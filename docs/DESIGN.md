@@ -33,6 +33,6 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
 
 ## 还没定的
 
-- 协议的来源：A 以 Codex 某版为底、自己管，还是 C 自定 HTTP + SSE（DESIGN 第 8 条、调研报告 §5.7）。
+- 协议的来源：A 以 Codex 某版为底、自己管，还是 C 自定 HTTP + SSE（DESIGN 第 8 条、调研报告 §5.7）。两边的建议不同：ranch 主控推荐 A，canter 主控倾向 C，各自的理由见报告 §5.7 末尾。
 - 第一期怎么拆成具体的活（报告 §9.1 推测 7 件左右）。
 - 从 Codex 搬哪些代码（`apply-patch`、协议类型等），搬来的代码要保留 Apache-2.0 声明，按需加 NOTICE。
