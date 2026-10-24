@@ -1,21 +1,39 @@
 use std::process::ExitCode;
 
+use canter::{ChatArgs, Command, Context, USAGE};
+
 #[tokio::main]
 async fn main() -> ExitCode {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let replace = match args.as_slice() {
-        [serve] if serve == "serve" => false,
-        [serve, replace] if serve == "serve" && replace == "--replace" => true,
-        _ => {
-            eprintln!("用法：canter serve [--replace]");
+    let result = match canter::parse(std::env::args_os().skip(1)) {
+        Ok(Command::Serve { replace }) => canter_server::serve(replace)
+            .await
+            .map_err(|error| error.to_string()),
+        Ok(Command::Chat(args)) => chat(args).await,
+        Ok(Command::Help) => {
+            print!("{USAGE}");
+            Ok(())
+        }
+        Err(message) => {
+            eprintln!("canter: {message}\n\n{USAGE}");
             return ExitCode::FAILURE;
         }
     };
-    match canter_server::serve(replace).await {
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("canter: {error}");
             ExitCode::FAILURE
         }
     }
+}
+
+async fn chat(args: ChatArgs) -> Result<(), String> {
+    let launch = canter::prepare(args, Context::current()?).await?;
+    let session = canter_tui::run(launch)
+        .await
+        .map_err(|error| error.to_string())?;
+    if let Some(id) = session {
+        println!("接着聊：canter --resume {id}");
+    }
+    Ok(())
 }

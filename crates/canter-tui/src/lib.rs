@@ -1,25 +1,32 @@
-//! canter's terminal client, part one: the conversation screen.
+//! canter's terminal client: the conversation screen, the approval box, the
+//! session list, and reconnecting after the server restarts.
 //!
 //! The screen does not take over the terminal. Finished rows go into the
 //! terminal's own scrollback; only the bottom (what is still streaming, the
-//! status line, the input box and the info line) is redrawn.
+//! status line, the input or approval box and the info line) is redrawn.
 //!
 //! - [`client`]: HTTP + SSE over the server's unix socket.
 //! - [`fake`]: a server that replays a scripted session, for tests and demos.
-//! - [`Ui`]: the screen on any ratatui backend; [`run`] drives it in a real terminal.
+//! - [`Ui`]: the screen on any ratatui backend; [`run`] opens a session and
+//!   drives the screen in a real terminal, [`run_on`] on any backend.
 
 mod app;
+mod approval;
 mod cells;
 pub mod client;
 pub mod fake;
 mod input;
 mod markdown;
+mod picker;
 mod run;
 mod terminal;
 mod text;
 
 pub use app::{Action, App};
-pub use run::{CLIENT_NAME, RunError, RunOptions, run};
+pub use run::{
+    CLIENT_NAME, Connected, Connector, FrameSync, Launch, Open, RunError, SocketConnector, run,
+    run_on,
+};
 pub use terminal::InlineTerminal;
 
 use ratatui::backend::Backend;
@@ -33,10 +40,12 @@ pub struct Ui<B: Backend> {
 impl<B: Backend> Ui<B> {
     /// Starts at the backend's cursor row.
     pub fn new(backend: B, app: App) -> Result<Self, B::Error> {
-        Ok(Self {
-            terminal: InlineTerminal::new(backend)?,
-            app,
-        })
+        Ok(Self::with_terminal(InlineTerminal::new(backend)?, app))
+    }
+
+    /// Continues on a terminal that already drew something (the session list).
+    pub fn with_terminal(terminal: InlineTerminal<B>, app: App) -> Self {
+        Self { terminal, app }
     }
 
     pub fn app(&self) -> &App {
@@ -49,6 +58,10 @@ impl<B: Backend> Ui<B> {
 
     pub fn backend(&self) -> &B {
         self.terminal.backend()
+    }
+
+    pub fn backend_mut(&mut self) -> &mut B {
+        self.terminal.backend_mut()
     }
 
     /// Writes newly finished rows to the scrollback, then redraws the bottom.
