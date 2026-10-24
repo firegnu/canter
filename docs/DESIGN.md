@@ -29,7 +29,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 代价：离用户原来要的「使用成熟的现有的coding agent使用的协议」远一步，用的是 Codex 的结构，不是它的协议本身；协议包要自己写，估 1,000–1,500 行（报告 §9.1）。
    - **和 Codex app-server v2（`rust-v0.163.0`）不一样的地方**（第 1 件定的，细节见 `docs/任务/P1-1-协议包和存盘.md` 的完成记录和「审查后修改」，以及 `crates/canter-protocol/README.md`）：
      - 命名：`session`、`sessionId` 代替 `thread`、`threadId`；事件名用点号（`session.status`、`turn.started`、`item.delta` 等）。每条事件外层带 `seq`（每个会话从 1 起）、`sessionId`、`timestamp`（Unix 毫秒）；快照带 `lastEventSeq`；命令的回复带 `eventSeq`。
-     - 会话设置：新增 `session.updated`，建会话时和每次修改后各写一条，带公开设置：名字、模型、权限模式、工作目录。环境变量不公开，只存私有文件。
+     - 会话设置：新增 `session.updated`，建会话时和每次修改后各写一条，带公开设置：名字、模型、权限模式、工作目录。环境变量不公开，也不存盘（10-24 改，见第 14 条）。
      - 会话状态是六种字符串（`starting`、`idle`、`working`、`waiting_approval`、`error`、`closed`），不是 Codex 带标记的对象。权限模式的字段名沿用 `approvalPolicy`，值是 canter 自己的 `alwaysAsk`、`askForExecution`、`allowAll`；不要 Codex 的沙箱设置。
      - 送话：一条 input 命令带 `mode: queue / steer`，代替 Codex 的 `turn/start`、`turn/steer`。排队时发 `input.queued` 事件，快照里有 `queuedInputs`。
      - 一轮结束：`turn.completed` 只更新状态、错误、用量，项目以 `item.*` 事件为准，和 Codex 一样。
@@ -42,6 +42,10 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
 11. **服务端怎么起、怎么升级**：照报告第 7 条的推荐：客户端找不到服务端就在后台起一个，另可装成用户服务；升级第一期等在跑的轮跑完（有上限）再重启、不自动换版本，第二期接 corral 派活前做排空交接；嵌在终端里的单机模式只作备选。
 12. **接 corral 往后放**：「corral的接入等agent差不多可以工作了（tui版本的），再考虑接入。」
 13. **会话存两份：事件和模型历史**（2026-10-24，第 1 件交叉审查后用户选定）。每个会话除了发给客户端的事件文件，另存一份只追加的模型历史，原样记下发给模型的每条消息（工具调用 id、原样参数、截断后回给模型的结果、压缩后的摘要等），不发给客户端，文件 0600。恢复会话时，模型的上下文从模型历史还原，不从显示用的事件反推。Codex 也是这样分的（rollout 文件存模型层的条目，和 app-server 的通知分开）。
+14. **会话环境和 API key**（2026-10-24，派 P1-4、P1-5 前用户选定，都照主控的建议）。
+   - 环境变量不存盘：建会话时客户端交来的环境只放服务端内存；服务端重启后，客户端接着聊时重新交一份（用接着聊那个终端的环境）。理由：环境变量里常有令牌，不落盘；服务端重启后在跑的轮本来就断了，接着聊总得有客户端连上来。第 1 件原来把环境存进会话目录的 `private.json`（0600），P1-4 拿掉。
+   - DeepSeek 的 API key 放 canter 的配置文件（状态目录下，0600，不进仓库）。理由：服务端是在后台自己起的，以后还可能装成系统服务，拿不到用户终端里的环境变量。
+   - canter 的状态目录和配置文件是 read、write、edit 工具的受保护路径，模型读写都拒绝（P1-3 交叉审查后主控定）；shell 拦不住。
 
 ## 和报告不同的地方
 
