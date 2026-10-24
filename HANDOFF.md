@@ -6,6 +6,7 @@
 
 - 10-24 装了 main `ae4ba32`（0.1.0）：`cargo install --locked --path crates/canter`，程序在 `~/.cargo/bin/canter`。不是系统服务，服务端由客户端在后台起，状态在 `~/.canter/`（DESIGN 第 15、16 条）。
 - 换版本：在 main 上重新 `cargo install --locked --path crates/canter`，再 `canter serve --replace`。
+- 装的版本还不含 P1-9（只读命令免批准），要用得重装。
 - 退回：按 `~/.canter/server.json` 的 pid 停服务端（SIGTERM），`cargo uninstall canter`。`~/.canter/` 有会话和 key，删不删问用户。
 
 ## 机器和环境
@@ -15,7 +16,7 @@
 
 ## 还没派的
 
-第一期 P1-1 到 P1-8 都做完了。排着的三件，等用户说了再做：
+第一期 P1-1 到 P1-8、P1-9 都做完了。排着的两件，等用户说了再做：
 
 - P1-10 修第一期已知问题（`docs/任务/P1-10-第一期已知问题.md`）：待用户定修哪几条、拆几件。
 - P2-0 写第二期需求单（`docs/任务/P2-0-第二期需求单.md`，主控做）：待用户定第二期范围。
