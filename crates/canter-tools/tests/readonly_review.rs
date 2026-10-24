@@ -173,7 +173,7 @@ async fn find_sed_and_output_commands_only_allow_known_readonly_forms() {
     let tools = Tools::new(Arc::new(
         LocalExecutor::new(
             dir.path().into(),
-            BTreeMap::new(),
+            BTreeMap::from([("HOME".into(), dir.path().to_str().unwrap().into())]),
             vec![dir.path().join("private")],
         )
         .unwrap(),

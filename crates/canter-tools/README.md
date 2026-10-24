@@ -116,10 +116,21 @@ shell 免批准只识别一小部分语法和参数，白名单在 `src/readonly
   head/tail 和 git log/show 支持 `-100` 这样的数字简写。Git 可带 `--no-pager`，
   带值的长选项只认 `--选项=值`，不猜可选参数的边界。printf 只认常见输出格式；
   `-v`、`%n` 等修改 shell 变量的形式仍询问。
+- Git 每次判断都同步读当前仓库配置、会话 HOME 下的 `.gitconfig`、XDG 下的 `git/config`
+  （未设 XDG_CONFIG_HOME 时用 `~/.config/git/config`）。支持向上查找仓库、裸仓库、
+  worktree 的 `gitdir:`/`commondir` 和 `config.worktree`，不启动 Git 或其他子进程。
+  出现 fsmonitor、textconv、diff.external、diff.*.command、gpg/签名相关配置、
+  log.showSignature、remote.*.promisor、extensions.partialClone、filter 的外部程序，
+  或 include/includeIf 时询问；`--format/--pretty` 以及配置中的命名/默认格式含 `%G` 也询问。
+  不存在的可选配置可跳过；无法读取、非普通文件、超过 1 MiB、无法识别的配置语法
+  （包括续行/转义）、HOME 缺失或相对路径、相对 XDG_CONFIG_HOME 都询问。
+  改变仓库/配置来源或注入配置的 GIT_DIR/GIT_COMMON_DIR/GIT_WORK_TREE/GIT_CONFIG*
+  环境覆盖也询问（GIT_CONFIG_NOSYSTEM 除外）。
 - `cd <字面路径>` 检查目标并跟踪后续目录，`&&`/`||` 按成功/失败分支检查，`;` 同时考虑
   cd 成功和失败的位置；管道内的 cd 不改变后续目录。多种可能目录都通过才免批准，
   可能状态超过 64 个则询问。无参数的 cd、`cd -`、带变量的 cd，以及会话设了非空
   CDPATH 时的相对 cd 都询问。`~` 是否展开按原始引号/转义判断，避免跟踪错目录。
+  后续 cwd 使用字面规范化路径；解析后的 cd 目标只用于额外的受保护路径检查。
 - find 支持字面起点、深度/名称/路径/类型过滤、布尔组合及打印等已知只读动作；
   `-exec/-execdir/-ok/-okdir/-delete/-fprint/-fprint0/-fprintf/-fls` 和未知参数仍询问。
 - sed 只认可直接检查的脚本：基本地址、打印/删除行等纯文本操作和替换，支持 `-n/-E/-r`
@@ -129,18 +140,23 @@ shell 免批准只识别一小部分语法和参数，白名单在 `src/readonly
 - `&&`、`||`、`;`、`|` 连接的每一段都必须通过检查。未知命令或选项、解析失败、
   重定向（包括输入重定向）、命令替换、变量展开、子 shell、后台 `&`、注释、换行和
   未引用的通配符一律询问。命令绝对路径、`git -C/-c` 等仍不放行。
-- 每个字面参数（包括 `-f路径`、`--file=路径` 中的值）按当前可能 cwd 检查，规范化 `.`、`..`；
+- 每个字面参数（包括 `-f路径`、`--file=路径` 中的值）按当前可能 cwd 检查，规范化 `.`、`..`，
+  按路径组件做 ASCII 不分大小写比较（所有平台一致）；
   `~` 用会话环境中的绝对 `HOME` 展开，不使用服务端 HOME。HOME 缺失、相对 HOME 和
   `~用户名` 都询问。碰到受保护路径本身或子路径时询问，cwd 在受保护目录内也询问。
   这只影响是否免批准，不改变批准后的执行；`allowAll` 和已有会话授权仍可执行这些命令。
+- 带 `-r/-R/--recursive` 的 grep、所有 rg、git diff 的路径起点，等于受保护路径、
+  位于其中或是其上级目录时都询问；省略路径时检查 cwd。搜索模式和选项值不当成起点。
+  Git diff 的 `--` 后按显式路径检查；没有 `--` 时还检查 cwd，避免把版本号误当成路径。
+  复杂路径匹配语法/通配起点仍询问。`find ~`、`ls -R ~` 只列名字，继续放行。
 - 直接执行仍使用原始命令、`commandExecution` 开始/完成项目和输出回调，不增加或更改事件。
 
 **已知限制：这不是 shell 沙箱，挡不全状态目录的访问。** `$HOME/.canter` 等显式变量语法
-目前保守地询问，但不展开或追踪任意环境变量，也不检查环境引入的程序配置、PATH 上实际
-执行的程序、Git 的外部 diff/textconv 等配置行为。cd 目标存在时会额外检查解析后的路径，
+目前保守地询问，但不展开或追踪任意环境变量，也不完整检查其他程序的环境配置、系统级
+Git 配置或 PATH 上实际执行的程序。仓库/用户 Git 配置中的外部 diff/textconv 等已检查。
+cd 目标存在时会额外检查解析后的路径，
 但路径检查仍不完整覆盖符号链接、硬链接、文件系统别名或执行期间的路径变化；
-递归搜索父目录、程序内部的路径匹配和隐式读取也可能
-读到受保护文件。不要把白名单理解为“绝不会写文件或读取秘密”；read/write/edit 的原有
+程序内部的其他隐式读取仍可能读到受保护文件。不要把白名单理解为“绝不会写文件或读取秘密”；read/write/edit 的原有
 路径保护不变。合并时应把这些限制同步到 DESIGN。
 
 `Executor` 是可替换的异步 trait：`cwd`、`resolve_path`、`open_file`、`write_file`、`spawn`。

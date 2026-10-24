@@ -830,6 +830,8 @@ async fn approval_box_matches_the_server_after_a_restart() {
     assert_eq!(snapshot.status, SessionStatus::Idle);
     assert_eq!(snapshot.turns[0].status, TurnStatus::Interrupted);
 
+    assert!(!world.path("work/approval-proof.txt").exists());
+
     a.type_line("再跑一下").await;
     a.wait_for("要跑这条命令吗？").await;
     read_the_box().await;

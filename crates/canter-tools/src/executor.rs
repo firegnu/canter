@@ -108,10 +108,7 @@ impl Executor for LocalExecutor {
         crate::readonly::is_readonly(
             command,
             &self.cwd,
-            self.environment.get("HOME").map(Path::new),
-            self.environment
-                .get("CDPATH")
-                .is_some_and(|value| !value.is_empty()),
+            &self.environment,
             &self.shell_protected_paths,
         )
     }

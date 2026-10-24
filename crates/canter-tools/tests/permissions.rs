@@ -7,7 +7,12 @@ use tokio_util::sync::CancellationToken;
 async fn readonly_shell_allowlist_applies_in_all_asking_modes() {
     let dir = tempfile::tempdir().unwrap();
     let tools = Tools::new(Arc::new(
-        LocalExecutor::new(dir.path().into(), BTreeMap::new(), vec![]).unwrap(),
+        LocalExecutor::new(
+            dir.path().into(),
+            BTreeMap::from([("HOME".into(), dir.path().to_str().unwrap().into())]),
+            vec![],
+        )
+        .unwrap(),
     ));
     let gate = PermissionGate::default();
     let cancel = CancellationToken::new();

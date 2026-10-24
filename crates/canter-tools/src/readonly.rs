@@ -1,14 +1,21 @@
 // Deliberately recognizes a small shell subset. This is an approval heuristic, not a sandbox.
-use std::path::{Component, Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Component, Path, PathBuf},
+};
+mod git;
 mod sed;
 
 pub(crate) fn is_readonly(
     command: &str,
     cwd: &Path,
-    home: Option<&Path>,
-    has_cdpath: bool,
+    environment: &BTreeMap<String, String>,
     protected: &[PathBuf],
 ) -> bool {
+    let home = environment.get("HOME").map(Path::new);
+    let has_cdpath = environment
+        .get("CDPATH")
+        .is_some_and(|value| !value.is_empty());
     let Some(commands) = parse_commands(command, home) else {
         return false;
     };
@@ -25,7 +32,12 @@ pub(crate) fn is_readonly(
                 next_states.push((cwd, success));
                 continue;
             }
-            let allowed = |word: &str| path_allowed(word, &cwd, home, protected);
+            let allowed = |word: &str| path_allowed(word, &cwd, home, protected, false);
+            let recursive_allowed = |word: &str| {
+                !word.contains(['*', '?', '[', ']'])
+                    && !word.starts_with(':')
+                    && path_allowed(word, &cwd, home, protected, true)
+            };
             if !allowed(".") {
                 return false;
             }
@@ -42,18 +54,20 @@ pub(crate) fn is_readonly(
                     {
                         return false;
                     }
-                    let target = cwd.join(target);
-                    let target = target.canonicalize().unwrap_or_else(|_| normalize(&target));
-                    let Some(target_str) = target.to_str() else {
+                    let target = normalize(&cwd.join(target));
+                    let resolved = target.canonicalize().unwrap_or_else(|_| target.clone());
+                    let Some(target_str) = resolved.to_str() else {
                         return false;
                     };
-                    if !path_allowed(target_str, &cwd, home, protected) {
+                    if !path_allowed(target_str, &cwd, home, protected, false) {
                         return false;
                     }
                     if pipeline.len() == 1 {
                         new_cwd = target;
                     }
-                } else if !readonly_command(&command.words, &allowed) {
+                } else if !readonly_command(&command.words, &allowed, &recursive_allowed)
+                    || command.words[0] == "git" && !git::configuration_is_safe(&cwd, environment)
+                {
                     return false;
                 }
             }
@@ -71,9 +85,14 @@ pub(crate) fn is_readonly(
     true
 }
 
-fn readonly_command(words: &[String], path_allowed: &impl Fn(&str) -> bool) -> bool {
+fn readonly_command(
+    words: &[String],
+    path_allowed: &impl Fn(&str) -> bool,
+    recursive_allowed: &impl Fn(&str) -> bool,
+) -> bool {
     let (name, mut args) = (words[0].as_str(), &words[1..]);
     let mut numeric_short = matches!(name, "head" | "tail");
+    let mut git_diff = false;
     let options = match name {
         "echo" => return args.iter().all(|arg| path_allowed(arg)),
         "printf" => return readonly_printf(args) && args.iter().all(|arg| path_allowed(arg)),
@@ -177,6 +196,13 @@ fn readonly_command(words: &[String], path_allowed: &impl Fn(&str) -> bool) -> b
         ),
         "pwd" => return args.iter().all(|arg| matches!(arg.as_str(), "-L" | "-P")),
         "git" => {
+            if args.iter().any(|arg| {
+                arg.strip_prefix("--format=")
+                    .or_else(|| arg.strip_prefix("--pretty="))
+                    .is_some_and(|format| format.contains("%G"))
+            }) {
+                return false;
+            }
             if args.first().is_some_and(|arg| arg == "--no-pager") {
                 args = &args[1..];
             }
@@ -184,6 +210,7 @@ fn readonly_command(words: &[String], path_allowed: &impl Fn(&str) -> bool) -> b
                 return false;
             };
             args = rest;
+            git_diff = subcommand == "diff";
             numeric_short = matches!(subcommand.as_str(), "log" | "show");
             match subcommand.as_str() {
                 "status" => Options::new(
@@ -257,7 +284,40 @@ fn readonly_command(words: &[String], path_allowed: &impl Fn(&str) -> bool) -> b
     };
     // Git has optional values (e.g. --pretty, --unified): only accept =value,
     // never swallow the next option as a value and hide a possible --output.
-    options.accepts(args, path_allowed, name != "git", numeric_short)
+    let Some(parsed) = options.parse(args, path_allowed, name != "git", numeric_short) else {
+        return false;
+    };
+    let recursive = name == "rg"
+        || git_diff
+        || name == "grep"
+            && parsed
+                .flags
+                .iter()
+                .any(|flag| matches!(*flag, "r" | "R" | "recursive"));
+    if !recursive {
+        return true;
+    }
+    let mut paths = parsed.operands.as_slice();
+    if git_diff {
+        if let Some(start) = parsed.after_double_dash {
+            paths = &paths[start..];
+        } else if !recursive_allowed(".") {
+            // Before -- an operand may be a revision, leaving cwd as the implicit
+            // search root. Check both possibilities rather than resolving refs.
+            return false;
+        }
+    } else if !parsed
+        .flags
+        .iter()
+        .any(|flag| matches!(*flag, "e" | "f" | "regexp" | "file" | "files"))
+    {
+        paths = paths.get(1..).unwrap_or_default(); // The first operand is the pattern.
+    }
+    if paths.is_empty() {
+        recursive_allowed(".")
+    } else {
+        paths.iter().all(|path| recursive_allowed(path))
+    }
 }
 
 fn readonly_printf(args: &[String]) -> bool {
@@ -336,12 +396,15 @@ pub(crate) fn path_allowed(
     cwd: &Path,
     home: Option<&Path>,
     protected: &[PathBuf],
+    include_ancestors: bool,
 ) -> bool {
     let outside = |path: &Path| {
         let path = normalize(path);
-        !protected
-            .iter()
-            .any(|root| path.starts_with(normalize(root)))
+        !protected.iter().any(|root| {
+            let root = normalize(root);
+            starts_with_ascii_case_insensitive(&path, &root)
+                || include_ancestors && starts_with_ascii_case_insensitive(&root, &path)
+        })
     };
     // Check both spellings: quoted/escaped '~' is literal to the shell.
     if !outside(&cwd.join(word)) {
@@ -373,11 +436,30 @@ fn normalize(path: &Path) -> PathBuf {
     result
 }
 
+fn starts_with_ascii_case_insensitive(path: &Path, prefix: &Path) -> bool {
+    let mut components = path.components();
+    prefix.components().all(|part| {
+        components.next().is_some_and(|candidate| {
+            candidate
+                .as_os_str()
+                .as_encoded_bytes()
+                .eq_ignore_ascii_case(part.as_os_str().as_encoded_bytes())
+        })
+    })
+}
+
 struct Options {
     short_flags: &'static str,
     short_values: &'static str,
     long_flags: &'static [&'static str],
     long_values: &'static [&'static str],
+}
+
+#[derive(Default)]
+struct ParsedArgs<'a> {
+    flags: Vec<&'a str>,
+    operands: Vec<&'a str>,
+    after_double_dash: Option<usize>,
 }
 
 impl Options {
@@ -395,34 +477,45 @@ impl Options {
         }
     }
 
-    fn accepts(
+    fn parse<'a>(
         &self,
-        args: &[String],
+        args: &'a [String],
         path_allowed: &impl Fn(&str) -> bool,
         separate_long_values: bool,
         numeric_short: bool,
-    ) -> bool {
+    ) -> Option<ParsedArgs<'a>> {
+        let mut parsed = ParsedArgs::default();
         let mut args = args.iter();
         while let Some(arg) = args.next() {
             if !path_allowed(arg) {
-                return false;
+                return None;
             }
             if arg == "--" {
-                return args.all(|arg| path_allowed(arg));
+                parsed.after_double_dash = Some(parsed.operands.len());
+                for arg in args {
+                    if !path_allowed(arg) {
+                        return None;
+                    }
+                    parsed.operands.push(arg);
+                }
+                return Some(parsed);
             }
             if let Some(long) = arg.strip_prefix("--") {
                 if let Some((name, value)) = long.split_once('=') {
                     if !self.long_values.contains(&name) || !path_allowed(value) {
-                        return false;
+                        return None;
                     }
+                    parsed.flags.push(name);
                 } else if !self.long_flags.contains(&long)
                     && (!separate_long_values
                         || !self.long_values.contains(&long)
                         || !args.next().is_some_and(|value| path_allowed(value)))
                 {
-                    return false;
+                    return None;
+                } else {
+                    parsed.flags.push(long);
                 }
-            } else if let Some(short) = arg.strip_prefix('-') {
+            } else if let Some(short) = arg.strip_prefix('-').filter(|short| !short.is_empty()) {
                 if numeric_short
                     && !short.is_empty()
                     && short.bytes().all(|byte| byte.is_ascii_digit())
@@ -437,17 +530,21 @@ impl Options {
                         } else {
                             !path_allowed(value)
                         } {
-                            return false;
+                            return None;
                         }
+                        parsed.flags.push(&short[index..index + flag.len_utf8()]);
                         break;
                     }
                     if !self.short_flags.contains(flag) {
-                        return false;
+                        return None;
                     }
+                    parsed.flags.push(&short[index..index + flag.len_utf8()]);
                 }
+            } else {
+                parsed.operands.push(arg);
             }
         }
-        true
+        Some(parsed)
     }
 }
 
