@@ -14,7 +14,7 @@ use crate::text::{sanitize, str_width, truncate};
 
 /// Rows of sessions shown at once.
 const MAX_ROWS: usize = 12;
-const STATUS_COLUMNS: usize = 8;
+const STATUS_COLUMNS: usize = 10;
 const DIRECTORY_COLUMNS: usize = 24;
 
 /// What the user chose.
@@ -89,9 +89,9 @@ impl Picker {
         let mut rows = Vec::new();
         if shown.is_empty() {
             let text = if self.all {
-                "   还没有会话"
+                "   No sessions yet"
             } else {
-                "   这个目录还没有会话"
+                "   No sessions in this directory yet"
             };
             rows.push(Line::from(Span::styled(text, Style::new().dim())));
         }
@@ -100,12 +100,12 @@ impl Picker {
         }
         rows.push(Line::default());
         let tab = if self.all {
-            "Tab 只看当前目录"
+            "Tab this directory only"
         } else {
-            "Tab 看全部目录的会话"
+            "Tab all directories"
         };
         rows.push(Line::from(Span::styled(
-            format!("   {tab} · Enter 打开 · Esc 取消"),
+            format!("   {tab} · Enter open · Esc cancel"),
             Style::new().dim(),
         )));
         PickerView { rows }
@@ -132,7 +132,7 @@ impl Picker {
         }
         match &session.name {
             Some(name) => spans.push(Span::raw(sanitize(name).replace('\n', " "))),
-            None => spans.push(Span::styled("（还没说话）", Style::new().dim())),
+            None => spans.push(Span::styled("(no messages yet)", Style::new().dim())),
         }
         let style = if selected {
             Style::new().bold()
@@ -160,7 +160,7 @@ impl PickerView {
             .border_style(border)
             .title_top(Line::from(vec![
                 Span::styled("─ ", border),
-                Span::styled("接着哪个会话？", Style::new().bold()),
+                Span::styled("Which session to resume?", Style::new().bold()),
                 Span::raw(" "),
             ]));
         frame.render_widget(Paragraph::new(self.rows).block(block), frame.area());
@@ -169,13 +169,13 @@ impl PickerView {
 
 fn status_label(status: SessionStatus) -> &'static str {
     match status {
-        SessionStatus::Idle => "空闲",
-        SessionStatus::Working => "干活中",
-        SessionStatus::WaitingApproval => "等批准",
-        SessionStatus::Starting => "启动中",
-        SessionStatus::Error => "出错",
-        SessionStatus::Closed => "已结束",
-        SessionStatus::Unknown => "？",
+        SessionStatus::Idle => "Idle",
+        SessionStatus::Working => "Working",
+        SessionStatus::WaitingApproval => "Waiting",
+        SessionStatus::Starting => "Starting",
+        SessionStatus::Error => "Error",
+        SessionStatus::Closed => "Closed",
+        SessionStatus::Unknown => "?",
     }
 }
 

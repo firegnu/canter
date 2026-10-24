@@ -22,7 +22,7 @@ use crate::cells;
 use crate::input::InputBox;
 use crate::text::{LogicalLine, sanitize, str_width, truncate, wrap};
 
-const PLACEHOLDER: &str = "输入一句话（Enter 发送，Ctrl+J 换行）";
+const PLACEHOLDER: &str = "Type a message (Enter to send, Ctrl+J for a new line)";
 const MAX_INPUT_ROWS: usize = 8;
 /// Border, padding and the `› ` prompt on the left; padding and border on the right.
 const INPUT_LEFT: u16 = 4;
@@ -178,7 +178,10 @@ impl App {
         if let Err(error) = apply_event_mut(&mut self.snapshot, event) {
             self.notices.push(cells::notice(
                 "✗ ",
-                &format!("跳过一条对不上的事件（序号 {}）：{error}", event.seq),
+                &format!(
+                    "Skipped an event that does not fit (seq {}): {error}",
+                    event.seq
+                ),
                 Style::new().red(),
             ));
             return;
@@ -223,7 +226,7 @@ impl App {
                 turn_id,
             } => {
                 let text = if *will_retry {
-                    format!("{}（会重试）", error.message)
+                    format!("{} (will retry)", error.message)
                 } else {
                     error.message.clone()
                 };
@@ -335,7 +338,7 @@ impl App {
     pub fn send_failed(&mut self, message: &str) {
         self.notices.push(cells::notice(
             "✗ ",
-            &format!("没送出去：{message}"),
+            &format!("Not sent: {message}"),
             Style::new().red(),
         ));
     }
@@ -345,7 +348,7 @@ impl App {
         self.answered.remove(request_id);
         self.notices.push(cells::notice(
             "✗ ",
-            &format!("没答上：{message}"),
+            &format!("Answer not sent: {message}"),
             Style::new().red(),
         ));
     }
@@ -354,7 +357,7 @@ impl App {
     pub fn answer_late(&mut self) {
         self.notices.push(cells::notice(
             "· ",
-            "你的回答晚了一步，没有生效",
+            "Your answer came too late and was ignored",
             Style::new().dim(),
         ));
     }
@@ -363,7 +366,7 @@ impl App {
         self.interrupting = None;
         self.notices.push(cells::notice(
             "✗ ",
-            &format!("没打断：{message}"),
+            &format!("Interrupt failed: {message}"),
             Style::new().red(),
         ));
     }
@@ -653,9 +656,9 @@ impl App {
             ApprovalResolution::Answered { decision } => {
                 let label = approval::decision_label(*decision);
                 let text = match client {
-                    Some(name) if name == self.client_name => format!("你选了：{label}"),
-                    Some(name) => format!("{name} 答了：{label}"),
-                    None => format!("答了：{label}"),
+                    Some(name) if name == self.client_name => format!("You chose: {label}"),
+                    Some(name) => format!("{name} answered: {label}"),
+                    None => format!("Answered: {label}"),
                 };
                 let (mark, style) = match decision {
                     ApprovalDecision::Accept | ApprovalDecision::AcceptForSession => {
@@ -665,8 +668,12 @@ impl App {
                 };
                 Some(cells::notice(mark, &text, style))
             }
-            ApprovalResolution::Cancelled => Some(cells::notice("■ ", "批准请求取消了", dim)),
-            ApprovalResolution::TimedOut => Some(cells::notice("■ ", "批准请求超时了", dim)),
+            ApprovalResolution::Cancelled => {
+                Some(cells::notice("■ ", "Approval request cancelled", dim))
+            }
+            ApprovalResolution::TimedOut => {
+                Some(cells::notice("■ ", "Approval request timed out", dim))
+            }
             ApprovalResolution::Unknown => None,
         }
     }
@@ -738,9 +745,9 @@ impl App {
             }
         }
         for queued in &self.snapshot.queued_inputs {
-            let mut text = format!("  · 排队：{}", first_line(&queued.input));
+            let mut text = format!("  · Queued: {}", first_line(&queued.input));
             if let Some(from) = source(&self.client_name, &queued.client_name) {
-                text += &format!("（来自 {}）", sanitize(from));
+                text += &format!("  (from {})", sanitize(from));
             }
             rows.push(Line::from(truncate(
                 vec![Span::styled(text, Style::new().dim())],
@@ -753,7 +760,7 @@ impl App {
     fn status_line(&self, now_ms: i64) -> Line<'static> {
         if let Some(reason) = &self.reconnecting {
             return Line::from(vec![
-                Span::styled(" ⟳ 重连中…", Style::new().yellow()),
+                Span::styled(" ⟳ Reconnecting…", Style::new().yellow()),
                 Span::styled(format!(" · {}", sanitize(reason)), Style::new().dim()),
             ]);
         }
@@ -764,7 +771,7 @@ impl App {
                 .any(|turn| turn.id == *id && turn.status == TurnStatus::InProgress)
         });
         if interrupting {
-            return Line::from(Span::styled(" ■ 正在打断…", Style::new().yellow()));
+            return Line::from(Span::styled(" ■ Interrupting…", Style::new().yellow()));
         }
         let elapsed = self
             .working_since
@@ -775,27 +782,27 @@ impl App {
                 let frame = SPINNER[(now_ms.max(0) / 80) as usize % SPINNER.len()];
                 Line::from(vec![
                     Span::styled(format!(" {frame} "), Style::new().cyan()),
-                    Span::raw("干活中"),
+                    Span::raw("Working"),
                     Span::styled(format!(" · {elapsed}"), Style::new().dim()),
                 ])
             }
             SessionStatus::WaitingApproval => Line::from(vec![
-                Span::styled(" ⏸ 等你批准", Style::new().yellow()),
+                Span::styled(" ⏸ Waiting for approval", Style::new().yellow()),
                 Span::styled(format!(" · {elapsed}"), Style::new().dim()),
             ]),
-            SessionStatus::Starting => Line::from(Span::styled(" 启动中…", Style::new().dim())),
+            SessionStatus::Starting => Line::from(Span::styled(" Starting…", Style::new().dim())),
             SessionStatus::Error => {
                 let message = self.snapshot.error.as_ref().map_or(String::new(), |error| {
-                    format!("：{}", sanitize(&error.message))
+                    format!(": {}", sanitize(&error.message))
                 });
                 Line::from(Span::styled(
-                    format!(" ✗ 出错了{message}"),
+                    format!(" ✗ Error{message}"),
                     Style::new().red(),
                 ))
             }
             // Only an explicit `canter --resume` opens it again.
             SessionStatus::Closed => Line::from(Span::styled(
-                " ■ 会话已关闭 · 要接着聊，退出后用 canter --resume",
+                " ■ Session closed · to resume, quit and run canter --resume",
                 Style::new().yellow(),
             )),
             SessionStatus::Idle | SessionStatus::Unknown => Line::default(),
@@ -805,10 +812,10 @@ impl App {
     fn info_line(&self, width: u16) -> Line<'static> {
         let settings = &self.snapshot.settings;
         let mode = match settings.approval_policy {
-            PermissionMode::AskForExecution => "只问执行",
-            PermissionMode::AllowAll => "全放行",
+            PermissionMode::AskForExecution => "Ask for execution",
+            PermissionMode::AllowAll => "Allow all",
             // Unknown modes are treated as the strictest one.
-            PermissionMode::AlwaysAsk | PermissionMode::Unknown => "每次问",
+            PermissionMode::AlwaysAsk | PermissionMode::Unknown => "Always ask",
         };
         let cwd = shorten_home(&sanitize(&settings.cwd), self.home.as_deref());
         let text = format!(" {} · {mode} · {cwd}", sanitize(&settings.model));

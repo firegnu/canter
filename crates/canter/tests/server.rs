@@ -375,7 +375,7 @@ async fn a_second_server_cannot_replace_the_lock_owner() {
     assert!(!status.success());
     let logs = fs::read_to_string(fixture.root.path().join("server.log")).unwrap();
     assert!(
-        logs.contains("已经有一个服务端在运行"),
+        logs.contains("a server is already running"),
         "duplicate startup must identify the existing owner"
     );
     assert!(

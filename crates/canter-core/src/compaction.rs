@@ -85,7 +85,7 @@ pub(crate) async fn compact(
                     turn_id: turn_id.into(),
                     item: Item::ContextCompaction {
                         id: item_id,
-                        summary: "压缩未完成，原上下文保留。".into(),
+                        summary: "Compaction did not finish; the original context is kept.".into(),
                     },
                 }])
                 .await?;
@@ -291,7 +291,7 @@ async fn summarize(
     }
     kept.reverse();
     kept.push(Message::User {
-        text: format!("[上下文摘要]\n{summary}"),
+        text: format!("[Context summary]\n{summary}"),
     });
     Ok((summary, kept))
 }

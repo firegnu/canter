@@ -72,13 +72,13 @@ async fn request_repairs_tool_pairs_after_unknown_history_or_interruption() {
                 {"id":"interrupted","type":"function","function":{"name":"read","arguments":"{}"}}
             ]},
             {"role":"tool","tool_call_id":"kept","content":"Original result"},
-            {"role":"tool","tool_call_id":"missing","content":"没有结果：被打断或本版本无法识别"},
-            {"role":"tool","tool_call_id":"interrupted","content":"没有结果：被打断或本版本无法识别"},
+            {"role":"tool","tool_call_id":"missing","content":"No result: interrupted, or not understood by this version"},
+            {"role":"tool","tool_call_id":"interrupted","content":"No result: interrupted, or not understood by this version"},
             {"role":"user","content":"Continue"},
             {"role":"assistant","content":"","tool_calls":[
                 {"id":"last","type":"function","function":{"name":"read","arguments":"{}"}}
             ]},
-            {"role":"tool","tool_call_id":"last","content":"没有结果：被打断或本版本无法识别"}
+            {"role":"tool","tool_call_id":"last","content":"No result: interrupted, or not understood by this version"}
         ])
     );
     server.stop().await;

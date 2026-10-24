@@ -59,7 +59,7 @@ fn normalize_tool_pairs(messages: Vec<Value>) -> Vec<Value> {
             if missing.remove(id.as_str()) {
                 normalized.push(json!({
                     "role": "tool", "tool_call_id": id,
-                    "content": "没有结果：被打断或本版本无法识别"
+                    "content": "No result: interrupted, or not understood by this version"
                 }));
             }
         }

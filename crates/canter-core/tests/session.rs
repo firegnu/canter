@@ -120,12 +120,11 @@ async fn interrupt_during_model_stream_repairs_history_and_discards_queued_input
     finished(&mut events).await;
     let requests = model.requests.lock().unwrap().clone();
     assert!(
-        requests[1]
-            .messages
-            .iter()
-            .any(|message| matches!(message, Message::User { text } if text.contains("被打断")))
+        requests[1].messages.iter().any(
+            |message| matches!(message, Message::User { text } if text.contains("interrupted"))
+        )
     );
-    assert!(requests[1].messages.iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "unfinished" && text.contains("被打断"))));
+    assert!(requests[1].messages.iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "unfinished" && text.contains("interrupted"))));
     assert!(
         !requests[1]
             .messages

@@ -131,7 +131,7 @@ async fn startup_failure_returns_the_log_error_without_waiting_for_the_deadline(
     };
     let log = fs::read_to_string(home().join("server.log")).unwrap();
     let last = log.lines().last().unwrap();
-    assert!(last.contains("无法读取 config.json"));
+    assert!(last.contains("cannot read config.json"));
     assert!(
         error.to_string().contains(last),
         "startup error must contain the last log line"
@@ -193,7 +193,7 @@ async fn concurrent_clients_start_one_daemon_without_duplicate_start_errors() {
     daemon.stop().await;
     let log = fs::read_to_string(home.join("server.log")).unwrap();
     assert!(
-        !log.contains("已经有一个服务端在运行"),
+        !log.contains("a server is already running"),
         "concurrent client discovery must not log misleading startup errors"
     );
 }

@@ -33,7 +33,7 @@ async fn chat(args: ChatArgs) -> Result<(), String> {
         .await
         .map_err(|error| error.to_string())?;
     if let Some(id) = session {
-        println!("接着聊：canter --resume {id}");
+        println!("To resume: canter --resume {id}");
     }
     Ok(())
 }

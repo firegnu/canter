@@ -301,7 +301,7 @@ fn check_protected(path: &Path, protected_paths: &[PathBuf]) -> io::Result<()> {
         if path.starts_with(protected) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "这是 canter 的私有文件",
+                "this file is private to canter",
             ));
         }
     }

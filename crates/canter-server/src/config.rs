@@ -18,14 +18,15 @@ pub(crate) struct Config {
 impl Config {
     pub fn load(home: &Path) -> Result<Self, ServerError> {
         let path = home.join("config.json");
-        let file = fs::File::open(path)
-            .map_err(|_| ServerError("无法读取 config.json；请先配置模型和 API key".into()))?;
+        let file = fs::File::open(path).map_err(|_| {
+            ServerError("cannot read config.json; configure a model and API key first".into())
+        })?;
         file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|_| ServerError("无法将 config.json 权限设为 0600".into()))?;
+            .map_err(|_| ServerError("cannot set config.json permissions to 0600".into()))?;
         let config: Self = serde_json::from_reader(file)
-            .map_err(|_| ServerError("config.json 格式无效".into()))?;
+            .map_err(|_| ServerError("config.json is not valid".into()))?;
         let url = reqwest::Url::parse(&config.base_url)
-            .map_err(|_| ServerError("base_url 无效".into()))?;
+            .map_err(|_| ServerError("invalid base_url".into()))?;
         let local = url.host_str().is_some_and(|host| {
             host == "localhost"
                 || host
@@ -35,16 +36,19 @@ impl Config {
         });
         if url.scheme() == "http" && !local {
             return Err(ServerError(
-                "非本机 base_url 必须使用 HTTPS，避免明文传送 API key".into(),
+                "a non-local base_url must use HTTPS so the API key is not sent in plain text"
+                    .into(),
             ));
         }
         if config.model.trim().is_empty() || config.api_key.trim().is_empty() {
             return Err(ServerError(
-                "config.json 的 model 和 api_key 不得为空".into(),
+                "model and api_key in config.json must not be empty".into(),
             ));
         }
         if config.context_window <= u64::from(CoreOptions::default().max_output_tokens) + 16_384 {
-            return Err(ServerError("context_window 必须大于 81920".into()));
+            return Err(ServerError(
+                "context_window must be greater than 81920".into(),
+            ));
         }
         Ok(config)
     }
@@ -52,7 +56,7 @@ impl Config {
     pub fn model_client(&self) -> Result<Arc<dyn Model>, ServerError> {
         ChatCompletions::new(&self.base_url, ApiKey::new(self.api_key.clone()))
             .map(|model| Arc::new(model) as Arc<dyn Model>)
-            .map_err(|_| ServerError("模型配置无效".into()))
+            .map_err(|_| ServerError("invalid model config".into()))
     }
 
     pub fn options(&self) -> CoreOptions {

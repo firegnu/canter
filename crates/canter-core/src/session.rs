@@ -243,7 +243,7 @@ impl Session {
             }
         }
         state
-            .complete_missing_tools("没有结果：服务端停止，本轮被打断")
+            .complete_missing_tools("No result: the server stopped and this turn was interrupted")
             .await?;
         state.cancel_requests().await?;
         let unfinished = state
@@ -257,7 +257,7 @@ impl Session {
         if !unfinished.is_empty() {
             state
                 .message(Message::User {
-                    text: "[服务端停止，上一轮被打断；请根据已有结果继续。]".into(),
+                    text: "[The server stopped and the previous turn was interrupted; continue from the results so far.]".into(),
                 })
                 .await?;
         }

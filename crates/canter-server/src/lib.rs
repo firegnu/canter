@@ -29,11 +29,11 @@ pub fn state_directory() -> Result<PathBuf, ServerError> {
     let path = if let Some(path) = std::env::var_os("CANTER_HOME") {
         PathBuf::from(path)
     } else {
-        PathBuf::from(std::env::var_os("HOME").ok_or(ServerError("HOME 未设置".into()))?)
+        PathBuf::from(std::env::var_os("HOME").ok_or(ServerError("HOME is not set".into()))?)
             .join(".canter")
     };
     if !path.is_absolute() {
-        return Err(ServerError("CANTER_HOME 必须是绝对路径".into()));
+        return Err(ServerError("CANTER_HOME must be an absolute path".into()));
     }
     Ok(path)
 }
@@ -57,12 +57,12 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
         let lease = lifecycle::Lease::acquire(home, replace)?;
         let config = config::Config::load(&lease.home)?;
         let store = canter_store::Store::new(lease.home.join("sessions"))
-            .map_err(|_| ServerError("无法打开会话目录".into()))?;
+            .map_err(|_| ServerError("cannot open the sessions directory".into()))?;
         lifecycle::cleanup_creating(&lease.home.join("sessions"))?;
         Ok::<_, ServerError>((lease, config, store))
     })
     .await
-    .map_err(|_| ServerError("初始化失败".into()))??;
+    .map_err(|_| ServerError("initialization failed".into()))??;
     let app = Arc::new(http::App {
         home: lease.home.clone(),
         store: Arc::new(store),
@@ -75,27 +75,27 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
         stopped: CancellationToken::new(),
     });
     let listener = tokio::net::UnixListener::bind(&lease.registration.socket_path)
-        .map_err(|_| ServerError("无法监听 Unix socket".into()))?;
+        .map_err(|_| ServerError("cannot listen on the Unix socket".into()))?;
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(
             &lease.registration.socket_path,
             std::fs::Permissions::from_mode(0o600),
         )
-        .map_err(|_| ServerError("无法设置 socket 权限".into()))?;
+        .map_err(|_| ServerError("cannot set the socket permissions".into()))?;
     }
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|_| ServerError("无法监听退出信号".into()))?;
+        .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-        .map_err(|_| ServerError("无法监听退出信号".into()))?;
+        .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
     let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-        .map_err(|_| ServerError("无法监听退出信号".into()))?;
+        .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
     let lease = tokio::task::spawn_blocking(move || {
         lease.publish()?;
         Ok::<_, ServerError>(lease)
     })
     .await
-    .map_err(|_| ServerError("登记失败".into()))??;
+    .map_err(|_| ServerError("registration failed".into()))??;
     let shutdown = app.clone();
     let home = lease.home.clone();
     let registration = lease.registration.clone();
@@ -145,17 +145,19 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
     }).into_future();
     tokio::pin!(server);
     tokio::select! {
-        result = &mut server => { result.map_err(|_| ServerError("HTTP 服务失败".into()))?; }
+        result = &mut server => { result.map_err(|_| ServerError("the HTTP server failed".into()))?; }
         _ = stopped.cancelled() => {
             // Sessions are already closed. A client stalled in an HTTP body must not hold the daemon lock forever.
             if let Ok(result) = tokio::time::timeout(Duration::from_secs(5), &mut server).await {
-                result.map_err(|_| ServerError("HTTP 服务失败".into()))?;
+                result.map_err(|_| ServerError("the HTTP server failed".into()))?;
             }
         }
     }
     drop(lease);
     if close_failed.load(Ordering::Relaxed) {
-        Err(ServerError("部分会话关闭失败，请重新接着聊以恢复".into()))
+        Err(ServerError(
+            "some sessions failed to close; resume them to recover".into(),
+        ))
     } else {
         Ok(())
     }
