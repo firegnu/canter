@@ -14,7 +14,7 @@ use std::future::Future;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -119,6 +119,58 @@ pub enum RunError {
     Io(#[from] io::Error),
 }
 
+/// Terminal events for [`run_on`], from an [`InputSender`]. Each one carries
+/// the number of the frame on screen when it came in, so that a key acts on
+/// what the user saw, not on a frame drawn after it was pressed.
+pub struct Input {
+    events: mpsc::UnboundedReceiver<(u64, TermEvent)>,
+    frames: Arc<AtomicU64>,
+}
+
+/// Sends terminal events to [`run_on`]; see [`input`].
+#[derive(Clone)]
+pub struct InputSender {
+    events: mpsc::UnboundedSender<(u64, TermEvent)>,
+    frames: Arc<AtomicU64>,
+}
+
+/// A channel for terminal events.
+pub fn input() -> (InputSender, Input) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    let frames = Arc::new(AtomicU64::new(0));
+    let input = Input {
+        events: receiver,
+        frames: frames.clone(),
+    };
+    let sender = InputSender {
+        events: sender,
+        frames,
+    };
+    (sender, input)
+}
+
+impl InputSender {
+    /// Sends `event`, stamped with the frame on screen now. False once the
+    /// screen is gone.
+    pub fn send(&self, event: TermEvent) -> bool {
+        let frame = self.frames.load(Ordering::SeqCst);
+        self.events.send((frame, event)).is_ok()
+    }
+
+    /// How many frames have been put on screen so far.
+    pub fn frames(&self) -> u64 {
+        self.frames.load(Ordering::SeqCst)
+    }
+}
+
+impl Input {
+    /// The frame just drawn is on screen now; returns its number. Events sent
+    /// from here on carry it.
+    fn frame_on_screen(&self) -> u64 {
+        self.frames.fetch_add(1, Ordering::SeqCst) + 1
+    }
+}
+
 /// Lets a frame, history included, appear at once in terminals that support it.
 pub trait FrameSync: Backend {
     fn begin_frame(&mut self) -> Result<(), Self::Error> {
@@ -146,17 +198,17 @@ pub async fn run<C: Connector>(launch: Launch<C>) -> Result<Option<String>, RunE
     let _session = TerminalSession::start()?;
     // Reads the cursor position, so it must come before the input thread starts.
     let terminal = InlineTerminal::new(CrosstermBackend::new(io::stdout()))?;
-    let (sender, keys) = mpsc::unbounded_channel();
+    let (sender, input) = input();
     let reader = TerminalReader::spawn(sender);
-    let result = run_on(terminal, keys, launch).await;
+    let result = run_on(terminal, input, launch).await;
     reader.stop();
     result
 }
 
-/// [`run`] on any backend, with terminal events from `keys`.
+/// [`run`] on any backend, with terminal events from `input`.
 pub async fn run_on<B, C>(
     mut terminal: InlineTerminal<B>,
-    mut keys: mpsc::UnboundedReceiver<TermEvent>,
+    mut input: Input,
     launch: Launch<C>,
 ) -> Result<Option<String>, RunError>
 where
@@ -200,7 +252,7 @@ where
                 Some(id) => Some(id),
                 None => {
                     let picker = Picker::new(client.list_sessions().await?, cwd, home.clone());
-                    pick(&mut terminal, &mut keys, picker).await?
+                    pick(&mut terminal, &mut input, picker).await?
                 }
             };
             match id {
@@ -245,12 +297,12 @@ where
     let mut tick = tokio::time::interval(Duration::from_millis(100));
 
     let result = loop {
-        if let Err(error) = draw(&mut ui) {
+        if let Err(error) = draw(&mut ui, &input) {
             break Err(error);
         }
         let mut quit = tokio::select! {
-            event = keys.recv() => match event {
-                Some(event) => chat.terminal(&mut ui, event),
+            event = input.events.recv() => match event {
+                Some((frame, event)) => chat.terminal(&mut ui, frame, event),
                 None => true,
             },
             Some(message) = messages.recv() => chat.message(&mut ui, message),
@@ -259,8 +311,8 @@ where
         while let Ok(message) = messages.try_recv() {
             quit |= chat.message(&mut ui, message);
         }
-        while let Ok(event) = keys.try_recv() {
-            quit |= chat.terminal(&mut ui, event);
+        while let Ok((frame, event)) = input.events.try_recv() {
+            quit |= chat.terminal(&mut ui, frame, event);
         }
         if quit {
             break Ok(());
@@ -312,7 +364,7 @@ async fn resume(
 /// Shows the session list until the user picks one (its id) or leaves (`None`).
 async fn pick<B>(
     terminal: &mut InlineTerminal<B>,
-    keys: &mut mpsc::UnboundedReceiver<TermEvent>,
+    input: &mut Input,
     mut picker: Picker,
 ) -> Result<Option<String>, RunError>
 where
@@ -329,9 +381,11 @@ where
         let drawn = terminal.draw(view.height(), |frame| view.render(frame));
         terminal.backend_mut().end_frame().map_err(terminal_error)?;
         drawn.map_err(terminal_error)?;
-        match keys.recv().await {
+        input.frame_on_screen();
+        // The list changes only with its own keys, so every key is for this frame.
+        match input.events.recv().await {
             None => return Ok(None),
-            Some(TermEvent::Key(key)) => match picker.handle_key(key) {
+            Some((_, TermEvent::Key(key))) => match picker.handle_key(key) {
                 Some(Pick::Open(id)) => return Ok(Some(id)),
                 Some(Pick::Cancel) => return Ok(None),
                 None => {}
@@ -341,15 +395,20 @@ where
     }
 }
 
-fn draw<B>(ui: &mut Ui<B>) -> Result<(), RunError>
+fn draw<B>(ui: &mut Ui<B>, input: &Input) -> Result<(), RunError>
 where
     B: FrameSync,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     ui.backend_mut().begin_frame().map_err(terminal_error)?;
-    let drawn = ui.draw(now_ms());
+    let drawn = ui.render(now_ms());
     ui.backend_mut().end_frame().map_err(terminal_error)?;
-    drawn.map_err(terminal_error)
+    drawn.map_err(terminal_error)?;
+    // Only now is the frame on screen; keys that came in while it was drawn
+    // were pressed on the one before.
+    let frame = input.frame_on_screen();
+    ui.app_mut().frame_on_screen(frame);
+    Ok(())
 }
 
 fn terminal_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> RunError {
@@ -377,10 +436,11 @@ struct Chat {
 }
 
 impl Chat {
-    /// Returns true when the user asked to quit.
-    fn terminal<B: Backend>(&mut self, ui: &mut Ui<B>, event: TermEvent) -> bool {
+    /// `event` came in while frame `frame` was on screen. Returns true when
+    /// the user asked to quit.
+    fn terminal<B: Backend>(&mut self, ui: &mut Ui<B>, frame: u64, event: TermEvent) -> bool {
         match event {
-            TermEvent::Key(key) => match ui.app_mut().handle_key(key) {
+            TermEvent::Key(key) => match ui.app_mut().handle_key_on(key, frame) {
                 Some(Action::Quit) => true,
                 Some(action) => {
                     self.act(ui.app(), action);
@@ -605,7 +665,7 @@ struct TerminalReader {
 }
 
 impl TerminalReader {
-    fn spawn(sender: mpsc::UnboundedSender<TermEvent>) -> Self {
+    fn spawn(sender: InputSender) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let thread = std::thread::spawn(move || {
@@ -613,7 +673,7 @@ impl TerminalReader {
                 match crossterm::event::poll(Duration::from_millis(50)) {
                     Ok(true) => match crossterm::event::read() {
                         Ok(event) => {
-                            if sender.send(event).is_err() {
+                            if !sender.send(event) {
                                 return;
                             }
                         }

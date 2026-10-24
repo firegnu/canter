@@ -3,7 +3,7 @@
 //! progress plus the status line, the input box (or the approval box) and the
 //! info line.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use canter_protocol::{
     ApprovalDecision, ApprovalRequest, ApprovalResolution, Event, EventPayload, Item, ItemStatus,
@@ -28,6 +28,8 @@ const MAX_INPUT_ROWS: usize = 8;
 const INPUT_LEFT: u16 = 4;
 const INPUT_CHROME: u16 = 6;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Changes of what is on screen kept for keys still waiting to be handled.
+const SHOWN_KEPT: usize = 8;
 
 /// What the caller should do after a key press.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,9 +66,10 @@ struct ApprovalCursor {
     scroll: usize,
 }
 
-/// What the last frame showed. Keys act on that, not on events that arrived
-/// since: a key meant for one request never answers the next one.
-#[derive(Debug, Default)]
+/// What a frame showed. A key acts on the frame that was on screen when it
+/// came in, not on anything drawn since: a key meant for the input box or
+/// for one request never answers the next request.
+#[derive(Debug, Default, Clone, PartialEq)]
 struct Shown {
     /// The request in the approval box; `None` when the input box showed.
     approval: Option<String>,
@@ -102,7 +105,10 @@ pub struct App {
     /// From the last layout: body rows per PgUp/PgDn and the furthest scroll.
     approval_page: usize,
     approval_max_scroll: usize,
-    shown: Shown,
+    /// What the frame being drawn shows; on screen after [`App::frame_on_screen`].
+    drawing: Shown,
+    /// Recent frames on screen: each entry holds from that frame number on.
+    shown: VecDeque<(u64, Shown)>,
     width: u16,
 }
 
@@ -129,7 +135,8 @@ impl App {
             approval: ApprovalCursor::default(),
             approval_page: 1,
             approval_max_scroll: 0,
-            shown: Shown::default(),
+            drawing: Shown::default(),
+            shown: VecDeque::new(),
             width: 80,
         }
     }
@@ -221,16 +228,45 @@ impl App {
         }
     }
 
+    /// The frame numbered `frame` is on screen now.
+    pub(crate) fn frame_on_screen(&mut self, frame: u64) {
+        if self.shown.back().map(|(_, shown)| shown) != Some(&self.drawing) {
+            self.shown.push_back((frame, self.drawing.clone()));
+            // Keys wait at most a frame or two before they are handled.
+            if self.shown.len() > SHOWN_KEPT {
+                self.shown.pop_front();
+            }
+        }
+    }
+
+    /// A key pressed on the latest frame on screen.
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let shown = self.shown.back().map(|(_, shown)| shown.clone());
+        self.key_on(key, shown.unwrap_or_default())
+    }
+
+    /// A key that came in while frame `frame` was on screen. Before any
+    /// frame, keys go to the input box.
+    pub(crate) fn handle_key_on(&mut self, key: KeyEvent, frame: u64) -> Option<Action> {
+        let shown = self
+            .shown
+            .iter()
+            .rev()
+            .find(|(since, _)| *since <= frame)
+            .map(|(_, shown)| shown.clone());
+        self.key_on(key, shown.unwrap_or_default())
+    }
+
+    fn key_on(&mut self, key: KeyEvent, shown: Shown) -> Option<Action> {
         if key.kind == KeyEventKind::Release {
             return None;
         }
-        if let Some(request_id) = self.shown.approval.clone() {
-            return self.approval_key(key, request_id);
+        if shown.approval.is_some() {
+            return self.approval_key(key, shown);
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Esc => return self.interrupt_shown(),
+            KeyCode::Esc => return self.interrupt_seen(shown.turn),
             KeyCode::Char('c') if ctrl => {
                 if self.input.is_empty() {
                     return Some(Action::Quit);
@@ -395,7 +431,7 @@ impl App {
             );
             (request.id.clone(), laid)
         });
-        self.shown = Shown {
+        self.drawing = Shown {
             approval: approval.as_ref().map(|(request, _)| request.clone()),
             answers: approval.as_ref().is_some_and(|(_, laid)| laid.fits),
             turn: self
@@ -487,17 +523,18 @@ impl App {
             })
     }
 
-    /// Keys for the approval box on screen. They answer only the request it
-    /// showed, and only when its answers were on screen; once that request
-    /// is gone, keys wait for the next frame.
-    fn approval_key(&mut self, key: KeyEvent, request_id: String) -> Option<Action> {
+    /// Keys pressed on an approval box. They answer only the request that box
+    /// showed, and only when its answers were on screen; once that request is
+    /// gone, they do nothing.
+    fn approval_key(&mut self, key: KeyEvent, shown: Shown) -> Option<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('c' | 'd') if ctrl => return Some(Action::Quit),
-            KeyCode::Esc => return self.interrupt_shown(),
+            KeyCode::Esc => return self.interrupt_seen(shown.turn),
             _ => {}
         }
-        if !self.shown.answers {
+        let request_id = shown.approval?;
+        if !shown.answers {
             return None;
         }
         let options =
@@ -549,10 +586,10 @@ impl App {
         })
     }
 
-    /// Esc stops the turn the screen showed in progress, if it still is; when
-    /// the screen showed nothing in progress it does nothing.
-    fn interrupt_shown(&mut self) -> Option<Action> {
-        let turn_id = self.shown.turn.clone()?;
+    /// Esc stops the turn the frame showed in progress, if it still is; when
+    /// the frame showed nothing in progress it does nothing.
+    fn interrupt_seen(&mut self, turn: Option<String>) -> Option<Action> {
+        let turn_id = turn?;
         let working = self
             .snapshot
             .turns

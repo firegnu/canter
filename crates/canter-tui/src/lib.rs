@@ -24,8 +24,8 @@ mod text;
 
 pub use app::{Action, App};
 pub use run::{
-    CLIENT_NAME, Connected, Connector, FrameSync, Launch, Open, RunError, SocketConnector, run,
-    run_on,
+    CLIENT_NAME, Connected, Connector, FrameSync, Input, InputSender, Launch, Open, RunError,
+    SocketConnector, input, run, run_on,
 };
 pub use terminal::InlineTerminal;
 
@@ -35,6 +35,8 @@ use ratatui::backend::Backend;
 pub struct Ui<B: Backend> {
     terminal: InlineTerminal<B>,
     app: App,
+    /// Frames [`Ui::draw`] has put on screen.
+    frames: u64,
 }
 
 impl<B: Backend> Ui<B> {
@@ -45,7 +47,11 @@ impl<B: Backend> Ui<B> {
 
     /// Continues on a terminal that already drew something (the session list).
     pub fn with_terminal(terminal: InlineTerminal<B>, app: App) -> Self {
-        Self { terminal, app }
+        Self {
+            terminal,
+            app,
+            frames: 0,
+        }
     }
 
     pub fn app(&self) -> &App {
@@ -64,8 +70,19 @@ impl<B: Backend> Ui<B> {
         self.terminal.backend_mut()
     }
 
-    /// Writes newly finished rows to the scrollback, then redraws the bottom.
+    /// Writes newly finished rows to the scrollback, then redraws the bottom,
+    /// on a backend that shows what it draws at once (such as `TestBackend`).
+    /// [`App::handle_key`] then acts on this frame.
     pub fn draw(&mut self, now_ms: i64) -> Result<(), B::Error> {
+        self.render(now_ms)?;
+        self.frames += 1;
+        self.app.frame_on_screen(self.frames);
+        Ok(())
+    }
+
+    /// Draws a frame without counting it as on screen yet: with synchronized
+    /// output the terminal shows it only when the frame ends.
+    pub(crate) fn render(&mut self, now_ms: i64) -> Result<(), B::Error> {
         let size = self.terminal.size()?;
         let rows = self.app.take_history(size.width);
         self.terminal.insert_history(&rows)?;

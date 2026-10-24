@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use axum::{Json, Router, extract::State, routing::post};
 use canter::{Command, Context};
 use canter_protocol::{SessionSnapshot, SessionStatus, TurnStatus};
 use canter_tui::client::Client;
-use canter_tui::{FrameSync, InlineTerminal, RunError, run_on};
+use canter_tui::{FrameSync, InlineTerminal, InputSender, RunError, run_on};
 use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, kill};
@@ -27,7 +28,6 @@ use ratatui::layout::{Position, Size};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::process::Child;
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use unicode_width::UnicodeWidthStr;
 
@@ -190,8 +190,8 @@ fn env_value(client_name: &str) -> String {
 
 /// A terminal running the client, with a screen the test can look at.
 struct Terminal {
-    screen: Arc<Mutex<TestBackend>>,
-    keys: mpsc::UnboundedSender<TermEvent>,
+    keys: InputSender,
+    frames: Frames,
     task: JoinHandle<Result<Option<String>, RunError>>,
 }
 
@@ -201,39 +201,70 @@ impl Terminal {
             panic!("not a chat command");
         };
         let launch = canter::prepare(args, context).await.unwrap();
-        let screen = Arc::new(Mutex::new(TestBackend::new(WIDTH, HEIGHT)));
-        let terminal = InlineTerminal::new(Screen(screen.clone())).unwrap();
-        let (keys, receiver) = mpsc::unbounded_channel();
-        let task = tokio::spawn(run_on(terminal, receiver, launch));
-        Self { screen, keys, task }
+        let (keys, input) = canter_tui::input();
+        let frames = Frames::default();
+        let terminal = InlineTerminal::new(Screen {
+            backend: Arc::new(Mutex::new(TestBackend::new(WIDTH, HEIGHT))),
+            keys: keys.clone(),
+            frames: frames.clone(),
+        })
+        .unwrap();
+        let task = tokio::spawn(run_on(terminal, input, launch));
+        Self { keys, frames, task }
     }
 
-    fn press(&self, code: KeyCode) {
-        self.press_with(code, KeyModifiers::NONE);
+    /// Sends `key` while the first frame showing `text` is drawn, before that
+    /// frame is on screen. Returns whether it has been sent.
+    fn press_while_drawing(&self, text: &str, key: KeyCode) -> Arc<AtomicBool> {
+        let sent = Arc::new(AtomicBool::new(false));
+        *self.frames.trap.lock().unwrap() = Some(Trap {
+            text: text.to_owned(),
+            key: TermEvent::Key(KeyEvent::new(key, KeyModifiers::NONE)),
+            sent: sent.clone(),
+        });
+        sent
     }
 
-    fn press_with(&self, code: KeyCode, modifiers: KeyModifiers) {
-        let _ = self
-            .keys
+    /// Waits until the client has put `count` more frames on screen.
+    async fn frames_later(&self, count: u64) {
+        let target = self.frames.done.load(Ordering::SeqCst) + count;
+        self.wait_until("frames", |terminal| {
+            terminal.frames.done.load(Ordering::SeqCst) >= target
+        })
+        .await;
+    }
+
+    async fn press(&self, code: KeyCode) {
+        self.press_with(code, KeyModifiers::NONE).await;
+    }
+
+    /// Like a user, presses a key on what the test has seen: first waits
+    /// until the client counts the frames the test saw as on screen.
+    async fn press_with(&self, code: KeyCode, modifiers: KeyModifiers) {
+        let seen = self.frames.done.load(Ordering::SeqCst);
+        self.wait_until("the frame to be on screen", |terminal| {
+            terminal.keys.frames() >= seen
+        })
+        .await;
+        self.keys
             .send(TermEvent::Key(KeyEvent::new(code, modifiers)));
     }
 
-    fn type_line(&self, text: &str) {
+    async fn type_line(&self, text: &str) {
         for c in text.chars() {
-            self.press(KeyCode::Char(c));
+            self.press(KeyCode::Char(c)).await;
         }
-        self.press(KeyCode::Enter);
+        self.press(KeyCode::Enter).await;
     }
 
-    /// The scrollback, then the screen.
+    /// The scrollback, then the screen, as of the last frame on screen.
     fn text(&self) -> String {
-        let backend = self.screen.lock().unwrap();
-        rows(backend.scrollback()) + &rows(backend.buffer())
+        self.frames.visible.lock().unwrap().text.clone()
     }
 
     /// Only what is on the screen now.
     fn screen(&self) -> String {
-        rows(self.screen.lock().unwrap().buffer())
+        self.frames.visible.lock().unwrap().screen.clone()
     }
 
     /// The screen's status line: the row above the input or approval box.
@@ -272,7 +303,8 @@ impl Terminal {
 
     /// Ctrl+C on an empty input quits; returns the session id the client had.
     async fn quit(self) -> String {
-        self.press_with(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        self.press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
+            .await;
         tokio::time::timeout(WAIT, self.task)
             .await
             .expect("client quits")
@@ -282,8 +314,59 @@ impl Terminal {
     }
 }
 
-/// The test's handle on a TestBackend that the client draws on.
-struct Screen(Arc<Mutex<TestBackend>>);
+/// The client draws on a TestBackend. Like a terminal with synchronized
+/// output, a frame is on screen only once `end_frame` is done; the test sees
+/// only frames on screen.
+struct Screen {
+    backend: Arc<Mutex<TestBackend>>,
+    keys: InputSender,
+    frames: Frames,
+}
+
+/// What is on screen, how many frames the client finished, and a key to send
+/// while a frame is drawn.
+#[derive(Clone, Default)]
+struct Frames {
+    visible: Arc<Mutex<Visible>>,
+    done: Arc<AtomicU64>,
+    trap: Arc<Mutex<Option<Trap>>>,
+}
+
+#[derive(Default)]
+struct Visible {
+    /// The scrollback, then the screen.
+    text: String,
+    screen: String,
+}
+
+/// Send `key` while the frame showing `text` is drawn but not yet on screen.
+struct Trap {
+    text: String,
+    key: TermEvent,
+    sent: Arc<AtomicBool>,
+}
+
+impl FrameSync for Screen {
+    fn end_frame(&mut self) -> Result<(), Self::Error> {
+        let backend = self.backend.lock().unwrap();
+        let screen = rows(backend.buffer());
+        let text = rows(backend.scrollback()) + &screen;
+        drop(backend);
+        let mut trap = self.frames.trap.lock().unwrap();
+        if trap
+            .as_ref()
+            .is_some_and(|trap| screen.contains(&trap.text))
+        {
+            let trap = trap.take().unwrap();
+            self.keys.send(trap.key);
+            trap.sent.store(true, Ordering::SeqCst);
+        }
+        drop(trap);
+        *self.frames.visible.lock().unwrap() = Visible { text, screen };
+        self.frames.done.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
 
 impl Backend for Screen {
     type Error = std::convert::Infallible;
@@ -295,7 +378,7 @@ impl Backend for Screen {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
-        let mut backend = self.0.lock().unwrap();
+        let mut backend = self.backend.lock().unwrap();
         let width = backend.size()?.width;
         let blank = Cell::default();
         for (x, y, cell) in content {
@@ -307,38 +390,36 @@ impl Backend for Screen {
         Ok(())
     }
     fn append_lines(&mut self, n: u16) -> Result<(), Self::Error> {
-        self.0.lock().unwrap().append_lines(n)
+        self.backend.lock().unwrap().append_lines(n)
     }
     fn hide_cursor(&mut self) -> Result<(), Self::Error> {
-        self.0.lock().unwrap().hide_cursor()
+        self.backend.lock().unwrap().hide_cursor()
     }
     fn show_cursor(&mut self) -> Result<(), Self::Error> {
-        self.0.lock().unwrap().show_cursor()
+        self.backend.lock().unwrap().show_cursor()
     }
     fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
-        self.0.lock().unwrap().get_cursor_position()
+        self.backend.lock().unwrap().get_cursor_position()
     }
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
-        self.0.lock().unwrap().set_cursor_position(position)
+        self.backend.lock().unwrap().set_cursor_position(position)
     }
     fn clear(&mut self) -> Result<(), Self::Error> {
-        self.0.lock().unwrap().clear()
+        self.backend.lock().unwrap().clear()
     }
     fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
-        self.0.lock().unwrap().clear_region(clear_type)
+        self.backend.lock().unwrap().clear_region(clear_type)
     }
     fn size(&self) -> Result<Size, Self::Error> {
-        self.0.lock().unwrap().size()
+        self.backend.lock().unwrap().size()
     }
     fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
-        self.0.lock().unwrap().window_size()
+        self.backend.lock().unwrap().window_size()
     }
     fn flush(&mut self) -> Result<(), Self::Error> {
-        self.0.lock().unwrap().flush()
+        self.backend.lock().unwrap().flush()
     }
 }
-
-impl FrameSync for Screen {}
 
 /// The buffer as text, one row per line, trailing spaces trimmed. Cells
 /// hidden under a wide character are skipped.
@@ -409,10 +490,10 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     let daemon = Pid::from_raw(registration["pid"].as_u64().unwrap() as i32);
     assert_ne!(daemon.as_raw() as u32, std::process::id());
 
-    terminal.type_line("把环境写出来");
+    terminal.type_line("把环境写出来").await;
     terminal.wait_for("要跑这条命令吗？").await;
     assert!(terminal.screen().contains(WRITE_ENV), "the whole command");
-    terminal.press(KeyCode::Enter);
+    terminal.press(KeyCode::Enter).await;
     terminal.wait_for("写好了").await;
     assert!(terminal.text().contains("你选了：允许这一次"));
     assert_eq!(
@@ -450,7 +531,7 @@ async fn two_terminals_share_one_session() {
     b.wait_for("回答一").await;
     assert!(b.text().contains("› 第一句  （来自 canter-tui a）"));
 
-    b.type_line("第二句");
+    b.type_line("第二句").await;
     for terminal in [&a, &b] {
         terminal.wait_for("回答二").await;
     }
@@ -484,7 +565,7 @@ async fn client_reconnects_after_the_server_restarts() {
     let mut world = World::new(vec![text_reply("回答一"), text_reply("回答二")]).await;
     world.start_server().await;
     let a = world.open(&[], "canter-tui a").await;
-    a.type_line("第一句");
+    a.type_line("第一句").await;
     a.wait_for("回答一").await;
 
     world.stop_server(Signal::SIGTERM).await;
@@ -493,7 +574,7 @@ async fn client_reconnects_after_the_server_restarts() {
     world.start_server().await;
     a.wait_until("reconnected", |a| !a.status().contains("重连中"))
         .await;
-    a.type_line("第二句");
+    a.type_line("第二句").await;
     a.wait_for("回答二").await;
     a.wait_idle().await;
     let id = world.only_session().await;
@@ -524,16 +605,16 @@ async fn the_later_answer_to_an_approval_closes_and_names_the_first() {
     // B opens the session from the list: this directory's sessions come first.
     let b = world.open(&["--resume"], "canter-tui b").await;
     b.wait_for("接着哪个会话？").await;
-    b.press(KeyCode::Enter);
+    b.press(KeyCode::Enter).await;
     b.wait_idle().await;
 
-    a.type_line("跑一下");
+    a.type_line("跑一下").await;
     for terminal in [&a, &b] {
         terminal.wait_for("要跑这条命令吗？").await;
     }
     // A allows (option 1), B declines (key 3), at the same moment.
-    a.press(KeyCode::Enter);
-    b.press(KeyCode::Char('3'));
+    a.press(KeyCode::Enter).await;
+    b.press(KeyCode::Char('3')).await;
     for terminal in [&a, &b] {
         terminal
             .wait_until("the box to close", |t| {
@@ -580,7 +661,7 @@ async fn approval_box_shows_control_characters_in_the_command() {
         a.screen()
     );
 
-    a.press(KeyCode::Enter);
+    a.press(KeyCode::Enter).await;
     a.wait_for("跑完了").await;
     assert_eq!(
         fs::read_to_string(world.path("work/approval-proof.txt")).unwrap(),
@@ -617,12 +698,50 @@ async fn a_session_closed_by_another_client_stays_closed() {
     let b = world.open(&["--resume", &id], "canter-tui b").await;
     b.wait_idle().await;
     a.wait_idle().await;
-    b.type_line("第二句");
+    b.type_line("第二句").await;
     a.wait_for("回答二").await;
     assert!(a.text().contains("› 第二句  （来自 canter-tui b）"));
 
     assert_eq!(a.quit().await, id);
     assert_eq!(b.quit().await, id);
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// Enter comes in while the approval box's first frame is drawn but not yet
+/// on screen: it was pressed on the input box still showing, so it does not
+/// answer the approval. Enter pressed once the box is on screen does.
+#[tokio::test]
+async fn a_key_that_comes_in_while_the_box_is_drawn_does_not_answer_it() {
+    let mut world = World::new(vec![
+        shell_reply("printf B > second-proof.txt"),
+        text_reply("跑完了"),
+    ])
+    .await;
+    world.start_server().await;
+    let a = world.open(&[], "canter-tui a").await;
+    a.wait_idle().await;
+    let sent = a.press_while_drawing("要跑这条命令吗？", KeyCode::Enter);
+    a.type_line("跑一下").await;
+    a.wait_until("Enter sent mid-frame", |_| sent.load(Ordering::SeqCst))
+        .await;
+    a.frames_later(2).await;
+    // Give a wrong answer every chance to land.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let id = world.only_session().await;
+    assert_eq!(
+        world.snapshot(&id).await.pending_requests.len(),
+        1,
+        "the Enter answered a box that was not on screen yet"
+    );
+    assert!(!world.path("work/second-proof.txt").exists());
+
+    a.press(KeyCode::Enter).await;
+    a.wait_for("跑完了").await;
+    assert_eq!(
+        fs::read_to_string(world.path("work/second-proof.txt")).unwrap(),
+        "B"
+    );
+    a.quit().await;
     world.stop_server(Signal::SIGTERM).await;
 }
 
@@ -640,7 +759,7 @@ async fn approval_box_matches_the_server_after_a_restart() {
     .await;
     world.start_server().await;
     let a = world.open(&[], "canter-tui a").await;
-    a.type_line("跑一下");
+    a.type_line("跑一下").await;
     a.wait_for("要跑这条命令吗？").await;
     assert!(a.status().contains("等你批准"));
 
@@ -662,9 +781,9 @@ async fn approval_box_matches_the_server_after_a_restart() {
     assert_eq!(snapshot.status, SessionStatus::Idle);
     assert_eq!(snapshot.turns[0].status, TurnStatus::Interrupted);
 
-    a.type_line("再跑一下");
+    a.type_line("再跑一下").await;
     a.wait_for("要跑这条命令吗？").await;
-    a.press(KeyCode::Char('1'));
+    a.press(KeyCode::Char('1')).await;
     a.wait_for("跑完了").await;
     a.wait_idle().await;
     assert_eq!(
