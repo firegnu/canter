@@ -8,7 +8,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::markdown;
-use crate::text::{LogicalLine, sanitize, spans_width, truncate, wrap};
+use crate::text::{LogicalLine, sanitize, spans_width, truncate, visible, wrap};
 
 /// Output lines a finished command keeps.
 const FINISHED_TAIL: usize = 3;
@@ -406,13 +406,14 @@ fn command_card(
 }
 
 /// `● 跑 <first line of the command>` with `right` flush with the right edge.
+/// Control characters in the command show as escapes, as in the approval box.
 fn command_title(
     command: &str,
     bullet: Style,
     right: Vec<Span<'static>>,
     width: u16,
 ) -> Line<'static> {
-    let clean = sanitize(command);
+    let clean = visible(command);
     let mut lines = clean.lines();
     let mut shown = lines.next().unwrap_or_default().to_owned();
     if lines.next().is_some() {
@@ -454,8 +455,9 @@ fn format_duration(ms: u64) -> String {
 }
 
 /// Paths inside the session's working directory are shown relative to it.
+/// Control characters show as escapes.
 pub(crate) fn display_path(path: &str, cwd: &str) -> String {
-    let path = sanitize(path);
+    let path = visible(path);
     if cwd.is_empty() {
         return path;
     }

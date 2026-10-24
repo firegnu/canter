@@ -1,6 +1,7 @@
 //! The approval box. It takes the input box's place while the model waits for
 //! permission to run a command or change a file, and shows the whole command
-//! or diff. A long body scrolls.
+//! or diff, control characters drawn as escapes. The answers always fit; a
+//! long body scrolls in the rows left over.
 
 use canter_protocol::{
     ApprovalDecision, ApprovalRequest, Item, PatchChangeKind, PendingRequest, SessionSnapshot,
@@ -10,7 +11,7 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 use crate::cells::{DiffKind, diff_style, display_path, parse_diff};
-use crate::text::{LogicalLine, sanitize, wrap};
+use crate::text::{LogicalLine, visible, wrap};
 
 /// The box laid out for one frame.
 pub(crate) struct ApprovalBox {
@@ -23,6 +24,9 @@ pub(crate) struct ApprovalBox {
     /// Body rows one PgUp/PgDn moves.
     pub page: usize,
     pub max_scroll: usize,
+    /// False when the window is too small for the answers: the box says so
+    /// and takes no answer.
+    pub fits: bool,
 }
 
 /// The answers offered, in the box's order. Unknown answers are left out.
@@ -92,7 +96,7 @@ pub(crate) fn layout(
             (title.to_owned(), change_body(approval, &kind, cwd, inner))
         }
         tool => (
-            format!("要允许 {} 吗？", sanitize(tool)),
+            format!("要允许 {} 吗？", visible(tool)),
             json_body(&approval.arguments, inner),
         ),
     };
@@ -110,31 +114,57 @@ pub(crate) fn layout(
         } else {
             Line::from(vec![Span::raw("  "), Span::raw(text)])
         });
-    }
-    if options.get(selected) == Some(&ApprovalDecision::AcceptForSession) {
-        let note = LogicalLine::new(
-            vec![Span::raw("  ")],
-            vec![Span::styled(
-                session_note(&approval.tool),
-                Style::new().yellow(),
-            )],
-        );
-        tail.extend(wrap(&note, inner));
+        // What it grants, readable before choosing it (also with its number key).
+        if *decision == ApprovalDecision::AcceptForSession {
+            let note = LogicalLine::new(
+                vec![Span::raw("     ")],
+                vec![Span::styled(
+                    session_note(&approval.tool),
+                    Style::new().yellow(),
+                )],
+            );
+            tail.extend(wrap(&note, inner));
+        }
     }
 
-    let room = usize::from(max_height)
-        .saturating_sub(2 + tail.len())
-        .max(3);
-    let visible = body.len().min(room);
-    let max_scroll = body.len() - visible;
+    let border = Style::new().yellow();
+    let title = Line::from(vec![
+        Span::styled("─ ", border),
+        Span::styled(title, Style::new().bold()),
+        Span::raw(" "),
+    ]);
+    let footer = |hint: &'static str| {
+        Line::from(vec![
+            Span::styled("─ ", border),
+            Span::styled(hint, Style::new().dim()),
+            Span::styled(" ─", border),
+        ])
+    };
+    // The answers come first; the body gets the rows left, at least one.
+    let room = usize::from(max_height).saturating_sub(2 + tail.len());
+    if room == 0 {
+        return ApprovalBox {
+            title,
+            position: None,
+            rows: vec![Line::from(Span::styled(
+                " 窗口太小，放不下批准框；把窗口拉高一点再选",
+                Style::new().yellow(),
+            ))],
+            footer: footer("Esc 打断这一轮"),
+            page: 1,
+            max_scroll: 0,
+            fits: false,
+        };
+    }
+    let shown = body.len().min(room);
+    let max_scroll = body.len() - shown;
     let scroll = scroll.min(max_scroll);
-    let mut rows: Vec<Line<'static>> = body[scroll..scroll + visible].to_vec();
+    let mut rows: Vec<Line<'static>> = body[scroll..scroll + shown].to_vec();
     rows.extend(tail);
     for row in &mut rows {
         row.spans.insert(0, Span::raw(" "));
     }
 
-    let border = Style::new().yellow();
     let hint = if max_scroll > 0 {
         "↑↓ 选，PgUp/PgDn 翻看，Enter 确定，数字键直接选，Esc 打断这一轮"
     } else {
@@ -143,7 +173,7 @@ pub(crate) fn layout(
     let position = (max_scroll > 0).then(|| {
         Line::from(vec![
             Span::styled(
-                format!(" {}–{} / {} ", scroll + 1, scroll + visible, body.len()),
+                format!(" {}–{} / {} ", scroll + 1, scroll + shown, body.len()),
                 Style::new().dim(),
             ),
             Span::styled("─", border),
@@ -151,20 +181,13 @@ pub(crate) fn layout(
         .right_aligned()
     });
     ApprovalBox {
-        title: Line::from(vec![
-            Span::styled("─ ", border),
-            Span::styled(title, Style::new().bold()),
-            Span::raw(" "),
-        ]),
+        title,
         position,
         rows,
-        footer: Line::from(vec![
-            Span::styled("─ ", border),
-            Span::styled(hint, Style::new().dim()),
-            Span::styled(" ─", border),
-        ]),
-        page: visible.max(1),
+        footer: footer(hint),
+        page: shown.max(1),
         max_scroll,
+        fits: true,
     }
 }
 
@@ -175,7 +198,7 @@ fn session_note(tool: &str) -> String {
         "shell" => "这个会话里以后所有命令都直接跑，不再问".to_owned(),
         "write" => "这个会话里以后整文件写入都不再问".to_owned(),
         "edit" => "这个会话里以后按文字替换改文件都不再问".to_owned(),
-        other => format!("这个会话里以后 {} 都不再问", sanitize(other)),
+        other => format!("这个会话里以后 {} 都不再问", visible(other)),
     };
     format!("{what}；之后把权限模式改回「每次问」，这个允许照样有效。")
 }
@@ -198,7 +221,7 @@ fn shell_body(
         .and_then(Value::as_str)
         .unwrap_or(item_command);
     let mut rows = Vec::new();
-    for line in sanitize(command).split('\n') {
+    for line in visible(command).split('\n') {
         rows.extend(wrap(
             &LogicalLine::new(Vec::new(), vec![Span::raw(line.to_owned())]),
             width,
@@ -212,7 +235,7 @@ fn shell_body(
     rows.extend(wrap(
         &LogicalLine::new(
             vec![Span::styled("目录：", Style::new().dim())],
-            vec![Span::raw(shorten_home(&sanitize(cwd), home))],
+            vec![Span::raw(shorten_home(&visible(cwd), home))],
         ),
         width,
     ));
@@ -229,7 +252,7 @@ fn change_body(
     let text = |key: &str| approval.arguments.get(key).and_then(Value::as_str);
     // The tools resolve the path; the resolved one is what really gets written.
     let path = text("resolvedPath").or(text("path")).unwrap_or_default();
-    let diff = parse_diff(&sanitize(text("diff").unwrap_or_default()), kind);
+    let diff = parse_diff(&visible(text("diff").unwrap_or_default()), kind);
     let count = |wanted| diff.iter().filter(|(kind, _)| *kind == wanted).count();
     let added = Span::styled(format!("+{}", count(DiffKind::Added)), Style::new().green());
     let removed = Span::styled(format!("−{}", count(DiffKind::Removed)), Style::new().red());
@@ -262,7 +285,7 @@ fn change_body(
 /// Arguments of a tool the box does not know, as indented JSON.
 fn json_body(arguments: &Value, width: u16) -> Vec<Line<'static>> {
     let text = serde_json::to_string_pretty(arguments).unwrap_or_default();
-    sanitize(&text)
+    visible(&text)
         .split('\n')
         .flat_map(|line| {
             wrap(

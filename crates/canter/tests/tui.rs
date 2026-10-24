@@ -162,6 +162,20 @@ impl World {
         assert_eq!(sessions.len(), 1);
         sessions[0].id.clone()
     }
+
+    /// Another client closes the session: `DELETE /v1/sessions/{id}`.
+    async fn close_session(&self, id: &str) {
+        let http = reqwest::Client::builder()
+            .unix_socket(self.path("state/server.sock"))
+            .build()
+            .unwrap();
+        let response = http
+            .delete(format!("http://localhost/v1/sessions/{id}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success(), "{response:?}");
+    }
 }
 
 impl Drop for World {
@@ -274,11 +288,23 @@ struct Screen(Arc<Mutex<TestBackend>>);
 impl Backend for Screen {
     type Error = std::convert::Infallible;
 
+    /// Like a terminal, a wide character also covers the cell after it.
+    /// TestBackend alone would keep what was there, and ratatui, which
+    /// counts on the terminal clearing it, never redraws that cell.
     fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
-        self.0.lock().unwrap().draw(content)
+        let mut backend = self.0.lock().unwrap();
+        let width = backend.size()?.width;
+        let blank = Cell::default();
+        for (x, y, cell) in content {
+            backend.draw(std::iter::once((x, y, cell)))?;
+            if cell.symbol().width() > 1 && x + 1 < width {
+                backend.draw(std::iter::once((x + 1, y, &blank)))?;
+            }
+        }
+        Ok(())
     }
     fn append_lines(&mut self, n: u16) -> Result<(), Self::Error> {
         self.0.lock().unwrap().append_lines(n)
@@ -535,6 +561,68 @@ async fn the_later_answer_to_an_approval_closes_and_names_the_first() {
 
     a.quit().await;
     b.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// The box shows exactly what will run: a carriage return in the command does
+/// not hide what comes before it, it shows as `\r`.
+#[tokio::test]
+async fn approval_box_shows_control_characters_in_the_command() {
+    let hidden = "printf review-proof > approval-proof.txt #\recho safe";
+    let mut world = World::new(vec![shell_reply(hidden), text_reply("跑完了")]).await;
+    world.start_server().await;
+    let a = world.open(&["跑一下"], "canter-tui a").await;
+    a.wait_for("要跑这条命令吗？").await;
+    assert!(
+        a.screen()
+            .contains(r"printf review-proof > approval-proof.txt #\recho safe"),
+        "the whole command:\n{}",
+        a.screen()
+    );
+
+    a.press(KeyCode::Enter);
+    a.wait_for("跑完了").await;
+    assert_eq!(
+        fs::read_to_string(world.path("work/approval-proof.txt")).unwrap(),
+        "review-proof",
+        "what ran is what the box showed"
+    );
+    a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// Another client closes the session on the same server. The terminal
+/// watching it does not open it again and says it is closed; opening it on
+/// purpose with `--resume` still works, and the watching terminal follows.
+#[tokio::test]
+async fn a_session_closed_by_another_client_stays_closed() {
+    let mut world = World::new(vec![text_reply("回答一"), text_reply("回答二")]).await;
+    world.start_server().await;
+    let a = world.open(&["第一句"], "canter-tui a").await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+    let id = world.only_session().await;
+
+    world.close_session(&id).await;
+    // Long enough for the watching terminal to reconnect a few times over.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        world.snapshot(&id).await.status,
+        SessionStatus::Closed,
+        "the watching terminal opened the session again"
+    );
+    a.wait_until("会话已关闭", |a| a.status().contains("会话已关闭"))
+        .await;
+
+    let b = world.open(&["--resume", &id], "canter-tui b").await;
+    b.wait_idle().await;
+    a.wait_idle().await;
+    b.type_line("第二句");
+    a.wait_for("回答二").await;
+    assert!(a.text().contains("› 第二句  （来自 canter-tui b）"));
+
+    assert_eq!(a.quit().await, id);
+    assert_eq!(b.quit().await, id);
     world.stop_server(Signal::SIGTERM).await;
 }
 

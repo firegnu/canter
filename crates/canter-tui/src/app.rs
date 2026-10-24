@@ -64,6 +64,18 @@ struct ApprovalCursor {
     scroll: usize,
 }
 
+/// What the last frame showed. Keys act on that, not on events that arrived
+/// since: a key meant for one request never answers the next one.
+#[derive(Debug, Default)]
+struct Shown {
+    /// The request in the approval box; `None` when the input box showed.
+    approval: Option<String>,
+    /// Whether that box had room for its answers.
+    answers: bool,
+    /// The turn in progress.
+    turn: Option<String>,
+}
+
 pub struct App {
     snapshot: SessionSnapshot,
     home: Option<String>,
@@ -90,6 +102,7 @@ pub struct App {
     /// From the last layout: body rows per PgUp/PgDn and the furthest scroll.
     approval_page: usize,
     approval_max_scroll: usize,
+    shown: Shown,
     width: u16,
 }
 
@@ -116,6 +129,7 @@ impl App {
             approval: ApprovalCursor::default(),
             approval_page: 1,
             approval_max_scroll: 0,
+            shown: Shown::default(),
             width: 80,
         }
     }
@@ -211,15 +225,12 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return None;
         }
-        if let Some((request, approval)) = self.open_approval() {
-            let request_id = request.id.clone();
-            let turn_id = request.turn_id.clone();
-            let options = approval::options(approval);
-            return self.approval_key(key, request_id, turn_id, &options);
+        if let Some(request_id) = self.shown.approval.clone() {
+            return self.approval_key(key, request_id);
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Esc => return self.interrupt_current(),
+            KeyCode::Esc => return self.interrupt_shown(),
             KeyCode::Char('c') if ctrl => {
                 if self.input.is_empty() {
                     return Some(Action::Quit);
@@ -384,6 +395,17 @@ impl App {
             );
             (request.id.clone(), laid)
         });
+        self.shown = Shown {
+            approval: approval.as_ref().map(|(request, _)| request.clone()),
+            answers: approval.as_ref().is_some_and(|(_, laid)| laid.fits),
+            turn: self
+                .snapshot
+                .turns
+                .iter()
+                .rev()
+                .find(|turn| turn.status == TurnStatus::InProgress)
+                .map(|turn| turn.id.clone()),
+        };
         let bottom = match approval {
             Some((request, laid)) => {
                 self.approval_page = laid.page;
@@ -465,13 +487,31 @@ impl App {
             })
     }
 
-    fn approval_key(
-        &mut self,
-        key: KeyEvent,
-        request_id: String,
-        turn_id: String,
-        options: &[ApprovalDecision],
-    ) -> Option<Action> {
+    /// Keys for the approval box on screen. They answer only the request it
+    /// showed, and only when its answers were on screen; once that request
+    /// is gone, keys wait for the next frame.
+    fn approval_key(&mut self, key: KeyEvent, request_id: String) -> Option<Action> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('c' | 'd') if ctrl => return Some(Action::Quit),
+            KeyCode::Esc => return self.interrupt_shown(),
+            _ => {}
+        }
+        if !self.shown.answers {
+            return None;
+        }
+        let options =
+            self.snapshot
+                .pending_requests
+                .iter()
+                .find_map(|request| match &request.kind {
+                    RequestKind::Approval(approval)
+                        if request.id == request_id && !self.answered.contains(&request.id) =>
+                    {
+                        Some(approval::options(approval))
+                    }
+                    _ => None,
+                })?;
         if self.approval.request != request_id {
             self.approval = ApprovalCursor {
                 request: request_id.clone(),
@@ -479,10 +519,7 @@ impl App {
             };
         }
         let cursor = &mut self.approval;
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let decision = match key.code {
-            KeyCode::Char('c' | 'd') if ctrl => return Some(Action::Quit),
-            KeyCode::Esc => return self.interrupt(turn_id),
             KeyCode::Up => {
                 cursor.selected = cursor.selected.saturating_sub(1);
                 None
@@ -512,15 +549,18 @@ impl App {
         })
     }
 
-    /// Esc while working stops the turn; while idle it does nothing.
-    fn interrupt_current(&mut self) -> Option<Action> {
-        let turn = self
+    /// Esc stops the turn the screen showed in progress, if it still is; when
+    /// the screen showed nothing in progress it does nothing.
+    fn interrupt_shown(&mut self) -> Option<Action> {
+        let turn_id = self.shown.turn.clone()?;
+        let working = self
             .snapshot
             .turns
             .iter()
-            .rev()
-            .find(|turn| turn.status == TurnStatus::InProgress)?;
-        let turn_id = turn.id.clone();
+            .any(|turn| turn.id == turn_id && turn.status == TurnStatus::InProgress);
+        if !working {
+            return None;
+        }
         self.interrupt(turn_id)
     }
 
@@ -683,7 +723,11 @@ impl App {
                     Style::new().red(),
                 ))
             }
-            SessionStatus::Closed => Line::from(Span::styled(" 会话已结束", Style::new().dim())),
+            // Only an explicit `canter --resume` opens it again.
+            SessionStatus::Closed => Line::from(Span::styled(
+                " ■ 会话已关闭 · 要接着聊，退出后用 canter --resume",
+                Style::new().yellow(),
+            )),
             SessionStatus::Idle | SessionStatus::Unknown => Line::default(),
         }
     }

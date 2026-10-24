@@ -24,6 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         connected: Connected {
             client: Client::new(&socket)?,
             warning: None,
+            server: None,
         },
         connector: SocketConnector(socket),
         open: Open::Resume {

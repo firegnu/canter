@@ -142,6 +142,7 @@ fn connected(connection: canter_server::Connection) -> Result<Connected, String>
     Ok(Connected {
         client,
         warning: connection.version_warning,
+        server: Some(connection.registration.instance),
     })
 }
 

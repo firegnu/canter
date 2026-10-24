@@ -3,9 +3,11 @@
 //! terminal; [`run_on`] does the same on any backend.
 //!
 //! When the event stream drops, the screen keeps going and says 「重连中」:
-//! it finds the server again through the [`Connector`], sends `resume` with
-//! this terminal's environment (a restarted server has not opened the session
-//! yet), and subscribes from the last event it had.
+//! it finds the server again through the [`Connector`] and subscribes from the
+//! last event it had. Only a new server process gets a `resume` with this
+//! terminal's environment first (a restarted server has not opened the
+//! session yet). The same server still has the session open, unless another
+//! client closed it, and then it stays closed.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -49,6 +51,9 @@ pub struct Connected {
     pub client: Client,
     /// Shown to the user, e.g. that the server runs another version.
     pub warning: Option<String>,
+    /// Which server process this is (its registered instance). `None` when
+    /// the connector cannot tell, and then every reconnect resumes.
+    pub server: Option<String>,
 }
 
 /// Finds the server again after the connection dropped.
@@ -66,6 +71,7 @@ impl Connector for SocketConnector {
         Ok(Connected {
             client,
             warning: None,
+            server: None,
         })
     }
 }
@@ -225,6 +231,7 @@ where
     let pump = tokio::spawn(pump(
         connector,
         stream,
+        connected.server,
         session.clone(),
         env,
         sender.clone(),
@@ -484,11 +491,13 @@ impl Chat {
 }
 
 /// Forwards events to the screen. When the stream drops, keeps trying to
-/// reach the server again, then resumes the session and subscribes from the
-/// last event delivered, so nothing is lost or repeated.
+/// reach the server again, then subscribes from the last event delivered, so
+/// nothing is lost or repeated. `server` is the server process the stream
+/// came from.
 async fn pump<C: Connector>(
     connector: C,
     mut stream: EventStream,
+    mut server: Option<String>,
     session: String,
     env: BTreeMap<String, String>,
     sender: mpsc::UnboundedSender<Message>,
@@ -511,8 +520,9 @@ async fn pump<C: Connector>(
         let cursor = stream.last_seq();
         stream = loop {
             tokio::time::sleep(RETRY).await;
-            match reconnect(&connector, &session, &env, cursor).await {
+            match reconnect(&connector, server.as_deref(), &session, &env, cursor).await {
                 Ok((connected, stream)) => {
+                    server.clone_from(&connected.server);
                     if sender.send(Message::Reconnected(connected)).is_err() {
                         return;
                     }
@@ -528,18 +538,24 @@ async fn pump<C: Connector>(
     }
 }
 
+/// Connects again; `previous` is the server process the last stream came from.
 async fn reconnect<C: Connector>(
     connector: &C,
+    previous: Option<&str>,
     session: &str,
     env: &BTreeMap<String, String>,
     cursor: u64,
 ) -> Result<(Connected, EventStream), String> {
     let connected = connector.connect().await?;
     let client = &connected.client;
-    client
-        .resume(session, env)
-        .await
-        .map_err(|error| error.to_string())?;
+    // Resuming on the same server would open a session someone closed.
+    let same_server = connected.server.is_some() && connected.server.as_deref() == previous;
+    if !same_server {
+        client
+            .resume(session, env)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     let stream = client
         .subscribe(session, cursor)
         .await
