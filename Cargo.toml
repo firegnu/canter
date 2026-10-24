@@ -20,3 +20,7 @@ schemars = "=1.2.3"
 ts-rs = { version = "=12.0.1", features = ["serde-json-impl", "no-serde-warnings"] }
 thiserror = "=2.0.21"
 tempfile = "=3.27.0"
+async-trait = "=0.1.92"
+tokio-util = { version = "=0.7.20", features = ["rt"] }
+similar = "=2.7.0"
+nix = { version = "=0.31.3", features = ["signal", "process"] }
