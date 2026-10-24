@@ -11,6 +11,7 @@ pub mod routes {
     pub const INFO: &str = "/v1/info";
     pub const SESSIONS: &str = "/v1/sessions";
     pub const SESSION: &str = "/v1/sessions/{id}";
+    pub const RESUME: &str = "/v1/sessions/{id}/resume";
     pub const INPUT: &str = "/v1/sessions/{id}/input";
     pub const INTERRUPT: &str = "/v1/sessions/{id}/interrupt";
     pub const REQUEST: &str = "/v1/sessions/{id}/requests/{rid}";
@@ -85,7 +86,17 @@ macro_rules! session_response {
         }
     )+};
 }
-session_response!(SessionCreateResponse, SessionReadResponse);
+session_response!(
+    SessionCreateResponse,
+    SessionReadResponse,
+    SessionResumeResponse
+);
+
+/// POST /v1/sessions/{id}/resume. Never log this body or replace an open session's environment.
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct SessionResumeParams {
+    pub env: BTreeMap<String, String>,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -209,6 +220,7 @@ pub enum ErrorCode {
     RequestNotFound,
     InvalidDecision,
     SessionClosed,
+    SessionNotResumed,
     Conflict,
     Internal,
     #[serde(other)]

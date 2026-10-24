@@ -14,6 +14,7 @@
 | POST SESSIONS | SessionCreateParams | SessionCreateResponse |
 | GET SESSIONS | SessionListParams | SessionListResponse |
 | GET SESSION | SessionReadParams | SessionReadResponse |
+| POST RESUME | SessionResumeParams | SessionResumeResponse |
 | POST INPUT | SessionInputParams | SessionInputResponse |
 | POST INTERRUPT | SessionInterruptParams | SessionInterruptResponse |
 | POST REQUEST | RequestResolveParams | RequestResolveResponse |
@@ -53,6 +54,13 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 `cwd` 同时出现在公开设置和会话摘要中，供显示、选择恢复目录；PATCH 不修改它。
 环境变量只交给服务端内存中的执行器，不存盘，不进入事件、公开设置或快照。
 创建请求不实现 Debug，调用方也不得记录其请求体。
+创建请求的 `model` 为空字符串时使用服务端配置里的默认模型；非空时使用请求指定的模型。
+
+`POST /v1/sessions/{id}/resume` 的请求体为 `{ "env": { ... } }`，也不实现 Debug、
+不得记录请求体。服务端重启后，会话默认未打开；接着聊用新环境打开，并返回快照及其
+`eventSeq`。已经打开时只返回当前快照，保留原环境。未打开时快照和事件直接从盘读取，
+input、interrupt、批准回答、compact、PATCH、DELETE 返回 `session_not_resumed`，
+客户端须先 resume；不存在的会话仍返回 `session_not_found`。
 
 ### 错误与 SSE
 
@@ -63,6 +71,7 @@ HTTP 错误统一返回 `ErrorResponse { code, message }`，不带成功回复�
 | invalid_request | 400 | 请求格式、未知输入/权限模式或续传游标无效 |
 | session_not_found / request_not_found | 404 | 会话或请求不存在 |
 | turn_mismatch / session_closed / conflict | 409 | 目标轮不符、会话已关闭或状态冲突 |
+| session_not_resumed | 409 | 会话尚未打开，请先用 resume 重新提供环境 |
 | invalid_decision | 400 | 回答不在 availableDecisions 中（包括 Unknown） |
 | internal | 500 | 服务端内部错误，message 不包含私有数据 |
 
