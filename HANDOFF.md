@@ -4,7 +4,7 @@
 
 ## 装的哪一版、怎么退回
 
-- 10-24 装了 main `1f6cebe`（0.1.0，含 P1-9、P1-11、P1-12）：`cargo install --locked --path crates/canter`，程序在 `~/.cargo/bin/canter`。不是系统服务，服务端由客户端在后台起，状态在 `~/.canter/`（DESIGN 第 15、16 条）。
+- 10-24 装了 main `8879bb1`（0.1.0，含 P1-9 到 P1-14）：`cargo install --locked --path crates/canter`，程序在 `~/.cargo/bin/canter`。不是系统服务，服务端由客户端在后台起，状态在 `~/.canter/`（DESIGN 第 15、16 条）。
 - 换版本：在 main 上重新 `cargo install --locked --path crates/canter`，再 `canter serve --replace`。
 - 退回：按 `~/.canter/server.json` 的 pid 停服务端（SIGTERM），`cargo uninstall canter`。`~/.canter/` 有会话和 key，删不删问用户。
 
