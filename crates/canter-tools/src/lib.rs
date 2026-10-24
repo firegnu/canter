@@ -720,7 +720,7 @@ fn tool_error(
                 .map(|path| FileUpdateChange {
                     path: path.into(),
                     kind: PatchChangeKind::Unknown,
-                    diff: arguments["diff"].as_str().unwrap_or_default().into(),
+                    diff: String::new(),
                 })
                 .into_iter()
                 .collect(),

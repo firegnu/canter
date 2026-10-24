@@ -10,6 +10,8 @@
    环境用客户端传入的完整 `BTreeMap<String, String>`，不能合并服务端环境。
    gate 不跨会话共享、不序列化，恢复会话时重新创建。`protected_paths` 是 P1-5
    提供的绝对路径列表，包含 canter 状态目录和配置文件，也可以包含尚不存在的路径。
+   建执行器时解析并保存这份列表；受保护路径本身是悬空链接时，同时保护链接和目标，
+   不影响普通文件工具调用，也不在每次调用时重新解析这份列表。
 2. 用 `Tool::ALL` 和 `Tool::definition()` 取得名称、说明、`serde_json::Value`
    参数 Schema、`Risk`。模型给出名字后用 `Tool::from_name()` 查找；未知名字返回 `None`，
    由调用方报告未知工具。
@@ -35,9 +37,9 @@
    `ToolOutput.text` 给模型，`ToolOutput.item` 给客户端最终项目。
    `ToolOutcome::{Completed, Failed, Cancelled, TimedOut, Declined}` 供循环区分结果。
    协议没有 cancelled/timedOut 项目状态，这两种最终 `Item.status` 都是 `Failed`，
-   一轮是否 interrupted 由循环根据 outcome 决定。
+   一轮是否 interrupted 由循环根据取消信号和 outcome 决定。
 
-准备失败的项目保留已知 cwd/path；改文件种类尚不确定时用 `PatchChangeKind::Unknown`。
+准备失败的项目保留已知 cwd/path，diff 留空；改文件种类尚不确定时用 `PatchChangeKind::Unknown`。
 执行失败保留已经准备好的文件种类和 diff。read 失败时 content 留空，错误只在模型文字中，
 不把错误提示冒充文件内容。未新增协议字段。
 
@@ -84,11 +86,13 @@ shell 自己按其规则建立的变量（例如 PWD）仍然存在。
 所以连提示也不超过 1 MiB。使用有界头尾缓冲，不累积整份输出。
 增量只发最初至多 1 MiB，达到上限后停止发送，最终项目提供保留的头尾并替换增量显示。
 两个输出流分别增量解码，跨块 UTF-8 不损坏；非法字节按替代字符显示。
-非零退出、超时、取消都返回失败项目。模型退出信息使用 `Exit code: 0`、`Killed by signal 9`。
+非零退出、执行中的超时和取消都返回失败项目。模型退出信息使用 `Exit code: 0`、`Killed by signal 9`。
 取消先向原进程组发 SIGTERM，给最多 50 ms 清理机会，然后 SIGKILL 清理残留；超时直接 SIGKILL。
 shell 正常退出也清掉本组剩余后台子进程，执行器句柄 Drop 同样尝试清理原组。
 shell 回收后管道最多再读取 2000 ms；取消和原始超时在此期间保持有效，包括另一个终止原因
-已触发之后。停止读取时在模型和客户端最终文字中注明后台进程仍占着管道，保留首次终止原因。
+已触发之后。停止读取时在模型和客户端最终文字中注明后台进程仍占着管道及停止读取的原因。
+如果 shell 已自行退出，收尾期间的超时或取消只停止读取输出，结果按实际退出码返回；
+如果命令先前因超时或取消被终止，结果仍保留首次终止原因。
 `set -m`、`setsid` 等移到其他进程组或会话的进程不在清理范围内，可能继续运行。
 第一期只清理原进程组，不提供操作系统级的后代进程收容；第二期的执行器/沙箱再处理这一边界。
 

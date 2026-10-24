@@ -202,6 +202,89 @@ async fn protected_paths_reject_reads_writes_edits_and_symlink_aliases() {
 }
 
 #[tokio::test]
+async fn dangling_protected_links_do_not_block_ordinary_files_and_protect_both_paths() {
+    for absolute_target in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("missing/config.toml");
+        let link = dir.path().join("config.toml");
+        std::os::unix::fs::symlink(
+            if absolute_target {
+                target.as_path()
+            } else {
+                std::path::Path::new("missing/config.toml")
+            },
+            &link,
+        )
+        .unwrap();
+        let tools = Tools::new(Arc::new(
+            LocalExecutor::new(dir.path().into(), BTreeMap::new(), vec![link.clone()]).unwrap(),
+        ));
+        std::fs::write(dir.path().join("ordinary"), "original").unwrap();
+        for (tool, args) in [
+            (Tool::Read, serde_json::json!({"path":"ordinary"})),
+            (
+                Tool::Write,
+                serde_json::json!({"path":"ordinary","content":"original"}),
+            ),
+            (
+                Tool::Edit,
+                serde_json::json!({"path":"ordinary","edits":[{"oldText":"original","newText":"edited"}]}),
+            ),
+        ] {
+            let result = invoke(&tools, tool, args).await;
+            assert_eq!(
+                result.outcome,
+                ToolOutcome::Completed,
+                "{tool:?}: {}",
+                result.text
+            );
+        }
+        for target_exists in [false, true] {
+            if target_exists {
+                std::fs::create_dir(dir.path().join("missing")).unwrap();
+                std::fs::write(&target, "private fixture").unwrap();
+            }
+            for path in ["config.toml", "missing/config.toml"] {
+                for (tool, args) in [
+                    (Tool::Read, serde_json::json!({"path":path})),
+                    (
+                        Tool::Write,
+                        serde_json::json!({"path":path,"content":"changed"}),
+                    ),
+                    (
+                        Tool::Edit,
+                        serde_json::json!({"path":path,"edits":[{"oldText":"private fixture","newText":"changed"}]}),
+                    ),
+                ] {
+                    let result = invoke(&tools, tool, args).await;
+                    assert_eq!(result.outcome, ToolOutcome::Failed);
+                    assert!(
+                        result.text.contains("这是 canter 的私有文件"),
+                        "{path}: {}",
+                        result.text
+                    );
+                }
+            }
+            assert_eq!(target.exists(), target_exists);
+            assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        }
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "private fixture");
+        std::fs::remove_file(&link).unwrap();
+        std::fs::write(&link, "replacement private fixture").unwrap();
+        assert_eq!(
+            invoke(
+                &tools,
+                Tool::Read,
+                serde_json::json!({"path":"config.toml"})
+            )
+            .await
+            .outcome,
+            ToolOutcome::Failed
+        );
+    }
+}
+
+#[tokio::test]
 async fn lifecycle_items_preserve_paths_diffs_and_failure_context() {
     use canter_protocol::PatchChangeKind;
     let dir = tempfile::tempdir().unwrap();
@@ -530,6 +613,43 @@ async fn invalid_json_or_missing_fields_never_mutate_files() {
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "unchanged");
             assert!(!dir.path().join("marker").exists());
         }
+    }
+}
+
+#[tokio::test]
+async fn preparation_failure_does_not_display_untrusted_diff() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools(&dir);
+    std::fs::write(dir.path().join("file"), "original").unwrap();
+    for (tool, args) in [
+        (
+            Tool::Write,
+            serde_json::json!({"path":"file","content":"changed","diff":"+ fake diff shown to the user"}),
+        ),
+        (
+            Tool::Edit,
+            serde_json::json!({"path":"file","edits":[{"oldText":"original","newText":"changed"}],"diff":"+ fake diff shown to the user"}),
+        ),
+    ] {
+        let result = invoke(&tools, tool, args).await;
+        assert_eq!(result.outcome, ToolOutcome::Failed);
+        let Item::FileChange {
+            changes,
+            status: ItemStatus::Failed,
+            ..
+        } = result.item
+        else {
+            panic!("wrong failure item")
+        };
+        assert_eq!(changes[0].path, "file");
+        assert!(
+            changes[0].diff.is_empty(),
+            "preparation failure displayed model-supplied diff"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("file")).unwrap(),
+            "original"
+        );
     }
 }
 

@@ -37,11 +37,13 @@ impl Drop for EscapedProcess {
 async fn escaped_output_holders_cannot_block_exit_timeout_or_cancellation() {
     use std::time::Duration;
     for mode in [
+        "cancel_during_drain",
+        "timeout_during_drain",
+        "cancel_during_drain_failed",
+        "timeout_during_drain_failed",
         "exit",
         "cancel",
         "timeout",
-        "cancel_during_drain",
-        "timeout_during_drain",
     ] {
         let dir = tempfile::tempdir().unwrap();
         let _escaped = EscapedProcess(dir.path().join("escaped.pid"));
@@ -51,6 +53,8 @@ async fn escaped_output_holders_cannot_block_exit_timeout_or_cancellation() {
             "set -m; /bin/sleep 30 & echo $! > escaped.pid; echo started; {}",
             if mode == "cancel" || mode == "timeout" {
                 "/bin/sleep 30"
+            } else if mode.ends_with("failed") {
+                "exit 7"
             } else {
                 ":"
             }
@@ -84,11 +88,39 @@ async fn escaped_output_holders_cannot_block_exit_timeout_or_cancellation() {
         assert!(
             matches!(&result.item, Item::CommandExecution {aggregated_output, ..} if aggregated_output.contains("Background processes still hold output pipes"))
         );
+        if mode.contains("during_drain") {
+            let (code, status) = if mode.ends_with("failed") {
+                (7, ItemStatus::Failed)
+            } else {
+                (0, ItemStatus::Completed)
+            };
+            assert!(
+                result.text.contains(&format!("Exit code: {code}")),
+                "{mode}: {}",
+                result.text
+            );
+            assert!(result.text.contains(if mode.starts_with("cancel") {
+                "Output reading was cancelled"
+            } else {
+                "Output timeout reached"
+            }));
+            assert!(
+                !result.text.contains("Command timed out")
+                    && !result.text.contains("Command cancelled")
+            );
+            assert!(
+                matches!(&result.item, Item::CommandExecution {exit_code, status:actual_status, ..} if *exit_code == Some(code) && *actual_status == status)
+            );
+        }
         assert_eq!(
             result.outcome,
-            if mode.starts_with("cancel") {
+            if mode.ends_with("failed") {
+                ToolOutcome::Failed
+            } else if mode.contains("during_drain") {
+                ToolOutcome::Completed
+            } else if mode == "cancel" {
                 ToolOutcome::Cancelled
-            } else if mode.starts_with("timeout") {
+            } else if mode == "timeout" {
                 ToolOutcome::TimedOut
             } else {
                 ToolOutcome::Completed

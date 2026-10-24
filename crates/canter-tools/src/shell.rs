@@ -100,7 +100,7 @@ async fn capture(
     let mut cancellation_seen = false;
     let mut timeout_seen = false;
     let mut drain_deadline = None;
-    let mut stopped_reading = false;
+    let mut drain_stop_reason = None;
     let deadline = tokio::time::sleep(std::time::Duration::from_millis(args.timeout_ms));
     tokio::pin!(deadline);
     while !stdout_done || !stderr_done || status.is_none() {
@@ -108,8 +108,11 @@ async fn capture(
             biased;
             _ = cancel.cancelled(), if !cancellation_seen => {
                 cancellation_seen = true;
+                if status.is_some() {
+                    drain_stop_reason = Some("Output reading was cancelled after the shell exited.");
+                    break;
+                }
                 interruption.get_or_insert(ToolOutcome::Cancelled);
-                if status.is_some() { stopped_reading = true; break; }
                 handle.process.terminate().await?;
                 if let Ok(result) = tokio::time::timeout(std::time::Duration::from_millis(50), handle.process.wait()).await { result?; }
                 handle.process.kill().await?;
@@ -118,14 +121,17 @@ async fn capture(
             }
             _ = &mut deadline, if !timeout_seen => {
                 timeout_seen = true;
+                if status.is_some() {
+                    drain_stop_reason = Some("Output timeout reached after the shell exited.");
+                    break;
+                }
                 interruption.get_or_insert(ToolOutcome::TimedOut);
-                if status.is_some() { stopped_reading = true; break; }
                 handle.process.kill().await?;
                 status = Some(handle.process.wait().await?);
                 drain_deadline = Some(tokio::time::Instant::now() + std::time::Duration::from_millis(IO_DRAIN_TIMEOUT_MS));
             }
             _ = tokio::time::sleep_until(drain_deadline.unwrap_or_else(tokio::time::Instant::now)), if drain_deadline.is_some() => {
-                stopped_reading = true;
+                drain_stop_reason = Some("Output drain limit reached after the shell exited.");
                 break;
             }
             result = handle.process.wait(), if status.is_none() => {
@@ -147,9 +153,10 @@ async fn capture(
             }
         }
     }
-    if stopped_reading {
-        let notice = "\nBackground processes still hold output pipes; stopped reading.\n";
-        output.push(notice, on_output);
+    if let Some(reason) = drain_stop_reason {
+        let notice =
+            format!("\nBackground processes still hold output pipes; stopped reading. {reason}\n");
+        output.push(&notice, on_output);
     }
     status
         .map(|status| (status, interruption))

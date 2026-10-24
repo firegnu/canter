@@ -71,7 +71,7 @@ impl LocalExecutor {
         Ok(Self {
             cwd,
             environment,
-            protected_paths,
+            protected_paths: prepare_protected_paths(protected_paths)?,
         })
     }
 
@@ -99,7 +99,7 @@ impl Executor for LocalExecutor {
         let path = self.resolve(path);
         let protected_paths = self.protected_paths.clone();
         let resolved = tokio::task::spawn_blocking(move || {
-            let resolved = resolve_target(&path)?;
+            let resolved = resolve_target(&path, &protected_paths)?;
             check_protected(&resolved, &protected_paths)?;
             Ok::<_, io::Error>(resolved)
         })
@@ -133,7 +133,7 @@ impl Executor for LocalExecutor {
             use std::io::Write;
             use std::os::unix::fs::PermissionsExt;
             check_cancel(&cancel)?;
-            let path = resolve_target(&path)?;
+            let path = resolve_target(&path, &protected_paths)?;
             check_protected(&path, &protected_paths)?;
             let current = match std::fs::read(&path) {
                 Ok(bytes) => Some(bytes),
@@ -216,7 +216,7 @@ impl Executor for LocalExecutor {
 // Resolve each existing prefix before processing `..`; unlike lexical normalization,
 // this preserves the meaning of a parent segment following a symlink. Missing tails
 // are allowed for write, but dangling symlinks are never replaced by ordinary files.
-fn resolve_target(path: &Path) -> io::Result<PathBuf> {
+fn resolve_target(path: &Path, protected_paths: &[PathBuf]) -> io::Result<PathBuf> {
     use std::path::Component;
     let mut resolved = PathBuf::new();
     for component in path.components() {
@@ -227,6 +227,8 @@ fn resolve_target(path: &Path) -> io::Result<PathBuf> {
             Component::CurDir => {}
             component => {
                 resolved.push(component.as_os_str());
+                // Check link names before following them, including protected dangling links.
+                check_protected(&resolved, protected_paths)?;
                 match std::fs::canonicalize(&resolved) {
                     Ok(path) => resolved = path,
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -245,9 +247,39 @@ fn resolve_target(path: &Path) -> io::Result<PathBuf> {
     Ok(resolved)
 }
 
+fn prepare_protected_paths(mut pending: Vec<PathBuf>) -> io::Result<Vec<PathBuf>> {
+    let mut protected = Vec::new();
+    while let Some(path) = pending.pop() {
+        let path = match (path.parent(), path.file_name()) {
+            (Some(parent), Some(name)) => resolve_target(parent, &[])?.join(name),
+            _ => resolve_target(&path, &[])?,
+        };
+        if protected.contains(&path) {
+            continue;
+        }
+        // Keep the link name even if it is subsequently replaced with an ordinary file.
+        protected.push(path.clone());
+        match std::fs::read_link(&path) {
+            Ok(target) => pending.push(path.parent().unwrap_or(Path::new("/")).join(target)),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::InvalidInput | io::ErrorKind::NotFound
+                ) =>
+            {
+                protected.push(resolve_target(&path, &[])?);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    protected.sort();
+    protected.dedup();
+    Ok(protected)
+}
+
 fn check_protected(path: &Path, protected_paths: &[PathBuf]) -> io::Result<()> {
     for protected in protected_paths {
-        if path.starts_with(resolve_target(protected)?) {
+        if path.starts_with(protected) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "这是 canter 的私有文件",
