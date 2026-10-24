@@ -1,8 +1,7 @@
 use canter_protocol::*;
-use canter_store::{PrivateSessionConfig, Store};
+use canter_store::Store;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write,
     os::unix::fs::PermissionsExt,
@@ -28,9 +27,6 @@ fn private_typed_model_history_survives_reopen_and_a_torn_last_line() {
                 name: None,
                 model: "fake".into(),
                 approval_policy: PermissionMode::AlwaysAsk,
-            },
-            PrivateSessionConfig {
-                env: BTreeMap::new(),
             },
             1,
         )

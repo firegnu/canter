@@ -1,6 +1,5 @@
 use canter_protocol::*;
-use canter_store::{PrivateSessionConfig, Store};
-use std::collections::BTreeMap;
+use canter_store::Store;
 use std::fs::OpenOptions;
 use std::io::Write;
 
@@ -16,9 +15,6 @@ fn an_incomplete_last_line_is_discarded_before_further_appends() {
                 name: Some("intact".into()),
                 model: "fake".into(),
                 approval_policy: PermissionMode::AllowAll,
-            },
-            PrivateSessionConfig {
-                env: BTreeMap::new(),
             },
             10,
         )

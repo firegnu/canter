@@ -1,7 +1,6 @@
 use canter_protocol::*;
-use canter_store::{PrivateSessionConfig, SessionWriter, Store};
+use canter_store::{SessionWriter, Store};
 use std::{
-    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write,
 };
@@ -15,9 +14,6 @@ fn create(store: &Store, id: &str) -> SessionWriter {
                 name: Some(id.into()),
                 model: "fake".into(),
                 approval_policy: PermissionMode::AlwaysAsk,
-            },
-            PrivateSessionConfig {
-                env: BTreeMap::new(),
             },
             1,
         )

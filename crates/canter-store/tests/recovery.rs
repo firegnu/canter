@@ -1,9 +1,8 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
 use canter_protocol::*;
-use canter_store::{PrivateSessionConfig, Store};
+use canter_store::Store;
 use serde_json::json;
 
 fn settings() -> SessionSettings {
@@ -15,17 +14,15 @@ fn settings() -> SessionSettings {
     }
 }
 
-fn private() -> PrivateSessionConfig {
-    PrivateSessionConfig {
-        env: BTreeMap::from([("TEST_ONLY".into(), "private-fixture".into())]),
-    }
-}
-
 #[test]
 fn stored_session_reopens_identically_and_continues_sequence() {
     let temp = tempfile::tempdir().unwrap();
     let store = Store::new(temp.path().join("sessions")).unwrap();
-    let mut writer = store.create("s1", settings(), private(), 100).unwrap();
+    let mut writer = store.create("s1", settings(), 100).unwrap();
+    assert!(
+        !temp.path().join("sessions/s1/private.json").exists(),
+        "session environment must never be persisted"
+    );
     let payloads = json!([
         {"type":"session.status", "status":"working"},
         {"type":"turn.started", "turn":{"id":"t1", "items":[], "status":"inProgress", "error":null,
@@ -88,7 +85,6 @@ fn stored_session_reopens_identically_and_continues_sequence() {
 
     let mut reopened = store.open("s1").unwrap();
     assert_eq!(reopened.snapshot(), &expected);
-    assert!(reopened.private_config() == &private());
     assert_eq!(store.list().unwrap(), vec![expected.summary()]);
     let mut completed_turn = expected.turns[0].clone();
     completed_turn.status = TurnStatus::Completed;
@@ -129,7 +125,7 @@ fn stored_session_reopens_identically_and_continues_sequence() {
     let dir = temp.path().join("sessions/s1");
     for (path, mode) in [
         (dir.clone(), 0o700),
-        (dir.join("private.json"), 0o600),
+        (dir.join("model-history.jsonl"), 0o600),
         (dir.join("events.jsonl"), 0o600),
     ] {
         assert_eq!(

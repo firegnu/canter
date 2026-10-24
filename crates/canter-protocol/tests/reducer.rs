@@ -140,3 +140,33 @@ fn completing_a_turn_preserves_item_events_and_original_input() {
     assert_eq!(state.turns[0].status, TurnStatus::Failed);
     assert_eq!(state.turns[0].error.as_ref().unwrap().message, "failed");
 }
+
+#[test]
+fn removed_inputs_leave_the_queue_for_every_removal_reason() {
+    for reason in ["steered", "merged", "interrupted", "closed", "futureReason"] {
+        let mut state = snapshot();
+        state.queued_inputs = ["q1", "q2", "q3"]
+            .map(|id| QueuedInput {
+                id: id.into(),
+                input: vec![UserInput::Text { text: id.into() }],
+                client_name: "terminal".into(),
+            })
+            .into();
+        let removed: Event = serde_json::from_value(serde_json::json!({
+            "seq":1, "sessionId":"s1", "timestamp":10, "type":"input.removed",
+            "inputIds":["q1", "q2"], "reason":reason
+        }))
+        .unwrap();
+        apply_event_mut(&mut state, &removed).unwrap();
+        assert_eq!(
+            state
+                .queued_inputs
+                .iter()
+                .map(|input| input.id.as_str())
+                .collect::<Vec<_>>(),
+            ["q3"]
+        );
+        apply_event_mut(&mut state, &removed).unwrap();
+        assert_eq!(state.queued_inputs.len(), 1);
+    }
+}
