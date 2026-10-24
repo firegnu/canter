@@ -4,7 +4,9 @@
 
 ## 装的哪一版、怎么退回
 
-还没装。第一期 P1-1 到 P1-7 已合并进 main；装到哪、怎么退回在 P1-8 开始时和用户定，定了写进这里和 DESIGN。
+- 10-24 装了 main `ae4ba32`（0.1.0）：`cargo install --locked --path crates/canter`，程序在 `~/.cargo/bin/canter`。不是系统服务，服务端由客户端在后台起，状态在 `~/.canter/`（DESIGN 第 15、16 条）。
+- 换版本：在 main 上重新 `cargo install --locked --path crates/canter`，再 `canter serve --replace`。
+- 退回：按 `~/.canter/server.json` 的 pid 停服务端（SIGTERM），`cargo uninstall canter`。`~/.canter/` 有会话和 key，删不删问用户。
 
 ## 机器和环境
 
@@ -13,7 +15,7 @@
 
 ## 还没派的
 
-- P1-8 真模型试用（`docs/任务/P1-8-真模型试用.md`）：要用户在场。先定装到哪、怎么退回；用户自己把 DeepSeek key 写进 `~/.canter/config.json`（0600），主控不经手 key。
+- P1-8 真模型试用（`docs/任务/P1-8-真模型试用.md`）：已装好，要用户在场；用户自己把 DeepSeek key 写进 `~/.canter/config.json`（0600），主控不经手 key。
 
 ## 已知没修的问题
 

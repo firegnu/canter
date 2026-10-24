@@ -50,6 +50,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - DeepSeek 的 API key 放 canter 的配置文件（状态目录下，0600，不进仓库）。理由：服务端是在后台自己起的，以后还可能装成系统服务，拿不到用户终端里的环境变量。
    - canter 的状态目录和配置文件是 read、write、edit 工具的受保护路径，模型读写都拒绝（P1-3 交叉审查后主控定）；shell 拦不住。
 15. **状态目录**（主控定，P1-5 合并时写入）：`~/.canter/`，可用环境变量 `CANTER_HOME` 改成别的绝对路径（测试靠它隔离）。目录 0700，里面的文件 0600。布局见 `crates/canter-server/README.md`：`config.json`（模型地址、模型名、上下文窗口、API key）、`server.lock`（一台机器一个服务端，以它为准判断服务端在不在）、`server.json`（登记）、`server.sock`、`server.log`、`startup.lock`（客户端后台起服务端时串行）、升级交接用的 `replace.lock` / `replace.json`，会话在 `sessions/<id>/`。服务端只听这个 unix socket，不开 TCP。升级要显式 `canter serve --replace`，新的等旧的手上在跑的轮跑完，最多 60 秒，超时的轮记为被打断。
+16. **装到哪、怎么退回**（2026-10-24，P1-8 开始时用户照主控的建议定：「按你的建议装，开始吧」）。第一期用 `cargo install --locked --path crates/canter` 从本地 main 装，程序在 `~/.cargo/bin/canter`（已在用户 PATH 上），不装成系统服务，服务端由客户端在后台起。换版本：重新 `cargo install`，再 `canter serve --replace` 让新服务端接手。退回：停掉服务端（按 `~/.canter/server.json` 里的 pid 发 SIGTERM），`cargo uninstall canter`；`~/.canter/` 里有会话和 key，删不删由用户定。
 
 ## 和报告不同的地方
 
