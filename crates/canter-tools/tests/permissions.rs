@@ -97,7 +97,7 @@ async fn readonly_shell_allowlist_applies_in_all_asking_modes() {
                 "cat 'unterminated",
                 "cat file\\",
                 "ls |& cat",
-                "cd somewhere && cat file",
+                "cd \"$SOMEWHERE\" && cat file",
             ][..],
             true,
         ),
@@ -330,7 +330,10 @@ async fn permission_modes_use_tool_risk_and_unknown_means_always_ask() {
             Tool::Edit,
             r#"{"path":"file","edits":[{"oldText":"original","newText":"edited"}]}"#,
         ),
-        (Tool::Shell, r#"{"command":"printf 'complete command'"}"#),
+        (
+            Tool::Shell,
+            r#"{"command":"printf 'complete command' > file"}"#,
+        ),
     ] {
         let call = tools.prepare(tool, "item", raw, &cancel).await.unwrap();
         for (mode, ask) in [
@@ -378,14 +381,19 @@ async fn approval_answers_and_grants_are_scoped_to_one_session_and_one_tool() {
     ));
     let cancel = CancellationToken::new();
     let shell = tools
-        .prepare(Tool::Shell, "s1", r#"{"command":"printf first"}"#, &cancel)
+        .prepare(
+            Tool::Shell,
+            "s1",
+            r#"{"command":"printf first > first"}"#,
+            &cancel,
+        )
         .await
         .unwrap();
     let another_shell = tools
         .prepare(
             Tool::Shell,
             "s2",
-            r#"{"command":"printf different"}"#,
+            r#"{"command":"printf different > different"}"#,
             &cancel,
         )
         .await

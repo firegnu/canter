@@ -801,7 +801,7 @@ async fn enter_right_after_the_box_appears_does_not_answer_it() {
 #[tokio::test]
 async fn approval_box_matches_the_server_after_a_restart() {
     let mut world = World::new(vec![
-        shell_reply("echo never"),
+        shell_reply("echo never > approval-proof.txt"),
         shell_reply(WRITE_ENV),
         text_reply("跑完了"),
     ])

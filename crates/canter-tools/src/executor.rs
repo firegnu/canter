@@ -105,14 +105,15 @@ impl Executor for LocalExecutor {
     }
 
     fn is_readonly_shell(&self, command: &str) -> bool {
-        crate::readonly::is_readonly(command, |word| {
-            crate::readonly::path_allowed(
-                word,
-                &self.cwd,
-                self.environment.get("HOME").map(Path::new),
-                &self.shell_protected_paths,
-            )
-        })
+        crate::readonly::is_readonly(
+            command,
+            &self.cwd,
+            self.environment.get("HOME").map(Path::new),
+            self.environment
+                .get("CDPATH")
+                .is_some_and(|value| !value.is_empty()),
+            &self.shell_protected_paths,
+        )
     }
 
     async fn resolve_path(&self, path: &Path, cancel: &CancellationToken) -> io::Result<PathBuf> {
