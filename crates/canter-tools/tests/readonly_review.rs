@@ -111,6 +111,241 @@ async fn p1_8_repository_inspection_commands_do_not_need_approval() {
 }
 
 #[tokio::test]
+async fn p1_12_markdown_listing_does_not_need_approval() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("ink-sample");
+    for child in ["docs", "node_modules", ".git"] {
+        std::fs::create_dir_all(cwd.join(child)).unwrap();
+    }
+    for path in [
+        "README.md",
+        "docs/guide.markdown",
+        "docs/my component.mdx",
+        "docs/ignored.txt",
+        "node_modules/ignored.md",
+        ".git/ignored.md",
+    ] {
+        std::fs::write(cwd.join(path), "fixture\n").unwrap();
+    }
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(
+            dir.path().into(),
+            BTreeMap::from([
+                ("HOME".into(), dir.path().to_str().unwrap().into()),
+                ("TMPDIR".into(), dir.path().to_str().unwrap().into()),
+                ("PATH".into(), "/usr/bin:/bin".into()),
+                ("LC_ALL".into(), "C".into()),
+            ]),
+            vec![dir.path().join(".canter")],
+        )
+        .unwrap(),
+    ));
+    // Keep the reported command, replacing only its directory with an isolated fixture.
+    let command = r"cd /Users/firegnu/Developer/personal_projs/ink-sample && find . -type f \( -name '*.md' -o -name '*.markdown' -o -name '*.mdx' \) -not -path './node_modules/*' -not -path './.git/*' | sort"
+        .replace("/Users/firegnu/Developer/personal_projs/ink-sample", cwd.to_str().unwrap());
+    for command in [
+        command.clone(),
+        command.replace(r"\(", "'('").replace(r"\)", "')'"),
+        command.replace(r"\(", "\"(\"").replace(r"\)", "\")\""),
+    ] {
+        check(&tools, &command, false).await;
+        let cancel = CancellationToken::new();
+        let call = tools
+            .prepare(
+                Tool::Shell,
+                "p1-12",
+                &serde_json::json!({"command": command}).to_string(),
+                &cancel,
+            )
+            .await
+            .unwrap();
+        let PermissionCheck::Execute(permit) =
+            PermissionGate::default().evaluate(&call, PermissionMode::AlwaysAsk)
+        else {
+            panic!("listing markdown files must not ask");
+        };
+        let mut streamed = String::new();
+        let result = tools
+            .execute(permit, &cancel, &mut |chunk| streamed.push_str(chunk))
+            .await;
+        assert_eq!(result.outcome, ToolOutcome::Completed, "{}", result.text);
+        assert_eq!(
+            streamed,
+            "./README.md\n./docs/guide.markdown\n./docs/my component.mdx\n"
+        );
+        assert!(
+            matches!(result.item, Item::CommandExecution { command: actual, aggregated_output, exit_code: Some(0), .. } if actual == command && aggregated_output == streamed)
+        );
+    }
+}
+
+#[tokio::test]
+async fn sort_only_allows_known_readonly_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(dir.path().into(), BTreeMap::new(), vec![]).unwrap(),
+    ));
+    for command in [
+        "sort -u file",
+        "sort -nr file other",
+        "sort -bdfi file",
+        "sort -h file",
+        "sort -M file",
+        "sort -V file",
+        "sort -z file",
+        "sort -C file",
+        "sort -t: -k2,2n file",
+        "sort -t ':' -k 2,2 file",
+        "sort --reverse --numeric-sort --unique file",
+        "sort --stable --merge --key=2,2 --field-separator=: file",
+        "sort --key 2,2 --field-separator ':' file",
+        "sort --check file",
+        "sort --check=quiet file",
+        "sort -- -filename",
+    ] {
+        check(&tools, command, false).await;
+    }
+    for command in [
+        "sort -o out file",
+        "sort -oout file",
+        "sort -nroout file",
+        "sort file -o out",
+        "sort --output out file",
+        "sort --output=out file",
+        "sort --out=out file",
+        "sort --compress-program sh file",
+        "sort --compress-program=sh file",
+        "sort --check --output=out file",
+        "sort --check --compress-program=sh file",
+        "sort --files0-from=list",
+        "sort --random-source=file",
+        "sort -T scratch file",
+        "sort --temporary-directory=scratch file",
+        "sort --unknown file",
+        "sort file > out",
+        "sort file | sh",
+    ] {
+        check(&tools, command, true).await;
+    }
+}
+
+#[tokio::test]
+async fn uniq_allows_one_input_and_never_an_output_operand() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(dir.path().into(), BTreeMap::new(), vec![]).unwrap(),
+    ));
+    for command in [
+        "uniq",
+        "uniq -",
+        "uniq file",
+        "uniq -c file",
+        "uniq -di -f1 -s2 file",
+        "uniq -u -f 1 -s 2 file",
+        "uniq --count --ignore-case file",
+        "uniq --repeated --skip-fields=1 --skip-chars=2 file",
+        "uniq --unique --skip-fields 1 --skip-chars 2 file",
+        "uniq -- file",
+        "uniq -- -filename",
+        "sort file | uniq -c | sort -nr",
+    ] {
+        check(&tools, command, false).await;
+    }
+    for command in [
+        "uniq file out",
+        "uniq - out",
+        "uniq -- file out",
+        "uniq -c -- file out",
+        "uniq -f 1 file out",
+        "uniq --skip-chars=2 file out",
+        // BSD uniq stops parsing options at its input; these name output files.
+        "uniq file -c",
+        "uniq file --count",
+        "uniq file --",
+        "uniq file -f1",
+        "uniq file -s file",
+        "uniq -- file -c",
+        "uniq --unknown file",
+        "uniq file > out",
+        "uniq file | sh",
+    ] {
+        check(&tools, command, true).await;
+    }
+}
+
+#[tokio::test]
+async fn grouped_find_sort_and_uniq_preserve_path_and_command_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("repo");
+    let private = dir.path().join(".canter");
+    std::fs::create_dir(&cwd).unwrap();
+    std::fs::create_dir(&private).unwrap();
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(
+            cwd.clone(),
+            BTreeMap::from([
+                ("HOME".into(), dir.path().to_str().unwrap().into()),
+                ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+            ]),
+            vec![private.clone(), cwd.join("settings.json")],
+        )
+        .unwrap(),
+    ));
+    for command in [
+        "sort README.md other.md | uniq -c",
+        "sort ../.canter-backup/file",
+        "uniq settings.json.backup",
+        r"find . \( -name '*.md' -o -name '*.mdx' \) | sort",
+        "find ~ '(' -name '*.md' ')' | sort",
+    ] {
+        check(&tools, command, false).await;
+    }
+    for reader in ["sort", "uniq"] {
+        for path in [
+            "~/.canter/config.json",
+            "../.CaNtEr/Config.json",
+            "'../repo/../.canter/config.json'",
+            "settings.json",
+            "./settings.json",
+        ] {
+            check(&tools, &format!("{reader} {path}"), true).await;
+            check(&tools, &format!("{reader} -- {path}"), true).await;
+        }
+        check(
+            &tools,
+            &format!("{reader} {}/config.json", private.display()),
+            true,
+        )
+        .await;
+        check(
+            &tools,
+            &format!("cd .. && {reader} .canter/config.json"),
+            true,
+        )
+        .await;
+    }
+    for command in [
+        "sort README.md ../.canter/config.json",
+        r"find ~/.canter \( -name '*.md' \) | sort",
+        r"find . \( -name '*.md' -exec touch out \; \) | sort",
+        "find . '(' -name '*.md' -delete ')' | sort",
+        "find . '(' -name '*.md' -fprint out ')' | sort",
+        "find . ( -name '*.md' ) | sort",
+        "(find .) | sort",
+        "sort file && touch out",
+        "uniq file; git commit -m x",
+        "grep -r needle .. | sort",
+        "rg --hidden needle .. | uniq",
+        "git diff -- . .. | sort",
+    ] {
+        check(&tools, command, true).await;
+    }
+    std::fs::create_dir(cwd.join(".git")).unwrap();
+    std::fs::write(cwd.join(".git/config"), "[core]\nfsmonitor = probe\n").unwrap();
+    check(&tools, "git diff --stat | sort", true).await;
+}
+
+#[tokio::test]
 async fn directory_changes_check_targets_and_every_possible_following_directory() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");

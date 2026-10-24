@@ -98,6 +98,34 @@ fn readonly_command(
         "printf" => return readonly_printf(args) && args.iter().all(|arg| path_allowed(arg)),
         "find" => return readonly_find(args, path_allowed),
         "sed" => return sed::is_readonly(args, path_allowed),
+        "sort" => Options::new(
+            "bcCdfghiMmnrsuVz",
+            "kt",
+            &[
+                "check",
+                "dictionary-order",
+                "general-numeric-sort",
+                "human-numeric-sort",
+                "ignore-case",
+                "ignore-leading-blanks",
+                "ignore-nonprinting",
+                "merge",
+                "month-sort",
+                "numeric-sort",
+                "reverse",
+                "stable",
+                "unique",
+                "version-sort",
+                "zero-terminated",
+            ],
+            &["check", "key", "field-separator"],
+        ),
+        "uniq" => Options::new(
+            "cdiu",
+            "fs",
+            &["count", "repeated", "ignore-case", "unique"],
+            &["skip-fields", "skip-chars"],
+        ),
         "ls" => Options::new("aAbBcCdFfGhHiklLmnpqQrRsStTuUvx1", "", &[], &[]),
         "cat" => Options::new(
             "benstuvET",
@@ -287,6 +315,17 @@ fn readonly_command(
     let Some(parsed) = options.parse(args, path_allowed, name != "git", numeric_short) else {
         return false;
     };
+    if name == "uniq" {
+        // BSD uniq treats everything after the input as operands, even -c or --.
+        // Parse the options separately so no trailing option can hide an output file.
+        return match parsed.operands.as_slice() {
+            [] => true,
+            [_] => options
+                .parse(&args[..args.len() - 1], path_allowed, true, false)
+                .is_some_and(|prefix| prefix.operands.is_empty()),
+            _ => false,
+        };
+    }
     let recursive = name == "rg"
         || git_diff
         || name == "grep"
