@@ -1,0 +1,12 @@
+: keep-alive
+
+data: {"id":"fixture","object":"chat.completion.chunk","created":0,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"想一想"},"finish_reason":null}],"usage":null}
+
+data: {"id":"fixture","object":"chat.completion.chunk","created":0,"model":"test-model","choices":[{"index":0,"delta":{"content":"Reading.","tool_calls":[{"index":1,"id":"b","type":"function","function":{"name":"read","arguments":"{\"path\":"}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"fixture","object":"chat.completion.chunk","created":0,"model":"test-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"read","arguments":"{}"}},{"index":1,"function":{"arguments":"\"b\"}"}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"fixture","object":"chat.completion.chunk","created":0,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17,"prompt_tokens_details":{"cached_tokens":4},"prompt_cache_hit_tokens":4,"prompt_cache_miss_tokens":6,"completion_tokens_details":{"reasoning_tokens":3}}}
+
+data: [DONE]
+
