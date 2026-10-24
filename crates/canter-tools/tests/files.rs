@@ -180,7 +180,7 @@ async fn protected_paths_reject_reads_writes_edits_and_symlink_aliases() {
             let result = invoke(&tools, tool, args).await;
             assert_eq!(result.outcome, ToolOutcome::Failed, "{tool:?} {path}");
             assert!(
-                result.text.contains("这是 canter 的私有文件"),
+                result.text.contains("this file is private to canter"),
                 "{}",
                 result.text
             );
@@ -259,7 +259,7 @@ async fn dangling_protected_links_do_not_block_ordinary_files_and_protect_both_p
                     let result = invoke(&tools, tool, args).await;
                     assert_eq!(result.outcome, ToolOutcome::Failed);
                     assert!(
-                        result.text.contains("这是 canter 的私有文件"),
+                        result.text.contains("this file is private to canter"),
                         "{path}: {}",
                         result.text
                     );

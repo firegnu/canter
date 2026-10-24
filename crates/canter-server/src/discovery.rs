@@ -23,13 +23,13 @@ pub async fn discover(home: &Path) -> Result<Option<Connection>, ServerError> {
         lifecycle::read_registration(&directory)
     })
     .await
-    .map_err(|_| ServerError("读取服务端登记失败".into()))??;
+    .map_err(|_| ServerError("failed to read the server registration".into()))??;
     let Some(registration) = registration else {
         return Ok(None);
     };
     if registration.protocol_version != PROTOCOL_VERSION {
         return Err(ServerError(
-            "服务端协议版本不同，请先手动升级；未自动替换服务端".into(),
+            "the server speaks a different protocol version; upgrade it manually first (it was not replaced)".into(),
         ));
     }
     let client = Client::builder()
@@ -38,7 +38,7 @@ pub async fn discover(home: &Path) -> Result<Option<Connection>, ServerError> {
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(2))
         .build()
-        .map_err(|_| ServerError("无法创建本机 HTTP 客户端".into()))?;
+        .map_err(|_| ServerError("cannot create the local HTTP client".into()))?;
     // Bound discovery, but do not impose a total timeout on the returned SSE client.
     let probe = async {
         client
@@ -51,9 +51,13 @@ pub async fn discover(home: &Path) -> Result<Option<Connection>, ServerError> {
     };
     let result = tokio::time::timeout(Duration::from_secs(2), probe)
         .await
-        .map_err(|_| ServerError("已登记的服务端没有响应；未自动替换".into()))
+        .map_err(|_| {
+            ServerError("the registered server is not responding; it was not replaced".into())
+        })
         .and_then(|result| {
-            result.map_err(|_| ServerError("无法连接已登记的服务端；未自动替换".into()))
+            result.map_err(|_| {
+                ServerError("cannot connect to the registered server; it was not replaced".into())
+            })
         });
     if result.is_err() && !server_running(home).await? {
         return Ok(None);
@@ -61,12 +65,13 @@ pub async fn discover(home: &Path) -> Result<Option<Connection>, ServerError> {
     let info = result?;
     if info.protocol_version != PROTOCOL_VERSION || info.server_version != registration.version {
         return Err(ServerError(
-            "服务端身份或协议与登记文件不一致，请稍后重试".into(),
+            "the server's identity or protocol does not match its registration; try again later"
+                .into(),
         ));
     }
     let version_warning = (registration.version != VERSION).then(|| {
         format!(
-            "服务端版本为 {}，客户端版本为 {}；继续使用旧服务端，升级请运行 canter serve --replace",
+            "Server version is {}, client version is {}; still using the old server. To upgrade, run canter serve --replace",
             registration.version, VERSION
         )
     });
@@ -81,14 +86,16 @@ async fn server_running(home: &Path) -> Result<bool, ServerError> {
     let directory = home.to_path_buf();
     tokio::task::spawn_blocking(move || lifecycle::server_running(&directory))
         .await
-        .map_err(|_| ServerError("无法检查服务端文件锁".into()))?
+        .map_err(|_| ServerError("cannot check the server file lock".into()))?
 }
 
 /// Find a compatible daemon, or detach `executable serve` and wait up to 15 seconds for readiness.
 /// `home` must be an absolute canter-only state directory. Never upgrades automatically.
 pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection, ServerError> {
     if !home.is_absolute() {
-        return Err(ServerError("状态目录必须是绝对路径".into()));
+        return Err(ServerError(
+            "the state directory must be an absolute path".into(),
+        ));
     }
     if let Some(connection) = discover(home).await? {
         return Ok(connection);
@@ -103,7 +110,7 @@ pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection,
         ))
     })
     .await
-    .map_err(|_| ServerError("无法准备服务端日志".into()))??;
+    .map_err(|_| ServerError("cannot prepare the server log".into()))??;
     loop {
         match startup.try_lock() {
             Ok(()) => break,
@@ -111,9 +118,11 @@ pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection,
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
             Err(std::fs::TryLockError::WouldBlock) => {
-                return Err(ServerError("等待客户端启动服务端超时".into()));
+                return Err(ServerError(
+                    "timed out waiting for another client to start the server".into(),
+                ));
             }
-            Err(_) => return Err(ServerError("无法取得客户端启动锁".into())),
+            Err(_) => return Err(ServerError("cannot take the client startup lock".into())),
         }
     }
     // Another client may have started the daemon while this caller waited for the startup lock.
@@ -129,7 +138,7 @@ pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection,
         .stdin(Stdio::null())
         .stdout(
             log.try_clone()
-                .map_err(|_| ServerError("无法打开服务端日志".into()))?,
+                .map_err(|_| ServerError("cannot open the server log".into()))?,
         )
         .stderr(log);
     // setsid is the only pre-exec operation; it detaches the daemon from the client's terminal.
@@ -142,7 +151,7 @@ pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection,
     }
     let mut child = command
         .spawn()
-        .map_err(|_| ServerError("无法启动 canter serve".into()))?;
+        .map_err(|_| ServerError("cannot start canter serve".into()))?;
     loop {
         if let Some(connection) = discover(home).await? {
             tokio::spawn(async move {
@@ -152,7 +161,7 @@ pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection,
         }
         if child
             .try_wait()
-            .map_err(|_| ServerError("无法检查新服务端".into()))?
+            .map_err(|_| ServerError("cannot check the new server".into()))?
             .is_some()
         {
             // Only wait for a competing startup while someone actually holds the daemon lock.
@@ -160,7 +169,7 @@ pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection,
                 let directory = home.to_path_buf();
                 let message = tokio::task::spawn_blocking(move || startup_error(&directory))
                     .await
-                    .map_err(|_| ServerError("无法读取启动错误".into()))?;
+                    .map_err(|_| ServerError("cannot read the startup error".into()))?;
                 return Err(ServerError(message));
             }
         }
@@ -168,7 +177,9 @@ pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection,
             tokio::spawn(async move {
                 let _ = child.wait().await;
             });
-            return Err(ServerError("等待服务端启动超时，请检查 server.log".into()));
+            return Err(ServerError(
+                "timed out waiting for the server to start; check server.log".into(),
+            ));
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -189,7 +200,7 @@ fn startup_error(home: &Path) -> String {
             .map(str::to_string)
     })();
     match last_line {
-        Some(line) => format!("服务端未启动：{line}"),
-        None => "服务端未启动，请检查状态目录中的 server.log".into(),
+        Some(line) => format!("the server did not start: {line}"),
+        None => "the server did not start; check server.log in the state directory".into(),
     }
 }

@@ -416,7 +416,7 @@ async fn interrupted_approval_is_resolved_before_the_failed_tool_item() {
             ..
         }
     ));
-    assert!(history_messages(&store).iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "pending" && text.contains("被打断，没有执行"))));
+    assert!(history_messages(&store).iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "pending" && text.contains("Interrupted; not run"))));
     assert!(!temp.path().join("must-not-exist").exists());
     session.close().await.unwrap();
 }
@@ -594,7 +594,7 @@ async fn failed_automatic_compaction_waits_until_a_new_turn_or_manual_request() 
         1,
         "a failed automatic compaction must not repeat after tools or late steering"
     );
-    assert_eq!(seen.iter().filter(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains("自动压缩失败"))).count(), 1);
+    assert_eq!(seen.iter().filter(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains("Auto-compaction failed"))).count(), 1);
     assert!(
         matches!(&seen.last().unwrap().payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Completed)
     );
@@ -764,7 +764,7 @@ async fn oversized_summary_request_retries_smaller_chunks_without_losing_transcr
     }
     session.input(input("continue")).await.unwrap();
     finished(&mut events).await;
-    assert!(model.requests.lock().unwrap()[4].messages.iter().any(|message| matches!(message, Message::User { text } if text == "[上下文摘要]\ncomplete summary")));
+    assert!(model.requests.lock().unwrap()[4].messages.iter().any(|message| matches!(message, Message::User { text } if text == "[Context summary]\ncomplete summary")));
     session.close().await.unwrap();
 }
 

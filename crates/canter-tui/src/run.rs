@@ -113,7 +113,7 @@ pub struct Launch<C> {
 pub enum RunError {
     #[error(transparent)]
     Client(#[from] ClientError),
-    #[error("没有这个会话：{0}")]
+    #[error("no such session: {0}")]
     NoSession(String),
     #[error("terminal: {0}")]
     Io(#[from] io::Error),
@@ -468,7 +468,9 @@ impl Chat {
         match message {
             Message::Server(event) => app.apply_event(&event, now_ms()),
             Message::SendFailed(error) => app.send_failed(&error),
-            Message::NameFailed(error) => app.warning(&format!("会话没起好名字：{error}")),
+            Message::NameFailed(error) => {
+                app.warning(&format!("Could not name the session: {error}"))
+            }
             Message::AnswerFailed { request_id, error } => app.answer_failed(&request_id, &error),
             Message::AnswerLate => app.answer_late(),
             Message::InterruptFailed(error) => app.interrupt_failed(&error),
@@ -577,8 +579,8 @@ async fn pump<C: Connector>(
                         return;
                     }
                 }
-                Some(Err(_)) => break "连接断了".to_owned(),
-                None => break "服务端结束了事件流".to_owned(),
+                Some(Err(_)) => break "connection lost".to_owned(),
+                None => break "server ended the event stream".to_owned(),
             }
         };
         if sender.send(Message::Reconnecting(reason)).is_err() {

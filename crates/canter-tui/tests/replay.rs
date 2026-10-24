@@ -114,7 +114,7 @@ async fn replay() {
     assert_eq!(scrollback[added].fg, Color::Green, "added lines are green");
     let removed = find(scrollback, "- git clone https://github.com/firegnu/canter");
     assert_eq!(scrollback[removed].fg, Color::Red, "removed lines are red");
-    let thinking = find(scrollback, "思考：");
+    let thinking = find(scrollback, "Thinking: ");
     assert!(
         scrollback[thinking].modifier.contains(Modifier::DIM),
         "thinking is grey"

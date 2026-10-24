@@ -10,16 +10,17 @@ use canter_tui::client::Client;
 use canter_tui::{CLIENT_NAME, Connected, Connector, Launch, Open};
 
 pub const USAGE: &str = "\
-用法：
-  canter [选项] [首句]        在当前目录开新会话；没有服务端就在后台起一个
-  canter [选项] --resume [会话 id]
-                              接着聊；不写 id 就从会话列表里选
-  canter serve [--replace]    在前台跑服务端
+Usage:
+  canter [options] [prompt]   start a new session in the current directory;
+                              starts a server in the background if none runs
+  canter [options] --resume [session id]
+                              resume a session; without an id, pick from a list
+  canter serve [--replace]    run the server in the foreground
 
-选项：
-  -m, --model <模型>  用这个模型（默认用服务端配置里的）
-  --yolo              权限模式用全放行：跑命令、改文件都不问
-  -h, --help          显示这段说明
+Options:
+  -m, --model <model>  use this model (default: the server's config)
+  --yolo               use permission mode Allow all (never ask)
+  -h, --help           show this help
 ";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -45,14 +46,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         .into_iter()
         .map(|arg| {
             arg.into_string()
-                .map_err(|arg| format!("参数不是 UTF-8：{}", arg.to_string_lossy()))
+                .map_err(|arg| format!("argument is not UTF-8: {}", arg.to_string_lossy()))
         })
         .collect::<Result<Vec<_>, _>>()?;
     if args.first().map(String::as_str) == Some("serve") {
         return match &args[1..] {
             [] => Ok(Command::Serve { replace: false }),
             [replace] if replace == "--replace" => Ok(Command::Serve { replace: true }),
-            _ => Err("serve 只接受 --replace".into()),
+            _ => Err("serve only accepts --replace".into()),
         };
     }
     let mut chat = ChatArgs::default();
@@ -63,10 +64,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             "--" => words.extend(args.by_ref()),
             "-h" | "--help" => return Ok(Command::Help),
             "--yolo" => chat.yolo = true,
-            "-m" | "--model" => chat.model = Some(args.next().ok_or("-m 后面要写模型名")?),
+            "-m" | "--model" => chat.model = Some(args.next().ok_or("-m needs a model name")?),
             "--resume" => chat.resume = Some(args.next_if(|next| !next.starts_with('-'))),
             option if option.starts_with('-') && option.len() > 1 => {
-                return Err(format!("不认识的选项：{option}"));
+                return Err(format!("unknown option: {option}"));
             }
             _ => words.push(arg),
         }
@@ -74,7 +75,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
     let first = words.join(" ");
     if !first.trim().is_empty() {
         if chat.resume.is_some() {
-            return Err("--resume 不能带首句；接上以后再说".into());
+            return Err("--resume does not take a prompt; send it after resuming".into());
         }
         chat.first = Some(first);
     }
@@ -98,8 +99,9 @@ impl Context {
     pub fn current() -> Result<Self, String> {
         Ok(Self {
             state_dir: canter_server::state_directory().map_err(|error| error.to_string())?,
-            executable: std::env::current_exe().map_err(|_| "找不到 canter 程序自己的路径")?,
-            cwd: std::env::current_dir().map_err(|_| "读不到当前目录")?,
+            executable: std::env::current_exe()
+                .map_err(|_| "cannot find the canter executable's own path")?,
+            cwd: std::env::current_dir().map_err(|_| "cannot read the current directory")?,
             // Variables that are not UTF-8 cannot travel as JSON strings.
             env: std::env::vars_os()
                 .filter_map(|(key, value)| {
@@ -131,7 +133,7 @@ impl Connector for ServerConnector {
         let connection = canter_server::discover(&self.state_dir)
             .await
             .map_err(|error| error.to_string())?
-            .ok_or("找不到服务端")?;
+            .ok_or("no server found")?;
         connected(connection)
     }
 }
@@ -152,7 +154,7 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
     let cwd = context
         .cwd
         .to_str()
-        .ok_or("当前目录的路径不是 UTF-8")?
+        .ok_or("the current directory's path is not UTF-8")?
         .to_owned();
     let connection = canter_server::ensure_server(&context.state_dir, &context.executable)
         .await

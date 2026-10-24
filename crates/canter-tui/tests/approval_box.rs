@@ -201,17 +201,17 @@ fn answer_keys_right_after_the_box_appears_are_dropped() {
     screen.start_turn("t1");
     screen.ask("r1", "t1", "printf A > first-proof.txt");
     screen.draw();
-    assert!(screen.dim("1. 允许这一次"), "A's answers are not taken yet");
+    assert!(screen.dim("1. Allow once"), "A's answers are not taken yet");
     screen.read_the_box();
     screen.draw();
-    assert!(!screen.dim("1. 允许这一次"));
+    assert!(!screen.dim("1. Allow once"));
 
     // Another terminal answers A, and B comes on screen.
     screen.allowed_elsewhere("r1", "t1", "printf A > first-proof.txt");
     screen.ask("r2", "t1", "printf B > second-proof.txt");
     screen.draw();
     assert!(screen.screen().contains("printf B > second-proof.txt"));
-    assert!(screen.dim("1. 允许这一次"), "B's answers are not taken yet");
+    assert!(screen.dim("1. Allow once"), "B's answers are not taken yet");
     for code in [KeyCode::Down, KeyCode::Char('2'), KeyCode::Enter] {
         screen.wait(50);
         assert_eq!(screen.key(code), None, "{code:?} right after B appeared");
@@ -219,7 +219,7 @@ fn answer_keys_right_after_the_box_appears_are_dropped() {
     // The guard now ends ANSWER_GUARD_MS after the last of those keys.
     screen.wait(ANSWER_GUARD_MS - 1);
     screen.draw();
-    assert!(screen.dim("1. 允许这一次"));
+    assert!(screen.dim("1. Allow once"));
     assert_eq!(
         screen.key(KeyCode::Enter),
         None,
@@ -228,7 +228,7 @@ fn answer_keys_right_after_the_box_appears_are_dropped() {
 
     screen.read_the_box();
     screen.draw();
-    assert!(!screen.dim("1. 允许这一次"));
+    assert!(!screen.dim("1. Allow once"));
     // Down was dropped, not kept: option 1 is still the one selected.
     assert_eq!(
         screen.key(KeyCode::Enter),
@@ -291,10 +291,10 @@ fn what_allowing_for_the_session_means_shows_before_choosing() {
     screen.ask("r1", "t1", "cargo test");
     screen.draw();
     let shown = screen.screen();
-    assert!(shown.contains("› 1. 允许这一次"), "{shown}");
+    assert!(shown.contains("› 1. Allow once"), "{shown}");
     assert!(
         shown.contains(
-            "这个会话里以后所有命令都直接跑，不再问；之后把权限模式改回「每次问」，这个允许照样有效。"
+            "All later commands in this session run without asking, even after switching back to Always ask."
         ),
         "the note shows with option 1 selected:\n{shown}"
     );
@@ -319,7 +319,7 @@ fn a_small_window_never_hides_an_answer_it_accepts() {
             screen.ask("r1", "t1", command);
             screen.draw();
             let shown = screen.screen();
-            if shown.contains("窗口太小") {
+            if shown.contains("Window too small") {
                 assert!(height < 20, "height {height} is enough:\n{shown}");
                 for code in [
                     KeyCode::Enter,
@@ -333,10 +333,10 @@ fn a_small_window_never_hides_an_answer_it_accepts() {
                 continue;
             }
             for answer in [
-                "1. 允许这一次",
-                "2. 本会话都允许",
-                "3. 拒绝",
-                "4. 拒绝并停下",
+                "1. Allow once",
+                "2. Allow for this session",
+                "3. Decline",
+                "4. Decline and stop",
             ] {
                 assert!(
                     shown.contains(answer),

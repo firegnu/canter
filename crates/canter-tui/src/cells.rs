@@ -40,7 +40,7 @@ pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> V
         let mut body = vec![Span::raw(line.to_owned())];
         if let Some(source) = source.filter(|_| i == 0) {
             body.push(Span::styled(
-                format!("  （来自 {}）", sanitize(source)),
+                format!("  (from {})", sanitize(source)),
                 Style::new().dim(),
             ));
         }
@@ -96,7 +96,7 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
         } => vec![file_read(path, *start_line, content, *status, cwd, width)],
         Item::ContextCompaction { .. } => {
             vec![Line::from(Span::styled(
-                "  ── 上下文已压缩 ──",
+                "  ── Context compacted ──",
                 Style::new().dim(),
             ))]
         }
@@ -107,15 +107,15 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
 /// What a turn leaves behind when it did not end normally.
 pub(crate) fn turn_footer(turn: &Turn, error_shown: bool) -> Option<LogicalLine> {
     match turn.status {
-        TurnStatus::Interrupted => Some(notice("■ ", "这一轮被打断了", Style::new().dim())),
+        TurnStatus::Interrupted => Some(notice("■ ", "Turn interrupted", Style::new().dim())),
         TurnStatus::Failed if !error_shown => {
             let message = turn
                 .error
                 .as_ref()
-                .map_or("没有说原因", |error| error.message.as_str());
+                .map_or("no reason given", |error| error.message.as_str());
             Some(notice(
                 "✗ ",
-                &format!("这一轮失败了：{message}"),
+                &format!("Turn failed: {message}"),
                 Style::new().red(),
             ))
         }
@@ -144,7 +144,7 @@ fn reasoning(
 ) -> Vec<Line<'static>> {
     let style = Style::new().dim().italic();
     if !finished {
-        return vec![Line::from(Span::styled("  思考中…", style))];
+        return vec![Line::from(Span::styled("  Thinking…", style))];
     }
     let parts = if summary.iter().any(|part| !part.trim().is_empty()) {
         summary
@@ -156,7 +156,7 @@ fn reasoning(
         return Vec::new();
     };
     vec![Line::from(truncate(
-        vec![Span::styled(format!("  思考：{first}"), style)],
+        vec![Span::styled(format!("  Thinking: {first}"), style)],
         usize::from(width),
     ))]
 }
@@ -172,21 +172,21 @@ fn file_read(
     let mut spans = vec![
         Span::raw("  "),
         Span::styled("◇ ", Style::new().dim()),
-        Span::styled("读 ", Style::new().bold()),
+        Span::styled("Read ", Style::new().bold()),
         Span::raw(display_path(path, cwd)),
     ];
     let lines = content.lines().count() as u32;
     let detail = match status {
         ItemStatus::InProgress => None,
-        ItemStatus::Failed => Some(Span::styled("  失败", Style::new().red())),
-        ItemStatus::Declined => Some(Span::styled("  没有读", Style::new().dim())),
-        _ if lines == 0 => Some(Span::styled("  空", Style::new().dim())),
+        ItemStatus::Failed => Some(Span::styled("  failed", Style::new().red())),
+        ItemStatus::Declined => Some(Span::styled("  declined", Style::new().dim())),
+        _ if lines == 0 => Some(Span::styled("  empty", Style::new().dim())),
         _ if lines == 1 => Some(Span::styled(
-            format!("  第 {start_line} 行"),
+            format!("  line {start_line}"),
             Style::new().dim(),
         )),
         _ => Some(Span::styled(
-            format!("  {start_line}–{} 行", start_line + lines - 1),
+            format!("  lines {start_line}–{}", start_line + lines - 1),
             Style::new().dim(),
         )),
     };
@@ -206,7 +206,7 @@ pub(crate) enum DiffKind {
 /// An item waiting for an approval: only its title row, marked 「等你批准」.
 /// The approval box below shows the whole command or diff.
 pub(crate) fn waiting(item: &Item, cwd: &str, width: u16) -> Vec<Line<'static>> {
-    let mark = || vec![Span::styled("等你批准", Style::new().yellow())];
+    let mark = || vec![Span::styled("Waiting for approval", Style::new().yellow())];
     match item {
         Item::CommandExecution { command, .. } => {
             vec![command_title(command, Style::new().dim(), mark(), width)]
@@ -234,11 +234,11 @@ fn file_change(
         ItemStatus::InProgress => (Style::new().dim(), None),
         ItemStatus::Failed => (
             Style::new().red(),
-            Some(Span::styled("  失败", Style::new().red())),
+            Some(Span::styled("  failed", Style::new().red())),
         ),
         ItemStatus::Declined => (
             Style::new().dim(),
-            Some(Span::styled("  没有改", Style::new().dim())),
+            Some(Span::styled("  declined", Style::new().dim())),
         ),
         _ => (Style::new().green(), None),
     };
@@ -270,9 +270,9 @@ fn change_header(
     let count = |wanted| diff.iter().filter(|(kind, _)| *kind == wanted).count();
     let (added, removed) = (count(DiffKind::Added), count(DiffKind::Removed));
     let verb = match &change.kind {
-        PatchChangeKind::Add => "新建 ",
-        PatchChangeKind::Delete => "删除 ",
-        _ => "改 ",
+        PatchChangeKind::Add => "Add ",
+        PatchChangeKind::Delete => "Delete ",
+        _ => "Edit ",
     };
     let mut header = vec![
         Span::raw("  "),
@@ -358,16 +358,16 @@ fn command_card(
     let dim = Style::new().dim();
     let took = duration_ms.map(|ms| Span::styled(format!(" · {}", format_duration(ms)), dim));
     let (bullet, mut right) = match (status, exit_code) {
-        (ItemStatus::InProgress, _) => (dim, vec![Span::styled("运行中", dim)]),
-        (ItemStatus::Declined, _) => (dim, vec![Span::styled("没有运行", dim)]),
-        (_, Some(0)) => (Style::new().green(), vec![Span::styled("退出码 0", dim)]),
+        (ItemStatus::InProgress, _) => (dim, vec![Span::styled("running", dim)]),
+        (ItemStatus::Declined, _) => (dim, vec![Span::styled("declined", dim)]),
+        (_, Some(0)) => (Style::new().green(), vec![Span::styled("exit 0", dim)]),
         (_, Some(code)) => (
             Style::new().red(),
-            vec![Span::styled(format!("退出码 {code}"), Style::new().red())],
+            vec![Span::styled(format!("exit {code}"), Style::new().red())],
         ),
         (ItemStatus::Failed, None) => (
             Style::new().red(),
-            vec![Span::styled("失败", Style::new().red())],
+            vec![Span::styled("failed", Style::new().red())],
         ),
         (_, None) => (Style::new().green(), Vec::new()),
     };
@@ -388,7 +388,7 @@ fn command_card(
         rows.push(Line::from(vec![
             Span::styled(GUTTER, dim),
             Span::styled(
-                format!("……（共 {} 行，只显示最后 {tail} 行）", lines.len()),
+                format!("… ({} lines, showing the last {tail})", lines.len()),
                 dim,
             ),
         ]));
@@ -422,7 +422,7 @@ fn command_title(
     let left = vec![
         Span::raw("  "),
         Span::styled("● ", bullet),
-        Span::styled("跑 ", Style::new().bold()),
+        Span::styled("Run ", Style::new().bold()),
         Span::raw(shown),
     ];
     right_aligned(left, right, usize::from(width))

@@ -44,11 +44,13 @@ pub(crate) fn options(approval: &ApprovalRequest) -> Vec<ApprovalDecision> {
 
 pub(crate) fn decision_label(decision: ApprovalDecision) -> &'static str {
     match decision {
-        ApprovalDecision::Accept => "允许这一次",
-        ApprovalDecision::AcceptForSession => "本会话都允许（以后这个工具不再问）",
-        ApprovalDecision::Decline => "拒绝",
-        ApprovalDecision::Cancel => "拒绝并停下",
-        ApprovalDecision::Unknown => "（不认识的回答）",
+        ApprovalDecision::Accept => "Allow once",
+        ApprovalDecision::AcceptForSession => {
+            "Allow for this session (don't ask again for this tool)"
+        }
+        ApprovalDecision::Decline => "Decline",
+        ApprovalDecision::Cancel => "Decline and stop",
+        ApprovalDecision::Unknown => "(unknown answer)",
     }
 }
 
@@ -81,7 +83,7 @@ pub(crate) fn layout(
     let cwd = &snapshot.settings.cwd;
     let (title, body) = match approval.tool.as_str() {
         "shell" => (
-            "要跑这条命令吗？".to_owned(),
+            "Run this command?".to_owned(),
             shell_body(approval, item, cwd, home, inner),
         ),
         "write" | "edit" => {
@@ -91,14 +93,14 @@ pub(crate) fn layout(
             }
             .unwrap_or(PatchChangeKind::Update { move_path: None });
             let title = if kind == PatchChangeKind::Add {
-                "要新建这个文件吗？"
+                "Create this file?"
             } else {
-                "要改这个文件吗？"
+                "Edit this file?"
             };
             (title.to_owned(), change_body(approval, &kind, cwd, inner))
         }
         tool => (
-            format!("要允许 {} 吗？", visible(tool)),
+            format!("Allow {}?", visible(tool)),
             json_body(&approval.arguments, inner),
         ),
     };
@@ -154,10 +156,10 @@ pub(crate) fn layout(
             title,
             position: None,
             rows: vec![Line::from(Span::styled(
-                " 窗口太小，放不下批准框；把窗口拉高一点再选",
+                " Window too small for the approval box; make it taller to choose",
                 Style::new().yellow(),
             ))],
-            footer: footer("Esc 打断这一轮"),
+            footer: footer("Esc interrupt"),
             page: 1,
             max_scroll: 0,
             fits: false,
@@ -173,9 +175,9 @@ pub(crate) fn layout(
     }
 
     let hint = if max_scroll > 0 {
-        "↑↓ 选，PgUp/PgDn 翻看，Enter 确定，数字键直接选，Esc 打断这一轮"
+        "↑↓ select, PgUp/PgDn scroll, Enter confirm, number keys pick, Esc interrupt"
     } else {
-        "↑↓ 选，Enter 确定，数字键直接选，Esc 打断这一轮"
+        "↑↓ select, Enter confirm, number keys pick, Esc interrupt"
     };
     let position = (max_scroll > 0).then(|| {
         Line::from(vec![
@@ -202,12 +204,12 @@ pub(crate) fn layout(
 /// switching the mode back to 「每次问」 later does not take it back.
 fn session_note(tool: &str) -> String {
     let what = match tool {
-        "shell" => "这个会话里以后所有命令都直接跑，不再问".to_owned(),
-        "write" => "这个会话里以后整文件写入都不再问".to_owned(),
-        "edit" => "这个会话里以后按文字替换改文件都不再问".to_owned(),
-        other => format!("这个会话里以后 {} 都不再问", visible(other)),
+        "shell" => "All later commands in this session run without asking".to_owned(),
+        "write" => "Later whole-file writes in this session won't ask".to_owned(),
+        "edit" => "Later text-replacement edits in this session won't ask".to_owned(),
+        other => format!("Later {} calls in this session won't ask", visible(other)),
     };
-    format!("{what}；之后把权限模式改回「每次问」，这个允许照样有效。")
+    format!("{what}, even after switching back to Always ask.")
 }
 
 /// The whole command, then the directory it runs in.
@@ -241,7 +243,7 @@ fn shell_body(
     };
     rows.extend(wrap(
         &LogicalLine::new(
-            vec![Span::styled("目录：", Style::new().dim())],
+            vec![Span::styled("Directory: ", Style::new().dim())],
             vec![Span::raw(shorten_home(&visible(cwd), home))],
         ),
         width,
@@ -275,7 +277,7 @@ fn change_body(
     }
     let mut rows = wrap(&LogicalLine::new(Vec::new(), header), width);
     if diff.is_empty() {
-        rows.push(Line::from(Span::styled("（没有改动）", Style::new().dim())));
+        rows.push(Line::from(Span::styled("(no changes)", Style::new().dim())));
     }
     for (kind, line) in diff {
         let (marker, style) = diff_style(kind);

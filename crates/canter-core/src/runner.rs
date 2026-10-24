@@ -63,12 +63,14 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         let finish = async {
             state.cancel_requests().await?;
             state
-                .complete_missing_tools("没有结果：被打断或本轮未完成")
+                .complete_missing_tools("No result: interrupted, or the turn did not finish")
                 .await?;
             if cancel.is_cancelled() {
                 state
                     .message(Message::User {
-                        text: "[本轮被打断；尚未完成的操作没有继续执行。]".into(),
+                        text:
+                            "[This turn was interrupted; unfinished operations were not continued.]"
+                                .into(),
                     })
                     .await?;
                 let reason = if state.closing {
@@ -197,7 +199,7 @@ async fn conversation(
                         .journal
                         .append(vec![EventPayload::Warning {
                             message: format!(
-                                "自动压缩失败（{}）；原请求加输出上限仍在上下文窗口内，继续对话。",
+                                "Auto-compaction failed ({}); the request plus the output limit still fits in the context window, so the conversation continues.",
                                 error.message
                             ),
                         }])
@@ -230,7 +232,7 @@ async fn conversation(
                 .state
                 .lock()
                 .await
-                .complete_missing_tools("没有结果：模型请求未完成")
+                .complete_missing_tools("No result: the model request did not finish")
                 .await?;
             if error.kind == ErrorKind::ContextLength && !compacted && !*auto_compaction_failed {
                 compaction::compact(shared, turn_id, cancel).await?;
@@ -253,7 +255,9 @@ async fn conversation(
                 .state
                 .lock()
                 .await
-                .complete_missing_tools("没有结果：模型回复不完整，未执行工具")
+                .complete_missing_tools(
+                    "No result: the model reply was incomplete, so the tool was not run",
+                )
                 .await?;
             if matches!(reason, Some(FinishReason::Length | FinishReason::Other)) {
                 shared
@@ -262,7 +266,8 @@ async fn conversation(
                     .await
                     .journal
                     .append(vec![EventPayload::Warning {
-                        message: "模型回复不完整，未执行其中的工具调用。".into(),
+                        message: "The model reply was incomplete; its tool calls were not run."
+                            .into(),
                     }])
                     .await?;
             }
@@ -495,7 +500,7 @@ async fn execute(
         state
             .journal
             .append(vec![EventPayload::Warning {
-                message: format!("未知工具 {}，没有执行。", call.name),
+                message: format!("Unknown tool {}; not run.", call.name),
             }])
             .await?;
         return Ok(());
@@ -518,7 +523,7 @@ async fn execute(
                         _ => unreachable!("prepared tool item"),
                     }
                     ToolOutput {
-                        text: "被打断，没有执行".into(),
+                        text: "Interrupted; not run".into(),
                         item,
                         outcome: ToolOutcome::Cancelled,
                     }

@@ -142,7 +142,10 @@ pub(crate) async fn prefix(cwd: String) -> Result<(Vec<Message>, Vec<String>), C
                     path.display()
                 )),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => warnings.push(format!("跳过项目指令 {}：{error}", path.display())),
+                Err(error) => warnings.push(format!(
+                    "Skipped project instructions {}: {error}",
+                    path.display()
+                )),
             }
         }
         (vec![Message::System { text }], warnings)

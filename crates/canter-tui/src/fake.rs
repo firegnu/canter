@@ -210,7 +210,7 @@ impl Shared {
             error(
                 StatusCode::NOT_FOUND,
                 ErrorCode::SessionNotFound,
-                format!("没有会话 {id}"),
+                format!("no session {id}"),
             )
         })
     }
@@ -241,7 +241,7 @@ async fn send_input(
         return error(
             StatusCode::CONFLICT,
             ErrorCode::Conflict,
-            "假服务端还在回放，放完再发".into(),
+            "the fake server is still replaying; send after it finishes".into(),
         );
     }
     let number = shared.echo_turns.fetch_add(1, Ordering::SeqCst) + 1;
@@ -255,7 +255,10 @@ async fn send_input(
             UserInput::Unknown => None,
         })
         .collect();
-    let reply = format!("这是假服务端，只会回放写好的事件。收到：{}", said.join(" "));
+    let reply = format!(
+        "This is a fake server; it only replays scripted events. Received: {}",
+        said.join(" ")
+    );
     let turn = |status| Turn {
         id: turn_id.clone(),
         items: Vec::new(),

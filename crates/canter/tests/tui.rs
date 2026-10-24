@@ -488,7 +488,7 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     let terminal = Terminal::start(&[], world.context("canter-tui a", &anywhere)).await;
     // The info line: default model, asking each time, this directory.
     terminal
-        .wait_for("fake-model · 每次问 · /tmp/canter-tui-")
+        .wait_for("fake-model · Always ask · /tmp/canter-tui-")
         .await;
     assert!(terminal.screen().contains("somewhere/else/deep"));
     let registration: Value =
@@ -497,12 +497,12 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     assert_ne!(daemon.as_raw() as u32, std::process::id());
 
     terminal.type_line("把环境写出来").await;
-    terminal.wait_for("要跑这条命令吗？").await;
+    terminal.wait_for("Run this command?").await;
     assert!(terminal.screen().contains(WRITE_ENV), "the whole command");
     read_the_box().await;
     terminal.press(KeyCode::Enter).await;
     terminal.wait_for("写好了").await;
-    assert!(terminal.text().contains("你选了：允许这一次"));
+    assert!(terminal.text().contains("You chose: Allow once"));
     assert_eq!(
         fs::read_to_string(anywhere.join("env.txt")).unwrap(),
         env_value("canter-tui a"),
@@ -536,13 +536,13 @@ async fn two_terminals_share_one_session() {
     let b = world.open(&["--resume", &id], "canter-tui b").await;
     // B first shows what the session already has.
     b.wait_for("回答一").await;
-    assert!(b.text().contains("› 第一句  （来自 canter-tui a）"));
+    assert!(b.text().contains("› 第一句  (from canter-tui a)"));
 
     b.type_line("第二句").await;
     for terminal in [&a, &b] {
         terminal.wait_for("回答二").await;
     }
-    assert!(a.text().contains("› 第二句  （来自 canter-tui b）"));
+    assert!(a.text().contains("› 第二句  (from canter-tui b)"));
     assert!(
         b.text().contains("› 第二句\n"),
         "own messages are not marked"
@@ -552,8 +552,8 @@ async fn two_terminals_share_one_session() {
     let conversation = |terminal: &Terminal| {
         let text = terminal
             .text()
-            .replace("  （来自 canter-tui a）", "")
-            .replace("  （来自 canter-tui b）", "");
+            .replace("  (from canter-tui a)", "")
+            .replace("  (from canter-tui b)", "");
         let start = text.find("› 第一句").unwrap();
         let end = text.find("回答二").unwrap();
         text[start..end].to_owned()
@@ -576,10 +576,10 @@ async fn client_reconnects_after_the_server_restarts() {
     a.wait_for("回答一").await;
 
     world.stop_server(Signal::SIGTERM).await;
-    a.wait_until("重连中", |a| a.status().contains("重连中"))
+    a.wait_until("Reconnecting", |a| a.status().contains("Reconnecting"))
         .await;
     world.start_server().await;
-    a.wait_until("reconnected", |a| !a.status().contains("重连中"))
+    a.wait_until("reconnected", |a| !a.status().contains("Reconnecting"))
         .await;
     a.type_line("第二句").await;
     a.wait_for("回答二").await;
@@ -594,7 +594,7 @@ async fn client_reconnects_after_the_server_restarts() {
     fresh.wait_for("回答二").await;
     fresh.wait_idle().await;
     assert_eq!(a.text().trim_end(), fresh.text().trim_end());
-    assert!(!a.text().contains("对不上"));
+    assert!(!a.text().contains("does not fit"));
 
     assert_eq!(a.quit().await, id);
     assert_eq!(fresh.quit().await, id);
@@ -611,13 +611,13 @@ async fn the_later_answer_to_an_approval_closes_and_names_the_first() {
     a.wait_idle().await;
     // B opens the session from the list: this directory's sessions come first.
     let b = world.open(&["--resume"], "canter-tui b").await;
-    b.wait_for("接着哪个会话？").await;
+    b.wait_for("Which session to resume?").await;
     b.press(KeyCode::Enter).await;
     b.wait_idle().await;
 
     a.type_line("跑一下").await;
     for terminal in [&a, &b] {
-        terminal.wait_for("要跑这条命令吗？").await;
+        terminal.wait_for("Run this command?").await;
     }
     // A allows (option 1), B declines (key 3), at the same moment.
     read_the_box().await;
@@ -626,7 +626,7 @@ async fn the_later_answer_to_an_approval_closes_and_names_the_first() {
     for terminal in [&a, &b] {
         terminal
             .wait_until("the box to close", |t| {
-                !t.screen().contains("要跑这条命令吗？")
+                !t.screen().contains("Run this command?")
             })
             .await;
         terminal.wait_for("做完了").await;
@@ -634,19 +634,23 @@ async fn the_later_answer_to_an_approval_closes_and_names_the_first() {
 
     let id = world.only_session().await;
     assert!(world.snapshot(&id).await.pending_requests.is_empty());
-    let (winner, loser, label) = if a.text().contains("你选了：允许这一次") {
-        (&a, &b, "canter-tui a 答了：允许这一次")
+    let (winner, loser, label) = if a.text().contains("You chose: Allow once") {
+        (&a, &b, "canter-tui a answered: Allow once")
     } else {
-        (&b, &a, "canter-tui b 答了：拒绝")
+        (&b, &a, "canter-tui b answered: Decline")
     };
     assert!(
         loser.text().contains(label),
         "the later terminal names who answered:\n{}",
         loser.text()
     );
-    assert!(loser.text().contains("你的回答晚了一步，没有生效"));
-    assert!(!winner.text().contains("晚了一步"));
-    assert!(!winner.text().contains(" 答了："));
+    assert!(
+        loser
+            .text()
+            .contains("Your answer came too late and was ignored")
+    );
+    assert!(!winner.text().contains("too late"));
+    assert!(!winner.text().contains(" answered: "));
 
     a.quit().await;
     b.quit().await;
@@ -661,7 +665,7 @@ async fn approval_box_shows_control_characters_in_the_command() {
     let mut world = World::new(vec![shell_reply(hidden), text_reply("跑完了")]).await;
     world.start_server().await;
     let a = world.open(&["跑一下"], "canter-tui a").await;
-    a.wait_for("要跑这条命令吗？").await;
+    a.wait_for("Run this command?").await;
     assert!(
         a.screen()
             .contains(r"printf review-proof > approval-proof.txt #\recho safe"),
@@ -701,7 +705,7 @@ async fn a_session_closed_by_another_client_stays_closed() {
         SessionStatus::Closed,
         "the watching terminal opened the session again"
     );
-    a.wait_until("会话已关闭", |a| a.status().contains("会话已关闭"))
+    a.wait_until("Session closed", |a| a.status().contains("Session closed"))
         .await;
 
     let b = world.open(&["--resume", &id], "canter-tui b").await;
@@ -709,7 +713,7 @@ async fn a_session_closed_by_another_client_stays_closed() {
     a.wait_idle().await;
     b.type_line("第二句").await;
     a.wait_for("回答二").await;
-    assert!(a.text().contains("› 第二句  （来自 canter-tui b）"));
+    assert!(a.text().contains("› 第二句  (from canter-tui b)"));
 
     assert_eq!(a.quit().await, id);
     assert_eq!(b.quit().await, id);
@@ -729,7 +733,7 @@ async fn a_key_that_comes_in_while_the_box_is_drawn_does_not_answer_it() {
     world.start_server().await;
     let a = world.open(&[], "canter-tui a").await;
     a.wait_idle().await;
-    let sent = a.press_while_drawing("要跑这条命令吗？", KeyCode::Enter);
+    let sent = a.press_while_drawing("Run this command?", KeyCode::Enter);
     a.type_line("跑一下").await;
     a.wait_until("Enter sent mid-frame", |_| sent.load(Ordering::SeqCst))
         .await;
@@ -770,7 +774,7 @@ async fn enter_right_after_the_box_appears_does_not_answer_it() {
     let a = world.open(&[], "canter-tui a").await;
     a.wait_idle().await;
     a.type_line("跑一下").await;
-    a.wait_for("要跑这条命令吗？").await;
+    a.wait_for("Run this command?").await;
     // Comes in after the box's frame, so the frame check lets it through.
     a.press(KeyCode::Enter).await;
     // Give a wrong answer every chance to land, also after the guard.
@@ -782,7 +786,7 @@ async fn enter_right_after_the_box_appears_does_not_answer_it() {
         "the Enter right after the box appeared answered it"
     );
     assert!(!world.path("work/second-proof.txt").exists());
-    assert!(a.screen().contains("要跑这条命令吗？"));
+    assert!(a.screen().contains("Run this command?"));
 
     a.press(KeyCode::Enter).await;
     a.wait_for("跑完了").await;
@@ -809,19 +813,19 @@ async fn approval_box_matches_the_server_after_a_restart() {
     world.start_server().await;
     let a = world.open(&[], "canter-tui a").await;
     a.type_line("跑一下").await;
-    a.wait_for("要跑这条命令吗？").await;
-    assert!(a.status().contains("等你批准"));
+    a.wait_for("Run this command?").await;
+    assert!(a.status().contains("Waiting for approval"));
 
     world.stop_server(Signal::SIGKILL).await;
-    a.wait_until("重连中", |a| a.status().contains("重连中"))
+    a.wait_until("Reconnecting", |a| a.status().contains("Reconnecting"))
         .await;
     world.start_server().await;
     a.wait_until("the box to close", |a| {
-        !a.screen().contains("要跑这条命令吗？") && !a.status().contains("重连中")
+        !a.screen().contains("Run this command?") && !a.status().contains("Reconnecting")
     })
     .await;
-    a.wait_for("批准请求取消了").await;
-    a.wait_for("这一轮被打断了").await;
+    a.wait_for("Approval request cancelled").await;
+    a.wait_for("Turn interrupted").await;
     assert_eq!(a.status(), "", "idle");
 
     let id = world.only_session().await;
@@ -833,7 +837,7 @@ async fn approval_box_matches_the_server_after_a_restart() {
     assert!(!world.path("work/approval-proof.txt").exists());
 
     a.type_line("再跑一下").await;
-    a.wait_for("要跑这条命令吗？").await;
+    a.wait_for("Run this command?").await;
     read_the_box().await;
     a.press(KeyCode::Char('1')).await;
     a.wait_for("跑完了").await;

@@ -56,7 +56,7 @@ impl App {
         self.disk_snapshot(id).await?;
         Err(ApiError::new(
             ErrorCode::SessionNotResumed,
-            "请先接着聊：POST /v1/sessions/{id}/resume 并重新提供 env",
+            "resume the session first: POST /v1/sessions/{id}/resume with env again",
         ))
     }
 
@@ -368,7 +368,7 @@ async fn close(
             app.disk_snapshot(&id).await?;
             return Err(ApiError::new(
                 ErrorCode::SessionNotResumed,
-                "请先接着聊：POST /v1/sessions/{id}/resume 并重新提供 env",
+                "resume the session first: POST /v1/sessions/{id}/resume with env again",
             ));
         };
         let response = session.close().await;
