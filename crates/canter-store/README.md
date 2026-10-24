@@ -1,7 +1,7 @@
 # canter-store
 
 同步的 Unix 文件存盘库，根目录由调用方传入；没有默认 HOME 路径。
-`Store::create` 在根目录的 `.creating-*` 临时目录建好私有配置、空模型历史和
+`Store::create(id, settings, timestamp)` 在根目录的 `.creating-*` 临时目录建好空模型历史和
 第一条 `session.updated`，文件及目录同步成功后再改名为正式 id。
 失败清理本次创建的目录；若发布后的根目录同步失败，也撤回本次发布。
 `Store::open` 重放历史，没有任何已提交事件时按不存在处理；
@@ -14,14 +14,14 @@
 <root>/                 0700
   <session-id>/         0700
     events.jsonl        0600，一行一条公开协议事件
-    private.json        0600，仅含环境变量
     model-history.jsonl 0600，一行一条模型历史，不发给客户端
 ```
 
 会话 id 仅允许 1–128 个 ASCII 字母、数字、连字符和下划线。
 `Store::new` 创建根目录或将调用方指定根目录的权限收紧为 0700；
 请传入专门用于 canter 的目录。测试始终使用临时目录。
-`PrivateSessionConfig` 不实现 Debug，也不参与协议类型导出。
+本包不接收或持有环境变量，不再创建或读取 `private.json`；已有旧文件不迁移。
+环境由调用方在创建或恢复时重新交给内存中的执行器。
 
 写入者用 Rust 标准库 `File::try_lock` 对事件文件持有排他锁，句柄释放时解锁；
 该会话锁也保护模型历史写入，重复打开立即返回 `StoreError::Locked`。
@@ -49,4 +49,4 @@
 
 存盘层不处理 HTTP 请求竞争、输入排队或会话业务状态转换；调用方负责产生对应事件，
 例如批准只处理一次、完成轮前解决待处理批准、PATCH 后写完整 `session.updated`。
-环境变量在创建后保持不变；公开设置通过事件更新。
+公开设置通过事件更新。

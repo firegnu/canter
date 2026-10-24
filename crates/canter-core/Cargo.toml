@@ -1,0 +1,24 @@
+[package]
+name = "canter-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+canter-protocol.workspace = true
+canter-model = { path = "../canter-model" }
+canter-store = { path = "../canter-store" }
+canter-tools = { path = "../canter-tools" }
+tokio.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+httpdate.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+async-stream.workspace = true
+nix.workspace = true

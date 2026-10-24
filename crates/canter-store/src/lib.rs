@@ -1,7 +1,6 @@
 //! Synchronous, Unix session storage. Callers choose an isolated root directory.
 //! Keep a `SessionWriter` alive for the duration of a writable session.
 
-use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -11,14 +10,7 @@ use canter_protocol::{
     Event, EventPayload, ReduceError, SessionSettings, SessionSnapshot, SessionSummary,
     apply_event_mut, validate_event,
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-
-/// Local execution context. Deliberately has no Debug, protocol schema, or TS export.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PrivateSessionConfig {
-    pub env: BTreeMap<String, String>,
-}
+use serde::{Serialize, de::DeserializeOwned};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -56,19 +48,15 @@ impl Store {
         &self,
         id: &str,
         settings: SessionSettings,
-        private: PrivateSessionConfig,
         timestamp: i64,
     ) -> Result<SessionWriter, StoreError> {
-        self.create_with_sync(id, settings, private, timestamp, |path| {
-            File::open(path)?.sync_all()
-        })
+        self.create_with_sync(id, settings, timestamp, |path| File::open(path)?.sync_all())
     }
 
     fn create_with_sync(
         &self,
         id: &str,
         settings: SessionSettings,
-        private: PrivateSessionConfig,
         timestamp: i64,
         mut sync: impl FnMut(&std::path::Path) -> io::Result<()>,
     ) -> Result<SessionWriter, StoreError> {
@@ -97,18 +85,10 @@ impl Store {
             .mode(0o600)
             .open(dir.join("model-history.jsonl"))?;
         model_history.sync_all()?;
-        let mut config = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(dir.join("private.json"))?;
-        serde_json::to_writer(&mut config, &private)?;
-        sync(&dir.join("private.json"))?;
         let mut writer = SessionWriter {
             file,
             model_history,
             snapshot: SessionSnapshot::empty(id),
-            private,
             write_failed: false,
         };
         writer.append(EventPayload::SessionUpdated { settings }, timestamp)?;
@@ -136,7 +116,6 @@ impl Store {
                 io::Error::new(io::ErrorKind::NotFound, "session has no committed events").into(),
             );
         }
-        let private = serde_json::from_reader(File::open(dir.join("private.json"))?)?;
         let model_history = OpenOptions::new()
             .read(true)
             .append(true)
@@ -150,7 +129,6 @@ impl Store {
             file,
             model_history,
             snapshot,
-            private,
             write_failed: false,
         })
     }
@@ -296,7 +274,6 @@ pub struct SessionWriter {
     file: File,
     model_history: File,
     snapshot: SessionSnapshot,
-    private: PrivateSessionConfig,
     write_failed: bool,
 }
 
@@ -358,10 +335,6 @@ impl SessionWriter {
         &self.snapshot
     }
 
-    pub fn private_config(&self) -> &PrivateSessionConfig {
-        &self.private
-    }
-
     /// Assigns the next sequence, durably appends one line, then updates memory.
     /// After an I/O error this handle refuses further writes; reopen to recover.
     pub fn append(&mut self, payload: EventPayload, timestamp: i64) -> Result<Event, StoreError> {
@@ -406,7 +379,7 @@ mod creation_tests {
 
     #[test]
     fn failed_creation_cleans_up_before_and_after_publication() {
-        for fail_at in 1..=3 {
+        for fail_at in 1..=2 {
             let temp = tempfile::tempdir().unwrap();
             let store = Store::new(temp.path()).unwrap();
             let settings = SessionSettings {
@@ -415,23 +388,19 @@ mod creation_tests {
                 model: "fake".into(),
                 approval_policy: canter_protocol::PermissionMode::AlwaysAsk,
             };
-            let private = PrivateSessionConfig {
-                env: BTreeMap::new(),
-            };
             let mut syncs = 0;
-            let result =
-                store.create_with_sync("s1", settings.clone(), private.clone(), 1, |path| {
-                    syncs += 1;
-                    assert_eq!(
-                        temp.path().join("s1").exists(),
-                        path == temp.path(),
-                        "publish only after all session files are durable"
-                    );
-                    if syncs == fail_at {
-                        return Err(io::Error::other("injected filesystem sync failure"));
-                    }
-                    File::open(path)?.sync_all()
-                });
+            let result = store.create_with_sync("s1", settings.clone(), 1, |path| {
+                syncs += 1;
+                assert_eq!(
+                    temp.path().join("s1").exists(),
+                    path == temp.path(),
+                    "publish only after all session files are durable"
+                );
+                if syncs == fail_at {
+                    return Err(io::Error::other("injected filesystem sync failure"));
+                }
+                File::open(path)?.sync_all()
+            });
             assert!(result.is_err());
             assert!(
                 !temp.path().join("s1").exists(),
@@ -442,7 +411,7 @@ mod creation_tests {
                 0,
                 "temporary creation data must be removed too"
             );
-            assert!(store.create("s1", settings, private, 2).is_ok());
+            assert!(store.create("s1", settings, 2).is_ok());
         }
     }
 }

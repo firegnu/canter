@@ -33,6 +33,16 @@
 输入回复的 `eventSeq` 指向该事件，`turnId` 为空。快照的 `queuedInputs` 保留待执行输入。
 开始对应轮时，`turn.started.inputId` 带排队输入 id，归并时将其移出队列。
 非排队输入开始轮时 `inputId` 可省略或为空。`SessionInterruptParams.turnId` 是目标轮的前置条件。
+`input.removed { inputIds, reason, turnId? }` 按 id 移出一个或多个排队输入；
+reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupted`（打断丢弃）、
+`closed`（关闭丢弃）。重复移出无影响，未知 reason 也按 id 移出。
+`turnId` 在消费时指目标轮，丢弃时可省略；TypeScript 同样为可选属性。
+忙时插话也先落盘 `input.queued`，回复的 `eventSeq` 指该事件、`turnId` 指当前目标轮；
+只有实际进入上下文时才发送 `input.removed`，接收成功不等于模型已经看见。
+手动压缩成功接收后立即回复：`eventSeq` 指独立压缩轮的 `turn.started`，
+`turnId` 是该轮 id；旧回复可以没有此字段，省略时不序列化，TypeScript 为可选属性。
+压缩结果看该轮的 `contextCompaction` 项目和 `turn.completed`，回复不等摘要结束。
+压缩轮进行中的 `steer` 按 `queue` 处理，输入回复 `turnId` 为空，之后另开一轮。
 审批先到先得：后到的回答由服务端返回 `alreadyResolved: true` 和原处理事件序号，
 不再产生一个处理事件。取消、超时的 `clientName` 可为空。
 权限模式为 `alwaysAsk`、`askForExecution`、`allowAll`；批准回答为
@@ -41,7 +51,7 @@
 `session.updated` 的 `settings` 是完整的公开设置（工作目录、名字、模型、权限模式）。
 创建会话、PATCH 成功后各写一条。PATCH 中省略/null 表示不修改字段。
 `cwd` 同时出现在公开设置和会话摘要中，供显示、选择恢复目录；PATCH 不修改它。
-环境变量只在创建请求中传入，由私有文件存盘，不进入事件、公开设置或快照。
+环境变量只交给服务端内存中的执行器，不存盘，不进入事件、公开设置或快照。
 创建请求不实现 Debug，调用方也不得记录其请求体。
 
 ### 错误与 SSE

@@ -1,6 +1,5 @@
 use canter_protocol::{PermissionMode, SessionSettings};
-use canter_store::{PrivateSessionConfig, Store, StoreError};
-use std::collections::BTreeMap;
+use canter_store::{Store, StoreError};
 use std::process::Command;
 
 #[test]
@@ -21,9 +20,6 @@ fn a_second_writer_cannot_lock_the_same_session() {
                 name: None,
                 model: "fake".into(),
                 approval_policy: PermissionMode::AlwaysAsk,
-            },
-            PrivateSessionConfig {
-                env: BTreeMap::new(),
             },
             1,
         )

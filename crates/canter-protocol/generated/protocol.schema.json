@@ -213,6 +213,35 @@
         },
         {
           "properties": {
+            "inputIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "reason": {
+              "$ref": "#/$defs/InputRemovalReason"
+            },
+            "turnId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "input.removed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "inputIds",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "turn": {
               "$ref": "#/$defs/Turn"
             },
@@ -501,6 +530,35 @@
         },
         {
           "properties": {
+            "inputIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "reason": {
+              "$ref": "#/$defs/InputRemovalReason"
+            },
+            "turnId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "input.removed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "inputIds",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "turn": {
               "$ref": "#/$defs/Turn"
             },
@@ -766,6 +824,16 @@
       "enum": [
         "queue",
         "steer",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "InputRemovalReason": {
+      "enum": [
+        "steered",
+        "merged",
+        "interrupted",
+        "closed",
         "unknown"
       ],
       "type": "string"
@@ -1300,11 +1368,18 @@
       "type": "object"
     },
     "SessionCompactResponse": {
+      "description": "Accepted compaction; completion is reported by the referenced turn's events.",
       "properties": {
         "eventSeq": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

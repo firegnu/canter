@@ -89,6 +89,12 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
     let event_ts = fs::read_to_string(temp.path().join("typescript/Event.ts")).unwrap();
     assert!(event_ts.contains("seq: number"));
     assert!(event_ts.contains("sessionId: string"));
+    let payload_ts = fs::read_to_string(temp.path().join("typescript/EventPayload.ts")).unwrap();
+    assert!(payload_ts.contains("\"input.removed\""));
+    assert!(
+        payload_ts.contains("turnId?: string"),
+        "omittable removal turnId must be optional in TypeScript"
+    );
     let item_ts = fs::read_to_string(temp.path().join("typescript/Item.ts")).unwrap();
     assert!(item_ts.contains("aggregatedOutput: string"));
     assert!(item_ts.contains("exitCode: number | null"));
@@ -99,6 +105,9 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         "PATCH fields must be optional in TypeScript too"
     );
     let generated = files(temp.path());
+    let compact_ts =
+        fs::read_to_string(temp.path().join("typescript/SessionCompactResponse.ts")).unwrap();
+    assert!(compact_ts.contains("turnId?: string"));
     export_protocol(temp.path()).unwrap();
     assert_eq!(files(temp.path()), generated);
     let checked_in = Path::new(env!("CARGO_MANIFEST_DIR")).join("generated");

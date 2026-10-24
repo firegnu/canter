@@ -36,6 +36,14 @@ pub enum EventPayload {
     },
     #[serde(rename = "input.queued")]
     InputQueued { input: QueuedInput },
+    #[serde(rename = "input.removed")]
+    InputRemoved {
+        input_ids: Vec<String>,
+        reason: InputRemovalReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        turn_id: Option<String>,
+    },
     #[serde(rename = "turn.completed")]
     TurnCompleted { turn: Turn },
     #[serde(rename = "item.started")]
@@ -67,6 +75,17 @@ pub enum EventPayload {
         turn_id: Option<String>,
     },
     #[serde(rename = "unknown")]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum InputRemovalReason {
+    Steered,
+    Merged,
+    Interrupted,
+    Closed,
     #[serde(other)]
     Unknown,
 }

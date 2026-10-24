@@ -124,6 +124,11 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
                 snapshot.queued_inputs.push(input.clone());
             }
         }
+        EventPayload::InputRemoved { input_ids, .. } => {
+            snapshot
+                .queued_inputs
+                .retain(|input| !input_ids.contains(&input.id));
+        }
         EventPayload::TurnCompleted { turn } => {
             let existing = snapshot
                 .turns
