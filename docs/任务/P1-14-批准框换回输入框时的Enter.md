@@ -46,3 +46,44 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-10-24，canter/dev-approval。
+
+- **做了什么**（只动 `crates/canter-tui/src/app.rs` 和测试）：
+  - 新加 `send_guard_until`，和批准框的 `guard_until` 分开记。某一帧从批准框换成输入框、上了屏，就从那一刻起算 `ANSWER_GUARD_MS`（300 ms）。
+  - 保护期内输入框里的 Enter 不发送，草稿留着。任何键进来都从这个键起再算 300 ms。打字、删字、Shift+Enter / Ctrl+J 换行、Esc、Ctrl+C / Ctrl+D 都照常。
+  - 提示照 P1-7：保护期内输入框的几行画暗，文字不变。换回输入框的第一帧就是暗的，过后下一次重画恢复。
+  - 批准框的保护期、帧号保护、重连和协议都没动。
+- **拿主意的地方**：
+  - 本终端自己答完批准框、换回输入框，**也加保护**。理由：现有批准框保护期不管是谁引起的换框（本终端答了 A、B 跟着出来，也算），只看屏幕上能按的东西变没变；连按两下 Enter 时，第二下落在输入框那一帧上，和被别人答掉是同一个风险。
+  - 请求被取消（例如服务端重启后）换回输入框，同样加保护。
+  - 没有和 `guard_until` 共用一个时间，因为共用会多出一个无关的改动：批准框出现前按在输入框那一帧上的 Enter，到达时间如果晚于批准框上屏（还在它的保护期内），会从「发送」变成「丢掉」。分开记就不会。
+- **验证**：
+  - 先写复现、确认失败，再改：
+    - `crates/canter/tests/tui.rs` 新加 `enter_right_after_another_terminal_answers_does_not_send_the_draft`：两个终端都用真服务端、假模型；B 输入框里有草稿，A 答掉批准框，B 一看到输入框回来就按 Enter。改之前失败：草稿被发出去，会话里多了第 2 轮（`(2, 0)` 对 `(1, 0)`）。改之后草稿没发；过一秒再按 Enter 照常发出，两个终端都看到回复。
+    - `crates/canter-tui/tests/approval_box.rs` 新加 `enter_right_after_the_box_closes_does_not_send_the_draft`（TestBackend，测试控制时间）：保护期内 Enter 不发；打的字照常进输入框并顺延保护期；快到期时 Enter 仍不发；画暗和恢复；之后 Enter 发出 `草稿!`。改之前失败。
+    - 新加 `enter_right_after_answering_does_not_send_the_draft`：本终端答完后马上再按 Enter 不发，过后照常发。
+  - 反向检查：去掉「按键顺延」后，`enter_right_after_the_box_closes_does_not_send_the_draft` 在「顺延了保护期」那条断言失败。
+  - 原有的 `approval_box_matches_the_server_after_a_restart` 在批准框被取消、换回输入框后马上打字回车，新的保护期把这次 Enter 丢掉了，测试因此失败。照 P1-7 的做法，打字前先等保护期过去（`read_the_box`），没有删测试，也没有放宽断言。
+  - `cargo test --all-targets`：144 个全过；`cargo test -p canter --test tui`：10 个，连跑 3 次都过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check` 都过。
+  - 真实模型接口调用 0 次。测试起的服务端都停了；机器上还在跑的 `~/.cargo/bin/canter serve` 是用户装的那份，没碰。
+- **代价**：
+  - 和批准框一样：换回输入框后一直不停地按键，保护期就一直往后推。停手 300 ms 以后，Enter 才发得出去。如果框一消失就连着打完一句话、紧接着回车，这次回车会被丢掉（草稿是暗的），要再按一次。
+  - 终端卡顿超过 300 ms 时挡不住（同 P1-7，不在本件）。
+- **没做的事**：没改批准框保护期、帧号保护、重连、协议和 DESIGN（DESIGN 不涉及按键）。
+- **踩过的坑**：
+  - 新测试第一次用 `x` 当草稿，`dim("x")` 找到的是命令 `first-proof.txt` 那一行，换成 `稿`。
+  - 我在一条追加测试的 shell 命令末尾误带了一个 `python3 -`，它等着标准输入、卡到超时，被我停掉。没有执行任何东西，测试文件内容核对过是对的。
+
+## 主控审查
+
+2026-10-24，canter/main。
+
+- 改动只在 `crates/canter-tui/src/app.rs`（输入框的发送保护期，沿用 `ANSWER_GUARD_MS`，期间输入框画暗）和测试；复现测试（两个终端，一个答掉批准框、另一个紧接着按 Enter）改前失败、改后通过。旧测试 `approval_box_matches_the_server_after_a_restart` 只加了一步等保护期，没删、没放宽。
+- 拿主意的地方都同意：本终端自己答完、请求被取消换回输入框也加保护（连按两下 Enter 时第二下落到输入框，风险一样）；代价是框一消失就回车要再按一次。
+- 主控重跑 `cargo test --all-targets --no-fail-fast`（144 个）、clippy、fmt 都通过。
+- HANDOFF 已知问题里批准框那条只剩前半（终端卡顿超过 300 ms）。
+
+结果：一次过
