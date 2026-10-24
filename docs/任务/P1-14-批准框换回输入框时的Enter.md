@@ -76,3 +76,14 @@
 - **踩过的坑**：
   - 新测试第一次用 `x` 当草稿，`dim("x")` 找到的是命令 `first-proof.txt` 那一行，换成 `稿`。
   - 我在一条追加测试的 shell 命令末尾误带了一个 `python3 -`，它等着标准输入、卡到超时，被我停掉。没有执行任何东西，测试文件内容核对过是对的。
+
+## 主控审查
+
+2026-10-24，canter/main。
+
+- 改动只在 `crates/canter-tui/src/app.rs`（输入框的发送保护期，沿用 `ANSWER_GUARD_MS`，期间输入框画暗）和测试；复现测试（两个终端，一个答掉批准框、另一个紧接着按 Enter）改前失败、改后通过。旧测试 `approval_box_matches_the_server_after_a_restart` 只加了一步等保护期，没删、没放宽。
+- 拿主意的地方都同意：本终端自己答完、请求被取消换回输入框也加保护（连按两下 Enter 时第二下落到输入框，风险一样）；代价是框一消失就回车要再按一次。
+- 主控重跑 `cargo test --all-targets --no-fail-fast`（144 个）、clippy、fmt 都通过。
+- HANDOFF 已知问题里批准框那条只剩前半（终端卡顿超过 300 ms）。
+
+结果：一次过
