@@ -798,6 +798,62 @@ async fn enter_right_after_the_box_appears_does_not_answer_it() {
     world.stop_server(Signal::SIGTERM).await;
 }
 
+/// The other way round: terminal A answers the box, and terminal B, which
+/// has a draft in its input box, gets the input box back. An Enter B presses
+/// right then was meant for the box, so it does not send the draft; Enter
+/// pressed after the guard does.
+#[tokio::test]
+async fn enter_right_after_another_terminal_answers_does_not_send_the_draft() {
+    let mut world = World::new(vec![
+        shell_reply("printf A > first-proof.txt"),
+        text_reply("跑完了"),
+        text_reply("收到草稿"),
+    ])
+    .await;
+    world.start_server().await;
+    let a = world.open(&[], "canter-tui a").await;
+    a.wait_idle().await;
+    let b = world.open(&["--resume"], "canter-tui b").await;
+    b.wait_for("Which session to resume?").await;
+    b.press(KeyCode::Enter).await;
+    b.wait_idle().await;
+    for c in "草稿".chars() {
+        b.press(KeyCode::Char(c)).await;
+    }
+    b.wait_until("the draft", |b| b.screen().contains("› 草稿"))
+        .await;
+
+    a.type_line("跑一下").await;
+    for terminal in [&a, &b] {
+        terminal.wait_for("Run this command?").await;
+    }
+    read_the_box().await;
+    a.press(KeyCode::Enter).await;
+    b.wait_until("the input box", |b| b.screen().contains("› 草稿"))
+        .await;
+    // Comes in after the input box's frame, so the frame check lets it through.
+    b.press(KeyCode::Enter).await;
+    a.wait_for("跑完了").await;
+    // Give a wrong send every chance to land, also after the guard.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let id = world.only_session().await;
+    let snapshot = world.snapshot(&id).await;
+    assert_eq!(
+        (snapshot.turns.len(), snapshot.queued_inputs.len()),
+        (1, 0),
+        "the Enter right after the box closed sent the draft"
+    );
+    assert!(b.screen().contains("› 草稿"));
+
+    b.press(KeyCode::Enter).await;
+    b.wait_for("收到草稿").await;
+    a.wait_for("收到草稿").await;
+    assert_eq!(world.snapshot(&id).await.turns.len(), 2);
+    a.quit().await;
+    b.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
 /// The server dies while the box is open. After reconnecting, the box and the
 /// session's state agree with the server: the request was cancelled, the turn
 /// interrupted, the session idle. The resumed session runs commands with this
@@ -836,6 +892,9 @@ async fn approval_box_matches_the_server_after_a_restart() {
 
     assert!(!world.path("work/approval-proof.txt").exists());
 
+    // The input box came back when the box closed: Enter sends once the
+    // guard is over, like a user who sees the box gone before typing on.
+    read_the_box().await;
     a.type_line("再跑一下").await;
     a.wait_for("Run this command?").await;
     read_the_box().await;

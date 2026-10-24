@@ -351,3 +351,84 @@ fn a_small_window_never_hides_an_answer_it_accepts() {
         }
     }
 }
+
+/// The other way round: another terminal answers the box and the input box
+/// comes back with a draft in it. An Enter right then was meant for the box,
+/// so for ANSWER_GUARD_MS it does not send the draft, and every key in that
+/// time pushes the end back. Typing still works; the draft shows dim until
+/// Enter sends it again.
+#[test]
+fn enter_right_after_the_box_closes_does_not_send_the_draft() {
+    let mut screen = Screen::new(80, 30);
+    screen.start_turn("t1");
+    screen.draw();
+    for c in "草稿".chars() {
+        assert_eq!(screen.key(KeyCode::Char(c)), None);
+    }
+    screen.ask("r1", "t1", "printf A > first-proof.txt");
+    screen.draw();
+    screen.read_the_box();
+    screen.draw();
+    assert!(!screen.screen().contains("草稿"));
+
+    // Another terminal answers, and the input box comes back.
+    screen.allowed_elsewhere("r1", "t1", "printf A > first-proof.txt");
+    screen.draw();
+    assert!(screen.screen().contains("› 草稿"));
+    assert!(screen.dim("草稿"), "Enter does not send the draft yet");
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        None,
+        "Enter was meant for the box"
+    );
+    screen.wait(50);
+    assert_eq!(screen.key(KeyCode::Char('!')), None);
+    // The guard now ends ANSWER_GUARD_MS after the last key.
+    screen.wait(ANSWER_GUARD_MS - 1);
+    screen.draw();
+    assert!(
+        screen.screen().contains("› 草稿!"),
+        "typing works meanwhile"
+    );
+    assert!(screen.dim("草稿"));
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        None,
+        "the keys meanwhile pushed the guard back"
+    );
+
+    screen.wait(ANSWER_GUARD_MS);
+    screen.draw();
+    assert!(!screen.dim("草稿"));
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        Some(Action::Send("草稿!".into()))
+    );
+}
+
+/// Answering the box in this terminal brings the input box back the same way,
+/// with the same guard: a second Enter right after the answer does not send
+/// the draft.
+#[test]
+fn enter_right_after_answering_does_not_send_the_draft() {
+    let mut screen = Screen::new(80, 30);
+    screen.start_turn("t1");
+    screen.draw();
+    screen.key(KeyCode::Char('稿'));
+    screen.ask("r1", "t1", "printf A > first-proof.txt");
+    screen.draw();
+    screen.read_the_box();
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        resolve("r1", ApprovalDecision::Accept)
+    );
+    screen.draw();
+    assert!(screen.screen().contains("› 稿"));
+    assert!(screen.dim("稿"));
+    assert_eq!(screen.key(KeyCode::Enter), None, "a second Enter");
+
+    screen.read_the_box();
+    screen.draw();
+    assert!(!screen.dim("稿"));
+    assert_eq!(screen.key(KeyCode::Enter), Some(Action::Send("稿".into())));
+}
