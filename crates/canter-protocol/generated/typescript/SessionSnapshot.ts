@@ -2,12 +2,17 @@
 import type { ErrorInfo } from "./ErrorInfo";
 import type { PendingRequest } from "./PendingRequest";
 import type { QueuedInput } from "./QueuedInput";
+import type { SessionCloseReason } from "./SessionCloseReason";
 import type { SessionSettings } from "./SessionSettings";
 import type { SessionStatus } from "./SessionStatus";
 import type { TokenUsage } from "./TokenUsage";
 import type { Turn } from "./Turn";
 
 export type SessionSnapshot = { id: string, settings: SessionSettings, status: SessionStatus,
+/**
+ * Why the session is closed; absent for open sessions and legacy data.
+ */
+closeReason?: SessionCloseReason,
 /**
  * Unix time in milliseconds; zero until the first event is applied.
  */

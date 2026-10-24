@@ -112,6 +112,7 @@ fn stored_session_reopens_identically_and_continues_sequence() {
         .append(
             EventPayload::SessionStatus {
                 status: SessionStatus::Idle,
+                close_reason: None,
             },
             122,
         )

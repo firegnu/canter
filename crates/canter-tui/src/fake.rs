@@ -279,6 +279,7 @@ async fn send_input(
         },
         EventPayload::SessionStatus {
             status: SessionStatus::Working,
+            close_reason: None,
         },
         EventPayload::ItemStarted {
             turn_id: turn_id.clone(),
@@ -300,6 +301,7 @@ async fn send_input(
         },
         EventPayload::SessionStatus {
             status: SessionStatus::Idle,
+            close_reason: None,
         },
     ]);
     axum::Json(SessionInputResponse {

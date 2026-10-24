@@ -112,7 +112,12 @@ kind 内层为带 type 的 RequestKind，当前只有 approval 及未知种类�
 待处理请求由 `request.opened` 加入、`request.resolved` 移除；对已移除请求重复处理
 不会改变批准状态。若输入历史本身包含一条新的重复处理事件，只更新其游标和时间。
 `warning` 只供实时展示；最近的 `error` 和 `session.usage` 保存在快照中。
-结束会话使用 `session.status: closed`，不删除存盘。
+结束会话使用 `session.status: closed`，不删除存盘。事件和 `SessionSnapshot`
+带可选的 `closeReason`：`clientRequest` 表示客户端 DELETE，`serverShutdown`
+表示服务端停机（含升级）。归并保留当前关闭的原因；后续非 closed 状态清空原因。
+字段缺失时不序列化，旧事件和快照没有该字段仍可读取；TypeScript 同样为可选属性。
+终端连接新服务端时先读快照：停机关闭、无原因的旧会话，以及崩溃留下的非关闭状态
+可自动 resume；客户端主动关闭或未知关闭原因保持关闭。用户主动 resume 不受此限制。
 
 ## 重新生成
 

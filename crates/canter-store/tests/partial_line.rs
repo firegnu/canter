@@ -31,6 +31,7 @@ fn an_incomplete_last_line_is_discarded_before_further_appends() {
         .append(
             EventPayload::SessionStatus {
                 status: SessionStatus::Idle,
+                close_reason: None,
             },
             12,
         )

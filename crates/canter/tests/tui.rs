@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use axum::{Json, Router, extract::State, routing::post};
 use canter::{Command, Context};
-use canter_protocol::{SessionSnapshot, SessionStatus, TurnStatus};
+use canter_protocol::{SessionCloseReason, SessionSnapshot, SessionStatus, TurnStatus};
 use canter_tui::client::Client;
 use canter_tui::{ANSWER_GUARD_MS, FrameSync, InlineTerminal, InputSender, RunError, run_on};
 use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
@@ -569,24 +569,55 @@ async fn two_terminals_share_one_session() {
 /// from where its stream broke: nothing lost, nothing twice.
 #[tokio::test]
 async fn client_reconnects_after_the_server_restarts() {
+    reconnect_after_restart(false).await;
+}
+
+#[tokio::test]
+async fn client_reconnects_to_a_legacy_session_without_a_close_reason() {
+    reconnect_after_restart(true).await;
+}
+
+async fn reconnect_after_restart(legacy: bool) {
     let mut world = World::new(vec![text_reply("回答一"), text_reply("回答二")]).await;
     world.start_server().await;
     let a = world.open(&[], "canter-tui a").await;
     a.type_line("第一句").await;
     a.wait_for("回答一").await;
+    let id = world.only_session().await;
 
     world.stop_server(Signal::SIGTERM).await;
     a.wait_until("Reconnecting", |a| a.status().contains("Reconnecting"))
         .await;
+    let path = world.path(&format!("state/sessions/{id}/events.jsonl"));
+    let mut events: Vec<Value> = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let closed = events.last().unwrap();
+    assert_eq!(closed["type"], "session.status");
+    assert_eq!(closed["status"], "closed");
+    assert_eq!(closed["closeReason"], "serverShutdown");
+    if legacy {
+        // Reproduce a pre-closeReason event log while its server is stopped.
+        let lines = events
+            .iter_mut()
+            .map(|event| {
+                event.as_object_mut().unwrap().remove("closeReason");
+                serde_json::to_string(event).unwrap()
+            })
+            .collect::<Vec<_>>();
+        fs::write(path, lines.join("\n") + "\n").unwrap();
+    }
     world.start_server().await;
     a.wait_until("reconnected", |a| !a.status().contains("Reconnecting"))
         .await;
     a.type_line("第二句").await;
     a.wait_for("回答二").await;
     a.wait_idle().await;
-    let id = world.only_session().await;
     let snapshot = world.snapshot(&id).await;
     assert_eq!(snapshot.status, SessionStatus::Idle);
+    assert_eq!(snapshot.close_reason, None);
     assert_eq!(snapshot.turns.len(), 2);
 
     // A fresh terminal on the session shows exactly what A shows.
@@ -715,6 +746,53 @@ async fn a_session_closed_by_another_client_stays_closed() {
     a.wait_for("回答二").await;
     assert!(a.text().contains("› 第二句  (from canter-tui b)"));
 
+    assert_eq!(a.quit().await, id);
+    assert_eq!(b.quit().await, id);
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// A watching terminal must not undo an explicit close when the server restarts.
+#[tokio::test]
+async fn a_session_closed_by_another_client_stays_closed_after_restart() {
+    let mut world = World::new(vec![text_reply("回答一"), text_reply("回答二")]).await;
+    world.start_server().await;
+    let a = world.open(&["第一句"], "canter-tui a").await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+    let id = world.only_session().await;
+
+    world.close_session(&id).await;
+    assert_eq!(
+        world.snapshot(&id).await.close_reason,
+        Some(SessionCloseReason::ClientRequest)
+    );
+    a.wait_until("Session closed", |a| a.status().contains("Session closed"))
+        .await;
+    world.stop_server(Signal::SIGTERM).await;
+    a.wait_until("Reconnecting", |a| a.status().contains("Reconnecting"))
+        .await;
+    world.start_server().await;
+    a.wait_until("reconnected", |a| !a.status().contains("Reconnecting"))
+        .await;
+    assert_eq!(
+        world.snapshot(&id).await.status,
+        SessionStatus::Closed,
+        "the watching terminal reopened a session closed by another client"
+    );
+    assert_eq!(
+        world.snapshot(&id).await.close_reason,
+        Some(SessionCloseReason::ClientRequest),
+        "the reason survives replay and the later server shutdown"
+    );
+    a.wait_until("Session closed", |a| a.status().contains("Session closed"))
+        .await;
+
+    let b = world.open(&["--resume", &id], "canter-tui b").await;
+    b.wait_idle().await;
+    a.wait_idle().await;
+    assert_eq!(world.snapshot(&id).await.close_reason, None);
+    b.type_line("第二句").await;
+    a.wait_for("回答二").await;
     assert_eq!(a.quit().await, id);
     assert_eq!(b.quit().await, id);
     world.stop_server(Signal::SIGTERM).await;

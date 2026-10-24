@@ -4,10 +4,10 @@
 //!
 //! When the event stream drops, the screen keeps going and says 「重连中」:
 //! it finds the server again through the [`Connector`] and subscribes from the
-//! last event it had. Only a new server process gets a `resume` with this
-//! terminal's environment first (a restarted server has not opened the
-//! session yet). The same server still has the session open, unless another
-//! client closed it, and then it stays closed.
+//! last event it had. A new server process gets a `resume` with this terminal's
+//! environment, unless the snapshot says the session was explicitly closed.
+//! The same server still has the session open, unless another client closed
+//! it, and then it stays closed.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -19,8 +19,9 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use canter_protocol::{
-    ErrorCode, Event, InputMode, PermissionMode, RequestResolveParams, SessionCreateParams,
-    SessionInputParams, SessionSnapshot, SessionUpdateParams, UserInput,
+    ErrorCode, Event, InputMode, PermissionMode, RequestResolveParams, SessionCloseReason,
+    SessionCreateParams, SessionInputParams, SessionSnapshot, SessionStatus, SessionUpdateParams,
+    UserInput,
 };
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyboardEnhancementFlags,
@@ -52,7 +53,8 @@ pub struct Connected {
     /// Shown to the user, e.g. that the server runs another version.
     pub warning: Option<String>,
     /// Which server process this is (its registered instance). `None` when
-    /// the connector cannot tell, and then every reconnect resumes.
+    /// the connector cannot tell, and then every reconnect checks the snapshot
+    /// to decide whether to resume.
     pub server: Option<String>,
 }
 
@@ -620,10 +622,24 @@ async fn reconnect<C: Connector>(
     // Resuming on the same server would open a session someone closed.
     let same_server = connected.server.is_some() && connected.server.as_deref() == previous;
     if !same_server {
-        client
-            .resume(session, env)
+        let snapshot = client
+            .read_session(session)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| error.to_string())?
+            .session;
+        // Old data has no reason. Keep its restart behavior, and also recover
+        // non-closed sessions left behind by a crashed server.
+        if snapshot.status != SessionStatus::Closed
+            || matches!(
+                snapshot.close_reason,
+                None | Some(SessionCloseReason::ServerShutdown)
+            )
+        {
+            client
+                .resume(session, env)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
     }
     let stream = client
         .subscribe(session, cursor)

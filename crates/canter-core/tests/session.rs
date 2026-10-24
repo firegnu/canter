@@ -61,6 +61,47 @@ async fn until(
 }
 
 #[tokio::test]
+async fn client_close_conflicts_only_when_shutdown_closed_first() {
+    for (shutdown_first, expected_reason) in [
+        (false, SessionCloseReason::ClientRequest),
+        (true, SessionCloseReason::ServerShutdown),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+        let (session, _) = Session::create(
+            store,
+            "s1".into(),
+            settings(temp.path()),
+            RuntimeContext::default(),
+            ScriptModel::new(vec![]),
+            CoreOptions::default(),
+        )
+        .await
+        .unwrap();
+
+        let closed = if shutdown_first {
+            session.close_for_shutdown().await.unwrap()
+        } else {
+            session.close().await.unwrap()
+        };
+        if shutdown_first {
+            let error = session.close().await.expect_err(
+                "a client close must not report success for a session closed by shutdown",
+            );
+            assert_eq!(error.code, ErrorCode::Conflict);
+            assert_eq!(error.message, "server is stopping");
+        } else {
+            let shutdown = session.close_for_shutdown().await.unwrap();
+            assert_eq!(shutdown.event_seq, closed.event_seq);
+        }
+        let snapshot = session.snapshot().await.session;
+        assert_eq!(snapshot.status, SessionStatus::Closed);
+        assert_eq!(snapshot.close_reason, Some(expected_reason));
+        assert_eq!(snapshot.last_event_seq, closed.event_seq);
+    }
+}
+
+#[tokio::test]
 async fn interrupt_during_model_stream_repairs_history_and_discards_queued_input() {
     let temp = tempfile::tempdir().unwrap();
     let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());

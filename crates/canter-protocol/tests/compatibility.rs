@@ -36,6 +36,7 @@ fn unknown_events_and_items_can_be_skipped() {
             timestamp: 102,
             payload: EventPayload::SessionStatus {
                 status: SessionStatus::Idle,
+                close_reason: None,
             },
         },
     )
@@ -68,6 +69,7 @@ fn unknown_enum_values_inside_known_messages_are_tolerated() {
         assert_eq!(serde_json::to_value(decoded).unwrap(), expected);
     }
     unknown::<SessionStatus>(json!("waiting_answer"), json!("unknown"));
+    unknown::<SessionCloseReason>(json!("futureReason"), json!("unknown"));
     unknown::<TurnStatus>(json!("futureStatus"), json!("unknown"));
     unknown::<ItemStatus>(json!("futureStatus"), json!("unknown"));
     unknown::<PermissionMode>(json!("futurePolicy"), json!("unknown"));
@@ -117,4 +119,44 @@ fn an_unknown_pending_request_can_be_read_and_resolved_by_id() {
     )
     .unwrap();
     assert!(resolved.pending_requests.is_empty());
+}
+
+#[test]
+fn close_reasons_replay_and_legacy_events_and_snapshots_remain_readable() {
+    let mut snapshot = SessionSnapshot::empty("s1");
+    for (seq, status, reason, expected) in [
+        (1, "closed", Some("clientRequest"), Some("clientRequest")),
+        (2, "idle", None, None),
+        (3, "closed", Some("serverShutdown"), Some("serverShutdown")),
+        (4, "closed", Some("futureReason"), Some("unknown")),
+        (5, "closed", None, None),
+    ] {
+        let mut value = json!({
+            "seq": seq, "sessionId": "s1", "timestamp": seq,
+            "type": "session.status", "status": status
+        });
+        if let Some(reason) = reason {
+            value["closeReason"] = json!(reason);
+        }
+        let event: Event = serde_json::from_value(value).unwrap();
+        snapshot = apply_event(&snapshot, &event).unwrap();
+        let encoded = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            encoded.get("closeReason"),
+            expected.map(|reason| json!(reason)).as_ref()
+        );
+        assert_eq!(encoded["status"], status);
+        assert_eq!(
+            serde_json::from_value::<SessionSnapshot>(encoded).unwrap(),
+            snapshot
+        );
+        if reason.is_none() {
+            assert!(
+                serde_json::to_value(event)
+                    .unwrap()
+                    .get("closeReason")
+                    .is_none()
+            );
+        }
+    }
 }

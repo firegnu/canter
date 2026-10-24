@@ -285,6 +285,7 @@ impl Session {
         state.discard_queue(InputRemovalReason::Interrupted).await?;
         payloads.push(EventPayload::SessionStatus {
             status: SessionStatus::Idle,
+            close_reason: None,
         });
         state.journal.append(payloads).await?;
         let response = SessionReadResponse {
@@ -332,6 +333,7 @@ impl Session {
         journal
             .append(vec![EventPayload::SessionStatus {
                 status: SessionStatus::Idle,
+                close_reason: None,
             }])
             .await?;
         let response = SessionCreateResponse {
@@ -547,6 +549,7 @@ impl Session {
                 },
                 EventPayload::SessionStatus {
                     status: SessionStatus::Working,
+                    close_reason: None,
                 },
             ])
             .await?;
@@ -649,11 +652,29 @@ impl Session {
         })
     }
 
+    /// An explicit client close. Returns Conflict if shutdown already closed the session.
     pub async fn close(&self) -> Result<SessionCloseResponse, CoreError> {
-        let session = self.clone();
-        owned(async move { session.close_inner().await }).await
+        self.close_with_reason(SessionCloseReason::ClientRequest)
+            .await
     }
-    async fn close_inner(&self) -> Result<SessionCloseResponse, CoreError> {
+
+    /// Close for server shutdown so watching clients can resume after restart.
+    pub async fn close_for_shutdown(&self) -> Result<SessionCloseResponse, CoreError> {
+        self.close_with_reason(SessionCloseReason::ServerShutdown)
+            .await
+    }
+
+    async fn close_with_reason(
+        &self,
+        reason: SessionCloseReason,
+    ) -> Result<SessionCloseResponse, CoreError> {
+        let session = self.clone();
+        owned(async move { session.close_inner(reason).await }).await
+    }
+    async fn close_inner(
+        &self,
+        reason: SessionCloseReason,
+    ) -> Result<SessionCloseResponse, CoreError> {
         let done = {
             let mut state = self.shared.state.lock().await;
             state.closing = true;
@@ -672,12 +693,19 @@ impl Session {
             state.journal.release().await?;
             return Err(CoreError::internal());
         }
+        if reason == SessionCloseReason::ClientRequest
+            && state.journal.snapshot.status == SessionStatus::Closed
+            && state.journal.snapshot.close_reason != Some(SessionCloseReason::ClientRequest)
+        {
+            return Err(CoreError::new(ErrorCode::Conflict, "server is stopping"));
+        }
         if state.journal.snapshot.status != SessionStatus::Closed {
             state.discard_queue(InputRemovalReason::Closed).await?;
             state
                 .journal
                 .append(vec![EventPayload::SessionStatus {
                     status: SessionStatus::Closed,
+                    close_reason: Some(reason),
                 }])
                 .await?;
             state.journal.release().await?;
@@ -745,6 +773,7 @@ impl Shared {
             },
             EventPayload::SessionStatus {
                 status: SessionStatus::Working,
+                close_reason: None,
             },
         ];
         if !params.input.is_empty() {
