@@ -22,7 +22,7 @@ mod run;
 mod terminal;
 mod text;
 
-pub use app::{Action, App};
+pub use app::{ANSWER_GUARD_MS, Action, App};
 pub use run::{
     CLIENT_NAME, Connected, Connector, FrameSync, Input, InputSender, Launch, Open, RunError,
     SocketConnector, input, run, run_on,
@@ -76,7 +76,7 @@ impl<B: Backend> Ui<B> {
     pub fn draw(&mut self, now_ms: i64) -> Result<(), B::Error> {
         self.render(now_ms)?;
         self.frames += 1;
-        self.app.frame_on_screen(self.frames);
+        self.app.frame_on_screen(self.frames, now_ms);
         Ok(())
     }
 

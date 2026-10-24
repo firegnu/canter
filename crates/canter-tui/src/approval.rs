@@ -53,7 +53,8 @@ pub(crate) fn decision_label(decision: ApprovalDecision) -> &'static str {
 }
 
 /// Lays out the box for `width` columns and at most `max_height` rows,
-/// borders included. `selected` and `scroll` are clamped here.
+/// borders included. `selected` and `scroll` are clamped here. The answers
+/// show dim until `taken`: keys do not answer yet.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn layout(
     snapshot: &SessionSnapshot,
@@ -62,6 +63,7 @@ pub(crate) fn layout(
     home: Option<&str>,
     selected: usize,
     scroll: usize,
+    taken: bool,
     width: u16,
     max_height: u16,
 ) -> ApprovalBox {
@@ -106,13 +108,18 @@ pub(crate) fn layout(
     let mut tail = vec![Line::default()];
     for (index, decision) in options.iter().enumerate() {
         let text = format!("{}. {}", index + 1, decision_label(*decision));
-        tail.push(if index == selected {
+        let line = if index == selected {
             Line::from(vec![
                 Span::styled("› ", Style::new().cyan().bold()),
                 Span::styled(text, Style::new().bold()),
             ])
         } else {
             Line::from(vec![Span::raw("  "), Span::raw(text)])
+        };
+        tail.push(if taken {
+            line
+        } else {
+            line.patch_style(Style::new().dim())
         });
         // What it grants, readable before choosing it (also with its number key).
         if *decision == ApprovalDecision::AcceptForSession {

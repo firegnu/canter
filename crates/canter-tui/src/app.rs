@@ -30,6 +30,11 @@ const INPUT_CHROME: u16 = 6;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Changes of what is on screen kept for keys still waiting to be handled.
 const SHOWN_KEPT: usize = 8;
+/// After an approval box's answers come on screen, answer keys are dropped
+/// for this long, and every key that comes in meanwhile pushes it back. The
+/// terminal may still show what was there before for a moment, so a key
+/// right after the box appears may not be meant for it (user's decision).
+pub const ANSWER_GUARD_MS: i64 = 300;
 
 /// What the caller should do after a key press.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +84,13 @@ struct Shown {
     turn: Option<String>,
 }
 
+impl Shown {
+    /// The request whose answers showed.
+    fn answering(&self) -> Option<&str> {
+        self.approval.as_deref().filter(|_| self.answers)
+    }
+}
+
 pub struct App {
     snapshot: SessionSnapshot,
     home: Option<String>,
@@ -109,6 +121,8 @@ pub struct App {
     drawing: Shown,
     /// Recent frames on screen: each entry holds from that frame number on.
     shown: VecDeque<(u64, Shown)>,
+    /// Unix ms until which answer keys are dropped; see [`ANSWER_GUARD_MS`].
+    guard_until: i64,
     width: u16,
 }
 
@@ -137,6 +151,7 @@ impl App {
             approval_max_scroll: 0,
             drawing: Shown::default(),
             shown: VecDeque::new(),
+            guard_until: i64::MIN,
             width: 80,
         }
     }
@@ -228,9 +243,14 @@ impl App {
         }
     }
 
-    /// The frame numbered `frame` is on screen now.
-    pub(crate) fn frame_on_screen(&mut self, frame: u64) {
-        if self.shown.back().map(|(_, shown)| shown) != Some(&self.drawing) {
+    /// The frame numbered `frame` is on screen from `at` (Unix ms).
+    pub(crate) fn frame_on_screen(&mut self, frame: u64, at: i64) {
+        let before = self.shown.back().map(|(_, shown)| shown);
+        if before != Some(&self.drawing) {
+            let answering = self.drawing.answering();
+            if answering.is_some() && before.and_then(Shown::answering) != answering {
+                self.guard_until = self.guard_until.max(at + ANSWER_GUARD_MS);
+            }
             self.shown.push_back((frame, self.drawing.clone()));
             // Keys wait at most a frame or two before they are handled.
             if self.shown.len() > SHOWN_KEPT {
@@ -239,30 +259,34 @@ impl App {
         }
     }
 
-    /// A key pressed on the latest frame on screen.
-    pub fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+    /// A key pressed at `now_ms` on the latest frame on screen.
+    pub fn handle_key(&mut self, key: KeyEvent, now_ms: i64) -> Option<Action> {
         let shown = self.shown.back().map(|(_, shown)| shown.clone());
-        self.key_on(key, shown.unwrap_or_default())
+        self.key_on(key, shown.unwrap_or_default(), now_ms)
     }
 
-    /// A key that came in while frame `frame` was on screen. Before any
-    /// frame, keys go to the input box.
-    pub(crate) fn handle_key_on(&mut self, key: KeyEvent, frame: u64) -> Option<Action> {
+    /// A key that came in at `at` (Unix ms) while frame `frame` was on
+    /// screen. Before any frame, keys go to the input box.
+    pub(crate) fn handle_key_on(&mut self, key: KeyEvent, frame: u64, at: i64) -> Option<Action> {
         let shown = self
             .shown
             .iter()
             .rev()
             .find(|(since, _)| *since <= frame)
             .map(|(_, shown)| shown.clone());
-        self.key_on(key, shown.unwrap_or_default())
+        self.key_on(key, shown.unwrap_or_default(), at)
     }
 
-    fn key_on(&mut self, key: KeyEvent, shown: Shown) -> Option<Action> {
+    fn key_on(&mut self, key: KeyEvent, shown: Shown, at: i64) -> Option<Action> {
         if key.kind == KeyEventKind::Release {
             return None;
         }
+        let guarded = at < self.guard_until;
+        if guarded {
+            self.guard_until = self.guard_until.max(at + ANSWER_GUARD_MS);
+        }
         if shown.approval.is_some() {
-            return self.approval_key(key, shown);
+            return self.approval_key(key, shown, guarded);
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
@@ -419,6 +443,11 @@ impl App {
                 (0, 0)
             };
             let home = self.home.as_deref();
+            // Answers already on screen and past the guard; a box that
+            // first shows them in this frame starts a guard.
+            let taken = now_ms >= self.guard_until
+                && self.shown.back().and_then(|(_, shown)| shown.answering())
+                    == Some(request.id.as_str());
             let laid = approval::layout(
                 &self.snapshot,
                 request,
@@ -426,6 +455,7 @@ impl App {
                 home,
                 selected,
                 scroll,
+                taken,
                 width,
                 box_height,
             );
@@ -525,12 +555,15 @@ impl App {
 
     /// Keys pressed on an approval box. They answer only the request that box
     /// showed, and only when its answers were on screen; once that request is
-    /// gone, they do nothing.
-    fn approval_key(&mut self, key: KeyEvent, shown: Shown) -> Option<Action> {
+    /// gone, they do nothing. While `guarded`, answer keys are dropped.
+    fn approval_key(&mut self, key: KeyEvent, shown: Shown, guarded: bool) -> Option<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('c' | 'd') if ctrl => return Some(Action::Quit),
             KeyCode::Esc => return self.interrupt_seen(shown.turn),
+            KeyCode::Up | KeyCode::Down | KeyCode::Enter | KeyCode::Char('1'..='9') if guarded => {
+                return None;
+            }
             _ => {}
         }
         let request_id = shown.approval?;

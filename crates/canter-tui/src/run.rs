@@ -120,17 +120,18 @@ pub enum RunError {
 }
 
 /// Terminal events for [`run_on`], from an [`InputSender`]. Each one carries
-/// the number of the frame on screen when it came in, so that a key acts on
-/// what the user saw, not on a frame drawn after it was pressed.
+/// the number of the frame on screen and the time (Unix ms) when it came in,
+/// so that a key acts on what the user saw, not on a frame drawn after it
+/// was pressed.
 pub struct Input {
-    events: mpsc::UnboundedReceiver<(u64, TermEvent)>,
+    events: mpsc::UnboundedReceiver<(u64, i64, TermEvent)>,
     frames: Arc<AtomicU64>,
 }
 
 /// Sends terminal events to [`run_on`]; see [`input`].
 #[derive(Clone)]
 pub struct InputSender {
-    events: mpsc::UnboundedSender<(u64, TermEvent)>,
+    events: mpsc::UnboundedSender<(u64, i64, TermEvent)>,
     frames: Arc<AtomicU64>,
 }
 
@@ -150,11 +151,11 @@ pub fn input() -> (InputSender, Input) {
 }
 
 impl InputSender {
-    /// Sends `event`, stamped with the frame on screen now. False once the
-    /// screen is gone.
+    /// Sends `event`, stamped with the frame on screen and the time now.
+    /// False once the screen is gone.
     pub fn send(&self, event: TermEvent) -> bool {
         let frame = self.frames.load(Ordering::SeqCst);
-        self.events.send((frame, event)).is_ok()
+        self.events.send((frame, now_ms(), event)).is_ok()
     }
 
     /// How many frames have been put on screen so far.
@@ -302,7 +303,7 @@ where
         }
         let mut quit = tokio::select! {
             event = input.events.recv() => match event {
-                Some((frame, event)) => chat.terminal(&mut ui, frame, event),
+                Some((frame, at, event)) => chat.terminal(&mut ui, frame, at, event),
                 None => true,
             },
             Some(message) = messages.recv() => chat.message(&mut ui, message),
@@ -311,8 +312,8 @@ where
         while let Ok(message) = messages.try_recv() {
             quit |= chat.message(&mut ui, message);
         }
-        while let Ok((frame, event)) = input.events.try_recv() {
-            quit |= chat.terminal(&mut ui, frame, event);
+        while let Ok((frame, at, event)) = input.events.try_recv() {
+            quit |= chat.terminal(&mut ui, frame, at, event);
         }
         if quit {
             break Ok(());
@@ -385,7 +386,7 @@ where
         // The list changes only with its own keys, so every key is for this frame.
         match input.events.recv().await {
             None => return Ok(None),
-            Some((_, TermEvent::Key(key))) => match picker.handle_key(key) {
+            Some((_, _, TermEvent::Key(key))) => match picker.handle_key(key) {
                 Some(Pick::Open(id)) => return Ok(Some(id)),
                 Some(Pick::Cancel) => return Ok(None),
                 None => {}
@@ -407,7 +408,7 @@ where
     // Only now is the frame on screen; keys that came in while it was drawn
     // were pressed on the one before.
     let frame = input.frame_on_screen();
-    ui.app_mut().frame_on_screen(frame);
+    ui.app_mut().frame_on_screen(frame, now_ms());
     Ok(())
 }
 
@@ -436,11 +437,17 @@ struct Chat {
 }
 
 impl Chat {
-    /// `event` came in while frame `frame` was on screen. Returns true when
-    /// the user asked to quit.
-    fn terminal<B: Backend>(&mut self, ui: &mut Ui<B>, frame: u64, event: TermEvent) -> bool {
+    /// `event` came in at `at` (Unix ms) while frame `frame` was on screen.
+    /// Returns true when the user asked to quit.
+    fn terminal<B: Backend>(
+        &mut self,
+        ui: &mut Ui<B>,
+        frame: u64,
+        at: i64,
+        event: TermEvent,
+    ) -> bool {
         match event {
-            TermEvent::Key(key) => match ui.app_mut().handle_key_on(key, frame) {
+            TermEvent::Key(key) => match ui.app_mut().handle_key_on(key, frame, at) {
                 Some(Action::Quit) => true,
                 Some(action) => {
                     self.act(ui.app(), action);

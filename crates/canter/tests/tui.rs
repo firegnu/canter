@@ -17,7 +17,7 @@ use axum::{Json, Router, extract::State, routing::post};
 use canter::{Command, Context};
 use canter_protocol::{SessionSnapshot, SessionStatus, TurnStatus};
 use canter_tui::client::Client;
-use canter_tui::{FrameSync, InlineTerminal, InputSender, RunError, run_on};
+use canter_tui::{ANSWER_GUARD_MS, FrameSync, InlineTerminal, InputSender, RunError, run_on};
 use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, kill};
@@ -439,6 +439,12 @@ fn rows(buffer: &Buffer) -> String {
     out
 }
 
+/// Like a user who reads an approval box before answering it: waits until
+/// the box takes answers, ANSWER_GUARD_MS after it appeared.
+async fn read_the_box() {
+    tokio::time::sleep(Duration::from_millis(ANSWER_GUARD_MS as u64 + 200)).await;
+}
+
 async fn fake_model(
     State(script): State<Arc<Mutex<VecDeque<String>>>>,
     Json(_body): Json<Value>,
@@ -493,6 +499,7 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     terminal.type_line("把环境写出来").await;
     terminal.wait_for("要跑这条命令吗？").await;
     assert!(terminal.screen().contains(WRITE_ENV), "the whole command");
+    read_the_box().await;
     terminal.press(KeyCode::Enter).await;
     terminal.wait_for("写好了").await;
     assert!(terminal.text().contains("你选了：允许这一次"));
@@ -613,6 +620,7 @@ async fn the_later_answer_to_an_approval_closes_and_names_the_first() {
         terminal.wait_for("要跑这条命令吗？").await;
     }
     // A allows (option 1), B declines (key 3), at the same moment.
+    read_the_box().await;
     a.press(KeyCode::Enter).await;
     b.press(KeyCode::Char('3')).await;
     for terminal in [&a, &b] {
@@ -661,6 +669,7 @@ async fn approval_box_shows_control_characters_in_the_command() {
         a.screen()
     );
 
+    read_the_box().await;
     a.press(KeyCode::Enter).await;
     a.wait_for("跑完了").await;
     assert_eq!(
@@ -745,6 +754,46 @@ async fn a_key_that_comes_in_while_the_box_is_drawn_does_not_answer_it() {
     world.stop_server(Signal::SIGTERM).await;
 }
 
+/// The user's decision after review round 2: a terminal can still show the
+/// input box for a moment after the client has sent the approval box, so an
+/// Enter that comes in just after the box's frame was sent may not be meant
+/// for it. For a short guard after the box appears, answer keys are dropped,
+/// not kept for later; Enter pressed after that answers it.
+#[tokio::test]
+async fn enter_right_after_the_box_appears_does_not_answer_it() {
+    let mut world = World::new(vec![
+        shell_reply("printf B > second-proof.txt"),
+        text_reply("跑完了"),
+    ])
+    .await;
+    world.start_server().await;
+    let a = world.open(&[], "canter-tui a").await;
+    a.wait_idle().await;
+    a.type_line("跑一下").await;
+    a.wait_for("要跑这条命令吗？").await;
+    // Comes in after the box's frame, so the frame check lets it through.
+    a.press(KeyCode::Enter).await;
+    // Give a wrong answer every chance to land, also after the guard.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let id = world.only_session().await;
+    assert_eq!(
+        world.snapshot(&id).await.pending_requests.len(),
+        1,
+        "the Enter right after the box appeared answered it"
+    );
+    assert!(!world.path("work/second-proof.txt").exists());
+    assert!(a.screen().contains("要跑这条命令吗？"));
+
+    a.press(KeyCode::Enter).await;
+    a.wait_for("跑完了").await;
+    assert_eq!(
+        fs::read_to_string(world.path("work/second-proof.txt")).unwrap(),
+        "B"
+    );
+    a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
 /// The server dies while the box is open. After reconnecting, the box and the
 /// session's state agree with the server: the request was cancelled, the turn
 /// interrupted, the session idle. The resumed session runs commands with this
@@ -783,6 +832,7 @@ async fn approval_box_matches_the_server_after_a_restart() {
 
     a.type_line("再跑一下").await;
     a.wait_for("要跑这条命令吗？").await;
+    read_the_box().await;
     a.press(KeyCode::Char('1')).await;
     a.wait_for("跑完了").await;
     a.wait_idle().await;

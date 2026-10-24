@@ -4,10 +4,11 @@
 //! the last frame showed.
 
 use canter_protocol::{ApprovalDecision, Event, SessionSnapshot};
-use canter_tui::{Action, App, Ui};
+use canter_tui::{ANSWER_GUARD_MS, Action, App, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::style::Modifier;
 use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
@@ -17,13 +18,28 @@ const SESSION: &str = "s1";
 struct Screen {
     ui: Ui<TestBackend>,
     seq: u64,
+    /// The time frames are drawn and keys pressed at.
+    now: i64,
 }
 
 impl Screen {
     fn new(width: u16, height: u16) -> Self {
         let app = App::new(SessionSnapshot::empty(SESSION), None, NOW);
         let ui = Ui::new(TestBackend::new(width, height), app).unwrap();
-        Self { ui, seq: 0 }
+        Self {
+            ui,
+            seq: 0,
+            now: NOW,
+        }
+    }
+
+    fn wait(&mut self, ms: i64) {
+        self.now += ms;
+    }
+
+    /// Like a user who reads the box before answering: the answer guard is over.
+    fn read_the_box(&mut self) {
+        self.wait(ANSWER_GUARD_MS);
     }
 
     /// An event from the server; the screen is not redrawn yet.
@@ -37,17 +53,32 @@ impl Screen {
     }
 
     fn draw(&mut self) {
-        self.ui.draw(NOW).unwrap();
+        self.ui.draw(self.now).unwrap();
     }
 
     fn key(&mut self, code: KeyCode) -> Option<Action> {
         self.ui
             .app_mut()
-            .handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+            .handle_key(KeyEvent::new(code, KeyModifiers::NONE), self.now)
     }
 
     fn screen(&self) -> String {
         rows(self.ui.backend().buffer())
+    }
+
+    /// Whether the first row showing `text` is drawn dim where `text` starts.
+    fn dim(&self, text: &str) -> bool {
+        let buffer = self.ui.backend().buffer();
+        let y = self
+            .screen()
+            .lines()
+            .position(|row| row.contains(text))
+            .unwrap_or_else(|| panic!("{text} is not on screen")) as u16;
+        let first = text.chars().next().unwrap().to_string();
+        let x = (0..buffer.area.width)
+            .find(|&x| buffer[(x, y)].symbol() == first)
+            .unwrap();
+        buffer[(x, y)].modifier.contains(Modifier::DIM)
     }
 
     fn start_turn(&mut self, turn: &str) {
@@ -152,6 +183,53 @@ fn keys_meant_for_an_answered_request_do_not_answer_the_next() {
 
     screen.draw();
     assert!(screen.screen().contains("printf B > second-proof.txt"));
+    screen.read_the_box();
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        resolve("r2", ApprovalDecision::Accept)
+    );
+}
+
+/// The user's decision after review round 2: the terminal may still show
+/// what was there before for a moment after a box is drawn. So for
+/// ANSWER_GUARD_MS after a box's answers come on screen, answer keys are
+/// dropped, not kept for later, and every key in that time pushes the end
+/// back. The answers show dim until then.
+#[test]
+fn answer_keys_right_after_the_box_appears_are_dropped() {
+    let mut screen = Screen::new(80, 30);
+    screen.start_turn("t1");
+    screen.ask("r1", "t1", "printf A > first-proof.txt");
+    screen.draw();
+    assert!(screen.dim("1. 允许这一次"), "A's answers are not taken yet");
+    screen.read_the_box();
+    screen.draw();
+    assert!(!screen.dim("1. 允许这一次"));
+
+    // Another terminal answers A, and B comes on screen.
+    screen.allowed_elsewhere("r1", "t1", "printf A > first-proof.txt");
+    screen.ask("r2", "t1", "printf B > second-proof.txt");
+    screen.draw();
+    assert!(screen.screen().contains("printf B > second-proof.txt"));
+    assert!(screen.dim("1. 允许这一次"), "B's answers are not taken yet");
+    for code in [KeyCode::Down, KeyCode::Char('2'), KeyCode::Enter] {
+        screen.wait(50);
+        assert_eq!(screen.key(code), None, "{code:?} right after B appeared");
+    }
+    // The guard now ends ANSWER_GUARD_MS after the last of those keys.
+    screen.wait(ANSWER_GUARD_MS - 1);
+    screen.draw();
+    assert!(screen.dim("1. 允许这一次"));
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        None,
+        "the keys meanwhile pushed the guard back"
+    );
+
+    screen.read_the_box();
+    screen.draw();
+    assert!(!screen.dim("1. 允许这一次"));
+    // Down was dropped, not kept: option 1 is still the one selected.
     assert_eq!(
         screen.key(KeyCode::Enter),
         resolve("r2", ApprovalDecision::Accept)
@@ -177,6 +255,7 @@ fn keys_typed_before_the_box_appears_do_not_answer_it() {
 
     screen.draw();
     assert!(screen.screen().contains("rm -rf build"));
+    screen.read_the_box();
     assert_eq!(
         screen.key(KeyCode::Char('3')),
         resolve("r1", ApprovalDecision::Decline)
@@ -204,7 +283,7 @@ fn esc_interrupts_only_the_turn_on_screen() {
 }
 
 /// What 「本会话都允许」 grants is on screen before anything is chosen, so
-/// pressing 2 straight away is an informed choice.
+/// pressing 2 as soon as the box takes answers is an informed choice.
 #[test]
 fn what_allowing_for_the_session_means_shows_before_choosing() {
     let mut screen = Screen::new(120, 30);
@@ -219,6 +298,7 @@ fn what_allowing_for_the_session_means_shows_before_choosing() {
         ),
         "the note shows with option 1 selected:\n{shown}"
     );
+    screen.read_the_box();
     assert_eq!(
         screen.key(KeyCode::Char('2')),
         resolve("r1", ApprovalDecision::AcceptForSession)
