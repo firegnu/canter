@@ -3,10 +3,31 @@ use canter_protocol::{ApprovalDecision, ApprovalRequest, PermissionMode};
 use std::collections::HashSet;
 
 #[derive(Debug, PartialEq)]
-pub enum PermissionCheck {
-    Execute,
+pub enum PermissionCheck<'a> {
+    Execute(ExecutionPermit<'a>),
     Ask(ApprovalRequest),
     Deny { cancel_turn: bool },
+}
+
+/// An unforgeable, single-use permission for this exact prepared call.
+pub struct ExecutionPermit<'a> {
+    call: &'a PreparedCall,
+}
+
+impl<'a> ExecutionPermit<'a> {
+    pub(crate) fn into_call(self) -> &'a PreparedCall {
+        self.call
+    }
+}
+impl std::fmt::Debug for ExecutionPermit<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecutionPermit").finish_non_exhaustive()
+    }
+}
+impl PartialEq for ExecutionPermit<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.call, other.call)
+    }
 }
 
 /// Own one gate per session. Grants are in-memory only and must not be restored from disk.
@@ -17,16 +38,16 @@ pub struct PermissionGate {
 
 impl PermissionGate {
     /// The caller must first correlate the answer with this session's pending request.
-    pub fn resolve(
+    pub fn resolve<'a>(
         &mut self,
-        call: &PreparedCall,
+        call: &'a PreparedCall,
         decision: ApprovalDecision,
-    ) -> Result<PermissionCheck, &'static str> {
+    ) -> Result<PermissionCheck<'a>, &'static str> {
         match decision {
-            ApprovalDecision::Accept => Ok(PermissionCheck::Execute),
+            ApprovalDecision::Accept => Ok(PermissionCheck::Execute(ExecutionPermit { call })),
             ApprovalDecision::AcceptForSession => {
                 self.grants.insert(call.tool);
-                Ok(PermissionCheck::Execute)
+                Ok(PermissionCheck::Execute(ExecutionPermit { call }))
             }
             ApprovalDecision::Decline => Ok(PermissionCheck::Deny { cancel_turn: false }),
             ApprovalDecision::Cancel => Ok(PermissionCheck::Deny { cancel_turn: true }),
@@ -34,9 +55,13 @@ impl PermissionGate {
         }
     }
 
-    pub fn evaluate(&self, call: &PreparedCall, mode: PermissionMode) -> PermissionCheck {
+    pub fn evaluate<'a>(
+        &self,
+        call: &'a PreparedCall,
+        mode: PermissionMode,
+    ) -> PermissionCheck<'a> {
         if self.grants.contains(&call.tool) {
-            return PermissionCheck::Execute;
+            return PermissionCheck::Execute(ExecutionPermit { call });
         }
         let ask = match mode {
             PermissionMode::AlwaysAsk | PermissionMode::Unknown => call.tool.risk() != Risk::Read,
@@ -56,7 +81,7 @@ impl PermissionGate {
                 ],
             })
         } else {
-            PermissionCheck::Execute
+            PermissionCheck::Execute(ExecutionPermit { call })
         }
     }
 }

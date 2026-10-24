@@ -8,7 +8,7 @@ async fn permission_modes_use_tool_risk_and_unknown_means_always_ask() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("file"), "original\n").unwrap();
     let tools = Tools::new(Arc::new(
-        LocalExecutor::new(dir.path().into(), BTreeMap::new()).unwrap(),
+        LocalExecutor::new(dir.path().into(), BTreeMap::new(), vec![]).unwrap(),
     ));
     let cancel = CancellationToken::new();
     let gate = PermissionGate::default();
@@ -52,7 +52,7 @@ async fn permission_modes_use_tool_risk_and_unknown_means_always_ask() {
                         );
                     }
                 }
-                PermissionCheck::Execute => assert!(!ask, "{tool:?} {mode:?} must ask"),
+                PermissionCheck::Execute(_) => assert!(!ask, "{tool:?} {mode:?} must ask"),
                 other => panic!("unexpected permission decision: {other:?}"),
             }
         }
@@ -63,7 +63,7 @@ async fn permission_modes_use_tool_risk_and_unknown_means_always_ask() {
 async fn approval_answers_and_grants_are_scoped_to_one_session_and_one_tool() {
     let dir = tempfile::tempdir().unwrap();
     let tools = Tools::new(Arc::new(
-        LocalExecutor::new(dir.path().into(), BTreeMap::new()).unwrap(),
+        LocalExecutor::new(dir.path().into(), BTreeMap::new(), vec![]).unwrap(),
     ));
     let cancel = CancellationToken::new();
     let shell = tools
@@ -102,22 +102,22 @@ async fn approval_answers_and_grants_are_scoped_to_one_session_and_one_tool() {
             .resolve(&shell, ApprovalDecision::Unknown)
             .is_err()
     );
-    assert_eq!(
+    assert!(matches!(
         first_session.resolve(&shell, ApprovalDecision::Accept),
-        Ok(PermissionCheck::Execute)
-    );
+        Ok(PermissionCheck::Execute(_))
+    ));
     assert!(matches!(
         first_session.evaluate(&another_shell, PermissionMode::AlwaysAsk),
         PermissionCheck::Ask(_)
     ));
-    assert_eq!(
+    assert!(matches!(
         first_session.resolve(&shell, ApprovalDecision::AcceptForSession),
-        Ok(PermissionCheck::Execute)
-    );
-    assert_eq!(
+        Ok(PermissionCheck::Execute(_))
+    ));
+    assert!(matches!(
         first_session.evaluate(&another_shell, PermissionMode::AlwaysAsk),
-        PermissionCheck::Execute
-    );
+        PermissionCheck::Execute(_)
+    ));
     assert!(matches!(
         first_session.evaluate(&write, PermissionMode::AlwaysAsk),
         PermissionCheck::Ask(_)
