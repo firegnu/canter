@@ -1,0 +1,182 @@
+//! Params describe JSON bodies, except GET params (query strings). Path values
+//! are separate so private creation data is never part of a session snapshot.
+
+use crate::{ApprovalDecision, Event, PermissionMode, SessionSnapshot, SessionSummary, UserInput};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use ts_rs::TS;
+
+pub mod routes {
+    pub const INFO: &str = "/v1/info";
+    pub const SESSIONS: &str = "/v1/sessions";
+    pub const SESSION: &str = "/v1/sessions/{id}";
+    pub const INPUT: &str = "/v1/sessions/{id}/input";
+    pub const INTERRUPT: &str = "/v1/sessions/{id}/interrupt";
+    pub const REQUEST: &str = "/v1/sessions/{id}/requests/{rid}";
+    pub const COMPACT: &str = "/v1/sessions/{id}/compact";
+    pub const EVENTS: &str = "/v1/events";
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct SessionPath {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct RequestPath {
+    pub id: String,
+    pub rid: String,
+}
+
+macro_rules! empty_params {
+    ($($name:ident),+ $(,)?) => {$(
+        #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+        pub struct $name {}
+    )+};
+}
+
+empty_params!(
+    InfoParams,
+    SessionListParams,
+    SessionReadParams,
+    SessionCompactParams,
+    SessionCloseParams
+);
+
+/// GET /v1/info. Each session carries its own replay cursor; there is no global sequence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct InfoResponse {
+    pub server_version: String,
+    pub protocol_version: u32,
+    pub sessions: Vec<SessionSummary>,
+}
+
+/// GET /v1/sessions. Each summary carries its own lastEventSeq.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListResponse {
+    pub data: Vec<SessionSummary>,
+}
+
+/// POST /v1/sessions. Do not log this body: env may contain credentials.
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(optional_fields = nullable)]
+pub struct SessionCreateParams {
+    pub cwd: String,
+    pub env: BTreeMap<String, String>,
+    pub model: String,
+    pub approval_policy: PermissionMode,
+    pub input: Option<Vec<UserInput>>,
+    pub name: Option<String>,
+    pub client_name: String,
+}
+
+macro_rules! session_response {
+    ($($name:ident),+ $(,)?) => {$(
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+        #[serde(rename_all = "camelCase")]
+        pub struct $name {
+            pub session: SessionSnapshot,
+            #[ts(type = "number")]
+            pub event_seq: u64,
+        }
+    )+};
+}
+session_response!(SessionCreateResponse, SessionReadResponse);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum InputMode {
+    #[default]
+    Queue,
+    Steer,
+}
+
+/// POST /v1/sessions/{id}/input. Idle starts a turn; mode applies when busy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInputParams {
+    pub input: Vec<UserInput>,
+    #[serde(default)]
+    pub mode: InputMode,
+    pub client_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInputResponse {
+    #[ts(type = "number")]
+    pub event_seq: u64,
+    /// None while queued for a future turn.
+    pub turn_id: Option<String>,
+}
+
+/// POST /v1/sessions/{id}/interrupt, with the target turn as a precondition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInterruptParams {
+    pub turn_id: String,
+}
+
+/// POST /v1/sessions/{id}/requests/{rid}.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestResolveParams {
+    pub decision: ApprovalDecision,
+    pub client_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestResolveResponse {
+    /// The original resolution's sequence when alreadyResolved is true.
+    #[ts(type = "number")]
+    pub event_seq: u64,
+    pub already_resolved: bool,
+}
+
+/// PATCH /v1/sessions/{id}. Omitted/null fields retain their current values.
+/// The resulting complete public settings are emitted in session.updated.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(optional_fields = nullable)]
+pub struct SessionUpdateParams {
+    pub name: Option<String>,
+    pub model: Option<String>,
+    pub approval_policy: Option<PermissionMode>,
+}
+
+macro_rules! command_response {
+    ($($name:ident),+ $(,)?) => {$(
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+        #[serde(rename_all = "camelCase")]
+        pub struct $name {
+            #[ts(type = "number")]
+            pub event_seq: u64,
+        }
+    )+};
+}
+command_response!(
+    SessionInterruptResponse,
+    SessionUpdateResponse,
+    SessionCompactResponse,
+    SessionCloseResponse
+);
+
+/// GET /v1/events?session={id}&after={seq}. Zero requests the complete history.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EventsParams {
+    pub session: String,
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub after: u64,
+}
+
+/// One SSE data frame, encoded as the event itself (not a JSON array).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(transparent)]
+pub struct EventsResponse(pub Event);
