@@ -59,6 +59,16 @@ fn text(value: &str) -> Step {
 fn finish() -> Step {
     Step::Event(ModelEvent::Finished(FinishReason::Stop))
 }
+fn read_fixture(id: &str) -> Vec<Step> {
+    vec![
+        Step::Event(ModelEvent::ToolCall(ToolCall {
+            id: id.into(),
+            name: "read".into(),
+            arguments: r#"{"path":"fixture.txt"}"#.into(),
+        })),
+        Step::Event(ModelEvent::Finished(FinishReason::ToolCalls)),
+    ]
+}
 fn input(value: &str) -> SessionInputParams {
     SessionInputParams {
         input: vec![UserInput::Text { text: value.into() }],
@@ -273,10 +283,15 @@ async fn unreadable_project_instructions_warn_and_do_not_block_the_model() {
             _ => std::fs::write(&path, "x".repeat(65_537)).unwrap(),
         }
         let mut events = session.subscribe(0).await.unwrap();
-        for _ in 0..2 {
+        for round in 0..2 {
             session.input(input("continue")).await.unwrap();
             let seen = finished(&mut events).await;
-            assert!(seen.iter().any(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains(path.to_str().unwrap()))), "missing warning for {kind}");
+            let warnings = seen.iter().filter(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains(path.to_str().unwrap()))).count();
+            assert_eq!(
+                warnings,
+                usize::from(round == 0),
+                "warn once for unchanged {kind}"
+            );
             assert!(
                 matches!(&seen.last().unwrap().payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Completed)
             );
@@ -403,6 +418,217 @@ async fn interrupted_approval_is_resolved_before_the_failed_tool_item() {
     ));
     assert!(history_messages(&store).iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "pending" && text.contains("被打断，没有执行"))));
     assert!(!temp.path().join("must-not-exist").exists());
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancel_approval_keeps_the_declined_result_and_stops_the_turn() {
+    let model = ScriptModel::new(vec![vec![
+        Step::Event(ModelEvent::ToolCall(ToolCall {
+            id: "declined".into(),
+            name: "shell".into(),
+            arguments: r#"{"command":"touch must-not-exist"}"#.into(),
+        })),
+        Step::Event(ModelEvent::Finished(FinishReason::ToolCalls)),
+    ]]);
+    let (temp, store, session) = create(model.clone(), CoreOptions::default()).await;
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("run")).await.unwrap();
+    let opened = until(&mut events, |event| {
+        matches!(event, EventPayload::RequestOpened { .. })
+    })
+    .await;
+    let EventPayload::RequestOpened { request } = &opened.last().unwrap().payload else {
+        unreachable!()
+    };
+    let answer = session
+        .resolve(
+            &request.id,
+            RequestResolveParams {
+                decision: ApprovalDecision::Cancel,
+                client_name: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let seen = finished(&mut events).await;
+    assert!(seen.iter().any(|event| event.seq == answer.event_seq
+        && matches!(
+            event.payload,
+            EventPayload::RequestResolved {
+                resolution: ApprovalResolution::Answered {
+                    decision: ApprovalDecision::Cancel
+                },
+                ..
+            }
+        )));
+    assert!(
+        seen.iter().any(|event| event.seq > answer.event_seq
+            && matches!(
+                event.payload,
+                EventPayload::ItemCompleted {
+                    item: Item::CommandExecution {
+                        status: ItemStatus::Declined,
+                        ..
+                    },
+                    ..
+                }
+            )),
+        "an explicit cancel answer must remain a declined tool call"
+    );
+    assert!(history_messages(&store).iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "declined" && text == "Tool call declined.")));
+    assert!(
+        matches!(&seen.last().unwrap().payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Interrupted && turn.error.is_none())
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 1);
+    assert!(!temp.path().join("must-not-exist").exists());
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn project_instruction_warnings_repeat_only_when_the_problem_changes() {
+    let mut scripts = vec![read_fixture("first"), read_fixture("second")];
+    scripts.extend((0..5).map(|_| vec![text("done"), finish()]));
+    let model = ScriptModel::new(scripts);
+    let (temp, _store, session) = create(model.clone(), CoreOptions::default()).await;
+    std::fs::write(temp.path().join("fixture.txt"), "fixture").unwrap();
+    let path = temp.path().join("AGENTS.md");
+    std::fs::create_dir(&path).unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    let mut previous_warning = String::new();
+    for (round, expected_warnings) in [1, 0, 1, 0, 1].into_iter().enumerate() {
+        match round {
+            2 => {
+                std::fs::remove_dir(&path).unwrap();
+                std::fs::write(&path, [0xff]).unwrap();
+            }
+            3 => std::fs::write(&path, "valid instructions").unwrap(),
+            4 => std::fs::write(&path, [0xff]).unwrap(),
+            _ => {}
+        }
+        session.input(input("continue")).await.unwrap();
+        let seen = finished(&mut events).await;
+        let warnings: Vec<_> = seen
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::Warning { message } if message.contains(path.to_str().unwrap()) => {
+                    Some(message)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            expected_warnings,
+            "duplicate instruction warning in round {round}"
+        );
+        if round == 0 {
+            previous_warning = warnings[0].clone();
+        }
+        if round == 2 {
+            assert_ne!(warnings[0], &previous_warning);
+        }
+        assert!(
+            matches!(&seen.last().unwrap().payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Completed)
+        );
+    }
+    assert_eq!(model.requests.lock().unwrap().len(), 7);
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_automatic_compaction_waits_until_a_new_turn_or_manual_request() {
+    let release_reply = Arc::new(Notify::new());
+    let model = ScriptModel::new(vec![
+        vec![text(&"x".repeat(175_000)), finish()],
+        vec![Step::Error(ErrorKind::Server)],
+        read_fixture("first"),
+        read_fixture("second"),
+        vec![
+            text("ready for steering"),
+            Step::Wait(release_reply.clone()),
+            finish(),
+        ],
+        vec![text("steered reply"), finish()],
+        vec![Step::Error(ErrorKind::Server)],
+        vec![text("next turn"), finish()],
+        vec![Step::Error(ErrorKind::Server)],
+    ]);
+    let (temp, _store, session) = create(
+        model.clone(),
+        CoreOptions {
+            context_window: 100_000,
+            max_output_tokens: 32_768,
+            ..CoreOptions::default()
+        },
+    )
+    .await;
+    std::fs::write(temp.path().join("fixture.txt"), "fixture").unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("seed")).await.unwrap();
+    finished(&mut events).await;
+    let response = session.input(input("use two tools")).await.unwrap();
+    let mut seen = until(&mut events, |event| matches!(event, EventPayload::ItemDelta { delta: ItemDelta::AgentMessage { delta }, .. } if delta == "ready for steering")).await;
+    let steered = session
+        .input(SessionInputParams {
+            mode: InputMode::Steer,
+            ..input("continue in this turn")
+        })
+        .await
+        .unwrap();
+    assert_eq!(steered.turn_id, response.turn_id);
+    let queued = session.input(input("new turn")).await.unwrap();
+    assert!(queued.turn_id.is_none());
+    release_reply.notify_one();
+    seen.extend(finished(&mut events).await);
+    assert_eq!(
+        seen.iter()
+            .filter(|event| matches!(
+                event.payload,
+                EventPayload::ItemStarted {
+                    item: Item::ContextCompaction { .. },
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "a failed automatic compaction must not repeat after tools or late steering"
+    );
+    assert_eq!(seen.iter().filter(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains("自动压缩失败"))).count(), 1);
+    assert!(
+        matches!(&seen.last().unwrap().payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Completed)
+    );
+    let seen = finished(&mut events).await;
+    assert_eq!(
+        model
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request.tools.is_empty())
+            .count(),
+        2,
+        "a new turn may retry compaction"
+    );
+    assert!(
+        matches!(&seen.last().unwrap().payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Completed)
+    );
+    session.compact().await.unwrap();
+    let seen = finished(&mut events).await;
+    assert_eq!(
+        model
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request.tools.is_empty())
+            .count(),
+        3,
+        "manual compaction may retry"
+    );
+    assert!(
+        matches!(&seen.last().unwrap().payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Failed)
+    );
     session.close().await.unwrap();
 }
 

@@ -15,6 +15,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
+    // Late steering may re-enter conversation without starting a new turn.
+    let mut auto_compaction_failed = false;
     loop {
         let (turn, cancel, manual_compaction) = {
             let state = shared.state.lock().await;
@@ -31,7 +33,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                 Err(error) => Err(error),
             }
         } else {
-            conversation(&shared, &turn.id, &cancel).await
+            conversation(&shared, &turn.id, &cancel, &mut auto_compaction_failed).await
         };
         let mut state = shared.state.lock().await;
         // An input accepted just as the model stopped still belongs to this turn.
@@ -116,7 +118,10 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             client_name: input.client_name,
         };
         match shared.start(&mut state, params, Some(input.id)).await {
-            Ok((_, next)) => done = next,
+            Ok((_, next)) => {
+                done = next;
+                auto_compaction_failed = false;
+            }
             Err(_) => break,
         }
     }
@@ -126,6 +131,7 @@ async fn conversation(
     shared: &Shared,
     turn_id: &str,
     cancel: &CancellationToken,
+    auto_compaction_failed: &mut bool,
 ) -> Result<(), CoreError> {
     let mut compacted = false;
     loop {
@@ -168,7 +174,7 @@ async fn conversation(
                 });
         let fits = occupancy.saturating_add(u64::from(shared.options.max_output_tokens))
             <= shared.options.context_window;
-        if occupancy > compaction::input_limit(shared) && !compacted {
+        if occupancy > compaction::input_limit(shared) && !compacted && !*auto_compaction_failed {
             compacted = true;
             match compaction::compact(shared, turn_id, cancel).await {
                 Ok(()) => continue,
@@ -183,6 +189,7 @@ async fn conversation(
                     ));
                 }
                 Err(error) => {
+                    *auto_compaction_failed = true;
                     shared
                         .state
                         .lock()
@@ -225,7 +232,7 @@ async fn conversation(
                 .await
                 .complete_missing_tools("没有结果：模型请求未完成")
                 .await?;
-            if error.kind == ErrorKind::ContextLength && !compacted {
+            if error.kind == ErrorKind::ContextLength && !compacted && !*auto_compaction_failed {
                 compaction::compact(shared, turn_id, cancel).await?;
                 compacted = true;
                 continue;
@@ -295,17 +302,17 @@ async fn refresh_prefix(shared: &Shared) -> Result<(), CoreError> {
             .await?;
         state.prefix = prefix;
     }
-    if !warnings.is_empty() {
-        state
-            .journal
-            .append(
-                warnings
-                    .into_iter()
-                    .map(|message| EventPayload::Warning { message })
-                    .collect(),
-            )
-            .await?;
+    let new_warnings: Vec<_> = warnings
+        .iter()
+        .filter(|message| !state.instruction_warnings.contains(message))
+        .map(|message| EventPayload::Warning {
+            message: message.clone(),
+        })
+        .collect();
+    if !new_warnings.is_empty() {
+        state.journal.append(new_warnings).await?;
     }
+    state.instruction_warnings = warnings;
     Ok(())
 }
 
@@ -583,7 +590,7 @@ async fn permission<'a>(
     call: &'a PreparedCall,
     cancel: &CancellationToken,
 ) -> Result<Option<PermissionCheck<'a>>, CoreError> {
-    let receiver = {
+    let mut receiver = {
         let mut state = shared.state.lock().await;
         state
             .journal
@@ -624,10 +631,15 @@ async fn permission<'a>(
     let decision = tokio::select! {
         biased;
         _ = cancel.cancelled() => {
-            shared.state.lock().await.cancel_requests().await?;
-            return Ok(None);
+            match receiver.try_recv() {
+                Ok(decision) => decision,
+                Err(_) => {
+                    shared.state.lock().await.cancel_requests().await?;
+                    return Ok(None);
+                }
+            }
         },
-        decision = receiver => decision.map_err(|_| CoreError::internal())?,
+        decision = &mut receiver => decision.map_err(|_| CoreError::internal())?,
     };
     shared
         .state

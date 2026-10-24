@@ -44,6 +44,7 @@ pub(crate) struct Shared {
 pub(crate) struct State {
     pub journal: Journal,
     pub prefix: Vec<Message>,
+    pub instruction_warnings: Vec<String>,
     pub history: Vec<Message>,
     pub user_messages: Vec<String>,
     pub gate: PermissionGate,
@@ -66,6 +67,7 @@ impl State {
         Self {
             journal,
             prefix: Vec::new(),
+            instruction_warnings: Vec::new(),
             history: Vec::new(),
             user_messages: Vec::new(),
             gate: PermissionGate::default(),
