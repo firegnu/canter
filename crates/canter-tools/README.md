@@ -119,9 +119,17 @@ shell 免批准只识别一小部分语法和参数，白名单在 `src/readonly
 - Git 每次判断都同步读当前仓库配置、会话 HOME 下的 `.gitconfig`、XDG 下的 `git/config`
   （未设 XDG_CONFIG_HOME 时用 `~/.config/git/config`）。支持向上查找仓库、裸仓库、
   worktree 的 `gitdir:`/`commondir` 和 `config.worktree`，不启动 Git 或其他子进程。
-  出现 fsmonitor、textconv、diff.external、diff.*.command、gpg/签名相关配置、
-  log.showSignature、remote.*.promisor、extensions.partialClone、filter 的外部程序，
+  未启用 GIT_CONFIG_NOSYSTEM 时，还用同一规则检查 `/etc/gitconfig` 和会话 PATH 中
+  第一个可执行 git 所在前缀的 `etc/gitconfig`（例如 `/opt/homebrew/bin/git` 对应
+  `/opt/homebrew/etc/gitconfig`；bin/git 是链接时仍检查 PATH 前缀）。PATH 缺失或找不到
+  可执行 git 时询问；GIT_CONFIG_NOSYSTEM 为 `0`/`false` 等假值仍检查系统配置。
+  出现 fsmonitor、textconv、diff.external、diff.*.command、gpg 段或 gpg 子段配置、
+  log.showSignature、remote.*.promisor、extensions.partialClone，
   或 include/includeIf 时询问；`--format/--pretty` 以及配置中的命名/默认格式含 `%G` 也询问。
+  `*.gpgsign` 和 `user.signingkey` 不影响只读命令放行。filter 仅接受 `git lfs install`
+  写入的标准 `filter.lfs` 值：clean 为 `git-lfs clean -- %f`、smudge 为
+  `git-lfs smudge -- %f`、process 为 `git-lfs filter-process`、required 为 `true`；
+  其他 filter、其他键或改过的值仍询问。
   不存在的可选配置可跳过；无法读取、非普通文件、超过 1 MiB、无法识别的配置语法
   （包括续行/转义）、HOME 缺失或相对路径、相对 XDG_CONFIG_HOME 都询问。
   改变仓库/配置来源或注入配置的 GIT_DIR/GIT_COMMON_DIR/GIT_WORK_TREE/GIT_CONFIG*
@@ -152,8 +160,9 @@ shell 免批准只识别一小部分语法和参数，白名单在 `src/readonly
 - 直接执行仍使用原始命令、`commandExecution` 开始/完成项目和输出回调，不增加或更改事件。
 
 **已知限制：这不是 shell 沙箱，挡不全状态目录的访问。** `$HOME/.canter` 等显式变量语法
-目前保守地询问，但不展开或追踪任意环境变量，也不完整检查其他程序的环境配置、系统级
-Git 配置或 PATH 上实际执行的程序。仓库/用户 Git 配置中的外部 diff/textconv 等已检查。
+目前保守地询问，但不展开或追踪任意环境变量，也不完整检查其他程序的环境配置或 PATH
+上实际执行的程序。上述仓库、用户和系统 Git 配置中的外部 diff/textconv 等已检查，
+非标准安装在其他编译时位置的系统配置仍不覆盖。
 cd 目标存在时会额外检查解析后的路径，
 但路径检查仍不完整覆盖符号链接、硬链接、文件系统别名或执行期间的路径变化；
 程序内部的其他隐式读取仍可能读到受保护文件。不要把白名单理解为“绝不会写文件或读取秘密”；read/write/edit 的原有

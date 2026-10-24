@@ -81,6 +81,12 @@ async fn p1_8_repository_inspection_commands_do_not_need_approval() {
         );
     }
     std::fs::write(cwd.join("README.md"), "changed fixture\n").unwrap();
+    // Match a normal HOME after `git lfs install`, not only an empty global config.
+    std::fs::write(
+        dir.path().join(".gitconfig"),
+        "[filter \"lfs\"]\nclean = git-lfs clean -- %f\nsmudge = git-lfs smudge -- %f\nprocess = git-lfs filter-process\nrequired = true\n",
+    )
+    .unwrap();
     let tools = Tools::new(Arc::new(
         LocalExecutor::new(cwd.clone(), environment, vec![dir.path().join(".canter")]).unwrap(),
     ));
@@ -173,7 +179,10 @@ async fn find_sed_and_output_commands_only_allow_known_readonly_forms() {
     let tools = Tools::new(Arc::new(
         LocalExecutor::new(
             dir.path().into(),
-            BTreeMap::from([("HOME".into(), dir.path().to_str().unwrap().into())]),
+            BTreeMap::from([
+                ("HOME".into(), dir.path().to_str().unwrap().into()),
+                ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+            ]),
             vec![dir.path().join("private")],
         )
         .unwrap(),

@@ -136,7 +136,7 @@ async fn git_configuration_that_can_execute_or_fetch_always_needs_approval() {
         "[diff]\nexternal = ./hook\n",
         "[gpg]\nprogram = ./hook\n",
         "[gpg \"ssh\"]\nprogram = ./hook\n",
-        "[commit]\ngpgSign = false\n",
+        "[gpg.ssh]\nprogram = ./hook\n",
         "[log]\nshowSignature = true\n",
         "[pretty]\nreview = format:%GS\n",
         "[format]\npretty = format:%GK\n",
@@ -159,6 +159,57 @@ async fn git_configuration_that_can_execute_or_fetch_always_needs_approval() {
     // Re-evaluate every time; removing an unsafe key restores the ordinary path.
     write(&config, "[core]\nrepositoryformatversion = 0\n");
     check(&tools, "git diff", false).await;
+}
+
+#[tokio::test]
+async fn standard_lfs_filters_are_safe_but_changed_values_and_other_filters_ask() {
+    let fixture = Fixture::new();
+    let config = fixture.home.join(".gitconfig");
+    let tools = fixture.tools(&fixture.cwd);
+    let standard = "[filter \"lfs\"]\nclean = git-lfs clean -- %f\nsmudge = git-lfs smudge -- %f\nprocess = git-lfs filter-process\nrequired = true\n";
+    for header in ["[filter \"lfs\"]", "[filter.lfs]", "[FILTER \"lfs\"]"] {
+        write(&config, &standard.replace("[filter \"lfs\"]", header));
+        for command in [
+            "git status --short",
+            "git diff",
+            "git show -p",
+            "git log -p",
+        ] {
+            check(&tools, command, false).await;
+        }
+    }
+    for (original, changed) in [
+        ("git-lfs clean -- %f", "./helper %f"),
+        ("git-lfs smudge -- %f", "git-lfs smudge -- %f; ./helper"),
+        ("git-lfs filter-process", "git-lfs filter-process --skip"),
+        ("required = true", "required = false"),
+        ("[filter \"lfs\"]", "[filter \"other\"]"),
+        ("[filter \"lfs\"]", "[filter \"lfs.other\"]"),
+        ("[filter \"lfs\"]", "[filter \"LFS\"]"),
+    ] {
+        write(&config, &standard.replace(original, changed));
+        check(&tools, "git diff", true).await;
+    }
+}
+
+#[tokio::test]
+async fn signing_preferences_do_not_block_readonly_git_commands() {
+    let fixture = Fixture::new();
+    write(
+        &fixture.home.join(".gitconfig"),
+        "[commit]\ngpgSign = true\n[tag]\ngpgSign = false\n[user]\nsigningKey = fixture-only\n",
+    );
+    let tools = fixture.tools(&fixture.cwd);
+    for command in [
+        "git status --short",
+        "git diff",
+        "git show -p",
+        "git log -p",
+    ] {
+        check(&tools, command, false).await;
+    }
+    check(&tools, "git log --format=%GS", true).await;
+    check(&tools, "git commit -m fixture", true).await;
 }
 
 #[tokio::test]

@@ -9,7 +9,10 @@ async fn readonly_shell_allowlist_applies_in_all_asking_modes() {
     let tools = Tools::new(Arc::new(
         LocalExecutor::new(
             dir.path().into(),
-            BTreeMap::from([("HOME".into(), dir.path().to_str().unwrap().into())]),
+            BTreeMap::from([
+                ("HOME".into(), dir.path().to_str().unwrap().into()),
+                ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+            ]),
             vec![],
         )
         .unwrap(),

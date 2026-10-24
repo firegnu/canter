@@ -2,16 +2,20 @@ use std::{
     collections::BTreeMap,
     fs,
     io::{self, Read},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
-// No git subprocess and no cache: repository/user config can change between calls.
+// No git subprocess and no cache: configuration can change between calls.
 pub(super) fn configuration_is_safe(cwd: &Path, environment: &BTreeMap<String, String>) -> bool {
-    check_configuration(cwd, environment).unwrap_or(false)
+    check_configuration(cwd, environment, Path::new("/etc/gitconfig")).unwrap_or(false)
 }
 
-fn check_configuration(cwd: &Path, environment: &BTreeMap<String, String>) -> io::Result<bool> {
+fn check_configuration(
+    cwd: &Path,
+    environment: &BTreeMap<String, String>,
+    system_config: &Path,
+) -> io::Result<bool> {
     // These overrides change the config sources or inject config directly. Do not
     // guess their semantics or accidentally inspect the server's own environment.
     if environment.keys().any(|key| {
@@ -37,6 +41,20 @@ fn check_configuration(cwd: &Path, environment: &BTreeMap<String, String>) -> io
         Some(_) => return Ok(false),
         None => home.join(".config"),
     };
+    let read_system = match environment.get("GIT_CONFIG_NOSYSTEM") {
+        None => true,
+        Some(value) => match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => false,
+            "" | "0" | "false" | "no" | "off" => true,
+            _ => return Ok(false),
+        },
+    };
+    if read_system
+        && (!config_file_is_safe(system_config)?
+            || !config_file_is_safe(&git_prefix_config(cwd, environment)?)?)
+    {
+        return Ok(false);
+    }
     for path in [home.join(".gitconfig"), xdg.join("git/config")] {
         if !config_file_is_safe(&path)? {
             return Ok(false);
@@ -60,6 +78,27 @@ fn check_configuration(cwd: &Path, environment: &BTreeMap<String, String>) -> io
         }
     }
     Ok(true)
+}
+
+fn git_prefix_config(cwd: &Path, environment: &BTreeMap<String, String>) -> io::Result<PathBuf> {
+    let path = environment
+        .get("PATH")
+        .ok_or_else(|| io::Error::other("missing session PATH"))?;
+    for directory in std::env::split_paths(path) {
+        let bin = cwd.join(directory);
+        let Some(metadata) = metadata_optional(&bin.join("git"))? else {
+            continue;
+        };
+        if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+            // Keep the PATH prefix, including Homebrew's bin/git symlink, rather
+            // than following it into a version-specific installation directory.
+            return bin
+                .parent()
+                .map(|prefix| prefix.join("etc/gitconfig"))
+                .ok_or_else(|| io::Error::other("unknown Git prefix"));
+        }
+    }
+    Err(io::Error::other("Git not found on session PATH"))
 }
 
 fn discover_gitdir(cwd: &Path) -> io::Result<Option<PathBuf>> {
@@ -140,6 +179,7 @@ fn config_file_is_safe(path: &Path) -> io::Result<bool> {
         return Ok(true);
     };
     let mut section = String::new();
+    let mut subsection = None;
     for line in contents.trim_start_matches('\u{feff}').lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with(['#', ';']) {
@@ -166,19 +206,25 @@ fn config_file_is_safe(path: &Path) -> io::Result<bool> {
             {
                 return Ok(false);
             }
-            if let Some(subsection) = parts.next() {
-                let subsection = subsection.trim();
-                let Some(value) = subsection
+            let (name, legacy_subsection) = name
+                .split_once('.')
+                .map_or((name, None), |(name, value)| (name, Some(value)));
+            subsection = legacy_subsection.map(str::to_ascii_lowercase);
+            if let Some(quoted) = parts.next() {
+                let Some(value) = quoted
+                    .trim()
                     .strip_prefix('"')
                     .and_then(|value| value.strip_suffix('"'))
                 else {
                     return Ok(false);
                 };
-                if value.contains('"') {
+                if legacy_subsection.is_some() || value.contains('"') {
                     return Ok(false);
                 }
+                // Quoted Git subsections are case sensitive, unlike section/key names.
+                subsection = Some(value.to_owned());
             }
-            section = name.split('.').next().unwrap_or("").to_ascii_lowercase();
+            section = name.to_ascii_lowercase();
             if matches!(section.as_str(), "include" | "includeif") {
                 return Ok(false);
             }
@@ -198,11 +244,24 @@ fn config_file_is_safe(path: &Path) -> io::Result<bool> {
         if value.chars().filter(|ch| *ch == '"').count() % 2 != 0 {
             return Ok(false);
         }
-        if matches!(key.as_str(), "fsmonitor" | "textconv" | "signingkey")
-            || key.contains("gpg")
+        if section == "filter" {
+            // The exact defaults written by `git lfs install` are the sole exception.
+            let standard = match key.as_str() {
+                "clean" => "git-lfs clean -- %f",
+                "smudge" => "git-lfs smudge -- %f",
+                "process" => "git-lfs filter-process",
+                "required" => "true",
+                _ => return Ok(false),
+            };
+            if subsection.as_deref() != Some("lfs")
+                || value.strip_prefix('=').map(str::trim) != Some(standard)
+            {
+                return Ok(false);
+            }
+        }
+        if matches!(key.as_str(), "fsmonitor" | "textconv")
             || section == "gpg"
             || section == "diff" && matches!(key.as_str(), "external" | "command")
-            || section == "filter" && matches!(key.as_str(), "clean" | "smudge" | "process")
             || section == "log" && key == "showsignature"
             || (section == "pretty" || section == "format" && key == "pretty")
                 && value.contains("%G")
@@ -213,4 +272,64 @@ fn config_file_is_safe(path: &Path) -> io::Result<bool> {
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_and_git_prefix_configs_are_checked_without_running_git() {
+        // Inject /etc's location so this test never reads the host's system config.
+        for location in ["system", "prefix"] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            let cwd = home.join("repo");
+            let prefix = dir.path().join("prefix");
+            let system_config = dir.path().join("etc/gitconfig");
+            fs::create_dir_all(cwd.join(".git")).unwrap();
+            fs::create_dir_all(prefix.join("bin")).unwrap();
+            fs::create_dir_all(prefix.join("etc")).unwrap();
+            fs::create_dir_all(system_config.parent().unwrap()).unwrap();
+            let marker = dir.path().join("git-was-run");
+            let git = dir.path().join("git-probe");
+            fs::write(&git, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+            fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+            // Homebrew also uses a bin/git link; inspect the PATH prefix's config.
+            std::os::unix::fs::symlink(&git, prefix.join("bin/git")).unwrap();
+            let mut environment = BTreeMap::from([
+                ("HOME".into(), home.to_str().unwrap().into()),
+                ("PATH".into(), prefix.join("bin").to_str().unwrap().into()),
+            ]);
+            let config = if location == "system" {
+                system_config.clone()
+            } else {
+                prefix.join("etc/gitconfig")
+            };
+            assert!(check_configuration(&cwd, &environment, &system_config).unwrap());
+            fs::write(&config, "[user]\nname = Fixture\n").unwrap();
+            assert!(check_configuration(&cwd, &environment, &system_config).unwrap());
+            for contents in [
+                "[core]\nfsmonitor = ./helper\n",
+                "[include]\npath = other\n",
+                "[filter \"lfs\"]\nprocess = ./helper\n",
+            ] {
+                fs::write(&config, contents).unwrap();
+                assert!(
+                    !check_configuration(&cwd, &environment, &system_config).unwrap(),
+                    "{location}: {contents}"
+                );
+            }
+            fs::remove_file(&config).unwrap();
+            fs::create_dir(&config).unwrap();
+            assert!(!check_configuration(&cwd, &environment, &system_config).unwrap_or(false));
+            for value in ["0", "false"] {
+                environment.insert("GIT_CONFIG_NOSYSTEM".into(), value.into());
+                assert!(!check_configuration(&cwd, &environment, &system_config).unwrap_or(false));
+            }
+            environment.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
+            assert!(check_configuration(&cwd, &environment, &system_config).unwrap());
+            assert!(!marker.exists(), "config checks must not start git");
+        }
+    }
 }
