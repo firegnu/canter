@@ -69,6 +69,9 @@
 DELETE 的关闭事件记录 `closeReason: clientRequest`；停机关闭记录
 `closeReason: serverShutdown`，未打开的会话保持原有关闭原因。快照和事件重放均保留原因，
 供旁观终端在服务端重启后决定是否自动 resume；用户主动恢复仍可重开任何已关闭会话。
+停机已经关闭、但尚在内存登记中的会话收到 DELETE 时，返回 HTTP 409、`code: conflict`、
+`message: server is stopping`，保留 `serverShutdown`，不把这次客户端关闭报告为成功。
+反过来，停机遇到已被客户端关闭的会话时直接成功，保留 `clientRequest`。
 DELETE 即使关闭失败也移除内存登记、唤醒订阅者，并保留原错误回复；随后可 resume 重开恢复。
 所有创建/恢复均把状态目录和配置路径传为受保护路径，不读取或合并服务端环境。
 环境和请求体不记录日志，也不写公开设置、事件或模型历史；工具本身的输入输出仍照核心协议记录。

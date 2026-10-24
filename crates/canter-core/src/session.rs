@@ -652,7 +652,7 @@ impl Session {
         })
     }
 
-    /// An explicit client close. Repeated closes preserve the first reason.
+    /// An explicit client close. Returns Conflict if shutdown already closed the session.
     pub async fn close(&self) -> Result<SessionCloseResponse, CoreError> {
         self.close_with_reason(SessionCloseReason::ClientRequest)
             .await
@@ -692,6 +692,12 @@ impl Session {
         if stopped.is_err() || state.journal.failed {
             state.journal.release().await?;
             return Err(CoreError::internal());
+        }
+        if reason == SessionCloseReason::ClientRequest
+            && state.journal.snapshot.status == SessionStatus::Closed
+            && state.journal.snapshot.close_reason != Some(SessionCloseReason::ClientRequest)
+        {
+            return Err(CoreError::new(ErrorCode::Conflict, "server is stopping"));
         }
         if state.journal.snapshot.status != SessionStatus::Closed {
             state.discard_queue(InputRemovalReason::Closed).await?;
