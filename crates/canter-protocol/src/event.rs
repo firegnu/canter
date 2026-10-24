@@ -1,0 +1,97 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use crate::{
+    ApprovalResolution, ErrorInfo, Item, PendingRequest, QueuedInput, SessionSettings,
+    SessionStatus, TokenUsage, Turn,
+};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Event {
+    #[ts(type = "number")]
+    pub seq: u64,
+    pub session_id: String,
+    /// Unix time in milliseconds.
+    #[ts(type = "number")]
+    pub timestamp: i64,
+    #[serde(flatten)]
+    pub payload: EventPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all_fields = "camelCase")]
+pub enum EventPayload {
+    #[serde(rename = "session.updated")]
+    SessionUpdated { settings: SessionSettings },
+    #[serde(rename = "session.status")]
+    SessionStatus { status: SessionStatus },
+    #[serde(rename = "turn.started")]
+    TurnStarted {
+        turn: Turn,
+        #[serde(default)]
+        #[ts(optional = nullable)]
+        input_id: Option<String>,
+    },
+    #[serde(rename = "input.queued")]
+    InputQueued { input: QueuedInput },
+    #[serde(rename = "turn.completed")]
+    TurnCompleted { turn: Turn },
+    #[serde(rename = "item.started")]
+    ItemStarted { turn_id: String, item: Item },
+    #[serde(rename = "item.delta")]
+    ItemDelta {
+        turn_id: String,
+        item_id: String,
+        delta: ItemDelta,
+    },
+    #[serde(rename = "item.completed")]
+    ItemCompleted { turn_id: String, item: Item },
+    #[serde(rename = "request.opened")]
+    RequestOpened { request: PendingRequest },
+    #[serde(rename = "request.resolved")]
+    RequestResolved {
+        request_id: String,
+        resolution: ApprovalResolution,
+        client_name: Option<String>,
+    },
+    #[serde(rename = "session.usage")]
+    SessionUsage { token_usage: TokenUsage },
+    #[serde(rename = "warning")]
+    Warning { message: String },
+    #[serde(rename = "error")]
+    Error {
+        error: ErrorInfo,
+        will_retry: bool,
+        turn_id: Option<String>,
+    },
+    #[serde(rename = "unknown")]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ItemDelta {
+    AgentMessage {
+        delta: String,
+    },
+    ReasoningSummary {
+        summary_index: u32,
+        delta: String,
+    },
+    ReasoningContent {
+        content_index: u32,
+        delta: String,
+    },
+    CommandExecution {
+        delta: String,
+    },
+    #[serde(other)]
+    Unknown,
+}
