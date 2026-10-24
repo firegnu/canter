@@ -27,16 +27,28 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 协议类型放单独的 Rust 包，从它生成 JSON Schema 和 TypeScript 类型；agent 核心和协议之间隔一层转换。
    - 理由：A 拷过来、不跟上游以后，同样是 canter 自己维护的协议，和 C 只差传输方式和拷不拷类型代码。传输上 HTTP + SSE 更贴合 canter：一台机器多个客户端，断线能接着收，以后 corral、pony 这类同步程序直接接，curl 就能排错。
    - 代价：离用户原来要的「使用成熟的现有的coding agent使用的协议」远一步，用的是 Codex 的结构，不是它的协议本身；协议包要自己写，估 1,000–1,500 行（报告 §9.1）。
+   - **和 Codex app-server v2（`rust-v0.163.0`）不一样的地方**（第 1 件定的，细节见 `docs/任务/1-协议包和存盘.md` 的完成记录和「审查后修改」，以及 `crates/canter-protocol/README.md`）：
+     - 命名：`session`、`sessionId` 代替 `thread`、`threadId`；事件名用点号（`session.status`、`turn.started`、`item.delta` 等）。每条事件外层带 `seq`（每个会话从 1 起）、`sessionId`、`timestamp`（Unix 毫秒）；快照带 `lastEventSeq`；命令的回复带 `eventSeq`。
+     - 会话设置：新增 `session.updated`，建会话时和每次修改后各写一条，带公开设置：名字、模型、权限模式、工作目录。环境变量不公开，只存私有文件。
+     - 会话状态是六种字符串（`starting`、`idle`、`working`、`waiting_approval`、`error`、`closed`），不是 Codex 带标记的对象。权限模式的字段名沿用 `approvalPolicy`，值是 canter 自己的 `alwaysAsk`、`askForExecution`、`allowAll`；不要 Codex 的沙箱设置。
+     - 送话：一条 input 命令带 `mode: queue / steer`，代替 Codex 的 `turn/start`、`turn/steer`。排队时发 `input.queued` 事件，快照里有 `queuedInputs`。
+     - 一轮结束：`turn.completed` 只更新状态、错误、用量，项目以 `item.*` 事件为准，和 Codex 一样。
+     - 项目种类：沿用 Codex 的 `userMessage`、`agentMessage`、`reasoning`、`commandExecution`、`fileChange`、`contextCompaction`；新增 `fileRead`；增量统一走 `item.delta`，按种类区分。
+     - 待处理请求：外层 `id`、`turnId`、`createdAt`，内层带 `type`（第一期只有批准）。四个回答对应 Codex 的 `accept`（允许这一次）、`acceptForSession`（本会话都允许）、`decline`（拒绝）、`cancel`（拒绝并停下）。`request.resolved` 比 Codex 多 `resolution`（回答、取消、超时）和 `clientName`。
+     - 兼容：枚举都有 `Unknown`；不认识的事件、项目、增量、枚举值都跳过，不让整条解析失败。
+     - 传输：出错的回复是 `{ code, message }`。SSE 每帧 `id:` 是序号，续传时 `Last-Event-ID` 优先于 `after` 参数。
 9. **桌面应用用 GPUI**（和 paddock 一样）。
 10. **第一版范围**：照报告「要用户定的」第 6 条的推荐，模型改成只接 DeepSeek（第 6 条 10-24 的改动）：不做 OpenAI Responses 接口和 ChatGPT 套餐登录，改文件不用 apply_patch。
 11. **服务端怎么起、怎么升级**：照报告第 7 条的推荐：客户端找不到服务端就在后台起一个，另可装成用户服务；升级第一期等在跑的轮跑完（有上限）再重启、不自动换版本，第二期接 corral 派活前做排空交接；嵌在终端里的单机模式只作备选。
 12. **接 corral 往后放**：「corral的接入等agent差不多可以工作了（tui版本的），再考虑接入。」
+13. **会话存两份：事件和模型历史**（2026-10-24，第 1 件交叉审查后用户选定）。每个会话除了发给客户端的事件文件，另存一份只追加的模型历史，原样记下发给模型的每条消息（工具调用 id、原样参数、截断后回给模型的结果、压缩后的摘要等），不发给客户端，文件 0600。恢复会话时，模型的上下文从模型历史还原，不从显示用的事件反推。Codex 也是这样分的（rollout 文件存模型层的条目，和 app-server 的通知分开）。
 
 ## 和报告不同的地方
 
 - **协议**：最后和报告 §5.2 的推荐一样，自定「HTTP 发命令 + SSE 收事件」（甲）。中间用户一度定了 Codex app-server（乙），10-24 改成 C，即甲的传输加 Codex 的结构（第 8 条）。报告 §5 里讲乙、讲 WebSocket 的部分不再适用；讲数据结构（会话 → 一轮 → 项目）、待处理请求、断线续传的部分照用。
 - **模型**：报告推荐第一期只接 Responses 接口，加 ChatGPT 套餐登录；用户 10-24 定为第一期只接 DeepSeek（BYOK），正好反过来：只做 Chat Completions 接口，Responses 和套餐登录往后放。模型接入层一开始就按多家来做。
 - **改文件**：报告推荐第一期用「整文件写 + apply_patch」，等接开源模型时再加「按文字替换」；第一期只接 DeepSeek，所以改成「整文件写 + 按文字替换」，apply_patch 等接 OpenAI 时再加。
+- **会话存盘**：报告 §2.3 建议只存事件、「存的和发给客户端的是一样的东西」；改成事件和模型历史各存一份（第 13 条）。
 - **接 corral**：报告 §6、§9.2 把接 corral 排在第二期；用户定为终端版本差不多能用之后再考虑，到时再定做法（报告「要用户定的」第 9 条的五种做法留作参考）。
 
 ## 还没定的
