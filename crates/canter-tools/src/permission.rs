@@ -1,4 +1,4 @@
-use crate::{PreparedCall, Risk, Tool};
+use crate::{Action, PreparedCall, Risk, Tool};
 use canter_protocol::{ApprovalDecision, ApprovalRequest, PermissionMode};
 use std::collections::HashSet;
 
@@ -68,7 +68,9 @@ impl PermissionGate {
             PermissionMode::AskForExecution => call.tool.risk() == Risk::Execute,
             PermissionMode::AllowAll => false,
         };
-        if ask {
+        let readonly_shell = ask
+            && matches!(&call.action, Action::Shell(args) if call.executor.is_readonly_shell(&args.command));
+        if ask && !readonly_shell {
             PermissionCheck::Ask(ApprovalRequest {
                 item_id: call.id.clone(),
                 tool: call.tool.name().into(),

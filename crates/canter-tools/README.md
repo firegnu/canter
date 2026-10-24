@@ -100,8 +100,8 @@ shell 回收后管道最多再读取 2000 ms；取消和原始超时在此期间
 
 | 模式 | read | write / edit | shell |
 | --- | --- | --- | --- |
-| alwaysAsk / Unknown | 执行 | 询问 | 询问 |
-| askForExecution | 执行 | 执行 | 询问 |
+| alwaysAsk / Unknown | 执行 | 询问 | 白名单只读命令执行，其余询问 |
+| askForExecution | 执行 | 执行 | 白名单只读命令执行，其余询问 |
 | allowAll | 执行 | 执行 | 执行 |
 
 Accept 仅允许当前调用；AcceptForSession 记住本会话的这个工具；Decline 拒绝；
@@ -109,11 +109,34 @@ Cancel 拒绝并向调用方返回 `cancel_turn: true`，gate 本身不取消一
 风险档来自内置 Tool 定义，不接受模型自报的风险档。
 对 shell 的会话授权等于放行这个会话的所有命令；改回 alwaysAsk 后已有授权仍有效。
 
+shell 免批准只识别一小部分语法和参数，白名单在 `src/readonly.rs`：
+
+- 命令：`ls`、`cat`、`head`、`tail`、`wc`、`grep`、`rg`、`pwd`，以及
+  `git status/diff/log/show`。支持常用短选项组合、带引号和转义的字面参数；
+  Git 可带 `--no-pager`，带值的长选项只认 `--选项=值`，不猜可选参数的边界。
+- `&&`、`||`、`;`、`|` 连接的每一段都必须通过检查。未知命令或选项、解析失败、
+  重定向（包括输入重定向）、命令替换、变量展开、子 shell、后台 `&`、注释、换行和
+  未引用的通配符一律询问。`cd`、`find`、`sed`、命令绝对路径、`git -C/-c` 等本次不放行。
+- 每个字面参数（包括 `-f路径`、`--file=路径` 中的值）按会话 cwd 检查，规范化 `.`、`..`；
+  `~` 用会话环境中的绝对 `HOME` 展开，不使用服务端 HOME。HOME 缺失、相对 HOME 和
+  `~用户名` 都询问。碰到受保护路径本身或子路径时询问，cwd 在受保护目录内也询问。
+  这只影响是否免批准，不改变批准后的执行；`allowAll` 和已有会话授权仍可执行这些命令。
+- 直接执行仍使用原始命令、`commandExecution` 开始/完成项目和输出回调，不增加或更改事件。
+
+**已知限制：这不是 shell 沙箱，挡不全状态目录的访问。** `$HOME/.canter` 等显式变量语法
+目前保守地询问，但不展开或追踪任意环境变量，也不检查环境引入的程序配置、PATH 上实际
+执行的程序、Git 的外部 diff/textconv 等配置行为。字面路径检查不追踪符号链接、硬链接、
+文件系统别名或执行期间的路径变化；递归搜索父目录、程序内部的路径匹配和隐式读取也可能
+读到受保护文件。不要把白名单理解为“绝不会写文件或读取秘密”；read/write/edit 的原有
+路径保护不变。合并时应把这些限制同步到 DESIGN。
+
 `Executor` 是可替换的异步 trait：`cwd`、`resolve_path`、`open_file`、`write_file`、`spawn`。
+另有同步的 `is_readonly_shell` 判断，默认返回 false（仍询问）；本机执行器使用已有的
+会话 cwd、环境、受保护路径实现，不需要核心或服务端再传数据，也不在判断时启动子进程。
 读文件返回 `FileReader`（异步字节流）；启动命令返回 `CommandHandle`（stdout、stderr、
 `Box<dyn CommandProcess>`），后者提供 `wait`、`terminate` 和 `kill`；后两者只作用于原进程组。
 第二期可把这些操作实现为
 独立子进程的请求，不需要改变工具和权限接口。
 
 参考 pi 的精确文字替换、oh-my-pi 的风险分档，以及 Codex `rust-v0.163.0`
-的进程组清理和 UTF-8 头尾截断思路，独立实现，未复制源码。
+的进程组清理、UTF-8 头尾截断和受限 shell 语法逐段判断思路，独立实现，未复制源码。
