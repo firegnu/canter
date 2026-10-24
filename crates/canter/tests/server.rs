@@ -74,13 +74,17 @@ impl Fixture {
     }
 
     fn spawn(root: &std::path::Path) -> Child {
+        Self::spawn_args(root, &["serve"])
+    }
+
+    fn spawn_args(root: &std::path::Path, args: &[&str]) -> Child {
         let log = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(root.join("server.log"))
             .unwrap();
         Command::new(env!("CARGO_BIN_EXE_canter"))
-            .arg("serve")
+            .args(args)
             .env_clear()
             .env("CANTER_HOME", root.join("state"))
             .env("HOME", root.join("home"))
@@ -577,4 +581,102 @@ async fn credentials_environment_and_request_bodies_are_not_logged() {
     }
     let log = fs::read_to_string(fixture.root.path().join("server.log")).unwrap();
     assert!(!log.contains("private-user-input") && !log.contains("private-client"));
+}
+
+async fn exit_signal_closes_active_work(signal: nix::sys::signal::Signal, replace: bool) {
+    let mut fixture = Fixture::start(vec![tool_reply()]).await;
+    let created = fixture.create().await;
+    let id = &created.session.id;
+    fixture.input(id).await;
+    fixture
+        .events_until(id, 0, |event| {
+            matches!(event.payload, EventPayload::RequestOpened { .. })
+        })
+        .await;
+    let mut successor =
+        replace.then(|| Fixture::spawn_args(fixture.root.path(), &["serve", "--replace"]));
+    if replace {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let response = fixture
+                    .request(
+                        Method::PATCH,
+                        &format!("/v1/sessions/{id}"),
+                        json!({"name":"signal-test"}),
+                    )
+                    .await;
+                if response.status() == 409 {
+                    break;
+                }
+                assert_eq!(response.status(), 200);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("old daemon enters upgrade drain");
+    }
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(fixture.child.id().unwrap() as i32),
+        signal,
+    )
+    .unwrap();
+    let stopped = tokio::time::timeout(Duration::from_secs(5), fixture.child.wait()).await;
+    if stopped.is_err() {
+        fixture.child.kill().await.unwrap();
+        fixture.child.wait().await.unwrap();
+        if let Some(child) = successor.as_mut() {
+            child.kill().await.unwrap();
+            child.wait().await.unwrap();
+        }
+        fixture.model.abort();
+        let _ = (&mut fixture.model).await;
+        panic!("{signal:?} must skip the upgrade wait and close active work");
+    }
+    assert!(
+        stopped.unwrap().unwrap().success(),
+        "{signal:?} must perform a graceful shutdown"
+    );
+    let events: Vec<Event> = fs::read_to_string(
+        fixture
+            .root
+            .path()
+            .join("state/sessions")
+            .join(id)
+            .join("events.jsonl"),
+    )
+    .unwrap()
+    .lines()
+    .map(|line| serde_json::from_str(line).unwrap())
+    .collect();
+    assert!(events.iter().any(|event| matches!(&event.payload, EventPayload::TurnCompleted { turn } if turn.status == canter_protocol::TurnStatus::Interrupted)));
+    assert!(matches!(
+        events.last().unwrap().payload,
+        EventPayload::SessionStatus {
+            status: canter_protocol::SessionStatus::Closed
+        }
+    ));
+    if let Some(child) = successor {
+        fixture.child = child;
+        fixture.ready().await;
+        fixture.stop().await;
+    } else {
+        assert!(!fixture.root.path().join("state/server.json").exists());
+        fixture.model.abort();
+        let _ = (&mut fixture.model).await;
+    }
+}
+
+#[tokio::test]
+async fn sigterm_interrupts_upgrade_draining() {
+    exit_signal_closes_active_work(nix::sys::signal::Signal::SIGTERM, true).await;
+}
+
+#[tokio::test]
+async fn sigint_interrupts_upgrade_draining() {
+    exit_signal_closes_active_work(nix::sys::signal::Signal::SIGINT, true).await;
+}
+
+#[tokio::test]
+async fn sighup_closes_active_work_before_exiting() {
+    exit_signal_closes_active_work(nix::sys::signal::Signal::SIGHUP, false).await;
 }

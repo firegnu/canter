@@ -18,6 +18,7 @@
   server.json            pid、version、protocolVersion、socketPath、instance
   server.sock            HTTP + SSE
   server.log             客户端自动启动时收集 stdout/stderr
+  startup.lock           串行化客户端自动启动，避免竞争者重复启动并记录误导错误
   replace.lock           串行化主动升级的请求
   replace.json           主动升级时才存在；目标是完整的旧登记记录
   sessions/<id>/         canter-store 的事件和模型历史
@@ -50,18 +51,22 @@
 
 `state_directory()` 返回默认/环境指定的状态目录。
 `discover(&home)` 只查找；`ensure_server(&home, &canter_executable)` 查不到时后台启动
-指定可执行文件的 `serve`，最多等 15 秒。子进程用独立 Unix session，stdin 关闭，
-stdout/stderr 写入 0600 的 `server.log`。启动竞争由服务端文件锁解决。
+指定可执行文件的 `serve`，最多等 15 秒。多个客户端通过 `startup.lock` 串行启动，拿锁后
+重新发现已有服务端；服务端本身仍由 `server.lock` 保证单实例。子进程用独立 Unix session，
+清空继承环境，仅传 `CANTER_HOME`，stdin 关闭，stdout/stderr 写入 0600 的 `server.log`。
+子进程退出且服务端锁空闲时立即返回错误，并附日志最后一个非空行，不等满启动期限。
 
 成功返回 `Connection { registration, client, version_warning }`。使用里面的 reqwest
 `client` 请求 `http://localhost/v1/...`；它固定走登记的 Unix socket，不走代理，
 没有总请求超时，因此可以持有 SSE。调用者应为普通命令自行设置适当超时。
 调用方显示 `version_warning`：协议兼容而版本不同仍连接旧服务端，不自动替换；
-协议不兼容则返回错误。已登记的活进程连接失败时返回错误，不偷偷替换。
+协议不兼容则返回错误。判活以 `server.lock` 为准：锁空闲则登记视为残留，即使 PID 已被
+其他活进程复用，也按没有服务端处理；探活失败后再检查锁，锁仍被占用才报错，不偷偷替换。
 
 `POST /v1/sessions/{id}/resume { "env": { ... } }` 用于接着聊，回复快照及最后序号。
 未打开会话的快照和事件直接从盘读；变更命令返回 `session_not_resumed`，不存在则 404。
 重复 resume 返回当前快照，不替换环境；DELETE 关闭后可再次 resume。
+DELETE 即使关闭失败也移除内存登记、唤醒订阅者，并保留原错误回复；随后可 resume 重开恢复。
 所有创建/恢复均把状态目录和配置路径传为受保护路径，不读取或合并服务端环境。
 环境和请求体不记录日志，也不写公开设置、事件或模型历史；工具本身的输入输出仍照核心协议记录。
 
@@ -81,4 +86,5 @@ SSE 用协议包的 `sse_frame`、`resume_after`，`Last-Event-ID` 优先，15 �
 另给 5 秒收尾，避免未传完的请求体无限拖住退出。新进程等锁最多 75 秒，超时只报错，
 不会强杀旧进程。新版启动后会话仍需客户端 resume 重新交环境。
 
-Ctrl-C / SIGTERM 直接 await 所有会话 close，不等 60 秒。不安装系统服务、不改 PATH。
+SIGINT（Ctrl-C）、SIGTERM、SIGHUP 共用退出路径，直接 await 所有会话 close；升级排空
+期间仍持续接收这些信号，收到即跳过剩余的 60 秒等待。不安装系统服务、不改 PATH。

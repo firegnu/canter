@@ -24,6 +24,10 @@ use canter_store::Store;
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio_util::sync::CancellationToken;
 
+#[cfg(test)]
+#[path = "http_tests.rs"]
+mod tests;
+
 pub(crate) struct App {
     pub home: PathBuf,
     pub store: Arc<Store>,
@@ -367,10 +371,14 @@ async fn close(
                 "请先接着聊：POST /v1/sessions/{id}/resume 并重新提供 env",
             ));
         };
-        let response = session.close().await?;
+        let response = session.close().await;
+        if response.is_err() {
+            // A final journal append can fail before Core releases its writer; a second close releases it.
+            let _ = session.close().await;
+        }
         sessions.remove(&id);
         app.registry_changed.notify_waiters();
-        Ok(Json(response))
+        Ok(Json(response?))
     })
     .await
     .map_err(|_| ApiError::internal())?

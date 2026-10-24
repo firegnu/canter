@@ -23,16 +23,17 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
-pub struct ServerError(pub(crate) &'static str);
+pub struct ServerError(pub(crate) String);
 
 pub fn state_directory() -> Result<PathBuf, ServerError> {
     let path = if let Some(path) = std::env::var_os("CANTER_HOME") {
         PathBuf::from(path)
     } else {
-        PathBuf::from(std::env::var_os("HOME").ok_or(ServerError("HOME 未设置"))?).join(".canter")
+        PathBuf::from(std::env::var_os("HOME").ok_or(ServerError("HOME 未设置".into()))?)
+            .join(".canter")
     };
     if !path.is_absolute() {
-        return Err(ServerError("CANTER_HOME 必须是绝对路径"));
+        return Err(ServerError("CANTER_HOME 必须是绝对路径".into()));
     }
     Ok(path)
 }
@@ -56,12 +57,12 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
         let lease = lifecycle::Lease::acquire(home, replace)?;
         let config = config::Config::load(&lease.home)?;
         let store = canter_store::Store::new(lease.home.join("sessions"))
-            .map_err(|_| ServerError("无法打开会话目录"))?;
+            .map_err(|_| ServerError("无法打开会话目录".into()))?;
         lifecycle::cleanup_creating(&lease.home.join("sessions"))?;
         Ok::<_, ServerError>((lease, config, store))
     })
     .await
-    .map_err(|_| ServerError("初始化失败"))??;
+    .map_err(|_| ServerError("初始化失败".into()))??;
     let app = Arc::new(http::App {
         home: lease.home.clone(),
         store: Arc::new(store),
@@ -74,23 +75,27 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
         stopped: CancellationToken::new(),
     });
     let listener = tokio::net::UnixListener::bind(&lease.registration.socket_path)
-        .map_err(|_| ServerError("无法监听 Unix socket"))?;
+        .map_err(|_| ServerError("无法监听 Unix socket".into()))?;
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(
             &lease.registration.socket_path,
             std::fs::Permissions::from_mode(0o600),
         )
-        .map_err(|_| ServerError("无法设置 socket 权限"))?;
+        .map_err(|_| ServerError("无法设置 socket 权限".into()))?;
     }
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|_| ServerError("无法监听退出信号"))?;
+        .map_err(|_| ServerError("无法监听退出信号".into()))?;
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .map_err(|_| ServerError("无法监听退出信号".into()))?;
+    let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        .map_err(|_| ServerError("无法监听退出信号".into()))?;
     let lease = tokio::task::spawn_blocking(move || {
         lease.publish()?;
         Ok::<_, ServerError>(lease)
     })
     .await
-    .map_err(|_| ServerError("登记失败"))??;
+    .map_err(|_| ServerError("登记失败".into()))??;
     let shutdown = app.clone();
     let home = lease.home.clone();
     let registration = lease.registration.clone();
@@ -106,7 +111,11 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
         };
-        let replacing = tokio::select! { _ = terminate.recv() => false, _ = tokio::signal::ctrl_c() => false, _ = upgrade => true };
+        let exit = async {
+            tokio::select! { _ = terminate.recv() => {}, _ = interrupt.recv() => {}, _ = hangup.recv() => {} }
+        };
+        tokio::pin!(exit);
+        let replacing = tokio::select! { _ = &mut exit => false, _ = upgrade => true };
         *shutdown.draining.write().await = true;
         let sessions: Vec<_> = shutdown.sessions.lock().await.values().cloned().collect();
         if replacing {
@@ -120,7 +129,10 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
             };
-            let _ = tokio::time::timeout(lifecycle::UPGRADE_GRACE, wait).await;
+            tokio::select! {
+                _ = &mut exit => {},
+                _ = tokio::time::timeout(lifecycle::UPGRADE_GRACE, wait) => {},
+            }
         }
         futures_util::future::join_all(sessions.iter().map(|session| async {
             if session.close().await.is_err() {
@@ -133,17 +145,17 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
     }).into_future();
     tokio::pin!(server);
     tokio::select! {
-        result = &mut server => { result.map_err(|_| ServerError("HTTP 服务失败"))?; }
+        result = &mut server => { result.map_err(|_| ServerError("HTTP 服务失败".into()))?; }
         _ = stopped.cancelled() => {
             // Sessions are already closed. A client stalled in an HTTP body must not hold the daemon lock forever.
             if let Ok(result) = tokio::time::timeout(Duration::from_secs(5), &mut server).await {
-                result.map_err(|_| ServerError("HTTP 服务失败"))?;
+                result.map_err(|_| ServerError("HTTP 服务失败".into()))?;
             }
         }
     }
     drop(lease);
     if close_failed.load(Ordering::Relaxed) {
-        Err(ServerError("部分会话关闭失败，请重新接着聊以恢复"))
+        Err(ServerError("部分会话关闭失败，请重新接着聊以恢复".into()))
     } else {
         Ok(())
     }

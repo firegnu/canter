@@ -28,7 +28,7 @@ pub(crate) fn private_dir(path: &Path) -> Result<(), ServerError> {
         .mode(0o700)
         .create(path)
         .and_then(|()| fs::set_permissions(path, fs::Permissions::from_mode(0o700)))
-        .map_err(|_| ServerError("无法创建私有状态目录"))
+        .map_err(|_| ServerError("无法创建私有状态目录".into()))
 }
 
 pub(crate) fn private_file(path: &Path) -> Result<File, ServerError> {
@@ -38,9 +38,9 @@ pub(crate) fn private_file(path: &Path) -> Result<File, ServerError> {
         .create(true)
         .mode(0o600)
         .open(path)
-        .map_err(|_| ServerError("无法打开服务端状态文件"))?;
+        .map_err(|_| ServerError("无法打开服务端状态文件".into()))?;
     file.set_permissions(fs::Permissions::from_mode(0o600))
-        .map_err(|_| ServerError("无法设置状态文件权限"))?;
+        .map_err(|_| ServerError("无法设置状态文件权限".into()))?;
     Ok(file)
 }
 
@@ -48,24 +48,41 @@ pub(crate) fn read_registration(home: &Path) -> Result<Option<Registration>, Ser
     match fs::read(home.join("server.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
-            .map_err(|_| ServerError("服务端登记文件无效")),
+            .map_err(|_| ServerError("服务端登记文件无效".into())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(_) => Err(ServerError("无法读取服务端登记文件")),
+        Err(_) => Err(ServerError("无法读取服务端登记文件".into())),
+    }
+}
+
+pub(crate) fn server_running(home: &Path) -> Result<bool, ServerError> {
+    let file = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(home.join("server.lock"))
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(ServerError("无法检查服务端文件锁".into())),
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(false), // Dropping the file immediately releases this probe's lock.
+        Err(TryLockError::WouldBlock) => Ok(true),
+        Err(_) => Err(ServerError("无法检查服务端文件锁".into())),
     }
 }
 
 fn write_json(home: &Path, name: &str, value: &impl Serialize) -> Result<(), ServerError> {
     let mut file =
-        tempfile::NamedTempFile::new_in(home).map_err(|_| ServerError("无法写登记文件"))?;
+        tempfile::NamedTempFile::new_in(home).map_err(|_| ServerError("无法写登记文件".into()))?;
     file.as_file()
         .set_permissions(fs::Permissions::from_mode(0o600))
-        .map_err(|_| ServerError("无法设置登记文件权限"))?;
-    serde_json::to_writer(&mut file, value).map_err(|_| ServerError("无法写登记文件"))?;
+        .map_err(|_| ServerError("无法设置登记文件权限".into()))?;
+    serde_json::to_writer(&mut file, value).map_err(|_| ServerError("无法写登记文件".into()))?;
     file.write_all(b"\n")
         .and_then(|()| file.as_file().sync_all())
-        .map_err(|_| ServerError("无法同步登记文件"))?;
+        .map_err(|_| ServerError("无法同步登记文件".into()))?;
     file.persist(home.join(name))
-        .map_err(|_| ServerError("无法发布登记文件"))?;
+        .map_err(|_| ServerError("无法发布登记文件".into()))?;
     Ok(())
 }
 
@@ -79,7 +96,7 @@ impl Lease {
     // Runs on a blocking thread, including bounded waiting for an explicit replacement.
     pub fn acquire(home: PathBuf, replace: bool) -> Result<Self, ServerError> {
         private_dir(&home)?;
-        let home = fs::canonicalize(home).map_err(|_| ServerError("状态目录无效"))?;
+        let home = fs::canonicalize(home).map_err(|_| ServerError("状态目录无效".into()))?;
         let lock = private_file(&home.join("server.lock"))?;
         match lock.try_lock() {
             Ok(()) => {}
@@ -87,11 +104,11 @@ impl Lease {
                 let replacement = private_file(&home.join("replace.lock"))?;
                 replacement
                     .try_lock()
-                    .map_err(|_| ServerError("另一个升级正在进行"))?;
+                    .map_err(|_| ServerError("另一个升级正在进行".into()))?;
                 // Reject unusable replacement settings before asking a healthy daemon to exit.
                 crate::config::Config::load(&home)?.model_client()?;
                 let previous = read_registration(&home)?
-                    .ok_or(ServerError("旧服务端尚未完成启动，请稍后重试"))?;
+                    .ok_or(ServerError("旧服务端尚未完成启动，请稍后重试".into()))?;
                 // A private filesystem request avoids signalling a stale/reused PID or adding an HTTP command.
                 write_json(&home, "replace.json", &previous)?;
                 let deadline = Instant::now() + UPGRADE_GRACE + Duration::from_secs(15);
@@ -101,16 +118,18 @@ impl Lease {
                         Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
                             std::thread::sleep(Duration::from_millis(100));
                         }
-                        _ => return Err(ServerError("等待旧服务端退出超时，未强制终止进程")),
+                        _ => {
+                            return Err(ServerError("等待旧服务端退出超时，未强制终止进程".into()));
+                        }
                     }
                 }
             }
             Err(TryLockError::WouldBlock) => {
                 return Err(ServerError(
-                    "已经有一个服务端在运行；要升级请运行 canter serve --replace",
+                    "已经有一个服务端在运行；要升级请运行 canter serve --replace".into(),
                 ));
             }
-            Err(_) => return Err(ServerError("无法取得服务端文件锁")),
+            Err(_) => return Err(ServerError("无法取得服务端文件锁".into())),
         }
         let registration = Registration {
             pid: std::process::id(),
@@ -128,7 +147,7 @@ impl Lease {
             match fs::remove_file(lease.home.join(name)) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => return Err(ServerError("无法清理旧服务端登记文件或 socket")),
+                Err(_) => return Err(ServerError("无法清理旧服务端登记文件或 socket".into())),
             }
         }
         Ok(lease)
@@ -156,8 +175,8 @@ pub(crate) fn replacement_requested(home: &Path, current: &Registration) -> bool
 }
 
 pub(crate) fn cleanup_creating(root: &Path) -> Result<(), ServerError> {
-    for entry in fs::read_dir(root).map_err(|_| ServerError("无法读取会话目录"))? {
-        let entry = entry.map_err(|_| ServerError("无法读取会话目录"))?;
+    for entry in fs::read_dir(root).map_err(|_| ServerError("无法读取会话目录".into()))? {
+        let entry = entry.map_err(|_| ServerError("无法读取会话目录".into()))?;
         if !entry
             .file_name()
             .to_string_lossy()
@@ -175,7 +194,7 @@ pub(crate) fn cleanup_creating(root: &Path) -> Result<(), ServerError> {
         };
         if file.try_lock().is_ok() {
             fs::remove_dir_all(entry.path())
-                .map_err(|_| ServerError("无法清理未完成的会话目录"))?;
+                .map_err(|_| ServerError("无法清理未完成的会话目录".into()))?;
         }
     }
     Ok(())
