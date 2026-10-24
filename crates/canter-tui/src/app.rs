@@ -123,6 +123,9 @@ pub struct App {
     shown: VecDeque<(u64, Shown)>,
     /// Unix ms until which answer keys are dropped; see [`ANSWER_GUARD_MS`].
     guard_until: i64,
+    /// Unix ms until which Enter in the input box does not send: the same
+    /// guard, started when the input box comes back after an approval box.
+    send_guard_until: i64,
     width: u16,
 }
 
@@ -152,6 +155,7 @@ impl App {
             drawing: Shown::default(),
             shown: VecDeque::new(),
             guard_until: i64::MIN,
+            send_guard_until: i64::MIN,
             width: 80,
         }
     }
@@ -254,6 +258,11 @@ impl App {
             if answering.is_some() && before.and_then(Shown::answering) != answering {
                 self.guard_until = self.guard_until.max(at + ANSWER_GUARD_MS);
             }
+            if before.is_some_and(|shown| shown.approval.is_some())
+                && self.drawing.approval.is_none()
+            {
+                self.send_guard_until = self.send_guard_until.max(at + ANSWER_GUARD_MS);
+            }
             self.shown.push_back((frame, self.drawing.clone()));
             // Keys wait at most a frame or two before they are handled.
             if self.shown.len() > SHOWN_KEPT {
@@ -288,6 +297,10 @@ impl App {
         if guarded {
             self.guard_until = self.guard_until.max(at + ANSWER_GUARD_MS);
         }
+        let send_guarded = at < self.send_guard_until;
+        if send_guarded {
+            self.send_guard_until = self.send_guard_until.max(at + ANSWER_GUARD_MS);
+        }
         if shown.approval.is_some() {
             return self.approval_key(key, shown, guarded);
         }
@@ -306,7 +319,8 @@ impl App {
                 self.input.insert("\n")
             }
             KeyCode::Enter => {
-                if !self.input.text().trim().is_empty() {
+                // Right after an approval box closed it was meant for the box.
+                if !send_guarded && !self.input.text().trim().is_empty() {
                     return Some(Action::Send(self.input.take()));
                 }
             }
@@ -484,7 +498,7 @@ impl App {
                 }
                 Bottom::Approval(laid)
             }
-            None => self.input_view(width),
+            None => self.input_view(width, now_ms),
         };
 
         let mut live = self.live_rows(width);
@@ -500,7 +514,14 @@ impl App {
         }
     }
 
-    fn input_view(&self, width: u16) -> Bottom {
+    fn input_view(&self, width: u16, now_ms: i64) -> Bottom {
+        // Like the approval box's answers, the rows show dim while Enter does
+        // not send; a frame that replaces an approval box starts the guard.
+        let guarded = now_ms < self.send_guard_until
+            || self
+                .shown
+                .back()
+                .is_some_and(|(_, shown)| shown.approval.is_some());
         let input_width = usize::from(width.saturating_sub(INPUT_CHROME));
         let layout = self.input.layout(input_width);
         let first = layout
@@ -526,10 +547,12 @@ impl App {
             } else {
                 spans.push(Span::raw(self.input.text()[range.clone()].to_owned()));
             }
-            rows.push(Line::from(truncate(
-                spans,
-                usize::from(width.saturating_sub(2)),
-            )));
+            let line = Line::from(truncate(spans, usize::from(width.saturating_sub(2))));
+            rows.push(if guarded {
+                line.patch_style(Style::new().dim())
+            } else {
+                line
+            });
         }
         let cursor = (
             INPUT_LEFT + layout.cursor.1 as u16,
