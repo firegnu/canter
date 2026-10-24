@@ -130,6 +130,8 @@ shell 免批准只识别一小部分语法和参数，白名单在 `src/readonly
   写入的标准 `filter.lfs` 值：clean 为 `git-lfs clean -- %f`、smudge 为
   `git-lfs smudge -- %f`、process 为 `git-lfs filter-process`、required 为 `true`；
   其他 filter、其他键或改过的值仍询问。
+  即使 filter 是标准值，LFS 的外部程序配置也询问：`lfs` 段中以 `extension` 开头的
+  子段（ASCII 不分大小写）、`lfs.customtransfer.*`、`lfs.standalonetransferagent`。
   不存在的可选配置可跳过；无法读取、非普通文件、超过 1 MiB、无法识别的配置语法
   （包括续行/转义）、HOME 缺失或相对路径、相对 XDG_CONFIG_HOME 都询问。
   改变仓库/配置来源或注入配置的 GIT_DIR/GIT_COMMON_DIR/GIT_WORK_TREE/GIT_CONFIG*

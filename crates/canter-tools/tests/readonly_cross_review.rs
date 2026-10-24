@@ -193,6 +193,46 @@ async fn standard_lfs_filters_are_safe_but_changed_values_and_other_filters_ask(
 }
 
 #[tokio::test]
+async fn lfs_extensions_need_approval_even_with_standard_filters() {
+    for header in [
+        "[lfs \"extension.x\"]",
+        "[LfS \"ExTeNsIoN.x\"]",
+        "[lfs.extension.x]",
+        "[lfs \"extension\"]",
+    ] {
+        check_lfs_program_configuration(&format!("{header}\nclean = ./helper\n")).await;
+    }
+}
+
+#[tokio::test]
+async fn lfs_custom_transfers_need_approval_even_with_standard_filters() {
+    for header in ["[lfs \"customtransfer.x\"]", "[LfS.CuStOmTrAnSfEr.x]"] {
+        check_lfs_program_configuration(&format!("{header}\npath = ./helper\n")).await;
+    }
+}
+
+#[tokio::test]
+async fn lfs_standalone_transfer_agent_needs_approval_even_with_standard_filters() {
+    check_lfs_program_configuration("[LfS]\nstandaloneTransferAgent = fixture\n").await;
+}
+
+async fn check_lfs_program_configuration(extra: &str) {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(&fixture.cwd);
+    let standard = "[filter \"lfs\"]\nclean = git-lfs clean -- %f\nsmudge = git-lfs smudge -- %f\nprocess = git-lfs filter-process\nrequired = true\n";
+    for config in [
+        fixture.home.join(".gitconfig"),
+        fixture.cwd.join(".git/config"),
+    ] {
+        write(&config, standard);
+        check(&tools, "git diff", false).await;
+        write(&config, &format!("{standard}{extra}"));
+        check(&tools, "git diff", true).await;
+        write(&config, standard);
+    }
+}
+
+#[tokio::test]
 async fn signing_preferences_do_not_block_readonly_git_commands() {
     let fixture = Fixture::new();
     write(

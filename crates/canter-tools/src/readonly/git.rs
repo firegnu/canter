@@ -225,7 +225,15 @@ fn config_file_is_safe(path: &Path) -> io::Result<bool> {
                 subsection = Some(value.to_owned());
             }
             section = name.to_ascii_lowercase();
-            if matches!(section.as_str(), "include" | "includeif") {
+            if matches!(section.as_str(), "include" | "includeif")
+                || section == "lfs"
+                    && subsection.as_ref().is_some_and(|value| {
+                        let value = value.to_ascii_lowercase();
+                        value.starts_with("extension")
+                            || value == "customtransfer"
+                            || value.starts_with("customtransfer.")
+                    })
+            {
                 return Ok(false);
             }
             continue;
@@ -267,6 +275,7 @@ fn config_file_is_safe(path: &Path) -> io::Result<bool> {
                 && value.contains("%G")
             || section == "remote" && key == "promisor"
             || section == "extensions" && key == "partialclone"
+            || section == "lfs" && key == "standalonetransferagent"
         {
             return Ok(false);
         }
