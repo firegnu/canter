@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::{
-    ApprovalResolution, ErrorInfo, Item, PendingRequest, QueuedInput, SessionSettings,
-    SessionStatus, TokenUsage, Turn,
+    ApprovalResolution, ErrorInfo, Item, PendingRequest, QueuedInput, SessionCloseReason,
+    SessionSettings, SessionStatus, TokenUsage, Turn,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -26,7 +26,12 @@ pub enum EventPayload {
     #[serde(rename = "session.updated")]
     SessionUpdated { settings: SessionSettings },
     #[serde(rename = "session.status")]
-    SessionStatus { status: SessionStatus },
+    SessionStatus {
+        status: SessionStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        close_reason: Option<SessionCloseReason>,
+    },
     #[serde(rename = "turn.started")]
     TurnStarted {
         turn: Turn,

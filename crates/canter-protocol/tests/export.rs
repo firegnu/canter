@@ -48,6 +48,7 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         "RequestKind",
         "QueuedInput",
         "SessionSnapshot",
+        "SessionCloseReason",
         "Item",
         "InfoParams",
         "InfoResponse",
@@ -93,6 +94,17 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
     assert!(event_ts.contains("sessionId: string"));
     let payload_ts = fs::read_to_string(temp.path().join("typescript/EventPayload.ts")).unwrap();
     assert!(payload_ts.contains("\"input.removed\""));
+    assert!(payload_ts.contains("closeReason?: SessionCloseReason"));
+    let snapshot_ts =
+        fs::read_to_string(temp.path().join("typescript/SessionSnapshot.ts")).unwrap();
+    assert!(snapshot_ts.contains("closeReason?: SessionCloseReason"));
+    assert!(
+        definitions["SessionSnapshot"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|field| field != "closeReason")
+    );
     assert!(
         payload_ts.contains("turnId?: string"),
         "omittable removal turnId must be optional in TypeScript"

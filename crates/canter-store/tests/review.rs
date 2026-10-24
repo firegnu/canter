@@ -20,7 +20,10 @@ fn create(store: &Store, id: &str) -> SessionWriter {
         .unwrap()
 }
 fn status(status: SessionStatus) -> EventPayload {
-    EventPayload::SessionStatus { status }
+    EventPayload::SessionStatus {
+        status,
+        close_reason: None,
+    }
 }
 
 #[test]

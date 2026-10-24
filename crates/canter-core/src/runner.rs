@@ -100,6 +100,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                     EventPayload::TurnCompleted { turn: completed },
                     EventPayload::SessionStatus {
                         status: SessionStatus::Idle,
+                        close_reason: None,
                     },
                 ])
                 .await
@@ -624,6 +625,7 @@ async fn permission<'a>(
                         },
                         EventPayload::SessionStatus {
                             status: SessionStatus::WaitingApproval,
+                            close_reason: None,
                         },
                     ])
                     .await?;

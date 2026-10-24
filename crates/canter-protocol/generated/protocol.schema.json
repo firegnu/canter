@@ -159,6 +159,16 @@
         },
         {
           "properties": {
+            "closeReason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionCloseReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "status": {
               "$ref": "#/$defs/SessionStatus"
             },
@@ -476,6 +486,16 @@
         },
         {
           "properties": {
+            "closeReason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionCloseReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "status": {
               "$ref": "#/$defs/SessionStatus"
             },
@@ -1352,6 +1372,14 @@
     "SessionCloseParams": {
       "type": "object"
     },
+    "SessionCloseReason": {
+      "enum": [
+        "clientRequest",
+        "serverShutdown",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "SessionCloseResponse": {
       "properties": {
         "eventSeq": {
@@ -1628,6 +1656,17 @@
     },
     "SessionSnapshot": {
       "properties": {
+        "closeReason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionCloseReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the session is closed; absent for open sessions and legacy data."
+        },
         "createdAt": {
           "description": "Unix time in milliseconds; zero until the first event is applied.",
           "format": "int64",

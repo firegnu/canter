@@ -652,7 +652,8 @@ async fn exit_signal_closes_active_work(signal: nix::sys::signal::Signal, replac
     assert!(matches!(
         events.last().unwrap().payload,
         EventPayload::SessionStatus {
-            status: canter_protocol::SessionStatus::Closed
+            status: canter_protocol::SessionStatus::Closed,
+            close_reason: Some(canter_protocol::SessionCloseReason::ServerShutdown),
         }
     ));
     if let Some(child) = successor {

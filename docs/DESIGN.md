@@ -32,6 +32,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
      - 会话设置：新增 `session.updated`，建会话时和每次修改后各写一条，带公开设置：名字、模型、权限模式、工作目录。环境变量不公开，也不存盘（10-24 改，见第 14 条）。
      - 接着聊：参考 `thread/resume`，用 `POST /v1/sessions/{id}/resume { env }` 重新提供仅驻内存的环境；已打开时保留原环境，未打开时变更命令返回 `session_not_resumed`，快照和事件仍可只读访问。
      - 会话状态是六种字符串（`starting`、`idle`、`working`、`waiting_approval`、`error`、`closed`），不是 Codex 带标记的对象。权限模式的字段名沿用 `approvalPolicy`，值是 canter 自己的 `alwaysAsk`、`askForExecution`、`allowAll`；不要 Codex 的沙箱设置。
+     - 关闭原因（P1-13）：`session.status` 事件和会话快照新增可选的 `closeReason`，关闭时为 `clientRequest`（客户端主动关）或 `serverShutdown`（服务端停机，包括升级）；离开 `closed` 时清空。原因随事件存盘，避免服务端重启后旁观终端撤销人的关闭意图。终端连接新服务端时，仅对停机关闭或缺少原因的旧会话自动 resume；未知关闭原因保持关闭，非关闭状态仍按崩溃恢复。用户主动 `--resume` 或在列表里选择会话不受此限制。
      - 送话：一条 input 命令带 `mode: queue / steer`，代替 Codex 的 `turn/start`、`turn/steer`。排队时发 `input.queued` 事件，快照里有 `queuedInputs`。
      - 新增 `input.removed { inputIds, reason, turnId? }`，用于插话/合并消费、打断/关闭丢弃，避免这些路径在恢复和客户端快照中留下已处理的输入；保留 `turn.started.inputId`。插话回复的 `eventSeq` 指接收时的 `input.queued`，`turnId` 指当前目标轮，实际进入上下文时再移出。
      - 手动压缩命令在独立压缩轮的 `turn.started` 落盘后即回复 `{ eventSeq, turnId? }`，结果通过事件报告，避免 HTTP 等待整个摘要过程；压缩轮期间的插话按排队处理，完成后另开一轮。

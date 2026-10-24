@@ -25,6 +25,15 @@ pub enum SessionStatus {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionCloseReason {
+    ClientRequest,
+    ServerShutdown,
+    #[serde(other)]
+    Unknown,
+}
+
 /// Public settings. Environment variables never belong here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +51,10 @@ pub struct SessionSnapshot {
     pub id: String,
     pub settings: SessionSettings,
     pub status: SessionStatus,
+    /// Why the session is closed; absent for open sessions and legacy data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub close_reason: Option<SessionCloseReason>,
     /// Unix time in milliseconds; zero until the first event is applied.
     #[ts(type = "number")]
     pub created_at: i64,
@@ -69,6 +82,7 @@ impl SessionSnapshot {
                 approval_policy: PermissionMode::AlwaysAsk,
             },
             status: SessionStatus::Starting,
+            close_reason: None,
             created_at: 0,
             updated_at: 0,
             turns: Vec::new(),

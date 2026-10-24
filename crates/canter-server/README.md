@@ -66,6 +66,9 @@
 `POST /v1/sessions/{id}/resume { "env": { ... } }` 用于接着聊，回复快照及最后序号。
 未打开会话的快照和事件直接从盘读；变更命令返回 `session_not_resumed`，不存在则 404。
 重复 resume 返回当前快照，不替换环境；DELETE 关闭后可再次 resume。
+DELETE 的关闭事件记录 `closeReason: clientRequest`；停机关闭记录
+`closeReason: serverShutdown`，未打开的会话保持原有关闭原因。快照和事件重放均保留原因，
+供旁观终端在服务端重启后决定是否自动 resume；用户主动恢复仍可重开任何已关闭会话。
 DELETE 即使关闭失败也移除内存登记、唤醒订阅者，并保留原错误回复；随后可 resume 重开恢复。
 所有创建/恢复均把状态目录和配置路径传为受保护路径，不读取或合并服务端环境。
 环境和请求体不记录日志，也不写公开设置、事件或模型历史；工具本身的输入输出仍照核心协议记录。
@@ -81,10 +84,10 @@ SSE 用协议包的 `sse_frame`、`resume_after`，`Last-Event-ID` 优先，15 �
 不新增 HTTP 命令。新进程继续等待同一把服务端锁，旧进程释放前不能发布新登记。
 
 旧进程停止接受创建、恢复、送话、压缩和修改设置，继续处理快照、事件、批准、打断和关闭。
-等已接受的工作空闲，最多 60 秒；到时对所有打开会话并发 await `close()`，活动轮按核心
+等已接受的工作空闲，最多 60 秒；到时对所有打开会话并发 await `close_for_shutdown()`，活动轮按核心
 逻辑记为 interrupted，排队输入清理，工具退出后释放会话锁。SSE 随后关闭，HTTP 连接
 另给 5 秒收尾，避免未传完的请求体无限拖住退出。新进程等锁最多 75 秒，超时只报错，
 不会强杀旧进程。新版启动后会话仍需客户端 resume 重新交环境。
 
-SIGINT（Ctrl-C）、SIGTERM、SIGHUP 共用退出路径，直接 await 所有会话 close；升级排空
+SIGINT（Ctrl-C）、SIGTERM、SIGHUP 共用退出路径，直接 await 所有会话 close_for_shutdown；升级排空
 期间仍持续接收这些信号，收到即跳过剩余的 60 秒等待。不安装系统服务、不改 PATH。

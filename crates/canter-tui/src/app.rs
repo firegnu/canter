@@ -193,7 +193,7 @@ impl App {
                     self.interrupting = None;
                 }
             }
-            EventPayload::SessionStatus { status } => match status {
+            EventPayload::SessionStatus { status, .. } => match status {
                 SessionStatus::Working | SessionStatus::WaitingApproval => {
                     self.working_since.get_or_insert(now_ms);
                 }

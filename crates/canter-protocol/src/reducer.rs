@@ -1,4 +1,4 @@
-use crate::{Event, EventPayload, Item, ItemDelta, SessionSnapshot};
+use crate::{Event, EventPayload, Item, ItemDelta, SessionSnapshot, SessionStatus};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReduceError {
@@ -106,7 +106,17 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
     }
     match &event.payload {
         EventPayload::SessionUpdated { settings } => snapshot.settings = settings.clone(),
-        EventPayload::SessionStatus { status } => snapshot.status = *status,
+        EventPayload::SessionStatus {
+            status,
+            close_reason,
+        } => {
+            snapshot.status = *status;
+            snapshot.close_reason = if *status == SessionStatus::Closed {
+                *close_reason
+            } else {
+                None
+            };
+        }
         EventPayload::TurnStarted { turn, input_id } => {
             let mut turn = turn.clone();
             turn.items.retain(|item| item.id().is_some());

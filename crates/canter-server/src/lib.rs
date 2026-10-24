@@ -135,10 +135,10 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
             }
         }
         futures_util::future::join_all(sessions.iter().map(|session| async {
-            if session.close().await.is_err() {
+            if session.close_for_shutdown().await.is_err() {
                 failed.store(true, Ordering::Relaxed);
                 // P1-4 releases a failed writer on a subsequent close attempt.
-                let _ = session.close().await;
+                let _ = session.close_for_shutdown().await;
             }
         })).await;
         shutdown.stopped.cancel();
