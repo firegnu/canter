@@ -20,7 +20,7 @@ schemars = "=1.2.3"
 ts-rs = { version = "=12.0.1", features = ["serde-json-impl", "no-serde-warnings"] }
 thiserror = "=2.0.21"
 tempfile = "=3.27.0"
-tokio-util = { version = "=0.7.20", features = ["rt"] }
+tokio-util = "=0.7.20"
 futures-util = "=0.3.34"
 async-stream = "=0.3.6"
 eventsource-stream = "=0.2.3"
@@ -29,3 +29,6 @@ ratatui = { version = "=0.30.2", default-features = false, features = ["crosster
 crossterm = "=0.29.0"
 pulldown-cmark = { version = "=0.13.4", default-features = false }
 unicode-width = "=0.2.2"
+async-trait = "=0.1.92"
+similar = "=2.7.0"
+nix = { version = "=0.31.3", features = ["signal", "process"] }
