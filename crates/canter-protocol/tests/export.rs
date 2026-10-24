@@ -57,6 +57,8 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         "SessionListResponse",
         "SessionReadParams",
         "SessionReadResponse",
+        "SessionResumeParams",
+        "SessionResumeResponse",
         "SessionInputParams",
         "SessionInputResponse",
         "SessionInterruptParams",

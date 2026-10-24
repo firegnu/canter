@@ -100,6 +100,7 @@
         "request_not_found",
         "invalid_decision",
         "session_closed",
+        "session_not_resumed",
         "conflict",
         "internal",
         "unknown"
@@ -1551,6 +1552,38 @@
       "type": "object"
     },
     "SessionReadResponse": {
+      "properties": {
+        "eventSeq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionSnapshot"
+        }
+      },
+      "required": [
+        "session",
+        "eventSeq"
+      ],
+      "type": "object"
+    },
+    "SessionResumeParams": {
+      "description": "POST /v1/sessions/{id}/resume. Never log this body or replace an open session's environment.",
+      "properties": {
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "env"
+      ],
+      "type": "object"
+    },
+    "SessionResumeResponse": {
       "properties": {
         "eventSeq": {
           "format": "uint64",

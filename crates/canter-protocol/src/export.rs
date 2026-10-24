@@ -28,6 +28,8 @@ pub fn export_protocol(directory: &Path) -> Result<(), Box<dyn std::error::Error
         SessionListResponse,
         SessionReadParams,
         SessionReadResponse,
+        SessionResumeParams,
+        SessionResumeResponse,
         SessionInputParams,
         SessionInputResponse,
         SessionInterruptParams,

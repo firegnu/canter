@@ -30,6 +30,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - **和 Codex app-server v2（`rust-v0.163.0`）不一样的地方**（第 1 件定的，细节见 `docs/任务/P1-1-协议包和存盘.md` 的完成记录和「审查后修改」，以及 `crates/canter-protocol/README.md`）：
      - 命名：`session`、`sessionId` 代替 `thread`、`threadId`；事件名用点号（`session.status`、`turn.started`、`item.delta` 等）。每条事件外层带 `seq`（每个会话从 1 起）、`sessionId`、`timestamp`（Unix 毫秒）；快照带 `lastEventSeq`；命令的回复带 `eventSeq`。
      - 会话设置：新增 `session.updated`，建会话时和每次修改后各写一条，带公开设置：名字、模型、权限模式、工作目录。环境变量不公开，也不存盘（10-24 改，见第 14 条）。
+     - 接着聊：参考 `thread/resume`，用 `POST /v1/sessions/{id}/resume { env }` 重新提供仅驻内存的环境；已打开时保留原环境，未打开时变更命令返回 `session_not_resumed`，快照和事件仍可只读访问。
      - 会话状态是六种字符串（`starting`、`idle`、`working`、`waiting_approval`、`error`、`closed`），不是 Codex 带标记的对象。权限模式的字段名沿用 `approvalPolicy`，值是 canter 自己的 `alwaysAsk`、`askForExecution`、`allowAll`；不要 Codex 的沙箱设置。
      - 送话：一条 input 命令带 `mode: queue / steer`，代替 Codex 的 `turn/start`、`turn/steer`。排队时发 `input.queued` 事件，快照里有 `queuedInputs`。
      - 新增 `input.removed { inputIds, reason, turnId? }`，用于插话/合并消费、打断/关闭丢弃，避免这些路径在恢复和客户端快照中留下已处理的输入；保留 `turn.started.inputId`。插话回复的 `eventSeq` 指接收时的 `input.queued`，`turnId` 指当前目标轮，实际进入上下文时再移出。
