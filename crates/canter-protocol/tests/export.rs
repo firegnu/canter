@@ -105,6 +105,9 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         "PATCH fields must be optional in TypeScript too"
     );
     let generated = files(temp.path());
+    let compact_ts =
+        fs::read_to_string(temp.path().join("typescript/SessionCompactResponse.ts")).unwrap();
+    assert!(compact_ts.contains("turnId?: string"));
     export_protocol(temp.path()).unwrap();
     assert_eq!(files(temp.path()), generated);
     let checked_in = Path::new(env!("CARGO_MANIFEST_DIR")).join("generated");

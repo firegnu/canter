@@ -2,6 +2,16 @@ use canter_protocol::*;
 use serde_json::json;
 
 #[test]
+fn compact_response_preserves_the_optional_turn_id() {
+    for value in [
+        json!({"eventSeq":3}),
+        json!({"eventSeq":3,"turnId":"compact-turn"}),
+    ] {
+        let response: SessionCompactResponse = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(response).unwrap(), value);
+    }
+}
+#[test]
 fn queued_input_is_visible_in_snapshots_until_its_turn_starts() {
     let queued: Event = serde_json::from_value(json!({"seq":1,"sessionId":"s1","timestamp":1,
         "type":"input.queued", "input":{"id":"q1","input":[{"type":"text","text":"next task"}],"clientName":"terminal-b"}})).unwrap();

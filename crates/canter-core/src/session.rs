@@ -57,6 +57,7 @@ pub(crate) struct State {
 }
 pub(crate) struct Active {
     pub turn: Turn,
+    pub manual_compaction: bool,
     pub cancel: CancellationToken,
     pub done: watch::Receiver<Option<Result<u64, CoreError>>>,
 }
@@ -400,7 +401,13 @@ impl Session {
                     input: input.clone(),
                 }])
                 .await?;
-            let turn_id = if params.mode == InputMode::Steer {
+            let turn_id = if params.mode == InputMode::Steer
+                && !state
+                    .active
+                    .as_ref()
+                    .expect("active turn")
+                    .manual_compaction
+            {
                 state.steers.push(input);
                 state.active.as_ref().map(|active| active.turn.id.clone())
             } else {
@@ -415,7 +422,7 @@ impl Session {
         let (response, done) = self.shared.start(&mut state, params, None).await?;
         let shared = self.shared.clone();
         tokio::spawn(async move {
-            runner::run(shared, done, false).await;
+            runner::run(shared, done).await;
         });
         Ok(response)
     }
@@ -625,33 +632,19 @@ impl Session {
                 None,
             )
             .await?;
-        let receiver = state
+        state
             .active
-            .as_ref()
+            .as_mut()
             .expect("started compaction")
-            .done
-            .clone();
+            .manual_compaction = true;
         let shared = self.shared.clone();
         tokio::spawn(async move {
-            runner::run(shared, done, true).await;
+            runner::run(shared, done).await;
         });
-        drop(state);
-        let event_seq = wait_done(receiver).await?;
-        let state = self.shared.state.lock().await;
-        let turn = state
-            .journal
-            .snapshot
-            .turns
-            .iter()
-            .find(|turn| Some(&turn.id) == response.turn_id.as_ref())
-            .expect("compaction turn");
-        if turn.status != TurnStatus::Completed {
-            return Err(CoreError::new(
-                ErrorCode::Conflict,
-                "compaction did not complete",
-            ));
-        }
-        Ok(SessionCompactResponse { event_seq })
+        Ok(SessionCompactResponse {
+            event_seq: response.event_seq,
+            turn_id: response.turn_id,
+        })
     }
 
     pub async fn close(&self) -> Result<SessionCloseResponse, CoreError> {
@@ -765,6 +758,7 @@ impl Shared {
         let (done, receiver) = watch::channel(None);
         state.active = Some(Active {
             turn: turn.clone(),
+            manual_compaction: false,
             cancel: self.lifetime.child_token(),
             done: receiver,
         });

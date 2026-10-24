@@ -1368,11 +1368,18 @@
       "type": "object"
     },
     "SessionCompactResponse": {
+      "description": "Accepted compaction; completion is reported by the referenced turn's events.",
       "properties": {
         "eventSeq": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

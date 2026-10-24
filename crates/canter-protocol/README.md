@@ -39,6 +39,10 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 `turnId` 在消费时指目标轮，丢弃时可省略；TypeScript 同样为可选属性。
 忙时插话也先落盘 `input.queued`，回复的 `eventSeq` 指该事件、`turnId` 指当前目标轮；
 只有实际进入上下文时才发送 `input.removed`，接收成功不等于模型已经看见。
+手动压缩成功接收后立即回复：`eventSeq` 指独立压缩轮的 `turn.started`，
+`turnId` 是该轮 id；旧回复可以没有此字段，省略时不序列化，TypeScript 为可选属性。
+压缩结果看该轮的 `contextCompaction` 项目和 `turn.completed`，回复不等摘要结束。
+压缩轮进行中的 `steer` 按 `queue` 处理，输入回复 `turnId` 为空，之后另开一轮。
 审批先到先得：后到的回答由服务端返回 `alreadyResolved: true` 和原处理事件序号，
 不再产生一个处理事件。取消、超时的 `clientName` 可为空。
 权限模式为 `alwaysAsk`、`askForExecution`、`allowAll`；批准回答为

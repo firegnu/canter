@@ -8,21 +8,24 @@ use canter_model::{
     RequestOptions, ToolCall, ToolDefinition, Usage,
 };
 use canter_protocol::*;
-use canter_tools::{PermissionCheck, PreparedCall, Tool, ToolOutcome};
+use canter_tools::{PermissionCheck, PreparedCall, Tool, ToolOutcome, ToolOutput};
 use futures_util::StreamExt;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-pub(crate) async fn run(shared: Arc<Shared>, mut done: Done, mut manual_compaction: bool) {
+pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
     loop {
-        let (turn, cancel) = {
+        let (turn, cancel, manual_compaction) = {
             let state = shared.state.lock().await;
             let active = state.active.as_ref().expect("active turn");
-            (active.turn.clone(), active.cancel.clone())
+            (
+                active.turn.clone(),
+                active.cancel.clone(),
+                active.manual_compaction,
+            )
         };
         let result = if manual_compaction {
-            manual_compaction = false;
             match refresh_prefix(&shared).await {
                 Ok(()) => compaction::compact(&shared, &turn.id, &cancel).await,
                 Err(error) => Err(error),
@@ -47,10 +50,14 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done, mut manual_compacti
         } else {
             TurnStatus::Completed
         };
-        completed.error = result.err().map(|error| ErrorInfo {
-            message: error.message,
-            additional_details: None,
-        });
+        completed.error = if cancel.is_cancelled() {
+            None
+        } else {
+            result.err().map(|error| ErrorInfo {
+                message: error.message,
+                additional_details: None,
+            })
+        };
         let finish = async {
             state.cancel_requests().await?;
             state
@@ -159,14 +166,39 @@ async fn conversation(
                 .map_or(estimated, |(actual, before)| {
                     estimated.max(actual.saturating_add(estimated.saturating_sub(before)))
                 });
+        let fits = occupancy.saturating_add(u64::from(shared.options.max_output_tokens))
+            <= shared.options.context_window;
         if occupancy > compaction::input_limit(shared) && !compacted {
-            compaction::compact(shared, turn_id, cancel).await?;
             compacted = true;
-            continue;
+            match compaction::compact(shared, turn_id, cancel).await {
+                Ok(()) => continue,
+                Err(_) if cancel.is_cancelled() => return Ok(()),
+                Err(error) if !fits => {
+                    return Err(CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        &format!(
+                            "automatic compaction failed ({}); request plus output limit exceeds the context window",
+                            error.message
+                        ),
+                    ));
+                }
+                Err(error) => {
+                    shared
+                        .state
+                        .lock()
+                        .await
+                        .journal
+                        .append(vec![EventPayload::Warning {
+                            message: format!(
+                                "自动压缩失败（{}）；原请求加输出上限仍在上下文窗口内，继续对话。",
+                                error.message
+                            ),
+                        }])
+                        .await?;
+                }
+            }
         }
-        if estimated.saturating_add(u64::from(shared.options.max_output_tokens))
-            > shared.options.context_window
-        {
+        if !fits {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 "context remains too large after compaction",
@@ -183,14 +215,6 @@ async fn conversation(
                 }
             })
             .collect();
-        if !content.is_empty() {
-            shared
-                .state
-                .lock()
-                .await
-                .message(Message::Assistant { content })
-                .await?;
-        }
         if cancel.is_cancelled() {
             return Ok(());
         }
@@ -260,7 +284,7 @@ async fn refresh_prefix(shared: &Shared) -> Result<(), CoreError> {
         .settings
         .cwd
         .clone();
-    let prefix = context::prefix(cwd).await?;
+    let (prefix, warnings) = context::prefix(cwd).await?;
     let mut state = shared.state.lock().await;
     if state.prefix != prefix {
         state
@@ -270,6 +294,17 @@ async fn refresh_prefix(shared: &Shared) -> Result<(), CoreError> {
             })
             .await?;
         state.prefix = prefix;
+    }
+    if !warnings.is_empty() {
+        state
+            .journal
+            .append(
+                warnings
+                    .into_iter()
+                    .map(|message| EventPayload::Warning { message })
+                    .collect(),
+            )
+            .await?;
     }
     Ok(())
 }
@@ -331,6 +366,18 @@ async fn model_response(
         if pending.len() >= 128 {
             flush(shared, &mut pending).await?;
         }
+    }
+    // Stream deltas immediately, but make the full assistant message durable
+    // before publishing either final text or final reasoning items.
+    if !content.is_empty() {
+        shared
+            .state
+            .lock()
+            .await
+            .message(Message::Assistant {
+                content: content.clone(),
+            })
+            .await?;
     }
     if !text.is_empty() {
         pending.push(EventPayload::ItemCompleted {
@@ -431,15 +478,20 @@ async fn execute(
     cancel: &CancellationToken,
 ) -> Result<(), CoreError> {
     let Some(tool) = Tool::from_name(&call.name) else {
-        return shared
-            .state
-            .lock()
-            .await
+        let mut state = shared.state.lock().await;
+        state
             .message(Message::ToolResult {
                 tool_call_id: call.id,
                 text: "Unknown tool".into(),
             })
-            .await;
+            .await?;
+        state
+            .journal
+            .append(vec![EventPayload::Warning {
+                message: format!("未知工具 {}，没有执行。", call.name),
+            }])
+            .await?;
+        return Ok(());
     };
     let output = match shared
         .tools
@@ -450,14 +502,28 @@ async fn execute(
         Ok(prepared) => {
             let permission = permission(shared, turn_id, &prepared, cancel).await?;
             match permission {
-                PermissionCheck::Deny { cancel_turn } => {
+                None => {
+                    let mut item = prepared.started_item();
+                    match &mut item {
+                        Item::FileRead { status, .. }
+                        | Item::FileChange { status, .. }
+                        | Item::CommandExecution { status, .. } => *status = ItemStatus::Failed,
+                        _ => unreachable!("prepared tool item"),
+                    }
+                    ToolOutput {
+                        text: "被打断，没有执行".into(),
+                        item,
+                        outcome: ToolOutcome::Cancelled,
+                    }
+                }
+                Some(PermissionCheck::Deny { cancel_turn }) => {
                     if cancel_turn {
                         cancel.cancel();
                     }
                     prepared.declined_output()
                 }
-                PermissionCheck::Ask(_) => unreachable!("approval resolved"),
-                PermissionCheck::Execute(permit) => {
+                Some(PermissionCheck::Ask(_)) => unreachable!("approval resolved"),
+                Some(PermissionCheck::Execute(permit)) => {
                     let (sender, mut receiver) = mpsc::unbounded_channel();
                     let mut on_output = |text: &str| {
                         let _ = sender.send(text.to_owned());
@@ -516,7 +582,7 @@ async fn permission<'a>(
     turn_id: &str,
     call: &'a PreparedCall,
     cancel: &CancellationToken,
-) -> Result<PermissionCheck<'a>, CoreError> {
+) -> Result<Option<PermissionCheck<'a>>, CoreError> {
     let receiver = {
         let mut state = shared.state.lock().await;
         state
@@ -552,12 +618,15 @@ async fn permission<'a>(
                 state.approvals.insert(request.id, sender);
                 receiver
             }
-            permission => return Ok(permission),
+            permission => return Ok(Some(permission)),
         }
     };
     let decision = tokio::select! {
         biased;
-        _ = cancel.cancelled() => return Ok(PermissionCheck::Deny { cancel_turn: true }),
+        _ = cancel.cancelled() => {
+            shared.state.lock().await.cancel_requests().await?;
+            return Ok(None);
+        },
         decision = receiver => decision.map_err(|_| CoreError::internal())?,
     };
     shared
@@ -566,6 +635,7 @@ async fn permission<'a>(
         .await
         .gate
         .resolve(call, decision)
+        .map(Some)
         .map_err(|_| CoreError::new(ErrorCode::InvalidDecision, "invalid approval decision"))
 }
 async fn flush(shared: &Shared, pending: &mut Vec<EventPayload>) -> Result<(), CoreError> {

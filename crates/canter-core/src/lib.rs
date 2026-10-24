@@ -58,6 +58,9 @@ impl From<canter_store::StoreError> for CoreError {
             StoreError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 Self::new(ErrorCode::SessionNotFound, "session not found")
             }
+            StoreError::Io(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                Self::new(ErrorCode::Conflict, "session already exists")
+            }
             _ => Self::internal(),
         }
     }

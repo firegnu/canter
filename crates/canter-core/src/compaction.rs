@@ -4,7 +4,9 @@ use crate::{
     runner,
     session::{Shared, id},
 };
-use canter_model::{AssistantContent, FinishReason, Message, ModelEvent, Request, RequestOptions};
+use canter_model::{
+    AssistantContent, ErrorKind, FinishReason, Message, ModelEvent, Request, RequestOptions,
+};
 use canter_protocol::{ErrorCode, EventPayload, Item};
 use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
@@ -190,43 +192,70 @@ async fn summarize(
                 ));
             }
         }
-        shared
-            .state
-            .lock()
-            .await
-            .journal
-            .record(HistoryEntry::CompactionRequest {
-                messages: request.messages.clone(),
-            })
-            .await?;
-        let mut stream = shared.model.stream(request, cancel.clone());
-        let mut next_summary = String::new();
-        let mut finished = false;
-        loop {
-            let event = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => return Err(CoreError::new(ErrorCode::Conflict, "compaction interrupted")),
-                event = stream.next() => event,
-            };
-            match event {
-                Some(Ok(ModelEvent::TextDelta(delta))) => next_summary.push_str(&delta),
-                Some(Ok(ModelEvent::Usage(usage))) => {
-                    runner::record_usage(shared, usage, None).await?
+        let next_summary = loop {
+            shared
+                .state
+                .lock()
+                .await
+                .journal
+                .record(HistoryEntry::CompactionRequest {
+                    messages: request.messages.clone(),
+                })
+                .await?;
+            let mut stream = shared.model.stream(request.clone(), cancel.clone());
+            let mut next_summary = String::new();
+            let mut finished = false;
+            let mut too_large = false;
+            loop {
+                let event = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return Err(CoreError::new(ErrorCode::Conflict, "compaction interrupted")),
+                    event = stream.next() => event,
+                };
+                match event {
+                    Some(Ok(ModelEvent::TextDelta(delta))) => next_summary.push_str(&delta),
+                    Some(Ok(ModelEvent::Usage(usage))) => {
+                        runner::record_usage(shared, usage, None).await?
+                    }
+                    Some(Ok(ModelEvent::Finished(FinishReason::Stop))) => {
+                        finished = true;
+                        break;
+                    }
+                    Some(Ok(ModelEvent::ReasoningDelta(_))) => {}
+                    Some(Err(error)) if error.kind == ErrorKind::ContextLength => {
+                        too_large = true;
+                        break;
+                    }
+                    _ => break,
                 }
-                Some(Ok(ModelEvent::Finished(FinishReason::Stop))) => {
-                    finished = true;
-                    break;
-                }
-                Some(Ok(ModelEvent::ReasoningDelta(_))) => {}
-                _ => break,
             }
-        }
-        if !finished || next_summary.trim().is_empty() {
-            return Err(CoreError::new(
-                ErrorCode::Internal,
-                "model did not produce a complete compaction summary",
-            ));
-        }
+            if too_large {
+                // Retry the same prefix of the transcript; only advance it
+                // after a complete summary. Halving bounds failed attempts.
+                end /= 2;
+                while !remaining.is_char_boundary(end) {
+                    end -= 1;
+                }
+                if end == 0 {
+                    return Err(CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "compaction request exceeds the context window even at the smallest transcript chunk",
+                    ));
+                }
+                request.messages.pop();
+                request.messages.push(Message::User {
+                    text: format!("{header}{}", &remaining[..end]),
+                });
+                continue;
+            }
+            if !finished || next_summary.trim().is_empty() {
+                return Err(CoreError::new(
+                    ErrorCode::Internal,
+                    "model did not produce a complete compaction summary",
+                ));
+            }
+            break next_summary;
+        };
         summary = next_summary;
         remaining = &remaining[end..];
         if remaining.is_empty() {

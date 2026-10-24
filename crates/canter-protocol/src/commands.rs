@@ -164,9 +164,19 @@ macro_rules! command_response {
 command_response!(
     SessionInterruptResponse,
     SessionUpdateResponse,
-    SessionCompactResponse,
     SessionCloseResponse
 );
+
+/// Accepted compaction; completion is reported by the referenced turn's events.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionCompactResponse {
+    #[ts(type = "number")]
+    pub event_seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
+}
 
 /// GET /v1/events?session={id}&after={seq}. Zero requests the complete history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

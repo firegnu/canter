@@ -22,13 +22,13 @@ SessionWriter 操作、执行器构造和项目指令读取都在 `spawn_blockin
 | `input(SessionInputParams)` | 空闲开轮：turn.started；忙时 queue/steer：input.queued |
 | `interrupt(SessionInterruptParams)` | turnId 必须匹配当前轮；等模型取消、工具回收及历史收尾后，返回 turn.completed 的序号 |
 | `resolve(request_id, RequestResolveParams)` | request.resolved；后到的回答返回原序号及 alreadyResolved=true |
-| `compact()` | 空闲时开独立的压缩轮，完成后返回 turn.completed；忙时返回 conflict |
+| `compact()` | 空闲时开独立的压缩轮，turn.started 落盘后即返回其序号和 turnId，结果看事件；忙时返回 conflict |
 | `update(SessionUpdateParams)` | session.updated；名字、模型、权限模式可改，下一次请求/权限判断使用新值 |
 | `close()` | 停止当前轮、清队列、释放存盘锁，返回 session.status=closed 的序号；可再次 open 恢复聊天 |
 | `snapshot()` | SessionReadResponse，eventSeq 与 lastEventSeq 一致 |
 | `subscribe(after)` | `Subscription::recv()` 按序返回事件，每条自带 seq；after 超过当前最后序号报 invalid_request |
 
-`CoreError` 提供协议的 `code` 和安全的 `message`，供服务端映射 HTTP 错误。
+`CoreError` 提供协议的 `code` 和安全的 `message`，供服务端映射 HTTP 错误；重复会话 id 返回 conflict。
 接受的变更在独立任务中完成，调用方丢弃等待 future 不会截断写盘/内存状态转换。
 `close` 应在运行时停止前 await；丢弃最后一个 Session 句柄也会请求取消，但不能代替
 运行时退出前等待清理。订阅者不会持有写入锁，close 后读完最后事件即返回 None。
@@ -39,17 +39,22 @@ SessionWriter 操作、执行器构造和项目指令读取都在 `spawn_blockin
 严格按 prepare → started_item → gate.evaluate/resolve → execute 接入。
 Length/Other 发出可见 warning，并为没有执行的调用补结果。工具失败/超时/拒绝的结果
 交回模型；取消、拒绝并停下则终止当前轮。模型错误以 error 和失败的 turn.completed 收尾。
+未知工具把结果交回模型，并发 warning 写明工具名。等批准时被打断，先发
+request.resolved(cancelled)，再记录“被打断，没有执行”的工具结果和 failed 项目；
+普通拒绝仍是 declined。打断（包括压缩）以 interrupted 收尾，不设置轮错误或发 error。
 完整思考内容写入模型历史，显示事件不是模型历史的替代品。
 
 同会话的命令、批准回答和落盘更新串行；耗时的模型/工具等待不持会话锁。
 一条批准请求只写一次处理事件，取消/恢复时也记录原处理序号供晚到回答查询。
 模型内部重试不暴露重试事件，核心保持 working；没有伪造“正在重试”提示，也未修改模型接口。
 
-忙时插话先排入公开队列：回复 eventSeq 指 input.queued，turnId 指当前轮。
+普通对话忙时插话先排入公开队列：回复 eventSeq 指 input.queued，turnId 指当前轮。
 下一次模型请求前写入上下文和用户项目，再发 input.removed；同时消费多条插话时
 reason=merged，单条为 steered。模型失败时仍把已接受插话写入当前轮的上下文，
 便于后续继续。普通 queue 输入逐条另开一轮，由 turn.started.inputId 移出。
 打断/关闭时清除两种队列，原因分别为 interrupted/closed。
+手动压缩轮中的 steer 按 queue 处理，回复不带 turnId，压缩结束后另开一轮；
+后续对话的失败或批准等待不改变压缩轮的结果。
 
 事件先 append_batch 并完成磁盘同步，再更新快照和广播；文字/命令输出增量
 每约 20 ms 合批，模型流的待写事件到 128 条也刷盘。广播缓冲为 256 条事件。
@@ -69,10 +74,13 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
 - `compaction_request { messages }`：每次摘要调用收到的完整消息，仅作审计，不混入正常对话。
 - `compaction { summary, messages, user_messages }`：压缩后的完整对话替换及保留的用户原话，恢复从最后一次压缩继续。原记录不删除。
 
+每份 AGENTS.md 至多 64 KiB；读取失败、非 UTF-8 或超限时整份跳过，warning 写明文件路径和原因，继续正常请求。
+
 未知条目/消息/助手内容会跳过，绝不把 Unknown 再写回。恢复模型上下文只读模型历史；
 事件用于恢复显示、请求处理序号和轮状态。重新打开时取消遗留批准和排队输入，未完成轮
 标成 interrupted，未完成工具项目标成 failed，并补工具占位结果和“被打断”记录。
 事件与模型历史是两个文件，没有跨文件事务：先记模型输入/结果，再记相关显示事件；
+助手流式增量照常发送，收完流后先写完整助手消息，再发最后的 item.completed。
 恢复不会根据显示事件猜测工具结果或重新执行工具。
 
 ## 压缩与数字
@@ -88,10 +96,15 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
 每 3 UTF-8 字节约一个 token，加每条消息 8 token 估算；也取提供方上次实际输入用量
 加新增上下文估算，两者的较大值。它是估算，不保证等于提供方计数。
 收到 ContextLength 时也会压缩重试；一次请求最多恢复一次，仍超长就明确失败，避免无限压缩。
+自动压缩失败时保留原上下文；若输入占用加输出上限仍在窗口内，发 warning 后继续原请求，
+超出窗口才报错并说明压缩失败及窗口不足。输入占用沿用上述估算与实际用量的较大值。
 
 摘要独立调用模型，禁用工具和思考，输出上限 min(正常输出上限, 8,192)。对话太长时
 按可容纳的 UTF-8 文本块顺序摘要，把前一块摘要带到下一块，不静默扔掉旧内容；完整思考
 保留在原历史里，摘要文本不包含思考。摘要失败或取消时保留原上下文。
+摘要请求被提供方判为 ContextLength 时，将当前块减半（按 UTF-8 边界）重试；
+只有成功才前移待摘要文本，下一块带上先前摘要。缩到无法再分仍失败时停止，保留原上下文。
+Length 摘要仍视为不完整，走上述失败回退，不用截断的摘要替换历史。
 压缩后保留最近约 20,000 token 的用户原话，再加摘要；小窗口会进一步缩减保留预算，
 边界消息只保留可容纳的原文尾部，按 UTF-8 边界截取。
 
