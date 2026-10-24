@@ -4,6 +4,325 @@ use std::{collections::BTreeMap, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
+async fn readonly_shell_allowlist_applies_in_all_asking_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(
+            dir.path().into(),
+            BTreeMap::from([
+                ("HOME".into(), dir.path().to_str().unwrap().into()),
+                ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+            ]),
+            vec![],
+        )
+        .unwrap(),
+    ));
+    let gate = PermissionGate::default();
+    let cancel = CancellationToken::new();
+    for (commands, ask) in [
+        (
+            &[
+                "ls",
+                "ls -lah src",
+                "cat -- README.md",
+                "cat 'file with spaces'",
+                "cat file\\ with\\ spaces",
+                "head -n 20 README.md",
+                "tail -c100 file",
+                "wc -l file",
+                "grep -nE 'foo|bar' file",
+                "rg --files src",
+                "rg -n -g '*.rs' needle src",
+                "rg --glob='*.rs' needle src",
+                "pwd",
+                "git status --short",
+                "git diff",
+                "git diff --cached --stat",
+                "git log --oneline -n 5",
+                "git show HEAD:README.md",
+                "ls && cat README.md",
+                "grep needle file || cat fallback",
+                "cat file | head -n 5; wc -l file",
+                "cat a\" b\"' c'",
+            ][..],
+            false,
+        ),
+        (
+            &[
+                "rm file",
+                "touch file",
+                "npm install",
+                "cargo build",
+                "git commit -m x",
+                "git checkout main",
+                "sed -i '' file",
+                "find . -delete",
+                "find . -exec sh -c bad \\;",
+                "rg --pre=sh needle",
+                "rg --pre sh needle",
+                "rg --hostname-bin=sh needle",
+                "git diff --output=out",
+                "git diff --output out",
+                "git diff -U --output=out",
+                "git diff --unified --output=out",
+                "git log --pretty --output=out",
+                "git show --format --output=out",
+                "git log --output=out",
+                "git show --ext-diff",
+                "git -c alias.status=bad status",
+                "git --paginate diff",
+                "git diff --textconv",
+                "git diff --no-index a b",
+                "ls --unknown-option",
+                "ls && rm file",
+                "ls || rm file",
+                "ls; rm file",
+                "cat file | sh",
+                "cat file > out",
+                "cat file >> out",
+                "cat file 2> out",
+                "cat file < in",
+                "cat file 2>&1",
+                "cat <<EOF\ntext\nEOF",
+                "ls &",
+                "(ls)",
+                "{ ls; }",
+                "cat $(pwd)/file",
+                "cat `pwd`/file",
+                "cat <(ls)",
+                "cat $HOME/file",
+                "cat \"$HOME/file\"",
+                "cat *.rs",
+                "X=1 ls",
+                "env ls",
+                "sh -c ls",
+                "./ls",
+                "/tmp/ls",
+                "ls\nrm file",
+                "ls # comment",
+                "ls &&",
+                "ls ;; cat file",
+                "cat 'unterminated",
+                "cat file\\",
+                "ls |& cat",
+                "cd \"$SOMEWHERE\" && cat file",
+            ][..],
+            true,
+        ),
+    ] {
+        for command in commands {
+            let raw = serde_json::json!({"command":command}).to_string();
+            let call = tools
+                .prepare(Tool::Shell, "shell", &raw, &cancel)
+                .await
+                .unwrap();
+            for mode in [
+                PermissionMode::AlwaysAsk,
+                PermissionMode::AskForExecution,
+                PermissionMode::Unknown,
+            ] {
+                assert_eq!(
+                    matches!(gate.evaluate(&call, mode), PermissionCheck::Ask(_)),
+                    ask,
+                    "{command}: {mode:?}"
+                );
+            }
+            assert!(
+                matches!(
+                    gate.evaluate(&call, PermissionMode::AllowAll),
+                    PermissionCheck::Execute(_)
+                ),
+                "{command}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn readonly_shell_still_asks_for_literal_protected_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let cwd = home.join("repo");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let private = home.join(".canter");
+    let custom = dir.path().join("custom-state");
+    let config = cwd.join("settings.json");
+    let environment = BTreeMap::from([("HOME".into(), home.to_string_lossy().into_owned())]);
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(
+            cwd.clone(),
+            environment,
+            vec![private.clone(), custom.clone(), config],
+        )
+        .unwrap(),
+    ));
+    let cancel = CancellationToken::new();
+    let mut gate = PermissionGate::default();
+    let commands = [
+        "cat ~/.canter/config.json".to_owned(),
+        "cat ../.canter/config.json".to_owned(),
+        "cat ../repo/../.canter/config.json".to_owned(),
+        "cat '../.canter/config.json'".to_owned(),
+        "cat ..\\/.canter/config.json".to_owned(),
+        "ls ../.canter".to_owned(),
+        "cat settings.json".to_owned(),
+        "cat ./settings.json".to_owned(),
+        "ls && cat ../.canter/config.json".to_owned(),
+        "rg -f../.canter/config.json needle".to_owned(),
+        "grep -nf../.canter/config.json file".to_owned(),
+        "rg --file=../.canter/config.json needle".to_owned(),
+        "grep --file ../.canter/config.json file".to_owned(),
+        format!("cat {}/config.json", private.display()),
+        format!("cat '{}/config.json'", custom.display()),
+    ];
+    for command in commands {
+        let raw = serde_json::json!({"command": command}).to_string();
+        let call = tools
+            .prepare(Tool::Shell, "private", &raw, &cancel)
+            .await
+            .unwrap();
+        for mode in [
+            PermissionMode::AlwaysAsk,
+            PermissionMode::AskForExecution,
+            PermissionMode::Unknown,
+        ] {
+            assert!(
+                matches!(gate.evaluate(&call, mode), PermissionCheck::Ask(_)),
+                "{command}: {mode:?}"
+            );
+        }
+        assert!(matches!(
+            gate.evaluate(&call, PermissionMode::AllowAll),
+            PermissionCheck::Execute(_)
+        ));
+    }
+    for command in [
+        "cat README.md",
+        "cat ../.canter-other/file",
+        "cat settings.json.backup",
+        "cat ~/notes",
+    ] {
+        let call = tools
+            .prepare(
+                Tool::Shell,
+                "public",
+                &serde_json::json!({"command":command}).to_string(),
+                &cancel,
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                gate.evaluate(&call, PermissionMode::AlwaysAsk),
+                PermissionCheck::Execute(_)
+            ),
+            "{command}"
+        );
+    }
+    let call = tools
+        .prepare(
+            Tool::Shell,
+            "private",
+            r#"{"command":"cat ~/.canter/config.json"}"#,
+            &cancel,
+        )
+        .await
+        .unwrap();
+    gate.resolve(&call, ApprovalDecision::AcceptForSession)
+        .unwrap();
+    assert!(matches!(
+        gate.evaluate(&call, PermissionMode::AlwaysAsk),
+        PermissionCheck::Execute(_)
+    ));
+}
+
+#[tokio::test]
+async fn readonly_shell_checks_implicit_cwd_and_requires_a_known_home_for_tilde() {
+    let dir = tempfile::tempdir().unwrap();
+    let protected = dir.path().join("private");
+    std::fs::create_dir(&protected).unwrap();
+    let cancel = CancellationToken::new();
+    for (cwd, home, command) in [
+        (protected.clone(), None, "ls"),
+        (protected.clone(), None, "rg --files"),
+        (protected.clone(), None, "cat config.json"),
+        (dir.path().into(), None, "cat ~/.canter/config.json"),
+        (dir.path().into(), Some("relative"), "cat ~/file"),
+        (dir.path().into(), None, "cat ~somebody/file"),
+    ] {
+        let environment = home
+            .map(|home| BTreeMap::from([("HOME".into(), home.into())]))
+            .unwrap_or_default();
+        let tools = Tools::new(Arc::new(
+            LocalExecutor::new(cwd, environment, vec![protected.clone()]).unwrap(),
+        ));
+        let call = tools
+            .prepare(
+                Tool::Shell,
+                "private",
+                &serde_json::json!({"command":command}).to_string(),
+                &cancel,
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                PermissionGate::default().evaluate(&call, PermissionMode::AlwaysAsk),
+                PermissionCheck::Ask(_)
+            ),
+            "{command}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn auto_approved_shell_preserves_command_items_and_output() {
+    use canter_protocol::{Item, ItemStatus};
+    use canter_tools::ToolOutcome;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("README.md"), "repository contents\n").unwrap();
+    let environment = BTreeMap::from([
+        ("HOME".into(), dir.path().to_string_lossy().into_owned()),
+        ("PATH".into(), "/usr/bin:/bin".into()),
+    ]);
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(dir.path().into(), environment, vec![]).unwrap(),
+    ));
+    let cancel = CancellationToken::new();
+    let raw = r#"{"command":"cat README.md"}"#;
+    let call = tools
+        .prepare(Tool::Shell, "read-repo", raw, &cancel)
+        .await
+        .unwrap();
+    assert_eq!(call.raw_arguments(), raw);
+    assert!(
+        matches!(call.started_item(), Item::CommandExecution { command, cwd, status: ItemStatus::InProgress, .. } if command == "cat README.md" && cwd == dir.path().to_string_lossy())
+    );
+    let gate = PermissionGate::default();
+    let PermissionCheck::Execute(permit) = gate.evaluate(&call, PermissionMode::AlwaysAsk) else {
+        panic!("reading the repository must not need approval");
+    };
+    let mut streamed = String::new();
+    let result = tools
+        .execute(permit, &cancel, &mut |chunk| streamed.push_str(chunk))
+        .await;
+    assert_eq!(result.outcome, ToolOutcome::Completed);
+    assert_eq!(streamed, "repository contents\n");
+    assert!(result.text.contains("repository contents\n"));
+    assert!(
+        matches!(result.item, Item::CommandExecution { id, command, status: ItemStatus::Completed, aggregated_output, exit_code: Some(0), .. } if id == "read-repo" && command == "cat README.md" && aggregated_output == streamed)
+    );
+    let write = tools
+        .prepare(Tool::Shell, "write", r#"{"command":"touch file"}"#, &cancel)
+        .await
+        .unwrap();
+    assert!(matches!(
+        gate.evaluate(&write, PermissionMode::AlwaysAsk),
+        PermissionCheck::Ask(_)
+    ));
+}
+
+#[tokio::test]
 async fn permission_modes_use_tool_risk_and_unknown_means_always_ask() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("file"), "original\n").unwrap();
@@ -19,7 +338,10 @@ async fn permission_modes_use_tool_risk_and_unknown_means_always_ask() {
             Tool::Edit,
             r#"{"path":"file","edits":[{"oldText":"original","newText":"edited"}]}"#,
         ),
-        (Tool::Shell, r#"{"command":"printf 'complete command'"}"#),
+        (
+            Tool::Shell,
+            r#"{"command":"printf 'complete command' > file"}"#,
+        ),
     ] {
         let call = tools.prepare(tool, "item", raw, &cancel).await.unwrap();
         for (mode, ask) in [
@@ -67,14 +389,19 @@ async fn approval_answers_and_grants_are_scoped_to_one_session_and_one_tool() {
     ));
     let cancel = CancellationToken::new();
     let shell = tools
-        .prepare(Tool::Shell, "s1", r#"{"command":"printf first"}"#, &cancel)
+        .prepare(
+            Tool::Shell,
+            "s1",
+            r#"{"command":"printf first > first"}"#,
+            &cancel,
+        )
         .await
         .unwrap();
     let another_shell = tools
         .prepare(
             Tool::Shell,
             "s2",
-            r#"{"command":"printf different"}"#,
+            r#"{"command":"printf different > different"}"#,
             &cancel,
         )
         .await

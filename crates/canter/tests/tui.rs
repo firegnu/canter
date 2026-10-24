@@ -801,7 +801,7 @@ async fn enter_right_after_the_box_appears_does_not_answer_it() {
 #[tokio::test]
 async fn approval_box_matches_the_server_after_a_restart() {
     let mut world = World::new(vec![
-        shell_reply("echo never"),
+        shell_reply("echo never > approval-proof.txt"),
         shell_reply(WRITE_ENV),
         text_reply("跑完了"),
     ])
@@ -829,6 +829,8 @@ async fn approval_box_matches_the_server_after_a_restart() {
     assert!(snapshot.pending_requests.is_empty());
     assert_eq!(snapshot.status, SessionStatus::Idle);
     assert_eq!(snapshot.turns[0].status, TurnStatus::Interrupted);
+
+    assert!(!world.path("work/approval-proof.txt").exists());
 
     a.type_line("再跑一下").await;
     a.wait_for("要跑这条命令吗？").await;

@@ -100,8 +100,8 @@ shell 回收后管道最多再读取 2000 ms；取消和原始超时在此期间
 
 | 模式 | read | write / edit | shell |
 | --- | --- | --- | --- |
-| alwaysAsk / Unknown | 执行 | 询问 | 询问 |
-| askForExecution | 执行 | 执行 | 询问 |
+| alwaysAsk / Unknown | 执行 | 询问 | 白名单只读命令执行，其余询问 |
+| askForExecution | 执行 | 执行 | 白名单只读命令执行，其余询问 |
 | allowAll | 执行 | 执行 | 执行 |
 
 Accept 仅允许当前调用；AcceptForSession 记住本会话的这个工具；Decline 拒绝；
@@ -109,11 +109,74 @@ Cancel 拒绝并向调用方返回 `cancel_turn: true`，gate 本身不取消一
 风险档来自内置 Tool 定义，不接受模型自报的风险档。
 对 shell 的会话授权等于放行这个会话的所有命令；改回 alwaysAsk 后已有授权仍有效。
 
+shell 免批准只识别一小部分语法和参数，白名单在 `src/readonly.rs`：
+
+- 命令：`ls`、`cat`、`head`、`tail`、`wc`、`grep`、`rg`、`pwd`、`echo`、`printf`，以及
+  `git status/diff/log/show`。支持常用短选项组合、带引号和转义的字面参数；
+  head/tail 和 git log/show 支持 `-100` 这样的数字简写。Git 可带 `--no-pager`，
+  带值的长选项只认 `--选项=值`，不猜可选参数的边界。printf 只认常见输出格式；
+  `-v`、`%n` 等修改 shell 变量的形式仍询问。
+- Git 每次判断都同步读当前仓库配置、会话 HOME 下的 `.gitconfig`、XDG 下的 `git/config`
+  （未设 XDG_CONFIG_HOME 时用 `~/.config/git/config`）。支持向上查找仓库、裸仓库、
+  worktree 的 `gitdir:`/`commondir` 和 `config.worktree`，不启动 Git 或其他子进程。
+  未启用 GIT_CONFIG_NOSYSTEM 时，还用同一规则检查 `/etc/gitconfig` 和会话 PATH 中
+  第一个可执行 git 所在前缀的 `etc/gitconfig`（例如 `/opt/homebrew/bin/git` 对应
+  `/opt/homebrew/etc/gitconfig`；bin/git 是链接时仍检查 PATH 前缀）。PATH 缺失或找不到
+  可执行 git 时询问；GIT_CONFIG_NOSYSTEM 为 `0`/`false` 等假值仍检查系统配置。
+  出现 fsmonitor、textconv、diff.external、diff.*.command、gpg 段或 gpg 子段配置、
+  log.showSignature、remote.*.promisor、extensions.partialClone，
+  或 include/includeIf 时询问；`--format/--pretty` 以及配置中的命名/默认格式含 `%G` 也询问。
+  `*.gpgsign` 和 `user.signingkey` 不影响只读命令放行。filter 仅接受 `git lfs install`
+  写入的标准 `filter.lfs` 值：clean 为 `git-lfs clean -- %f`、smudge 为
+  `git-lfs smudge -- %f`、process 为 `git-lfs filter-process`、required 为 `true`；
+  其他 filter、其他键或改过的值仍询问。
+  即使 filter 是标准值，LFS 的外部程序配置也询问：`lfs` 段中以 `extension` 开头的
+  子段（ASCII 不分大小写）、`lfs.customtransfer.*`、`lfs.standalonetransferagent`。
+  不存在的可选配置可跳过；无法读取、非普通文件、超过 1 MiB、无法识别的配置语法
+  （包括续行/转义）、HOME 缺失或相对路径、相对 XDG_CONFIG_HOME 都询问。
+  改变仓库/配置来源或注入配置的 GIT_DIR/GIT_COMMON_DIR/GIT_WORK_TREE/GIT_CONFIG*
+  环境覆盖也询问（GIT_CONFIG_NOSYSTEM 除外）。
+- `cd <字面路径>` 检查目标并跟踪后续目录，`&&`/`||` 按成功/失败分支检查，`;` 同时考虑
+  cd 成功和失败的位置；管道内的 cd 不改变后续目录。多种可能目录都通过才免批准，
+  可能状态超过 64 个则询问。无参数的 cd、`cd -`、带变量的 cd，以及会话设了非空
+  CDPATH 时的相对 cd 都询问。`~` 是否展开按原始引号/转义判断，避免跟踪错目录。
+  后续 cwd 使用字面规范化路径；解析后的 cd 目标只用于额外的受保护路径检查。
+- find 支持字面起点、深度/名称/路径/类型过滤、布尔组合及打印等已知只读动作；
+  `-exec/-execdir/-ok/-okdir/-delete/-fprint/-fprint0/-fprintf/-fls` 和未知参数仍询问。
+- sed 只认可直接检查的脚本：基本地址、打印/删除行等纯文本操作和替换，支持 `-n/-E/-r`
+  与 `-e/--expression`。`-i/--in-place`、从文件加载脚本、`w/W/e/r/R` 命令、
+  替换的 w/e 标志、复杂或无法识别的脚本都询问；括号组、分支、文本插入及未转义的
+  正则字符组暂不放行。输出中的删除行不会修改源文件。
+- `&&`、`||`、`;`、`|` 连接的每一段都必须通过检查。未知命令或选项、解析失败、
+  重定向（包括输入重定向）、命令替换、变量展开、子 shell、后台 `&`、注释、换行和
+  未引用的通配符一律询问。命令绝对路径、`git -C/-c` 等仍不放行。
+- 每个字面参数（包括 `-f路径`、`--file=路径` 中的值）按当前可能 cwd 检查，规范化 `.`、`..`，
+  按路径组件做 ASCII 不分大小写比较（所有平台一致）；
+  `~` 用会话环境中的绝对 `HOME` 展开，不使用服务端 HOME。HOME 缺失、相对 HOME 和
+  `~用户名` 都询问。碰到受保护路径本身或子路径时询问，cwd 在受保护目录内也询问。
+  这只影响是否免批准，不改变批准后的执行；`allowAll` 和已有会话授权仍可执行这些命令。
+- 带 `-r/-R/--recursive` 的 grep、所有 rg、git diff 的路径起点，等于受保护路径、
+  位于其中或是其上级目录时都询问；省略路径时检查 cwd。搜索模式和选项值不当成起点。
+  Git diff 的 `--` 后按显式路径检查；没有 `--` 时还检查 cwd，避免把版本号误当成路径。
+  复杂路径匹配语法/通配起点仍询问。`find ~`、`ls -R ~` 只列名字，继续放行。
+- 直接执行仍使用原始命令、`commandExecution` 开始/完成项目和输出回调，不增加或更改事件。
+
+**已知限制：这不是 shell 沙箱，挡不全状态目录的访问。** `$HOME/.canter` 等显式变量语法
+目前保守地询问，但不展开或追踪任意环境变量，也不完整检查其他程序的环境配置或 PATH
+上实际执行的程序。上述仓库、用户和系统 Git 配置中的外部 diff/textconv 等已检查，
+非标准安装在其他编译时位置的系统配置仍不覆盖。
+cd 目标存在时会额外检查解析后的路径，
+但路径检查仍不完整覆盖符号链接、硬链接、文件系统别名或执行期间的路径变化；
+程序内部的其他隐式读取仍可能读到受保护文件。不要把白名单理解为“绝不会写文件或读取秘密”；read/write/edit 的原有
+路径保护不变。合并时应把这些限制同步到 DESIGN。
+
 `Executor` 是可替换的异步 trait：`cwd`、`resolve_path`、`open_file`、`write_file`、`spawn`。
+另有同步的 `is_readonly_shell` 判断，默认返回 false（仍询问）；本机执行器使用已有的
+会话 cwd、环境、受保护路径实现，不需要核心或服务端再传数据，也不在判断时启动子进程。
 读文件返回 `FileReader`（异步字节流）；启动命令返回 `CommandHandle`（stdout、stderr、
 `Box<dyn CommandProcess>`），后者提供 `wait`、`terminate` 和 `kill`；后两者只作用于原进程组。
 第二期可把这些操作实现为
 独立子进程的请求，不需要改变工具和权限接口。
 
 参考 pi 的精确文字替换、oh-my-pi 的风险分档，以及 Codex `rust-v0.163.0`
-的进程组清理和 UTF-8 头尾截断思路，独立实现，未复制源码。
+的进程组清理、UTF-8 头尾截断和受限 shell 语法逐段判断思路，独立实现，未复制源码。

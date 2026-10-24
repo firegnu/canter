@@ -29,6 +29,10 @@ pub trait CommandProcess: Send {
 #[async_trait]
 pub trait Executor: Send + Sync {
     fn cwd(&self) -> &Path;
+    /// Opt in only when the command and the executor's private paths have been checked.
+    fn is_readonly_shell(&self, _command: &str) -> bool {
+        false
+    }
     async fn resolve_path(&self, path: &Path, cancel: &CancellationToken) -> io::Result<PathBuf>;
     async fn open_file(&self, path: &Path, cancel: &CancellationToken) -> io::Result<FileReader>;
     /// Replace a file only if its bytes still match the approved snapshot (None means absent).
@@ -48,6 +52,7 @@ pub struct LocalExecutor {
     cwd: PathBuf,
     environment: BTreeMap<String, String>,
     protected_paths: Vec<PathBuf>,
+    shell_protected_paths: Vec<PathBuf>,
 }
 
 impl LocalExecutor {
@@ -68,10 +73,15 @@ impl LocalExecutor {
                 "protected paths must be absolute",
             ));
         }
+        // Keep the spellings supplied by the server as well as the resolved file-tool paths.
+        let mut shell_protected_paths = protected_paths.clone();
+        let protected_paths = prepare_protected_paths(protected_paths)?;
+        shell_protected_paths.extend(protected_paths.iter().cloned());
         Ok(Self {
             cwd,
             environment,
-            protected_paths: prepare_protected_paths(protected_paths)?,
+            protected_paths,
+            shell_protected_paths,
         })
     }
 
@@ -92,6 +102,15 @@ pub(crate) fn check_cancel(cancel: &CancellationToken) -> io::Result<()> {
 impl Executor for LocalExecutor {
     fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    fn is_readonly_shell(&self, command: &str) -> bool {
+        crate::readonly::is_readonly(
+            command,
+            &self.cwd,
+            &self.environment,
+            &self.shell_protected_paths,
+        )
     }
 
     async fn resolve_path(&self, path: &Path, cancel: &CancellationToken) -> io::Result<PathBuf> {

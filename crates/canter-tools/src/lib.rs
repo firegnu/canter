@@ -3,6 +3,7 @@ mod executor;
 mod output;
 pub use output::MAX_CLIENT_OUTPUT_BYTES;
 mod permission;
+mod readonly;
 mod shell;
 pub use executor::{CommandHandle, CommandProcess, Executor, FileReader, LocalExecutor};
 pub use permission::{ExecutionPermit, PermissionCheck, PermissionGate};
