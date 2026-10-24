@@ -17,6 +17,8 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - ChatGPT Pro：经 OpenAI 的「Sign in with ChatGPT」，走 Responses 接口（报告 §4.4）。
    - DeepSeek：API key，走 Chat Completions 接口。
    - 不用 Claude 订阅：「不要查claude的条款，我不会拿claude订阅来做接入自研的agent的」。
+   - **2026-10-24 改：第一期只接 DeepSeek。** 用户：「这样，我觉得第一期先不做订阅的接入。就是BYOK」。BYOK 只接 DeepSeek，不接 OpenAI 的 API key。所以第一期只做 Chat Completions 接口，base_url 和 key 可以配置。ChatGPT Pro 登录和 Responses 接口往后放。模型接入层仍按多家来做，以后加 Responses 不用推翻。
+   - 跟着改的：第一期改文件用「整文件写 + 按文字替换」；Codex 的 apply_patch 是给 GPT 用的，等接 OpenAI 时再搬（用户 10-24 选定）。
 7. **名字和仓库**：`canter`（马的「慢跑」步法），仓库 `github.com/firegnu/canter`，公开，Apache-2.0。用户：「开源，repo就放在github上」。
 8. **协议：结构照 Codex，传输和类型 canter 自己定（报告 §5.7 的 C）**。2026-10-24 在 canter 仓库定的，用户：「好，就用 C，改 DESIGN」。
    - 经过：用户先说「协议我觉得做好使用成熟的现有的coding agent使用的协议」，选了 Codex app-server 协议，不用 ACP（「ACP我一直不是很看好」）。10-23 用户又提醒「我们选的 Codex app-server 协议是 OpenAI 自家的协议，不是公共标准，会跟着 Codex 版本一起变」。可选的有两条：A 是以 Codex 某版为底拷一份、自己管；C 是自定 HTTP + SSE（报告 §5.7）。最后定了 C。
@@ -26,17 +28,18 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 理由：A 拷过来、不跟上游以后，同样是 canter 自己维护的协议，和 C 只差传输方式和拷不拷类型代码。传输上 HTTP + SSE 更贴合 canter：一台机器多个客户端，断线能接着收，以后 corral、pony 这类同步程序直接接，curl 就能排错。
    - 代价：离用户原来要的「使用成熟的现有的coding agent使用的协议」远一步，用的是 Codex 的结构，不是它的协议本身；协议包要自己写，估 1,000–1,500 行（报告 §9.1）。
 9. **桌面应用用 GPUI**（和 paddock 一样）。
-10. **第一版范围**：照报告「要用户定的」第 6 条的推荐，另加 DeepSeek（第 6 条）。
+10. **第一版范围**：照报告「要用户定的」第 6 条的推荐，模型改成只接 DeepSeek（第 6 条 10-24 的改动）：不做 OpenAI Responses 接口和 ChatGPT 套餐登录，改文件不用 apply_patch。
 11. **服务端怎么起、怎么升级**：照报告第 7 条的推荐：客户端找不到服务端就在后台起一个，另可装成用户服务；升级第一期等在跑的轮跑完（有上限）再重启、不自动换版本，第二期接 corral 派活前做排空交接；嵌在终端里的单机模式只作备选。
 12. **接 corral 往后放**：「corral的接入等agent差不多可以工作了（tui版本的），再考虑接入。」
 
 ## 和报告不同的地方
 
 - **协议**：最后和报告 §5.2 的推荐一样，自定「HTTP 发命令 + SSE 收事件」（甲）。中间用户一度定了 Codex app-server（乙），10-24 改成 C，即甲的传输加 Codex 的结构（第 8 条）。报告 §5 里讲乙、讲 WebSocket 的部分不再适用；讲数据结构（会话 → 一轮 → 项目）、待处理请求、断线续传的部分照用。
-- **模型**：报告推荐第一期只接 Responses 接口；用户要第一期就接 DeepSeek，所以第一期同时有 Responses 和 Chat Completions 两种接口，模型接入层一开始就按多家来做。
+- **模型**：报告推荐第一期只接 Responses 接口，加 ChatGPT 套餐登录；用户 10-24 定为第一期只接 DeepSeek（BYOK），正好反过来：只做 Chat Completions 接口，Responses 和套餐登录往后放。模型接入层一开始就按多家来做。
+- **改文件**：报告推荐第一期用「整文件写 + apply_patch」，等接开源模型时再加「按文字替换」；第一期只接 DeepSeek，所以改成「整文件写 + 按文字替换」，apply_patch 等接 OpenAI 时再加。
 - **接 corral**：报告 §6、§9.2 把接 corral 排在第二期；用户定为终端版本差不多能用之后再考虑，到时再定做法（报告「要用户定的」第 9 条的五种做法留作参考）。
 
 ## 还没定的
 
 - 第一期怎么拆成具体的活（报告 §9.1 推测 7 件左右）。
-- 从 Codex 搬哪些代码（比如 `apply-patch`；协议类型不搬，见第 8 条），搬来的代码要保留 Apache-2.0 声明，按需加 NOTICE。
+- 从 Codex 搬哪些代码（`apply-patch` 等接 OpenAI 时再定；协议类型不搬，见第 8 条），搬来的代码要保留 Apache-2.0 声明，按需加 NOTICE。
