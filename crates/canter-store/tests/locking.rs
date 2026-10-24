@@ -17,12 +17,12 @@ fn a_second_writer_cannot_lock_the_same_session() {
         .create(
             "locked",
             SessionSettings {
+                cwd: temp.path().to_string_lossy().into(),
                 name: None,
                 model: "fake".into(),
                 approval_policy: PermissionMode::AlwaysAsk,
             },
             PrivateSessionConfig {
-                cwd: temp.path().into(),
                 env: BTreeMap::new(),
             },
             1,

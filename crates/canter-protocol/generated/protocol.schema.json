@@ -5,7 +5,8 @@
         "accept",
         "acceptForSession",
         "decline",
-        "cancel"
+        "cancel",
+        "unknown"
       ],
       "type": "string"
     },
@@ -20,31 +21,18 @@
           },
           "type": "array"
         },
-        "createdAt": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "id": {
-          "type": "string"
-        },
         "itemId": {
           "type": "string"
         },
         "tool": {
           "type": "string"
-        },
-        "turnId": {
-          "type": "string"
         }
       },
       "required": [
-        "id",
-        "turnId",
         "itemId",
         "tool",
         "arguments",
-        "availableDecisions",
-        "createdAt"
+        "availableDecisions"
       ],
       "type": "object"
     },
@@ -89,8 +77,34 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
       ]
+    },
+    "ErrorCode": {
+      "enum": [
+        "invalid_request",
+        "session_not_found",
+        "turn_mismatch",
+        "request_not_found",
+        "invalid_decision",
+        "session_closed",
+        "conflict",
+        "internal",
+        "unknown"
+      ],
+      "type": "string"
     },
     "ErrorInfo": {
       "properties": {
@@ -105,6 +119,21 @@
         }
       },
       "required": [
+        "message"
+      ],
+      "type": "object"
+    },
+    "ErrorResponse": {
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
         "message"
       ],
       "type": "object"
@@ -145,6 +174,13 @@
         },
         {
           "properties": {
+            "inputId": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "turn": {
               "$ref": "#/$defs/Turn"
             },
@@ -156,6 +192,22 @@
           "required": [
             "type",
             "turn"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/QueuedInput"
+            },
+            "type": {
+              "const": "input.queued",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input"
           ],
           "type": "object"
         },
@@ -242,7 +294,7 @@
         {
           "properties": {
             "request": {
-              "$ref": "#/$defs/ApprovalRequest"
+              "$ref": "#/$defs/PendingRequest"
             },
             "type": {
               "const": "request.opened",
@@ -410,6 +462,13 @@
         },
         {
           "properties": {
+            "inputId": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "turn": {
               "$ref": "#/$defs/Turn"
             },
@@ -421,6 +480,22 @@
           "required": [
             "type",
             "turn"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/QueuedInput"
+            },
+            "type": {
+              "const": "input.queued",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input"
           ],
           "type": "object"
         },
@@ -507,7 +582,7 @@
         {
           "properties": {
             "request": {
-              "$ref": "#/$defs/ApprovalRequest"
+              "$ref": "#/$defs/PendingRequest"
             },
             "type": {
               "const": "request.opened",
@@ -690,7 +765,8 @@
     "InputMode": {
       "enum": [
         "queue",
-        "steer"
+        "steer",
+        "unknown"
       ],
       "type": "string"
     },
@@ -1008,7 +1084,8 @@
         "inProgress",
         "completed",
         "failed",
-        "declined"
+        "declined",
+        "unknown"
       ],
       "type": "string"
     },
@@ -1055,16 +1132,104 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
       ]
+    },
+    "PendingRequest": {
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/RequestKind"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "turnId",
+        "createdAt",
+        "kind"
+      ],
+      "type": "object"
     },
     "PermissionMode": {
       "enum": [
         "alwaysAsk",
         "askForExecution",
-        "allowAll"
+        "allowAll",
+        "unknown"
       ],
       "type": "string"
+    },
+    "QueuedInput": {
+      "properties": {
+        "clientName": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "input": {
+          "items": {
+            "$ref": "#/$defs/UserInput"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "input",
+        "clientName"
+      ],
+      "type": "object"
+    },
+    "RequestKind": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ApprovalRequest",
+          "properties": {
+            "type": {
+              "const": "approval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "RequestPath": {
       "properties": {
@@ -1328,10 +1493,14 @@
       "type": "object"
     },
     "SessionSettings": {
-      "description": "Public settings. Working directory and environment never belong here.",
+      "description": "Public settings. Environment variables never belong here.",
       "properties": {
         "approvalPolicy": {
           "$ref": "#/$defs/PermissionMode"
+        },
+        "cwd": {
+          "default": "",
+          "type": "string"
         },
         "model": {
           "type": "string"
@@ -1376,7 +1545,14 @@
         },
         "pendingRequests": {
           "items": {
-            "$ref": "#/$defs/ApprovalRequest"
+            "$ref": "#/$defs/PendingRequest"
+          },
+          "type": "array"
+        },
+        "queuedInputs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/QueuedInput"
           },
           "type": "array"
         },
@@ -1426,12 +1602,17 @@
         "working",
         "waiting_approval",
         "error",
-        "closed"
+        "closed",
+        "unknown"
       ],
       "type": "string"
     },
     "SessionSummary": {
       "properties": {
+        "cwd": {
+          "default": "",
+          "type": "string"
+        },
         "id": {
           "type": "string"
         },
@@ -1628,7 +1809,8 @@
         "inProgress",
         "completed",
         "interrupted",
-        "failed"
+        "failed",
+        "unknown"
       ],
       "type": "string"
     },
@@ -1647,6 +1829,18 @@
           "required": [
             "type",
             "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
           ],
           "type": "object"
         }

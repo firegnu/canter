@@ -12,12 +12,12 @@ fn an_incomplete_last_line_is_discarded_before_further_appends() {
         .create(
             "s1",
             SessionSettings {
+                cwd: temp.path().to_string_lossy().into(),
                 name: Some("intact".into()),
                 model: "fake".into(),
                 approval_policy: PermissionMode::AllowAll,
             },
             PrivateSessionConfig {
-                cwd: temp.path().into(),
                 env: BTreeMap::new(),
             },
             10,

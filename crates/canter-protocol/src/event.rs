@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::{
-    ApprovalRequest, ApprovalResolution, ErrorInfo, Item, SessionSettings, SessionStatus,
-    TokenUsage, Turn,
+    ApprovalResolution, ErrorInfo, Item, PendingRequest, QueuedInput, SessionSettings,
+    SessionStatus, TokenUsage, Turn,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -28,7 +28,14 @@ pub enum EventPayload {
     #[serde(rename = "session.status")]
     SessionStatus { status: SessionStatus },
     #[serde(rename = "turn.started")]
-    TurnStarted { turn: Turn },
+    TurnStarted {
+        turn: Turn,
+        #[serde(default)]
+        #[ts(optional = nullable)]
+        input_id: Option<String>,
+    },
+    #[serde(rename = "input.queued")]
+    InputQueued { input: QueuedInput },
     #[serde(rename = "turn.completed")]
     TurnCompleted { turn: Turn },
     #[serde(rename = "item.started")]
@@ -42,7 +49,7 @@ pub enum EventPayload {
     #[serde(rename = "item.completed")]
     ItemCompleted { turn_id: String, item: Item },
     #[serde(rename = "request.opened")]
-    RequestOpened { request: ApprovalRequest },
+    RequestOpened { request: PendingRequest },
     #[serde(rename = "request.resolved")]
     RequestResolved {
         request_id: String,

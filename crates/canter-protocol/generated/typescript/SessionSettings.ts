@@ -2,6 +2,6 @@
 import type { PermissionMode } from "./PermissionMode";
 
 /**
- * Public settings. Working directory and environment never belong here.
+ * Public settings. Environment variables never belong here.
  */
-export type SessionSettings = { name: string | null, model: string, approvalPolicy: PermissionMode, };
+export type SessionSettings = { cwd: string, name: string | null, model: string, approvalPolicy: PermissionMode, };

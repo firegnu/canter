@@ -8,6 +8,7 @@ use serde_json::json;
 
 fn settings() -> SessionSettings {
     SessionSettings {
+        cwd: "/isolated/workspace".into(),
         name: Some("demo".into()),
         model: "fake-model".into(),
         approval_policy: PermissionMode::AlwaysAsk,
@@ -16,7 +17,6 @@ fn settings() -> SessionSettings {
 
 fn private() -> PrivateSessionConfig {
     PrivateSessionConfig {
-        cwd: "/isolated/workspace".into(),
         env: BTreeMap::from([("TEST_ONLY".into(), "private-fixture".into())]),
     }
 }
@@ -42,8 +42,8 @@ fn stored_session_reopens_identically_and_continues_sequence() {
         {"type":"item.completed", "turnId":"t1", "item":{"type":"fileChange","id":"f1", "changes":[{"path":"file.txt", "kind":{"type":"update","movePath":null}, "diff":"-old\n+new"}], "status":"completed"}},
         {"type":"item.completed", "turnId":"t1", "item":{"type":"fileRead","id":"read1", "path":"file.txt", "startLine":1,"content":"new", "status":"completed"}},
         {"type":"item.completed", "turnId":"t1", "item":{"type":"contextCompaction","id":"compact1", "summary":"conversation so far"}},
-        {"type":"session.updated", "settings":{"name":"renamed", "model":"fake-model-2", "approvalPolicy":"askForExecution"}},
-        {"type":"request.opened", "request":{"id":"q1","turnId":"t1","itemId":"c2","tool":"shell", "arguments":{"command":"pwd"},"availableDecisions":["accept","acceptForSession","decline","cancel"], "createdAt":116}},
+        {"type":"session.updated", "settings":{"cwd":"/isolated/workspace", "name":"renamed", "model":"fake-model-2", "approvalPolicy":"askForExecution"}},
+        {"type":"request.opened", "request":{"id":"q1","turnId":"t1", "createdAt":116,"kind":{"type":"approval","itemId":"c2","tool":"shell", "arguments":{"command":"pwd"},"availableDecisions":["accept","acceptForSession","decline","cancel"]}}},
         {"type":"session.status", "status":"waiting_approval"},
         {"type":"session.usage", "tokenUsage":{"total":{"inputTokens":10,"cachedInputTokens":2,"outputTokens":5,"reasoningOutputTokens":1,"totalTokens":15}, "last":{"inputTokens":10,"cachedInputTokens":2,"outputTokens":5,"reasoningOutputTokens":1,"totalTokens":15},"contextTokens":20,"modelContextWindow":1000}}
     ]);
@@ -78,10 +78,10 @@ fn stored_session_reopens_identically_and_continues_sequence() {
     assert!(
         matches!(&expected.turns[0].items[3], Item::CommandExecution { aggregated_output, exit_code:Some(0), duration_ms:Some(12), .. } if aggregated_output == "hello")
     );
-    assert_eq!(
-        expected.pending_requests[0].arguments,
-        json!({"command":"pwd"})
-    );
+    let RequestKind::Approval(approval) = &expected.pending_requests[0].kind else {
+        panic!("expected approval")
+    };
+    assert_eq!(approval.arguments, json!({"command":"pwd"}));
     assert_eq!(expected.token_usage.as_ref().unwrap().context_tokens, 20);
     assert_eq!(expected.last_event_seq, 19);
     drop(writer);
@@ -139,5 +139,5 @@ fn stored_session_reopens_identically_and_continues_sequence() {
     }
     let events = fs::read_to_string(dir.join("events.jsonl")).unwrap();
     assert!(!events.contains("private-fixture"));
-    assert!(!events.contains("/isolated/workspace"));
+    assert!(events.contains("/isolated/workspace"));
 }

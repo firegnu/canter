@@ -93,6 +93,8 @@ pub enum InputMode {
     #[default]
     Queue,
     Steer,
+    #[serde(other)]
+    Unknown,
 }
 
 /// POST /v1/sessions/{id}/input. Idle starts a turn; mode applies when busy.
@@ -180,3 +182,49 @@ pub struct EventsParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(transparent)]
 pub struct EventsResponse(pub Event);
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorResponse {
+    pub code: ErrorCode,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    InvalidRequest,
+    SessionNotFound,
+    TurnMismatch,
+    RequestNotFound,
+    InvalidDecision,
+    SessionClosed,
+    Conflict,
+    Internal,
+    #[serde(other)]
+    Unknown,
+}
+
+pub const SSE_EVENT_NAME: &str = "message";
+
+pub fn sse_frame(event: &Event) -> Result<String, serde_json::Error> {
+    Ok(format!(
+        "id: {}\nevent: {SSE_EVENT_NAME}\ndata: {}\n\n",
+        event.seq,
+        serde_json::to_string(event)?
+    ))
+}
+
+pub fn resume_after(after: u64, last_event_id: Option<&str>) -> Result<u64, ErrorResponse> {
+    let Some(id) = last_event_id else {
+        return Ok(after);
+    };
+    let invalid = || ErrorResponse {
+        code: ErrorCode::InvalidRequest,
+        message: "Last-Event-ID must be an unsigned decimal event sequence".into(),
+    };
+    if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    id.parse().map_err(|_| invalid())
+}

@@ -42,6 +42,11 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
     let definitions = schema["$defs"].as_object().unwrap();
     for name in [
         "Event",
+        "ErrorResponse",
+        "ErrorCode",
+        "PendingRequest",
+        "RequestKind",
+        "QueuedInput",
         "SessionSnapshot",
         "Item",
         "InfoParams",
@@ -80,7 +85,7 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
     assert!(settings.get("model").is_some());
     assert!(settings.get("approvalPolicy").is_some());
     assert!(settings.get("env").is_none());
-    assert!(settings.get("cwd").is_none());
+    assert!(settings.get("cwd").is_some());
     let event_ts = fs::read_to_string(temp.path().join("typescript/Event.ts")).unwrap();
     assert!(event_ts.contains("seq: number"));
     assert!(event_ts.contains("sessionId: string"));
@@ -102,4 +107,13 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         generated,
         "regenerate protocol artifacts after changing wire types"
     );
+}
+
+#[test]
+fn readme_generation_command_uses_the_main_build_directory() {
+    let readme = include_str!("../README.md");
+    assert!(readme.contains(
+        "canter-worktrees/.target/main cargo run -p canter-protocol --bin export_protocol"
+    ));
+    assert!(!readme.contains(".target/p1-protocol-store"));
 }

@@ -2,8 +2,8 @@
 import type { ApprovalDecision } from "./ApprovalDecision";
 import type { JsonValue } from "./serde_json/JsonValue";
 
-export type ApprovalRequest = { id: string, turnId: string, itemId: string, tool: string,
+export type ApprovalRequest = { itemId: string, tool: string,
 /**
  * Full tool arguments, including a command or the proposed file changes.
  */
-arguments: JsonValue, availableDecisions: Array<ApprovalDecision>, createdAt: number, };
+arguments: JsonValue, availableDecisions: Array<ApprovalDecision>, };
