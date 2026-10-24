@@ -1,12 +1,14 @@
 //! Chat Completions wire types stay inside this adapter.
 
+use std::collections::HashSet;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{AssistantContent, Message, Request, ToolCall, Usage};
 
 pub(crate) fn request_body(request: &Request) -> Value {
-    let messages: Vec<_> = request.messages.iter().filter_map(message).collect();
+    let messages = normalize_tool_pairs(request.messages.iter().filter_map(message).collect());
     let mut body = json!({
         "model": request.model, "messages": messages,
         "stream": true, "stream_options": {"include_usage": true}
@@ -25,6 +27,44 @@ pub(crate) fn request_body(request: &Request) -> Value {
         body["max_tokens"] = json!(limit);
     }
     body
+}
+
+fn normalize_tool_pairs(messages: Vec<Value>) -> Vec<Value> {
+    let mut messages = messages.into_iter().peekable();
+    let mut normalized = Vec::new();
+    while let Some(message) = messages.next() {
+        if message["role"] == "tool" {
+            continue;
+        }
+        let ids: Vec<_> = message["tool_calls"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|call| call["id"].as_str())
+            .map(str::to_owned)
+            .collect();
+        let mut missing: HashSet<_> = ids.iter().map(String::as_str).collect();
+        normalized.push(message);
+        // Tool results must immediately follow their assistant's call batch.
+        // Unknown messages were already skipped; keep only matching results.
+        while let Some(result) = messages.next_if(|message| message["role"] == "tool") {
+            if result["tool_call_id"]
+                .as_str()
+                .is_some_and(|id| missing.remove(id))
+            {
+                normalized.push(result);
+            }
+        }
+        for id in &ids {
+            if missing.remove(id.as_str()) {
+                normalized.push(json!({
+                    "role": "tool", "tool_call_id": id,
+                    "content": "没有结果：被打断或本版本无法识别"
+                }));
+            }
+        }
+    }
+    normalized
 }
 
 fn message(message: &Message) -> Option<Value> {

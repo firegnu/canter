@@ -19,7 +19,8 @@ pub enum Message {
         text: String,
     },
     /// Skip when building a request after reading history from a newer version.
-    #[serde(other)]
+    /// Serialization fails rather than silently discarding the original payload.
+    #[serde(other, skip_serializing)]
     Unknown,
 }
 
@@ -33,7 +34,8 @@ pub enum AssistantContent {
         text: String,
     },
     ToolCall(ToolCall),
-    #[serde(other)]
+    /// Read-only compatibility marker; serializing it is an error.
+    #[serde(other, skip_serializing)]
     Unknown,
 }
 

@@ -25,6 +25,66 @@ fn request() -> Request {
 }
 
 #[tokio::test]
+async fn request_repairs_tool_pairs_after_unknown_history_or_interruption() {
+    let messages = serde_json::from_value(json!([
+        {"type":"user","text":"Read the files"},
+        {"type":"tool_result","tool_call_id":"missing","text":"An orphan before its call"},
+        {"type":"assistant","content":[
+            {"type":"custom_tool_call","id":"future","name":"apply_patch","input":"patch"}
+        ]},
+        {"type":"tool_result","tool_call_id":"future","text":"Unknown call's result"},
+        {"type":"assistant","content":[
+            {"type":"reasoning","text":"Keep this reasoning"},
+            {"type":"text","text":"Reading"},
+            {"type":"tool_call","id":"missing","name":"read","arguments":"{raw"},
+            {"type":"tool_call","id":"kept","name":"read","arguments":"{}"},
+            {"type":"tool_call","id":"interrupted","name":"read","arguments":"{}"}
+        ]},
+        {"type":"future_tool_result","tool_call_id":"missing","parts":["image"]},
+        {"type":"tool_result","tool_call_id":"kept","text":"Original result"},
+        {"type":"user","text":"Continue"},
+        {"type":"tool_result","tool_call_id":"interrupted","text":"Too late for that batch"},
+        {"type":"assistant","content":[
+            {"type":"tool_call","id":"last","name":"read","arguments":"{}"}
+        ]}
+    ]))
+    .unwrap();
+    let server = Server::start(vec![Reply::sse(STOP)]).await;
+    let client = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
+    let events: Vec<_> = client
+        .stream(
+            Request {
+                messages,
+                ..request()
+            },
+            CancellationToken::new(),
+        )
+        .collect()
+        .await;
+    assert_eq!(events, vec![Ok(ModelEvent::Finished(FinishReason::Stop))]);
+    assert_eq!(
+        server.requests.lock().unwrap()[0]["messages"],
+        json!([
+            {"role":"user","content":"Read the files"},
+            {"role":"assistant","content":"Reading","reasoning_content":"Keep this reasoning","tool_calls":[
+                {"id":"missing","type":"function","function":{"name":"read","arguments":"{raw"}},
+                {"id":"kept","type":"function","function":{"name":"read","arguments":"{}"}},
+                {"id":"interrupted","type":"function","function":{"name":"read","arguments":"{}"}}
+            ]},
+            {"role":"tool","tool_call_id":"kept","content":"Original result"},
+            {"role":"tool","tool_call_id":"missing","content":"没有结果：被打断或本版本无法识别"},
+            {"role":"tool","tool_call_id":"interrupted","content":"没有结果：被打断或本版本无法识别"},
+            {"role":"user","content":"Continue"},
+            {"role":"assistant","content":"","tool_calls":[
+                {"id":"last","type":"function","function":{"name":"read","arguments":"{}"}}
+            ]},
+            {"role":"tool","tool_call_id":"last","content":"没有结果：被打断或本版本无法识别"}
+        ])
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn cancellation_stops_pending_reads_and_discards_buffered_events() {
     for tail in [STOP, ""] {
         let mut reply = Reply::sse(format!(
@@ -89,6 +149,117 @@ async fn cancellation_interrupts_retry_after_and_local_backoff() {
         assert_eq!(server.requests.lock().unwrap().len(), 1);
         server.stop().await;
     }
+}
+
+#[tokio::test]
+async fn retry_after_over_sixty_seconds_returns_the_original_error_without_waiting() {
+    let far_date =
+        httpdate::fmt_http_date(std::time::SystemTime::now() + Duration::from_secs(86400));
+    for (header, expected_seconds) in [
+        ("61".to_owned(), Some(61)),
+        ("86400".to_owned(), Some(86400)),
+        (far_date, None),
+    ] {
+        let server = Server::start(vec![
+            Reply {
+                status: axum::http::StatusCode::TOO_MANY_REQUESTS,
+                body: "{}".into(),
+                retry_after: Some(header),
+                hang: false,
+            },
+            Reply::sse(STOP),
+        ])
+        .await;
+        let client = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
+        let events: Vec<_> = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.stream(request(), CancellationToken::new()).collect(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(events.len(), 1);
+        let error = events[0].as_ref().unwrap_err();
+        assert_eq!(error.kind, ErrorKind::RateLimited);
+        assert_eq!(error.status, Some(429));
+        let delay = error.retry_after.unwrap();
+        if let Some(seconds) = expected_seconds {
+            assert_eq!(delay, Duration::from_secs(seconds));
+        } else {
+            assert!(delay > Duration::from_secs(86390));
+            assert!(delay <= Duration::from_secs(86400));
+        }
+        assert_eq!(server.requests.lock().unwrap().len(), 1);
+        server.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn interrupted_finish_reasons_retry_only_before_emitting_content() {
+    for reason in ["insufficient_system_resource", "aborted"] {
+        for emitted_content in [false, true] {
+            let chunk = json!({"choices":[{"index":0,"delta":{
+                "content": if emitted_content { Some("partial") } else { None },
+                "tool_calls":[{"index":0,"id":"unfinished","type":"function","function":{"name":"read","arguments":"{}"}}]
+            },"finish_reason":reason}]});
+            let server = Server::start(vec![
+                Reply::sse(format!("data: {chunk}\n\ndata: [DONE]\n\n")),
+                Reply::sse(STOP),
+            ])
+            .await;
+            let client = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
+            let events: Vec<_> = client
+                .stream(request(), CancellationToken::new())
+                .collect()
+                .await;
+            if emitted_content {
+                assert_eq!(events.len(), 2);
+                assert_eq!(events[0], Ok(ModelEvent::TextDelta("partial".into())));
+                assert_eq!(events[1].as_ref().unwrap_err().kind, ErrorKind::Server);
+                assert_eq!(server.requests.lock().unwrap().len(), 1);
+            } else {
+                assert_eq!(events, vec![Ok(ModelEvent::Finished(FinishReason::Stop))]);
+                assert_eq!(server.requests.lock().unwrap().len(), 2);
+            }
+            server.stop().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn tool_call_uses_first_nonempty_id_and_name_while_appending_arguments() {
+    let mut body: String = [
+        json!({"index":0,"id":"","function":{"name":"","arguments":" {"}}),
+        json!({"index":0,"id":"call_1","function":{"name":"read","arguments":"bad:"}}),
+        json!({"index":0,"id":"call_1","function":{"name":"read","arguments":" value"}}),
+        json!({"index":0,"id":"replacement","function":{"name":"other","arguments":"}\n"}}),
+    ]
+    .into_iter()
+    .map(|call| {
+        format!(
+            "data: {}\n\n",
+            json!({"choices":[{"index":0,"delta":{"tool_calls":[call]}}]})
+        )
+    })
+    .collect();
+    body.push_str("data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n");
+    let server = Server::start(vec![Reply::sse(body)]).await;
+    let client = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
+    let events: Vec<_> = client
+        .stream(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert_eq!(
+        events,
+        vec![
+            Ok(ModelEvent::ToolCall(ToolCall {
+                id: "call_1".into(),
+                name: "read".into(),
+                arguments: " {bad: value}\n".into()
+            })),
+            Ok(ModelEvent::Finished(FinishReason::ToolCalls))
+        ]
+    );
+    server.stop().await;
 }
 
 #[tokio::test]

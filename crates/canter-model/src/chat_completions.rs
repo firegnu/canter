@@ -126,9 +126,13 @@ impl ChatCompletions {
                         let call = calls.entry(delta.index).or_insert_with(|| ToolCall {
                             id: String::new(), name: String::new(), arguments: String::new()
                         });
-                        if let Some(id) = delta.id { call.id.push_str(&id); }
+                        if call.id.is_empty() && let Some(id) = delta.id {
+                            call.id = id;
+                        }
                         if let Some(function) = delta.function {
-                            if let Some(name) = function.name { call.name.push_str(&name); }
+                            if call.name.is_empty() && let Some(name) = function.name {
+                                call.name = name;
+                            }
                             if let Some(arguments) = function.arguments { call.arguments.push_str(&arguments); }
                         }
                     }
@@ -137,6 +141,7 @@ impl ChatCompletions {
                             "stop" => FinishReason::Stop,
                             "tool_calls" => FinishReason::ToolCalls,
                             "length" => FinishReason::Length,
+                            "insufficient_system_resource" | "aborted" => Err(ModelError::new(ErrorKind::Server))?,
                             "network_error" => Err(ModelError::new(ErrorKind::Network))?,
                             _ => FinishReason::Other,
                         });
@@ -173,7 +178,8 @@ impl Model for ChatCompletions {
                             yield Ok(event);
                         }
                         Err(error) => {
-                            if !emitted && error.is_retryable() && retry < 3 {
+                            if !emitted && error.is_retryable() && retry < 3
+                                && error.retry_after.is_none_or(|delay| delay <= Duration::from_secs(60)) {
                                 retry_delay = Some(error.retry_after.unwrap_or_else(|| {
                                     Duration::from_millis(250 * (1 << retry)).min(Duration::from_secs(1))
                                 }));

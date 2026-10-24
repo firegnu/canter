@@ -1,7 +1,7 @@
 use canter_model::{AssistantContent, Message, ToolCall};
 
 #[test]
-fn history_preserves_raw_content_and_skips_unknown_kinds() {
+fn history_preserves_raw_content_and_reads_unknown_kinds_without_writing_them() {
     let history = r#"[
         {"type":"system","text":"Be helpful."},
         {"type":"user","text":"Read the file."},
@@ -35,9 +35,40 @@ fn history_preserves_raw_content_and_skips_unknown_kinds() {
             ]
         }
     );
-    let saved = serde_json::to_string(&messages).unwrap();
+    assert!(serde_json::to_string(&messages[2]).is_err());
+    assert!(serde_json::to_string(&messages[3]).is_err());
+    assert!(serde_json::to_string(&messages).is_err());
+}
+
+#[test]
+fn known_history_ignores_new_fields_and_preserves_existing_fields_on_roundtrip() {
+    let messages: Vec<Message> = serde_json::from_value(serde_json::json!([
+        {"type":"system","text":"System","new_field":true},
+        {"type":"user","text":"User","new_field":{}},
+        {"type":"assistant","new_field":[],"content":[
+            {"type":"reasoning","text":"  Think\n","new_field":1},
+            {"type":"text","text":"Reading.","new_field":2},
+            {"type":"tool_call","id":"call_a","name":"read","arguments":"{broken: [","new_field":3}
+        ]},
+        {"type":"tool_result","tool_call_id":"call_a","text":"Invalid arguments.","new_field":null}
+    ]))
+    .unwrap();
+    let saved = serde_json::to_value(&messages).unwrap();
     assert_eq!(
-        serde_json::from_str::<Vec<Message>>(&saved).unwrap(),
+        saved,
+        serde_json::json!([
+            {"type":"system","text":"System"},
+            {"type":"user","text":"User"},
+            {"type":"assistant","content":[
+                {"type":"reasoning","text":"  Think\n"},
+                {"type":"text","text":"Reading."},
+                {"type":"tool_call","id":"call_a","name":"read","arguments":"{broken: ["}
+            ]},
+            {"type":"tool_result","tool_call_id":"call_a","text":"Invalid arguments."}
+        ])
+    );
+    assert_eq!(
+        serde_json::from_value::<Vec<Message>>(saved).unwrap(),
         messages
     );
 }
