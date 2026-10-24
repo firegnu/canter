@@ -8,7 +8,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::markdown;
-use crate::text::{LogicalLine, sanitize, spans_width, truncate, wrap};
+use crate::text::{LogicalLine, sanitize, spans_width, truncate, visible, wrap};
 
 /// Output lines a finished command keeps.
 const FINISHED_TAIL: usize = 3;
@@ -16,8 +16,9 @@ const FINISHED_TAIL: usize = 3;
 const LIVE_TAIL: usize = 5;
 const GUTTER: &str = "    │ ";
 
-/// A blank row, `› ` and the text, then another blank row.
-pub(crate) fn prompt(input: &[UserInput], width: u16) -> Vec<Line<'static>> {
+/// A blank row, `› ` and the text, then another blank row. `source` names the
+/// client that sent it when that was not this terminal.
+pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> Vec<Line<'static>> {
     let texts: Vec<&str> = input
         .iter()
         .filter_map(|part| match part {
@@ -36,10 +37,14 @@ pub(crate) fn prompt(input: &[UserInput], width: u16) -> Vec<Line<'static>> {
         } else {
             Span::raw("  ")
         };
-        rows.extend(wrap(
-            &LogicalLine::new(vec![indent], vec![Span::raw(line.to_owned())]),
-            width,
-        ));
+        let mut body = vec![Span::raw(line.to_owned())];
+        if let Some(source) = source.filter(|_| i == 0) {
+            body.push(Span::styled(
+                format!("  （来自 {}）", sanitize(source)),
+                Style::new().dim(),
+            ));
+        }
+        rows.extend(wrap(&LogicalLine::new(vec![indent], body), width));
     }
     rows.push(Line::default());
     rows
@@ -56,7 +61,7 @@ pub(crate) fn agent_message(text: &str) -> Vec<LogicalLine> {
 /// Rows for an item; `finished` picks its final form over the in-progress one.
 pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Line<'static>> {
     match item {
-        Item::UserMessage { content, .. } => prompt(content, width),
+        Item::UserMessage { content, .. } => prompt(content, None, width),
         Item::AgentMessage { text, .. } => wrap_all(&agent_message(text), width),
         Item::Reasoning {
             summary, content, ..
@@ -190,12 +195,32 @@ fn file_read(
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum DiffKind {
+pub(crate) enum DiffKind {
     Hunk,
     Added,
     Removed,
     Context,
     Note,
+}
+
+/// An item waiting for an approval: only its title row, marked 「等你批准」.
+/// The approval box below shows the whole command or diff.
+pub(crate) fn waiting(item: &Item, cwd: &str, width: u16) -> Vec<Line<'static>> {
+    let mark = || vec![Span::styled("等你批准", Style::new().yellow())];
+    match item {
+        Item::CommandExecution { command, .. } => {
+            vec![command_title(command, Style::new().dim(), mark(), width)]
+        }
+        Item::FileChange { changes, .. } => changes
+            .iter()
+            .map(|change| {
+                let diff = parse_diff(&sanitize(&change.diff), &change.kind);
+                let header = change_header(change, &diff, Style::new().dim(), cwd);
+                right_aligned(header, mark(), usize::from(width))
+            })
+            .collect(),
+        _ => self::item(item, false, cwd, width),
+    }
 }
 
 fn file_change(
@@ -205,14 +230,6 @@ fn file_change(
     width: u16,
 ) -> Vec<Line<'static>> {
     let diff = parse_diff(&sanitize(&change.diff), &change.kind);
-    let added = diff
-        .iter()
-        .filter(|(kind, _)| *kind == DiffKind::Added)
-        .count();
-    let removed = diff
-        .iter()
-        .filter(|(kind, _)| *kind == DiffKind::Removed)
-        .count();
     let (bullet, suffix) = match status {
         ItemStatus::InProgress => (Style::new().dim(), None),
         ItemStatus::Failed => (
@@ -225,6 +242,33 @@ fn file_change(
         ),
         _ => (Style::new().green(), None),
     };
+    let mut header = change_header(change, &diff, bullet, cwd);
+    header.extend(suffix);
+    let mut rows = vec![Line::from(truncate(header, usize::from(width)))];
+    for (kind, text) in diff {
+        let (marker, style) = diff_style(kind);
+        let line = LogicalLine {
+            indent: vec![
+                Span::styled(GUTTER, Style::new().dim()),
+                Span::styled(marker, style),
+            ],
+            hang: vec![Span::styled(GUTTER, Style::new().dim()), Span::raw("  ")],
+            body: vec![Span::styled(text, style)],
+        };
+        rows.extend(wrap(&line, width));
+    }
+    rows
+}
+
+/// `● 改 path  +a −r`: a file change's title, before any status suffix.
+fn change_header(
+    change: &FileUpdateChange,
+    diff: &[(DiffKind, String)],
+    bullet: Style,
+    cwd: &str,
+) -> Vec<Span<'static>> {
+    let count = |wanted| diff.iter().filter(|(kind, _)| *kind == wanted).count();
+    let (added, removed) = (count(DiffKind::Added), count(DiffKind::Removed));
     let verb = match &change.kind {
         PatchChangeKind::Add => "新建 ",
         PatchChangeKind::Delete => "删除 ",
@@ -256,32 +300,23 @@ fn file_change(
             Span::styled(format!("−{removed}"), Style::new().red()),
         ]),
     }
-    header.extend(suffix);
-    let mut rows = vec![Line::from(truncate(header, usize::from(width)))];
-    for (kind, text) in diff {
-        let (marker, style) = match kind {
-            DiffKind::Hunk => ("", Style::new().cyan()),
-            DiffKind::Added => ("+ ", Style::new().green()),
-            DiffKind::Removed => ("- ", Style::new().red()),
-            DiffKind::Context => ("  ", Style::new().dim()),
-            DiffKind::Note => ("", Style::new().dim()),
-        };
-        let line = LogicalLine {
-            indent: vec![
-                Span::styled(GUTTER, Style::new().dim()),
-                Span::styled(marker, style),
-            ],
-            hang: vec![Span::styled(GUTTER, Style::new().dim()), Span::raw("  ")],
-            body: vec![Span::styled(text, style)],
-        };
-        rows.extend(wrap(&line, width));
+    header
+}
+
+/// The marker and colour of a diff line.
+pub(crate) fn diff_style(kind: DiffKind) -> (&'static str, Style) {
+    match kind {
+        DiffKind::Hunk => ("", Style::new().cyan()),
+        DiffKind::Added => ("+ ", Style::new().green()),
+        DiffKind::Removed => ("- ", Style::new().red()),
+        DiffKind::Context => ("  ", Style::new().dim()),
+        DiffKind::Note => ("", Style::new().dim()),
     }
-    rows
 }
 
 /// Splits a unified diff into marked lines. Text without hunks is a whole
 /// file being added (or deleted).
-fn parse_diff(text: &str, kind: &PatchChangeKind) -> Vec<(DiffKind, String)> {
+pub(crate) fn parse_diff(text: &str, kind: &PatchChangeKind) -> Vec<(DiffKind, String)> {
     if !text.lines().any(|line| line.starts_with("@@")) {
         let kind = match kind {
             PatchChangeKind::Delete => DiffKind::Removed,
@@ -337,20 +372,7 @@ fn command_card(
         (_, None) => (Style::new().green(), Vec::new()),
     };
     right.extend(took);
-
-    let clean = sanitize(command);
-    let mut lines = clean.lines();
-    let mut shown = lines.next().unwrap_or_default().to_owned();
-    if lines.next().is_some() {
-        shown.push_str(" …");
-    }
-    let left = vec![
-        Span::raw("  "),
-        Span::styled("● ", bullet),
-        Span::styled("跑 ", Style::new().bold()),
-        Span::raw(shown),
-    ];
-    let mut rows = vec![right_aligned(left, right, usize::from(width))];
+    let mut rows = vec![command_title(command, bullet, right, width)];
 
     let output = sanitize(output);
     let mut lines: Vec<&str> = output.split('\n').collect();
@@ -383,6 +405,29 @@ fn command_card(
     rows
 }
 
+/// `● 跑 <first line of the command>` with `right` flush with the right edge.
+/// Control characters in the command show as escapes, as in the approval box.
+fn command_title(
+    command: &str,
+    bullet: Style,
+    right: Vec<Span<'static>>,
+    width: u16,
+) -> Line<'static> {
+    let clean = visible(command);
+    let mut lines = clean.lines();
+    let mut shown = lines.next().unwrap_or_default().to_owned();
+    if lines.next().is_some() {
+        shown.push_str(" …");
+    }
+    let left = vec![
+        Span::raw("  "),
+        Span::styled("● ", bullet),
+        Span::styled("跑 ", Style::new().bold()),
+        Span::raw(shown),
+    ];
+    right_aligned(left, right, usize::from(width))
+}
+
 /// `left` then `right` flush with the right edge; the left side is cut to fit.
 fn right_aligned(
     left: Vec<Span<'static>>,
@@ -410,8 +455,9 @@ fn format_duration(ms: u64) -> String {
 }
 
 /// Paths inside the session's working directory are shown relative to it.
-fn display_path(path: &str, cwd: &str) -> String {
-    let path = sanitize(path);
+/// Control characters show as escapes.
+pub(crate) fn display_path(path: &str, cwd: &str) -> String {
+    let path = visible(path);
     if cwd.is_empty() {
         return path;
     }

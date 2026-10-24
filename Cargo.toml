@@ -32,3 +32,4 @@ unicode-width = "=0.2.2"
 async-trait = "=0.1.92"
 similar = "=2.7.0"
 nix = { version = "=0.31.3", features = ["signal", "process"] }
+chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }

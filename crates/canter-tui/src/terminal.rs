@@ -51,6 +51,10 @@ impl<B: Backend> InlineTerminal<B> {
         self.terminal.backend()
     }
 
+    pub fn backend_mut(&mut self) -> &mut B {
+        self.terminal.backend_mut()
+    }
+
     pub fn size(&self) -> Result<Size, B::Error> {
         self.terminal.size()
     }

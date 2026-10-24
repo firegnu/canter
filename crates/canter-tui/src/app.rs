@@ -1,12 +1,14 @@
 //! The conversation screen: keeps the session snapshot up to date from events,
 //! hands finished rows to the scrollback in order, and draws what is still in
-//! progress plus the status line, input box and info line.
+//! progress plus the status line, the input box (or the approval box) and the
+//! info line.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use canter_protocol::{
-    Event, EventPayload, Item, ItemStatus, PermissionMode, SessionSnapshot, SessionStatus, Turn,
-    TurnStatus, UserInput, apply_event_mut,
+    ApprovalDecision, ApprovalRequest, ApprovalResolution, Event, EventPayload, Item, ItemStatus,
+    PendingRequest, PermissionMode, RequestKind, SessionSnapshot, SessionStatus, Turn, TurnStatus,
+    UserInput, apply_event_mut,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
@@ -15,6 +17,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
+use crate::approval::{self, ApprovalBox, shorten_home};
 use crate::cells;
 use crate::input::InputBox;
 use crate::text::{LogicalLine, sanitize, str_width, truncate, wrap};
@@ -25,12 +28,28 @@ const MAX_INPUT_ROWS: usize = 8;
 const INPUT_LEFT: u16 = 4;
 const INPUT_CHROME: u16 = 6;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Changes of what is on screen kept for keys still waiting to be handled.
+const SHOWN_KEPT: usize = 8;
+/// After an approval box's answers come on screen, answer keys are dropped
+/// for this long, and every key that comes in meanwhile pushes it back. The
+/// terminal may still show what was there before for a moment, so a key
+/// right after the box appears may not be meant for it (user's decision).
+pub const ANSWER_GUARD_MS: i64 = 300;
 
 /// What the caller should do after a key press.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Send this text to the session.
     Send(String),
+    /// Answer an approval request.
+    Resolve {
+        request_id: String,
+        decision: ApprovalDecision,
+    },
+    /// Stop this turn.
+    Interrupt {
+        turn_id: String,
+    },
     Quit,
 }
 
@@ -44,9 +63,39 @@ struct Written {
     lines: usize,
 }
 
+/// The approval box's highlighted answer and body scroll, for one request.
+#[derive(Debug, Default)]
+struct ApprovalCursor {
+    request: String,
+    selected: usize,
+    scroll: usize,
+}
+
+/// What a frame showed. A key acts on the frame that was on screen when it
+/// came in, not on anything drawn since: a key meant for the input box or
+/// for one request never answers the next request.
+#[derive(Debug, Default, Clone, PartialEq)]
+struct Shown {
+    /// The request in the approval box; `None` when the input box showed.
+    approval: Option<String>,
+    /// Whether that box had room for its answers.
+    answers: bool,
+    /// The turn in progress.
+    turn: Option<String>,
+}
+
+impl Shown {
+    /// The request whose answers showed.
+    fn answering(&self) -> Option<&str> {
+        self.approval.as_deref().filter(|_| self.answers)
+    }
+}
+
 pub struct App {
     snapshot: SessionSnapshot,
     home: Option<String>,
+    /// This terminal's `clientName`; what others send is marked with theirs.
+    client_name: String,
     input: InputBox,
     written: Written,
     /// Rows to add to the scrollback after the items (warnings, errors).
@@ -57,7 +106,23 @@ pub struct App {
     errors_shown: HashSet<String>,
     /// Unix ms when the current turn started.
     working_since: Option<i64>,
-    disconnected: Option<String>,
+    /// Why the event stream is down while reconnecting.
+    reconnecting: Option<String>,
+    /// The turn an interrupt was sent for.
+    interrupting: Option<String>,
+    /// Approval requests this terminal answered; their box stays closed
+    /// while the answer is on its way.
+    answered: HashSet<String>,
+    approval: ApprovalCursor,
+    /// From the last layout: body rows per PgUp/PgDn and the furthest scroll.
+    approval_page: usize,
+    approval_max_scroll: usize,
+    /// What the frame being drawn shows; on screen after [`App::frame_on_screen`].
+    drawing: Shown,
+    /// Recent frames on screen: each entry holds from that frame number on.
+    shown: VecDeque<(u64, Shown)>,
+    /// Unix ms until which answer keys are dropped; see [`ANSWER_GUARD_MS`].
+    guard_until: i64,
     width: u16,
 }
 
@@ -71,15 +136,30 @@ impl App {
         Self {
             snapshot,
             home,
+            client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::default(),
             written: Written::default(),
             notices: Vec::new(),
             completed: HashSet::new(),
             errors_shown: HashSet::new(),
             working_since: working.then_some(now_ms),
-            disconnected: None,
+            reconnecting: None,
+            interrupting: None,
+            answered: HashSet::new(),
+            approval: ApprovalCursor::default(),
+            approval_page: 1,
+            approval_max_scroll: 0,
+            drawing: Shown::default(),
+            shown: VecDeque::new(),
+            guard_until: i64::MIN,
             width: 80,
         }
+    }
+
+    /// Sets this terminal's `clientName` (the default is [`crate::CLIENT_NAME`]).
+    pub fn with_client_name(mut self, name: impl Into<String>) -> Self {
+        self.client_name = name.into();
+        self
     }
 
     pub fn snapshot(&self) -> &SessionSnapshot {
@@ -87,6 +167,14 @@ impl App {
     }
 
     pub fn apply_event(&mut self, event: &Event, now_ms: i64) {
+        let open_request = match &event.payload {
+            EventPayload::RequestResolved { request_id, .. } => {
+                self.snapshot.pending_requests.iter().any(|request| {
+                    request.id == *request_id && matches!(request.kind, RequestKind::Approval(_))
+                })
+            }
+            _ => false,
+        };
         if let Err(error) = apply_event_mut(&mut self.snapshot, event) {
             self.notices.push(cells::notice(
                 "✗ ",
@@ -97,6 +185,11 @@ impl App {
         }
         match &event.payload {
             EventPayload::TurnStarted { .. } => self.working_since = Some(event.timestamp),
+            EventPayload::TurnCompleted { turn } => {
+                if self.interrupting.as_ref() == Some(&turn.id) {
+                    self.interrupting = None;
+                }
+            }
             EventPayload::SessionStatus { status } => match status {
                 SessionStatus::Working | SessionStatus::WaitingApproval => {
                     self.working_since.get_or_insert(now_ms);
@@ -106,6 +199,18 @@ impl App {
             EventPayload::ItemCompleted { turn_id, item } => {
                 if let Some(id) = item.id() {
                     self.completed.insert((turn_id.clone(), id.to_owned()));
+                }
+            }
+            EventPayload::RequestResolved {
+                request_id,
+                resolution,
+                client_name,
+            } => {
+                self.answered.remove(request_id);
+                if open_request
+                    && let Some(notice) = self.resolution_notice(resolution, client_name.as_deref())
+                {
+                    self.notices.push(notice);
                 }
             }
             EventPayload::Warning { message } => {
@@ -138,12 +243,54 @@ impl App {
         }
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+    /// The frame numbered `frame` is on screen from `at` (Unix ms).
+    pub(crate) fn frame_on_screen(&mut self, frame: u64, at: i64) {
+        let before = self.shown.back().map(|(_, shown)| shown);
+        if before != Some(&self.drawing) {
+            let answering = self.drawing.answering();
+            if answering.is_some() && before.and_then(Shown::answering) != answering {
+                self.guard_until = self.guard_until.max(at + ANSWER_GUARD_MS);
+            }
+            self.shown.push_back((frame, self.drawing.clone()));
+            // Keys wait at most a frame or two before they are handled.
+            if self.shown.len() > SHOWN_KEPT {
+                self.shown.pop_front();
+            }
+        }
+    }
+
+    /// A key pressed at `now_ms` on the latest frame on screen.
+    pub fn handle_key(&mut self, key: KeyEvent, now_ms: i64) -> Option<Action> {
+        let shown = self.shown.back().map(|(_, shown)| shown.clone());
+        self.key_on(key, shown.unwrap_or_default(), now_ms)
+    }
+
+    /// A key that came in at `at` (Unix ms) while frame `frame` was on
+    /// screen. Before any frame, keys go to the input box.
+    pub(crate) fn handle_key_on(&mut self, key: KeyEvent, frame: u64, at: i64) -> Option<Action> {
+        let shown = self
+            .shown
+            .iter()
+            .rev()
+            .find(|(since, _)| *since <= frame)
+            .map(|(_, shown)| shown.clone());
+        self.key_on(key, shown.unwrap_or_default(), at)
+    }
+
+    fn key_on(&mut self, key: KeyEvent, shown: Shown, at: i64) -> Option<Action> {
         if key.kind == KeyEventKind::Release {
             return None;
         }
+        let guarded = at < self.guard_until;
+        if guarded {
+            self.guard_until = self.guard_until.max(at + ANSWER_GUARD_MS);
+        }
+        if shown.approval.is_some() {
+            return self.approval_key(key, shown, guarded);
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
+            KeyCode::Esc => return self.interrupt_seen(shown.turn),
             KeyCode::Char('c') if ctrl => {
                 if self.input.is_empty() {
                     return Some(Action::Quit);
@@ -179,6 +326,12 @@ impl App {
         self.input.insert(text);
     }
 
+    /// A line for the scrollback, e.g. the server's version differs.
+    pub fn warning(&mut self, message: &str) {
+        self.notices
+            .push(cells::notice("! ", message, Style::new().yellow()));
+    }
+
     pub fn send_failed(&mut self, message: &str) {
         self.notices.push(cells::notice(
             "✗ ",
@@ -187,9 +340,41 @@ impl App {
         ));
     }
 
-    /// The event stream ended; shown in the status line.
-    pub fn disconnected(&mut self, reason: &str) {
-        self.disconnected = Some(reason.to_owned());
+    /// The answer did not reach the server; the box opens again.
+    pub fn answer_failed(&mut self, request_id: &str, message: &str) {
+        self.answered.remove(request_id);
+        self.notices.push(cells::notice(
+            "✗ ",
+            &format!("没答上：{message}"),
+            Style::new().red(),
+        ));
+    }
+
+    /// Another client answered first, so this terminal's answer was ignored.
+    pub fn answer_late(&mut self) {
+        self.notices.push(cells::notice(
+            "· ",
+            "你的回答晚了一步，没有生效",
+            Style::new().dim(),
+        ));
+    }
+
+    pub fn interrupt_failed(&mut self, message: &str) {
+        self.interrupting = None;
+        self.notices.push(cells::notice(
+            "✗ ",
+            &format!("没打断：{message}"),
+            Style::new().red(),
+        ));
+    }
+
+    /// The event stream is down; the status line says so until [`App::reconnected`].
+    pub fn reconnecting(&mut self, reason: &str) {
+        self.reconnecting = Some(reason.to_owned());
+    }
+
+    pub fn reconnected(&mut self) {
+        self.reconnecting = None;
     }
 
     /// Rows that are finished since the last call, in order. A row is
@@ -200,7 +385,8 @@ impl App {
         let cwd = self.snapshot.settings.cwd.clone();
         while let Some(turn) = self.snapshot.turns.get(self.written.turn) {
             if !self.written.prompt {
-                rows.extend(cells::prompt(&turn.input, width));
+                let from = source(&self.client_name, &turn.client_name);
+                rows.extend(cells::prompt(&turn.input, from, width));
                 self.written.prompt = true;
             }
             let echo = echo_index(turn);
@@ -247,7 +433,71 @@ impl App {
     }
 
     /// Lays out the viewport for a screen of `width` × `height`.
-    pub(crate) fn view(&self, width: u16, height: u16, now_ms: i64) -> View {
+    pub(crate) fn view(&mut self, width: u16, height: u16, now_ms: i64) -> View {
+        // Leave the blank row, status line, info line and one live row.
+        let box_height = height.saturating_sub(4);
+        let approval = self.open_approval().map(|(request, approval)| {
+            let (selected, scroll) = if self.approval.request == request.id {
+                (self.approval.selected, self.approval.scroll)
+            } else {
+                (0, 0)
+            };
+            let home = self.home.as_deref();
+            // Answers already on screen and past the guard; a box that
+            // first shows them in this frame starts a guard.
+            let taken = now_ms >= self.guard_until
+                && self.shown.back().and_then(|(_, shown)| shown.answering())
+                    == Some(request.id.as_str());
+            let laid = approval::layout(
+                &self.snapshot,
+                request,
+                approval,
+                home,
+                selected,
+                scroll,
+                taken,
+                width,
+                box_height,
+            );
+            (request.id.clone(), laid)
+        });
+        self.drawing = Shown {
+            approval: approval.as_ref().map(|(request, _)| request.clone()),
+            answers: approval.as_ref().is_some_and(|(_, laid)| laid.fits),
+            turn: self
+                .snapshot
+                .turns
+                .iter()
+                .rev()
+                .find(|turn| turn.status == TurnStatus::InProgress)
+                .map(|turn| turn.id.clone()),
+        };
+        let bottom = match approval {
+            Some((request, laid)) => {
+                self.approval_page = laid.page;
+                self.approval_max_scroll = laid.max_scroll;
+                if self.approval.request == request {
+                    self.approval.scroll = self.approval.scroll.min(laid.max_scroll);
+                }
+                Bottom::Approval(laid)
+            }
+            None => self.input_view(width),
+        };
+
+        let mut live = self.live_rows(width);
+        let room = usize::from(height.saturating_sub(3 + bottom.height()));
+        if live.len() > room {
+            live.drain(..live.len() - room);
+        }
+        View {
+            live,
+            status: self.status_line(now_ms),
+            bottom,
+            info: self.info_line(width),
+        }
+    }
+
+    fn input_view(&self, width: u16) -> Bottom {
         let input_width = usize::from(width.saturating_sub(INPUT_CHROME));
         let layout = self.input.layout(input_width);
         let first = layout
@@ -255,7 +505,7 @@ impl App {
             .0
             .saturating_sub(MAX_INPUT_ROWS - 1)
             .min(layout.rows.len().saturating_sub(MAX_INPUT_ROWS));
-        let mut input = Vec::new();
+        let mut rows = Vec::new();
         for (row, range) in layout
             .rows
             .iter()
@@ -273,7 +523,7 @@ impl App {
             } else {
                 spans.push(Span::raw(self.input.text()[range.clone()].to_owned()));
             }
-            input.push(Line::from(truncate(
+            rows.push(Line::from(truncate(
                 spans,
                 usize::from(width.saturating_sub(2)),
             )));
@@ -282,24 +532,143 @@ impl App {
             INPUT_LEFT + layout.cursor.1 as u16,
             1 + (layout.cursor.0 - first) as u16,
         );
-
-        let bottom = 1 + 1 + input.len() as u16 + 2 + 1;
-        let mut live = self.live_rows(width);
-        let room = usize::from(height.saturating_sub(bottom));
-        if live.len() > room {
-            live.drain(..live.len() - room);
-        }
-        View {
-            live,
-            status: self.status_line(now_ms),
-            input,
-            cursor,
-            info: self.info_line(width),
-        }
+        Bottom::Input { rows, cursor }
     }
 
     fn input_width(&self) -> usize {
         usize::from(self.width.saturating_sub(INPUT_CHROME))
+    }
+
+    /// The approval request the box shows: the first one this terminal has
+    /// not answered yet.
+    fn open_approval(&self) -> Option<(&PendingRequest, &ApprovalRequest)> {
+        self.snapshot
+            .pending_requests
+            .iter()
+            .find_map(|request| match &request.kind {
+                RequestKind::Approval(approval) if !self.answered.contains(&request.id) => {
+                    Some((request, approval))
+                }
+                _ => None,
+            })
+    }
+
+    /// Keys pressed on an approval box. They answer only the request that box
+    /// showed, and only when its answers were on screen; once that request is
+    /// gone, they do nothing. While `guarded`, answer keys are dropped.
+    fn approval_key(&mut self, key: KeyEvent, shown: Shown, guarded: bool) -> Option<Action> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('c' | 'd') if ctrl => return Some(Action::Quit),
+            KeyCode::Esc => return self.interrupt_seen(shown.turn),
+            KeyCode::Up | KeyCode::Down | KeyCode::Enter | KeyCode::Char('1'..='9') if guarded => {
+                return None;
+            }
+            _ => {}
+        }
+        let request_id = shown.approval?;
+        if !shown.answers {
+            return None;
+        }
+        let options =
+            self.snapshot
+                .pending_requests
+                .iter()
+                .find_map(|request| match &request.kind {
+                    RequestKind::Approval(approval)
+                        if request.id == request_id && !self.answered.contains(&request.id) =>
+                    {
+                        Some(approval::options(approval))
+                    }
+                    _ => None,
+                })?;
+        if self.approval.request != request_id {
+            self.approval = ApprovalCursor {
+                request: request_id.clone(),
+                ..ApprovalCursor::default()
+            };
+        }
+        let cursor = &mut self.approval;
+        let decision = match key.code {
+            KeyCode::Up => {
+                cursor.selected = cursor.selected.saturating_sub(1);
+                None
+            }
+            KeyCode::Down => {
+                cursor.selected = (cursor.selected + 1).min(options.len().saturating_sub(1));
+                None
+            }
+            KeyCode::PageUp => {
+                cursor.scroll = cursor.scroll.saturating_sub(self.approval_page);
+                None
+            }
+            KeyCode::PageDown => {
+                cursor.scroll = (cursor.scroll + self.approval_page).min(self.approval_max_scroll);
+                None
+            }
+            KeyCode::Enter => options.get(cursor.selected).copied(),
+            KeyCode::Char(digit @ '1'..='9') if !ctrl => {
+                options.get(digit as usize - '1' as usize).copied()
+            }
+            _ => None,
+        }?;
+        self.answered.insert(request_id.clone());
+        Some(Action::Resolve {
+            request_id,
+            decision,
+        })
+    }
+
+    /// Esc stops the turn the frame showed in progress, if it still is; when
+    /// the frame showed nothing in progress it does nothing.
+    fn interrupt_seen(&mut self, turn: Option<String>) -> Option<Action> {
+        let turn_id = turn?;
+        let working = self
+            .snapshot
+            .turns
+            .iter()
+            .any(|turn| turn.id == turn_id && turn.status == TurnStatus::InProgress);
+        if !working {
+            return None;
+        }
+        self.interrupt(turn_id)
+    }
+
+    fn interrupt(&mut self, turn_id: String) -> Option<Action> {
+        if self.interrupting.as_ref() == Some(&turn_id) {
+            return None;
+        }
+        self.interrupting = Some(turn_id.clone());
+        Some(Action::Interrupt { turn_id })
+    }
+
+    /// Who answered an approval, for the scrollback.
+    fn resolution_notice(
+        &self,
+        resolution: &ApprovalResolution,
+        client: Option<&str>,
+    ) -> Option<LogicalLine> {
+        let dim = Style::new().dim();
+        match resolution {
+            ApprovalResolution::Answered { decision } => {
+                let label = approval::decision_label(*decision);
+                let text = match client {
+                    Some(name) if name == self.client_name => format!("你选了：{label}"),
+                    Some(name) => format!("{name} 答了：{label}"),
+                    None => format!("答了：{label}"),
+                };
+                let (mark, style) = match decision {
+                    ApprovalDecision::Accept | ApprovalDecision::AcceptForSession => {
+                        ("✓ ", Style::new().green())
+                    }
+                    _ => ("✗ ", Style::new().red()),
+                };
+                Some(cells::notice(mark, &text, style))
+            }
+            ApprovalResolution::Cancelled => Some(cells::notice("■ ", "批准请求取消了", dim)),
+            ApprovalResolution::TimedOut => Some(cells::notice("■ ", "批准请求超时了", dim)),
+            ApprovalResolution::Unknown => None,
+        }
     }
 
     /// Statusless items (messages, thinking) are done once `item.completed`
@@ -324,6 +693,15 @@ impl App {
     /// Everything not yet in the scrollback.
     fn live_rows(&self, width: u16) -> Vec<Line<'static>> {
         let cwd = &self.snapshot.settings.cwd;
+        let waiting: Vec<&str> = self
+            .snapshot
+            .pending_requests
+            .iter()
+            .filter_map(|request| match &request.kind {
+                RequestKind::Approval(approval) => Some(approval.item_id.as_str()),
+                RequestKind::Unknown => None,
+            })
+            .collect();
         let mut rows = Vec::new();
         for (turn_index, turn) in self
             .snapshot
@@ -334,7 +712,8 @@ impl App {
         {
             let current = turn_index == self.written.turn;
             if !current || !self.written.prompt {
-                rows.extend(cells::prompt(&turn.input, width));
+                let from = source(&self.client_name, &turn.client_name);
+                rows.extend(cells::prompt(&turn.input, from, width));
             }
             let echo = echo_index(turn);
             let first = if current { self.written.item } else { 0 };
@@ -351,18 +730,20 @@ impl App {
                         0
                     };
                     rows.extend(cells::wrap_all(&lines[from..], width));
+                } else if !done && item.id().is_some_and(|id| waiting.contains(&id)) {
+                    rows.extend(cells::waiting(item, cwd, width));
                 } else {
                     rows.extend(cells::item(item, done, cwd, width));
                 }
             }
         }
         for queued in &self.snapshot.queued_inputs {
-            let text = first_line(&queued.input);
+            let mut text = format!("  · 排队：{}", first_line(&queued.input));
+            if let Some(from) = source(&self.client_name, &queued.client_name) {
+                text += &format!("（来自 {}）", sanitize(from));
+            }
             rows.push(Line::from(truncate(
-                vec![Span::styled(
-                    format!("  · 排队：{text}"),
-                    Style::new().dim(),
-                )],
+                vec![Span::styled(text, Style::new().dim())],
                 usize::from(width),
             )));
         }
@@ -370,11 +751,20 @@ impl App {
     }
 
     fn status_line(&self, now_ms: i64) -> Line<'static> {
-        if let Some(reason) = &self.disconnected {
-            return Line::from(Span::styled(
-                format!(" ✗ 和服务端断开了：{reason}"),
-                Style::new().red(),
-            ));
+        if let Some(reason) = &self.reconnecting {
+            return Line::from(vec![
+                Span::styled(" ⟳ 重连中…", Style::new().yellow()),
+                Span::styled(format!(" · {}", sanitize(reason)), Style::new().dim()),
+            ]);
+        }
+        let interrupting = self.interrupting.as_ref().is_some_and(|id| {
+            self.snapshot
+                .turns
+                .iter()
+                .any(|turn| turn.id == *id && turn.status == TurnStatus::InProgress)
+        });
+        if interrupting {
+            return Line::from(Span::styled(" ■ 正在打断…", Style::new().yellow()));
         }
         let elapsed = self
             .working_since
@@ -403,7 +793,11 @@ impl App {
                     Style::new().red(),
                 ))
             }
-            SessionStatus::Closed => Line::from(Span::styled(" 会话已结束", Style::new().dim())),
+            // Only an explicit `canter --resume` opens it again.
+            SessionStatus::Closed => Line::from(Span::styled(
+                " ■ 会话已关闭 · 要接着聊，退出后用 canter --resume",
+                Style::new().yellow(),
+            )),
             SessionStatus::Idle | SessionStatus::Unknown => Line::default(),
         }
     }
@@ -416,13 +810,7 @@ impl App {
             // Unknown modes are treated as the strictest one.
             PermissionMode::AlwaysAsk | PermissionMode::Unknown => "每次问",
         };
-        let mut cwd = sanitize(&settings.cwd);
-        if let Some(home) = &self.home
-            && let Some(rest) = cwd.strip_prefix(home.trim_end_matches('/'))
-            && (rest.is_empty() || rest.starts_with('/'))
-        {
-            cwd = format!("~{rest}");
-        }
+        let cwd = shorten_home(&sanitize(&settings.cwd), self.home.as_deref());
         let text = format!(" {} · {mode} · {cwd}", sanitize(&settings.model));
         Line::from(truncate(
             vec![Span::styled(text, Style::new().dim())],
@@ -435,15 +823,34 @@ impl App {
 pub(crate) struct View {
     live: Vec<Line<'static>>,
     status: Line<'static>,
-    input: Vec<Line<'static>>,
-    /// Cursor inside the input box, relative to the box's top-left corner.
-    cursor: (u16, u16),
+    bottom: Bottom,
     info: Line<'static>,
+}
+
+/// The input box, or the approval box in its place.
+enum Bottom {
+    Input {
+        rows: Vec<Line<'static>>,
+        /// Cursor inside the box, relative to the box's top-left corner.
+        cursor: (u16, u16),
+    },
+    Approval(ApprovalBox),
+}
+
+impl Bottom {
+    /// Rows inside the border, plus the border.
+    fn height(&self) -> u16 {
+        let rows = match self {
+            Bottom::Input { rows, .. } => rows.len(),
+            Bottom::Approval(laid) => laid.rows.len(),
+        };
+        rows as u16 + 2
+    }
 }
 
 impl View {
     pub fn height(&self) -> u16 {
-        (self.live.len() + 1 + 1 + self.input.len() + 2 + 1) as u16
+        self.live.len() as u16 + 1 + 1 + self.bottom.height() + 1
     }
 
     pub fn render(self, frame: &mut Frame) {
@@ -458,21 +865,42 @@ impl View {
         frame.render_widget(Paragraph::new(self.live), live);
         row(1);
         frame.render_widget(Paragraph::new(self.status), row(1));
-        let input = row(self.input.len() as u16 + 2);
-        frame.render_widget(
-            Paragraph::new(self.input).block(
-                Block::bordered()
+        let boxed = row(self.bottom.height());
+        let info = row(1);
+        match self.bottom {
+            Bottom::Input { rows, cursor } => {
+                frame.render_widget(
+                    Paragraph::new(rows).block(
+                        Block::bordered()
+                            .border_type(BorderType::Rounded)
+                            .border_style(Style::new().dim()),
+                    ),
+                    boxed,
+                );
+                let cursor = Position::new(boxed.x + cursor.0, boxed.y + cursor.1);
+                if boxed.contains(cursor) {
+                    frame.set_cursor_position(cursor);
+                }
+            }
+            Bottom::Approval(laid) => {
+                let mut block = Block::bordered()
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::new().dim()),
-            ),
-            input,
-        );
-        frame.render_widget(Paragraph::new(self.info), row(1));
-        let cursor = Position::new(input.x + self.cursor.0, input.y + self.cursor.1);
-        if input.contains(cursor) {
-            frame.set_cursor_position(cursor);
+                    .border_style(Style::new().yellow())
+                    .title_top(laid.title)
+                    .title_bottom(laid.footer);
+                if let Some(position) = laid.position {
+                    block = block.title_top(position);
+                }
+                frame.render_widget(Paragraph::new(laid.rows).block(block), boxed);
+            }
         }
+        frame.render_widget(Paragraph::new(self.info), info);
     }
+}
+
+/// The client to name next to what someone sent, when it was not this terminal.
+fn source<'a>(own: &str, client: &'a str) -> Option<&'a str> {
+    (!client.is_empty() && client != own).then_some(client)
 }
 
 /// The item that repeats the turn's input as a user message, if any.

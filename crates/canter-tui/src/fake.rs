@@ -140,6 +140,8 @@ impl FakeServer {
 
         let app = Router::new()
             .route(routes::SESSION, get(read_session))
+            // Nothing to open: resuming returns the snapshot, like reading it.
+            .route(routes::RESUME, post(read_session))
             .route(routes::INPUT, post(send_input))
             .route(routes::EVENTS, get(events))
             .with_state(shared.clone());

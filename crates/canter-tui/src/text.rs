@@ -67,6 +67,42 @@ pub(crate) fn sanitize(text: &str) -> String {
     out
 }
 
+/// Draws text as it is, for what the user is asked to approve: control
+/// characters show as escapes (`\r`, `\x1b`, `\u{9b}`) instead of acting or
+/// vanishing, so nothing can hide part of a command or diff. Bidi controls,
+/// which reorder what a terminal draws, show as escapes too. Newlines still
+/// break lines and tabs still become spaces.
+pub(crate) fn visible(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut line_start = 0;
+    for c in text.chars() {
+        match c {
+            '\n' => {
+                out.push('\n');
+                line_start = out.len();
+            }
+            '\t' => {
+                let column = str_width(&out[line_start..]);
+                out.push_str(&" ".repeat(4 - column % 4));
+            }
+            '\r' => out.push_str("\\r"),
+            c if c.is_ascii_control() => out.push_str(&format!("\\x{:02x}", u32::from(c))),
+            c if c.is_control() || is_bidi_control(c) => {
+                out.push_str(&format!("\\u{{{:x}}}", u32::from(c)));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn is_bidi_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{61c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+    )
+}
+
 fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars>) {
     match chars.next() {
         // CSI: parameters, then one final byte in @..~.

@@ -4,14 +4,18 @@
 //! The usual flow: [`Client::read_session`] for a snapshot, then
 //! [`Client::subscribe`] from the snapshot's `lastEventSeq`, and feed each
 //! event to `canter_protocol::apply_event_mut`. After a dropped stream,
+//! [`Client::resume`] (a restarted server has not opened the session yet) and
 //! subscribe again from [`EventStream::last_seq`].
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 
 use canter_protocol::{
-    ErrorCode, ErrorResponse, Event, SessionInputParams, SessionInputResponse, SessionReadResponse,
-    routes,
+    ErrorCode, ErrorResponse, Event, RequestResolveParams, RequestResolveResponse,
+    SessionCreateParams, SessionCreateResponse, SessionInputParams, SessionInputResponse,
+    SessionInterruptParams, SessionInterruptResponse, SessionListResponse, SessionReadResponse,
+    SessionResumeParams, SessionResumeResponse, SessionSummary, SessionUpdateParams,
+    SessionUpdateResponse, routes,
 };
 use reqwest::header::ACCEPT;
 use reqwest::{StatusCode, Url};
@@ -49,9 +53,66 @@ impl Client {
         Ok(Self { http })
     }
 
+    /// GET /v1/sessions: every session, most recently updated first.
+    pub async fn list_sessions(&self) -> Result<Vec<SessionSummary>, ClientError> {
+        let response = self.http.get(url(routes::SESSIONS, &[])).send().await?;
+        Ok(decode::<SessionListResponse>(response).await?.data)
+    }
+
+    /// POST /v1/sessions: a new session. The body carries the environment,
+    /// so it is never logged.
+    pub async fn create_session(
+        &self,
+        params: &SessionCreateParams,
+    ) -> Result<SessionCreateResponse, ClientError> {
+        let response = self
+            .http
+            .post(url(routes::SESSIONS, &[]))
+            .json(params)
+            .send()
+            .await?;
+        decode(response).await
+    }
+
     /// GET /v1/sessions/{id}: the session's full snapshot and its `lastEventSeq`.
     pub async fn read_session(&self, session: &str) -> Result<SessionReadResponse, ClientError> {
-        let response = self.http.get(url(routes::SESSION, session)).send().await?;
+        let response = self
+            .http
+            .get(url(routes::SESSION, &[session]))
+            .send()
+            .await?;
+        decode(response).await
+    }
+
+    /// POST /v1/sessions/{id}/resume: opens the session with this terminal's
+    /// environment (kept if it is already open) and returns its snapshot.
+    pub async fn resume(
+        &self,
+        session: &str,
+        env: &BTreeMap<String, String>,
+    ) -> Result<SessionResumeResponse, ClientError> {
+        let params = SessionResumeParams { env: env.clone() };
+        let response = self
+            .http
+            .post(url(routes::RESUME, &[session]))
+            .json(&params)
+            .send()
+            .await?;
+        decode(response).await
+    }
+
+    /// PATCH /v1/sessions/{id}: change the name, model or permission mode.
+    pub async fn update(
+        &self,
+        session: &str,
+        params: &SessionUpdateParams,
+    ) -> Result<SessionUpdateResponse, ClientError> {
+        let response = self
+            .http
+            .patch(url(routes::SESSION, &[session]))
+            .json(params)
+            .send()
+            .await?;
         decode(response).await
     }
 
@@ -63,7 +124,43 @@ impl Client {
     ) -> Result<SessionInputResponse, ClientError> {
         let response = self
             .http
-            .post(url(routes::INPUT, session))
+            .post(url(routes::INPUT, &[session]))
+            .json(params)
+            .send()
+            .await?;
+        decode(response).await
+    }
+
+    /// POST /v1/sessions/{id}/interrupt: stop the turn. Answers once the turn
+    /// has ended.
+    pub async fn interrupt(
+        &self,
+        session: &str,
+        turn_id: &str,
+    ) -> Result<SessionInterruptResponse, ClientError> {
+        let params = SessionInterruptParams {
+            turn_id: turn_id.to_owned(),
+        };
+        let response = self
+            .http
+            .post(url(routes::INTERRUPT, &[session]))
+            .json(&params)
+            .send()
+            .await?;
+        decode(response).await
+    }
+
+    /// POST /v1/sessions/{id}/requests/{rid}: answer an approval. The first
+    /// answer wins; a later one gets `alreadyResolved: true`.
+    pub async fn resolve(
+        &self,
+        session: &str,
+        request: &str,
+        params: &RequestResolveParams,
+    ) -> Result<RequestResolveResponse, ClientError> {
+        let response = self
+            .http
+            .post(url(routes::REQUEST, &[session, request]))
             .json(params)
             .send()
             .await?;
@@ -72,7 +169,7 @@ impl Client {
 
     /// GET /v1/events: the session's events with a sequence greater than `after`.
     pub async fn subscribe(&self, session: &str, after: u64) -> Result<EventStream, ClientError> {
-        let mut url = url(routes::EVENTS, session);
+        let mut url = url(routes::EVENTS, &[]);
         url.query_pairs_mut()
             .append_pair("session", session)
             .append_pair("after", &after.to_string());
@@ -182,18 +279,21 @@ impl SseParser {
     }
 }
 
-/// Fills `{id}` in a route; the session id is percent-encoded as a path segment.
-fn url(route: &str, session: &str) -> Url {
+/// Fills a route's `{…}` segments with `values` in order; each value is
+/// percent-encoded as a path segment.
+fn url(route: &str, values: &[&str]) -> Url {
     let mut url = Url::parse(ORIGIN).expect("static origin parses");
+    let mut values = values.iter();
     url.path_segments_mut()
         .expect("http URLs have a path")
         .clear()
-        .extend(
-            route
-                .trim_start_matches('/')
-                .split('/')
-                .map(|part| if part == "{id}" { session } else { part }),
-        );
+        .extend(route.trim_start_matches('/').split('/').map(|part| {
+            if part.starts_with('{') {
+                values.next().copied().unwrap_or(part)
+            } else {
+                part
+            }
+        }));
     url
 }
 

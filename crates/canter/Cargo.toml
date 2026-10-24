@@ -7,14 +7,18 @@ license.workspace = true
 
 [dependencies]
 canter-server = { path = "../canter-server" }
+canter-tui = { path = "../canter-tui" }
+canter-protocol.workspace = true
 tokio.workspace = true
+nix = { workspace = true, features = ["term"] }
 
 [dev-dependencies]
-canter-protocol.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 axum.workspace = true
 futures-util.workspace = true
 eventsource-stream.workspace = true
-nix.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+unicode-width.workspace = true

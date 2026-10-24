@@ -71,9 +71,9 @@ async fn replay() {
 
     // Type a message and send it; after the replay the fake server answers.
     for c in "你好".chars() {
-        assert_eq!(ui.app_mut().handle_key(key(KeyCode::Char(c))), None);
+        assert_eq!(ui.app_mut().handle_key(key(KeyCode::Char(c)), NOW), None);
     }
-    let Some(Action::Send(text)) = ui.app_mut().handle_key(key(KeyCode::Enter)) else {
+    let Some(Action::Send(text)) = ui.app_mut().handle_key(key(KeyCode::Enter), NOW) else {
         panic!("Enter sends the input");
     };
     let params = SessionInputParams {
