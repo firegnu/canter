@@ -14,8 +14,8 @@ canter 是用户自己做的 coding agent：Rust 写，一台机器一个常驻�
 
 - **语言与依赖**：Rust stable；只用成熟、活跃维护的库，依赖版本由 canter 自己决定，升级作为单独任务。实现、测试和辅助工具不用 Python，工具用 Rust 或纯数据文件。终端界面可以用 ratatui、crossterm（ranch 不许用的那条只管 ranch）。
 - **独立**：不在 Cargo 里引用 ranch、paddock、cairn 的包，不读它们的状态目录（`~/.corral`、`~/.pony` 等），代码和文档里不为 corral 写特例。以后接 corral，是 corral 去适配 canter 的公开接口（DESIGN 第 1、12 条）。
-- **协议**：服务端和客户端之间用 Codex app-server 协议（DESIGN 第 8 条）。和它不一样的地方（加了什么、改了什么）写进 DESIGN，说明为什么。
-- **从别的项目搬来的代码**（比如 Codex 的 `apply-patch`、协议类型）：文件开头注明来源（项目、版本标签、原文件），保留原许可证声明；Apache-2.0 的代码按要求维护 `NOTICE`。只参考、不搬的，在任务文件里写参考了哪里。
+- **协议**：服务端和客户端之间用 canter 自定的 HTTP + SSE 协议，结构照 Codex app-server v2（DESIGN 第 8 条）。和 Codex 结构不一样的地方（加了什么、改了什么）写进 DESIGN，说明为什么。
+- **从别的项目搬来的代码**（比如 Codex 的 `apply-patch`）：文件开头注明来源（项目、版本标签、原文件），保留原许可证声明；Apache-2.0 的代码按要求维护 `NOTICE`。只参考、不搬的，在任务文件里写参考了哪里。
 - **账号和花钱**：
   - 凭证（ChatGPT 登录得到的令牌、DeepSeek 的 API key）只放本机，不进仓库，不出现在日志、测试快照和提交里。
   - 测试不调真实的模型接口：用本机起的假服务端回放固定的响应。真调 ChatGPT Pro（占用户的套餐额度）或 DeepSeek（花钱）只在用户在场、同意时做，任务文件里写明调了几次。

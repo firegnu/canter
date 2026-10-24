@@ -822,7 +822,7 @@ corral 拿到的 `interrupted` 是服务端直接说的，不用像 R24 那样�
 
 ### 5.7 补充（10-23，报告之后）：用 Codex 协议的风险，A 和 C 的抉择
 
-这一节是报告写完、用户定了用 Codex app-server 协议之后补的，由 ranch 主控写。用户原话：「我们选的 Codex app-server 协议是 OpenAI 自家的协议，不是公共标准，会跟着 Codex 版本一起变。」「这个A和C的抉择写到调研文件中，我之后会在那个repo中讨论。」**还没定。**
+这一节是报告写完、用户定了用 Codex app-server 协议之后补的，由 ranch 主控写。用户原话：「我们选的 Codex app-server 协议是 OpenAI 自家的协议，不是公共标准，会跟着 Codex 版本一起变。」「这个A和C的抉择写到调研文件中，我之后会在那个repo中讨论。」**已定（2026-10-24）：C，见 canter 的 `docs/DESIGN.md` 第 8 条。**
 
 **查到的（读 `rust-v0.163.0` 的 `codex-rs/app-server-protocol`，L1）：**
 
@@ -863,7 +863,7 @@ corral 拿到的 `interrupted` 是服务端直接说的，不用像 R24 那样�
 
 **主控当时的建议：A。** 理由：保住了用户要的「成熟协议」的大部分好处，又切断了被 OpenAI 牵着走的风险；隔一层之后，哪天想换成 C 的传输也不难。在 canter 仓库里讨论定了以后，结论写进 `docs/DESIGN.md` 第 8 条。
 
-**canter 主控的看法（2026-10-23，接手后）：倾向 C，和上面的建议不同。** 还没定，等用户拍板。理由：
+**canter 主控的看法（2026-10-23，接手后）：倾向 C，和上面的建议不同。** 用户 10-24 采纳，定了 C。理由：
 
 - 拷过来、不跟上游以后，A 也成了 canter 自己的协议，Codex 以后怎么改都和 canter 无关。两条路照抄 Codex 的部分一样：会话 → 一轮 → 项目，批准和提问，开始／增量／完成的事件。A 和 C 只差两点：怎么传，拷不拷 Codex 的类型代码。
 - 传输上 C 更贴合 canter：一台机器多个客户端、断线续传、以后 corral 和 pony（同步程序）接入、curl 排错，HTTP + SSE 都更省事。选 A 要自己补续传，corral 那边要另接 WebSocket。
