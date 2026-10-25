@@ -15,6 +15,7 @@ mod app;
 mod approval;
 mod cells;
 pub mod client;
+mod commands;
 pub mod fake;
 mod input;
 mod markdown;
@@ -67,6 +68,11 @@ impl<B: Backend> Ui<B> {
 
     pub fn backend_mut(&mut self) -> &mut B {
         self.terminal.backend_mut()
+    }
+
+    /// For drawing something else in the screen's place, such as the session list.
+    pub(crate) fn terminal_mut(&mut self) -> &mut Terminal<B> {
+        &mut self.terminal
     }
 
     /// Redraws the screen on a backend that shows what it draws at once

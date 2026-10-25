@@ -271,35 +271,45 @@ where
 
     let session = snapshot.id.clone();
     let stream = client.subscribe(&session, snapshot.last_event_seq).await?;
-    let mut app = App::new(snapshot, home, now_ms()).with_client_name(client_name.clone());
+    let mut app = App::new(snapshot, home.clone(), now_ms()).with_client_name(client_name.clone());
     if let Some(warning) = &connected.warning {
         app.warning(warning);
     }
     let mut ui = Ui::with_terminal(terminal, app);
+    let connector = Arc::new(connector);
     let (sender, mut messages) = mpsc::unbounded_channel();
     let pump = tokio::spawn(pump(
-        connector,
+        connector.clone(),
         stream,
-        connected.server,
+        connected.server.clone(),
         session.clone(),
-        env,
+        env.clone(),
         sender.clone(),
     ));
     let mut chat = Chat {
+        connector,
         client,
-        session: session.clone(),
+        server: connected.server,
+        session,
+        env,
         client_name,
+        home,
         sender,
+        pump,
     };
     let mut tick = tokio::time::interval(Duration::from_millis(100));
 
-    let result = loop {
+    let result = 'run: loop {
         if let Err(error) = draw(&mut ui, &input) {
             break Err(error);
         }
+        let mut next = None;
         let mut quit = tokio::select! {
             event = input.events.recv() => match event {
-                Some((frame, at, event)) => chat.terminal(&mut ui, frame, at, event),
+                Some(event) => {
+                    next = Some(event);
+                    false
+                }
                 None => true,
             },
             Some(message) = messages.recv() => chat.message(&mut ui, message),
@@ -308,15 +318,37 @@ where
         while let Ok(message) = messages.try_recv() {
             quit |= chat.message(&mut ui, message);
         }
-        while let Ok((frame, at, event)) = input.events.try_recv() {
-            quit |= chat.terminal(&mut ui, frame, at, event);
+        while let Some((frame, at, event)) = next.take().or_else(|| input.events.try_recv().ok()) {
+            match terminal_event(ui.app_mut(), frame, at, event) {
+                None => {}
+                Some(Action::Quit) => {
+                    quit = true;
+                    break;
+                }
+                Some(Action::NewSession) => {
+                    if let Some(receiver) = chat.new_session(&mut ui).await {
+                        messages = receiver;
+                    }
+                }
+                Some(Action::PickSession) => {
+                    let picked = chat.pick_session(&mut ui, &mut input).await;
+                    // Not the redraws missed while the list was up, all at once.
+                    tick.reset();
+                    match picked {
+                        Ok(Some(receiver)) => messages = receiver,
+                        Ok(None) => {}
+                        Err(error) => break 'run Err(error),
+                    }
+                }
+                Some(action) => chat.act(ui.app(), action),
+            }
         }
         if quit {
             break Ok(());
         }
     };
-    pump.abort();
-    result.map(|()| Some(session))
+    chat.pump.abort();
+    result.map(|()| Some(chat.session))
 }
 
 /// A session's name from its first message: the first non-empty line, cut
@@ -419,6 +451,7 @@ enum Message {
     Server(Box<Event>),
     SendFailed(String),
     NameFailed(String),
+    Warning(String),
     AnswerFailed { request_id: String, error: String },
     AnswerLate,
     InterruptFailed(String),
@@ -426,43 +459,143 @@ enum Message {
     Reconnected(Connected),
 }
 
-/// Carries out what the user asked for, without blocking the screen.
-struct Chat {
-    client: Client,
-    session: String,
-    client_name: String,
-    sender: mpsc::UnboundedSender<Message>,
+/// `event` came in at `at` (Unix ms) while frame `frame` was on screen.
+/// Returns what the user asked for.
+fn terminal_event(app: &mut App, frame: u64, at: i64, event: TermEvent) -> Option<Action> {
+    match event {
+        TermEvent::Key(key) => app.handle_key_on(key, frame, at),
+        TermEvent::Paste(text) => {
+            app.handle_paste(&text);
+            None
+        }
+        TermEvent::Mouse(mouse) => {
+            app.handle_mouse(mouse);
+            None
+        }
+        _ => None,
+    }
 }
 
-impl Chat {
-    /// `event` came in at `at` (Unix ms) while frame `frame` was on screen.
-    /// Returns true when the user asked to quit.
-    fn terminal<B: Backend>(
+/// Carries out what the user asked for, without blocking the screen, except
+/// for switching to another session.
+struct Chat<C> {
+    connector: Arc<C>,
+    client: Client,
+    /// The server process `client` reaches, as [`Connected::server`].
+    server: Option<String>,
+    /// The session on screen.
+    session: String,
+    env: BTreeMap<String, String>,
+    client_name: String,
+    home: Option<String>,
+    /// Background tasks report here; replaced, with the receiver, when the
+    /// screen switches sessions, so nothing about the session before shows.
+    sender: mpsc::UnboundedSender<Message>,
+    /// Forwards the session's events.
+    pump: tokio::task::JoinHandle<()>,
+}
+
+impl<C: Connector> Chat<C> {
+    /// `/new`: a session with the directory, model and permission mode of the
+    /// one on screen, shown in its place. The one before stays open on the
+    /// server. Returns where the new session's events come in.
+    async fn new_session<B: Backend>(
         &mut self,
         ui: &mut Ui<B>,
-        frame: u64,
-        at: i64,
-        event: TermEvent,
-    ) -> bool {
-        match event {
-            TermEvent::Key(key) => match ui.app_mut().handle_key_on(key, frame, at) {
-                Some(Action::Quit) => true,
-                Some(action) => {
-                    self.act(ui.app(), action);
-                    false
-                }
-                None => false,
-            },
-            TermEvent::Paste(text) => {
-                ui.app_mut().handle_paste(&text);
-                false
+    ) -> Option<mpsc::UnboundedReceiver<Message>> {
+        let settings = &ui.app().snapshot().settings;
+        let params = SessionCreateParams {
+            cwd: settings.cwd.clone(),
+            env: self.env.clone(),
+            model: settings.model.clone(),
+            approval_policy: settings.approval_policy,
+            input: None,
+            name: None,
+            client_name: self.client_name.clone(),
+        };
+        let failed = "Could not start a new session";
+        match self.client.create_session(&params).await {
+            Ok(created) => self.show(ui, created.session, failed).await,
+            Err(error) => {
+                ui.app_mut().warning(&format!("{failed}: {error}"));
+                None
             }
-            TermEvent::Mouse(mouse) => {
-                ui.app_mut().handle_mouse(mouse);
-                false
-            }
-            _ => false,
         }
+    }
+
+    /// `/resume`: the session list in the screen's place; the session picked
+    /// is shown instead of the one before, which stays open on the server.
+    /// Esc goes back to the session on screen. Returns where the picked
+    /// session's events come in.
+    async fn pick_session<B>(
+        &mut self,
+        ui: &mut Ui<B>,
+        input: &mut Input,
+    ) -> Result<Option<mpsc::UnboundedReceiver<Message>>, RunError>
+    where
+        B: FrameSync,
+        B::Error: std::error::Error + Send + Sync + 'static,
+    {
+        let sessions = match self.client.list_sessions().await {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                ui.app_mut()
+                    .warning(&format!("Could not list the sessions: {error}"));
+                return Ok(None);
+            }
+        };
+        let cwd = ui.app().snapshot().settings.cwd.clone();
+        let picker = Picker::new(sessions, cwd, self.home.clone());
+        let id = match pick(ui.terminal_mut(), input, picker).await? {
+            Some(id) if id != self.session => id,
+            _ => return Ok(None),
+        };
+        let failed = "Could not resume the session";
+        let update = SessionUpdateParams::default();
+        Ok(match resume(&self.client, &id, &self.env, &update).await {
+            Ok(snapshot) => self.show(ui, snapshot, failed).await,
+            Err(error) => {
+                ui.app_mut().warning(&format!("{failed}: {error}"));
+                None
+            }
+        })
+    }
+
+    /// Shows `snapshot`'s session in place of the one on screen, following
+    /// its events from the snapshot on. When that fails, the screen stays
+    /// and says why after `failed`.
+    async fn show<B: Backend>(
+        &mut self,
+        ui: &mut Ui<B>,
+        snapshot: SessionSnapshot,
+        failed: &str,
+    ) -> Option<mpsc::UnboundedReceiver<Message>> {
+        let stream = match self
+            .client
+            .subscribe(&snapshot.id, snapshot.last_event_seq)
+            .await
+        {
+            Ok(stream) => stream,
+            Err(error) => {
+                ui.app_mut().warning(&format!("{failed}: {error}"));
+                return None;
+            }
+        };
+        let (sender, messages) = mpsc::unbounded_channel();
+        self.pump.abort();
+        self.pump = tokio::spawn(pump(
+            self.connector.clone(),
+            stream,
+            self.server.clone(),
+            snapshot.id.clone(),
+            self.env.clone(),
+            sender.clone(),
+        ));
+        self.sender = sender;
+        self.session = snapshot.id.clone();
+        *ui.app_mut() = App::new(snapshot, self.home.clone(), now_ms())
+            .with_client_name(self.client_name.clone());
+        Some(messages)
     }
 
     fn message<B: Backend>(&mut self, ui: &mut Ui<B>, message: Message) -> bool {
@@ -473,12 +606,14 @@ impl Chat {
             Message::NameFailed(error) => {
                 app.warning(&format!("Could not name the session: {error}"))
             }
+            Message::Warning(message) => app.warning(&message),
             Message::AnswerFailed { request_id, error } => app.answer_failed(&request_id, &error),
             Message::AnswerLate => app.answer_late(),
             Message::InterruptFailed(error) => app.interrupt_failed(&error),
             Message::Reconnecting(reason) => app.reconnecting(&reason),
             Message::Reconnected(connected) => {
                 self.client = connected.client;
+                self.server = connected.server;
                 app.reconnected();
                 if let Some(warning) = connected.warning {
                     app.warning(&warning);
@@ -556,7 +691,25 @@ impl Chat {
                     }
                 });
             }
-            Action::Quit => {}
+            Action::Compact => {
+                tokio::spawn(async move {
+                    if let Err(error) = client.compact(&session).await {
+                        let _ =
+                            sender.send(Message::Warning(format!("Could not compact: {error}")));
+                    }
+                });
+            }
+            Action::Update(params) => {
+                tokio::spawn(async move {
+                    if let Err(error) = client.update(&session, &params).await {
+                        let _ = sender.send(Message::Warning(format!(
+                            "Could not change the session: {error}"
+                        )));
+                    }
+                });
+            }
+            // The main loop handles these itself.
+            Action::Quit | Action::NewSession | Action::PickSession => {}
         }
     }
 }
@@ -566,7 +719,7 @@ impl Chat {
 /// nothing is lost or repeated. `server` is the server process the stream
 /// came from.
 async fn pump<C: Connector>(
-    connector: C,
+    connector: Arc<C>,
     mut stream: EventStream,
     mut server: Option<String>,
     session: String,
@@ -591,7 +744,7 @@ async fn pump<C: Connector>(
         let cursor = stream.last_seq();
         stream = loop {
             tokio::time::sleep(RETRY).await;
-            match reconnect(&connector, server.as_deref(), &session, &env, cursor).await {
+            match reconnect(&*connector, server.as_deref(), &session, &env, cursor).await {
                 Ok((connected, stream)) => {
                     server.clone_from(&connected.server);
                     if sender.send(Message::Reconnected(connected)).is_err() {

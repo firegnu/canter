@@ -12,10 +12,10 @@ use std::path::Path;
 
 use canter_protocol::{
     ErrorCode, ErrorResponse, Event, RequestResolveParams, RequestResolveResponse,
-    SessionCreateParams, SessionCreateResponse, SessionInputParams, SessionInputResponse,
-    SessionInterruptParams, SessionInterruptResponse, SessionListResponse, SessionReadResponse,
-    SessionResumeParams, SessionResumeResponse, SessionSummary, SessionUpdateParams,
-    SessionUpdateResponse, routes,
+    SessionCompactParams, SessionCompactResponse, SessionCreateParams, SessionCreateResponse,
+    SessionInputParams, SessionInputResponse, SessionInterruptParams, SessionInterruptResponse,
+    SessionListResponse, SessionReadResponse, SessionResumeParams, SessionResumeResponse,
+    SessionSummary, SessionUpdateParams, SessionUpdateResponse, routes,
 };
 use reqwest::header::ACCEPT;
 use reqwest::{StatusCode, Url};
@@ -145,6 +145,19 @@ impl Client {
             .http
             .post(url(routes::INTERRUPT, &[session]))
             .json(&params)
+            .send()
+            .await?;
+        decode(response).await
+    }
+
+    /// POST /v1/sessions/{id}/compact: compact the session's context in a
+    /// turn of its own. Answers once that turn has started; the server
+    /// refuses while another turn runs.
+    pub async fn compact(&self, session: &str) -> Result<SessionCompactResponse, ClientError> {
+        let response = self
+            .http
+            .post(url(routes::COMPACT, &[session]))
+            .json(&SessionCompactParams::default())
             .send()
             .await?;
         decode(response).await
