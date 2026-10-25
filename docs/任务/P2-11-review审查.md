@@ -94,3 +94,15 @@
 - 踩过的坑：没有。
 - 要主控决定的事：没有。
 - 后续主控按 P1-11 纠正提示语言：将块外列表提示改为 `[Untracked file list truncated; use the read tool or git status to see all of it]`，同步测试断言；仅运行 `cargo test -p canter-tui --test review local_`，3 个相关测试通过，使用本任务 CARGO_TARGET_DIR 并等前台结束后继续。
+
+## 主控审查
+
+2026-10-25，canter/main。
+
+- diff 看过：输入、队列、Turn 加可选 `review`，审查轮排成新的一轮；`evaluate_review` 对 Tool 穷举匹配，只放行读文件和白名单 shell，写文件、改补丁、其它 shell 直接回 `review is read-only`，不弹批准框，「本会话都允许」也不放行；下一轮恢复原权限。终端 `/review` 收集本地 diff 和未跟踪列表，或用 `gh pr view/diff` 取 PR，不 checkout；对话区只显示一行 Review 标题。DESIGN 第 8、14 条已写。
+- 交叉审查（review-claude）提 1 条必须改：旧服务端不认识 `review` 字段会照普通轮跑，不是只读。改为服务端在 `/v1/info` 返回 `features: ["review"]`，终端每次 `/review` 前查，没有就提示 `canter serve --replace`、不发。复核结论可以合并；复核新提的未跟踪列表上限（32 KiB）主控采纳，已改。
+- 主控纠正一处：截断提示原来照主控的中文原话写进了发给模型的消息，违反 P1-11（给模型的内部提示用英文），已改成英文。
+- 合并后在 main 上 `cargo test --all-targets --no-fail-fast`：284 个通过，1 个失败（`tui.rs:281` 服务端启动超时，和已记的偶发问题同类）；单独重跑 tui 测试 44 个全过。clippy、`fmt --check`、`git diff --check` 通过。
+- 没验到的：真模型审查质量、真 `gh` 取 PR，用户装好后试。
+
+结果：返工 1 次
