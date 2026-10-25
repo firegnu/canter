@@ -2,8 +2,8 @@
 //! command's name, its line of help and what it does are in [`COMMANDS`];
 //! adding a command means adding it there.
 //!
-//! A first word that starts with `/` and has no other `/` in it is a command;
-//! one like `/tmp/a.txt` is a message.
+//! A first word (after any leading blanks) that starts with `/` and has no
+//! other `/` in it is a command; one like `/tmp/a.txt` is a message.
 
 use canter_protocol::{PermissionMode, SessionUpdateParams};
 use ratatui::style::Style;
@@ -16,6 +16,9 @@ pub(crate) struct Command {
     pub name: &'static str,
     /// One line, shown in the command list and by `/help`.
     pub about: &'static str,
+    /// Whether it takes text after its name; one that does not refuses any
+    /// rather than drop it.
+    pub takes_args: bool,
     /// Runs the command with the text after its name, trimmed. Returns what
     /// the caller should do; an error is shown in the conversation, and the
     /// input box keeps what was typed.
@@ -27,16 +30,19 @@ pub(crate) const COMMANDS: &[Command] = &[
     Command {
         name: "compact",
         about: "Summarize the conversation to free up context",
+        takes_args: false,
         run: |_, _| Ok(Some(Action::Compact)),
     },
     Command {
         name: "exit",
         about: "Quit canter",
+        takes_args: false,
         run: |_, _| Ok(Some(Action::Quit)),
     },
     Command {
         name: "help",
         about: "Show available commands",
+        takes_args: false,
         run: |app, _| {
             app.show(help());
             Ok(None)
@@ -45,16 +51,19 @@ pub(crate) const COMMANDS: &[Command] = &[
     Command {
         name: "mode",
         about: "Change the permission mode",
+        takes_args: true,
         run: mode,
     },
     Command {
         name: "new",
         about: "Start a new session",
+        takes_args: false,
         run: |_, _| Ok(Some(Action::NewSession)),
     },
     Command {
         name: "resume",
         about: "Switch to another session",
+        takes_args: false,
         run: |_, _| Ok(Some(Action::PickSession)),
     },
 ];
@@ -64,12 +73,12 @@ const MODES: [(&str, PermissionMode, &str); 3] = [
     (
         "always-ask",
         PermissionMode::AlwaysAsk,
-        "Ask before editing files or running commands",
+        "Ask before edits and non-read-only commands",
     ),
     (
         "ask-for-execution",
         PermissionMode::AskForExecution,
-        "Edit files freely; ask before running commands",
+        "Edit freely; ask before non-read-only commands",
     ),
     ("allow-all", PermissionMode::AllowAll, "Never ask"),
 ];
@@ -137,7 +146,7 @@ pub(crate) fn find(name: &str) -> Option<&'static Command> {
 /// The command name being typed, while the input is still one word that
 /// could be a command: `/` and letters, no space, no other `/`.
 pub(crate) fn typing(text: &str) -> Option<&str> {
-    let name = text.strip_prefix('/')?;
+    let name = text.trim_start().strip_prefix('/')?;
     (!name.contains(|c: char| c == '/' || c.is_whitespace())).then_some(name)
 }
 
@@ -151,7 +160,7 @@ pub(crate) fn matching(typed: &str) -> Vec<&'static Command> {
 
 /// A command's name and the text after it, when the first word is one.
 pub(crate) fn parse(text: &str) -> Option<(&str, &str)> {
-    let rest = text.strip_prefix('/')?;
+    let rest = text.trim_start().strip_prefix('/')?;
     let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
     (!name.contains('/')).then_some((name, args.trim()))
 }

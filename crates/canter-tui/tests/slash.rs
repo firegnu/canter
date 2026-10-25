@@ -34,8 +34,12 @@ struct Screen {
 
 impl Screen {
     fn new() -> Self {
+        Self::sized(WIDTH, HEIGHT)
+    }
+
+    fn sized(width: u16, height: u16) -> Self {
         let app = App::new(SessionSnapshot::empty(SESSION), None, NOW);
-        let ui = Ui::new(TestBackend::new(WIDTH, HEIGHT), app).unwrap();
+        let ui = Ui::new(TestBackend::new(width, height), app).unwrap();
         let mut screen = Self {
             ui,
             seq: 0,
@@ -484,4 +488,164 @@ fn enter_right_after_the_box_closes_does_not_run_a_command() {
     screen.wait(ANSWER_GUARD_MS);
     screen.draw();
     assert_eq!(screen.key(KeyCode::Enter), Some(Action::Quit));
+}
+
+/// Cross review 1: keys act on the frame on screen when they came in. Keys
+/// pressed while the input box showed `/mode` and queued before the next
+/// frame do not move or confirm the choice that `/mode` opened.
+#[test]
+fn keys_queued_before_the_mode_choice_shows_do_not_choose() {
+    let mut screen = Screen::new();
+    screen.type_text("/mode");
+    screen.draw();
+    for code in [KeyCode::Enter, KeyCode::Down, KeyCode::Down, KeyCode::Enter] {
+        assert_eq!(screen.key(code), None, "{code:?} before the choice showed");
+    }
+    screen.draw();
+    let shown = screen.text();
+    assert!(shown.contains("Permission mode"), "{shown}");
+    assert!(
+        screen.above_box(3)[0].starts_with(" › always-ask (current)"),
+        "the Downs were dropped:\n{shown}"
+    );
+    // On screen now: keys choose.
+    assert_eq!(screen.key(KeyCode::Down), None);
+    assert_eq!(screen.key(KeyCode::Down), None);
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        set_mode(PermissionMode::AllowAll)
+    );
+}
+
+/// Cross review 1: in a window too short to show even one mode, keys neither
+/// move nor confirm the choice; Esc still closes it.
+#[test]
+fn a_mode_choice_with_no_room_takes_no_choice() {
+    let mut screen = Screen::sized(80, 5);
+    assert_eq!(screen.enter("/mode"), None);
+    screen.draw();
+    let shown = screen.text();
+    assert!(!shown.contains("always-ask"), "no room:\n{shown}");
+    for code in [KeyCode::Down, KeyCode::Down, KeyCode::Enter] {
+        assert_eq!(screen.key(code), None, "{code:?} on a choice not shown");
+        screen.draw();
+    }
+    assert_eq!(screen.key(KeyCode::Esc), None);
+    assert_eq!(
+        screen.enter("hi"),
+        Some(Action::Send("hi".into())),
+        "the choice is closed"
+    );
+}
+
+/// Cross review 2: the first word is found after leading blanks, so a
+/// command typed after a space is still a command, never a message. A
+/// message keeps its text as typed.
+#[test]
+fn a_command_after_leading_blanks_is_still_a_command() {
+    let mut screen = Screen::new();
+    assert_eq!(
+        screen.enter(" /mode allow-all"),
+        set_mode(PermissionMode::AllowAll)
+    );
+
+    let mut screen = Screen::new();
+    assert_eq!(screen.enter("  /foo"), None);
+    screen.draw();
+    assert!(screen.text().contains("Unknown command: /foo"));
+    assert_eq!(screen.input(), "›   /foo", "the draft stays");
+
+    let mut screen = Screen::new();
+    assert_eq!(
+        screen.enter(" /tmp/a.txt 看看这个"),
+        Some(Action::Send(" /tmp/a.txt 看看这个".into()))
+    );
+}
+
+/// Cross review 3: a command that takes no arguments, followed by more text
+/// (also pasted text after a newline), is not run and not sent; the
+/// conversation says why and the draft stays.
+#[test]
+fn text_after_a_command_without_arguments_is_refused() {
+    for name in ["compact", "exit", "help", "new", "resume"] {
+        let mut screen = Screen::new();
+        assert_eq!(screen.enter(&format!("/{name} now")), None, "/{name}");
+        screen.draw();
+        let shown = screen.text();
+        assert!(
+            shown.contains(&format!("/{name} takes no arguments")),
+            "{shown}"
+        );
+        assert_eq!(screen.input(), format!("› /{name} now"), "{shown}");
+    }
+
+    let mut screen = Screen::new();
+    screen
+        .ui
+        .app_mut()
+        .handle_paste("/compact\nThis is copied documentation, not a request to compact.");
+    screen.draw();
+    assert_eq!(screen.key(KeyCode::Enter), None, "the paste is not run");
+    screen.draw();
+    assert!(screen.text().contains("/compact takes no arguments"));
+    assert_eq!(screen.input(), "› /compact");
+}
+
+/// Cross review 4: after Enter completes `/` to `/compact`, a second Enter
+/// pressed before the completion is on screen was meant for what was there
+/// before, so it does not compact. Enter once it shows does.
+#[test]
+fn enter_before_the_completion_shows_does_not_run_it() {
+    let mut screen = Screen::new();
+    screen.type_text("/");
+    screen.draw();
+    assert_eq!(screen.key(KeyCode::Enter), None, "completes");
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        None,
+        "the completion is not on screen yet"
+    );
+    screen.draw();
+    assert_eq!(screen.input(), "› /compact", "{}", screen.text());
+    assert_eq!(screen.key(KeyCode::Enter), Some(Action::Compact));
+}
+
+/// Cross review 5: the modes say that read-only commands run without
+/// asking, in full at 80 columns.
+#[test]
+fn the_modes_say_read_only_commands_do_not_ask() {
+    for mode in ["alwaysAsk", "askForExecution", "allowAll"] {
+        let mut screen = Screen::new();
+        screen.settings(mode);
+        assert_eq!(screen.enter("/mode"), None);
+        screen.draw();
+        let choices = screen.above_box(3);
+        let shown = screen.text();
+        assert!(
+            choices[0].ends_with("Ask before edits and non-read-only commands"),
+            "{mode}:\n{shown}"
+        );
+        assert!(
+            choices[1].ends_with("Edit freely; ask before non-read-only commands"),
+            "{mode}:\n{shown}"
+        );
+        assert!(choices[2].ends_with("Never ask"), "{mode}:\n{shown}");
+    }
+}
+
+/// Cross review 2: the list and its completion also find the first word
+/// after leading blanks.
+#[test]
+fn the_list_shows_after_leading_blanks() {
+    let mut screen = Screen::new();
+    screen.type_text(" /co");
+    screen.draw();
+    assert!(
+        screen.above_box(1)[0].starts_with(" › /compact"),
+        "{}",
+        screen.text()
+    );
+    assert_eq!(screen.key(KeyCode::Enter), None, "completes");
+    screen.draw();
+    assert_eq!(screen.input(), "› /compact");
 }

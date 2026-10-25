@@ -139,6 +139,10 @@ struct Shown {
     answers: bool,
     /// The turn in progress.
     turn: Option<String>,
+    /// The choice whose choices showed, numbered as [`App::choose`] opened it.
+    chooser: Option<u64>,
+    /// How many completions the input box showed.
+    completions: u64,
 }
 
 impl Shown {
@@ -157,6 +161,10 @@ pub struct App {
     commands: CommandList,
     /// A choice offered above the input box, such as `/mode` alone.
     chooser: Option<Chooser>,
+    /// How many choices have been offered, numbering them.
+    choosers: u64,
+    /// How many times a command name was completed in the input box.
+    completions: u64,
     /// In the order they came, which is also the order of their places.
     notices: Vec<Notice>,
     history: History,
@@ -204,6 +212,8 @@ impl App {
             input: InputBox::default(),
             commands: CommandList::default(),
             chooser: None,
+            choosers: 0,
+            completions: 0,
             notices: Vec::new(),
             history: History::default(),
             scroll: Scroll::default(),
@@ -368,7 +378,8 @@ impl App {
             return self.approval_key(key, shown, guarded);
         }
         if self.chooser.is_some() && !matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
-            return self.chooser_key(key, send_guarded);
+            let seen = shown.chooser == Some(self.choosers);
+            return self.chooser_key(key, seen, send_guarded);
         }
         if let Some((matches, selected)) = self.command_list() {
             let last = matches.len() - 1;
@@ -407,8 +418,9 @@ impl App {
                 self.input.insert("\n")
             }
             KeyCode::Enter => {
-                // Right after an approval box closed it was meant for the box.
-                if !send_guarded {
+                // Right after an approval box closed it was meant for the box;
+                // before a completion showed, for what was there before it.
+                if !send_guarded && shown.completions == self.completions {
                     return self.enter();
                 }
             }
@@ -463,15 +475,23 @@ impl App {
 
     /// Puts `/name ` in the input box; the list closes, and Enter runs it.
     fn complete(&mut self, command: &Command) {
+        self.completions += 1;
         self.input.clear();
         self.input.insert(&format!("/{} ", command.name));
     }
 
-    /// Runs `command`; the input box is emptied unless it fails.
+    /// Runs `command`; the input box is emptied unless it fails. Text after
+    /// a command that takes none, such as pasted lines, is refused, not
+    /// dropped.
     fn run_command(&mut self, command: &Command, args: &str) -> Option<Action> {
         // Like sending, so that what the command shows is in view.
         self.scroll.top = None;
-        match (command.run)(self, args) {
+        let run = if command.takes_args || args.is_empty() {
+            (command.run)(self, args)
+        } else {
+            Err(format!("/{} takes no arguments", command.name))
+        };
+        match run {
             Ok(action) => {
                 self.input.clear();
                 action
@@ -501,14 +521,16 @@ impl App {
 
     /// Keys while a choice is offered: Up and Down select, Enter chooses
     /// (not right after an approval box closed), Esc, Ctrl+C or Ctrl+D
-    /// cancels, like in the session list. Other keys do nothing.
-    fn chooser_key(&mut self, key: KeyEvent, send_guarded: bool) -> Option<Action> {
+    /// cancels, like in the session list. Other keys do nothing. Only keys
+    /// pressed while its choices were on screen (`seen`) select or choose;
+    /// any key can cancel.
+    fn chooser_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
         let chooser = self.chooser.as_mut()?;
         let last = chooser.choices.len().saturating_sub(1);
         match key.code {
-            KeyCode::Up => chooser.selected = chooser.selected.saturating_sub(1),
-            KeyCode::Down => chooser.selected = (chooser.selected + 1).min(last),
-            KeyCode::Enter if !send_guarded => {
+            KeyCode::Up if seen => chooser.selected = chooser.selected.saturating_sub(1),
+            KeyCode::Down if seen => chooser.selected = (chooser.selected + 1).min(last),
+            KeyCode::Enter if seen && !send_guarded => {
                 let chooser = self.chooser.take()?;
                 return chooser
                     .choices
@@ -527,6 +549,7 @@ impl App {
 
     /// Offers a choice above the input box.
     pub(crate) fn choose(&mut self, chooser: Chooser) {
+        self.choosers += 1;
         self.chooser = Some(chooser);
     }
 
@@ -724,6 +747,8 @@ impl App {
                 .rev()
                 .find(|turn| turn.status == TurnStatus::InProgress)
                 .map(|turn| turn.id.clone()),
+            chooser: None,
+            completions: self.completions,
         };
         let bottom = match approval {
             Some((request, laid)) => {
@@ -744,6 +769,12 @@ impl App {
             ),
             Bottom::Approval(_) => Vec::new(),
         };
+        // The choice offered is on screen when any of its choices fit.
+        self.drawing.chooser = self
+            .chooser
+            .as_ref()
+            .filter(|_| !list.is_empty())
+            .map(|_| self.choosers);
 
         self.extend_history(width);
         let live = self.live_rows(width);
