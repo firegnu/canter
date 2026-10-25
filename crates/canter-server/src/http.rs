@@ -111,6 +111,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::MODELS, get(models))
         .route(routes::SESSIONS, post(create).get(list))
         .route(routes::SESSION, get(read).patch(update).delete(close))
+        .route(routes::SKILLS, get(skills))
         .route(routes::RESUME, post(resume))
         .route(routes::INPUT, post(input))
         .route(routes::INTERRUPT, post(interrupt))
@@ -214,6 +215,13 @@ async fn list(state: State<Arc<App>>) -> Result<Json<SessionListResponse>, ApiEr
     Ok(Json(SessionListResponse {
         data: info(state).await?.0.sessions,
     }))
+}
+
+async fn skills(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<SkillListResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.skills().await))
 }
 
 async fn read(

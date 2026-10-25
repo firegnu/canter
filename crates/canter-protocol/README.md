@@ -15,6 +15,7 @@
 | POST SESSIONS | SessionCreateParams | SessionCreateResponse |
 | GET SESSIONS | SessionListParams | SessionListResponse |
 | GET SESSION | SessionReadParams | SessionReadResponse |
+| GET SKILLS | SkillListParams | SkillListResponse |
 | POST RESUME | SessionResumeParams | SessionResumeResponse |
 | POST INPUT | SessionInputParams | SessionInputResponse |
 | POST INTERRUPT | SessionInterruptParams | SessionInterruptResponse |
@@ -53,7 +54,7 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 `session.updated` 的 `settings` 是完整的公开设置（工作目录、名字、模型、思考档位、权限模式）。
 创建会话、PATCH 成功后各写一条。PATCH 中省略/null 表示不修改字段。
 `cwd` 同时出现在公开设置和会话摘要中，供显示、选择恢复目录；PATCH 不修改它。
-环境变量只交给服务端内存中的执行器，不存盘，不进入事件、公开设置或快照。
+环境变量只留在服务端内存中，供执行器和打开会话时的技能发现使用，不存盘，不进入事件、公开设置或快照。
 创建请求不实现 Debug，调用方也不得记录其请求体。
 `reasoningEffort` 选用 Codex v2 创建/恢复/派生会话回复中的名字；Codex 的设置对象和
 改设置参数用 `effort`。canter 统一使用明确表示推理强度的 `reasoningEffort`，
@@ -71,6 +72,14 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 条目的 id、model、displayName 都是配置中的模型名；isDefault 标记默认模型。
 本机配置列表无需分页，只提供模型名和默认标记；省掉的 Codex 模型字段和查询参数
 及理由逐项记在 DESIGN 第 8 条。
+
+`GET /v1/sessions/{id}/skills` 返回打开会话时固定的技能，按名字排序，一次全部返回：
+`{ "data": [{ "name": "tdd", "description": "Test-first development", "path": "/work/.agents/skills/tdd/SKILL.md", "source": "project", "modelInvocation": true }] }`。
+`source` 为 `global` / `project`，`path` 是 SKILL.md 的绝对路径；项目同名技能覆盖全局。
+`modelInvocation: false` 表示技能禁止模型自行使用，但仍供 `/skills` 显示。
+GET 不重新扫描，不发事件；修改技能在下次打开会话时才生效。未打开时返回
+`session_not_resumed`，不存在时返回 `session_not_found`。该列表不存盘，读取错误只在
+打开时沿用 warning 事件报告。与 Codex `skills/list` 的差异和理由见 DESIGN 第 8 条。
 
 `POST /v1/sessions/{id}/resume` 的请求体为 `{ "env": { ... } }`，也不实现 Debug、
 不得记录请求体。服务端重启后，会话默认未打开；接着聊用新环境打开，并返回快照及其

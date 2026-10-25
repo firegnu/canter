@@ -82,12 +82,58 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::PickSession)),
     },
     Command {
+        name: "skills",
+        about: "List this session's skills",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::ListSkills)),
+    },
+    Command {
         name: "think",
         about: "Change thinking effort (none, low, high, max)",
         takes_args: true,
         run: think,
     },
 ];
+
+pub(crate) fn skills(skills: Vec<canter_protocol::Skill>) -> Vec<LogicalLine> {
+    if skills.is_empty() {
+        return [
+            "No skills in this session.",
+            "Add skills to either location, then reopen the session:",
+            "Global: ~/.agents/skills/<name>/SKILL.md",
+            "Project: <project root>/.agents/skills/<name>/SKILL.md",
+        ]
+        .into_iter()
+        .map(|text| LogicalLine::new(vec![Span::raw("  ")], vec![Span::raw(text)]))
+        .collect();
+    }
+    skills
+        .into_iter()
+        .map(|skill| {
+            let source = match skill.source {
+                canter_protocol::SkillSource::Global => "global",
+                canter_protocol::SkillSource::Project => "project",
+                canter_protocol::SkillSource::Unknown => "unknown",
+            };
+            let manual = if skill.model_invocation {
+                ""
+            } else {
+                " [not for model]"
+            };
+            LogicalLine::new(
+                vec![Span::raw("  ")],
+                vec![
+                    Span::styled(
+                        sanitize(&skill.name).replace('\n', " "),
+                        Style::new().cyan(),
+                    ),
+                    Span::styled(format!(" [{source}]{manual}  "), Style::new().dim()),
+                    Span::raw(sanitize(&skill.description).replace('\n', " ")),
+                ],
+            )
+        })
+        .collect()
+}
 
 fn think(app: &mut App, args: &str) -> Result<Option<Action>, String> {
     let efforts = [

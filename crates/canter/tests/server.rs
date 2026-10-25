@@ -26,6 +26,12 @@ struct Fixture {
     child: Child,
     client: Client,
     model: JoinHandle<()>,
+    script: Arc<Mutex<ModelScript>>,
+}
+
+struct ModelScript {
+    replies: VecDeque<String>,
+    requests: Vec<Value>,
 }
 
 impl Fixture {
@@ -49,10 +55,13 @@ impl Fixture {
         fs::create_dir(root.path().join("home")).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
-        let script = Arc::new(Mutex::new(VecDeque::from(replies)));
+        let script = Arc::new(Mutex::new(ModelScript {
+            replies: replies.into(),
+            requests: Vec::new(),
+        }));
         let app = Router::new()
             .route("/chat/completions", post(fake_model))
-            .with_state(script);
+            .with_state(script.clone());
         let model = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
@@ -79,6 +88,7 @@ impl Fixture {
             child,
             client,
             model,
+            script,
         };
         fixture.ready().await;
         fixture
@@ -335,15 +345,290 @@ impl Drop for Fixture {
 }
 
 async fn fake_model(
-    State(script): State<Arc<Mutex<VecDeque<String>>>>,
-    Json(_body): Json<Value>,
+    State(script): State<Arc<Mutex<ModelScript>>>,
+    Json(body): Json<Value>,
 ) -> impl axum::response::IntoResponse {
+    let mut script = script.lock().unwrap();
+    script.requests.push(body);
     let reply = script
-        .lock()
-        .unwrap()
+        .replies
         .pop_front()
         .expect("unexpected model request");
     ([("content-type", "text/event-stream")], reply)
+}
+
+#[tokio::test]
+async fn skills_prompt_lists_tdd_and_read_gets_the_full_skill_without_approval() {
+    let mut fixture = Fixture::start(vec![text_reply()]).await;
+    let home = fixture.root.path().join("home");
+    let skill = home.join(".agents/skills/tdd/SKILL.md");
+    fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    let contents = "---\nname: tdd\ndescription: Test-first development\n---\n\nWrite a failing test before implementation.\n";
+    fs::write(&skill, contents).unwrap();
+    fixture.script.lock().unwrap().replies.push_front(format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices":[{"index":0,"delta":{"tool_calls":[{
+            "index":0,"id":"read-skill","type":"function","function":{
+                "name":"read","arguments":json!({"path":skill}).to_string()
+            }
+        }]},"finish_reason":"tool_calls"}]})
+    ));
+    let response = fixture
+        .request(
+            Method::POST,
+            "/v1/sessions",
+            json!({
+                "cwd":fixture.root.path().join("work"), "env":{"HOME":home},
+                "model":"fake-model", "approvalPolicy":"alwaysAsk", "clientName":"skills-test"
+            }),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+    let created: SessionCreateResponse = response.json().await.unwrap();
+    let id = &created.session.id;
+    let response = fixture
+        .request(
+            Method::POST,
+            &format!("/v1/sessions/{id}/input"),
+            json!({
+                "input":[{"type":"text","text":"用 tdd 的方式改 X"}], "clientName":"skills-test"
+            }),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+    let events = fixture
+        .events_until(id, 0, |event| {
+            matches!(
+                event.payload,
+                EventPayload::TurnCompleted { .. } | EventPayload::RequestOpened { .. }
+            )
+        })
+        .await;
+    fixture.stop().await;
+    let script = fixture.script.lock().unwrap();
+    let system = script.requests[0]["messages"][0]["content"]
+        .as_str()
+        .unwrap();
+    assert!(
+        system.contains("tdd"),
+        "the system prompt must list the tdd skill"
+    );
+    assert!(system.contains("Test-first development"));
+    assert!(system.contains(skill.to_str().unwrap()));
+    assert!(!system.contains("Write a failing test before implementation."));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::RequestOpened { .. }))
+    );
+    assert_eq!(script.requests.len(), 2);
+    let messages = script.requests[1]["messages"].as_array().unwrap();
+    let read = messages
+        .iter()
+        .find(|message| message["role"] == "tool")
+        .unwrap();
+    assert_eq!(
+        read["content"],
+        "1: ---\n2: name: tdd\n3: description: Test-first development\n4: ---\n5: \n6: Write a failing test before implementation.\n"
+    );
+}
+
+fn write_skill(base: &std::path::Path, directory: &str, contents: &str) -> std::path::PathBuf {
+    let path = base.join(".agents/skills").join(directory).join("SKILL.md");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, contents).unwrap();
+    path
+}
+
+impl Fixture {
+    async fn create_with_skills(&self, cwd: &std::path::Path) -> SessionCreateResponse {
+        let response = self
+            .request(
+                Method::POST,
+                "/v1/sessions",
+                json!({
+                    "cwd":cwd, "env":{"HOME":self.root.path().join("home")},
+                    "model":"fake-model", "approvalPolicy":"alwaysAsk", "clientName":"skills-test"
+                }),
+            )
+            .await;
+        assert_eq!(response.status(), 200);
+        response.json().await.unwrap()
+    }
+
+    async fn skills(&self, id: &str) -> Value {
+        let response = self
+            .request(Method::GET, &format!("/v1/sessions/{id}/skills"), json!({}))
+            .await;
+        assert_eq!(
+            response.status(),
+            200,
+            "the open session must expose its frozen skills"
+        );
+        response.json().await.unwrap()
+    }
+}
+
+#[tokio::test]
+async fn skills_prefer_project_and_list_manual_skills_but_skip_invalid_headers_with_warnings() {
+    let mut fixture = Fixture::start(vec![text_reply(), text_reply()]).await;
+    let home = fixture.root.path().join("home");
+    let work = fixture.root.path().join("work");
+    fs::create_dir(work.join(".git")).unwrap();
+    let cwd = work.join("nested");
+    fs::create_dir(&cwd).unwrap();
+    write_skill(
+        &home,
+        "tdd",
+        "---\nname: tdd\ndescription: global tdd\n---\n",
+    );
+    let tdd = write_skill(
+        &work,
+        "tdd",
+        "---\nname: tdd\ndescription: \"项目：测试优先\"\nmetadata:\n  description: ignored\n---\nproject body\n",
+    );
+    let manual = write_skill(
+        &home,
+        "manual",
+        "---\nname: manual\ndescription: Manual review\ndisable-model-invocation: true\n---\n",
+    );
+    let global = write_skill(
+        &home,
+        "zeta",
+        "---\nname: zeta\ndescription: Global helper\n---\n",
+    );
+    let broken = [
+        write_skill(&work, "missing-header", "not front matter\n"),
+        write_skill(&work, "missing-name", "---\ndescription: no name\n---\n"),
+        write_skill(
+            &work,
+            "missing-description",
+            "---\nname: no-description\n---\n",
+        ),
+    ];
+    let created = fixture.create_with_skills(&cwd).await;
+    let id = &created.session.id;
+    assert_eq!(
+        fixture.skills(id).await,
+        json!({"data":[
+            {"name":"manual", "description":"Manual review", "path":manual, "source":"global", "modelInvocation":false},
+            {"name":"tdd", "description":"项目：测试优先", "path":tdd, "source":"project", "modelInvocation":true},
+            {"name":"zeta", "description":"Global helper", "path":global, "source":"global", "modelInvocation":true}
+        ]})
+    );
+    fixture.input(id).await;
+    let events = fixture
+        .events_until(id, 0, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    let warnings: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::Warning { message } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(warnings.len(), 3);
+    for path in broken {
+        assert!(
+            warnings
+                .iter()
+                .any(|message| message.contains(path.to_str().unwrap()))
+        );
+    }
+    fixture.input(id).await;
+    let later = fixture
+        .events_until(id, events.last().unwrap().seq, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    assert!(
+        !later
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::Warning { .. }))
+    );
+    fixture.stop().await;
+    let script = fixture.script.lock().unwrap();
+    let system = script.requests[0]["messages"][0]["content"]
+        .as_str()
+        .unwrap();
+    assert!(system.contains("项目：测试优先"));
+    assert!(system.contains(tdd.to_str().unwrap()));
+    assert!(!system.contains("global tdd"));
+    assert!(!system.contains("manual"));
+    assert!(!system.contains("project body"));
+    assert!(system.find("- tdd:").unwrap() < system.find("- zeta:").unwrap());
+}
+
+#[tokio::test]
+async fn skills_empty_prefix_and_list_stay_frozen_until_session_reopens() {
+    let mut fixture = Fixture::start(vec![text_reply(), text_reply(), text_reply()]).await;
+    let home = fixture.root.path().join("home");
+    let work = fixture.root.path().join("work");
+    let created = fixture.create_with_skills(&work).await;
+    let id = &created.session.id;
+    assert_eq!(fixture.skills(id).await, json!({"data":[]}));
+    fixture.input(id).await;
+    let first = fixture
+        .events_until(id, 0, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    assert!(
+        !first
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::Warning { .. }))
+    );
+    let skill = write_skill(
+        &home,
+        "tdd",
+        "---\nname: tdd\ndescription: Newly installed skill\n---\n",
+    );
+    assert_eq!(fixture.skills(id).await, json!({"data":[]}));
+    fixture.input(id).await;
+    fixture
+        .events_until(id, first.last().unwrap().seq, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    let response = fixture
+        .request(Method::DELETE, &format!("/v1/sessions/{id}"), json!({}))
+        .await;
+    assert_eq!(response.status(), 200);
+    let response = fixture
+        .request(
+            Method::POST,
+            &format!("/v1/sessions/{id}/resume"),
+            json!({"env":{"HOME":home}}),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+    let reopened: SessionReadResponse = response.json().await.unwrap();
+    assert_eq!(fixture.skills(id).await["data"][0]["path"], json!(skill));
+    fixture.input(id).await;
+    fixture
+        .events_until(id, reopened.event_seq, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    fixture.stop().await;
+    let script = fixture.script.lock().unwrap();
+    let before = script.requests[0]["messages"].as_array().unwrap();
+    let during = script.requests[1]["messages"].as_array().unwrap();
+    assert!(
+        !before[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Available skills:")
+    );
+    assert_eq!(before.as_slice(), &during[..before.len()]);
+    assert!(
+        script.requests[2]["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Newly installed skill")
+    );
 }
 
 fn text_reply() -> String {

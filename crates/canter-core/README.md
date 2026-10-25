@@ -26,6 +26,7 @@ SessionWriter 操作、执行器构造和项目指令读取都在 `spawn_blockin
 | `update(SessionUpdateParams)` | session.updated；名字、模型、权限模式可改，下一次请求/权限判断使用新值 |
 | `close()` | 停止当前轮、清队列、释放存盘锁，返回 session.status=closed 的序号；可再次 open 恢复聊天 |
 | `snapshot()` | SessionReadResponse，eventSeq 与 lastEventSeq 一致 |
+| `skills()` | SkillListResponse，返回会话打开时固定的技能列表，不重新读盘 |
 | `subscribe(after)` | `Subscription::recv()` 按序返回事件，每条自带 seq；after 超过当前最后序号报 invalid_request |
 
 `CoreError` 提供协议的 `code` 和安全的 `message`，供服务端映射 HTTP 错误；重复会话 id 返回 conflict。
@@ -70,13 +71,22 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
 
 私有 JSONL 条目带 `type`，目前有：
 
-- `context { messages }`：系统提示词、目录、操作系统/架构、UTC 日期、从最近 git 根到 cwd 的 AGENTS.md。创建或打开会话时读一次；与恢复的开头不同才追加新记录，没有 git 根则只读 cwd。会话中途改文件或跨 UTC 零点不重读，普通请求、手动和自动压缩都沿用这份开头，下次打开会话才更新。
+- `context { messages }`：系统提示词、目录、操作系统/架构、UTC 日期、从最近 git 根到 cwd 的 AGENTS.md、可供模型使用的技能简介与路径。创建或打开会话时读一次；与恢复的开头不同才追加新记录，没有 git 根则只读 cwd。会话中途改文件或跨 UTC 零点不重读，普通请求、手动和自动压缩都沿用这份开头，下次打开会话才更新。
 - `message { message, user_input }`：一条模型消息；user_input 区分用户原话和核心的中断提示，旧条目缺字段时默认 false。
 - `compaction_request { messages }`：每次摘要调用收到的完整消息，仅作审计，不混入正常对话。
 - `compaction { summary, messages, user_messages }`：压缩后的完整对话替换及保留的用户原话，恢复从最后一次压缩继续。原记录不删除。
 
 每份 AGENTS.md 至多 64 KiB；读取失败、非 UTF-8 或超限时整份跳过，warning 写明文件路径和原因，继续正常请求。
 警告也只在创建或打开会话时发送；中途问题变化不重新提示，下次打开时按当时的读取结果报告。
+
+技能从会话环境 `HOME` 下的 `.agents/skills/<目录>/SKILL.md` 和同一项目根目录下的
+`.agents/skills/<目录>/SKILL.md` 发现；未提供 HOME 时只查项目，不读取服务端进程的 HOME。
+跟随技能目录的符号链接，按 `name` 去重（项目优先）并排序。只读取开头两个 `---`
+之间的头部，使用本机样例的单行普通文本或双引号文本解析 `name`、`description`，
+忽略其他元数据。缺少头部、名字或简介，以及读取或 UTF-8 错误，都跳过并沿用 warning；
+技能根目录不存在不警告。`disable-model-invocation: true` 的技能仍列在 `skills()` 中，
+但不进入系统提示词。没有可供模型使用的技能时不加技能段落。全文只在模型需要时由现有
+read 工具读取，权限与受保护路径规则不变。技能列表只驻内存，不改变存盘格式。
 
 未知条目/消息/助手内容会跳过，绝不把 Unknown 再写回。恢复模型上下文只读模型历史；
 事件用于恢复显示、请求处理序号和轮状态。重新打开时取消遗留批准和排队输入，未完成轮
