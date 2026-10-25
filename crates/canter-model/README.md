@@ -6,7 +6,7 @@
 
 - `ChatCompletions::new(base_url, ApiKey::new(key))` 创建客户端。URL 可带 `/v1` 和尾部斜杠；适配器追加 `/chat/completions`。模型名在每次 `Request.model` 中传入。
 - `Model::stream(Request, CancellationToken) -> ModelStream<'_>` 返回 `Send` 的拉取式流，可以通过 `dyn Model` 注入假模型。调用方持续 poll；丢弃流即丢弃请求，本包不开后台任务。
-- `Request` 包含 `model`、`messages`、`tools`、`options`。`ToolDefinition.parameters` 是 `serde_json::Value`。`RequestOptions.thinking: Option<bool>` 控制思考开关，`max_output_tokens: Option<u32>` 控制输出上限；`None` 不发送对应字段，沿用提供方默认值。
+- `Request` 包含 `model`、`messages`、`tools`、`options`。`ToolDefinition.parameters` 是 `serde_json::Value`。`RequestOptions.thinking: Option<bool>` 控制思考开关，`reasoning_effort: Option<String>` 传思考档位，`max_output_tokens: Option<u32>` 控制输出上限；`None` 不发送对应字段，沿用提供方默认值。显式关闭思考时不发送 `reasoning_effort`。
 - `ModelEvent` 包括 `TextDelta`、`ReasoningDelta`、完整的 `ToolCall`、`Usage` 和 `Finished`。用量包含输入、输出、总 token 数，以及提供方给出时的缓存命中、未命中和思考 token 数；缓存、思考计数是细分，不能再叠加到总量。
 - `Finished` 是成功收完传输后的最后一个事件，原因是 `Stop`、`ToolCalls`、`Length` 或 `Other`。`Finished(Length)` 和 `Finished(Other)` 都表示回复不完整，核心需向用户说明。工具调用按序号拼接，id 和名字取第一个非空值、参数逐段追加，在 `[DONE]` 到达且结束原因为 `ToolCalls` 时交出。调用方必须等到 `Finished(ToolCalls)` 后才执行工具；取消、错误或截断都不能执行这一批工具。
 - 错误以流中的一次 `Err(ModelError)` 结束。用 `kind` 区分 `RateLimited`、`Server`、`Network`、`Timeout`、`ContextLength`、`Authentication`、`InvalidRequest` 和 `Other`；`ContextLength` 供核心触发压缩。可选的 `status`、`retry_after` 只保留安全的状态码与时长，不带提供方原始错误内容。

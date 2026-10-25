@@ -386,6 +386,7 @@ mod creation_tests {
                 cwd: "/work".into(),
                 name: None,
                 model: "fake".into(),
+                reasoning_effort: Default::default(),
                 approval_policy: canter_protocol::PermissionMode::AlwaysAsk,
             };
             let mut syncs = 0;

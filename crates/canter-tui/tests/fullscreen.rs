@@ -189,7 +189,7 @@ fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
     assert_eq!(lines[0], "› first question", "from the top:\n{shown}");
     assert_eq!(lines[2], "  short answer", "{shown}");
     assert_eq!(
-        lines[last], " test-model · Always ask · /work",
+        lines[last], " test-model · think high · Always ask · /work",
         "the info line is the bottom row:\n{shown}"
     );
     assert!(lines[last - 3].starts_with('╭'), "{shown}");
@@ -210,7 +210,7 @@ fn info_line_shows_total_and_last_cache_hit_rates_only_with_input_usage() {
     screen.resize(100, HEIGHT);
     screen.draw();
     let last = usize::from(HEIGHT) - 1;
-    let base = " test-model · Always ask · /work";
+    let base = " test-model · think high · Always ask · /work";
     assert_eq!(screen.lines()[last], base);
 
     for (total_input, total_cached, last_input, last_cached, suffix) in [

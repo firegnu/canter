@@ -45,6 +45,7 @@ struct World {
     root: TempDir,
     model: JoinHandle<()>,
     server: Option<Child>,
+    requests: Arc<Mutex<Vec<Value>>>,
 }
 
 impl World {
@@ -61,9 +62,10 @@ impl World {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
         let script = Arc::new(Mutex::new(VecDeque::from(replies)));
+        let requests = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new()
             .route("/chat/completions", post(fake_model))
-            .with_state(script);
+            .with_state((script, requests.clone()));
         let model = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
@@ -82,6 +84,7 @@ impl World {
             root,
             model,
             server: None,
+            requests,
         }
     }
 
@@ -156,6 +159,24 @@ impl World {
     async fn snapshot(&self, id: &str) -> SessionSnapshot {
         let client = Client::new(&self.path("state/server.sock")).unwrap();
         client.read_session(id).await.unwrap().session
+    }
+
+    /// Seed older/newer on-disk settings while this test's server is stopped.
+    fn rewrite_settings(&self, id: &str, change: impl Fn(&mut Value)) {
+        assert!(self.server.is_none());
+        let path = self.path(&format!("state/sessions/{id}/events.jsonl"));
+        let rewritten: String = fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                let mut event: Value = serde_json::from_str(line).unwrap();
+                if let Some(settings) = event.get_mut("settings") {
+                    change(settings);
+                }
+                serde_json::to_string(&event).unwrap() + "\n"
+            })
+            .collect();
+        fs::write(path, rewritten).unwrap();
     }
 
     async fn only_session(&self) -> String {
@@ -445,10 +466,13 @@ async fn read_the_box() {
     tokio::time::sleep(Duration::from_millis(ANSWER_GUARD_MS as u64 + 200)).await;
 }
 
+type ModelScript = (Arc<Mutex<VecDeque<String>>>, Arc<Mutex<Vec<Value>>>);
+
 async fn fake_model(
-    State(script): State<Arc<Mutex<VecDeque<String>>>>,
-    Json(_body): Json<Value>,
+    State((script, requests)): State<ModelScript>,
+    Json(body): Json<Value>,
 ) -> impl axum::response::IntoResponse {
+    requests.lock().unwrap().push(body);
     let reply = script
         .lock()
         .unwrap()
@@ -464,6 +488,54 @@ fn text_reply(text: &str) -> String {
     )
 }
 
+#[tokio::test]
+async fn slash_think_and_model_apply_to_the_next_request_and_info_line() {
+    let mut world = World::new(vec![text_reply("回答一"), text_reply("回答二")]).await;
+    world.start_server().await;
+    let a = world.open(&["第一句"], "canter-tui a").await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+
+    a.type_line("/think max").await;
+    a.wait_until("think max", |a| a.info().contains("think max"))
+        .await;
+    a.type_line("/model deepseek-v4-pro").await;
+    a.wait_until("new model and effort", |a| {
+        a.info()
+            .starts_with("deepseek-v4-pro · think max · Always ask")
+    })
+    .await;
+    a.type_line("第二句").await;
+    a.wait_for("回答二").await;
+    a.wait_idle().await;
+    {
+        let requests = world.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["reasoning_effort"], "high");
+        assert_eq!(requests[1]["model"], "deepseek-v4-pro");
+        assert_eq!(requests[1]["thinking"], json!({"type":"enabled"}));
+        assert_eq!(requests[1]["reasoning_effort"], "max");
+        assert_eq!(requests[1]["max_tokens"], 65_536);
+        let first = requests[0]["messages"].as_array().unwrap();
+        let next = requests[1]["messages"].as_array().unwrap();
+        assert!(next.len() > first.len());
+        assert_eq!(&next[..first.len()], first);
+        assert_eq!(requests[0]["tools"], requests[1]["tools"]);
+        let mut previous = requests[0].clone();
+        let mut next = requests[1].clone();
+        for field in ["messages", "model", "thinking", "reasoning_effort"] {
+            previous.as_object_mut().unwrap().remove(field);
+            next.as_object_mut().unwrap().remove(field);
+        }
+        assert_eq!(
+            previous, next,
+            "only the model and thinking options may change"
+        );
+    }
+    a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
 fn shell_reply(command: &str) -> String {
     let arguments = json!({ "command": command }).to_string();
     format!(
@@ -473,6 +545,344 @@ fn shell_reply(command: &str) -> String {
             "function":{"name":"shell","arguments":arguments}
         }]},"finish_reason":"tool_calls"}]})
     )
+}
+
+#[tokio::test]
+async fn thinking_none_low_and_compaction_preserve_their_wire_options() {
+    let reasoning = "  original reasoning\nkept verbatim  ";
+    let first = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({
+            "choices":[{"index":0,"delta":{"reasoning_content":reasoning,"content":"回答一"},"finish_reason":"stop"}]
+        })
+    );
+    let mut world = World::new(vec![
+        first,
+        text_reply("回答二"),
+        text_reply("回答三"),
+        text_reply("摘要"),
+    ])
+    .await;
+    world.start_server().await;
+    let a = world.open(&["第一句"], "canter-tui a").await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+    for (effort, prompt, answer) in [("none", "第二句", "回答二"), ("low", "第三句", "回答三")]
+    {
+        a.type_line(&format!("/think {effort}")).await;
+        a.wait_until(effort, |a| a.info().contains(&format!("think {effort}")))
+            .await;
+        a.type_line(prompt).await;
+        a.wait_for(answer).await;
+        a.wait_idle().await;
+    }
+    a.type_line("/think max").await;
+    a.wait_until("think max", |a| a.info().contains("think max"))
+        .await;
+    a.type_line("/compact").await;
+    a.wait_for("Context compacted").await;
+    a.wait_idle().await;
+    {
+        let requests = world.requests.lock().unwrap();
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[1]["thinking"], json!({"type":"disabled"}));
+        assert!(requests[1].get("reasoning_effort").is_none());
+        assert_eq!(requests[2]["thinking"], json!({"type":"enabled"}));
+        assert_eq!(requests[2]["reasoning_effort"], "low");
+        for request in &requests[..3] {
+            assert_eq!(request["max_tokens"], 65_536);
+        }
+        for pair in requests[..3].windows(2) {
+            let previous = pair[0]["messages"].as_array().unwrap();
+            let next = pair[1]["messages"].as_array().unwrap();
+            assert!(next.len() > previous.len());
+            assert_eq!(&next[..previous.len()], previous);
+        }
+        assert!(
+            requests[2]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|message| message["reasoning_content"] == reasoning)
+        );
+        assert_eq!(requests[3]["thinking"], json!({"type":"disabled"}));
+        assert!(requests[3].get("reasoning_effort").is_none());
+        assert!(requests[3].get("tools").is_none());
+    }
+    a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn name_only_patch_normalizes_unknown_stored_effort_before_writing() {
+    let mut world = World::new(vec![text_reply("继续回答")]).await;
+    world.start_server().await;
+    let a = world.open(&[], "canter-tui a").await;
+    a.wait_idle().await;
+    let id = a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+    world.rewrite_settings(&id, |settings| settings["reasoningEffort"] = json!("ultra"));
+    world.start_server().await;
+    let client = Client::new(&world.path("state/server.sock")).unwrap();
+    client.resume(&id, &BTreeMap::new()).await.unwrap();
+    let updated = client
+        .update(
+            &id,
+            &canter_protocol::SessionUpdateParams {
+                name: Some("renamed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let path = world.path(&format!("state/sessions/{id}/events.jsonl"));
+    let persisted: Value = fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|event| event["seq"] == updated.event_seq)
+        .unwrap();
+    assert_eq!(persisted["settings"]["name"], "renamed");
+    assert_eq!(persisted["settings"]["reasoningEffort"], "high");
+
+    let a = world.open(&["--resume", &id], "canter-tui a").await;
+    a.wait_idle().await;
+    a.type_line("继续").await;
+    a.wait_for("继续回答").await;
+    {
+        let requests = world.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["thinking"], json!({"type":"enabled"}));
+        assert_eq!(requests[0]["reasoning_effort"], "high");
+    }
+    a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn unknown_effort_shows_and_selects_high_and_new_uses_the_default() {
+    let mut world = World::new(vec![text_reply("原会话回答")]).await;
+    world.start_server().await;
+    let a = world.open(&["原会话问题"], "canter-tui a").await;
+    a.wait_for("原会话回答").await;
+    a.wait_idle().await;
+    let old = a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+    world.rewrite_settings(&old, |settings| {
+        settings["reasoningEffort"] = json!("ultra")
+    });
+    world.start_server().await;
+
+    let a = world.open(&["--resume", &old], "canter-tui a").await;
+    a.wait_idle().await;
+    assert!(
+        a.info().starts_with("fake-model · think high"),
+        "{}",
+        a.info()
+    );
+    a.type_line("/think").await;
+    a.wait_for("Thinking effort").await;
+    assert!(
+        a.screen()
+            .lines()
+            .any(|line| line.starts_with(" › high (current)")),
+        "{}",
+        a.screen()
+    );
+    a.press(KeyCode::Esc).await;
+    // Cancel the choice so /new still receives Unknown from the old session.
+    a.type_line("/new").await;
+    a.wait_until("new session", |a| !a.screen().contains("原会话问题"))
+        .await;
+    assert!(
+        a.info().starts_with("fake-model · think high"),
+        "{}",
+        a.info()
+    );
+    let new = a.quit().await;
+    assert_ne!(new, old);
+    assert_eq!(
+        world.snapshot(&new).await.settings.reasoning_effort,
+        canter_protocol::ReasoningEffort::High
+    );
+    assert_eq!(
+        world.snapshot(&old).await.settings.reasoning_effort,
+        canter_protocol::ReasoningEffort::Unknown
+    );
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn new_session_retries_with_default_model_when_previous_model_was_removed() {
+    let mut world = World::new(vec![text_reply("原会话回答"), text_reply("默认模型回答")]).await;
+    world.start_server().await;
+    let a = world
+        .open(
+            &["--yolo", "-m", "deepseek-v4-pro", "原会话问题"],
+            "canter-tui a",
+        )
+        .await;
+    a.wait_for("原会话回答").await;
+    a.wait_idle().await;
+    a.type_line("/think max").await;
+    a.wait_until("think max", |a| a.info().contains("think max"))
+        .await;
+    let old = a.quit().await;
+    let old_settings = world.snapshot(&old).await.settings;
+    world.stop_server(Signal::SIGTERM).await;
+    let config_path = world.path("state/config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    config["models"] = json!(["fake-model"]);
+    fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    world.start_server().await;
+
+    let a = world.open(&["--resume", &old], "canter-tui a").await;
+    a.wait_idle().await;
+    a.type_line("/new").await;
+    a.wait_for("Model deepseek-v4-pro is no longer available")
+        .await;
+    assert!(
+        a.screen()
+            .contains("new session uses default model fake-model"),
+        "{}",
+        a.screen()
+    );
+    assert!(
+        a.info().starts_with("fake-model · think max · Allow all"),
+        "{}",
+        a.info()
+    );
+    assert!(!a.screen().contains("原会话问题"));
+    a.type_line("继续").await;
+    a.wait_for("默认模型回答").await;
+    a.wait_idle().await;
+    let new = a.quit().await;
+    assert_ne!(new, old);
+    let mut expected = old_settings.clone();
+    expected.model = "fake-model".into();
+    expected.name = Some("继续".into());
+    assert_eq!(world.snapshot(&new).await.settings, expected);
+    assert_eq!(world.snapshot(&old).await.settings, old_settings);
+    let client = Client::new(&world.path("state/server.sock")).unwrap();
+    assert_eq!(client.list_sessions().await.unwrap().len(), 2);
+    {
+        let requests = world.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1]["model"], "fake-model");
+        assert_eq!(requests[1]["reasoning_effort"], "max");
+    }
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn legacy_session_without_effort_and_with_unlisted_model_can_resume() {
+    let mut world = World::new(vec![text_reply("回答一"), text_reply("旧会话继续回答")]).await;
+    world.start_server().await;
+    let a = world.open(&["第一句"], "canter-tui a").await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+    let id = a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+    let path = world.path(&format!("state/sessions/{id}/events.jsonl"));
+    let legacy: String = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let mut event: Value = serde_json::from_str(line).unwrap();
+            if let Some(settings) = event.get_mut("settings") {
+                settings.as_object_mut().unwrap().remove("reasoningEffort");
+                settings["model"] = json!("legacy-model");
+            }
+            serde_json::to_string(&event).unwrap() + "\n"
+        })
+        .collect();
+    fs::write(path, legacy).unwrap();
+    world.start_server().await;
+    let a = world.open(&["--resume", &id], "canter-tui a").await;
+    a.wait_until("legacy model, default high", |a| {
+        a.info().starts_with("legacy-model · think high")
+    })
+    .await;
+    a.type_line("继续").await;
+    a.wait_for("旧会话继续回答").await;
+    a.wait_idle().await;
+    let settings = serde_json::to_value(world.snapshot(&id).await.settings).unwrap();
+    assert_eq!(settings["reasoningEffort"], "high");
+    {
+        let requests = world.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1]["model"], "legacy-model");
+        assert_eq!(requests[1]["thinking"], json!({"type":"enabled"}));
+        assert_eq!(requests[1]["reasoning_effort"], "high");
+        assert!(
+            requests[1]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|message| message["content"] == "回答一")
+        );
+    }
+    a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn think_and_model_choosers_only_accept_keys_after_their_frame_is_shown() {
+    let mut world = World::new(Vec::new()).await;
+    world.start_server().await;
+    let a = world.open(&[], "canter-tui a").await;
+    a.wait_idle().await;
+    let id = world.only_session().await;
+    for (command, title, current, downs, expected) in [
+        (
+            "/think",
+            "Thinking effort",
+            "high (current)",
+            1,
+            "fake-model · think max",
+        ),
+        (
+            "/model",
+            "Model",
+            "fake-model (current)",
+            2,
+            "deepseek-v4-pro · think max",
+        ),
+    ] {
+        let before = world.snapshot(&id).await.last_event_seq;
+        let sent = a.press_while_drawing(title, KeyCode::Enter);
+        a.type_line(command).await;
+        a.wait_until("Enter sent before chooser was on screen", |_| {
+            sent.load(Ordering::SeqCst)
+        })
+        .await;
+        a.frames_later(2).await;
+        assert!(a.screen().contains(current), "{}", a.screen());
+        if command == "/think" {
+            for effort in ["none", "low", "high (current)", "max"] {
+                assert!(a.screen().contains(effort), "{}", a.screen());
+            }
+        }
+        assert_eq!(world.snapshot(&id).await.last_event_seq, before);
+        for _ in 0..downs {
+            a.press(KeyCode::Down).await;
+        }
+        a.press(KeyCode::Enter).await;
+        a.wait_until(expected, |a| a.info().starts_with(expected))
+            .await;
+    }
+    let settings = world.snapshot(&id).await.settings;
+    a.type_line("/think medium").await;
+    a.wait_for("Unknown thinking effort: medium").await;
+    assert_eq!(world.snapshot(&id).await.settings, settings);
+    a.press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        .await;
+    a.type_line("/model unlisted").await;
+    a.wait_for("model is not in the configured model list")
+        .await;
+    assert_eq!(world.snapshot(&id).await.settings, settings);
+    a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
 }
 
 /// 「这样我随时可以在任何terminal中启动。」: with no server running, `canter`
@@ -488,7 +898,7 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     let terminal = Terminal::start(&[], world.context("canter-tui a", &anywhere)).await;
     // The info line: default model, asking each time, this directory.
     terminal
-        .wait_for("fake-model · Always ask · /tmp/canter-tui-")
+        .wait_for("fake-model · think high · Always ask · /tmp/canter-tui-")
         .await;
     assert!(terminal.screen().contains("somewhere/else/deep"));
     let registration: Value =
@@ -1020,18 +1430,25 @@ async fn slash_new_opens_a_new_session_in_this_terminal() {
     let mut world = World::new(vec![text_reply("回答一"), text_reply("回答二")]).await;
     world.start_server().await;
     let a = world
-        .open(&["--yolo", "-m", "other-model", "第一句"], "canter-tui a")
+        .open(
+            &["--yolo", "-m", "deepseek-v4-pro", "第一句"],
+            "canter-tui a",
+        )
         .await;
     a.wait_for("回答一").await;
     a.wait_idle().await;
     let old = world.only_session().await;
+
+    a.type_line("/think max").await;
+    a.wait_until("think max", |a| a.info().contains("think max"))
+        .await;
 
     a.type_line("/new").await;
     a.wait_until("the new session", |a| !a.screen().contains("第一句"))
         .await;
     assert!(
         a.info()
-            .starts_with("other-model · Allow all · /tmp/canter-tui-"),
+            .starts_with("deepseek-v4-pro · think max · Allow all · /tmp/canter-tui-"),
         "{}",
         a.screen()
     );
@@ -1041,7 +1458,11 @@ async fn slash_new_opens_a_new_session_in_this_terminal() {
     let new = sessions.iter().find(|s| s.id != old).unwrap().id.clone();
     let settings = world.snapshot(&new).await.settings;
     assert_eq!(settings.cwd, world.path("work").display().to_string());
-    assert_eq!(settings.model, "other-model");
+    assert_eq!(settings.model, "deepseek-v4-pro");
+    assert_eq!(
+        settings.reasoning_effort,
+        canter_protocol::ReasoningEffort::Max
+    );
     assert_eq!(settings.approval_policy, PermissionMode::AllowAll);
     assert_eq!(
         world.snapshot(&old).await.status,
@@ -1193,7 +1614,7 @@ async fn slash_mode_changes_the_permission_mode() {
     let a = world.open(&[], "canter-tui a").await;
     a.wait_idle().await;
     assert!(
-        a.info().starts_with("fake-model · Always ask"),
+        a.info().starts_with("fake-model · think high · Always ask"),
         "{}",
         a.info()
     );
@@ -1202,7 +1623,7 @@ async fn slash_mode_changes_the_permission_mode() {
 
     a.type_line("/mode allow-all").await;
     a.wait_until("Allow all", |a| {
-        a.info().starts_with("fake-model · Allow all")
+        a.info().starts_with("fake-model · think high · Allow all")
     })
     .await;
     assert_eq!(mode().await, PermissionMode::AllowAll);
@@ -1213,7 +1634,7 @@ async fn slash_mode_changes_the_permission_mode() {
     a.press(KeyCode::Up).await;
     a.press(KeyCode::Enter).await;
     a.wait_until("Always ask", |a| {
-        a.info().starts_with("fake-model · Always ask")
+        a.info().starts_with("fake-model · think high · Always ask")
     })
     .await;
     assert_eq!(mode().await, PermissionMode::AlwaysAsk);
@@ -1221,7 +1642,7 @@ async fn slash_mode_changes_the_permission_mode() {
     a.type_line("/mode yolo").await;
     a.wait_for("Unknown mode: yolo").await;
     assert_eq!(mode().await, PermissionMode::AlwaysAsk);
-    assert!(a.info().starts_with("fake-model · Always ask"));
+    assert!(a.info().starts_with("fake-model · think high · Always ask"));
     // The first Ctrl+C clears the draft left in the input box.
     a.press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
         .await;

@@ -150,6 +150,7 @@ async fn summarize(
             tools: Vec::new(),
             options: RequestOptions {
                 thinking: Some(false),
+                reasoning_effort: None,
                 max_output_tokens: Some(output_limit),
             },
         };

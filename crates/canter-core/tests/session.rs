@@ -695,12 +695,13 @@ async fn automatic_compaction_keeps_recent_user_words_and_can_continue_after_reo
     let options = CoreOptions {
         context_window: 100_000,
         max_output_tokens: 32_768,
-        thinking: false,
     };
+    let mut session_settings = settings(temp.path());
+    session_settings.reasoning_effort = ReasoningEffort::None;
     let (session, _) = Session::create(
         store.clone(),
         "s1".into(),
-        settings(temp.path()),
+        session_settings,
         RuntimeContext::default(),
         model.clone(),
         options.clone(),
@@ -775,6 +776,7 @@ fn settings(cwd: &std::path::Path) -> SessionSettings {
         cwd: cwd.to_string_lossy().into(),
         name: None,
         model: "fake".into(),
+        reasoning_effort: Default::default(),
         approval_policy: PermissionMode::AllowAll,
     }
 }

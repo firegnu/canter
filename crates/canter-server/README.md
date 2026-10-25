@@ -30,16 +30,26 @@
 {
   "base_url": "https://api.deepseek.com",
   "model": "<model-name>",
+  "models": ["deepseek-flash", "deepseek-v4-pro"],
   "context_window": 1048576,
   "api_key": "<your-key>"
 }
 ```
 
 启动时收紧已有配置权限；缺失或无效时用不含配置内容的错误退出。配置格式为 JSON，
-四项必填；窗口必须大于 81,920（核心的输出预留 65,536 加压缩余量 16,384）。
+`base_url`、`model`、`context_window`、`api_key` 必填；窗口必须大于 81,920
+（核心的输出预留 65,536 加压缩余量 16,384）。
+`models` 是可选的模型名数组，省略时为 `deepseek-flash`、`deepseek-v4-pro`；
+默认模型 `model` 不在列表中时，自动加在最前。`GET /v1/models` 返回该列表。
 非本机 `http://` 地址被拒绝，本机仅接受 localhost 或 loopback IP；模型客户端禁用代理和跳转。
 模型、key、窗口在服务端启动时读取，修改后需显式重启。
 创建会话的 `model` 为空字符串时使用配置中的默认模型；非空则使用请求里的模型名。
+创建和 PATCH 只接受列表内的模型，拒绝时返回 `invalid_request`，不修改设置。
+已存的旧模型名仍可恢复并继续对话。终端 `/model` 列出可用模型，`/model <名字>` 直接切换。
+`/think` 选择 `none`、`low`、`high`、`max`，`/think <档位>` 直接切换；
+下一次模型请求生效，信息行显示模型和档位，`/new` 沿用二者。
+旧会话的模型已不在列表时，`/new` 在创建被拒后改用默认模型重试一次，并在新会话中提示。
+未知的旧档位在终端按 `high` 显示和选择，`/new` 交由服务端使用默认 `high`。
 
 启动先取得服务端锁，普通第二次启动直接退出，不动已有 socket 或登记文件。
 拿锁后清理旧登记和 socket，以及 `sessions/.creating-*` 中能取得事件文件锁的目录；

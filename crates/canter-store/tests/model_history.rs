@@ -26,6 +26,7 @@ fn private_typed_model_history_survives_reopen_and_a_torn_last_line() {
                 cwd: "/work".into(),
                 name: None,
                 model: "fake".into(),
+                reasoning_effort: Default::default(),
                 approval_policy: PermissionMode::AlwaysAsk,
             },
             1,

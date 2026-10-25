@@ -244,6 +244,7 @@ where
                 model,
                 approval_policy,
                 input: first.clone().map(|text| vec![UserInput::Text { text }]),
+                reasoning_effort: None,
                 name: first.as_deref().map(session_title),
                 client_name: client_name.clone(),
             };
@@ -340,6 +341,12 @@ where
                         Err(error) => break 'run Err(error),
                     }
                 }
+                Some(Action::PickModel) => match chat.client.list_models().await {
+                    Ok(models) => crate::commands::choose_model(ui.app_mut(), models),
+                    Err(error) => ui
+                        .app_mut()
+                        .warning(&format!("Could not list models: {error}")),
+                },
                 Some(action) => chat.act(ui.app(), action),
             }
         }
@@ -504,18 +511,41 @@ impl<C: Connector> Chat<C> {
         ui: &mut Ui<B>,
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let settings = &ui.app().snapshot().settings;
-        let params = SessionCreateParams {
+        let mut params = SessionCreateParams {
             cwd: settings.cwd.clone(),
             env: self.env.clone(),
             model: settings.model.clone(),
             approval_policy: settings.approval_policy,
+            reasoning_effort: (settings.reasoning_effort
+                != canter_protocol::ReasoningEffort::Unknown)
+                .then_some(settings.reasoning_effort),
             input: None,
             name: None,
             client_name: self.client_name.clone(),
         };
         let failed = "Could not start a new session";
-        match self.client.create_session(&params).await {
-            Ok(created) => self.show(ui, created.session, failed).await,
+        let mut response = self.client.create_session(&params).await;
+        let mut previous_model = None;
+        if matches!(&response, Err(ClientError::Server { code: ErrorCode::InvalidRequest, message, .. })
+            if message == "model is not in the configured model list")
+        {
+            previous_model = Some(std::mem::take(&mut params.model));
+            response = self.client.create_session(&params).await;
+        }
+        match response {
+            Ok(created) => {
+                let notice = previous_model.map(|model| {
+                    format!(
+                        "Model {model} is no longer available; new session uses default model {}.",
+                        created.session.settings.model
+                    )
+                });
+                let receiver = self.show(ui, created.session, failed).await?;
+                if let Some(notice) = notice {
+                    ui.app_mut().warning(&notice);
+                }
+                Some(receiver)
+            }
             Err(error) => {
                 ui.app_mut().warning(&format!("{failed}: {error}"));
                 None
@@ -709,7 +739,7 @@ impl<C: Connector> Chat<C> {
                 });
             }
             // The main loop handles these itself.
-            Action::Quit | Action::NewSession | Action::PickSession => {}
+            Action::Quit | Action::NewSession | Action::PickSession | Action::PickModel => {}
         }
     }
 }

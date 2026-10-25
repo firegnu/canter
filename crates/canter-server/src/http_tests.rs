@@ -42,6 +42,7 @@ async fn failed_close_can_be_resumed_through_http() {
         store: Arc::new(store),
         model: model.clone(),
         default_model: "fake-model".into(),
+        models: vec!["fake-model".into()],
         options: CoreOptions::default(),
         sessions: Default::default(),
         registry_changed: Default::default(),

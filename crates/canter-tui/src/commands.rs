@@ -5,12 +5,12 @@
 //! A first word (after any leading blanks) that starts with `/` and has no
 //! other `/` in it is a command; one like `/tmp/a.txt` is a message.
 
-use canter_protocol::{PermissionMode, SessionUpdateParams};
+use canter_protocol::{PermissionMode, ReasoningEffort, SessionUpdateParams};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::{Action, App};
-use crate::text::{LogicalLine, str_width, truncate};
+use crate::text::{LogicalLine, sanitize, str_width, truncate};
 
 pub(crate) struct Command {
     pub name: &'static str,
@@ -55,6 +55,21 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: mode,
     },
     Command {
+        name: "model",
+        about: "Change the model",
+        takes_args: true,
+        run: |_, args| {
+            Ok(Some(if args.is_empty() {
+                Action::PickModel
+            } else {
+                Action::Update(SessionUpdateParams {
+                    model: Some(args.to_owned()),
+                    ..SessionUpdateParams::default()
+                })
+            }))
+        },
+    },
+    Command {
         name: "new",
         about: "Start a new session",
         takes_args: false,
@@ -66,7 +81,90 @@ pub(crate) const COMMANDS: &[Command] = &[
         takes_args: false,
         run: |_, _| Ok(Some(Action::PickSession)),
     },
+    Command {
+        name: "think",
+        about: "Change thinking effort (none, low, high, max)",
+        takes_args: true,
+        run: think,
+    },
 ];
+
+fn think(app: &mut App, args: &str) -> Result<Option<Action>, String> {
+    let efforts = [
+        ReasoningEffort::None,
+        ReasoningEffort::Low,
+        ReasoningEffort::High,
+        ReasoningEffort::Max,
+    ];
+    let set = |effort| {
+        Action::Update(SessionUpdateParams {
+            reasoning_effort: Some(effort),
+            ..SessionUpdateParams::default()
+        })
+    };
+    if args.is_empty() {
+        let current = match app.snapshot().settings.reasoning_effort {
+            ReasoningEffort::Unknown => ReasoningEffort::High,
+            effort => effort,
+        };
+        let choices = efforts
+            .iter()
+            .map(|&effort| Choice {
+                label: if effort == current {
+                    format!("{} (current)", effort.as_str())
+                } else {
+                    effort.as_str().to_owned()
+                },
+                about: String::new(),
+                action: set(effort),
+            })
+            .collect();
+        let selected = efforts
+            .iter()
+            .position(|&effort| effort == current)
+            .unwrap_or(0);
+        app.choose(Chooser {
+            title: "Thinking effort",
+            choices,
+            selected,
+        });
+        Ok(None)
+    } else {
+        efforts
+            .into_iter()
+            .find(|effort| effort.as_str() == args)
+            .map(|effort| Some(set(effort)))
+            .ok_or_else(|| format!("Unknown thinking effort: {args} (use none, low, high or max)"))
+    }
+}
+
+pub(crate) fn choose_model(app: &mut App, models: Vec<canter_protocol::Model>) {
+    let current = &app.snapshot().settings.model;
+    let selected = models
+        .iter()
+        .position(|model| &model.model == current)
+        .unwrap_or(0);
+    let choices = models
+        .into_iter()
+        .map(|model| Choice {
+            label: if &model.model == current {
+                format!("{} (current)", sanitize(&model.display_name))
+            } else {
+                sanitize(&model.display_name)
+            },
+            about: String::new(),
+            action: Action::Update(SessionUpdateParams {
+                model: Some(model.model),
+                ..SessionUpdateParams::default()
+            }),
+        })
+        .collect();
+    app.choose(Chooser {
+        title: "Model",
+        choices,
+        selected,
+    });
+}
 
 /// The permission modes as `/mode` takes them, with what each means.
 const MODES: [(&str, PermissionMode, &str); 3] = [

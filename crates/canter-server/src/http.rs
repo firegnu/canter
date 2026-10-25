@@ -33,6 +33,7 @@ pub(crate) struct App {
     pub store: Arc<Store>,
     pub model: Arc<dyn Model>,
     pub default_model: String,
+    pub models: Vec<String>,
     pub options: CoreOptions,
     pub sessions: Mutex<HashMap<String, Session>>,
     pub registry_changed: Notify,
@@ -41,6 +42,17 @@ pub(crate) struct App {
 }
 
 impl App {
+    fn validate_model(&self, model: &str) -> Result<(), ApiError> {
+        if self.models.iter().any(|available| available == model) {
+            Ok(())
+        } else {
+            Err(ApiError::new(
+                ErrorCode::InvalidRequest,
+                "model is not in the configured model list",
+            ))
+        }
+    }
+
     fn runtime(&self, environment: std::collections::BTreeMap<String, String>) -> RuntimeContext {
         RuntimeContext {
             environment,
@@ -96,6 +108,7 @@ impl App {
 pub(crate) fn router(app: Arc<App>) -> Router {
     Router::new()
         .route(routes::INFO, get(info))
+        .route(routes::MODELS, get(models))
         .route(routes::SESSIONS, post(create).get(list))
         .route(routes::SESSION, get(read).patch(update).delete(close))
         .route(routes::RESUME, post(resume))
@@ -179,6 +192,22 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         protocol_version: PROTOCOL_VERSION,
         sessions,
     }))
+}
+
+async fn models(State(app): State<Arc<App>>) -> Json<ModelListResponse> {
+    Json(ModelListResponse {
+        data: app
+            .models
+            .iter()
+            .map(|model| canter_protocol::Model {
+                id: model.clone(),
+                model: model.clone(),
+                display_name: model.clone(),
+                is_default: model == &app.default_model,
+            })
+            .collect(),
+        next_cursor: None,
+    })
 }
 
 async fn list(state: State<Arc<App>>) -> Result<Json<SessionListResponse>, ApiError> {
@@ -266,7 +295,9 @@ async fn create(
                 params.model
             },
             approval_policy: params.approval_policy,
+            reasoning_effort: params.reasoning_effort.unwrap_or_default(),
         };
+        app.validate_model(&settings.model)?;
         let (session, mut response) = Session::create(
             app.store.clone(),
             id.clone(),
@@ -349,6 +380,9 @@ async fn update(
     params: Result<Json<SessionUpdateParams>, JsonRejection>,
 ) -> Result<Json<SessionUpdateResponse>, ApiError> {
     let params = body(params)?;
+    if let Some(model) = &params.model {
+        app.validate_model(model)?;
+    }
     let draining = app.draining.read().await;
     if *draining {
         return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));

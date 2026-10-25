@@ -22,7 +22,7 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat · Always ask · ~/canter
+ deepseek-chat · think high · Always ask · ~/canter
 == 第 21 条事件后，屏幕 ==
 › 把 README 里的安装步骤改成 cargo install
 
@@ -47,7 +47,7 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat · Always ask · ~/canter
+ deepseek-chat · think high · Always ask · ~/canter
 == 第 23 条事件后，屏幕 ==
 › 把 README 里的安装步骤改成 cargo install
 
@@ -72,7 +72,7 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat · Always ask · ~/canter
+ deepseek-chat · think high · Always ask · ~/canter
 == 第 29 条事件后，屏幕 ==
   先看一下 README 现在怎么写的。
   ◇ Read README.md  lines 1–21
@@ -97,7 +97,7 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat · Always ask · ~/canter
+ deepseek-chat · think high · Always ask · ~/canter
 == 发了「你好」之后，屏幕 ==
   ● Run cargo build                                               exit 0 · 12.3s
     │ … (12 lines, showing the last 3)
@@ -122,7 +122,7 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat · Always ask · ~/canter
+ deepseek-chat · think high · Always ask · ~/canter
 == 发了「你好」之后，往上翻到顶 ==
 › 把 README 里的安装步骤改成 cargo install
 
@@ -147,4 +147,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat · Always ask · ~/canter
+ deepseek-chat · think high · Always ask · ~/canter

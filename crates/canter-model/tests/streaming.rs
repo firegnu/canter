@@ -314,6 +314,7 @@ async fn streams_content_tools_and_usage_and_replays_reasoning() {
         }],
         options: RequestOptions {
             thinking: Some(true),
+            reasoning_effort: None,
             max_output_tokens: Some(128),
         },
     };
