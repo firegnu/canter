@@ -16,6 +16,7 @@ Usage:
   canter [options] --resume [session id]
                               resume a session; without an id, pick from a list
   canter serve [--replace]    run the server in the foreground
+  canter usage               show daily token usage and cost by model
 
 Options:
   -m, --model <model>  use this model (default: the server's config)
@@ -26,6 +27,7 @@ Options:
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Serve { replace: bool },
+    Usage,
     Chat(ChatArgs),
     Help,
 }
@@ -49,6 +51,13 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 .map_err(|arg| format!("argument is not UTF-8: {}", arg.to_string_lossy()))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if args.first().map(String::as_str) == Some("usage") {
+        return if args.len() == 1 {
+            Ok(Command::Usage)
+        } else {
+            Err("usage does not accept arguments".into())
+        };
+    }
     if args.first().map(String::as_str) == Some("serve") {
         return match &args[1..] {
             [] => Ok(Command::Serve { replace: false }),
@@ -146,6 +155,21 @@ fn connected(connection: canter_server::Connection) -> Result<Connected, String>
         warning: connection.version_warning,
         server: Some(connection.registration.instance),
     })
+}
+
+pub async fn usage(context: Context) -> Result<String, String> {
+    let connection = canter_server::ensure_server(&context.state_dir, &context.executable)
+        .await
+        .map_err(|error| error.to_string())?;
+    if let Some(warning) = &connection.version_warning {
+        eprintln!("{warning}");
+    }
+    let report = connected(connection)?
+        .client
+        .usage(None)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(canter_tui::usage::format_report(&report).join("\n") + "\n")
 }
 
 /// Finds the server, starting one in the background when none runs, and

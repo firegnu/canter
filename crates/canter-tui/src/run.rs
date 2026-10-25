@@ -354,6 +354,12 @@ where
                         .app_mut()
                         .warning(&format!("Could not list models: {error}")),
                 },
+                Some(Action::Usage) => match chat.client.usage(Some(&chat.session)).await {
+                    Ok(report) => ui.app_mut().show_usage(&report),
+                    Err(error) => ui
+                        .app_mut()
+                        .warning(&format!("Could not read usage: {error}")),
+                },
                 Some(Action::ListSkills) => match chat.client.list_skills(&chat.session).await {
                     Ok(skills) => ui.app_mut().show_skills(skills),
                     Err(error) => ui
@@ -787,6 +793,7 @@ impl<C: Connector> Chat<C> {
             | Action::NewSession
             | Action::PickSession
             | Action::PickModel
+            | Action::Usage
             | Action::ListSkills => {}
         }
     }

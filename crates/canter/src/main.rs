@@ -9,6 +9,12 @@ async fn main() -> ExitCode {
             .await
             .map_err(|error| error.to_string()),
         Ok(Command::Chat(args)) => chat(args).await,
+        Ok(Command::Usage) => match Context::current() {
+            Ok(context) => canter::usage(context)
+                .await
+                .map(|report| print!("{report}")),
+            Err(error) => Err(error),
+        },
         Ok(Command::Help) => {
             print!("{USAGE}");
             Ok(())

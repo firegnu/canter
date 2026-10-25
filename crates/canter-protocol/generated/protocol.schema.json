@@ -1407,6 +1407,29 @@
       ],
       "type": "string"
     },
+    "RequestCharge": {
+      "properties": {
+        "costUsd": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "startedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "model",
+        "startedAt"
+      ],
+      "type": "object"
+    },
     "RequestKind": {
       "oneOf": [
         {
@@ -2061,6 +2084,16 @@
           "minimum": 0,
           "type": "integer"
         },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageCost"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "last": {
           "$ref": "#/$defs/TokenUsageBreakdown"
         },
@@ -2071,6 +2104,17 @@
             "integer",
             "null"
           ]
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestCharge"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent in old events; present with a null cost for an unpriced request."
         },
         "total": {
           "$ref": "#/$defs/TokenUsageBreakdown"
@@ -2182,6 +2226,91 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "UsageCost": {
+      "properties": {
+        "unknown": {
+          "type": "boolean"
+        },
+        "usd": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "usd",
+        "unknown"
+      ],
+      "type": "object"
+    },
+    "UsageResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/UsageRow"
+          },
+          "type": "array"
+        },
+        "lastTurnCost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageCost"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total": {
+          "$ref": "#/$defs/UsageRow"
+        }
+      },
+      "required": [
+        "data",
+        "total"
+      ],
+      "type": "object"
+    },
+    "UsageRow": {
+      "properties": {
+        "cachedInputTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cost": {
+          "$ref": "#/$defs/UsageCost"
+        },
+        "date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outputTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uncachedInputTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cachedInputTokens",
+        "uncachedInputTokens",
+        "outputTokens",
+        "cost"
+      ],
+      "type": "object"
     },
     "UserInput": {
       "oneOf": [

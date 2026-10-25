@@ -17,7 +17,7 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 9] = [
+const COMMANDS: [(&str, &str); 10] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/exit", "Quit canter"),
     ("/help", "Show available commands"),
@@ -27,6 +27,7 @@ const COMMANDS: [(&str, &str); 9] = [
     ("/resume", "Switch to another session"),
     ("/skills", "List this session's skills"),
     ("/think", "Change thinking effort (none, low, high, max)"),
+    ("/usage", "Show this session's token usage and cost"),
 ];
 
 struct Screen {
@@ -422,6 +423,7 @@ fn each_command_asks_for_its_action() {
         ("/new", Some(Action::NewSession)),
         ("/resume", Some(Action::PickSession)),
         ("/compact", Some(Action::Compact)),
+        ("/usage", Some(Action::Usage)),
         ("/mode allow-all", set_mode(PermissionMode::AllowAll)),
         ("/mode always-ask", set_mode(PermissionMode::AlwaysAsk)),
         (
@@ -435,6 +437,44 @@ fn each_command_asks_for_its_action() {
         assert!(screen.input().contains("Type a message"), "{text}");
         assert!(screen.no_list(), "{text}");
     }
+}
+
+#[test]
+fn usage_displays_models_total_last_turn_and_unknown_costs() {
+    let mut screen = Screen::new();
+    assert_eq!(screen.enter("/usage"), Some(Action::Usage));
+    let report = serde_json::from_value(json!({
+        "data":[
+            {"model":"deepseek-flash","cachedInputTokens":800,"uncachedInputTokens":200,"outputTokens":100,"cost":{"usd":0.001,"unknown":false}},
+            {"model":"unpriced","cachedInputTokens":20,"uncachedInputTokens":30,"outputTokens":40,"cost":{"usd":0.0,"unknown":true}}
+        ],
+        "total":{"cachedInputTokens":820,"uncachedInputTokens":230,"outputTokens":140,"cost":{"usd":0.001,"unknown":true}},
+        "lastTurnCost":{"usd":0.12,"unknown":false}
+    })).unwrap();
+    screen.ui.app_mut().show_usage(&report);
+    screen.draw();
+    let rows = screen
+        .lines()
+        .into_iter()
+        .filter(|line| line.starts_with("  "))
+        .map(|line| {
+            line.split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        vec![
+            vec![
+                "Model", "Cache", "hit", "Cache", "miss", "Output", "Cost", "(USD)"
+            ],
+            vec!["deepseek-flash", "800", "200", "100", "<$0.01"],
+            vec!["unpriced", "20", "30", "40", "unknown"],
+            vec!["Total", "820", "230", "140", "<$0.01+?"],
+            vec!["Last", "turn:", "$0.12"],
+        ]
+    );
 }
 
 /// /help shows the commands in the conversation, and sends nothing.

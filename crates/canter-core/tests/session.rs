@@ -52,6 +52,106 @@ fn assert_request_extension(previous: &Request, next: &Request) {
 }
 
 #[tokio::test]
+async fn ordinary_and_compaction_requests_persist_their_model_and_charge() {
+    // 1970-01-05 was Monday. Each case replays an ordinary and a compaction request.
+    for (model_name, clock, expected) in [
+        ("deepseek-flash", (|| 349_200_000) as fn() -> i64, 0.1848), // Mon 01:00
+        ("deepseek-flash", (|| 360_000_000) as fn() -> i64, 0.0924), // Mon 04:00
+        ("deepseek-v4-pro", (|| 367_200_000) as fn() -> i64, 0.6952), // Mon 06:00
+        ("deepseek-v4-pro", (|| 781_200_000) as fn() -> i64, 0.3476), // Sat 01:00
+        ("no-price", (|| 349_200_000) as fn() -> i64, 0.0),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+        let reply = || {
+            vec![
+                ModelEvent::TextDelta("summary or reply".into()),
+                ModelEvent::Usage(canter_model::Usage {
+                    input_tokens: 1_000_000,
+                    output_tokens: 100_000,
+                    total_tokens: 1_100_000,
+                    cache_read_tokens: Some(800_000),
+                    cache_miss_tokens: Some(200_000),
+                    reasoning_tokens: Some(50_000),
+                }),
+                ModelEvent::Finished(FinishReason::Stop),
+            ]
+        };
+        let mut config = settings(temp.path());
+        config.model = model_name.into();
+        let (session, _) = Session::create(
+            store.clone(),
+            "billing".into(),
+            config,
+            RuntimeContext::default(),
+            ScriptModel::new(vec![reply(), reply()]),
+            CoreOptions {
+                request_time: clock,
+                ..CoreOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+        let mut events = session.subscribe(0).await.unwrap();
+        session.input(input("hello")).await.unwrap();
+        finished(&mut events).await;
+        session.compact().await.unwrap();
+        finished(&mut events).await;
+        let usages = store
+            .events_after("billing", 0)
+            .unwrap()
+            .into_iter()
+            .filter(|event| matches!(event.payload, EventPayload::SessionUsage { .. }))
+            .map(|event| serde_json::to_value(event).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(usages.len(), 2);
+        for event in &usages {
+            assert_eq!(event["tokenUsage"]["request"]["model"], model_name);
+            assert_eq!(event["tokenUsage"]["request"]["startedAt"], clock());
+            assert_ne!(
+                event["timestamp"],
+                clock(),
+                "charge uses request time, not completion time"
+            );
+            if model_name == "no-price" {
+                assert!(event["tokenUsage"]["request"]["costUsd"].is_null());
+                assert_eq!(event["tokenUsage"]["cost"]["unknown"], true);
+            } else {
+                assert!(
+                    (event["tokenUsage"]["request"]["costUsd"].as_f64().unwrap() - expected).abs()
+                        < 1e-10
+                );
+            }
+        }
+        let snapshot = session.snapshot().await.session;
+        let cost = snapshot.token_usage.unwrap().cost.unwrap();
+        assert!((cost.usd - expected * 2.0).abs() < 1e-10);
+        for turn in snapshot.turns {
+            assert!((turn.usage.unwrap().cost.unwrap().usd - expected).abs() < 1e-10);
+        }
+        session.close().await.unwrap();
+        drop(session);
+        let (reopened, response) = Session::open(
+            store,
+            "billing".into(),
+            RuntimeContext::default(),
+            ScriptModel::new(vec![]),
+            CoreOptions {
+                // Removing all prices cannot change previously recorded costs or unknowns.
+                prices: Default::default(),
+                ..CoreOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+        let cost = response.session.token_usage.unwrap().cost.unwrap();
+        assert!((cost.usd - expected * 2.0).abs() < 1e-10);
+        assert_eq!(cost.unknown, model_name == "no-price");
+        reopened.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn request_prefix_is_frozen_until_reopening_and_only_compaction_replaces_history() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("AGENTS.md");

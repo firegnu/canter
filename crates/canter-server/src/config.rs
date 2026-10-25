@@ -17,6 +17,8 @@ pub(crate) struct Config {
     image_models: Vec<String>,
     context_window: u64,
     api_key: String,
+    #[serde(default)]
+    prices: canter_core::usage::PriceBook,
 }
 
 impl Config {
@@ -57,6 +59,11 @@ impl Config {
         if !config.models.contains(&config.model) {
             config.models.insert(0, config.model.clone());
         }
+        if config.prices.values().any(|price| !price.valid()) {
+            return Err(ServerError(
+                "prices must contain finite, non-negative dollar amounts".into(),
+            ));
+        }
         Ok(config)
     }
 
@@ -67,7 +74,10 @@ impl Config {
     }
 
     pub fn options(&self) -> CoreOptions {
+        let mut prices = canter_core::usage::builtin_prices();
+        prices.extend(self.prices.clone());
         CoreOptions {
+            prices,
             context_window: self.context_window,
             image_models: self.image_models.clone(),
             ..CoreOptions::default()

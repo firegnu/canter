@@ -389,6 +389,13 @@ pub enum ApprovalResolution {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
+    /// Absent in old events; present with a null cost for an unpriced request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub request: Option<RequestCharge>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cost: Option<UsageCost>,
     pub total: TokenUsageBreakdown,
     pub last: TokenUsageBreakdown,
     /// Current context occupancy, distinct from cumulative billed input tokens.
@@ -396,6 +403,69 @@ pub struct TokenUsage {
     pub context_tokens: u64,
     #[ts(type = "number | null")]
     pub model_context_window: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestCharge {
+    pub model: String,
+    #[ts(type = "number")]
+    pub started_at: i64,
+    pub cost_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct UsageCost {
+    pub usd: f64,
+    pub unknown: bool,
+}
+
+impl UsageCost {
+    pub fn add(&mut self, other: &Self) {
+        self.usd += other.usd;
+        self.unknown |= other.unknown;
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageRow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    #[ts(type = "number")]
+    pub cached_input_tokens: u64,
+    #[ts(type = "number")]
+    pub uncached_input_tokens: u64,
+    #[ts(type = "number")]
+    pub output_tokens: u64,
+    pub cost: UsageCost,
+}
+
+impl UsageRow {
+    pub fn add(&mut self, other: &Self) {
+        self.cached_input_tokens = self
+            .cached_input_tokens
+            .saturating_add(other.cached_input_tokens);
+        self.uncached_input_tokens = self
+            .uncached_input_tokens
+            .saturating_add(other.uncached_input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.cost.add(&other.cost);
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageResponse {
+    pub data: Vec<UsageRow>,
+    pub total: UsageRow,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_turn_cost: Option<UsageCost>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

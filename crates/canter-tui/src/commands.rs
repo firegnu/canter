@@ -93,6 +93,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         takes_args: true,
         run: think,
     },
+    Command {
+        name: "usage",
+        about: "Show this session's token usage and cost",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::Usage)),
+    },
 ];
 
 pub(crate) fn skills(skills: Vec<canter_protocol::Skill>) -> Vec<LogicalLine> {

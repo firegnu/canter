@@ -267,6 +267,8 @@ impl Session {
             .map(std::path::PathBuf::from);
         let tools = executor(writer.snapshot().settings.cwd.clone(), runtime).await?;
         let mut state = State::new(Journal::new(store, writer));
+        crate::usage::Ledger::replay(&events, &options.prices)
+            .fill_costs(&mut state.journal.snapshot);
         (state.prefix, state.history, state.user_messages) = crate::context::restore(entries);
         state.initialize_prefix(home).await?;
         for event in events {

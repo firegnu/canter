@@ -236,6 +236,7 @@ async fn summarize(
                 })
                 .await?;
             let prepared = crate::images::prepare(shared, request.clone()).await?;
+            let started_at = (shared.options.request_time)();
             let mut stream = shared.model.stream(prepared, cancel.clone());
             let mut next_summary = String::new();
             let mut finished = false;
@@ -249,7 +250,7 @@ async fn summarize(
                 match event {
                     Some(Ok(ModelEvent::TextDelta(delta))) => next_summary.push_str(&delta),
                     Some(Ok(ModelEvent::Usage(usage))) => {
-                        runner::record_usage(shared, usage, None).await?
+                        runner::record_usage(shared, usage, None, &model, started_at).await?
                     }
                     Some(Ok(ModelEvent::Finished(FinishReason::Stop))) => {
                         finished = true;

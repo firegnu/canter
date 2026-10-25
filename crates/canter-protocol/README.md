@@ -12,6 +12,8 @@
 | --- | --- | --- |
 | GET INFO | InfoParams | InfoResponse |
 | GET MODELS | ModelListParams | ModelListResponse |
+| GET USAGE | 无参数 | UsageResponse |
+| GET SESSION_USAGE | 无参数，SessionPath | UsageResponse |
 | POST SESSIONS | SessionCreateParams | SessionCreateResponse |
 | GET SESSIONS | SessionListParams | SessionListResponse |
 | GET SESSION | SessionReadParams | SessionReadResponse |
@@ -100,6 +102,19 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 GET 不重新扫描，不发事件；修改技能在下次打开会话时才生效。未打开时返回
 `session_not_resumed`，不存在时返回 `session_not_found`。该列表不存盘，读取错误只在
 打开时沿用 warning 事件报告。与 Codex `skills/list` 的差异和理由见 DESIGN 第 8 条。
+
+`GET /v1/usage` 按本机时区日期、模型汇总所有会话；`GET /v1/sessions/{id}/usage`
+按模型汇总一个会话，不要求 resume。两者返回 `UsageResponse { data, total, lastTurnCost? }`。
+每行有 `date?`、`model?`、`cachedInputTokens`、`uncachedInputTokens`、`outputTokens`
+和 `cost: { usd, unknown }`，其中 usd 是已知金额合计，unknown 表示含至少一笔未知金额。
+单会话行没有 date，合计没有 date/model；lastTurnCost 只在单会话存在已结束轮时提供。
+
+`TokenUsage` 新增可选 `request: { model, startedAt, costUsd }` 和 `cost`。
+request 是一次请求的已记金额，startedAt 是请求发出时刻（Unix 毫秒）；costUsd 可以是 null，
+表示未知，不能视为零或以后补价。整个 request 缺失才是旧事件：服务端按当前单价、
+事件 timestamp 和此前最近一次 session.updated 的模型补算，不写回文件。
+cost 对应该 TokenUsage.total 的金额：session.usage 中是会话累计，Turn.usage 中是该轮累计。
+客户端显示服务端给出的金额，不取价、不自行估算；旧客户端可以忽略这两个字段。
 
 `POST /v1/sessions/{id}/resume` 的请求体为 `{ "env": { ... } }`，也不实现 Debug、
 不得记录请求体。服务端重启后，会话默认未打开；接着聊用新环境打开，并返回快照及其

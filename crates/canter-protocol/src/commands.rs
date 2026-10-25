@@ -13,6 +13,8 @@ use ts_rs::TS;
 pub mod routes {
     pub const INFO: &str = "/v1/info";
     pub const MODELS: &str = "/v1/models";
+    pub const USAGE: &str = "/v1/usage";
+    pub const SESSION_USAGE: &str = "/v1/sessions/{id}/usage";
     pub const SESSIONS: &str = "/v1/sessions";
     pub const SESSION: &str = "/v1/sessions/{id}";
     pub const SKILLS: &str = "/v1/sessions/{id}/skills";

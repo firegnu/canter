@@ -75,6 +75,7 @@ pub enum Action {
     PickModel,
     /// Fetch the skills fixed when this session opened.
     ListSkills,
+    Usage,
     /// Compact this session's context.
     Compact,
     /// Change this session's settings.
@@ -644,6 +645,15 @@ impl App {
         for line in commands::skills(skills) {
             self.push_notice(line, truncate);
         }
+    }
+
+    pub fn show_usage(&mut self, report: &canter_protocol::UsageResponse) {
+        self.show(
+            crate::usage::format_report(report)
+                .into_iter()
+                .map(|line| LogicalLine::new(vec![Span::raw("  ")], vec![Span::raw(line)]))
+                .collect(),
+        );
     }
 
     /// The mouse wheel scrolls the conversation, also while the approval box
@@ -1504,7 +1514,7 @@ impl App {
             // Unknown modes are treated as the strictest one.
             PermissionMode::AlwaysAsk | PermissionMode::Unknown => ("Always ask", dim),
         };
-        let first = vec![
+        let mut first = vec![
             Span::styled(
                 format!(
                     " {} · think {} · ",
@@ -1518,6 +1528,23 @@ impl App {
             ),
             Span::styled(mode, mode_style),
         ];
+        // Permission shortcuts only require the mode itself to be fully visible.
+        let through_mode: String = first.iter().map(|span| span.content.as_ref()).collect();
+        if let Some(cost) = self
+            .snapshot
+            .token_usage
+            .as_ref()
+            .and_then(|usage| usage.cost.as_ref())
+        {
+            first.push(Span::styled(
+                format!(
+                    " · {}{}",
+                    crate::usage::dollars(cost.usd),
+                    if cost.unknown { "+?" } else { "" }
+                ),
+                dim,
+            ));
+        }
         let cwd = shorten_home(&sanitize(&settings.cwd), self.home.as_deref());
         let mut text = format!(" {cwd}");
         if let Some(branch) = &self.branch {
@@ -1549,8 +1576,6 @@ impl App {
                 }
             }
         }
-        // The mode ends the first row: it shows in full when that row is not cut.
-        let full: String = first.iter().map(|span| span.content.as_ref()).collect();
         let second = vec![Span::styled(text, dim)];
         let rows = [first, second].map(|spans| Line::from(truncate(spans, usize::from(width))));
         let kept: String = rows[0]
@@ -1558,7 +1583,7 @@ impl App {
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        (rows, kept == full)
+        (rows, kept.starts_with(&through_mode))
     }
 }
 

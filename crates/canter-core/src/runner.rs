@@ -303,6 +303,8 @@ async fn model_response(
 > {
     let estimated = context::request_tokens(&request);
     let request = crate::images::prepare(shared, request).await?;
+    let model = request.model.clone();
+    let started_at = (shared.options.request_time)();
     let mut stream = shared.model.stream(request, cancel.clone());
     let mut content = Vec::new();
     let mut text = String::new();
@@ -377,7 +379,7 @@ async fn model_response(
     }
     flush(shared, &mut pending).await?;
     if let Some(usage) = usage {
-        record_usage(shared, usage, Some(estimated)).await?;
+        record_usage(shared, usage, Some(estimated), &model, started_at).await?;
     }
     Ok((content, reason, error))
 }
@@ -386,6 +388,8 @@ pub(crate) async fn record_usage(
     shared: &Shared,
     usage: Usage,
     estimated: Option<u64>,
+    model: &str,
+    started_at: i64,
 ) -> Result<(), CoreError> {
     let mut state = shared.state.lock().await;
     let last = TokenUsageBreakdown {
@@ -414,7 +418,19 @@ pub(crate) async fn record_usage(
             .as_ref()
             .map_or(0, |usage| usage.context_tokens)
     };
+    let request = crate::usage::request_charge(&shared.options.prices, model, started_at, &last);
+    let charge = crate::usage::cost(&request);
+    let mut cost = state
+        .journal
+        .snapshot
+        .token_usage
+        .as_ref()
+        .and_then(|usage| usage.cost.clone())
+        .unwrap_or_default();
+    cost.add(&charge);
     let token_usage = TokenUsage {
+        request: Some(request),
+        cost: Some(cost),
         total,
         last: last.clone(),
         context_tokens,
@@ -428,8 +444,16 @@ pub(crate) async fn record_usage(
             .map(|usage| usage.total.clone())
             .unwrap_or_default();
         add_usage(&mut total, &last);
+        let mut cost = active
+            .turn
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.cost.clone())
+            .unwrap_or_default();
+        cost.add(&charge);
         active.turn.usage = Some(TokenUsage {
             total,
+            cost: Some(cost),
             ..token_usage.clone()
         });
     }

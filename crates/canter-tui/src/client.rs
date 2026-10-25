@@ -45,6 +45,17 @@ pub struct Client {
 }
 
 impl Client {
+    pub async fn usage(
+        &self,
+        session: Option<&str>,
+    ) -> Result<canter_protocol::UsageResponse, ClientError> {
+        let endpoint = match session {
+            Some(id) => url(routes::SESSION_USAGE, &[id]),
+            None => url(routes::USAGE, &[]),
+        };
+        decode(self.http.get(endpoint).send().await?).await
+    }
+
     /// GET /v1/sessions/{id}/skills: the session's fixed skill list.
     pub async fn list_skills(
         &self,

@@ -152,6 +152,30 @@ fn two_rows_with_usage_in_a_git_repository() {
 }
 
 #[test]
+fn session_cost_is_shown_after_the_permission_mode() {
+    let (home, dir) = repo();
+    let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
+    assert!(!screen.bar()[0].contains('$'));
+    for (usd, unknown, expected) in [
+        (0.12, false, "$0.12"),
+        (0.12, true, "$0.12+?"),
+        (0.001, false, "<$0.01"),
+        (0.0, true, "$0.00+?"),
+        (0.0, false, "$0.00"),
+    ] {
+        let counts = json!({"inputTokens":100,"cachedInputTokens":90,"outputTokens":10,
+            "reasoningOutputTokens":0,"totalTokens":110});
+        screen.event(json!({"type":"session.usage","tokenUsage":{
+            "total":counts,"last":counts,"contextTokens":110,"modelContextWindow":1000000,
+            "cost":{"usd":usd,"unknown":unknown}}}));
+        assert_eq!(
+            screen.bar()[0],
+            format!(" deepseek-flash · think high · Always ask · {expected}")
+        );
+    }
+}
+
+#[test]
 fn allow_all_is_red_and_the_rest_stays_dim() {
     let (home, dir) = repo();
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AllowAll);

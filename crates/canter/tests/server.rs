@@ -44,6 +44,15 @@ impl Fixture {
         default_model: &str,
         models: Option<&[&str]>,
     ) -> Self {
+        Self::start_with_prices(replies, default_model, models, json!({})).await
+    }
+
+    async fn start_with_prices(
+        replies: Vec<String>,
+        default_model: &str,
+        models: Option<&[&str]>,
+        prices: Value,
+    ) -> Self {
         // A short absolute path also works within macOS's Unix socket limit.
         let root = tempfile::Builder::new()
             .prefix("canter-")
@@ -71,6 +80,7 @@ impl Fixture {
         if let Some(models) = models {
             config["models"] = json!(models);
         }
+        config["prices"] = prices;
         fs::write(
             home.join("config.json"),
             serde_json::to_vec(&config).unwrap(),
@@ -109,6 +119,7 @@ impl Fixture {
             .env_clear()
             .env("CANTER_HOME", root.join("state"))
             .env("HOME", root.join("home"))
+            .env("TZ", "Asia/Singapore")
             .current_dir(root.join("work"))
             .stdin(std::process::Stdio::null())
             .stdout(log.try_clone().unwrap())
@@ -236,6 +247,203 @@ impl Fixture {
         self.model.abort();
         let _ = (&mut self.model).await;
     }
+}
+
+#[tokio::test]
+async fn configured_prices_override_builtin_prices_for_model_requests() {
+    let reply = concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1000000,\"prompt_cache_hit_tokens\":800000,\"completion_tokens\":100000,\"total_tokens\":1100000}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let mut fixture = Fixture::start_with_prices(
+        vec![reply.into()],
+        "deepseek-flash",
+        None,
+        json!({"deepseek-flash":{"peak":{"cache_hit":1.0,"cache_miss":2.0,"output":3.0}}}),
+    )
+    .await;
+    let response = fixture
+        .request(
+            Method::POST,
+            "/v1/sessions",
+            json!({
+                "cwd":fixture.root.path().join("work"), "env":{}, "model":"deepseek-flash",
+                "approvalPolicy":"alwaysAsk", "clientName":"test"
+            }),
+        )
+        .await;
+    let created: SessionCreateResponse = response.json().await.unwrap();
+    fixture.input(&created.session.id).await;
+    let events = fixture
+        .events_until(&created.session.id, created.event_seq, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    let usage = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::SessionUsage { token_usage } => Some(token_usage),
+            _ => None,
+        })
+        .unwrap();
+    assert!((usage.request.as_ref().unwrap().cost_usd.unwrap() - 1.5).abs() < 1e-10);
+    let report: Value = fixture
+        .request(
+            Method::GET,
+            &format!("/v1/sessions/{}/usage", created.session.id),
+            json!({}),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(report["lastTurnCost"], json!({"usd":1.5,"unknown":false}));
+    assert_eq!(report["total"]["cost"], report["lastTurnCost"]);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn usage_replays_legacy_model_changes_and_preserves_recorded_costs() {
+    let mut fixture = Fixture::start_with_prices(
+        vec![],
+        "fake-model",
+        None,
+        json!({"priced":{"peak":{"cache_hit":1.0,"cache_miss":2.0,"output":3.0}}}),
+    )
+    .await;
+    let directory = fixture.root.path().join("state/sessions/legacy");
+    fs::create_dir_all(&directory).unwrap();
+    let counts = json!({"inputTokens":1000000,"cachedInputTokens":800000,
+        "outputTokens":100000,"reasoningOutputTokens":50000,"totalTokens":1100000});
+    let usage = json!({"type":"session.usage","tokenUsage":{
+        "last":counts,"total":counts,"contextTokens":0,"modelContextWindow":1048576}});
+    let settings = |model| {
+        json!({"type":"session.updated","settings":{
+        "model":model,"cwd":directory,"name":null,"approvalPolicy":"alwaysAsk"}})
+    };
+    let mut stored = usage.clone();
+    stored["tokenUsage"]["request"] = json!({"model":"priced","startedAt":0,"costUsd":0.25});
+    let mut unknown = stored.clone();
+    unknown["tokenUsage"]["request"]["costUsd"] = Value::Null;
+    // Singapore was UTC+07:30 in 1970; cross local midnight within one session.
+    let entries = [
+        (349_200_000, settings("deepseek-flash")), // Mon 01:00 UTC
+        (349_200_000, usage.clone()),              // peak: .1848
+        (402_600_000, usage.clone()),              // Mon 15:50 UTC, off-peak: .0924
+        (405_600_000, settings("priced")),         // Mon 16:40 UTC = Tue local
+        (405_600_000, usage.clone()),              // flat override: 1.5
+        (405_600_000, stored),                     // original .25, never repriced
+        (405_600_000, unknown),                    // original unknown, never repriced
+        (405_600_000, settings("unpriced")),
+        (405_600_000, usage),
+    ];
+    let text = entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, (at, mut event))| {
+            event["seq"] = json!(index + 1);
+            event["sessionId"] = json!("legacy");
+            event["timestamp"] = json!(at);
+            serde_json::to_string(&event).unwrap() + "\n"
+        })
+        .collect::<String>();
+    fs::write(directory.join("events.jsonl"), &text).unwrap();
+    let response = fixture.request(Method::GET, "/v1/usage", json!({})).await;
+    assert_eq!(
+        response.status(),
+        200,
+        "usage must be available without resuming sessions"
+    );
+    let report: Value = response.json().await.unwrap();
+    assert_eq!(report["data"].as_array().unwrap().len(), 3);
+    assert_eq!(report["data"][0]["date"], "1970-01-05");
+    assert_eq!(report["data"][0]["model"], "deepseek-flash");
+    assert!((report["data"][0]["cost"]["usd"].as_f64().unwrap() - 0.2772).abs() < 1e-10);
+    assert_eq!(report["data"][1]["date"], "1970-01-06");
+    assert_eq!(
+        report["data"][1]["cost"],
+        json!({"usd":1.75,"unknown":true})
+    );
+    assert_eq!(report["data"][2]["cost"], json!({"usd":0.0,"unknown":true}));
+    assert_eq!(report["total"]["cachedInputTokens"], 4_800_000);
+    assert_eq!(report["total"]["uncachedInputTokens"], 1_200_000);
+    assert_eq!(report["total"]["outputTokens"], 600_000);
+    assert!((report["total"]["cost"]["usd"].as_f64().unwrap() - 2.0272).abs() < 1e-10);
+    assert_eq!(report["total"]["cost"]["unknown"], true);
+    let response = fixture
+        .request(Method::GET, "/v1/sessions/legacy/usage", json!({}))
+        .await;
+    assert_eq!(response.status(), 200);
+    let session: Value = response.json().await.unwrap();
+    assert_eq!(session["total"], report["total"]);
+    let snapshot: Value = fixture
+        .request(Method::GET, "/v1/sessions/legacy", json!({}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot["session"]["tokenUsage"]["cost"],
+        report["total"]["cost"]
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_canter"))
+        .arg("usage")
+        .env_clear()
+        .env("HOME", fixture.root.path().join("home"))
+        .env("CANTER_HOME", fixture.root.path().join("state"))
+        .current_dir(fixture.root.path())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let rows = stdout
+        .lines()
+        .skip(1)
+        .map(|row| row.split_whitespace().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        vec![
+            vec![
+                "1970-01-05",
+                "deepseek-flash",
+                "1600000",
+                "400000",
+                "200000",
+                "$0.28"
+            ],
+            vec![
+                "1970-01-06",
+                "priced",
+                "2400000",
+                "600000",
+                "300000",
+                "$1.75+?"
+            ],
+            vec![
+                "1970-01-06",
+                "unpriced",
+                "800000",
+                "200000",
+                "100000",
+                "unknown"
+            ],
+            vec!["Total", "4800000", "1200000", "600000", "$2.03+?"],
+        ]
+    );
+    assert_eq!(
+        fs::read_to_string(directory.join("events.jsonl")).unwrap(),
+        text,
+        "no backfill writes"
+    );
+    fixture.stop().await;
 }
 
 #[tokio::test]

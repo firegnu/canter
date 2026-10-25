@@ -25,6 +25,7 @@ mod picker;
 mod question;
 mod run;
 mod text;
+pub mod usage;
 
 pub use app::{ANSWER_GUARD_MS, Action, App};
 pub use run::{
