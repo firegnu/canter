@@ -24,20 +24,22 @@ use canter_protocol::{
     UserInput,
 };
 use crossterm::event::{
-    DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyboardEnhancementFlags,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event as TermEvent, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
-    BeginSynchronizedUpdate, EndSynchronizedUpdate, disable_raw_mode, enable_raw_mode,
-    supports_keyboard_enhancement,
+    BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement,
 };
 use crossterm::{cursor, execute, queue};
+use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use tokio::sync::mpsc;
 
 use crate::client::{Client, ClientError, EventStream};
 use crate::picker::{Pick, Picker};
-use crate::{Action, App, InlineTerminal, Ui, now_ms};
+use crate::{Action, App, Ui, now_ms};
 
 /// The `clientName` prefix of the terminal client.
 pub const CLIENT_NAME: &str = "canter-tui";
@@ -195,12 +197,13 @@ impl<W: Write> FrameSync for CrosstermBackend<W> {
 
 impl FrameSync for TestBackend {}
 
-/// Runs in the real terminal until the user quits. Returns the session's id,
-/// or `None` when the user closed the session list without picking one.
+/// Runs in the real terminal, taking over the whole screen, until the user
+/// quits; the screen is as it was before once this returns. Returns the
+/// session's id, or `None` when the user closed the session list without
+/// picking one.
 pub async fn run<C: Connector>(launch: Launch<C>) -> Result<Option<String>, RunError> {
     let _session = TerminalSession::start()?;
-    // Reads the cursor position, so it must come before the input thread starts.
-    let terminal = InlineTerminal::new(CrosstermBackend::new(io::stdout()))?;
+    let terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let (sender, input) = input();
     let reader = TerminalReader::spawn(sender);
     let result = run_on(terminal, input, launch).await;
@@ -210,7 +213,7 @@ pub async fn run<C: Connector>(launch: Launch<C>) -> Result<Option<String>, RunE
 
 /// [`run`] on any backend, with terminal events from `input`.
 pub async fn run_on<B, C>(
-    mut terminal: InlineTerminal<B>,
+    mut terminal: Terminal<B>,
     mut input: Input,
     launch: Launch<C>,
 ) -> Result<Option<String>, RunError>
@@ -260,20 +263,11 @@ where
             };
             match id {
                 Some(id) => resume(&client, &id, &env, &update).await,
-                None => {
-                    terminal.finish().map_err(terminal_error)?;
-                    return Ok(None);
-                }
+                None => return Ok(None),
             }
         }
     };
-    let snapshot = match opened {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            terminal.finish().map_err(terminal_error)?;
-            return Err(error);
-        }
-    };
+    let snapshot = opened?;
 
     let session = snapshot.id.clone();
     let stream = client.subscribe(&session, snapshot.last_event_seq).await?;
@@ -322,7 +316,6 @@ where
         }
     };
     pump.abort();
-    ui.finish().map_err(terminal_error)?;
     result.map(|()| Some(session))
 }
 
@@ -366,7 +359,7 @@ async fn resume(
 
 /// Shows the session list until the user picks one (its id) or leaves (`None`).
 async fn pick<B>(
-    terminal: &mut InlineTerminal<B>,
+    terminal: &mut Terminal<B>,
     input: &mut Input,
     mut picker: Picker,
 ) -> Result<Option<String>, RunError>
@@ -375,13 +368,16 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     loop {
-        let size = terminal.size().map_err(terminal_error)?;
-        let view = picker.view(size.width, size.height);
         terminal
             .backend_mut()
             .begin_frame()
             .map_err(terminal_error)?;
-        let drawn = terminal.draw(view.height(), |frame| view.render(frame));
+        let drawn = terminal
+            .draw(|frame| {
+                let area = frame.area();
+                picker.view(area.width, area.height).render(frame);
+            })
+            .map(drop);
         terminal.backend_mut().end_frame().map_err(terminal_error)?;
         drawn.map_err(terminal_error)?;
         input.frame_on_screen();
@@ -459,6 +455,10 @@ impl Chat {
             },
             TermEvent::Paste(text) => {
                 ui.app_mut().handle_paste(&text);
+                false
+            }
+            TermEvent::Mouse(mouse) => {
+                ui.app_mut().handle_mouse(mouse);
                 false
             }
             _ => false,
@@ -648,25 +648,40 @@ async fn reconnect<C: Connector>(
     Ok((connected, stream))
 }
 
-/// Raw mode, bracketed paste and (when the terminal has it) the keyboard
-/// protocol that tells Shift+Enter from Enter. Undone on drop, panics included.
-struct TerminalSession {
-    keyboard_enhanced: bool,
-}
+/// Set while [`TerminalSession`] has the terminal; the first restore clears it.
+static TAKEN_OVER: AtomicBool = AtomicBool::new(false);
+static KEYBOARD_ENHANCED: AtomicBool = AtomicBool::new(false);
+
+/// Raw mode, the alternate screen, mouse reporting (for the wheel), bracketed
+/// paste and (when the terminal has it) the keyboard protocol that tells
+/// Shift+Enter from Enter. Undone on drop, and on a panic before its message
+/// is printed, so the message shows on the normal screen.
+struct TerminalSession;
 
 impl TerminalSession {
     fn start() -> io::Result<Self> {
-        let mut session = Self {
-            keyboard_enhanced: false,
-        };
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            restore_terminal();
+            previous(info);
+        }));
+        TAKEN_OVER.store(true, Ordering::SeqCst);
+        // Dropped, and so undone, if a step below fails.
+        let session = Self;
         enable_raw_mode()?;
-        execute!(io::stdout(), EnableBracketedPaste)?;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste
+        )?;
+        // The alternate screen keeps its own keyboard modes, so this comes after entering it.
         if supports_keyboard_enhancement().unwrap_or(false) {
             execute!(
                 io::stdout(),
                 PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
             )?;
-            session.keyboard_enhanced = true;
+            KEYBOARD_ENHANCED.store(true, Ordering::SeqCst);
         }
         Ok(session)
     }
@@ -674,13 +689,27 @@ impl TerminalSession {
 
 impl Drop for TerminalSession {
     fn drop(&mut self) {
-        let mut stdout = io::stdout();
-        if self.keyboard_enhanced {
-            let _ = execute!(stdout, PopKeyboardEnhancementFlags);
-        }
-        let _ = execute!(stdout, DisableBracketedPaste, cursor::Show);
-        let _ = disable_raw_mode();
+        restore_terminal();
     }
+}
+
+/// Puts the terminal back as it was before [`TerminalSession::start`], once.
+fn restore_terminal() {
+    if !TAKEN_OVER.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    let mut stdout = io::stdout();
+    if KEYBOARD_ENHANCED.swap(false, Ordering::SeqCst) {
+        let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+    }
+    let _ = execute!(
+        stdout,
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        LeaveAlternateScreen,
+        cursor::Show
+    );
+    let _ = disable_raw_mode();
 }
 
 /// Reads terminal input on its own thread; crossterm's reader blocks.
@@ -697,6 +726,12 @@ impl TerminalReader {
             while !flag.load(Ordering::Relaxed) {
                 match crossterm::event::poll(Duration::from_millis(50)) {
                     Ok(true) => match crossterm::event::read() {
+                        // Only the wheel is used; moving the mouse would just redraw.
+                        Ok(TermEvent::Mouse(mouse))
+                            if !matches!(
+                                mouse.kind,
+                                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                            ) => {}
                         Ok(event) => {
                             if !sender.send(event) {
                                 return;

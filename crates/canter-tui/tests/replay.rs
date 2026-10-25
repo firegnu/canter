@@ -10,8 +10,9 @@ use canter_tui::client::{Client, EventStream};
 use canter_tui::fake::{DEMO_SCRIPT, FakeServer, Pace, parse_script};
 use canter_tui::{Action, App, CLIENT_NAME, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::backend::TestBackend;
-use ratatui::buffer::Buffer;
+use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
+use ratatui::buffer::{Buffer, Cell};
+use ratatui::layout::{Position, Size};
 use ratatui::style::{Color, Modifier};
 use unicode_width::UnicodeWidthStr;
 
@@ -56,7 +57,7 @@ async fn replay() {
         .await
         .expect("subscribe");
     let app = App::new(snapshot, Some("/home/dev".into()), NOW);
-    let mut ui = Ui::new(TestBackend::new(WIDTH, HEIGHT), app).expect("ui");
+    let mut ui = Ui::new(Screen(TestBackend::new(WIDTH, HEIGHT)), app).expect("ui");
     ui.draw(NOW).unwrap();
 
     let mut report = String::new();
@@ -65,7 +66,7 @@ async fn replay() {
         let seq = ui.app().snapshot().last_event_seq;
         if SNAPSHOT_AT.contains(&seq) {
             report += &format!("== 第 {seq} 条事件后，屏幕 ==\n");
-            report += &rows(ui.backend().buffer());
+            report += &rows(ui.backend().0.buffer());
         }
     }
 
@@ -93,10 +94,15 @@ async fn replay() {
             break;
         }
     }
-    report += "== 发了「你好」之后，滚动区 ==\n";
-    report += &rows(ui.backend().scrollback());
     report += "== 发了「你好」之后，屏幕 ==\n";
-    report += &rows(ui.backend().buffer());
+    report += &rows(ui.backend().0.buffer());
+    // More PgUp than the conversation has pages: the view stops at the top.
+    for _ in 0..5 {
+        assert_eq!(ui.app_mut().handle_key(key(KeyCode::PageUp), NOW), None);
+    }
+    ui.draw(NOW).unwrap();
+    report += "== 发了「你好」之后，往上翻到顶 ==\n";
+    report += &rows(ui.backend().0.buffer());
 
     let expected_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/expected/replay.txt");
     if std::env::var_os("CANTER_UPDATE_EXPECTED").is_some() {
@@ -109,19 +115,19 @@ async fn replay() {
     );
 
     // Colors the text above cannot show: diff lines, and grey thinking.
-    let scrollback = ui.backend().scrollback();
-    let added = find(scrollback, "+ cargo install --path crates/canter");
-    assert_eq!(scrollback[added].fg, Color::Green, "added lines are green");
-    let removed = find(scrollback, "- git clone https://github.com/firegnu/canter");
-    assert_eq!(scrollback[removed].fg, Color::Red, "removed lines are red");
-    let thinking = find(scrollback, "Thinking: ");
+    let top = ui.backend().0.buffer();
+    let added = find(top, "+ cargo install --path crates/canter");
+    assert_eq!(top[added].fg, Color::Green, "added lines are green");
+    let removed = find(top, "- git clone https://github.com/firegnu/canter");
+    assert_eq!(top[removed].fg, Color::Red, "removed lines are red");
+    let thinking = find(top, "Thinking: ");
     assert!(
-        scrollback[thinking].modifier.contains(Modifier::DIM),
+        top[thinking].modifier.contains(Modifier::DIM),
         "thinking is grey"
     );
 }
 
-async fn step(ui: &mut Ui<TestBackend>, events: &mut EventStream) {
+async fn step(ui: &mut Ui<Screen>, events: &mut EventStream) {
     let event = events
         .next()
         .await
@@ -166,4 +172,56 @@ fn row(buffer: &Buffer, y: u16) -> String {
         x += symbol.width().max(1) as u16;
     }
     row
+}
+
+/// TestBackend that, like a terminal, lets a wide character cover the cell
+/// after it. TestBackend alone keeps what was there, and ratatui, which
+/// counts on the terminal clearing it, never redraws that cell; rows that
+/// scroll past wide characters would show leftovers.
+struct Screen(TestBackend);
+
+impl Backend for Screen {
+    type Error = std::convert::Infallible;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        let width = self.0.size()?.width;
+        let blank = Cell::default();
+        for (x, y, cell) in content {
+            self.0.draw(std::iter::once((x, y, cell)))?;
+            if cell.symbol().width() > 1 && x + 1 < width {
+                self.0.draw(std::iter::once((x + 1, y, &blank)))?;
+            }
+        }
+        Ok(())
+    }
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        self.0.hide_cursor()
+    }
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        self.0.show_cursor()
+    }
+    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+        self.0.get_cursor_position()
+    }
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
+        self.0.set_cursor_position(position)
+    }
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        self.0.clear()
+    }
+    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+        self.0.clear_region(clear_type)
+    }
+    fn size(&self) -> Result<Size, Self::Error> {
+        self.0.size()
+    }
+    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+        self.0.window_size()
+    }
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.0.flush()
+    }
 }

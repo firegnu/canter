@@ -1,7 +1,7 @@
-//! The conversation screen: keeps the session snapshot up to date from events,
-//! hands finished rows to the scrollback in order, and draws what is still in
-//! progress plus the status line, the input box (or the approval box) and the
-//! info line.
+//! The conversation screen: keeps the session snapshot up to date from events
+//! and draws the whole terminal: the conversation from the top, following the
+//! latest output unless scrolled back, then the status line, the input box
+//! (or the approval box) and the info line at the bottom.
 
 use std::collections::{HashSet, VecDeque};
 
@@ -10,7 +10,7 @@ use canter_protocol::{
     PendingRequest, PermissionMode, RequestKind, SessionSnapshot, SessionStatus, Turn, TurnStatus,
     UserInput, apply_event_mut,
 };
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
@@ -28,6 +28,8 @@ const MAX_INPUT_ROWS: usize = 8;
 const INPUT_LEFT: u16 = 4;
 const INPUT_CHROME: u16 = 6;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Conversation rows one step of the mouse wheel scrolls.
+const WHEEL_ROWS: usize = 3;
 /// Changes of what is on screen kept for keys still waiting to be handled.
 const SHOWN_KEPT: usize = 8;
 /// After an approval box's answers come on screen, answer keys are dropped
@@ -53,14 +55,49 @@ pub enum Action {
     Quit,
 }
 
-/// How far the scrollback has got: the next turn, whether its prompt is out,
-/// the next item, and how many rows of a streaming message are out.
-#[derive(Debug, Default, Clone, Copy)]
-struct Written {
+/// A place in the conversation: a turn, whether its prompt is before it, and
+/// the item. Places later in the conversation compare greater.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Place {
     turn: usize,
     prompt: bool,
     item: usize,
-    lines: usize,
+}
+
+/// A line from the client or server (warning, error, who answered), shown
+/// where the finished part of the conversation ended when it came.
+struct Notice {
+    at: Place,
+    line: LogicalLine,
+}
+
+/// The finished part of the conversation, wrapped for `width`, with the
+/// notices in their places. Finished parts do not change, so they are wrapped
+/// once, and again only when the width changes.
+#[derive(Default)]
+struct History {
+    width: u16,
+    rows: Vec<Line<'static>>,
+    /// Where the finished part ends.
+    end: Place,
+    /// How many notices are among the rows.
+    notices: usize,
+}
+
+/// Scrolling back through the conversation.
+#[derive(Default)]
+struct Scroll {
+    /// The conversation row at the top of the view while scrolled back;
+    /// `None` while following the latest output.
+    top: Option<usize>,
+    /// The conversation changed since scrolling back: the hint shows.
+    unseen: bool,
+    /// From the last layout: rows in view and the furthest top row.
+    page: usize,
+    max_top: usize,
+    /// The last frame's width, history length and rows after the history,
+    /// to tell whether the conversation changed since.
+    seen: (u16, usize, Vec<Line<'static>>),
 }
 
 /// The approval box's highlighted answer and body scroll, for one request.
@@ -97,9 +134,10 @@ pub struct App {
     /// This terminal's `clientName`; what others send is marked with theirs.
     client_name: String,
     input: InputBox,
-    written: Written,
-    /// Rows to add to the scrollback after the items (warnings, errors).
-    notices: Vec<LogicalLine>,
+    /// In the order they came, which is also the order of their places.
+    notices: Vec<Notice>,
+    history: History,
+    scroll: Scroll,
     /// Items an `item.completed` event has closed, as (turn id, item id).
     completed: HashSet<(String, String)>,
     /// Turns whose error has already been shown.
@@ -141,8 +179,9 @@ impl App {
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::default(),
-            written: Written::default(),
             notices: Vec::new(),
+            history: History::default(),
+            scroll: Scroll::default(),
             completed: HashSet::new(),
             errors_shown: HashSet::new(),
             working_since: working.then_some(now_ms),
@@ -180,7 +219,7 @@ impl App {
             _ => false,
         };
         if let Err(error) = apply_event_mut(&mut self.snapshot, event) {
-            self.notices.push(cells::notice(
+            self.notice(cells::notice(
                 "✗ ",
                 &format!(
                     "Skipped an event that does not fit (seq {}): {error}",
@@ -217,12 +256,11 @@ impl App {
                 if open_request
                     && let Some(notice) = self.resolution_notice(resolution, client_name.as_deref())
                 {
-                    self.notices.push(notice);
+                    self.notice(notice);
                 }
             }
             EventPayload::Warning { message } => {
-                self.notices
-                    .push(cells::notice("! ", message, Style::new().yellow()));
+                self.notice(cells::notice("! ", message, Style::new().yellow()));
             }
             EventPayload::Error {
                 error,
@@ -239,7 +277,7 @@ impl App {
                 } else {
                     Style::new().red()
                 };
-                self.notices.push(cells::notice("✗ ", &text, style));
+                self.notice(cells::notice("✗ ", &text, style));
                 if let Some(turn_id) = turn_id
                     && !will_retry
                 {
@@ -321,9 +359,13 @@ impl App {
             KeyCode::Enter => {
                 // Right after an approval box closed it was meant for the box.
                 if !send_guarded && !self.input.text().trim().is_empty() {
+                    // Sending follows the latest output again.
+                    self.scroll.top = None;
                     return Some(Action::Send(self.input.take()));
                 }
             }
+            KeyCode::PageUp => self.scroll_by(-(self.scroll.page as isize)),
+            KeyCode::PageDown => self.scroll_by(self.scroll.page as isize),
             KeyCode::Char(c) if !ctrl => self.input.insert(c.encode_utf8(&mut [0; 4])),
             KeyCode::Backspace => self.input.backspace(),
             KeyCode::Delete => self.input.delete(),
@@ -338,19 +380,46 @@ impl App {
         None
     }
 
+    /// The mouse wheel scrolls the conversation, also while the approval box
+    /// is open. Other mouse events do nothing.
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.scroll_by(-(WHEEL_ROWS as isize)),
+            MouseEventKind::ScrollDown => self.scroll_by(WHEEL_ROWS as isize),
+            _ => {}
+        }
+    }
+
+    /// Moves the view `rows` up (negative) or down, as far as the last frame
+    /// allows. [`App::view`] follows the latest output again once the view
+    /// reaches the bottom.
+    fn scroll_by(&mut self, rows: isize) {
+        let top = self.scroll.top.unwrap_or(self.scroll.max_top);
+        self.scroll.top = Some(top.saturating_add_signed(rows).min(self.scroll.max_top));
+    }
+
     /// Bracketed paste: the whole text goes in at once, newlines included.
     pub fn handle_paste(&mut self, text: &str) {
         self.input.insert(text);
     }
 
-    /// A line for the scrollback, e.g. the server's version differs.
+    /// A line for the conversation, e.g. the server's version differs.
     pub fn warning(&mut self, message: &str) {
-        self.notices
-            .push(cells::notice("! ", message, Style::new().yellow()));
+        self.notice(cells::notice("! ", message, Style::new().yellow()));
+    }
+
+    /// Puts `line` after everything finished so far, before what is still
+    /// in progress.
+    fn notice(&mut self, line: LogicalLine) {
+        self.extend_history(self.width);
+        self.notices.push(Notice {
+            at: self.history.end,
+            line,
+        });
     }
 
     pub fn send_failed(&mut self, message: &str) {
-        self.notices.push(cells::notice(
+        self.notice(cells::notice(
             "✗ ",
             &format!("Not sent: {message}"),
             Style::new().red(),
@@ -360,7 +429,7 @@ impl App {
     /// The answer did not reach the server; the box opens again.
     pub fn answer_failed(&mut self, request_id: &str, message: &str) {
         self.answered.remove(request_id);
-        self.notices.push(cells::notice(
+        self.notice(cells::notice(
             "✗ ",
             &format!("Answer not sent: {message}"),
             Style::new().red(),
@@ -369,7 +438,7 @@ impl App {
 
     /// Another client answered first, so this terminal's answer was ignored.
     pub fn answer_late(&mut self) {
-        self.notices.push(cells::notice(
+        self.notice(cells::notice(
             "· ",
             "Your answer came too late and was ignored",
             Style::new().dim(),
@@ -378,7 +447,7 @@ impl App {
 
     pub fn interrupt_failed(&mut self, message: &str) {
         self.interrupting = None;
-        self.notices.push(cells::notice(
+        self.notice(cells::notice(
             "✗ ",
             &format!("Interrupt failed: {message}"),
             Style::new().red(),
@@ -394,64 +463,74 @@ impl App {
         self.reconnecting = None;
     }
 
-    /// Rows that are finished since the last call, in order. A row is
-    /// finished once nothing before it is still in progress.
-    pub(crate) fn take_history(&mut self, width: u16) -> Vec<Line<'static>> {
-        self.width = width;
-        let mut rows = Vec::new();
-        let cwd = self.snapshot.settings.cwd.clone();
-        while let Some(turn) = self.snapshot.turns.get(self.written.turn) {
-            if !self.written.prompt {
-                let from = source(&self.client_name, &turn.client_name);
-                rows.extend(cells::prompt(&turn.input, from, width));
-                self.written.prompt = true;
-            }
-            let echo = echo_index(turn);
-            let mut waiting = false;
-            while let Some(item) = turn.items.get(self.written.item) {
-                let index = self.written.item;
-                let done = self.item_done(turn, index);
-                if Some(index) == echo {
-                    // Already shown as the turn's prompt.
-                } else if let Item::AgentMessage { text, .. } = item {
-                    let source = if done {
-                        text.as_str()
-                    } else {
-                        complete_lines(text)
-                    };
-                    let lines = cells::agent_message(source);
-                    let from = self.written.lines.min(lines.len());
-                    rows.extend(cells::wrap_all(&lines[from..], width));
-                    self.written.lines = self.written.lines.max(lines.len());
-                } else if done {
-                    rows.extend(cells::item(item, true, &cwd, width));
-                }
-                if !done {
-                    waiting = true;
-                    break;
-                }
-                self.written.item += 1;
-                self.written.lines = 0;
-            }
-            if waiting || turn.status == TurnStatus::InProgress {
-                break;
-            }
-            let error_shown = self.errors_shown.contains(&turn.id);
-            if let Some(footer) = cells::turn_footer(turn, error_shown) {
-                rows.extend(wrap(&footer, width));
-            }
-            self.written = Written {
-                turn: self.written.turn + 1,
-                ..Written::default()
+    /// Adds what finished since the last call to the history, notices in
+    /// their places. A part is finished once it and everything before it is
+    /// done. A new width wraps the whole history again.
+    fn extend_history(&mut self, width: u16) {
+        if self.history.width != width {
+            self.history = History {
+                width,
+                ..History::default()
             };
         }
-        rows.extend(cells::wrap_all(&std::mem::take(&mut self.notices), width));
-        rows
+        loop {
+            while let Some(notice) = self.notices.get(self.history.notices)
+                && notice.at <= self.history.end
+            {
+                self.history.rows.extend(wrap(&notice.line, width));
+                self.history.notices += 1;
+            }
+            let Some((rows, next)) = self.finished_part(self.history.end, width) else {
+                break;
+            };
+            self.history.rows.extend(rows);
+            self.history.end = next;
+        }
     }
 
-    /// Lays out the viewport for a screen of `width` × `height`.
+    /// The rows of the part at `at` (a prompt, an item or a turn's end) and
+    /// the place after it, if that part is finished.
+    fn finished_part(&self, at: Place, width: u16) -> Option<(Vec<Line<'static>>, Place)> {
+        let turn = self.snapshot.turns.get(at.turn)?;
+        if !at.prompt {
+            let from = source(&self.client_name, &turn.client_name);
+            let rows = cells::prompt(&turn.input, from, width);
+            return Some((rows, Place { prompt: true, ..at }));
+        }
+        if let Some(item) = turn.items.get(at.item) {
+            if !self.item_done(turn, at.item) {
+                return None;
+            }
+            let rows = if Some(at.item) == echo_index(turn) {
+                // Already shown as the turn's prompt.
+                Vec::new()
+            } else {
+                cells::item(item, true, &self.snapshot.settings.cwd, width)
+            };
+            let next = Place {
+                item: at.item + 1,
+                ..at
+            };
+            return Some((rows, next));
+        }
+        if turn.status == TurnStatus::InProgress {
+            return None;
+        }
+        let error_shown = self.errors_shown.contains(&turn.id);
+        let rows = cells::turn_footer(turn, error_shown)
+            .map(|footer| wrap(&footer, width))
+            .unwrap_or_default();
+        let next = Place {
+            turn: at.turn + 1,
+            ..Place::default()
+        };
+        Some((rows, next))
+    }
+
+    /// Lays out the whole screen of `width` × `height`.
     pub(crate) fn view(&mut self, width: u16, height: u16, now_ms: i64) -> View {
-        // Leave the blank row, status line, info line and one live row.
+        self.width = width;
+        // Leave the status line, the info line, the hint and one row of the conversation.
         let box_height = height.saturating_sub(4);
         let approval = self.open_approval().map(|(request, approval)| {
             let (selected, scroll) = if self.approval.request == request.id {
@@ -501,13 +580,57 @@ impl App {
             None => self.input_view(width, now_ms),
         };
 
-        let mut live = self.live_rows(width);
-        let room = usize::from(height.saturating_sub(3 + bottom.height()));
-        if live.len() > room {
-            live.drain(..live.len() - room);
+        self.extend_history(width);
+        let live = self.live_rows(width);
+        let history = &self.history.rows;
+        let (seen_width, seen_history, seen_live) = &self.scroll.seen;
+        // Finished rows stay as they are, so only the rows after the history
+        // seen last time can have changed.
+        if self.scroll.top.is_some()
+            && *seen_width == width
+            && !history[*seen_history..].iter().chain(&live).eq(seen_live)
+        {
+            self.scroll.unseen = true;
         }
+        self.scroll.seen = (width, history.len(), live.clone());
+
+        // Nothing is above the conversation, so it starts without the first
+        // prompt's blank row.
+        let lead = usize::from(
+            history
+                .iter()
+                .chain(&live)
+                .next()
+                .is_some_and(|row| row.width() == 0),
+        );
+        let total = history.len() + live.len() - lead;
+        let room = usize::from(height.saturating_sub(2 + bottom.height()));
+        if self.scroll.top.is_some_and(|top| top + room >= total) {
+            self.scroll.top = None;
+        }
+        if self.scroll.top.is_none() {
+            self.scroll.unseen = false;
+        }
+        let hint = self.scroll.unseen.then(|| {
+            Line::from(vec![
+                Span::styled(" ↓ New output below", Style::new().cyan()),
+                Span::styled(" · scroll down or press PgDn", Style::new().dim()),
+            ])
+        });
+        let area = room.saturating_sub(usize::from(hint.is_some()));
+        self.scroll.page = area.max(1);
+        self.scroll.max_top = total.saturating_sub(area);
+        let top = self.scroll.top.unwrap_or(self.scroll.max_top);
+        let conversation = history
+            .iter()
+            .chain(&live)
+            .skip(lead + top)
+            .take(area)
+            .cloned()
+            .collect();
         View {
-            live,
+            conversation,
+            hint,
             status: self.status_line(now_ms),
             bottom,
             info: self.info_line(width),
@@ -668,7 +791,7 @@ impl App {
         Some(Action::Interrupt { turn_id })
     }
 
-    /// Who answered an approval, for the scrollback.
+    /// Who answered an approval, for the conversation.
     fn resolution_notice(
         &self,
         resolution: &ApprovalResolution,
@@ -720,8 +843,10 @@ impl App {
         closed || turn.status != TurnStatus::InProgress || index + 1 < turn.items.len()
     }
 
-    /// Everything not yet in the scrollback.
+    /// The conversation after the history: what is still in progress, then
+    /// the queued messages.
     fn live_rows(&self, width: u16) -> Vec<Line<'static>> {
+        let end = self.history.end;
         let cwd = &self.snapshot.settings.cwd;
         let waiting: Vec<&str> = self
             .snapshot
@@ -733,34 +858,20 @@ impl App {
             })
             .collect();
         let mut rows = Vec::new();
-        for (turn_index, turn) in self
-            .snapshot
-            .turns
-            .iter()
-            .enumerate()
-            .skip(self.written.turn)
-        {
-            let current = turn_index == self.written.turn;
-            if !current || !self.written.prompt {
+        for (turn_index, turn) in self.snapshot.turns.iter().enumerate().skip(end.turn) {
+            let current = turn_index == end.turn;
+            if !current || !end.prompt {
                 let from = source(&self.client_name, &turn.client_name);
                 rows.extend(cells::prompt(&turn.input, from, width));
             }
             let echo = echo_index(turn);
-            let first = if current { self.written.item } else { 0 };
+            let first = if current { end.item } else { 0 };
             for (index, item) in turn.items.iter().enumerate().skip(first) {
                 if Some(index) == echo {
                     continue;
                 }
                 let done = self.item_done(turn, index);
-                if let Item::AgentMessage { text, .. } = item {
-                    let lines = cells::agent_message(text);
-                    let from = if current && index == self.written.item {
-                        self.written.lines.min(lines.len())
-                    } else {
-                        0
-                    };
-                    rows.extend(cells::wrap_all(&lines[from..], width));
-                } else if !done && item.id().is_some_and(|id| waiting.contains(&id)) {
+                if !done && item.id().is_some_and(|id| waiting.contains(&id)) {
                     rows.extend(cells::waiting(item, cwd, width));
                 } else {
                     rows.extend(cells::item(item, done, cwd, width));
@@ -849,9 +960,12 @@ impl App {
     }
 }
 
-/// The viewport's content, laid out for one frame.
+/// The screen's content, laid out for one frame.
 pub(crate) struct View {
-    live: Vec<Line<'static>>,
+    /// The conversation rows in view, from the top of the screen.
+    conversation: Vec<Line<'static>>,
+    /// Says there is new output below while scrolled back.
+    hint: Option<Line<'static>>,
     status: Line<'static>,
     bottom: Bottom,
     info: Line<'static>,
@@ -879,21 +993,22 @@ impl Bottom {
 }
 
 impl View {
-    pub fn height(&self) -> u16 {
-        self.live.len() as u16 + 1 + 1 + self.bottom.height() + 1
-    }
-
+    /// The conversation fills the rows the status line, the box and the info
+    /// line (and the hint) leave at the bottom.
     pub fn render(self, frame: &mut Frame) {
         let area = frame.area();
+        let below = 1 + self.bottom.height() + 1 + u16::from(self.hint.is_some());
         let mut y = area.y;
         let mut row = |height: u16| {
             let rect = Rect::new(area.x, y, area.width, height).intersection(area);
             y += height;
             rect
         };
-        let live = row(self.live.len() as u16);
-        frame.render_widget(Paragraph::new(self.live), live);
-        row(1);
+        let conversation = row(area.height.saturating_sub(below));
+        frame.render_widget(Paragraph::new(self.conversation), conversation);
+        if let Some(hint) = self.hint {
+            frame.render_widget(Paragraph::new(hint), row(1));
+        }
         frame.render_widget(Paragraph::new(self.status), row(1));
         let boxed = row(self.bottom.height());
         let info = row(1);
@@ -941,11 +1056,6 @@ fn echo_index(turn: &Turn) -> Option<usize> {
     turn.items.iter().position(
         |item| matches!(item, Item::UserMessage { content, .. } if *content == turn.input),
     )
-}
-
-/// The text up to and including its last newline.
-fn complete_lines(text: &str) -> &str {
-    text.rfind('\n').map_or("", |end| &text[..=end])
 }
 
 fn first_line(input: &[UserInput]) -> String {
