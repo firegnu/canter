@@ -101,6 +101,7 @@ pub(crate) async fn prefix(
 ) -> Result<(Vec<Message>, Vec<String>, Vec<canter_protocol::Skill>), CoreError> {
     tokio::task::spawn_blocking(move || {
         let cwd = PathBuf::from(cwd);
+        let home = home.map(|home| cwd.join(home));
         let root = cwd
             .ancestors()
             .find(|path| path.join(".git").exists())
@@ -122,8 +123,13 @@ pub(crate) async fn prefix(
             std::env::consts::ARCH
         );
         let mut warnings = Vec::new();
-        for dir in paths {
-            let path = dir.join("AGENTS.md");
+        let global = home
+            .as_ref()
+            .map(|home| ("Global", home.join(".agents/AGENTS.md")));
+        let project = paths
+            .into_iter()
+            .map(|dir| ("Project", dir.join("AGENTS.md")));
+        for (scope, path) in global.into_iter().chain(project) {
             let instructions = (|| -> std::io::Result<String> {
                 let mut bytes = Vec::new();
                 std::fs::File::open(&path)?
@@ -141,17 +147,18 @@ pub(crate) async fn prefix(
             })();
             match instructions {
                 Ok(instructions) => text.push_str(&format!(
-                    "\nProject instructions ({}):\n{instructions}\n",
+                    "\n{scope} instructions ({}):\n{instructions}\n",
                     path.display()
                 )),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => warnings.push(format!(
-                    "Skipped project instructions {}: {error}",
+                    "Skipped {} instructions {}: {error}",
+                    scope.to_ascii_lowercase(),
                     path.display()
                 )),
             }
         }
-        let skills = crate::skills::discover(home.map(|home| cwd.join(home)), root, &mut warnings);
+        let skills = crate::skills::discover(home, root, &mut warnings);
         crate::skills::append_prompt(&mut text, &skills);
         (vec![Message::System { text }], warnings, skills)
     })

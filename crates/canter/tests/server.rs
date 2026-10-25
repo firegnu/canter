@@ -631,6 +631,150 @@ async fn skills_empty_prefix_and_list_stay_frozen_until_session_reopens() {
     );
 }
 
+#[tokio::test]
+async fn global_agents_instructions_precede_project_instructions() {
+    let mut fixture = Fixture::start(vec![text_reply()]).await;
+    let home = fixture.root.path().join("client-home");
+    let global = home.join(".agents/AGENTS.md");
+    let work = fixture.root.path().join("work");
+    let project = work.join("AGENTS.md");
+    fs::create_dir_all(global.parent().unwrap()).unwrap();
+    fs::write(&global, "Global instruction marker").unwrap();
+    fs::write(&project, "Project instruction marker").unwrap();
+    let response = fixture
+        .request(
+            Method::POST,
+            "/v1/sessions",
+            json!({
+                "cwd":work, "env":{"HOME":home},
+                "model":"fake-model", "approvalPolicy":"alwaysAsk", "clientName":"agents-test"
+            }),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+    let created: SessionCreateResponse = response.json().await.unwrap();
+    let id = &created.session.id;
+    fixture.input(id).await;
+    fixture
+        .events_until(id, 0, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    fixture.stop().await;
+    let script = fixture.script.lock().unwrap();
+    let system = script.requests[0]["messages"][0]["content"]
+        .as_str()
+        .unwrap();
+    let global_position = system
+        .find("Global instruction marker")
+        .expect("the system prompt must include global instructions from the session HOME");
+    let project_position = system.find("Project instruction marker").unwrap();
+    assert!(global_position < project_position);
+    assert!(system.contains(&format!("Global instructions ({}):", global.display())));
+    assert!(system.contains(&format!("Project instructions ({}):", project.display())));
+}
+
+#[tokio::test]
+async fn global_agents_missing_file_adds_no_prompt_section_or_warning() {
+    let mut fixture = Fixture::start(vec![text_reply()]).await;
+    let created = fixture
+        .create_with_skills(&fixture.root.path().join("work"))
+        .await;
+    let id = &created.session.id;
+    fixture.input(id).await;
+    let events = fixture
+        .events_until(id, 0, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    fixture.stop().await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::Warning { .. }))
+    );
+    let script = fixture.script.lock().unwrap();
+    let system = script.requests[0]["messages"][0]["content"]
+        .as_str()
+        .unwrap();
+    assert!(!system.contains("Global instructions ("));
+}
+
+#[tokio::test]
+async fn global_agents_oversized_file_is_skipped_with_a_warning() {
+    let mut fixture = Fixture::start(vec![text_reply()]).await;
+    let global = fixture.root.path().join("home/.agents/AGENTS.md");
+    fs::create_dir_all(global.parent().unwrap()).unwrap();
+    fs::write(&global, "x".repeat(64 * 1024 + 1)).unwrap();
+    let created = fixture
+        .create_with_skills(&fixture.root.path().join("work"))
+        .await;
+    let id = &created.session.id;
+    fixture.input(id).await;
+    let events = fixture
+        .events_until(id, 0, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    fixture.stop().await;
+    let warnings: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::Warning { message } => Some(message.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        warnings,
+        [format!(
+            "Skipped global instructions {}: exceeds the 64 KiB file limit",
+            global.display()
+        )]
+    );
+    let script = fixture.script.lock().unwrap();
+    let system = script.requests[0]["messages"][0]["content"]
+        .as_str()
+        .unwrap();
+    assert!(!system.contains("Global instructions ("));
+    assert!(!system.contains(&"x".repeat(64 * 1024 + 1)));
+}
+
+#[tokio::test]
+async fn global_agents_edits_do_not_change_the_open_session_prefix() {
+    let mut fixture = Fixture::start(vec![text_reply(), text_reply()]).await;
+    let global = fixture.root.path().join("home/.agents/AGENTS.md");
+    fs::create_dir_all(global.parent().unwrap()).unwrap();
+    fs::write(&global, "Original global instructions").unwrap();
+    let created = fixture
+        .create_with_skills(&fixture.root.path().join("work"))
+        .await;
+    let id = &created.session.id;
+    fixture.input(id).await;
+    let first = fixture
+        .events_until(id, 0, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    fs::write(&global, "Changed global instructions").unwrap();
+    fixture.input(id).await;
+    fixture
+        .events_until(id, first.last().unwrap().seq, |event| {
+            matches!(event.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    fixture.stop().await;
+    let script = fixture.script.lock().unwrap();
+    let before = script.requests[0]["messages"].as_array().unwrap();
+    let during = script.requests[1]["messages"].as_array().unwrap();
+    assert!(
+        before[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Original global instructions")
+    );
+    assert_eq!(before.as_slice(), &during[..before.len()]);
+}
+
 fn text_reply() -> String {
     format!(
         "data: {}\n\ndata: [DONE]\n\n",
