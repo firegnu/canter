@@ -1088,6 +1088,15 @@
     "InfoResponse": {
       "description": "GET /v1/info. Each session carries its own replay cursor; there is no global sequence.",
       "properties": {
+        "features": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "protocolVersion": {
           "format": "uint32",
           "minimum": 0,

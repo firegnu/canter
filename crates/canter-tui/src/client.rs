@@ -45,6 +45,10 @@ pub struct Client {
 }
 
 impl Client {
+    pub async fn info(&self) -> Result<canter_protocol::InfoResponse, ClientError> {
+        decode(self.http.get(url(routes::INFO, &[])).send().await?).await
+    }
+
     pub async fn btw(&self, session: &str, question: String) -> Result<BtwStream, ClientError> {
         self.private_answer(
             session,

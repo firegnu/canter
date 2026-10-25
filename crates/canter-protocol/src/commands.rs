@@ -90,6 +90,9 @@ empty_params!(
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InfoResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub features: Option<Vec<String>>,
     pub server_version: String,
     pub protocol_version: u32,
     pub sessions: Vec<SessionSummary>,

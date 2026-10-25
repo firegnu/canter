@@ -2,6 +2,22 @@ use canter_protocol::*;
 use serde_json::json;
 
 #[test]
+fn info_features_are_optional_and_preserve_unknown_capabilities() {
+    for features in [
+        None,
+        Some(json!([])),
+        Some(json!(["review", "future-feature"])),
+    ] {
+        let mut value = json!({"serverVersion":"test", "protocolVersion":1, "sessions":[]});
+        if let Some(features) = features {
+            value["features"] = features;
+        }
+        let info: InfoResponse = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(info).unwrap(), value);
+    }
+}
+
+#[test]
 fn compact_response_preserves_the_optional_turn_id() {
     for value in [
         json!({"eventSeq":3}),

@@ -72,3 +72,15 @@
 - 没做的事：未 checkout PR、自动修复、审查指定提交/分支/目录、读取额外审查规则、发 PR 评论或升级/新增依赖；未调真实模型或 GitHub，真实调用次数均为 0。未读用户真实 canter/gh 状态，未操作用户服务端，未合并或推送，未改 HANDOFF。
 - 踩过的坑：`gh pr diff` 没有 `--stat`，改用 `gh pr view --json files --jq ...` 获取整个 PR 的文件增删统计。`git ls-files` 在子目录会缩小未跟踪列表范围，失败测试后改为先定位仓库根目录。write/edit 原先先准备再过权限，改成审查轮提前拒绝，避免把文件准备错误当成只读拒绝。第一次全量编译漏了一个旧测试的 Turn 字面量新增字段，补 `review: None` 后全量重跑通过。
 - 要主控决定的事：没有。
+
+### 交叉审查后修改（2026-10-25）
+
+- 主控决定：只读参阅主仓库 `docs/任务/P2-11-交叉审查.md` 的审查意见，必须改 1 采用能力字段方案；建议改 1、2、3 全部落实；可以不改 1 采用 Tool 穷举匹配并说明提问照常，其余可以不改项不动。只验证本轮直接相关测试，不重跑全套，不合并、不推送。
+- 做了什么：`InfoResponse` 新增可选 `features` 字符串数组，本版服务端返回 `review`。终端每次 `/review` 先向所连服务端查能力，缺字段或没有 review 时直接提示 `The running server cannot enforce read-only review; run canter serve --replace and try again`，不收集也不发送审查输入；不以版本号代替能力判断。同步 DESIGN 第 8 条、协议说明、Schema 和 TypeScript。
+- 做了什么：未跟踪列表独立放在 diff 前，每路收集仍有 256 KiB 上限，暂存/未暂存 diff 合用 256 KiB 内容额度，统计另限 32 KiB。PR 标题、说明、diff、本地两种 diff 各有完整起止标记，分支名、根目录、列表和统计也按外部数据处理；标记避开段内已有文本，截断后再包装，保证结束标记不被裁掉。英文要求明确段内指示一律不照做，PR 的本地工作区提示放在全部外部文本之前，显示标题不再额外拼到模型消息的无标记部分。
+- 做了什么：`evaluate_review` 按 Tool 穷举匹配，没有 `_` 兜底，新增工具时须显式决定审查权限；README 明确 ask_user 在闸门之前处理，审查轮照常提问。普通 steer 和打断后的轮次权限实现无需改动，补测试锁住现有正确行为。
+- 验证了什么：先通过真实 TUI 驱动和临时 Unix HTTP 假服务端复现「缺能力仍发输入」，修改后缺 features、空 features 均提示并且无 input 请求，有 review 能力正常发送；另验证本版真实测试服务端会声明 review。大暂存 diff 加未跟踪文件先复现丢文件名，修改后保留。数据边界先确认旧消息缺少明确要求，修改后验证标题/说明/diff 的完整标记、提示位置、伪造结束标记留在真实数据块内部，以及大 diff 截断后的结束标记。新增核心测试验证普通 steer 到达模型后 write 仍拒绝、无批准且无文件；中断审查后普通轮恢复 alwaysAsk，先批准再写成功。
+- 本轮命令及结果：`cargo test -p canter --test tui review_`（2 个）、`cargo test -p canter-tui --test review`（5 个）、`cargo test -p canter-core --test review review_`（5 个）、`cargo test -p canter-protocol --test transport --test export`（6 个）均通过；`cargo fmt --check`、`git diff --check` 通过。全部 Cargo 命令使用本任务 CARGO_TARGET_DIR，逐个等前台结束；没有重跑全套。
+- 没做的事：未处理其余可以不改项，未改普通轮权限和只读白名单，未新增依赖，未调用真实模型或 GitHub，未操作用户服务端，未修改主仓库的审查文件，未合并或推送。
+- 踩过的坑：仅给外部数据加标记还不够，原来模型消息顶部额外拼的 PR 显示标题也来自外部文本；已移除该副本，让标题只在自身数据块内出现，并用测试断言只出现一次。截断必须先处理内容再包装，否则结束标记会被截掉。
+- 要主控决定的事：没有。

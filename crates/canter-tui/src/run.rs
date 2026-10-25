@@ -739,6 +739,10 @@ impl<C: Connector> Chat<C> {
                 let client_name = self.client_name.clone();
                 tokio::spawn(async move {
                     let result = async {
+                        let info = client.info().await.map_err(|e| e.to_string())?;
+                        if !info.features.as_ref().is_some_and(|features| features.iter().any(|feature| feature == "review")) {
+                            return Err("The running server cannot enforce read-only review; run canter serve --replace and try again".into());
+                        }
                         let params =
                             crate::review::prepare(&cwd, &env, &target, &client_name).await?;
                         client

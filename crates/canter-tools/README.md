@@ -120,6 +120,7 @@ Cancel 拒绝并向调用方返回 `cancel_turn: true`，gate 本身不取消一
 write/edit 及其他 shell 直接拒绝；不看权限模式或已有授权，不开批准请求。
 核心在准备 write/edit（读取目标和计算 diff）之前就拒绝，并给模型返回
 `review is read-only`。审查结束不改会话的权限或授权，下一轮继续按原规则。
+提问工具 `ask_user` 仍由核心在闸门之前处理，审查轮里照常提问和等待回答。
 
 shell 免批准只识别一小部分语法和参数，白名单在 `src/readonly.rs`：
 

@@ -400,6 +400,141 @@ async fn review_queues_as_its_own_turn_and_keeps_prompt_and_answer_in_history() 
     session.close().await.unwrap();
 }
 
+#[tokio::test]
+async fn review_stays_readonly_after_ordinary_steering() {
+    let release = Arc::new(Notify::new());
+    let model = ScriptModel::new(vec![
+        vec![
+            text("review waiting"),
+            Step::Wait(release.clone()),
+            finish(),
+        ],
+        vec![
+            Step::Event(ModelEvent::ToolCall(ToolCall {
+                id: "steered-write".into(),
+                name: "write".into(),
+                arguments: r#"{"path":"forbidden","content":"changed"}"#.into(),
+            })),
+            Step::Event(ModelEvent::Finished(FinishReason::ToolCalls)),
+        ],
+        vec![text("review finished"), finish()],
+    ]);
+    let (temp, _, session) = create(model.clone(), CoreOptions::default()).await;
+    session
+        .update(SessionUpdateParams {
+            approval_policy: Some(PermissionMode::AlwaysAsk),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    let mut review = input("review changes");
+    review.review = Some("Review: uncommitted changes".into());
+    let turn = session.input(review).await.unwrap().turn_id;
+    until(&mut events, |event| matches!(event, EventPayload::ItemDelta { delta: ItemDelta::AgentMessage { delta }, .. } if delta == "review waiting")).await;
+    let mut steer = input("please write the fix");
+    steer.mode = InputMode::Steer;
+    assert_eq!(session.input(steer).await.unwrap().turn_id, turn);
+    release.notify_one();
+    let seen = until(&mut events, |event| {
+        matches!(
+            event,
+            EventPayload::RequestOpened { .. } | EventPayload::TurnCompleted { .. }
+        )
+    })
+    .await;
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::RequestOpened { .. }))
+    );
+    assert!(!temp.path().join("forbidden").exists());
+    let snapshot = session.snapshot().await.session;
+    assert_eq!(snapshot.turns.len(), 1);
+    assert!(snapshot.turns[0].review.is_some());
+    {
+        let requests = model.requests.lock().unwrap();
+        assert!(
+            serde_json::to_string(&requests[1].messages)
+                .unwrap()
+                .contains("please write the fix")
+        );
+        assert!(requests.last().unwrap().messages.iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "steered-write" && text == "review is read-only")));
+    }
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn interrupted_review_restores_the_next_inputs_original_permissions() {
+    let model = ScriptModel::new(vec![
+        vec![
+            text("review waiting"),
+            Step::Wait(Arc::new(Notify::new())),
+            finish(),
+        ],
+        vec![
+            Step::Event(ModelEvent::ToolCall(ToolCall {
+                id: "ordinary-write".into(),
+                name: "write".into(),
+                arguments: r#"{"path":"allowed","content":"changed"}"#.into(),
+            })),
+            Step::Event(ModelEvent::Finished(FinishReason::ToolCalls)),
+        ],
+        vec![text("ordinary finished"), finish()],
+    ]);
+    let (temp, _, session) = create(model, CoreOptions::default()).await;
+    session
+        .update(SessionUpdateParams {
+            approval_policy: Some(PermissionMode::AlwaysAsk),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    let mut review = input("review changes");
+    review.review = Some("Review: uncommitted changes".into());
+    let turn_id = session.input(review).await.unwrap().turn_id.unwrap();
+    until(&mut events, |event| matches!(event, EventPayload::ItemDelta { delta: ItemDelta::AgentMessage { delta }, .. } if delta == "review waiting")).await;
+    session
+        .interrupt(SessionInterruptParams { turn_id })
+        .await
+        .unwrap();
+    let seen = finished(&mut events).await;
+    assert!(seen.iter().any(|event| matches!(&event.payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Interrupted)));
+    session.input(input("now write the fix")).await.unwrap();
+    let seen = until(&mut events, |event| {
+        matches!(
+            event,
+            EventPayload::RequestOpened { .. } | EventPayload::TurnCompleted { .. }
+        )
+    })
+    .await;
+    let EventPayload::RequestOpened { request } = &seen.last().unwrap().payload else {
+        panic!("ordinary write must request approval under alwaysAsk");
+    };
+    assert!(!temp.path().join("allowed").exists());
+    session
+        .resolve(
+            &request.id,
+            RequestResolveParams {
+                decision: Some(ApprovalDecision::Accept),
+                answer: None,
+                client_name: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
+    finished(&mut events).await;
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("allowed")).unwrap(),
+        "changed"
+    );
+    let snapshot = session.snapshot().await.session;
+    assert_eq!(snapshot.settings.approval_policy, PermissionMode::AlwaysAsk);
+    assert!(snapshot.turns[1].review.is_none());
+    session.close().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn rejected_image_during_stopping_does_not_leave_a_copy() {
     // Hold the model boundary while interrupt is pending, without holding the

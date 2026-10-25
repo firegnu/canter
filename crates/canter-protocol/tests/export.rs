@@ -40,6 +40,20 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         "https://json-schema.org/draft/2020-12/schema"
     );
     let definitions = schema["$defs"].as_object().unwrap();
+    assert!(
+        definitions["InfoResponse"]["properties"]
+            .get("features")
+            .is_some()
+    );
+    assert!(
+        definitions["InfoResponse"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|field| field != "features")
+    );
+    let info_ts = fs::read_to_string(temp.path().join("typescript/InfoResponse.ts")).unwrap();
+    assert!(info_ts.contains("features?: Array<string>"));
     for name in ["SessionInputParams", "QueuedInput", "Turn"] {
         assert_eq!(
             definitions[name]["properties"]["review"]["type"],

@@ -39,6 +39,165 @@ const WAIT: Duration = Duration::from_secs(20);
 /// What the shell tool writes when it runs with a session's environment.
 const WRITE_ENV: &str = r#"printf '%s' "$CANTER_TEST_ENV" > env.txt"#;
 
+#[tokio::test]
+async fn review_feature_is_advertised_by_the_server() {
+    let mut world = World::new(Vec::new()).await;
+    world.start_server().await;
+    let info = Client::new(&world.path("state/server.sock"))
+        .unwrap()
+        .info()
+        .await
+        .unwrap();
+    world.stop_server(Signal::SIGTERM).await;
+    assert!(
+        info.features
+            .unwrap()
+            .iter()
+            .any(|feature| feature == "review")
+    );
+}
+
+#[tokio::test]
+async fn review_requires_the_running_servers_review_feature_before_sending() {
+    use axum::{response::Sse, routing::get};
+    use canter_tui::{Connected, Launch, Open, SocketConnector};
+    for features in [None, Some(json!([])), Some(json!(["review"]))] {
+        let root = tempfile::Builder::new()
+            .prefix("review-feature-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let home = root.path().join("home");
+        let work = root.path().join("work");
+        fs::create_dir(&home).unwrap();
+        fs::create_dir(&work).unwrap();
+        let env = BTreeMap::from([
+            ("HOME".into(), home.display().to_string()),
+            (
+                "CANTER_HOME".into(),
+                root.path().join("state").display().to_string(),
+            ),
+            ("PATH".into(), std::env::var("PATH").unwrap()),
+            ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
+            ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+        ]);
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&work)
+                .env_clear()
+                .envs(&env)
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(work.join("new.txt"), "a change to review").unwrap();
+        let mut snapshot = SessionSnapshot::empty("s1");
+        snapshot.settings.cwd = work.display().to_string();
+        snapshot.settings.model = "fake-model".into();
+        snapshot.status = SessionStatus::Idle;
+        let mut info = json!({"serverVersion":"old", "protocolVersion":1, "sessions":[]});
+        let supported = features
+            .as_ref()
+            .is_some_and(|value| value == &json!(["review"]));
+        if let Some(features) = features {
+            info["features"] = features;
+        }
+        let received = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let requests = received.clone();
+        let app = Router::new()
+            .route(
+                "/v1/info",
+                get(move || {
+                    let info = info.clone();
+                    async move { Json(info) }
+                }),
+            )
+            .route(
+                "/v1/models",
+                get(|| async { Json(json!({"data":[],"nextCursor":null})) }),
+            )
+            .route(
+                "/v1/sessions/s1/resume",
+                post(move || {
+                    let snapshot = snapshot.clone();
+                    async move { Json(json!({"session":snapshot,"eventSeq":0})) }
+                }),
+            )
+            .route(
+                "/v1/events",
+                get(|| async {
+                    Sse::new(futures_util::stream::pending::<
+                        Result<axum::response::sse::Event, std::convert::Infallible>,
+                    >())
+                }),
+            )
+            .route(
+                "/v1/sessions/s1/input",
+                post(move |Json(input): Json<Value>| {
+                    requests.lock().unwrap().push(input);
+                    async { Json(json!({"eventSeq":1,"turnId":"t1"})) }
+                }),
+            );
+        let socket = root.path().join("server.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let (keys, input) = canter_tui::input();
+        let frames = Frames::default();
+        let backend = ratatui::Terminal::new(Screen {
+            backend: Arc::new(Mutex::new(TestBackend::new(160, HEIGHT))),
+            keys: keys.clone(),
+            frames: frames.clone(),
+        })
+        .unwrap();
+        let task = tokio::spawn(run_on(
+            backend,
+            input,
+            Launch {
+                connected: Connected {
+                    client: Client::new(&socket).unwrap(),
+                    warning: None,
+                    server: None,
+                },
+                connector: SocketConnector(socket),
+                open: Open::Resume {
+                    id: Some("s1".into()),
+                    cwd: work.display().to_string(),
+                    update: Default::default(),
+                },
+                env,
+                home: Some(home.display().to_string()),
+                client_name: "test".into(),
+            },
+        ));
+        let terminal = Terminal { keys, frames, task };
+        terminal.wait_for("Type a message").await;
+        terminal.type_line("/review").await;
+        const NOTICE: &str = "The running server cannot enforce read-only review; run canter serve --replace and try again";
+        terminal
+            .wait_until("review blocked or sent", |t| {
+                t.screen().contains(NOTICE) || !received.lock().unwrap().is_empty()
+            })
+            .await;
+        let screen = terminal.screen();
+        terminal.quit().await;
+        server.abort();
+        let _ = server.await;
+        let received = received.lock().unwrap();
+        if supported {
+            assert_eq!(received.len(), 1);
+            assert_eq!(received[0]["review"], "Review: uncommitted changes");
+        } else {
+            assert!(
+                received.is_empty(),
+                "an unsupported server must receive no review input: {received:?}"
+            );
+            assert!(screen.contains(NOTICE), "{screen}");
+        }
+    }
+}
+
 /// One user's machine: a state directory with a config pointing at a fake
 /// model, a home, a project directory, and maybe a running server.
 struct World {

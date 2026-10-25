@@ -174,6 +174,10 @@ input 不填，说明只放入本地输入框供用户修改后发送。取消�
 
 ### 审查轮
 
+`GET /v1/info` 新增可选 `features` 字符串数组，本版返回 `["review"]`。
+终端每次发起 `/review` 先读取所连服务端的能力；缺省/null 或不含 review 时不发送，
+提示运行 `canter serve --replace` 后重试。旧客户端可以忽略该字段。
+
 `POST /v1/sessions/{id}/input` 可带 `review: "Review: uncommitted changes"` 或 PR 标题。
 存在这个字符串即开启只读审查轮，省略/null 仍是普通输入。`QueuedInput` 和 `Turn`
 带同一个可选字段，随队列、轮事件和快照保留；Schema 和 TypeScript 也标为可选，
