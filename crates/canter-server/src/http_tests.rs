@@ -615,6 +615,32 @@ impl BtwTest {
 }
 
 #[tokio::test]
+async fn context_has_no_measured_usage_after_only_btw() {
+    let test = BtwTest::new().await;
+    let id = test.create().await;
+    let response = test
+        .client
+        .post(format!("{}/btw", test.url(&id)))
+        .json(&json!({"question":"btw-only before the main turn"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.text().await.unwrap().contains("completed"));
+    let report: serde_json::Value = test
+        .client
+        .get(format!("{}/context", test.url(&id)))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(report["contextTokens"].is_null(), "{report}");
+    test.finish().await;
+}
+
+#[tokio::test]
 async fn btw_preserves_main_requests_history_and_context_but_records_cost() {
     use canter_model::Message;
     let test = BtwTest::new().await;

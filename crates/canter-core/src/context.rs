@@ -317,6 +317,7 @@ impl crate::Session {
                 .snapshot
                 .token_usage
                 .as_ref()
+                .filter(|usage| usage.model_context_window.is_some())
                 .map(|usage| usage.context_tokens),
         }
     }

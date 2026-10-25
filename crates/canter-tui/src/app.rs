@@ -190,6 +190,8 @@ struct Shown {
     custom_input: bool,
     /// The turn in progress.
     turn: Option<String>,
+    /// The private answer in progress on this frame.
+    btw: Option<usize>,
     /// The choice whose choices showed, numbered as [`App::choose`] opened it.
     chooser: Option<u64>,
     /// How many completions the input box showed.
@@ -447,10 +449,16 @@ impl App {
             return None;
         }
         if key.code == KeyCode::Esc
-            && let Some(id) = self.active_btw
+            && (shown.approval.is_some()
+                || (self.chooser.is_none() && self.command_list().is_none()))
+            && let Some(id) = shown.btw
         {
-            self.btw_event(id, canter_protocol::BtwEvent::Cancelled);
-            return Some(Action::CancelBtw { id });
+            if self.active_btw == Some(id) {
+                self.btw_event(id, canter_protocol::BtwEvent::Cancelled);
+                return Some(Action::CancelBtw { id });
+            }
+            // A late Esc for a finished btw must never fall through to the main turn.
+            return None;
         }
         let guarded = at < self.guard_until;
         if guarded {
@@ -738,9 +746,6 @@ impl App {
         if answer.done {
             self.active_btw = None;
         }
-        // An in-place local block changed; rewrap it in its original position.
-        self.history.width = 0;
-        self.scroll.seen.0 = 0;
     }
 
     pub fn show_context(&mut self, report: &canter_protocol::ContextResponse) {
@@ -941,6 +946,10 @@ impl App {
             while let Some(notice) = self.notices.get(self.history.notices)
                 && notice.at <= self.history.end
             {
+                // Keep the streaming block and everything after it in the live area.
+                if matches!(&notice.content, NoticeContent::Btw(answer) if !answer.done) {
+                    return;
+                }
                 self.history.rows.extend(notice.rows(width));
                 self.history.notices += 1;
             }
@@ -1050,6 +1059,7 @@ impl App {
                 .find(|turn| turn.status == TurnStatus::InProgress)
                 .map(|turn| turn.id.clone()),
             chooser: None,
+            btw: self.active_btw,
             completions: self.completions,
             mode: None,
         };
@@ -1548,6 +1558,15 @@ impl App {
                     item: turn.items.len(),
                 },
             );
+            if turn.status != TurnStatus::InProgress
+                && let Some(footer) = cells::turn_footer(turn, self.errors_shown.contains(&turn.id))
+            {
+                rows.extend(wrap(&footer, width));
+            }
+        }
+        // A btw can follow all turns, including in a session without any turns.
+        for notice in notices {
+            rows.extend(notice.rows(width));
         }
         for queued in &self.snapshot.queued_inputs {
             let mut text = format!("  · Queued: {}", first_line(&queued.input));
