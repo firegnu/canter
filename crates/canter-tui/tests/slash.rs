@@ -237,8 +237,8 @@ fn a_slash_lists_the_commands_above_the_input_box() {
     assert!(screen.no_list(), "{}", screen.text());
 }
 
-/// Up and Down move the selection; Tab completes the input to the selected
-/// command; Enter runs the selected command.
+/// Up and Down move the selection; Tab, or Enter on a name not typed in
+/// full, completes the input to the selected command; Enter then runs it.
 #[test]
 fn up_down_tab_and_enter_work_on_the_list() {
     let mut screen = Screen::new();
@@ -259,9 +259,34 @@ fn up_down_tab_and_enter_work_on_the_list() {
     assert_eq!(screen.input(), "› /exit", "{}", screen.text());
     assert_eq!(screen.key(KeyCode::Enter), Some(Action::Quit));
 
-    // Enter on a narrowed list runs the command selected there.
+    // Enter on `/` alone completes the command selected, like Tab.
     let mut screen = Screen::new();
-    assert_eq!(screen.enter("/e"), Some(Action::Quit));
+    screen.type_text("/");
+    screen.draw();
+    assert_eq!(screen.key(KeyCode::Down), None);
+    assert_eq!(screen.key(KeyCode::Enter), None);
+    screen.draw();
+    assert_eq!(screen.input(), "› /exit", "{}", screen.text());
+    assert_eq!(screen.key(KeyCode::Enter), Some(Action::Quit));
+}
+
+/// The user's decision: Enter runs a command only when its whole name is
+/// typed. `/` alone or the start of a name only completes the command
+/// selected (`/compact` comes first), so a quick `/` and Enter does not
+/// compact the session; the next Enter does.
+#[test]
+fn enter_runs_only_a_whole_command_name() {
+    let mut screen = Screen::new();
+    assert_eq!(screen.enter("/"), None, "/ and Enter runs nothing");
+    screen.draw();
+    assert_eq!(screen.input(), "› /compact", "{}", screen.text());
+    assert!(screen.no_list(), "{}", screen.text());
+
+    let mut screen = Screen::new();
+    assert_eq!(screen.enter("/co"), None, "/co and Enter runs nothing");
+    screen.draw();
+    assert_eq!(screen.input(), "› /compact", "{}", screen.text());
+    assert_eq!(screen.key(KeyCode::Enter), Some(Action::Compact));
 }
 
 /// While the list is open, Esc closes only the list; with the list closed,

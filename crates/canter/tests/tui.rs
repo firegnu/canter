@@ -1228,3 +1228,42 @@ async fn slash_mode_changes_the_permission_mode() {
     assert_eq!(a.quit().await, id);
     world.stop_server(Signal::SIGTERM).await;
 }
+
+/// The user's decision: `/` and Enter, or `/co` and Enter, only complete the
+/// input to `/compact`; nothing is compacted and the model gets no request.
+/// Enter on the whole name compacts.
+#[tokio::test]
+async fn slash_and_enter_only_completes_compact() {
+    let mut world = World::new(vec![
+        text_reply("回答一"),
+        text_reply("SUMMARY-OF-THE-CHAT"),
+    ])
+    .await;
+    world.start_server().await;
+    let a = world.open(&["第一句"], "canter-tui a").await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+    let id = world.only_session().await;
+    let turns = async || world.snapshot(&id).await.turns.len();
+
+    a.type_line("/").await;
+    a.wait_for("│ › /compact").await;
+    // Give a wrong compaction every chance to start.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(turns().await, 1, "/ and Enter compacted");
+    a.press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        .await;
+    a.wait_for("Type a message").await;
+
+    a.type_line("/co").await;
+    a.wait_for("│ › /compact").await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(turns().await, 1, "/co and Enter compacted");
+
+    a.press(KeyCode::Enter).await;
+    a.wait_for("Context compacted").await;
+    a.wait_idle().await;
+    assert_eq!(turns().await, 2);
+    assert_eq!(a.quit().await, id);
+    world.stop_server(Signal::SIGTERM).await;
+}

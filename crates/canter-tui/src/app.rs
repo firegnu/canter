@@ -378,8 +378,7 @@ impl App {
                 KeyCode::Up => Some((selected.saturating_sub(1), false)),
                 KeyCode::Down => Some(((selected + 1).min(last), false)),
                 KeyCode::Tab => {
-                    self.input.clear();
-                    self.input.insert(&format!("/{} ", matches[selected].name));
+                    self.complete(matches[selected]);
                     return None;
                 }
                 _ => None,
@@ -429,11 +428,18 @@ impl App {
         None
     }
 
-    /// Enter in the input box: runs the command selected in the list or
-    /// typed, or sends the message.
+    /// Enter in the input box: runs the command whose whole name is typed,
+    /// or sends the message. With `/` alone or the start of a name, it only
+    /// completes the command selected, like Tab: the first one, `/compact`,
+    /// cannot be undone (user's decision).
     fn enter(&mut self) -> Option<Action> {
-        if let Some((matches, selected)) = self.command_list() {
-            return self.run_command(matches[selected], "");
+        if let Some((matches, selected)) = self.command_list()
+            && commands::typing(self.input.text())
+                .and_then(commands::find)
+                .is_none()
+        {
+            self.complete(matches[selected]);
+            return None;
         }
         let typed = commands::parse(self.input.text()).map(|(name, args)| {
             let command = commands::find(name).ok_or_else(|| name.to_owned());
@@ -453,6 +459,12 @@ impl App {
                 Some(Action::Send(self.input.take()))
             }
         }
+    }
+
+    /// Puts `/name ` in the input box; the list closes, and Enter runs it.
+    fn complete(&mut self, command: &Command) {
+        self.input.clear();
+        self.input.insert(&format!("/{} ", command.name));
     }
 
     /// Runs `command`; the input box is emptied unless it fails.
