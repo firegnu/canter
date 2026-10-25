@@ -4,4 +4,4 @@ import type { SessionSummary } from "./SessionSummary";
 /**
  * GET /v1/info. Each session carries its own replay cursor; there is no global sequence.
  */
-export type InfoResponse = { serverVersion: string, protocolVersion: number, sessions: Array<SessionSummary>, };
+export type InfoResponse = { features?: Array<string>, serverVersion: string, protocolVersion: number, sessions: Array<SessionSummary>, };

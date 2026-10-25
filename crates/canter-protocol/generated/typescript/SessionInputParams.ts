@@ -5,4 +5,8 @@ import type { UserInput } from "./UserInput";
 /**
  * POST /v1/sessions/{id}/input. Idle starts a turn; mode applies when busy.
  */
-export type SessionInputParams = { input: Array<UserInput>, mode: InputMode, clientName: string, };
+export type SessionInputParams = {
+/**
+ * Present for a read-only review turn; the single-line display title.
+ */
+review?: string, input: Array<UserInput>, mode: InputMode, clientName: string, };

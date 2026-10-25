@@ -260,6 +260,7 @@ async fn send_input(
         said.join(" ")
     );
     let turn = |status| Turn {
+        review: params.review.clone(),
         id: turn_id.clone(),
         items: Vec::new(),
         status,

@@ -63,3 +63,34 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：实现 `/review` 和 `/review <PR 号或 GitHub PR 网址>`，收集暂存、未暂存 diff 和未跟踪列表，或用 `gh pr view/diff` 取 PR 标题、说明、目标分支和 diff。消息在当前会话排队成为独立轮，结果留在原对话；界面只显示一行 Review 标题，加入命令列表和 `/help`。复用 P2-8 的 git 环境隔离、禁用过滤器和监视器等措施，新增有界输出、15 秒总超时和截断提示。服务端拒绝审查轮的 write/edit（在准备文件和 diff 前）及白名单外 shell，返回 `review is read-only`，不产生批准请求；白名单和普通轮权限未改。
+- 验证了什么：按任务先写并运行针对性测试，确认旧行为失败，再实现并转绿。失败证据包括 allowAll 审查实际写文件、`/review` 没有命令动作、缺少本地/PR 收集和截断提示、子目录漏未跟踪文件、edit 准备阶段抢先返回文件错误。最终覆盖本地三种改动、空改动/非仓库、PR 号/网址、缺少 gh/登录错误/PR 不存在/非 GitHub 的原始报错、本地和 PR 超限、三种权限模式及已有会话授权下的拒绝与只读放行、下一轮权限恢复、排队和结果历史、标题显示与协议兼容。git 和 gh 用临时目录及隔离环境，gh 是测试 PATH 中的假程序，核心使用脚本模型和临时存盘、空运行环境。最后 `cargo test --all-targets`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check` 全部通过，均使用任务指定的独立 CARGO_TARGET_DIR，命令等前台结束后才继续。
+- 拿主意的地方：采用可选字符串 `review` 同时作为审查标记和显示标题，添加到输入、队列和 Turn；缺省/null 保持原行为，不修改已有字段含义。即使客户端传 steer，审查也排队成新轮。diff 内容上限 256 KiB，超限保留至多 32 KiB 统计和 diff 开头；PR 用 gh 的 files 增删统计代替 git 的 `--stat`。本地从仓库根目录收集并在消息中标明路径基准。协议差异和权限行为写入 DESIGN 第 8、14 条及 README，并重新生成 Schema/TypeScript。只参考 `/tmp/agent-stuff-ro/extensions/review.ts` 的 buildReviewPrompt、getUserFacingHint 和 sendUserMessage 组织方式，未复制源码或审查提示词；英文要求独立编写。
+- 没做的事：未 checkout PR、自动修复、审查指定提交/分支/目录、读取额外审查规则、发 PR 评论或升级/新增依赖；未调真实模型或 GitHub，真实调用次数均为 0。未读用户真实 canter/gh 状态，未操作用户服务端，未合并或推送，未改 HANDOFF。
+- 踩过的坑：`gh pr diff` 没有 `--stat`，改用 `gh pr view --json files --jq ...` 获取整个 PR 的文件增删统计。`git ls-files` 在子目录会缩小未跟踪列表范围，失败测试后改为先定位仓库根目录。write/edit 原先先准备再过权限，改成审查轮提前拒绝，避免把文件准备错误当成只读拒绝。第一次全量编译漏了一个旧测试的 Turn 字面量新增字段，补 `review: None` 后全量重跑通过。
+- 要主控决定的事：没有。
+
+### 交叉审查后修改（2026-10-25）
+
+- 主控决定：只读参阅主仓库 `docs/任务/P2-11-交叉审查.md` 的审查意见，必须改 1 采用能力字段方案；建议改 1、2、3 全部落实；可以不改 1 采用 Tool 穷举匹配并说明提问照常，其余可以不改项不动。只验证本轮直接相关测试，不重跑全套，不合并、不推送。
+- 做了什么：`InfoResponse` 新增可选 `features` 字符串数组，本版服务端返回 `review`。终端每次 `/review` 先向所连服务端查能力，缺字段或没有 review 时直接提示 `The running server cannot enforce read-only review; run canter serve --replace and try again`，不收集也不发送审查输入；不以版本号代替能力判断。同步 DESIGN 第 8 条、协议说明、Schema 和 TypeScript。
+- 做了什么：未跟踪列表独立放在 diff 前，每路收集仍有 256 KiB 上限，暂存/未暂存 diff 合用 256 KiB 内容额度，统计另限 32 KiB。PR 标题、说明、diff、本地两种 diff 各有完整起止标记，分支名、根目录、列表和统计也按外部数据处理；标记避开段内已有文本，截断后再包装，保证结束标记不被裁掉。英文要求明确段内指示一律不照做，PR 的本地工作区提示放在全部外部文本之前，显示标题不再额外拼到模型消息的无标记部分。
+- 做了什么：`evaluate_review` 按 Tool 穷举匹配，没有 `_` 兜底，新增工具时须显式决定审查权限；README 明确 ask_user 在闸门之前处理，审查轮照常提问。普通 steer 和打断后的轮次权限实现无需改动，补测试锁住现有正确行为。
+- 验证了什么：先通过真实 TUI 驱动和临时 Unix HTTP 假服务端复现「缺能力仍发输入」，修改后缺 features、空 features 均提示并且无 input 请求，有 review 能力正常发送；另验证本版真实测试服务端会声明 review。大暂存 diff 加未跟踪文件先复现丢文件名，修改后保留。数据边界先确认旧消息缺少明确要求，修改后验证标题/说明/diff 的完整标记、提示位置、伪造结束标记留在真实数据块内部，以及大 diff 截断后的结束标记。新增核心测试验证普通 steer 到达模型后 write 仍拒绝、无批准且无文件；中断审查后普通轮恢复 alwaysAsk，先批准再写成功。
+- 本轮命令及结果：`cargo test -p canter --test tui review_`（2 个）、`cargo test -p canter-tui --test review`（5 个）、`cargo test -p canter-core --test review review_`（5 个）、`cargo test -p canter-protocol --test transport --test export`（6 个）均通过；`cargo fmt --check`、`git diff --check` 通过。全部 Cargo 命令使用本任务 CARGO_TARGET_DIR，逐个等前台结束；没有重跑全套。
+- 没做的事：未处理其余可以不改项，未改普通轮权限和只读白名单，未新增依赖，未调用真实模型或 GitHub，未操作用户服务端，未修改主仓库的审查文件，未合并或推送。
+- 踩过的坑：仅给外部数据加标记还不够，原来模型消息顶部额外拼的 PR 显示标题也来自外部文本；已移除该副本，让标题只在自身数据块内出现，并用测试断言只出现一次。截断必须先处理内容再包装，否则结束标记会被截掉。
+- 要主控决定的事：没有。
+
+### 复核后限制未跟踪列表（2026-10-25）
+
+- 主控决定：采纳复核新增建议，将未跟踪列表限制为 32 KiB，超限算截断，在数据块外写明「列表已截断，用读文件或 git status 看全部」；整条本地审查消息控制在约 300 KiB 内，只跑这处相关测试。
+- 做了什么：列表在 UTF-8 边界截为至多 32 KiB，超限同时设置整体截断标记和专用列表提示，起止标记保持完整。统计仍至多 32 KiB，但统计占用从原 256 KiB diff 前缀预算扣除，让 diff、统计与列表合计至多 288 KiB，另外只加固定提示、标记和仓库路径，避免 256 + 32 + 32 KiB 仍超过目标。
+- 验证了什么：先加「大 diff、500 个额外暂存文件、500 个未跟踪文件」测试，原实现失败，消息为 349,668 字节。修改后断言整条消息小于 300 KiB、列表不超过 32 KiB、列表首部保留而尾部省略、专用提示在块外、diff 仍有内容及完整标记；普通小列表没有截断提示。`cargo test -p canter-tui --test review local_` 的 3 个相关测试通过，`cargo fmt --check` 和 `git diff --check` 通过；Cargo 使用本任务独立 CARGO_TARGET_DIR，全部命令在前台结束后才继续。
+- 没做的事：未重跑全套，未改 PR 收集、权限和协议，未访问真实模型或 GitHub，未修改主仓库审查文件，未合并或推送。
+- 踩过的坑：没有。
+- 要主控决定的事：没有。
+- 后续主控按 P1-11 纠正提示语言：将块外列表提示改为 `[Untracked file list truncated; use the read tool or git status to see all of it]`，同步测试断言；仅运行 `cargo test -p canter-tui --test review local_`，3 个相关测试通过，使用本任务 CARGO_TARGET_DIR 并等前台结束后继续。

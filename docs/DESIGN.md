@@ -37,6 +37,8 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
      - 会话状态是六种字符串（`starting`、`idle`、`working`、`waiting_approval`、`error`、`closed`），不是 Codex 带标记的对象。权限模式的字段名沿用 `approvalPolicy`，值是 canter 自己的 `alwaysAsk`、`askForExecution`、`allowAll`；不要 Codex 的沙箱设置。
      - 关闭原因（P1-13）：`session.status` 事件和会话快照新增可选的 `closeReason`，关闭时为 `clientRequest`（客户端主动关）或 `serverShutdown`（服务端停机，包括升级）；离开 `closed` 时清空。原因随事件存盘，避免服务端重启后旁观终端撤销人的关闭意图。终端连接新服务端时，仅对停机关闭或缺少原因的旧会话自动 resume；未知关闭原因保持关闭，非关闭状态仍按崩溃恢复。用户主动 `--resume` 或在列表里选择会话不受此限制。
      - 送话：一条 input 命令带 `mode: queue / steer`，代替 Codex 的 `turn/start`、`turn/steer`。排队时发 `input.queued` 事件，快照里有 `queuedInputs`。
+     - 审查（P2-11）：`SessionInputParams`、`QueuedInput` 和 `Turn` 新增可选 `review` 字符串，保存一行审查标题；存在即表示只读审查轮，省略时保持普通轮行为。终端收集本地未提交 diff / 未跟踪列表，或用 `gh pr view/diff` 收集 PR，拼成单条用户消息；显示时仅用 review 标题，模型历史仍保留完整消息。审查输入始终排队，不作为插话混入已有轮；普通插话进入审查轮时仍受该轮只读限制。不同于 Codex 独立的 review/start 和审查事件，canter 复用 input 与普通轮事件，让审查结果留在当前对话并支持继续修改。
+     - 审查能力协商（P2-11 交叉审查后主控定）：`GET /v1/info` 新增可选 `features` 字符串数组，本版含 `"review"`。终端每次 `/review` 先读取所连服务端的能力；缺少该字段或不含 review 时不发送审查输入，提示运行 `canter serve --replace` 后重试，避免旧服务端忽略 review 字段后按普通权限执行。旧客户端忽略 features，已有协议版本及字段含义不变。
      - 图片输入（P2-5）：沿用 Codex v2 `UserInput::LocalImage` 的 `type: localImage` 和 `path`，新增可选 `name` 保留附件的显示文件名；省掉 `detail`（固定不填）、URL 图片和客户端内联图片。本机客户端提交路径，服务端接收整条消息前读入、按内容识别 JPEG/PNG/GIF/WebP 并限制每张 8 MiB；保存原始字节到会话目录的 `image-<随机名>.<格式>`（0600），事件和模型历史的 path 只存该文件名，请求时按当前会话目录解析，不依赖原文件或旧状态目录位置。副本不可读时，在请求中用 `[image unavailable: 名字]` 代替该图并发 warning，存盘引用不改。`GET /v1/models` 补回 Codex 的可选 `inputModalities`（字符串数组 `text` / `image`），由本机 `image_models` 配置决定，供终端在附图前提示；缺少该字段的旧服务端按只有 deepseek-flash 收图处理。新字段可选，纯文字的输入、存盘和模型请求保持原格式。
      - 新增 `input.removed { inputIds, reason, turnId? }`，用于插话/合并消费、打断/关闭丢弃，避免这些路径在恢复和客户端快照中留下已处理的输入；保留 `turn.started.inputId`。插话回复的 `eventSeq` 指接收时的 `input.queued`，`turnId` 指当前目标轮，实际进入上下文时再移出。
      - 手动压缩命令在独立压缩轮的 `turn.started` 落盘后即回复 `{ eventSeq, turnId? }`，结果通过事件报告，避免 HTTP 等待整个摘要过程；压缩轮期间的插话按排队处理，完成后另开一轮。
@@ -58,6 +60,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
 12. **接 corral 往后放**：「corral的接入等agent差不多可以工作了（tui版本的），再考虑接入。」
 13. **会话存两份：事件和模型历史**（2026-10-24，第 1 件交叉审查后用户选定）。每个会话除了发给客户端的事件文件，另存一份只追加的模型历史，原样记下发给模型的每条消息（工具调用 id、原样参数、截断后回给模型的结果、压缩后的摘要等），不发给客户端，文件 0600。恢复会话时，模型的上下文从模型历史还原，不从显示用的事件反推。Codex 也是这样分的（rollout 文件存模型层的条目，和 app-server 的通知分开）。
 14. **会话环境和 API key**（2026-10-24，派 P1-4、P1-5 前用户选定，都照主控的建议）。
+   - 审查轮（P2-11）强制只读：write/edit 和不符合现有只读白名单的 shell 直接拒绝，模型收到 `review is read-only`，不产生批准请求，三种权限模式和已有会话授权都不能放行。read 和白名单 shell 沿用原机制；限制只看当前轮标记，不改变会话权限和授权，结束后自动恢复。白名单及其已知边界不变。
    - 环境变量不存盘：建会话时客户端交来的环境只放服务端内存；服务端重启后，客户端接着聊时重新交一份（用接着聊那个终端的环境）。理由：环境变量里常有令牌，不落盘；服务端重启后在跑的轮本来就断了，接着聊总得有客户端连上来。第 1 件原来把环境存进会话目录的 `private.json`（0600），P1-4 拿掉。
    - DeepSeek 的 API key 放 canter 的配置文件（状态目录下，0600，不进仓库）。理由：服务端是在后台自己起的，以后还可能装成系统服务，拿不到用户终端里的环境变量。
    - canter 的状态目录和配置文件是 read、write、edit 工具的受保护路径，模型读写都拒绝（P1-3 交叉审查后主控定）；shell 拦不住。

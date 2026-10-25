@@ -123,6 +123,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         takes_args: true,
         run: App::start_handoff,
     },
+    Command {
+        name: "review",
+        about: "Review uncommitted changes or a PR number/URL (read-only)",
+        takes_args: true,
+        run: |_, args| Ok(Some(Action::Review(args.to_owned()))),
+    },
 ];
 
 pub(crate) fn skills(skills: Vec<canter_protocol::Skill>) -> Vec<LogicalLine> {

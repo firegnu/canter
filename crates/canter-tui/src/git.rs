@@ -114,7 +114,7 @@ pub(crate) async fn status(cwd: &str, home: Option<&str>) -> Vec<String> {
 
 // Status may hash worktree contents through a configured clean/process filter.
 // Disable these in the superproject and in status's recursive submodule queries.
-async fn filter_overrides(cwd: &str) -> std::io::Result<Vec<String>> {
+pub(crate) async fn filter_overrides(cwd: &str) -> std::io::Result<Vec<String>> {
     const KEYS: &str = r"^filter\..*\.(clean|smudge|process|required)$";
     let local = git_output(
         cwd,
@@ -156,7 +156,12 @@ async fn filter_overrides(cwd: &str) -> std::io::Result<Vec<String>> {
 }
 
 async fn git_output(cwd: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
-    tokio::process::Command::new("git")
+    command(cwd).args(args).output().await
+}
+
+pub(crate) fn command(cwd: &str) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new("git");
+    command
         .current_dir(cwd)
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
@@ -175,9 +180,7 @@ async fn git_output(cwd: &str, args: &[&str]) -> std::io::Result<std::process::O
             "-c",
             "status.relativePaths=false",
         ])
-        .args(args)
         .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output()
-        .await
+        .kill_on_drop(true);
+    command
 }

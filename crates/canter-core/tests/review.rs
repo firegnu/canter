@@ -71,6 +71,7 @@ fn read_fixture(id: &str) -> Vec<Step> {
 }
 fn input(value: &str) -> SessionInputParams {
     SessionInputParams {
+        review: None,
         input: vec![UserInput::Text { text: value.into() }],
         mode: InputMode::Queue,
         client_name: "test".into(),
@@ -124,6 +125,414 @@ async fn finished(events: &mut Subscription) -> Vec<Event> {
         matches!(event, EventPayload::TurnCompleted { .. })
     })
     .await
+}
+
+#[tokio::test]
+async fn review_turn_is_readonly_even_with_session_grants_and_restores_permissions() {
+    use serde_json::json;
+    for mode in [
+        PermissionMode::AllowAll,
+        PermissionMode::AlwaysAsk,
+        PermissionMode::AskForExecution,
+    ] {
+        for granted in [false, true] {
+            let calls = || {
+                vec![
+                    ("write", json!({"path":"written.txt", "content":"written"})),
+                    (
+                        "edit",
+                        json!({"path":"fixture.txt", "edits":[{"oldText":"original", "newText":"edited"}]}),
+                    ),
+                    ("shell", json!({"command":"touch shell-ran"})),
+                    ("read", json!({"path":"fixture.txt"})),
+                    ("shell", json!({"command":"echo allowed"})),
+                ]
+            };
+            let tools = || {
+                let mut steps: Vec<_> = calls()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (name, args))| {
+                        Step::Event(ModelEvent::ToolCall(ToolCall {
+                            id: format!("call-{i}"),
+                            name: name.into(),
+                            arguments: args.to_string(),
+                        }))
+                    })
+                    .collect();
+                steps.push(Step::Event(ModelEvent::Finished(FinishReason::ToolCalls)));
+                steps
+            };
+            let mut scripts = Vec::new();
+            if granted {
+                scripts.extend([tools(), vec![finish()]]);
+            }
+            scripts.extend([
+                tools(),
+                vec![text("No issues found. Safe to merge."), finish()],
+                tools(),
+                vec![finish()],
+            ]);
+            let model = ScriptModel::new(scripts);
+            let (temp, _, session) = create(model.clone(), CoreOptions::default()).await;
+            std::fs::write(temp.path().join("fixture.txt"), "original").unwrap();
+            let mut events = session.subscribe(0).await.unwrap();
+            if granted {
+                session
+                    .update(SessionUpdateParams {
+                        approval_policy: Some(PermissionMode::AlwaysAsk),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+                session.input(input("grant tools")).await.unwrap();
+                loop {
+                    let batch = until(&mut events, |e| {
+                        matches!(
+                            e,
+                            EventPayload::RequestOpened { .. } | EventPayload::TurnCompleted { .. }
+                        )
+                    })
+                    .await;
+                    match &batch.last().unwrap().payload {
+                        EventPayload::RequestOpened { request } => {
+                            session
+                                .resolve(
+                                    &request.id,
+                                    RequestResolveParams {
+                                        decision: Some(ApprovalDecision::AcceptForSession),
+                                        answer: None,
+                                        client_name: "test".into(),
+                                    },
+                                )
+                                .await
+                                .unwrap();
+                        }
+                        _ => break,
+                    }
+                }
+                std::fs::remove_file(temp.path().join("written.txt")).unwrap();
+                std::fs::remove_file(temp.path().join("shell-ran")).unwrap();
+                std::fs::write(temp.path().join("fixture.txt"), "original").unwrap();
+            }
+            session
+                .update(SessionUpdateParams {
+                    approval_policy: Some(mode),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let params = serde_json::from_value(json!({
+                "input":[{"type":"text","text":"Review this diff"}],
+                "clientName":"test", "review":"Review: uncommitted changes"
+            }))
+            .unwrap();
+            session.input(params).await.unwrap();
+            let batch = until(&mut events, |e| {
+                matches!(
+                    e,
+                    EventPayload::RequestOpened { .. } | EventPayload::TurnCompleted { .. }
+                )
+            })
+            .await;
+            assert!(
+                !batch
+                    .iter()
+                    .any(|e| matches!(e.payload, EventPayload::RequestOpened { .. })),
+                "review must not ask for approval"
+            );
+            assert!(
+                !temp.path().join("written.txt").exists(),
+                "review wrote a file: {mode:?}, granted={granted}"
+            );
+            assert!(!temp.path().join("shell-ran").exists());
+            assert_eq!(
+                std::fs::read_to_string(temp.path().join("fixture.txt")).unwrap(),
+                "original"
+            );
+            {
+                let requests = model.requests.lock().unwrap();
+                let messages = &requests.last().unwrap().messages;
+                for i in 0..3 {
+                    assert!(messages.iter().any(|m| matches!(m, Message::ToolResult { tool_call_id, text } if tool_call_id == &format!("call-{i}") && text.contains("review is read-only"))));
+                }
+                assert!(messages.iter().any(|m| matches!(m, Message::ToolResult { tool_call_id, text } if tool_call_id == "call-3" && text.contains("original"))));
+                assert!(messages.iter().any(|m| matches!(m, Message::ToolResult { tool_call_id, text } if tool_call_id == "call-4" && text.contains("allowed"))));
+            }
+            assert_eq!(
+                session.snapshot().await.session.settings.approval_policy,
+                mode
+            );
+            session.input(input("make the changes now")).await.unwrap();
+            let mut approvals = 0;
+            loop {
+                let batch = until(&mut events, |e| {
+                    matches!(
+                        e,
+                        EventPayload::RequestOpened { .. } | EventPayload::TurnCompleted { .. }
+                    )
+                })
+                .await;
+                match &batch.last().unwrap().payload {
+                    EventPayload::RequestOpened { request } => {
+                        approvals += 1;
+                        session
+                            .resolve(
+                                &request.id,
+                                RequestResolveParams {
+                                    decision: Some(ApprovalDecision::Accept),
+                                    answer: None,
+                                    client_name: "test".into(),
+                                },
+                            )
+                            .await
+                            .unwrap();
+                    }
+                    _ => break,
+                }
+            }
+            assert_eq!(
+                approvals,
+                if granted {
+                    0
+                } else {
+                    match mode {
+                        PermissionMode::AlwaysAsk => 3,
+                        PermissionMode::AskForExecution => 1,
+                        _ => 0,
+                    }
+                }
+            );
+            assert!(temp.path().join("written.txt").exists());
+            assert!(temp.path().join("shell-ran").exists());
+            assert_eq!(
+                std::fs::read_to_string(temp.path().join("fixture.txt")).unwrap(),
+                "edited"
+            );
+            session.close().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn review_rejects_changes_before_reading_or_preparing_the_target() {
+    let model = ScriptModel::new(vec![
+        vec![
+            Step::Event(ModelEvent::ToolCall(ToolCall {
+                id: "missing-edit".into(),
+                name: "edit".into(),
+                arguments: r#"{"path":"missing.txt","edits":[{"oldText":"old","newText":"new"}]}"#
+                    .into(),
+            })),
+            Step::Event(ModelEvent::Finished(FinishReason::ToolCalls)),
+        ],
+        vec![finish()],
+    ]);
+    let (_temp, _, session) = create(model.clone(), CoreOptions::default()).await;
+    let mut events = session.subscribe(0).await.unwrap();
+    let mut params = input("Review changes");
+    params.review = Some("Review: uncommitted changes".into());
+    session.input(params).await.unwrap();
+    finished(&mut events).await;
+    assert!(model.requests.lock().unwrap().last().unwrap().messages.iter().any(|m| matches!(m, Message::ToolResult { text, .. } if text.contains("review is read-only"))));
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn review_queues_as_its_own_turn_and_keeps_prompt_and_answer_in_history() {
+    let release = Arc::new(Notify::new());
+    let model = ScriptModel::new(vec![
+        vec![Step::Wait(release.clone()), text("first answer"), finish()],
+        vec![
+            Step::Event(ModelEvent::ToolCall(ToolCall {
+                id: "write".into(),
+                name: "write".into(),
+                arguments: r#"{"path":"forbidden","content":"no"}"#.into(),
+            })),
+            Step::Event(ModelEvent::Finished(FinishReason::ToolCalls)),
+        ],
+        vec![text("No findings. Safe to merge."), finish()],
+    ]);
+    let (temp, _, session) = create(model.clone(), CoreOptions::default()).await;
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("ordinary turn")).await.unwrap();
+    let mut review = input("review instructions and diff");
+    review.review = Some("Review: uncommitted changes".into());
+    review.mode = InputMode::Steer;
+    assert!(session.input(review).await.unwrap().turn_id.is_none());
+    let queued = session.snapshot().await.session.queued_inputs;
+    assert_eq!(queued.len(), 1);
+    assert_eq!(
+        queued[0].review.as_deref(),
+        Some("Review: uncommitted changes")
+    );
+    release.notify_one();
+    finished(&mut events).await;
+    let review_events = finished(&mut events).await;
+    assert!(
+        !review_events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::RequestOpened { .. }))
+    );
+    assert!(!temp.path().join("forbidden").exists());
+    let snapshot = session.snapshot().await.session;
+    assert!(snapshot.queued_inputs.is_empty());
+    assert_eq!(snapshot.turns.len(), 2);
+    assert!(snapshot.turns[0].review.is_none());
+    assert_eq!(
+        snapshot.turns[1].review.as_deref(),
+        Some("Review: uncommitted changes")
+    );
+    assert!(snapshot.turns[1].items.iter().any(|item| matches!(item, Item::AgentMessage { text, .. } if text == "No findings. Safe to merge.")));
+    {
+        let requests = model.requests.lock().unwrap();
+        assert!(
+            !serde_json::to_string(&requests[0])
+                .unwrap()
+                .contains("review instructions and diff")
+        );
+        assert!(
+            serde_json::to_string(requests.last().unwrap())
+                .unwrap()
+                .contains("review instructions and diff")
+        );
+    }
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn review_stays_readonly_after_ordinary_steering() {
+    let release = Arc::new(Notify::new());
+    let model = ScriptModel::new(vec![
+        vec![
+            text("review waiting"),
+            Step::Wait(release.clone()),
+            finish(),
+        ],
+        vec![
+            Step::Event(ModelEvent::ToolCall(ToolCall {
+                id: "steered-write".into(),
+                name: "write".into(),
+                arguments: r#"{"path":"forbidden","content":"changed"}"#.into(),
+            })),
+            Step::Event(ModelEvent::Finished(FinishReason::ToolCalls)),
+        ],
+        vec![text("review finished"), finish()],
+    ]);
+    let (temp, _, session) = create(model.clone(), CoreOptions::default()).await;
+    session
+        .update(SessionUpdateParams {
+            approval_policy: Some(PermissionMode::AlwaysAsk),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    let mut review = input("review changes");
+    review.review = Some("Review: uncommitted changes".into());
+    let turn = session.input(review).await.unwrap().turn_id;
+    until(&mut events, |event| matches!(event, EventPayload::ItemDelta { delta: ItemDelta::AgentMessage { delta }, .. } if delta == "review waiting")).await;
+    let mut steer = input("please write the fix");
+    steer.mode = InputMode::Steer;
+    assert_eq!(session.input(steer).await.unwrap().turn_id, turn);
+    release.notify_one();
+    let seen = until(&mut events, |event| {
+        matches!(
+            event,
+            EventPayload::RequestOpened { .. } | EventPayload::TurnCompleted { .. }
+        )
+    })
+    .await;
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::RequestOpened { .. }))
+    );
+    assert!(!temp.path().join("forbidden").exists());
+    let snapshot = session.snapshot().await.session;
+    assert_eq!(snapshot.turns.len(), 1);
+    assert!(snapshot.turns[0].review.is_some());
+    {
+        let requests = model.requests.lock().unwrap();
+        assert!(
+            serde_json::to_string(&requests[1].messages)
+                .unwrap()
+                .contains("please write the fix")
+        );
+        assert!(requests.last().unwrap().messages.iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "steered-write" && text == "review is read-only")));
+    }
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn interrupted_review_restores_the_next_inputs_original_permissions() {
+    let model = ScriptModel::new(vec![
+        vec![
+            text("review waiting"),
+            Step::Wait(Arc::new(Notify::new())),
+            finish(),
+        ],
+        vec![
+            Step::Event(ModelEvent::ToolCall(ToolCall {
+                id: "ordinary-write".into(),
+                name: "write".into(),
+                arguments: r#"{"path":"allowed","content":"changed"}"#.into(),
+            })),
+            Step::Event(ModelEvent::Finished(FinishReason::ToolCalls)),
+        ],
+        vec![text("ordinary finished"), finish()],
+    ]);
+    let (temp, _, session) = create(model, CoreOptions::default()).await;
+    session
+        .update(SessionUpdateParams {
+            approval_policy: Some(PermissionMode::AlwaysAsk),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    let mut review = input("review changes");
+    review.review = Some("Review: uncommitted changes".into());
+    let turn_id = session.input(review).await.unwrap().turn_id.unwrap();
+    until(&mut events, |event| matches!(event, EventPayload::ItemDelta { delta: ItemDelta::AgentMessage { delta }, .. } if delta == "review waiting")).await;
+    session
+        .interrupt(SessionInterruptParams { turn_id })
+        .await
+        .unwrap();
+    let seen = finished(&mut events).await;
+    assert!(seen.iter().any(|event| matches!(&event.payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Interrupted)));
+    session.input(input("now write the fix")).await.unwrap();
+    let seen = until(&mut events, |event| {
+        matches!(
+            event,
+            EventPayload::RequestOpened { .. } | EventPayload::TurnCompleted { .. }
+        )
+    })
+    .await;
+    let EventPayload::RequestOpened { request } = &seen.last().unwrap().payload else {
+        panic!("ordinary write must request approval under alwaysAsk");
+    };
+    assert!(!temp.path().join("allowed").exists());
+    session
+        .resolve(
+            &request.id,
+            RequestResolveParams {
+                decision: Some(ApprovalDecision::Accept),
+                answer: None,
+                client_name: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
+    finished(&mut events).await;
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("allowed")).unwrap(),
+        "changed"
+    );
+    let snapshot = session.snapshot().await.session;
+    assert_eq!(snapshot.settings.approval_policy, PermissionMode::AlwaysAsk);
+    assert!(snapshot.turns[1].review.is_none());
+    session.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
@@ -182,6 +591,7 @@ async fn rejected_image_during_stopping_does_not_leave_a_copy() {
     let before = session.snapshot().await;
     let result = session
         .input(SessionInputParams {
+            review: None,
             input: vec![UserInput::LocalImage {
                 path: path.to_string_lossy().into_owned(),
                 name: None,
@@ -287,6 +697,7 @@ async fn rejected_images_are_removed_when_history_or_event_writes_fail() {
         let guard = FileLimit::small();
         let result = session
             .input(SessionInputParams {
+                review: None,
                 input: vec![UserInput::LocalImage {
                     path: source.to_string_lossy().into_owned(),
                     name: None,
@@ -340,6 +751,7 @@ async fn image_requests_and_compaction_keep_the_newest_images_within_40_mib() {
     for batch in inputs.chunks(2) {
         session
             .input(SessionInputParams {
+                review: None,
                 input: batch.to_vec(),
                 ..input("")
             })
@@ -412,6 +824,7 @@ async fn image_references_survive_moving_the_store_and_missing_copies_only_warn(
     let mut events = session.subscribe(0).await.unwrap();
     session
         .input(SessionInputParams {
+            review: None,
             input: vec![UserInput::LocalImage {
                 path: source.to_string_lossy().into_owned(),
                 name: None,
@@ -540,6 +953,7 @@ async fn manual_compaction_returns_at_start_and_steering_runs_in_a_separate_turn
         );
         let queued = session
             .input(SessionInputParams {
+                review: None,
                 mode: InputMode::Steer,
                 ..input("follow-up")
             })
@@ -988,6 +1402,7 @@ async fn failed_automatic_compaction_waits_until_a_new_turn_or_manual_request() 
     let mut seen = until(&mut events, |event| matches!(event, EventPayload::ItemDelta { delta: ItemDelta::AgentMessage { delta }, .. } if delta == "ready for steering")).await;
     let steered = session
         .input(SessionInputParams {
+            review: None,
             mode: InputMode::Steer,
             ..input("continue in this turn")
         })

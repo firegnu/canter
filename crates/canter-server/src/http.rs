@@ -197,6 +197,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(|_| ApiError::internal())?
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
+        features: Some(vec!["review".into()]),
         server_version: crate::VERSION.into(),
         protocol_version: PROTOCOL_VERSION,
         sessions,
@@ -457,6 +458,7 @@ async fn create(
         if let Some(input) = params.input {
             session
                 .input(SessionInputParams {
+                    review: None,
                     input,
                     mode: InputMode::Queue,
                     client_name: params.client_name,

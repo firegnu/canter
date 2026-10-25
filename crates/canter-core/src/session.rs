@@ -492,6 +492,7 @@ impl Session {
         };
         if state.active.is_some() {
             let input = QueuedInput {
+                review: params.review.clone(),
                 id: id("input"),
                 input: params.input,
                 client_name: params.client_name,
@@ -503,6 +504,7 @@ impl Session {
                 }])
                 .await?;
             let turn_id = if params.mode == InputMode::Steer
+                && params.review.is_none()
                 && !state
                     .active
                     .as_ref()
@@ -775,6 +777,7 @@ impl Session {
             .start(
                 &mut state,
                 SessionInputParams {
+                    review: None,
                     input: Vec::new(),
                     mode: InputMode::Queue,
                     client_name: "compact".into(),
@@ -907,6 +910,7 @@ impl Shared {
         input_id: Option<String>,
     ) -> Result<(SessionInputResponse, Done), CoreError> {
         let turn = Turn {
+            review: params.review,
             id: id("turn"),
             items: Vec::new(),
             status: TurnStatus::InProgress,

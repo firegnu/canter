@@ -16,8 +16,24 @@ const SESSION: &str = "s1";
 const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
+#[test]
+fn review_command_dispatches_and_hides_assembled_prompt() {
+    let mut screen = Screen::new();
+    assert!(
+        screen.enter("/review").is_some(),
+        "review must dispatch a command"
+    );
+    let mut turn = turn_json("review", "inProgress");
+    turn["review"] = json!("Review: PR #123 Fix tests");
+    turn["input"] = json!([{"type":"text","text":"PRIVATE ASSEMBLED REVIEW PROMPT\ndiff --git"}]);
+    screen.event(json!({"type":"turn.started", "turn":turn}));
+    screen.draw();
+    assert!(screen.text().contains("Review: PR #123 Fix tests"));
+    assert!(!screen.text().contains("PRIVATE ASSEMBLED"));
+}
+
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 14] = [
+const COMMANDS: [(&str, &str); 15] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/exit", "Quit canter"),
@@ -35,6 +51,10 @@ const COMMANDS: [(&str, &str); 14] = [
         "Ask one question without adding it to the conversation",
     ),
     ("/handoff", "Draft a handoff note in a new session"),
+    (
+        "/review",
+        "Review uncommitted changes or a PR number/URL (read-only)",
+    ),
 ];
 
 struct Screen {

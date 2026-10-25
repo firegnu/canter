@@ -26,6 +26,7 @@ mod input;
 mod markdown;
 mod picker;
 mod question;
+pub mod review;
 mod run;
 mod text;
 pub mod usage;

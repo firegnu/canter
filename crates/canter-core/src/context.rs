@@ -370,6 +370,7 @@ mod tests {
         let mut events = session.subscribe(0).await.unwrap();
         session
             .input(SessionInputParams {
+                review: None,
                 input: vec![
                     UserInput::Text {
                         text: "inspect image".into(),

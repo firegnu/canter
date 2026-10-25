@@ -162,6 +162,9 @@ pub enum TurnStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub review: Option<String>,
     pub id: String,
     pub items: Vec<Item>,
     pub status: TurnStatus,
@@ -174,6 +177,9 @@ pub struct Turn {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct QueuedInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub review: Option<String>,
     pub id: String,
     pub input: Vec<UserInput>,
     pub client_name: String,

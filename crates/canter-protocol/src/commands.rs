@@ -90,6 +90,9 @@ empty_params!(
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InfoResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub features: Option<Vec<String>>,
     pub server_version: String,
     pub protocol_version: u32,
     pub sessions: Vec<SessionSummary>,
@@ -199,6 +202,10 @@ pub enum InputMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInputParams {
+    /// Present for a read-only review turn; the single-line display title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub review: Option<String>,
     pub input: Vec<UserInput>,
     #[serde(default)]
     pub mode: InputMode,
