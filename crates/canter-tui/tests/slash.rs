@@ -17,7 +17,7 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 12] = [
+const COMMANDS: [(&str, &str); 13] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/exit", "Quit canter"),
@@ -30,6 +30,10 @@ const COMMANDS: [(&str, &str); 12] = [
     ("/skills", "List this session's skills"),
     ("/think", "Change thinking effort (none, low, high, max)"),
     ("/usage", "Show this session's token usage and cost"),
+    (
+        "/btw",
+        "Ask one question without adding it to the conversation",
+    ),
 ];
 
 struct Screen {
@@ -1145,4 +1149,258 @@ fn context_lists_categories_measured_usage_and_truncates_narrow_rows() {
     let shown = screen.text();
     assert!(shown.contains("Context  no request yet"), "{shown}");
     assert!(!shown.contains("Compaction summary"));
+}
+
+#[test]
+fn btw_esc_stops_the_private_answer_before_the_main_turn() {
+    let mut screen = Screen::new();
+    screen.start_turn("main");
+    screen.event(json!({"type":"item.started","turnId":"main","item":{"type":"agentMessage","id":"streaming","text":"main output\n".repeat(30)}}));
+    screen.draw();
+    let start = screen.enter("/btw explain this");
+    assert!(start.is_some(), "/btw must start a private answer");
+    assert!(!matches!(start, Some(Action::Send(_))));
+    screen.draw();
+    assert!(screen.text().contains("› /btw explain this"));
+    assert!(screen.text().contains("btw  Waiting"));
+    let first = screen.key(KeyCode::Esc);
+    assert!(first.is_some());
+    assert_ne!(
+        first,
+        Some(Action::Interrupt {
+            turn_id: "main".into()
+        })
+    );
+    screen.draw();
+    assert_eq!(
+        screen.key(KeyCode::Esc),
+        Some(Action::Interrupt {
+            turn_id: "main".into()
+        })
+    );
+    assert_eq!(screen.ui.app().snapshot().turns[0].items.len(), 1);
+}
+
+#[test]
+fn btw_streams_markdown_locally_and_rejects_empty_or_overlapping_questions() {
+    use canter_protocol::BtwEvent;
+    use ratatui::style::{Color, Modifier};
+    let mut screen = Screen::new();
+    let snapshot = screen.ui.app().snapshot().clone();
+    assert_eq!(screen.enter("/btw"), None);
+    screen.draw();
+    assert!(screen.text().contains("Usage: /btw <question>"));
+    screen.ui.app_mut().handle_key(
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        NOW,
+    );
+    let Some(Action::Btw { id, question }) = screen.enter("/btw  explain `x`  ") else {
+        panic!("btw action")
+    };
+    assert_eq!(question, " explain `x`  ");
+    assert_eq!(screen.enter("/btw another"), None);
+    screen.draw();
+    assert!(screen.text().contains("already in progress"));
+    screen.ui.app_mut().handle_key(
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        NOW,
+    );
+    for delta in ["**bold", " reply**\n- `code`"] {
+        screen.ui.app_mut().btw_event(
+            id,
+            BtwEvent::Delta {
+                delta: delta.into(),
+            },
+        );
+        screen.draw();
+    }
+    assert!(screen.text().contains("btw  bold reply"));
+    assert!(!screen.text().contains("**bold reply**"));
+    let buffer = screen.ui.backend().buffer();
+    let pos = (0..HEIGHT)
+        .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
+        .find(|&(x, y)| {
+            buffer[(x, y)].symbol() == "b" && buffer[(x, y)].modifier.contains(Modifier::BOLD)
+        })
+        .unwrap();
+    assert_eq!(buffer[pos].fg, Color::DarkGray);
+    assert!(buffer[pos].modifier.contains(Modifier::DIM));
+    screen.ui.app_mut().btw_event(
+        id,
+        BtwEvent::Error {
+            message: "connection lost".into(),
+        },
+    );
+    screen.draw();
+    assert!(screen.text().contains("Error: connection lost"));
+    assert_eq!(screen.ui.app().snapshot(), &snapshot);
+    let Some(Action::Btw { id: next, .. }) = screen.enter("/btw retry") else {
+        panic!("retry")
+    };
+    screen.ui.app_mut().btw_event(
+        id,
+        BtwEvent::Delta {
+            delta: "stale".into(),
+        },
+    );
+    screen.ui.app_mut().btw_event(
+        next,
+        BtwEvent::Delta {
+            delta: "new answer".into(),
+        },
+    );
+    screen.ui.app_mut().btw_event(next, BtwEvent::Completed);
+    screen.draw();
+    assert!(screen.text().contains("new answer"));
+    assert!(!screen.text().contains("stale"));
+    let mut reopened = Ui::new(
+        TestBackend::new(WIDTH, HEIGHT),
+        App::new(snapshot, None, NOW),
+    )
+    .unwrap();
+    reopened.draw(NOW).unwrap();
+    assert!(
+        !rows(reopened.backend().buffer())
+            .join("\n")
+            .contains("new answer")
+    );
+}
+
+#[test]
+fn btw_escape_closes_choices_and_command_list_before_cancelling_the_answer() {
+    for command in ["/think", "/mode", "/"] {
+        let mut screen = Screen::new();
+        screen.start_turn("main");
+        let Some(Action::Btw { id, .. }) = screen.enter("/btw explain this") else {
+            panic!("btw action");
+        };
+        if command == "/" {
+            screen.type_text(command);
+        } else {
+            assert_eq!(screen.enter(command), None);
+        }
+        screen.draw();
+        assert_eq!(screen.key(KeyCode::Esc), None, "close {command} only");
+        screen.draw();
+        assert!(screen.no_list());
+        assert!(!screen.text().contains("↑↓ select"));
+        assert!(screen.text().contains("btw  Waiting"));
+        assert_eq!(screen.key(KeyCode::Esc), Some(Action::CancelBtw { id }));
+    }
+}
+
+#[test]
+fn btw_escape_still_precedes_an_approval_box() {
+    let mut screen = Screen::new();
+    screen.start_turn("main");
+    let Some(Action::Btw { id, .. }) = screen.enter("/btw explain this") else {
+        panic!("btw action");
+    };
+    screen.ask("main", "sleep 60");
+    screen.draw();
+    assert_eq!(screen.key(KeyCode::Esc), Some(Action::CancelBtw { id }));
+    screen.draw();
+    assert_eq!(screen.ui.app().snapshot().pending_requests.len(), 1);
+    assert_eq!(
+        screen.key(KeyCode::Esc),
+        Some(Action::Interrupt {
+            turn_id: "main".into()
+        })
+    );
+}
+
+#[test]
+fn btw_escape_from_an_answering_frame_does_not_interrupt_after_completion() {
+    for approval in [false, true] {
+        let mut screen = Screen::new();
+        screen.start_turn("main");
+        let Some(Action::Btw { id, .. }) = screen.enter("/btw explain this") else {
+            panic!("btw action");
+        };
+        if approval {
+            screen.ask("main", "sleep 60");
+        }
+        screen.draw();
+        screen
+            .ui
+            .app_mut()
+            .btw_event(id, canter_protocol::BtwEvent::Completed);
+        assert_eq!(
+            screen.key(KeyCode::Esc),
+            None,
+            "the key's frame still shows btw answering"
+        );
+        screen.draw();
+        assert_eq!(
+            screen.key(KeyCode::Esc),
+            Some(Action::Interrupt {
+                turn_id: "main".into()
+            })
+        );
+    }
+}
+
+#[test]
+fn btw_streaming_keeps_later_turns_notices_and_footers_when_cached() {
+    let mut screen = Screen::sized(80, 40);
+    screen.start_turn("earlier");
+    screen.event(json!({"type":"item.completed","turnId":"earlier","item":{"type":"agentMessage","id":"before","text":"Earlier **answer**"}}));
+    screen.event(json!({"type":"turn.completed","turn":turn_json("earlier", "completed")}));
+    screen.event(json!({"type":"session.status","status":"idle"}));
+    screen.draw();
+    let Some(Action::Btw { id, .. }) = screen.enter("/btw side question") else {
+        panic!("btw action");
+    };
+    screen.draw();
+    assert!(screen.text().contains("btw  Waiting"));
+    screen.ui.app_mut().btw_event(
+        id,
+        canter_protocol::BtwEvent::Delta {
+            delta: "First **part**".into(),
+        },
+    );
+    screen.ui.app_mut().warning("Notice after btw");
+    screen.start_turn("later");
+    screen.event(json!({"type":"item.completed","turnId":"later","item":{"type":"agentMessage","id":"after","text":"Later answer"}}));
+    screen.event(json!({"type":"turn.completed","turn":turn_json("later", "interrupted")}));
+    screen.event(json!({"type":"session.status","status":"idle"}));
+    screen.ui.app_mut().btw_event(
+        id,
+        canter_protocol::BtwEvent::Delta {
+            delta: " and last part".into(),
+        },
+    );
+    screen.draw();
+    let wide = screen.text();
+    let ordered = [
+        "Earlier answer",
+        "btw  First part and last part",
+        "Notice after btw",
+        "Later answer",
+        "Turn interrupted",
+    ];
+    let positions: Vec<_> = ordered
+        .iter()
+        .map(|text| {
+            assert_eq!(wide.matches(text).count(), 1, "{wide}");
+            wide.find(text).unwrap()
+        })
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{wide}");
+    screen.ui.backend_mut().resize(40, 40);
+    screen.draw();
+    let narrow = screen.text();
+    screen
+        .ui
+        .app_mut()
+        .btw_event(id, canter_protocol::BtwEvent::Completed);
+    screen.draw();
+    assert_eq!(
+        screen.text(),
+        narrow,
+        "moving the completed btw into history preserves the display"
+    );
+    screen.ui.backend_mut().resize(80, 40);
+    screen.draw();
+    assert_eq!(screen.text(), wide);
 }

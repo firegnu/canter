@@ -158,13 +158,36 @@ pub(crate) fn message(input: &[UserInput]) -> Message {
     }
 }
 
-pub(crate) async fn prepare(shared: &Shared, mut request: Request) -> Result<Request, CoreError> {
+pub(crate) async fn prepare(shared: &Shared, request: Request) -> Result<Request, CoreError> {
+    let (request, warnings) = prepare_request(shared, request).await?;
+    if !warnings.is_empty() {
+        shared
+            .state
+            .lock()
+            .await
+            .journal
+            .append(
+                warnings
+                    .into_iter()
+                    .map(|message| EventPayload::Warning { message })
+                    .collect(),
+            )
+            .await?;
+    }
+    Ok(request)
+}
+
+/// The same wire images for every request, without publishing session events.
+pub(crate) async fn prepare_request(
+    shared: &Shared,
+    mut request: Request,
+) -> Result<(Request, Vec<String>), CoreError> {
     if !request
         .messages
         .iter()
         .any(|message| matches!(message, Message::UserParts { .. }))
     {
-        return Ok(request);
+        return Ok((request, Vec::new()));
     }
     let accepts_images = shared.options.image_models.contains(&request.model);
     let (store, session) = {
@@ -220,21 +243,7 @@ pub(crate) async fn prepare(shared: &Shared, mut request: Request) -> Result<Req
     })
     .await
     .map_err(|_| CoreError::internal())?;
-    if !warnings.is_empty() {
-        shared
-            .state
-            .lock()
-            .await
-            .journal
-            .append(
-                warnings
-                    .into_iter()
-                    .map(|message| EventPayload::Warning { message })
-                    .collect(),
-            )
-            .await?;
-    }
-    Ok(request)
+    Ok((request, warnings))
 }
 
 fn base64(bytes: &[u8]) -> String {

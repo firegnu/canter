@@ -19,7 +19,7 @@ pub(crate) struct Command {
     /// Whether it takes text after its name; one that does not refuses any
     /// rather than drop it.
     pub takes_args: bool,
-    /// Runs the command with the text after its name, trimmed. Returns what
+    /// Runs the command with the text after its name (btw preserves whitespace). Returns what
     /// the caller should do; an error is shown in the conversation, and the
     /// input box keeps what was typed.
     pub run: fn(&mut App, &str) -> Result<Option<Action>, String>,
@@ -110,6 +110,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         about: "Show this session's token usage and cost",
         takes_args: false,
         run: |_, _| Ok(Some(Action::Usage)),
+    },
+    Command {
+        name: "btw",
+        about: "Ask one question without adding it to the conversation",
+        takes_args: true,
+        run: App::start_btw,
     },
 ];
 
@@ -344,7 +350,7 @@ pub(crate) fn matching(typed: &str) -> Vec<&'static Command> {
 pub(crate) fn parse(text: &str) -> Option<(&str, &str)> {
     let rest = text.trim_start().strip_prefix('/')?;
     let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-    (!name.contains('/')).then_some((name, args.trim()))
+    (!name.contains('/')).then_some((name, if name == "btw" { args } else { args.trim() }))
 }
 
 /// One choice to make in a list above the input box, such as the modes

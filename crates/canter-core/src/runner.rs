@@ -355,7 +355,7 @@ async fn model_response(
     }
     flush(shared, &mut pending).await?;
     if let Some(usage) = usage {
-        record_usage(shared, usage, Some(estimated), &model, started_at).await?;
+        record_usage(shared, usage, Some(estimated), &model, started_at, true).await?;
     }
     Ok((content, reason, error))
 }
@@ -366,6 +366,7 @@ pub(crate) async fn record_usage(
     estimated: Option<u64>,
     model: &str,
     started_at: i64,
+    in_turn: bool,
 ) -> Result<(), CoreError> {
     let mut state = shared.state.lock().await;
     let last = TokenUsageBreakdown {
@@ -410,9 +411,20 @@ pub(crate) async fn record_usage(
         total,
         last: last.clone(),
         context_tokens,
-        model_context_window: Some(shared.options.context_window),
+        model_context_window: if in_turn {
+            Some(shared.options.context_window)
+        } else {
+            state
+                .journal
+                .snapshot
+                .token_usage
+                .as_ref()
+                .and_then(|usage| usage.model_context_window)
+        },
     };
-    if let Some(active) = &mut state.active {
+    if let Some(active) = &mut state.active
+        && in_turn
+    {
         let mut total = active
             .turn
             .usage
@@ -435,7 +447,11 @@ pub(crate) async fn record_usage(
     }
     state
         .journal
-        .append(vec![EventPayload::SessionUsage { token_usage }])
+        .append(vec![if in_turn {
+            EventPayload::SessionUsage { token_usage }
+        } else {
+            EventPayload::SessionBtwUsage { token_usage }
+        }])
         .await?;
     Ok(())
 }

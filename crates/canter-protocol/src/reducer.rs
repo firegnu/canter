@@ -226,7 +226,8 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
         EventPayload::RequestResolved { request_id, .. } => snapshot
             .pending_requests
             .retain(|request| request.id != *request_id),
-        EventPayload::SessionUsage { token_usage } => {
+        EventPayload::SessionUsage { token_usage }
+        | EventPayload::SessionBtwUsage { token_usage } => {
             snapshot.token_usage = Some(token_usage.clone())
         }
         EventPayload::Error { error, .. } => snapshot.error = Some(error.clone()),

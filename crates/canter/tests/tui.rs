@@ -480,7 +480,15 @@ async fn fake_model(
         .unwrap()
         .pop_front()
         .expect("unexpected model request");
-    ([("content-type", "text/event-stream")], reply)
+    use futures_util::StreamExt;
+    let hold = reply.starts_with("hold:");
+    let reply = reply.strip_prefix("hold:").unwrap_or(&reply).to_owned();
+    let first = futures_util::stream::once(async move { Ok::<_, std::convert::Infallible>(reply) });
+    let rest = futures_util::stream::pending().take(if hold { 1 } else { 0 });
+    (
+        [("content-type", "text/event-stream")],
+        axum::body::Body::from_stream(first.chain(rest)),
+    )
 }
 
 fn text_reply(text: &str) -> String {
@@ -2350,5 +2358,75 @@ async fn shift_tab_pressed_on_the_session_list_changes_nothing() {
     .await;
     assert_eq!(mode().await, PermissionMode::AskForExecution);
     assert_eq!(a.quit().await, id);
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn btw_is_private_streams_and_escape_cancels_it_before_the_main_tool() {
+    let partial = format!(
+        "data: {}\n\n",
+        json!({"choices":[{"index":0,"delta":{"content":"**side answer**"},"finish_reason":null}]})
+    );
+    let mut world = World::new(vec![
+        shell_reply("sleep 60"),
+        format!("hold:{partial}"),
+        text_reply("private final answer"),
+        partial, // EOF after text: an error belongs in the btw block.
+    ])
+    .await;
+    world.start_server().await;
+    let a = world.open(&["--yolo", "start tool"], "btw-a").await;
+    a.wait_until("running tool", |a| {
+        a.screen().contains("sleep 60") && a.status().contains("Working")
+    })
+    .await;
+    let id = world.only_session().await;
+    let b = world.open(&["--resume", &id], "btw-b").await;
+    b.wait_for("sleep 60").await;
+    a.type_line("/btw private question").await;
+    a.wait_for("btw  side answer").await;
+    assert!(!b.screen().contains("private question"));
+    assert!(!b.screen().contains("side answer"));
+    a.type_line("/btw overlap").await;
+    a.wait_for("already in progress").await;
+    assert_eq!(world.requests.lock().unwrap().len(), 2);
+    a.press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        .await;
+    a.frames_later(1).await;
+    a.press(KeyCode::Esc).await;
+    a.wait_for("Stopped").await;
+    assert_eq!(
+        world.snapshot(&id).await.turns[0].status,
+        TurnStatus::InProgress
+    );
+    a.press(KeyCode::Esc).await;
+    a.wait_for("Turn interrupted").await;
+    a.wait_idle().await;
+    assert_eq!(
+        world.snapshot(&id).await.turns[0].status,
+        TurnStatus::Interrupted
+    );
+    a.type_line("/btw").await;
+    a.wait_for("Usage: /btw <question>").await;
+    assert_eq!(world.requests.lock().unwrap().len(), 2);
+    a.press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        .await;
+    a.frames_later(1).await;
+    a.type_line("/btw try again").await;
+    a.wait_for("private final answer").await;
+    a.type_line("/btw broken connection").await;
+    a.wait_for("Error:").await;
+    assert_eq!(world.snapshot(&id).await.turns.len(), 1);
+    let events =
+        fs::read_to_string(world.path(&format!("state/sessions/{id}/events.jsonl"))).unwrap();
+    assert!(!events.contains("private question"));
+    assert!(!events.contains("side answer"));
+    assert!(!events.contains("private final answer"));
+    a.quit().await;
+    b.quit().await;
+    let reopened = world.open(&["--resume", &id], "btw-reopened").await;
+    reopened.wait_for("Turn interrupted").await;
+    assert!(!reopened.screen().contains("private final answer"));
+    reopened.quit().await;
     world.stop_server(Signal::SIGTERM).await;
 }

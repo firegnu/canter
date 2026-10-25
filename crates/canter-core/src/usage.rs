@@ -122,7 +122,8 @@ impl Ledger {
                         Some(ledger.turn_costs.get(&turn.id).cloned().unwrap_or_default());
                     turn_id = None;
                 }
-                EventPayload::SessionUsage { token_usage } => {
+                EventPayload::SessionUsage { token_usage }
+                | EventPayload::SessionBtwUsage { token_usage } => {
                     let charge = token_usage.request.clone().unwrap_or_else(|| {
                         request_charge(prices, &model, event.timestamp, &token_usage.last)
                     });
@@ -137,7 +138,9 @@ impl Ledger {
                         cost: cost(&charge),
                         ..UsageRow::default()
                     };
-                    if let Some(id) = &turn_id {
+                    if let Some(id) = &turn_id
+                        && matches!(event.payload, EventPayload::SessionUsage { .. })
+                    {
                         ledger
                             .turn_costs
                             .entry(id.clone())

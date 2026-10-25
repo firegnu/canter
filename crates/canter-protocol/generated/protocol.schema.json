@@ -108,6 +108,78 @@
         }
       ]
     },
+    "BtwEvent": {
+      "oneOf": [
+        {
+          "properties": {
+            "delta": {
+              "type": "string"
+            },
+            "type": {
+              "const": "delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "delta"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "completed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ContextMessages": {
       "properties": {
         "assistant": {
@@ -553,6 +625,23 @@
           "type": "object"
         },
         {
+          "description": "Session-only usage; never belongs to the active conversation turn.",
+          "properties": {
+            "tokenUsage": {
+              "$ref": "#/$defs/TokenUsage"
+            },
+            "type": {
+              "const": "session.btwUsage",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tokenUsage"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "message": {
               "type": "string"
@@ -870,6 +959,23 @@
             },
             "type": {
               "const": "session.usage",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tokenUsage"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Session-only usage; never belongs to the active conversation turn.",
+          "properties": {
+            "tokenUsage": {
+              "$ref": "#/$defs/TokenUsage"
+            },
+            "type": {
+              "const": "session.btwUsage",
               "type": "string"
             }
           },
@@ -1681,6 +1787,18 @@
       "required": [
         "eventSeq",
         "alreadyResolved"
+      ],
+      "type": "object"
+    },
+    "SessionBtwParams": {
+      "description": "An ephemeral question. Its response stream is private to this HTTP caller.",
+      "properties": {
+        "question": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "question"
       ],
       "type": "object"
     },

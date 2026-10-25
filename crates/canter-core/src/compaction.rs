@@ -251,7 +251,7 @@ async fn summarize(
                 match event {
                     Some(Ok(ModelEvent::TextDelta(delta))) => next_summary.push_str(&delta),
                     Some(Ok(ModelEvent::Usage(usage))) => {
-                        runner::record_usage(shared, usage, None, &model, started_at).await?
+                        runner::record_usage(shared, usage, None, &model, started_at, true).await?
                     }
                     Some(Ok(ModelEvent::Finished(FinishReason::Stop))) => {
                         finished = true;

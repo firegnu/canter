@@ -301,6 +301,7 @@ where
         home,
         sender,
         pump,
+        btw: None,
     };
     let mut tick = tokio::time::interval(Duration::from_millis(100));
 
@@ -381,6 +382,7 @@ where
         }
     };
     chat.pump.abort();
+    chat.cancel_btw();
     result.map(|()| Some(chat.session))
 }
 
@@ -481,6 +483,10 @@ fn terminal_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> Run
 
 /// What the background tasks tell the screen.
 enum Message {
+    Btw {
+        id: usize,
+        event: canter_protocol::BtwEvent,
+    },
     Sent,
     ImageSendFailed(String),
     Models(Vec<canter_protocol::Model>),
@@ -488,7 +494,10 @@ enum Message {
     SendFailed(String),
     NameFailed(String),
     Warning(String),
-    AnswerFailed { request_id: String, error: String },
+    AnswerFailed {
+        request_id: String,
+        error: String,
+    },
     AnswerLate,
     InterruptFailed(String),
     Reconnecting(String),
@@ -529,6 +538,7 @@ struct Chat<C> {
     sender: mpsc::UnboundedSender<Message>,
     /// Forwards the session's events.
     pump: tokio::task::JoinHandle<()>,
+    btw: Option<(usize, tokio::task::JoinHandle<()>)>,
 }
 
 impl<C: Connector> Chat<C> {
@@ -642,6 +652,7 @@ impl<C: Connector> Chat<C> {
         };
         let (sender, messages) = mpsc::unbounded_channel();
         self.pump.abort();
+        self.cancel_btw();
         self.pump = tokio::spawn(pump(
             self.connector.clone(),
             stream,
@@ -663,6 +674,18 @@ impl<C: Connector> Chat<C> {
     fn message<B: Backend>(&mut self, ui: &mut Ui<B>, message: Message) -> bool {
         let app = ui.app_mut();
         match message {
+            Message::Btw { id, event } => {
+                if matches!(
+                    event,
+                    canter_protocol::BtwEvent::Completed
+                        | canter_protocol::BtwEvent::Cancelled
+                        | canter_protocol::BtwEvent::Error { .. }
+                ) && self.btw.as_ref().is_some_and(|(active, _)| *active == id)
+                {
+                    self.btw.take();
+                }
+                app.btw_event(id, event);
+            }
             Message::Sent => app.sent(),
             Message::ImageSendFailed(error) => app.image_send_failed(&error),
             Message::Models(models) => app.set_models(&models),
@@ -688,11 +711,53 @@ impl<C: Connector> Chat<C> {
         false
     }
 
-    fn act(&self, app: &App, action: Action) {
+    fn cancel_btw(&mut self) {
+        if let Some((_, task)) = self.btw.take() {
+            task.abort();
+        }
+    }
+
+    fn act(&mut self, app: &App, action: Action) {
         let client = self.client.clone();
         let session = self.session.clone();
         let sender = self.sender.clone();
         match action {
+            Action::Btw { id, question } => {
+                let task = tokio::spawn(async move {
+                    use canter_protocol::BtwEvent;
+                    let result: Result<(), ClientError> = async {
+                        let mut stream = client.btw(&session, question).await?;
+                        while let Some(event) = stream.next().await {
+                            let event = event?;
+                            let done = matches!(
+                                event,
+                                BtwEvent::Completed | BtwEvent::Cancelled | BtwEvent::Error { .. }
+                            );
+                            if sender.send(Message::Btw { id, event }).is_err() || done {
+                                return Ok(());
+                            }
+                        }
+                        Err(ClientError::Protocol(
+                            "btw connection ended before the answer finished".into(),
+                        ))
+                    }
+                    .await;
+                    if let Err(error) = result {
+                        let _ = sender.send(Message::Btw {
+                            id,
+                            event: BtwEvent::Error {
+                                message: error.to_string(),
+                            },
+                        });
+                    }
+                });
+                self.btw = Some((id, task));
+            }
+            Action::CancelBtw { id } => {
+                if self.btw.as_ref().is_some_and(|(active, _)| *active == id) {
+                    self.cancel_btw();
+                }
+            }
             action @ (Action::Send(_) | Action::SendImages { .. }) => {
                 let has_images = matches!(&action, Action::SendImages { .. });
                 let (text, input) = match action {

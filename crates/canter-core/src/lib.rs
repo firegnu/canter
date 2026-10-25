@@ -1,4 +1,5 @@
 //! Conversation sessions independent of HTTP and terminal clients.
+mod btw;
 mod compaction;
 mod context;
 mod images;
@@ -8,6 +9,7 @@ mod session;
 mod skills;
 pub mod usage;
 
+pub use btw::BtwStream;
 use canter_protocol::ErrorCode;
 pub use journal::Subscription;
 pub use session::Session;

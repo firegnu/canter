@@ -77,6 +77,13 @@ pub enum Action {
     ListSkills,
     Usage,
     Context,
+    Btw {
+        id: usize,
+        question: String,
+    },
+    CancelBtw {
+        id: usize,
+    },
     Files,
     /// Compact this session's context.
     Compact,
@@ -97,8 +104,31 @@ struct Place {
 /// where the finished part of the conversation ended when it came.
 struct Notice {
     at: Place,
-    line: LogicalLine,
-    truncate: bool,
+    content: NoticeContent,
+}
+
+enum NoticeContent {
+    Line { line: LogicalLine, truncate: bool },
+    Btw(crate::btw::Answer),
+}
+
+impl Notice {
+    fn rows(&self, width: u16) -> Vec<Line<'static>> {
+        match &self.content {
+            NoticeContent::Btw(answer) => answer.rows(width),
+            NoticeContent::Line {
+                line,
+                truncate: true,
+            } => {
+                let spans = line.indent.iter().chain(&line.body).cloned().collect();
+                vec![Line::from(truncate(spans, usize::from(width)))]
+            }
+            NoticeContent::Line {
+                line,
+                truncate: false,
+            } => wrap(line, width),
+        }
+    }
 }
 
 /// The finished part of the conversation, wrapped for `width`, with the
@@ -160,6 +190,8 @@ struct Shown {
     custom_input: bool,
     /// The turn in progress.
     turn: Option<String>,
+    /// The private answer in progress on this frame.
+    btw: Option<usize>,
     /// The choice whose choices showed, numbered as [`App::choose`] opened it.
     chooser: Option<u64>,
     /// How many completions the input box showed.
@@ -198,6 +230,7 @@ pub struct App {
     completions: u64,
     /// In the order they came, which is also the order of their places.
     notices: Vec<Notice>,
+    active_btw: Option<usize>,
     history: History,
     scroll: Scroll,
     /// Items an `item.completed` event has closed, as (turn id, item id).
@@ -253,6 +286,7 @@ impl App {
             choosers: 0,
             completions: 0,
             notices: Vec::new(),
+            active_btw: None,
             history: History::default(),
             scroll: Scroll::default(),
             completed: HashSet::new(),
@@ -412,6 +446,18 @@ impl App {
 
     fn key_on(&mut self, key: KeyEvent, shown: Shown, at: i64) -> Option<Action> {
         if key.kind == KeyEventKind::Release {
+            return None;
+        }
+        if key.code == KeyCode::Esc
+            && (shown.approval.is_some()
+                || (self.chooser.is_none() && self.command_list().is_none()))
+            && let Some(id) = shown.btw
+        {
+            if self.active_btw == Some(id) {
+                self.btw_event(id, canter_protocol::BtwEvent::Cancelled);
+                return Some(Action::CancelBtw { id });
+            }
+            // A late Esc for a finished btw must never fall through to the main turn.
             return None;
         }
         let guarded = at < self.guard_until;
@@ -658,6 +704,50 @@ impl App {
         );
     }
 
+    pub(crate) fn start_btw(&mut self, question: &str) -> Result<Option<Action>, String> {
+        if question.trim().is_empty() {
+            return Err("Usage: /btw <question>".into());
+        }
+        if self.active_btw.is_some() {
+            return Err("A btw answer is already in progress; press Esc to stop it".into());
+        }
+        self.extend_history(self.width);
+        let id = self.notices.len();
+        let at = self
+            .snapshot
+            .turns
+            .last()
+            .map_or(self.history.end, |turn| Place {
+                turn: self.snapshot.turns.len() - 1,
+                prompt: true,
+                item: turn.items.len(),
+            })
+            .max(self.history.end);
+        self.notices.push(Notice {
+            at,
+            content: NoticeContent::Btw(crate::btw::Answer::new(question.into())),
+        });
+        self.active_btw = Some(id);
+        Ok(Some(Action::Btw {
+            id,
+            question: question.into(),
+        }))
+    }
+
+    /// Update only this terminal's answer; stale events after Esc are ignored.
+    pub fn btw_event(&mut self, id: usize, event: canter_protocol::BtwEvent) {
+        if self.active_btw != Some(id) {
+            return;
+        }
+        let NoticeContent::Btw(answer) = &mut self.notices[id].content else {
+            return;
+        };
+        answer.apply(event);
+        if answer.done {
+            self.active_btw = None;
+        }
+    }
+
     pub fn show_context(&mut self, report: &canter_protocol::ContextResponse) {
         self.show_report(crate::context::lines(report, self.home.as_deref()));
     }
@@ -782,9 +872,11 @@ impl App {
     fn push_notice(&mut self, line: LogicalLine, truncate: bool) {
         self.extend_history(self.width);
         self.notices.push(Notice {
-            at: self.history.end,
-            line,
-            truncate,
+            at: self
+                .notices
+                .last()
+                .map_or(self.history.end, |last| last.at.max(self.history.end)),
+            content: NoticeContent::Line { line, truncate },
         });
     }
 
@@ -854,20 +946,11 @@ impl App {
             while let Some(notice) = self.notices.get(self.history.notices)
                 && notice.at <= self.history.end
             {
-                if notice.truncate {
-                    let spans = notice
-                        .line
-                        .indent
-                        .iter()
-                        .chain(&notice.line.body)
-                        .cloned()
-                        .collect();
-                    self.history
-                        .rows
-                        .push(Line::from(truncate(spans, usize::from(width))));
-                } else {
-                    self.history.rows.extend(wrap(&notice.line, width));
+                // Keep the streaming block and everything after it in the live area.
+                if matches!(&notice.content, NoticeContent::Btw(answer) if !answer.done) {
+                    return;
                 }
+                self.history.rows.extend(notice.rows(width));
                 self.history.notices += 1;
             }
             let Some((rows, next)) = self.finished_part(self.history.end, width) else {
@@ -976,6 +1059,7 @@ impl App {
                 .find(|turn| turn.status == TurnStatus::InProgress)
                 .map(|turn| turn.id.clone()),
             chooser: None,
+            btw: self.active_btw,
             completions: self.completions,
             mode: None,
         };
@@ -1426,7 +1510,20 @@ impl App {
             })
             .collect();
         let mut rows = Vec::new();
+        let mut notices = self.notices[self.history.notices..].iter().peekable();
+        let mut append_notices = |rows: &mut Vec<Line<'static>>, at: Place| {
+            while notices.peek().is_some_and(|notice| notice.at <= at) {
+                rows.extend(notices.next().expect("peeked notice").rows(width));
+            }
+        };
         for (turn_index, turn) in self.snapshot.turns.iter().enumerate().skip(end.turn) {
+            append_notices(
+                &mut rows,
+                Place {
+                    turn: turn_index,
+                    ..Place::default()
+                },
+            );
             let current = turn_index == end.turn;
             if !current || !end.prompt {
                 let from = source(&self.client_name, &turn.client_name);
@@ -1435,6 +1532,14 @@ impl App {
             let echo = echo_index(turn);
             let first = if current { end.item } else { 0 };
             for (index, item) in turn.items.iter().enumerate().skip(first) {
+                append_notices(
+                    &mut rows,
+                    Place {
+                        turn: turn_index,
+                        prompt: true,
+                        item: index,
+                    },
+                );
                 if Some(index) == echo {
                     continue;
                 }
@@ -1445,6 +1550,23 @@ impl App {
                     rows.extend(cells::item(item, done, cwd, width));
                 }
             }
+            append_notices(
+                &mut rows,
+                Place {
+                    turn: turn_index,
+                    prompt: true,
+                    item: turn.items.len(),
+                },
+            );
+            if turn.status != TurnStatus::InProgress
+                && let Some(footer) = cells::turn_footer(turn, self.errors_shown.contains(&turn.id))
+            {
+                rows.extend(wrap(&footer, width));
+            }
+        }
+        // A btw can follow all turns, including in a session without any turns.
+        for notice in notices {
+            rows.extend(notice.rows(width));
         }
         for queued in &self.snapshot.queued_inputs {
             let mut text = format!("  · Queued: {}", first_line(&queued.input));
