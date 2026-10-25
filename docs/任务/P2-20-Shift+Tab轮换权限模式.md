@@ -127,3 +127,14 @@
   - 第一行画出来、第二行被截时，Shift+Tab 照常能用：模式就在第一行，用户看得见。
   - `/resume` 那条测试靠测试跑在单线程运行时里：`press(Esc)` 等会话列表那一帧上屏后发出 Esc，紧接着同步发 Shift+Tab，中间客户端插不进来。所以两个键都落在会话列表那一帧上，不会因为时序变成落在新画的输入框上。
 - **踩过的坑**：没有。
+
+## 主控审查
+
+2026-10-25，canter/main。
+
+- diff 只动了 `crates/canter-tui/` 和测试。`/mode` 和 Shift+Tab 共用 `set_mode`；起点是按键那一帧屏幕上的模式。在 `470e496` 上重跑 `cargo test --all-targets`：217 个通过；clippy、`fmt --check`、`git diff --check` 通过。
+- 交叉审查（canter/review-shifttab，Codex gpt-6-astra / xhigh，见 `P2-20-交叉审查.md`）：必须改 2 条，主控同意：模式文字被信息行截掉时仍会往下轮、可能跳过没看到的模式进 Allow all；选择框／命令列表那一帧上排队的 Shift+Tab 在 Esc 关框后会漏到输入框。`8187b8e` 改完。期间 P2-6 先合并（权限模式挪到状态栏第一行），主控让开发者合并 main 并按第一行判断（`7fe487f`），把临时检查留成正式测试。复核可以合并。
+- 合并后在 main 上 `cargo test --all-targets` 229 个通过，clippy、`fmt --check` 通过。
+- 没验到的：各家真终端是否都把 Shift+Tab 发成 `BackTab`（crossterm 0.29 认传统 `ESC [ Z` 和 CSI-u），用户装好后试。
+
+结果：返工 1 次
