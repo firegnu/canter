@@ -108,7 +108,9 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
         } => {
             let answer = match answer {
                 Some(canter_protocol::UserInputAnswer::Option { label }) => label.clone(),
-                Some(canter_protocol::UserInputAnswer::Text { text }) => format!("自己写：{text}"),
+                Some(canter_protocol::UserInputAnswer::Text { text }) => {
+                    format!("Own answer: {text}")
+                }
                 _ if *status == ItemStatus::InProgress => "Waiting for your answer".into(),
                 _ => "No answer".into(),
             };

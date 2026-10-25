@@ -529,7 +529,7 @@ async fn ask_user_second_option_returns_to_the_model_and_continues() {
     a.wait_for("1. SQLite").await;
     a.wait_for("2. PostgreSQL").await;
     a.wait_for("Share data between servers.").await;
-    a.wait_for("3. 自己写").await;
+    a.wait_for("3. Write your own").await;
     read_the_box().await;
     a.press(KeyCode::Char('2')).await;
     a.wait_for("Using PostgreSQL now.").await;
@@ -575,11 +575,11 @@ async fn ask_user_accepts_custom_text_even_with_allow_all() {
     a.press(KeyCode::Up).await;
     a.press(KeyCode::Down).await;
     a.press(KeyCode::Enter).await;
-    a.wait_for("自己写：").await;
+    a.wait_for("Write your own:").await;
     a.type_line("Use plain files for now.").await;
     a.wait_for("Using your suggestion.").await;
     a.wait_idle().await;
-    a.wait_for("自己写：Use plain files for now.").await;
+    a.wait_for("Own answer: Use plain files for now.").await;
     {
         let requests = world.requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
@@ -598,7 +598,7 @@ async fn ask_user_accepts_custom_text_even_with_allow_all() {
     let id = a.quit().await;
     let resumed = world.open(&["--resume", &id], "canter-tui b").await;
     resumed
-        .wait_for("Which storage should we use? → 自己写：Use plain files for now.")
+        .wait_for("Which storage should we use? → Own answer: Use plain files for now.")
         .await;
     resumed.quit().await;
     world.stop_server(Signal::SIGTERM).await;

@@ -283,7 +283,7 @@ fn question_empty_custom_answer_can_return_to_the_options() {
         assert_eq!(screen.key(KeyCode::Backspace), None);
         screen.draw();
         assert!(
-            screen.screen().contains("自己写："),
+            screen.screen().contains("Write your own:"),
             "deleting the last character stays in the editor"
         );
         assert_eq!(screen.key(back), None);
@@ -292,7 +292,7 @@ fn question_empty_custom_answer_can_return_to_the_options() {
         assert_eq!(screen.key(KeyCode::Enter), None);
         screen.draw();
         assert!(
-            screen.screen().contains("3. 自己写"),
+            screen.screen().contains("3. Write your own"),
             "{back:?} returns to the options"
         );
         assert_eq!(
@@ -357,7 +357,7 @@ fn question_custom_answer_accepts_digits_only_after_its_frame_is_shown() {
     assert_eq!(screen.key(KeyCode::Char('1')), None);
     assert_eq!(screen.key(KeyCode::Enter), None);
     screen.draw();
-    assert!(screen.screen().contains("自己写："));
+    assert!(screen.screen().contains("Write your own:"));
     for c in "2 x".chars() {
         assert_eq!(screen.key(KeyCode::Char(c)), None);
     }

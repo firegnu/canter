@@ -25,7 +25,7 @@ pub(crate) fn layout(
     let body = lines(visible(&question.question));
     let mut tail = vec![Line::default()];
     if let Some(text) = custom {
-        tail.push(Line::from("自己写："));
+        tail.push(Line::from("Write your own:"));
         // Keep the end of a long single-line answer and its cursor visible.
         let input = lines(format!("› {}▏", visible(text)));
         let room = usize::from(max_height.saturating_sub(6)).max(1);
@@ -47,7 +47,7 @@ pub(crate) fn layout(
                     visible(&option.label),
                     visible(&option.description)
                 ),
-                None => format!("{}. 自己写", index + 1),
+                None => format!("{}. Write your own", index + 1),
             };
             let style = if index == selected {
                 Style::new().cyan().bold()
