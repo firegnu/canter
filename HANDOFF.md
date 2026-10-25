@@ -4,7 +4,7 @@
 
 ## 装的哪一版、怎么退回
 
-- 10-25 装了 main `46f705b`（0.1.0，含 P2-16 全屏界面、P2-1 斜杠命令、P2-15 缓存命中、P2-2 思考档位和切模型、P2-3 技能、P2-19 全局 AGENTS.md、P2-4 提问框、P2-6 两行状态栏、P2-20 Shift+Tab 轮换权限、P2-5 图片输入、P2-7 用量和花费；上一版是 `b55b723`）：`cargo install --locked --path crates/canter`，程序在 `~/.cargo/bin/canter`。不是系统服务，服务端由客户端在后台起，状态在 `~/.canter/`（DESIGN 第 15、16 条）。
+- 10-25 装了 main `97961dc`（0.1.0，含 P2-16 全屏界面、P2-1 斜杠命令、P2-15 缓存命中、P2-2 思考档位和切模型、P2-3 技能、P2-19 全局 AGENTS.md、P2-4 提问框、P2-6 两行状态栏、P2-20 Shift+Tab 轮换权限、P2-5 图片输入、P2-7 用量和花费、P2-8 /context 和 /files；上一版是 `46f705b`）：`cargo install --locked --path crates/canter`，程序在 `~/.cargo/bin/canter`。不是系统服务，服务端由客户端在后台起，状态在 `~/.canter/`（DESIGN 第 15、16 条）。
 - 换版本：在 main 上重新 `cargo install --locked --path crates/canter`，再 `canter serve --replace`。
 - 退回：按 `~/.canter/server.json` 的 pid 停服务端（SIGTERM），`cargo uninstall canter`。`~/.canter/` 有会话和 key，删不删问用户。
 
