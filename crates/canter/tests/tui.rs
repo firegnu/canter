@@ -337,14 +337,16 @@ impl Terminal {
             .expect("a session was open")
     }
 
-    /// The bottom row: model, permission mode and directory.
+    /// The two bottom rows, joined by ` · `: model, thinking and permission
+    /// mode, then directory, context use and cache hits.
     fn info(&self) -> String {
-        self.screen()
-            .lines()
-            .last()
-            .unwrap_or_default()
-            .trim()
-            .to_owned()
+        let screen = self.screen();
+        let lines: Vec<&str> = screen.lines().collect();
+        let rows = &lines[lines.len().saturating_sub(2)..];
+        rows.iter()
+            .map(|row| row.trim())
+            .collect::<Vec<_>>()
+            .join(" · ")
     }
 }
 
@@ -1224,9 +1226,13 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     assert!(!world.path("state/server.json").exists(), "no server yet");
 
     let terminal = Terminal::start(&[], world.context("canter-tui a", &anywhere)).await;
-    // The info line: default model, asking each time, this directory.
+    // The info rows: default model, asking each time, this directory.
     terminal
-        .wait_for("fake-model · think high · Always ask · /tmp/canter-tui-")
+        .wait_until("the info rows", |terminal| {
+            terminal
+                .info()
+                .starts_with("fake-model · think high · Always ask · /tmp/canter-tui-")
+        })
         .await;
     assert!(terminal.screen().contains("somewhere/else/deep"));
     let registration: Value =

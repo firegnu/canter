@@ -3,8 +3,8 @@
 //!
 //! The screen takes over the whole terminal (the alternate screen): the
 //! conversation from the top, scrolled back with the mouse wheel and
-//! PgUp/PgDn; the status line, the input or approval box and the info line at
-//! the bottom.
+//! PgUp/PgDn; the status line, the input or approval box and the two info rows
+//! at the bottom.
 //!
 //! - [`client`]: HTTP + SSE over the server's unix socket.
 //! - [`fake`]: a server that replays a scripted session, for tests and demos.
@@ -17,6 +17,7 @@ mod cells;
 pub mod client;
 mod commands;
 pub mod fake;
+mod git;
 mod input;
 mod markdown;
 mod picker;
