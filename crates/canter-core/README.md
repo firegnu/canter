@@ -71,12 +71,12 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
 
 私有 JSONL 条目带 `type`，目前有：
 
-- `context { messages }`：系统提示词、目录、操作系统/架构、UTC 日期、从最近 git 根到 cwd 的 AGENTS.md、可供模型使用的技能简介与路径。创建或打开会话时读一次；与恢复的开头不同才追加新记录，没有 git 根则只读 cwd。会话中途改文件或跨 UTC 零点不重读，普通请求、手动和自动压缩都沿用这份开头，下次打开会话才更新。
+- `context { messages }`：系统提示词、目录、操作系统/架构、UTC 日期、全局及项目 AGENTS.md、可供模型使用的技能简介与路径。全局说明从会话环境 `HOME` 下的 `.agents/AGENTS.md` 读取，标明来源和路径，排在所有项目说明之前；未提供 HOME 时不读全局说明，不读取服务端进程的 HOME。项目说明从最近 git 根读到 cwd，没有 git 根则只读 cwd。创建或打开会话时读一次；与恢复的开头不同才追加新记录。会话中途改文件或跨 UTC 零点不重读，普通请求、手动和自动压缩都沿用这份开头，下次打开会话才更新。
 - `message { message, user_input }`：一条模型消息；user_input 区分用户原话和核心的中断提示，旧条目缺字段时默认 false。
 - `compaction_request { messages }`：每次摘要调用收到的完整消息，仅作审计，不混入正常对话。
 - `compaction { summary, messages, user_messages }`：压缩后的完整对话替换及保留的用户原话，恢复从最后一次压缩继续。原记录不删除。
 
-每份 AGENTS.md 至多 64 KiB；读取失败、非 UTF-8 或超限时整份跳过，warning 写明文件路径和原因，继续正常请求。
+全局和项目的每份 AGENTS.md 至多 64 KiB；文件不存在不警告，其他读取失败、非 UTF-8 或超限时整份跳过，warning 写明文件路径和原因，继续正常请求。
 警告也只在创建或打开会话时发送；中途问题变化不重新提示，下次打开时按当时的读取结果报告。
 
 技能从会话环境 `HOME` 下的 `.agents/skills/<目录>/SKILL.md` 和同一项目根目录下的
