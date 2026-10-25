@@ -5,6 +5,7 @@ use canter_protocol::{SessionStatus, SessionSummary};
 use chrono::{Local, TimeZone};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
@@ -149,11 +150,10 @@ pub(crate) struct PickerView {
 }
 
 impl PickerView {
-    pub fn height(&self) -> u16 {
-        self.rows.len() as u16 + 2
-    }
-
+    /// At the top of the screen, as tall as the list.
     pub fn render(self, frame: &mut Frame) {
+        let area = frame.area();
+        let height = (self.rows.len() as u16 + 2).min(area.height);
         let border = Style::new().dim();
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
@@ -163,7 +163,10 @@ impl PickerView {
                 Span::styled("Which session to resume?", Style::new().bold()),
                 Span::raw(" "),
             ]));
-        frame.render_widget(Paragraph::new(self.rows).block(block), frame.area());
+        frame.render_widget(
+            Paragraph::new(self.rows).block(block),
+            Rect { height, ..area },
+        );
     }
 }
 

@@ -17,7 +17,7 @@ use axum::{Json, Router, extract::State, routing::post};
 use canter::{Command, Context};
 use canter_protocol::{SessionCloseReason, SessionSnapshot, SessionStatus, TurnStatus};
 use canter_tui::client::Client;
-use canter_tui::{ANSWER_GUARD_MS, FrameSync, InlineTerminal, InputSender, RunError, run_on};
+use canter_tui::{ANSWER_GUARD_MS, FrameSync, InputSender, RunError, run_on};
 use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, kill};
@@ -203,7 +203,7 @@ impl Terminal {
         let launch = canter::prepare(args, context).await.unwrap();
         let (keys, input) = canter_tui::input();
         let frames = Frames::default();
-        let terminal = InlineTerminal::new(Screen {
+        let terminal = ratatui::Terminal::new(Screen {
             backend: Arc::new(Mutex::new(TestBackend::new(WIDTH, HEIGHT))),
             keys: keys.clone(),
             frames: frames.clone(),
@@ -257,14 +257,9 @@ impl Terminal {
         self.press(KeyCode::Enter).await;
     }
 
-    /// The scrollback, then the screen, as of the last frame on screen.
-    fn text(&self) -> String {
-        self.frames.visible.lock().unwrap().text.clone()
-    }
-
-    /// Only what is on the screen now.
+    /// The screen as of the last frame on screen.
     fn screen(&self) -> String {
-        self.frames.visible.lock().unwrap().screen.clone()
+        self.frames.visible.lock().unwrap().clone()
     }
 
     /// The screen's status line: the row above the input or approval box.
@@ -292,12 +287,12 @@ impl Terminal {
         })
         .await;
         if waited.is_err() {
-            panic!("waited for {what}; the terminal shows:\n{}", self.text());
+            panic!("waited for {what}; the terminal shows:\n{}", self.screen());
         }
     }
 
     async fn wait_for(&self, text: &str) {
-        self.wait_until(text, |terminal| terminal.text().contains(text))
+        self.wait_until(text, |terminal| terminal.screen().contains(text))
             .await;
     }
 
@@ -327,16 +322,9 @@ struct Screen {
 /// while a frame is drawn.
 #[derive(Clone, Default)]
 struct Frames {
-    visible: Arc<Mutex<Visible>>,
+    visible: Arc<Mutex<String>>,
     done: Arc<AtomicU64>,
     trap: Arc<Mutex<Option<Trap>>>,
-}
-
-#[derive(Default)]
-struct Visible {
-    /// The scrollback, then the screen.
-    text: String,
-    screen: String,
 }
 
 /// Send `key` while the frame showing `text` is drawn but not yet on screen.
@@ -348,10 +336,7 @@ struct Trap {
 
 impl FrameSync for Screen {
     fn end_frame(&mut self) -> Result<(), Self::Error> {
-        let backend = self.backend.lock().unwrap();
-        let screen = rows(backend.buffer());
-        let text = rows(backend.scrollback()) + &screen;
-        drop(backend);
+        let screen = rows(self.backend.lock().unwrap().buffer());
         let mut trap = self.frames.trap.lock().unwrap();
         if trap
             .as_ref()
@@ -362,7 +347,7 @@ impl FrameSync for Screen {
             trap.sent.store(true, Ordering::SeqCst);
         }
         drop(trap);
-        *self.frames.visible.lock().unwrap() = Visible { text, screen };
+        *self.frames.visible.lock().unwrap() = screen;
         self.frames.done.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -388,9 +373,6 @@ impl Backend for Screen {
             }
         }
         Ok(())
-    }
-    fn append_lines(&mut self, n: u16) -> Result<(), Self::Error> {
-        self.backend.lock().unwrap().append_lines(n)
     }
     fn hide_cursor(&mut self) -> Result<(), Self::Error> {
         self.backend.lock().unwrap().hide_cursor()
@@ -502,7 +484,7 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     read_the_box().await;
     terminal.press(KeyCode::Enter).await;
     terminal.wait_for("写好了").await;
-    assert!(terminal.text().contains("You chose: Allow once"));
+    assert!(terminal.screen().contains("You chose: Allow once"));
     assert_eq!(
         fs::read_to_string(anywhere.join("env.txt")).unwrap(),
         env_value("canter-tui a"),
@@ -536,22 +518,22 @@ async fn two_terminals_share_one_session() {
     let b = world.open(&["--resume", &id], "canter-tui b").await;
     // B first shows what the session already has.
     b.wait_for("回答一").await;
-    assert!(b.text().contains("› 第一句  (from canter-tui a)"));
+    assert!(b.screen().contains("› 第一句  (from canter-tui a)"));
 
     b.type_line("第二句").await;
     for terminal in [&a, &b] {
         terminal.wait_for("回答二").await;
     }
-    assert!(a.text().contains("› 第二句  (from canter-tui b)"));
+    assert!(a.screen().contains("› 第二句  (from canter-tui b)"));
     assert!(
-        b.text().contains("› 第二句\n"),
+        b.screen().contains("› 第二句\n"),
         "own messages are not marked"
     );
-    assert!(a.text().contains("› 第一句\n"));
+    assert!(a.screen().contains("› 第一句\n"));
     // Apart from the marks, both show the same conversation.
     let conversation = |terminal: &Terminal| {
         let text = terminal
-            .text()
+            .screen()
             .replace("  (from canter-tui a)", "")
             .replace("  (from canter-tui b)", "");
         let start = text.find("› 第一句").unwrap();
@@ -624,8 +606,8 @@ async fn reconnect_after_restart(legacy: bool) {
     let fresh = world.open(&["--resume", &id], "canter-tui a").await;
     fresh.wait_for("回答二").await;
     fresh.wait_idle().await;
-    assert_eq!(a.text().trim_end(), fresh.text().trim_end());
-    assert!(!a.text().contains("does not fit"));
+    assert_eq!(a.screen().trim_end(), fresh.screen().trim_end());
+    assert!(!a.screen().contains("does not fit"));
 
     assert_eq!(a.quit().await, id);
     assert_eq!(fresh.quit().await, id);
@@ -665,23 +647,23 @@ async fn the_later_answer_to_an_approval_closes_and_names_the_first() {
 
     let id = world.only_session().await;
     assert!(world.snapshot(&id).await.pending_requests.is_empty());
-    let (winner, loser, label) = if a.text().contains("You chose: Allow once") {
+    let (winner, loser, label) = if a.screen().contains("You chose: Allow once") {
         (&a, &b, "canter-tui a answered: Allow once")
     } else {
         (&b, &a, "canter-tui b answered: Decline")
     };
     assert!(
-        loser.text().contains(label),
+        loser.screen().contains(label),
         "the later terminal names who answered:\n{}",
-        loser.text()
+        loser.screen()
     );
     assert!(
         loser
-            .text()
+            .screen()
             .contains("Your answer came too late and was ignored")
     );
-    assert!(!winner.text().contains("too late"));
-    assert!(!winner.text().contains(" answered: "));
+    assert!(!winner.screen().contains("too late"));
+    assert!(!winner.screen().contains(" answered: "));
 
     a.quit().await;
     b.quit().await;
@@ -744,7 +726,7 @@ async fn a_session_closed_by_another_client_stays_closed() {
     a.wait_idle().await;
     b.type_line("第二句").await;
     a.wait_for("回答二").await;
-    assert!(a.text().contains("› 第二句  (from canter-tui b)"));
+    assert!(a.screen().contains("› 第二句  (from canter-tui b)"));
 
     assert_eq!(a.quit().await, id);
     assert_eq!(b.quit().await, id);
