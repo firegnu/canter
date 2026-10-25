@@ -629,6 +629,8 @@ impl Session {
         }
         if let Some(effort) = params.reasoning_effort {
             settings.reasoning_effort = effort;
+        } else if settings.reasoning_effort == ReasoningEffort::Unknown {
+            settings.reasoning_effort = ReasoningEffort::High;
         }
         let events = state
             .journal

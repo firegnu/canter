@@ -161,6 +161,24 @@ impl World {
         client.read_session(id).await.unwrap().session
     }
 
+    /// Seed older/newer on-disk settings while this test's server is stopped.
+    fn rewrite_settings(&self, id: &str, change: impl Fn(&mut Value)) {
+        assert!(self.server.is_none());
+        let path = self.path(&format!("state/sessions/{id}/events.jsonl"));
+        let rewritten: String = fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                let mut event: Value = serde_json::from_str(line).unwrap();
+                if let Some(settings) = event.get_mut("settings") {
+                    change(settings);
+                }
+                serde_json::to_string(&event).unwrap() + "\n"
+            })
+            .collect();
+        fs::write(path, rewritten).unwrap();
+    }
+
     async fn only_session(&self) -> String {
         let client = Client::new(&self.path("state/server.sock")).unwrap();
         let sessions = client.list_sessions().await.unwrap();
@@ -592,6 +610,167 @@ async fn thinking_none_low_and_compaction_preserve_their_wire_options() {
         assert!(requests[3].get("tools").is_none());
     }
     a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn name_only_patch_normalizes_unknown_stored_effort_before_writing() {
+    let mut world = World::new(vec![text_reply("继续回答")]).await;
+    world.start_server().await;
+    let a = world.open(&[], "canter-tui a").await;
+    a.wait_idle().await;
+    let id = a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+    world.rewrite_settings(&id, |settings| settings["reasoningEffort"] = json!("ultra"));
+    world.start_server().await;
+    let client = Client::new(&world.path("state/server.sock")).unwrap();
+    client.resume(&id, &BTreeMap::new()).await.unwrap();
+    let updated = client
+        .update(
+            &id,
+            &canter_protocol::SessionUpdateParams {
+                name: Some("renamed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let path = world.path(&format!("state/sessions/{id}/events.jsonl"));
+    let persisted: Value = fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|event| event["seq"] == updated.event_seq)
+        .unwrap();
+    assert_eq!(persisted["settings"]["name"], "renamed");
+    assert_eq!(persisted["settings"]["reasoningEffort"], "high");
+
+    let a = world.open(&["--resume", &id], "canter-tui a").await;
+    a.wait_idle().await;
+    a.type_line("继续").await;
+    a.wait_for("继续回答").await;
+    {
+        let requests = world.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["thinking"], json!({"type":"enabled"}));
+        assert_eq!(requests[0]["reasoning_effort"], "high");
+    }
+    a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn unknown_effort_shows_and_selects_high_and_new_uses_the_default() {
+    let mut world = World::new(vec![text_reply("原会话回答")]).await;
+    world.start_server().await;
+    let a = world.open(&["原会话问题"], "canter-tui a").await;
+    a.wait_for("原会话回答").await;
+    a.wait_idle().await;
+    let old = a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+    world.rewrite_settings(&old, |settings| {
+        settings["reasoningEffort"] = json!("ultra")
+    });
+    world.start_server().await;
+
+    let a = world.open(&["--resume", &old], "canter-tui a").await;
+    a.wait_idle().await;
+    assert!(
+        a.info().starts_with("fake-model · think high"),
+        "{}",
+        a.info()
+    );
+    a.type_line("/think").await;
+    a.wait_for("Thinking effort").await;
+    assert!(
+        a.screen()
+            .lines()
+            .any(|line| line.starts_with(" › high (current)")),
+        "{}",
+        a.screen()
+    );
+    a.press(KeyCode::Esc).await;
+    // Cancel the choice so /new still receives Unknown from the old session.
+    a.type_line("/new").await;
+    a.wait_until("new session", |a| !a.screen().contains("原会话问题"))
+        .await;
+    assert!(
+        a.info().starts_with("fake-model · think high"),
+        "{}",
+        a.info()
+    );
+    let new = a.quit().await;
+    assert_ne!(new, old);
+    assert_eq!(
+        world.snapshot(&new).await.settings.reasoning_effort,
+        canter_protocol::ReasoningEffort::High
+    );
+    assert_eq!(
+        world.snapshot(&old).await.settings.reasoning_effort,
+        canter_protocol::ReasoningEffort::Unknown
+    );
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn new_session_retries_with_default_model_when_previous_model_was_removed() {
+    let mut world = World::new(vec![text_reply("原会话回答"), text_reply("默认模型回答")]).await;
+    world.start_server().await;
+    let a = world
+        .open(
+            &["--yolo", "-m", "deepseek-v4-pro", "原会话问题"],
+            "canter-tui a",
+        )
+        .await;
+    a.wait_for("原会话回答").await;
+    a.wait_idle().await;
+    a.type_line("/think max").await;
+    a.wait_until("think max", |a| a.info().contains("think max"))
+        .await;
+    let old = a.quit().await;
+    let old_settings = world.snapshot(&old).await.settings;
+    world.stop_server(Signal::SIGTERM).await;
+    let config_path = world.path("state/config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    config["models"] = json!(["fake-model"]);
+    fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    world.start_server().await;
+
+    let a = world.open(&["--resume", &old], "canter-tui a").await;
+    a.wait_idle().await;
+    a.type_line("/new").await;
+    a.wait_for("Model deepseek-v4-pro is no longer available")
+        .await;
+    assert!(
+        a.screen()
+            .contains("new session uses default model fake-model"),
+        "{}",
+        a.screen()
+    );
+    assert!(
+        a.info().starts_with("fake-model · think max · Allow all"),
+        "{}",
+        a.info()
+    );
+    assert!(!a.screen().contains("原会话问题"));
+    a.type_line("继续").await;
+    a.wait_for("默认模型回答").await;
+    a.wait_idle().await;
+    let new = a.quit().await;
+    assert_ne!(new, old);
+    let mut expected = old_settings.clone();
+    expected.model = "fake-model".into();
+    expected.name = Some("继续".into());
+    assert_eq!(world.snapshot(&new).await.settings, expected);
+    assert_eq!(world.snapshot(&old).await.settings, old_settings);
+    let client = Client::new(&world.path("state/server.sock")).unwrap();
+    assert_eq!(client.list_sessions().await.unwrap().len(), 2);
+    {
+        let requests = world.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1]["model"], "fake-model");
+        assert_eq!(requests[1]["reasoning_effort"], "max");
+    }
     world.stop_server(Signal::SIGTERM).await;
 }
 

@@ -55,9 +55,13 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 `cwd` 同时出现在公开设置和会话摘要中，供显示、选择恢复目录；PATCH 不修改它。
 环境变量只交给服务端内存中的执行器，不存盘，不进入事件、公开设置或快照。
 创建请求不实现 Debug，调用方也不得记录其请求体。
-`reasoningEffort` 沿用 Codex v2 字段名，取值为 DeepSeek 的 `none`、`low`、`high`、`max`。
+`reasoningEffort` 选用 Codex v2 创建/恢复/派生会话回复中的名字；Codex 的设置对象和
+改设置参数用 `effort`。canter 统一使用明确表示推理强度的 `reasoningEffort`，
+取值为 DeepSeek 的 `none`、`low`、`high`、`max`。
 创建时省略/null 默认 `high`；旧设置中缺少该字段按 `high` 读取。PATCH 省略/null 不改，
 修改后由下一次模型请求使用；摘要请求仍固定关思考。新字段在 TypeScript 中可选。
+例外：旧存盘的未知档位在运行和终端显示时按 `high`，PATCH 没带档位时也写成 `high`，
+不把解码兜底值 `unknown` 写回；此规则不改变权限模式的 Unknown 处理。
 创建请求的 `model` 为空字符串时使用服务端配置里的默认模型；非空时使用请求指定的模型。
 创建和 PATCH 的模型必须在可用列表内，否则返回 `invalid_request`，设置和事件序号不变；
 恢复旧会话不检查其已存模型是否仍在列表中。
@@ -65,7 +69,8 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 `GET /v1/models` 一次返回配置的全部可用模型，回复结构参考 Codex v2 `model/list`：
 `{ "data": [{ "id": "deepseek-flash", "model": "deepseek-flash", "displayName": "deepseek-flash", "isDefault": true }], "nextCursor": null }`。
 条目的 id、model、displayName 都是配置中的模型名；isDefault 标记默认模型。
-本机配置列表无需分页，不实现 Codex 的隐藏模型和供应商扩展字段；差异记在 DESIGN 第 8 条。
+本机配置列表无需分页，只提供模型名和默认标记；省掉的 Codex 模型字段和查询参数
+及理由逐项记在 DESIGN 第 8 条。
 
 `POST /v1/sessions/{id}/resume` 的请求体为 `{ "env": { ... } }`，也不实现 Debug、
 不得记录请求体。服务端重启后，会话默认未打开；接着聊用新环境打开，并返回快照及其

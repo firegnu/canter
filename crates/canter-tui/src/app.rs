@@ -1180,7 +1180,10 @@ impl App {
         let mut text = format!(
             " {} · think {} · {mode} · {cwd}",
             sanitize(&settings.model),
-            settings.reasoning_effort.as_str()
+            match settings.reasoning_effort {
+                canter_protocol::ReasoningEffort::Unknown => "high",
+                effort => effort.as_str(),
+            }
         );
         if let Some(usage) = &self.snapshot.token_usage {
             let percent = |input: u64, cached: u64| {

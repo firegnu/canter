@@ -103,7 +103,10 @@ fn think(app: &mut App, args: &str) -> Result<Option<Action>, String> {
         })
     };
     if args.is_empty() {
-        let current = app.snapshot().settings.reasoning_effort;
+        let current = match app.snapshot().settings.reasoning_effort {
+            ReasoningEffort::Unknown => ReasoningEffort::High,
+            effort => effort,
+        };
         let choices = efforts
             .iter()
             .map(|&effort| Choice {
