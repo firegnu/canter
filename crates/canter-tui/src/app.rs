@@ -81,6 +81,10 @@ pub enum Action {
         id: usize,
         question: String,
     },
+    Handoff {
+        id: usize,
+        direction: String,
+    },
     CancelBtw {
         id: usize,
     },
@@ -576,6 +580,10 @@ impl App {
             }
             None if self.input.text().trim().is_empty() => None,
             None => {
+                if self.handoff_in_progress() {
+                    self.warning("Wait for handoff to finish or press Esc to cancel");
+                    return None;
+                }
                 if self.sending_image.is_some() {
                     return None;
                 }
@@ -708,6 +716,47 @@ impl App {
         if question.trim().is_empty() {
             return Err("Usage: /btw <question>".into());
         }
+        self.start_private_answer(question, false)
+    }
+
+    pub(crate) fn start_handoff(&mut self, direction: &str) -> Result<Option<Action>, String> {
+        if self.sending_image.is_some()
+            || !self.snapshot.queued_inputs.is_empty()
+            || !self.snapshot.pending_requests.is_empty()
+            || self
+                .snapshot
+                .turns
+                .iter()
+                .any(|turn| turn.status == TurnStatus::InProgress)
+            || matches!(
+                self.snapshot.status,
+                SessionStatus::Working | SessionStatus::WaitingApproval
+            )
+        {
+            return Err(
+                "Wait for this turn to finish or press Esc to interrupt before /handoff".into(),
+            );
+        }
+        if self.snapshot.turns.is_empty() {
+            return Err("No conversation to hand off".into());
+        }
+        self.start_private_answer(direction, true)
+    }
+
+    fn handoff_in_progress(&self) -> bool {
+        self.active_btw.is_some_and(
+            |id| matches!(&self.notices[id].content, NoticeContent::Btw(answer) if answer.handoff),
+        )
+    }
+
+    fn start_private_answer(
+        &mut self,
+        question: &str,
+        handoff: bool,
+    ) -> Result<Option<Action>, String> {
+        if self.handoff_in_progress() {
+            return Err("A handoff is already in progress; press Esc to stop it".into());
+        }
         if self.active_btw.is_some() {
             return Err("A btw answer is already in progress; press Esc to stop it".into());
         }
@@ -723,14 +772,23 @@ impl App {
                 item: turn.items.len(),
             })
             .max(self.history.end);
+        let mut answer = crate::btw::Answer::new(question.into());
+        answer.handoff = handoff;
         self.notices.push(Notice {
             at,
-            content: NoticeContent::Btw(crate::btw::Answer::new(question.into())),
+            content: NoticeContent::Btw(answer),
         });
         self.active_btw = Some(id);
-        Ok(Some(Action::Btw {
-            id,
-            question: question.into(),
+        Ok(Some(if handoff {
+            Action::Handoff {
+                id,
+                direction: question.into(),
+            }
+        } else {
+            Action::Btw {
+                id,
+                question: question.into(),
+            }
         }))
     }
 
@@ -743,9 +801,31 @@ impl App {
             return;
         };
         answer.apply(event);
-        if answer.done {
+        if answer.done && answer.handoff_note().is_none() {
             self.active_btw = None;
         }
+    }
+
+    /// Taken after queued keys are handled, so Esc on the generating frame still cancels.
+    pub(crate) fn take_handoff(&mut self) -> Option<String> {
+        let id = self.active_btw?;
+        let NoticeContent::Btw(answer) = &self.notices[id].content else {
+            return None;
+        };
+        let note = answer.handoff_note()?.to_owned();
+        self.active_btw = None;
+        Some(note)
+    }
+
+    pub(crate) fn handoff_draft(&mut self, source: &str, note: &str) {
+        self.input.insert(note);
+        self.notice(LogicalLine::new(
+            vec![Span::raw("  ")],
+            vec![Span::raw(format!(
+                "Handoff from {}. Edit the note and press Enter to send.",
+                source.chars().take(8).collect::<String>()
+            ))],
+        ));
     }
 
     pub fn show_context(&mut self, report: &canter_protocol::ContextResponse) {

@@ -20,6 +20,7 @@ pub mod routes {
     pub const SKILLS: &str = "/v1/sessions/{id}/skills";
     pub const CONTEXT: &str = "/v1/sessions/{id}/context";
     pub const BTW: &str = "/v1/sessions/{id}/btw";
+    pub const HANDOFF: &str = "/v1/sessions/{id}/handoff";
     pub const RESUME: &str = "/v1/sessions/{id}/resume";
     pub const INPUT: &str = "/v1/sessions/{id}/input";
     pub const INTERRUPT: &str = "/v1/sessions/{id}/interrupt";
@@ -37,6 +38,14 @@ pub struct SessionPath {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct SessionBtwParams {
     pub question: String,
+}
+
+/// Generate a private handoff note from an idle session's current context.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct SessionHandoffParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub direction: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

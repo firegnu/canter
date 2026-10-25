@@ -454,7 +454,7 @@ impl Model for BtwModel {
             _ => String::new(),
         };
         self.0.lock().unwrap().push(request);
-        if question == "btw-held" {
+        if question == "btw-held" || question.ends_with("handoff-held") {
             return Box::pin(async_stream::stream! {
                 yield Ok(ModelEvent::Usage(Usage { input_tokens: 1000, cache_read_tokens: Some(800), output_tokens: 100, total_tokens: 1100, ..Default::default() }));
                 yield Ok(ModelEvent::TextDelta("held answer".into()));
@@ -473,7 +473,9 @@ impl Model for BtwModel {
                 }),
                 ModelEvent::Finished(FinishReason::ToolCalls),
             ]
-        } else if question.starts_with("btw-only") {
+        } else if question.starts_with("btw-only")
+            || question.starts_with("Write a self-contained handoff note")
+        {
             vec![
                 ModelEvent::TextDelta("private **btw answer**".into()),
                 ModelEvent::Usage(Usage {
@@ -507,6 +509,99 @@ impl Model for BtwModel {
     }
 }
 
+#[tokio::test]
+async fn handoff_appends_instructions_without_changing_history_and_charges_source() {
+    use canter_model::Message;
+    let test = BtwTest::new().await;
+    let control = test.create().await;
+    let source = test.create().await;
+    for id in [&control, &source] {
+        test.input(id, "hello").await;
+        test.wait_status(id, SessionStatus::Idle).await;
+    }
+    test.input(&control, "next").await;
+    test.wait_status(&control, SessionStatus::Idle).await;
+    let baseline = test.model.0.lock().unwrap().last().unwrap().clone();
+    let history = test
+        .app
+        .store
+        .model_history::<serde_json::Value>(&source)
+        .unwrap();
+    for direction in [None, Some("接着实现测试")] {
+        let before = test.wait_status(&source, SessionStatus::Idle).await;
+        let response = test
+            .client
+            .post(format!("{}/handoff", test.url(&source)))
+            .json(&direction.map_or(json!({}), |direction| json!({"direction":direction})))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "handoff must stream a private note"
+        );
+        let answer = response.text().await.unwrap();
+        assert!(answer.contains("private **btw answer**"));
+        assert!(answer.contains("completed"));
+        let request = test.model.0.lock().unwrap().last().unwrap().clone();
+        let Message::User { text } = request.messages.last().unwrap() else {
+            panic!("handoff instructions");
+        };
+        assert!(text.starts_with("Write a self-contained handoff note"));
+        for required in [
+            "completed work",
+            "decisions",
+            "key findings",
+            "files",
+            "next steps",
+            "user's language",
+            "only the note",
+        ] {
+            assert!(text.contains(required), "missing {required}: {text}");
+        }
+        assert!(text.ends_with(direction.unwrap_or("Continue the current task.")));
+        let mut expected = baseline.clone();
+        *expected.messages.last_mut().unwrap() = Message::User { text: text.clone() };
+        assert_eq!(
+            request, expected,
+            "keep every part of the main request before the final user message"
+        );
+        assert_eq!(
+            test.app
+                .store
+                .model_history::<serde_json::Value>(&source)
+                .unwrap(),
+            history
+        );
+        let events = test
+            .app
+            .store
+            .events_after(&source, before.last_event_seq)
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0].payload,
+            EventPayload::SessionBtwUsage { .. }
+        ));
+        let after = test.wait_status(&source, SessionStatus::Idle).await;
+        assert_eq!(after.turns, before.turns);
+        let before_usage = before.token_usage.unwrap();
+        let after_usage = after.token_usage.unwrap();
+        assert_eq!(after_usage.context_tokens, before_usage.context_tokens);
+        assert_eq!(
+            after_usage.total.total_tokens,
+            before_usage.total.total_tokens + 1100
+        );
+        assert!(
+            (after_usage.cost.unwrap().usd - before_usage.cost.unwrap().usd - 0.0001848).abs()
+                < 1e-10
+        );
+        assert!(!test.root.path().join("btw-tool.txt").exists());
+    }
+    test.finish().await;
+}
+
 struct BtwTest {
     root: tempfile::TempDir,
     app: Arc<App>,
@@ -514,6 +609,94 @@ struct BtwTest {
     client: reqwest::Client,
     stop: CancellationToken,
     server: tokio::task::JoinHandle<()>,
+}
+
+#[tokio::test]
+async fn handoff_requires_idle_conversation_and_excludes_concurrent_work() {
+    let test = BtwTest::new().await;
+    let empty = test.create().await;
+    let working = test.create().await;
+    test.input(&working, "btw-held").await;
+    test.wait_status(&working, SessionStatus::Working).await;
+    let waiting = test.create().await;
+    test.input(&waiting, "tool-main").await;
+    test.wait_status(&waiting, SessionStatus::WaitingApproval)
+        .await;
+    let source = test.create().await;
+    test.input(&source, "hello").await;
+    test.wait_status(&source, SessionStatus::Idle).await;
+    let mut btw = test
+        .client
+        .post(format!("{}/btw", test.url(&source)))
+        .json(&json!({"question":"btw-held"}))
+        .send()
+        .await
+        .unwrap();
+    while !String::from_utf8_lossy(&btw.chunk().await.unwrap().unwrap()).contains("held answer") {}
+    let count = test.model.0.lock().unwrap().len();
+    for (id, status) in [
+        (&empty, StatusCode::BAD_REQUEST),
+        (&working, StatusCode::CONFLICT),
+        (&waiting, StatusCode::CONFLICT),
+        (&source, StatusCode::CONFLICT),
+    ] {
+        let response = test
+            .client
+            .post(format!("{}/handoff", test.url(id)))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+    }
+    assert_eq!(test.model.0.lock().unwrap().len(), count);
+    drop(btw);
+    // Closing waits for the cancelled private worker and its usage to finish.
+    test.client.delete(test.url(&source)).send().await.unwrap();
+    test.client
+        .post(format!("{}/resume", test.url(&source)))
+        .json(&json!({"env":{"HOME":test.root.path().join("home")}}))
+        .send()
+        .await
+        .unwrap();
+    let before = test.wait_status(&source, SessionStatus::Idle).await;
+    let mut handoff = test
+        .client
+        .post(format!("{}/handoff", test.url(&source)))
+        .json(&json!({"direction":"handoff-held"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(handoff.status(), StatusCode::OK);
+    while !String::from_utf8_lossy(&handoff.chunk().await.unwrap().unwrap()).contains("held answer")
+    {
+    }
+    for (method, suffix, body) in [
+        (
+            reqwest::Method::POST,
+            "/input",
+            json!({"input":[{"type":"text","text":"overlap"}],"clientName":"test"}),
+        ),
+        (reqwest::Method::POST, "/compact", json!({})),
+        (reqwest::Method::PATCH, "", json!({"reasoningEffort":"max"})),
+        (reqwest::Method::POST, "/btw", json!({"question":"overlap"})),
+    ] {
+        let response = test
+            .client
+            .request(method, format!("{}{suffix}", test.url(&source)))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::CONFLICT,
+            "{suffix} must wait for handoff"
+        );
+    }
+    assert_eq!(test.wait_status(&source, SessionStatus::Idle).await, before);
+    drop(handoff);
+    test.finish().await;
 }
 impl BtwTest {
     async fn new() -> Self {

@@ -2362,6 +2362,135 @@ async fn shift_tab_pressed_on_the_session_list_changes_nothing() {
 }
 
 #[tokio::test]
+async fn handoff_opens_matching_session_with_an_editable_unsent_note() {
+    let note = format!(
+        "交接说明开始\n{}\n下一步继续实现",
+        "已确认的工作和文件\n".repeat(24)
+    );
+    let mut world = World::new(vec![
+        text_reply("原会话回答"),
+        text_reply(&note),
+        text_reply("收到修改后的说明"),
+    ])
+    .await;
+    world.start_server().await;
+    let a = world
+        .open(&["--yolo", "-m", "deepseek-flash", "原任务"], "handoff")
+        .await;
+    a.wait_for("原会话回答").await;
+    a.wait_idle().await;
+    let original = world.only_session().await;
+    a.type_line("/think low").await;
+    a.wait_until("think low", |a| a.info().contains("think low"))
+        .await;
+    let before = world.snapshot(&original).await;
+    a.type_line("/handoff 继续实现").await;
+    a.wait_for("Edit the note and press Enter to send.").await;
+    a.wait_for("下一步继续实现").await;
+    let client = Client::new(&world.path("state/server.sock")).unwrap();
+    let sessions = client.list_sessions().await.unwrap();
+    assert_eq!(sessions.len(), 2);
+    let new = sessions
+        .iter()
+        .find(|s| s.id != original)
+        .unwrap()
+        .id
+        .clone();
+    let created = world.snapshot(&new).await;
+    assert_eq!(created.settings.cwd, before.settings.cwd);
+    assert_eq!(created.settings.model, before.settings.model);
+    assert_eq!(
+        created.settings.reasoning_effort,
+        before.settings.reasoning_effort
+    );
+    assert_eq!(
+        created.settings.approval_policy,
+        before.settings.approval_policy
+    );
+    assert!(created.turns.is_empty());
+    assert_eq!(
+        world.requests.lock().unwrap().len(),
+        2,
+        "never send the draft automatically"
+    );
+    assert_eq!(world.snapshot(&original).await, before);
+    for _ in 0..27 {
+        a.press(KeyCode::Up).await;
+    }
+    a.wait_for("交接说明开始").await;
+    for _ in 0..27 {
+        a.press(KeyCode::Down).await;
+    }
+    a.press(KeyCode::End).await;
+    a.type_line("，先补测试").await;
+    a.wait_for("收到修改后的说明").await;
+    assert_eq!(
+        world.snapshot(&new).await.turns[0].input,
+        vec![canter_protocol::UserInput::Text {
+            text: format!("{note}，先补测试")
+        }]
+    );
+    assert_eq!(a.quit().await, new);
+    let resumed = world.open(&["--resume", &original], "handoff-resume").await;
+    resumed.wait_for("原会话回答").await;
+    assert_eq!(resumed.quit().await, original);
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn handoff_cancellation_and_errors_leave_the_original_session_open() {
+    let partial = format!(
+        "data: {}\n\n",
+        json!({"choices":[{"index":0,"delta":{"content":"unshown partial note"},"finish_reason":null}]})
+    );
+    let model_error = format!(
+        "data: {}\n\n",
+        json!({"choices":[{"index":0,"delta":{"content":"unshown model error"},"finish_reason":"aborted"}]})
+    );
+    let mut world = World::new(vec![
+        text_reply("Original answer"),
+        format!("hold:{partial}"),
+        text_reply("   "),
+        partial,
+        model_error,
+    ])
+    .await;
+    world.start_server().await;
+    let a = world.open(&["original task"], "handoff-errors").await;
+    a.wait_for("Original answer").await;
+    a.wait_idle().await;
+    let original = world.only_session().await;
+    let before = world.snapshot(&original).await;
+    a.type_line("/handoff").await;
+    a.wait_for("Writing the handoff note").await;
+    tokio::time::timeout(WAIT, async {
+        while world.requests.lock().unwrap().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    a.frames_later(2).await;
+    assert!(!a.screen().contains("unshown partial note"));
+    a.press(KeyCode::Esc).await;
+    a.wait_for("handoff  Stopped").await;
+    assert_eq!(world.only_session().await, original);
+    assert_eq!(world.snapshot(&original).await, before);
+    // Let the cancelled HTTP response reach the server before retrying.
+    a.frames_later(2).await;
+    for expected in ["handoff note is empty", "Network", "Server"] {
+        a.type_line("/handoff").await;
+        a.wait_for(expected).await;
+        assert_eq!(world.only_session().await, original);
+        assert_eq!(world.snapshot(&original).await, before);
+        assert!(!a.screen().contains("unshown"));
+    }
+    assert_eq!(world.requests.lock().unwrap().len(), 5);
+    assert_eq!(a.quit().await, original);
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
 async fn btw_is_private_streams_and_escape_cancels_it_before_the_main_tool() {
     let partial = format!(
         "data: {}\n\n",

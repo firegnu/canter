@@ -17,7 +17,7 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 13] = [
+const COMMANDS: [(&str, &str); 14] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/exit", "Quit canter"),
@@ -34,6 +34,7 @@ const COMMANDS: [(&str, &str); 13] = [
         "/btw",
         "Ask one question without adding it to the conversation",
     ),
+    ("/handoff", "Draft a handoff note in a new session"),
 ];
 
 struct Screen {
@@ -1149,6 +1150,74 @@ fn context_lists_categories_measured_usage_and_truncates_narrow_rows() {
     let shown = screen.text();
     assert!(shown.contains("Context  no request yet"), "{shown}");
     assert!(!shown.contains("Compaction summary"));
+}
+
+#[test]
+fn handoff_rejects_empty_busy_and_btw_sessions_without_an_action() {
+    let mut screen = Screen::new();
+    assert_eq!(screen.enter("/handoff"), None);
+    screen.draw();
+    assert!(screen.text().contains("No conversation to hand off"));
+    screen.ui.app_mut().handle_key(
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        screen.now,
+    );
+    screen.start_turn("main");
+    assert_eq!(screen.enter("/handoff continue"), None);
+    screen.draw();
+    assert!(screen.text().contains("Wait for this turn to finish"));
+    screen.ui.app_mut().handle_key(
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        screen.now,
+    );
+    screen.event(json!({"type":"turn.completed","turn":turn_json("main", "completed")}));
+    screen.event(json!({"type":"session.status","status":"idle"}));
+    assert!(matches!(
+        screen.enter("/btw question"),
+        Some(Action::Btw { .. })
+    ));
+    assert_eq!(screen.enter("/handoff continue"), None);
+    screen.draw();
+    assert!(
+        screen
+            .text()
+            .contains("A btw answer is already in progress")
+    );
+}
+
+#[test]
+fn handoff_escape_on_generating_frame_cancels_even_when_note_just_finished() {
+    let mut screen = Screen::new();
+    screen.start_turn("main");
+    screen.event(json!({"type":"turn.completed","turn":turn_json("main", "completed")}));
+    screen.event(json!({"type":"session.status","status":"idle"}));
+    let Some(Action::Handoff { id, .. }) = screen.enter("/handoff") else {
+        panic!("handoff action");
+    };
+    screen.ui.app_mut().btw_event(
+        id,
+        canter_protocol::BtwEvent::Delta {
+            delta: "private note".into(),
+        },
+    );
+    screen.draw();
+    assert!(screen.text().contains("Writing the handoff note"));
+    assert!(!screen.text().contains("private note"));
+    screen
+        .ui
+        .app_mut()
+        .btw_event(id, canter_protocol::BtwEvent::Completed);
+    assert_eq!(screen.key(KeyCode::Esc), Some(Action::CancelBtw { id }));
+    screen
+        .ui
+        .app_mut()
+        .btw_event(id, canter_protocol::BtwEvent::Completed);
+    screen.draw();
+    assert!(screen.text().contains("handoff  Stopped"));
+    assert!(matches!(
+        screen.enter("/handoff again"),
+        Some(Action::Handoff { .. })
+    ));
 }
 
 #[test]

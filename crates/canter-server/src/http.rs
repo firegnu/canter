@@ -119,6 +119,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::SKILLS, get(skills))
         .route(routes::CONTEXT, get(context))
         .route(routes::BTW, post(btw))
+        .route(routes::HANDOFF, post(handoff))
         .route(routes::RESUME, post(resume))
         .route(routes::INPUT, post(input))
         .route(routes::INTERRUPT, post(interrupt))
@@ -315,7 +316,25 @@ async fn btw(
     if *draining {
         return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
     }
-    let mut answer = app.session(&id).await?.btw(params.question).await?;
+    let answer = app.session(&id).await?.btw(params.question).await?;
+    Ok(private_answer(answer))
+}
+
+async fn handoff(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+    params: Result<Json<SessionHandoffParams>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let params = body(params)?;
+    let draining = app.draining.read().await;
+    if *draining {
+        return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
+    }
+    let answer = app.session(&id).await?.handoff(params.direction).await?;
+    Ok(private_answer(answer))
+}
+
+fn private_answer(mut answer: canter_core::BtwStream) -> Response {
     let stream = async_stream::stream! {
         let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
         loop {
@@ -332,14 +351,14 @@ async fn btw(
             }
         }
     };
-    Ok((
+    (
         [
             ("content-type", "text/event-stream"),
             ("cache-control", "no-cache"),
         ],
         Body::from_stream(stream),
     )
-        .into_response())
+        .into_response()
 }
 
 async fn read(

@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{CoreError, Session, context, runner, session::Shared};
 
 pub(crate) struct ActiveBtw {
+    pub handoff: bool,
     pub cancel: CancellationToken,
     pub done: watch::Receiver<Option<Result<u64, CoreError>>>,
 }
@@ -35,12 +36,44 @@ impl Session {
                 "usage: /btw <question>",
             ));
         }
+        self.private_answer(question, false).await
+    }
+
+    pub async fn handoff(&self, direction: Option<String>) -> Result<BtwStream, CoreError> {
+        let direction = direction
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Continue the current task.");
+        let prompt = format!(
+            "Write a self-contained handoff note for a new session. Include completed work, decisions, key findings, relevant files, and next steps so the new session can proceed without this conversation. Write in the user's language. Output only the note, without a preamble. Do not call tools.\n\nTask for the new session:\n{direction}"
+        );
+        self.private_answer(prompt, true).await
+    }
+
+    async fn private_answer(
+        &self,
+        question: String,
+        handoff: bool,
+    ) -> Result<BtwStream, CoreError> {
         let mut state = self.shared.state.lock().await;
         state.available()?;
         if state.btw.is_some() {
             return Err(CoreError::new(
                 ErrorCode::Conflict,
                 "a btw answer is already in progress",
+            ));
+        }
+        if handoff && (state.active.is_some() || !state.requests.is_empty()) {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "Wait for this turn to finish or press Esc to interrupt before /handoff",
+            ));
+        }
+        if handoff && state.history.is_empty() {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "No conversation to hand off",
             ));
         }
         let mut request = context::request(&state, self.shared.options.max_output_tokens);
@@ -66,6 +99,7 @@ impl Session {
         let (sender, receiver) = mpsc::unbounded_channel();
         let (done, done_receiver) = watch::channel(None);
         state.btw = Some(ActiveBtw {
+            handoff,
             cancel: cancel.clone(),
             done: done_receiver,
         });

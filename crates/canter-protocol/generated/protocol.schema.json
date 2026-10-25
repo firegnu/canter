@@ -1922,6 +1922,18 @@
       ],
       "type": "object"
     },
+    "SessionHandoffParams": {
+      "description": "Generate a private handoff note from an idle session's current context.",
+      "properties": {
+        "direction": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "SessionInputParams": {
       "description": "POST /v1/sessions/{id}/input. Idle starts a turn; mode applies when busy.",
       "properties": {

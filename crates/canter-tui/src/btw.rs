@@ -10,6 +10,7 @@ use crate::{
 };
 
 pub(crate) struct Answer {
+    pub handoff: bool,
     question: String,
     text: String,
     status: Option<String>,
@@ -18,6 +19,7 @@ pub(crate) struct Answer {
 impl Answer {
     pub fn new(question: String) -> Self {
         Self {
+            handoff: false,
             question,
             text: String::new(),
             status: None,
@@ -28,7 +30,12 @@ impl Answer {
     pub fn apply(&mut self, event: BtwEvent) {
         match event {
             BtwEvent::Delta { delta } => self.text.push_str(&delta),
-            BtwEvent::Completed => self.done = true,
+            BtwEvent::Completed => {
+                self.done = true;
+                if self.handoff && self.text.trim().is_empty() {
+                    self.status = Some("Error: the handoff note is empty".into());
+                }
+            }
             BtwEvent::Cancelled => {
                 self.done = true;
                 self.status = Some("Stopped".into());
@@ -41,7 +48,25 @@ impl Answer {
         }
     }
 
+    pub fn handoff_note(&self) -> Option<&str> {
+        (self.handoff && self.done && self.status.is_none()).then_some(self.text.as_str())
+    }
+
     pub fn rows(&self, width: u16) -> Vec<Line<'static>> {
+        if self.handoff {
+            let status = self.status.as_deref().unwrap_or(if self.done {
+                "Handoff note ready"
+            } else {
+                "Writing the handoff note… (Esc to cancel)"
+            });
+            return wrap(
+                &LogicalLine::new(
+                    vec![Span::raw("  handoff  ")],
+                    vec![Span::raw(status.to_owned())],
+                ),
+                width,
+            );
+        }
         let mut rows = cells::prompt(
             &[UserInput::Text {
                 text: format!("/btw {}", self.question),

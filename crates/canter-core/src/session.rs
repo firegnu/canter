@@ -237,6 +237,12 @@ impl State {
         if self.closing || self.journal.snapshot.status == SessionStatus::Closed {
             return Err(CoreError::new(ErrorCode::SessionClosed, "session closed"));
         }
+        if self.btw.as_ref().is_some_and(|answer| answer.handoff) {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "A handoff is in progress; wait for it to finish or cancel it",
+            ));
+        }
         Ok(())
     }
 }
