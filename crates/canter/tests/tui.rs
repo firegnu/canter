@@ -337,14 +337,16 @@ impl Terminal {
             .expect("a session was open")
     }
 
-    /// The bottom row: model, permission mode and directory.
+    /// The two bottom rows, joined by ` · `: model, thinking and permission
+    /// mode, then directory, context use and cache hits.
     fn info(&self) -> String {
-        self.screen()
-            .lines()
-            .last()
-            .unwrap_or_default()
-            .trim()
-            .to_owned()
+        let screen = self.screen();
+        let lines: Vec<&str> = screen.lines().collect();
+        let rows = &lines[lines.len().saturating_sub(2)..];
+        rows.iter()
+            .map(|row| row.trim())
+            .collect::<Vec<_>>()
+            .join(" · ")
     }
 }
 
@@ -1224,9 +1226,13 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     assert!(!world.path("state/server.json").exists(), "no server yet");
 
     let terminal = Terminal::start(&[], world.context("canter-tui a", &anywhere)).await;
-    // The info line: default model, asking each time, this directory.
+    // The info rows: default model, asking each time, this directory.
     terminal
-        .wait_for("fake-model · think high · Always ask · /tmp/canter-tui-")
+        .wait_until("the info rows", |terminal| {
+            terminal
+                .info()
+                .starts_with("fake-model · think high · Always ask · /tmp/canter-tui-")
+        })
         .await;
     assert!(terminal.screen().contains("somewhere/else/deep"));
     let registration: Value =
@@ -2019,7 +2025,7 @@ async fn slash_and_enter_only_completes_compact() {
 
 /// Shift+Tab in the input box cycles the permission mode with the same change
 /// `/mode` makes: from allow all to always ask, ask for execution, allow all,
-/// and back to always ask. The info line follows each change.
+/// and back to always ask. The info rows follow each change.
 #[tokio::test]
 async fn shift_tab_cycles_the_permission_mode() {
     let mut world = World::new(Vec::new()).await;
@@ -2045,6 +2051,54 @@ async fn shift_tab_cycles_the_permission_mode() {
         a.wait_until(shown, |a| a.info().starts_with(&info)).await;
         assert_eq!(world.snapshot(&id).await.settings.approval_policy, mode);
     }
+    assert_eq!(a.quit().await, id);
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// Cross review 2: `/resume`'s session list is drawn in the screen's place.
+/// Shift+Tab pressed on it right after Esc, and so handled once the list is
+/// gone, changes nothing; back on the input box it works.
+#[tokio::test]
+async fn shift_tab_pressed_on_the_session_list_changes_nothing() {
+    let mut world = World::new(Vec::new()).await;
+    world.start_server().await;
+    let a = world.open(&[], "canter-tui a").await;
+    a.wait_idle().await;
+    let id = world.only_session().await;
+    // With the space the command list is gone: the frame before the session
+    // list is the bare input box.
+    for c in "/resume ".chars() {
+        a.press(KeyCode::Char(c)).await;
+    }
+    a.wait_until("/resume without the command list", |a| {
+        a.screen().contains("│ › /resume") && !a.screen().contains("Switch to another session")
+    })
+    .await;
+    a.press(KeyCode::Enter).await;
+    a.wait_for("Which session to resume?").await;
+    // Esc waits for the list's frame to be on screen; Shift+Tab follows on
+    // the same frame, with no chance for the client to run in between.
+    a.press(KeyCode::Esc).await;
+    a.keys.send(TermEvent::Key(KeyEvent::new(
+        KeyCode::BackTab,
+        KeyModifiers::SHIFT,
+    )));
+    a.wait_until("the conversation again", |a| {
+        !a.screen().contains("Which session to resume?")
+    })
+    .await;
+    // Give a wrong change every chance to arrive.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let mode = async || world.snapshot(&id).await.settings.approval_policy;
+    assert_eq!(mode().await, PermissionMode::AlwaysAsk);
+    assert!(a.info().contains("· Always ask ·"), "{}", a.info());
+
+    a.press_with(KeyCode::BackTab, KeyModifiers::SHIFT).await;
+    a.wait_until("Ask for execution", |a| {
+        a.info().contains("· Ask for execution ·")
+    })
+    .await;
+    assert_eq!(mode().await, PermissionMode::AskForExecution);
     assert_eq!(a.quit().await, id);
     world.stop_server(Signal::SIGTERM).await;
 }

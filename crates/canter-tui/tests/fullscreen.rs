@@ -15,8 +15,8 @@ const NOW: i64 = 0;
 const SESSION: &str = "s1";
 const WIDTH: u16 = 60;
 const HEIGHT: u16 = 20;
-/// Rows below the conversation: status line, input box (3) and info line.
-const BELOW: usize = 5;
+/// Rows below the conversation: status line, input box (3) and info rows (2).
+const BELOW: usize = 6;
 const HINT: &str = "↓ New output below · scroll down or press PgDn";
 
 struct Screen {
@@ -174,7 +174,7 @@ fn screen_text(lines: &[String]) -> String {
 }
 
 /// Less than a screen: the conversation starts on the top row, the input box
-/// sits right above the info line on the bottom row, blank rows between.
+/// sits right above the two info rows at the bottom, blank rows between.
 #[test]
 fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
     let mut screen = Screen::new();
@@ -189,17 +189,18 @@ fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
     assert_eq!(lines[0], "› first question", "from the top:\n{shown}");
     assert_eq!(lines[2], "  short answer", "{shown}");
     assert_eq!(
-        lines[last], " test-model · think high · Always ask · /work",
-        "the info line is the bottom row:\n{shown}"
+        lines[last - 1..],
+        [" test-model · think high · Always ask", " /work"],
+        "the info rows are the bottom rows:\n{shown}"
     );
-    assert!(lines[last - 3].starts_with('╭'), "{shown}");
-    assert!(lines[last - 2].starts_with("│ › Type a message"), "{shown}");
+    assert!(lines[last - 4].starts_with('╭'), "{shown}");
+    assert!(lines[last - 3].starts_with("│ › Type a message"), "{shown}");
     assert!(
-        lines[last - 1].starts_with('╰'),
-        "the input box is right above the info line:\n{shown}"
+        lines[last - 2].starts_with('╰'),
+        "the input box is right above the info rows:\n{shown}"
     );
     assert!(
-        lines[3..last - 3].iter().all(String::is_empty),
+        lines[3..last - 4].iter().all(String::is_empty),
         "blank between:\n{shown}"
     );
 }
@@ -210,7 +211,7 @@ fn info_line_shows_total_and_last_cache_hit_rates_only_with_input_usage() {
     screen.resize(100, HEIGHT);
     screen.draw();
     let last = usize::from(HEIGHT) - 1;
-    let base = " test-model · think high · Always ask · /work";
+    let base = " /work";
     assert_eq!(screen.lines()[last], base);
 
     for (total_input, total_cached, last_input, last_cached, suffix) in [

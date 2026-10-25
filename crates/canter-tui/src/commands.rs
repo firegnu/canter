@@ -237,7 +237,7 @@ fn set_mode(mode: PermissionMode) -> Action {
 
 /// Shift+Tab: changes to the mode after `shown` in [`MODES`], and from the
 /// last back to the first. An unknown mode counts as always-ask, as the info
-/// line shows it.
+/// rows show it.
 pub(crate) fn next_mode(shown: PermissionMode) -> Action {
     let index = MODES
         .iter()

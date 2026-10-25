@@ -193,6 +193,13 @@ impl Screen {
         lines[top.saturating_sub(count)..top].to_vec()
     }
 
+    /// The first of the two info rows at the bottom: model, thinking and
+    /// permission mode.
+    fn mode_row(&self) -> String {
+        let lines = self.lines();
+        lines[lines.len() - 2].clone()
+    }
+
     /// The input box's first row, without the border.
     fn input(&self) -> String {
         let lines = self.lines();
@@ -858,21 +865,47 @@ fn shift_tab_works_while_the_model_answers() {
     );
 }
 
-/// Cross review 1: while the info line is too narrow to show the mode,
+/// Cross review 1: while the first info row is too narrow to show the mode,
 /// Shift+Tab changes nothing, also after a change came back and was drawn
 /// still cut off: it never moves on to Allow all from modes not seen.
 #[test]
 fn shift_tab_does_nothing_while_the_mode_is_cut_off() {
     let mut screen = Screen::sized(24, 12);
     screen.draw();
-    let info = screen.lines().last().unwrap().clone();
+    let info = screen.mode_row();
+    assert!(info.starts_with(" test-model · think"), "{}", screen.text());
     assert!(!info.contains("Always ask"), "the mode is cut off: {info}");
     assert_eq!(screen.shift_tab(), None, "no mode on screen: {info}");
 
     screen.settings("askForExecution");
     screen.draw();
-    assert_eq!(screen.lines().last().unwrap(), &info, "still cut off");
+    assert_eq!(screen.mode_row(), info, "still cut off");
     assert_eq!(screen.shift_tab(), None, "not on to Allow all");
+}
+
+/// Cross review 1: the mode is in the first of the two info rows. In a
+/// window with room for that row only, Shift+Tab works; in one too short
+/// for it, the mode is not on screen and Shift+Tab changes nothing.
+#[test]
+fn shift_tab_needs_the_first_info_row_drawn() {
+    let mut screen = Screen::sized(80, 5);
+    screen.draw();
+    let shown = screen.text();
+    assert!(
+        screen.lines()[4].contains("test-model · think high · Always ask"),
+        "{shown}"
+    );
+    assert!(!shown.contains("/work"), "the second row is cut: {shown}");
+    assert_eq!(
+        screen.shift_tab(),
+        set_mode(PermissionMode::AskForExecution)
+    );
+
+    let mut screen = Screen::sized(80, 4);
+    screen.draw();
+    let shown = screen.text();
+    assert!(!shown.contains("Always ask"), "{shown}");
+    assert_eq!(screen.shift_tab(), None, "{shown}");
 }
 
 /// Cross review 2: Shift+Tab pressed on a frame that showed a choice or the

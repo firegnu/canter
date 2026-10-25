@@ -2,7 +2,7 @@
 //! and draws the whole terminal: the conversation from the top, following the
 //! latest output unless scrolled back, then the status line, the command list
 //! while a `/` command is typed, the input box (or the approval box) and the
-//! info line at the bottom.
+//! two info rows at the bottom.
 
 use std::collections::{HashSet, VecDeque};
 
@@ -32,6 +32,9 @@ const INPUT_CHROME: u16 = 6;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Conversation rows one step of the mouse wheel scrolls.
 const WHEEL_ROWS: usize = 3;
+/// The info rows at the bottom: model, thinking and permission mode; then
+/// directory and branch, context use and cache hits.
+const INFO_ROWS: u16 = 2;
 /// Changes of what is on screen kept for keys still waiting to be handled.
 const SHOWN_KEPT: usize = 8;
 /// After an approval box's answers come on screen, answer keys are dropped
@@ -154,8 +157,8 @@ struct Shown {
     chooser: Option<u64>,
     /// How many completions the input box showed.
     completions: u64,
-    /// The permission mode Shift+Tab moves on from: the one the info line
-    /// showed in full, under the bare input box (no approval or question
+    /// The permission mode Shift+Tab moves on from: the one the first info
+    /// row showed in full, under the bare input box (no approval or question
     /// box, choice or command list). `None` on any other frame.
     mode: Option<PermissionMode>,
 }
@@ -170,6 +173,9 @@ impl Shown {
 pub struct App {
     snapshot: SessionSnapshot,
     home: Option<String>,
+    /// The git branch of the session's directory; read when the screen opens
+    /// a session and again when a turn ends, not every frame.
+    branch: Option<String>,
     /// This terminal's `clientName`; what others send is marked with theirs.
     client_name: String,
     input: InputBox,
@@ -217,13 +223,14 @@ pub struct App {
 }
 
 impl App {
-    /// `home` shortens paths in the info line to `~`.
+    /// `home` shortens paths in the info rows to `~`.
     pub fn new(snapshot: SessionSnapshot, home: Option<String>, now_ms: i64) -> Self {
         let working = matches!(
             snapshot.status,
             SessionStatus::Working | SessionStatus::WaitingApproval
         );
         Self {
+            branch: crate::git::branch(&snapshot.settings.cwd),
             snapshot,
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
@@ -289,6 +296,7 @@ impl App {
                 if self.interrupting.as_ref() == Some(&turn.id) {
                     self.interrupting = None;
                 }
+                self.branch = crate::git::branch(&self.snapshot.settings.cwd);
             }
             EventPayload::SessionStatus { status, .. } => match status {
                 SessionStatus::Working | SessionStatus::WaitingApproval => {
@@ -784,8 +792,8 @@ impl App {
     /// Lays out the whole screen of `width` × `height`.
     pub(crate) fn view(&mut self, width: u16, height: u16, now_ms: i64) -> View {
         self.width = width;
-        // Leave the status line, the info line, the hint and one row of the conversation.
-        let box_height = height.saturating_sub(4);
+        // Leave the status line, the info rows, the hint and one row of the conversation.
+        let box_height = height.saturating_sub(3 + INFO_ROWS);
         let approval = self.open_request().map(|request| {
             let (selected, scroll) = if self.approval.request == request.id {
                 (self.approval.selected, self.approval.scroll)
@@ -858,7 +866,7 @@ impl App {
         let list = match bottom {
             Bottom::Input { .. } => self.list_view(
                 width,
-                usize::from(height.saturating_sub(2 + bottom.height())),
+                usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height())),
             ),
             Bottom::Approval(_) => Vec::new(),
         };
@@ -893,7 +901,7 @@ impl App {
                 .is_some_and(|row| row.width() == 0),
         );
         let total = history.len() + live.len() - lead;
-        let room = usize::from(height.saturating_sub(2 + bottom.height())) - list.len();
+        let room = usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height())) - list.len();
         if self.scroll.top.is_some_and(|top| top + room >= total) {
             self.scroll.top = None;
         }
@@ -922,7 +930,7 @@ impl App {
             .take(area)
             .cloned()
             .collect();
-        let (info, mode_in_full) = self.info_line(width);
+        let (info, mode_in_full) = self.info_rows(width);
         let view = View {
             conversation,
             hint,
@@ -932,12 +940,14 @@ impl App {
             info,
         };
         // Shift+Tab moves on only from a mode shown in full under the bare
-        // input box. The info line is the bottom row, drawn only when all
-        // rows under the conversation fit.
+        // input box. The mode is in the first info row, above the bottom
+        // row; rows under the conversation that do not fit are cut from the
+        // bottom, so it is drawn when the rows down to it fit.
         let bare_input = matches!(view.bottom, Bottom::Input { .. })
             && self.chooser.is_none()
             && self.command_list().is_none();
-        self.drawing.mode = (bare_input && mode_in_full && view.below() <= height)
+        let mode_drawn = view.below() - (INFO_ROWS - 1) <= height;
+        self.drawing.mode = (bare_input && mode_in_full && mode_drawn)
             .then_some(self.snapshot.settings.approval_policy);
         view
     }
@@ -1385,30 +1395,52 @@ impl App {
         }
     }
 
-    /// The info line, and whether it shows all of the permission mode.
-    fn info_line(&self, width: u16) -> (Line<'static>, bool) {
+    /// Model, thinking and permission mode (Allow all in red); then the
+    /// directory with its git branch, context use and cache hits. Each row
+    /// is cut on its own when the window is too narrow. Also whether the
+    /// first row shows all of the permission mode.
+    fn info_rows(&self, width: u16) -> ([Line<'static>; 2], bool) {
         let settings = &self.snapshot.settings;
-        let mode = match settings.approval_policy {
-            PermissionMode::AskForExecution => "Ask for execution",
-            PermissionMode::AllowAll => "Allow all",
+        let dim = Style::new().dim();
+        let (mode, mode_style) = match settings.approval_policy {
+            PermissionMode::AskForExecution => ("Ask for execution", dim),
+            PermissionMode::AllowAll => ("Allow all", Style::new().red()),
             // Unknown modes are treated as the strictest one.
-            PermissionMode::AlwaysAsk | PermissionMode::Unknown => "Always ask",
+            PermissionMode::AlwaysAsk | PermissionMode::Unknown => ("Always ask", dim),
         };
+        let first = vec![
+            Span::styled(
+                format!(
+                    " {} · think {} · ",
+                    sanitize(&settings.model),
+                    match settings.reasoning_effort {
+                        canter_protocol::ReasoningEffort::Unknown => "high",
+                        effort => effort.as_str(),
+                    }
+                ),
+                dim,
+            ),
+            Span::styled(mode, mode_style),
+        ];
         let cwd = shorten_home(&sanitize(&settings.cwd), self.home.as_deref());
-        let up_to_mode = format!(
-            " {} · think {} · {mode}",
-            sanitize(&settings.model),
-            match settings.reasoning_effort {
-                canter_protocol::ReasoningEffort::Unknown => "high",
-                effort => effort.as_str(),
-            }
-        );
-        let mut text = format!("{up_to_mode} · {cwd}");
+        let mut text = format!(" {cwd}");
+        if let Some(branch) = &self.branch {
+            text.push_str(&format!(" ({})", sanitize(branch)));
+        }
         if let Some(usage) = &self.snapshot.token_usage {
             let percent = |input: u64, cached: u64| {
                 (input != 0)
                     .then(|| (u128::from(cached) * 100 + u128::from(input) / 2) / u128::from(input))
             };
+            if let Some(window) = usage.model_context_window
+                && let Some(used) = percent(window, usage.context_tokens)
+            {
+                text.push_str(&format!(
+                    " · ctx {used}% {}/{}",
+                    tokens(usage.context_tokens),
+                    tokens(window)
+                ));
+            }
             let total = percent(usage.total.input_tokens, usage.total.cached_input_tokens);
             let last = percent(usage.last.input_tokens, usage.last.cached_input_tokens);
             if total.is_some() || last.is_some() {
@@ -1421,14 +1453,16 @@ impl App {
                 }
             }
         }
-        let spans = truncate(
-            vec![Span::styled(text, Style::new().dim())],
-            usize::from(width),
-        );
-        // Cutting keeps the start of the line.
-        let kept: String = spans.iter().map(|span| span.content.as_ref()).collect();
-        let mode_in_full = kept.starts_with(&up_to_mode);
-        (Line::from(spans), mode_in_full)
+        // The mode ends the first row: it shows in full when that row is not cut.
+        let full: String = first.iter().map(|span| span.content.as_ref()).collect();
+        let second = vec![Span::styled(text, dim)];
+        let rows = [first, second].map(|spans| Line::from(truncate(spans, usize::from(width))));
+        let kept: String = rows[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        (rows, kept == full)
     }
 }
 
@@ -1442,7 +1476,7 @@ pub(crate) struct View {
     /// The command list or a choice, right above the input box.
     list: Vec<Line<'static>>,
     bottom: Bottom,
-    info: Line<'static>,
+    info: [Line<'static>; 2],
 }
 
 /// The input box, or the approval box in its place.
@@ -1468,13 +1502,17 @@ impl Bottom {
 
 impl View {
     /// Rows under the conversation: the hint, the status line, the list, the
-    /// box and the info line.
+    /// box and the info rows.
     fn below(&self) -> u16 {
-        u16::from(self.hint.is_some()) + 1 + self.list.len() as u16 + self.bottom.height() + 1
+        u16::from(self.hint.is_some())
+            + 1
+            + self.list.len() as u16
+            + self.bottom.height()
+            + INFO_ROWS
     }
 
     /// The conversation fills the rows the status line, the box and the info
-    /// line (and the hint and the list) leave at the bottom.
+    /// rows (and the hint and the list) leave at the bottom.
     pub fn render(self, frame: &mut Frame) {
         let area = frame.area();
         let list = self.list.len() as u16;
@@ -1493,7 +1531,7 @@ impl View {
         frame.render_widget(Paragraph::new(self.status), row(1));
         frame.render_widget(Paragraph::new(self.list), row(list));
         let boxed = row(self.bottom.height());
-        let info = row(1);
+        let info = row(INFO_ROWS);
         match self.bottom {
             Bottom::Input { rows, cursor } => {
                 frame.render_widget(
@@ -1521,7 +1559,7 @@ impl View {
                 frame.render_widget(Paragraph::new(laid.rows).block(block), boxed);
             }
         }
-        frame.render_widget(Paragraph::new(self.info), info);
+        frame.render_widget(Paragraph::new(Vec::from(self.info)), info);
     }
 }
 
@@ -1553,6 +1591,21 @@ fn first_line(input: &[UserInput]) -> String {
         format!("{first} …")
     } else {
         first.to_owned()
+    }
+}
+
+/// A token count as `950`, `440k`, `1M` or `1.5M`.
+fn tokens(n: u64) -> String {
+    if n < 1000 {
+        return n.to_string();
+    }
+    if n < 999_500 {
+        return format!("{}k", (n + 500) / 1000);
+    }
+    let tenths = (n + 50_000) / 100_000;
+    match tenths % 10 {
+        0 => format!("{}M", tenths / 10),
+        tenth => format!("{}.{tenth}M", tenths / 10),
     }
 }
 
