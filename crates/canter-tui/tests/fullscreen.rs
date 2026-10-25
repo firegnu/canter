@@ -67,6 +67,27 @@ impl Screen {
         self.event(json!({ "type": "item.completed", "turnId": turn, "item": message }));
     }
 
+    /// The model wants to run `command` and asks first: the approval box opens.
+    fn ask(&mut self, turn: &str, command: &str) {
+        let item = json!({
+            "type": "commandExecution", "id": "c1", "command": command, "cwd": "/work",
+            "status": "inProgress", "aggregatedOutput": "", "exitCode": null, "durationMs": null,
+        });
+        self.event(json!({ "type": "item.started", "turnId": turn, "item": item }));
+        self.event(json!({
+            "type": "request.opened",
+            "request": {
+                "id": "r1", "turnId": turn, "createdAt": NOW,
+                "kind": {
+                    "type": "approval", "itemId": "c1", "tool": "shell",
+                    "arguments": { "command": command },
+                    "availableDecisions": ["accept", "acceptForSession", "decline", "cancel"],
+                },
+            },
+        }));
+        self.event(json!({ "type": "session.status", "status": "waiting_approval" }));
+    }
+
     /// A turn still in progress whose messages are `line 1` to `line {count}`.
     fn long_turn(count: usize) -> Self {
         let mut screen = Self::new();
@@ -324,4 +345,25 @@ fn resizing_rewraps_the_whole_conversation() {
             }
         }
     }
+}
+
+/// While the approval box is open, PgDn scrolls the box, not the
+/// conversation, so the hint does not tell to press it.
+#[test]
+fn with_the_approval_box_open_the_hint_does_not_mention_pgdn() {
+    let mut screen = Screen::long_turn(40);
+    screen.wheel(MouseEventKind::ScrollUp);
+    screen.draw();
+
+    screen.ask("t1", "cargo test");
+    screen.draw();
+    let lines = screen.lines();
+    let shown = screen_text(&lines);
+    assert!(shown.contains("Run this command?"), "{shown}");
+    let hint = lines
+        .iter()
+        .find(|row| row.contains("New output below"))
+        .unwrap_or_else(|| panic!("no hint:\n{shown}"));
+    assert!(!hint.contains("PgDn"), "{shown}");
+    assert_eq!(hint, " ↓ New output below · scroll down", "{shown}");
 }

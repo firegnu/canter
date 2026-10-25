@@ -612,9 +612,14 @@ impl App {
             self.scroll.unseen = false;
         }
         let hint = self.scroll.unseen.then(|| {
+            // PgDn scrolls the approval box while it is open.
+            let how = match bottom {
+                Bottom::Input { .. } => " · scroll down or press PgDn",
+                Bottom::Approval(_) => " · scroll down",
+            };
             Line::from(vec![
                 Span::styled(" ↓ New output below", Style::new().cyan()),
-                Span::styled(" · scroll down or press PgDn", Style::new().dim()),
+                Span::styled(how, Style::new().dim()),
             ])
         });
         let area = room.saturating_sub(usize::from(hint.is_some()));
