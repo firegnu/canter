@@ -56,6 +56,38 @@ fn configure() {
     .unwrap();
 }
 
+#[tokio::test]
+async fn usage_starts_server_and_reports_empty_ledger() {
+    if isolated("usage_starts_server_and_reports_empty_ledger").await {
+        return;
+    }
+    configure();
+    let output = Command::new(env!("CARGO_BIN_EXE_canter"))
+        .arg("usage")
+        .env_clear()
+        .env("HOME", std::env::var_os("HOME").unwrap())
+        .env("CANTER_HOME", home())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let connection = canter_server::discover(&home())
+        .await
+        .unwrap()
+        .expect("usage auto-starts the server");
+    let daemon = Daemon::new(&connection);
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "No usage recorded.\n"
+    );
+    daemon.stop().await;
+}
+
 struct Daemon(Pid);
 impl Daemon {
     fn new(connection: &Connection) -> Self {

@@ -6,6 +6,7 @@ mod journal;
 mod runner;
 mod session;
 mod skills;
+pub mod usage;
 
 use canter_protocol::ErrorCode;
 pub use journal::Subscription;
@@ -23,6 +24,9 @@ pub struct CoreOptions {
     pub context_window: u64,
     pub max_output_tokens: u32,
     pub image_models: Vec<String>,
+    pub prices: usage::PriceBook,
+    /// Clock at the model-request boundary; replaceable for deterministic replay tests.
+    pub request_time: fn() -> i64,
 }
 impl Default for CoreOptions {
     fn default() -> Self {
@@ -30,6 +34,8 @@ impl Default for CoreOptions {
             context_window: 1_048_576,
             max_output_tokens: 65_536,
             image_models: vec!["deepseek-flash".into()],
+            prices: usage::builtin_prices(),
+            request_time: journal::now,
         }
     }
 }

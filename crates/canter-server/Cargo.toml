@@ -21,3 +21,4 @@ tempfile.workspace = true
 async-stream.workspace = true
 futures-util.workspace = true
 nix.workspace = true
+chrono.workspace = true

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     convert::Infallible,
     path::PathBuf,
     sync::Arc,
@@ -83,12 +83,15 @@ impl App {
 
     async fn disk_snapshot(&self, id: &str) -> Result<SessionReadResponse, ApiError> {
         let store = self.store.clone();
+        let prices = self.options.prices.clone();
         let id = id.to_string();
         tokio::task::spawn_blocking(move || {
             let mut snapshot = SessionSnapshot::empty(&id);
-            for event in store.events_after(&id, 0).map_err(CoreError::from)? {
-                apply_event_mut(&mut snapshot, &event).map_err(|_| ApiError::internal())?;
+            let events = store.events_after(&id, 0).map_err(CoreError::from)?;
+            for event in &events {
+                apply_event_mut(&mut snapshot, event).map_err(|_| ApiError::internal())?;
             }
+            canter_core::usage::Ledger::replay(&events, &prices).fill_costs(&mut snapshot);
             if snapshot.last_event_seq == 0 {
                 return Err(ApiError::new(
                     ErrorCode::SessionNotFound,
@@ -109,6 +112,8 @@ pub(crate) fn router(app: Arc<App>) -> Router {
     Router::new()
         .route(routes::INFO, get(info))
         .route(routes::MODELS, get(models))
+        .route(routes::USAGE, get(usage))
+        .route(routes::SESSION_USAGE, get(session_usage))
         .route(routes::SESSIONS, post(create).get(list))
         .route(routes::SESSION, get(read).patch(update).delete(close))
         .route(routes::SKILLS, get(skills))
@@ -220,6 +225,68 @@ async fn list(state: State<Arc<App>>) -> Result<Json<SessionListResponse>, ApiEr
     Ok(Json(SessionListResponse {
         data: info(state).await?.0.sessions,
     }))
+}
+
+async fn ledger(app: &App, id: &str) -> Result<canter_core::usage::Ledger, ApiError> {
+    let sessions = app.sessions.lock().await;
+    let through = if let Some(session) = sessions.get(id) {
+        Some(session.snapshot().await.event_seq)
+    } else {
+        None
+    };
+    let mut events = app.disk_events(id, 0).await?;
+    if let Some(through) = through {
+        events.retain(|event| event.seq <= through);
+    }
+    if events.is_empty() {
+        return Err(ApiError::new(
+            ErrorCode::SessionNotFound,
+            "session not found",
+        ));
+    }
+    drop(sessions);
+    Ok(canter_core::usage::Ledger::replay(
+        &events,
+        &app.options.prices,
+    ))
+}
+
+async fn session_usage(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<UsageResponse>, ApiError> {
+    Ok(Json(ledger(&app, &id).await?.report))
+}
+
+async fn usage(State(app): State<Arc<App>>) -> Result<Json<UsageResponse>, ApiError> {
+    let store = app.store.clone();
+    let sessions = tokio::task::spawn_blocking(move || store.list())
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(CoreError::from)?;
+    let mut rows = BTreeMap::<(String, String), UsageRow>::new();
+    let mut report = UsageResponse::default();
+    for session in sessions {
+        for (timestamp, record) in ledger(&app, &session.id).await?.records {
+            let date = chrono::DateTime::from_timestamp_millis(timestamp)
+                .ok_or_else(ApiError::internal)?
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d")
+                .to_string();
+            let model = record.model.clone().unwrap_or_default();
+            let row = rows
+                .entry((date.clone(), model.clone()))
+                .or_insert_with(|| UsageRow {
+                    date: Some(date),
+                    model: Some(model),
+                    ..UsageRow::default()
+                });
+            row.add(&record);
+            report.total.add(&record);
+        }
+    }
+    report.data = rows.into_values().collect();
+    Ok(Json(report))
 }
 
 async fn skills(
