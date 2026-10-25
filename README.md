@@ -48,6 +48,7 @@ The turn ends when the model stops asking for tools. canter is that loop, plus a
   - Esc interrupts the current turn.
 - Sessions are saved and can be resumed. Context is compacted manually or automatically when it gets too long.
 - Reads `AGENTS.md`.
+- `/context` shows the loaded context by category, token estimates, remaining window space and the last model-reported usage. `/files` lists files read or changed by session tools and the working directory's git status. Shell edits appear in git status, not in the session's changed-file list. Both commands are read-only.
 
 The first goal is to be good enough for everyday small tasks. More planned: a GPUI desktop app, a web client, skills, MCP, sub-agents, and more model providers.
 

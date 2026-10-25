@@ -45,6 +45,19 @@ pub struct Client {
 }
 
 impl Client {
+    pub async fn context(
+        &self,
+        session: &str,
+    ) -> Result<canter_protocol::ContextResponse, ClientError> {
+        decode(
+            self.http
+                .get(url(routes::CONTEXT, &[session]))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
     pub async fn usage(
         &self,
         session: Option<&str>,

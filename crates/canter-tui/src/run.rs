@@ -360,6 +360,13 @@ where
                         .app_mut()
                         .warning(&format!("Could not read usage: {error}")),
                 },
+                Some(Action::Context) => match chat.client.context(&chat.session).await {
+                    Ok(report) => ui.app_mut().show_context(&report),
+                    Err(error) => ui
+                        .app_mut()
+                        .warning(&format!("Could not read context: {error}")),
+                },
+                Some(Action::Files) => ui.app_mut().show_files().await,
                 Some(Action::ListSkills) => match chat.client.list_skills(&chat.session).await {
                     Ok(skills) => ui.app_mut().show_skills(skills),
                     Err(error) => ui
@@ -794,6 +801,8 @@ impl<C: Connector> Chat<C> {
             | Action::PickSession
             | Action::PickModel
             | Action::Usage
+            | Action::Context
+            | Action::Files
             | Action::ListSkills => {}
         }
     }

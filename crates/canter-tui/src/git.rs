@@ -1,5 +1,5 @@
-//! The git branch of the session's directory for the info rows, read straight
-//! from `.git` rather than by running git.
+//! The info-row branch read from `.git`, and a bounded read-only git status
+//! query for `/files`.
 
 use std::fs;
 use std::path::Path;
@@ -36,4 +36,148 @@ pub(crate) fn branch(dir: &str) -> Option<String> {
             .filter(|_| head.chars().all(|c| c.is_ascii_hexdigit()))
             .map(str::to_owned),
     }
+}
+
+/// Read-only status, with all git work bounded by one timeout. Dropping an
+/// unfinished output future kills and reaps its child through tokio.
+pub(crate) async fn status(cwd: &str, home: Option<&str>) -> Vec<String> {
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let root = git_output(cwd, &["rev-parse", "--show-toplevel"]).await?;
+        if !root.status.success() {
+            return Ok(vec![
+                if String::from_utf8_lossy(&root.stderr).contains("not a git repository") {
+                    "Git: not a git repository".into()
+                } else {
+                    "Git: could not read repository status".into()
+                },
+            ]);
+        }
+        let root = String::from_utf8_lossy(&root.stdout);
+        let root = Path::new(root.strip_suffix('\n').unwrap_or(&root));
+        // git resolves directory symlinks (notably /var -> /private/var on macOS).
+        let display_cwd = tokio::fs::canonicalize(cwd).await?;
+        let display_home = match home {
+            Some(home) => tokio::fs::canonicalize(home).await.ok(),
+            None => None,
+        };
+        let mut arguments = filter_overrides(cwd).await?;
+        arguments.extend(
+            [
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--branch",
+                "--untracked-files=all",
+                "--no-renames",
+            ]
+            .map(str::to_owned),
+        );
+        let output = git_output(
+            cwd,
+            &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
+        )
+        .await?;
+        if !output.status.success() {
+            return Ok(vec!["Git: could not read repository status".into()]);
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut entries = text.split('\0').filter(|entry| !entry.is_empty());
+        let mut lines = vec![format!(
+            "Git: {}",
+            entries.next().unwrap_or_default().trim_start_matches("## ")
+        )];
+        for entry in entries {
+            if let Some(path) = entry.get(3..) {
+                lines.push(format!(
+                    "  {}  {}",
+                    &entry[..2],
+                    crate::files::display_path(
+                        &root.join(path),
+                        &display_cwd.to_string_lossy(),
+                        display_home.as_ref().and_then(|home| home.to_str())
+                    )
+                ));
+            }
+        }
+        if lines.len() == 1 {
+            lines.push("  clean".into());
+        }
+        Ok::<_, std::io::Error>(lines)
+    })
+    .await;
+    match result {
+        Ok(Ok(lines)) => lines,
+        Ok(Err(_)) => vec!["Git: could not run git status".into()],
+        Err(_) => vec!["Git: status timed out".into()],
+    }
+}
+
+// Status may hash worktree contents through a configured clean/process filter.
+// Disable these in the superproject and in status's recursive submodule queries.
+async fn filter_overrides(cwd: &str) -> std::io::Result<Vec<String>> {
+    const KEYS: &str = r"^filter\..*\.(clean|smudge|process|required)$";
+    let local = git_output(
+        cwd,
+        &["config", "--null", "--name-only", "--get-regexp", KEYS],
+    )
+    .await?;
+    if !local.status.success() && local.status.code() != Some(1) {
+        return Err(std::io::Error::other("could not inspect git filters"));
+    }
+    // Fixed command: no repository-provided strings are interpolated into a shell.
+    let modules = git_output(cwd, &["submodule", "--quiet", "foreach", "--recursive",
+        r#"git config --null --name-only --get-regexp '^filter\..*\.(clean|smudge|process|required)$' || test "$?" = 1"#,
+    ]).await?;
+    if !modules.status.success() {
+        return Err(std::io::Error::other("could not inspect submodule filters"));
+    }
+    let mut arguments = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for key in local
+        .stdout
+        .split(|&byte| byte == 0)
+        .chain(modules.stdout.split(|&byte| byte == 0))
+        .filter(|key| !key.is_empty())
+    {
+        let key = std::str::from_utf8(key).map_err(std::io::Error::other)?;
+        if seen.insert(key) {
+            arguments.push("-c".into());
+            arguments.push(format!(
+                "{key}={}",
+                if key.ends_with(".required") {
+                    "false"
+                } else {
+                    ""
+                }
+            ));
+        }
+    }
+    Ok(arguments)
+}
+
+async fn git_output(cwd: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
+    tokio::process::Command::new("git")
+        .current_dir(cwd)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("LC_ALL", "C")
+        .args([
+            "--no-pager",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.untrackedCache=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "status.relativePaths=false",
+        ])
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
 }

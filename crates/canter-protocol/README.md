@@ -122,6 +122,24 @@ cost 对应该 TokenUsage.total 的金额：session.usage 中是会话累计，T
 input、interrupt、批准回答、compact、PATCH、DELETE 返回 `session_not_resumed`，
 客户端须先 resume；不存在的会话仍返回 `session_not_found`。
 
+### 上下文查询
+
+`GET /v1/sessions/{id}/context` 返回已打开会话当前装入的上下文估算；未打开时返回
+`session_not_resumed`。查询不改变事件、存盘或模型请求。返回字段：
+
+- `prefix`：`{kind, path, tokens}` 数组，kind 为 `system`、`globalInstructions`、
+  `projectInstructions`（每个文件一行）、`skills`；非文件段的 path 为 null。
+- `skillCount`：模型可调用的技能数量；`toolCount`、`toolTokens`：工具定义数量及估算。
+- `compactionTokens`：压缩摘要估算，未压缩时为 null。
+- `messages`：`count`、`tokens`、`user`、`assistant`、`toolResults`、`images`；摘要单独统计。
+- `estimatedTokens`：上述各项合计；`freeTokens`：窗口减估算值，最小为 0；
+  `modelContextWindow`：窗口大小；`contextTokens`：与状态栏相同的最近普通请求实测占用，
+  尚无用量记录时为 null。
+
+估算沿用压缩判断的字节启发式和图片固定估算；系统消息的角色、JSON 开销计入 system，
+其余前缀段按追加前后的估算差分计入，保持总和一致。排队输入、尚未产生的工具结果和
+输出预留不计入；实际下一次请求还可能因新输入、工具执行或压缩而变化。
+
 ### 错误与 SSE
 
 HTTP 错误统一返回 `ErrorResponse { code, message }`，不带成功回复的 eventSeq：

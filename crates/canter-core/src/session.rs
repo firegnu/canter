@@ -45,6 +45,8 @@ pub(crate) struct State {
     pub journal: Journal,
     pub prefix: Vec<Message>,
     pub skills: Vec<Skill>,
+    pub prefix_sections: Vec<ContextSection>,
+    pub summary_index: Option<usize>,
     pub history: Vec<Message>,
     pub user_messages: Vec<Message>,
     pub gate: PermissionGate,
@@ -68,6 +70,8 @@ impl State {
             journal,
             prefix: Vec::new(),
             skills: Vec::new(),
+            prefix_sections: Vec::new(),
+            summary_index: None,
             history: Vec::new(),
             user_messages: Vec::new(),
             gate: PermissionGate::default(),
@@ -84,9 +88,10 @@ impl State {
         &mut self,
         home: Option<std::path::PathBuf>,
     ) -> Result<(), CoreError> {
-        let (prefix, warnings, skills) =
+        let (prefix, warnings, skills, sections) =
             crate::context::prefix(self.journal.snapshot.settings.cwd.clone(), home).await?;
         self.skills = skills;
+        self.prefix_sections = sections;
         if self.prefix != prefix {
             self.journal
                 .record(HistoryEntry::Context {
@@ -269,7 +274,12 @@ impl Session {
         let mut state = State::new(Journal::new(store, writer));
         crate::usage::Ledger::replay(&events, &options.prices)
             .fill_costs(&mut state.journal.snapshot);
-        (state.prefix, state.history, state.user_messages) = crate::context::restore(entries);
+        (
+            state.prefix,
+            state.history,
+            state.user_messages,
+            state.summary_index,
+        ) = crate::context::restore(entries);
         state.initialize_prefix(home).await?;
         for event in events {
             if let EventPayload::RequestResolved { request_id, .. } = event.payload {

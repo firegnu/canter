@@ -1,5 +1,6 @@
 use crate::CoreError;
 use canter_model::{AssistantContent, Message};
+use canter_protocol::{ContextSection, ContextSectionKind};
 use serde::{Deserialize, Serialize};
 use std::{io::Read, path::PathBuf, time::SystemTime};
 
@@ -49,10 +50,13 @@ pub(crate) fn known(message: Message) -> Option<Message> {
     }
 }
 
-pub(crate) fn restore(entries: Vec<HistoryEntry>) -> (Vec<Message>, Vec<Message>, Vec<Message>) {
+pub(crate) fn restore(
+    entries: Vec<HistoryEntry>,
+) -> (Vec<Message>, Vec<Message>, Vec<Message>, Option<usize>) {
     let mut prefix = Vec::new();
     let mut history = Vec::new();
     let mut users = Vec::new();
+    let mut summary_index = None;
     for entry in entries {
         match entry {
             HistoryEntry::Context { messages } => {
@@ -75,6 +79,7 @@ pub(crate) fn restore(entries: Vec<HistoryEntry>) -> (Vec<Message>, Vec<Message>
                 ..
             } => {
                 history = messages.into_iter().filter_map(known).collect();
+                summary_index = history.len().checked_sub(1);
                 users = if user_inputs.is_empty() {
                     user_messages
                         .into_iter()
@@ -88,7 +93,7 @@ pub(crate) fn restore(entries: Vec<HistoryEntry>) -> (Vec<Message>, Vec<Message>
             HistoryEntry::Unknown => {}
         }
     }
-    (prefix, history, users)
+    (prefix, history, users, summary_index)
 }
 
 pub(crate) fn estimate(text: &str) -> u64 {
@@ -120,7 +125,15 @@ pub(crate) fn message_tokens(message: &Message) -> u64 {
 pub(crate) async fn prefix(
     cwd: String,
     home: Option<PathBuf>,
-) -> Result<(Vec<Message>, Vec<String>, Vec<canter_protocol::Skill>), CoreError> {
+) -> Result<
+    (
+        Vec<Message>,
+        Vec<String>,
+        Vec<canter_protocol::Skill>,
+        Vec<ContextSection>,
+    ),
+    CoreError,
+> {
     tokio::task::spawn_blocking(move || {
         let cwd = PathBuf::from(cwd);
         let home = home.map(|home| cwd.join(home));
@@ -145,6 +158,8 @@ pub(crate) async fn prefix(
             std::env::consts::ARCH
         );
         let mut warnings = Vec::new();
+        let mut sections = Vec::new();
+        record_section(&mut sections, &text, ContextSectionKind::System, None);
         let global = home
             .as_ref()
             .map(|home| ("Global", home.join(".agents/AGENTS.md")));
@@ -168,10 +183,22 @@ pub(crate) async fn prefix(
                 })
             })();
             match instructions {
-                Ok(instructions) => text.push_str(&format!(
-                    "\n{scope} instructions ({}):\n{instructions}\n",
-                    path.display()
-                )),
+                Ok(instructions) => {
+                    text.push_str(&format!(
+                        "\n{scope} instructions ({}):\n{instructions}\n",
+                        path.display()
+                    ));
+                    record_section(
+                        &mut sections,
+                        &text,
+                        if scope == "Global" {
+                            ContextSectionKind::GlobalInstructions
+                        } else {
+                            ContextSectionKind::ProjectInstructions
+                        },
+                        Some(path.to_string_lossy().into_owned()),
+                    );
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => warnings.push(format!(
                     "Skipped {} instructions {}: {error}",
@@ -182,8 +209,232 @@ pub(crate) async fn prefix(
         }
         let skills = crate::skills::discover(home, root, &mut warnings);
         crate::skills::append_prompt(&mut text, &skills);
-        (vec![Message::System { text }], warnings, skills)
+        record_section(&mut sections, &text, ContextSectionKind::Skills, None);
+        (vec![Message::System { text }], warnings, skills, sections)
     })
     .await
     .map_err(|_| CoreError::internal())
+}
+
+fn record_section(
+    sections: &mut Vec<ContextSection>,
+    text: &str,
+    kind: ContextSectionKind,
+    path: Option<String>,
+) {
+    let tokens = message_tokens(&Message::System { text: text.into() })
+        - sections.iter().map(|section| section.tokens).sum::<u64>();
+    sections.push(ContextSection { kind, path, tokens });
+}
+
+pub(crate) fn request(
+    state: &crate::session::State,
+    max_output_tokens: u32,
+) -> canter_model::Request {
+    use canter_model::{Request, RequestOptions, ToolDefinition};
+    use canter_tools::Tool;
+    let effort = match state.journal.snapshot.settings.reasoning_effort {
+        canter_protocol::ReasoningEffort::Unknown => canter_protocol::ReasoningEffort::High,
+        effort => effort,
+    };
+    Request {
+        model: state.journal.snapshot.settings.model.clone(),
+        messages: state.prefix.iter().chain(&state.history).cloned().collect(),
+        tools: Tool::ALL
+            .into_iter()
+            .map(|tool| {
+                let definition = tool.definition();
+                ToolDefinition {
+                    name: definition.name.into(),
+                    description: definition.description.into(),
+                    parameters: definition.parameters,
+                }
+            })
+            .collect(),
+        options: RequestOptions {
+            thinking: Some(effort != canter_protocol::ReasoningEffort::None),
+            reasoning_effort: (effort != canter_protocol::ReasoningEffort::None)
+                .then(|| effort.as_str().to_owned()),
+            max_output_tokens: Some(max_output_tokens),
+        },
+    }
+}
+
+impl crate::Session {
+    pub async fn context(&self) -> canter_protocol::ContextResponse {
+        use canter_model::UserContent;
+        use canter_protocol::{ContextMessages, ContextResponse};
+        let state = self.shared.state.lock().await;
+        let request = request(&state, self.shared.options.max_output_tokens);
+        let mut messages = ContextMessages::default();
+        let mut compaction_tokens = None;
+        for (index, message) in state.history.iter().enumerate() {
+            let tokens = message_tokens(message);
+            if state.summary_index == Some(index) {
+                compaction_tokens = Some(tokens);
+                continue;
+            }
+            messages.count += 1;
+            messages.tokens += tokens;
+            match message {
+                Message::User { .. } => messages.user += tokens,
+                Message::UserParts { content } => {
+                    let images = content
+                        .iter()
+                        .filter(|part| matches!(part, UserContent::Image { .. }))
+                        .count() as u64
+                        * 1024;
+                    messages.images += images;
+                    messages.user += tokens - images;
+                }
+                Message::ToolResult { .. } => messages.tool_results += tokens,
+                _ => messages.assistant += tokens,
+            }
+        }
+        let estimated_tokens = request_tokens(&request);
+        ContextResponse {
+            prefix: state.prefix_sections.clone(),
+            skill_count: state
+                .skills
+                .iter()
+                .filter(|skill| skill.model_invocation)
+                .count(),
+            tool_count: request.tools.len(),
+            tool_tokens: estimate(
+                &serde_json::to_string(&request.tools).expect("tool definitions"),
+            ),
+            compaction_tokens,
+            messages,
+            estimated_tokens,
+            free_tokens: self
+                .shared
+                .options
+                .context_window
+                .saturating_sub(estimated_tokens),
+            model_context_window: self.shared.options.context_window,
+            context_tokens: state
+                .journal
+                .snapshot
+                .token_usage
+                .as_ref()
+                .map(|usage| usage.context_tokens),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use canter_model::{FinishReason, Model, ModelEvent, ModelStream, Request};
+    use canter_protocol::{
+        InputMode, PermissionMode, ReasoningEffort, SessionInputParams, SessionSettings, UserInput,
+    };
+    use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
+
+    struct Reply;
+    impl Model for Reply {
+        fn stream(&self, _: Request, _: CancellationToken) -> ModelStream<'_> {
+            Box::pin(futures_util::stream::iter([
+                Ok(ModelEvent::TextDelta("saved summary".into())),
+                Ok(ModelEvent::Finished(FinishReason::Stop)),
+            ]))
+        }
+    }
+
+    #[tokio::test]
+    async fn report_uses_existing_estimators_and_preserves_the_request_after_compaction() {
+        let temp = tempfile::tempdir().unwrap();
+        let image = temp.path().join("image.png");
+        std::fs::write(&image, b"\x89PNG\r\n\x1a\n").unwrap();
+        let (session, _) = crate::Session::create(
+            Arc::new(canter_store::Store::new(temp.path().join("state")).unwrap()),
+            "context".into(),
+            SessionSettings {
+                cwd: temp.path().to_string_lossy().into_owned(),
+                name: None,
+                model: "deepseek-flash".into(),
+                reasoning_effort: ReasoningEffort::High,
+                approval_policy: PermissionMode::AllowAll,
+            },
+            crate::RuntimeContext {
+                environment: [("HOME".into(), temp.path().to_string_lossy().into_owned())].into(),
+                ..Default::default()
+            },
+            Arc::new(Reply),
+            crate::CoreOptions::default(),
+        )
+        .await
+        .unwrap();
+        let mut events = session.subscribe(0).await.unwrap();
+        session
+            .input(SessionInputParams {
+                input: vec![
+                    UserInput::Text {
+                        text: "inspect image".into(),
+                    },
+                    UserInput::LocalImage {
+                        path: image.to_string_lossy().into_owned(),
+                        name: None,
+                    },
+                ],
+                mode: InputMode::Queue,
+                client_name: "test".into(),
+            })
+            .await
+            .unwrap();
+        for compact in [false, true] {
+            if compact {
+                session.compact().await.unwrap();
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while let Some(event) = events.recv().await.unwrap() {
+                    if matches!(
+                        event.payload,
+                        canter_protocol::EventPayload::SessionStatus {
+                            status: canter_protocol::SessionStatus::Idle,
+                            ..
+                        }
+                    ) && session.shared.state.lock().await.active.is_none()
+                    {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            let before = {
+                let state = session.shared.state.lock().await;
+                request(&state, session.shared.options.max_output_tokens)
+            };
+            let snapshot = session.snapshot().await;
+            let report = session.context().await;
+            let after = {
+                let state = session.shared.state.lock().await;
+                request(&state, session.shared.options.max_output_tokens)
+            };
+            assert_eq!(before, after);
+            assert_eq!(snapshot, session.snapshot().await);
+            assert_eq!(report.estimated_tokens, request_tokens(&before));
+            assert_eq!(
+                report.tool_tokens,
+                estimate(&serde_json::to_string(&before.tools).unwrap())
+            );
+            assert_eq!(report.messages.images, 1024);
+            assert_eq!(report.compaction_tokens.is_some(), compact);
+            assert_eq!(
+                report.estimated_tokens,
+                report.prefix.iter().map(|part| part.tokens).sum::<u64>()
+                    + report.tool_tokens
+                    + report.compaction_tokens.unwrap_or(0)
+                    + report.messages.tokens
+            );
+            let state = session.shared.state.lock().await;
+            for (index, message) in state.history.iter().enumerate() {
+                if state.summary_index == Some(index) {
+                    assert_eq!(report.compaction_tokens, Some(message_tokens(message)));
+                }
+            }
+        }
+    }
 }

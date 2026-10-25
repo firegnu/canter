@@ -76,6 +76,8 @@ pub enum Action {
     /// Fetch the skills fixed when this session opened.
     ListSkills,
     Usage,
+    Context,
+    Files,
     /// Compact this session's context.
     Compact,
     /// Change this session's settings.
@@ -654,6 +656,26 @@ impl App {
                 .map(|line| LogicalLine::new(vec![Span::raw("  ")], vec![Span::raw(line)]))
                 .collect(),
         );
+    }
+
+    pub fn show_context(&mut self, report: &canter_protocol::ContextResponse) {
+        self.show_report(crate::context::lines(report, self.home.as_deref()));
+    }
+
+    pub async fn show_files(&mut self) {
+        self.show_report(crate::files::lines(&self.snapshot, self.home.as_deref()).await);
+    }
+
+    fn show_report(&mut self, lines: Vec<String>) {
+        for line in lines {
+            self.push_notice(
+                LogicalLine::new(
+                    vec![Span::raw("  ")],
+                    vec![Span::raw(sanitize(&line).replace('\n', " "))],
+                ),
+                true,
+            );
+        }
     }
 
     /// The mouse wheel scrolls the conversation, also while the approval box
@@ -1720,7 +1742,7 @@ fn first_line(input: &[UserInput]) -> String {
 }
 
 /// A token count as `950`, `440k`, `1M` or `1.5M`.
-fn tokens(n: u64) -> String {
+pub(crate) fn tokens(n: u64) -> String {
     if n < 1000 {
         return n.to_string();
     }

@@ -34,10 +34,22 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::Compact)),
     },
     Command {
+        name: "context",
+        about: "Show context contents and token estimates",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::Context)),
+    },
+    Command {
         name: "exit",
         about: "Quit canter",
         takes_args: false,
         run: |_, _| Ok(Some(Action::Quit)),
+    },
+    Command {
+        name: "files",
+        about: "List session files and git status",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::Files)),
     },
     Command {
         name: "help",
