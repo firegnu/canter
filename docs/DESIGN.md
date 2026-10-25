@@ -54,6 +54,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
 15. **状态目录**（主控定，P1-5 合并时写入）：`~/.canter/`，可用环境变量 `CANTER_HOME` 改成别的绝对路径（测试靠它隔离）。目录 0700，里面的文件 0600。布局见 `crates/canter-server/README.md`：`config.json`（模型地址、模型名、上下文窗口、API key）、`server.lock`（一台机器一个服务端，以它为准判断服务端在不在）、`server.json`（登记）、`server.sock`、`server.log`、`startup.lock`（客户端后台起服务端时串行）、升级交接用的 `replace.lock` / `replace.json`，会话在 `sessions/<id>/`。服务端只听这个 unix socket，不开 TCP。升级要显式 `canter serve --replace`，新的等旧的手上在跑的轮跑完，最多 60 秒，超时的轮记为被打断。
 16. **装到哪、怎么退回**（2026-10-24，P1-8 开始时用户照主控的建议定：「按你的建议装，开始吧」）。第一期用 `cargo install --locked --path crates/canter` 从本地 main 装，程序在 `~/.cargo/bin/canter`（已在用户 PATH 上），不装成系统服务，服务端由客户端在后台起。换版本：重新 `cargo install`，再 `canter serve --replace` 让新服务端接手。退回：停掉服务端（按 `~/.canter/server.json` 里的 pid 发 SIGTERM），`cargo uninstall canter`；`~/.canter/` 里有会话和 key，删不删由用户定。
 17. **照顾缓存命中**（2026-10-25，用户同意主控的建议：「同意，加进单子，AGENTS.md 只在打开时读」）。DeepSeek 按前缀缓存，请求开头和上次一样的部分才命中，命中的价格低很多。规矩：发给模型的内容只往后加，前面不改；压缩和切模型是仅有的例外。系统提示词里的日期和项目的 `AGENTS.md` 只在打开会话时定下来，会话中途改了 `AGENTS.md`，下一个会话才生效（Codex 也这样）。第一期是每次请求都重读，第二期 P2-15 改。
+18. **终端界面改成全屏**（2026-10-25，用户：「现在再终端中运行canter的时候，就感觉像是一个普通的bash程序，而不是像其他的coding agent那种直接托管整个屏幕了，而且输入框始终在最下面」；听了取舍后：「都能接受，要鼠标滚轮，只做全屏」）。改掉第一期「不占全屏」的做法（调研报告 §8.2 的推荐）：canter 打开后整屏归程序画，对话在上面、输入框固定在屏幕最下面，像 pi、opencode。用户接受的代价：往上翻、搜索靠程序自己做；程序接管鼠标滚轮后，选中复制要按住修饰键再拖；退出后屏幕恢复原样，对话不留在终端里；`corral read`、tmux 里只看得到当前屏幕。只做全屏，不留旧模式的开关。第二期 P2-16 改。
 
 ## 和报告不同的地方
 
