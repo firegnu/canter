@@ -94,6 +94,7 @@ fn a_batch_is_prevalidated_and_commits_contiguous_events_together() {
             (
                 EventPayload::TurnStarted {
                     turn: Turn {
+                        review: None,
                         id: "t1".into(),
                         items: Vec::new(),
                         status: TurnStatus::InProgress,

@@ -733,6 +733,26 @@ impl<C: Connector> Chat<C> {
         let session = self.session.clone();
         let sender = self.sender.clone();
         match action {
+            Action::Review(target) => {
+                let cwd = app.snapshot().settings.cwd.clone();
+                let env = self.env.clone();
+                let client_name = self.client_name.clone();
+                tokio::spawn(async move {
+                    let result = async {
+                        let params =
+                            crate::review::prepare(&cwd, &env, &target, &client_name).await?;
+                        client
+                            .send_input(&session, &params)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        Ok::<_, String>(())
+                    }
+                    .await;
+                    if let Err(error) = result {
+                        let _ = sender.send(Message::Warning(error));
+                    }
+                });
+            }
             action @ (Action::Btw { .. } | Action::Handoff { .. }) => {
                 let (id, question, handoff) = match action {
                     Action::Btw { id, question } => (id, question, false),
@@ -797,6 +817,7 @@ impl<C: Connector> Chat<C> {
                     && snapshot.queued_inputs.is_empty();
                 let name = unnamed.then(|| session_title(&text));
                 let params = SessionInputParams {
+                    review: None,
                     input,
                     mode: InputMode::Queue,
                     client_name: self.client_name.clone(),

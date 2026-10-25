@@ -40,6 +40,26 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         "https://json-schema.org/draft/2020-12/schema"
     );
     let definitions = schema["$defs"].as_object().unwrap();
+    for name in ["SessionInputParams", "QueuedInput", "Turn"] {
+        assert_eq!(
+            definitions[name]["properties"]["review"]["type"],
+            serde_json::json!(["string", "null"])
+        );
+        assert!(
+            definitions[name]["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|field| field != "review")
+        );
+        let ts = fs::read_to_string(temp.path().join(format!("typescript/{name}.ts"))).unwrap();
+        assert!(ts.contains("review?: string"), "{ts}");
+    }
+    let old_input = serde_json::json!({"input":[{"type":"text","text":"hello"}],"mode":"queue","clientName":"old"});
+    let parsed: canter_protocol::SessionInputParams =
+        serde_json::from_value(old_input.clone()).unwrap();
+    assert!(parsed.review.is_none());
+    assert_eq!(serde_json::to_value(parsed).unwrap(), old_input);
     for name in [
         "Event",
         "ErrorResponse",

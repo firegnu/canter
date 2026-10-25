@@ -5,4 +5,4 @@ import type { TokenUsage } from "./TokenUsage";
 import type { TurnStatus } from "./TurnStatus";
 import type { UserInput } from "./UserInput";
 
-export type Turn = { id: string, items: Array<Item>, status: TurnStatus, error: ErrorInfo | null, input: Array<UserInput>, clientName: string, usage: TokenUsage | null, };
+export type Turn = { review?: string, id: string, items: Array<Item>, status: TurnStatus, error: ErrorInfo | null, input: Array<UserInput>, clientName: string, usage: TokenUsage | null, };

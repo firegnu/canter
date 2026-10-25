@@ -37,6 +37,16 @@ pub struct PermissionGate {
 }
 
 impl PermissionGate {
+    /// Review restrictions precede both permission mode and session grants.
+    pub fn evaluate_review<'a>(&self, call: &'a PreparedCall) -> PermissionCheck<'a> {
+        match &call.action {
+            Action::Read(_) => PermissionCheck::Execute(ExecutionPermit { call }),
+            Action::Shell(args) if call.executor.is_readonly_shell(&args.command) => {
+                PermissionCheck::Execute(ExecutionPermit { call })
+            }
+            _ => PermissionCheck::Deny { cancel_turn: false },
+        }
+    }
     /// The caller must first correlate the answer with this session's pending request.
     pub fn resolve<'a>(
         &mut self,

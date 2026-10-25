@@ -5,6 +5,7 @@ fn snapshot() -> SessionSnapshot {
     let mut output = String::with_capacity(1_000_000);
     output.push_str("existing output");
     snapshot.turns.push(Turn {
+        review: None,
         id: "t1".into(),
         items: vec![Item::AgentMessage {
             id: "a1".into(),
@@ -118,6 +119,7 @@ fn completing_a_turn_preserves_item_events_and_original_input() {
     let original_items = state.turns[0].items.clone();
     let original_input = state.turns[0].input.clone();
     let completed = Turn {
+        review: None,
         id: "t1".into(),
         items: Vec::new(),
         status: TurnStatus::Failed,
@@ -147,6 +149,7 @@ fn removed_inputs_leave_the_queue_for_every_removal_reason() {
         let mut state = snapshot();
         state.queued_inputs = ["q1", "q2", "q3"]
             .map(|id| QueuedInput {
+                review: None,
                 id: id.into(),
                 input: vec![UserInput::Text { text: id.into() }],
                 client_name: "terminal".into(),

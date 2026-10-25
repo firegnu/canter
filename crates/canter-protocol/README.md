@@ -172,6 +172,18 @@ input、interrupt、批准回答、compact、PATCH、DELETE 返回 `session_not_
 input 不填，说明只放入本地输入框供用户修改后发送。取消、错误或空回答不切会话。
 原会话保持打开，不保存会话父子关系。
 
+### 审查轮
+
+`POST /v1/sessions/{id}/input` 可带 `review: "Review: uncommitted changes"` 或 PR 标题。
+存在这个字符串即开启只读审查轮，省略/null 仍是普通输入。`QueuedInput` 和 `Turn`
+带同一个可选字段，随队列、轮事件和快照保留；Schema 和 TypeScript 也标为可选，
+旧客户端和旧存盘不必提供。审查输入即使指定 steer，也排队成为独立一轮。
+`input` 和 userMessage 仍存完整审查要求、对象和 diff，模型回答沿用 agentMessage；
+终端仅把这一轮的开头提示显示为 review 标题，后续插话正常显示。
+write/edit 与白名单外 shell 直接返回 `review is read-only`，不产生批准请求，
+会话权限模式与已有授权都不放行；轮结束后继续按原权限运行。
+这是 canter 自定扩展，与 Codex 的差异见 DESIGN 第 8 条。
+
 ### 错误与 SSE
 
 HTTP 错误统一返回 `ErrorResponse { code, message }`，不带成功回复的 eventSeq：

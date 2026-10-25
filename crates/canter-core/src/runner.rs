@@ -112,6 +112,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             break;
         };
         let params = SessionInputParams {
+            review: input.review,
             input: input.input,
             mode: InputMode::Queue,
             client_name: input.client_name,
@@ -489,11 +490,30 @@ async fn execute(
             .await?;
         return Ok(());
     };
-    let output = match shared
-        .tools
-        .prepare(tool, id("tool"), &call.arguments, cancel)
+    let review = shared
+        .state
+        .lock()
         .await
-    {
+        .active
+        .as_ref()
+        .is_some_and(|active| active.turn.review.is_some());
+    let prepared = if review && matches!(tool, Tool::Write | Tool::Edit) {
+        Err(ToolOutput {
+            text: "review is read-only".into(),
+            item: Item::FileChange {
+                id: id("tool"),
+                changes: Vec::new(),
+                status: ItemStatus::Declined,
+            },
+            outcome: ToolOutcome::Declined,
+        })
+    } else {
+        shared
+            .tools
+            .prepare(tool, id("tool"), &call.arguments, cancel)
+            .await
+    };
+    let output = match prepared {
         Err(output) => output,
         Ok(prepared) if prepared.tool() == Tool::AskUser => {
             ask_user(shared, turn_id, &prepared, cancel).await?
@@ -519,7 +539,11 @@ async fn execute(
                     if cancel_turn {
                         cancel.cancel();
                     }
-                    prepared.declined_output()
+                    let mut output = prepared.declined_output();
+                    if review {
+                        output.text = "review is read-only".into();
+                    }
+                    output
                 }
                 Some(PermissionCheck::Ask(_)) => unreachable!("approval resolved"),
                 Some(PermissionCheck::Execute(permit)) => {
@@ -591,10 +615,18 @@ async fn permission<'a>(
                 item: call.started_item(),
             }])
             .await?;
-        match state
-            .gate
-            .evaluate(call, state.journal.snapshot.settings.approval_policy)
+        let permission = if state
+            .active
+            .as_ref()
+            .is_some_and(|active| active.turn.review.is_some())
         {
+            state.gate.evaluate_review(call)
+        } else {
+            state
+                .gate
+                .evaluate(call, state.journal.snapshot.settings.approval_policy)
+        };
+        match permission {
             PermissionCheck::Ask(approval) => {
                 let request = PendingRequest {
                     id: id("approval"),

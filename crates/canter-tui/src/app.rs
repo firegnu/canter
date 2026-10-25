@@ -89,6 +89,7 @@ pub enum Action {
         id: usize,
     },
     Files,
+    Review(String),
     /// Compact this session's context.
     Compact,
     /// Change this session's settings.
@@ -1047,7 +1048,7 @@ impl App {
         let turn = self.snapshot.turns.get(at.turn)?;
         if !at.prompt {
             let from = source(&self.client_name, &turn.client_name);
-            let rows = cells::prompt(&turn.input, from, width);
+            let rows = turn_prompt(turn, from, width);
             return Some((rows, Place { prompt: true, ..at }));
         }
         if let Some(item) = turn.items.get(at.item) {
@@ -1607,7 +1608,7 @@ impl App {
             let current = turn_index == end.turn;
             if !current || !end.prompt {
                 let from = source(&self.client_name, &turn.client_name);
-                rows.extend(cells::prompt(&turn.input, from, width));
+                rows.extend(turn_prompt(turn, from, width));
             }
             let echo = echo_index(turn);
             let first = if current { end.item } else { 0 };
@@ -1649,7 +1650,13 @@ impl App {
             rows.extend(notice.rows(width));
         }
         for queued in &self.snapshot.queued_inputs {
-            let mut text = format!("  · Queued: {}", first_line(&queued.input));
+            let mut text = format!(
+                "  · Queued: {}",
+                queued.review.as_ref().map_or_else(
+                    || first_line(&queued.input),
+                    |title| sanitize(title).replace('\n', " ")
+                )
+            );
             if let Some(from) = source(&self.client_name, &queued.client_name) {
                 text += &format!("  (from {})", sanitize(from));
             }
@@ -1921,6 +1928,19 @@ fn echo_index(turn: &Turn) -> Option<usize> {
     turn.items.iter().position(
         |item| matches!(item, Item::UserMessage { content, .. } if *content == turn.input),
     )
+}
+
+fn turn_prompt(turn: &Turn, from: Option<&str>, width: u16) -> Vec<Line<'static>> {
+    match &turn.review {
+        Some(title) => vec![Line::from(truncate(
+            vec![Span::styled(
+                format!("  {}", sanitize(title).replace('\n', " ")),
+                Style::new().cyan(),
+            )],
+            usize::from(width),
+        ))],
+        None => cells::prompt(&turn.input, from, width),
+    }
 }
 
 fn first_line(input: &[UserInput]) -> String {

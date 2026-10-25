@@ -457,6 +457,7 @@ async fn create(
         if let Some(input) = params.input {
             session
                 .input(SessionInputParams {
+                    review: None,
                     input,
                     mode: InputMode::Queue,
                     client_name: params.client_name,

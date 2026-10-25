@@ -78,6 +78,7 @@ async fn replay() {
         panic!("Enter sends the input");
     };
     let params = SessionInputParams {
+        review: None,
         input: vec![UserInput::Text { text }],
         mode: InputMode::Queue,
         client_name: CLIENT_NAME.into(),

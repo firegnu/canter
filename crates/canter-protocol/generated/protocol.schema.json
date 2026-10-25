@@ -1641,6 +1641,12 @@
             "$ref": "#/$defs/UserInput"
           },
           "type": "array"
+        },
+        "review": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -1949,6 +1955,13 @@
         "mode": {
           "$ref": "#/$defs/InputMode",
           "default": "queue"
+        },
+        "review": {
+          "description": "Present for a read-only review turn; the single-line display title.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -2470,6 +2483,12 @@
             "$ref": "#/$defs/Item"
           },
           "type": "array"
+        },
+        "review": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "status": {
           "$ref": "#/$defs/TurnStatus"
