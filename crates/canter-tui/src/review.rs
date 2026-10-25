@@ -185,9 +185,11 @@ async fn local(cwd: &str) -> Result<(String, String), String> {
     if staged.text.is_empty() && unstaged.text.is_empty() && untracked.text.is_empty() {
         return Err("Review: No uncommitted changes".into());
     }
+    let list_truncated = untracked.truncated || untracked.text.len() > 32 * 1024;
+    let untracked = prefix(&untracked.text, 32 * 1024);
     let truncated = staged.truncated
         || unstaged.truncated
-        || untracked.truncated
+        || list_truncated
         || staged.text.len() + unstaged.text.len() > LIMIT;
     let statistics = if truncated {
         let staged_stat = run(&mut diff(true, true)).await?;
@@ -205,15 +207,22 @@ async fn local(cwd: &str) -> Result<(String, String), String> {
     } else {
         String::new()
     };
-    let staged = prefix(&staged.text, LIMIT);
-    let unstaged = prefix(&unstaged.text, LIMIT - staged.len());
+    // Statistics share the diff budget; the list gets a separate 32 KiB.
+    let diff_limit = LIMIT.saturating_sub(statistics.len());
+    let staged = prefix(&staged.text, diff_limit);
+    let unstaged = prefix(&unstaged.text, diff_limit - staged.len());
     Ok((
         "Review: uncommitted changes".into(),
         format!(
-            "Review uncommitted changes. Diff paths are relative to the repository root. Read untracked files if needed.\n{}\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}",
+            "Review uncommitted changes. Diff paths are relative to the repository root. Read untracked files if needed.\n{}\n{}\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}",
             if truncated { TRUNCATED } else { "" },
+            if list_truncated {
+                "[列表已截断，用读文件或 git status 看全部]"
+            } else {
+                ""
+            },
             untrusted("REPOSITORY_ROOT", cwd),
-            untrusted("UNTRACKED_FILES", &untracked.text),
+            untrusted("UNTRACKED_FILES", untracked),
             statistics,
             untrusted("STAGED_DIFF", staged),
             untrusted("UNSTAGED_DIFF", unstaged),

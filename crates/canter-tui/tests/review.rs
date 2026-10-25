@@ -237,6 +237,7 @@ async fn local_review_collects_staged_unstaged_and_untracked_changes_only_when_p
     assert_untrusted(text, "STAGED_DIFF_0", "+staged");
     assert_untrusted(text, "UNSTAGED_DIFF_0", "+unstaged");
     assert!(!text.contains("not loaded eagerly"));
+    assert!(!text.contains("列表已截断"));
     let nested = cwd.join("nested");
     std::fs::create_dir(&nested).unwrap();
     let params = prepare(nested.to_str().unwrap(), &env, "", "test")
@@ -276,4 +277,64 @@ async fn large_local_diff_has_stats_a_bounded_prefix_and_a_truncation_notice() {
     assert_untrusted(text, "STAGED_DIFF_0", "+修改过的一行");
     assert!(!text.contains("END-OF-LARGE-DIFF"));
     assert!(text.len() < 300_000, "{}", text.len());
+}
+
+#[tokio::test]
+async fn large_local_diff_and_untracked_list_keep_the_message_under_300_kib() {
+    let root = tempfile::tempdir().unwrap();
+    let env = environment(root.path());
+    let cwd = root.path().join("repo");
+    std::fs::create_dir(&cwd).unwrap();
+    git(&cwd, &env, &["init", "-q"]);
+    std::fs::write(cwd.join("000-large.txt"), "changed line\n".repeat(40_000)).unwrap();
+    // Enough staged files to fill the separate statistics allowance as well.
+    for index in 0..500 {
+        std::fs::write(
+            cwd.join(format!("staged-{index:04}-{}.txt", "s".repeat(90))),
+            "new\n",
+        )
+        .unwrap();
+    }
+    git(&cwd, &env, &["add", "."]);
+    for index in 0..500 {
+        std::fs::write(
+            cwd.join(format!("untracked-{index:04}-{}.txt", "u".repeat(90))),
+            "untracked\n",
+        )
+        .unwrap();
+    }
+    let params = prepare(cwd.to_str().unwrap(), &env, "", "test")
+        .await
+        .unwrap();
+    let text = prompt(&params);
+    assert!(
+        text.len() < 300 * 1024,
+        "review message is {} bytes",
+        text.len()
+    );
+    let block_start = text
+        .find("<<<BEGIN_UNTRUSTED CANTER_REVIEW_UNTRACKED_FILES_0>>>")
+        .unwrap();
+    let block_end = text
+        .find("<<<END_UNTRUSTED CANTER_REVIEW_UNTRACKED_FILES_0>>>")
+        .unwrap();
+    let list = text[block_start..block_end]
+        .split_once('\n')
+        .unwrap()
+        .1
+        .trim_end_matches('\n');
+    assert!(
+        list.len() <= 32 * 1024,
+        "untracked list is {} bytes",
+        list.len()
+    );
+    assert!(list.contains("untracked-0000-"));
+    assert!(!list.contains("untracked-0499-"));
+    assert!(
+        text.find("列表已截断，用读文件或 git status 看全部")
+            .unwrap()
+            < block_start
+    );
+    assert!(text.contains("已截断，需要时用读文件工具看"));
+    assert_untrusted(text, "STAGED_DIFF_0", "+changed line");
 }
