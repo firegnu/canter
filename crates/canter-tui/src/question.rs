@@ -86,7 +86,7 @@ pub(crate) fn layout(
     let hint = if !fits {
         "Esc interrupt"
     } else if custom.is_some() {
-        "Enter send, Backspace edit, Esc interrupt"
+        "Enter send, Backspace/↑ back if empty, PgUp/PgDn scroll, Esc interrupt"
     } else {
         "↑↓ select, Enter confirm, number keys pick, PgUp/PgDn scroll, Esc interrupt"
     };

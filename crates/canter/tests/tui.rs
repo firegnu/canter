@@ -611,7 +611,7 @@ async fn ask_user_escape_interrupts_and_closes_the_question() {
     let a = world.open(&["Choose storage"], "canter-tui a").await;
     a.wait_for("Ask user").await;
     a.press(KeyCode::Esc).await;
-    a.wait_for("Question cancelled").await;
+    a.wait_for("No answer").await;
     a.wait_for("Turn interrupted").await;
     a.wait_idle().await;
     assert!(!a.screen().contains("─ Ask user"));
@@ -641,7 +641,7 @@ async fn ask_user_restart_cancels_the_unanswered_request() {
             !a.screen().contains("─ Ask user") && !a.status().contains("Reconnecting")
         })
         .await;
-        a.wait_for("Question cancelled").await;
+        a.wait_for("No answer").await;
         a.wait_for("Turn interrupted").await;
         a.wait_idle().await;
         let snapshot = world.snapshot(&id).await;

@@ -597,8 +597,18 @@ impl App {
         self.scroll.top = Some(top.saturating_add_signed(rows).min(self.scroll.max_top));
     }
 
-    /// Bracketed paste: the whole text goes in at once, newlines included.
+    /// Bracketed paste goes to an open custom answer as one line, otherwise
+    /// to the message draft with its newlines intact.
     pub fn handle_paste(&mut self, text: &str) {
+        if self.open_request().is_some_and(|request| {
+            request.id == self.approval.request && matches!(request.kind, RequestKind::UserInput(_))
+        }) && let Some(custom) = &mut self.approval.custom
+        {
+            let mut pasted = InputBox::default();
+            pasted.insert(text);
+            custom.push_str(&pasted.text().replace('\n', " "));
+            return;
+        }
         self.input.insert(text);
     }
 
@@ -1073,6 +1083,23 @@ impl App {
         if custom_shown != cursor.custom.is_some() {
             return None;
         }
+        match key.code {
+            KeyCode::PageUp => {
+                cursor.scroll = cursor.scroll.saturating_sub(self.approval_page);
+                return None;
+            }
+            KeyCode::PageDown => {
+                cursor.scroll = (cursor.scroll + self.approval_page).min(self.approval_max_scroll);
+                return None;
+            }
+            _ => {}
+        }
+        if cursor.custom.as_ref().is_some_and(String::is_empty)
+            && matches!(key.code, KeyCode::Backspace | KeyCode::Up)
+        {
+            cursor.custom = None;
+            return None;
+        }
         let answer = if let Some(text) = &mut cursor.custom {
             match key.code {
                 KeyCode::Enter if !text.trim().is_empty() => {
@@ -1101,15 +1128,6 @@ impl App {
                 }
                 KeyCode::Down => {
                     cursor.selected = (cursor.selected + 1).min(question.options.len());
-                    None
-                }
-                KeyCode::PageUp => {
-                    cursor.scroll = cursor.scroll.saturating_sub(self.approval_page);
-                    None
-                }
-                KeyCode::PageDown => {
-                    cursor.scroll =
-                        (cursor.scroll + self.approval_page).min(self.approval_max_scroll);
                     None
                 }
                 KeyCode::Enter => Some(cursor.selected),
