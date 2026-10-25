@@ -1,14 +1,15 @@
 //! The conversation screen: keeps the session snapshot up to date from events
 //! and draws the whole terminal: the conversation from the top, following the
-//! latest output unless scrolled back, then the status line, the input box
-//! (or the approval box) and the info line at the bottom.
+//! latest output unless scrolled back, then the status line, the command list
+//! while a `/` command is typed, the input box (or the approval box) and the
+//! info line at the bottom.
 
 use std::collections::{HashSet, VecDeque};
 
 use canter_protocol::{
     ApprovalDecision, ApprovalRequest, ApprovalResolution, Event, EventPayload, Item, ItemStatus,
-    PendingRequest, PermissionMode, RequestKind, SessionSnapshot, SessionStatus, Turn, TurnStatus,
-    UserInput, apply_event_mut,
+    PendingRequest, PermissionMode, RequestKind, SessionSnapshot, SessionStatus,
+    SessionUpdateParams, Turn, TurnStatus, UserInput, apply_event_mut,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::Frame;
@@ -19,6 +20,7 @@ use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::approval::{self, ApprovalBox, shorten_home};
 use crate::cells;
+use crate::commands::{self, Chooser, Command};
 use crate::input::InputBox;
 use crate::text::{LogicalLine, sanitize, str_width, truncate, wrap};
 
@@ -39,7 +41,7 @@ const SHOWN_KEPT: usize = 8;
 pub const ANSWER_GUARD_MS: i64 = 300;
 
 /// What the caller should do after a key press.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     /// Send this text to the session.
     Send(String),
@@ -53,6 +55,15 @@ pub enum Action {
         turn_id: String,
     },
     Quit,
+    /// Open a new session with this one's directory, model and permission
+    /// mode, and switch to it.
+    NewSession,
+    /// Show the session list and switch to the session picked.
+    PickSession,
+    /// Compact this session's context.
+    Compact,
+    /// Change this session's settings.
+    Update(SessionUpdateParams),
 }
 
 /// A place in the conversation: a turn, whether its prompt is before it, and
@@ -100,6 +111,15 @@ struct Scroll {
     seen: (u16, usize, Vec<Line<'static>>),
 }
 
+/// The command list's selection, and whether Esc closed it, for one input
+/// text; once something else is typed, the list starts afresh.
+#[derive(Default)]
+struct CommandList {
+    text: String,
+    selected: usize,
+    closed: bool,
+}
+
 /// The approval box's highlighted answer and body scroll, for one request.
 #[derive(Debug, Default)]
 struct ApprovalCursor {
@@ -119,6 +139,10 @@ struct Shown {
     answers: bool,
     /// The turn in progress.
     turn: Option<String>,
+    /// The choice whose choices showed, numbered as [`App::choose`] opened it.
+    chooser: Option<u64>,
+    /// How many completions the input box showed.
+    completions: u64,
 }
 
 impl Shown {
@@ -134,6 +158,13 @@ pub struct App {
     /// This terminal's `clientName`; what others send is marked with theirs.
     client_name: String,
     input: InputBox,
+    commands: CommandList,
+    /// A choice offered above the input box, such as `/mode` alone.
+    chooser: Option<Chooser>,
+    /// How many choices have been offered, numbering them.
+    choosers: u64,
+    /// How many times a command name was completed in the input box.
+    completions: u64,
     /// In the order they came, which is also the order of their places.
     notices: Vec<Notice>,
     history: History,
@@ -179,6 +210,10 @@ impl App {
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::default(),
+            commands: CommandList::default(),
+            chooser: None,
+            choosers: 0,
+            completions: 0,
             notices: Vec::new(),
             history: History::default(),
             scroll: Scroll::default(),
@@ -342,6 +377,32 @@ impl App {
         if shown.approval.is_some() {
             return self.approval_key(key, shown, guarded);
         }
+        if self.chooser.is_some() && !matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
+            let seen = shown.chooser == Some(self.choosers);
+            return self.chooser_key(key, seen, send_guarded);
+        }
+        if let Some((matches, selected)) = self.command_list() {
+            let last = matches.len() - 1;
+            let list = match key.code {
+                // Closes only the list, not the turn in progress.
+                KeyCode::Esc => Some((selected, true)),
+                KeyCode::Up => Some((selected.saturating_sub(1), false)),
+                KeyCode::Down => Some(((selected + 1).min(last), false)),
+                KeyCode::Tab => {
+                    self.complete(matches[selected]);
+                    return None;
+                }
+                _ => None,
+            };
+            if let Some((selected, closed)) = list {
+                self.commands = CommandList {
+                    text: self.input.text().to_owned(),
+                    selected,
+                    closed,
+                };
+                return None;
+            }
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => return self.interrupt_seen(shown.turn),
@@ -357,11 +418,10 @@ impl App {
                 self.input.insert("\n")
             }
             KeyCode::Enter => {
-                // Right after an approval box closed it was meant for the box.
-                if !send_guarded && !self.input.text().trim().is_empty() {
-                    // Sending follows the latest output again.
-                    self.scroll.top = None;
-                    return Some(Action::Send(self.input.take()));
+                // Right after an approval box closed it was meant for the box;
+                // before a completion showed, for what was there before it.
+                if !send_guarded && shown.completions == self.completions {
+                    return self.enter();
                 }
             }
             KeyCode::PageUp => self.scroll_by(-(self.scroll.page as isize)),
@@ -378,6 +438,126 @@ impl App {
             _ => {}
         }
         None
+    }
+
+    /// Enter in the input box: runs the command whose whole name is typed,
+    /// or sends the message. With `/` alone or the start of a name, it only
+    /// completes the command selected, like Tab: the first one, `/compact`,
+    /// cannot be undone (user's decision).
+    fn enter(&mut self) -> Option<Action> {
+        if let Some((matches, selected)) = self.command_list()
+            && commands::typing(self.input.text())
+                .and_then(commands::find)
+                .is_none()
+        {
+            self.complete(matches[selected]);
+            return None;
+        }
+        let typed = commands::parse(self.input.text()).map(|(name, args)| {
+            let command = commands::find(name).ok_or_else(|| name.to_owned());
+            (command, args.to_owned())
+        });
+        match typed {
+            Some((Ok(command), args)) => self.run_command(command, &args),
+            Some((Err(name), _)) => {
+                self.scroll.top = None;
+                self.warning(&format!("Unknown command: /{name}"));
+                None
+            }
+            None if self.input.text().trim().is_empty() => None,
+            None => {
+                // Sending follows the latest output again.
+                self.scroll.top = None;
+                Some(Action::Send(self.input.take()))
+            }
+        }
+    }
+
+    /// Puts `/name ` in the input box; the list closes, and Enter runs it.
+    fn complete(&mut self, command: &Command) {
+        self.completions += 1;
+        self.input.clear();
+        self.input.insert(&format!("/{} ", command.name));
+    }
+
+    /// Runs `command`; the input box is emptied unless it fails. Text after
+    /// a command that takes none, such as pasted lines, is refused, not
+    /// dropped.
+    fn run_command(&mut self, command: &Command, args: &str) -> Option<Action> {
+        // Like sending, so that what the command shows is in view.
+        self.scroll.top = None;
+        let run = if command.takes_args || args.is_empty() {
+            (command.run)(self, args)
+        } else {
+            Err(format!("/{} takes no arguments", command.name))
+        };
+        match run {
+            Ok(action) => {
+                self.input.clear();
+                action
+            }
+            Err(message) => {
+                self.warning(&message);
+                None
+            }
+        }
+    }
+
+    /// The commands listed above the input box for what is typed, and the
+    /// one selected. None while the input cannot be a command, nothing
+    /// matches, or Esc closed the list.
+    fn command_list(&self) -> Option<(Vec<&'static Command>, usize)> {
+        let text = self.input.text();
+        let typed = commands::typing(text)?;
+        let same = self.commands.text == text;
+        if same && self.commands.closed {
+            return None;
+        }
+        let matches = commands::matching(typed);
+        let last = matches.len().checked_sub(1)?;
+        let selected = if same { self.commands.selected } else { 0 };
+        Some((matches, selected.min(last)))
+    }
+
+    /// Keys while a choice is offered: Up and Down select, Enter chooses
+    /// (not right after an approval box closed), Esc, Ctrl+C or Ctrl+D
+    /// cancels, like in the session list. Other keys do nothing. Only keys
+    /// pressed while its choices were on screen (`seen`) select or choose;
+    /// any key can cancel.
+    fn chooser_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
+        let chooser = self.chooser.as_mut()?;
+        let last = chooser.choices.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Up if seen => chooser.selected = chooser.selected.saturating_sub(1),
+            KeyCode::Down if seen => chooser.selected = (chooser.selected + 1).min(last),
+            KeyCode::Enter if seen && !send_guarded => {
+                let chooser = self.chooser.take()?;
+                return chooser
+                    .choices
+                    .into_iter()
+                    .nth(chooser.selected)
+                    .map(|choice| choice.action);
+            }
+            KeyCode::Esc => self.chooser = None,
+            KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.chooser = None;
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Offers a choice above the input box.
+    pub(crate) fn choose(&mut self, chooser: Chooser) {
+        self.choosers += 1;
+        self.chooser = Some(chooser);
+    }
+
+    /// Lines for the conversation from the client, such as `/help`'s.
+    pub(crate) fn show(&mut self, lines: Vec<LogicalLine>) {
+        for line in lines {
+            self.notice(line);
+        }
     }
 
     /// The mouse wheel scrolls the conversation, also while the approval box
@@ -567,6 +747,8 @@ impl App {
                 .rev()
                 .find(|turn| turn.status == TurnStatus::InProgress)
                 .map(|turn| turn.id.clone()),
+            chooser: None,
+            completions: self.completions,
         };
         let bottom = match approval {
             Some((request, laid)) => {
@@ -579,6 +761,20 @@ impl App {
             }
             None => self.input_view(width, now_ms),
         };
+        // Commands are only for the input box.
+        let list = match bottom {
+            Bottom::Input { .. } => self.list_view(
+                width,
+                usize::from(height.saturating_sub(2 + bottom.height())),
+            ),
+            Bottom::Approval(_) => Vec::new(),
+        };
+        // The choice offered is on screen when any of its choices fit.
+        self.drawing.chooser = self
+            .chooser
+            .as_ref()
+            .filter(|_| !list.is_empty())
+            .map(|_| self.choosers);
 
         self.extend_history(width);
         let live = self.live_rows(width);
@@ -604,7 +800,7 @@ impl App {
                 .is_some_and(|row| row.width() == 0),
         );
         let total = history.len() + live.len() - lead;
-        let room = usize::from(height.saturating_sub(2 + bottom.height()));
+        let room = usize::from(height.saturating_sub(2 + bottom.height())) - list.len();
         if self.scroll.top.is_some_and(|top| top + room >= total) {
             self.scroll.top = None;
         }
@@ -637,9 +833,31 @@ impl App {
             conversation,
             hint,
             status: self.status_line(now_ms),
+            list,
             bottom,
             info: self.info_line(width),
         }
+    }
+
+    /// The list above the input box: the choice offered, or the commands
+    /// matching what is typed. At most `max` rows.
+    fn list_view(&self, width: u16, max: usize) -> Vec<Line<'static>> {
+        if let Some(chooser) = &self.chooser {
+            return chooser.rows(width, max);
+        }
+        let Some((matches, selected)) = self.command_list() else {
+            return Vec::new();
+        };
+        let names: Vec<String> = matches
+            .iter()
+            .map(|command| format!("/{}", command.name))
+            .collect();
+        let entries: Vec<(&str, &str)> = names
+            .iter()
+            .zip(&matches)
+            .map(|(name, command)| (name.as_str(), command.about))
+            .collect();
+        commands::list_rows(&entries, selected, width, max)
     }
 
     fn input_view(&self, width: u16, now_ms: i64) -> Bottom {
@@ -972,6 +1190,8 @@ pub(crate) struct View {
     /// Says there is new output below while scrolled back.
     hint: Option<Line<'static>>,
     status: Line<'static>,
+    /// The command list or a choice, right above the input box.
+    list: Vec<Line<'static>>,
     bottom: Bottom,
     info: Line<'static>,
 }
@@ -999,10 +1219,11 @@ impl Bottom {
 
 impl View {
     /// The conversation fills the rows the status line, the box and the info
-    /// line (and the hint) leave at the bottom.
+    /// line (and the hint and the list) leave at the bottom.
     pub fn render(self, frame: &mut Frame) {
         let area = frame.area();
-        let below = 1 + self.bottom.height() + 1 + u16::from(self.hint.is_some());
+        let list = self.list.len() as u16;
+        let below = 1 + list + self.bottom.height() + 1 + u16::from(self.hint.is_some());
         let mut y = area.y;
         let mut row = |height: u16| {
             let rect = Rect::new(area.x, y, area.width, height).intersection(area);
@@ -1015,6 +1236,7 @@ impl View {
             frame.render_widget(Paragraph::new(hint), row(1));
         }
         frame.render_widget(Paragraph::new(self.status), row(1));
+        frame.render_widget(Paragraph::new(self.list), row(list));
         let boxed = row(self.bottom.height());
         let info = row(1);
         match self.bottom {

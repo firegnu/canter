@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use axum::{Json, Router, extract::State, routing::post};
 use canter::{Command, Context};
-use canter_protocol::{SessionCloseReason, SessionSnapshot, SessionStatus, TurnStatus};
+use canter_protocol::{
+    Item, PermissionMode, SessionCloseReason, SessionSnapshot, SessionStatus, TurnStatus,
+};
 use canter_tui::client::Client;
 use canter_tui::{ANSWER_GUARD_MS, FrameSync, InputSender, RunError, run_on};
 use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
@@ -300,12 +302,28 @@ impl Terminal {
     async fn quit(self) -> String {
         self.press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
             .await;
+        self.finished().await
+    }
+
+    /// Waits for the client to stop; returns the session id it had, the one
+    /// `canter` prints how to resume.
+    async fn finished(self) -> String {
         tokio::time::timeout(WAIT, self.task)
             .await
             .expect("client quits")
             .unwrap()
             .unwrap()
             .expect("a session was open")
+    }
+
+    /// The bottom row: model, permission mode and directory.
+    fn info(&self) -> String {
+        self.screen()
+            .lines()
+            .last()
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
     }
 }
 
@@ -970,5 +988,282 @@ async fn approval_box_matches_the_server_after_a_restart() {
     assert!(matches!(snapshot.turns[1].status, TurnStatus::Completed));
 
     a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// `/exit` quits like Ctrl+D on an empty input: the session stays on the
+/// server, and `canter` prints how to resume it.
+#[tokio::test]
+async fn slash_exit_quits_and_keeps_the_session() {
+    let mut world = World::new(vec![text_reply("回答一")]).await;
+    world.start_server().await;
+    let a = world.open(&["第一句"], "canter-tui a").await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+    let id = world.only_session().await;
+
+    a.type_line("/exit").await;
+    assert_eq!(a.finished().await, id);
+    assert_eq!(
+        world.snapshot(&id).await.status,
+        SessionStatus::Idle,
+        "the session stays on the server"
+    );
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// `/new` opens a new session in the same terminal, with the directory,
+/// model and permission mode of the one before. The old session stays open;
+/// the screen shows the new one, and quitting names it.
+#[tokio::test]
+async fn slash_new_opens_a_new_session_in_this_terminal() {
+    let mut world = World::new(vec![text_reply("回答一"), text_reply("回答二")]).await;
+    world.start_server().await;
+    let a = world
+        .open(&["--yolo", "-m", "other-model", "第一句"], "canter-tui a")
+        .await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+    let old = world.only_session().await;
+
+    a.type_line("/new").await;
+    a.wait_until("the new session", |a| !a.screen().contains("第一句"))
+        .await;
+    assert!(
+        a.info()
+            .starts_with("other-model · Allow all · /tmp/canter-tui-"),
+        "{}",
+        a.screen()
+    );
+    let client = Client::new(&world.path("state/server.sock")).unwrap();
+    let sessions = client.list_sessions().await.unwrap();
+    assert_eq!(sessions.len(), 2);
+    let new = sessions.iter().find(|s| s.id != old).unwrap().id.clone();
+    let settings = world.snapshot(&new).await.settings;
+    assert_eq!(settings.cwd, world.path("work").display().to_string());
+    assert_eq!(settings.model, "other-model");
+    assert_eq!(settings.approval_policy, PermissionMode::AllowAll);
+    assert_eq!(
+        world.snapshot(&old).await.status,
+        SessionStatus::Idle,
+        "the old session stays open"
+    );
+
+    a.type_line("第二句").await;
+    a.wait_for("回答二").await;
+    assert_eq!(world.snapshot(&new).await.turns.len(), 1);
+    assert_eq!(world.snapshot(&old).await.turns.len(), 1);
+    assert_eq!(a.quit().await, new, "quitting names the session on screen");
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// `/resume` shows the session list; the session picked replaces the one on
+/// screen, and the conversation goes on there.
+#[tokio::test]
+async fn slash_resume_switches_to_the_session_picked() {
+    let mut world = World::new(vec![
+        text_reply("回答一"),
+        text_reply("回答二"),
+        text_reply("回答三"),
+    ])
+    .await;
+    world.start_server().await;
+    let b = world.open(&["第一句"], "canter-tui b").await;
+    b.wait_for("回答一").await;
+    b.wait_idle().await;
+    let first = world.only_session().await;
+    b.quit().await;
+    let a = world.open(&["第二句"], "canter-tui a").await;
+    a.wait_for("回答二").await;
+    a.wait_idle().await;
+
+    a.type_line("/resume").await;
+    a.wait_for("Which session to resume?").await;
+    // Most recently updated first: the session on screen, then the first one.
+    a.press(KeyCode::Down).await;
+    a.press(KeyCode::Enter).await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+    assert!(
+        !a.screen().contains("第二句"),
+        "only the session switched to:\n{}",
+        a.screen()
+    );
+
+    a.type_line("第三句").await;
+    a.wait_for("回答三").await;
+    assert_eq!(world.snapshot(&first).await.turns.len(), 2);
+    assert_eq!(
+        a.quit().await,
+        first,
+        "quitting names the session on screen"
+    );
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// Esc on the `/resume` list goes back to the session on screen.
+#[tokio::test]
+async fn slash_resume_esc_goes_back_to_the_same_session() {
+    let mut world = World::new(vec![text_reply("回答一"), text_reply("回答二")]).await;
+    world.start_server().await;
+    let a = world.open(&["第一句"], "canter-tui a").await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+    let id = world.only_session().await;
+
+    a.type_line("/resume").await;
+    a.wait_for("Which session to resume?").await;
+    a.press(KeyCode::Esc).await;
+    a.wait_until("the conversation again", |a| {
+        !a.screen().contains("Which session to resume?") && a.screen().contains("回答一")
+    })
+    .await;
+    a.type_line("第二句").await;
+    a.wait_for("回答二").await;
+    assert_eq!(world.snapshot(&id).await.turns.len(), 2);
+    assert_eq!(a.quit().await, id);
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// `/compact` compacts the session; the screen shows it the way it shows
+/// any compaction.
+#[tokio::test]
+async fn slash_compact_compacts_the_session() {
+    let mut world = World::new(vec![
+        text_reply("回答一"),
+        text_reply("SUMMARY-OF-THE-CHAT"),
+    ])
+    .await;
+    world.start_server().await;
+    let a = world.open(&["第一句"], "canter-tui a").await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+    let id = world.only_session().await;
+
+    a.type_line("/compact").await;
+    a.wait_for("Context compacted").await;
+    a.wait_idle().await;
+    let snapshot = world.snapshot(&id).await;
+    assert_eq!(snapshot.turns.len(), 2);
+    assert_eq!(snapshot.turns[1].status, TurnStatus::Completed);
+    assert!(
+        snapshot.turns[1].items.iter().any(|item| matches!(
+            item,
+            Item::ContextCompaction { summary, .. } if summary == "SUMMARY-OF-THE-CHAT"
+        )),
+        "{:?}",
+        snapshot.turns[1]
+    );
+    assert_eq!(a.quit().await, id);
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// The server refuses to compact while the model is answering: the screen
+/// shows its error as a warning and carries on.
+#[tokio::test]
+async fn slash_compact_during_an_answer_shows_the_server_error() {
+    let mut world = World::new(vec![shell_reply("sleep 5"), text_reply("睡好了")]).await;
+    world.start_server().await;
+    let a = world.open(&["--yolo", "睡一会"], "canter-tui a").await;
+    a.wait_until("the command running", |a| {
+        a.screen().contains("sleep 5") && a.status().contains("Working")
+    })
+    .await;
+
+    a.type_line("/compact").await;
+    a.wait_for("cannot compact while a turn is active").await;
+    a.wait_for("睡好了").await;
+    a.wait_idle().await;
+    let id = world.only_session().await;
+    assert_eq!(
+        world.snapshot(&id).await.turns.len(),
+        1,
+        "nothing compacted"
+    );
+    assert_eq!(a.quit().await, id);
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// `/mode <mode>` changes the permission mode, `/mode` alone offers the three
+/// modes, and an unknown name changes nothing. The info line follows.
+#[tokio::test]
+async fn slash_mode_changes_the_permission_mode() {
+    let mut world = World::new(Vec::new()).await;
+    world.start_server().await;
+    let a = world.open(&[], "canter-tui a").await;
+    a.wait_idle().await;
+    assert!(
+        a.info().starts_with("fake-model · Always ask"),
+        "{}",
+        a.info()
+    );
+    let id = world.only_session().await;
+    let mode = async || world.snapshot(&id).await.settings.approval_policy;
+
+    a.type_line("/mode allow-all").await;
+    a.wait_until("Allow all", |a| {
+        a.info().starts_with("fake-model · Allow all")
+    })
+    .await;
+    assert_eq!(mode().await, PermissionMode::AllowAll);
+
+    a.type_line("/mode").await;
+    a.wait_for("(current)").await;
+    a.press(KeyCode::Up).await;
+    a.press(KeyCode::Up).await;
+    a.press(KeyCode::Enter).await;
+    a.wait_until("Always ask", |a| {
+        a.info().starts_with("fake-model · Always ask")
+    })
+    .await;
+    assert_eq!(mode().await, PermissionMode::AlwaysAsk);
+
+    a.type_line("/mode yolo").await;
+    a.wait_for("Unknown mode: yolo").await;
+    assert_eq!(mode().await, PermissionMode::AlwaysAsk);
+    assert!(a.info().starts_with("fake-model · Always ask"));
+    // The first Ctrl+C clears the draft left in the input box.
+    a.press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        .await;
+    assert_eq!(a.quit().await, id);
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// The user's decision: `/` and Enter, or `/co` and Enter, only complete the
+/// input to `/compact`; nothing is compacted and the model gets no request.
+/// Enter on the whole name compacts.
+#[tokio::test]
+async fn slash_and_enter_only_completes_compact() {
+    let mut world = World::new(vec![
+        text_reply("回答一"),
+        text_reply("SUMMARY-OF-THE-CHAT"),
+    ])
+    .await;
+    world.start_server().await;
+    let a = world.open(&["第一句"], "canter-tui a").await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+    let id = world.only_session().await;
+    let turns = async || world.snapshot(&id).await.turns.len();
+
+    a.type_line("/").await;
+    a.wait_for("│ › /compact").await;
+    // Give a wrong compaction every chance to start.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(turns().await, 1, "/ and Enter compacted");
+    a.press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        .await;
+    a.wait_for("Type a message").await;
+
+    a.type_line("/co").await;
+    a.wait_for("│ › /compact").await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(turns().await, 1, "/co and Enter compacted");
+
+    a.press(KeyCode::Enter).await;
+    a.wait_for("Context compacted").await;
+    a.wait_idle().await;
+    assert_eq!(turns().await, 2);
+    assert_eq!(a.quit().await, id);
     world.stop_server(Signal::SIGTERM).await;
 }
