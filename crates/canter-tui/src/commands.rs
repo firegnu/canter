@@ -227,14 +227,27 @@ const MODES: [(&str, PermissionMode, &str); 3] = [
     ("allow-all", PermissionMode::AllowAll, "Never ask"),
 ];
 
+/// Changes the permission mode, for `/mode` and Shift+Tab alike.
+fn set_mode(mode: PermissionMode) -> Action {
+    Action::Update(SessionUpdateParams {
+        approval_policy: Some(mode),
+        ..SessionUpdateParams::default()
+    })
+}
+
+/// Shift+Tab: changes to the mode after `shown` in [`MODES`], and from the
+/// last back to the first. An unknown mode counts as always-ask, as the info
+/// line shows it.
+pub(crate) fn next_mode(shown: PermissionMode) -> Action {
+    let index = MODES
+        .iter()
+        .position(|&(_, mode, _)| mode == shown)
+        .unwrap_or(0);
+    set_mode(MODES[(index + 1) % MODES.len()].1)
+}
+
 /// `/mode <mode>` changes the permission mode; `/mode` alone offers the three.
 fn mode(app: &mut App, args: &str) -> Result<Option<Action>, String> {
-    let set = |mode| {
-        Action::Update(SessionUpdateParams {
-            approval_policy: Some(mode),
-            ..SessionUpdateParams::default()
-        })
-    };
     if args.is_empty() {
         let current = app.snapshot().settings.approval_policy;
         let choices = MODES
@@ -246,7 +259,7 @@ fn mode(app: &mut App, args: &str) -> Result<Option<Action>, String> {
                     name.to_owned()
                 },
                 about: about.to_owned(),
-                action: set(mode),
+                action: set_mode(mode),
             })
             .collect();
         let selected = MODES
@@ -261,23 +274,30 @@ fn mode(app: &mut App, args: &str) -> Result<Option<Action>, String> {
         return Ok(None);
     }
     match MODES.iter().find(|&&(name, ..)| name == args) {
-        Some(&(_, mode, _)) => Ok(Some(set(mode))),
+        Some(&(_, mode, _)) => Ok(Some(set_mode(mode))),
         None => Err(format!(
             "Unknown mode: {args} (use always-ask, ask-for-execution or allow-all)"
         )),
     }
 }
 
-/// `/help`: every command with its line, after a blank row.
+/// `/help`: every command with its line, after a blank row, then the
+/// shortcut for the permission mode in the same columns.
 fn help() -> Vec<LogicalLine> {
-    let width = COMMANDS.iter().map(|command| command.name.len()).max();
-    let width = width.unwrap_or(0) + 1;
+    let mut rows: Vec<(String, &str)> = COMMANDS
+        .iter()
+        .map(|command| (format!("/{}", command.name), command.about))
+        .collect();
+    rows.push(("Shift+Tab".to_owned(), "Cycle permission mode"));
+    let width = rows.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
     let mut lines = vec![LogicalLine::default()];
-    for command in COMMANDS {
-        let name = format!("{:width$}   ", format!("/{}", command.name));
+    for (name, about) in rows {
         lines.push(LogicalLine::new(
-            vec![Span::raw("  "), Span::styled(name, Style::new().cyan())],
-            vec![Span::styled(command.about, Style::new().dim())],
+            vec![
+                Span::raw("  "),
+                Span::styled(format!("{name:width$}   "), Style::new().cyan()),
+            ],
+            vec![Span::styled(about, Style::new().dim())],
         ));
     }
     lines

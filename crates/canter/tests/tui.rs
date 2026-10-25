@@ -2016,3 +2016,35 @@ async fn slash_and_enter_only_completes_compact() {
     assert_eq!(a.quit().await, id);
     world.stop_server(Signal::SIGTERM).await;
 }
+
+/// Shift+Tab in the input box cycles the permission mode with the same change
+/// `/mode` makes: from allow all to always ask, ask for execution, allow all,
+/// and back to always ask. The info line follows each change.
+#[tokio::test]
+async fn shift_tab_cycles_the_permission_mode() {
+    let mut world = World::new(Vec::new()).await;
+    world.start_server().await;
+    let a = world.open(&["--yolo"], "canter-tui a").await;
+    a.wait_idle().await;
+    assert!(
+        a.info()
+            .starts_with("fake-model · think high · Allow all ·"),
+        "{}",
+        a.info()
+    );
+    let id = world.only_session().await;
+
+    for (mode, shown) in [
+        (PermissionMode::AlwaysAsk, "Always ask"),
+        (PermissionMode::AskForExecution, "Ask for execution"),
+        (PermissionMode::AllowAll, "Allow all"),
+        (PermissionMode::AlwaysAsk, "Always ask"),
+    ] {
+        a.press_with(KeyCode::BackTab, KeyModifiers::SHIFT).await;
+        let info = format!("fake-model · think high · {shown} ·");
+        a.wait_until(shown, |a| a.info().starts_with(&info)).await;
+        assert_eq!(world.snapshot(&id).await.settings.approval_policy, mode);
+    }
+    assert_eq!(a.quit().await, id);
+    world.stop_server(Signal::SIGTERM).await;
+}

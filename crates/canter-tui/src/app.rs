@@ -154,6 +154,8 @@ struct Shown {
     chooser: Option<u64>,
     /// How many completions the input box showed.
     completions: u64,
+    /// The permission mode the info line showed; Shift+Tab moves on from it.
+    mode: Option<PermissionMode>,
 }
 
 impl Shown {
@@ -403,6 +405,8 @@ impl App {
                     self.complete(matches[selected]);
                     return None;
                 }
+                // The permission mode changes only from the bare input box.
+                KeyCode::BackTab => return None,
                 _ => None,
             };
             if let Some((selected, closed)) = list {
@@ -433,6 +437,14 @@ impl App {
                 // before a completion showed, for what was there before it.
                 if !send_guarded && shown.completions == self.completions {
                     return self.enter();
+                }
+            }
+            // From the mode on screen, so presses before the change shows
+            // ask for the same mode; like Enter, not right after an approval
+            // box closed.
+            KeyCode::BackTab => {
+                if !send_guarded && let Some(mode) = shown.mode {
+                    return Some(commands::next_mode(mode));
                 }
             }
             KeyCode::PageUp => self.scroll_by(-(self.scroll.page as isize)),
@@ -814,6 +826,7 @@ impl App {
                 .map(|turn| turn.id.clone()),
             chooser: None,
             completions: self.completions,
+            mode: Some(self.snapshot.settings.approval_policy),
         };
         let bottom = match approval {
             Some((request, laid)) => {

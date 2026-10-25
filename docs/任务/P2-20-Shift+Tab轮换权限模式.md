@@ -59,3 +59,31 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-10-25，canter/dev-shifttab。
+
+- **做了什么**（只动 `crates/canter-tui/src/app.rs`、`commands.rs`、`crates/canter-tui/tests/slash.rs` 和 `crates/canter/tests/tui.rs`）：
+  - 输入框里按 Shift+Tab（crossterm 的 `BackTab`，不看修饰键），按 `MODES` 的顺序换到下一个模式：always-ask → ask-for-execution → allow-all → always-ask。交出的是和 `/mode <名字>` 同一个 `Action::Update`：`commands.rs` 新加 `set_mode`，`/mode` 和 Shift+Tab 共用；`next_mode` 算下一个。主循环照旧发 `PATCH`，信息行等 `session.updated` 回来再变。
+  - 起点按按键那一帧：`Shown` 多记这一帧信息行显示的模式，Shift+Tab 从它往下轮。屏幕还没变时连按几下，都换到同一个模式。一帧都还没画出来时不换。服务端存的是 Unknown 时，信息行显示 Always ask，就从 Always ask 往下轮。
+  - 只在输入框能用时生效：批准框、提问框照原来的分派先走自己的按键处理，不认 Shift+Tab；选择框开着时只认上下、Enter、Esc 等，本来就不认；命令列表开着时新加一条，Shift+Tab 什么都不做。批准框、提问框换回输入框的 300 ms 保护期里（P1-14 的 `send_guard_until`）也不换；和别的键一样，这一下会把保护期往后推。
+  - `/help` 最后加一行 `Shift+Tab   Cycle permission mode`，和命令行一样是青色名字、灰色说明，列宽按最长的 `Shift+Tab` 算。
+  - 没改 `/mode`、三种模式的含义、协议、核心和服务端。服务端本来就允许回答中途改设置，每次调工具都读当时的模式，所以「回答中途换，下一个动作按新模式走」不用改服务端。
+- **验证了什么**：
+  - 先写测试，改代码前跑过都失败，原因都是没有这个快捷键（Shift+Tab 交出 `None`；真服务端那条信息行一直是 Allow all，等到超时）：
+    - 验收：`tui.rs` 的 `shift_tab_cycles_the_permission_mode`（真服务端、假模型）：`--yolo` 开会话，按四下 Shift+Tab，每一下等信息行变，再查服务端存的模式，依次是 Always ask、Ask for execution、Allow all、Always ask。
+    - 边角（`slash.rs`，TestBackend）：`shift_tab_on_an_unchanged_screen_moves_one_mode`（同一帧连按两下、重画后服务端还没回话、回话到了还没画出来，都只换到 Ask for execution；画出来以后再按才到 Allow all）；`shift_tab_does_nothing_while_a_box_a_choice_or_the_list_is_open`（批准框、提问框、`/mode` 三选一、命令列表四种，每种先确认打开前 Shift+Tab 能换，打开后不换）；`shift_tab_right_after_a_box_closes_does_nothing`（批准框、提问框被别的终端答掉后 300 ms 内不换，过后能换）；`shift_tab_works_while_the_model_answers`。
+  - 反向检查：分别把「从屏幕上的模式轮」改成「从最新收到的模式轮」、去掉命令列表那条、去掉 300 ms 保护，每次只有对应的那个测试失败，改回后全过。
+  - `/help` 那行没写测试（验证清单里没有），用一个临时测试画出来看过：在命令后面，列宽、颜色和命令行一致；看完删了，没提交。
+  - `cargo test --all-targets` 217 个全过；`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都过，都带本任务的 `CARGO_TARGET_DIR`。没调真实模型；测试的服务端用隔离目录，测完没有残留进程。
+- **拿主意的地方**：
+  - 验收测试从 Allow all 起按四下。任务里写「按三下……依次是三种模式，第四下回到 Always ask」：从默认的 Always ask 起按，第三下就回到 Always ask，第四下是 Ask for execution；从 Allow all 起，三下正好依次是 Always ask、Ask for execution、Allow all，第四下回到 Always ask，和字面一致，整圈和绕回都走到了。
+  - 批准框、提问框开没开按按键那一帧算，和输入框里别的键一样：框已经来了、还没画出来时，按在输入框那一帧上的 Shift+Tab 照样换模式。命令列表按当前输入算（和 Tab、上下键一样）；选择框按当前状态算（和现在一样，开着就吃掉按键）。
+  - 起点按帧上的模式，所以连按两下时，就算第一下的回话已经到了、还没画出来，第二下也换到同一个模式，等于发两次相同的改设置请求。
+  - `/help` 列宽按 `Shift+Tab`（9 个字）算，命令的说明比原来往右挪了一格，好让这一行和命令对齐。
+  - Shift+Tab 不看修饰键。看过 crossterm 0.29 的解析：老式的 `ESC [ Z` 和 kitty 键盘协议里的 Shift+Tab 都报成 `BackTab`，没发现要另外处理的终端。
+- **没做的事**：没在真终端里手动按过，只有 TestBackend 和真服务端测试；`canter --help` 没提这个快捷键（在 `crates/canter/src/`，不在本任务范围）；DESIGN 没改（不涉及按键）。
+- **踩过的坑**：
+  - 「屏幕没变时只换一格」的测试第一版分不出「从屏幕上的模式轮」和「从最新收到的模式轮」：第一版里回话一到就马上重画，按键时屏幕上的和最新收到的总是同一个模式。补了「回话到了、还没画出来时再按」那一步，反向检查确认它能抓到。
+  - clippy 把测试里 `[(&str, fn(&mut Screen)); 4]` 这样的数组报成类型太复杂（`type_complexity`），加了一个类型别名 `Step`。
