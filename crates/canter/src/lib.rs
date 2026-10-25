@@ -16,7 +16,7 @@ Usage:
   canter [options] --resume [session id]
                               resume a session; without an id, pick from a list
   canter serve [--replace]    run the server in the foreground
-  canter usage               show daily token usage and cost by model
+  canter usage                show daily token usage and cost by model
 
 Options:
   -m, --model <model>  use this model (default: the server's config)
