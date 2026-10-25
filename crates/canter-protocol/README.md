@@ -46,10 +46,20 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 `turnId` 是该轮 id；旧回复可以没有此字段，省略时不序列化，TypeScript 为可选属性。
 压缩结果看该轮的 `contextCompaction` 项目和 `turn.completed`，回复不等摘要结束。
 压缩轮进行中的 `steer` 按 `queue` 处理，输入回复 `turnId` 为空，之后另开一轮。
-审批先到先得：后到的回答由服务端返回 `alreadyResolved: true` 和原处理事件序号，
+批准和提问先到先得：后到的回答由服务端返回 `alreadyResolved: true` 和原处理事件序号，
 不再产生一个处理事件。取消、超时的 `clientName` 可为空。
 权限模式为 `alwaysAsk`、`askForExecution`、`allowAll`；批准回答为
 `accept`、`acceptForSession`、`decline`、`cancel`。
+
+解决请求的 `decision` 和 `answer` 都可省略，但必须恰好提供一个，且匹配请求类型。
+批准仍发送 `{ decision, clientName }`；提问发送 `{ answer, clientName }`，其中 answer 为
+`{ "type": "option", "label": "选项标签" }` 或 `{ "type": "text", "text": "自己写的一句话" }`。
+选项标签必须在请求中，文字不能只有空白或包含换行。类型错、空回答、未知选项返回
+`invalid_request`，请求、会话状态和事件序号不变；非法批准 decision 仍为 `invalid_decision`。
+已处理请求沿用重复处理规则，后到的回答不覆盖原回答。
+`request.resolved.resolution` 的提问结果是 `{ "type": "userInput", "answer": ... }`；
+取消仍用 `cancelled`。等待问题沿用 `waiting_approval`，客户端由请求种类区分提示。
+新的可选字段不影响旧批准请求；旧客户端遇到新种类按 Unknown 跳过。
 
 `session.updated` 的 `settings` 是完整的公开设置（工作目录、名字、模型、思考档位、权限模式）。
 创建会话、PATCH 成功后各写一条。PATCH 中省略/null 表示不修改字段。
@@ -132,8 +142,11 @@ data 为单行 JSON，内容里的换行保持 JSON 转义；帧末两个换行�
 因此生产者可以发送空 items，不必重复整轮输出。项目以 `item.*` 为准，
 `item.completed` 携带完整最终项目并替换同 id 的项目。
 待处理请求公共字段 id/turnId/createdAt 放在 PendingRequest 外层；
-kind 内层为带 type 的 RequestKind，当前只有 approval 及未知种类的兜底。
+kind 内层为带 type 的 RequestKind，包含 approval、userInput 及未知种类的兜底。
 批准内容包含 itemId/tool/arguments/availableDecisions，未知请求也能按外层 id 移除。
+提问内容包含 itemId/question/options，每个选项是 label/description；一次一题、2–4 个选项。
+对应的 `userInput` 项目保存 id/question/status 和可选 answer，答完后快照也能显示问答；
+取消、关闭和重开会话时沿用批准的请求取消及未完成工具收尾规则。
 待处理请求由 `request.opened` 加入、`request.resolved` 移除；对已移除请求重复处理
 不会改变批准状态。若输入历史本身包含一条新的重复处理事件，只更新其游标和时间。
 `warning` 只供实时展示；最近的 `error` 和 `session.usage` 保存在快照中。

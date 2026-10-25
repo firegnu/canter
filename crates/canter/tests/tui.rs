@@ -488,6 +488,334 @@ fn text_reply(text: &str) -> String {
     )
 }
 
+fn ask_reply() -> String {
+    format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices":[{"index":0,"delta":{"tool_calls":[{
+            "index":0,"id":"ask-1","type":"function","function":{
+                "name":"ask_user","arguments":json!({
+                    "question":"Which storage should we use?",
+                    "options":[
+                        {"label":"SQLite","description":"Keep the data locally."},
+                        {"label":"PostgreSQL","description":"Share data between servers."}
+                    ]
+                }).to_string()
+            }
+        }]},"finish_reason":"tool_calls"}]})
+    )
+}
+
+#[tokio::test]
+async fn ask_user_second_option_returns_to_the_model_and_continues() {
+    let mut world = World::new(vec![ask_reply(), text_reply("Using PostgreSQL now.")]).await;
+    world.start_server().await;
+    let a = world.open(&["Choose storage"], "canter-tui a").await;
+    // Fail directly on the missing tool, before waiting for its dialog.
+    a.wait_until("the first model request", |_| {
+        !world.requests.lock().unwrap().is_empty()
+    })
+    .await;
+    {
+        let requests = world.requests.lock().unwrap();
+        let names: Vec<_> = requests[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["function"]["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["read", "write", "edit", "shell", "ask_user"]);
+    }
+    a.wait_for("Which storage should we use?").await;
+    a.wait_for("1. SQLite").await;
+    a.wait_for("2. PostgreSQL").await;
+    a.wait_for("Share data between servers.").await;
+    a.wait_for("3. 自己写").await;
+    read_the_box().await;
+    a.press(KeyCode::Char('2')).await;
+    a.wait_for("Using PostgreSQL now.").await;
+    a.wait_idle().await;
+    {
+        let requests = world.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        let result = requests[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["tool_call_id"] == "ask-1")
+            .unwrap();
+        let result: Value = serde_json::from_str(result["content"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            result,
+            json!({"question":"Which storage should we use?",
+            "answer":{"type":"option","label":"PostgreSQL"}})
+        );
+        let previous = requests[0]["messages"].as_array().unwrap();
+        let next = requests[1]["messages"].as_array().unwrap();
+        assert_eq!(&next[..previous.len()], previous);
+        assert_eq!(requests[0]["tools"], requests[1]["tools"]);
+    }
+    a.wait_for("Which storage should we use? → PostgreSQL")
+        .await;
+    a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn ask_user_accepts_custom_text_even_with_allow_all() {
+    let mut world = World::new(vec![ask_reply(), text_reply("Using your suggestion.")]).await;
+    world.start_server().await;
+    let a = world
+        .open(&["--yolo", "Choose storage"], "canter-tui a")
+        .await;
+    a.wait_for("Ask user").await;
+    assert!(a.info().contains("Allow all"));
+    read_the_box().await;
+    a.press(KeyCode::Down).await;
+    a.press(KeyCode::Down).await;
+    a.press(KeyCode::Up).await;
+    a.press(KeyCode::Down).await;
+    a.press(KeyCode::Enter).await;
+    a.wait_for("自己写：").await;
+    a.type_line("Use plain files for now.").await;
+    a.wait_for("Using your suggestion.").await;
+    a.wait_idle().await;
+    a.wait_for("自己写：Use plain files for now.").await;
+    {
+        let requests = world.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        let result = requests[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["tool_call_id"] == "ask-1")
+            .unwrap();
+        let result: Value = serde_json::from_str(result["content"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            result["answer"],
+            json!({"type":"text","text":"Use plain files for now."})
+        );
+    }
+    let id = a.quit().await;
+    let resumed = world.open(&["--resume", &id], "canter-tui b").await;
+    resumed
+        .wait_for("Which storage should we use? → 自己写：Use plain files for now.")
+        .await;
+    resumed.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn ask_user_escape_interrupts_and_closes_the_question() {
+    let mut world = World::new(vec![ask_reply()]).await;
+    world.start_server().await;
+    let a = world.open(&["Choose storage"], "canter-tui a").await;
+    a.wait_for("Ask user").await;
+    a.press(KeyCode::Esc).await;
+    a.wait_for("Question cancelled").await;
+    a.wait_for("Turn interrupted").await;
+    a.wait_idle().await;
+    assert!(!a.screen().contains("─ Ask user"));
+    let snapshot = world.snapshot(&world.only_session().await).await;
+    assert!(snapshot.pending_requests.is_empty());
+    assert_eq!(snapshot.turns[0].status, TurnStatus::Interrupted);
+    assert_eq!(world.requests.lock().unwrap().len(), 1);
+    a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn ask_user_restart_cancels_the_unanswered_request() {
+    for signal in [Signal::SIGKILL, Signal::SIGTERM] {
+        let mut world =
+            World::new(vec![ask_reply(), text_reply("Continuing after restart.")]).await;
+        world.start_server().await;
+        let a = world.open(&["Choose storage"], "canter-tui a").await;
+        a.wait_for("Ask user").await;
+        let id = world.only_session().await;
+        let request = world.snapshot(&id).await.pending_requests[0].id.clone();
+        world.stop_server(signal).await;
+        a.wait_until("Reconnecting", |a| a.status().contains("Reconnecting"))
+            .await;
+        world.start_server().await;
+        a.wait_until("question closed after reconnect", |a| {
+            !a.screen().contains("─ Ask user") && !a.status().contains("Reconnecting")
+        })
+        .await;
+        a.wait_for("Question cancelled").await;
+        a.wait_for("Turn interrupted").await;
+        a.wait_idle().await;
+        let snapshot = world.snapshot(&id).await;
+        assert!(snapshot.pending_requests.is_empty());
+        assert_eq!(snapshot.status, SessionStatus::Idle);
+        assert_eq!(snapshot.turns[0].status, TurnStatus::Interrupted);
+        let late = answer_request(
+            &world,
+            &id,
+            &request,
+            json!({"answer":{"type":"option","label":"SQLite"}}),
+        )
+        .await;
+        assert_eq!(late.0, 200);
+        assert_eq!(late.1["alreadyResolved"], true);
+        read_the_box().await;
+        a.type_line("Continue").await;
+        a.wait_for("Continuing after restart.").await;
+        {
+            let requests = world.requests.lock().unwrap();
+            let result = requests[1]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|message| message["tool_call_id"] == "ask-1")
+                .unwrap();
+            assert!(
+                result["content"]
+                    .as_str()
+                    .unwrap()
+                    .to_lowercase()
+                    .contains("interrupt")
+            );
+        }
+        a.quit().await;
+        world.stop_server(Signal::SIGTERM).await;
+    }
+}
+
+async fn answer_request(
+    world: &World,
+    session: &str,
+    request: &str,
+    mut body: Value,
+) -> (u16, Value) {
+    body["clientName"] = json!("late-terminal");
+    let response = reqwest::Client::builder()
+        .unix_socket(world.path("state/server.sock"))
+        .build()
+        .unwrap()
+        .post(format!(
+            "http://localhost/v1/sessions/{session}/requests/{request}"
+        ))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    (response.status().as_u16(), response.json().await.unwrap())
+}
+
+#[tokio::test]
+async fn ask_user_first_terminal_wins_and_the_other_keeps_its_draft() {
+    let mut world = World::new(vec![
+        ask_reply(),
+        text_reply("Choice received."),
+        text_reply("Draft received."),
+    ])
+    .await;
+    world.start_server().await;
+    let a = world.open(&[], "canter-tui a").await;
+    a.wait_idle().await;
+    let id = world.only_session().await;
+    let b = world.open(&["--resume", &id], "canter-tui b").await;
+    b.wait_idle().await;
+    for c in "草稿".chars() {
+        b.press(KeyCode::Char(c)).await;
+    }
+    b.wait_for("› 草稿").await;
+    a.type_line("Choose storage").await;
+    for terminal in [&a, &b] {
+        terminal.wait_for("Ask user").await;
+    }
+    let request = world.snapshot(&id).await.pending_requests[0].id.clone();
+    read_the_box().await;
+    a.press(KeyCode::Char('2')).await;
+    b.wait_for("› 草稿").await;
+    b.press(KeyCode::Enter).await;
+    for terminal in [&a, &b] {
+        terminal.wait_for("Choice received.").await;
+        terminal.wait_idle().await;
+    }
+    let before = world.snapshot(&id).await;
+    let late = answer_request(
+        &world,
+        &id,
+        &request,
+        json!({"answer":{"type":"option","label":"SQLite"}}),
+    )
+    .await;
+    assert_eq!(late.0, 200);
+    assert_eq!(late.1["alreadyResolved"], true);
+    let repeat = answer_request(
+        &world,
+        &id,
+        &request,
+        json!({"answer":{"type":"text","text":"Late"}}),
+    )
+    .await;
+    assert_eq!(repeat, late);
+    assert_eq!(world.snapshot(&id).await, before);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let snapshot = world.snapshot(&id).await;
+    assert_eq!((snapshot.turns.len(), snapshot.queued_inputs.len()), (1, 0));
+    assert!(snapshot.pending_requests.is_empty());
+    assert!(!b.screen().contains("─ Ask user"));
+    assert!(b.screen().contains("› 草稿"));
+    assert!(
+        b.screen()
+            .contains("Which storage should we use? → PostgreSQL")
+    );
+    b.press(KeyCode::Enter).await;
+    b.wait_for("Draft received.").await;
+    a.wait_for("Draft received.").await;
+    a.quit().await;
+    b.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn ask_user_wrong_and_empty_answers_leave_requests_unchanged() {
+    let mut world = World::new(vec![
+        ask_reply(),
+        shell_reply("printf done > approved.txt"),
+        text_reply("Done."),
+    ])
+    .await;
+    world.start_server().await;
+    let a = world.open(&["Choose storage"], "canter-tui a").await;
+    a.wait_for("Ask user").await;
+    let id = world.only_session().await;
+    let before = world.snapshot(&id).await;
+    let request = &before.pending_requests[0].id;
+    for body in [
+        json!({"decision":"accept"}),
+        json!({"answer":{"type":"text","text":""}}),
+        json!({"answer":{"type":"text","text":"   "}}),
+        json!({"answer":{"type":"option","label":""}}),
+        json!({"answer":{"type":"option","label":"Not offered"}}),
+        json!({"decision":"accept","answer":{"type":"option","label":"SQLite"}}),
+        json!({}),
+    ] {
+        let (status, error) = answer_request(&world, &id, request, body).await;
+        assert_eq!(status, 400);
+        assert_eq!(error["code"], "invalid_request");
+        assert_eq!(world.snapshot(&id).await, before);
+    }
+    read_the_box().await;
+    a.press(KeyCode::Char('2')).await;
+    a.wait_for("Run this command?").await;
+    let before = world.snapshot(&id).await;
+    let request = &before.pending_requests[0].id;
+    for body in [json!({"answer":{"type":"text","text":"yes"}}), json!({})] {
+        let (status, error) = answer_request(&world, &id, request, body).await;
+        assert_eq!(status, 400);
+        assert_eq!(error["code"], "invalid_request");
+        assert_eq!(world.snapshot(&id).await, before);
+    }
+    read_the_box().await;
+    a.press(KeyCode::Char('1')).await;
+    a.wait_for("Done.").await;
+    a.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
 #[tokio::test]
 async fn slash_think_and_model_apply_to_the_next_request_and_info_line() {
     let mut world = World::new(vec![text_reply("回答一"), text_reply("回答二")]).await;

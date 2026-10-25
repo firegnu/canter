@@ -475,7 +475,8 @@ async fn cancel_approval_keeps_the_declined_result_and_stops_the_turn() {
         .resolve(
             &request.id,
             RequestResolveParams {
-                decision: ApprovalDecision::Cancel,
+                decision: Some(ApprovalDecision::Cancel),
+                answer: None,
                 client_name: "test".into(),
             },
         )

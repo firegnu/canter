@@ -51,7 +51,7 @@ pub(crate) struct State {
     pub active: Option<Active>,
     pub queue: VecDeque<QueuedInput>,
     pub steers: Vec<QueuedInput>,
-    pub approvals: HashMap<String, oneshot::Sender<ApprovalDecision>>,
+    pub requests: HashMap<String, oneshot::Sender<ApprovalResolution>>,
     pub resolved: HashMap<String, u64>,
     pub closing: bool,
     pub measured_context: Option<(u64, u64)>,
@@ -74,7 +74,7 @@ impl State {
             active: None,
             queue: VecDeque::new(),
             steers: Vec::new(),
-            approvals: HashMap::new(),
+            requests: HashMap::new(),
             resolved: HashMap::new(),
             closing: false,
             measured_context: None,
@@ -217,7 +217,7 @@ impl State {
             .collect();
         for event in self.journal.append(payloads).await? {
             if let EventPayload::RequestResolved { request_id, .. } = event.payload {
-                self.approvals.remove(&request_id);
+                self.requests.remove(&request_id);
                 self.resolved.insert(request_id, event.seq);
             }
         }
@@ -300,6 +300,7 @@ impl Session {
                     Item::CommandExecution { status, .. }
                     | Item::FileChange { status, .. }
                     | Item::FileRead { status, .. }
+                    | Item::UserInput { status, .. }
                         if *status == ItemStatus::InProgress =>
                     {
                         *status = ItemStatus::Failed;
@@ -572,24 +573,53 @@ impl Session {
             .pending_requests
             .iter()
             .find(|request| request.id == request_id)
-            .ok_or_else(|| {
-                CoreError::new(ErrorCode::RequestNotFound, "approval request not found")
-            })?;
-        if !matches!(&request.kind, RequestKind::Approval(approval) if params.decision != ApprovalDecision::Unknown && approval.available_decisions.contains(&params.decision))
-        {
-            return Err(CoreError::new(
-                ErrorCode::InvalidDecision,
-                "invalid approval decision",
-            ));
-        }
+            .ok_or_else(|| CoreError::new(ErrorCode::RequestNotFound, "request not found"))?;
+        let resolution = match (&request.kind, params.decision, &params.answer) {
+            (RequestKind::Approval(approval), Some(decision), None) => {
+                if decision == ApprovalDecision::Unknown
+                    || !approval.available_decisions.contains(&decision)
+                {
+                    return Err(CoreError::new(
+                        ErrorCode::InvalidDecision,
+                        "invalid approval decision",
+                    ));
+                }
+                ApprovalResolution::Answered { decision }
+            }
+            (RequestKind::UserInput(question), None, Some(answer)) => {
+                let valid = match answer {
+                    UserInputAnswer::Option { label } => {
+                        !label.trim().is_empty()
+                            && question.options.iter().any(|option| option.label == *label)
+                    }
+                    UserInputAnswer::Text { text } => {
+                        !text.trim().is_empty() && !text.contains(['\n', '\r'])
+                    }
+                    UserInputAnswer::Unknown => false,
+                };
+                if !valid {
+                    return Err(CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "invalid user input answer",
+                    ));
+                }
+                ApprovalResolution::UserInput {
+                    answer: answer.clone(),
+                }
+            }
+            _ => {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "answer must match the request type",
+                ));
+            }
+        };
         let events = state
             .journal
             .append(vec![
                 EventPayload::RequestResolved {
                     request_id: request_id.into(),
-                    resolution: ApprovalResolution::Answered {
-                        decision: params.decision,
-                    },
+                    resolution: resolution.clone(),
                     client_name: Some(params.client_name),
                 },
                 EventPayload::SessionStatus {
@@ -599,10 +629,10 @@ impl Session {
             ])
             .await?;
         state.resolved.insert(request_id.into(), events[0].seq);
-        if let Some(sender) = state.approvals.remove(request_id) {
-            let _ = sender.send(params.decision);
+        if let Some(sender) = state.requests.remove(request_id) {
+            let _ = sender.send(resolution);
         }
-        if params.decision == ApprovalDecision::Cancel
+        if params.decision == Some(ApprovalDecision::Cancel)
             && let Some(active) = &state.active
         {
             active.cancel.cancel();

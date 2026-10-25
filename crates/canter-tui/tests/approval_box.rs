@@ -149,6 +149,78 @@ fn resolve(request: &str, decision: ApprovalDecision) -> Option<Action> {
     })
 }
 
+fn question(screen: &mut Screen, request: &str) {
+    screen.event(json!({"type":"request.opened","request":{
+        "id":request,"turnId":"t1","createdAt":NOW,"kind":{
+            "type":"userInput","itemId":format!("item-{request}"),
+            "question":"Pick storage", "options":[
+                {"label":"SQLite","description":"Local files"},
+                {"label":"PostgreSQL","description":"Shared server"}
+            ]
+        }
+    }}));
+    screen.event(json!({"type":"session.status","status":"waiting_approval"}));
+}
+
+fn question_resolved(screen: &mut Screen, request: &str) {
+    screen.event(json!({"type":"request.resolved","requestId":request,
+        "resolution":{"type":"userInput","answer":{"type":"option","label":"PostgreSQL"}},
+        "clientName":"another-terminal"
+    }));
+}
+
+#[test]
+fn question_keys_follow_the_visible_frame_and_both_300ms_guards() {
+    let mut screen = Screen::new(100, 30);
+    screen.start_turn("t1");
+    screen.draw();
+    question(&mut screen, "q1");
+    assert_eq!(screen.key(KeyCode::Enter), None, "not drawn yet");
+    screen.draw();
+    assert!(screen.screen().contains("2. PostgreSQL"));
+    assert!(screen.dim("PostgreSQL"));
+    for key in [KeyCode::Enter, KeyCode::Char('2'), KeyCode::Down] {
+        screen.wait(ANSWER_GUARD_MS - 1);
+        assert_eq!(screen.key(key), None, "guard extends on every key");
+    }
+    screen.read_the_box();
+    screen.draw();
+    assert!(!screen.dim("PostgreSQL"));
+    // q2 arrived while the frame still shows q1. An old Enter cannot answer q2.
+    question_resolved(&mut screen, "q1");
+    question(&mut screen, "q2");
+    assert_eq!(screen.key(KeyCode::Enter), None);
+    screen.draw();
+    assert_eq!(
+        screen.key(KeyCode::Char('2')),
+        None,
+        "new box starts a guard"
+    );
+    screen.read_the_box();
+    assert_eq!(
+        screen.key(KeyCode::Char('2')),
+        Some(Action::ResolveUserInput {
+            request_id: "q2".into(),
+            answer: canter_protocol::UserInputAnswer::Option {
+                label: "PostgreSQL".into()
+            },
+        })
+    );
+    screen.draw();
+    assert!(!screen.screen().contains("─ Ask user"));
+    assert_eq!(screen.key(KeyCode::Char('稿')), None);
+    screen.wait(ANSWER_GUARD_MS - 1);
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        None,
+        "own answer protects the draft"
+    );
+    screen.draw();
+    assert!(screen.dim("稿"));
+    screen.read_the_box();
+    assert_eq!(screen.key(KeyCode::Enter), Some(Action::Send("稿".into())));
+}
+
 /// The buffer as text, one row per line, trailing spaces trimmed.
 fn rows(buffer: &Buffer) -> String {
     let mut out = String::new();

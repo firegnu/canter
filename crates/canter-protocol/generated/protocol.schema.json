@@ -56,6 +56,22 @@
         },
         {
           "properties": {
+            "answer": {
+              "$ref": "#/$defs/UserInputAnswer"
+            },
+            "type": {
+              "const": "userInput",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "answer"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "type": {
               "const": "cancelled",
               "type": "string"
@@ -1064,6 +1080,40 @@
         },
         {
           "properties": {
+            "answer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UserInputAnswer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "question": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "type": {
+              "const": "userInput",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "question",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "type": {
               "const": "unknown",
               "type": "string"
@@ -1364,6 +1414,19 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/UserInputRequest",
+          "properties": {
+            "type": {
+              "const": "userInput",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "type": {
               "const": "unknown",
@@ -1395,15 +1458,31 @@
     "RequestResolveParams": {
       "description": "POST /v1/sessions/{id}/requests/{rid}.",
       "properties": {
+        "answer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserInputAnswer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "clientName": {
           "type": "string"
         },
         "decision": {
-          "$ref": "#/$defs/ApprovalDecision"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalDecision"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
-        "decision",
         "clientName"
       ],
       "type": "object"
@@ -2126,6 +2205,91 @@
           "type": "object"
         }
       ]
+    },
+    "UserInputAnswer": {
+      "oneOf": [
+        {
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "type": {
+              "const": "option",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "label"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "UserInputOption": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "description"
+      ],
+      "type": "object"
+    },
+    "UserInputRequest": {
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/UserInputOption"
+          },
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "question",
+        "options"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

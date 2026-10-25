@@ -100,6 +100,27 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
                 Style::new().dim(),
             ))]
         }
+        Item::UserInput {
+            question,
+            answer,
+            status,
+            ..
+        } => {
+            let answer = match answer {
+                Some(canter_protocol::UserInputAnswer::Option { label }) => label.clone(),
+                Some(canter_protocol::UserInputAnswer::Text { text }) => format!("自己写：{text}"),
+                _ if *status == ItemStatus::InProgress => "Waiting for your answer".into(),
+                _ => "Question cancelled".into(),
+            };
+            wrap(
+                &notice(
+                    "? ",
+                    &format!("{} → {}", visible(question), visible(&answer)),
+                    Style::new().dim(),
+                ),
+                width,
+            )
+        }
         Item::Unknown => Vec::new(),
     }
 }
