@@ -302,6 +302,8 @@ async fn model_response(
     CoreError,
 > {
     let estimated = context::request_tokens(&request);
+    let accepts_images = shared.options.image_models.contains(&request.model);
+    let request = crate::images::prepare(request, accepts_images).await?;
     let mut stream = shared.model.stream(request, cancel.clone());
     let mut content = Vec::new();
     let mut text = String::new();

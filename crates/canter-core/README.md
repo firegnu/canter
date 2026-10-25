@@ -79,6 +79,10 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
 - `message { message, user_input }`：一条模型消息；user_input 区分用户原话和核心的中断提示，旧条目缺字段时默认 false。
 - `compaction_request { messages }`：每次摘要调用收到的完整消息，仅作审计，不混入正常对话。
 - `compaction { summary, messages, user_messages }`：压缩后的完整对话替换及保留的用户原话，恢复从最后一次压缩继续。原记录不删除。
+  有图片时另加可选 `user_inputs` 保存保留的完整用户消息；旧的纯文字记录仍原样读写。
+  图片用户消息用 `user_parts` 保存按顺序排列的文字和会话副本路径，不存内联 base64。
+  常规与压缩请求都临时读取副本，支持图片的模型收到 data URL；不支持的模型收到文字占位。
+  图片每张估 1024 token，并计入压缩保留用户消息的现有预算。
 
 全局和项目的每份 AGENTS.md 至多 64 KiB；文件不存在不警告，其他读取失败、非 UTF-8 或超限时整份跳过，warning 写明文件路径和原因，继续正常请求。
 警告也只在创建或打开会话时发送；中途问题变化不重新提示，下次打开时按当时的读取结果报告。

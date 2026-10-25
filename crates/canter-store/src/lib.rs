@@ -199,6 +199,27 @@ impl Store {
         }
         Ok(self.root.join(id))
     }
+
+    /// Publish original attachment bytes before their referencing events/history.
+    pub fn save_image(
+        &self,
+        id: &str,
+        bytes: &[u8],
+        extension: &str,
+    ) -> Result<PathBuf, StoreError> {
+        let dir = self.session_dir(id)?;
+        let mut file = tempfile::Builder::new()
+            .prefix("image-")
+            .suffix(&format!(".{extension}"))
+            .tempfile_in(&dir)?;
+        file.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(bytes)?;
+        file.as_file().sync_all()?;
+        let (_, path) = file.keep().map_err(|error| error.error)?;
+        File::open(dir)?.sync_all()?;
+        Ok(path)
+    }
 }
 
 fn lock(file: &File) -> Result<(), StoreError> {

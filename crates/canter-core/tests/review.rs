@@ -625,6 +625,7 @@ async fn failed_automatic_compaction_waits_until_a_new_turn_or_manual_request() 
         CoreOptions {
             context_window: 100_000,
             max_output_tokens: 32_768,
+            ..CoreOptions::default()
         },
     )
     .await;
@@ -740,6 +741,7 @@ async fn failed_automatic_compaction_continues_only_when_the_request_still_fits(
                 CoreOptions {
                     context_window: 100_000,
                     max_output_tokens: 32_768,
+                    ..CoreOptions::default()
                 },
             )
             .await;

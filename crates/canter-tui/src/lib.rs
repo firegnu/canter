@@ -17,6 +17,7 @@ mod cells;
 pub mod client;
 mod commands;
 pub mod fake;
+mod images;
 mod input;
 mod markdown;
 mod picker;

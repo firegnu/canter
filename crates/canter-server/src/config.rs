@@ -13,6 +13,8 @@ pub(crate) struct Config {
     pub model: String,
     #[serde(default = "default_models")]
     pub models: Vec<String>,
+    #[serde(default = "default_image_models")]
+    image_models: Vec<String>,
     context_window: u64,
     api_key: String,
 }
@@ -67,6 +69,7 @@ impl Config {
     pub fn options(&self) -> CoreOptions {
         CoreOptions {
             context_window: self.context_window,
+            image_models: self.image_models.clone(),
             ..CoreOptions::default()
         }
     }
@@ -74,4 +77,8 @@ impl Config {
 
 fn default_models() -> Vec<String> {
     vec!["deepseek-flash".into(), "deepseek-v4-pro".into()]
+}
+
+fn default_image_models() -> Vec<String> {
+    vec!["deepseek-flash".into()]
 }

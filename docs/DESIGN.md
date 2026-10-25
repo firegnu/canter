@@ -37,6 +37,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
      - 会话状态是六种字符串（`starting`、`idle`、`working`、`waiting_approval`、`error`、`closed`），不是 Codex 带标记的对象。权限模式的字段名沿用 `approvalPolicy`，值是 canter 自己的 `alwaysAsk`、`askForExecution`、`allowAll`；不要 Codex 的沙箱设置。
      - 关闭原因（P1-13）：`session.status` 事件和会话快照新增可选的 `closeReason`，关闭时为 `clientRequest`（客户端主动关）或 `serverShutdown`（服务端停机，包括升级）；离开 `closed` 时清空。原因随事件存盘，避免服务端重启后旁观终端撤销人的关闭意图。终端连接新服务端时，仅对停机关闭或缺少原因的旧会话自动 resume；未知关闭原因保持关闭，非关闭状态仍按崩溃恢复。用户主动 `--resume` 或在列表里选择会话不受此限制。
      - 送话：一条 input 命令带 `mode: queue / steer`，代替 Codex 的 `turn/start`、`turn/steer`。排队时发 `input.queued` 事件，快照里有 `queuedInputs`。
+     - 图片输入（P2-5）：沿用 Codex v2 `UserInput::LocalImage` 的 `type: localImage` 和 `path`，新增可选 `name` 保留附件的显示文件名；省掉 `detail`（固定不填）、URL 图片和客户端内联图片。本机客户端提交路径，服务端接收整条消息前读入、按内容识别 JPEG/PNG/GIF/WebP 并限制每张 8 MiB；保存原始字节到会话目录的 `image-<随机名>.<格式>`（0600），事件和模型历史只引用会话副本路径，后续不依赖原文件。`GET /v1/models` 补回 Codex 的可选 `inputModalities`（字符串数组 `text` / `image`），由本机 `image_models` 配置决定，供终端在附图前提示；缺少该字段的旧服务端按只有 deepseek-flash 收图处理。新字段可选，纯文字的输入、存盘和模型请求保持原格式。
      - 新增 `input.removed { inputIds, reason, turnId? }`，用于插话/合并消费、打断/关闭丢弃，避免这些路径在恢复和客户端快照中留下已处理的输入；保留 `turn.started.inputId`。插话回复的 `eventSeq` 指接收时的 `input.queued`，`turnId` 指当前目标轮，实际进入上下文时再移出。
      - 手动压缩命令在独立压缩轮的 `turn.started` 落盘后即回复 `{ eventSeq, turnId? }`，结果通过事件报告，避免 HTTP 等待整个摘要过程；压缩轮期间的插话按排队处理，完成后另开一轮。
      - 一轮结束：`turn.completed` 只更新状态、错误、用量，项目以 `item.*` 事件为准，和 Codex 一样。

@@ -185,6 +185,12 @@ pub enum UserInput {
     Text {
         text: String,
     },
+    LocalImage {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
+    },
     #[serde(other)]
     Unknown,
 }

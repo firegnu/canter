@@ -45,6 +45,10 @@ pub const ANSWER_GUARD_MS: i64 = 300;
 pub enum Action {
     /// Send this text to the session.
     Send(String),
+    SendImages {
+        text: String,
+        input: Vec<UserInput>,
+    },
     /// Answer an approval request.
     Resolve {
         request_id: String,
@@ -169,6 +173,9 @@ pub struct App {
     /// This terminal's `clientName`; what others send is marked with theirs.
     client_name: String,
     input: InputBox,
+    sending_image: Option<InputBox>,
+    image_models: Vec<String>,
+    clipboard: crate::images::Clipboard,
     commands: CommandList,
     /// A choice offered above the input box, such as `/mode` alone.
     chooser: Option<Chooser>,
@@ -221,6 +228,9 @@ impl App {
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::default(),
+            sending_image: None,
+            image_models: vec!["deepseek-flash".into()],
+            clipboard: crate::images::Clipboard::default(),
             commands: CommandList::default(),
             chooser: None,
             choosers: 0,
@@ -425,6 +435,11 @@ impl App {
             }
             KeyCode::Char('d') if ctrl && self.input.is_empty() => return Some(Action::Quit),
             KeyCode::Char('j') if ctrl => self.input.insert("\n"),
+            KeyCode::Char('v') if ctrl => match self.clipboard.image() {
+                Ok(Some(path)) => self.attach_image(path),
+                Ok(None) => {}
+                Err(error) => self.warning(&error),
+            },
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.input.insert("\n")
             }
@@ -477,8 +492,25 @@ impl App {
             }
             None if self.input.text().trim().is_empty() => None,
             None => {
+                if self.sending_image.is_some() {
+                    return None;
+                }
                 // Sending follows the latest output again.
                 self.scroll.top = None;
+                let input = self.input.parts();
+                if input
+                    .iter()
+                    .any(|part| matches!(part, UserInput::LocalImage { .. }))
+                {
+                    if !self.accepts_images() {
+                        return None;
+                    }
+                    self.sending_image = Some(self.input.clone());
+                    return Some(Action::SendImages {
+                        text: self.input.take(),
+                        input,
+                    });
+                }
                 Some(Action::Send(self.input.take()))
             }
         }
@@ -609,7 +641,64 @@ impl App {
             custom.push_str(&pasted.text().replace('\n', " "));
             return;
         }
-        self.input.insert(text);
+        if let Some(path) = crate::images::pasted_path(text, &self.snapshot.settings.cwd) {
+            self.attach_image(path);
+        } else {
+            self.input.insert(text);
+        }
+    }
+
+    pub fn set_models(&mut self, models: &[canter_protocol::Model]) {
+        self.image_models = models
+            .iter()
+            .filter(|model| {
+                model
+                    .input_modalities
+                    .as_ref()
+                    .map_or(model.model == "deepseek-flash", |modalities| {
+                        modalities.iter().any(|kind| kind == "image")
+                    })
+            })
+            .map(|model| model.model.clone())
+            .collect();
+    }
+
+    /// Replace only the OS clipboard boundary (e.g. for headless clients/tests).
+    pub fn with_clipboard_reader(
+        mut self,
+        reader: impl FnMut(&std::path::Path) -> Result<bool, String> + Send + 'static,
+    ) -> Self {
+        self.clipboard = crate::images::Clipboard::with_reader(reader);
+        self
+    }
+
+    fn accepts_images(&mut self) -> bool {
+        let model = &self.snapshot.settings.model;
+        if self.image_models.contains(model) {
+            return true;
+        }
+        let suggestion = self
+            .image_models
+            .first()
+            .map(|model| format!("; switch with /model {model}"))
+            .unwrap_or_default();
+        self.warning(&format!("{model} does not accept images{suggestion}"));
+        false
+    }
+
+    fn attach_image(&mut self, path: std::path::PathBuf) {
+        if self.accepts_images() {
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            self.input.attach(path.to_string_lossy().into_owned(), name);
+        }
+    }
+
+    pub fn sent(&mut self) {
+        self.sending_image = None;
     }
 
     /// A line for the conversation, e.g. the server's version differs.
@@ -638,6 +727,13 @@ impl App {
             &format!("Not sent: {message}"),
             Style::new().red(),
         ));
+    }
+
+    pub fn image_send_failed(&mut self, message: &str) {
+        if let Some(draft) = self.sending_image.take() {
+            self.input.restore(draft);
+        }
+        self.send_failed(message);
     }
 
     /// The answer did not reach the server; the box opens again.
@@ -1495,6 +1591,10 @@ fn first_line(input: &[UserInput]) -> String {
         .iter()
         .find_map(|part| match part {
             UserInput::Text { text } => Some(sanitize(text)),
+            UserInput::LocalImage { name, .. } => Some(format!(
+                "[Image {}]",
+                sanitize(name.as_deref().unwrap_or("image"))
+            )),
             UserInput::Unknown => None,
         })
         .unwrap_or_default();

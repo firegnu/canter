@@ -488,6 +488,248 @@ fn text_reply(text: &str) -> String {
     )
 }
 
+// A complete 1×1 PNG; the literal data URL independently checks unchanged bytes.
+const PNG: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0,
+    0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 100, 248, 15, 0, 1, 5, 1, 1,
+    39, 24, 227, 102, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+const PNG_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+#[tokio::test]
+async fn pasted_image_reaches_the_model_as_original_png() {
+    let mut world = World::new(vec![text_reply("这是一张图片")]).await;
+    let path = world.path("work/screenshot.png");
+    fs::write(&path, PNG).unwrap();
+    world.start_server().await;
+    let terminal = world.open(&["-m", "deepseek-flash"], "image").await;
+    terminal.wait_for("deepseek-flash").await;
+    terminal
+        .keys
+        .send(TermEvent::Paste(format!("'{}'", path.display())));
+    terminal.type_line("这是什么").await;
+    terminal.wait_for("这是一张图片").await;
+    terminal.wait_idle().await;
+    let request = world.requests.lock().unwrap()[0].clone();
+    let user = request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "user")
+        .unwrap();
+    assert_eq!(
+        user["content"],
+        json!([
+            {"type":"image_url", "image_url":{"url":PNG_URL}},
+            {"type":"text", "text":"这是什么"}
+        ])
+    );
+    assert!(terminal.screen().contains("[Image #1 screenshot.png]"));
+    let id = world.only_session().await;
+    let snapshot = world.snapshot(&id).await;
+    let canter_protocol::UserInput::LocalImage { path: saved, .. } = &snapshot.turns[0].input[0]
+    else {
+        panic!("image input persisted");
+    };
+    assert!(
+        Path::new(saved).starts_with(
+            world
+                .path(&format!("state/sessions/{id}"))
+                .canonicalize()
+                .unwrap()
+        )
+    );
+    assert_eq!(fs::read(saved).unwrap(), PNG);
+    assert_eq!(
+        fs::metadata(saved).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    terminal.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn image_history_survives_source_deletion_model_switch_compaction_and_restart() {
+    let mut world = World::new(
+        (1..=6)
+            .map(|n| text_reply(&format!("image reply {n}")))
+            .collect(),
+    )
+    .await;
+    let path = world.path("work/screenshot.png");
+    fs::write(&path, PNG).unwrap();
+    world.start_server().await;
+    let terminal = world.open(&["-m", "deepseek-flash"], "image").await;
+    terminal.wait_for("deepseek-flash").await;
+    terminal
+        .keys
+        .send(TermEvent::Paste(path.display().to_string()));
+    terminal.type_line("这是什么").await;
+    terminal.wait_for("image reply 1").await;
+    terminal.wait_idle().await;
+    fs::remove_file(&path).unwrap();
+    terminal.type_line("继续").await;
+    terminal.wait_for("image reply 2").await;
+    terminal.wait_idle().await;
+    terminal.type_line("/model deepseek-v4-pro").await;
+    terminal
+        .wait_until("pro selected", |t| t.info().starts_with("deepseek-v4-pro"))
+        .await;
+    terminal.type_line("继续文字").await;
+    terminal.wait_for("image reply 3").await;
+    terminal.wait_idle().await;
+    terminal.type_line("/model deepseek-flash").await;
+    terminal
+        .wait_until("flash selected", |t| t.info().starts_with("deepseek-flash"))
+        .await;
+    terminal.type_line("再看图片").await;
+    terminal.wait_for("image reply 4").await;
+    terminal.wait_idle().await;
+    terminal.type_line("/compact").await;
+    terminal.wait_for("Context compacted").await;
+    terminal.wait_idle().await;
+    let id = terminal.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+    world.start_server().await;
+    let terminal = world.open(&["--resume", &id], "image-reopened").await;
+    terminal.wait_for("deepseek-flash").await;
+    terminal.type_line("重开后再看").await;
+    terminal.wait_for("image reply 6").await;
+    terminal.wait_idle().await;
+    let requests = world.requests.lock().unwrap().clone();
+    for index in [0, 1, 3, 4, 5] {
+        assert!(
+            requests[index]["messages"].to_string().contains(PNG_URL),
+            "request {index} lost the image"
+        );
+    }
+    assert!(!requests[2]["messages"].to_string().contains("data:image"));
+    assert!(
+        requests[2]["messages"]
+            .to_string()
+            .contains("[image omitted: screenshot.png]")
+    );
+    terminal.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn rejected_images_leave_the_whole_message_out_and_the_draft_can_be_retried() {
+    let mut world = World::new(vec![text_reply("image accepted")]).await;
+    let path = world.path("work/screenshot.png");
+    fs::write(&path, PNG).unwrap();
+    world.start_server().await;
+    let terminal = world.open(&["-m", "deepseek-flash"], "image").await;
+    terminal.wait_for("deepseek-flash").await;
+    terminal
+        .keys
+        .send(TermEvent::Paste(path.display().to_string()));
+    terminal.wait_for("[Image #1 screenshot.png]").await;
+    let id = world.only_session().await;
+    let before = world.snapshot(&id).await;
+    fs::write(&path, b"not an image").unwrap();
+    terminal.type_line("这是什么").await;
+    terminal
+        .wait_for("image must be JPEG, PNG, GIF or WebP")
+        .await;
+    assert!(
+        terminal
+            .screen()
+            .contains("[Image #1 screenshot.png]这是什么")
+    );
+    assert_eq!(world.snapshot(&id).await, before);
+    assert!(world.requests.lock().unwrap().is_empty());
+
+    fs::write(&path, PNG).unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(8 * 1024 * 1024 + 1)
+        .unwrap();
+    terminal.press(KeyCode::Enter).await;
+    terminal.wait_for("image exceeds the 8 MiB limit").await;
+    assert!(
+        terminal
+            .screen()
+            .contains("[Image #1 screenshot.png]这是什么")
+    );
+    assert_eq!(world.snapshot(&id).await, before);
+
+    fs::remove_file(&path).unwrap();
+    terminal.press(KeyCode::Enter).await;
+    terminal.wait_for("cannot read image file").await;
+    assert!(
+        terminal
+            .screen()
+            .contains("[Image #1 screenshot.png]这是什么")
+    );
+    assert_eq!(world.snapshot(&id).await, before);
+
+    fs::write(&path, PNG).unwrap();
+    terminal.press(KeyCode::Enter).await;
+    terminal.wait_for("image accepted").await;
+    terminal.wait_idle().await;
+    assert!(
+        world.requests.lock().unwrap()[0]["messages"]
+            .to_string()
+            .contains(PNG_URL)
+    );
+    terminal.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn configured_image_models_control_attachments_and_history_fallback() {
+    let mut world = World::new(vec![
+        text_reply("custom image accepted"),
+        text_reply("text accepted"),
+    ])
+    .await;
+    let config = world.path("state/config.json");
+    let mut value: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    value["image_models"] = json!(["fake-model"]);
+    fs::write(config, serde_json::to_vec(&value).unwrap()).unwrap();
+    let path = world.path("work/screenshot.png");
+    fs::write(&path, PNG).unwrap();
+    world.start_server().await;
+    let terminal = world.open(&[], "image").await;
+    terminal.wait_for("fake-model").await;
+    terminal
+        .keys
+        .send(TermEvent::Paste(path.display().to_string()));
+    terminal.type_line("这是什么").await;
+    terminal.wait_for("custom image accepted").await;
+    terminal.wait_idle().await;
+    terminal.type_line("/model deepseek-flash").await;
+    terminal
+        .wait_until("flash selected", |t| t.info().starts_with("deepseek-flash"))
+        .await;
+    terminal
+        .keys
+        .send(TermEvent::Paste(path.display().to_string()));
+    terminal
+        .wait_for("deepseek-flash does not accept images; switch with /model fake-model")
+        .await;
+    terminal.type_line("just text").await;
+    terminal.wait_for("text accepted").await;
+    terminal.wait_idle().await;
+    let requests = world.requests.lock().unwrap().clone();
+    assert!(requests[0]["messages"].to_string().contains(PNG_URL));
+    assert!(!requests[1]["messages"].to_string().contains("data:image"));
+    assert!(
+        requests[1]["messages"]
+            .to_string()
+            .contains("[image omitted: screenshot.png]")
+    );
+    assert_eq!(
+        requests[1]["messages"].as_array().unwrap().last().unwrap()["content"],
+        "just text"
+    );
+    terminal.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
 fn ask_reply() -> String {
     format!(
         "data: {}\n\ndata: [DONE]\n\n",

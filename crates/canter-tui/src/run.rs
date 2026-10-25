@@ -273,6 +273,10 @@ where
     let session = snapshot.id.clone();
     let stream = client.subscribe(&session, snapshot.last_event_seq).await?;
     let mut app = App::new(snapshot, home.clone(), now_ms()).with_client_name(client_name.clone());
+    match client.list_models().await {
+        Ok(models) => app.set_models(&models),
+        Err(error) => app.warning(&format!("Could not read image capabilities: {error}")),
+    }
     if let Some(warning) = &connected.warning {
         app.warning(warning);
     }
@@ -342,7 +346,10 @@ where
                     }
                 }
                 Some(Action::PickModel) => match chat.client.list_models().await {
-                    Ok(models) => crate::commands::choose_model(ui.app_mut(), models),
+                    Ok(models) => {
+                        ui.app_mut().set_models(&models);
+                        crate::commands::choose_model(ui.app_mut(), models);
+                    }
                     Err(error) => ui
                         .app_mut()
                         .warning(&format!("Could not list models: {error}")),
@@ -461,6 +468,9 @@ fn terminal_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> Run
 
 /// What the background tasks tell the screen.
 enum Message {
+    Sent,
+    ImageSendFailed(String),
+    Models(Vec<canter_protocol::Model>),
     Server(Box<Event>),
     SendFailed(String),
     NameFailed(String),
@@ -631,12 +641,18 @@ impl<C: Connector> Chat<C> {
         self.session = snapshot.id.clone();
         *ui.app_mut() = App::new(snapshot, self.home.clone(), now_ms())
             .with_client_name(self.client_name.clone());
+        if let Ok(models) = self.client.list_models().await {
+            ui.app_mut().set_models(&models);
+        }
         Some(messages)
     }
 
     fn message<B: Backend>(&mut self, ui: &mut Ui<B>, message: Message) -> bool {
         let app = ui.app_mut();
         match message {
+            Message::Sent => app.sent(),
+            Message::ImageSendFailed(error) => app.image_send_failed(&error),
+            Message::Models(models) => app.set_models(&models),
             Message::Server(event) => app.apply_event(&event, now_ms()),
             Message::SendFailed(error) => app.send_failed(&error),
             Message::NameFailed(error) => {
@@ -664,7 +680,13 @@ impl<C: Connector> Chat<C> {
         let session = self.session.clone();
         let sender = self.sender.clone();
         match action {
-            Action::Send(text) => {
+            action @ (Action::Send(_) | Action::SendImages { .. }) => {
+                let has_images = matches!(&action, Action::SendImages { .. });
+                let (text, input) = match action {
+                    Action::Send(text) => (text.clone(), vec![UserInput::Text { text }]),
+                    Action::SendImages { text, input } => (text, input),
+                    _ => unreachable!(),
+                };
                 let snapshot = app.snapshot();
                 // Name a new session after its first message, for the session list.
                 let unnamed = snapshot.settings.name.is_none()
@@ -672,14 +694,22 @@ impl<C: Connector> Chat<C> {
                     && snapshot.queued_inputs.is_empty();
                 let name = unnamed.then(|| session_title(&text));
                 let params = SessionInputParams {
-                    input: vec![UserInput::Text { text }],
+                    input,
                     mode: InputMode::Queue,
                     client_name: self.client_name.clone(),
                 };
                 tokio::spawn(async move {
                     if let Err(error) = client.send_input(&session, &params).await {
-                        let _ = sender.send(Message::SendFailed(error.to_string()));
+                        let error = if has_images {
+                            Message::ImageSendFailed(error.to_string())
+                        } else {
+                            Message::SendFailed(error.to_string())
+                        };
+                        let _ = sender.send(error);
                         return;
+                    }
+                    if has_images {
+                        let _ = sender.send(Message::Sent);
                     }
                     if let Some(name) = name {
                         let update = SessionUpdateParams {
@@ -794,6 +824,9 @@ async fn pump<C: Connector>(
             tokio::time::sleep(RETRY).await;
             match reconnect(&*connector, server.as_deref(), &session, &env, cursor).await {
                 Ok((connected, stream)) => {
+                    if let Ok(models) = connected.client.list_models().await {
+                        let _ = sender.send(Message::Models(models));
+                    }
                     server.clone_from(&connected.server);
                     if sender.send(Message::Reconnected(connected)).is_err() {
                         return;

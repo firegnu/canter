@@ -205,6 +205,11 @@ async fn models(State(app): State<Arc<App>>) -> Json<ModelListResponse> {
                 model: model.clone(),
                 display_name: model.clone(),
                 is_default: model == &app.default_model,
+                input_modalities: Some(if app.options.image_models.contains(model) {
+                    vec!["text".into(), "image".into()]
+                } else {
+                    vec!["text".into()]
+                }),
             })
             .collect(),
         next_cursor: None,
