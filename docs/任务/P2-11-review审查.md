@@ -93,3 +93,4 @@
 - 没做的事：未重跑全套，未改 PR 收集、权限和协议，未访问真实模型或 GitHub，未修改主仓库审查文件，未合并或推送。
 - 踩过的坑：没有。
 - 要主控决定的事：没有。
+- 后续主控按 P1-11 纠正提示语言：将块外列表提示改为 `[Untracked file list truncated; use the read tool or git status to see all of it]`，同步测试断言；仅运行 `cargo test -p canter-tui --test review local_`，3 个相关测试通过，使用本任务 CARGO_TARGET_DIR 并等前台结束后继续。

@@ -217,7 +217,7 @@ async fn local(cwd: &str) -> Result<(String, String), String> {
             "Review uncommitted changes. Diff paths are relative to the repository root. Read untracked files if needed.\n{}\n{}\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}",
             if truncated { TRUNCATED } else { "" },
             if list_truncated {
-                "[列表已截断，用读文件或 git status 看全部]"
+                "[Untracked file list truncated; use the read tool or git status to see all of it]"
             } else {
                 ""
             },

@@ -237,7 +237,7 @@ async fn local_review_collects_staged_unstaged_and_untracked_changes_only_when_p
     assert_untrusted(text, "STAGED_DIFF_0", "+staged");
     assert_untrusted(text, "UNSTAGED_DIFF_0", "+unstaged");
     assert!(!text.contains("not loaded eagerly"));
-    assert!(!text.contains("列表已截断"));
+    assert!(!text.contains("Untracked file list truncated"));
     let nested = cwd.join("nested");
     std::fs::create_dir(&nested).unwrap();
     let params = prepare(nested.to_str().unwrap(), &env, "", "test")
@@ -331,8 +331,10 @@ async fn large_local_diff_and_untracked_list_keep_the_message_under_300_kib() {
     assert!(list.contains("untracked-0000-"));
     assert!(!list.contains("untracked-0499-"));
     assert!(
-        text.find("列表已截断，用读文件或 git status 看全部")
-            .unwrap()
+        text.find(
+            "[Untracked file list truncated; use the read tool or git status to see all of it]"
+        )
+        .unwrap()
             < block_start
     );
     assert!(text.contains("已截断，需要时用读文件工具看"));
