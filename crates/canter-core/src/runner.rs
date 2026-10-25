@@ -3,8 +3,8 @@ use crate::{
     session::{Done, Shared, id},
 };
 use canter_model::{
-    AssistantContent, ErrorKind, FinishReason, Message, ModelError, ModelEvent, Request,
-    RequestOptions, ToolCall, ToolDefinition, Usage,
+    AssistantContent, ErrorKind, FinishReason, Message, ModelError, ModelEvent, Request, ToolCall,
+    Usage,
 };
 use canter_protocol::*;
 use canter_tools::{PermissionCheck, PreparedCall, Tool, ToolOutcome, ToolOutput};
@@ -140,31 +140,7 @@ async fn conversation(
         let request = {
             let mut state = shared.state.lock().await;
             state.consume_steering(turn_id).await?;
-            let effort = match state.journal.snapshot.settings.reasoning_effort {
-                canter_protocol::ReasoningEffort::Unknown => canter_protocol::ReasoningEffort::High,
-                effort => effort,
-            };
-            Request {
-                model: state.journal.snapshot.settings.model.clone(),
-                messages: state.prefix.iter().chain(&state.history).cloned().collect(),
-                tools: Tool::ALL
-                    .into_iter()
-                    .map(|tool| {
-                        let definition = tool.definition();
-                        ToolDefinition {
-                            name: definition.name.into(),
-                            description: definition.description.into(),
-                            parameters: definition.parameters,
-                        }
-                    })
-                    .collect(),
-                options: RequestOptions {
-                    thinking: Some(effort != canter_protocol::ReasoningEffort::None),
-                    reasoning_effort: (effort != canter_protocol::ReasoningEffort::None)
-                        .then(|| effort.as_str().to_owned()),
-                    max_output_tokens: Some(shared.options.max_output_tokens),
-                },
-            }
+            context::request(&state, shared.options.max_output_tokens)
         };
         let estimated = context::request_tokens(&request);
         let occupancy =

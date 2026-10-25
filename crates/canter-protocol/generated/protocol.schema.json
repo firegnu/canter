@@ -108,6 +108,153 @@
         }
       ]
     },
+    "ContextMessages": {
+      "properties": {
+        "assistant": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "images": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "toolResults": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "user": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "count",
+        "tokens",
+        "user",
+        "assistant",
+        "toolResults",
+        "images"
+      ],
+      "type": "object"
+    },
+    "ContextResponse": {
+      "description": "Read-only estimate of the currently loaded context, using the compaction heuristic.",
+      "properties": {
+        "compactionTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "contextTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "estimatedTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "freeTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "messages": {
+          "$ref": "#/$defs/ContextMessages"
+        },
+        "modelContextWindow": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "prefix": {
+          "items": {
+            "$ref": "#/$defs/ContextSection"
+          },
+          "type": "array"
+        },
+        "skillCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "toolCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "toolTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "prefix",
+        "skillCount",
+        "toolCount",
+        "toolTokens",
+        "messages",
+        "estimatedTokens",
+        "freeTokens",
+        "modelContextWindow"
+      ],
+      "type": "object"
+    },
+    "ContextSection": {
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ContextSectionKind"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "tokens"
+      ],
+      "type": "object"
+    },
+    "ContextSectionKind": {
+      "enum": [
+        "system",
+        "globalInstructions",
+        "projectInstructions",
+        "skills",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "ErrorCode": {
       "enum": [
         "invalid_request",

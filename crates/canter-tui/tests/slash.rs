@@ -17,9 +17,11 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 10] = [
+const COMMANDS: [(&str, &str); 12] = [
     ("/compact", "Summarize the conversation to free up context"),
+    ("/context", "Show context contents and token estimates"),
     ("/exit", "Quit canter"),
+    ("/files", "List session files and git status"),
     ("/help", "Show available commands"),
     ("/mode", "Change the permission mode"),
     ("/model", "Change the model"),
@@ -324,7 +326,7 @@ fn a_slash_lists_the_commands_above_the_input_box() {
         );
     }
     assert!(list[0].starts_with(" › /compact"), "{shown}");
-    assert!(list[1].starts_with("   /exit"), "{shown}");
+    assert!(list[1].starts_with("   /context"), "{shown}");
 
     screen.type_text("e");
     screen.draw();
@@ -354,14 +356,14 @@ fn up_down_tab_and_enter_work_on_the_list() {
     screen.draw();
     let shown = screen.text();
     assert!(
-        screen.above_box(COMMANDS.len())[1].starts_with(" › /exit"),
+        screen.above_box(COMMANDS.len())[1].starts_with(" › /context"),
         "{shown}"
     );
 
     assert_eq!(screen.key(KeyCode::Tab), None);
     screen.draw();
-    assert_eq!(screen.input(), "› /exit", "{}", screen.text());
-    assert_eq!(screen.key(KeyCode::Enter), Some(Action::Quit));
+    assert_eq!(screen.input(), "› /context", "{}", screen.text());
+    assert_eq!(screen.key(KeyCode::Enter), Some(Action::Context));
 
     // Enter on `/` alone completes the command selected, like Tab.
     let mut screen = Screen::new();
@@ -370,8 +372,8 @@ fn up_down_tab_and_enter_work_on_the_list() {
     assert_eq!(screen.key(KeyCode::Down), None);
     assert_eq!(screen.key(KeyCode::Enter), None);
     screen.draw();
-    assert_eq!(screen.input(), "› /exit", "{}", screen.text());
-    assert_eq!(screen.key(KeyCode::Enter), Some(Action::Quit));
+    assert_eq!(screen.input(), "› /context", "{}", screen.text());
+    assert_eq!(screen.key(KeyCode::Enter), Some(Action::Context));
 }
 
 /// The user's decision: Enter runs a command only when its whole name is
@@ -424,6 +426,8 @@ fn each_command_asks_for_its_action() {
         ("/resume", Some(Action::PickSession)),
         ("/compact", Some(Action::Compact)),
         ("/usage", Some(Action::Usage)),
+        ("/context", Some(Action::Context)),
+        ("/files", Some(Action::Files)),
         ("/mode allow-all", set_mode(PermissionMode::AllowAll)),
         ("/mode always-ask", set_mode(PermissionMode::AlwaysAsk)),
         (
@@ -709,7 +713,9 @@ fn a_command_after_leading_blanks_is_still_a_command() {
 /// conversation says why and the draft stays.
 #[test]
 fn text_after_a_command_without_arguments_is_refused() {
-    for name in ["compact", "exit", "help", "new", "resume"] {
+    for name in [
+        "compact", "context", "files", "exit", "help", "new", "resume",
+    ] {
         let mut screen = Screen::new();
         assert_eq!(screen.enter(&format!("/{name} now")), None, "/{name}");
         screen.draw();
@@ -783,7 +789,7 @@ fn the_list_shows_after_leading_blanks() {
     screen.type_text(" /co");
     screen.draw();
     assert!(
-        screen.above_box(1)[0].starts_with(" › /compact"),
+        screen.above_box(2)[0].starts_with(" › /compact"),
         "{}",
         screen.text()
     );
@@ -981,4 +987,162 @@ fn shift_tab_on_a_frame_with_a_choice_or_the_list_does_nothing() {
             "{open_shows:?} closed on screen"
         );
     }
+}
+
+#[tokio::test]
+async fn files_lists_deduplicated_history_and_isolated_git_status() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let repo = home.join("project");
+    let cwd = repo.join("src");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .env("HOME", &home)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(cwd.join("tracked.txt"), "original").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "initial"]);
+    std::fs::write(cwd.join("tracked.txt"), "modified").unwrap();
+    std::fs::write(cwd.join("untracked space.txt"), "new").unwrap();
+    // A configured fsmonitor must never be executed by /files.
+    git(&["config", "core.fsmonitor", "touch forbidden-marker"]);
+    git(&[
+        "config",
+        "filter.probe.clean",
+        "touch forbidden-filter; cat",
+    ]);
+    std::fs::write(repo.join(".gitattributes"), "*.txt filter=probe\n").unwrap();
+    let mut snapshot = SessionSnapshot::empty(SESSION);
+    snapshot.settings.cwd = cwd.to_string_lossy().into_owned();
+    let mut screen = Screen::sized(130, 32);
+    screen.ui = Ui::new(
+        TestBackend::new(130, 32),
+        App::new(snapshot, Some(home.to_string_lossy().into_owned()), NOW),
+    )
+    .unwrap();
+    screen.seq = 0;
+    screen.start_turn("t1");
+    for (id, path) in [
+        ("r1", cwd.join("tracked.txt")),
+        ("r2", std::path::PathBuf::from("tracked.txt")),
+        ("r3", home.join("other.txt")),
+    ] {
+        screen.event(json!({"type":"item.completed","turnId":"t1","item":{"type":"fileRead","id":id,"path":path,"startLine":1,"content":"read","status":"completed"}}));
+    }
+    for (id, kind) in [("w1", "add"), ("w2", "update"), ("w3", "update")] {
+        screen.event(json!({"type":"item.completed","turnId":"t1","item":{"type":"fileChange","id":id,"changes":[{"path":cwd.join("created.txt"),"kind":{"type":kind},"diff":""}],"status":"completed"}}));
+    }
+    screen.event(json!({"type":"item.completed","turnId":"t1","item":{"type":"fileChange","id":"delete","changes":[{"path":cwd.join("gone.txt"),"kind":{"type":"delete"},"diff":""}],"status":"completed"}}));
+    screen.ui.app_mut().show_files().await;
+    screen.draw();
+    let shown = screen.text();
+    assert!(shown.contains("Read files"), "{shown}");
+    let shown = &shown[shown.find("Read files").unwrap()..];
+    assert!(shown.contains("Changed files"), "{shown}");
+    assert_eq!(shown.matches("~/other.txt").count(), 1, "{shown}");
+    assert_eq!(shown.matches("created.txt").count(), 1, "{shown}");
+    assert!(shown.contains("新增 / 修改  created.txt"), "{shown}");
+    assert!(shown.contains("删除  gone.txt"), "{shown}");
+    assert!(shown.find("tracked.txt").unwrap() < shown.find("~/other.txt").unwrap());
+    assert!(shown.contains("Git: main"), "{shown}");
+    assert!(shown.contains(" M  tracked.txt"), "{shown}");
+    assert!(shown.contains("??  untracked space.txt"), "{shown}");
+    assert!(shown.contains("Shell edits"), "{shown}");
+    assert!(!repo.join("forbidden-marker").exists());
+    assert!(!repo.join("forbidden-filter").exists());
+    screen.ui.backend_mut().resize(40, 32);
+    screen.draw();
+    assert!(
+        screen
+            .lines()
+            .iter()
+            .any(|line| line.contains("Shell edits") && line.ends_with('…')),
+        "{}",
+        screen.text()
+    );
+
+    let plain = temp.path().join("plain");
+    std::fs::create_dir(&plain).unwrap();
+    let mut snapshot = SessionSnapshot::empty("empty");
+    snapshot.settings.cwd = plain.to_string_lossy().into_owned();
+    let mut screen = Screen::sized(80, HEIGHT);
+    screen.ui = Ui::new(TestBackend::new(80, HEIGHT), App::new(snapshot, None, NOW)).unwrap();
+    screen.ui.app_mut().show_files().await;
+    screen.draw();
+    let shown = screen.text();
+    assert_eq!(shown.matches("none").count(), 2, "{shown}");
+    assert!(shown.contains("not a git repository"), "{shown}");
+}
+
+#[test]
+fn context_lists_categories_measured_usage_and_truncates_narrow_rows() {
+    let report = serde_json::from_value(json!({
+        "prefix":[
+            {"kind":"system","path":null,"tokens":3000},
+            {"kind":"globalInstructions","path":"/home/test/.agents/AGENTS.md","tokens":1000},
+            {"kind":"projectInstructions","path":"/project/AGENTS.md","tokens":2000},
+            {"kind":"skills","path":null,"tokens":1000}
+        ],
+        "skillCount":5,"toolCount":9,"toolTokens":4000,"compactionTokens":12000,
+        "messages":{"count":34,"tokens":395000,"user":20000,"assistant":80000,"toolResults":290000,"images":5000},
+        "estimatedTokens":418000,"freeTokens":582000,"modelContextWindow":1000000,"contextTokens":420000
+    })).unwrap();
+    for width in [140, 40] {
+        let mut screen = Screen::sized(width, 30);
+        screen.ui.app_mut().show_context(&report);
+        screen.draw();
+        let shown = screen.text();
+        for label in [
+            "System prompt",
+            "Global AGENTS.md",
+            "Project AGENTS.md",
+            "Skills (5)",
+            "Tools (9)",
+            "Compaction summary",
+            "Messages (34)",
+            "Free",
+        ] {
+            assert!(shown.contains(label), "{label}: {shown}");
+        }
+        if width == 140 {
+            assert!(shown.contains("ctx 42% 420k/1M (last request)"), "{shown}");
+            assert!(
+                shown.contains("user 20k · assistant 80k · tool results 290k · images 5k"),
+                "{shown}"
+            );
+            assert!(shown.contains("582k"));
+        } else {
+            assert!(
+                screen
+                    .lines()
+                    .iter()
+                    .any(|line| line.contains("Messages (34)") && line.ends_with('…')),
+                "{shown}"
+            );
+        }
+    }
+    let mut report = report;
+    report.context_tokens = None;
+    report.compaction_tokens = None;
+    let mut screen = Screen::new();
+    screen.ui.app_mut().show_context(&report);
+    screen.draw();
+    let shown = screen.text();
+    assert!(shown.contains("Context  no request yet"), "{shown}");
+    assert!(!shown.contains("Compaction summary"));
 }

@@ -117,6 +117,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::SESSIONS, post(create).get(list))
         .route(routes::SESSION, get(read).patch(update).delete(close))
         .route(routes::SKILLS, get(skills))
+        .route(routes::CONTEXT, get(context))
         .route(routes::RESUME, post(resume))
         .route(routes::INPUT, post(input))
         .route(routes::INTERRUPT, post(interrupt))
@@ -287,6 +288,13 @@ async fn usage(State(app): State<Arc<App>>) -> Result<Json<UsageResponse>, ApiEr
     }
     report.data = rows.into_values().collect();
     Ok(Json(report))
+}
+
+async fn context(
+    State(app): State<Arc<App>>,
+    ApiPath(SessionPath { id }): ApiPath<SessionPath>,
+) -> Result<Json<ContextResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.context().await))
 }
 
 async fn skills(

@@ -489,3 +489,61 @@ pub struct ErrorInfo {
     pub message: String,
     pub additional_details: Option<String>,
 }
+
+/// Read-only estimate of the currently loaded context, using the compaction heuristic.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextResponse {
+    pub prefix: Vec<ContextSection>,
+    pub skill_count: usize,
+    pub tool_count: usize,
+    #[ts(type = "number")]
+    pub tool_tokens: u64,
+    #[ts(type = "number | null")]
+    pub compaction_tokens: Option<u64>,
+    pub messages: ContextMessages,
+    #[ts(type = "number")]
+    pub estimated_tokens: u64,
+    #[ts(type = "number")]
+    pub free_tokens: u64,
+    #[ts(type = "number")]
+    pub model_context_window: u64,
+    #[ts(type = "number | null")]
+    pub context_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSection {
+    pub kind: ContextSectionKind,
+    pub path: Option<String>,
+    #[ts(type = "number")]
+    pub tokens: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ContextSectionKind {
+    System,
+    GlobalInstructions,
+    ProjectInstructions,
+    Skills,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextMessages {
+    pub count: usize,
+    #[ts(type = "number")]
+    pub tokens: u64,
+    #[ts(type = "number")]
+    pub user: u64,
+    #[ts(type = "number")]
+    pub assistant: u64,
+    #[ts(type = "number")]
+    pub tool_results: u64,
+    #[ts(type = "number")]
+    pub images: u64,
+}
