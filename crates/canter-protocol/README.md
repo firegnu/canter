@@ -158,6 +158,20 @@ input、interrupt、批准回答、compact、PATCH、DELETE 返回 `session_not_
 为本次请求，contextTokens 保留主线实测值。服务端汇总时不把它归入任何主线轮，
 不改变 lastTurnCost。已有 `session.usage` 语义不变；旧客户端可跳过新事件。
 
+### 交接
+
+`POST /v1/sessions/{id}/handoff { "direction": "新会话要做的事" }` 沿用上述私有
+`BtwEvent` SSE 和断流取消；direction 可省略或为空白，此时接着做当前任务。
+只在已有对话、主线空闲、没有 btw 时接受；空会话返回 `invalid_request`，
+主线在跑或等待批准/提问、已有私有请求时返回 `conflict`。生成期间主线输入、压缩和
+设置更新也返回 `conflict`。主线请求的前缀、历史和工具定义原样保留，末尾追加英文
+交接提示，要求用用户的语言只输出说明；不执行工具、不写问答历史或事件。
+用量沿用 `session.btwUsage`，记入原会话，不改变 ctx。
+
+终端收完非空说明后通过已有建会话接口创建同目录、模型、思考档位和权限模式的新会话，
+input 不填，说明只放入本地输入框供用户修改后发送。取消、错误或空回答不切会话。
+原会话保持打开，不保存会话父子关系。
+
 ### 错误与 SSE
 
 HTTP 错误统一返回 `ErrorResponse { code, message }`，不带成功回复的 eventSeq：

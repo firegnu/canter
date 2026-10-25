@@ -332,7 +332,7 @@ where
                     break;
                 }
                 Some(Action::NewSession) => {
-                    if let Some(receiver) = chat.new_session(&mut ui).await {
+                    if let Some(receiver) = chat.new_session(&mut ui, None).await {
                         messages = receiver;
                     }
                 }
@@ -379,6 +379,11 @@ where
         }
         if quit {
             break Ok(());
+        }
+        if let Some(note) = ui.app_mut().take_handoff()
+            && let Some(receiver) = chat.new_session(&mut ui, Some(note)).await
+        {
+            messages = receiver;
         }
     };
     chat.pump.abort();
@@ -548,6 +553,7 @@ impl<C: Connector> Chat<C> {
     async fn new_session<B: Backend>(
         &mut self,
         ui: &mut Ui<B>,
+        handoff: Option<String>,
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let settings = &ui.app().snapshot().settings;
         let mut params = SessionCreateParams {
@@ -565,7 +571,8 @@ impl<C: Connector> Chat<C> {
         let failed = "Could not start a new session";
         let mut response = self.client.create_session(&params).await;
         let mut previous_model = None;
-        if matches!(&response, Err(ClientError::Server { code: ErrorCode::InvalidRequest, message, .. })
+        if handoff.is_none()
+            && matches!(&response, Err(ClientError::Server { code: ErrorCode::InvalidRequest, message, .. })
             if message == "model is not in the configured model list")
         {
             previous_model = Some(std::mem::take(&mut params.model));
@@ -579,7 +586,11 @@ impl<C: Connector> Chat<C> {
                         created.session.settings.model
                     )
                 });
+                let source = self.session.clone();
                 let receiver = self.show(ui, created.session, failed).await?;
+                if let Some(note) = handoff {
+                    ui.app_mut().handoff_draft(&source, &note);
+                }
                 if let Some(notice) = notice {
                     ui.app_mut().warning(&notice);
                 }
@@ -722,11 +733,20 @@ impl<C: Connector> Chat<C> {
         let session = self.session.clone();
         let sender = self.sender.clone();
         match action {
-            Action::Btw { id, question } => {
+            action @ (Action::Btw { .. } | Action::Handoff { .. }) => {
+                let (id, question, handoff) = match action {
+                    Action::Btw { id, question } => (id, question, false),
+                    Action::Handoff { id, direction } => (id, direction, true),
+                    _ => unreachable!(),
+                };
                 let task = tokio::spawn(async move {
                     use canter_protocol::BtwEvent;
                     let result: Result<(), ClientError> = async {
-                        let mut stream = client.btw(&session, question).await?;
+                        let mut stream = if handoff {
+                            client.handoff(&session, question).await?
+                        } else {
+                            client.btw(&session, question).await?
+                        };
                         while let Some(event) = stream.next().await {
                             let event = event?;
                             let done = matches!(
@@ -738,7 +758,12 @@ impl<C: Connector> Chat<C> {
                             }
                         }
                         Err(ClientError::Protocol(
-                            "btw connection ended before the answer finished".into(),
+                            if handoff {
+                                "handoff connection ended before the note finished"
+                            } else {
+                                "btw connection ended before the answer finished"
+                            }
+                            .into(),
                         ))
                     }
                     .await;

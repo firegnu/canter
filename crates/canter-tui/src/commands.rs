@@ -117,6 +117,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         takes_args: true,
         run: App::start_btw,
     },
+    Command {
+        name: "handoff",
+        about: "Draft a handoff note in a new session",
+        takes_args: true,
+        run: App::start_handoff,
+    },
 ];
 
 pub(crate) fn skills(skills: Vec<canter_protocol::Skill>) -> Vec<LogicalLine> {

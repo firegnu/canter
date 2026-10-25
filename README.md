@@ -45,11 +45,12 @@ The turn ends when the model stops asking for tools. canter is that loop, plus a
 - Tools: read, write, edit files, run shell commands.
 - Permissions:
   - allow everything, ask every time, or allow for this session;
-  - Esc stops an active `/btw` answer first; otherwise it interrupts the current turn.
+  - Esc stops an active `/btw` answer or `/handoff` generation first; otherwise it interrupts the current turn.
 - Sessions are saved and can be resumed. Context is compacted manually or automatically when it gets too long.
 - Reads `AGENTS.md`.
 - `/context` shows the loaded context by category, token estimates, remaining window space and the last model-reported usage. `/files` lists files read or changed by session tools and the working directory's git status. Shell edits appear in git status, not in the session's changed-file list. Both commands are read-only.
 - `/btw <question>` asks one question using the current context, even while the main turn runs. Its answer streams in gray in this terminal only; neither the question nor the answer enters saved history. Usage counts toward session cost, while context occupancy stays unchanged. Only one btw answer can run per session at a time.
+- `/handoff [direction]` writes a self-contained note from the current context, opens a new session with the same directory, model, thinking effort and permission mode, and places the note in the input box. Edit it and press Enter to send; it is never sent automatically. Requires an idle conversation with no btw answer running. Esc cancels generation, and errors leave you in the original session. Usage is charged to the original session, which stays available through `/resume`.
 
 The first goal is to be good enough for everyday small tasks. More planned: a GPUI desktop app, a web client, skills, MCP, sub-agents, and more model providers.
 

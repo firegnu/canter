@@ -46,10 +46,39 @@ pub struct Client {
 
 impl Client {
     pub async fn btw(&self, session: &str, question: String) -> Result<BtwStream, ClientError> {
+        self.private_answer(
+            session,
+            routes::BTW,
+            &canter_protocol::SessionBtwParams { question },
+        )
+        .await
+    }
+
+    pub async fn handoff(
+        &self,
+        session: &str,
+        direction: String,
+    ) -> Result<BtwStream, ClientError> {
+        self.private_answer(
+            session,
+            routes::HANDOFF,
+            &canter_protocol::SessionHandoffParams {
+                direction: Some(direction),
+            },
+        )
+        .await
+    }
+
+    async fn private_answer(
+        &self,
+        session: &str,
+        route: &str,
+        params: &impl serde::Serialize,
+    ) -> Result<BtwStream, ClientError> {
         let response = self
             .http
-            .post(url(routes::BTW, &[session]))
-            .json(&canter_protocol::SessionBtwParams { question })
+            .post(url(route, &[session]))
+            .json(params)
             .header(ACCEPT, "text/event-stream")
             .send()
             .await?;
