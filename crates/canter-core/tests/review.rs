@@ -275,13 +275,41 @@ async fn unreadable_project_instructions_warn_and_do_not_block_the_model() {
             vec![text("first"), finish()],
             vec![text("second"), finish()],
         ]);
-        let (temp, _, session) = create(model.clone(), CoreOptions::default()).await;
+        let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("AGENTS.md");
         match kind {
             "directory" => std::fs::create_dir(&path).unwrap(),
             "utf8" => std::fs::write(&path, [0xff, 0xfe]).unwrap(),
             _ => std::fs::write(&path, "x".repeat(65_537)).unwrap(),
         }
+        let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+        let (session, created) = Session::create(
+            store.clone(),
+            "s1".into(),
+            SessionSettings {
+                cwd: temp.path().to_string_lossy().into(),
+                model: "fake".into(),
+                name: None,
+                approval_policy: PermissionMode::AskForExecution,
+            },
+            RuntimeContext::default(),
+            model.clone(),
+            CoreOptions::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            store
+                .events_after("s1", 0)
+                .unwrap()
+                .iter()
+                .filter(|event| event.seq <= created.event_seq
+                    && matches!(&event.payload, EventPayload::Warning { message }
+                if message.contains(path.to_str().unwrap())))
+                .count(),
+            1,
+            "{kind} must warn during creation, before any model request"
+        );
         let mut events = session.subscribe(0).await.unwrap();
         for round in 0..2 {
             session.input(input("continue")).await.unwrap();
@@ -486,17 +514,36 @@ async fn cancel_approval_keeps_the_declined_result_and_stops_the_turn() {
 }
 
 #[tokio::test]
-async fn project_instruction_warnings_repeat_only_when_the_problem_changes() {
+async fn project_instruction_warnings_repeat_only_when_reopening() {
     let mut scripts = vec![read_fixture("first"), read_fixture("second")];
     scripts.extend((0..5).map(|_| vec![text("done"), finish()]));
     let model = ScriptModel::new(scripts);
-    let (temp, _store, session) = create(model.clone(), CoreOptions::default()).await;
+    let (temp, store, session) = create(model.clone(), CoreOptions::default()).await;
     std::fs::write(temp.path().join("fixture.txt"), "fixture").unwrap();
     let path = temp.path().join("AGENTS.md");
     std::fs::create_dir(&path).unwrap();
-    let mut events = session.subscribe(0).await.unwrap();
-    let mut previous_warning = String::new();
-    for (round, expected_warnings) in [1, 0, 1, 0, 1].into_iter().enumerate() {
+    let closed = session.close().await.unwrap();
+    drop(session);
+    let (session, opened) = Session::open(
+        store.clone(),
+        "s1".into(),
+        RuntimeContext::default(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(closed.event_seq).await.unwrap();
+    assert!(
+        store
+            .events_after("s1", closed.event_seq)
+            .unwrap()
+            .iter()
+            .any(|event| event.seq <= opened.event_seq
+                && matches!(&event.payload, EventPayload::Warning { message }
+            if message.contains(path.to_str().unwrap())))
+    );
+    for (round, expected_warnings) in [1, 0, 0, 0, 0].into_iter().enumerate() {
         match round {
             2 => {
                 std::fs::remove_dir(&path).unwrap();
@@ -522,17 +569,33 @@ async fn project_instruction_warnings_repeat_only_when_the_problem_changes() {
             expected_warnings,
             "duplicate instruction warning in round {round}"
         );
-        if round == 0 {
-            previous_warning = warnings[0].clone();
-        }
-        if round == 2 {
-            assert_ne!(warnings[0], &previous_warning);
-        }
         assert!(
             matches!(&seen.last().unwrap().payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Completed)
         );
     }
     assert_eq!(model.requests.lock().unwrap().len(), 7);
+    let closed = session.close().await.unwrap();
+    drop(session);
+    let (session, _) = Session::open(
+        store.clone(),
+        "s1".into(),
+        RuntimeContext::default(),
+        model,
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let warnings: Vec<_> = store
+        .events_after("s1", closed.event_seq)
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event.payload {
+            EventPayload::Warning { message } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("not valid UTF-8"));
     session.close().await.unwrap();
 }
 

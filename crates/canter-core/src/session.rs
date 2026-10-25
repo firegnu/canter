@@ -44,7 +44,6 @@ pub(crate) struct Shared {
 pub(crate) struct State {
     pub journal: Journal,
     pub prefix: Vec<Message>,
-    pub instruction_warnings: Vec<String>,
     pub history: Vec<Message>,
     pub user_messages: Vec<String>,
     pub gate: PermissionGate,
@@ -67,7 +66,6 @@ impl State {
         Self {
             journal,
             prefix: Vec::new(),
-            instruction_warnings: Vec::new(),
             history: Vec::new(),
             user_messages: Vec::new(),
             gate: PermissionGate::default(),
@@ -79,6 +77,29 @@ impl State {
             closing: false,
             measured_context: None,
         }
+    }
+    async fn initialize_prefix(&mut self) -> Result<(), CoreError> {
+        let (prefix, warnings) =
+            crate::context::prefix(self.journal.snapshot.settings.cwd.clone()).await?;
+        if self.prefix != prefix {
+            self.journal
+                .record(HistoryEntry::Context {
+                    messages: prefix.clone(),
+                })
+                .await?;
+            self.prefix = prefix;
+        }
+        if !warnings.is_empty() {
+            self.journal
+                .append(
+                    warnings
+                        .into_iter()
+                        .map(|message| EventPayload::Warning { message })
+                        .collect(),
+                )
+                .await?;
+        }
+        Ok(())
     }
     pub async fn message(&mut self, message: Message) -> Result<(), CoreError> {
         self.journal
@@ -237,6 +258,7 @@ impl Session {
         let tools = executor(writer.snapshot().settings.cwd.clone(), runtime).await?;
         let mut state = State::new(Journal::new(store, writer));
         (state.prefix, state.history, state.user_messages) = crate::context::restore(entries);
+        state.initialize_prefix().await?;
         for event in events {
             if let EventPayload::RequestResolved { request_id, .. } = event.payload {
                 state.resolved.insert(request_id, event.seq);
@@ -336,14 +358,13 @@ impl Session {
                 close_reason: None,
             }])
             .await?;
+        let mut state = State::new(journal);
+        state.initialize_prefix().await?;
         let response = SessionCreateResponse {
-            session: journal.snapshot.clone(),
-            event_seq: journal.snapshot.last_event_seq,
+            session: state.journal.snapshot.clone(),
+            event_seq: state.journal.snapshot.last_event_seq,
         };
-        Ok((
-            Self::from_state(State::new(journal), tools, model, options),
-            response,
-        ))
+        Ok((Self::from_state(state, tools, model, options), response))
     }
 
     fn from_state(state: State, tools: Tools, model: Arc<dyn Model>, options: CoreOptions) -> Self {

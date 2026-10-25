@@ -1175,7 +1175,24 @@ impl App {
             PermissionMode::AlwaysAsk | PermissionMode::Unknown => "Always ask",
         };
         let cwd = shorten_home(&sanitize(&settings.cwd), self.home.as_deref());
-        let text = format!(" {} · {mode} · {cwd}", sanitize(&settings.model));
+        let mut text = format!(" {} · {mode} · {cwd}", sanitize(&settings.model));
+        if let Some(usage) = &self.snapshot.token_usage {
+            let percent = |input: u64, cached: u64| {
+                (input != 0)
+                    .then(|| (u128::from(cached) * 100 + u128::from(input) / 2) / u128::from(input))
+            };
+            let total = percent(usage.total.input_tokens, usage.total.cached_input_tokens);
+            let last = percent(usage.last.input_tokens, usage.last.cached_input_tokens);
+            if total.is_some() || last.is_some() {
+                text.push_str(" · cache");
+                if let Some(total) = total {
+                    text.push_str(&format!(" {total}%"));
+                }
+                if let Some(last) = last {
+                    text.push_str(&format!(" (last {last}%)"));
+                }
+            }
+        }
         Line::from(truncate(
             vec![Span::styled(text, Style::new().dim())],
             usize::from(width),

@@ -1,6 +1,5 @@
 use crate::{
-    CoreError, compaction,
-    context::{self, HistoryEntry},
+    CoreError, compaction, context,
     session::{Done, Shared, id},
 };
 use canter_model::{
@@ -28,10 +27,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             )
         };
         let result = if manual_compaction {
-            match refresh_prefix(&shared).await {
-                Ok(()) => compaction::compact(&shared, &turn.id, &cancel).await,
-                Err(error) => Err(error),
-            }
+            compaction::compact(&shared, &turn.id, &cancel).await
         } else {
             conversation(&shared, &turn.id, &cancel, &mut auto_compaction_failed).await
         };
@@ -141,7 +137,6 @@ async fn conversation(
         if cancel.is_cancelled() {
             return Ok(());
         }
-        refresh_prefix(shared).await?;
         let request = {
             let mut state = shared.state.lock().await;
             state.consume_steering(turn_id).await?;
@@ -285,41 +280,6 @@ async fn conversation(
         }
         compacted = false;
     }
-}
-
-async fn refresh_prefix(shared: &Shared) -> Result<(), CoreError> {
-    let cwd = shared
-        .state
-        .lock()
-        .await
-        .journal
-        .snapshot
-        .settings
-        .cwd
-        .clone();
-    let (prefix, warnings) = context::prefix(cwd).await?;
-    let mut state = shared.state.lock().await;
-    if state.prefix != prefix {
-        state
-            .journal
-            .record(HistoryEntry::Context {
-                messages: prefix.clone(),
-            })
-            .await?;
-        state.prefix = prefix;
-    }
-    let new_warnings: Vec<_> = warnings
-        .iter()
-        .filter(|message| !state.instruction_warnings.contains(message))
-        .map(|message| EventPayload::Warning {
-            message: message.clone(),
-        })
-        .collect();
-    if !new_warnings.is_empty() {
-        state.journal.append(new_warnings).await?;
-    }
-    state.instruction_warnings = warnings;
-    Ok(())
 }
 
 async fn model_response(
