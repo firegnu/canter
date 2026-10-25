@@ -113,3 +113,14 @@
 
 - macOS 的 git 将 `/var` 路径解析为 `/private/var`，直接按会话目录字符串去前缀会错误显示绝对路径；git 结果改用解析后的目录和 HOME 比较，临时仓库用例验证通过。
 - 只关闭 fsmonitor 不够，`git status` 校验文件内容时仍会运行 clean/process filter；现先只读枚举过滤器配置，再通过本次 git 命令参数关闭，子模块使用同一组覆盖，所有步骤共用超时。
+
+## 主控审查
+
+2026-10-25，canter/main。
+
+- diff 看过：新增只读 `GET /v1/sessions/{id}/context`，前缀各段在打开会话时记下估算，压缩摘要记位置；普通请求的拼法抽成 `context::request` 供运行循环和查询共用，消息、工具、选项和顺序没变（测试比对了查询前后的请求）。`/files` 从 FileRead / FileChange 汇总，git 查询不拿锁、两秒超时、隔离全局配置并关掉 fsmonitor、hooks、外部内容过滤器。DESIGN 第 8 条写了新接口。
+- 合并后在 main 上第一次跑 `cargo test --all-targets`：`crates/canter/tests/tui.rs:122`（等服务端起来超时）的 `slash_exit_quits_and_keeps_the_session` 失败 1 次，cargo 因此没跑后面的测试；单独复跑通过，全套重跑 253 个通过、0 失败。和之前记过的负载下偶发失败是同一处，和本件无关。clippy、`fmt --check`、`git diff --check` 通过。
+- 取舍同意：Free 是窗口减估算输入，不扣输出预留；只显示已装入上下文的内容；文件改动列的是发生过的操作类型，不推断净改动；关掉内容过滤器可能让依赖过滤器的文件显示成有改动，换来不执行仓库配置的程序。
+- 没验到的：真终端里的观感和真实会话的数字，用户装好后看。
+
+结果：一次过
