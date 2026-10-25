@@ -1,6 +1,7 @@
 //! Conversation sessions independent of HTTP and terminal clients.
 mod compaction;
 mod context;
+mod images;
 mod journal;
 mod runner;
 mod session;
@@ -21,12 +22,14 @@ pub struct RuntimeContext {
 pub struct CoreOptions {
     pub context_window: u64,
     pub max_output_tokens: u32,
+    pub image_models: Vec<String>,
 }
 impl Default for CoreOptions {
     fn default() -> Self {
         Self {
             context_window: 1_048_576,
             max_output_tokens: 65_536,
+            image_models: vec!["deepseek-flash".into()],
         }
     }
 }

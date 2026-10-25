@@ -31,6 +31,7 @@
   "base_url": "https://api.deepseek.com",
   "model": "<model-name>",
   "models": ["deepseek-flash", "deepseek-v4-pro"],
+  "image_models": ["deepseek-flash"],
   "context_window": 1048576,
   "api_key": "<your-key>"
 }
@@ -41,6 +42,21 @@
 （核心的输出预留 65,536 加压缩余量 16,384）。
 `models` 是可选的模型名数组，省略时为 `deepseek-flash`、`deepseek-v4-pro`；
 默认模型 `model` 不在列表中时，自动加在最前。`GET /v1/models` 返回该列表。
+`image_models` 是可选的收图片模型名数组，省略时只有 `deepseek-flash`；空数组表示全部不收。
+它不增加可用模型，模型仍须列在 `models` 或作为默认模型；列表接口用可选的
+`inputModalities: ["text", "image"]` 或 `["text"]` 告诉终端能否附图。
+图片只接收本机路径，按内容签名识别 JPEG、PNG、GIF、WebP，每张最多 8 MiB。
+接收消息前把原始字节保存为 `sessions/<id>/image-<随机名>.<格式>`，文件 0600，
+随会话长期保留；事件及私有模型历史只存副本文件名，读取时按当前会话目录拼路径。
+源文件删除、整个状态目录搬移或服务端重启不影响后续请求；副本丢失或不可读时，
+用 `[image unavailable: 文件名]` 替代并发 warning，仍继续本轮。
+切到不收图的模型时，请求临时用 `[image omitted: 文件名]` 代替，历史引用不变。
+普通与压缩请求都从最新图片向前累计 base64 大小，只发送 40 MiB 预算内最近的图片，
+超限的旧图临时换成同样的 omitted 占位，存盘历史不变。这为请求中的文字和结构留出空间，
+不是整个 HTTP 请求体的大小上限。原图读取、格式和大小校验在会话锁外完成；
+拿锁后重新检查模型及会话状态，写副本与事件，消息拒绝时清理本次新增副本。
+终端粘贴图片路径会生成可删除的占位；macOS 的 Ctrl+V 通过系统 `osascript` 调用
+AppKit，只读取剪贴板已有的 PNG 表示，不转换格式。临时截图文件在本终端退出／换会话时清理。
 非本机 `http://` 地址被拒绝，本机仅接受 localhost 或 loopback IP；模型客户端禁用代理和跳转。
 模型、key、窗口在服务端启动时读取，修改后需显式重启。
 创建会话的 `model` 为空字符串时使用配置中的默认模型；非空则使用请求里的模型名。

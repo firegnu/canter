@@ -6,6 +6,7 @@ use crate::{
 };
 use canter_model::{
     AssistantContent, ErrorKind, FinishReason, Message, ModelEvent, Request, RequestOptions,
+    UserContent,
 };
 use canter_protocol::{ErrorCode, EventPayload, Item};
 use futures_util::StreamExt;
@@ -48,6 +49,7 @@ pub(crate) async fn compact(
     let mut state = shared.state.lock().await;
     match result {
         Ok((summary, messages)) if !cancel.is_cancelled() => {
+            let user_inputs = messages[..messages.len() - 1].to_vec();
             let user_messages = messages[..messages.len() - 1]
                 .iter()
                 .filter_map(|message| match message {
@@ -61,10 +63,18 @@ pub(crate) async fn compact(
                     summary: summary.clone(),
                     messages: messages.clone(),
                     user_messages: user_messages.clone(),
+                    user_inputs: if user_inputs
+                        .iter()
+                        .any(|message| matches!(message, Message::UserParts { .. }))
+                    {
+                        user_inputs.clone()
+                    } else {
+                        Vec::new()
+                    },
                 })
                 .await?;
             state.history = messages;
-            state.user_messages = user_messages;
+            state.user_messages = user_inputs;
             state.measured_context = None;
             state
                 .journal
@@ -109,9 +119,26 @@ async fn summarize(
     };
     let output_limit = shared.options.max_output_tokens.min(8192);
     let mut transcript = String::new();
+    let mut images = Vec::new();
     for message in &history {
         match message {
             Message::User { text } => transcript.push_str(&format!("\nUser: {text}\n")),
+            Message::UserParts { content } => {
+                transcript.push_str("\nUser: ");
+                for part in content {
+                    match part {
+                        UserContent::Text { text } => transcript.push_str(text),
+                        UserContent::Image { name, .. } => {
+                            transcript.push_str(&format!("[image: {name}]"));
+                            images.push(UserContent::Text {
+                                text: format!("[image: {name}]"),
+                            });
+                            images.push(part.clone());
+                        }
+                    }
+                }
+                transcript.push('\n');
+            }
             Message::Assistant { content } => {
                 for part in content {
                     match part {
@@ -154,6 +181,11 @@ async fn summarize(
                 max_output_tokens: Some(output_limit),
             },
         };
+        if !images.is_empty() {
+            request.messages.push(Message::UserParts {
+                content: images.clone(),
+            });
+        }
         request.messages.push(Message::User {
             text: header.clone(),
         });
@@ -203,7 +235,8 @@ async fn summarize(
                     messages: request.messages.clone(),
                 })
                 .await?;
-            let mut stream = shared.model.stream(request.clone(), cancel.clone());
+            let prepared = crate::images::prepare(shared, request.clone()).await?;
+            let mut stream = shared.model.stream(prepared, cancel.clone());
             let mut next_summary = String::new();
             let mut finished = false;
             let mut too_large = false;
@@ -274,10 +307,19 @@ async fn summarize(
     );
     let mut kept = Vec::new();
     let mut left = budget;
-    for text in user_messages.iter().rev() {
+    for message in user_messages.iter().rev() {
         if left == 0 {
             break;
         }
+        let Message::User { text } = message else {
+            let tokens = context::message_tokens(message);
+            if tokens > left {
+                break;
+            }
+            left -= tokens;
+            kept.push(message.clone());
+            continue;
+        };
         let bytes = (left.saturating_mul(3) as usize).min(text.len());
         let mut start = text.len() - bytes;
         while !text.is_char_boundary(start) {

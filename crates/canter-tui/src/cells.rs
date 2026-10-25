@@ -19,10 +19,18 @@ const GUTTER: &str = "    │ ";
 /// A blank row, `› ` and the text, then another blank row. `source` names the
 /// client that sent it when that was not this terminal.
 pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> Vec<Line<'static>> {
-    let texts: Vec<&str> = input
+    let mut image_number = 0;
+    let texts: Vec<String> = input
         .iter()
         .filter_map(|part| match part {
-            UserInput::Text { text } => Some(text.as_str()),
+            UserInput::Text { text } => Some(text.clone()),
+            UserInput::LocalImage { name, .. } => {
+                image_number += 1;
+                Some(format!(
+                    "[Image #{image_number} {}]",
+                    name.as_deref().unwrap_or("image")
+                ))
+            }
             UserInput::Unknown => None,
         })
         .collect();

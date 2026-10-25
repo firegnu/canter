@@ -302,6 +302,7 @@ async fn model_response(
     CoreError,
 > {
     let estimated = context::request_tokens(&request);
+    let request = crate::images::prepare(shared, request).await?;
     let mut stream = shared.model.stream(request, cancel.clone());
     let mut content = Vec::new();
     let mut text = String::new();

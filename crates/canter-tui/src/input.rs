@@ -4,11 +4,13 @@ use std::ops::Range;
 
 use crate::text::{char_width, str_width};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct InputBox {
     text: String,
     /// Byte offset into `text`, always on a char boundary.
     cursor: usize,
+    images: Vec<(String, canter_protocol::UserInput)>,
+    image_number: usize,
 }
 
 /// Soft-wrapped rows (byte ranges, without the newlines) and the cursor's
@@ -29,7 +31,55 @@ impl InputBox {
 
     pub fn take(&mut self) -> String {
         self.cursor = 0;
+        self.images.clear();
         std::mem::take(&mut self.text)
+    }
+
+    pub fn attach(&mut self, path: String, name: String) {
+        self.image_number += 1;
+        let marker = format!(
+            "[Image #{} {}]",
+            self.image_number,
+            crate::text::sanitize(&name)
+        );
+        self.insert(&marker);
+        self.images.push((
+            marker,
+            canter_protocol::UserInput::LocalImage {
+                path,
+                name: Some(name),
+            },
+        ));
+    }
+
+    pub fn parts(&self) -> Vec<canter_protocol::UserInput> {
+        use canter_protocol::UserInput;
+        let mut parts = Vec::new();
+        let mut rest = self.text.as_str();
+        while let Some((offset, marker, image)) = self
+            .images
+            .iter()
+            .filter_map(|(marker, image)| rest.find(marker).map(|offset| (offset, marker, image)))
+            .min_by_key(|(offset, _, _)| *offset)
+        {
+            if offset > 0 {
+                parts.push(UserInput::Text {
+                    text: rest[..offset].into(),
+                });
+            }
+            parts.push(image.clone());
+            rest = &rest[offset + marker.len()..];
+        }
+        if !rest.is_empty() {
+            parts.push(UserInput::Text { text: rest.into() });
+        }
+        parts
+    }
+
+    pub fn restore(&mut self, draft: Self) {
+        self.cursor = 0;
+        self.insert(&draft.text);
+        self.images.extend(draft.images);
     }
 
     pub fn clear(&mut self) {

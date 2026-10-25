@@ -46,7 +46,7 @@ pub(crate) struct State {
     pub prefix: Vec<Message>,
     pub skills: Vec<Skill>,
     pub history: Vec<Message>,
-    pub user_messages: Vec<String>,
+    pub user_messages: Vec<Message>,
     pub gate: PermissionGate,
     pub active: Option<Active>,
     pub queue: VecDeque<QueuedInput>,
@@ -117,16 +117,16 @@ impl State {
         self.history.push(message);
         Ok(())
     }
-    async fn user_input(&mut self, text: String) -> Result<(), CoreError> {
-        let message = Message::User { text: text.clone() };
+    async fn user_input(&mut self, input: &[UserInput]) -> Result<(), CoreError> {
+        let message = crate::images::message(input);
         self.journal
             .record(HistoryEntry::Message {
                 message: message.clone(),
                 user_input: true,
             })
             .await?;
+        self.user_messages.push(message.clone());
         self.history.push(message);
-        self.user_messages.push(text);
         Ok(())
     }
     pub async fn complete_missing_tools(&mut self, explanation: &str) -> Result<(), CoreError> {
@@ -181,7 +181,7 @@ impl State {
         }
         let mut payloads = Vec::new();
         for input in &inputs {
-            self.user_input(input_text(&input.input)).await?;
+            self.user_input(&input.input).await?;
             payloads.push(EventPayload::ItemCompleted {
                 turn_id: turn_id.into(),
                 item: Item::UserMessage {
@@ -409,7 +409,7 @@ impl Session {
     }
     async fn input_inner(
         &self,
-        params: SessionInputParams,
+        mut params: SessionInputParams,
     ) -> Result<SessionInputResponse, CoreError> {
         if params.mode == InputMode::Unknown
             || params.input.is_empty()
@@ -420,9 +420,28 @@ impl Session {
         {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
-                "input must contain supported text",
+                "input must contain supported text or images",
             ));
         }
+        let loaded = if params
+            .input
+            .iter()
+            .any(|part| matches!(part, UserInput::LocalImage { .. }))
+        {
+            let cwd = self
+                .shared
+                .state
+                .lock()
+                .await
+                .journal
+                .snapshot
+                .settings
+                .cwd
+                .clone();
+            Some(crate::images::load(cwd, std::mem::take(&mut params.input)).await?)
+        } else {
+            None
+        };
         let mut state = self.shared.state.lock().await;
         state.available()?;
         if state
@@ -432,6 +451,25 @@ impl Session {
         {
             return Err(CoreError::new(ErrorCode::Conflict, "turn is stopping"));
         }
+        let imported = if let Some(loaded) = loaded {
+            let model = &state.journal.snapshot.settings.model;
+            if !self.shared.options.image_models.contains(model) {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    &format!("{model} does not accept images"),
+                ));
+            }
+            let (input, imported) = crate::images::import(
+                state.journal.store.clone(),
+                state.journal.snapshot.id.clone(),
+                loaded,
+            )
+            .await?;
+            params.input = input;
+            Some(imported)
+        } else {
+            None
+        };
         if state.active.is_some() {
             let input = QueuedInput {
                 id: id("input"),
@@ -457,12 +495,18 @@ impl Session {
                 state.queue.push_back(input);
                 None
             };
+            if let Some(imported) = imported {
+                imported.keep();
+            }
             return Ok(SessionInputResponse {
                 event_seq: events[0].seq,
                 turn_id,
             });
         }
         let (response, done) = self.shared.start(&mut state, params, None).await?;
+        if let Some(imported) = imported {
+            imported.keep();
+        }
         let shared = self.shared.clone();
         tokio::spawn(async move {
             runner::run(shared, done).await;
@@ -843,9 +887,8 @@ impl Shared {
             client_name: params.client_name,
             usage: None,
         };
-        let text = input_text(&params.input);
         if !params.input.is_empty() {
-            state.user_input(text).await?;
+            state.user_input(&params.input).await?;
         }
         let mut payloads = vec![
             EventPayload::TurnStarted {
@@ -882,16 +925,6 @@ impl Shared {
             done,
         ))
     }
-}
-fn input_text(input: &[UserInput]) -> String {
-    input
-        .iter()
-        .filter_map(|input| match input {
-            UserInput::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 fn validate_options(options: &CoreOptions) -> Result<(), CoreError> {
     if options.max_output_tokens == 0

@@ -1236,6 +1236,15 @@
         "id": {
           "type": "string"
         },
+        "inputModalities": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "isDefault": {
           "type": "boolean"
         },
@@ -2189,6 +2198,28 @@
           "required": [
             "type",
             "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "const": "localImage",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
           ],
           "type": "object"
         },

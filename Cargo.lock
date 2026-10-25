@@ -301,6 +301,7 @@ dependencies = [
  "chrono",
  "crossterm",
  "futures-util",
+ "nix",
  "pulldown-cmark",
  "ratatui",
  "reqwest",

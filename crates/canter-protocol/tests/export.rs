@@ -110,6 +110,28 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         );
     }
     let event_ts = fs::read_to_string(temp.path().join("typescript/Event.ts")).unwrap();
+    let model_ts = fs::read_to_string(temp.path().join("typescript/Model.ts")).unwrap();
+    assert!(model_ts.contains("inputModalities?: Array<string>"));
+    assert!(
+        definitions["Model"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|field| field != "inputModalities")
+    );
+    let input_ts = fs::read_to_string(temp.path().join("typescript/UserInput.ts")).unwrap();
+    assert!(input_ts.contains("\"type\": \"localImage\", path: string, name?: string"));
+    let image = definitions["UserInput"]["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|variant| variant["properties"]["type"]["const"] == "localImage")
+        .unwrap();
+    assert_eq!(image["required"], serde_json::json!(["type", "path"]));
+    let old_model =
+        serde_json::json!({"id":"old", "model":"old", "displayName":"old", "isDefault":true});
+    let model: canter_protocol::Model = serde_json::from_value(old_model.clone()).unwrap();
+    assert_eq!(serde_json::to_value(model).unwrap(), old_model);
     let resolve_ts =
         fs::read_to_string(temp.path().join("typescript/RequestResolveParams.ts")).unwrap();
     assert!(resolve_ts.contains("decision?: ApprovalDecision"));

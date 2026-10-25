@@ -11,6 +11,10 @@ pub enum Message {
     User {
         text: String,
     },
+    /// Ordered text and images. Text-only history keeps its original encoding.
+    UserParts {
+        content: Vec<UserContent>,
+    },
     Assistant {
         content: Vec<AssistantContent>,
     },
@@ -22,6 +26,22 @@ pub enum Message {
     /// Serialization fails rather than silently discarding the original payload.
     #[serde(other, skip_serializing)]
     Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UserContent {
+    Text {
+        text: String,
+    },
+    Image {
+        /// Filename relative to the owning session directory.
+        path: String,
+        name: String,
+        /// Filled from the session copy for each request; never stored in history.
+        #[serde(skip)]
+        data_url: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -76,6 +76,9 @@ pub struct Model {
     pub model: String,
     pub display_name: String,
     pub is_default: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub input_modalities: Option<Vec<String>>,
 }
 
 /// GET /v1/sessions/{id}/skills. Frozen when the session is opened.

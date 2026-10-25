@@ -32,6 +32,14 @@
 事件序号和时间在 JSON / TypeScript 中都是 number；网页调用方使用 JS 安全整数范围。
 
 空闲时 input 开新轮，忙时默认 `queue`，也可 `steer`。
+`UserInput` 支持 `{ "type": "text", "text": "这是什么" }` 和
+`{ "type": "localImage", "path": "/tmp/screenshot.png", "name": "screenshot.png" }`。
+图片沿用 Codex v2 的 localImage/path，`name` 是 canter 可选的显示文件名；不提供 detail 或网址输入。
+服务端读取整条输入、校验图片格式和 8 MiB 上限后才接收；无效图片返回 invalid_request，
+不追加消息或事件。事件里的图片 path 是会话目录内的持久副本文件名，name 保留原文件名。
+此文件名以当前会话目录为基准解析，不能当作客户端工作目录里的本机路径重新提交。
+存盘副本不可读时以 `[image unavailable: 名字]` 替代并发送 warning；请求不会因此失败。
+纯文字输入的 JSON 不变；旧客户端用 Unknown 跳过新的图片种类。
 排队成功先落盘并发送 `input.queued`，包含 `id`、`input`、`clientName`；
 输入回复的 `eventSeq` 指向该事件，`turnId` 为空。快照的 `queuedInputs` 保留待执行输入。
 开始对应轮时，`turn.started.inputId` 带排队输入 id，归并时将其移出队列。
@@ -80,6 +88,8 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 `GET /v1/models` 一次返回配置的全部可用模型，回复结构参考 Codex v2 `model/list`：
 `{ "data": [{ "id": "deepseek-flash", "model": "deepseek-flash", "displayName": "deepseek-flash", "isDefault": true }], "nextCursor": null }`。
 条目的 id、model、displayName 都是配置中的模型名；isDefault 标记默认模型。
+可选的 `inputModalities` 字段说明是否收图：`["text", "image"]` 或 `["text"]`。
+旧回复不带该字段时，终端默认只有 deepseek-flash 收图。
 本机配置列表无需分页，只提供模型名和默认标记；省掉的 Codex 模型字段和查询参数
 及理由逐项记在 DESIGN 第 8 条。
 

@@ -27,6 +27,8 @@ pub(crate) enum HistoryEntry {
         messages: Vec<Message>,
         #[serde(default)]
         user_messages: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        user_inputs: Vec<Message>,
     },
     #[serde(other, skip_serializing)]
     Unknown,
@@ -47,7 +49,7 @@ pub(crate) fn known(message: Message) -> Option<Message> {
     }
 }
 
-pub(crate) fn restore(entries: Vec<HistoryEntry>) -> (Vec<Message>, Vec<Message>, Vec<String>) {
+pub(crate) fn restore(entries: Vec<HistoryEntry>) -> (Vec<Message>, Vec<Message>, Vec<Message>) {
     let mut prefix = Vec::new();
     let mut history = Vec::new();
     let mut users = Vec::new();
@@ -60,18 +62,27 @@ pub(crate) fn restore(entries: Vec<HistoryEntry>) -> (Vec<Message>, Vec<Message>
                 message,
                 user_input,
             } => {
-                if user_input && let Message::User { text } = &message {
-                    users.push(text.clone());
+                if user_input && matches!(message, Message::User { .. } | Message::UserParts { .. })
+                {
+                    users.push(message.clone());
                 }
                 history.extend(known(message));
             }
             HistoryEntry::Compaction {
                 messages,
                 user_messages,
+                user_inputs,
                 ..
             } => {
                 history = messages.into_iter().filter_map(known).collect();
-                users = user_messages;
+                users = if user_inputs.is_empty() {
+                    user_messages
+                        .into_iter()
+                        .map(|text| Message::User { text })
+                        .collect()
+                } else {
+                    user_inputs.into_iter().filter_map(known).collect()
+                };
             }
             HistoryEntry::CompactionRequest { .. } => {}
             HistoryEntry::Unknown => {}
@@ -87,12 +98,23 @@ pub(crate) fn estimate(text: &str) -> u64 {
 pub(crate) fn request_tokens(request: &canter_model::Request) -> u64 {
     // Byte heuristic including role/JSON/tool-definition overhead.
     // Provider-reported input usage, when available, is also used by the loop.
-    request
-        .messages
-        .iter()
-        .map(|message| estimate(&serde_json::to_string(message).expect("known message")) + 8)
-        .sum::<u64>()
+    request.messages.iter().map(message_tokens).sum::<u64>()
         + estimate(&serde_json::to_string(&request.tools).expect("tool definitions"))
+}
+
+pub(crate) fn message_tokens(message: &Message) -> u64 {
+    if let Message::UserParts { content } = message {
+        return 8 + content
+            .iter()
+            .map(|part| match part {
+                canter_model::UserContent::Image { .. } => 1024,
+                canter_model::UserContent::Text { .. } => {
+                    estimate(&serde_json::to_string(part).expect("text part"))
+                }
+            })
+            .sum::<u64>();
+    }
+    estimate(&serde_json::to_string(message).expect("known message")) + 8
 }
 
 pub(crate) async fn prefix(

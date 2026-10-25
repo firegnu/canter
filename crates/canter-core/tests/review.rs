@@ -126,6 +126,357 @@ async fn finished(events: &mut Subscription) -> Vec<Event> {
     .await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn rejected_image_during_stopping_does_not_leave_a_copy() {
+    // Hold the model boundary while interrupt is pending, without holding the
+    // session lock. This makes the stopping state deterministic.
+    struct HeldModel {
+        entered: Notify,
+        cancellation: Mutex<Option<CancellationToken>>,
+        release: (Mutex<bool>, std::sync::Condvar),
+    }
+    impl Model for HeldModel {
+        fn stream(&self, _: Request, cancel: CancellationToken) -> ModelStream<'_> {
+            *self.cancellation.lock().unwrap() = Some(cancel);
+            self.entered.notify_one();
+            let (released, _) = self
+                .release
+                .1
+                .wait_timeout_while(
+                    self.release.0.lock().unwrap(),
+                    Duration::from_secs(15),
+                    |released| !*released,
+                )
+                .unwrap();
+            assert!(*released, "test must release its model");
+            Box::pin(futures_util::stream::empty())
+        }
+    }
+    let model = Arc::new(HeldModel {
+        entered: Notify::new(),
+        cancellation: Mutex::new(None),
+        release: (Mutex::new(false), std::sync::Condvar::new()),
+    });
+    let (temp, _, session) = create(
+        model.clone(),
+        CoreOptions {
+            image_models: vec!["fake".into()],
+            ..CoreOptions::default()
+        },
+    )
+    .await;
+    let path = temp.path().join("source.png");
+    std::fs::write(&path, b"\x89PNG\r\n\x1a\n").unwrap();
+    let started = session.input(input("start")).await.unwrap();
+    model.entered.notified().await;
+    let cancellation = model.cancellation.lock().unwrap().clone().unwrap();
+    let owner = session.clone();
+    let interrupt = tokio::spawn(async move {
+        owner
+            .interrupt(SessionInterruptParams {
+                turn_id: started.turn_id.unwrap(),
+            })
+            .await
+    });
+    cancellation.cancelled().await;
+    let before = session.snapshot().await;
+    let result = session
+        .input(SessionInputParams {
+            input: vec![UserInput::LocalImage {
+                path: path.to_string_lossy().into_owned(),
+                name: None,
+            }],
+            ..input("")
+        })
+        .await;
+    let after = session.snapshot().await;
+    let copies: Vec<_> = std::fs::read_dir(temp.path().join("sessions/s1"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name.to_string_lossy().starts_with("image-"))
+        .collect();
+    *model.release.0.lock().unwrap() = true;
+    model.release.1.notify_one();
+    interrupt.await.unwrap().unwrap();
+    assert_eq!(result.unwrap_err().message, "turn is stopping");
+    assert_eq!(after, before);
+    assert!(copies.is_empty(), "rejected image left copies: {copies:?}");
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn rejected_images_are_removed_when_history_or_event_writes_fail() {
+    // Resource limits are process-wide: change them only in this test's child.
+    const CHILD: &str = "CANTER_IMAGE_WRITE_FAILURE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "rejected_images_are_removed_when_history_or_event_writes_fail",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    struct FileLimit(nix::libc::rlimit, nix::libc::sighandler_t);
+    impl FileLimit {
+        fn small() -> Self {
+            let mut previous = nix::libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: valid rlimit pointers; this isolated child owns the limit
+            // and signal handler, and Drop restores both before cleanup.
+            unsafe {
+                assert_eq!(
+                    nix::libc::getrlimit(nix::libc::RLIMIT_FSIZE, &mut previous),
+                    0
+                );
+                let handler = nix::libc::signal(nix::libc::SIGXFSZ, nix::libc::SIG_IGN);
+                assert_ne!(handler, nix::libc::SIG_ERR);
+                let limit = nix::libc::rlimit {
+                    rlim_cur: 128,
+                    rlim_max: previous.rlim_max,
+                };
+                assert_eq!(nix::libc::setrlimit(nix::libc::RLIMIT_FSIZE, &limit), 0);
+                Self(previous, handler)
+            }
+        }
+    }
+    impl Drop for FileLimit {
+        fn drop(&mut self) {
+            // SAFETY: restore the values read before this test changed them.
+            unsafe {
+                nix::libc::setrlimit(nix::libc::RLIMIT_FSIZE, &self.0);
+                nix::libc::signal(nix::libc::SIGXFSZ, self.1);
+            }
+        }
+    }
+    for filename in ["model-history.jsonl", "events.jsonl"] {
+        let model = ScriptModel::new(vec![vec![
+            text("ready"),
+            Step::Wait(Arc::new(Notify::new())),
+        ]]);
+        let (temp, _, session) = create(
+            model,
+            CoreOptions {
+                image_models: vec!["fake".into()],
+                ..CoreOptions::default()
+            },
+        )
+        .await;
+        let directory = temp.path().join("sessions/s1");
+        if filename == "events.jsonl" {
+            let mut events = session.subscribe(0).await.unwrap();
+            session.input(input("keep this turn active")).await.unwrap();
+            until(&mut events, |event| matches!(event, EventPayload::ItemDelta { delta: ItemDelta::AgentMessage { delta }, .. } if delta == "ready")).await;
+        }
+        let source = temp.path().join("source.png");
+        std::fs::write(&source, b"\x89PNG\r\n\x1a\n").unwrap();
+        assert!(std::fs::metadata(directory.join(filename)).unwrap().len() > 128);
+        // The 8-byte copy can be written; appending to the journal cannot.
+        let guard = FileLimit::small();
+        let result = session
+            .input(SessionInputParams {
+                input: vec![UserInput::LocalImage {
+                    path: source.to_string_lossy().into_owned(),
+                    name: None,
+                }],
+                ..input("")
+            })
+            .await;
+        drop(guard);
+        let copies: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().starts_with("image-"))
+            .collect();
+        let _ = session.close().await;
+        assert_eq!(result.unwrap_err().code, ErrorCode::Internal);
+        assert!(
+            copies.is_empty(),
+            "{filename} write failure left copies: {copies:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn image_requests_and_compaction_keep_the_newest_images_within_40_mib() {
+    use canter_model::UserContent;
+    let model = ScriptModel::new(vec![
+        vec![text("first"), finish()],
+        vec![text("second"), finish()],
+        vec![text("summary"), finish()],
+    ]);
+    let (temp, store, session) = create(
+        model.clone(),
+        CoreOptions {
+            image_models: vec!["fake".into()],
+            ..CoreOptions::default()
+        },
+    )
+    .await;
+    let mut events = session.subscribe(0).await.unwrap();
+    let mut inputs = Vec::new();
+    for index in 0..4 {
+        let path = temp.path().join(format!("large-{index}.png"));
+        let mut bytes = vec![index as u8; 8 * 1024 * 1024];
+        bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        std::fs::write(&path, bytes).unwrap();
+        inputs.push(UserInput::LocalImage {
+            path: path.to_string_lossy().into_owned(),
+            name: None,
+        });
+    }
+    for batch in inputs.chunks(2) {
+        session
+            .input(SessionInputParams {
+                input: batch.to_vec(),
+                ..input("")
+            })
+            .await
+            .unwrap();
+        finished(&mut events).await;
+    }
+    session.compact().await.unwrap();
+    finished(&mut events).await;
+    {
+        let requests = model.requests.lock().unwrap();
+        for request in &requests[1..] {
+            let parts: Vec<_> = request
+                .messages
+                .iter()
+                .filter_map(|message| match message {
+                    Message::UserParts { content } => Some(content.iter()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            assert!(parts.iter().any(|part| matches!(part, UserContent::Text { text } if text == "[image omitted: large-0.png]")), "oldest image must be omitted");
+            let images: Vec<_> = parts
+                .iter()
+                .filter_map(|part| match part {
+                    UserContent::Image { name, data_url, .. } => {
+                        Some((name.as_str(), data_url.as_str()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                images.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+                ["large-1.png", "large-2.png", "large-3.png"]
+            );
+            assert!(
+                images
+                    .iter()
+                    .all(|(_, url)| url.starts_with("data:image/png;base64,"))
+            );
+            assert!(
+                images
+                    .iter()
+                    .map(|(_, url)| url.split_once(',').unwrap().1.len())
+                    .sum::<usize>()
+                    <= 40 * 1024 * 1024
+            );
+        }
+    }
+    let history = store.model_history::<serde_json::Value>("s1").unwrap();
+    assert!(
+        !serde_json::to_string(&history)
+            .unwrap()
+            .contains("image omitted")
+    );
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn image_references_survive_moving_the_store_and_missing_copies_only_warn() {
+    use canter_model::UserContent;
+    let model = ScriptModel::new((0..4).map(|_| vec![text("continued"), finish()]).collect());
+    let options = CoreOptions {
+        image_models: vec!["fake".into()],
+        ..CoreOptions::default()
+    };
+    let (temp, store, session) = create(model.clone(), options.clone()).await;
+    let source = temp.path().join("source.png");
+    std::fs::write(&source, b"\x89PNG\r\n\x1a\n").unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    session
+        .input(SessionInputParams {
+            input: vec![UserInput::LocalImage {
+                path: source.to_string_lossy().into_owned(),
+                name: None,
+            }],
+            ..input("")
+        })
+        .await
+        .unwrap();
+    finished(&mut events).await;
+    let snapshot = session.snapshot().await;
+    let UserInput::LocalImage { path: saved, .. } = &snapshot.session.turns[0].input[0] else {
+        panic!("image reference");
+    };
+    assert_eq!(
+        std::path::Path::new(saved).file_name().unwrap(),
+        saved.as_str(),
+        "events must store only the filename"
+    );
+    let history = store.model_history::<serde_json::Value>("s1").unwrap();
+    let image = history
+        .iter()
+        .find_map(|entry| entry.pointer("/message/content/0/path"))
+        .unwrap();
+    assert_eq!(image, saved);
+    let saved = saved.clone();
+    session.close().await.unwrap();
+    drop(session);
+    let moved_root = temp.path().join("moved-sessions");
+    std::fs::rename(temp.path().join("sessions"), &moved_root).unwrap();
+    std::fs::remove_file(source).unwrap();
+    let moved_store = Arc::new(Store::new(&moved_root).unwrap());
+    let (session, opened) = Session::open(
+        moved_store,
+        "s1".into(),
+        RuntimeContext::default(),
+        model.clone(),
+        options,
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(opened.event_seq).await.unwrap();
+    session.input(input("after moving")).await.unwrap();
+    finished(&mut events).await;
+    assert!(model.requests.lock().unwrap()[1].messages.iter().any(|message| matches!(message, Message::UserParts { content } if content.iter().any(|part| matches!(part, UserContent::Image { data_url, .. } if data_url == "data:image/png;base64,iVBORw0KGgo=")))));
+    std::fs::remove_file(moved_root.join("s1").join(saved)).unwrap();
+    for compact in [false, true] {
+        if compact {
+            session.compact().await.unwrap();
+        } else {
+            session.input(input("after losing the copy")).await.unwrap();
+        }
+        let seen = finished(&mut events).await;
+        assert!(seen.iter().any(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains("image unavailable: source.png"))), "missing copy must produce a warning");
+        assert!(seen.iter().any(|event| matches!(&event.payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Completed)), "missing copy must not fail the turn");
+    }
+    {
+        let requests = model.requests.lock().unwrap();
+        assert_eq!(requests.len(), 4);
+        for request in &requests[2..] {
+            assert!(request.messages.iter().any(|message| matches!(message, Message::UserParts { content } if content.iter().any(|part| matches!(part, UserContent::Text { text } if text == "[image unavailable: source.png]")))));
+        }
+    }
+    session.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn manual_compaction_returns_at_start_and_steering_runs_in_a_separate_turn() {
     for needs_approval in [false, true] {
@@ -625,6 +976,7 @@ async fn failed_automatic_compaction_waits_until_a_new_turn_or_manual_request() 
         CoreOptions {
             context_window: 100_000,
             max_output_tokens: 32_768,
+            ..CoreOptions::default()
         },
     )
     .await;
@@ -740,6 +1092,7 @@ async fn failed_automatic_compaction_continues_only_when_the_request_still_fits(
                 CoreOptions {
                     context_window: 100_000,
                     max_output_tokens: 32_768,
+                    ..CoreOptions::default()
                 },
             )
             .await;
