@@ -235,11 +235,7 @@ async fn summarize(
                     messages: request.messages.clone(),
                 })
                 .await?;
-            let prepared = crate::images::prepare(
-                request.clone(),
-                shared.options.image_models.contains(&model),
-            )
-            .await?;
+            let prepared = crate::images::prepare(shared, request.clone()).await?;
             let mut stream = shared.model.stream(prepared, cancel.clone());
             let mut next_summary = String::new();
             let mut finished = false;

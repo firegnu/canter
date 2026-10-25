@@ -35,6 +35,7 @@ pub enum UserContent {
         text: String,
     },
     Image {
+        /// Filename relative to the owning session directory.
         path: String,
         name: String,
         /// Filled from the session copy for each request; never stored in history.

@@ -200,6 +200,20 @@ impl Store {
         Ok(self.root.join(id))
     }
 
+    /// Resolve a saved image filename within its owning session directory.
+    pub fn image_path(&self, id: &str, name: &str) -> Result<PathBuf, StoreError> {
+        let mut components = std::path::Path::new(name).components();
+        if !name.starts_with("image-")
+            || !matches!(components.next(), Some(std::path::Component::Normal(_)))
+            || components.next().is_some()
+        {
+            return Err(
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid image filename").into(),
+            );
+        }
+        Ok(self.session_dir(id)?.join(name))
+    }
+
     /// Publish original attachment bytes before their referencing events/history.
     pub fn save_image(
         &self,
@@ -216,8 +230,8 @@ impl Store {
             .set_permissions(fs::Permissions::from_mode(0o600))?;
         file.write_all(bytes)?;
         file.as_file().sync_all()?;
-        let (_, path) = file.keep().map_err(|error| error.error)?;
         File::open(dir)?.sync_all()?;
+        let (_, path) = file.keep().map_err(|error| error.error)?;
         Ok(path)
     }
 }

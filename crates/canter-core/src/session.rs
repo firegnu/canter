@@ -423,28 +423,27 @@ impl Session {
                 "input must contain supported text or images",
             ));
         }
-        let mut state = self.shared.state.lock().await;
-        state.available()?;
-        if params
+        let loaded = if params
             .input
             .iter()
             .any(|part| matches!(part, UserInput::LocalImage { .. }))
         {
-            let model = &state.journal.snapshot.settings.model;
-            if !self.shared.options.image_models.contains(model) {
-                return Err(CoreError::new(
-                    ErrorCode::InvalidRequest,
-                    &format!("{model} does not accept images"),
-                ));
-            }
-            params.input = crate::images::import(
-                state.journal.store.clone(),
-                state.journal.snapshot.id.clone(),
-                state.journal.snapshot.settings.cwd.clone(),
-                params.input,
-            )
-            .await?;
-        }
+            let cwd = self
+                .shared
+                .state
+                .lock()
+                .await
+                .journal
+                .snapshot
+                .settings
+                .cwd
+                .clone();
+            Some(crate::images::load(cwd, std::mem::take(&mut params.input)).await?)
+        } else {
+            None
+        };
+        let mut state = self.shared.state.lock().await;
+        state.available()?;
         if state
             .active
             .as_ref()
@@ -452,6 +451,25 @@ impl Session {
         {
             return Err(CoreError::new(ErrorCode::Conflict, "turn is stopping"));
         }
+        let imported = if let Some(loaded) = loaded {
+            let model = &state.journal.snapshot.settings.model;
+            if !self.shared.options.image_models.contains(model) {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    &format!("{model} does not accept images"),
+                ));
+            }
+            let (input, imported) = crate::images::import(
+                state.journal.store.clone(),
+                state.journal.snapshot.id.clone(),
+                loaded,
+            )
+            .await?;
+            params.input = input;
+            Some(imported)
+        } else {
+            None
+        };
         if state.active.is_some() {
             let input = QueuedInput {
                 id: id("input"),
@@ -477,12 +495,18 @@ impl Session {
                 state.queue.push_back(input);
                 None
             };
+            if let Some(imported) = imported {
+                imported.keep();
+            }
             return Ok(SessionInputResponse {
                 event_seq: events[0].seq,
                 turn_id,
             });
         }
         let (response, done) = self.shared.start(&mut state, params, None).await?;
+        if let Some(imported) = imported {
+            imported.keep();
+        }
         let shared = self.shared.clone();
         tokio::spawn(async move {
             runner::run(shared, done).await;

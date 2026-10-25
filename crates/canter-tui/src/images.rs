@@ -1,6 +1,7 @@
 use std::{
-    fs::File,
+    fs::OpenOptions,
     io::Read,
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
 
@@ -108,19 +109,20 @@ fn read_clipboard(_path: &Path) -> Result<bool, String> {
 
 /// A single shell word as pasted by Finder/terminals. No expansion or execution.
 pub(crate) fn pasted_path(text: &str, cwd: &str) -> Option<PathBuf> {
-    let raw = Path::new(cwd).join(text.trim());
-    if raw.is_file() {
-        return recognized_image(raw);
+    let text = text.trim_matches(|c: char| c.is_ascii_whitespace());
+    let raw = Path::new(cwd).join(text);
+    if let Some(path) = recognized_image(raw) {
+        return Some(path);
     }
     let mut path = String::new();
     let mut quote = None;
-    let mut chars = text.trim().chars();
+    let mut chars = text.chars();
     while let Some(c) = chars.next() {
         match (quote, c) {
             (Some('\''), '\'') | (Some('"'), '"') => quote = None,
             (None, '\'' | '"') => quote = Some(c),
             (None | Some('"'), '\\') => path.push(chars.next()?),
-            (None, c) if c.is_whitespace() => return None,
+            (None, c) if c.is_ascii_whitespace() => return None,
             _ => path.push(c),
         }
     }
@@ -132,11 +134,12 @@ pub(crate) fn pasted_path(text: &str, cwd: &str) -> Option<PathBuf> {
 }
 
 fn recognized_image(path: PathBuf) -> Option<PathBuf> {
-    if !path.is_file() {
-        return None;
-    }
     let mut header = [0; 12];
-    let mut file = File::open(&path).ok()?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NONBLOCK)
+        .open(&path)
+        .ok()?;
     if !file.metadata().ok()?.is_file() {
         return None;
     }

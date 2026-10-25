@@ -19,6 +19,7 @@ crossterm.workspace = true
 pulldown-cmark.workspace = true
 unicode-width.workspace = true
 chrono.workspace = true
+nix.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

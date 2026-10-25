@@ -66,6 +66,22 @@ fn image_path_pastes_accept_quotes_escapes_and_spaces_and_other_pastes_stay_text
 }
 
 #[test]
+fn dragged_screenshot_path_preserves_narrow_no_break_spaces() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("Screenshot at 10.00.00\u{202f}PM.png");
+    std::fs::write(&path, b"\x89PNG\r\n\x1a\n").unwrap();
+    let mut app = app();
+    app.handle_paste(&path.to_str().unwrap().replace(' ', "\\ "));
+    let sent = app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 0);
+    let Some(Action::SendImages { input, .. }) = sent else {
+        panic!("dragged screenshot became text: {sent:?}");
+    };
+    assert!(
+        matches!(&input[0], UserInput::LocalImage { path: attached, .. } if std::path::Path::new(attached) == path)
+    );
+}
+
+#[test]
 fn deleting_the_placeholder_removes_the_image_and_text_models_refuse_attachments() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("image.png");

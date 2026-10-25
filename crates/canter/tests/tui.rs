@@ -531,17 +531,11 @@ async fn pasted_image_reaches_the_model_as_original_png() {
     else {
         panic!("image input persisted");
     };
-    assert!(
-        Path::new(saved).starts_with(
-            world
-                .path(&format!("state/sessions/{id}"))
-                .canonicalize()
-                .unwrap()
-        )
-    );
-    assert_eq!(fs::read(saved).unwrap(), PNG);
+    assert_eq!(Path::new(saved).file_name().unwrap(), saved.as_str());
+    let saved = world.path(&format!("state/sessions/{id}")).join(saved);
+    assert_eq!(fs::read(&saved).unwrap(), PNG);
     assert_eq!(
-        fs::metadata(saved).unwrap().permissions().mode() & 0o777,
+        fs::metadata(&saved).unwrap().permissions().mode() & 0o777,
         0o600
     );
     terminal.quit().await;
@@ -627,6 +621,17 @@ async fn rejected_images_leave_the_whole_message_out_and_the_draft_can_be_retrie
     terminal.wait_for("[Image #1 screenshot.png]").await;
     let id = world.only_session().await;
     let before = world.snapshot(&id).await;
+    let assert_no_images = || {
+        assert!(
+            fs::read_dir(world.path(&format!("state/sessions/{id}")))
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("image-"))
+        )
+    };
     fs::write(&path, b"not an image").unwrap();
     terminal.type_line("这是什么").await;
     terminal
@@ -639,6 +644,7 @@ async fn rejected_images_leave_the_whole_message_out_and_the_draft_can_be_retrie
     );
     assert_eq!(world.snapshot(&id).await, before);
     assert!(world.requests.lock().unwrap().is_empty());
+    assert_no_images();
 
     fs::write(&path, PNG).unwrap();
     fs::OpenOptions::new()
@@ -649,6 +655,7 @@ async fn rejected_images_leave_the_whole_message_out_and_the_draft_can_be_retrie
         .unwrap();
     terminal.press(KeyCode::Enter).await;
     terminal.wait_for("image exceeds the 8 MiB limit").await;
+    assert_no_images();
     assert!(
         terminal
             .screen()
@@ -659,6 +666,7 @@ async fn rejected_images_leave_the_whole_message_out_and_the_draft_can_be_retrie
     fs::remove_file(&path).unwrap();
     terminal.press(KeyCode::Enter).await;
     terminal.wait_for("cannot read image file").await;
+    assert_no_images();
     assert!(
         terminal
             .screen()

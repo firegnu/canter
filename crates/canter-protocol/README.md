@@ -36,7 +36,9 @@
 `{ "type": "localImage", "path": "/tmp/screenshot.png", "name": "screenshot.png" }`。
 图片沿用 Codex v2 的 localImage/path，`name` 是 canter 可选的显示文件名；不提供 detail 或网址输入。
 服务端读取整条输入、校验图片格式和 8 MiB 上限后才接收；无效图片返回 invalid_request，
-不追加消息或事件。事件里的图片 path 已改为会话自己的持久副本，name 保留原文件名。
+不追加消息或事件。事件里的图片 path 是会话目录内的持久副本文件名，name 保留原文件名。
+此文件名以当前会话目录为基准解析，不能当作客户端工作目录里的本机路径重新提交。
+存盘副本不可读时以 `[image unavailable: 名字]` 替代并发送 warning；请求不会因此失败。
 纯文字输入的 JSON 不变；旧客户端用 Unknown 跳过新的图片种类。
 排队成功先落盘并发送 `input.queued`，包含 `id`、`input`、`clientName`；
 输入回复的 `eventSeq` 指向该事件，`turnId` 为空。快照的 `queuedInputs` 保留待执行输入。
