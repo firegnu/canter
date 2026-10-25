@@ -444,3 +444,446 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
     stop.cancel();
     server.await.unwrap();
 }
+
+struct BtwModel(std::sync::Mutex<Vec<Request>>);
+impl Model for BtwModel {
+    fn stream(&self, request: Request, _: CancellationToken) -> ModelStream<'_> {
+        use canter_model::{Message, ToolCall, Usage};
+        let question = match request.messages.last() {
+            Some(Message::User { text }) => text.clone(),
+            _ => String::new(),
+        };
+        self.0.lock().unwrap().push(request);
+        if question == "btw-held" {
+            return Box::pin(async_stream::stream! {
+                yield Ok(ModelEvent::Usage(Usage { input_tokens: 1000, cache_read_tokens: Some(800), output_tokens: 100, total_tokens: 1100, ..Default::default() }));
+                yield Ok(ModelEvent::TextDelta("held answer".into()));
+                std::future::pending::<()>().await;
+            });
+        }
+        let events = if question == "tool-main" {
+            vec![
+                ModelEvent::ToolCall(ToolCall {
+                    id: "read-first".into(), name: "read".into(),
+                    arguments: r#"{"path":"file.txt"}"#.into(),
+                }),
+                ModelEvent::ToolCall(ToolCall {
+                    id: "wait-for-user".into(), name: "ask_user".into(),
+                    arguments: r#"{"question":"Continue?","options":[{"label":"yes","description":"continue"},{"label":"no","description":"stop"}]}"#.into(),
+                }),
+                ModelEvent::Finished(FinishReason::ToolCalls),
+            ]
+        } else if question.starts_with("btw-only") {
+            vec![
+                ModelEvent::TextDelta("private **btw answer**".into()),
+                ModelEvent::Usage(Usage {
+                    input_tokens: 1000,
+                    cache_read_tokens: Some(800),
+                    output_tokens: 100,
+                    total_tokens: 1100,
+                    ..Default::default()
+                }),
+                ModelEvent::ToolCall(ToolCall {
+                    id: "must-not-run".into(),
+                    name: "write".into(),
+                    arguments: r#"{"path":"btw-tool.txt","content":"wrong"}"#.into(),
+                }),
+                ModelEvent::Finished(FinishReason::ToolCalls),
+            ]
+        } else {
+            vec![
+                ModelEvent::TextDelta("main answer".into()),
+                ModelEvent::Usage(Usage {
+                    input_tokens: 100,
+                    cache_read_tokens: Some(80),
+                    output_tokens: 20,
+                    total_tokens: 120,
+                    ..Default::default()
+                }),
+                ModelEvent::Finished(FinishReason::Stop),
+            ]
+        };
+        Box::pin(futures_util::stream::iter(events.into_iter().map(Ok)))
+    }
+}
+
+struct BtwTest {
+    root: tempfile::TempDir,
+    app: Arc<App>,
+    model: Arc<BtwModel>,
+    client: reqwest::Client,
+    stop: CancellationToken,
+    server: tokio::task::JoinHandle<()>,
+}
+impl BtwTest {
+    async fn new() -> Self {
+        let root = tempfile::Builder::new()
+            .prefix("canter-btw-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        std::fs::write(root.path().join("file.txt"), "test content").unwrap();
+        let model = Arc::new(BtwModel(Default::default()));
+        let app = Arc::new(App {
+            home: root.path().join("state"),
+            store: Arc::new(Store::new(root.path().join("state/sessions")).unwrap()),
+            model: model.clone(),
+            default_model: "deepseek-flash".into(),
+            models: vec!["deepseek-flash".into()],
+            options: CoreOptions {
+                request_time: || 349_200_000,
+                ..Default::default()
+            },
+            sessions: Default::default(),
+            registry_changed: Default::default(),
+            draining: Default::default(),
+            stopped: CancellationToken::new(),
+        });
+        let socket = root.path().join("server.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let stop = CancellationToken::new();
+        let shutdown = stop.clone();
+        let router = router(app.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(shutdown.cancelled_owned())
+                .await
+                .unwrap();
+        });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .unix_socket(socket)
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        Self {
+            root,
+            app,
+            model,
+            client,
+            stop,
+            server,
+        }
+    }
+    async fn create(&self) -> String {
+        let response: SessionCreateResponse = self.client.post("http://localhost/v1/sessions").json(&json!({
+            "cwd": self.root.path(), "env": {"HOME":self.root.path().join("home"),"CANTER_HOME":self.app.home},
+            "model":"deepseek-flash", "reasoningEffort":"low", "approvalPolicy":"allowAll", "clientName":"test"
+        })).send().await.unwrap().json().await.unwrap();
+        response.session.id
+    }
+    fn url(&self, id: &str) -> String {
+        format!("http://localhost/v1/sessions/{id}")
+    }
+    async fn input(&self, id: &str, text: &str) {
+        let response = self
+            .client
+            .post(format!("{}/input", self.url(id)))
+            .json(&json!({"input":[{"type":"text","text":text}],"clientName":"test"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    async fn wait_status(&self, id: &str, status: SessionStatus) -> SessionSnapshot {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let response: SessionReadResponse = self
+                    .client
+                    .get(self.url(id))
+                    .send()
+                    .await
+                    .unwrap()
+                    .json()
+                    .await
+                    .unwrap();
+                if response.session.status == status {
+                    break response.session;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+    async fn finish(self) {
+        for session in self.app.sessions.lock().await.values() {
+            session.close().await.unwrap();
+        }
+        self.stop.cancel();
+        self.server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn btw_preserves_main_requests_history_and_context_but_records_cost() {
+    use canter_model::Message;
+    let test = BtwTest::new().await;
+    let control = test.create().await;
+    let session = test.create().await;
+    for id in [&control, &session] {
+        test.input(id, "hello").await;
+        test.wait_status(id, SessionStatus::Idle).await;
+    }
+    test.input(&control, "next").await;
+    test.wait_status(&control, SessionStatus::Idle).await;
+    let baseline = test.model.0.lock().unwrap().last().unwrap().clone();
+    let history = test
+        .app
+        .store
+        .model_history::<serde_json::Value>(&session)
+        .unwrap();
+    let before = test.wait_status(&session, SessionStatus::Idle).await;
+    let question = "btw-only question\n  keep original spaces  ";
+    let response = test
+        .client
+        .post(format!("{}/btw", test.url(&session)))
+        .json(&json!({"question":question}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "btw must stream without starting a turn"
+    );
+    assert_eq!(response.headers()["content-type"], "text/event-stream");
+    let answer = response.text().await.unwrap();
+    assert!(answer.contains("private **btw answer**"));
+    assert!(answer.contains("completed"));
+    let mut expected = baseline.clone();
+    *expected.messages.last_mut().unwrap() = Message::User {
+        text: question.into(),
+    };
+    let request = test.model.0.lock().unwrap().last().unwrap().clone();
+    assert_eq!(
+        serde_json::to_string(&request).unwrap(),
+        serde_json::to_string(&expected).unwrap()
+    );
+    assert_eq!(
+        test.app
+            .store
+            .model_history::<serde_json::Value>(&session)
+            .unwrap(),
+        history
+    );
+    let after = test.wait_status(&session, SessionStatus::Idle).await;
+    assert_eq!(after.turns, before.turns);
+    let before_usage = before.token_usage.unwrap();
+    let after_usage = after.token_usage.unwrap();
+    assert_eq!(after_usage.context_tokens, before_usage.context_tokens);
+    assert_eq!(
+        after_usage.total.total_tokens,
+        before_usage.total.total_tokens + 1100
+    );
+    assert!(
+        (after_usage.cost.unwrap().usd - before_usage.cost.unwrap().usd - 0.0001848).abs() < 1e-10
+    );
+    for endpoint in [
+        format!("{}/usage", test.url(&session)),
+        "http://localhost/v1/usage".into(),
+    ] {
+        let report: UsageResponse = test
+            .client
+            .get(endpoint)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(report.total.cost.usd >= 0.0001848);
+    }
+    let events = serde_json::to_string(&test.app.store.events_after(&session, 0).unwrap()).unwrap();
+    assert!(!events.contains("btw-only"));
+    assert!(!events.contains("btw answer"));
+    assert!(!test.root.path().join("btw-tool.txt").exists());
+    test.input(&session, "next").await;
+    test.wait_status(&session, SessionStatus::Idle).await;
+    let actual = test.model.0.lock().unwrap().last().unwrap().clone();
+    assert_eq!(
+        serde_json::to_string(&actual).unwrap(),
+        serde_json::to_string(&baseline).unwrap()
+    );
+    let snapshot = test.wait_status(&session, SessionStatus::Idle).await;
+    assert_eq!(
+        test.client
+            .delete(test.url(&session))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let restored: SessionReadResponse = test
+        .client
+        .post(format!("{}/resume", test.url(&session)))
+        .json(&json!({"env":{"HOME":test.root.path().join("home")}}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let restored_usage = restored.session.token_usage.unwrap();
+    assert_eq!(restored_usage.total, snapshot.token_usage.unwrap().total);
+    assert_eq!(restored_usage.context_tokens, 120);
+    assert!((restored_usage.cost.unwrap().usd - 0.00024576).abs() < 1e-10);
+    assert_eq!(restored.session.turns, snapshot.turns);
+    test.finish().await;
+}
+
+#[tokio::test]
+async fn btw_during_tools_omits_the_whole_unfinished_group_and_does_not_charge_the_turn() {
+    use canter_model::Message;
+    let test = BtwTest::new().await;
+    let id = test.create().await;
+    test.input(&id, "tool-main").await;
+    let before = test.wait_status(&id, SessionStatus::WaitingApproval).await;
+    assert!(before.turns[0].items.iter().any(|item| matches!(
+        item,
+        Item::FileRead {
+            status: ItemStatus::Completed,
+            ..
+        }
+    )));
+    let mut expected = test.model.0.lock().unwrap().last().unwrap().clone();
+    expected.messages.push(Message::User {
+        text: "btw-only during tools".into(),
+    });
+    let history = test
+        .app
+        .store
+        .model_history::<serde_json::Value>(&id)
+        .unwrap();
+    let response = test
+        .client
+        .post(format!("{}/btw", test.url(&id)))
+        .json(&json!({"question":"btw-only during tools"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .text()
+            .await
+            .unwrap()
+            .contains("private **btw answer**")
+    );
+    let actual = test.model.0.lock().unwrap().last().unwrap().clone();
+    assert_eq!(
+        actual, expected,
+        "omit the assistant tool calls and partial results together"
+    );
+    let after = test.wait_status(&id, SessionStatus::WaitingApproval).await;
+    assert_eq!(after.turns, before.turns);
+    assert_eq!(after.pending_requests, before.pending_requests);
+    assert_eq!(
+        test.app
+            .store
+            .model_history::<serde_json::Value>(&id)
+            .unwrap(),
+        history
+    );
+    let usage = after.token_usage.unwrap();
+    assert_eq!(usage.context_tokens, 0);
+    assert_eq!(
+        usage.model_context_window, None,
+        "btw must not introduce a ctx display before the first main usage"
+    );
+    let request_id = &after.pending_requests[0].id;
+    let response = test
+        .client
+        .post(format!("{}/requests/{request_id}", test.url(&id)))
+        .json(&json!({"answer":{"type":"option","label":"yes"},"clientName":"test"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let finished = test.wait_status(&id, SessionStatus::Idle).await;
+    assert_eq!(finished.turns[0].status, TurnStatus::Completed);
+    assert_eq!(
+        finished.turns[0].usage.as_ref().unwrap().total.total_tokens,
+        120
+    );
+    let report: UsageResponse = test
+        .client
+        .get(format!("{}/usage", test.url(&id)))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!((report.total.cost.usd - 0.00021528).abs() < 1e-10);
+    assert!((report.last_turn_cost.unwrap().usd - 0.00003048).abs() < 1e-10);
+    test.finish().await;
+}
+
+#[tokio::test]
+async fn btw_disconnect_keeps_received_usage_and_never_blocks_the_main_turn() {
+    let test = BtwTest::new().await;
+    let id = test.create().await;
+    let endpoint = format!("{}/btw", test.url(&id));
+    assert_eq!(
+        test.client
+            .post(&endpoint)
+            .json(&json!({"question":" \n "}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert!(test.model.0.lock().unwrap().is_empty());
+    let mut response = test
+        .client
+        .post(&endpoint)
+        .json(&json!({"question":"btw-held"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut text = String::new();
+    while !text.contains("held answer") {
+        text += std::str::from_utf8(&response.chunk().await.unwrap().unwrap()).unwrap();
+    }
+    assert_eq!(
+        test.client
+            .post(&endpoint)
+            .json(&json!({"question":"overlap"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    test.input(&id, "hello").await;
+    let before = test.wait_status(&id, SessionStatus::Idle).await;
+    assert_eq!(
+        before.turns[0].status,
+        TurnStatus::Completed,
+        "main completes while btw is still streaming"
+    );
+    drop(response);
+    let after = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = test.wait_status(&id, SessionStatus::Idle).await;
+            if snapshot.token_usage.as_ref().unwrap().total.total_tokens == 1220 {
+                break snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(after.turns, before.turns);
+    assert_eq!(after.token_usage.unwrap().context_tokens, 120);
+    let ledger = canter_core::usage::Ledger::replay(
+        &test.app.store.events_after(&id, 0).unwrap(),
+        &test.app.options.prices,
+    );
+    assert!((ledger.report.total.cost.usd - 0.00021528).abs() < 1e-10);
+    assert!((ledger.report.last_turn_cost.unwrap().usd - 0.00003048).abs() < 1e-10);
+    test.finish().await;
+}

@@ -19,6 +19,7 @@ pub mod routes {
     pub const SESSION: &str = "/v1/sessions/{id}";
     pub const SKILLS: &str = "/v1/sessions/{id}/skills";
     pub const CONTEXT: &str = "/v1/sessions/{id}/context";
+    pub const BTW: &str = "/v1/sessions/{id}/btw";
     pub const RESUME: &str = "/v1/sessions/{id}/resume";
     pub const INPUT: &str = "/v1/sessions/{id}/input";
     pub const INTERRUPT: &str = "/v1/sessions/{id}/interrupt";
@@ -30,6 +31,27 @@ pub mod routes {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct SessionPath {
     pub id: String,
+}
+
+/// An ephemeral question. Its response stream is private to this HTTP caller.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct SessionBtwParams {
+    pub question: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum BtwEvent {
+    Delta {
+        delta: String,
+    },
+    Completed,
+    Cancelled,
+    Error {
+        message: String,
+    },
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

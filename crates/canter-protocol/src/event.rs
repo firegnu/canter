@@ -71,6 +71,9 @@ pub enum EventPayload {
     },
     #[serde(rename = "session.usage")]
     SessionUsage { token_usage: TokenUsage },
+    /// Session-only usage; never belongs to the active conversation turn.
+    #[serde(rename = "session.btwUsage")]
+    SessionBtwUsage { token_usage: TokenUsage },
     #[serde(rename = "warning")]
     Warning { message: String },
     #[serde(rename = "error")]

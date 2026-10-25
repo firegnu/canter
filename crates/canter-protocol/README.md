@@ -20,6 +20,7 @@
 | GET SKILLS | SkillListParams | SkillListResponse |
 | POST RESUME | SessionResumeParams | SessionResumeResponse |
 | POST INPUT | SessionInputParams | SessionInputResponse |
+| POST BTW | SessionBtwParams | BtwEvent（私有 SSE data 帧） |
 | POST INTERRUPT | SessionInterruptParams | SessionInterruptResponse |
 | POST REQUEST | RequestResolveParams | RequestResolveResponse |
 | PATCH SESSION | SessionUpdateParams | SessionUpdateResponse |
@@ -140,6 +141,23 @@ input、interrupt、批准回答、compact、PATCH、DELETE 返回 `session_not_
 其余前缀段按追加前后的估算差分计入，保持总和一致。排队输入、尚未产生的工具结果和
 输出预留不计入；实际下一次请求还可能因新输入、工具执行或压缩而变化。
 
+### 顺口问
+
+`POST /v1/sessions/{id}/btw { "question": "问题原文" }` 不开轮、不排队，
+响应是只发给本 HTTP 调用方的 `text/event-stream`。主线可以同时运行；请求复用当前
+模型、思考档位、前缀、工具定义和已完整的历史，末尾追加问题原文。最后一组工具调用
+尚有结果缺失时，连同这组已有的结果一并排除。模型返回工具调用也只结束这次回答，不执行工具。
+
+帧为 `data: {"type":"delta","delta":"回答片段"}`，末尾为 `completed`、
+`cancelled` 或 `error { message }`。这些帧没有 seq/id，不落盘、不重放，断开响应流
+就取消本次 btw。问答不进入会话事件、模型历史或快照；错误也不改变主线状态。
+空白问题返回 `invalid_request`，同一会话已有 btw 时返回 `conflict`；未打开时返回
+`session_not_resumed`。关闭会话取消 btw 并等已收到的用量入账。
+
+用量单独记为 `session.btwUsage { tokenUsage }`：total/cost 为会话累计，last/request
+为本次请求，contextTokens 保留主线实测值。服务端汇总时不把它归入任何主线轮，
+不改变 lastTurnCost。已有 `session.usage` 语义不变；旧客户端可跳过新事件。
+
 ### 错误与 SSE
 
 HTTP 错误统一返回 `ErrorResponse { code, message }`，不带成功回复的 eventSeq：
@@ -154,7 +172,7 @@ HTTP 错误统一返回 `ErrorResponse { code, message }`，不带成功回复�
 | internal | 500 | 服务端内部错误，message 不包含私有数据 |
 
 `Unknown` 是旧客户端的解码兜底，不是服务端可执行的新权限或批准选项。
-响应类型为 `text/event-stream`，每帧格式由 `sse_frame` 生成：
+会话事件响应类型为 `text/event-stream`，每帧格式由 `sse_frame` 生成：
 
 ```text
 id: 42

@@ -45,6 +45,24 @@ pub struct Client {
 }
 
 impl Client {
+    pub async fn btw(&self, session: &str, question: String) -> Result<BtwStream, ClientError> {
+        let response = self
+            .http
+            .post(url(routes::BTW, &[session]))
+            .json(&canter_protocol::SessionBtwParams { question })
+            .header(ACCEPT, "text/event-stream")
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(server_error(status, &response.bytes().await?));
+        }
+        Ok(BtwStream {
+            response,
+            parser: SseParser::default(),
+        })
+    }
+
     pub async fn context(
         &self,
         session: &str,
@@ -249,6 +267,29 @@ impl Client {
             parser: SseParser::default(),
             last_seq: after,
         })
+    }
+}
+
+/// Private, non-replayable answer. Drop it to cancel the server request.
+pub struct BtwStream {
+    response: reqwest::Response,
+    parser: SseParser,
+}
+impl BtwStream {
+    pub async fn next(&mut self) -> Option<Result<canter_protocol::BtwEvent, ClientError>> {
+        loop {
+            if let Some(data) = self.parser.ready.pop_front() {
+                return Some(
+                    serde_json::from_str(&data)
+                        .map_err(|error| ClientError::Protocol(format!("bad btw event: {error}"))),
+                );
+            }
+            match self.response.chunk().await {
+                Ok(Some(bytes)) => self.parser.feed(&bytes),
+                Ok(None) => return None,
+                Err(error) => return Some(Err(error.into())),
+            }
+        }
     }
 }
 

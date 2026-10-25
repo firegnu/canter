@@ -51,6 +51,7 @@ pub(crate) struct State {
     pub user_messages: Vec<Message>,
     pub gate: PermissionGate,
     pub active: Option<Active>,
+    pub btw: Option<crate::btw::ActiveBtw>,
     pub queue: VecDeque<QueuedInput>,
     pub steers: Vec<QueuedInput>,
     pub requests: HashMap<String, oneshot::Sender<ApprovalResolution>>,
@@ -76,6 +77,7 @@ impl State {
             user_messages: Vec::new(),
             gate: PermissionGate::default(),
             active: None,
+            btw: None,
             queue: VecDeque::new(),
             steers: Vec::new(),
             requests: HashMap::new(),
@@ -812,19 +814,27 @@ impl Session {
         &self,
         reason: SessionCloseReason,
     ) -> Result<SessionCloseResponse, CoreError> {
-        let done = {
+        let (done, btw_done) = {
             let mut state = self.shared.state.lock().await;
             state.closing = true;
-            state.active.as_ref().map(|active| {
+            let done = state.active.as_ref().map(|active| {
                 active.cancel.cancel();
                 active.done.clone()
-            })
+            });
+            let btw_done = state.btw.as_ref().map(|btw| {
+                btw.cancel.cancel();
+                btw.done.clone()
+            });
+            (done, btw_done)
         };
-        let stopped = if let Some(done) = done {
+        let mut stopped = if let Some(done) = done {
             wait_done(done).await.map(|_| ())
         } else {
             Ok(())
         };
+        if let Some(done) = btw_done {
+            stopped = stopped.and(wait_done(done).await.map(|_| ()));
+        }
         let mut state = self.shared.state.lock().await;
         if stopped.is_err() || state.journal.failed {
             state.journal.release().await?;

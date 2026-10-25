@@ -118,6 +118,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::SESSION, get(read).patch(update).delete(close))
         .route(routes::SKILLS, get(skills))
         .route(routes::CONTEXT, get(context))
+        .route(routes::BTW, post(btw))
         .route(routes::RESUME, post(resume))
         .route(routes::INPUT, post(input))
         .route(routes::INTERRUPT, post(interrupt))
@@ -302,6 +303,43 @@ async fn skills(
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<SkillListResponse>, ApiError> {
     Ok(Json(app.session(&id).await?.skills().await))
+}
+
+async fn btw(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+    params: Result<Json<SessionBtwParams>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let params = body(params)?;
+    let draining = app.draining.read().await;
+    if *draining {
+        return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
+    }
+    let mut answer = app.session(&id).await?.btw(params.question).await?;
+    let stream = async_stream::stream! {
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
+        loop {
+            tokio::select! {
+                event = answer.recv() => match event {
+                    Some(event) => {
+                        let terminal = matches!(event, BtwEvent::Completed | BtwEvent::Cancelled | BtwEvent::Error { .. });
+                        yield Ok::<_, Infallible>(format!("data: {}\n\n", serde_json::to_string(&event).expect("btw event")));
+                        if terminal { break; }
+                    }
+                    None => break,
+                },
+                _ = heartbeat.tick() => yield Ok(": heartbeat\n\n".to_owned()),
+            }
+        }
+    };
+    Ok((
+        [
+            ("content-type", "text/event-stream"),
+            ("cache-control", "no-cache"),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response())
 }
 
 async fn read(
