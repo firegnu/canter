@@ -4,6 +4,7 @@ mod context;
 mod journal;
 mod runner;
 mod session;
+mod skills;
 
 use canter_protocol::ErrorCode;
 pub use journal::Subscription;

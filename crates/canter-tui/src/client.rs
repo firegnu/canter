@@ -45,6 +45,21 @@ pub struct Client {
 }
 
 impl Client {
+    /// GET /v1/sessions/{id}/skills: the session's fixed skill list.
+    pub async fn list_skills(
+        &self,
+        session: &str,
+    ) -> Result<Vec<canter_protocol::Skill>, ClientError> {
+        let response = self
+            .http
+            .get(url(routes::SKILLS, &[session]))
+            .send()
+            .await?;
+        Ok(decode::<canter_protocol::SkillListResponse>(response)
+            .await?
+            .data)
+    }
+
     /// GET /v1/models: the server's configured model list.
     pub async fn list_models(&self) -> Result<Vec<canter_protocol::Model>, ClientError> {
         let response = self.http.get(url(routes::MODELS, &[])).send().await?;

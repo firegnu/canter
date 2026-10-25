@@ -1912,6 +1912,59 @@
       ],
       "type": "object"
     },
+    "Skill": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "modelInvocation": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SkillSource"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "path",
+        "source",
+        "modelInvocation"
+      ],
+      "type": "object"
+    },
+    "SkillListParams": {
+      "type": "object"
+    },
+    "SkillListResponse": {
+      "description": "GET /v1/sessions/{id}/skills. Frozen when the session is opened.",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/Skill"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
+    "SkillSource": {
+      "enum": [
+        "global",
+        "project",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "TokenUsage": {
       "properties": {
         "contextTokens": {

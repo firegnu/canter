@@ -44,6 +44,7 @@ pub(crate) struct Shared {
 pub(crate) struct State {
     pub journal: Journal,
     pub prefix: Vec<Message>,
+    pub skills: Vec<Skill>,
     pub history: Vec<Message>,
     pub user_messages: Vec<String>,
     pub gate: PermissionGate,
@@ -66,6 +67,7 @@ impl State {
         Self {
             journal,
             prefix: Vec::new(),
+            skills: Vec::new(),
             history: Vec::new(),
             user_messages: Vec::new(),
             gate: PermissionGate::default(),
@@ -78,9 +80,13 @@ impl State {
             measured_context: None,
         }
     }
-    async fn initialize_prefix(&mut self) -> Result<(), CoreError> {
-        let (prefix, warnings) =
-            crate::context::prefix(self.journal.snapshot.settings.cwd.clone()).await?;
+    async fn initialize_prefix(
+        &mut self,
+        home: Option<std::path::PathBuf>,
+    ) -> Result<(), CoreError> {
+        let (prefix, warnings, skills) =
+            crate::context::prefix(self.journal.snapshot.settings.cwd.clone(), home).await?;
+        self.skills = skills;
         if self.prefix != prefix {
             self.journal
                 .record(HistoryEntry::Context {
@@ -255,10 +261,14 @@ impl Session {
         })
         .await
         .map_err(|_| CoreError::internal())??;
+        let home = runtime
+            .environment
+            .get("HOME")
+            .map(std::path::PathBuf::from);
         let tools = executor(writer.snapshot().settings.cwd.clone(), runtime).await?;
         let mut state = State::new(Journal::new(store, writer));
         (state.prefix, state.history, state.user_messages) = crate::context::restore(entries);
-        state.initialize_prefix().await?;
+        state.initialize_prefix(home).await?;
         for event in events {
             if let EventPayload::RequestResolved { request_id, .. } = event.payload {
                 state.resolved.insert(request_id, event.seq);
@@ -349,6 +359,10 @@ impl Session {
             ));
         }
         let cwd = settings.cwd.clone();
+        let home = runtime
+            .environment
+            .get("HOME")
+            .map(std::path::PathBuf::from);
         let tools = executor(cwd, runtime).await?;
         let owned_store = store.clone();
         let writer = tokio::task::spawn_blocking(move || owned_store.create(&id, settings, now()))
@@ -362,7 +376,7 @@ impl Session {
             }])
             .await?;
         let mut state = State::new(journal);
-        state.initialize_prefix().await?;
+        state.initialize_prefix(home).await?;
         let response = SessionCreateResponse {
             session: state.journal.snapshot.clone(),
             event_seq: state.journal.snapshot.last_event_seq,
@@ -479,6 +493,13 @@ impl Session {
         drop(state);
         subscription.catch_up().await?;
         Ok(subscription)
+    }
+
+    /// Skills discovered when this session was created or opened; never rescans.
+    pub async fn skills(&self) -> SkillListResponse {
+        SkillListResponse {
+            data: self.shared.state.lock().await.skills.clone(),
+        }
     }
 
     pub async fn snapshot(&self) -> SessionReadResponse {

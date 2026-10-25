@@ -347,6 +347,12 @@ where
                         .app_mut()
                         .warning(&format!("Could not list models: {error}")),
                 },
+                Some(Action::ListSkills) => match chat.client.list_skills(&chat.session).await {
+                    Ok(skills) => ui.app_mut().show_skills(skills),
+                    Err(error) => ui
+                        .app_mut()
+                        .warning(&format!("Could not list skills: {error}")),
+                },
                 Some(action) => chat.act(ui.app(), action),
             }
         }
@@ -739,7 +745,11 @@ impl<C: Connector> Chat<C> {
                 });
             }
             // The main loop handles these itself.
-            Action::Quit | Action::NewSession | Action::PickSession | Action::PickModel => {}
+            Action::Quit
+            | Action::NewSession
+            | Action::PickSession
+            | Action::PickModel
+            | Action::ListSkills => {}
         }
     }
 }

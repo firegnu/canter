@@ -15,6 +15,7 @@ pub mod routes {
     pub const MODELS: &str = "/v1/models";
     pub const SESSIONS: &str = "/v1/sessions";
     pub const SESSION: &str = "/v1/sessions/{id}";
+    pub const SKILLS: &str = "/v1/sessions/{id}/skills";
     pub const RESUME: &str = "/v1/sessions/{id}/resume";
     pub const INPUT: &str = "/v1/sessions/{id}/input";
     pub const INTERRUPT: &str = "/v1/sessions/{id}/interrupt";
@@ -46,6 +47,7 @@ empty_params!(
     ModelListParams,
     SessionListParams,
     SessionReadParams,
+    SkillListParams,
     SessionCompactParams,
     SessionCloseParams
 );
@@ -74,6 +76,31 @@ pub struct Model {
     pub model: String,
     pub display_name: String,
     pub is_default: bool,
+}
+
+/// GET /v1/sessions/{id}/skills. Frozen when the session is opened.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct SkillListResponse {
+    pub data: Vec<Skill>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Skill {
+    pub name: String,
+    pub description: String,
+    pub path: String,
+    pub source: SkillSource,
+    pub model_invocation: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SkillSource {
+    Global,
+    Project,
+    #[serde(other)]
+    Unknown,
 }
 
 /// GET /v1/sessions. Each summary carries its own lastEventSeq.

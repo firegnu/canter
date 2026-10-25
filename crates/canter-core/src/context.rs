@@ -95,7 +95,10 @@ pub(crate) fn request_tokens(request: &canter_model::Request) -> u64 {
         + estimate(&serde_json::to_string(&request.tools).expect("tool definitions"))
 }
 
-pub(crate) async fn prefix(cwd: String) -> Result<(Vec<Message>, Vec<String>), CoreError> {
+pub(crate) async fn prefix(
+    cwd: String,
+    home: Option<PathBuf>,
+) -> Result<(Vec<Message>, Vec<String>, Vec<canter_protocol::Skill>), CoreError> {
     tokio::task::spawn_blocking(move || {
         let cwd = PathBuf::from(cwd);
         let root = cwd
@@ -148,7 +151,9 @@ pub(crate) async fn prefix(cwd: String) -> Result<(Vec<Message>, Vec<String>), C
                 )),
             }
         }
-        (vec![Message::System { text }], warnings)
+        let skills = crate::skills::discover(home.map(|home| cwd.join(home)), root, &mut warnings);
+        crate::skills::append_prompt(&mut text, &skills);
+        (vec![Message::System { text }], warnings, skills)
     })
     .await
     .map_err(|_| CoreError::internal())

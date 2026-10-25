@@ -16,7 +16,7 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 8] = [
+const COMMANDS: [(&str, &str); 9] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/exit", "Quit canter"),
     ("/help", "Show available commands"),
@@ -24,6 +24,7 @@ const COMMANDS: [(&str, &str); 8] = [
     ("/model", "Change the model"),
     ("/new", "Start a new session"),
     ("/resume", "Switch to another session"),
+    ("/skills", "List this session's skills"),
     ("/think", "Change thinking effort (none, low, high, max)"),
 ];
 
@@ -207,6 +208,58 @@ fn rows(buffer: &Buffer) -> Vec<String> {
             row.trim_end().to_owned()
         })
         .collect()
+}
+
+#[test]
+fn skills_show_names_sources_and_manual_marker_in_single_truncated_rows() {
+    for width in [90, 40] {
+        let mut screen = Screen::sized(width, HEIGHT);
+        assert_eq!(screen.enter("/skills"), Some(Action::ListSkills));
+        let skills = serde_json::from_value(json!([
+            {"name":"manual", "description":"Review all interface states", "source":"global", "path":"/home/.agents/skills/manual/SKILL.md", "modelInvocation":false},
+            {"name":"tdd", "description":"Write a failing test before changing implementation and verify the result", "source":"project", "path":"/work/.agents/skills/tdd/SKILL.md", "modelInvocation":true}
+        ])).unwrap();
+        screen.ui.app_mut().show_skills(skills);
+        screen.draw();
+        let lines = screen.lines();
+        let manual = lines
+            .iter()
+            .position(|line| line.contains("manual [global] [not for model]"))
+            .unwrap();
+        let tdd = &lines[manual + 1];
+        assert!(
+            tdd.contains("tdd [project]  Write a failing"),
+            "{}",
+            screen.text()
+        );
+        if width == 40 {
+            assert!(lines[manual].ends_with('…'));
+            assert!(tdd.ends_with('…'));
+            assert!(!screen.text().contains("changing implementation"));
+        } else {
+            assert!(lines[manual].contains("Review all interface states"));
+            assert!(tdd.contains("verify the result"));
+        }
+    }
+}
+
+#[test]
+fn skills_empty_screen_explains_both_directories() {
+    let mut screen = Screen::new();
+    assert_eq!(screen.enter("/skills"), Some(Action::ListSkills));
+    screen.ui.app_mut().show_skills(Vec::new());
+    screen.draw();
+    let shown = screen.text();
+    assert!(shown.contains("No skills in this session."), "{shown}");
+    assert!(
+        shown.contains("~/.agents/skills/<name>/SKILL.md"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("<project root>/.agents/skills/<name>/SKILL.md"),
+        "{shown}"
+    );
+    assert!(shown.contains("reopen the session"), "{shown}");
 }
 
 /// A `/` as the first character lists every command with a line about it,

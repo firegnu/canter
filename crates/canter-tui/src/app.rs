@@ -62,6 +62,8 @@ pub enum Action {
     PickSession,
     /// Fetch the available models and offer a choice.
     PickModel,
+    /// Fetch the skills fixed when this session opened.
+    ListSkills,
     /// Compact this session's context.
     Compact,
     /// Change this session's settings.
@@ -82,6 +84,7 @@ struct Place {
 struct Notice {
     at: Place,
     line: LogicalLine,
+    truncate: bool,
 }
 
 /// The finished part of the conversation, wrapped for `width`, with the
@@ -562,6 +565,14 @@ impl App {
         }
     }
 
+    /// Displays `/skills`, one row per skill; descriptions truncate on narrow screens.
+    pub fn show_skills(&mut self, skills: Vec<canter_protocol::Skill>) {
+        let truncate = !skills.is_empty();
+        for line in commands::skills(skills) {
+            self.push_notice(line, truncate);
+        }
+    }
+
     /// The mouse wheel scrolls the conversation, also while the approval box
     /// is open. Other mouse events do nothing.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
@@ -593,10 +604,15 @@ impl App {
     /// Puts `line` after everything finished so far, before what is still
     /// in progress.
     fn notice(&mut self, line: LogicalLine) {
+        self.push_notice(line, false);
+    }
+
+    fn push_notice(&mut self, line: LogicalLine, truncate: bool) {
         self.extend_history(self.width);
         self.notices.push(Notice {
             at: self.history.end,
             line,
+            truncate,
         });
     }
 
@@ -659,7 +675,20 @@ impl App {
             while let Some(notice) = self.notices.get(self.history.notices)
                 && notice.at <= self.history.end
             {
-                self.history.rows.extend(wrap(&notice.line, width));
+                if notice.truncate {
+                    let spans = notice
+                        .line
+                        .indent
+                        .iter()
+                        .chain(&notice.line.body)
+                        .cloned()
+                        .collect();
+                    self.history
+                        .rows
+                        .push(Line::from(truncate(spans, usize::from(width))));
+                } else {
+                    self.history.rows.extend(wrap(&notice.line, width));
+                }
                 self.history.notices += 1;
             }
             let Some((rows, next)) = self.finished_part(self.history.end, width) else {
