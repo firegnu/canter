@@ -7,9 +7,9 @@
 use std::collections::{HashSet, VecDeque};
 
 use canter_protocol::{
-    ApprovalDecision, ApprovalRequest, ApprovalResolution, Event, EventPayload, Item, ItemStatus,
-    PendingRequest, PermissionMode, RequestKind, SessionSnapshot, SessionStatus,
-    SessionUpdateParams, Turn, TurnStatus, UserInput, apply_event_mut,
+    ApprovalDecision, ApprovalResolution, Event, EventPayload, Item, ItemStatus, PendingRequest,
+    PermissionMode, RequestKind, SessionSnapshot, SessionStatus, SessionUpdateParams, Turn,
+    TurnStatus, UserInput, UserInputAnswer, apply_event_mut,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::Frame;
@@ -49,6 +49,10 @@ pub enum Action {
     Resolve {
         request_id: String,
         decision: ApprovalDecision,
+    },
+    ResolveUserInput {
+        request_id: String,
+        answer: UserInputAnswer,
     },
     /// Stop this turn.
     Interrupt {
@@ -125,12 +129,13 @@ struct CommandList {
     closed: bool,
 }
 
-/// The approval box's highlighted answer and body scroll, for one request.
+/// The approval/question box's selection, body scroll and optional text answer.
 #[derive(Debug, Default)]
 struct ApprovalCursor {
     request: String,
     selected: usize,
     scroll: usize,
+    custom: Option<String>,
 }
 
 /// What a frame showed. A key acts on the frame that was on screen when it
@@ -138,10 +143,11 @@ struct ApprovalCursor {
 /// for one request never answers the next request.
 #[derive(Debug, Default, Clone, PartialEq)]
 struct Shown {
-    /// The request in the approval box; `None` when the input box showed.
+    /// The request in the approval/question box; `None` for the message input.
     approval: Option<String>,
     /// Whether that box had room for its answers.
     answers: bool,
+    custom_input: bool,
     /// The turn in progress.
     turn: Option<String>,
     /// The choice whose choices showed, numbered as [`App::choose`] opened it.
@@ -591,8 +597,18 @@ impl App {
         self.scroll.top = Some(top.saturating_add_signed(rows).min(self.scroll.max_top));
     }
 
-    /// Bracketed paste: the whole text goes in at once, newlines included.
+    /// Bracketed paste goes to an open custom answer as one line, otherwise
+    /// to the message draft with its newlines intact.
     pub fn handle_paste(&mut self, text: &str) {
+        if self.open_request().is_some_and(|request| {
+            request.id == self.approval.request && matches!(request.kind, RequestKind::UserInput(_))
+        }) && let Some(custom) = &mut self.approval.custom
+        {
+            let mut pasted = InputBox::default();
+            pasted.insert(text);
+            custom.push_str(&pasted.text().replace('\n', " "));
+            return;
+        }
         self.input.insert(text);
     }
 
@@ -743,7 +759,7 @@ impl App {
         self.width = width;
         // Leave the status line, the info line, the hint and one row of the conversation.
         let box_height = height.saturating_sub(4);
-        let approval = self.open_approval().map(|(request, approval)| {
+        let approval = self.open_request().map(|request| {
             let (selected, scroll) = if self.approval.request == request.id {
                 (self.approval.selected, self.approval.scroll)
             } else {
@@ -755,22 +771,40 @@ impl App {
             let taken = now_ms >= self.guard_until
                 && self.shown.back().and_then(|(_, shown)| shown.answering())
                     == Some(request.id.as_str());
-            let laid = approval::layout(
-                &self.snapshot,
-                request,
-                approval,
-                home,
-                selected,
-                scroll,
-                taken,
-                width,
-                box_height,
-            );
+            let laid = match &request.kind {
+                RequestKind::Approval(approval) => approval::layout(
+                    &self.snapshot,
+                    request,
+                    approval,
+                    home,
+                    selected,
+                    scroll,
+                    taken,
+                    width,
+                    box_height,
+                ),
+                RequestKind::UserInput(question) => crate::question::layout(
+                    question,
+                    selected,
+                    self.approval
+                        .custom
+                        .as_deref()
+                        .filter(|_| self.approval.request == request.id),
+                    scroll,
+                    taken,
+                    width,
+                    box_height,
+                ),
+                RequestKind::Unknown => unreachable!("known request"),
+            };
             (request.id.clone(), laid)
         });
         self.drawing = Shown {
             approval: approval.as_ref().map(|(request, _)| request.clone()),
             answers: approval.as_ref().is_some_and(|(_, laid)| laid.fits),
+            custom_input: approval.as_ref().is_some_and(|(id, _)| {
+                *id == self.approval.request && self.approval.custom.is_some()
+            }),
             turn: self
                 .snapshot
                 .turns
@@ -942,18 +976,12 @@ impl App {
         usize::from(self.width.saturating_sub(INPUT_CHROME))
     }
 
-    /// The approval request the box shows: the first one this terminal has
+    /// The pending request the box shows: the first one this terminal has
     /// not answered yet.
-    fn open_approval(&self) -> Option<(&PendingRequest, &ApprovalRequest)> {
-        self.snapshot
-            .pending_requests
-            .iter()
-            .find_map(|request| match &request.kind {
-                RequestKind::Approval(approval) if !self.answered.contains(&request.id) => {
-                    Some((request, approval))
-                }
-                _ => None,
-            })
+    fn open_request(&self) -> Option<&PendingRequest> {
+        self.snapshot.pending_requests.iter().find(|request| {
+            !matches!(request.kind, RequestKind::Unknown) && !self.answered.contains(&request.id)
+        })
     }
 
     /// Keys pressed on an approval box. They answer only the request that box
@@ -972,6 +1000,11 @@ impl App {
         let request_id = shown.approval?;
         if !shown.answers {
             return None;
+        }
+        if self.snapshot.pending_requests.iter().any(|request| {
+            request.id == request_id && matches!(request.kind, RequestKind::UserInput(_))
+        }) {
+            return self.question_key(key, &request_id, shown.custom_input, guarded);
         }
         let options =
             self.snapshot
@@ -1019,6 +1052,109 @@ impl App {
         Some(Action::Resolve {
             request_id,
             decision,
+        })
+    }
+
+    fn question_key(
+        &mut self,
+        key: KeyEvent,
+        request_id: &str,
+        custom_shown: bool,
+        guarded: bool,
+    ) -> Option<Action> {
+        if guarded || self.answered.contains(request_id) {
+            return None;
+        }
+        let question =
+            self.snapshot
+                .pending_requests
+                .iter()
+                .find_map(|request| match &request.kind {
+                    RequestKind::UserInput(question) if request.id == request_id => Some(question),
+                    _ => None,
+                })?;
+        if self.approval.request != request_id {
+            self.approval = ApprovalCursor {
+                request: request_id.into(),
+                ..ApprovalCursor::default()
+            };
+        }
+        let cursor = &mut self.approval;
+        if custom_shown != cursor.custom.is_some() {
+            return None;
+        }
+        match key.code {
+            KeyCode::PageUp => {
+                cursor.scroll = cursor.scroll.saturating_sub(self.approval_page);
+                return None;
+            }
+            KeyCode::PageDown => {
+                cursor.scroll = (cursor.scroll + self.approval_page).min(self.approval_max_scroll);
+                return None;
+            }
+            _ => {}
+        }
+        if cursor.custom.as_ref().is_some_and(String::is_empty)
+            && matches!(key.code, KeyCode::Backspace | KeyCode::Up)
+        {
+            cursor.custom = None;
+            return None;
+        }
+        let answer = if let Some(text) = &mut cursor.custom {
+            match key.code {
+                KeyCode::Enter if !text.trim().is_empty() => {
+                    Some(UserInputAnswer::Text { text: text.clone() })
+                }
+                KeyCode::Backspace => {
+                    text.pop();
+                    None
+                }
+                KeyCode::Char(c)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                        && !c.is_control() =>
+                {
+                    text.push(c);
+                    None
+                }
+                _ => None,
+            }
+        } else {
+            let selected = match key.code {
+                KeyCode::Up => {
+                    cursor.selected = cursor.selected.saturating_sub(1);
+                    None
+                }
+                KeyCode::Down => {
+                    cursor.selected = (cursor.selected + 1).min(question.options.len());
+                    None
+                }
+                KeyCode::Enter => Some(cursor.selected),
+                KeyCode::Char(digit @ '1'..='9')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    Some(digit as usize - '1' as usize)
+                }
+                _ => None,
+            }?;
+            if selected == question.options.len() {
+                cursor.selected = selected;
+                cursor.custom = Some(String::new());
+                None
+            } else {
+                question
+                    .options
+                    .get(selected)
+                    .map(|option| UserInputAnswer::Option {
+                        label: option.label.clone(),
+                    })
+            }
+        }?;
+        self.answered.insert(request_id.into());
+        Some(Action::ResolveUserInput {
+            request_id: request_id.into(),
+            answer,
         })
     }
 
@@ -1074,7 +1210,7 @@ impl App {
             ApprovalResolution::TimedOut => {
                 Some(cells::notice("■ ", "Approval request timed out", dim))
             }
-            ApprovalResolution::Unknown => None,
+            ApprovalResolution::UserInput { .. } | ApprovalResolution::Unknown => None,
         }
     }
 
@@ -1086,6 +1222,7 @@ impl App {
             Item::CommandExecution { status, .. }
             | Item::FileChange { status, .. }
             | Item::FileRead { status, .. } => Some(*status),
+            Item::UserInput { status, .. } => Some(*status),
             _ => None,
         };
         if let Some(status) = status {
@@ -1108,6 +1245,7 @@ impl App {
             .iter()
             .filter_map(|request| match &request.kind {
                 RequestKind::Approval(approval) => Some(approval.item_id.as_str()),
+                RequestKind::UserInput(question) => Some(question.item_id.as_str()),
                 RequestKind::Unknown => None,
             })
             .collect();
@@ -1175,7 +1313,19 @@ impl App {
                 ])
             }
             SessionStatus::WaitingApproval => Line::from(vec![
-                Span::styled(" ⏸ Waiting for approval", Style::new().yellow()),
+                Span::styled(
+                    if self
+                        .snapshot
+                        .pending_requests
+                        .iter()
+                        .any(|request| matches!(request.kind, RequestKind::UserInput(_)))
+                    {
+                        " ⏸ Waiting for your answer"
+                    } else {
+                        " ⏸ Waiting for approval"
+                    },
+                    Style::new().yellow(),
+                ),
                 Span::styled(format!(" · {elapsed}"), Style::new().dim()),
             ]),
             SessionStatus::Starting => Line::from(Span::styled(" Starting…", Style::new().dim())),

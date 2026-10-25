@@ -149,6 +149,227 @@ fn resolve(request: &str, decision: ApprovalDecision) -> Option<Action> {
     })
 }
 
+fn question(screen: &mut Screen, request: &str) {
+    question_with_text(screen, request, "Pick storage");
+}
+
+fn question_with_text(screen: &mut Screen, request: &str, text: &str) {
+    screen.event(json!({"type":"request.opened","request":{
+        "id":request,"turnId":"t1","createdAt":NOW,"kind":{
+            "type":"userInput","itemId":format!("item-{request}"),
+            "question":text, "options":[
+                {"label":"SQLite","description":"Local files"},
+                {"label":"PostgreSQL","description":"Shared server"}
+            ]
+        }
+    }}));
+    screen.event(json!({"type":"session.status","status":"waiting_approval"}));
+}
+
+fn question_resolved(screen: &mut Screen, request: &str) {
+    screen.event(json!({"type":"request.resolved","requestId":request,
+        "resolution":{"type":"userInput","answer":{"type":"option","label":"PostgreSQL"}},
+        "clientName":"another-terminal"
+    }));
+}
+
+#[test]
+fn question_keys_follow_the_visible_frame_and_both_300ms_guards() {
+    let mut screen = Screen::new(100, 30);
+    screen.start_turn("t1");
+    screen.draw();
+    question(&mut screen, "q1");
+    assert_eq!(screen.key(KeyCode::Enter), None, "not drawn yet");
+    screen.draw();
+    assert!(screen.screen().contains("2. PostgreSQL"));
+    assert!(screen.dim("PostgreSQL"));
+    for key in [KeyCode::Enter, KeyCode::Char('2'), KeyCode::Down] {
+        screen.wait(ANSWER_GUARD_MS - 1);
+        assert_eq!(screen.key(key), None, "guard extends on every key");
+    }
+    screen.read_the_box();
+    screen.draw();
+    assert!(!screen.dim("PostgreSQL"));
+    // q2 arrived while the frame still shows q1. An old Enter cannot answer q2.
+    question_resolved(&mut screen, "q1");
+    question(&mut screen, "q2");
+    assert_eq!(screen.key(KeyCode::Enter), None);
+    screen.draw();
+    assert_eq!(
+        screen.key(KeyCode::Char('2')),
+        None,
+        "new box starts a guard"
+    );
+    screen.read_the_box();
+    assert_eq!(
+        screen.key(KeyCode::Char('2')),
+        Some(Action::ResolveUserInput {
+            request_id: "q2".into(),
+            answer: canter_protocol::UserInputAnswer::Option {
+                label: "PostgreSQL".into()
+            },
+        })
+    );
+    screen.draw();
+    assert!(!screen.screen().contains("─ Ask user"));
+    assert_eq!(screen.key(KeyCode::Char('稿')), None);
+    screen.wait(ANSWER_GUARD_MS - 1);
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        None,
+        "own answer protects the draft"
+    );
+    screen.draw();
+    assert!(screen.dim("稿"));
+    screen.read_the_box();
+    assert_eq!(screen.key(KeyCode::Enter), Some(Action::Send("稿".into())));
+}
+
+#[test]
+fn question_custom_paste_appends_a_single_line_and_preserves_the_message_draft() {
+    let mut screen = Screen::new(100, 30);
+    screen.start_turn("t1");
+    screen.draw();
+    screen.ui.app_mut().handle_paste("草稿\n第二行");
+    question(&mut screen, "q1");
+    screen.draw();
+    // Outside custom input, paste still goes to the message draft.
+    screen.ui.app_mut().handle_paste("（选项时）");
+    screen.read_the_box();
+    assert_eq!(screen.key(KeyCode::Char('3')), None);
+    screen.draw();
+    for c in "Use ".chars() {
+        assert_eq!(screen.key(KeyCode::Char(c)), None);
+    }
+    screen
+        .ui
+        .app_mut()
+        .handle_paste("plain\nfiles\r\nfor\rnow.");
+    screen.draw();
+    assert!(screen.screen().contains("› Use plain files for now.▏"));
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        Some(Action::ResolveUserInput {
+            request_id: "q1".into(),
+            answer: canter_protocol::UserInputAnswer::Text {
+                text: "Use plain files for now.".into(),
+            },
+        })
+    );
+    screen.draw();
+    // A retained custom cursor must not catch paste after this terminal answers.
+    screen.ui.app_mut().handle_paste("（答完后）");
+    screen.read_the_box();
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        Some(Action::Send("草稿\n第二行（选项时）（答完后）".into()))
+    );
+}
+
+#[test]
+fn question_empty_custom_answer_can_return_to_the_options() {
+    for back in [KeyCode::Backspace, KeyCode::Up] {
+        let mut screen = Screen::new(100, 30);
+        screen.start_turn("t1");
+        question(&mut screen, "q1");
+        screen.draw();
+        screen.read_the_box();
+        assert_eq!(screen.key(KeyCode::Char('3')), None);
+        screen.draw();
+        assert_eq!(screen.key(KeyCode::Char('x')), None);
+        assert_eq!(screen.key(KeyCode::Up), None);
+        screen.draw();
+        assert!(screen.screen().contains("› x▏"), "Up keeps non-empty text");
+        assert_eq!(screen.key(KeyCode::Backspace), None);
+        screen.draw();
+        assert!(
+            screen.screen().contains("Write your own:"),
+            "deleting the last character stays in the editor"
+        );
+        assert_eq!(screen.key(back), None);
+        // These keys still belong to the custom-input frame, not the options.
+        assert_eq!(screen.key(KeyCode::Char('1')), None);
+        assert_eq!(screen.key(KeyCode::Enter), None);
+        screen.draw();
+        assert!(
+            screen.screen().contains("3. Write your own"),
+            "{back:?} returns to the options"
+        );
+        assert_eq!(
+            screen.key(KeyCode::Char('2')),
+            Some(Action::ResolveUserInput {
+                request_id: "q1".into(),
+                answer: canter_protocol::UserInputAnswer::Option {
+                    label: "PostgreSQL".into()
+                },
+            })
+        );
+    }
+}
+
+#[test]
+fn question_custom_answer_keeps_page_scroll_escape_and_ctrl_c() {
+    let mut screen = Screen::new(100, 30);
+    screen.start_turn("t1");
+    question_with_text(
+        &mut screen,
+        "q1",
+        &format!("Start of question. {}", "Question details. ".repeat(200)),
+    );
+    screen.draw();
+    screen.read_the_box();
+    assert_eq!(screen.key(KeyCode::Char('3')), None);
+    screen.draw();
+    assert_eq!(screen.key(KeyCode::Char('x')), None);
+    screen.draw();
+    let before = screen.screen();
+    assert!(before.contains("Start of question."));
+    assert_eq!(screen.key(KeyCode::PageDown), None);
+    screen.draw();
+    assert!(!screen.screen().contains("Start of question."));
+    assert!(screen.screen().contains("› x▏"));
+    assert_eq!(screen.key(KeyCode::PageUp), None);
+    screen.draw();
+    assert_eq!(screen.screen(), before);
+    assert_eq!(
+        screen.key(KeyCode::Esc),
+        Some(Action::Interrupt {
+            turn_id: "t1".into()
+        })
+    );
+    assert_eq!(
+        screen.ui.app_mut().handle_key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            screen.now
+        ),
+        Some(Action::Quit)
+    );
+}
+
+#[test]
+fn question_custom_answer_accepts_digits_only_after_its_frame_is_shown() {
+    let mut screen = Screen::new(100, 30);
+    screen.start_turn("t1");
+    question(&mut screen, "q1");
+    screen.draw();
+    screen.read_the_box();
+    assert_eq!(screen.key(KeyCode::Char('3')), None);
+    assert_eq!(screen.key(KeyCode::Char('1')), None);
+    assert_eq!(screen.key(KeyCode::Enter), None);
+    screen.draw();
+    assert!(screen.screen().contains("Write your own:"));
+    for c in "2 x".chars() {
+        assert_eq!(screen.key(KeyCode::Char(c)), None);
+    }
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        Some(Action::ResolveUserInput {
+            request_id: "q1".into(),
+            answer: canter_protocol::UserInputAnswer::Text { text: "2 x".into() },
+        })
+    );
+}
+
 /// The buffer as text, one row per line, trailing spaces trimmed.
 fn rows(buffer: &Buffer) -> String {
     let mut out = String::new();

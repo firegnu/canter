@@ -20,6 +20,7 @@ pub mod fake;
 mod input;
 mod markdown;
 mod picker;
+mod question;
 mod run;
 mod text;
 

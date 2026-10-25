@@ -246,6 +246,14 @@ pub enum Item {
         id: String,
         summary: String,
     },
+    UserInput {
+        id: String,
+        question: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        answer: Option<UserInputAnswer>,
+        status: ItemStatus,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -259,6 +267,7 @@ impl Item {
             | Self::CommandExecution { id, .. }
             | Self::FileChange { id, .. }
             | Self::FileRead { id, .. }
+            | Self::UserInput { id, .. }
             | Self::ContextCompaction { id, .. } => Some(id),
             Self::Unknown => None,
         }
@@ -314,6 +323,7 @@ pub struct PendingRequest {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum RequestKind {
     Approval(ApprovalRequest),
+    UserInput(UserInputRequest),
     #[serde(other)]
     Unknown,
 }
@@ -329,10 +339,40 @@ pub struct ApprovalRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInputRequest {
+    pub item_id: String,
+    pub question: String,
+    pub options: Vec<UserInputOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct UserInputOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum UserInputAnswer {
+    Option {
+        label: String,
+    },
+    Text {
+        text: String,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ApprovalResolution {
     Answered {
         decision: ApprovalDecision,
+    },
+    UserInput {
+        answer: UserInputAnswer,
     },
     Cancelled,
     TimedOut,

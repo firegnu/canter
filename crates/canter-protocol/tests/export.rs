@@ -70,6 +70,9 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         "SessionInterruptResponse",
         "RequestResolveParams",
         "RequestResolveResponse",
+        "UserInputRequest",
+        "UserInputOption",
+        "UserInputAnswer",
         "SessionUpdateParams",
         "SessionUpdateResponse",
         "SessionCompactParams",
@@ -107,6 +110,30 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         );
     }
     let event_ts = fs::read_to_string(temp.path().join("typescript/Event.ts")).unwrap();
+    let resolve_ts =
+        fs::read_to_string(temp.path().join("typescript/RequestResolveParams.ts")).unwrap();
+    assert!(resolve_ts.contains("decision?: ApprovalDecision"));
+    assert!(resolve_ts.contains("answer?: UserInputAnswer"));
+    let required = definitions["RequestResolveParams"]["required"]
+        .as_array()
+        .unwrap();
+    assert!(
+        !required
+            .iter()
+            .any(|field| field == "decision" || field == "answer")
+    );
+    let legacy: canter_protocol::RequestResolveParams =
+        serde_json::from_value(serde_json::json!({"decision":"accept","clientName":"old-client"}))
+            .unwrap();
+    assert_eq!(
+        legacy.decision,
+        Some(canter_protocol::ApprovalDecision::Accept)
+    );
+    assert_eq!(legacy.answer, None);
+    assert_eq!(
+        serde_json::to_value(legacy).unwrap(),
+        serde_json::json!({"decision":"accept","clientName":"old-client"})
+    );
     assert!(event_ts.contains("seq: number"));
     assert!(event_ts.contains("sessionId: string"));
     let payload_ts = fs::read_to_string(temp.path().join("typescript/EventPayload.ts")).unwrap();

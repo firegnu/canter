@@ -692,12 +692,20 @@ impl<C: Connector> Chat<C> {
                     }
                 });
             }
-            Action::Resolve {
-                request_id,
-                decision,
-            } => {
+            action @ (Action::Resolve { .. } | Action::ResolveUserInput { .. }) => {
+                let (request_id, decision, answer) = match action {
+                    Action::Resolve {
+                        request_id,
+                        decision,
+                    } => (request_id, Some(decision), None),
+                    Action::ResolveUserInput { request_id, answer } => {
+                        (request_id, None, Some(answer))
+                    }
+                    _ => unreachable!(),
+                };
                 let params = RequestResolveParams {
                     decision,
+                    answer,
                     client_name: self.client_name.clone(),
                 };
                 tokio::spawn(async move {

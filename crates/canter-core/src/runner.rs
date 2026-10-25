@@ -478,6 +478,9 @@ async fn execute(
         .await
     {
         Err(output) => output,
+        Ok(prepared) if prepared.tool() == Tool::AskUser => {
+            ask_user(shared, turn_id, &prepared, cancel).await?
+        }
         Ok(prepared) => {
             let permission = permission(shared, turn_id, &prepared, cancel).await?;
             match permission {
@@ -595,13 +598,13 @@ async fn permission<'a>(
                         },
                     ])
                     .await?;
-                state.approvals.insert(request.id, sender);
+                state.requests.insert(request.id, sender);
                 receiver
             }
             permission => return Ok(Some(permission)),
         }
     };
-    let decision = tokio::select! {
+    let resolution = tokio::select! {
         biased;
         _ = cancel.cancelled() => {
             match receiver.try_recv() {
@@ -614,6 +617,9 @@ async fn permission<'a>(
         },
         decision = &mut receiver => decision.map_err(|_| CoreError::internal())?,
     };
+    let ApprovalResolution::Answered { decision } = resolution else {
+        return Err(CoreError::internal());
+    };
     shared
         .state
         .lock()
@@ -622,6 +628,85 @@ async fn permission<'a>(
         .resolve(call, decision)
         .map(Some)
         .map_err(|_| CoreError::new(ErrorCode::InvalidDecision, "invalid approval decision"))
+}
+async fn ask_user(
+    shared: &Shared,
+    turn_id: &str,
+    call: &PreparedCall,
+    cancel: &CancellationToken,
+) -> Result<ToolOutput, CoreError> {
+    let question = call.user_input_request().expect("user input call");
+    let mut receiver = {
+        let mut state = shared.state.lock().await;
+        let request = PendingRequest {
+            id: id("question"),
+            turn_id: turn_id.into(),
+            created_at: crate::journal::now(),
+            kind: RequestKind::UserInput(question.clone()),
+        };
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        state
+            .journal
+            .append(vec![
+                EventPayload::ItemStarted {
+                    turn_id: turn_id.into(),
+                    item: call.started_item(),
+                },
+                EventPayload::RequestOpened {
+                    request: request.clone(),
+                },
+                EventPayload::SessionStatus {
+                    status: SessionStatus::WaitingApproval,
+                    close_reason: None,
+                },
+            ])
+            .await?;
+        state.requests.insert(request.id, sender);
+        receiver
+    };
+    let resolution = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            match receiver.try_recv() {
+                Ok(resolution) => Some(resolution),
+                Err(_) => {
+                    shared.state.lock().await.cancel_requests().await?;
+                    None
+                }
+            }
+        },
+        resolution = &mut receiver => Some(resolution.map_err(|_| CoreError::internal())?),
+    };
+    let answer = match resolution {
+        Some(ApprovalResolution::UserInput { answer }) => Some(answer),
+        None => None,
+        _ => return Err(CoreError::internal()),
+    };
+    let text = match &answer {
+        Some(answer) => {
+            serde_json::json!({ "question": question.question, "answer": answer }).to_string()
+        }
+        None => "Interrupted; no user answer".into(),
+    };
+    let answered = answer.is_some();
+    Ok(ToolOutput {
+        text,
+        item: Item::UserInput {
+            id: question.item_id,
+            question: question.question,
+            answer,
+            status: if answered {
+                ItemStatus::Completed
+            } else {
+                ItemStatus::Failed
+            },
+        },
+        outcome: if answered {
+            ToolOutcome::Completed
+        } else {
+            ToolOutcome::Cancelled
+        },
+    })
 }
 async fn flush(shared: &Shared, pending: &mut Vec<EventPayload>) -> Result<(), CoreError> {
     if !pending.is_empty() {

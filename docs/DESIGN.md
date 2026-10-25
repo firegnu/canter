@@ -42,6 +42,8 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
      - 一轮结束：`turn.completed` 只更新状态、错误、用量，项目以 `item.*` 事件为准，和 Codex 一样。
      - 项目种类：沿用 Codex 的 `userMessage`、`agentMessage`、`reasoning`、`commandExecution`、`fileChange`、`contextCompaction`；新增 `fileRead`；增量统一走 `item.delta`，按种类区分。
      - 待处理请求：外层 `id`、`turnId`、`createdAt`，内层带 `type`（第一期只有批准）。四个回答对应 Codex 的 `accept`（允许这一次）、`acceptForSession`（本会话都允许）、`decline`（拒绝）、`cancel`（拒绝并停下）。`request.resolved` 比 Codex 多 `resolution`（回答、取消、超时）和 `clientName`。
+     - 提问（P2-4）：`ask_user` 加在现有工具末尾，参数为 `question`、`options: [{label, description}]`。参考 Codex `ToolRequestUserInput*`（`rust-v0.163.0`），沿用 question/options/label/description/itemId；`request.opened.kind` 新增 `type: userInput`，带 `itemId`、`question`、`options`。单次只问一题，省掉 questions 数组、题目 id/header、isOther/isSecret、isBlocking/autoResolutionMs：请求外层已有 id/turnId，会话由事件标识；固定允许自写、阻塞等待、不隐藏输入、不超时。
+     - 回答仍走解决请求接口：`decision` 改为可选，新增可选 `answer`，两者必须恰有一个且匹配请求类型。`answer` 为 `{type: option, label}` 或 `{type: text, text}`，代替 Codex 按题目 id 映射的 answers 字符串数组，因为这里单题单选且要明确区分选项和自写文字。空白或不匹配的回答返回 `invalid_request`，不改变状态；批准的非法 decision 仍返回 `invalid_decision`。`request.resolved.resolution` 新增 `type: userInput` 和 answer；取消、重复处理、重开会话沿用批准机制，等待状态仍用 `waiting_approval`（终端按请求类型显示等待回答）。新增 `userInput` 项目，带 id/question/status 和可选 answer，供快照及重连后的对话保留问答；模型工具结果为 `{question, answer}`。旧客户端的批准请求 JSON 不变，新字段在 Schema/TypeScript 中可选，未知请求、结果和项目沿用 Unknown 处理。
      - 兼容：枚举都有 `Unknown`；不认识的事件、项目、增量、枚举值都跳过，不让整条解析失败。
      - 传输：出错的回复是 `{ code, message }`。SSE 每帧 `id:` 是序号，续传时 `Last-Event-ID` 优先于 `after` 参数。
 9. **桌面应用用 GPUI**（和 paddock 一样）。

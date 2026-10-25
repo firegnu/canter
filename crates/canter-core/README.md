@@ -38,6 +38,10 @@ SessionWriter 操作、执行器构造和项目指令读取都在 `spawn_blockin
 
 先完整收完模型响应，再串行处理工具。工具只在 `Finished(ToolCalls)` 后执行，
 严格按 prepare → started_item → gate.evaluate/resolve → execute 接入。
+提问工具 `ask_user` 在 prepare 后由循环开 `userInput` 待处理请求、等待回答，跳过权限闸门
+和执行器；包括 allowAll 在内的所有模式都等人回答。工具结果为 `{question, answer}`，
+answer 区分选项标签与自写文字；显示问答写入 `userInput` 项目，恢复快照仍可查看。
+等待、取消、关闭、重开和多客户端先到先得共用批准请求机制；不设置超时，不记录会话授权。
 Length/Other 发出可见 warning，并为没有执行的调用补结果。工具失败/超时/拒绝的结果
 交回模型；取消、拒绝并停下则终止当前轮。模型错误以 error 和失败的 turn.completed 收尾。
 未知工具把结果交回模型，并发 warning 写明工具名。等批准时被打断，先发

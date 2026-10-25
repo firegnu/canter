@@ -9,7 +9,9 @@ pub use executor::{CommandHandle, CommandProcess, Executor, FileReader, LocalExe
 pub use permission::{ExecutionPermit, PermissionCheck, PermissionGate};
 pub use shell::{DEFAULT_SHELL_TIMEOUT_MS, MAX_MODEL_OUTPUT_BYTES, MAX_SHELL_TIMEOUT_MS};
 
-use canter_protocol::{FileUpdateChange, Item, ItemStatus, PatchChangeKind};
+use canter_protocol::{
+    FileUpdateChange, Item, ItemStatus, PatchChangeKind, UserInputOption, UserInputRequest,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -25,6 +27,7 @@ pub enum Tool {
     Write,
     Edit,
     Shell,
+    AskUser,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +35,7 @@ pub enum Risk {
     Read,
     Write,
     Execute,
+    Interaction,
 }
 
 pub struct ToolDefinition {
@@ -42,7 +46,13 @@ pub struct ToolDefinition {
 }
 
 impl Tool {
-    pub const ALL: [Self; 4] = [Self::Read, Self::Write, Self::Edit, Self::Shell];
+    pub const ALL: [Self; 5] = [
+        Self::Read,
+        Self::Write,
+        Self::Edit,
+        Self::Shell,
+        Self::AskUser,
+    ];
 
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|tool| tool.name() == name)
@@ -54,6 +64,7 @@ impl Tool {
             Self::Write => "write",
             Self::Edit => "edit",
             Self::Shell => "shell",
+            Self::AskUser => "ask_user",
         }
     }
 
@@ -62,10 +73,25 @@ impl Tool {
             Self::Read => Risk::Read,
             Self::Write | Self::Edit => Risk::Write,
             Self::Shell => Risk::Execute,
+            Self::AskUser => Risk::Interaction,
         }
     }
 
     pub fn definition(self) -> ToolDefinition {
+        if self == Self::AskUser {
+            return ToolDefinition {
+                name: self.name(),
+                description: "Ask the user one question with 2 to 4 options, each with a short label and a one-sentence description. Ask only when you are genuinely uncertain and the answer would change your approach. First investigate anything you can discover yourself by reading files or running read-only commands. The user can choose one option or write their own answer. Ask separate questions in separate calls.",
+                parameters: json!({"type":"object","properties":{
+                    "question":{"type":"string","minLength":1},
+                    "options":{"type":"array","minItems":2,"maxItems":4,"items":{
+                        "type":"object","properties":{"label":{"type":"string","minLength":1},"description":{"type":"string","minLength":1}},
+                        "required":["label","description"],"additionalProperties":false
+                    }}
+                },"required":["question","options"],"additionalProperties":false}),
+                risk: self.risk(),
+            };
+        }
         if self == Self::Shell {
             return ToolDefinition {
                 name: self.name(),
@@ -150,6 +176,13 @@ struct EditArgs {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AskUserArgs {
+    question: String,
+    options: Vec<UserInputOption>,
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Replacement {
     old_text: String,
@@ -157,6 +190,7 @@ struct Replacement {
 }
 
 enum Action {
+    AskUser(AskUserArgs),
     Read(ReadArgs),
     Change {
         path: String,
@@ -199,6 +233,12 @@ impl PreparedCall {
     }
     fn item(&self, status: ItemStatus) -> Item {
         match &self.action {
+            Action::AskUser(args) => Item::UserInput {
+                id: self.id.clone(),
+                question: args.question.clone(),
+                answer: None,
+                status,
+            },
             Action::Read(read) => Item::FileRead {
                 id: self.id.clone(),
                 path: read.path.clone(),
@@ -224,6 +264,17 @@ impl PreparedCall {
     }
     pub fn tool(&self) -> Tool {
         self.tool
+    }
+    /// Interactions are awaited by the session, never passed to the permission gate.
+    pub fn user_input_request(&self) -> Option<UserInputRequest> {
+        match &self.action {
+            Action::AskUser(args) => Some(UserInputRequest {
+                item_id: self.id.clone(),
+                question: args.question.clone(),
+                options: args.options.clone(),
+            }),
+            _ => None,
+        }
     }
     pub fn raw_arguments(&self) -> &str {
         &self.raw_arguments
@@ -313,6 +364,23 @@ impl Tools {
         cancel: &CancellationToken,
     ) -> Result<Action, String> {
         match tool {
+            Tool::AskUser => {
+                let args: AskUserArgs = parse(arguments)?;
+                if args.question.trim().is_empty()
+                    || !(2..=4).contains(&args.options.len())
+                    || args.options.iter().any(|option| {
+                        option.label.trim().is_empty() || option.description.trim().is_empty()
+                    })
+                    || args.options.iter().enumerate().any(|(i, option)| {
+                        args.options[..i]
+                            .iter()
+                            .any(|previous| previous.label == option.label)
+                    })
+                {
+                    return Err("ask_user requires a question and 2 to 4 distinct, non-empty options with descriptions".into());
+                }
+                Ok(Action::AskUser(args))
+            }
             Tool::Read => {
                 let read: ReadArgs = parse(arguments)?;
                 validate_path(&read.path)?;
@@ -453,6 +521,10 @@ impl Tools {
             }
         }
         match &call.action {
+            Action::AskUser(_) => call.failed_output(
+                "User input must be handled by the session".into(),
+                ToolOutcome::Failed,
+            ),
             Action::Read(read) => {
                 let result = tokio::select! {
                     biased;
@@ -704,6 +776,12 @@ fn tool_error(
     cwd: &std::path::Path,
 ) -> ToolOutput {
     let item = match tool {
+        Tool::AskUser => Item::UserInput {
+            id,
+            question: arguments["question"].as_str().unwrap_or_default().into(),
+            answer: None,
+            status: ItemStatus::Failed,
+        },
         Tool::Read => Item::FileRead {
             id,
             path: arguments["path"].as_str().unwrap_or_default().into(),

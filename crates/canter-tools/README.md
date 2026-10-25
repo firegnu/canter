@@ -1,6 +1,6 @@
 # canter-tools
 
-四个内置工具、每会话的执行器和权限判断；不依赖模型包，不发送事件、不弹批准框。
+五个内置工具、每会话的执行器和权限判断；不依赖模型包，不发送事件、不弹批准框。
 本机实现使用 Unix 进程组，面向 macOS / Linux。
 
 ## 第 4 件接入
@@ -20,6 +20,9 @@
    成功返回不可修改的 `PreparedCall`；`raw_arguments()` 保留原文，供模型历史存盘。
    失败返回 `ToolOutput`，其中已有给模型的错误文字和正确种类的失败 `Item`。
 4. `call.started_item()` 提供 `InProgress` 项目，供循环发送 item.started。
+   `ask_user` 属于 `Risk::Interaction`：用 `call.user_input_request()` 取问题，交会话循环
+   开待处理请求并等回答，所有权限模式都一样，不交给 gate，也不调用执行器。
+   以下 gate/execute 步骤只用于读写文件和 shell 工具。
    调 `gate.evaluate(&call, mode)`。`Execute(permit)` 可执行，`Ask(ApprovalRequest)`
    交循环/客户端处理。请求包含完整参数，write/edit 另加顶层 `diff`；文件路径解析后
    与模型提供的不同时另带 `resolvedPath`，客户端应显示这个实际目标。shell 保留完整命令。
@@ -59,6 +62,10 @@
 | write | `path`, `content` | 整文件写，创建父目录；`fileChange` 和 unified diff |
 | edit | `path`, `edits: [{oldText, newText}]` | 一次替换多处；`fileChange` 和 unified diff |
 | shell | `command`, 可选 `timeoutMs` | 文字输出、退出码、耗时；`commandExecution` |
+| ask_user | `question`, `options: [{label, description}]`（2–4 个，标签不重复，内容非空） | 会话循环等待选项或自写文字；模型结果 `{question, answer}`，客户端项目 `userInput` |
+
+`Tool::ALL` 固定按 read/write/edit/shell/ask_user 排列，保证会话每次请求的工具前缀稳定。
+`ask_user` 没有「本会话都允许」，也不超时自动选择；取消由会话循环处理。
 
 所有相对路径按会话 cwd 解析。read/write/edit 会解析符号链接和 `..`；碰到受保护路径
 本身或其子路径时拒绝，模型收到「这是 canter 的私有文件」。shell 无法靠这份列表拦住，
