@@ -157,6 +157,10 @@ struct Shown {
     chooser: Option<u64>,
     /// How many completions the input box showed.
     completions: u64,
+    /// The permission mode Shift+Tab moves on from: the one the first info
+    /// row showed in full, under the bare input box (no approval or question
+    /// box, choice or command list). `None` on any other frame.
+    mode: Option<PermissionMode>,
 }
 
 impl Shown {
@@ -207,6 +211,9 @@ pub struct App {
     drawing: Shown,
     /// Recent frames on screen: each entry holds from that frame number on.
     shown: VecDeque<(u64, Shown)>,
+    /// The number of this screen's latest frame on screen. A later one
+    /// showed something else in its place, such as the session list.
+    latest_frame: u64,
     /// Unix ms until which answer keys are dropped; see [`ANSWER_GUARD_MS`].
     guard_until: i64,
     /// Unix ms until which Enter in the input box does not send: the same
@@ -246,6 +253,7 @@ impl App {
             approval_max_scroll: 0,
             drawing: Shown::default(),
             shown: VecDeque::new(),
+            latest_frame: 0,
             guard_until: i64::MIN,
             send_guard_until: i64::MIN,
             width: 80,
@@ -344,6 +352,7 @@ impl App {
 
     /// The frame numbered `frame` is on screen from `at` (Unix ms).
     pub(crate) fn frame_on_screen(&mut self, frame: u64, at: i64) {
+        self.latest_frame = frame;
         let before = self.shown.back().map(|(_, shown)| shown);
         if before != Some(&self.drawing) {
             let answering = self.drawing.answering();
@@ -372,13 +381,20 @@ impl App {
     /// A key that came in at `at` (Unix ms) while frame `frame` was on
     /// screen. Before any frame, keys go to the input box.
     pub(crate) fn handle_key_on(&mut self, key: KeyEvent, frame: u64, at: i64) -> Option<Action> {
-        let shown = self
+        let mut shown = self
             .shown
             .iter()
             .rev()
             .find(|(since, _)| *since <= frame)
-            .map(|(_, shown)| shown.clone());
-        self.key_on(key, shown.unwrap_or_default(), at)
+            .map(|(_, shown)| shown.clone())
+            .unwrap_or_default();
+        // Pressed on something drawn in this screen's place, such as the
+        // session list: other keys act as on the frame before it, but
+        // Shift+Tab finds no mode there.
+        if frame > self.latest_frame {
+            shown.mode = None;
+        }
+        self.key_on(key, shown, at)
     }
 
     fn key_on(&mut self, key: KeyEvent, shown: Shown, at: i64) -> Option<Action> {
@@ -411,6 +427,8 @@ impl App {
                     self.complete(matches[selected]);
                     return None;
                 }
+                // The permission mode changes only from the bare input box.
+                KeyCode::BackTab => return None,
                 _ => None,
             };
             if let Some((selected, closed)) = list {
@@ -441,6 +459,15 @@ impl App {
                 // before a completion showed, for what was there before it.
                 if !send_guarded && shown.completions == self.completions {
                     return self.enter();
+                }
+            }
+            // From the mode the key's frame showed, so presses before the
+            // change shows ask for the same mode; none on a frame with a
+            // choice or the list, even one a key before this closed. Like
+            // Enter, not right after an approval box closed.
+            KeyCode::BackTab => {
+                if !send_guarded && let Some(mode) = shown.mode {
+                    return Some(commands::next_mode(mode));
                 }
             }
             KeyCode::PageUp => self.scroll_by(-(self.scroll.page as isize)),
@@ -822,6 +849,7 @@ impl App {
                 .map(|turn| turn.id.clone()),
             chooser: None,
             completions: self.completions,
+            mode: None,
         };
         let bottom = match approval {
             Some((request, laid)) => {
@@ -902,14 +930,26 @@ impl App {
             .take(area)
             .cloned()
             .collect();
-        View {
+        let (info, mode_in_full) = self.info_rows(width);
+        let view = View {
             conversation,
             hint,
             status: self.status_line(now_ms),
             list,
             bottom,
-            info: self.info_rows(width),
-        }
+            info,
+        };
+        // Shift+Tab moves on only from a mode shown in full under the bare
+        // input box. The mode is in the first info row, above the bottom
+        // row; rows under the conversation that do not fit are cut from the
+        // bottom, so it is drawn when the rows down to it fit.
+        let bare_input = matches!(view.bottom, Bottom::Input { .. })
+            && self.chooser.is_none()
+            && self.command_list().is_none();
+        let mode_drawn = view.below() - (INFO_ROWS - 1) <= height;
+        self.drawing.mode = (bare_input && mode_in_full && mode_drawn)
+            .then_some(self.snapshot.settings.approval_policy);
+        view
     }
 
     /// The list above the input box: the choice offered, or the commands
@@ -1357,8 +1397,9 @@ impl App {
 
     /// Model, thinking and permission mode (Allow all in red); then the
     /// directory with its git branch, context use and cache hits. Each row
-    /// is cut on its own when the window is too narrow.
-    fn info_rows(&self, width: u16) -> [Line<'static>; 2] {
+    /// is cut on its own when the window is too narrow. Also whether the
+    /// first row shows all of the permission mode.
+    fn info_rows(&self, width: u16) -> ([Line<'static>; 2], bool) {
         let settings = &self.snapshot.settings;
         let dim = Style::new().dim();
         let (mode, mode_style) = match settings.approval_policy {
@@ -1412,8 +1453,16 @@ impl App {
                 }
             }
         }
+        // The mode ends the first row: it shows in full when that row is not cut.
+        let full: String = first.iter().map(|span| span.content.as_ref()).collect();
         let second = vec![Span::styled(text, dim)];
-        [first, second].map(|spans| Line::from(truncate(spans, usize::from(width))))
+        let rows = [first, second].map(|spans| Line::from(truncate(spans, usize::from(width))));
+        let kept: String = rows[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        (rows, kept == full)
     }
 }
 
@@ -1452,12 +1501,22 @@ impl Bottom {
 }
 
 impl View {
+    /// Rows under the conversation: the hint, the status line, the list, the
+    /// box and the info rows.
+    fn below(&self) -> u16 {
+        u16::from(self.hint.is_some())
+            + 1
+            + self.list.len() as u16
+            + self.bottom.height()
+            + INFO_ROWS
+    }
+
     /// The conversation fills the rows the status line, the box and the info
     /// rows (and the hint and the list) leave at the bottom.
     pub fn render(self, frame: &mut Frame) {
         let area = frame.area();
         let list = self.list.len() as u16;
-        let below = 1 + list + self.bottom.height() + INFO_ROWS + u16::from(self.hint.is_some());
+        let below = self.below();
         let mut y = area.y;
         let mut row = |height: u16| {
             let rect = Rect::new(area.x, y, area.width, height).intersection(area);

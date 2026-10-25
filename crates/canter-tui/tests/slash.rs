@@ -1,6 +1,7 @@
 //! Slash commands in the input box on ratatui's TestBackend: the command list
 //! above the input box, picking and completing a command, what each command
-//! asks the caller to do, and telling commands from messages.
+//! asks the caller to do, and telling commands from messages. Also Shift+Tab,
+//! which cycles the permission modes `/mode` sets.
 
 use canter_protocol::{Event, PermissionMode, SessionSnapshot, SessionUpdateParams};
 use canter_tui::{ANSWER_GUARD_MS, Action, App, Ui};
@@ -124,6 +125,42 @@ impl Screen {
             .handle_key(KeyEvent::new(code, KeyModifiers::NONE), self.now)
     }
 
+    /// Shift+Tab, as crossterm reports it.
+    fn shift_tab(&mut self) -> Option<Action> {
+        self.ui.app_mut().handle_key(
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+            self.now,
+        )
+    }
+
+    /// A question from the model: the question box opens.
+    fn question(&mut self, turn: &str) {
+        self.event(json!({
+            "type": "request.opened",
+            "request": {
+                "id": "r1", "turnId": turn, "createdAt": NOW,
+                "kind": {
+                    "type": "userInput", "itemId": "q1", "question": "Pick storage",
+                    "options": [
+                        { "label": "SQLite", "description": "Local files" },
+                        { "label": "PostgreSQL", "description": "Shared server" },
+                    ],
+                },
+            },
+        }));
+        self.event(json!({ "type": "session.status", "status": "waiting_approval" }));
+    }
+
+    /// Another terminal answers the question.
+    fn answered_elsewhere(&mut self) {
+        self.event(json!({
+            "type": "request.resolved", "requestId": "r1",
+            "resolution": { "type": "userInput", "answer": { "type": "option", "label": "SQLite" } },
+            "clientName": "canter-tui b",
+        }));
+        self.event(json!({ "type": "session.status", "status": "working" }));
+    }
+
     /// Types `text` without pressing Enter; typing alone asks for nothing.
     fn type_text(&mut self, text: &str) {
         for c in text.chars() {
@@ -154,6 +191,13 @@ impl Screen {
             .rposition(|row| row.starts_with('╭'))
             .unwrap_or_else(|| panic!("no input box:\n{}", self.text()));
         lines[top.saturating_sub(count)..top].to_vec()
+    }
+
+    /// The first of the two info rows at the bottom: model, thinking and
+    /// permission mode.
+    fn mode_row(&self) -> String {
+        let lines = self.lines();
+        lines[lines.len() - 2].clone()
     }
 
     /// The input box's first row, without the border.
@@ -706,4 +750,195 @@ fn the_list_shows_after_leading_blanks() {
     assert_eq!(screen.key(KeyCode::Enter), None, "completes");
     screen.draw();
     assert_eq!(screen.input(), "› /compact");
+}
+
+/// Shift+Tab moves on from the mode on screen when it was pressed: until the
+/// change shows, more presses ask for the same mode, never two steps on.
+#[test]
+fn shift_tab_on_an_unchanged_screen_moves_one_mode() {
+    let mut screen = Screen::new();
+    screen.draw();
+    let next = set_mode(PermissionMode::AskForExecution);
+    assert_eq!(screen.shift_tab(), next);
+    assert_eq!(screen.shift_tab(), next, "pressed on the same frame");
+    screen.draw();
+    assert_eq!(screen.shift_tab(), next, "the change has not come back yet");
+    screen.settings("askForExecution");
+    assert_eq!(screen.shift_tab(), next, "the change is not drawn yet");
+
+    screen.draw();
+    let shown = screen.text();
+    assert!(
+        shown.contains("test-model · think high · Ask for execution"),
+        "{shown}"
+    );
+    assert_eq!(screen.shift_tab(), set_mode(PermissionMode::AllowAll));
+}
+
+/// Something that happens on a screen, such as a box opening.
+type Step = fn(&mut Screen);
+
+/// Shift+Tab changes the mode only from the input box: not while the
+/// approval box, the question box, a choice or the command list is open.
+#[test]
+fn shift_tab_does_nothing_while_a_box_a_choice_or_the_list_is_open() {
+    let opens: [(&str, Step); 4] = [
+        ("Run this command?", |screen| screen.ask("t1", "cargo test")),
+        ("Pick storage", |screen| screen.question("t1")),
+        ("Permission mode", |screen| {
+            assert_eq!(screen.enter("/mode"), None)
+        }),
+        ("Summarize the conversation", |screen| screen.type_text("/")),
+    ];
+    for (open_shows, open) in opens {
+        let mut screen = Screen::new();
+        screen.start_turn("t1");
+        screen.draw();
+        assert_eq!(
+            screen.shift_tab(),
+            set_mode(PermissionMode::AskForExecution),
+            "the input box, before {open_shows:?}"
+        );
+        open(&mut screen);
+        screen.draw();
+        // Past the boxes' guard: only being open keeps the mode.
+        screen.wait(ANSWER_GUARD_MS);
+        screen.draw();
+        let shown = screen.text();
+        assert!(shown.contains(open_shows), "{shown}");
+        assert_eq!(screen.shift_tab(), None, "{open_shows:?}:\n{shown}");
+    }
+}
+
+/// P1-14: for 300 ms after the approval or question box gives the input box
+/// back, Shift+Tab was meant for the box and changes nothing; after that it does.
+#[test]
+fn shift_tab_right_after_a_box_closes_does_nothing() {
+    let boxes: [(&str, Step, Step); 2] = [
+        (
+            "approval",
+            |screen| screen.ask("t1", "cargo test"),
+            |screen| screen.allowed_elsewhere("t1", "cargo test"),
+        ),
+        (
+            "question",
+            |screen| screen.question("t1"),
+            Screen::answered_elsewhere,
+        ),
+    ];
+    for (what, open, close) in boxes {
+        let mut screen = Screen::new();
+        screen.start_turn("t1");
+        open(&mut screen);
+        screen.draw();
+        screen.wait(ANSWER_GUARD_MS);
+        screen.draw();
+        close(&mut screen);
+        screen.draw();
+        assert!(
+            screen.input().contains("Type a message"),
+            "{what}:\n{}",
+            screen.text()
+        );
+        assert_eq!(screen.shift_tab(), None, "the {what} box just closed");
+
+        screen.wait(ANSWER_GUARD_MS);
+        screen.draw();
+        assert_eq!(
+            screen.shift_tab(),
+            set_mode(PermissionMode::AskForExecution),
+            "after the {what} box's guard"
+        );
+    }
+}
+
+/// While the model answers, Shift+Tab changes the mode too.
+#[test]
+fn shift_tab_works_while_the_model_answers() {
+    let mut screen = Screen::new();
+    screen.start_turn("t1");
+    screen.draw();
+    assert!(screen.text().contains("Working"), "{}", screen.text());
+    assert_eq!(
+        screen.shift_tab(),
+        set_mode(PermissionMode::AskForExecution)
+    );
+}
+
+/// Cross review 1: while the first info row is too narrow to show the mode,
+/// Shift+Tab changes nothing, also after a change came back and was drawn
+/// still cut off: it never moves on to Allow all from modes not seen.
+#[test]
+fn shift_tab_does_nothing_while_the_mode_is_cut_off() {
+    let mut screen = Screen::sized(24, 12);
+    screen.draw();
+    let info = screen.mode_row();
+    assert!(info.starts_with(" test-model · think"), "{}", screen.text());
+    assert!(!info.contains("Always ask"), "the mode is cut off: {info}");
+    assert_eq!(screen.shift_tab(), None, "no mode on screen: {info}");
+
+    screen.settings("askForExecution");
+    screen.draw();
+    assert_eq!(screen.mode_row(), info, "still cut off");
+    assert_eq!(screen.shift_tab(), None, "not on to Allow all");
+}
+
+/// Cross review 1: the mode is in the first of the two info rows. In a
+/// window with room for that row only, Shift+Tab works; in one too short
+/// for it, the mode is not on screen and Shift+Tab changes nothing.
+#[test]
+fn shift_tab_needs_the_first_info_row_drawn() {
+    let mut screen = Screen::sized(80, 5);
+    screen.draw();
+    let shown = screen.text();
+    assert!(
+        screen.lines()[4].contains("test-model · think high · Always ask"),
+        "{shown}"
+    );
+    assert!(!shown.contains("/work"), "the second row is cut: {shown}");
+    assert_eq!(
+        screen.shift_tab(),
+        set_mode(PermissionMode::AskForExecution)
+    );
+
+    let mut screen = Screen::sized(80, 4);
+    screen.draw();
+    let shown = screen.text();
+    assert!(!shown.contains("Always ask"), "{shown}");
+    assert_eq!(screen.shift_tab(), None, "{shown}");
+}
+
+/// Cross review 2: Shift+Tab pressed on a frame that showed a choice or the
+/// command list changes nothing, even when Esc pressed before it on the
+/// same frame already closed them. On the next frame it works.
+#[test]
+fn shift_tab_on_a_frame_with_a_choice_or_the_list_does_nothing() {
+    let opens: [(&str, Step); 2] = [
+        ("Thinking effort", |screen| {
+            assert_eq!(screen.enter("/think"), None)
+        }),
+        ("Summarize the conversation", |screen| screen.type_text("/")),
+    ];
+    for (open_shows, open) in opens {
+        let mut screen = Screen::new();
+        screen.draw();
+        open(&mut screen);
+        screen.draw();
+        let shown = screen.text();
+        assert!(shown.contains(open_shows), "{shown}");
+        assert_eq!(screen.key(KeyCode::Esc), None);
+        assert_eq!(
+            screen.shift_tab(),
+            None,
+            "{open_shows:?} still on screen:\n{shown}"
+        );
+
+        screen.draw();
+        assert!(!screen.text().contains(open_shows), "{}", screen.text());
+        assert_eq!(
+            screen.shift_tab(),
+            set_mode(PermissionMode::AskForExecution),
+            "{open_shows:?} closed on screen"
+        );
+    }
 }
