@@ -16,13 +16,15 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 6] = [
+const COMMANDS: [(&str, &str); 8] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/exit", "Quit canter"),
     ("/help", "Show available commands"),
     ("/mode", "Change the permission mode"),
+    ("/model", "Change the model"),
     ("/new", "Start a new session"),
     ("/resume", "Switch to another session"),
+    ("/think", "Change thinking effort (none, low, high, max)"),
 ];
 
 struct Screen {
@@ -440,7 +442,10 @@ fn mode_with_an_unknown_name_only_says_so() {
     screen.draw();
     let shown = screen.text();
     assert!(shown.contains("Unknown mode: yolo"), "{shown}");
-    assert!(shown.contains("test-model · Always ask"), "{shown}");
+    assert!(
+        shown.contains("test-model · think high · Always ask"),
+        "{shown}"
+    );
 }
 
 /// While the approval box is open, `/` does not open the list.

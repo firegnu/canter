@@ -69,6 +69,7 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
         model: config.model_client()?,
         options: config.options(),
         default_model: config.model,
+        models: config.models,
         sessions: Default::default(),
         registry_changed: Default::default(),
         draining: Default::default(),

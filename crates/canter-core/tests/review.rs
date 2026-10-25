@@ -88,6 +88,7 @@ async fn create(
         SessionSettings {
             cwd: temp.path().to_string_lossy().into(),
             model: "fake".into(),
+            reasoning_effort: Default::default(),
             name: None,
             approval_policy: PermissionMode::AskForExecution,
         },
@@ -289,6 +290,7 @@ async fn unreadable_project_instructions_warn_and_do_not_block_the_model() {
             SessionSettings {
                 cwd: temp.path().to_string_lossy().into(),
                 model: "fake".into(),
+                reasoning_effort: Default::default(),
                 name: None,
                 approval_policy: PermissionMode::AskForExecution,
             },
@@ -622,7 +624,6 @@ async fn failed_automatic_compaction_waits_until_a_new_turn_or_manual_request() 
         CoreOptions {
             context_window: 100_000,
             max_output_tokens: 32_768,
-            ..CoreOptions::default()
         },
     )
     .await;
@@ -738,7 +739,6 @@ async fn failed_automatic_compaction_continues_only_when_the_request_still_fits(
                 CoreOptions {
                     context_window: 100_000,
                     max_output_tokens: 32_768,
-                    ..CoreOptions::default()
                 },
             )
             .await;

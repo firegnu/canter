@@ -140,6 +140,10 @@ async fn conversation(
         let request = {
             let mut state = shared.state.lock().await;
             state.consume_steering(turn_id).await?;
+            let effort = match state.journal.snapshot.settings.reasoning_effort {
+                canter_protocol::ReasoningEffort::Unknown => canter_protocol::ReasoningEffort::High,
+                effort => effort,
+            };
             Request {
                 model: state.journal.snapshot.settings.model.clone(),
                 messages: state.prefix.iter().chain(&state.history).cloned().collect(),
@@ -155,7 +159,9 @@ async fn conversation(
                     })
                     .collect(),
                 options: RequestOptions {
-                    thinking: Some(shared.options.thinking),
+                    thinking: Some(effort != canter_protocol::ReasoningEffort::None),
+                    reasoning_effort: (effort != canter_protocol::ReasoningEffort::None)
+                        .then(|| effort.as_str().to_owned()),
                     max_output_tokens: Some(shared.options.max_output_tokens),
                 },
             }

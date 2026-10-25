@@ -19,6 +19,7 @@ fn a_second_writer_cannot_lock_the_same_session() {
                 cwd: temp.path().to_string_lossy().into(),
                 name: None,
                 model: "fake".into(),
+                reasoning_effort: Default::default(),
                 approval_policy: PermissionMode::AlwaysAsk,
             },
             1,

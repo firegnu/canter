@@ -14,6 +14,7 @@ fn an_incomplete_last_line_is_discarded_before_further_appends() {
                 cwd: temp.path().to_string_lossy().into(),
                 name: Some("intact".into()),
                 model: "fake".into(),
+                reasoning_effort: Default::default(),
                 approval_policy: PermissionMode::AllowAll,
             },
             10,

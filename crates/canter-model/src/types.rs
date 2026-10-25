@@ -66,6 +66,7 @@ pub struct Request {
 pub struct RequestOptions {
     /// None leaves the provider's default unchanged.
     pub thinking: Option<bool>,
+    pub reasoning_effort: Option<String>,
     pub max_output_tokens: Option<u32>,
 }
 

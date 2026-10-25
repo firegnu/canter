@@ -1178,6 +1178,53 @@
       ],
       "type": "string"
     },
+    "Model": {
+      "properties": {
+        "displayName": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "isDefault": {
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "model",
+        "displayName",
+        "isDefault"
+      ],
+      "type": "object"
+    },
+    "ModelListParams": {
+      "type": "object"
+    },
+    "ModelListResponse": {
+      "description": "GET /v1/models. The configured catalog is returned in full.",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/Model"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
     "PatchChangeKind": {
       "oneOf": [
         {
@@ -1290,6 +1337,16 @@
         "clientName"
       ],
       "type": "object"
+    },
+    "ReasoningEffort": {
+      "enum": [
+        "none",
+        "low",
+        "high",
+        "max",
+        "unknown"
+      ],
+      "type": "string"
     },
     "RequestKind": {
       "oneOf": [
@@ -1450,6 +1507,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "reasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -1646,6 +1713,10 @@
             "string",
             "null"
           ]
+        },
+        "reasoningEffort": {
+          "$ref": "#/$defs/ReasoningEffort",
+          "default": "high"
         }
       },
       "required": [
@@ -1813,6 +1884,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "reasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },

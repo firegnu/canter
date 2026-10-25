@@ -244,6 +244,7 @@ where
                 model,
                 approval_policy,
                 input: first.clone().map(|text| vec![UserInput::Text { text }]),
+                reasoning_effort: None,
                 name: first.as_deref().map(session_title),
                 client_name: client_name.clone(),
             };
@@ -340,6 +341,12 @@ where
                         Err(error) => break 'run Err(error),
                     }
                 }
+                Some(Action::PickModel) => match chat.client.list_models().await {
+                    Ok(models) => crate::commands::choose_model(ui.app_mut(), models),
+                    Err(error) => ui
+                        .app_mut()
+                        .warning(&format!("Could not list models: {error}")),
+                },
                 Some(action) => chat.act(ui.app(), action),
             }
         }
@@ -509,6 +516,7 @@ impl<C: Connector> Chat<C> {
             env: self.env.clone(),
             model: settings.model.clone(),
             approval_policy: settings.approval_policy,
+            reasoning_effort: Some(settings.reasoning_effort),
             input: None,
             name: None,
             client_name: self.client_name.clone(),
@@ -709,7 +717,7 @@ impl<C: Connector> Chat<C> {
                 });
             }
             // The main loop handles these itself.
-            Action::Quit | Action::NewSession | Action::PickSession => {}
+            Action::Quit | Action::NewSession | Action::PickSession | Action::PickModel => {}
         }
     }
 }

@@ -11,6 +11,8 @@ use crate::ServerError;
 pub(crate) struct Config {
     base_url: String,
     pub model: String,
+    #[serde(default = "default_models")]
+    pub models: Vec<String>,
     context_window: u64,
     api_key: String,
 }
@@ -23,7 +25,7 @@ impl Config {
         })?;
         file.set_permissions(fs::Permissions::from_mode(0o600))
             .map_err(|_| ServerError("cannot set config.json permissions to 0600".into()))?;
-        let config: Self = serde_json::from_reader(file)
+        let mut config: Self = serde_json::from_reader(file)
             .map_err(|_| ServerError("config.json is not valid".into()))?;
         let url = reqwest::Url::parse(&config.base_url)
             .map_err(|_| ServerError("invalid base_url".into()))?;
@@ -50,6 +52,9 @@ impl Config {
                 "context_window must be greater than 81920".into(),
             ));
         }
+        if !config.models.contains(&config.model) {
+            config.models.insert(0, config.model.clone());
+        }
         Ok(config)
     }
 
@@ -65,4 +70,8 @@ impl Config {
             ..CoreOptions::default()
         }
     }
+}
+
+fn default_models() -> Vec<String> {
+    vec!["deepseek-flash".into(), "deepseek-v4-pro".into()]
 }

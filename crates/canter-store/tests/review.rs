@@ -13,6 +13,7 @@ fn create(store: &Store, id: &str) -> SessionWriter {
                 cwd: "/work/project".into(),
                 name: Some(id.into()),
                 model: "fake".into(),
+                reasoning_effort: Default::default(),
                 approval_policy: PermissionMode::AlwaysAsk,
             },
             1,

@@ -10,6 +10,7 @@ fn settings() -> SessionSettings {
         cwd: "/isolated/workspace".into(),
         name: Some("demo".into()),
         model: "fake-model".into(),
+        reasoning_effort: Default::default(),
         approval_policy: PermissionMode::AlwaysAsk,
     }
 }

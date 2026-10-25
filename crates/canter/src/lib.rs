@@ -167,6 +167,7 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
             update: SessionUpdateParams {
                 name: None,
                 model: args.model,
+                reasoning_effort: None,
                 approval_policy: yolo,
             },
         },

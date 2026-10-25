@@ -87,8 +87,10 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
 
 ## 压缩与数字
 
-`CoreOptions` 可配置 `context_window`、`max_output_tokens`、`thinking`。默认窗口
-1,048,576 token（按 DeepSeek 当前文档的 1M），正常输出显式限制为 65,536，默认开启思考；
+`CoreOptions` 可配置 `context_window`、`max_output_tokens`。思考档位由会话设置的
+`reasoningEffort` 决定，每次请求重新读取，默认 `high`；`none` 关思考，其余档位开思考并传
+对应的 `reasoning_effort`。摘要请求固定关思考、不传档位。默认窗口
+1,048,576 token（按 DeepSeek 当前文档的 1M），所有档位的正常输出均显式限制为 65,536；
 窗口必须大于输出上限加 16,384。模型包保持原样，核心显式发送思考和输出上限选项。
 依据：[模型参数](https://api-docs.deepseek.com/quick_start/pricing)、
 [max_tokens 定义与输入输出总长度限制](https://api-docs.deepseek.com/api/create-chat-completion/)

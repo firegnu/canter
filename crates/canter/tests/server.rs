@@ -30,6 +30,14 @@ struct Fixture {
 
 impl Fixture {
     async fn start(replies: Vec<String>) -> Self {
+        Self::start_with_models(replies, "fake-model", None).await
+    }
+
+    async fn start_with_models(
+        replies: Vec<String>,
+        default_model: &str,
+        models: Option<&[&str]>,
+    ) -> Self {
         // A short absolute path also works within macOS's Unix socket limit.
         let root = tempfile::Builder::new()
             .prefix("canter-")
@@ -48,12 +56,15 @@ impl Fixture {
         let model = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
+        let mut config = json!({
+            "base_url":base_url, "model":default_model, "context_window":1048576, "api_key":KEY
+        });
+        if let Some(models) = models {
+            config["models"] = json!(models);
+        }
         fs::write(
             home.join("config.json"),
-            serde_json::to_vec(&json!({
-                "base_url":base_url, "model":"fake-model", "context_window":1048576, "api_key":KEY
-            }))
-            .unwrap(),
+            serde_json::to_vec(&config).unwrap(),
         )
         .unwrap();
         fs::set_permissions(home.join("config.json"), fs::Permissions::from_mode(0o600)).unwrap();
@@ -215,6 +226,106 @@ impl Fixture {
         self.model.abort();
         let _ = (&mut self.model).await;
     }
+}
+
+#[tokio::test]
+async fn models_configuration_lists_defaults_and_prepends_the_default() {
+    for (default_model, configured, expected) in [
+        (
+            "deepseek-flash",
+            None,
+            vec!["deepseek-flash", "deepseek-v4-pro"],
+        ),
+        (
+            "fake-model",
+            None,
+            vec!["fake-model", "deepseek-flash", "deepseek-v4-pro"],
+        ),
+        (
+            "fake-model",
+            Some(vec!["custom-model"]),
+            vec!["fake-model", "custom-model"],
+        ),
+        (
+            "fake-model",
+            Some(vec!["custom-model", "fake-model"]),
+            vec!["custom-model", "fake-model"],
+        ),
+    ] {
+        let mut fixture =
+            Fixture::start_with_models(Vec::new(), default_model, configured.as_deref()).await;
+        let response = fixture.request(Method::GET, "/v1/models", json!({})).await;
+        assert_eq!(response.status(), 200);
+        let listed: Value = response.json().await.unwrap();
+        assert_eq!(listed["nextCursor"], Value::Null);
+        let data = listed["data"].as_array().unwrap();
+        assert_eq!(data.len(), expected.len());
+        for (model, expected) in data.iter().zip(expected) {
+            assert_eq!(model["id"], expected);
+            assert_eq!(model["model"], expected);
+            assert_eq!(model["displayName"], expected);
+            assert_eq!(model["isDefault"], expected == default_model);
+        }
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn unlisted_models_are_rejected_without_changing_settings() {
+    let mut fixture = Fixture::start(Vec::new()).await;
+    let response = fixture
+        .request(
+            Method::POST,
+            "/v1/sessions",
+            json!({
+                "cwd":fixture.root.path().join("work"), "env":{},
+                "model":"unlisted", "approvalPolicy":"alwaysAsk", "clientName":"test"
+            }),
+        )
+        .await;
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["code"],
+        "invalid_request"
+    );
+    let sessions: Value = fixture
+        .request(Method::GET, "/v1/sessions", json!({}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(sessions["data"].as_array().unwrap().is_empty());
+
+    let created = fixture.create().await;
+    let path = format!("/v1/sessions/{}", created.session.id);
+    let before: Value = fixture
+        .request(Method::GET, &path, json!({}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let response = fixture
+        .request(
+            Method::PATCH,
+            &path,
+            json!({
+                "model":"unlisted", "reasoningEffort":"max", "name":"must not change"
+            }),
+        )
+        .await;
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["code"],
+        "invalid_request"
+    );
+    let after: Value = fixture
+        .request(Method::GET, &path, json!({}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+    fixture.stop().await;
 }
 
 impl Drop for Fixture {

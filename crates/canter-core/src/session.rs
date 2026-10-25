@@ -339,7 +339,10 @@ impl Session {
         options: CoreOptions,
     ) -> Result<(Self, SessionCreateResponse), CoreError> {
         validate_options(&options)?;
-        if settings.model.trim().is_empty() || settings.approval_policy == PermissionMode::Unknown {
+        if settings.model.trim().is_empty()
+            || settings.approval_policy == PermissionMode::Unknown
+            || settings.reasoning_effort == ReasoningEffort::Unknown
+        {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 "invalid session settings",
@@ -603,6 +606,7 @@ impl Session {
         let mut state = self.shared.state.lock().await;
         state.available()?;
         if params.approval_policy == Some(PermissionMode::Unknown)
+            || params.reasoning_effort == Some(ReasoningEffort::Unknown)
             || params
                 .model
                 .as_ref()
@@ -622,6 +626,9 @@ impl Session {
         }
         if let Some(policy) = params.approval_policy {
             settings.approval_policy = policy;
+        }
+        if let Some(effort) = params.reasoning_effort {
+            settings.reasoning_effort = effort;
         }
         let events = state
             .journal

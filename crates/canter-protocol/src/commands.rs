@@ -1,7 +1,10 @@
 //! Params describe JSON bodies, except GET params (query strings). Path values
 //! are separate so private creation data is never part of a session snapshot.
 
-use crate::{ApprovalDecision, Event, PermissionMode, SessionSnapshot, SessionSummary, UserInput};
+use crate::{
+    ApprovalDecision, Event, PermissionMode, ReasoningEffort, SessionSnapshot, SessionSummary,
+    UserInput,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -9,6 +12,7 @@ use ts_rs::TS;
 
 pub mod routes {
     pub const INFO: &str = "/v1/info";
+    pub const MODELS: &str = "/v1/models";
     pub const SESSIONS: &str = "/v1/sessions";
     pub const SESSION: &str = "/v1/sessions/{id}";
     pub const RESUME: &str = "/v1/sessions/{id}/resume";
@@ -39,6 +43,7 @@ macro_rules! empty_params {
 
 empty_params!(
     InfoParams,
+    ModelListParams,
     SessionListParams,
     SessionReadParams,
     SessionCompactParams,
@@ -52,6 +57,23 @@ pub struct InfoResponse {
     pub server_version: String,
     pub protocol_version: u32,
     pub sessions: Vec<SessionSummary>,
+}
+
+/// GET /v1/models. The configured catalog is returned in full.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelListResponse {
+    pub data: Vec<Model>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Model {
+    pub id: String,
+    pub model: String,
+    pub display_name: String,
+    pub is_default: bool,
 }
 
 /// GET /v1/sessions. Each summary carries its own lastEventSeq.
@@ -69,6 +91,7 @@ pub struct SessionCreateParams {
     pub cwd: String,
     pub env: BTreeMap<String, String>,
     pub model: String,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub approval_policy: PermissionMode,
     pub input: Option<Vec<UserInput>>,
     pub name: Option<String>,
@@ -159,6 +182,7 @@ pub struct RequestResolveResponse {
 pub struct SessionUpdateParams {
     pub name: Option<String>,
     pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub approval_policy: Option<PermissionMode>,
 }
 

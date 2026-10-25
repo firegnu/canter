@@ -60,6 +60,8 @@ pub enum Action {
     NewSession,
     /// Show the session list and switch to the session picked.
     PickSession,
+    /// Fetch the available models and offer a choice.
+    PickModel,
     /// Compact this session's context.
     Compact,
     /// Change this session's settings.
@@ -1175,7 +1177,11 @@ impl App {
             PermissionMode::AlwaysAsk | PermissionMode::Unknown => "Always ask",
         };
         let cwd = shorten_home(&sanitize(&settings.cwd), self.home.as_deref());
-        let mut text = format!(" {} · {mode} · {cwd}", sanitize(&settings.model));
+        let mut text = format!(
+            " {} · think {} · {mode} · {cwd}",
+            sanitize(&settings.model),
+            settings.reasoning_effort.as_str()
+        );
         if let Some(usage) = &self.snapshot.token_usage {
             let percent = |input: u64, cached: u64| {
                 (input != 0)

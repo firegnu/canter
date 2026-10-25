@@ -45,6 +45,14 @@ pub struct Client {
 }
 
 impl Client {
+    /// GET /v1/models: the server's configured model list.
+    pub async fn list_models(&self) -> Result<Vec<canter_protocol::Model>, ClientError> {
+        let response = self.http.get(url(routes::MODELS, &[])).send().await?;
+        Ok(decode::<canter_protocol::ModelListResponse>(response)
+            .await?
+            .data)
+    }
+
     /// Builds a client for the server listening on `socket`. Does not connect yet.
     pub fn new(socket: &Path) -> Result<Self, ClientError> {
         let http = reqwest::Client::builder()

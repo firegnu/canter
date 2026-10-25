@@ -30,6 +30,8 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - **和 Codex app-server v2（`rust-v0.163.0`）不一样的地方**（第 1 件定的，细节见 `docs/任务/P1-1-协议包和存盘.md` 的完成记录和「审查后修改」，以及 `crates/canter-protocol/README.md`）：
      - 命名：`session`、`sessionId` 代替 `thread`、`threadId`；事件名用点号（`session.status`、`turn.started`、`item.delta` 等）。每条事件外层带 `seq`（每个会话从 1 起）、`sessionId`、`timestamp`（Unix 毫秒）；快照带 `lastEventSeq`；命令的回复带 `eventSeq`。
      - 会话设置：新增 `session.updated`，建会话时和每次修改后各写一条，带公开设置：名字、模型、权限模式、工作目录。环境变量不公开，也不存盘（10-24 改，见第 14 条）。
+     - 思考档位（P2-2）：沿用 `reasoningEffort` 字段名，放在会话设置、创建和 PATCH 参数中，随 `session.updated` 存盘；省略时新会话和旧存盘均按 `high` 读，PATCH 省略/null 则不改。值用 DeepSeek 的 `none`、`low`、`high`、`max`，不照搬 Codex 的档位枚举；canter 以会话设置管理之后每次请求的选项。TypeScript 新字段可选。
+     - 可用模型（P2-2）：`GET /v1/models` 对应 Codex 的 `model/list`，回复沿用 `data`、`nextCursor`，模型条目沿用 `id`、`model`、`displayName`、`isDefault`。列表来自本机配置，一次返回全部、`nextCursor` 为 null，不引入 Codex 的分页、隐藏模型和供应商扩展字段。建会话和 PATCH 只接受列表内的模型，已存的旧模型仍可恢复。
      - 接着聊：参考 `thread/resume`，用 `POST /v1/sessions/{id}/resume { env }` 重新提供仅驻内存的环境；已打开时保留原环境，未打开时变更命令返回 `session_not_resumed`，快照和事件仍可只读访问。
      - 会话状态是六种字符串（`starting`、`idle`、`working`、`waiting_approval`、`error`、`closed`），不是 Codex 带标记的对象。权限模式的字段名沿用 `approvalPolicy`，值是 canter 自己的 `alwaysAsk`、`askForExecution`、`allowAll`；不要 Codex 的沙箱设置。
      - 关闭原因（P1-13）：`session.status` 事件和会话快照新增可选的 `closeReason`，关闭时为 `clientRequest`（客户端主动关）或 `serverShutdown`（服务端停机，包括升级）；离开 `closed` 时清空。原因随事件存盘，避免服务端重启后旁观终端撤销人的关闭意图。终端连接新服务端时，仅对停机关闭或缺少原因的旧会话自动 resume；未知关闭原因保持关闭，非关闭状态仍按崩溃恢复。用户主动 `--resume` 或在列表里选择会话不受此限制。

@@ -52,6 +52,10 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         "Item",
         "InfoParams",
         "InfoResponse",
+        "ReasoningEffort",
+        "Model",
+        "ModelListParams",
+        "ModelListResponse",
         "SessionCreateParams",
         "SessionCreateResponse",
         "SessionListParams",
@@ -89,6 +93,19 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
     assert!(settings.get("approvalPolicy").is_some());
     assert!(settings.get("env").is_none());
     assert!(settings.get("cwd").is_some());
+    for name in [
+        "SessionSettings",
+        "SessionCreateParams",
+        "SessionUpdateParams",
+    ] {
+        let ts = fs::read_to_string(temp.path().join(format!("typescript/{name}.ts"))).unwrap();
+        assert!(ts.contains("reasoningEffort?: ReasoningEffort"), "{ts}");
+        assert!(
+            definitions[name]["required"]
+                .as_array()
+                .is_none_or(|required| required.iter().all(|field| field != "reasoningEffort"))
+        );
+    }
     let event_ts = fs::read_to_string(temp.path().join("typescript/Event.ts")).unwrap();
     assert!(event_ts.contains("seq: number"));
     assert!(event_ts.contains("sessionId: string"));

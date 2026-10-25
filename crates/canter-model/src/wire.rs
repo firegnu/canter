@@ -26,6 +26,11 @@ pub(crate) fn request_body(request: &Request) -> Value {
     if let Some(limit) = request.options.max_output_tokens {
         body["max_tokens"] = json!(limit);
     }
+    if request.options.thinking != Some(false)
+        && let Some(effort) = &request.options.reasoning_effort
+    {
+        body["reasoning_effort"] = json!(effort);
+    }
     body
 }
 

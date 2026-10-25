@@ -34,6 +34,30 @@ pub enum SessionCloseReason {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    None,
+    Low,
+    #[default]
+    High,
+    Max,
+    #[serde(other)]
+    Unknown,
+}
+
+impl ReasoningEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Low => "low",
+            Self::High => "high",
+            Self::Max => "max",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// Public settings. Environment variables never belong here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +66,9 @@ pub struct SessionSettings {
     pub cwd: String,
     pub name: Option<String>,
     pub model: String,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub reasoning_effort: ReasoningEffort,
     pub approval_policy: PermissionMode,
 }
 
@@ -79,6 +106,7 @@ impl SessionSnapshot {
                 cwd: String::new(),
                 name: None,
                 model: String::new(),
+                reasoning_effort: ReasoningEffort::default(),
                 approval_policy: PermissionMode::AlwaysAsk,
             },
             status: SessionStatus::Starting,
