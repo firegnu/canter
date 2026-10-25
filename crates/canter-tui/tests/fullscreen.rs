@@ -204,6 +204,49 @@ fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
     );
 }
 
+#[test]
+fn info_line_shows_total_and_last_cache_hit_rates_only_with_input_usage() {
+    let mut screen = Screen::new();
+    screen.resize(100, HEIGHT);
+    screen.draw();
+    let last = usize::from(HEIGHT) - 1;
+    let base = " test-model · Always ask · /work";
+    assert_eq!(screen.lines()[last], base);
+
+    for (total_input, total_cached, last_input, last_cached, suffix) in [
+        (1000, 924, 100, 99, " · cache 92% (last 99%)"),
+        (3, 2, 3, 1, " · cache 67% (last 33%)"),
+        (100, 0, 10, 0, " · cache 0% (last 0%)"),
+        (100, 92, 0, 0, " · cache 92%"),
+        (0, 0, 100, 99, " · cache (last 99%)"),
+        (0, 0, 0, 0, ""),
+    ] {
+        let counts = |input, cached| {
+            json!({
+                "inputTokens": input, "cachedInputTokens": cached,
+                "outputTokens": 0, "reasoningOutputTokens": 0, "totalTokens": input,
+            })
+        };
+        screen.event(json!({
+            "type": "session.usage",
+            "tokenUsage": {
+                "total": counts(total_input, total_cached),
+                "last": counts(last_input, last_cached),
+                "contextTokens": 0, "modelContextWindow": null,
+            },
+        }));
+        screen.draw();
+        assert_eq!(screen.lines()[last], format!("{base}{suffix}"));
+        let buffer = screen.ui.backend().buffer();
+        for x in 0..(base.width() + suffix.width()) as u16 {
+            assert_eq!(
+                buffer[(x, HEIGHT - 1)].style(),
+                buffer[(1, HEIGHT - 1)].style()
+            );
+        }
+    }
+}
+
 /// More than a screen: the latest output is the row right above the status
 /// line, and the top rows are the ones that do not fit.
 #[test]

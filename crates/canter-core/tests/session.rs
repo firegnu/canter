@@ -40,6 +40,184 @@ impl Model for ScriptModel {
     }
 }
 
+fn assert_request_extension(previous: &Request, next: &Request) {
+    assert!(next.messages.len() > previous.messages.len());
+    let mut prefix = next.clone();
+    prefix.messages.truncate(previous.messages.len());
+    assert_eq!(
+        serde_json::to_string(&prefix).unwrap(),
+        serde_json::to_string(previous).unwrap(),
+        "messages, tools, model and options must stay byte-for-byte unchanged"
+    );
+}
+
+#[tokio::test]
+async fn request_prefix_is_frozen_until_reopening_and_only_compaction_replaces_history() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("AGENTS.md");
+    std::fs::write(&path, "original instructions").unwrap();
+    let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+    let reply = || {
+        vec![
+            ModelEvent::TextDelta("answer".into()),
+            ModelEvent::Finished(FinishReason::Stop),
+        ]
+    };
+    let model = ScriptModel::new(vec![
+        reply(),
+        reply(),
+        reply(),
+        reply(),
+        reply(),
+        vec![
+            call("denied", "shell", r#"{"command":"touch must-not-exist"}"#),
+            ModelEvent::Finished(FinishReason::ToolCalls),
+        ],
+        reply(),
+        reply(),
+        reply(),
+        reply(),
+    ]);
+    let mut config = settings(temp.path());
+    config.approval_policy = PermissionMode::AlwaysAsk;
+    let (mut session, _) = Session::create(
+        store.clone(),
+        "s1".into(),
+        config,
+        RuntimeContext::default(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    std::fs::write(&path, "changed before first request").unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    for text in ["first", "second"] {
+        session.input(input(text)).await.unwrap();
+        finished(&mut events).await;
+    }
+    std::fs::write(&path, "changed instructions").unwrap();
+    session
+        .input(input("after editing AGENTS.md"))
+        .await
+        .unwrap();
+    finished(&mut events).await;
+    {
+        let requests = model.requests.lock().unwrap();
+        assert!(matches!(&requests[0].messages[0], Message::System { text }
+            if text.contains("original instructions") && !text.contains("changed before first request")));
+        for pair in requests.windows(2) {
+            assert_request_extension(&pair[0], &pair[1]);
+        }
+    }
+    // Reopening with unchanged instructions extends the last request too.
+    std::fs::write(&path, "original instructions").unwrap();
+    let closed = session.close().await.unwrap();
+    drop(session);
+    (session, _) = Session::open(
+        store.clone(),
+        "s1".into(),
+        RuntimeContext::default(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    events = session.subscribe(closed.event_seq).await.unwrap();
+    session.input(input("reopened unchanged")).await.unwrap();
+    finished(&mut events).await;
+    {
+        let requests = model.requests.lock().unwrap();
+        assert_request_extension(&requests[2], &requests[3]);
+    }
+    assert_eq!(
+        store
+            .model_history::<serde_json::Value>("s1")
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["type"] == "context")
+            .count(),
+        1
+    );
+
+    std::fs::write(&path, "changed instructions").unwrap();
+    let closed = session.close().await.unwrap();
+    drop(session);
+    (session, _) = Session::open(
+        store.clone(),
+        "s1".into(),
+        RuntimeContext::default(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    events = session.subscribe(closed.event_seq).await.unwrap();
+    // The read happens on open, not on the first request.
+    std::fs::write(&path, "later instructions").unwrap();
+    session.input(input("reopened changed")).await.unwrap();
+    finished(&mut events).await;
+    {
+        let requests = model.requests.lock().unwrap();
+        assert!(matches!(&requests[4].messages[0], Message::System { text }
+            if text.contains("changed instructions") && !text.contains("later instructions")));
+        let mut previous = requests[3].clone();
+        previous.messages[0] = requests[4].messages[0].clone();
+        assert_request_extension(&previous, &requests[4]);
+    }
+    assert_eq!(
+        store
+            .model_history::<serde_json::Value>("s1")
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["type"] == "context")
+            .count(),
+        2
+    );
+
+    session.input(input("ask for approval")).await.unwrap();
+    let opened = until(&mut events, |event| {
+        matches!(event, EventPayload::RequestOpened { .. })
+    })
+    .await;
+    let EventPayload::RequestOpened { request } = opened.payload else {
+        unreachable!()
+    };
+    session
+        .resolve(
+            &request.id,
+            RequestResolveParams {
+                decision: ApprovalDecision::Decline,
+                client_name: "terminal".into(),
+            },
+        )
+        .await
+        .unwrap();
+    finished(&mut events).await;
+    assert!(!temp.path().join("must-not-exist").exists());
+    session.compact().await.unwrap();
+    finished(&mut events).await;
+    for text in ["after compaction", "continue"] {
+        session.input(input(text)).await.unwrap();
+        finished(&mut events).await;
+    }
+    let requests = model.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 10);
+    for pair in requests[4..7].windows(2) {
+        assert_request_extension(&pair[0], &pair[1]);
+    }
+    assert!(requests[6].messages.iter().any(|message|
+        matches!(message, Message::ToolResult { tool_call_id, .. } if tool_call_id == "denied")));
+    assert!(requests[7].tools.is_empty(), "independent summary request");
+    assert_eq!(requests[7].messages[0], requests[6].messages[0]);
+    assert_eq!(requests[8].messages[0], requests[6].messages[0]);
+    assert!(requests[8].messages.iter().any(
+        |message| matches!(message, Message::User { text } if text.contains("[Context summary]"))
+    ));
+    assert_request_extension(&requests[8], &requests[9]);
+    session.close().await.unwrap();
+}
+
 async fn until(
     events: &mut canter_core::Subscription,
     predicate: impl Fn(&EventPayload) -> bool,
@@ -160,6 +338,7 @@ async fn interrupt_during_model_stream_repairs_history_and_discards_queued_input
     session.input(input("continue")).await.unwrap();
     finished(&mut events).await;
     let requests = model.requests.lock().unwrap().clone();
+    assert_request_extension(&requests[0], &requests[1]);
     assert!(
         requests[1].messages.iter().any(
             |message| matches!(message, Message::User { text } if text.contains("interrupted"))
@@ -312,6 +491,9 @@ async fn two_clients_resolve_once_and_steering_precedes_the_next_model_request()
     assert!(session.snapshot().await.session.queued_inputs.is_empty());
     let requests = model.requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 3);
+    for pair in requests.windows(2) {
+        assert_request_extension(&pair[0], &pair[1]);
+    }
     assert!(
         requests[1]
             .messages
@@ -531,6 +713,11 @@ async fn automatic_compaction_keeps_recent_user_words_and_can_continue_after_reo
         .await
         .unwrap();
     finished(&mut events).await;
+    std::fs::write(
+        temp.path().join("AGENTS.md"),
+        "changed before automatic compaction",
+    )
+    .unwrap();
     session
         .input(input("continue with the second task"))
         .await
@@ -546,6 +733,7 @@ async fn automatic_compaction_keeps_recent_user_words_and_can_continue_after_reo
     assert!(compacted.iter().any(|message| matches!(message, Message::User { text } if text == "first task, preserve these exact words")));
     assert!(compacted.iter().any(|message| matches!(message, Message::User { text } if text == "continue with the second task")));
     assert!(!format!("{compacted:?}").contains("old output old output"));
+    std::fs::remove_file(temp.path().join("AGENTS.md")).unwrap();
     let closed = session.close().await.unwrap();
     drop(session);
     let (session, _) = Session::open(
@@ -560,7 +748,11 @@ async fn automatic_compaction_keeps_recent_user_words_and_can_continue_after_reo
     let mut events = session.subscribe(closed.event_seq).await.unwrap();
     session.input(input("resume")).await.unwrap();
     finished(&mut events).await;
-    let resumed = model.requests.lock().unwrap()[3].messages.clone();
+    let requests = model.requests.lock().unwrap().clone();
+    assert_request_extension(&requests[2], &requests[3]);
+    assert_eq!(requests[0].messages[0], requests[1].messages[0]);
+    assert_eq!(requests[0].messages[0], requests[2].messages[0]);
+    let resumed = requests[3].messages.clone();
     assert_eq!(&resumed[..compacted.len()], compacted);
     session.close().await.unwrap();
 }
@@ -677,6 +869,9 @@ async fn one_turn_runs_multiple_real_tools_and_publishes_the_durable_events() {
     assert!(seen.windows(2).all(|pair| pair[1].seq == pair[0].seq + 1));
     let requests = model.requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 4);
+    for pair in requests.windows(2) {
+        assert_request_extension(&pair[0], &pair[1]);
+    }
     assert!(requests[0].messages.iter().any(|message| matches!(message, Message::System { text } if text.contains("Keep edits small.") && text.contains(&*cwd.to_string_lossy()))));
     assert!(requests[1].messages.iter().any(|message| matches!(message, Message::Assistant { content } if content.contains(&AssistantContent::Reasoning { text: "Inspect and edit.".into() }))));
     assert!(requests[2].messages.iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "r" && text.contains("1: after"))));
