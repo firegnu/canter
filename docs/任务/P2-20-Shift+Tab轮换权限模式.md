@@ -87,3 +87,24 @@
 - **踩过的坑**：
   - 「屏幕没变时只换一格」的测试第一版分不出「从屏幕上的模式轮」和「从最新收到的模式轮」：第一版里回话一到就马上重画，按键时屏幕上的和最新收到的总是同一个模式。补了「回话到了、还没画出来时再按」那一步，反向检查确认它能抓到。
   - clippy 把测试里 `[(&str, fn(&mut Screen)); 4]` 这样的数组报成类型太复杂（`type_complexity`），加了一个类型别名 `Step`。
+
+## 交叉审查后修改
+
+2026-10-25，照 `P2-20-交叉审查.md` 的 2 条必须改（主控都同意）改，canter/dev-shifttab。只动 `crates/canter-tui/src/app.rs` 和 `crates/canter-tui/tests/slash.rs`。每条先加测试，改代码前跑过都失败。
+
+1. **模式被截掉时不轮换**：`Shown.mode` 只在这一帧的信息行把模式文字完整画出来时才记。`info_line` 多交出一个「模式整个在不在」：截断只留开头，所以截完的文字以「模型 · think 档位 · 模式」开头就算在。信息行是最下面一行，只有对话区下面的几行都放得下（`View::below() <= 高度`，和 `render` 共用同一个算法）时才画得出来，放不下也不记。没记时 Shift+Tab 不发更新。
+   - 测试 `shift_tab_does_nothing_while_the_mode_is_cut_off`（24×12，信息行只剩 ` test-model · think hig…`）：Shift+Tab 不发更新；回话（`askForExecution`）后重画，模式仍看不见，再按也不发。改前第一下就交出 Ask for execution；去掉第一下的断言再跑，第二下交出 Allow all，就是审查里说的跳过没看到的模式。
+2. **按键那一帧有选择框、命令列表时不轮换**：`Shown.mode` 还要求这一帧是空的输入框：没有批准框、提问框，选择框和命令列表都没开（按画这一帧时的状态算，没地方显示的也算开着）。所以那一帧上前一个排队的键（比如 Esc）已经把框关掉，这个 Shift+Tab 也拿不到模式，丢掉。原来按当前状态拦截的两处（选择框先走自己的按键处理、命令列表开着时吞掉 Shift+Tab）都留着。别的键不看 `Shown.mode`，行为不变。
+   - `/resume` 的会话列表由 `run.rs` 的 `pick` 另画，本界面不知道那些帧。`App` 多记本界面最后一帧的编号（`latest_frame`）。按键所属的帧比它新，就是画在本界面位置上的别的东西（会话列表），这时 Shift+Tab 拿不到模式。别的键照旧按列表之前那一帧处理，和原来一样。没改 `run.rs`。
+   - 测试 `shift_tab_on_a_frame_with_a_choice_or_the_list_does_nothing`：画出 `/think` 的选择框后不重画，依次按 Esc、Shift+Tab，不发更新；命令列表（输入 `/`）同样。之后重画、框不在了，Shift+Tab 照常换到 Ask for execution。改前 Esc 之后的 Shift+Tab 交出 Ask for execution。
+- **验证**：
+  - 新加的 2 个测试；`slash.rs` 全部 27 个，`approval_box.rs` 13 个，`fullscreen.rs` 7 个；`tui.rs` 里 Shift+Tab、`/mode`、`/resume`、`/think` 和 `/model` 选择框、批准框按帧判断、换回输入框保护期相关的 8 个。都过。照主控说的没重跑全套。
+  - `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都过。
+  - 反向检查：分别去掉「模式整个在」「这一帧没有选择框和命令列表」「信息行放得下」「按键帧比本界面最后一帧新」四个条件，每次都只有对应的检查失败，改回后过。
+  - 有两项用临时测试查过、没提交（主控只要求上面两个测试）：
+    - `/resume`：真服务端，输入 `/resume `（带空格，没有命令列表）回车，会话列表画出后一口气交入 Esc、Shift+Tab；改前服务端的模式被改成 Ask for execution，改后不变，回到输入框后 Shift+Tab 照常能换。
+    - 信息行放不下：80×4 的窗口，信息行画不出来，Shift+Tab 不发更新。
+- **拿主意的地方**：
+  - 选择框、命令列表开着却没地方显示时，也算「那一帧上有」，Shift+Tab 丢掉。这样宁可少换一次，不会在看不到框的时候换模式。
+  - `/resume` 没有在 `run.rs` 里另记会话列表的帧，而是在 `App` 里用帧编号判断，好让以后别的画在本界面位置上的东西也自动算进来。
+- **踩过的坑**：没有。
