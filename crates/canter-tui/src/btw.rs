@@ -72,7 +72,7 @@ impl Answer {
             None,
             width,
         );
-        let mut lines = markdown::render(&sanitize(&self.text));
+        let mut lines = markdown::render(&sanitize(&self.text), width.saturating_sub(7));
         if let Some(status) = &self.status {
             lines.push(LogicalLine::new(
                 Vec::new(),
