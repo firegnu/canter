@@ -4,7 +4,7 @@
 
 ## 装的哪一版、怎么退回
 
-- 10-26 装了 main `37489fe`（0.1.0，含 P2-45 拖选复制和 `/copy`、P2-58 思考用时从发出请求算起和网页标题、P2-40 Ctrl+O 展开和思考、P2-41 工具卡片、P2-42 空行和状态行、P2-43 每轮用时、P2-38 markdown 表格、P2-39 代码块语法色和批准框命令上色、MCP 每个服务可配 `startup_timeout_sec` / `tool_timeout_sec`、P2-23 撤销和回退、P2-35 网页编码、P2-36 展示层颜色、P2-37 diff 新画法、P2-13 网页抓取、P2-24 @ 引用文件、P2-12 MCP、P2-29 服务端启动误报修复、P2-16 全屏界面、P2-1 斜杠命令、P2-15 缓存命中、P2-2 思考档位和切模型、P2-3 技能、P2-19 全局 AGENTS.md、P2-4 提问框、P2-6 两行状态栏、P2-20 Shift+Tab 轮换权限、P2-5 图片输入、P2-7 用量和花费、P2-8 /context 和 /files、P2-9 /btw、P2-10 /handoff、P2-11 /review；上一版是 `bb3f76d`）：`cargo install --locked --path crates/canter`，程序在 `~/.cargo/bin/canter`。不是系统服务，服务端由客户端在后台起，状态在 `~/.canter/`（DESIGN 第 15、16 条）。
+- 10-26 装了 main `87259d5`（0.1.0，`canter --version` 显示 `canter 0.1.0 · 87259d5`；含 P2-47 启动欢迎头和 `--version`、P2-46 可点的链接和路径、P2-44 对话搜索 Ctrl+F、P2-45 拖选复制和 `/copy`、P2-58 思考用时从发出请求算起和网页标题、P2-40 Ctrl+O 展开和思考、P2-41 工具卡片、P2-42 空行和状态行、P2-43 每轮用时、P2-38 markdown 表格、P2-39 代码块语法色和批准框命令上色、MCP 每个服务可配 `startup_timeout_sec` / `tool_timeout_sec`、P2-23 撤销和回退、P2-35 网页编码、P2-36 展示层颜色、P2-37 diff 新画法、P2-13 网页抓取、P2-24 @ 引用文件、P2-12 MCP、P2-29 服务端启动误报修复、P2-16 全屏界面、P2-1 斜杠命令、P2-15 缓存命中、P2-2 思考档位和切模型、P2-3 技能、P2-19 全局 AGENTS.md、P2-4 提问框、P2-6 两行状态栏、P2-20 Shift+Tab 轮换权限、P2-5 图片输入、P2-7 用量和花费、P2-8 /context 和 /files、P2-9 /btw、P2-10 /handoff、P2-11 /review；上一版是 `37489fe`）：`cargo install --locked --path crates/canter`，程序在 `~/.cargo/bin/canter`。不是系统服务，服务端由客户端在后台起，状态在 `~/.canter/`（DESIGN 第 15、16 条）。
 - 换版本：在 main 上重新 `cargo install --locked --path crates/canter`，再 `canter serve --replace`。
 - 退回：按 `~/.canter/server.json` 的 pid 停服务端（SIGTERM），`cargo uninstall canter`。`~/.canter/` 有会话和 key，删不删问用户。
 - 用过 `/rewind` 退回对话的会话，不要用 `49216a5` 以前的版本打开：旧版不认退回记录，会显示退掉之前的完整对话、并把它发给模型；在旧版里接着聊过再升级回来，对话会乱（P2-23）。已退回的文件不受影响。
