@@ -99,8 +99,9 @@ impl Copier {
     }
 
     /// Starts copying `text`; [`Copier::poll`] finds out how it went. A copy
-    /// started before this one is no longer waited for.
-    pub fn copy(&mut self, text: String) {
+    /// started before this one is no longer waited for. Returns which copy
+    /// this is.
+    pub fn copy(&mut self, text: String) -> u64 {
         self.copies += 1;
         let mut pending = Pending {
             id: self.copies,
@@ -130,6 +131,7 @@ impl Copier {
             Err(error) => pending.failed = Some(error),
         }
         self.pending = Some(pending);
+        self.copies
     }
 
     /// [`Copier::copy`] for a link copied in place of opening it: the note
@@ -181,8 +183,9 @@ impl Copier {
     }
 
     /// Finds out how the latest copy went and lets an old note go; at `now`
-    /// (Unix ms), before each frame.
-    pub fn poll(&mut self, now: i64) {
+    /// (Unix ms), before each frame. Returns the copy that answered now, if
+    /// one did, and whether it worked.
+    pub fn poll(&mut self, now: i64) -> Option<(u64, bool)> {
         if self.note.as_ref().is_some_and(|(_, until)| now >= *until) {
             self.note = None;
         }
@@ -208,7 +211,7 @@ impl Copier {
             }
         }
         let Some(pending) = &mut self.pending else {
-            return;
+            return None;
         };
         let since = *pending.since.get_or_insert(now);
         let result = if pending.sent {
@@ -224,8 +227,9 @@ impl Copier {
                 TIMEOUT_MS / 1000
             ))
         } else {
-            return;
+            return None;
         };
+        let answer = (pending.id, result.is_ok());
         let note = match result {
             Ok(()) => match pending.link {
                 Some(done) => (link_copied(done), now + COPIED_MS),
@@ -241,6 +245,12 @@ impl Copier {
         };
         self.note = Some(note);
         self.pending = None;
+        Some(answer)
+    }
+
+    /// The copy waiting for the clipboard, if one is.
+    pub fn pending(&self) -> Option<u64> {
+        self.pending.as_ref().map(|pending| pending.id)
     }
 
     /// What the status line shows in place of what it would.

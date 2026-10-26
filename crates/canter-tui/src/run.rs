@@ -322,11 +322,18 @@ where
         pump,
         btw: None,
     };
-    let mut tick = tokio::time::interval(Duration::from_millis(100));
+    let mut every = ui.app().redraw_every(now_ms());
+    let mut tick = tokio::time::interval(every);
 
     let result = 'run: loop {
         if let Err(error) = draw(&mut ui, &input) {
             break Err(error);
+        }
+        // Faster for a moment while a copy's light sweeps, then as before.
+        let wanted = ui.app().redraw_every(now_ms());
+        if wanted != every {
+            every = wanted;
+            tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
         }
         let mut next = None;
         let mut quit = tokio::select! {

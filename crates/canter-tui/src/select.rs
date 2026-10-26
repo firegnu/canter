@@ -16,6 +16,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::text::{Row, grapheme_width};
+use crate::theme;
 
 /// A conversation row and a column on it.
 pub(crate) type Cell = (usize, usize);
@@ -109,16 +110,34 @@ pub(crate) fn columns(index: usize, start: Cell, end: Cell) -> Range<usize> {
 /// `row` with its text in `columns` reversed (and reversed text, such as a
 /// changed word, shown plain).
 pub(crate) fn highlight(row: &Row, columns: Range<usize>) -> Line<'static> {
+    lit(row, columns, |_| 0.0)
+}
+
+/// [`highlight`] under the light of a copy that worked: `light` says how
+/// much (0 to 1) is on a column.
+pub(crate) fn lit(row: &Row, columns: Range<usize>, light: impl Fn(usize) -> f32) -> Line<'static> {
     let Some(text) = &row.text else {
         return row.line.clone();
     };
     restyle(&row.line, |place, style| {
         if place.within(text, &columns) {
-            reverse(style)
+            theme::copy_shimmer(reverse(style), light(place.column))
         } else {
             style
         }
     })
+}
+
+/// The columns the text of `row` in `columns` is drawn in; `None` when none is.
+pub(crate) fn extent(row: &Row, columns: Range<usize>) -> Option<Range<usize>> {
+    let text = row.text.as_ref()?;
+    let mut drawn = text_cells(row)
+        .into_iter()
+        .map(|(place, _)| place)
+        .filter(|place| place.within(text, &columns));
+    let first = drawn.next()?;
+    let last = drawn.next_back().unwrap_or(first);
+    Some(first.column..last.column + last.width.max(1))
 }
 
 /// `style` reversed, or shown plain when it already is.
