@@ -32,3 +32,4 @@
 - 终端连上新服务端时「先读快照、再 resume」是两次请求，另一个客户端恰好在中间关掉会话，本终端会把它重开（P1-13 交叉审查，只推演没复现，窗口一次本机往返）。要堵死得给 resume 加前置条件（如 `ifEventSeq`），是协议改动。
 - 批准框：选项出现后 300 ms 保护期挡不住超过 300 ms 的终端卡顿（P1-7）。程序看不到终端真正显示的时刻，没有可靠修法；要更强保证得换成更明确的确认方式。换回输入框时的 Enter 已由 P1-14 修好。
 - 测试 `canter::discovery discovery_recovers_from_a_reused_pid` 在全套高负载时偶发失败过一次（P2-37 开发时），没留下报错，单独跑 25 次复现不了；再失败时把报错留下来再查。
+- 测试 `canter-model::streaming cancellation_interrupts_retry_after_and_local_backoff` 在全套并行跑时偶发失败过一次（P2-39 审查时），单独跑和再跑全套都过；这条测试等 50 毫秒后数请求，机器忙时可能没等到。
