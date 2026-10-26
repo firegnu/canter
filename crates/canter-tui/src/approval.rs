@@ -301,7 +301,7 @@ fn change_body(
     let text = |key: &str| approval.arguments.get(key).and_then(Value::as_str);
     // The tools resolve the path; the resolved one is what really gets written.
     let path = text("resolvedPath").or(text("path")).unwrap_or_default();
-    let diff = Diff::parse(&visible(text("diff").unwrap_or_default()), kind);
+    let diff = Diff::parse(&visible(text("diff").unwrap_or_default()), kind, path);
     let added = Span::styled(format!("+{}", diff.added()), theme::success());
     let removed = Span::styled(format!("−{}", diff.removed()), theme::failure());
     let mut header = vec![

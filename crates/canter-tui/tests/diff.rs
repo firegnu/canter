@@ -1,5 +1,6 @@
 //! How diffs are drawn, in the history and in the approval box: one column of
-//! line numbers, `⋮` between hunks, backgrounds on added and removed lines,
+//! line numbers, `⋯` and the function between hunks, backgrounds on added
+//! and removed lines with a deeper gutter, code coloured by its language,
 //! changed words a step deeper, and the history's short form.
 
 use canter_protocol::{Event, SessionSnapshot};
@@ -37,7 +38,7 @@ const HISTORY_ROWS: [&str; 9] = [
     "       14 - const FINISHED_TAIL: usize = 3;",
     "       14 + const FINISHED_TAIL: usize = 4;",
     "       15   /// Output lines shown while a command runs.",
-    "          ⋮",
+    "          ⋯",
     "      427 -     let tail = if status == ItemStatus::InProgress {",
     "      428 -     let x = 1;",
     "      427 +     let tail = if running {",
@@ -243,7 +244,7 @@ fn true_colour_paints_added_and_removed_lines_and_deeper_words() {
         screen.changed("c1", "src/lib.rs", update(), DIFF);
         let buffer = screen.draw();
 
-        let minus = row_cells(buffer, "14 - const");
+        let minus = row_cells(buffer, "const FINISHED_TAIL: usize = 3");
         assert!(
             minus
                 .iter()
@@ -251,12 +252,13 @@ fn true_colour_paints_added_and_removed_lines_and_deeper_words() {
             "{background:?}: the removed line is painted to the right edge"
         );
         assert_eq!(cell(buffer, "- const").fg, Color::Red, "{background:?}");
+        // Coloured as Rust: `src/lib.rs`.
         assert_eq!(
             cell(buffer, "const FINISHED").fg,
-            Color::Reset,
+            Color::Magenta,
             "{background:?}"
         );
-        let plus = row_cells(buffer, "14 + const");
+        let plus = row_cells(buffer, "const FINISHED_TAIL: usize = 4");
         assert!(
             plus.iter()
                 .all(|cell| cell.bg == added || cell.bg == added_word),
@@ -330,9 +332,11 @@ fn a_run_of_unequal_length_marks_no_words() {
         screen.changed("c1", "src/lib.rs", update(), DIFF);
         let buffer = screen.draw();
         for text in ["427 -", "428 -", "427 +"] {
-            let line_bg = row_cells(buffer, text)[6].bg;
+            // The code after the gutter.
+            let code = &row_cells(buffer, text)[6..];
+            let line_bg = code[0].bg;
             assert!(
-                row_cells(buffer, text).iter().all(|cell| {
+                code.iter().all(|cell| {
                     !cell.modifier.contains(Modifier::REVERSED) && cell.bg == line_bg
                 }),
                 "{theme:?}: {text} has no marked words"
@@ -480,5 +484,272 @@ fn approval_box_does_not_compare_very_long_lines_word_by_word() {
             }
         }
         assert!(long_rows > 4, "{theme:?}: the long lines are on screen");
+    }
+}
+
+/// A Rust change in two hunks, each `@@` line naming its function as git
+/// does; the second name is longer than the window.
+const RUST_DIFF: &str = "--- a/src/table.rs
++++ b/src/table.rs
+@@ -548,5 +548,5 @@ impl Table {
+     fn render(&mut self, rows: &[Row]) {
+         let lines_between = rows.iter().any(|row| row.len() > 1);
+-        self.push_row(rule(\"top\"));
++        self.push_row(rule(\"top\").into());
+         self.push_cells(&head);
+     }
+@@ -566,3 +566,3 @@ fn push_cells(&mut self, alignments: &[Alignment], widths: &[usize], cells: &[Vec<Linked>])
+         for line in 0..height {
+-            let mut body = Vec::new();
++            let mut body = Linked::default();
+         }
+";
+
+/// What the gutter (number and sign) and the line behind the code are drawn
+/// on, for added and removed lines.
+struct Shades {
+    added_line: Color,
+    added_gutter: Color,
+    added_word: Color,
+    removed_line: Color,
+    removed_gutter: Color,
+    removed_word: Color,
+}
+
+/// The cells of `text`, where it first shows.
+fn text_cells<'a>(buffer: &'a Buffer, text: &str) -> Vec<&'a Cell> {
+    let (x, y) = find(buffer, text);
+    (x..x + text.width() as u16)
+        .map(|x| &buffer[(x, y)])
+        .collect()
+}
+
+/// Checks the Rust diff drawn with backgrounds: syntax colours, the gutter's
+/// shade and colours, the line's background to the right edge, changed
+/// words a step deeper, and context lines without a background.
+fn check_coloured(buffer: &Buffer, look: &str, shades: &Shades) {
+    // Keywords, function names and strings are coloured, also on context
+    // lines, which are no longer dim.
+    let render = cell(buffer, "fn render");
+    assert_eq!(render.fg, Color::Magenta, "{look}: keyword");
+    assert!(
+        !render.modifier.contains(Modifier::DIM),
+        "{look}: context is not dim"
+    );
+    assert_ne!(
+        cell(buffer, "render(").fg,
+        Color::Reset,
+        "{look}: function name"
+    );
+    assert_eq!(
+        cell(buffer, "let lines").fg,
+        Color::Magenta,
+        "{look}: keyword"
+    );
+    let removed_string = text_cells(buffer, "\"top\"));");
+    assert_ne!(removed_string[1].fg, Color::Reset, "{look}: string");
+    // Red text on a removed line, green on an added one, is drawn in the
+    // default colour.
+    for cell in removed_string {
+        assert!(!matches!(cell.fg, Color::Red | Color::LightRed), "{look}");
+    }
+    for cell in text_cells(buffer, "\"top\").into") {
+        assert!(
+            !matches!(cell.fg, Color::Green | Color::LightGreen),
+            "{look}"
+        );
+    }
+
+    for (sign, line, gutter, word, color, changed) in [
+        (
+            "550 - ",
+            shades.removed_line,
+            shades.removed_gutter,
+            shades.removed_word,
+            Color::Red,
+            "rule(\"top\"));",
+        ),
+        (
+            "550 + ",
+            shades.added_line,
+            shades.added_gutter,
+            shades.added_word,
+            Color::Green,
+            "into()",
+        ),
+    ] {
+        let cells = row_cells(buffer, sign);
+        for cell in &cells[..6] {
+            assert_eq!(cell.bg, gutter, "{look}: {sign:?} gutter");
+        }
+        for cell in &cells[..5] {
+            if cell.symbol() != " " {
+                assert_eq!(cell.fg, color, "{look}: {sign:?} number and sign");
+            }
+        }
+        assert!(
+            cells[6..]
+                .iter()
+                .all(|cell| cell.bg == line || cell.bg == word),
+            "{look}: {sign:?} is painted to the right edge"
+        );
+        assert_eq!(cells.last().unwrap().bg, line, "{look}: {sign:?}");
+        assert_ne!(gutter, line, "{look}: the gutter is a shade off the line");
+        assert_ne!(gutter, word, "{look}: the gutter is not the changed words'");
+        if sign.ends_with("+ ") {
+            assert_eq!(cell(buffer, changed).bg, word, "{look}: changed word");
+        }
+    }
+    let context = row_cells(buffer, "549   ");
+    assert!(
+        context.iter().all(|cell| cell.bg == Color::Reset),
+        "{look}: context lines have no background"
+    );
+    assert!(
+        context[0].modifier.contains(Modifier::DIM),
+        "{look}: grey number"
+    );
+}
+
+#[test]
+fn true_colour_colours_code_by_language_with_a_deeper_gutter() {
+    for (background, shades) in [
+        (
+            Background::Dark,
+            Shades {
+                added_line: Color::Rgb(0x21, 0x3a, 0x2b),
+                added_gutter: Color::Rgb(0x1b, 0x30, 0x24),
+                added_word: Color::Rgb(0x2e, 0x5c, 0x3f),
+                removed_line: Color::Rgb(0x4a, 0x22, 0x1d),
+                removed_gutter: Color::Rgb(0x3d, 0x1c, 0x18),
+                removed_word: Color::Rgb(0x73, 0x32, 0x2a),
+            },
+        ),
+        (
+            Background::Light,
+            Shades {
+                added_line: Color::Rgb(0xda, 0xfb, 0xe1),
+                added_gutter: Color::Rgb(0xc6, 0xef, 0xd0),
+                added_word: Color::Rgb(0xab, 0xf2, 0xbc),
+                removed_line: Color::Rgb(0xff, 0xeb, 0xe9),
+                removed_gutter: Color::Rgb(0xff, 0xd9, 0xd5),
+                removed_word: Color::Rgb(0xff, 0xce, 0xcb),
+            },
+        ),
+    ] {
+        let mut screen = Screen::new(theme(Depth::TrueColor, background), 30);
+        screen.changed("c1", "src/table.rs", update(), RUST_DIFF);
+        check_coloured(screen.draw(), &format!("{background:?}"), &shades);
+    }
+}
+
+/// 256 colours on a light background: a gutter a step deeper than the line
+/// and not the changed words' colour (151, 181). On a dark one the lines
+/// are already the darkest green and red there are, so the gutter has the
+/// line's background.
+#[test]
+fn colours_256_colour_code_with_a_gutter_where_one_can_be_found() {
+    let mut screen = Screen::new(theme(Depth::Ansi256, Background::Light), 30);
+    screen.changed("c1", "src/table.rs", update(), RUST_DIFF);
+    let shades = Shades {
+        added_line: Color::Indexed(194),
+        added_gutter: Color::Indexed(151),
+        added_word: Color::Indexed(157),
+        removed_line: Color::Indexed(224),
+        removed_gutter: Color::Indexed(181),
+        removed_word: Color::Indexed(217),
+    };
+    check_coloured(screen.draw(), "256 light", &shades);
+
+    let mut screen = Screen::new(theme(Depth::Ansi256, Background::Dark), 30);
+    screen.changed("c1", "src/table.rs", update(), RUST_DIFF);
+    let buffer = screen.draw();
+    assert_eq!(cell(buffer, "fn render").fg, Color::Magenta);
+    assert_ne!(cell(buffer, "render(").fg, Color::Reset);
+    for (sign, line, color) in [
+        ("550 - ", Color::Indexed(52), Color::Red),
+        ("550 + ", Color::Indexed(22), Color::Green),
+    ] {
+        let cells = row_cells(buffer, sign);
+        assert!(
+            cells.iter().all(|cell| cell.bg == line
+                || cell.bg == Color::Indexed(28)
+                || cell.bg == Color::Indexed(88)),
+            "{sign:?}: the line's background from the number to the edge"
+        );
+        assert_eq!(cells[0].fg, color, "{sign:?}");
+        assert_eq!(cells[4].fg, color, "{sign:?}");
+    }
+    assert_eq!(cell(buffer, "into()").bg, Color::Indexed(28));
+}
+
+#[test]
+fn hunks_are_parted_by_a_dotted_line_naming_their_function() {
+    for look in [
+        Theme::default(),
+        theme(Depth::None, Background::Dark),
+        theme(Depth::TrueColor, Background::Dark),
+    ] {
+        let mut screen = Screen::new(look, 30);
+        screen.changed("c1", "src/table.rs", update(), RUST_DIFF);
+        let rows = screen.rows_after("● Edit src/table.rs  +2 −2", 10);
+        let name = "fn push_cells(&mut self, alignments: &[Alignment], widths: &[usize]";
+        let gap = format!("          ⋯ {}…", &name[..usize::from(WIDTH) - 13]);
+        assert_eq!(rows[6], gap, "{look:?}: cut to the window");
+        assert_eq!(
+            rows[7], "      566           for line in 0..height {",
+            "{look:?}"
+        );
+        let buffer = screen.draw();
+        let dots = cell(buffer, "⋯ fn");
+        assert!(dots.modifier.contains(Modifier::DIM), "{look:?}");
+        let name = cell(buffer, "fn push_cells");
+        assert!(name.modifier.contains(Modifier::DIM), "{look:?}");
+        assert!(name.modifier.contains(Modifier::ITALIC), "{look:?}");
+        assert_eq!(
+            name.fg,
+            Color::Reset,
+            "{look:?}: grey, not coloured as code"
+        );
+        assert!(
+            screen
+                .lines()
+                .iter()
+                .all(|line| !line.contains("impl Table")),
+            "{look:?}: the first hunk's name is not drawn"
+        );
+    }
+}
+
+#[test]
+fn sixteen_colours_and_unknown_languages_keep_code_uncoloured() {
+    for (look, path) in [
+        (Theme::default(), "src/table.rs"),
+        (theme(Depth::Ansi16, Background::Dark), "src/table.rs"),
+        (theme(Depth::TrueColor, Background::Unknown), "src/table.rs"),
+        (
+            theme(Depth::TrueColor, Background::Dark),
+            "src/table.unknownext",
+        ),
+        (theme(Depth::TrueColor, Background::Light), "Table"),
+    ] {
+        let mut screen = Screen::new(look, 30);
+        screen.changed("c1", path, update(), RUST_DIFF);
+        let buffer = screen.draw();
+        let render = cell(buffer, "fn render");
+        assert_eq!(render.fg, Color::Reset, "{look:?} {path}");
+        assert!(
+            render.modifier.contains(Modifier::DIM),
+            "{look:?} {path}: grey context"
+        );
+        let removed = cell(buffer, "self.push_row(rule(\"top\"));");
+        let added = cell(buffer, "self.push_row(rule(\"top\").into");
+        if look.background == Background::Unknown || look.depth == Depth::Ansi16 {
+            assert_eq!(removed.fg, Color::Red, "{look:?} {path}");
+            assert_eq!(added.fg, Color::Green, "{look:?} {path}");
+        } else {
+            assert_eq!(removed.fg, Color::Reset, "{look:?} {path}");
+            assert_eq!(added.fg, Color::Reset, "{look:?} {path}");
+        }
     }
 }

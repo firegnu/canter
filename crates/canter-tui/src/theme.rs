@@ -247,6 +247,19 @@ pub fn diff_removed_bg() -> Option<Color> {
     current().bg(([0x4a, 0x22, 0x1d], 52), ([0xff, 0xeb, 0xe9], 224))
 }
 
+/// The gutter (number and sign) of an added line: a shade deeper than the
+/// line, apart from the changed words. 256 colours: 151 (`#AFD7AF`) on
+/// light; on dark the line's 22, already the darkest green past black.
+pub fn diff_added_gutter_bg() -> Option<Color> {
+    current().bg(([0x1b, 0x30, 0x24], 22), ([0xc6, 0xef, 0xd0], 151))
+}
+
+/// The gutter of a removed line. 256 colours: 181 (`#D7AFAF`) on light; on
+/// dark the line's 52, already the darkest red past black.
+pub fn diff_removed_gutter_bg() -> Option<Color> {
+    current().bg(([0x3d, 0x1c, 0x18], 52), ([0xff, 0xd9, 0xd5], 181))
+}
+
 /// The changed words of an added line: a step deeper than the line's
 /// background, or reversed without one. 256 colours: 28 (`#008700`) on
 /// dark, 157 (`#AFFFAF`) on light.

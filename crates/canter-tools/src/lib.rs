@@ -919,10 +919,7 @@ async fn change_action(
             output: output::BoundedText::new(MAX_CLIENT_OUTPUT_BYTES),
             cancel,
         };
-        diff.unified_diff()
-            .header(&path, &path)
-            .to_writer(&mut writer)
-            .map_err(|e| e.to_string())?;
+        write_unified_diff(&diff, &path, before, &mut writer).map_err(|e| e.to_string())?;
         let kind = if original.is_some() {
             PatchChangeKind::Update { move_path: None }
         } else {
@@ -951,6 +948,40 @@ async fn change_action(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The unified diff as similar writes it, with each hunk's `@@` line naming
+/// the function it is in, by git's default rule: the nearest line above the
+/// hunk that starts with a letter, `_` or `$`, without trailing white space,
+/// at most 80 characters. None found, nothing added.
+fn write_unified_diff<'a>(
+    diff: &'a similar::TextDiff<'a, 'a, 'a, str>,
+    path: &str,
+    before: &str,
+    writer: &mut impl std::io::Write,
+) -> std::io::Result<()> {
+    let old_lines: Vec<&str> = before.lines().collect();
+    let unified = diff.unified_diff();
+    for (index, hunk) in unified.iter_hunks().enumerate() {
+        if index == 0 {
+            writeln!(writer, "--- {path}")?;
+            writeln!(writer, "+++ {path}")?;
+        }
+        let start = hunk.ops().first().map_or(0, |op| op.old_range().start);
+        let name = old_lines[..start.min(old_lines.len())]
+            .iter()
+            .rev()
+            .find(|line| {
+                line.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_' || c == '$')
+            })
+            .map(|line| line.trim_end().chars().take(80).collect::<String>());
+        let text = hunk.to_string();
+        match (name, text.split_once('\n')) {
+            (Some(name), Some((header, rest))) => write!(writer, "{header} {name}\n{rest}")?,
+            _ => writer.write_all(text.as_bytes())?,
+        }
+    }
+    Ok(())
 }
 
 struct DiffWriter {
