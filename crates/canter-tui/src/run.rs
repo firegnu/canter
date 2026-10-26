@@ -577,7 +577,7 @@ fn terminal_event(app: &mut App, frame: u64, at: i64, event: TermEvent) -> Optio
             None
         }
         TermEvent::Mouse(mouse) => {
-            app.handle_mouse_at(mouse, at);
+            app.handle_mouse_on(mouse, frame, at);
             None
         }
         _ => None,
