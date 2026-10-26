@@ -379,9 +379,11 @@ fn ctrl_o_shows_long_output_and_diffs_in_full_and_folds_them_again() {
         "{shown:#?}"
     );
     assert!(!shown.iter().any(|row| row.contains("showing the last")));
-    let status = screen.status();
-    assert!(status.starts_with(" ⠋ Working"), "{status:?}");
-    assert!(status.ends_with(DETAILS), "{status:?}");
+    // 60 columns are too few for both hints: the Ctrl+O one is left out.
+    assert_eq!(
+        screen.status(),
+        " ⠋ Running cargo build · 0s · Esc to interrupt"
+    );
 
     screen.finish_turn();
     assert_eq!(screen.status(), format!(" {DETAILS}"), "idle too");
