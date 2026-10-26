@@ -100,3 +100,8 @@
 - 返工 `3fc13d6`，复核可以合并，另提 2 条建议：A 基础变量（HOME、PATH）也被脱敏，会把结果里的路径抹掉，主控采纳；B HTTP 远端挂掉后 `/mcp` 仍显示已连接，主控决定只在 README 写明。`9d211b9` 照改，主控看过 diff。
 - 合并前把 main（含 P2-29）并进分支，跑 `cargo test --all-targets` 305 个全过，`clippy -D warnings`、`fmt --check` 通过。
 - 结果：返工 1 次
+
+## 用户试用
+
+- 10-26 装 `043a43c` 后，主控在用户的 `~/.canter/config.json` 登记 3 个 MCP 服务（备份为 `config.json.bak-20261026`）：`everything`（官方测试服务，本机 stdio，经 nvm 的 npx，`env` 写 PATH、HOME）、`fs`（官方 filesystem，限 `/tmp/canter-mcp-test`）、`context7`（远端 HTTPS，不带 key）。`npx` 包事先下载好（首次下载约 13 秒，超过 10 秒连接期限）。重启服务端后 `/v1/mcp` 三个都连上，工具 16 / 14 / 2 个。
+- 用户在自己的终端照清单试：`/mcp`、批准框和允许一次、「本会话都允许」只放行一个工具、非文字占位、Esc 取消长调用、子进程环境、远端 HTTPS、审查轮拒绝。用户：「我都测试了，都是可以使用的。没问题」。真调 DeepSeek 由用户自己在终端发起，次数没记。
