@@ -232,6 +232,12 @@ pub enum Item {
         summary: Vec<String>,
         content: Vec<String>,
     },
+    WebFetch {
+        id: String,
+        url: String,
+        result: String,
+        status: ItemStatus,
+    },
     McpToolCall {
         id: String,
         server: String,
@@ -285,6 +291,7 @@ impl Item {
             | Self::AgentMessage { id, .. }
             | Self::Reasoning { id, .. }
             | Self::McpToolCall { id, .. }
+            | Self::WebFetch { id, .. }
             | Self::CommandExecution { id, .. }
             | Self::FileChange { id, .. }
             | Self::FileRead { id, .. }

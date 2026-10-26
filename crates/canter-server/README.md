@@ -242,4 +242,18 @@ MCP 工具始终算执行；alwaysAsk / askForExecution 要批准，allowAll 直
 「本会话都允许」只授权当前服务的当前工具；`/review` 一律拒绝，不弹批准框。
 文字输出沿用 shell 的模型 32 KiB 头尾预算和客户端 1 MiB 上限；非文字内容只显示占位行。
 Esc 会取消调用并由 SDK 发出取消通知；工具错误、超时和断线均作为工具错误返回，继续这一轮。
-没有添加资源、提示词模板、采样、elicitation 或网页抓取能力。
+MCP 没有添加资源、提示词模板、采样或 elicitation 能力；网页搜索仍经 MCP。
+
+## 网页抓取（P2-13）
+
+内置 `web_fetch {url}` 由服务端执行，不增加 config.json 配置项；固定接在 ask_user 后、
+MCP 工具前，仍在会话创建/打开时冻结。HTML 转 Markdown，文字/JSON 原样，其它内容只留
+类型和大小占位；下载上限 5 MiB，总超时 30 秒，输出沿用模型 32 KiB / 客户端 1 MiB 截断。
+Esc 取消请求；HTTP/连接/证书/超时错误交回模型，本轮继续。
+
+独立客户端固定 `no_proxy` 和 `User-Agent: canter/0.1 web_fetch`，不带模型 key、MCP 请求头、
+cookie 或会话环境凭证。只收 HTTP(S)，拒绝网址中的用户名/密码；同主机及有效端口内最多
+跟随 5 次跳转，其它目标只报告新网址，由模型重新调用并批准。
+alwaysAsk / askForExecution 询问，allowAll 直接访问；会话授权只覆盖一个主机及端口。
+`/review` 一律拒绝且不弹框。本机和内网不额外限制，allowAll 可直接访问内部接口或触发
+有副作用的 GET；需要逐个把关时使用询问模式。完整边界见 `canter-tools/README.md`。

@@ -320,6 +320,7 @@ impl Session {
             for mut item in std::mem::take(&mut turn.items) {
                 match &mut item {
                     Item::McpToolCall { status, .. }
+                    | Item::WebFetch { status, .. }
                     | Item::CommandExecution { status, .. }
                     | Item::FileChange { status, .. }
                     | Item::FileRead { status, .. }

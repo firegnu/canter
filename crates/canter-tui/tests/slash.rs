@@ -17,6 +17,46 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 #[test]
+fn web_fetch_shows_url_domain_approval_result_length_and_interrupts_on_escape() {
+    let mut screen = Screen::new();
+    screen.start_turn("t1");
+    let url = "http://localhost:12345/docs?view=full#section";
+    screen.event(json!({"type":"item.started","turnId":"t1","item":{
+        "type":"webFetch","id":"web","url":url,"result":"","status":"inProgress"
+    }}));
+    screen.draw();
+    assert!(screen.text().contains("web_fetch"));
+    assert!(screen.text().contains("running"));
+    assert_eq!(
+        screen.key(KeyCode::Esc),
+        Some(Action::Interrupt {
+            turn_id: "t1".into()
+        })
+    );
+    screen.event(json!({"type":"request.opened","request":{
+        "id":"web-approval","turnId":"t1","createdAt":NOW,"kind":{"type":"approval","itemId":"web","tool":"web_fetch","arguments":{"url":url},"availableDecisions":["accept","acceptForSession","decline","cancel"]}
+    }}));
+    screen.event(json!({"type":"session.status","status":"waiting_approval"}));
+    screen.draw();
+    let text = screen.text();
+    assert!(text.contains("Fetch this URL?"), "{text}");
+    assert!(text.contains(url), "{text}");
+    assert!(text.contains("this host and port"), "{text}");
+    assert!(!text.contains("Later web_fetch calls in this session won't ask"));
+    screen.event(json!({"type":"request.resolved","requestId":"web-approval","resolution":{"type":"answered","decision":"acceptForSession"},"clientName":"test"}));
+    screen.event(json!({"type":"session.status","status":"working"}));
+    screen.event(json!({"type":"item.completed","turnId":"t1","item":{
+        "type":"webFetch","id":"web","url":url,"result":"fetched text","status":"completed"
+    }}));
+    screen.draw();
+    let text = screen.text();
+    assert!(text.contains("12 bytes"), "{text}");
+    assert!(text.contains("fetched text"), "{text}");
+    assert!(text.contains("this host and port"), "{text}");
+    assert!(!text.contains("don't ask again for this tool"), "{text}");
+}
+
+#[test]
 fn mcp_command_dispatches_instead_of_sending_a_message() {
     let mut screen = Screen::new();
     assert!(matches!(screen.enter("/mcp"), Some(Action::Mcp)));

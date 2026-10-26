@@ -515,11 +515,16 @@ async fn execute(
     };
     let output = match prepared {
         Err(mut output) => {
-            if review && tool == Tool::Mcp {
+            if review && matches!(tool, Tool::Mcp | Tool::WebFetch) {
                 output.text = "review is read-only".into();
                 output.outcome = ToolOutcome::Declined;
-                if let Item::McpToolCall { status, .. } = &mut output.item {
-                    *status = ItemStatus::Declined;
+                match &mut output.item {
+                    Item::McpToolCall { status, .. } => *status = ItemStatus::Declined,
+                    Item::WebFetch { status, result, .. } => {
+                        *status = ItemStatus::Declined;
+                        *result = output.text.clone();
+                    }
+                    _ => {}
                 }
             }
             output
@@ -534,6 +539,7 @@ async fn execute(
                     let mut item = prepared.started_item();
                     match &mut item {
                         Item::McpToolCall { status, .. }
+                        | Item::WebFetch { status, .. }
                         | Item::FileRead { status, .. }
                         | Item::FileChange { status, .. }
                         | Item::CommandExecution { status, .. } => *status = ItemStatus::Failed,

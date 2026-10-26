@@ -1,6 +1,6 @@
 # canter-tools
 
-五个内置工具、每会话的执行器和权限判断；不依赖模型包，不发送事件、不弹批准框。
+六个内置工具、每会话的执行器和权限判断；不依赖模型包，不发送事件、不弹批准框。
 本机实现使用 Unix 进程组，面向 macOS / Linux。
 
 ## 第 4 件接入
@@ -22,7 +22,7 @@
 4. `call.started_item()` 提供 `InProgress` 项目，供循环发送 item.started。
    `ask_user` 属于 `Risk::Interaction`：用 `call.user_input_request()` 取问题，交会话循环
    开待处理请求并等回答，所有权限模式都一样，不交给 gate，也不调用执行器。
-   以下 gate/execute 步骤只用于读写文件和 shell 工具。
+   以下 gate/execute 步骤用于读写文件、shell、web_fetch 和 MCP 工具。
    调 `gate.evaluate(&call, mode)`。`Execute(permit)` 可执行，`Ask(ApprovalRequest)`
    交循环/客户端处理。请求包含完整参数，write/edit 另加顶层 `diff`；文件路径解析后
    与模型提供的不同时另带 `resolvedPath`，客户端应显示这个实际目标。shell 保留完整命令。
@@ -63,8 +63,9 @@
 | edit | `path`, `edits: [{oldText, newText}]` | 一次替换多处；`fileChange` 和 unified diff |
 | shell | `command`, 可选 `timeoutMs` | 文字输出、退出码、耗时；`commandExecution` |
 | ask_user | `question`, `options: [{label, description}]`（2–4 个，标签不重复，内容非空） | 会话循环等待选项或自写文字；模型结果 `{question, answer}`，客户端项目 `userInput` |
+| web_fetch | `url`（HTTP(S)，不含用户名/密码） | HTML 转 Markdown，文字和 JSON 原样；有界文字结果，客户端项目 `webFetch` |
 
-`Tool::ALL` 固定按 read/write/edit/shell/ask_user 排列，保证会话每次请求的工具前缀稳定。
+`Tool::ALL` 固定按 read/write/edit/shell/ask_user/web_fetch 排列，保证会话每次请求的工具前缀稳定。
 `ask_user` 没有「本会话都允许」，也不超时自动选择；取消由会话循环处理。
 
 所有相对路径按会话 cwd 解析。read/write/edit 会解析符号链接和 `..`；碰到受保护路径
@@ -206,10 +207,41 @@ cd 目标存在时会额外检查解析后的路径，
 `mcp::Registry` 用固定版本的官方 rmcp 客户端维护进程/HTTP 连接；配置和运行句柄没有
 Debug/Serialize。`snapshot()` 为会话复制排序后的工具定义和调用句柄，`Tools::with_mcp`
 绑定这份快照。模型名字用 `Tools::find` 查找，`prepare_named` 只解析对象参数；MCP 参数中的
-`path` 不经过内置文件工具的路径准备。`Tool::ALL` 仍只列五个内置工具。
+`path` 不经过内置文件工具的路径准备。`Tool::ALL` 只列六个内置工具。
 
 `Tool::Mcp` 是执行风险分类；具体名字、服务和参数由准备好的调用保存。权限闸门仍发放
 不可伪造的单次 permit，会话授权改用完整工具名字，MCP 与内置工具没有共用授权。
 审查轮的 MCP 调用由同一闸门直接拒绝；不使用 MCP 的 readOnlyHint 等声明。
 调用取消、超时、协议错误与远端 `isError` 都返回失败项目；模型和客户端输出使用既有
 有界头尾缓冲，非文字只留占位行。连接的关闭和原进程组清理由 registry 负责。
+
+## 网页抓取
+
+`web_fetch` 只接受 `url`，使用独立的 reqwest 客户端 GET HTTP(S) 网址。
+没有新增配置项；固定 `User-Agent: canter/0.1 web_fetch`、`Accept-Encoding: identity`，
+不走代理（`no_proxy`），不继承模型/MCP 请求头或会话凭证，不保存/发送 cookie，
+拒绝 URL 中的用户名和密码。保持默认 TLS 证书验证，不执行网页脚本或加载附属资源。
+
+`text/html`、`application/xhtml+xml` 用固定版本 htmd 转 Markdown，忽略 head/script/style；
+其余 `text/*`、`application/json` 和 `application/*+json` 按 UTF-8 返回（非法字节替换）。
+其它类型只返回一行类型、大小占位，不把二进制交给模型；缺少 Content-Type 按
+application/octet-stream 处理。已知大小的非文字响应不读取内容，未知大小按流计数。
+下载最多 5 MiB：先检查 Content-Length，再逐块检查，超限立即丢弃响应并返回说明。
+转换后沿用 shell/MCP 的模型 32 KiB 头尾预算（截断标记另计）和客户端 1 MiB 总上限；
+终端显示网址、状态及保留结果的字节数。
+
+一次调用从请求开始到读取、转换完成总共最多 30 秒，包含跳转耗时；Esc 取消会丢弃
+正在等待响应头/响应体的请求。HTML 转换在线程池执行；已开始的有界转换会自行结束，
+取消后不再等待或使用结果。4xx/5xx、连接/TLS 失败和超时都作为工具错误返回，继续这一轮。
+
+301/302/303/307/308 的相对 Location 按当前网址解析；规范化主机名及有效端口相同才
+自动跟随，最多 5 次。改变主机或端口只返回「跳到了 <新网址>」，不访问新目标，
+模型可另调一次工具再过闸门。默认端口按 HTTP 80 / HTTPS 443 计算，子域名不共用授权。
+alwaysAsk / askForExecution 均须批准；「本会话都允许」只保存这一个主机及端口，
+不按整个工具放行；批准框显示完整网址和授权范围。审查轮始终拒绝并返回
+`review is read-only`，不会弹框，已有授权和 allowAll 均不能绕过。
+
+本机、内网和明文 HTTP 不另外拦截；allowAll 会直接访问这些地址，也可能触发有副作用的
+GET 接口或暴露内部服务内容。需要逐个把关时使用询问模式；这里没有网络沙箱。
+不做搜索、JavaScript 渲染、登录、cookie、代理配置、网页摘要、PDF 解析、图片输入或 URL 缓存。
+会话创建/打开时固定工具列表；旧会话下次打开会获得这个新内置工具，历史存盘不改写。

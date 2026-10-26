@@ -42,9 +42,12 @@ pub(crate) fn options(approval: &ApprovalRequest) -> Vec<ApprovalDecision> {
     .collect()
 }
 
-pub(crate) fn decision_label(decision: ApprovalDecision) -> &'static str {
+pub(crate) fn decision_label(decision: ApprovalDecision, tool: &str) -> &'static str {
     match decision {
         ApprovalDecision::Accept => "Allow once",
+        ApprovalDecision::AcceptForSession if tool == "web_fetch" => {
+            "Allow for this session (this host and port)"
+        }
         ApprovalDecision::AcceptForSession => {
             "Allow for this session (don't ask again for this tool)"
         }
@@ -82,6 +85,10 @@ pub(crate) fn layout(
         });
     let cwd = &snapshot.settings.cwd;
     let (title, body) = match approval.tool.as_str() {
+        "web_fetch" => (
+            "Fetch this URL?".to_owned(),
+            json_body(&approval.arguments, inner),
+        ),
         "shell" => (
             "Run this command?".to_owned(),
             shell_body(approval, item, cwd, home, inner),
@@ -118,7 +125,11 @@ pub(crate) fn layout(
     let selected = selected.min(options.len().saturating_sub(1));
     let mut tail = vec![Line::default()];
     for (index, decision) in options.iter().enumerate() {
-        let text = format!("{}. {}", index + 1, decision_label(*decision));
+        let text = format!(
+            "{}. {}",
+            index + 1,
+            decision_label(*decision, &approval.tool)
+        );
         let line = if index == selected {
             Line::from(vec![
                 Span::styled("› ", Style::new().cyan().bold()),
@@ -213,6 +224,10 @@ pub(crate) fn layout(
 /// switching the mode back to 「每次问」 later does not take it back.
 fn session_note(tool: &str) -> String {
     let what = match tool {
+        "web_fetch" => {
+            "Later fetches to this host and port won't ask; other hosts or ports still ask"
+                .to_owned()
+        }
         "shell" => "All later commands in this session run without asking".to_owned(),
         "write" => "Later whole-file writes in this session won't ask".to_owned(),
         "edit" => "Later text-replacement edits in this session won't ask".to_owned(),

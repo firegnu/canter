@@ -1214,6 +1214,34 @@
         },
         {
           "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "type": {
+              "const": "webFetch",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "url",
+            "result",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "arguments": true,
             "id": {
               "type": "string"

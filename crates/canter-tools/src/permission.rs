@@ -44,7 +44,7 @@ impl PermissionGate {
             Tool::Shell if matches!(&call.action, Action::Shell(args) if call.executor.is_readonly_shell(&args.command)) => {
                 PermissionCheck::Execute(ExecutionPermit { call })
             }
-            Tool::Write | Tool::Edit | Tool::Shell | Tool::AskUser | Tool::Mcp => {
+            Tool::Write | Tool::Edit | Tool::Shell | Tool::AskUser | Tool::Mcp | Tool::WebFetch => {
                 PermissionCheck::Deny { cancel_turn: false }
             }
         }
@@ -85,7 +85,10 @@ impl PermissionGate {
         if ask && !readonly_shell {
             PermissionCheck::Ask(ApprovalRequest {
                 item_id: call.id.clone(),
-                tool: call.permission_key(),
+                tool: match &call.action {
+                    Action::Mcp(tool) => tool.name.clone(),
+                    _ => call.tool.name().into(),
+                },
                 arguments: call.arguments.clone(),
                 available_decisions: vec![
                     ApprovalDecision::Accept,

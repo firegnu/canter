@@ -942,7 +942,10 @@ async fn ask_user_second_option_returns_to_the_model_and_continues() {
             .iter()
             .map(|tool| tool["function"]["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["read", "write", "edit", "shell", "ask_user"]);
+        assert_eq!(
+            names,
+            ["read", "write", "edit", "shell", "ask_user", "web_fetch"]
+        );
     }
     a.wait_for("Which storage should we use?").await;
     a.wait_for("1. SQLite").await;
