@@ -57,6 +57,37 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             })
         };
         let finish = async {
+            if state.active.as_ref().is_some_and(|active| active.retracted) {
+                state.discard_queue(InputRemovalReason::Interrupted).await?;
+                let event_seq = state.journal.snapshot.last_event_seq + 1;
+                state
+                    .journal
+                    .record(context::HistoryEntry::Retract {
+                        turn_id: completed.id.clone(),
+                        event_seq,
+                    })
+                    .await?;
+                let (messages, users) = state
+                    .rewind
+                    .retract(&completed.id)
+                    .ok_or_else(CoreError::internal)?;
+                state.history.truncate(messages);
+                state.user_messages.truncate(users);
+                state.measured_context = None;
+                state
+                    .journal
+                    .append(vec![
+                        EventPayload::TurnRetracted {
+                            turn_id: completed.id,
+                        },
+                        EventPayload::SessionStatus {
+                            status: SessionStatus::Idle,
+                            close_reason: None,
+                        },
+                    ])
+                    .await?;
+                return Ok(event_seq);
+            }
             state.cancel_requests().await?;
             state
                 .complete_missing_tools("No result: interrupted, or the turn did not finish")
@@ -301,6 +332,7 @@ async fn model_response(
             event = stream.next() => match event {
                 Some(Ok(ModelEvent::TextDelta(delta))) => {
                     if delta.is_empty() { continue; }
+                    if content.is_empty() && !shared.accept_model_output().await { break; }
                     if text.is_empty() { pending.push(EventPayload::ItemStarted { turn_id: turn_id.into(), item: Item::AgentMessage { id: text_id.clone(), text: String::new() } }); }
                     text.push_str(&delta);
                     if let Some(AssistantContent::Text { text }) = content.last_mut() { text.push_str(&delta); }
@@ -309,13 +341,17 @@ async fn model_response(
                 }
                 Some(Ok(ModelEvent::ReasoningDelta(delta))) => {
                     if delta.is_empty() { continue; }
+                    if content.is_empty() && !shared.accept_model_output().await { break; }
                     if reasoning.is_empty() { pending.push(EventPayload::ItemStarted { turn_id: turn_id.into(), item: Item::Reasoning { id: reasoning_id.clone(), summary: Vec::new(), content: Vec::new(), duration_ms: None } }); }
                     reasoning.push_str(&delta);
                     if let Some(AssistantContent::Reasoning { text }) = content.last_mut() { text.push_str(&delta); }
                     else { content.push(AssistantContent::Reasoning { text: delta.clone() }); }
                     pending.push(EventPayload::ItemDelta { turn_id: turn_id.into(), item_id: reasoning_id.clone(), delta: ItemDelta::ReasoningContent { content_index: 0, delta } });
                 }
-                Some(Ok(ModelEvent::ToolCall(call))) => content.push(AssistantContent::ToolCall(call)),
+                Some(Ok(ModelEvent::ToolCall(call))) => {
+                    if content.is_empty() && !shared.accept_model_output().await { break; }
+                    content.push(AssistantContent::ToolCall(call));
+                }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),
                 Some(Ok(ModelEvent::Finished(finish))) => { reason = Some(finish); break; }
                 Some(Err(value)) => { error = Some(value); break; }

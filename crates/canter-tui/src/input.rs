@@ -98,6 +98,37 @@ impl InputBox {
         self.take();
     }
 
+    pub fn prepend_inputs(&mut self, inputs: Vec<Vec<canter_protocol::UserInput>>) {
+        use canter_protocol::UserInput;
+        let draft = self.parts();
+        self.clear();
+        for input in inputs
+            .into_iter()
+            .chain([draft])
+            .filter(|parts| !parts.is_empty())
+        {
+            if !self.is_empty() {
+                self.insert("\n");
+            }
+            for part in input {
+                match part {
+                    UserInput::Text { text } => self.insert(&text),
+                    UserInput::LocalImage { path, name } => {
+                        let name = name.unwrap_or_else(|| {
+                            std::path::Path::new(&path)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into_owned()
+                        });
+                        self.attach(path, name);
+                    }
+                    UserInput::Unknown => {}
+                }
+            }
+        }
+    }
+
     /// Inserts typed or pasted text. Line endings become `\n`, tabs become
     /// spaces, and other control characters are dropped.
     pub fn insert(&mut self, text: &str) {

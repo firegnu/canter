@@ -193,6 +193,21 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
     assert!(event_ts.contains("seq: number"));
     assert!(event_ts.contains("sessionId: string"));
     let payload_ts = fs::read_to_string(temp.path().join("typescript/EventPayload.ts")).unwrap();
+    assert!(payload_ts.contains("\"turn.retracted\", turnId: string"));
+    for (name, field) in [
+        ("SessionInterruptParams", "retract"),
+        ("SessionInterruptResponse", "retracted"),
+    ] {
+        let ts = fs::read_to_string(temp.path().join(format!("typescript/{name}.ts"))).unwrap();
+        assert!(ts.contains(&format!("{field}?: boolean")), "{ts}");
+        assert!(
+            !definitions[name]["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == field)
+        );
+    }
     assert!(payload_ts.contains("\"input.removed\""));
     assert!(payload_ts.contains("closeReason?: SessionCloseReason"));
     let snapshot_ts =

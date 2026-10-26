@@ -24,6 +24,10 @@ pub(crate) enum HistoryEntry {
     Rewind {
         rewind: Box<crate::rewind::Rewind>,
     },
+    Retract {
+        turn_id: String,
+        event_seq: u64,
+    },
     Context {
         messages: Vec<Message>,
     },
@@ -77,6 +81,12 @@ pub(crate) fn restore(
             }
             HistoryEntry::Rewind { rewind: entry } => {
                 if let Some((messages, user_count)) = rewind.apply(&entry) {
+                    history.truncate(messages);
+                    users.truncate(user_count);
+                }
+            }
+            HistoryEntry::Retract { turn_id, .. } => {
+                if let Some((messages, user_count)) = rewind.retract(&turn_id) {
                     history.truncate(messages);
                     users.truncate(user_count);
                 }

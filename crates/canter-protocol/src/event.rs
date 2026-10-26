@@ -57,6 +57,8 @@ pub enum EventPayload {
     },
     #[serde(rename = "turn.completed")]
     TurnCompleted { turn: Turn },
+    #[serde(rename = "turn.retracted")]
+    TurnRetracted { turn_id: String },
     #[serde(rename = "item.started")]
     ItemStarted { turn_id: String, item: Item },
     #[serde(rename = "item.delta")]

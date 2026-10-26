@@ -528,6 +528,22 @@
         },
         {
           "properties": {
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "turn.retracted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turnId"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "item": {
               "$ref": "#/$defs/Item"
             },
@@ -891,6 +907,22 @@
           "required": [
             "type",
             "turn"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "turn.retracted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turnId"
           ],
           "type": "object"
         },
@@ -2278,6 +2310,12 @@
     "SessionInterruptParams": {
       "description": "POST /v1/sessions/{id}/interrupt, with the target turn as a precondition.",
       "properties": {
+        "retract": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "turnId": {
           "type": "string"
         }
@@ -2293,6 +2331,12 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "retracted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [

@@ -46,7 +46,10 @@ pub fn validate_event(snapshot: &SessionSnapshot, event: &Event) -> Result<(), R
         });
     }
     match &event.payload {
-        EventPayload::SessionRewound { before_turn_id, .. } => {
+        EventPayload::SessionRewound { before_turn_id, .. }
+        | EventPayload::TurnRetracted {
+            turn_id: before_turn_id,
+        } => {
             if !snapshot.turns.iter().any(|turn| turn.id == *before_turn_id) {
                 return Err(ReduceError::MissingTurn);
             }
@@ -122,6 +125,9 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
         add_time(&mut turn.duration_ms, elapsed);
     }
     match &event.payload {
+        EventPayload::TurnRetracted { turn_id } => {
+            snapshot.turns.retain(|turn| turn.id != *turn_id);
+        }
         EventPayload::SessionRewound {
             before_turn_id,
             rewind_conversation,

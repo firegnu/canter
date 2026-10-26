@@ -441,7 +441,7 @@ where
                         .app_mut()
                         .warning(&format!("Could not list skills: {error}")),
                 },
-                Some(action) => chat.act(ui.app(), action),
+                Some(action) => chat.act(ui.app_mut(), action),
             }
         }
         if quit {
@@ -564,7 +564,10 @@ enum Message {
         id: usize,
         event: canter_protocol::BtwEvent,
     },
-    Sent,
+    Sent {
+        event_seq: u64,
+        input: Vec<UserInput>,
+    },
     ImageSendFailed(String),
     Models(Vec<canter_protocol::Model>),
     Server(Box<Event>),
@@ -577,6 +580,10 @@ enum Message {
     },
     AnswerLate,
     InterruptFailed(String),
+    Interrupted {
+        turn_id: String,
+        retracted: bool,
+    },
     Reconnecting(String),
     Reconnected(Connected),
 }
@@ -772,7 +779,7 @@ impl<C: Connector> Chat<C> {
                 }
                 app.btw_event(id, event);
             }
-            Message::Sent => app.sent(),
+            Message::Sent { event_seq, input } => app.input_sent(event_seq, input),
             Message::ImageSendFailed(error) => app.image_send_failed(&error),
             Message::Models(models) => app.set_models(&models),
             Message::Server(event) => app.apply_event(&event, now_ms()),
@@ -784,6 +791,9 @@ impl<C: Connector> Chat<C> {
             Message::AnswerFailed { request_id, error } => app.answer_failed(&request_id, &error),
             Message::AnswerLate => app.answer_late(),
             Message::InterruptFailed(error) => app.interrupt_failed(&error),
+            Message::Interrupted { turn_id, retracted } => {
+                app.interrupt_finished(&turn_id, retracted)
+            }
             Message::Reconnecting(reason) => app.reconnecting(&reason),
             Message::Reconnected(connected) => {
                 self.client = connected.client;
@@ -803,7 +813,7 @@ impl<C: Connector> Chat<C> {
         }
     }
 
-    fn act(&mut self, app: &App, action: Action) {
+    fn act(&mut self, app: &mut App, action: Action) {
         let client = self.client.clone();
         let session = self.session.clone();
         let sender = self.sender.clone();
@@ -901,19 +911,24 @@ impl<C: Connector> Chat<C> {
                     mode: InputMode::Queue,
                     client_name: self.client_name.clone(),
                 };
+                app.input_sending();
                 tokio::spawn(async move {
-                    if let Err(error) = client.send_input(&session, &params).await {
-                        let error = if has_images {
-                            Message::ImageSendFailed(error.to_string())
-                        } else {
-                            Message::SendFailed(error.to_string())
-                        };
-                        let _ = sender.send(error);
-                        return;
-                    }
-                    if has_images {
-                        let _ = sender.send(Message::Sent);
-                    }
+                    let response = match client.send_input(&session, &params).await {
+                        Ok(response) => response,
+                        Err(error) => {
+                            let error = if has_images {
+                                Message::ImageSendFailed(error.to_string())
+                            } else {
+                                Message::SendFailed(error.to_string())
+                            };
+                            let _ = sender.send(error);
+                            return;
+                        }
+                    };
+                    let _ = sender.send(Message::Sent {
+                        event_seq: response.event_seq,
+                        input: params.input,
+                    });
                     if let Some(name) = name {
                         let update = SessionUpdateParams {
                             name: Some(name),
@@ -956,12 +971,22 @@ impl<C: Connector> Chat<C> {
             Action::Interrupt { turn_id } => {
                 tokio::spawn(async move {
                     match client.interrupt(&session, &turn_id).await {
+                        Ok(response) => {
+                            let _ = sender.send(Message::Interrupted {
+                                turn_id,
+                                retracted: response.retracted == Some(true),
+                            });
+                        }
                         // The turn ended on its own meanwhile.
-                        Ok(_)
-                        | Err(ClientError::Server {
+                        Err(ClientError::Server {
                             code: ErrorCode::TurnMismatch,
                             ..
-                        }) => {}
+                        }) => {
+                            let _ = sender.send(Message::Interrupted {
+                                turn_id,
+                                retracted: false,
+                            });
+                        }
                         Err(error) => {
                             let _ = sender.send(Message::InterruptFailed(error.to_string()));
                         }

@@ -241,6 +241,7 @@ impl Client {
         turn_id: &str,
     ) -> Result<SessionInterruptResponse, ClientError> {
         let params = SessionInterruptParams {
+            retract: Some(true),
             turn_id: turn_id.to_owned(),
         };
         let response = self

@@ -3,4 +3,4 @@
 /**
  * POST /v1/sessions/{id}/interrupt, with the target turn as a precondition.
  */
-export type SessionInterruptParams = { turnId: string, };
+export type SessionInterruptParams = { turnId: string, retract?: boolean, };

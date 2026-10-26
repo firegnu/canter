@@ -417,6 +417,7 @@ async fn interrupt_during_model_stream_repairs_history_and_discards_queued_input
     session.input(input("discard this")).await.unwrap();
     let interrupted = session
         .interrupt(SessionInterruptParams {
+            retract: None,
             turn_id: first.turn_id.unwrap(),
         })
         .await
@@ -488,6 +489,7 @@ async fn interrupt_while_waiting_for_approval_cancels_the_request_without_runnin
     );
     session
         .interrupt(SessionInterruptParams {
+            retract: None,
             turn_id: response.turn_id.unwrap(),
         })
         .await
@@ -664,6 +666,7 @@ async fn interrupt_during_a_command_waits_until_its_process_group_is_gone() {
     tokio::time::timeout(
         Duration::from_secs(5),
         session.interrupt(SessionInterruptParams {
+            retract: None,
             turn_id: response.turn_id.unwrap(),
         }),
     )
