@@ -61,3 +61,12 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- **做了什么**：`cells.rs` 里压缩那行按状态写三种：进行中 `── Compacting context… ──`，压完 `── Context compacted ──`，没压成功 `── Compaction did not finish; the original context is kept ──`；`app.rs` 的 `doing` 给进行中的压缩项返回 `Compacting context`，状态行照旧走 P2-56 的流光（整个两个词扫，对话里那行不扫）。自动压缩压完后下一项开始，状态行自然换回 `Thinking` 这些。README 的状态行、新加的「压缩」条目和流光表跟着改。
+- **怎么认出没压成功**：不改核心和协议。核心没压成功（出错、被 Esc 打断）时在 `item.completed` 的 `summary` 里写固定一句 `Compaction did not finish; the original context is kept.`，终端按这句原样比对；另外一轮已经结束、这项却一直没收到 `item.completed`（`summary` 还是开始时的空串）也算没压成功。压成功的摘要核心保证不为空（空的会报错走没压成功那条）。风险：核心以后改了这句话的措辞，终端会把失败显示成压好了；终端这边在 `cells.rs` 的常量上写了出处。
+- **验证**：新加 `crates/canter-tui/tests/compaction.rs` 三个 TestBackend 测试（压缩中的对话行、状态行和流光只在状态行；压完后对话行、自动压缩接着干活状态行回到 `Thinking`、`/compact` 单独一轮；没压成功的三种：失败、Esc 打断、没收到完成就结束）。先在原代码上跑：压缩中、没压成功两个失败（显示 `Context compacted`、状态行 `Working`），压完那个本来就过（行为没变，留作回归）。改完三个都过。现有画面测试和 `tests/expected/replay.txt` 都没有变化。`cargo nextest run --all-targets` 559 个全过，`cargo test --doc --workspace`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check` 都过（都带编译目录）。
+- **拿主意的地方**：没压成功的那行沿用原来的不折行写法（`Row::text_from`），窗口窄于 63 列时行尾被截掉，和原来那行一样不折；空摘要也算没压成功（见上）。
+- **没做的事**：没改核心、协议和压缩触发；`crates/canter/tests/tui.rs` 里几处 `wait_for("Context compacted")` 都是压成功的场景，不用改。
+- **踩过的坑**：没有。

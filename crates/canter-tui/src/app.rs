@@ -3150,6 +3150,7 @@ impl App {
             Item::FileChange { .. } => ("Editing", None),
             Item::McpToolCall { .. } => ("Calling", None),
             Item::WebFetch { .. } => ("Fetching", None),
+            Item::ContextCompaction { .. } => ("Compacting context", None),
             _ => return None,
         })
     }

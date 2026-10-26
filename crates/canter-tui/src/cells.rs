@@ -202,9 +202,9 @@ pub(crate) fn item(item: &Item, finished: bool, details: bool, cwd: &str, width:
             status,
             ..
         } => vec![file_read(path, *start_line, content, *status, cwd, width)],
-        Item::ContextCompaction { .. } => vec![Row::text_from(
+        Item::ContextCompaction { summary, .. } => vec![Row::text_from(
             Line::from(Span::styled(
-                "  ── Context compacted ──",
+                compaction_line(summary, finished),
                 theme::secondary(),
             )),
             2,
@@ -269,6 +269,23 @@ fn took(ms: u64) -> String {
         "<1s".to_owned()
     } else {
         format_elapsed(i64::try_from(ms).unwrap_or(i64::MAX))
+    }
+}
+
+/// The summary the core gives a compaction that did not finish
+/// (`canter-core/src/compaction.rs`).
+const COMPACTION_KEPT: &str = "Compaction did not finish; the original context is kept.";
+
+/// The line for a compaction: still going, compacted, or not finished. A
+/// finished one with no summary never got completed (its turn ended
+/// first); a summary that compacted is never empty.
+fn compaction_line(summary: &str, finished: bool) -> &'static str {
+    if !finished {
+        "  ── Compacting context… ──"
+    } else if summary.is_empty() || summary == COMPACTION_KEPT {
+        "  ── Compaction did not finish; the original context is kept ──"
+    } else {
+        "  ── Context compacted ──"
     }
 }
 
