@@ -7,6 +7,7 @@ use canter_protocol::{
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::diff::Diff;
 use crate::markdown;
 use crate::text::{LogicalLine, sanitize, spans_width, truncate, visible, wrap};
 use crate::theme;
@@ -16,6 +17,12 @@ const FINISHED_TAIL: usize = 3;
 /// Output lines shown while a command runs.
 const LIVE_TAIL: usize = 5;
 const GUTTER: &str = "    │ ";
+/// Diff lines a changed file shows in the history; the approval box shows all.
+const EDIT_LINES: usize = 12;
+/// Diff lines a new file shows in the history. A deleted file shows none.
+const ADD_LINES: usize = 6;
+/// Where a card's diff lines start: under the text of its command output.
+const DIFF_INDENT: &str = "      ";
 
 /// A blank row, `› ` and the text, then another blank row. `source` names the
 /// client that sent it when that was not this terminal.
@@ -258,15 +265,6 @@ fn file_read(
     Line::from(truncate(spans, usize::from(width)))
 }
 
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum DiffKind {
-    Hunk,
-    Added,
-    Removed,
-    Context,
-    Note,
-}
-
 /// An item waiting for an approval: only its title row, marked 「等你批准」.
 /// The approval box below shows the whole command or diff.
 pub(crate) fn waiting(item: &Item, cwd: &str, width: u16) -> Vec<Line<'static>> {
@@ -283,7 +281,7 @@ pub(crate) fn waiting(item: &Item, cwd: &str, width: u16) -> Vec<Line<'static>> 
         Item::FileChange { changes, .. } => changes
             .iter()
             .map(|change| {
-                let diff = parse_diff(&sanitize(&change.diff), &change.kind);
+                let diff = Diff::parse(&sanitize(&change.diff), &change.kind);
                 let header = change_header(change, &diff, dot(theme::secondary()), cwd);
                 right_aligned(header, mark(), usize::from(width))
             })
@@ -298,7 +296,7 @@ fn file_change(
     cwd: &str,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let diff = parse_diff(&sanitize(&change.diff), &change.kind);
+    let diff = Diff::parse(&sanitize(&change.diff), &change.kind);
     let (bullet, suffix) = match status {
         ItemStatus::InProgress => (dot(theme::secondary()), None),
         ItemStatus::Failed => (cross(), Some(Span::styled("  failed", theme::failure()))),
@@ -311,30 +309,23 @@ fn file_change(
     let mut header = change_header(change, &diff, bullet, cwd);
     header.extend(suffix);
     let mut rows = vec![Line::from(truncate(header, usize::from(width)))];
-    for (kind, text) in diff {
-        let (marker, style) = diff_style(kind);
-        let line = LogicalLine {
-            indent: vec![
-                Span::styled(GUTTER, theme::secondary()),
-                Span::styled(marker, style),
-            ],
-            hang: vec![Span::styled(GUTTER, theme::secondary()), Span::raw("  ")],
-            body: vec![Span::styled(text, style)],
-        };
-        rows.extend(wrap(&line, width));
-    }
+    let limit = match &change.kind {
+        PatchChangeKind::Add => ADD_LINES,
+        PatchChangeKind::Delete => return rows,
+        _ => EDIT_LINES,
+    };
+    rows.extend(diff.rows(DIFF_INDENT, width, Some(limit)));
     rows
 }
 
 /// `● 改 path  +a −r`: a file change's title, before any status suffix.
 fn change_header(
     change: &FileUpdateChange,
-    diff: &[(DiffKind, String)],
+    diff: &Diff,
     bullet: Span<'static>,
     cwd: &str,
 ) -> Vec<Span<'static>> {
-    let count = |wanted| diff.iter().filter(|(kind, _)| *kind == wanted).count();
-    let (added, removed) = (count(DiffKind::Added), count(DiffKind::Removed));
+    let (added, removed) = (diff.added(), diff.removed());
     let verb = match &change.kind {
         PatchChangeKind::Add => "Add ",
         PatchChangeKind::Delete => "Delete ",
@@ -365,50 +356,6 @@ fn change_header(
         ]),
     }
     header
-}
-
-/// The marker and colour of a diff line.
-pub(crate) fn diff_style(kind: DiffKind) -> (&'static str, Style) {
-    match kind {
-        DiffKind::Hunk => ("", theme::accent()),
-        DiffKind::Added => ("+ ", theme::diff_added()),
-        DiffKind::Removed => ("- ", theme::diff_removed()),
-        DiffKind::Context => ("  ", theme::secondary()),
-        DiffKind::Note => ("", theme::secondary()),
-    }
-}
-
-/// Splits a unified diff into marked lines. Text without hunks is a whole
-/// file being added (or deleted).
-pub(crate) fn parse_diff(text: &str, kind: &PatchChangeKind) -> Vec<(DiffKind, String)> {
-    if !text.lines().any(|line| line.starts_with("@@")) {
-        let kind = match kind {
-            PatchChangeKind::Delete => DiffKind::Removed,
-            _ => DiffKind::Added,
-        };
-        return text.lines().map(|line| (kind, line.to_owned())).collect();
-    }
-    let mut lines = Vec::new();
-    let mut in_hunk = false;
-    for line in text.lines() {
-        let entry = if line.starts_with("@@") {
-            in_hunk = true;
-            (DiffKind::Hunk, line)
-        } else if !in_hunk {
-            // File headers (diff --git, index, ---, +++) repeat the card's title.
-            continue;
-        } else if let Some(rest) = line.strip_prefix('+') {
-            (DiffKind::Added, rest)
-        } else if let Some(rest) = line.strip_prefix('-') {
-            (DiffKind::Removed, rest)
-        } else if line.starts_with('\\') {
-            (DiffKind::Note, line)
-        } else {
-            (DiffKind::Context, line.strip_prefix(' ').unwrap_or(line))
-        };
-        lines.push((entry.0, entry.1.to_owned()));
-    }
-    lines
 }
 
 fn command_card(

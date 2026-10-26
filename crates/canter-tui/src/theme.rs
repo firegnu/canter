@@ -89,15 +89,15 @@ impl Theme {
 
     /// One of two backgrounds for a dark or light terminal; none with 16
     /// colours or less, or when the background is unknown.
-    fn bg(self, dark: [u8; 3], light: [u8; 3]) -> Option<Color> {
-        let [r, g, b] = match self.background {
+    fn bg(self, dark: Shade, light: Shade) -> Option<Color> {
+        let ([r, g, b], index) = match self.background {
             Background::Dark => dark,
             Background::Light => light,
             Background::Unknown => return None,
         };
         match self.depth {
             Depth::TrueColor => Some(Color::Rgb(r, g, b)),
-            Depth::Ansi256 => Some(Color::Indexed(nearest_256([r, g, b]))),
+            Depth::Ansi256 => Some(Color::Indexed(index)),
             Depth::Ansi16 | Depth::None => None,
         }
     }
@@ -116,7 +116,8 @@ fn ask_terminal() -> Option<Background> {
 }
 
 /// `COLORFGBG` is `fg;bg` (sometimes `fg;default;bg`) in the 16-colour
-/// numbering: black to light grey (0–6) and dark grey (8) are dark.
+/// numbering: black and the dark colours (0–6) and dark grey (8) are dark;
+/// light grey (7) and the bright colours (9–15) are light.
 fn colorfgbg(value: &str) -> Option<Background> {
     match value.rsplit(';').next()?.parse::<u8>().ok()? {
         0..=6 | 8 => Some(Background::Dark),
@@ -125,29 +126,12 @@ fn colorfgbg(value: &str) -> Option<Background> {
     }
 }
 
-/// The closest colour in the 256-colour table, past the first 16 (those
-/// change with the terminal's settings).
-fn nearest_256(rgb: [u8; 3]) -> u8 {
-    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
-    let color = |index: u8| -> [u8; 3] {
-        if index >= 232 {
-            let gray = 8 + 10 * (index - 232);
-            [gray; 3]
-        } else {
-            let cube = usize::from(index - 16);
-            [LEVELS[cube / 36], LEVELS[cube / 6 % 6], LEVELS[cube % 6]]
-        }
-    };
-    let distance = |other: [u8; 3]| -> u32 {
-        rgb.iter()
-            .zip(other)
-            .map(|(&a, b)| u32::from(a.abs_diff(b)).pow(2))
-            .sum()
-    };
-    (16..=255)
-        .min_by_key(|&index| distance(color(index)))
-        .unwrap_or(16)
-}
+/// A background as a true colour, and the colour standing in for it in the
+/// 256-colour table. The stand-ins are picked by hand, not the nearest
+/// colour: the nearest to a dark green or red is often a grey, which loses
+/// the hue. They are past the first 16, which change with the terminal's
+/// settings.
+type Shade = ([u8; 3], u8);
 
 thread_local! {
     static CURRENT: Cell<Theme> = Cell::new(Theme::default());
@@ -218,25 +202,29 @@ pub fn diff_removed() -> Style {
     current().fg(Color::Red)
 }
 
-/// The background of an added line, when one can be shown.
+/// The background of an added line, when one can be shown. 256 colours:
+/// 22 (`#005F00`) on dark, 194 (`#D7FFD7`) on light.
 pub fn diff_added_bg() -> Option<Color> {
-    current().bg([0x21, 0x3a, 0x2b], [0xda, 0xfb, 0xe1])
+    current().bg(([0x21, 0x3a, 0x2b], 22), ([0xda, 0xfb, 0xe1], 194))
 }
 
-/// The background of a removed line, when one can be shown.
+/// The background of a removed line, when one can be shown. 256 colours:
+/// 52 (`#5F0000`) on dark, 224 (`#FFD7D7`) on light.
 pub fn diff_removed_bg() -> Option<Color> {
-    current().bg([0x4a, 0x22, 0x1d], [0xff, 0xeb, 0xe9])
+    current().bg(([0x4a, 0x22, 0x1d], 52), ([0xff, 0xeb, 0xe9], 224))
 }
 
 /// The changed words of an added line: a step deeper than the line's
-/// background, or reversed without one.
+/// background, or reversed without one. 256 colours: 28 (`#008700`) on
+/// dark, 157 (`#AFFFAF`) on light.
 pub fn diff_added_word() -> Style {
-    word(current().bg([0x2e, 0x5c, 0x3f], [0xab, 0xf2, 0xbc]))
+    word(current().bg(([0x2e, 0x5c, 0x3f], 28), ([0xab, 0xf2, 0xbc], 157)))
 }
 
-/// The changed words of a removed line.
+/// The changed words of a removed line. 256 colours: 88 (`#870000`) on
+/// dark, 217 (`#FFAFAF`) on light.
 pub fn diff_removed_word() -> Style {
-    word(current().bg([0x73, 0x32, 0x2a], [0xff, 0xce, 0xcb]))
+    word(current().bg(([0x73, 0x32, 0x2a], 88), ([0xff, 0xce, 0xcb], 217)))
 }
 
 fn word(background: Option<Color>) -> Style {

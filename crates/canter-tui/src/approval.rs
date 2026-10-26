@@ -10,7 +10,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 
-use crate::cells::{DiffKind, diff_style, display_path, parse_diff};
+use crate::cells::display_path;
+use crate::diff::Diff;
 use crate::text::{LogicalLine, visible, wrap};
 use crate::theme;
 
@@ -294,10 +295,9 @@ fn change_body(
     let text = |key: &str| approval.arguments.get(key).and_then(Value::as_str);
     // The tools resolve the path; the resolved one is what really gets written.
     let path = text("resolvedPath").or(text("path")).unwrap_or_default();
-    let diff = parse_diff(&visible(text("diff").unwrap_or_default()), kind);
-    let count = |wanted| diff.iter().filter(|(kind, _)| *kind == wanted).count();
-    let added = Span::styled(format!("+{}", count(DiffKind::Added)), theme::success());
-    let removed = Span::styled(format!("−{}", count(DiffKind::Removed)), theme::failure());
+    let diff = Diff::parse(&visible(text("diff").unwrap_or_default()), kind);
+    let added = Span::styled(format!("+{}", diff.added()), theme::success());
+    let removed = Span::styled(format!("−{}", diff.removed()), theme::failure());
     let mut header = vec![
         Span::styled(display_path(path, cwd), Style::new().bold()),
         Span::raw("  "),
@@ -312,15 +312,7 @@ fn change_body(
     if diff.is_empty() {
         rows.push(Line::from(Span::styled("(no changes)", theme::secondary())));
     }
-    for (kind, line) in diff {
-        let (marker, style) = diff_style(kind);
-        let line = LogicalLine {
-            indent: vec![Span::styled(marker, style)],
-            hang: vec![Span::raw("  ")],
-            body: vec![Span::styled(line, style)],
-        };
-        rows.extend(wrap(&line, width));
-    }
+    rows.extend(diff.rows("", width, None));
     rows
 }
 
