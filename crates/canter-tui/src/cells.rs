@@ -472,7 +472,7 @@ pub(crate) fn waiting(item: &Item, details: bool, cwd: &str, width: u16) -> Vec<
         Item::FileChange { changes, .. } => changes
             .iter()
             .map(|change| {
-                let diff = Diff::parse(&sanitize(&change.diff), &change.kind);
+                let diff = Diff::parse(&sanitize(&change.diff), &change.kind, &change.path);
                 let (header, links) = change_header(change, &diff, dot(theme::secondary()), cwd);
                 card_row(right_aligned(header, mark(), usize::from(width)), links)
             })
@@ -488,7 +488,7 @@ fn file_change(
     cwd: &str,
     width: u16,
 ) -> Vec<Row> {
-    let diff = Diff::parse(&sanitize(&change.diff), &change.kind);
+    let diff = Diff::parse(&sanitize(&change.diff), &change.kind, &change.path);
     let (bullet, suffix) = match status {
         ItemStatus::InProgress => (dot(theme::secondary()), None),
         ItemStatus::Failed => (cross(), Some(Span::styled("  failed", theme::failure()))),

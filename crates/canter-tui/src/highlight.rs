@@ -1,5 +1,6 @@
-//! Syntax colours for code blocks and for the command in the approval box:
-//! syntect with two-face's syntax definitions and its `ansi` theme.
+//! Syntax colours for code blocks, the command in the approval box and the
+//! code in diffs: syntect with two-face's syntax definitions and its `ansi`
+//! theme.
 //!
 //! The `ansi` theme names colours by their number in the terminal's 16-colour
 //! palette, and leaves plain text in the terminal's default colour, so code
@@ -7,12 +8,15 @@
 //!
 //! The text in progress is drawn again from the start every frame. Each code
 //! block's colours are remembered with the parser's state after its last
-//! line, so when the block grows only the new lines are worked out.
+//! line, so when the block grows only the new lines are worked out. A diff
+//! waiting for approval is drawn every frame too; each side of it is
+//! remembered the same way.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::LazyLock;
+use std::thread::LocalKey;
 
 use ratatui::style::Style;
 use ratatui::text::Span;
@@ -52,6 +56,20 @@ pub(crate) fn bash(lines: &[&str]) -> Option<Vec<Vec<Span<'static>>>> {
     highlight(SYNTAXES.find_syntax_by_extension("bash")?, lines)
 }
 
+/// The spans of each of `lines` coloured by the language of the file at
+/// `path`, found by its name (`Makefile`) or extension; `None` as for
+/// [`code_block`]. Only the lines are read, never the file.
+pub(crate) fn file(path: &str, lines: &[&str]) -> Option<Vec<Vec<Span<'static>>>> {
+    let name = path.rsplit(['/', '\\']).next()?;
+    let syntax = SYNTAXES
+        .find_syntax_by_extension(name)
+        .or_else(|| SYNTAXES.find_syntax_by_extension(name.rsplit_once('.')?.1))?;
+    if syntax.name == "Plain Text" {
+        return None;
+    }
+    remembered(&SIDES, syntax, lines, true)
+}
+
 /// By the first word of the fence's info string, as a syntax's file
 /// extension or name, with a few common aliases. Without one, by a `#!`
 /// first line. Never by guessing from the code.
@@ -79,14 +97,27 @@ fn find_syntax(language: &str, first_line: &str) -> Option<&'static SyntaxRefere
 }
 
 fn highlight(syntax: &'static SyntaxReference, lines: &[&str]) -> Option<Vec<Vec<Span<'static>>>> {
+    remembered(&DONE, syntax, lines, false)
+}
+
+/// `lines` coloured, from a block in `cache` that they continue (or, when
+/// `whole`, that has just these lines), or from the start.
+fn remembered(
+    cache: &'static LocalKey<RefCell<VecDeque<Block>>>,
+    syntax: &'static SyntaxReference,
+    lines: &[&str],
+    whole: bool,
+) -> Option<Vec<Vec<Span<'static>>>> {
     if theme::current().depth == Depth::None || too_big(lines) {
         return None;
     }
-    DONE.with_borrow_mut(|done| {
+    cache.with_borrow_mut(|done| {
         let reuse = done
             .iter()
             .enumerate()
-            .filter(|(_, block)| block.continues(syntax, lines))
+            .filter(|(_, block)| {
+                block.continues(syntax, lines) && (!whole || block.lines.len() == lines.len())
+            })
             .max_by_key(|(_, block)| block.lines.len())
             .map(|(i, _)| i);
         let mut block = match reuse {
@@ -110,6 +141,10 @@ fn too_big(lines: &[&str]) -> bool {
 thread_local! {
     /// The blocks coloured lately, the latest first.
     static DONE: RefCell<VecDeque<Block>> = const { RefCell::new(VecDeque::new()) };
+    /// The sides of diffs coloured lately, the latest first. Apart from the
+    /// code blocks, and only ever taken whole: one side of a diff often
+    /// starts with the other, and taking it to grow would drop it.
+    static SIDES: RefCell<VecDeque<Block>> = const { RefCell::new(VecDeque::new()) };
 }
 
 /// A code block coloured so far.

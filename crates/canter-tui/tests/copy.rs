@@ -1062,3 +1062,35 @@ fn a_changed_line_with_emoji_highlights_only_its_text() {
     screen.draw();
     assert_eq!(screen.highlighted_text(), [line], "{}", screen.text());
 }
+
+/// With code coloured and a gutter of its own, dragging over two hunks
+/// still copies only the code: no numbers, signs, or the `⋯` row naming
+/// the second hunk's function.
+#[test]
+fn dragging_over_coloured_hunks_copies_only_the_code() {
+    theme::set(Theme {
+        depth: Depth::TrueColor,
+        background: Background::Dark,
+    });
+    let mut screen = Screen::new();
+    screen.start_turn("t1", "edit");
+    screen.event(json!({ "type": "item.completed", "turnId": "t1", "item": {
+        "type": "fileChange", "id": "e1", "status": "completed",
+        "changes": [{
+            "path": "/work/src/lib.rs",
+            "kind": { "type": "update", "movePath": null },
+            "diff": "--- a/src/lib.rs\n+++ b/src/lib.rs\n\
+                     @@ -1,2 +1,2 @@\n fn one() {\n-    let a = 1;\n+    let a = 2;\n\
+                     @@ -20,2 +20,2 @@ fn two() {\n-    let b = \"x\";\n+    let b = \"y\";\n",
+        }],
+    }}));
+    screen.draw();
+    assert!(screen.text().contains("⋯ fn two() {"), "{}", screen.text());
+    let from = screen.find("fn one");
+    let to = screen.find_end("let b = \"y\";");
+    screen.select(from, to);
+    assert_eq!(
+        screen.clipboard(),
+        "fn one() {\n    let a = 1;\n    let a = 2;\n    let b = \"x\";\n    let b = \"y\";"
+    );
+}

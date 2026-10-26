@@ -720,3 +720,79 @@ async fn every_tool_honors_cancellation_before_execution() {
         assert!(!dir.path().join("marker").exists());
     }
 }
+
+/// The `@@` line of each hunk of the approved diff.
+async fn hunk_headers(original: &str, edits: serde_json::Value) -> Vec<String> {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("lib.rs"), original).unwrap();
+    let call = tools(&dir)
+        .prepare(
+            Tool::Edit,
+            "e1",
+            &serde_json::json!({ "path": "lib.rs", "edits": edits }).to_string(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    call.approval_arguments()["diff"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .filter(|line| line.starts_with("@@"))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[tokio::test]
+async fn hunk_headers_name_the_function_above_like_git() {
+    let lines = |name: &str| -> String {
+        (1..=10)
+            .map(|n| format!("    let {name}{n} = {n};\n"))
+            .collect()
+    };
+    let original = format!(
+        "use std::fmt;\n\nfn first(a: u32) -> u32 {{   \n{}}}\n",
+        lines("a")
+    );
+    let edit = serde_json::json!([{ "oldText": "a8 = 8", "newText": "a8 = 80" }]);
+    // Trailing spaces are dropped.
+    assert_eq!(
+        hunk_headers(&original, edit).await,
+        ["@@ -8,7 +8,7 @@ fn first(a: u32) -> u32 {"]
+    );
+
+    let original = format!("$weird_but_counts\n{}", lines("b"));
+    let edit = serde_json::json!([{ "oldText": "b8 = 8", "newText": "b8 = 80" }]);
+    assert_eq!(
+        hunk_headers(&original, edit).await,
+        ["@@ -6,6 +6,6 @@ $weird_but_counts"]
+    );
+
+    let long = format!("_private_{}", "x".repeat(100));
+    let original = format!("{long}\n{}", lines("c"));
+    let edit = serde_json::json!([{ "oldText": "c8 = 8", "newText": "c8 = 80" }]);
+    assert_eq!(
+        hunk_headers(&original, edit).await,
+        [format!("@@ -6,6 +6,6 @@ {}", &long[..80])],
+        "at most 80 characters"
+    );
+}
+
+#[tokio::test]
+async fn hunk_headers_without_a_line_to_name_stay_plain() {
+    let original: String = (1..=10).map(|n| format!("    line {n}\n")).collect();
+    let headers = hunk_headers(
+        &original,
+        serde_json::json!([{ "oldText": "line 8", "newText": "line eight" }]),
+    )
+    .await;
+    assert_eq!(headers, ["@@ -5,6 +5,6 @@"]);
+    // The first line of the file has nothing above it.
+    let original = format!("fn main() {{\n{original}}}\n");
+    let headers = hunk_headers(
+        &original,
+        serde_json::json!([{ "oldText": "fn main", "newText": "fn start" }]),
+    )
+    .await;
+    assert_eq!(headers, ["@@ -1,4 +1,4 @@"]);
+}
