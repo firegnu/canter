@@ -66,7 +66,7 @@ pub(crate) fn server_running(home: &Path) -> Result<bool, ServerError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(_) => return Err(ServerError("cannot check the server file lock".into())),
     };
-    match file.try_lock() {
+    match file.try_lock_shared() {
         Ok(()) => Ok(false), // Dropping the file immediately releases this probe's lock.
         Err(TryLockError::WouldBlock) => Ok(true),
         Err(_) => Err(ServerError("cannot check the server file lock".into())),
@@ -102,7 +102,23 @@ impl Lease {
         let home =
             fs::canonicalize(home).map_err(|_| ServerError("invalid state directory".into()))?;
         let lock = private_file(&home.join("server.lock"))?;
-        match lock.try_lock() {
+        let acquired = loop {
+            match lock.try_lock() {
+                Err(TryLockError::WouldBlock) => match lock.try_lock_shared() {
+                    // Only discovery probes hold shared locks. Let them finish,
+                    // then retry exclusive ownership without mistaking them for a daemon.
+                    Ok(()) => {
+                        lock.unlock().map_err(|_| {
+                            ServerError("cannot release the server probe lock".into())
+                        })?;
+                        std::thread::yield_now();
+                    }
+                    Err(error) => break Err(error),
+                },
+                result => break result,
+            }
+        };
+        match acquired {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) if replace => {
                 let replacement = private_file(&home.join("replace.lock"))?;
@@ -213,4 +229,39 @@ pub(crate) fn cleanup_creating(root: &Path) -> Result<(), ServerError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Barrier,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    #[test]
+    fn discovery_probes_do_not_reject_server_startup() {
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        private_file(&root.path().join("server.lock")).unwrap();
+        let probing = AtomicBool::new(true);
+        let ready = Barrier::new(9);
+        let result = std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    ready.wait();
+                    while probing.load(Ordering::Relaxed) {
+                        server_running(root.path()).unwrap();
+                    }
+                });
+            }
+            ready.wait();
+            // Exercise the same probe and acquisition used by discover / serve,
+            // without HTTP or process startup diluting the lock contention.
+            let result = (0..1_000)
+                .try_for_each(|_| Lease::acquire(root.path().to_path_buf(), false).map(drop));
+            probing.store(false, Ordering::Relaxed);
+            result
+        });
+        result.expect("discovery alone must not report a server is already running");
+    }
 }
