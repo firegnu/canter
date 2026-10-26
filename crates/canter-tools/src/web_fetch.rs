@@ -5,7 +5,10 @@ use encoding_rs::{Encoding, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252, X_USER_DEFI
 use reqwest::Url;
 use serde::Deserialize;
 use serde_json::Value;
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio_util::sync::CancellationToken;
 
 const MAX_DOWNLOAD_BYTES: usize = 5 * 1024 * 1024;
@@ -15,6 +18,7 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_HTML_DEPTH: usize = 256;
 const MAX_HTML_TAG_BYTES: usize = 4096;
 const HTML_STACK_BYTES: usize = 256 * 1024 * 1024;
+const MAX_TITLE_CHARS: usize = 512;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -202,6 +206,7 @@ async fn fetch(url: &Url) -> Result<String, String> {
         return Ok(placeholder(&content_type, downloaded as u64));
     }
     let (mut text, unknown_charset) = decode_text(&body, charset, html);
+    let mut title = String::new();
     if html {
         text = match check_html(&text) {
             Err(reason) => {
@@ -215,21 +220,59 @@ async fn fetch(url: &Url) -> Result<String, String> {
                     .name("canter-web-fetch-html".into())
                     .stack_size(HTML_STACK_BYTES)
                     .spawn(move || {
+                        let title = Arc::new(Mutex::new(String::new()));
+                        let captured = title.clone();
                         let result = htmd::HtmlToMarkdown::builder()
                             .skip_tags(vec!["script", "style", "head"])
+                            // Visit head only to capture title; discard all its output.
+                            .add_handler(
+                                vec!["head"],
+                                |handlers: &dyn htmd::element_handler::Handlers,
+                                 element: htmd::Element| {
+                                    handlers.walk_children(element.node);
+                                    None
+                                },
+                            )
+                            .add_handler(
+                                vec!["title"],
+                                move |handlers: &dyn htmd::element_handler::Handlers,
+                                      element: htmd::Element| {
+                                    let mut title = captured.lock().expect("title lock");
+                                    if title.is_empty() {
+                                        *title = handlers
+                                            .walk_children(element.node)
+                                            .content
+                                            .split_whitespace()
+                                            .collect::<Vec<_>>()
+                                            .join(" ")
+                                            .chars()
+                                            .take(MAX_TITLE_CHARS)
+                                            .collect();
+                                    }
+                                    None
+                                },
+                            )
                             .build()
                             .convert(&text)
+                            .map(|body| (body, title.lock().expect("title lock").clone()))
                             .map_err(|_| "HTML conversion failed".to_owned());
                         let _ = sender.send(result);
                     })
                     .map_err(|_| "Could not start HTML conversion thread")?;
-                receiver.await.map_err(|_| "HTML conversion failed")??
+                let (body, page_title) = receiver.await.map_err(|_| "HTML conversion failed")??;
+                title = page_title;
+                body
             }
         };
     }
-    Ok(match unknown_charset {
+    let text = match unknown_charset {
         Some(charset) => format!("[Unknown charset: {charset}; decoded as UTF-8.]\n\n{text}"),
         None => text,
+    };
+    Ok(if title.is_empty() {
+        text
+    } else {
+        format!("Title: {title}\n\n{text}")
     })
 }
 

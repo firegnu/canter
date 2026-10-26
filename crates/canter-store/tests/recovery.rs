@@ -71,7 +71,7 @@ fn stored_session_reopens_identically_and_continues_sequence() {
             id: "r1".into(),
             summary: vec!["summary".into()],
             content: vec!["thought".into()],
-            duration_ms: Some(2),
+            duration_ms: Some(3),
         }
     );
     assert!(

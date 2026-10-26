@@ -199,15 +199,17 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
                     .iter_mut()
                     .find(|existing| existing.id() == Some(id));
                 let mut item = item.clone();
-                // Thinking keeps the time it has; it starts at zero, and is
-                // unknown when its start was never seen.
+                // Include the wait since the previous event (the request),
+                // then keep accumulated time; an unseen start stays unknown.
                 if let Item::Reasoning { duration_ms, .. } = &mut item {
                     *duration_ms = match existing.as_deref() {
                         Some(Item::Reasoning {
                             duration_ms: so_far,
                             ..
                         }) => *so_far,
-                        _ if matches!(event.payload, EventPayload::ItemStarted { .. }) => Some(0),
+                        _ if matches!(event.payload, EventPayload::ItemStarted { .. }) => {
+                            Some(elapsed)
+                        }
                         _ => None,
                     };
                 }

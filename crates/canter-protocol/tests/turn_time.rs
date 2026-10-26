@@ -46,7 +46,7 @@ fn think(item: &str, delta: &str) -> Value {
     })
 }
 
-/// A turn that thinks for 4 s, answers, and ends 12.345 s after it started;
+/// A turn that thinks for 4.1 s, answers, and ends 12.345 s after it started;
 /// then a warning after the turn.
 fn session() -> Vec<Event> {
     let message = |text: &str| json!({ "type": "agentMessage", "id": "m1", "text": text });
@@ -128,7 +128,7 @@ fn assert_times(snapshot: &SessionSnapshot) {
     assert_eq!(thought["type"], "reasoning");
     assert_eq!(
         thought["durationMs"],
-        json!(4_000),
+        json!(4_100),
         "thinking ends at its last delta, not at its item.completed: {thought}"
     );
     assert_eq!(turn["items"][1].get("durationMs"), None, "{turn}");
@@ -139,6 +139,34 @@ fn turn_and_thinking_times_come_from_the_event_timestamps() {
     let mut snapshot = SessionSnapshot::empty(SESSION);
     replay(&mut snapshot, &session());
     assert_times(&snapshot);
+}
+
+#[test]
+fn thinking_includes_the_wait_for_its_first_delta() {
+    let events = numbered(
+        1,
+        vec![
+            (
+                T0,
+                json!({ "type": "turn.started", "turn": turn("t1", "inProgress") }),
+            ),
+            (
+                T0 + 2_000,
+                json!({ "type": "item.started", "turnId": "t1", "item": thinking("r1", &[]) }),
+            ),
+            (T0 + 3_000, think("r1", "Done thinking.")),
+        ],
+    );
+    let mut whole = SessionSnapshot::empty(SESSION);
+    replay(&mut whole, &events);
+    assert_eq!(wire(&whole)["turns"][0]["items"][0]["durationMs"], 3_000);
+    for split in 1..events.len() {
+        let mut first = SessionSnapshot::empty(SESSION);
+        replay(&mut first, &events[..split]);
+        let mut read: SessionSnapshot = serde_json::from_value(wire(&first)).unwrap();
+        replay(&mut read, &events[split..]);
+        assert_eq!(read, whole, "split before event {}", split + 1);
+    }
 }
 
 /// A clock set back between two events adds nothing for that step.
