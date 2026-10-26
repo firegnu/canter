@@ -18,7 +18,7 @@ use crate::text::sanitize;
 use crate::theme;
 
 /// How long the status line says what was copied.
-const COPIED_MS: i64 = 2000;
+pub(crate) const COPIED_MS: i64 = 2000;
 /// How long it says a copy failed.
 const FAILED_MS: i64 = 5000;
 /// A copy the clipboard has not taken after this long has failed.

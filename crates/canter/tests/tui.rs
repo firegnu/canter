@@ -39,6 +39,9 @@ const WAIT: Duration = Duration::from_secs(20);
 /// What the shell tool writes when it runs with a session's environment.
 const WRITE_ENV: &str = r#"printf '%s' "$CANTER_TEST_ENV" > env.txt"#;
 
+#[path = "support/statusline.rs"]
+mod statusline;
+
 #[tokio::test]
 async fn review_feature_is_advertised_by_the_server() {
     let mut world = World::new(Vec::new()).await;
