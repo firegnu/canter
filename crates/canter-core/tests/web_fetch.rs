@@ -490,9 +490,12 @@ async fn follows_only_same_host_and_port_redirects_with_a_limit_and_no_credentia
     assert_eq!(results[0], "final text");
     assert_eq!(
         results[1],
-        format!("跳到了 http://localhost:{}/destination", web.address.port())
+        format!(
+            "Redirected to http://localhost:{}/destination",
+            web.address.port()
+        )
     );
-    assert_eq!(results[2], format!("跳到了 {target}"));
+    assert_eq!(results[2], format!("Redirected to {target}"));
     assert!(results[3].contains("redirect limit"), "{}", results[3]);
     assert!(other.requests.lock().unwrap().is_empty());
     {
@@ -675,5 +678,224 @@ async fn binary_placeholders_report_declared_or_streamed_size_without_content() 
             "[Content omitted: image/png, 6 bytes]"
         ]
     );
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn deeply_nested_html_is_a_tool_error_and_the_process_and_turn_continue() {
+    for body in [
+        "<div>".repeat(3_000),
+        "<div>".repeat(1_048_000),
+        "<div></missing>".repeat(3_000),
+        "<div/>".repeat(3_000),
+        format!("<svg>{}", "<source>".repeat(3_000)),
+    ] {
+        assert!(body.len() < 5 * 1024 * 1024);
+        let web = WebServer::new(move |_| response("text/html", &body)).await;
+        let model = ScriptModel::new(vec![json!({"url":web.url("/deep")})]);
+        let (_temp, session, mut events) = create(model.clone(), PermissionMode::AllowAll).await;
+        session.input(input(false)).await.unwrap();
+        let seen = finished(&mut events).await;
+        assert!(model.results()[0].contains("HTML nesting limit"));
+        assert!(seen.iter().any(|e| matches!(
+            &e.payload,
+            EventPayload::ItemCompleted {
+                item: Item::WebFetch {
+                    status: ItemStatus::Failed,
+                    ..
+                },
+                ..
+            }
+        )));
+        assert!(seen.iter().any(|e| matches!(&e.payload, EventPayload::ItemCompleted { item: Item::AgentMessage { text, .. }, .. } if text == "continued")));
+        assert!(
+            matches!(&seen.last().unwrap().payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Completed)
+        );
+        session.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn attribute_heavy_html_is_rejected_before_conversion_and_the_turn_continues() {
+    let mut body = "<div".to_owned();
+    for i in 0..20_000 {
+        body.push_str(&format!(" a{i}=x"));
+    }
+    body.push_str(">content</div>");
+    let web = WebServer::new(move |_| response("text/html", &body)).await;
+    let model = ScriptModel::new(vec![json!({"url":web.url("/attributes")})]);
+    let (_temp, session, mut events) = create(model.clone(), PermissionMode::AllowAll).await;
+    session.input(input(false)).await.unwrap();
+    let seen = finished(&mut events).await;
+    assert!(model.results()[0].contains("HTML tag length limit"));
+    assert!(seen.iter().any(|e| matches!(
+        &e.payload,
+        EventPayload::ItemCompleted {
+            item: Item::WebFetch {
+                status: ItemStatus::Failed,
+                ..
+            },
+            ..
+        }
+    )));
+    assert!(seen.iter().any(|e| matches!(&e.payload, EventPayload::ItemCompleted { item: Item::AgentMessage { text, .. }, .. } if text == "continued")));
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn html_at_the_depth_limit_still_converts_on_the_normal_worker_stack() {
+    let body = format!("{}visible{}", "<div>".repeat(256), "</div>".repeat(256));
+    let web = WebServer::new(move |_| response("text/html", &body)).await;
+    let model = ScriptModel::new(vec![json!({"url":web.url("/bounded")})]);
+    let (_temp, session, mut events) = create(model.clone(), PermissionMode::AllowAll).await;
+    session.input(input(false)).await.unwrap();
+    let seen = finished(&mut events).await;
+    assert_eq!(model.results(), ["visible"]);
+    assert!(seen.iter().any(|e| matches!(
+        &e.payload,
+        EventPayload::ItemCompleted {
+            item: Item::WebFetch {
+                status: ItemStatus::Completed,
+                ..
+            },
+            ..
+        }
+    )));
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn raw_text_comments_cannot_hide_nesting_from_the_preflight() {
+    let body = format!(
+        "<script><!--</script>{}visible{}",
+        "<div>".repeat(257),
+        "</div>".repeat(257)
+    );
+    let web = WebServer::new(move |_| response("text/html", &body)).await;
+    let model = ScriptModel::new(vec![json!({"url":web.url("/raw-text")})]);
+    let (_temp, session, mut events) = create(model.clone(), PermissionMode::AllowAll).await;
+    session.input(input(false)).await.unwrap();
+    let seen = finished(&mut events).await;
+    assert!(model.results()[0].contains("HTML nesting limit"));
+    assert!(seen.iter().any(|e| matches!(
+        &e.payload,
+        EventPayload::ItemCompleted {
+            item: Item::WebFetch {
+                status: ItemStatus::Failed,
+                ..
+            },
+            ..
+        }
+    )));
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn malformed_attribute_quotes_cannot_hide_nesting_from_the_preflight() {
+    let body = format!("<div data=x\">{}visible", "<div>".repeat(257));
+    let web = WebServer::new(move |_| response("text/html", &body)).await;
+    let model = ScriptModel::new(vec![json!({"url":web.url("/malformed-attribute")})]);
+    let (_temp, session, mut events) = create(model.clone(), PermissionMode::AllowAll).await;
+    session.input(input(false)).await.unwrap();
+    let seen = finished(&mut events).await;
+    assert!(model.results()[0].contains("HTML tag contains nested markup"));
+    assert!(seen.iter().any(|e| matches!(
+        &e.payload,
+        EventPayload::ItemCompleted {
+            item: Item::WebFetch {
+                status: ItemStatus::Failed,
+                ..
+            },
+            ..
+        }
+    )));
+    assert!(seen.iter().any(|e| matches!(&e.payload, EventPayload::ItemCompleted { item: Item::AgentMessage { text, .. }, .. } if text == "continued")));
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn encoded_responses_are_omitted_and_non_utf8_declarations_are_reported() {
+    let web = WebServer::new(|request| {
+        if request.starts_with("GET /encoding ") {
+            // A server may ignore Accept-Encoding. No body or EOF will arrive.
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: 100\r\n\r\n".into()
+        } else if request.starts_with("GET /multiple ") {
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: identity\r\nContent-Encoding: br\r\nContent-Length: 100\r\n\r\n".into()
+        } else if request.starts_with("GET /html ") {
+            response("text/html; charset=GBK", "<h1>heading</h1>")
+        } else if request.starts_with("GET /text ") {
+            response("text/plain; CHARSET=\"ISO-8859-1\"", "<b>literal</b>")
+        } else {
+            response("text/plain; charset=UTF-8", "unchanged").replace("Content-Type:", "Content-Encoding: Identity\r\nContent-Type:")
+        }
+    }).await;
+    let model = ScriptModel::new(
+        ["/encoding", "/multiple", "/html", "/text", "/identity"]
+            .map(|path| json!({"url":web.url(path)}))
+            .into(),
+    );
+    let (_temp, session, mut events) = create(model.clone(), PermissionMode::AllowAll).await;
+    session.input(input(false)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), finished(&mut events))
+        .await
+        .expect("encoded body must not be awaited");
+    let results = model.results();
+    for (result, encoding) in results[..2].iter().zip(["gzip", "br"]) {
+        assert!(
+            result.contains("Content-Encoding") && result.contains(encoding),
+            "{result}"
+        );
+        assert_eq!(result.lines().count(), 1);
+    }
+    assert_eq!(
+        results[2],
+        "[Decoded as UTF-8; declared charset: GBK.]\n\n# heading"
+    );
+    assert_eq!(
+        results[3],
+        "[Decoded as UTF-8; declared charset: ISO-8859-1.]\n\n<b>literal</b>"
+    );
+    assert_eq!(results[4], "unchanged");
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn normalized_url_is_preserved_through_the_completed_fetch_item() {
+    let web = WebServer::new(|_| response("text/plain", "ok")).await;
+    let actual = web.url("/normalized");
+    let original = actual.replacen("http://", "HTTP://", 1);
+    let model = ScriptModel::new(vec![json!({"url":original})]);
+    let (_temp, session, mut events) = create(model.clone(), PermissionMode::AlwaysAsk).await;
+    session.input(input(false)).await.unwrap();
+    let seen = until(&mut events, |e| {
+        matches!(e, EventPayload::RequestOpened { .. })
+    })
+    .await;
+    let EventPayload::RequestOpened { request } = &seen.last().unwrap().payload else {
+        unreachable!()
+    };
+    let RequestKind::Approval(approval) = &request.kind else {
+        unreachable!()
+    };
+    assert_eq!(
+        approval.arguments,
+        json!({"url":original,"resolvedUrl":actual})
+    );
+    approve(&session, request).await;
+    let seen = finished(&mut events).await;
+    let item = seen
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ItemCompleted {
+                item: item @ Item::WebFetch { .. },
+                ..
+            } => Some(serde_json::to_value(item).unwrap()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(item["url"], original);
+    assert_eq!(item["resolvedUrl"], actual);
+    assert_eq!(model.results(), ["ok"]);
+    assert_eq!(web.requests.lock().unwrap().len(), 1);
     session.close().await.unwrap();
 }

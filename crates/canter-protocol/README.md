@@ -277,9 +277,11 @@ null）、`tools: [{ name, tool }]` 和 `warnings`。`name` 是给模型的完�
 ## 网页抓取（P2-13）
 
 新增 `Item::WebFetch`，序列化为 `webFetch`，字段为 `id`、完整 `url`、有界文字 `result`、
-既有 `ItemStatus`。沿用 item.started / item.completed，无专属增量事件。失败原因放在 result，
+既有 `ItemStatus`，另有可选 `resolvedUrl`（规范化后的实际网址）。`url` 保留原串，
+规范化不同时才带 resolvedUrl；缺少此字段的旧项目仍可读取。沿用 item.started / item.completed，
+无专属增量事件。失败原因放在 result，
 取消和超时的项目状态为 failed，一轮是否 interrupted 沿用现有取消机制。
-批准仍是 `ApprovalRequest { tool: "web_fetch", arguments: { url }, ... }`，完整网址不截断；
+批准仍是 `ApprovalRequest { tool: "web_fetch", arguments: { url, resolvedUrl? }, ... }`，完整网址不截断；
 acceptForSession 的授权范围为该网址的规范化主机名及有效端口，客户端需明确显示该范围。
 与 Codex 的 webSearch 不同，webFetch 只取指定网址，不带搜索动作或查询/来源列表。
 旧客户端按 Unknown 忽略新项目，已有协议字段和历史文件格式的含义保持不变。

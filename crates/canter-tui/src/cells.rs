@@ -76,11 +76,16 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
         } => reasoning(summary, content, finished, width),
         Item::WebFetch {
             url,
+            resolved_url,
             result,
             status,
             ..
         } => command_card(
-            &format!("web_fetch {url} ({} bytes)", result.len()),
+            &format!(
+                "web_fetch {} ({} bytes)",
+                resolved_url.as_deref().unwrap_or(url),
+                result.len()
+            ),
             *status,
             None,
             None,

@@ -147,10 +147,7 @@ pub(crate) fn layout(
         if *decision == ApprovalDecision::AcceptForSession {
             let note = LogicalLine::new(
                 vec![Span::raw("     ")],
-                vec![Span::styled(
-                    session_note(&approval.tool),
-                    Style::new().yellow(),
-                )],
+                vec![Span::styled(session_note(approval), Style::new().yellow())],
             );
             tail.extend(wrap(&note, inner));
         }
@@ -222,11 +219,22 @@ pub(crate) fn layout(
 
 /// What 「本会话都允许」 really grants. For shell that is every command, and
 /// switching the mode back to 「每次问」 later does not take it back.
-fn session_note(tool: &str) -> String {
-    let what = match tool {
+fn session_note(approval: &ApprovalRequest) -> String {
+    let what = match approval.tool.as_str() {
         "web_fetch" => {
-            "Later fetches to this host and port won't ask; other hosts or ports still ask"
-                .to_owned()
+            let authority = approval.arguments["resolvedUrl"]
+                .as_str()
+                .or_else(|| approval.arguments["url"].as_str())
+                .and_then(|url| reqwest::Url::parse(url).ok())
+                .and_then(|url| {
+                    Some(format!(
+                        "{}:{}",
+                        url.host_str()?,
+                        url.port_or_known_default()?
+                    ))
+                })
+                .unwrap_or_else(|| "this host and port".into());
+            format!("Later fetches to {authority} won't ask; other hosts or ports still ask")
         }
         "shell" => "All later commands in this session run without asking".to_owned(),
         "write" => "Later whole-file writes in this session won't ask".to_owned(),

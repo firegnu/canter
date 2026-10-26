@@ -235,6 +235,9 @@ pub enum Item {
     WebFetch {
         id: String,
         url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        resolved_url: Option<String>,
         result: String,
         status: ItemStatus,
     },

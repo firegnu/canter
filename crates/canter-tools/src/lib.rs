@@ -253,6 +253,7 @@ impl PreparedCall {
             Action::WebFetch(_) => Item::WebFetch {
                 id: self.id.clone(),
                 url: self.arguments["url"].as_str().unwrap_or_default().into(),
+                resolved_url: self.arguments["resolvedUrl"].as_str().map(str::to_owned),
                 result: String::new(),
                 status,
             },
@@ -434,6 +435,11 @@ impl Tools {
         })?;
         if let Action::Change { change, .. } = &action {
             arguments["diff"] = json!(change.diff);
+        }
+        if let Action::WebFetch(url) = &action
+            && arguments["url"].as_str() != Some(url.as_str())
+        {
+            arguments["resolvedUrl"] = json!(url.as_str());
         }
         if let Some(path) = &resolved_path
             && arguments["path"].as_str() != path.to_str()
@@ -625,6 +631,7 @@ impl Tools {
                     item: Item::WebFetch {
                         id: call.id.clone(),
                         url: call.arguments["url"].as_str().unwrap_or_default().into(),
+                        resolved_url: call.arguments["resolvedUrl"].as_str().map(str::to_owned),
                         result,
                         status: if outcome == ToolOutcome::Completed {
                             ItemStatus::Completed
@@ -911,6 +918,7 @@ fn tool_error(
         Tool::WebFetch => Item::WebFetch {
             id,
             url: arguments["url"].as_str().unwrap_or_default().into(),
+            resolved_url: None,
             result: text.clone(),
             status: ItemStatus::Failed,
         },

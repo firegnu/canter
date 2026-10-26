@@ -63,6 +63,30 @@ fn mcp_command_dispatches_instead_of_sending_a_message() {
 }
 
 #[test]
+fn web_fetch_displays_the_resolved_url_and_specific_grant_authority() {
+    let mut screen = Screen::new();
+    screen.start_turn("t1");
+    let url = "http://bücher.example";
+    let resolved = "http://xn--bcher-kva.example/";
+    screen.event(json!({"type":"item.started","turnId":"t1","item":{
+        "type":"webFetch","id":"web","url":url,"resolvedUrl":resolved,"result":"","status":"inProgress"
+    }}));
+    screen.draw();
+    assert!(screen.text().contains(resolved), "{}", screen.text());
+    screen.event(json!({"type":"request.opened","request":{
+        "id":"web-approval","turnId":"t1","createdAt":NOW,"kind":{"type":"approval","itemId":"web","tool":"web_fetch","arguments":{"url":url,"resolvedUrl":resolved},"availableDecisions":["accept","acceptForSession","decline","cancel"]}
+    }}));
+    screen.event(json!({"type":"session.status","status":"waiting_approval"}));
+    screen.draw();
+    let text = screen.text();
+    assert!(text.contains(url) && text.contains(resolved), "{text}");
+    assert!(
+        text.contains("Later fetches to xn--bcher-kva.example:80"),
+        "{text}"
+    );
+}
+
+#[test]
 fn review_command_dispatches_and_hides_assembled_prompt() {
     let mut screen = Screen::new();
     assert!(

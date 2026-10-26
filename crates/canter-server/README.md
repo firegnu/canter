@@ -250,9 +250,12 @@ MCP 没有添加资源、提示词模板、采样或 elicitation 能力；网页
 MCP 工具前，仍在会话创建/打开时冻结。HTML 转 Markdown，文字/JSON 原样，其它内容只留
 类型和大小占位；下载上限 5 MiB，总超时 30 秒，输出沿用模型 32 KiB / 客户端 1 MiB 截断。
 Esc 取消请求；HTTP/连接/证书/超时错误交回模型，本轮继续。
+HTML 解析前线性预检：粗估嵌套至多 256、单标签至多 4096 字节，超限作为工具错误。
+非 identity 的 Content-Encoding 只给占位；声明非 UTF-8 charset 时注明仍按 UTF-8 解码。
 
 独立客户端固定 `no_proxy` 和 `User-Agent: canter/0.1 web_fetch`，不带模型 key、MCP 请求头、
-cookie 或会话环境凭证。只收 HTTP(S)，拒绝网址中的用户名/密码；同主机及有效端口内最多
+cookie 或会话环境凭证。只收 HTTP(S)，拒绝网址中的用户名/密码、反斜杠、空白和控制字符；
+规范化不同于原串时通过 resolvedUrl 显示实际网址，批准说明写明具体主机及有效端口。同主机及有效端口内最多
 跟随 5 次跳转，其它目标只报告新网址，由模型重新调用并批准。
 alwaysAsk / askForExecution 询问，allowAll 直接访问；会话授权只覆盖一个主机及端口。
 `/review` 一律拒绝且不弹框。本机和内网不额外限制，allowAll 可直接访问内部接口或触发
