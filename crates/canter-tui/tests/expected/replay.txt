@@ -61,7 +61,7 @@
       16 - cargo build --release
       14 + cargo install --path crates/canter
   ● Run cargo build                                                      running
-    │ … (9 lines, showing the last 5)
+    │ … 4 more lines · Ctrl+O
     │    Compiling quote v1.0.41
     │    Compiling syn v2.0.106
     │    Compiling serde_derive v1.0.228
@@ -83,7 +83,7 @@
       16 - cargo build --release
       14 + cargo install --path crates/canter
   ● Run cargo build                                               exit 0 · 12.3s
-    │ … (12 lines, showing the last 3)
+    │ … 9 more lines · Ctrl+O
     │    Compiling canter-store v0.1.0 (/home/dev/canter/crates/canter-store)
     │    Compiling canter v0.1.0 (/home/dev/canter/crates/canter)
     │     Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.1s
@@ -99,7 +99,7 @@
  deepseek-chat · think high · Always ask
  ~/canter
 == 发了「你好」之后，屏幕 ==
-    │ … (12 lines, showing the last 3)
+    │ … 9 more lines · Ctrl+O
     │    Compiling canter-store v0.1.0 (/home/dev/canter/crates/canter-store)
     │    Compiling canter v0.1.0 (/home/dev/canter/crates/canter)
     │     Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.1s
@@ -136,7 +136,7 @@
       16 - cargo build --release
       14 + cargo install --path crates/canter
   ● Run cargo build                                               exit 0 · 12.3s
-    │ … (12 lines, showing the last 3)
+    │ … 9 more lines · Ctrl+O
     │    Compiling canter-store v0.1.0 (/home/dev/canter/crates/canter-store)
     │    Compiling canter v0.1.0 (/home/dev/canter/crates/canter)
     │     Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.1s

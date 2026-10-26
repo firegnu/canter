@@ -123,7 +123,7 @@ impl Diff {
     }
 
     /// Rows `width` columns wide, each starting with `indent`. With a
-    /// `limit`, at most that many lines, then `… N more lines`.
+    /// `limit`, at most that many lines, then `… N more lines · Ctrl+O`.
     pub(crate) fn rows(
         &self,
         indent: &str,
@@ -170,7 +170,7 @@ impl Diff {
             rows.push(Line::from(vec![
                 Span::raw(indent.to_owned()),
                 Span::styled(
-                    format!("{:>digits$} {hidden} more lines", "…"),
+                    format!("{:>digits$} {hidden} more lines · Ctrl+O", "…"),
                     theme::secondary(),
                 ),
             ]));
