@@ -27,12 +27,67 @@ pub mod routes {
     pub const INTERRUPT: &str = "/v1/sessions/{id}/interrupt";
     pub const REQUEST: &str = "/v1/sessions/{id}/requests/{rid}";
     pub const COMPACT: &str = "/v1/sessions/{id}/compact";
+    pub const REWIND: &str = "/v1/sessions/{id}/rewind";
+    pub const REWIND_PREVIEW: &str = "/v1/sessions/{id}/rewind/preview";
     pub const EVENTS: &str = "/v1/events";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct SessionPath {
     pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRewindParams {
+    pub before_turn_id: String,
+    pub rewind_files: bool,
+    pub rewind_conversation: bool,
+    #[serde(default)]
+    pub confirmed_external_changes: Vec<String>,
+    /// Preview's sequence; required when executing, omitted when requesting a preview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub last_event_seq: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RewindTurn {
+    pub turn_id: String,
+    pub input: Vec<UserInput>,
+    pub file_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct RewindListResponse {
+    pub data: Vec<RewindTurn>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RewindFile {
+    pub path: String,
+    pub delete: bool,
+    pub external_change: bool,
+    pub external_change_unknown: bool,
+    pub unavailable: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct RewindPreviewResponse {
+    pub files: Vec<RewindFile>,
+    #[serde(rename = "lastEventSeq")]
+    #[ts(type = "number")]
+    pub last_event_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRewindResponse {
+    #[ts(type = "number")]
+    pub event_seq: u64,
+    pub input: Vec<UserInput>,
 }
 
 /// An ephemeral question. Its response stream is private to this HTTP caller.

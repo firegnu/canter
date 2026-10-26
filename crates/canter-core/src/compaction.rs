@@ -74,6 +74,7 @@ pub(crate) async fn compact(
                 })
                 .await?;
             state.history = messages;
+            state.rewind.clear_boundaries();
             state.summary_index = state.history.len().checked_sub(1);
             state.user_messages = user_inputs;
             state.measured_context = None;

@@ -2721,3 +2721,47 @@ async fn btw_is_private_streams_and_escape_cancels_it_before_the_main_tool() {
     reopened.quit().await;
     world.stop_server(Signal::SIGTERM).await;
 }
+
+#[tokio::test]
+async fn rewind_conflict_repreviews_the_changed_file_before_confirming_delete() {
+    let write = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices":[{"index":0,"delta":{"tool_calls":[{
+            "index":0,"id":"write","type":"function",
+            "function":{"name":"write","arguments":json!({"path":"rewind.txt","content":"model content"}).to_string()}
+        }]},"finish_reason":"tool_calls"}]})
+    );
+    let mut world = World::new(vec![write, text_reply("file ready")]).await;
+    world.start_server().await;
+    let terminal = world.open(&["--yolo", "make file"], "rewind").await;
+    terminal.wait_for("file ready").await;
+    terminal.wait_idle().await;
+    let id = world.only_session().await;
+    let before = world.snapshot(&id).await;
+    terminal.type_line("/rewind").await;
+    terminal.wait_for("Rewind before which message?").await;
+    terminal.press(KeyCode::Enter).await;
+    terminal.wait_for("What should be rewound?").await;
+    terminal.press(KeyCode::Enter).await;
+    terminal.wait_for("Confirm rewind?").await;
+    terminal.wait_for("will delete").await;
+    fs::write(world.path("work/rewind.txt"), "user saved after preview").unwrap();
+    terminal.press(KeyCode::Enter).await;
+    terminal.wait_for("Changes since preview").await;
+    terminal.wait_for("之后在 canter 以外被改过").await;
+    assert_eq!(
+        fs::read_to_string(world.path("work/rewind.txt")).unwrap(),
+        "user saved after preview"
+    );
+    assert_eq!(world.snapshot(&id).await, before);
+    terminal.press(KeyCode::Enter).await;
+    terminal.wait_for("Deleted").await;
+    assert!(!world.path("work/rewind.txt").exists());
+    assert_eq!(world.requests.lock().unwrap().len(), 2);
+    terminal
+        .press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        .await;
+    terminal.frames_later(2).await;
+    terminal.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}

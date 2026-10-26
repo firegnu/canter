@@ -46,6 +46,11 @@ pub fn validate_event(snapshot: &SessionSnapshot, event: &Event) -> Result<(), R
         });
     }
     match &event.payload {
+        EventPayload::SessionRewound { before_turn_id, .. } => {
+            if !snapshot.turns.iter().any(|turn| turn.id == *before_turn_id) {
+                return Err(ReduceError::MissingTurn);
+            }
+        }
         EventPayload::TurnStarted { turn, .. } => {
             if snapshot.turns.iter().any(|existing| existing.id == turn.id) {
                 return Err(ReduceError::DuplicateTurn);
@@ -105,6 +110,22 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
         return Ok(());
     }
     match &event.payload {
+        EventPayload::SessionRewound {
+            before_turn_id,
+            rewind_conversation,
+            record,
+        } => {
+            if *rewind_conversation {
+                let index = snapshot
+                    .turns
+                    .iter()
+                    .position(|turn| turn.id == *before_turn_id)
+                    .expect("validated turn");
+                snapshot.turns.truncate(index);
+                snapshot.error = None;
+            }
+            snapshot.turns.push(record.clone());
+        }
         EventPayload::SessionUpdated { settings } => snapshot.settings = settings.clone(),
         EventPayload::SessionStatus {
             status,

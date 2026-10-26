@@ -23,6 +23,12 @@ pub struct Event {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum EventPayload {
+    #[serde(rename = "session.rewound")]
+    SessionRewound {
+        before_turn_id: String,
+        rewind_conversation: bool,
+        record: Turn,
+    },
     #[serde(rename = "session.updated")]
     SessionUpdated { settings: SessionSettings },
     #[serde(rename = "session.status")]

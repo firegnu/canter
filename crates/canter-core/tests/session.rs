@@ -988,3 +988,249 @@ async fn one_turn_runs_multiple_real_tools_and_publishes_the_durable_events() {
     assert!(!temp.path().join("sessions/s1/private.json").exists());
     session.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn rewind_after_reopen_uses_filtered_history_boundaries() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(temp.path().join("state/sessions")).unwrap());
+    let model = ScriptModel::new(
+        (0..4)
+            .map(|_| {
+                vec![
+                    ModelEvent::TextDelta("done".into()),
+                    ModelEvent::Finished(FinishReason::Stop),
+                ]
+            })
+            .collect(),
+    );
+    let runtime = || RuntimeContext {
+        environment: BTreeMap::from([
+            ("HOME".into(), temp.path().to_string_lossy().into_owned()),
+            (
+                "CANTER_HOME".into(),
+                temp.path().join("state").to_string_lossy().into_owned(),
+            ),
+        ]),
+        ..Default::default()
+    };
+    let (session, _) = Session::create(
+        store.clone(),
+        "rewind".into(),
+        settings(temp.path()),
+        runtime(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("retained")).await.unwrap();
+    finished(&mut events).await;
+    session.close().await.unwrap();
+    drop(session);
+    let mut writer = store.open("rewind").unwrap();
+    for message in [
+        serde_json::json!({"type":"future_message_kind"}),
+        serde_json::json!({"type":"assistant","content":[{"type":"future_content_kind"}]}),
+    ] {
+        writer
+            .append_model_history(
+                &serde_json::json!({"type":"message","message":message,"user_input":true}),
+            )
+            .unwrap();
+    }
+    drop(writer);
+    let (session, _) = Session::open(
+        store.clone(),
+        "rewind".into(),
+        runtime(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut events = session
+        .subscribe(session.snapshot().await.event_seq)
+        .await
+        .unwrap();
+    let target = session
+        .input(input("remove this"))
+        .await
+        .unwrap()
+        .turn_id
+        .unwrap();
+    finished(&mut events).await;
+    session.close().await.unwrap();
+    drop(session);
+    let (session, _) = Session::open(
+        store.clone(),
+        "rewind".into(),
+        runtime(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut params: SessionRewindParams = serde_json::from_value(
+        serde_json::json!({"beforeTurnId":target,"rewindFiles":false,"rewindConversation":true}),
+    )
+    .unwrap();
+    params.last_event_seq = Some(
+        session
+            .rewind_preview(params.clone())
+            .await
+            .unwrap()
+            .last_event_seq,
+    );
+    session.rewind(params).await.unwrap();
+    let mut events = session
+        .subscribe(session.snapshot().await.event_seq)
+        .await
+        .unwrap();
+    session.input(input("immediate")).await.unwrap();
+    finished(&mut events).await;
+    let expected = {
+        let requests = model.requests.lock().unwrap();
+        let old = &requests[1].messages;
+        let immediate = &requests[2].messages;
+        assert_eq!(
+            serde_json::to_vec(&old[..old.len() - 1]).unwrap(),
+            serde_json::to_vec(&immediate[..immediate.len() - 1]).unwrap()
+        );
+        let mut expected = immediate.clone();
+        expected.push(Message::Assistant {
+            content: vec![AssistantContent::Text {
+                text: "done".into(),
+            }],
+        });
+        expected
+    };
+    session.close().await.unwrap();
+    drop(session);
+    let (session, _) = Session::open(
+        store,
+        "rewind".into(),
+        runtime(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut events = session
+        .subscribe(session.snapshot().await.event_seq)
+        .await
+        .unwrap();
+    session.input(input("after restart")).await.unwrap();
+    finished(&mut events).await;
+    {
+        let requests = model.requests.lock().unwrap();
+        let last = &requests[3].messages;
+        assert_eq!(
+            serde_json::to_vec(&expected).unwrap(),
+            serde_json::to_vec(&last[..last.len() - 1]).unwrap()
+        );
+    }
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn rewind_large_outputs_keeps_small_originals_and_confirms_unknown_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let large = "x".repeat(1024 * 1024 + 1);
+    std::fs::write(temp.path().join("existing.txt"), "original").unwrap();
+    let store = Arc::new(Store::new(temp.path().join("state/sessions")).unwrap());
+    let model = ScriptModel::new(vec![
+        vec![
+            call(
+                "write-existing",
+                "write",
+                &serde_json::json!({"path":"existing.txt","content":large}).to_string(),
+            ),
+            call(
+                "write-new",
+                "write",
+                &serde_json::json!({"path":"new.txt","content":large}).to_string(),
+            ),
+            ModelEvent::Finished(FinishReason::ToolCalls),
+        ],
+        vec![
+            ModelEvent::TextDelta("done".into()),
+            ModelEvent::Finished(FinishReason::Stop),
+        ],
+    ]);
+    let runtime = || RuntimeContext {
+        environment: BTreeMap::from([
+            ("HOME".into(), temp.path().to_string_lossy().into_owned()),
+            (
+                "CANTER_HOME".into(),
+                temp.path().join("state").to_string_lossy().into_owned(),
+            ),
+        ]),
+        ..Default::default()
+    };
+    let (session, _) = Session::create(
+        store.clone(),
+        "large".into(),
+        settings(temp.path()),
+        runtime(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    let target = session
+        .input(input("write large files"))
+        .await
+        .unwrap()
+        .turn_id
+        .unwrap();
+    finished(&mut events).await;
+    session.close().await.unwrap();
+    drop(session);
+    let (session, _) = Session::open(
+        store,
+        "large".into(),
+        runtime(),
+        model,
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut params: SessionRewindParams = serde_json::from_value(
+        serde_json::json!({"beforeTurnId":target,"rewindFiles":true,"rewindConversation":false}),
+    )
+    .unwrap();
+    let preview = session.rewind_preview(params.clone()).await.unwrap();
+    assert_eq!(preview.files.len(), 2);
+    for file in &preview.files {
+        assert!(
+            file.unavailable.is_none(),
+            "the small original (or absence) must remain recoverable"
+        );
+        let wire = serde_json::to_value(file).unwrap();
+        assert_eq!(wire["externalChangeUnknown"], true);
+        assert_eq!(wire["delete"], file.path.ends_with("/new.txt"));
+    }
+    params.last_event_seq = Some(preview.last_event_seq);
+    assert_eq!(
+        session.rewind(params.clone()).await.unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("existing.txt")).unwrap(),
+        large
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("new.txt")).unwrap(),
+        large
+    );
+    params.confirmed_external_changes = preview.files.into_iter().map(|file| file.path).collect();
+    session.rewind(params).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("existing.txt")).unwrap(),
+        "original"
+    );
+    assert!(!temp.path().join("new.txt").exists());
+    session.close().await.unwrap();
+}

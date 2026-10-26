@@ -4,6 +4,7 @@ mod compaction;
 mod context;
 mod images;
 mod journal;
+mod rewind;
 mod runner;
 mod session;
 mod skills;

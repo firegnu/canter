@@ -563,6 +563,12 @@ async fn execute(
                 }
                 Some(PermissionCheck::Ask(_)) => unreachable!("approval resolved"),
                 Some(PermissionCheck::Execute(permit)) => {
+                    let checkpoint = shared
+                        .state
+                        .lock()
+                        .await
+                        .checkpoint_file(turn_id, &prepared)
+                        .await?;
                     let (sender, mut receiver) = mpsc::unbounded_channel();
                     let mut on_output = |text: &str| {
                         let _ = sender.send(text.to_owned());
@@ -592,6 +598,11 @@ async fn execute(
                         });
                     }
                     flush(shared, &mut pending).await?;
+                    if output.outcome != ToolOutcome::Completed
+                        && let Some(id) = checkpoint
+                    {
+                        shared.state.lock().await.abort_checkpoint(id).await?;
+                    }
                     output
                 }
             }

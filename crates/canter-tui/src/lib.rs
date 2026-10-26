@@ -31,6 +31,7 @@ mod mention;
 mod picker;
 mod question;
 pub mod review;
+mod rewind;
 mod run;
 mod text;
 pub mod theme;

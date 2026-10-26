@@ -285,3 +285,23 @@ null）、`tools: [{ name, tool }]` 和 `warnings`。`name` 是给模型的完�
 acceptForSession 的授权范围为该网址的规范化主机名及有效端口，客户端需明确显示该范围。
 与 Codex 的 webSearch 不同，webFetch 只取指定网址，不带搜索动作或查询/来源列表。
 旧客户端按 Unknown 忽略新项目，已有协议字段和历史文件格式的含义保持不变。
+
+## 回退（P2-23）
+
+- `GET /v1/sessions/{id}/rewind`：`{ data: [{ turnId, input, fileCount }] }`，最新轮在前。
+- `POST /v1/sessions/{id}/rewind/preview`：接受 `SessionRewindParams`，回复
+  `{ lastEventSeq, files: [{ path, delete, externalChange, externalChangeUnknown, unavailable }] }`，
+  不改会话或文件。`delete: true` 表示删除，false 表示恢复；`externalChangeUnknown` 表示
+  最近写入内容超限，无法确认有没有外部修改，仍可经确认后回退。`unavailable` 是不可恢复原因或 null。
+- `POST /v1/sessions/{id}/rewind`：`{ beforeTurnId, rewindFiles, rewindConversation,
+  confirmedExternalChanges?, lastEventSeq }`，两个 rewind 开关至少一个为 true。
+  `confirmedExternalChanges` 是用户确认过的外部修改路径列表，缺省为空；无法比较的路径也须确认。
+  `lastEventSeq` 来自预览，执行必传，预览请求可省略。执行时重新比较：会话序号不一致、
+  外部修改或无法比较的路径有任何一项不在确认列表中，均返回 conflict，文件和对话不变，客户端重新预览并确认。
+  会话正在工作时也返回 conflict；边界已被压缩或退掉返回 turn_mismatch。
+  回复 `{ eventSeq, input }`，退对话时 input 是所选轮的原输入，否则为空。
+- `session.rewound { beforeTurnId, rewindConversation, record }`：退对话时删除快照中目标轮
+  及其后的轮，再附加无输入的结果记录轮；只退文件时保留对话，附加记录轮。记录轮不进模型历史。
+
+只参考 Codex `rust-v0.163.0` 的 `thread/revert.beforeTurnId`，没有复制代码。
+与 Codex 的差异：canter 也恢复自己的 write/edit 文件，提供预览和外部修改确认，日志只追加。

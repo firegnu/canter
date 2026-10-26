@@ -12,6 +12,18 @@ const SYSTEM: &str = "You are canter, a coding assistant working in the user's p
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum HistoryEntry {
+    TurnBoundary {
+        turn_id: String,
+    },
+    FileCheckpoint {
+        checkpoint: crate::rewind::FileChange,
+    },
+    FileAborted {
+        id: String,
+    },
+    Rewind {
+        rewind: Box<crate::rewind::Rewind>,
+    },
     Context {
         messages: Vec<Message>,
     },
@@ -52,6 +64,7 @@ pub(crate) fn known(message: Message) -> Option<Message> {
 
 pub(crate) fn restore(
     entries: Vec<HistoryEntry>,
+    rewind: &mut crate::rewind::Checkpoints,
 ) -> (Vec<Message>, Vec<Message>, Vec<Message>, Option<usize>) {
     let mut prefix = Vec::new();
     let mut history = Vec::new();
@@ -59,6 +72,17 @@ pub(crate) fn restore(
     let mut summary_index = None;
     for entry in entries {
         match entry {
+            HistoryEntry::TurnBoundary { turn_id } => {
+                rewind.boundary(turn_id, history.len(), users.len())
+            }
+            HistoryEntry::Rewind { rewind: entry } => {
+                if let Some((messages, user_count)) = rewind.apply(&entry) {
+                    history.truncate(messages);
+                    users.truncate(user_count);
+                }
+            }
+            HistoryEntry::FileCheckpoint { checkpoint } => rewind.record_file(checkpoint),
+            HistoryEntry::FileAborted { id } => rewind.abort(&id),
             HistoryEntry::Context { messages } => {
                 prefix = messages.into_iter().filter_map(known).collect()
             }
@@ -78,6 +102,7 @@ pub(crate) fn restore(
                 user_inputs,
                 ..
             } => {
+                rewind.clear_boundaries();
                 history = messages.into_iter().filter_map(known).collect();
                 summary_index = history.len().checked_sub(1);
                 users = if user_inputs.is_empty() {
