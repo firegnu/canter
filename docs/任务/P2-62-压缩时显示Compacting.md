@@ -10,6 +10,7 @@
 ## 用户原话
 
 - 10-26：「现在自动压缩有什么ui上面的表现吗？我记得claude code或者codex是一个compacting...」；主控说现在只有一行 `── Context compacted ──` 和状态行 `Working`，建议状态行写 `Compacting context`、对话里压缩中写 `Compacting context…`、压完写 `Context compacted`。用户：「记成 P2-62，赶在这次装版之前做」。
+- 10-26：用户：「但是自动压缩之后是不是会接着干活？」（会，自动压缩压完同一轮接着发请求；手动 `/compact` 是单独一轮。）「我希望的是compacting...也是流光的效果」；主控问对话里那行要不要也扫，用户：「只扫状态行」。
 
 ## 样子
 
@@ -34,14 +35,14 @@
 
 ## 要做的
 
-- **状态行**：这一轮正在压缩（自动的、手动 `/compact` 的都算）时，转圈后面写 `Compacting context`，后面照旧用时和 `Esc to interrupt`；P2-56 的流光扫在 `Compacting` 这个词上（或整个 `Compacting context`，照 P2-56 扫动词的同一规则）。压完回到别的词。
+- **状态行**：这一轮正在压缩（自动的、手动 `/compact` 的都算）时，转圈后面写 `Compacting context`，后面照旧用时和 `Esc to interrupt`；P2-56 的流光扫整个 `Compacting context`，和扫 `Thinking` 同一套效果（用户 10-26：「我希望的是compacting...也是流光的效果」「只扫状态行」）。对话里那行不扫。自动压缩压完同一轮接着干活，状态行回到 `Thinking` 这类词。
 - **对话里那一行**：压缩中写 `── Compacting context… ──`；压完写 `── Context compacted ──`；没压成功写 `── Compaction did not finish; the original context is kept ──`，不再写 `Context compacted`。被 Esc 打断的照没压成功处理。
 - 「没压成功」现在核心只在 `summary` 里写一句固定的话，终端怎么可靠地认出来由你看；要改协议或核心才认得出时，停下来问。
 - README 跟着改。
 
 ## 怎么算做完
 
-- （用户 10-26）压缩期间界面上明确显示在压缩（状态行 `Compacting context`、对话里 `Compacting context…`），压完显示 `Context compacted`；没压成功不写压好了。
+- （用户 10-26）压缩期间界面上明确显示在压缩（状态行 `Compacting context` 带流光、对话里 `Compacting context…` 不带），压完显示 `Context compacted`；没压成功不写压好了。
 - 验证只做这些：针对验收写测试，先写、确认在现在的代码上失败（TestBackend：压缩中、压完、没压成功三种的对话行和状态行）；现有画面测试和 `tests/expected/replay.txt` 有变化的逐屏看过、说明；做完跑一次 `cargo nextest run --all-targets`、`cargo test --doc --workspace`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`（都带编译目录）。觉得不够，在回复里说，不要自己加。
 
 ## 不要做
