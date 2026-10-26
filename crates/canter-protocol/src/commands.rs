@@ -282,6 +282,19 @@ pub struct SessionInputResponse {
 #[serde(rename_all = "camelCase")]
 pub struct SessionInterruptParams {
     pub turn_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub retract: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInterruptResponse {
+    #[ts(type = "number")]
+    pub event_seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub retracted: Option<bool>,
 }
 
 /// POST /v1/sessions/{id}/requests/{rid}.
@@ -328,11 +341,7 @@ macro_rules! command_response {
         }
     )+};
 }
-command_response!(
-    SessionInterruptResponse,
-    SessionUpdateResponse,
-    SessionCloseResponse
-);
+command_response!(SessionUpdateResponse, SessionCloseResponse);
 
 /// Accepted compaction; completion is reported by the referenced turn's events.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

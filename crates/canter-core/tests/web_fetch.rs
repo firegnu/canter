@@ -627,7 +627,10 @@ async fn interrupt_cancels_the_in_flight_response_body() {
     .unwrap();
     tokio::time::timeout(
         Duration::from_secs(5),
-        session.interrupt(SessionInterruptParams { turn_id }),
+        session.interrupt(SessionInterruptParams {
+            turn_id,
+            retract: None,
+        }),
     )
     .await
     .expect("interrupt must cancel the HTTP body")

@@ -47,6 +47,9 @@ pub(crate) async fn compact(
         .await?;
     let result = summarize(shared, cancel).await;
     let mut state = shared.state.lock().await;
+    if state.active.as_ref().is_some_and(|active| active.retracted) {
+        return Ok(());
+    }
     match result {
         Ok((summary, messages)) if !cancel.is_cancelled() => {
             let user_inputs = messages[..messages.len() - 1].to_vec();
@@ -241,6 +244,7 @@ async fn summarize(
             let started_at = (shared.options.request_time)();
             let mut stream = shared.model.stream(prepared, cancel.clone());
             let mut next_summary = String::new();
+            let mut output_started = false;
             let mut finished = false;
             let mut too_large = false;
             loop {
@@ -250,7 +254,18 @@ async fn summarize(
                     event = stream.next() => event,
                 };
                 match event {
-                    Some(Ok(ModelEvent::TextDelta(delta))) => next_summary.push_str(&delta),
+                    Some(Ok(ModelEvent::TextDelta(delta))) => {
+                        if !delta.is_empty() && !output_started {
+                            if !shared.accept_model_output().await {
+                                return Err(CoreError::new(
+                                    ErrorCode::Conflict,
+                                    "compaction interrupted",
+                                ));
+                            }
+                            output_started = true;
+                        }
+                        next_summary.push_str(&delta);
+                    }
                     Some(Ok(ModelEvent::Usage(usage))) => {
                         runner::record_usage(shared, usage, None, &model, started_at, true).await?
                     }
@@ -258,7 +273,21 @@ async fn summarize(
                         finished = true;
                         break;
                     }
-                    Some(Ok(ModelEvent::ReasoningDelta(_))) => {}
+                    Some(Ok(ModelEvent::ReasoningDelta(delta))) => {
+                        if !delta.is_empty() && !output_started {
+                            if !shared.accept_model_output().await {
+                                return Err(CoreError::new(
+                                    ErrorCode::Conflict,
+                                    "compaction interrupted",
+                                ));
+                            }
+                            output_started = true;
+                        }
+                    }
+                    Some(Ok(ModelEvent::ToolCall(_))) => {
+                        shared.accept_model_output().await;
+                        break;
+                    }
                     Some(Err(error)) if error.kind == ErrorKind::ContextLength => {
                         too_large = true;
                         break;

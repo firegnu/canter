@@ -496,7 +496,10 @@ async fn interrupted_review_restores_the_next_inputs_original_permissions() {
     let turn_id = session.input(review).await.unwrap().turn_id.unwrap();
     until(&mut events, |event| matches!(event, EventPayload::ItemDelta { delta: ItemDelta::AgentMessage { delta }, .. } if delta == "review waiting")).await;
     session
-        .interrupt(SessionInterruptParams { turn_id })
+        .interrupt(SessionInterruptParams {
+            turn_id,
+            retract: None,
+        })
         .await
         .unwrap();
     let seen = finished(&mut events).await;
@@ -583,6 +586,7 @@ async fn rejected_image_during_stopping_does_not_leave_a_copy() {
     let interrupt = tokio::spawn(async move {
         owner
             .interrupt(SessionInterruptParams {
+                retract: None,
                 turn_id: started.turn_id.unwrap(),
             })
             .await
@@ -1006,6 +1010,7 @@ async fn interrupting_compaction_does_not_report_an_error() {
     .await;
     session
         .interrupt(SessionInterruptParams {
+            retract: None,
             turn_id: response.turn_id.unwrap(),
         })
         .await
@@ -1168,6 +1173,7 @@ async fn interrupted_approval_is_resolved_before_the_failed_tool_item() {
     .await;
     session
         .interrupt(SessionInterruptParams {
+            retract: None,
             turn_id: response.turn_id.unwrap(),
         })
         .await

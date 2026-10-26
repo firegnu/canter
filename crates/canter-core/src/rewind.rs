@@ -67,6 +67,13 @@ impl Checkpoints {
     pub fn clear_boundaries(&mut self) {
         self.boundaries.clear();
     }
+    pub fn retract(&mut self, turn_id: &str) -> Option<(usize, usize)> {
+        let index = self.boundaries.iter().position(|b| b.turn_id == turn_id)?;
+        let boundary = &self.boundaries[index];
+        let lengths = (boundary.messages, boundary.users);
+        self.boundaries.truncate(index);
+        Some(lengths)
+    }
     pub fn record_file(&mut self, checkpoint: FileChange) {
         self.changes.push(checkpoint);
     }

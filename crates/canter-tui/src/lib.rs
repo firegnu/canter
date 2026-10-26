@@ -33,6 +33,7 @@ mod markdown;
 mod mention;
 mod picker;
 mod question;
+mod retract;
 pub mod review;
 mod rewind;
 mod run;

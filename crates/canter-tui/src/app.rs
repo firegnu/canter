@@ -526,6 +526,8 @@ pub struct App {
     reconnecting: Option<String>,
     /// The turn an interrupt was sent for.
     interrupting: Option<String>,
+    retract_drafts: crate::retract::Drafts,
+    images_need_paste: bool,
     /// Approval requests this terminal answered; their box stays closed
     /// while the answer is on its way.
     answered: HashSet<String>,
@@ -561,6 +563,8 @@ impl App {
         );
         Self {
             branch: crate::git::branch(&snapshot.settings.cwd),
+            retract_drafts: crate::retract::Drafts::new(&snapshot),
+            images_need_paste: false,
             snapshot,
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
@@ -646,7 +650,26 @@ impl App {
             ));
             return;
         }
+        self.retract_drafts.event(event);
+        self.restore_retracted();
         match &event.payload {
+            EventPayload::TurnRetracted { turn_id } => {
+                self.history = History::default();
+                self.scroll = Scroll::default();
+                self.mouse.selection = None;
+                self.completed.retain(|(turn, _)| turn != turn_id);
+                self.errors_shown.remove(turn_id);
+                let end = self.snapshot.turns.len();
+                self.notices.retain(|notice| {
+                    notice.at.turn < end || (notice.at.turn == end && !notice.at.prompt)
+                });
+                if self.active_btw.is_some_and(|id| id >= self.notices.len()) {
+                    self.active_btw = None;
+                }
+                if self.interrupting.as_ref() == Some(turn_id) {
+                    self.interrupting = None;
+                }
+            }
             EventPayload::SessionRewound {
                 rewind_conversation: true,
                 ..
@@ -2013,6 +2036,34 @@ impl App {
         self.sending_image = None;
     }
 
+    pub fn input_sending(&mut self) {
+        self.retract_drafts.sending();
+    }
+
+    pub fn input_sent(&mut self, event_seq: u64, input: Vec<UserInput>) {
+        self.images_need_paste = false;
+        if input
+            .iter()
+            .any(|part| matches!(part, UserInput::LocalImage { .. }))
+        {
+            self.sent();
+        }
+        self.retract_drafts.sent(event_seq, input);
+        self.restore_retracted();
+    }
+
+    pub fn interrupt_finished(&mut self, turn_id: &str, retracted: bool) {
+        self.retract_drafts.response(turn_id, retracted);
+        self.restore_retracted();
+    }
+
+    fn restore_retracted(&mut self) {
+        if let Some((inputs, missing_images)) = self.retract_drafts.take_restored() {
+            self.input.prepend_inputs(inputs);
+            self.images_need_paste |= missing_images;
+        }
+    }
+
     /// A line for the conversation, e.g. the server's version differs.
     pub fn warning(&mut self, message: &str) {
         self.notice(cells::notice("! ", message, theme::warning()));
@@ -2036,6 +2087,8 @@ impl App {
     }
 
     pub fn send_failed(&mut self, message: &str) {
+        self.retract_drafts.send_failed();
+        self.restore_retracted();
         self.notice(cells::notice(
             "✗ ",
             &format!("Not sent: {message}"),
@@ -2069,11 +2122,20 @@ impl App {
         ));
     }
 
-    pub fn interrupt_failed(&mut self, message: &str) {
+    pub fn interrupt_failed(&mut self, turn_id: &str, connection_error: bool, message: &str) {
         self.interrupting = None;
+        // A dropped HTTP reply does not tell us whether the mutation committed.
+        // The matching durable event is enough to confirm it after reconnecting.
+        self.retract_drafts.response(turn_id, connection_error);
+        self.restore_retracted();
+        let problem = if connection_error {
+            "Interrupt reply lost"
+        } else {
+            "Interrupt failed"
+        };
         self.notice(cells::notice(
             "✗ ",
-            &format!("Interrupt failed: {message}"),
+            &format!("{problem}: {message}"),
             theme::failure(),
         ));
     }
@@ -2828,6 +2890,7 @@ impl App {
             return None;
         }
         self.interrupting = Some(turn_id.clone());
+        self.retract_drafts.interrupt(&turn_id);
         Some(Action::Interrupt { turn_id })
     }
 
@@ -3159,6 +3222,14 @@ impl App {
                 " ■ Session closed · to resume, quit and run canter --resume",
                 theme::warning(),
             )),
+            SessionStatus::Idle | SessionStatus::Unknown
+                if self.images_need_paste && !self.input.is_empty() =>
+            {
+                Line::from(Span::styled(
+                    " ! Paste images again with Ctrl+V",
+                    theme::warning(),
+                ))
+            }
             SessionStatus::Idle | SessionStatus::Unknown => Line::default(),
         };
         (line, self.snapshot.status == SessionStatus::Working)

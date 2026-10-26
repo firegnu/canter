@@ -64,6 +64,8 @@ pub(crate) struct State {
 pub(crate) struct Active {
     pub turn: Turn,
     pub manual_compaction: bool,
+    pub model_started: bool,
+    pub retracted: bool,
     pub cancel: CancellationToken,
     pub done: watch::Receiver<Option<Result<u64, CoreError>>>,
 }
@@ -298,10 +300,20 @@ impl Session {
             state.summary_index,
         ) = crate::context::restore(entries.clone(), &mut state.rewind);
         for entry in &entries {
-            if let HistoryEntry::Rewind { rewind } = entry
-                && rewind.event_seq > state.journal.snapshot.last_event_seq
+            let recovery = match entry {
+                HistoryEntry::Rewind { rewind } => Some((rewind.event_seq, rewind.event())),
+                HistoryEntry::Retract { turn_id, event_seq } => Some((
+                    *event_seq,
+                    EventPayload::TurnRetracted {
+                        turn_id: turn_id.clone(),
+                    },
+                )),
+                _ => None,
+            };
+            if let Some((seq, event)) = recovery
+                && seq > state.journal.snapshot.last_event_seq
             {
-                state.journal.append(vec![rewind.event()]).await?;
+                state.journal.append(vec![event]).await?;
             }
         }
         state.initialize_prefix(home).await?;
@@ -636,19 +648,27 @@ impl Session {
         &self,
         params: SessionInterruptParams,
     ) -> Result<SessionInterruptResponse, CoreError> {
-        let done = {
-            let state = self.shared.state.lock().await;
+        let (done, retracted) = {
+            let mut state = self.shared.state.lock().await;
             state.available()?;
             let active = state
                 .active
-                .as_ref()
+                .as_mut()
                 .filter(|active| active.turn.id == params.turn_id)
                 .ok_or_else(|| CoreError::new(ErrorCode::TurnMismatch, "turn is not active"))?;
+            if params.retract == Some(true)
+                && !active.cancel.is_cancelled()
+                && !active.manual_compaction
+                && !active.model_started
+            {
+                active.retracted = true;
+            }
             active.cancel.cancel();
-            active.done.clone()
+            (active.done.clone(), active.retracted)
         };
         Ok(SessionInterruptResponse {
             event_seq: wait_done(done).await?,
+            retracted: params.retract.map(|_| retracted),
         })
     }
 
@@ -784,7 +804,7 @@ impl Session {
         }
         let mut settings = state.journal.snapshot.settings.clone();
         if let Some(name) = params.name {
-            settings.name = Some(name);
+            settings.name = (!name.is_empty()).then_some(name);
         }
         if let Some(model) = params.model {
             settings.model = model;
@@ -959,6 +979,18 @@ pub(crate) async fn wait_done(
     }
 }
 impl Shared {
+    /// Serializes the first actual model output with the retract decision.
+    /// A losing stream must discard its buffered output before writing anything.
+    pub async fn accept_model_output(&self) -> bool {
+        let mut state = self.state.lock().await;
+        let active = state.active.as_mut().expect("active turn");
+        if active.retracted {
+            return false;
+        }
+        active.model_started = true;
+        true
+    }
+
     pub async fn start(
         &self,
         state: &mut State,
@@ -1016,6 +1048,8 @@ impl Shared {
         state.active = Some(Active {
             turn: turn.clone(),
             manual_compaction: false,
+            model_started: false,
+            retracted: false,
             cancel: self.lifetime.child_token(),
             done: receiver,
         });

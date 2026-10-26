@@ -47,6 +47,13 @@
 输入回复的 `eventSeq` 指向该事件，`turnId` 为空。快照的 `queuedInputs` 保留待执行输入。
 开始对应轮时，`turn.started.inputId` 带排队输入 id，归并时将其移出队列。
 非排队输入开始轮时 `inputId` 可省略或为空。`SessionInterruptParams.turnId` 是目标轮的前置条件。
+打断可带 `retract: true`：服务端在会话锁内与首个模型输出竞争，尚无思考、回答或工具调用输出时
+取消这一轮，回复 `retracted: true` 并发布 `turn.retracted { turnId }`；归并时整轮消失，不生成回退记录轮。
+自动压缩在摘要首次实际输出前也允许撤回，取消后不保存压缩结果；手动 `/compact` 只做普通打断。
+已经输出则回复 `retracted: false`，仍发布普通的 `turn.completed`（interrupted）。省略 `retract`
+保持原有打断和回复格式。撤回通过追加模型历史过滤记录持久化，原事件和历史行不改；恢复后仍过滤该轮。
+撤回时队列照普通打断以 `input.removed` 移出，发起终端保留并恢复这些输入，其他客户端只移除显示。
+不认识 `turn.retracted` 的旧客户端跳过该事件，仍会显示旧轮。
 `input.removed { inputIds, reason, turnId? }` 按 id 移出一个或多个排队输入；
 reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupted`（打断丢弃）、
 `closed`（关闭丢弃）。重复移出无影响，未知 reason 也按 id 移出。
@@ -74,6 +81,7 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 
 `session.updated` 的 `settings` 是完整的公开设置（工作目录、名字、模型、思考档位、权限模式）。
 创建会话、PATCH 成功后各写一条。PATCH 中省略/null 表示不修改字段。
+PATCH 的 `name: ""` 清空会话名（快照中为 null），供撤回起名消息后重新起名。
 `cwd` 同时出现在公开设置和会话摘要中，供显示、选择恢复目录；PATCH 不修改它。
 环境变量只留在服务端内存中，供执行器和打开会话时的技能发现使用，不存盘，不进入事件、公开设置或快照。
 创建请求不实现 Debug，调用方也不得记录其请求体。
