@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::process::ExitCode;
 
 use canter::{ChatArgs, Command, Context, USAGE};
@@ -31,7 +32,7 @@ async fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("canter: {error}");
+            let _ = writeln!(std::io::stderr(), "canter: {error}");
             ExitCode::FAILURE
         }
     }
@@ -43,7 +44,8 @@ async fn chat(args: ChatArgs) -> Result<(), String> {
         .await
         .map_err(|error| error.to_string())?;
     if let Some(id) = session {
-        println!("To resume: canter --resume {id}");
+        // The controlling terminal may have disappeared (SIGHUP/EIO).
+        let _ = writeln!(std::io::stdout(), "To resume: canter --resume {id}");
     }
     Ok(())
 }

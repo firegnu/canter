@@ -226,7 +226,7 @@ pub async fn run<C: Connector>(launch: Launch<C>) -> Result<Option<String>, RunE
     let (sender, input) = input();
     let reader = TerminalReader::spawn(sender);
     let result = run_on(terminal, input, launch).await;
-    reader.stop();
+    reader.stop().await;
     result
 }
 
@@ -241,6 +241,8 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
     C: Connector,
 {
+    let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let Launch {
         connector,
         connected,
@@ -347,6 +349,8 @@ where
         }
         let mut next = None;
         let mut quit = tokio::select! {
+            _ = hangup.recv() => break 'run Ok(()),
+            _ = terminate.recv() => break 'run Ok(()),
             event = input.events.recv() => match event {
                 Some(event) => {
                     next = Some(event);
@@ -465,6 +469,7 @@ where
     };
     chat.pump.abort();
     chat.cancel_btw();
+    ui.app_mut().stop_status_line().await;
     result.map(|()| Some(chat.session))
 }
 
@@ -1350,8 +1355,19 @@ impl TerminalReader {
         Self { stop, thread }
     }
 
-    fn stop(self) {
+    async fn stop(self) {
         self.stop.store(true, Ordering::Relaxed);
-        let _ = self.thread.join();
+        // Normally the 50 ms poll returns and the thread stops. A hung-up
+        // PTY can leave crossterm inside read/poll; do not let joining that
+        // thread hold the process open after all command cleanup has finished.
+        let _ = tokio::time::timeout(Duration::from_millis(100), async {
+            while !self.thread.is_finished() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        if self.thread.is_finished() {
+            let _ = self.thread.join();
+        }
     }
 }

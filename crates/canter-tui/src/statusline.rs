@@ -15,6 +15,9 @@ use tokio::{
     time::Instant,
 };
 
+/// Bound each retained line, including its SGR sequences, before decoding it.
+const MAX_LINE_BYTES: usize = 4096;
+
 pub(crate) fn load(env: &BTreeMap<String, String>) -> Option<String> {
     // Deserialize just this field. Unknown values (including API keys) are
     // skipped, never retained in a Value, an error message or a command input.
@@ -51,6 +54,7 @@ pub(crate) struct StatusLine {
     branch_checked: Option<Instant>,
     running: Option<Running>,
     output: Option<[Line<'static>; 2]>,
+    fitted: Option<(u16, [Line<'static>; 2])>,
     pub failed: bool,
     tps: tps::Tps,
 }
@@ -77,6 +81,7 @@ impl StatusLine {
             branch_checked: None,
             running: None,
             output: None,
+            fitted: None,
             failed: false,
             tps: tps::Tps::new(snapshot),
         }
@@ -116,6 +121,7 @@ impl StatusLine {
                     self.failed = result.is_err();
                     if let Ok(output) = result {
                         self.output = Some(lines(&output));
+                        self.fitted = None;
                     }
                     self.running = None;
                 }
@@ -149,15 +155,34 @@ impl StatusLine {
         });
     }
 
-    pub fn rows(&self, width: u16) -> Option<[Line<'static>; 2]> {
-        self.output.as_ref().map(|rows| {
-            rows.clone()
-                .map(|row| Line::from(crate::text::truncate(row.spans, usize::from(width))))
-        })
+    pub fn rows(&mut self, width: u16) -> Option<[Line<'static>; 2]> {
+        let rows = self.output.as_ref()?;
+        if self
+            .fitted
+            .as_ref()
+            .is_none_or(|(fitted_width, _)| *fitted_width != width)
+        {
+            // Scan and cut the retained lines only for a new result or size.
+            self.fitted = Some((
+                width,
+                rows.clone()
+                    .map(|row| Line::from(crate::text::truncate(row.spans, usize::from(width)))),
+            ));
+        }
+        // A frame copies only the visible cells, never the long source lines.
+        self.fitted.as_ref().map(|(_, rows)| rows.clone())
     }
 
     pub fn has_output(&self) -> bool {
         self.output.is_some()
+    }
+
+    pub async fn stop(&mut self) {
+        if let Some(mut running) = self.running.take() {
+            running.task.abort();
+            // Wait for the task's ProcessGroup guard before leaving the runtime.
+            let _ = (&mut running.task).await;
+        }
     }
 }
 
@@ -167,17 +192,25 @@ async fn execute(
     cwd: &str,
     json: &str,
 ) -> Result<String, ()> {
-    let mut child = tokio::process::Command::new("sh")
+    let mut process = tokio::process::Command::new("sh");
+    process
         .args(["-c", command])
         .current_dir(cwd)
         .envs(env)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .process_group(0)
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|_| ())?;
+        .kill_on_drop(true);
+    // Like server discovery: detach from the controlling terminal as well as
+    // its process group. setsid is the only pre-exec operation.
+    unsafe {
+        process.pre_exec(|| {
+            nix::unistd::setsid()
+                .map(|_| ())
+                .map_err(std::io::Error::from)
+        });
+    }
+    let mut child = process.spawn().map_err(|_| ())?;
     let group = ProcessGroup(nix::unistd::Pid::from_raw(child.id().ok_or(())? as i32));
     let mut stdin = child.stdin.take().ok_or(())?;
     let mut stdout = child.stdout.take().ok_or(())?;
@@ -192,19 +225,27 @@ async fn execute(
             Ok::<_, std::io::Error>(())
         };
         let read = async {
-            let mut output = Vec::new();
+            let mut output = Vec::with_capacity(2 * (MAX_LINE_BYTES + 1));
             let mut buffer = [0; 4096];
             let mut newlines = 0;
+            let mut line_bytes = 0;
             loop {
                 let count = stdout.read(&mut buffer).await?;
                 if count == 0 {
                     break;
                 }
-                // Drain the pipe, retaining only the two lines we display.
+                // Keep draining excess bytes, including oversized lines, so
+                // the command can finish and the second line is still read.
                 for &byte in &buffer[..count] {
                     if newlines < 2 {
-                        output.push(byte);
-                        newlines += usize::from(byte == b'\n');
+                        if byte == b'\n' {
+                            output.push(byte);
+                            newlines += 1;
+                            line_bytes = 0;
+                        } else if line_bytes < MAX_LINE_BYTES {
+                            output.push(byte);
+                            line_bytes += 1;
+                        }
                     }
                 }
             }
@@ -236,43 +277,36 @@ impl Drop for ProcessGroup {
 /// Interpret SGR as ratatui styles; no escape sequence reaches the terminal.
 fn lines(output: &str) -> [Line<'static>; 2] {
     let mut rows = [Line::default(), Line::default()];
-    let mut row = 0;
     let mut style = Style::default();
-    let mut text = String::new();
-    let mut chars = output.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\n' => {
-                rows[row]
-                    .spans
-                    .push(Span::styled(std::mem::take(&mut text), style));
-                row += 1;
-                if row == 2 {
-                    return rows;
-                }
-            }
-            '\u{1b}' if chars.peek() == Some(&'[') => {
-                chars.next();
-                let mut parameters = String::new();
-                for c in chars.by_ref() {
-                    if ('@'..='~').contains(&c) {
-                        if c == 'm' {
-                            rows[row]
-                                .spans
-                                .push(Span::styled(std::mem::take(&mut text), style));
-                            sgr(&parameters, &mut style);
+    // Parse each bounded line separately: an escape cut at its byte limit
+    // must not consume text from the next line.
+    for (row, line) in rows.iter_mut().zip(output.split('\n')) {
+        let mut text = String::new();
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\u{1b}' if chars.peek() == Some(&'[') => {
+                    chars.next();
+                    let mut parameters = String::new();
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            if c == 'm' {
+                                row.spans
+                                    .push(Span::styled(std::mem::take(&mut text), style));
+                                sgr(&parameters, &mut style);
+                            }
+                            break;
                         }
-                        break;
+                        parameters.push(c);
                     }
-                    parameters.push(c);
                 }
+                '\u{1b}' => crate::text::skip_escape(&mut chars),
+                c if c.is_control() => {}
+                c => text.push(c),
             }
-            '\u{1b}' => crate::text::skip_escape(&mut chars),
-            c if c.is_control() => {}
-            c => text.push(c),
         }
+        row.spans.push(Span::styled(text, style));
     }
-    rows[row].spans.push(Span::styled(text, style));
     rows
 }
 

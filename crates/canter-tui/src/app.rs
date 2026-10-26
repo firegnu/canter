@@ -581,6 +581,12 @@ impl App {
         }
     }
 
+    pub(crate) async fn stop_status_line(&mut self) {
+        if let Some(line) = &mut self.status_line {
+            line.stop().await;
+        }
+    }
+
     fn status_line_input(&self, now_ms: i64) -> serde_json::Value {
         let settings = &self.snapshot.settings;
         let usage = self.snapshot.token_usage.as_ref();
@@ -1015,7 +1021,10 @@ impl App {
             KeyCode::BackTab => {
                 if !send_guarded && let Some(mode) = shown.mode {
                     let action = commands::next_mode(mode);
-                    if self.status_line.is_some()
+                    if self
+                        .status_line
+                        .as_ref()
+                        .is_some_and(|line| line.has_output())
                         && let Action::Update(params) = &action
                         && let Some(mode) = params.approval_policy
                     {
@@ -3320,8 +3329,8 @@ impl App {
     /// directory with its git branch, context use and cache hits. Each row
     /// is cut on its own when the window is too narrow. Also whether the
     /// first row shows all of the permission mode.
-    fn info_rows(&self, width: u16) -> ([Line<'static>; 2], bool) {
-        if let Some(rows) = self.status_line.as_ref().and_then(|line| line.rows(width)) {
+    fn info_rows(&mut self, width: u16) -> ([Line<'static>; 2], bool) {
+        if let Some(rows) = self.status_line.as_mut().and_then(|line| line.rows(width)) {
             return (rows, false);
         }
         let settings = &self.snapshot.settings;

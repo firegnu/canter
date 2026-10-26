@@ -315,13 +315,28 @@ async fn custom_output_allows_shift_tab_from_its_frame_without_a_visible_mode() 
 }
 
 #[tokio::test]
-async fn configured_shift_tab_briefly_reports_the_new_mode_above_the_input() {
+async fn only_custom_output_shift_tab_briefly_reports_the_new_mode_above_the_input() {
     let mut screen = Screen::new("cat >/dev/null; printf custom");
     // Even before a command succeeds, the default row's fully visible mode works.
     screen.mode(PermissionMode::AskForExecution);
     screen.ui.draw(0).unwrap();
     let before = screen.row(6);
-    screen.ui.app_mut().handle_key(shift_tab(), 0);
+    assert_eq!(
+        screen.ui.app_mut().handle_key(shift_tab(), 0),
+        set_mode(PermissionMode::AllowAll)
+    );
+    screen.ui.draw(0).unwrap();
+    assert_eq!(
+        screen.row(6),
+        before,
+        "default rows keep their original behavior"
+    );
+    screen.wait_for("custom").await;
+    screen.ui.draw(0).unwrap();
+    assert_eq!(
+        screen.ui.app_mut().handle_key(shift_tab(), 0),
+        set_mode(PermissionMode::AllowAll)
+    );
     screen.ui.draw(0).unwrap();
     assert_eq!(screen.row(6), " Mode: Allow all");
     assert_eq!(screen.ui.backend().buffer()[(7, 6)].fg, Color::Red);
@@ -329,6 +344,39 @@ async fn configured_shift_tab_briefly_reports_the_new_mode_above_the_input() {
     assert_eq!(screen.row(6), " Mode: Allow all");
     screen.ui.draw(2000).unwrap();
     assert_eq!(screen.row(6), before);
+}
+
+#[tokio::test]
+async fn large_output_is_bounded_per_line_and_still_drained_to_the_next_line() {
+    let mut screen = Screen::new(
+        "cat >/dev/null\nhead -c 8388608 /dev/zero | tr '\\000' a\nprintf '\\nsecond\\n'",
+    );
+    let cwd = screen.root.path().to_str().unwrap().to_owned();
+    let env = BTreeMap::from([
+        ("HOME".into(), cwd.clone()),
+        ("CANTER_HOME".into(), cwd.clone()),
+    ]);
+    let output = super::execute("sh ./status.sh", &env, &cwd, "{}\n")
+        .await
+        .unwrap();
+    assert_eq!(
+        output.lines().nth(1),
+        Some("second"),
+        "drain excess bytes instead of ending the command early"
+    );
+    assert!(
+        output.len() <= 8194,
+        "only a few KiB per line may be retained, got {} bytes",
+        output.len()
+    );
+    let first = format!("{}…", "a".repeat(79));
+    assert_eq!(screen.wait_for(&first).await, [first, "second".into()]);
+    // Resizing can reveal more of the bounded output; steady frames stay small.
+    screen.ui.backend_mut().resize(12, 12);
+    assert_eq!(
+        screen.bar(),
+        [format!("{}…", "a".repeat(11)), "second".into()]
+    );
 }
 
 #[tokio::test]
