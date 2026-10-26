@@ -334,13 +334,14 @@ fn mode(app: &mut App, args: &str) -> Result<Option<Action>, String> {
 }
 
 /// `/help`: every command with its line, after a blank row, then the
-/// shortcut for the permission mode in the same columns.
+/// shortcuts for the permission mode and for searching, in the same columns.
 fn help() -> Vec<LogicalLine> {
     let mut rows: Vec<(String, &str)> = COMMANDS
         .iter()
         .map(|command| (format!("/{}", command.name), command.about))
         .collect();
     rows.push(("Shift+Tab".to_owned(), "Cycle permission mode"));
+    rows.push(("Ctrl+F".to_owned(), "Search the conversation"));
     let width = rows.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
     let mut lines = vec![LogicalLine::default()];
     for (name, about) in rows {

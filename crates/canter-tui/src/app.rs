@@ -5,6 +5,7 @@
 //! two info rows at the bottom.
 
 use std::collections::{HashSet, VecDeque};
+use std::ops::Range;
 
 use canter_protocol::{
     ApprovalDecision, ApprovalResolution, Event, EventPayload, Item, ItemStatus, PendingRequest,
@@ -27,9 +28,11 @@ use crate::input::InputBox;
 use crate::select::{self, Cell, Rows, Unit};
 use crate::text::{LogicalLine, Row, plain, sanitize, spans_width, str_width, truncate, wrap_rows};
 use crate::theme;
-use crate::{markdown, mention};
+use crate::{markdown, mention, search};
 
 const PLACEHOLDER: &str = "Type a message (Enter to send, Ctrl+J for a new line)";
+/// The input box's prompt while searching.
+const FIND: &str = "Find: ";
 const MAX_INPUT_ROWS: usize = 8;
 /// The most rows the `@` list takes above the input box.
 const MENTION_ROWS: usize = 10;
@@ -239,6 +242,8 @@ struct History {
     notices: usize,
     /// The last part among the rows.
     tail: Option<Tail>,
+    /// What the search found among the rows.
+    found: Option<Found>,
 }
 
 /// Scrolling back through the conversation.
@@ -257,6 +262,21 @@ struct Scroll {
     /// The last frame's width, history length and rows after the history,
     /// to tell whether the conversation changed since.
     seen: (u16, usize, Vec<Row>),
+}
+
+impl Scroll {
+    /// Holds the view where it is when `row` is in it, else puts `row` in
+    /// the middle, as far as the last frame allows.
+    fn reveal(&mut self, row: usize) {
+        let area = self.area.max(1);
+        let top = self.top.unwrap_or(self.max_top);
+        let top = if (top..top + area).contains(&row) {
+            top
+        } else {
+            row.saturating_sub(area / 2).min(self.max_top)
+        };
+        self.top = Some(top);
+    }
 }
 
 /// A place in the conversation that stays on the same text while the
@@ -294,6 +314,63 @@ struct Selection {
     left_row: bool,
     /// Unix ms before which a drag at an edge does not scroll again.
     next_scroll: i64,
+}
+
+/// Ctrl+F: searching the conversation. The draft in the input box stays
+/// as it is meanwhile.
+struct Search {
+    query: InputBox,
+    /// Where the view was when the search opened; `None` while following
+    /// the latest output.
+    back: Option<Back>,
+    /// The match on screen, pinned to its text; `None` while nothing matches.
+    current: Option<Anchor>,
+    /// The width and Ctrl+O `current` was found with: after a change the
+    /// rows are new, and it is looked for again and scrolled into view.
+    laid: (u16, bool),
+}
+
+/// A view scrolled back: its top row, the part that row is in and how many
+/// rows into it, and the width and Ctrl+O then.
+struct Back {
+    top: usize,
+    part: Option<(Part, usize)>,
+    laid: (u16, bool),
+}
+
+/// Which match a match is, to find it again in rows laid out anew: the
+/// `nth` on line `key` of `part`. Also, to find the nearest one once it is
+/// gone, the `index` in its part and the row it was on.
+#[derive(Debug, Clone)]
+struct Anchor {
+    part: Part,
+    key: select::Key,
+    nth: usize,
+    index: usize,
+    row: usize,
+}
+
+impl Anchor {
+    fn same(&self, other: &Anchor) -> bool {
+        (&self.part, self.key, self.nth) == (&other.part, other.key, other.nth)
+    }
+}
+
+/// A match: its columns and which match it is. Its anchor's row is counted
+/// from the history's first row while kept in [`Found`], else as the view
+/// counts rows.
+#[derive(Debug, Clone)]
+struct Hit {
+    columns: Range<usize>,
+    anchor: Anchor,
+}
+
+/// The matches in the history's parts searched so far. Finished parts do
+/// not change, so each is searched once for the same words.
+struct Found {
+    needle: String,
+    parts: usize,
+    hits: Vec<Hit>,
 }
 
 /// The command list's selection, and whether Esc closed it, for one input
@@ -376,6 +453,7 @@ pub struct App {
     /// Where copies go: the clipboard, and the terminal in tmux or over SSH.
     copier: Copier,
     mouse: Mouse,
+    search: Option<Search>,
     commands: CommandList,
     mentions: MentionList,
     /// A choice offered above the input box, such as `/mode` alone.
@@ -442,6 +520,7 @@ impl App {
             clipboard: crate::images::Clipboard::default(),
             copier: Copier::default(),
             mouse: Mouse::default(),
+            search: None,
             commands: CommandList::default(),
             mentions: MentionList::default(),
             chooser: None,
@@ -639,6 +718,11 @@ impl App {
                 return None;
             }
         }
+        // A choice offered meanwhile takes the keys until it closes.
+        if self.search.is_some() && shown.approval.is_none() && self.chooser.is_none() {
+            self.search_key(key);
+            return None;
+        }
         if key.code == KeyCode::Esc
             && (shown.approval.is_some()
                 || (self.chooser.is_none()
@@ -672,6 +756,10 @@ impl App {
         if self.chooser.is_some() && !matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
             let seen = shown.chooser == Some(self.choosers);
             return self.chooser_key(key, seen, send_guarded);
+        }
+        if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_search();
+            return None;
         }
         if let Some((matches, selected)) = self.command_list() {
             let last = matches.len() - 1;
@@ -1430,6 +1518,209 @@ impl App {
         self.scroll.top = Some(top.saturating_add_signed(rows).min(self.scroll.max_top));
     }
 
+    /// Ctrl+F: the input box turns into `Find:`. The selection goes; where
+    /// the view is is kept for Esc.
+    fn open_search(&mut self) {
+        self.mouse.selection = None;
+        let laid = (self.width, self.details);
+        let back = self.scroll.top.map(|top| {
+            let part = self
+                .part_starts(self.width)
+                .into_iter()
+                .take_while(|(start, _)| *start <= top)
+                .last()
+                .map(|(start, part)| (part, top - start));
+            Back { top, part, laid }
+        });
+        self.search = Some(Search {
+            query: InputBox::default(),
+            back,
+            current: None,
+            laid,
+        });
+    }
+
+    /// Keys while searching: Up and Down (Ctrl+P, Ctrl+N) go to an older or
+    /// a newer match, Enter closes the search there, Esc closes it and goes
+    /// back; Ctrl+C clears the words, or with none closes like Esc. PgUp,
+    /// PgDn and Ctrl+O work as ever. Other keys edit the words as in the
+    /// input box; a new line and images have no place in them.
+    fn search_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        let query = &mut search.query;
+        match key.code {
+            KeyCode::Esc => self.close_search(true),
+            KeyCode::Enter => self.close_search(false),
+            KeyCode::Char('c') if ctrl && query.is_empty() => self.close_search(true),
+            KeyCode::Char('c') if ctrl => {
+                query.clear();
+                self.search_from_newest();
+            }
+            KeyCode::Char('o') if ctrl => self.toggle_details(),
+            KeyCode::Up => self.search_step(-1),
+            KeyCode::Char('p') if ctrl => self.search_step(-1),
+            KeyCode::Down => self.search_step(1),
+            KeyCode::Char('n') if ctrl => self.search_step(1),
+            KeyCode::PageUp => self.scroll_by(-(self.scroll.page as isize)),
+            KeyCode::PageDown => self.scroll_by(self.scroll.page as isize),
+            KeyCode::Char(c) if !ctrl => {
+                query.insert(c.encode_utf8(&mut [0; 4]));
+                self.search_from_newest();
+            }
+            KeyCode::Backspace => {
+                query.backspace();
+                self.search_from_newest();
+            }
+            KeyCode::Delete => {
+                query.delete();
+                self.search_from_newest();
+            }
+            KeyCode::Left => query.left(),
+            KeyCode::Right => query.right(),
+            KeyCode::Home => query.home(),
+            KeyCode::End => query.end(),
+            _ => {}
+        }
+    }
+
+    /// Closes the search: the view stays, or with `back` goes back where it
+    /// was when the search opened.
+    fn close_search(&mut self, back: bool) {
+        let Some(search) = self.search.take() else {
+            return;
+        };
+        if !back {
+            return;
+        }
+        let width = self.width;
+        let same = (width, self.details);
+        let top = search.back.map(|back| {
+            back.part
+                .and_then(|(part, rows)| {
+                    let starts = self.part_starts(width);
+                    let (start, _) = starts.into_iter().find(|(_, at)| *at == part)?;
+                    Some(start + if back.laid == same { rows } else { 0 })
+                })
+                .unwrap_or(back.top)
+        });
+        self.scroll.top = top;
+    }
+
+    /// The words changed: searches again, from the newest match.
+    fn search_from_newest(&mut self) {
+        if let Some(search) = &mut self.search {
+            search.current = None;
+        }
+        let (hits, current, _) = self.search_hits(self.width);
+        if let Some(current) = current {
+            self.scroll.reveal(hits[current].anchor.row);
+        }
+    }
+
+    /// Goes `by` matches on from the current one, newer for more, as far as
+    /// there are, and scrolls to it.
+    fn search_step(&mut self, by: isize) {
+        let (hits, current, _) = self.search_hits(self.width);
+        let Some(current) = current else {
+            return;
+        };
+        let next = &hits[current.saturating_add_signed(by).min(hits.len() - 1)];
+        if let Some(search) = &mut self.search {
+            search.current = Some(next.anchor.clone());
+        }
+        self.scroll.reveal(next.anchor.row);
+    }
+
+    /// [`App::search_found`] on the conversation laid out for `width`.
+    fn search_hits(&mut self, width: u16) -> (Vec<Hit>, Option<usize>, bool) {
+        self.extend_history(width);
+        let (live, live_parts) = self.live_rows(width);
+        self.search_found(width, &live, &live_parts)
+    }
+
+    /// Every match on the conversation's rows, in order, their rows counted
+    /// as the view counts them; which one is current, if any; and whether to
+    /// scroll to it. While nothing was current, the newest match is, and is
+    /// scrolled to. When the current one's text is gone, the nearest one
+    /// takes its place. After a new width or Ctrl+O it is scrolled to again.
+    fn search_found(
+        &mut self,
+        width: u16,
+        live: &[Row],
+        live_parts: &[(usize, Part)],
+    ) -> (Vec<Hit>, Option<usize>, bool) {
+        let Some(search) = &self.search else {
+            return (Vec::new(), None, false);
+        };
+        let needle = search::needle(search.query.text());
+        let hits = self.hits(&needle, live, live_parts);
+        let laid = (width, self.details);
+        let Some(search) = &mut self.search else {
+            return (hits, None, false);
+        };
+        let relaid = std::mem::replace(&mut search.laid, laid) != laid;
+        let (current, reveal) = match &search.current {
+            _ if hits.is_empty() => (None, false),
+            None => (Some(hits.len() - 1), true),
+            Some(anchor) => {
+                let same = hits.iter().position(|hit| hit.anchor.same(anchor));
+                (same.or_else(|| nearest(&hits, anchor)), relaid)
+            }
+        };
+        search.current = current.map(|index| hits[index].anchor.clone());
+        (hits, current, reveal)
+    }
+
+    /// The matches of `needle` in the history and then in `live`, the rows
+    /// after it. The history's are kept, so only parts new to it are searched.
+    fn hits(&mut self, needle: &str, live: &[Row], live_parts: &[(usize, Part)]) -> Vec<Hit> {
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let history = &mut self.history;
+        if history
+            .found
+            .as_ref()
+            .is_none_or(|found| found.needle != needle)
+        {
+            history.found = Some(Found {
+                needle: needle.to_owned(),
+                parts: 0,
+                hits: Vec::new(),
+            });
+        }
+        let Some(found) = &mut history.found else {
+            return Vec::new();
+        };
+        for index in found.parts..history.parts.len() {
+            let (start, part) = &history.parts[index];
+            let end = history
+                .parts
+                .get(index + 1)
+                .map_or(history.rows.len(), |(next, _)| *next);
+            let rows: Vec<&Row> = history.rows[*start..end].iter().collect();
+            part_hits(&rows, part, *start, needle, &mut found.hits);
+        }
+        found.parts = history.parts.len();
+        let mut hits = found.hits.clone();
+        for (index, (start, part)) in live_parts.iter().enumerate() {
+            let end = live_parts
+                .get(index + 1)
+                .map_or(live.len(), |(next, _)| *next);
+            let rows: Vec<&Row> = live[*start..end].iter().collect();
+            part_hits(&rows, part, history.rows.len() + start, needle, &mut hits);
+        }
+        // The blank row the view leaves out has no match.
+        let lead = lead(&history.rows, live);
+        for hit in &mut hits {
+            hit.anchor.row = hit.anchor.row.saturating_sub(lead);
+        }
+        hits
+    }
+
     /// Bracketed paste goes to an open custom answer as one line, otherwise
     /// to the message draft with its newlines intact.
     pub fn handle_paste(&mut self, text: &str) {
@@ -1441,6 +1732,15 @@ impl App {
             let mut pasted = InputBox::default();
             pasted.insert(text);
             custom.push_str(&pasted.text().replace('\n', " "));
+            return;
+        }
+        if self.chooser.is_none()
+            && let Some(search) = &mut self.search
+        {
+            let mut pasted = InputBox::default();
+            pasted.insert(text);
+            search.query.insert(&pasted.text().replace('\n', " "));
+            self.search_from_newest();
             return;
         }
         if let Some(path) = crate::images::pasted_path(text, &self.snapshot.settings.cwd) {
@@ -1786,6 +2086,10 @@ impl App {
             };
             (request.id.clone(), laid)
         });
+        if approval.is_some() {
+            // The box takes the search box's place: the search stops here.
+            self.search = None;
+        }
         self.drawing = Shown {
             approval: approval.as_ref().map(|(request, _)| request.clone()),
             answers: approval.as_ref().is_some_and(|(_, laid)| laid.fits),
@@ -1834,6 +2138,7 @@ impl App {
         self.edge_scroll(now_ms);
         self.extend_history(width);
         let (live, live_parts) = self.live_rows(width);
+        let (hits, current, reveal) = self.search_found(width, &live, &live_parts);
         let history = &self.history.rows;
         let (seen_width, seen_history, seen_live) = &self.scroll.seen;
         // Finished rows stay as they are, so only the rows after the history
@@ -1855,6 +2160,8 @@ impl App {
             .selection
             .as_ref()
             .is_some_and(|selection| selection.held.is_some());
+        // So does it while a match is found, and new output comes below it.
+        let held = held || current.is_some();
         if !held && self.scroll.top.is_some_and(|top| top + room >= total) {
             self.scroll.top = None;
         }
@@ -1876,6 +2183,9 @@ impl App {
         self.scroll.area = area;
         self.scroll.page = area.max(1);
         self.scroll.max_top = total.saturating_sub(area);
+        if reveal && let Some(current) = current {
+            self.scroll.reveal(hits[current].anchor.row);
+        }
         let top = self
             .scroll
             .top
@@ -1904,6 +2214,21 @@ impl App {
             .enumerate()
             .map(|(y, row)| {
                 let index = top + y;
+                let first = hits.partition_point(|hit| hit.anchor.row < index);
+                let marks: Vec<(Range<usize>, bool)> = (first..hits.len())
+                    .take_while(|&at| hits[at].anchor.row == index)
+                    .map(|at| (hits[at].columns.clone(), Some(at) == current))
+                    .collect();
+                let found;
+                let row = if marks.is_empty() {
+                    row
+                } else {
+                    found = Row {
+                        line: search::mark(&row.line, &marks),
+                        ..row.clone()
+                    };
+                    &found
+                };
                 match selected {
                     Some((start, end)) if (start.0..=end.0).contains(&index) => {
                         select::highlight(row, select::columns(index, start, end))
@@ -1912,6 +2237,7 @@ impl App {
                 }
             })
             .collect();
+        let found = current.map(|current| (current, hits.len()));
         let (info, mode_in_full) = self.info_rows(width);
         let view = View {
             conversation,
@@ -1919,6 +2245,7 @@ impl App {
             status: match self.copier.note() {
                 // What was copied, or why not, for a moment instead.
                 Some(note) => Line::from(truncate(note.spans.clone(), usize::from(width))),
+                None if self.search.is_some() => self.search_status(found, width),
                 None => self.status_line(now_ms, width),
             },
             list,
@@ -1930,6 +2257,7 @@ impl App {
         // row; rows under the conversation that do not fit are cut from the
         // bottom, so it is drawn when the rows down to it fit.
         let bare_input = matches!(view.bottom, Bottom::Input { .. })
+            && self.search.is_none()
             && self.chooser.is_none()
             && self.command_list().is_none()
             && self.mention_list().is_none();
@@ -1945,6 +2273,10 @@ impl App {
     fn list_view(&mut self, width: u16, max: usize) -> Vec<Line<'static>> {
         if let Some(chooser) = &self.chooser {
             return chooser.rows(width, max);
+        }
+        // The lists are for the draft, which is put away while searching.
+        if self.search.is_some() {
+            return Vec::new();
         }
         let Some((matches, selected)) = self.command_list() else {
             return self.mention_rows(width, max);
@@ -1969,8 +2301,15 @@ impl App {
                 .shown
                 .back()
                 .is_some_and(|(_, shown)| shown.approval.is_some());
-        let input_width = usize::from(width.saturating_sub(INPUT_CHROME));
-        let layout = self.input.layout(input_width);
+        // While searching, the words searched for in place of the draft.
+        let (input, prompt, placeholder) = match &self.search {
+            Some(search) => (&search.query, FIND, ""),
+            None => (&self.input, "› ", PLACEHOLDER),
+        };
+        // The prompt's columns past those of `› `, which INPUT_CHROME counts.
+        let extra = str_width(prompt) - 2;
+        let input_width = usize::from(width.saturating_sub(INPUT_CHROME)).saturating_sub(extra);
+        let layout = input.layout(input_width);
         let first = layout
             .cursor
             .0
@@ -1984,12 +2323,16 @@ impl App {
             .skip(first)
             .take(MAX_INPUT_ROWS)
         {
-            let prompt = if row == 0 { "› " } else { "  " };
-            let mut spans = vec![Span::raw(" "), Span::styled(prompt, theme::accent().bold())];
-            if self.input.is_empty() {
-                spans.push(Span::styled(PLACEHOLDER, theme::secondary()));
+            let prompt = if row == 0 {
+                prompt.to_owned()
             } else {
-                spans.push(Span::raw(self.input.text()[range.clone()].to_owned()));
+                " ".repeat(str_width(prompt))
+            };
+            let mut spans = vec![Span::raw(" "), Span::styled(prompt, theme::accent().bold())];
+            if input.is_empty() {
+                spans.push(Span::styled(placeholder, theme::secondary()));
+            } else {
+                spans.push(Span::raw(input.text()[range.clone()].to_owned()));
             }
             let line = Line::from(truncate(spans, usize::from(width.saturating_sub(2))));
             rows.push(if guarded {
@@ -1999,7 +2342,7 @@ impl App {
             });
         }
         let cursor = (
-            INPUT_LEFT + layout.cursor.1 as u16,
+            INPUT_LEFT + (extra + layout.cursor.1) as u16,
             1 + (layout.cursor.0 - first) as u16,
         );
         Bottom::Input { rows, cursor }
@@ -2411,6 +2754,42 @@ impl App {
         line
     }
 
+    /// The status line while searching: which match of how many (`found`,
+    /// counted from the oldest) and the keys; or that nothing matches, and
+    /// while things are folded, that Ctrl+O shows them for the search. When
+    /// the window is too narrow, the keys go from the last one on, then the
+    /// line is cut at the edge.
+    fn search_status(&self, found: Option<(usize, usize)>, width: u16) -> Line<'static> {
+        let typed = self
+            .search
+            .as_ref()
+            .is_some_and(|search| !search.query.is_empty());
+        let (said, hints) = match found {
+            Some((current, count)) => (
+                format!(" · {}/{count}", current + 1),
+                &["↑ older", "↓ newer", "Enter stay", "Esc back"][..],
+            ),
+            None if !typed => (String::new(), &["Esc back"][..]),
+            None if self.details => (" · No matches".to_owned(), &[][..]),
+            None => (
+                " · No matches".to_owned(),
+                &["Ctrl+O to search folded parts"][..],
+            ),
+        };
+        let width = usize::from(width);
+        let mut spans = vec![Span::styled(" Find", theme::accent()), Span::raw(said)];
+        let mut used = spans_width(&spans);
+        for hint in hints {
+            let hint = format!(" · {hint}");
+            used += str_width(&hint);
+            if used > width {
+                break;
+            }
+            spans.push(Span::styled(hint, theme::secondary()));
+        }
+        Line::from(truncate(spans, width))
+    }
+
     /// What the turn in progress is doing: the verb for its latest item
     /// not done yet, and for a command the command. `None` while nothing is
     /// in progress, such as while waiting for the model.
@@ -2744,6 +3123,42 @@ fn span(selection: &Selection, rows: &Rows, starts: &[(usize, Part)]) -> Option<
     let (from, to) = (cell(&selection.anchor.0)?, cell(&selection.anchor.1)?);
     let (start, end) = (cell(&selection.pointer.0)?, cell(&selection.pointer.1)?);
     Some((from.min(start), to.max(end)))
+}
+
+/// Adds the matches of `needle` on a part's `rows` to `hits`; the part's
+/// first row is row `first`.
+fn part_hits(rows: &[&Row], part: &Part, first: usize, needle: &str, hits: &mut Vec<Hit>) {
+    let keys = select::keys(rows);
+    let mut nth = 0;
+    let mut index = 0;
+    for (at, (row, key)) in rows.iter().zip(&keys).enumerate() {
+        if at > 0 && keys[at - 1] != *key {
+            nth = 0;
+        }
+        for columns in search::find(&row.line, needle) {
+            let anchor = Anchor {
+                part: part.clone(),
+                key: *key,
+                nth,
+                index,
+                row: first + at,
+            };
+            hits.push(Hit { columns, anchor });
+            nth += 1;
+            index += 1;
+        }
+    }
+}
+
+/// The match nearest where `anchor` was: in its part, the one nearest its
+/// place there; else the one nearest its row.
+fn nearest(hits: &[Hit], anchor: &Anchor) -> Option<usize> {
+    let indices = 0..hits.len();
+    let in_part = indices
+        .clone()
+        .filter(|&index| hits[index].anchor.part == anchor.part)
+        .min_by_key(|&index| hits[index].anchor.index.abs_diff(anchor.index));
+    in_part.or_else(|| indices.min_by_key(|&index| hits[index].anchor.row.abs_diff(anchor.row)))
 }
 
 /// The client to name next to what someone sent, when it was not this terminal.

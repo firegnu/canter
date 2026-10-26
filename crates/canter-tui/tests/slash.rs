@@ -620,9 +620,9 @@ fn usage_displays_models_total_last_turn_and_unknown_costs() {
 /// /help shows the commands in the conversation, and sends nothing.
 #[test]
 fn help_shows_the_commands_in_the_conversation() {
-    // One row per command, a row for Shift+Tab and the conversation's
-    // blank row: one more than the usual screen holds since `/copy`.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 1);
+    // One row per command, rows for Shift+Tab and Ctrl+F and the conversation's
+    // blank row: two more than the usual screen holds since Ctrl+F.
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 2);
     assert_eq!(screen.enter("/help"), None);
     screen.draw();
     let shown = screen.text();

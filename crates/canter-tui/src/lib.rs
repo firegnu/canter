@@ -35,6 +35,7 @@ mod question;
 pub mod review;
 mod rewind;
 mod run;
+mod search;
 mod select;
 mod text;
 pub mod theme;
