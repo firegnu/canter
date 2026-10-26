@@ -24,6 +24,7 @@ mod git;
 mod images;
 mod input;
 mod markdown;
+mod mention;
 mod picker;
 mod question;
 pub mod review;

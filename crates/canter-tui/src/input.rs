@@ -29,6 +29,18 @@ impl InputBox {
         self.text.is_empty()
     }
 
+    /// Byte offset into the text.
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// Puts `with` in place of `range` (on char boundaries), the cursor
+    /// `cursor` bytes into it.
+    pub fn replace(&mut self, range: Range<usize>, with: &str, cursor: usize) {
+        self.cursor = range.start + cursor;
+        self.text.replace_range(range, with);
+    }
+
     pub fn take(&mut self) -> String {
         self.cursor = 0;
         self.images.clear();
