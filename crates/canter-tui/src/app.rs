@@ -144,13 +144,27 @@ impl Notice {
     }
 }
 
+/// What a stretch of conversation rows shows, to find it again after Ctrl+O.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Part {
+    /// A turn's prompt (`prompt` false), an item, or a turn's end.
+    At(Place),
+    /// The notice with this index.
+    Notice(usize),
+    /// The queued message with this index.
+    Queued(usize),
+}
+
 /// The finished part of the conversation, wrapped for `width`, with the
 /// notices in their places. Finished parts do not change, so they are wrapped
-/// once, and again only when the width changes.
+/// once, and again only when the width changes or details are shown or folded.
 #[derive(Default)]
 struct History {
     width: u16,
+    details: bool,
     rows: Vec<Line<'static>>,
+    /// The row each part starts on, in order.
+    parts: Vec<(usize, Part)>,
     /// Where the finished part ends.
     end: Place,
     /// How many notices are among the rows.
@@ -263,6 +277,9 @@ pub struct App {
     active_btw: Option<usize>,
     history: History,
     scroll: Scroll,
+    /// Ctrl+O shows everything folded in the conversation: whole thinking,
+    /// all command output, whole diffs. Folded again each time canter opens.
+    details: bool,
     /// Items an `item.completed` event has closed, as (turn id, item id).
     completed: HashSet<(String, String)>,
     /// Turns whose error has already been shown.
@@ -320,6 +337,7 @@ impl App {
             active_btw: None,
             history: History::default(),
             scroll: Scroll::default(),
+            details: false,
             completed: HashSet::new(),
             errors_shown: HashSet::new(),
             working_since: working.then_some(now_ms),
@@ -518,6 +536,11 @@ impl App {
         let send_guarded = at < self.send_guard_until;
         if send_guarded {
             self.send_guard_until = self.send_guard_until.max(at + ANSWER_GUARD_MS);
+        }
+        // Switches the conversation whatever is open below it.
+        if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.toggle_details();
+            return None;
         }
         if shown.approval.is_some() {
             return self.approval_key(key, shown, guarded);
@@ -1192,11 +1215,13 @@ impl App {
 
     /// Adds what finished since the last call to the history, notices in
     /// their places. A part is finished once it and everything before it is
-    /// done. A new width wraps the whole history again.
+    /// done. A new width, or showing or folding details, draws the whole
+    /// history again.
     fn extend_history(&mut self, width: u16) {
-        if self.history.width != width {
+        if self.history.width != width || self.history.details != self.details {
             self.history = History {
                 width,
+                details: self.details,
                 ..History::default()
             };
         }
@@ -1208,15 +1233,62 @@ impl App {
                 if matches!(&notice.content, NoticeContent::Btw(answer) if !answer.done) {
                     return;
                 }
+                let part = Part::Notice(self.history.notices);
+                self.history.parts.push((self.history.rows.len(), part));
                 self.history.rows.extend(notice.rows(width));
                 self.history.notices += 1;
             }
             let Some((rows, next)) = self.finished_part(self.history.end, width) else {
                 break;
             };
+            let part = Part::At(self.history.end);
+            self.history.parts.push((self.history.rows.len(), part));
             self.history.rows.extend(rows);
             self.history.end = next;
         }
+    }
+
+    /// Ctrl+O: shows or folds everything folded in the conversation. Scrolled
+    /// back, the part at the top of the view starts the view again.
+    fn toggle_details(&mut self) {
+        let width = self.width;
+        let top = self.scroll.top.and_then(|top| {
+            self.part_starts(width)
+                .into_iter()
+                .take_while(|(start, _)| *start <= top)
+                .last()
+                .map(|(_, part)| part)
+        });
+        self.details = !self.details;
+        // The rows change, but not because of new output.
+        self.scroll.seen = Default::default();
+        if let Some(part) = top
+            && let Some((start, _)) = self
+                .part_starts(width)
+                .into_iter()
+                .find(|(_, at)| *at == part)
+        {
+            self.scroll.top = Some(start);
+        }
+    }
+
+    /// The row each part of the conversation starts on, counted as the view
+    /// counts them: without the leading blank row.
+    fn part_starts(&mut self, width: u16) -> Vec<(usize, Part)> {
+        self.extend_history(width);
+        let (live, live_parts) = self.live_rows(width);
+        let history = &self.history;
+        let lead = lead(&history.rows, &live);
+        let live_parts = live_parts
+            .into_iter()
+            .map(|(start, part)| (start + history.rows.len(), part));
+        history
+            .parts
+            .iter()
+            .copied()
+            .chain(live_parts)
+            .map(|(start, part)| (start.saturating_sub(lead), part))
+            .collect()
     }
 
     /// The rows of the part at `at` (a prompt, an item or a turn's end) and
@@ -1236,7 +1308,7 @@ impl App {
                 // Already shown as the turn's prompt.
                 Vec::new()
             } else {
-                cells::item(item, true, &self.snapshot.settings.cwd, width)
+                cells::item(item, true, self.details, &self.snapshot.settings.cwd, width)
             };
             let next = Place {
                 item: at.item + 1,
@@ -1349,7 +1421,7 @@ impl App {
             .map(|_| self.choosers);
 
         self.extend_history(width);
-        let live = self.live_rows(width);
+        let (live, _) = self.live_rows(width);
         let history = &self.history.rows;
         let (seen_width, seen_history, seen_live) = &self.scroll.seen;
         // Finished rows stay as they are, so only the rows after the history
@@ -1362,15 +1434,7 @@ impl App {
         }
         self.scroll.seen = (width, history.len(), live.clone());
 
-        // Nothing is above the conversation, so it starts without the first
-        // prompt's blank row.
-        let lead = usize::from(
-            history
-                .iter()
-                .chain(&live)
-                .next()
-                .is_some_and(|row| row.width() == 0),
-        );
+        let lead = lead(history, &live);
         let total = history.len() + live.len() - lead;
         let room = usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height())) - list.len();
         if self.scroll.top.is_some_and(|top| top + room >= total) {
@@ -1756,8 +1820,8 @@ impl App {
     }
 
     /// The conversation after the history: what is still in progress, then
-    /// the queued messages.
-    fn live_rows(&self, width: u16) -> Vec<Line<'static>> {
+    /// the queued messages; and the row each part starts on.
+    fn live_rows(&self, width: u16) -> (Vec<Line<'static>>, Vec<(usize, Part)>) {
         let end = self.history.end;
         let cwd = &self.snapshot.settings.cwd;
         let waiting: Vec<&str> = self
@@ -1771,65 +1835,72 @@ impl App {
             })
             .collect();
         let mut rows = Vec::new();
-        let mut notices = self.notices[self.history.notices..].iter().peekable();
-        let mut append_notices = |rows: &mut Vec<Line<'static>>, at: Place| {
-            while notices.peek().is_some_and(|notice| notice.at <= at) {
-                rows.extend(notices.next().expect("peeked notice").rows(width));
-            }
-        };
+        let mut parts = Vec::new();
+        let mut notices = self
+            .notices
+            .iter()
+            .enumerate()
+            .skip(self.history.notices)
+            .peekable();
+        let mut append_notices =
+            |rows: &mut Vec<Line<'static>>, parts: &mut Vec<(usize, Part)>, at: Place| {
+                while let Some((index, notice)) = notices.next_if(|(_, notice)| notice.at <= at) {
+                    parts.push((rows.len(), Part::Notice(index)));
+                    rows.extend(notice.rows(width));
+                }
+            };
         for (turn_index, turn) in self.snapshot.turns.iter().enumerate().skip(end.turn) {
-            append_notices(
-                &mut rows,
-                Place {
-                    turn: turn_index,
-                    ..Place::default()
-                },
-            );
+            let at = Place {
+                turn: turn_index,
+                ..Place::default()
+            };
+            append_notices(&mut rows, &mut parts, at);
             let current = turn_index == end.turn;
             if !current || !end.prompt {
                 let from = source(&self.client_name, &turn.client_name);
+                parts.push((rows.len(), Part::At(at)));
                 rows.extend(turn_prompt(turn, from, width));
             }
             let echo = echo_index(turn);
             let first = if current { end.item } else { 0 };
             for (index, item) in turn.items.iter().enumerate().skip(first) {
-                append_notices(
-                    &mut rows,
-                    Place {
-                        turn: turn_index,
-                        prompt: true,
-                        item: index,
-                    },
-                );
+                let at = Place {
+                    turn: turn_index,
+                    prompt: true,
+                    item: index,
+                };
+                append_notices(&mut rows, &mut parts, at);
                 if Some(index) == echo {
                     continue;
                 }
+                parts.push((rows.len(), Part::At(at)));
                 let done = self.item_done(turn, index);
                 if !done && item.id().is_some_and(|id| waiting.contains(&id)) {
-                    rows.extend(cells::waiting(item, cwd, width));
+                    rows.extend(cells::waiting(item, self.details, cwd, width));
                 } else {
-                    rows.extend(cells::item(item, done, cwd, width));
+                    rows.extend(cells::item(item, done, self.details, cwd, width));
                 }
             }
-            append_notices(
-                &mut rows,
-                Place {
-                    turn: turn_index,
-                    prompt: true,
-                    item: turn.items.len(),
-                },
-            );
+            let at = Place {
+                turn: turn_index,
+                prompt: true,
+                item: turn.items.len(),
+            };
+            append_notices(&mut rows, &mut parts, at);
             if turn.status != TurnStatus::InProgress
                 && let Some(footer) = cells::turn_footer(turn, self.errors_shown.contains(&turn.id))
             {
+                parts.push((rows.len(), Part::At(at)));
                 rows.extend(wrap(&footer, width));
             }
         }
         // A btw can follow all turns, including in a session without any turns.
-        for notice in notices {
+        for (index, notice) in notices {
+            parts.push((rows.len(), Part::Notice(index)));
             rows.extend(notice.rows(width));
         }
-        for queued in &self.snapshot.queued_inputs {
+        for (index, queued) in self.snapshot.queued_inputs.iter().enumerate() {
+            parts.push((rows.len(), Part::Queued(index)));
             let mut text = format!(
                 "  · Queued: {}",
                 queued.review.as_ref().map_or_else(
@@ -1845,10 +1916,24 @@ impl App {
                 usize::from(width),
             )));
         }
-        rows
+        (rows, parts)
     }
 
+    /// What is going on; at the end, while details are shown, how to fold them.
     fn status_line(&self, now_ms: i64) -> Line<'static> {
+        let mut line = self.activity(now_ms);
+        if self.details {
+            let text = if line.spans.is_empty() {
+                " Details shown · Ctrl+O to fold"
+            } else {
+                " · Details shown · Ctrl+O to fold"
+            };
+            line.spans.push(Span::styled(text, theme::secondary()));
+        }
+        line
+    }
+
+    fn activity(&self, now_ms: i64) -> Line<'static> {
         if let Some(reason) = &self.reconnecting {
             return Line::from(vec![
                 Span::styled(" ⟳ Reconnecting…", theme::warning()),
@@ -2090,6 +2175,18 @@ impl View {
         }
         frame.render_widget(Paragraph::new(Vec::from(self.info)), info);
     }
+}
+
+/// Nothing is above the conversation, so it starts without the first
+/// prompt's blank row: 1 when there is one, else 0.
+fn lead(history: &[Line<'static>], live: &[Line<'static>]) -> usize {
+    usize::from(
+        history
+            .iter()
+            .chain(live)
+            .next()
+            .is_some_and(|row| row.width() == 0),
+    )
 }
 
 /// The client to name next to what someone sent, when it was not this terminal.

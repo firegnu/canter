@@ -12,6 +12,11 @@ use similar::{ChangeTag, TextDiff};
 use crate::text::{LogicalLine, spans_width, wrap};
 use crate::theme;
 
+/// Lines longer than this (in bytes) are not compared word by word: comparing
+/// them on every frame could stall the screen. They keep their colour, no
+/// words marked.
+const WORD_DIFF_MAX: usize = 1024;
+
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     Added,
@@ -146,7 +151,11 @@ impl Diff {
             if removed >= shown {
                 break;
             }
-            let (old, new) = changed_words(&self.lines[removed].text, &self.lines[added].text);
+            let (old, new) = (&self.lines[removed].text, &self.lines[added].text);
+            if old.len() > WORD_DIFF_MAX || new.len() > WORD_DIFF_MAX {
+                continue;
+            }
+            let (old, new) = changed_words(old, new);
             words[removed] = Some(old);
             if added < shown {
                 words[added] = Some(new);

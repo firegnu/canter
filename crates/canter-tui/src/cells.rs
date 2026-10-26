@@ -9,7 +9,9 @@ use ratatui::text::{Line, Span};
 
 use crate::diff::Diff;
 use crate::markdown;
-use crate::text::{LogicalLine, sanitize, spans_width, truncate, visible, wrap};
+use crate::text::{
+    LogicalLine, char_width, sanitize, spans_width, str_width, truncate, visible, wrap,
+};
 use crate::theme;
 
 /// Output lines a finished command keeps.
@@ -19,7 +21,8 @@ const LIVE_TAIL: usize = 5;
 const GUTTER: &str = "    │ ";
 /// Diff lines a changed file shows in the history; the approval box shows all.
 const EDIT_LINES: usize = 12;
-/// Diff lines a new file shows in the history. A deleted file shows none.
+/// Diff lines a new file shows in the history. A deleted file shows none
+/// until details are shown.
 const ADD_LINES: usize = 6;
 /// Where a card's diff lines start: under the text of its command output.
 const DIFF_INDENT: &str = "      ";
@@ -76,13 +79,21 @@ pub(crate) fn agent_message(text: &str, width: u16) -> Vec<LogicalLine> {
 }
 
 /// Rows for an item; `finished` picks its final form over the in-progress one.
-pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Line<'static>> {
+/// With `details` (Ctrl+O), nothing is folded: whole thinking, all output, all
+/// of a diff.
+pub(crate) fn item(
+    item: &Item,
+    finished: bool,
+    details: bool,
+    cwd: &str,
+    width: u16,
+) -> Vec<Line<'static>> {
     match item {
         Item::UserMessage { content, .. } => prompt(content, None, width),
         Item::AgentMessage { text, .. } => wrap_all(&agent_message(text, width), width),
         Item::Reasoning {
             summary, content, ..
-        } => reasoning(summary, content, finished, width),
+        } => reasoning(summary, content, finished, details, width),
         Item::WebFetch {
             url,
             resolved_url,
@@ -99,6 +110,7 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
             None,
             None,
             result,
+            details,
             width,
         ),
         Item::McpToolCall {
@@ -113,6 +125,7 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
             None,
             None,
             result,
+            details,
             width,
         ),
         Item::CommandExecution {
@@ -128,13 +141,14 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
             *exit_code,
             *duration_ms,
             aggregated_output,
+            details,
             width,
         ),
         Item::FileChange {
             changes, status, ..
         } => changes
             .iter()
-            .flat_map(|change| file_change(change, *status, cwd, width))
+            .flat_map(|change| file_change(change, *status, details, cwd, width))
             .collect(),
         Item::FileRead {
             path,
@@ -207,30 +221,97 @@ pub(crate) fn wrap_all(lines: &[LogicalLine], width: u16) -> Vec<Line<'static>> 
     lines.iter().flat_map(|line| wrap(line, width)).collect()
 }
 
-/// Thinking shows one grey line: 「思考中…」 while it runs, its first line once done.
+/// Thinking, grey and italic, from the summary when there is one. Folded it
+/// is one row: `Thinking… <the latest line>` while it runs, `Thought: <the
+/// first line>` once done. With `details`, a `Thought` row and then the whole
+/// text as markdown, each row after a grey `┊`.
 fn reasoning(
     summary: &[String],
     content: &[String],
     finished: bool,
+    details: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
     let style = theme::thinking();
-    if !finished {
-        return vec![Line::from(Span::styled("  Thinking…", style))];
+    let summarized = summary.iter().any(|part| !part.trim().is_empty());
+    let parts = if summarized { summary } else { content };
+    let text = sanitize(&parts.join("\n\n"));
+    let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+    if details {
+        if finished && text.trim().is_empty() {
+            return Vec::new();
+        }
+        let heading = if finished {
+            "  Thought"
+        } else {
+            "  Thinking…"
+        };
+        let mut rows = vec![Line::from(Span::styled(heading, style))];
+        let bar = || Span::styled("  ┊ ", theme::secondary());
+        let thinking = |spans: Vec<Span<'static>>| {
+            spans
+                .into_iter()
+                .map(|span| span.patch_style(style))
+                .collect()
+        };
+        for line in markdown::render(&text, width.saturating_sub(4)) {
+            let line = LogicalLine {
+                indent: thinking(line.indent),
+                hang: thinking(line.hang),
+                body: thinking(line.body),
+            };
+            rows.extend(wrap(&line.prefixed(bar(), bar()), width));
+        }
+        return rows;
     }
-    let parts = if summary.iter().any(|part| !part.trim().is_empty()) {
-        summary
-    } else {
-        content
-    };
-    let text = sanitize(&parts.join("\n"));
-    let Some(first) = text.lines().map(str::trim).find(|line| !line.is_empty()) else {
+    if !finished {
+        let lead = "  Thinking…";
+        let Some(latest) = lines.next_back() else {
+            return vec![Line::from(Span::styled(lead, style))];
+        };
+        let room = usize::from(width).saturating_sub(str_width(lead) + 1);
+        let shown = if str_width(latest) <= room {
+            latest.to_owned()
+        } else {
+            format!("…{}", tail(latest, room.saturating_sub(1)).trim_start())
+        };
+        return vec![Line::from(truncate(
+            vec![Span::styled(format!("{lead} {shown}"), style)],
+            usize::from(width),
+        ))];
+    }
+    let Some(first) = lines.next() else {
         return Vec::new();
     };
+    // A summary starts with its title in bold: the title alone is the row.
+    let (first, rest) = match first
+        .strip_prefix("**")
+        .and_then(|after| after.split_once("**"))
+    {
+        Some((title, rest)) if summarized && !title.trim().is_empty() => (title.trim(), rest),
+        _ => (first, ""),
+    };
+    let more = if !rest.trim().is_empty() || lines.next().is_some() {
+        "…"
+    } else {
+        ""
+    };
     vec![Line::from(truncate(
-        vec![Span::styled(format!("  Thinking: {first}"), style)],
+        vec![Span::styled(format!("  Thought: {first}{more}"), style)],
         usize::from(width),
     ))]
+}
+
+/// The end of `text` that fits in `width` columns.
+fn tail(text: &str, width: usize) -> &str {
+    let mut used = 0;
+    for (at, c) in text.char_indices().rev() {
+        used += char_width(c);
+        if used > width {
+            return &text[at + c.len_utf8()..];
+        }
+    }
+    text
 }
 
 fn file_read(
@@ -268,7 +349,7 @@ fn file_read(
 
 /// An item waiting for an approval: only its title row, marked 「等你批准」.
 /// The approval box below shows the whole command or diff.
-pub(crate) fn waiting(item: &Item, cwd: &str, width: u16) -> Vec<Line<'static>> {
+pub(crate) fn waiting(item: &Item, details: bool, cwd: &str, width: u16) -> Vec<Line<'static>> {
     let mark = || vec![Span::styled("Waiting for approval", theme::warning())];
     match item {
         Item::CommandExecution { command, .. } => {
@@ -287,13 +368,14 @@ pub(crate) fn waiting(item: &Item, cwd: &str, width: u16) -> Vec<Line<'static>> 
                 right_aligned(header, mark(), usize::from(width))
             })
             .collect(),
-        _ => self::item(item, false, cwd, width),
+        _ => self::item(item, false, details, cwd, width),
     }
 }
 
 fn file_change(
     change: &FileUpdateChange,
     status: ItemStatus,
+    details: bool,
     cwd: &str,
     width: u16,
 ) -> Vec<Line<'static>> {
@@ -311,11 +393,12 @@ fn file_change(
     header.extend(suffix);
     let mut rows = vec![Line::from(truncate(header, usize::from(width)))];
     let limit = match &change.kind {
-        PatchChangeKind::Add => ADD_LINES,
+        _ if details => None,
+        PatchChangeKind::Add => Some(ADD_LINES),
         PatchChangeKind::Delete => return rows,
-        _ => EDIT_LINES,
+        _ => Some(EDIT_LINES),
     };
-    rows.extend(diff.rows(DIFF_INDENT, width, Some(limit)));
+    rows.extend(diff.rows(DIFF_INDENT, width, limit));
     rows
 }
 
@@ -365,6 +448,7 @@ fn command_card(
     exit_code: Option<i32>,
     duration_ms: Option<u64>,
     output: &str,
+    details: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
     let dim = theme::secondary();
@@ -388,7 +472,9 @@ fn command_card(
     if lines.last() == Some(&"") {
         lines.pop();
     }
-    let tail = if status == ItemStatus::InProgress {
+    let tail = if details {
+        lines.len()
+    } else if status == ItemStatus::InProgress {
         LIVE_TAIL
     } else {
         FINISHED_TAIL

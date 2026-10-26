@@ -437,3 +437,48 @@ fn approval_box_shows_control_characters_as_escapes() {
         .collect();
     assert_eq!(rows, ["1 - echo hi", "1 + echo \\x1b[2Jhi\\r"]);
 }
+
+/// Comparing very long lines word by word every frame could stall the
+/// screen, so a pair with a line over 1024 bytes is not compared: its lines
+/// keep their colour, no words marked. Shorter pairs still are.
+#[test]
+fn approval_box_does_not_compare_very_long_lines_word_by_word() {
+    let numbers = |last: u32| {
+        let mut line: String = (0..300).map(|n| format!("{n}, ")).collect();
+        line.push_str(&last.to_string());
+        line
+    };
+    let (old, new) = (numbers(1), numbers(2));
+    assert!(old.len() > 1024 && new.len() > 1024);
+    let marked = |cell: &Cell| {
+        cell.modifier.contains(Modifier::REVERSED)
+            || cell.bg == Color::Rgb(0x73, 0x32, 0x2a)
+            || cell.bg == Color::Rgb(0x2e, 0x5c, 0x3f)
+    };
+    for theme in [Theme::default(), theme(Depth::TrueColor, Background::Dark)] {
+        let mut screen = Screen::new(theme, 60);
+        let diff =
+            format!("--- a/n.txt\n+++ b/n.txt\n@@ -1,2 +1,2 @@\n-x = 1\n-{old}\n+x = 2\n+{new}\n");
+        screen.ask_edit("n.txt", &diff);
+        let buffer = screen.draw();
+        for short in ["- x = 1", "+ x = 2"] {
+            assert!(
+                row_cells(buffer, short).iter().any(|cell| marked(cell)),
+                "{theme:?}: {short} is compared"
+            );
+        }
+        let mut long_rows = 0;
+        for y in 0..buffer.area.height {
+            if row(buffer, y).contains(", ") {
+                long_rows += 1;
+                for x in 0..buffer.area.width {
+                    assert!(
+                        !marked(&buffer[(x, y)]),
+                        "{theme:?}: row {y} has marked words"
+                    );
+                }
+            }
+        }
+        assert!(long_rows > 4, "{theme:?}: the long lines are on screen");
+    }
+}
