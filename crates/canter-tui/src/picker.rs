@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::approval::shorten_home;
 use crate::text::{sanitize, str_width, truncate};
+use crate::theme;
 
 /// Rows of sessions shown at once.
 const MAX_ROWS: usize = 12;
@@ -94,7 +95,7 @@ impl Picker {
             } else {
                 "   No sessions in this directory yet"
             };
-            rows.push(Line::from(Span::styled(text, Style::new().dim())));
+            rows.push(Line::from(Span::styled(text, theme::secondary())));
         }
         for (index, session) in shown.iter().enumerate().skip(first).take(room) {
             rows.push(self.row(session, index == self.selected, inner));
@@ -107,14 +108,14 @@ impl Picker {
         };
         rows.push(Line::from(Span::styled(
             format!("   {tab} · Enter open · Esc cancel"),
-            Style::new().dim(),
+            theme::secondary(),
         )));
         PickerView { rows }
     }
 
     fn row(&self, session: &SessionSummary, selected: bool, width: usize) -> Line<'static> {
         let mut spans = vec![if selected {
-            Span::styled(" › ", Style::new().cyan().bold())
+            Span::styled(" › ", theme::accent().bold())
         } else {
             Span::raw("   ")
         }];
@@ -127,13 +128,13 @@ impl Picker {
             spans.extend(
                 directory
                     .into_iter()
-                    .map(|span| span.style(Style::new().dim())),
+                    .map(|span| span.style(theme::secondary())),
             );
             spans.push(Span::raw(" ".repeat(DIRECTORY_COLUMNS - used)));
         }
         match &session.name {
             Some(name) => spans.push(Span::raw(sanitize(name).replace('\n', " "))),
-            None => spans.push(Span::styled("(no messages yet)", Style::new().dim())),
+            None => spans.push(Span::styled("(no messages yet)", theme::secondary())),
         }
         let style = if selected {
             Style::new().bold()
@@ -154,7 +155,7 @@ impl PickerView {
     pub fn render(self, frame: &mut Frame) {
         let area = frame.area();
         let height = (self.rows.len() as u16 + 2).min(area.height);
-        let border = Style::new().dim();
+        let border = theme::secondary();
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
             .border_style(border)
