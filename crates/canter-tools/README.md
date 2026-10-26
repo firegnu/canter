@@ -226,6 +226,11 @@ Debug/Serialize。`snapshot()` 为会话复制排序后的工具定义和调用�
 保持默认 TLS 证书验证，不执行网页脚本或加载附属资源。
 
 `text/html`、`application/xhtml+xml` 用固定版本 htmd 转 Markdown，忽略 head/script/style；
+转换成功且有非空 `<title>` 时，第一行是 `Title: <标题>`，空一行后接正文。
+标题在预检通过后的同一个大栈转换线程里，经 htmd 的元素回调取出，复用同一次 HTML
+解析；去掉标签、首尾空白，连续空白压成一个空格，实体沿用转换器的解码规则。
+标题最多保留 512 个 Unicode 字符，不拆 UTF-8 字符，不另加截断标记，计入已有输出预算。
+无标题或标题为空不加该行；预检回退原文时也不加。未知编码说明保留在标题行之后、正文之前。
 HTML 及其余 `text/*`、`application/json` 和 `application/*+json` 在下载上限检查后、
 HTML 预检和转换前，用固定版本 encoding_rs 转成 UTF-8：开头的 UTF-8 / UTF-16LE/BE BOM
 优先，其次是 Content-Type 的 charset，最后（仅 HTML）预扫前 1024 字节的

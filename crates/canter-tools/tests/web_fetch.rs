@@ -55,6 +55,47 @@ async fn assert_fetch_text(content_type: &str, body: &[u8], expected: &str) {
 }
 
 #[tokio::test]
+async fn html_title_precedes_the_markdown_body() {
+    assert_fetch_text(
+        "text/html",
+        b"<html><head><title>  Canter &amp;\n\t tools &#x4E2D;&#x6587; </title><style>hidden</style></head><body><h1>Welcome</h1><p>Body.</p></body></html>",
+        "Title: Canter & tools 中文\n\n# Welcome\n\nBody.",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn absent_or_empty_html_titles_add_no_line() {
+    for head in ["", "<title></title>", "<title> \n\t&nbsp; </title>"] {
+        let body = format!("<html><head>{head}</head><body><p>Body.</p></body></html>");
+        assert_fetch_text("text/html", body.as_bytes(), "Body.").await;
+    }
+}
+
+#[tokio::test]
+async fn html_title_is_bounded_without_splitting_unicode() {
+    let body = format!(
+        "<html><head><title>{}</title></head><body><p>Body.</p></body></html>",
+        "文".repeat(600)
+    );
+    let expected = format!("Title: {}\n\nBody.", "文".repeat(512));
+    assert_fetch_text("text/html", body.as_bytes(), &expected).await;
+}
+
+#[tokio::test]
+async fn html_preflight_fallback_keeps_the_raw_title() {
+    let body = format!(
+        "<html><head><title>Raw page</title></head><body>{}Body.{} </body></html>",
+        "<div>".repeat(257),
+        "</div>".repeat(257)
+    );
+    let expected = format!(
+        "[HTML not converted: HTML nesting limit exceeded (256); showing raw HTML.]\n\n{body}"
+    );
+    assert_fetch_text("text/html", body.as_bytes(), &expected).await;
+}
+
+#[tokio::test]
 async fn charset_gbk_from_content_type() {
     assert_fetch_text(
         "text/html; charset=GBK",
