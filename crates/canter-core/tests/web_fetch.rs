@@ -147,6 +147,13 @@ async fn create(
     model: Arc<ScriptModel>,
     mode: PermissionMode,
 ) -> (tempfile::TempDir, Session, Subscription) {
+    create_with(model, mode, CoreOptions::default()).await
+}
+async fn create_with(
+    model: Arc<ScriptModel>,
+    mode: PermissionMode,
+    options: CoreOptions,
+) -> (tempfile::TempDir, Session, Subscription) {
     let temp = tempfile::tempdir().unwrap();
     let store = Arc::new(Store::new(temp.path().join("state/sessions")).unwrap());
     let (session, _) = Session::create(
@@ -178,7 +185,7 @@ async fn create(
         model,
         CoreOptions {
             context_window: 64 * 1024 * 1024,
-            ..CoreOptions::default()
+            ..options
         },
     )
     .await
@@ -528,6 +535,14 @@ async fn follows_only_same_host_and_port_redirects_with_a_limit_and_no_credentia
     session.close().await.unwrap();
 }
 
+#[test]
+fn the_default_web_fetch_timeout_is_thirty_seconds() {
+    assert_eq!(
+        CoreOptions::default().web_fetch_timeout,
+        Duration::from_secs(30)
+    );
+}
+
 #[tokio::test]
 async fn bad_status_connection_and_timeout_are_tool_errors_and_the_turn_continues() {
     let web = WebServer::new(|request| {
@@ -550,7 +565,16 @@ async fn bad_status_connection_and_timeout_are_tool_errors_and_the_turn_continue
             .map(|url| json!({"url":url}))
             .into(),
     );
-    let (_temp, session, mut events) = create(model.clone(), PermissionMode::AllowAll).await;
+    // Same timeout path as the 30 second default, without waiting for it.
+    let (_temp, session, mut events) = create_with(
+        model.clone(),
+        PermissionMode::AllowAll,
+        CoreOptions {
+            web_fetch_timeout: Duration::from_secs(1),
+            ..CoreOptions::default()
+        },
+    )
+    .await;
     session.input(input(false)).await.unwrap();
     let seen = finished(&mut events).await;
     let results = model.results();

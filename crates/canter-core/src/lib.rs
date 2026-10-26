@@ -32,6 +32,8 @@ pub struct CoreOptions {
     pub prices: usage::PriceBook,
     /// Clock at the model-request boundary; replaceable for deterministic replay tests.
     pub request_time: fn() -> i64,
+    /// Total time for one web_fetch (30 seconds); replaceable so tests need not wait.
+    pub web_fetch_timeout: std::time::Duration,
 }
 impl Default for CoreOptions {
     fn default() -> Self {
@@ -41,6 +43,7 @@ impl Default for CoreOptions {
             image_models: vec!["deepseek-flash".into()],
             prices: usage::builtin_prices(),
             request_time: journal::now,
+            web_fetch_timeout: std::time::Duration::from_secs(30),
         }
     }
 }

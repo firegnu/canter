@@ -282,7 +282,12 @@ impl Session {
             .environment
             .get("HOME")
             .map(std::path::PathBuf::from);
-        let tools = executor(writer.snapshot().settings.cwd.clone(), runtime).await?;
+        let tools = executor(
+            writer.snapshot().settings.cwd.clone(),
+            runtime,
+            options.web_fetch_timeout,
+        )
+        .await?;
         let mut state = State::new(Journal::new(store, writer));
         crate::usage::Ledger::replay(&events, &options.prices)
             .fill_costs(&mut state.journal.snapshot);
@@ -397,7 +402,7 @@ impl Session {
             .environment
             .get("HOME")
             .map(std::path::PathBuf::from);
-        let tools = executor(cwd, runtime).await?;
+        let tools = executor(cwd, runtime, options.web_fetch_timeout).await?;
         let owned_store = store.clone();
         let writer = tokio::task::spawn_blocking(move || owned_store.create(&id, settings, now()))
             .await
@@ -920,10 +925,18 @@ pub(crate) async fn owned<T: Send + 'static>(
         .await
         .map_err(|_| CoreError::internal())?
 }
-async fn executor(cwd: String, runtime: RuntimeContext) -> Result<Tools, CoreError> {
+async fn executor(
+    cwd: String,
+    runtime: RuntimeContext,
+    web_fetch_timeout: std::time::Duration,
+) -> Result<Tools, CoreError> {
     tokio::task::spawn_blocking(move || {
         LocalExecutor::new(cwd.into(), runtime.environment, runtime.protected_paths)
-            .map(|executor| Tools::new(Arc::new(executor)).with_mcp(runtime.mcp_tools))
+            .map(|executor| {
+                Tools::new(Arc::new(executor))
+                    .with_mcp(runtime.mcp_tools)
+                    .with_web_fetch_timeout(web_fetch_timeout)
+            })
             .map_err(|_| CoreError::new(ErrorCode::InvalidRequest, "invalid execution context"))
     })
     .await

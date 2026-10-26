@@ -345,6 +345,7 @@ impl PreparedCall {
 pub struct Tools {
     executor: Arc<dyn Executor>,
     mcp: Vec<mcp::McpTool>,
+    web_fetch_timeout: std::time::Duration,
 }
 
 impl Tools {
@@ -386,7 +387,14 @@ impl Tools {
         Self {
             executor,
             mcp: Vec::new(),
+            web_fetch_timeout: web_fetch::DEFAULT_TIMEOUT,
         }
+    }
+
+    /// Only tests shorten it; the server always uses the 30 second default.
+    pub fn with_web_fetch_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.web_fetch_timeout = timeout;
+        self
     }
 
     pub fn with_mcp(mut self, tools: Vec<mcp::McpTool>) -> Self {
@@ -677,7 +685,8 @@ impl Tools {
         }
         match &call.action {
             Action::WebFetch(url) => {
-                let (text, result, outcome) = web_fetch::run(url, cancel).await;
+                let (text, result, outcome) =
+                    web_fetch::run(url, self.web_fetch_timeout, cancel).await;
                 ToolOutput {
                     text,
                     outcome,
