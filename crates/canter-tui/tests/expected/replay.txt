@@ -25,7 +25,7 @@
  ~/canter
 == 第 21 条事件后，屏幕 ==
 
-  Thought: 用户想把 README 的安装步骤换成 cargo install。先读 README 看现在怎么…
+  Thought for <1s: 用户想把 README 的安装步骤换成 cargo install。先读 README 看…
 
   先看一下 README 现在怎么写的。
 
@@ -99,10 +99,6 @@
  deepseek-chat · think high · Always ask
  ~/canter
 == 发了「你好」之后，屏幕 ==
-    │    Compiling canter-store v0.1.0 (/home/dev/canter/crates/canter-store)
-    │    Compiling canter v0.1.0 (/home/dev/canter/crates/canter)
-    │     Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.1s
-
   改好了，安装步骤现在只有一行 cargo install --path crates/canter。
 
   改了什么
@@ -114,9 +110,13 @@
 
   cargo build 跑过了，退出码 0。
 
+  ─ Worked for 14s ─
+
 › 你好
 
   This is a fake server; it only replays scripted events. Received: 你好
+
+  ─ Worked for <1s ─
 
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
@@ -126,7 +126,7 @@
 == 发了「你好」之后，往上翻到顶 ==
 › 把 README 里的安装步骤改成 cargo install
 
-  Thought: 用户想把 README 的安装步骤换成 cargo install。先读 README 看现在怎么…
+  Thought for <1s: 用户想把 README 的安装步骤换成 cargo install。先读 README 看…
 
   先看一下 README 现在怎么写的。
 

@@ -34,7 +34,7 @@ pub const DEMO_SCRIPT: &str = include_str!("../fixtures/demo-session.jsonl");
 /// How fast the script plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pace {
-    /// As fast as possible (tests).
+    /// As fast as possible, at the script's own times (tests).
     Instant,
     /// Roughly like a real session, for people watching.
     Demo,
@@ -136,7 +136,14 @@ impl FakeServer {
             replay: Mutex::new(None),
             echo_turns: AtomicU64::new(0),
         });
-        shared.append(first.into_iter().map(|event| event.payload));
+        let first: Vec<_> = first
+            .into_iter()
+            .map(|event| {
+                let timestamp = shared.timestamp(&event);
+                (event.payload, timestamp)
+            })
+            .collect();
+        shared.append(first);
 
         let app = Router::new()
             .route(routes::SESSION, get(read_session))
@@ -165,16 +172,16 @@ impl Drop for FakeServer {
 }
 
 impl Shared {
-    /// Appends events with fresh sequence numbers and timestamps; returns the
-    /// sequence of the first one.
-    fn append(&self, payloads: impl IntoIterator<Item = EventPayload>) -> u64 {
+    /// Appends events with fresh sequence numbers; returns the sequence of
+    /// the first one.
+    fn append(&self, events: impl IntoIterator<Item = (EventPayload, i64)>) -> u64 {
         let mut log = self.log.lock().expect("log lock");
         let first = log.snapshot.last_event_seq + 1;
-        for payload in payloads {
+        for (payload, timestamp) in events {
             let event = Event {
                 seq: log.snapshot.last_event_seq + 1,
                 session_id: self.session_id.clone(),
-                timestamp: now_ms(),
+                timestamp,
                 payload,
             };
             apply_event_mut(&mut log.snapshot, &event).expect("checked when the server started");
@@ -182,6 +189,16 @@ impl Shared {
         }
         self.changed.send_replace(log.snapshot.last_event_seq);
         first
+    }
+
+    /// When a script event happens: as the script says when replaying for
+    /// tests, so times on screen are the same on every run; now when people
+    /// watch, so the status line counts from now.
+    fn timestamp(&self, event: &Event) -> i64 {
+        match self.pace {
+            Pace::Instant => event.timestamp,
+            Pace::Demo => now_ms(),
+        }
     }
 
     fn start_replay(self: &Arc<Self>) {
@@ -197,7 +214,8 @@ impl Shared {
                 } else {
                     tokio::time::sleep(pause).await;
                 }
-                shared.append([event.payload]);
+                let timestamp = shared.timestamp(&event);
+                shared.append([(event.payload, timestamp)]);
             }
             shared.replay_done.store(true, Ordering::SeqCst);
         });
@@ -268,12 +286,15 @@ async fn send_input(
         input: params.input.clone(),
         client_name: params.client_name.clone(),
         usage: None,
+        started_at: None,
+        completed_at: None,
+        duration_ms: None,
     };
     let message = |text: &str| Item::AgentMessage {
         id: item_id.clone(),
         text: text.to_owned(),
     };
-    let seq = shared.append([
+    let reply_events = [
         EventPayload::TurnStarted {
             turn: turn(TurnStatus::InProgress),
             input_id: None,
@@ -304,7 +325,10 @@ async fn send_input(
             status: SessionStatus::Idle,
             close_reason: None,
         },
-    ]);
+    ];
+    // The whole answer at one moment: the turn takes no time.
+    let now = now_ms();
+    let seq = shared.append(reply_events.map(|payload| (payload, now)));
     axum::Json(SessionInputResponse {
         event_seq: seq,
         turn_id: Some(turn_id),

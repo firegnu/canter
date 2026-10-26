@@ -970,6 +970,9 @@ impl Shared {
             input: params.input.clone(),
             client_name: params.client_name,
             usage: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
         };
         state
             .journal

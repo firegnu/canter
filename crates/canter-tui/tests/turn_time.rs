@@ -89,9 +89,11 @@ impl Screen {
     }
 
     fn start_thinking(&mut self, id: &str) {
-        self.event(json!({ "type": "item.started", "turnId": self.turn, "item": {
-            "type": "reasoning", "id": id, "summary": [], "content": [],
-        }}));
+        self.event(
+            json!({ "type": "item.started", "turnId": self.turn, "item": {
+                "type": "reasoning", "id": id, "summary": [], "content": [],
+            }}),
+        );
     }
 
     fn think(&mut self, id: &str, delta: &str) {
@@ -102,9 +104,11 @@ impl Screen {
     }
 
     fn thought(&mut self, id: &str, text: &str) {
-        self.event(json!({ "type": "item.completed", "turnId": self.turn, "item": {
-            "type": "reasoning", "id": id, "summary": [], "content": [text],
-        }}));
+        self.event(
+            json!({ "type": "item.completed", "turnId": self.turn, "item": {
+                "type": "reasoning", "id": id, "summary": [], "content": [text],
+            }}),
+        );
     }
 
     fn ctrl_o(&mut self) {
@@ -230,7 +234,10 @@ fn an_interrupted_or_failed_turn_says_how_long_it_ran() {
     screen.wait(1_000);
     screen.start_turn("t2");
     screen.wait(61_000);
-    screen.end_turn("failed", json!({ "message": "boom", "additionalDetails": null }));
+    screen.end_turn(
+        "failed",
+        json!({ "message": "boom", "additionalDetails": null }),
+    );
     let conversation = screen.conversation();
     assert!(
         conversation.contains(&"  ■ Turn interrupted · 12s".to_owned()),

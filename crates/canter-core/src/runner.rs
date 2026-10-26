@@ -309,7 +309,7 @@ async fn model_response(
                 }
                 Some(Ok(ModelEvent::ReasoningDelta(delta))) => {
                     if delta.is_empty() { continue; }
-                    if reasoning.is_empty() { pending.push(EventPayload::ItemStarted { turn_id: turn_id.into(), item: Item::Reasoning { id: reasoning_id.clone(), summary: Vec::new(), content: Vec::new() } }); }
+                    if reasoning.is_empty() { pending.push(EventPayload::ItemStarted { turn_id: turn_id.into(), item: Item::Reasoning { id: reasoning_id.clone(), summary: Vec::new(), content: Vec::new(), duration_ms: None } }); }
                     reasoning.push_str(&delta);
                     if let Some(AssistantContent::Reasoning { text }) = content.last_mut() { text.push_str(&delta); }
                     else { content.push(AssistantContent::Reasoning { text: delta.clone() }); }
@@ -351,6 +351,7 @@ async fn model_response(
                 id: reasoning_id,
                 summary: Vec::new(),
                 content: vec![reasoning],
+                duration_ms: None,
             },
         });
     }

@@ -59,7 +59,10 @@ fn session() -> Vec<Event> {
                     "cwd": "/work", "name": null, "model": "m", "approvalPolicy": "alwaysAsk",
                 }}),
             ),
-            (T0, json!({ "type": "turn.started", "turn": turn("t1", "inProgress") })),
+            (
+                T0,
+                json!({ "type": "turn.started", "turn": turn("t1", "inProgress") }),
+            ),
             (T0, json!({ "type": "session.status", "status": "working" })),
             (
                 T0 + 100,
@@ -94,8 +97,14 @@ fn session() -> Vec<Event> {
                 T0 + 12_345,
                 json!({ "type": "turn.completed", "turn": turn("t1", "completed") }),
             ),
-            (T0 + 12_345, json!({ "type": "session.status", "status": "idle" })),
-            (T0 + 20_000, json!({ "type": "warning", "message": "later" })),
+            (
+                T0 + 12_345,
+                json!({ "type": "session.status", "status": "idle" }),
+            ),
+            (
+                T0 + 20_000,
+                json!({ "type": "warning", "message": "later" }),
+            ),
         ],
     )
 }
@@ -139,7 +148,10 @@ fn a_clock_set_back_counts_as_no_time() {
     let events = numbered(
         1,
         vec![
-            (10_000, json!({ "type": "turn.started", "turn": turn("t1", "inProgress") })),
+            (
+                10_000,
+                json!({ "type": "turn.started", "turn": turn("t1", "inProgress") }),
+            ),
             (
                 10_000,
                 json!({ "type": "item.started", "turnId": "t1", "item": thinking("r1", &[]) }),
@@ -220,7 +232,10 @@ fn old_snapshots_without_times_still_read() {
                 7_000,
                 json!({ "type": "turn.completed", "turn": turn("t1", "completed") }),
             ),
-            (8_000, json!({ "type": "turn.started", "turn": turn("t2", "inProgress") })),
+            (
+                8_000,
+                json!({ "type": "turn.started", "turn": turn("t2", "inProgress") }),
+            ),
             (
                 9_500,
                 json!({ "type": "turn.completed", "turn": turn("t2", "completed") }),

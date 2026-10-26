@@ -172,6 +172,20 @@ pub struct Turn {
     pub input: Vec<UserInput>,
     pub client_name: String,
     pub usage: Option<TokenUsage>,
+    /// Unix seconds of `turn.started`. The reducer fills the three times from
+    /// event timestamps; absent means unknown (old data).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub started_at: Option<i64>,
+    /// Unix seconds of `turn.completed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub completed_at: Option<i64>,
+    /// Time worked so far: up to the latest event while the turn runs, the
+    /// whole turn once it has ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -231,6 +245,11 @@ pub enum Item {
         id: String,
         summary: Vec<String>,
         content: Vec<String>,
+        /// Thinking time from `item.started` up to its latest delta, filled by
+        /// the reducer; absent means unknown. Not in Codex.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        duration_ms: Option<u64>,
     },
     WebFetch {
         id: String,

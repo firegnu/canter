@@ -8,6 +8,7 @@ use canter_protocol::{
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::app::format_elapsed;
 use crate::diff::Diff;
 use crate::markdown;
 use crate::text::{
@@ -102,8 +103,11 @@ pub(crate) fn item(
         Item::UserMessage { content, .. } => prompt(content, None, width),
         Item::AgentMessage { text, .. } => wrap_all(&agent_message(text, width), width),
         Item::Reasoning {
-            summary, content, ..
-        } => reasoning(summary, content, finished, details, width),
+            summary,
+            content,
+            duration_ms,
+            ..
+        } => reasoning(summary, content, *duration_ms, finished, details, width),
         Item::WebFetch {
             url,
             resolved_url,
@@ -194,22 +198,39 @@ pub(crate) fn item(
     }
 }
 
-/// What a turn leaves behind when it did not end normally.
+/// What a turn leaves behind once it has ended: `─ Worked for 12s ─`, or
+/// why it did not end normally, with ` · 12s` when its time is known.
 pub(crate) fn turn_footer(turn: &Turn, error_shown: bool) -> Option<LogicalLine> {
-    match turn.status {
-        TurnStatus::Interrupted => Some(notice("■ ", "Turn interrupted", theme::secondary())),
+    let time = turn.duration_ms.map(took);
+    let mut line = match turn.status {
+        TurnStatus::Completed => {
+            return time
+                .map(|time| notice("─ ", &format!("Worked for {time} ─"), theme::secondary()));
+        }
+        TurnStatus::Interrupted => notice("■ ", "Turn interrupted", theme::secondary()),
         TurnStatus::Failed if !error_shown => {
             let message = turn
                 .error
                 .as_ref()
                 .map_or("no reason given", |error| error.message.as_str());
-            Some(notice(
-                "✗ ",
-                &format!("Turn failed: {message}"),
-                theme::failure(),
-            ))
+            notice("✗ ", &format!("Turn failed: {message}"), theme::failure())
         }
-        _ => None,
+        _ => return None,
+    };
+    if let Some(time) = time {
+        line.body
+            .push(Span::styled(format!(" · {time}"), theme::secondary()));
+    }
+    Some(line)
+}
+
+/// How long a turn or its thinking took: `<1s` under a second, otherwise
+/// as the status line counts (`12s`, `3m 05s`).
+fn took(ms: u64) -> String {
+    if ms < 1000 {
+        "<1s".to_owned()
+    } else {
+        format_elapsed(i64::try_from(ms).unwrap_or(i64::MAX))
     }
 }
 
@@ -227,11 +248,13 @@ pub(crate) fn wrap_all(lines: &[LogicalLine], width: u16) -> Vec<Line<'static>> 
 
 /// Thinking, grey and italic, from the summary when there is one. Folded it
 /// is one row: `Thinking… <the latest line>` while it runs, `Thought: <the
-/// first line>` once done. With `details`, a `Thought` row and then the whole
-/// text as markdown, each row after a grey `┊`.
+/// first line>` once done, `Thought for 4s: …` when its time is known. With
+/// `details`, a `Thought` (`Thought for 4s`) row and then the whole text as
+/// markdown, each row after a grey `┊`.
 fn reasoning(
     summary: &[String],
     content: &[String],
+    duration_ms: Option<u64>,
     finished: bool,
     details: bool,
     width: u16,
@@ -241,14 +264,18 @@ fn reasoning(
     let parts = if summarized { summary } else { content };
     let text = sanitize(&parts.join("\n\n"));
     let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+    let thought = match duration_ms {
+        Some(ms) => format!("  Thought for {}", took(ms)),
+        None => "  Thought".to_owned(),
+    };
     if details {
         if finished && text.trim().is_empty() {
             return Vec::new();
         }
         let heading = if finished {
-            "  Thought"
+            thought
         } else {
-            "  Thinking…"
+            "  Thinking…".to_owned()
         };
         let mut rows = vec![Line::from(Span::styled(heading, style))];
         let bar = || Span::styled("  ┊ ", theme::secondary());
@@ -301,7 +328,7 @@ fn reasoning(
         ""
     };
     vec![Line::from(truncate(
-        vec![Span::styled(format!("  Thought: {first}{more}"), style)],
+        vec![Span::styled(format!("{thought}: {first}{more}"), style)],
         usize::from(width),
     ))]
 }

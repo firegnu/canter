@@ -232,6 +232,18 @@ data 为单行 JSON，内容里的换行保持 JSON 转义；帧末两个换行�
 `turn.completed` 只更新目标轮的 status/error/usage，忽略其 items/input/clientName，
 因此生产者可以发送空 items，不必重复整轮输出。项目以 `item.*` 为准，
 `item.completed` 携带完整最终项目并替换同 id 的项目。
+
+用时（P2-43）由归并按事件自带的 `timestamp` 填，生产者不填，事件和存盘不变：
+`Turn.startedAt`、`completedAt` 是 `turn.started`、`turn.completed` 的 Unix 秒；
+`Turn.durationMs` 在 `turn.started` 置 0，之后每归并一条事件（不论种类）
+就加上这条事件的时间戳减去快照 `updatedAt`（上一条事件的时间戳），
+所以进行中也有值，是到最近一条事件为止的用时，结束后是整轮用时。
+`reasoning` 项目的 `durationMs` 在它的 `item.started` 置 0，只在它自己的思考增量上累加，
+算到最后一条思考增量；`item.completed` 沿用已有的值，没见过开始的为空。
+客户端中途读到的快照接着归并，和一次归并结果一样。时钟往回调的那一步按 0 算。
+显示前先看轮或思考有没有结束。没有这些字段的旧快照、旧事件照样读，当作不知道；
+读进来时已在进行中、没有用时的轮，结束后也不补。服务端崩溃后，没结束的轮在下次打开时
+才补记为 interrupted，它的用时算到补记那一刻（含停机时间）。
 待处理请求公共字段 id/turnId/createdAt 放在 PendingRequest 外层；
 kind 内层为带 type 的 RequestKind，包含 approval、userInput 及未知种类的兜底。
 批准内容包含 itemId/tool/arguments/availableDecisions，未知请求也能按外层 id 移除。

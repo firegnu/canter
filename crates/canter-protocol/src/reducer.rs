@@ -1,4 +1,4 @@
-use crate::{Event, EventPayload, Item, ItemDelta, SessionSnapshot, SessionStatus};
+use crate::{Event, EventPayload, Item, ItemDelta, SessionSnapshot, SessionStatus, TurnStatus};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReduceError {
@@ -109,6 +109,18 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
     if event.seq <= snapshot.last_event_seq {
         return Ok(());
     }
+    // Times come from event timestamps only. A running turn's `durationMs`
+    // gains the time since the previous event (`updatedAt`) with every event,
+    // so a snapshot read part way through times the rest of the turn just as
+    // one replay does. A clock set back counts as no time.
+    let elapsed = u64::try_from(event.timestamp.saturating_sub(snapshot.updated_at)).unwrap_or(0);
+    // Turns start at the end, one at a time, so only the last can be running.
+    for turn in snapshot.turns.iter_mut().rev() {
+        if turn.status != TurnStatus::InProgress {
+            break;
+        }
+        add_time(&mut turn.duration_ms, elapsed);
+    }
     match &event.payload {
         EventPayload::SessionRewound {
             before_turn_id,
@@ -141,6 +153,9 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
         EventPayload::TurnStarted { turn, input_id } => {
             let mut turn = turn.clone();
             turn.items.retain(|item| item.id().is_some());
+            turn.started_at = Some(event.timestamp.div_euclid(1000));
+            turn.completed_at = None;
+            turn.duration_ms = Some(0);
             snapshot.turns.push(turn);
             if let Some(id) = input_id {
                 snapshot.queued_inputs.retain(|input| input.id != *id);
@@ -169,6 +184,7 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
             existing.status = turn.status;
             existing.error = turn.error.clone();
             existing.usage = turn.usage.clone();
+            existing.completed_at = Some(event.timestamp.div_euclid(1000));
         }
         EventPayload::ItemStarted { turn_id, item }
         | EventPayload::ItemCompleted { turn_id, item } => {
@@ -178,14 +194,26 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
                     .iter_mut()
                     .find(|turn| turn.id == *turn_id)
                     .expect("validated turn");
-                if let Some(existing) = turn
+                let existing = turn
                     .items
                     .iter_mut()
-                    .find(|existing| existing.id() == Some(id))
-                {
-                    *existing = item.clone();
-                } else {
-                    turn.items.push(item.clone());
+                    .find(|existing| existing.id() == Some(id));
+                let mut item = item.clone();
+                // Thinking keeps the time it has; it starts at zero, and is
+                // unknown when its start was never seen.
+                if let Item::Reasoning { duration_ms, .. } = &mut item {
+                    *duration_ms = match existing.as_deref() {
+                        Some(Item::Reasoning {
+                            duration_ms: so_far,
+                            ..
+                        }) => *so_far,
+                        _ if matches!(event.payload, EventPayload::ItemStarted { .. }) => Some(0),
+                        _ => None,
+                    };
+                }
+                match existing {
+                    Some(existing) => *existing = item,
+                    None => turn.items.push(item),
                 }
             }
         }
@@ -217,19 +245,33 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
                             ItemDelta::CommandExecution { delta },
                         ) => aggregated_output.push_str(delta),
                         (
-                            Item::Reasoning { summary, .. },
+                            Item::Reasoning {
+                                summary,
+                                duration_ms,
+                                ..
+                            },
                             ItemDelta::ReasoningSummary {
                                 summary_index,
                                 delta,
                             },
-                        ) => append_part(summary, *summary_index, delta),
+                        ) => {
+                            append_part(summary, *summary_index, delta);
+                            add_time(duration_ms, elapsed);
+                        }
                         (
-                            Item::Reasoning { content, .. },
+                            Item::Reasoning {
+                                content,
+                                duration_ms,
+                                ..
+                            },
                             ItemDelta::ReasoningContent {
                                 content_index,
                                 delta,
                             },
-                        ) => append_part(content, *content_index, delta),
+                        ) => {
+                            append_part(content, *content_index, delta);
+                            add_time(duration_ms, elapsed);
+                        }
                         _ => unreachable!("validated delta"),
                     }
                 }
@@ -260,6 +302,13 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
     snapshot.last_event_seq = event.seq;
     snapshot.updated_at = event.timestamp;
     Ok(())
+}
+
+/// Adds to a known time; an unknown one stays unknown.
+fn add_time(duration_ms: &mut Option<u64>, elapsed: u64) {
+    if let Some(duration) = duration_ms {
+        *duration = duration.saturating_add(elapsed);
+    }
 }
 
 fn append_part(parts: &mut Vec<String>, index: u32, delta: &str) {
