@@ -10,8 +10,10 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 
-use crate::cells::{DiffKind, diff_style, display_path, parse_diff};
+use crate::cells::display_path;
+use crate::diff::Diff;
 use crate::text::{LogicalLine, visible, wrap};
+use crate::theme;
 
 /// The box laid out for one frame.
 pub(crate) struct ApprovalBox {
@@ -132,7 +134,7 @@ pub(crate) fn layout(
         );
         let line = if index == selected {
             Line::from(vec![
-                Span::styled("› ", Style::new().cyan().bold()),
+                Span::styled("› ", theme::accent().bold()),
                 Span::styled(text, Style::new().bold()),
             ])
         } else {
@@ -141,19 +143,19 @@ pub(crate) fn layout(
         tail.push(if taken {
             line
         } else {
-            line.patch_style(Style::new().dim())
+            line.patch_style(theme::secondary())
         });
         // What it grants, readable before choosing it (also with its number key).
         if *decision == ApprovalDecision::AcceptForSession {
             let note = LogicalLine::new(
                 vec![Span::raw("     ")],
-                vec![Span::styled(session_note(approval), Style::new().yellow())],
+                vec![Span::styled(session_note(approval), theme::warning())],
             );
             tail.extend(wrap(&note, inner));
         }
     }
 
-    let border = Style::new().yellow();
+    let border = theme::warning_border();
     let title = Line::from(vec![
         Span::styled("─ ", border),
         Span::styled(title, Style::new().bold()),
@@ -162,7 +164,7 @@ pub(crate) fn layout(
     let footer = |hint: &'static str| {
         Line::from(vec![
             Span::styled("─ ", border),
-            Span::styled(hint, Style::new().dim()),
+            Span::styled(hint, theme::secondary()),
             Span::styled(" ─", border),
         ])
     };
@@ -174,7 +176,7 @@ pub(crate) fn layout(
             position: None,
             rows: vec![Line::from(Span::styled(
                 " Window too small for the approval box; make it taller to choose",
-                Style::new().yellow(),
+                theme::warning(),
             ))],
             footer: footer("Esc interrupt"),
             page: 1,
@@ -200,7 +202,7 @@ pub(crate) fn layout(
         Line::from(vec![
             Span::styled(
                 format!(" {}–{} / {} ", scroll + 1, scroll + shown, body.len()),
-                Style::new().dim(),
+                theme::secondary(),
             ),
             Span::styled("─", border),
         ])
@@ -275,7 +277,7 @@ fn shell_body(
     };
     rows.extend(wrap(
         &LogicalLine::new(
-            vec![Span::styled("Directory: ", Style::new().dim())],
+            vec![Span::styled("Directory: ", theme::secondary())],
             vec![Span::raw(shorten_home(&visible(cwd), home))],
         ),
         width,
@@ -293,10 +295,9 @@ fn change_body(
     let text = |key: &str| approval.arguments.get(key).and_then(Value::as_str);
     // The tools resolve the path; the resolved one is what really gets written.
     let path = text("resolvedPath").or(text("path")).unwrap_or_default();
-    let diff = parse_diff(&visible(text("diff").unwrap_or_default()), kind);
-    let count = |wanted| diff.iter().filter(|(kind, _)| *kind == wanted).count();
-    let added = Span::styled(format!("+{}", count(DiffKind::Added)), Style::new().green());
-    let removed = Span::styled(format!("−{}", count(DiffKind::Removed)), Style::new().red());
+    let diff = Diff::parse(&visible(text("diff").unwrap_or_default()), kind);
+    let added = Span::styled(format!("+{}", diff.added()), theme::success());
+    let removed = Span::styled(format!("−{}", diff.removed()), theme::failure());
     let mut header = vec![
         Span::styled(display_path(path, cwd), Style::new().bold()),
         Span::raw("  "),
@@ -309,17 +310,9 @@ fn change_body(
     }
     let mut rows = wrap(&LogicalLine::new(Vec::new(), header), width);
     if diff.is_empty() {
-        rows.push(Line::from(Span::styled("(no changes)", Style::new().dim())));
+        rows.push(Line::from(Span::styled("(no changes)", theme::secondary())));
     }
-    for (kind, line) in diff {
-        let (marker, style) = diff_style(kind);
-        let line = LogicalLine {
-            indent: vec![Span::styled(marker, style)],
-            hang: vec![Span::raw("  ")],
-            body: vec![Span::styled(line, style)],
-        };
-        rows.extend(wrap(&line, width));
-    }
+    rows.extend(diff.rows("", width, None));
     rows
 }
 

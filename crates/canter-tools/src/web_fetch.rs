@@ -1,6 +1,7 @@
 use crate::{
     MAX_CLIENT_OUTPUT_BYTES, MAX_MODEL_OUTPUT_BYTES, ToolOutcome, output::BoundedText, parse,
 };
+use encoding_rs::{Encoding, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252, X_USER_DEFINED};
 use reqwest::Url;
 use serde::Deserialize;
 use serde_json::Value;
@@ -155,9 +156,6 @@ async fn fetch(url: &Url) -> Result<String, String> {
             name.trim()
                 .eq_ignore_ascii_case("charset")
                 .then(|| value.trim().trim_matches(['\'', '"']))
-        })
-        .filter(|charset| {
-            !charset.eq_ignore_ascii_case("utf-8") && !charset.eq_ignore_ascii_case("utf8")
         });
     let content_type = content_type_header
         .split(';')
@@ -195,7 +193,7 @@ async fn fetch(url: &Url) -> Result<String, String> {
     if !textual {
         return Ok(placeholder(&content_type, downloaded as u64));
     }
-    let mut text = String::from_utf8_lossy(&body).into_owned();
+    let (mut text, unknown_charset) = decode_text(&body, charset, html);
     if html {
         text = match check_html(&text) {
             Err(reason) => {
@@ -221,10 +219,172 @@ async fn fetch(url: &Url) -> Result<String, String> {
             }
         };
     }
-    Ok(match charset {
-        Some(charset) => format!("[Decoded as UTF-8; declared charset: {charset}.]\n\n{text}"),
+    Ok(match unknown_charset {
+        Some(charset) => format!("[Unknown charset: {charset}; decoded as UTF-8.]\n\n{text}"),
         None => text,
     })
+}
+
+fn decode_text(body: &[u8], charset: Option<&str>, html: bool) -> (String, Option<String>) {
+    if let Some((encoding, bom_len)) = Encoding::for_bom(body) {
+        let (text, _) = encoding.decode_without_bom_handling(&body[bom_len..]);
+        return (text.into_owned(), None);
+    }
+    let from_meta = charset.is_none() && html;
+    let label = charset
+        .map(str::as_bytes)
+        .or_else(|| from_meta.then(|| html_charset(body)).flatten());
+    let mut unknown = None;
+    let mut encoding = match label {
+        Some(label) => Encoding::for_label(label).unwrap_or_else(|| {
+            unknown = Some(String::from_utf8_lossy(label).into_owned());
+            UTF_8
+        }),
+        None => UTF_8,
+    };
+    // HTML's meta prescan normalizes these labels; BOM and transport do not.
+    if from_meta {
+        if encoding == UTF_16LE || encoding == UTF_16BE {
+            encoding = UTF_8;
+        } else if encoding == X_USER_DEFINED {
+            encoding = WINDOWS_1252;
+        }
+    }
+    let (text, _) = encoding.decode_without_bom_handling(body);
+    (text.into_owned(), unknown)
+}
+
+fn html_space(byte: u8) -> bool {
+    matches!(byte, b'\t' | b'\n' | 0x0c | b'\r' | b' ')
+}
+
+// Byte-level HTML encoding prescan, limited to meta declarations in 1024 bytes.
+// This deliberately does not build a DOM or attempt encoding detection.
+fn html_charset(body: &[u8]) -> Option<&[u8]> {
+    let bytes = &body[..body.len().min(1024)];
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"<!--") {
+            i += 2;
+            i += bytes[i..].windows(3).position(|part| part == b"-->")? + 3;
+        } else if bytes[i] == b'<' && bytes.get(i + 1).is_some_and(u8::is_ascii_alphabetic) {
+            i += 1;
+            let start = i;
+            while i < bytes.len() && !html_space(bytes[i]) && !b"/>".contains(&bytes[i]) {
+                i += 1;
+            }
+            let meta = bytes[start..i].eq_ignore_ascii_case(b"meta")
+                && bytes
+                    .get(i)
+                    .is_some_and(|&byte| html_space(byte) || byte == b'/');
+            let mut charset = None;
+            let mut content = None;
+            let mut pragma = None;
+            while let Some((name, value)) = prescan_attribute(bytes, &mut i) {
+                if name.eq_ignore_ascii_case(b"charset") && charset.is_none() {
+                    charset = Some(value);
+                } else if name.eq_ignore_ascii_case(b"content") && content.is_none() {
+                    content = Some(value);
+                } else if name.eq_ignore_ascii_case(b"http-equiv") && pragma.is_none() {
+                    pragma = Some(value);
+                }
+            }
+            // A declaration cut off by the prescan limit is not complete.
+            if i == bytes.len() {
+                return None;
+            }
+            if meta {
+                let label = charset.or_else(|| {
+                    pragma
+                        .filter(|value| value.eq_ignore_ascii_case(b"content-type"))
+                        .and(content)
+                        .and_then(meta_content_charset)
+                });
+                if label.is_some() {
+                    return label;
+                }
+            }
+            i += 1;
+        } else if bytes[i] == b'<' && bytes.get(i + 1).is_some_and(|b| b"!/?".contains(b)) {
+            i += bytes[i..].iter().position(|&byte| byte == b'>')? + 1;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+fn prescan_attribute<'a>(bytes: &'a [u8], i: &mut usize) -> Option<(&'a [u8], &'a [u8])> {
+    while *i < bytes.len() && (html_space(bytes[*i]) || bytes[*i] == b'/') {
+        *i += 1;
+    }
+    if *i == bytes.len() || bytes[*i] == b'>' {
+        return None;
+    }
+    let start = *i;
+    // A leading '=' belongs to the name in the prescan algorithm.
+    *i += 1;
+    while *i < bytes.len() && !html_space(bytes[*i]) && !b"=/>".contains(&bytes[*i]) {
+        *i += 1;
+    }
+    let name = &bytes[start..*i];
+    while *i < bytes.len() && html_space(bytes[*i]) {
+        *i += 1;
+    }
+    if bytes.get(*i) != Some(&b'=') {
+        return Some((name, b""));
+    }
+    *i += 1;
+    while *i < bytes.len() && html_space(bytes[*i]) {
+        *i += 1;
+    }
+    let quote = bytes.get(*i).copied().filter(|b| b"\"'".contains(b));
+    if quote.is_some() {
+        *i += 1;
+    }
+    let start = *i;
+    while *i < bytes.len()
+        && match quote {
+            Some(quote) => bytes[*i] != quote,
+            None => !html_space(bytes[*i]) && bytes[*i] != b'>',
+        }
+    {
+        *i += 1;
+    }
+    let value = &bytes[start..*i];
+    if quote.is_some() && *i < bytes.len() {
+        *i += 1;
+    }
+    Some((name, value))
+}
+
+fn meta_content_charset(content: &[u8]) -> Option<&[u8]> {
+    let mut rest = content;
+    while let Some(start) = rest
+        .windows(7)
+        .position(|part| part.eq_ignore_ascii_case(b"charset"))
+    {
+        rest = &rest[start + 7..];
+        rest = rest.trim_ascii_start();
+        if !rest.starts_with(b"=") {
+            continue;
+        }
+        rest = rest[1..].trim_ascii_start();
+        if matches!(rest.first(), Some(b'\'' | b'"')) {
+            let quote = rest[0];
+            rest = &rest[1..];
+            return rest
+                .iter()
+                .position(|&byte| byte == quote)
+                .map(|end| &rest[..end]);
+        }
+        let end = rest
+            .iter()
+            .position(|&byte| html_space(byte) || byte == b';')
+            .unwrap_or(rest.len());
+        return Some(&rest[..end]);
+    }
+    None
 }
 
 // A conservative, linear preflight, not an HTML parser. In particular, only a

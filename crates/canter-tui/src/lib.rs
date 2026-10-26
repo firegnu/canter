@@ -8,6 +8,8 @@
 //!
 //! - [`client`]: HTTP + SSE over the server's unix socket.
 //! - [`fake`]: a server that replays a scripted session, for tests and demos.
+//! - [`theme`]: colours by purpose. [`run`] works out the terminal's colour depth
+//!   and background at start; tests set them with [`theme::set`].
 //! - [`Ui`]: the screen on any ratatui backend; [`run`] opens a session and
 //!   drives the screen in a real terminal, [`run_on`] on any backend.
 
@@ -18,6 +20,7 @@ mod cells;
 pub mod client;
 mod commands;
 mod context;
+mod diff;
 pub mod fake;
 mod files;
 mod git;
@@ -31,6 +34,7 @@ pub mod review;
 mod rewind;
 mod run;
 mod text;
+pub mod theme;
 pub mod usage;
 
 pub use app::{ANSWER_GUARD_MS, Action, App};

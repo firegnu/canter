@@ -1,12 +1,10 @@
 use canter_protocol::{BtwEvent, UserInput};
-use ratatui::{
-    style::{Modifier, Style},
-    text::{Line, Span},
-};
+use ratatui::text::{Line, Span};
 
 use crate::{
     cells, markdown,
     text::{LogicalLine, sanitize, wrap},
+    theme,
 };
 
 pub(crate) struct Answer {
@@ -99,9 +97,7 @@ impl Answer {
         }
         for row in &mut rows {
             for span in &mut row.spans {
-                span.style = span
-                    .style
-                    .patch(Style::new().dark_gray().add_modifier(Modifier::DIM));
+                span.style = span.style.patch(theme::aside());
             }
         }
         rows

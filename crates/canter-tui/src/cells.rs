@@ -7,14 +7,22 @@ use canter_protocol::{
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::diff::Diff;
 use crate::markdown;
 use crate::text::{LogicalLine, sanitize, spans_width, truncate, visible, wrap};
+use crate::theme;
 
 /// Output lines a finished command keeps.
 const FINISHED_TAIL: usize = 3;
 /// Output lines shown while a command runs.
 const LIVE_TAIL: usize = 5;
 const GUTTER: &str = "    │ ";
+/// Diff lines a changed file shows in the history; the approval box shows all.
+const EDIT_LINES: usize = 12;
+/// Diff lines a new file shows in the history. A deleted file shows none.
+const ADD_LINES: usize = 6;
+/// Where a card's diff lines start: under the text of its command output.
+const DIFF_INDENT: &str = "      ";
 
 /// A blank row, `› ` and the text, then another blank row. `source` names the
 /// client that sent it when that was not this terminal.
@@ -41,7 +49,7 @@ pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> V
     let mut rows = vec![Line::default()];
     for (i, line) in text.split('\n').enumerate() {
         let indent = if i == 0 {
-            Span::styled("› ", Style::new().cyan().bold())
+            Span::styled("› ", theme::accent().bold())
         } else {
             Span::raw("  ")
         };
@@ -49,7 +57,7 @@ pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> V
         if let Some(source) = source.filter(|_| i == 0) {
             body.push(Span::styled(
                 format!("  (from {})", sanitize(source)),
-                Style::new().dim(),
+                theme::secondary(),
             ));
         }
         rows.extend(wrap(&LogicalLine::new(vec![indent], body), width));
@@ -137,7 +145,7 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
         Item::ContextCompaction { .. } => {
             vec![Line::from(Span::styled(
                 "  ── Context compacted ──",
-                Style::new().dim(),
+                theme::secondary(),
             ))]
         }
         Item::UserInput {
@@ -158,7 +166,7 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
                 &notice(
                     "? ",
                     &format!("{} → {}", visible(question), visible(&answer)),
-                    Style::new().dim(),
+                    theme::secondary(),
                 ),
                 width,
             )
@@ -170,7 +178,7 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
 /// What a turn leaves behind when it did not end normally.
 pub(crate) fn turn_footer(turn: &Turn, error_shown: bool) -> Option<LogicalLine> {
     match turn.status {
-        TurnStatus::Interrupted => Some(notice("■ ", "Turn interrupted", Style::new().dim())),
+        TurnStatus::Interrupted => Some(notice("■ ", "Turn interrupted", theme::secondary())),
         TurnStatus::Failed if !error_shown => {
             let message = turn
                 .error
@@ -179,7 +187,7 @@ pub(crate) fn turn_footer(turn: &Turn, error_shown: bool) -> Option<LogicalLine>
             Some(notice(
                 "✗ ",
                 &format!("Turn failed: {message}"),
-                Style::new().red(),
+                theme::failure(),
             ))
         }
         _ => None,
@@ -205,7 +213,7 @@ fn reasoning(
     finished: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let style = Style::new().dim().italic();
+    let style = theme::thinking();
     if !finished {
         return vec![Line::from(Span::styled("  Thinking…", style))];
     }
@@ -234,51 +242,47 @@ fn file_read(
 ) -> Line<'static> {
     let mut spans = vec![
         Span::raw("  "),
-        Span::styled("◇ ", Style::new().dim()),
+        Span::styled("◇ ", theme::secondary()),
         Span::styled("Read ", Style::new().bold()),
         Span::raw(display_path(path, cwd)),
     ];
     let lines = content.lines().count() as u32;
     let detail = match status {
         ItemStatus::InProgress => None,
-        ItemStatus::Failed => Some(Span::styled("  failed", Style::new().red())),
-        ItemStatus::Declined => Some(Span::styled("  declined", Style::new().dim())),
-        _ if lines == 0 => Some(Span::styled("  empty", Style::new().dim())),
+        ItemStatus::Failed => Some(Span::styled("  failed", theme::failure())),
+        ItemStatus::Declined => Some(Span::styled("  declined", theme::secondary())),
+        _ if lines == 0 => Some(Span::styled("  empty", theme::secondary())),
         _ if lines == 1 => Some(Span::styled(
             format!("  line {start_line}"),
-            Style::new().dim(),
+            theme::secondary(),
         )),
         _ => Some(Span::styled(
             format!("  lines {start_line}–{}", start_line + lines - 1),
-            Style::new().dim(),
+            theme::secondary(),
         )),
     };
     spans.extend(detail);
     Line::from(truncate(spans, usize::from(width)))
 }
 
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum DiffKind {
-    Hunk,
-    Added,
-    Removed,
-    Context,
-    Note,
-}
-
 /// An item waiting for an approval: only its title row, marked 「等你批准」.
 /// The approval box below shows the whole command or diff.
 pub(crate) fn waiting(item: &Item, cwd: &str, width: u16) -> Vec<Line<'static>> {
-    let mark = || vec![Span::styled("Waiting for approval", Style::new().yellow())];
+    let mark = || vec![Span::styled("Waiting for approval", theme::warning())];
     match item {
         Item::CommandExecution { command, .. } => {
-            vec![command_title(command, Style::new().dim(), mark(), width)]
+            vec![command_title(
+                command,
+                dot(theme::secondary()),
+                mark(),
+                width,
+            )]
         }
         Item::FileChange { changes, .. } => changes
             .iter()
             .map(|change| {
-                let diff = parse_diff(&sanitize(&change.diff), &change.kind);
-                let header = change_header(change, &diff, Style::new().dim(), cwd);
+                let diff = Diff::parse(&sanitize(&change.diff), &change.kind);
+                let header = change_header(change, &diff, dot(theme::secondary()), cwd);
                 right_aligned(header, mark(), usize::from(width))
             })
             .collect(),
@@ -292,46 +296,36 @@ fn file_change(
     cwd: &str,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let diff = parse_diff(&sanitize(&change.diff), &change.kind);
+    let diff = Diff::parse(&sanitize(&change.diff), &change.kind);
     let (bullet, suffix) = match status {
-        ItemStatus::InProgress => (Style::new().dim(), None),
-        ItemStatus::Failed => (
-            Style::new().red(),
-            Some(Span::styled("  failed", Style::new().red())),
-        ),
+        ItemStatus::InProgress => (dot(theme::secondary()), None),
+        ItemStatus::Failed => (cross(), Some(Span::styled("  failed", theme::failure()))),
         ItemStatus::Declined => (
-            Style::new().dim(),
-            Some(Span::styled("  declined", Style::new().dim())),
+            dot(theme::secondary()),
+            Some(Span::styled("  declined", theme::secondary())),
         ),
-        _ => (Style::new().green(), None),
+        _ => (dot(theme::success()), None),
     };
     let mut header = change_header(change, &diff, bullet, cwd);
     header.extend(suffix);
     let mut rows = vec![Line::from(truncate(header, usize::from(width)))];
-    for (kind, text) in diff {
-        let (marker, style) = diff_style(kind);
-        let line = LogicalLine {
-            indent: vec![
-                Span::styled(GUTTER, Style::new().dim()),
-                Span::styled(marker, style),
-            ],
-            hang: vec![Span::styled(GUTTER, Style::new().dim()), Span::raw("  ")],
-            body: vec![Span::styled(text, style)],
-        };
-        rows.extend(wrap(&line, width));
-    }
+    let limit = match &change.kind {
+        PatchChangeKind::Add => ADD_LINES,
+        PatchChangeKind::Delete => return rows,
+        _ => EDIT_LINES,
+    };
+    rows.extend(diff.rows(DIFF_INDENT, width, Some(limit)));
     rows
 }
 
 /// `● 改 path  +a −r`: a file change's title, before any status suffix.
 fn change_header(
     change: &FileUpdateChange,
-    diff: &[(DiffKind, String)],
-    bullet: Style,
+    diff: &Diff,
+    bullet: Span<'static>,
     cwd: &str,
 ) -> Vec<Span<'static>> {
-    let count = |wanted| diff.iter().filter(|(kind, _)| *kind == wanted).count();
-    let (added, removed) = (count(DiffKind::Added), count(DiffKind::Removed));
+    let (added, removed) = (diff.added(), diff.removed());
     let verb = match &change.kind {
         PatchChangeKind::Add => "Add ",
         PatchChangeKind::Delete => "Delete ",
@@ -339,7 +333,7 @@ fn change_header(
     };
     let mut header = vec![
         Span::raw("  "),
-        Span::styled("● ", bullet),
+        bullet,
         Span::styled(verb, Style::new().bold()),
         Span::raw(display_path(&change.path, cwd)),
     ];
@@ -351,63 +345,17 @@ fn change_header(
     }
     header.push(Span::raw("  "));
     match &change.kind {
-        PatchChangeKind::Add => {
-            header.push(Span::styled(format!("+{added}"), Style::new().green()))
-        }
+        PatchChangeKind::Add => header.push(Span::styled(format!("+{added}"), theme::success())),
         PatchChangeKind::Delete => {
-            header.push(Span::styled(format!("−{removed}"), Style::new().red()))
+            header.push(Span::styled(format!("−{removed}"), theme::failure()))
         }
         _ => header.extend([
-            Span::styled(format!("+{added}"), Style::new().green()),
+            Span::styled(format!("+{added}"), theme::success()),
             Span::raw(" "),
-            Span::styled(format!("−{removed}"), Style::new().red()),
+            Span::styled(format!("−{removed}"), theme::failure()),
         ]),
     }
     header
-}
-
-/// The marker and colour of a diff line.
-pub(crate) fn diff_style(kind: DiffKind) -> (&'static str, Style) {
-    match kind {
-        DiffKind::Hunk => ("", Style::new().cyan()),
-        DiffKind::Added => ("+ ", Style::new().green()),
-        DiffKind::Removed => ("- ", Style::new().red()),
-        DiffKind::Context => ("  ", Style::new().dim()),
-        DiffKind::Note => ("", Style::new().dim()),
-    }
-}
-
-/// Splits a unified diff into marked lines. Text without hunks is a whole
-/// file being added (or deleted).
-pub(crate) fn parse_diff(text: &str, kind: &PatchChangeKind) -> Vec<(DiffKind, String)> {
-    if !text.lines().any(|line| line.starts_with("@@")) {
-        let kind = match kind {
-            PatchChangeKind::Delete => DiffKind::Removed,
-            _ => DiffKind::Added,
-        };
-        return text.lines().map(|line| (kind, line.to_owned())).collect();
-    }
-    let mut lines = Vec::new();
-    let mut in_hunk = false;
-    for line in text.lines() {
-        let entry = if line.starts_with("@@") {
-            in_hunk = true;
-            (DiffKind::Hunk, line)
-        } else if !in_hunk {
-            // File headers (diff --git, index, ---, +++) repeat the card's title.
-            continue;
-        } else if let Some(rest) = line.strip_prefix('+') {
-            (DiffKind::Added, rest)
-        } else if let Some(rest) = line.strip_prefix('-') {
-            (DiffKind::Removed, rest)
-        } else if line.starts_with('\\') {
-            (DiffKind::Note, line)
-        } else {
-            (DiffKind::Context, line.strip_prefix(' ').unwrap_or(line))
-        };
-        lines.push((entry.0, entry.1.to_owned()));
-    }
-    lines
 }
 
 fn command_card(
@@ -418,21 +366,18 @@ fn command_card(
     output: &str,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let dim = Style::new().dim();
+    let dim = theme::secondary();
     let took = duration_ms.map(|ms| Span::styled(format!(" · {}", format_duration(ms)), dim));
     let (bullet, mut right) = match (status, exit_code) {
-        (ItemStatus::InProgress, _) => (dim, vec![Span::styled("running", dim)]),
-        (ItemStatus::Declined, _) => (dim, vec![Span::styled("declined", dim)]),
-        (_, Some(0)) => (Style::new().green(), vec![Span::styled("exit 0", dim)]),
+        (ItemStatus::InProgress, _) => (dot(dim), vec![Span::styled("running", dim)]),
+        (ItemStatus::Declined, _) => (dot(dim), vec![Span::styled("declined", dim)]),
+        (_, Some(0)) => (dot(theme::success()), vec![Span::styled("exit 0", dim)]),
         (_, Some(code)) => (
-            Style::new().red(),
-            vec![Span::styled(format!("exit {code}"), Style::new().red())],
+            cross(),
+            vec![Span::styled(format!("exit {code}"), theme::failure())],
         ),
-        (ItemStatus::Failed, None) => (
-            Style::new().red(),
-            vec![Span::styled("failed", Style::new().red())],
-        ),
-        (_, None) => (Style::new().green(), Vec::new()),
+        (ItemStatus::Failed, None) => (cross(), vec![Span::styled("failed", theme::failure())]),
+        (_, None) => (dot(theme::success()), Vec::new()),
     };
     right.extend(took);
     let mut rows = vec![command_title(command, bullet, right, width)];
@@ -472,7 +417,7 @@ fn command_card(
 /// Control characters in the command show as escapes, as in the approval box.
 fn command_title(
     command: &str,
-    bullet: Style,
+    bullet: Span<'static>,
     right: Vec<Span<'static>>,
     width: u16,
 ) -> Line<'static> {
@@ -484,11 +429,21 @@ fn command_title(
     }
     let left = vec![
         Span::raw("  "),
-        Span::styled("● ", bullet),
+        bullet,
         Span::styled("Run ", Style::new().bold()),
         Span::raw(shown),
     ];
     right_aligned(left, right, usize::from(width))
+}
+
+/// A card's mark: `●` in `style`.
+fn dot(style: Style) -> Span<'static> {
+    Span::styled("● ", style)
+}
+
+/// A failed card's mark: a red `✗`.
+fn cross() -> Span<'static> {
+    Span::styled("✗ ", theme::failure())
 }
 
 /// `left` then `right` flush with the right edge; the left side is cut to fit.

@@ -34,3 +34,4 @@ similar = "=2.7.0"
 ignore = "=0.4.33"
 nix = { version = "=0.31.3", features = ["signal", "process"] }
 chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
+terminal-colorsaurus = { version = "=1.0.3", default-features = false }

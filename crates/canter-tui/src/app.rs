@@ -14,7 +14,6 @@ use canter_protocol::{
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
@@ -24,6 +23,7 @@ use crate::commands::{self, Chooser, Command};
 use crate::input::InputBox;
 use crate::mention;
 use crate::text::{LogicalLine, sanitize, str_width, truncate, wrap};
+use crate::theme;
 
 const PLACEHOLDER: &str = "Type a message (Enter to send, Ctrl+J for a new line)";
 const MAX_INPUT_ROWS: usize = 8;
@@ -370,7 +370,7 @@ impl App {
                     "Skipped an event that does not fit (seq {}): {error}",
                     event.seq
                 ),
-                Style::new().red(),
+                theme::failure(),
             ));
             return;
         }
@@ -418,7 +418,7 @@ impl App {
                 }
             }
             EventPayload::Warning { message } => {
-                self.notice(cells::notice("! ", message, Style::new().yellow()));
+                self.notice(cells::notice("! ", message, theme::warning()));
             }
             EventPayload::Error {
                 error,
@@ -431,9 +431,9 @@ impl App {
                     error.message.clone()
                 };
                 let style = if *will_retry {
-                    Style::new().yellow()
+                    theme::warning()
                 } else {
-                    Style::new().red()
+                    theme::failure()
                 };
                 self.notice(cells::notice("✗ ", &text, style));
                 if let Some(turn_id) = turn_id
@@ -817,7 +817,7 @@ impl App {
                     " ⋯ Only the first {} files and directories are listed",
                     mention::LIMIT
                 ),
-                Style::new().dim(),
+                theme::secondary(),
             )));
         }
         rows
@@ -1118,7 +1118,7 @@ impl App {
 
     /// A line for the conversation, e.g. the server's version differs.
     pub fn warning(&mut self, message: &str) {
-        self.notice(cells::notice("! ", message, Style::new().yellow()));
+        self.notice(cells::notice("! ", message, theme::warning()));
     }
 
     /// Puts `line` after everything finished so far, before what is still
@@ -1142,7 +1142,7 @@ impl App {
         self.notice(cells::notice(
             "✗ ",
             &format!("Not sent: {message}"),
-            Style::new().red(),
+            theme::failure(),
         ));
     }
 
@@ -1159,7 +1159,7 @@ impl App {
         self.notice(cells::notice(
             "✗ ",
             &format!("Answer not sent: {message}"),
-            Style::new().red(),
+            theme::failure(),
         ));
     }
 
@@ -1168,7 +1168,7 @@ impl App {
         self.notice(cells::notice(
             "· ",
             "Your answer came too late and was ignored",
-            Style::new().dim(),
+            theme::secondary(),
         ));
     }
 
@@ -1177,7 +1177,7 @@ impl App {
         self.notice(cells::notice(
             "✗ ",
             &format!("Interrupt failed: {message}"),
-            Style::new().red(),
+            theme::failure(),
         ));
     }
 
@@ -1386,8 +1386,8 @@ impl App {
                 Bottom::Approval(_) => " · scroll down",
             };
             Line::from(vec![
-                Span::styled(" ↓ New output below", Style::new().cyan()),
-                Span::styled(how, Style::new().dim()),
+                Span::styled(" ↓ New output below", theme::accent()),
+                Span::styled(how, theme::secondary()),
             ])
         });
         let area = room.saturating_sub(usize::from(hint.is_some()));
@@ -1470,18 +1470,15 @@ impl App {
             .take(MAX_INPUT_ROWS)
         {
             let prompt = if row == 0 { "› " } else { "  " };
-            let mut spans = vec![
-                Span::raw(" "),
-                Span::styled(prompt, Style::new().cyan().bold()),
-            ];
+            let mut spans = vec![Span::raw(" "), Span::styled(prompt, theme::accent().bold())];
             if self.input.is_empty() {
-                spans.push(Span::styled(PLACEHOLDER, Style::new().dim()));
+                spans.push(Span::styled(PLACEHOLDER, theme::secondary()));
             } else {
                 spans.push(Span::raw(self.input.text()[range.clone()].to_owned()));
             }
             let line = Line::from(truncate(spans, usize::from(width.saturating_sub(2))));
             rows.push(if guarded {
-                line.patch_style(Style::new().dim())
+                line.patch_style(theme::secondary())
             } else {
                 line
             });
@@ -1709,7 +1706,7 @@ impl App {
         client: Option<&str>,
         tool: &str,
     ) -> Option<LogicalLine> {
-        let dim = Style::new().dim();
+        let dim = theme::secondary();
         match resolution {
             ApprovalResolution::Answered { decision } => {
                 let label = approval::decision_label(*decision, tool);
@@ -1720,9 +1717,9 @@ impl App {
                 };
                 let (mark, style) = match decision {
                     ApprovalDecision::Accept | ApprovalDecision::AcceptForSession => {
-                        ("✓ ", Style::new().green())
+                        ("✓ ", theme::success())
                     }
-                    _ => ("✗ ", Style::new().red()),
+                    _ => ("✗ ", theme::failure()),
                 };
                 Some(cells::notice(mark, &text, style))
             }
@@ -1844,7 +1841,7 @@ impl App {
                 text += &format!("  (from {})", sanitize(from));
             }
             rows.push(Line::from(truncate(
-                vec![Span::styled(text, Style::new().dim())],
+                vec![Span::styled(text, theme::secondary())],
                 usize::from(width),
             )));
         }
@@ -1854,8 +1851,8 @@ impl App {
     fn status_line(&self, now_ms: i64) -> Line<'static> {
         if let Some(reason) = &self.reconnecting {
             return Line::from(vec![
-                Span::styled(" ⟳ Reconnecting…", Style::new().yellow()),
-                Span::styled(format!(" · {}", sanitize(reason)), Style::new().dim()),
+                Span::styled(" ⟳ Reconnecting…", theme::warning()),
+                Span::styled(format!(" · {}", sanitize(reason)), theme::secondary()),
             ]);
         }
         let interrupting = self.interrupting.as_ref().is_some_and(|id| {
@@ -1865,7 +1862,7 @@ impl App {
                 .any(|turn| turn.id == *id && turn.status == TurnStatus::InProgress)
         });
         if interrupting {
-            return Line::from(Span::styled(" ■ Interrupting…", Style::new().yellow()));
+            return Line::from(Span::styled(" ■ Interrupting…", theme::warning()));
         }
         let elapsed = self
             .working_since
@@ -1875,9 +1872,9 @@ impl App {
             SessionStatus::Working => {
                 let frame = SPINNER[(now_ms.max(0) / 80) as usize % SPINNER.len()];
                 Line::from(vec![
-                    Span::styled(format!(" {frame} "), Style::new().cyan()),
+                    Span::styled(format!(" {frame} "), theme::accent()),
                     Span::raw("Working"),
-                    Span::styled(format!(" · {elapsed}"), Style::new().dim()),
+                    Span::styled(format!(" · {elapsed}"), theme::secondary()),
                 ])
             }
             SessionStatus::WaitingApproval => Line::from(vec![
@@ -1892,24 +1889,21 @@ impl App {
                     } else {
                         " ⏸ Waiting for approval"
                     },
-                    Style::new().yellow(),
+                    theme::warning(),
                 ),
-                Span::styled(format!(" · {elapsed}"), Style::new().dim()),
+                Span::styled(format!(" · {elapsed}"), theme::secondary()),
             ]),
-            SessionStatus::Starting => Line::from(Span::styled(" Starting…", Style::new().dim())),
+            SessionStatus::Starting => Line::from(Span::styled(" Starting…", theme::secondary())),
             SessionStatus::Error => {
                 let message = self.snapshot.error.as_ref().map_or(String::new(), |error| {
                     format!(": {}", sanitize(&error.message))
                 });
-                Line::from(Span::styled(
-                    format!(" ✗ Error{message}"),
-                    Style::new().red(),
-                ))
+                Line::from(Span::styled(format!(" ✗ Error{message}"), theme::failure()))
             }
             // Only an explicit `canter --resume` opens it again.
             SessionStatus::Closed => Line::from(Span::styled(
                 " ■ Session closed · to resume, quit and run canter --resume",
-                Style::new().yellow(),
+                theme::warning(),
             )),
             SessionStatus::Idle | SessionStatus::Unknown => Line::default(),
         }
@@ -1921,10 +1915,10 @@ impl App {
     /// first row shows all of the permission mode.
     fn info_rows(&self, width: u16) -> ([Line<'static>; 2], bool) {
         let settings = &self.snapshot.settings;
-        let dim = Style::new().dim();
+        let dim = theme::secondary();
         let (mode, mode_style) = match settings.approval_policy {
             PermissionMode::AskForExecution => ("Ask for execution", dim),
-            PermissionMode::AllowAll => ("Allow all", Style::new().red()),
+            PermissionMode::AllowAll => ("Allow all", theme::failure()),
             // Unknown modes are treated as the strictest one.
             PermissionMode::AlwaysAsk | PermissionMode::Unknown => ("Always ask", dim),
         };
@@ -2073,7 +2067,7 @@ impl View {
                     Paragraph::new(rows).block(
                         Block::bordered()
                             .border_type(BorderType::Rounded)
-                            .border_style(Style::new().dim()),
+                            .border_style(theme::secondary()),
                     ),
                     boxed,
                 );
@@ -2085,7 +2079,7 @@ impl View {
             Bottom::Approval(laid) => {
                 let mut block = Block::bordered()
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::new().yellow())
+                    .border_style(theme::warning_border())
                     .title_top(laid.title)
                     .title_bottom(laid.footer);
                 if let Some(position) = laid.position {
@@ -2118,7 +2112,7 @@ fn turn_prompt(turn: &Turn, from: Option<&str>, width: u16) -> Vec<Line<'static>
         Some(title) => vec![Line::from(truncate(
             vec![Span::styled(
                 format!("  {}", sanitize(title).replace('\n', " ")),
-                Style::new().cyan(),
+                theme::accent(),
             )],
             usize::from(width),
         ))],

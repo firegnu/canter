@@ -21,6 +21,8 @@ unicode-width.workspace = true
 chrono.workspace = true
 nix.workspace = true
 ignore.workspace = true
+terminal-colorsaurus.workspace = true
+similar = { workspace = true, features = ["inline"] }
 
 [dev-dependencies]
 tempfile.workspace = true

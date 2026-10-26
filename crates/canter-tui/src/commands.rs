@@ -11,6 +11,7 @@ use ratatui::text::{Line, Span};
 
 use crate::app::{Action, App};
 use crate::text::{LogicalLine, sanitize, str_width, truncate};
+use crate::theme;
 
 pub(crate) struct Command {
     pub name: &'static str,
@@ -171,11 +172,8 @@ pub(crate) fn skills(skills: Vec<canter_protocol::Skill>) -> Vec<LogicalLine> {
             LogicalLine::new(
                 vec![Span::raw("  ")],
                 vec![
-                    Span::styled(
-                        sanitize(&skill.name).replace('\n', " "),
-                        Style::new().cyan(),
-                    ),
-                    Span::styled(format!(" [{source}]{manual}  "), Style::new().dim()),
+                    Span::styled(sanitize(&skill.name).replace('\n', " "), theme::accent()),
+                    Span::styled(format!(" [{source}]{manual}  "), theme::secondary()),
                     Span::raw(sanitize(&skill.description).replace('\n', " ")),
                 ],
             )
@@ -343,9 +341,9 @@ fn help() -> Vec<LogicalLine> {
         lines.push(LogicalLine::new(
             vec![
                 Span::raw("  "),
-                Span::styled(format!("{name:width$}   "), Style::new().cyan()),
+                Span::styled(format!("{name:width$}   "), theme::accent()),
             ],
-            vec![Span::styled(about, Style::new().dim())],
+            vec![Span::styled(about, theme::secondary())],
         ));
     }
     lines
@@ -409,7 +407,7 @@ impl Chooser {
                 Span::styled(format!(" {}", self.title), Style::new().bold()),
                 Span::styled(
                     "  ↑↓ select · Enter choose · Esc cancel",
-                    Style::new().dim(),
+                    theme::secondary(),
                 ),
             ],
             usize::from(width),
@@ -442,15 +440,15 @@ pub(crate) fn list_rows(
             let padded = format!("{label}{}", " ".repeat(label_width - str_width(label) + 3));
             let spans = if index == selected {
                 vec![
-                    Span::styled(" › ", Style::new().cyan().bold()),
+                    Span::styled(" › ", theme::accent().bold()),
                     Span::styled(padded, Style::new().bold()),
-                    Span::styled(about.to_owned(), Style::new().dim()),
+                    Span::styled(about.to_owned(), theme::secondary()),
                 ]
             } else {
                 vec![
                     Span::raw("   "),
                     Span::raw(padded),
-                    Span::styled(about.to_owned(), Style::new().dim()),
+                    Span::styled(about.to_owned(), theme::secondary()),
                 ]
             };
             Line::from(truncate(spans, usize::from(width)))

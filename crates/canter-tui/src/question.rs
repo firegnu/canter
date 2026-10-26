@@ -8,6 +8,7 @@ use ratatui::{
 use crate::{
     approval::ApprovalBox,
     text::{LogicalLine, visible, wrap},
+    theme,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -50,7 +51,7 @@ pub(crate) fn layout(
                 None => format!("{}. Write your own", index + 1),
             };
             let style = if index == selected {
-                Style::new().cyan().bold()
+                theme::accent().bold()
             } else {
                 Style::new()
             };
@@ -63,7 +64,7 @@ pub(crate) fn layout(
     }
     if !taken {
         for row in &mut tail {
-            *row = row.clone().patch_style(Style::new().dim());
+            *row = row.clone().patch_style(theme::secondary());
         }
     }
     let room = usize::from(max_height).saturating_sub(2 + tail.len());
@@ -91,7 +92,10 @@ pub(crate) fn layout(
         "↑↓ select, Enter confirm, number keys pick, PgUp/PgDn scroll, Esc interrupt"
     };
     ApprovalBox {
-        title: Line::from(Span::styled("─ Ask user ", Style::new().yellow().bold())),
+        title: Line::from(vec![
+            Span::styled("─ ", theme::warning_border()),
+            Span::styled("Ask user ", theme::warning().bold()),
+        ]),
         position: (fits && max_scroll > 0).then(|| {
             Line::from(format!(
                 " {}–{} / {} ─",
@@ -102,7 +106,7 @@ pub(crate) fn layout(
             .right_aligned()
         }),
         rows,
-        footer: Line::from(Span::styled(format!("─ {hint} ─"), Style::new().dim())),
+        footer: Line::from(Span::styled(format!("─ {hint} ─"), theme::secondary())),
         page: shown.max(1),
         max_scroll,
         fits,
