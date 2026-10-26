@@ -332,6 +332,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "similar",
  "tempfile",
  "terminal-colorsaurus",
  "thiserror",

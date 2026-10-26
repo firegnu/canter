@@ -20,6 +20,7 @@ mod cells;
 pub mod client;
 mod commands;
 mod context;
+mod diff;
 pub mod fake;
 mod files;
 mod git;
