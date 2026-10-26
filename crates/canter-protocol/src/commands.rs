@@ -43,9 +43,12 @@ pub struct SessionRewindParams {
     pub before_turn_id: String,
     pub rewind_files: bool,
     pub rewind_conversation: bool,
+    #[serde(default)]
+    pub confirmed_external_changes: Vec<String>,
+    /// Preview's sequence; required when executing, omitted when requesting a preview.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub confirmed_external_changes: Option<bool>,
+    #[ts(optional, type = "number")]
+    pub last_event_seq: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -65,13 +68,18 @@ pub struct RewindListResponse {
 #[serde(rename_all = "camelCase")]
 pub struct RewindFile {
     pub path: String,
+    pub delete: bool,
     pub external_change: bool,
+    pub external_change_unknown: bool,
     pub unavailable: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct RewindPreviewResponse {
     pub files: Vec<RewindFile>,
+    #[serde(rename = "lastEventSeq")]
+    #[ts(type = "number")]
+    pub last_event_seq: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

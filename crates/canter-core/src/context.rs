@@ -64,30 +64,25 @@ pub(crate) fn known(message: Message) -> Option<Message> {
 
 pub(crate) fn restore(
     entries: Vec<HistoryEntry>,
+    rewind: &mut crate::rewind::Checkpoints,
 ) -> (Vec<Message>, Vec<Message>, Vec<Message>, Option<usize>) {
     let mut prefix = Vec::new();
     let mut history = Vec::new();
     let mut users = Vec::new();
     let mut summary_index = None;
-    let mut boundaries = Vec::new();
     for entry in entries {
         match entry {
             HistoryEntry::TurnBoundary { turn_id } => {
-                boundaries.push((turn_id, history.len(), users.len()))
+                rewind.boundary(turn_id, history.len(), users.len())
             }
-            HistoryEntry::Rewind { rewind } if rewind.conversation => {
-                if let Some(index) = boundaries
-                    .iter()
-                    .position(|(id, _, _)| *id == rewind.before_turn_id)
-                {
-                    history.truncate(boundaries[index].1);
-                    users.truncate(boundaries[index].2);
-                    boundaries.truncate(index);
+            HistoryEntry::Rewind { rewind: entry } => {
+                if let Some((messages, user_count)) = rewind.apply(&entry) {
+                    history.truncate(messages);
+                    users.truncate(user_count);
                 }
             }
-            HistoryEntry::FileCheckpoint { .. }
-            | HistoryEntry::FileAborted { .. }
-            | HistoryEntry::Rewind { .. } => {}
+            HistoryEntry::FileCheckpoint { checkpoint } => rewind.record_file(checkpoint),
+            HistoryEntry::FileAborted { id } => rewind.abort(&id),
             HistoryEntry::Context { messages } => {
                 prefix = messages.into_iter().filter_map(known).collect()
             }
@@ -107,7 +102,7 @@ pub(crate) fn restore(
                 user_inputs,
                 ..
             } => {
-                boundaries.clear();
+                rewind.clear_boundaries();
                 history = messages.into_iter().filter_map(known).collect();
                 summary_index = history.len().checked_sub(1);
                 users = if user_inputs.is_empty() {

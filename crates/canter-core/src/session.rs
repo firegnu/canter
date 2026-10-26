@@ -291,8 +291,7 @@ impl Session {
             state.history,
             state.user_messages,
             state.summary_index,
-        ) = crate::context::restore(entries.clone());
-        state.rewind = crate::rewind::Checkpoints::restore(&entries);
+        ) = crate::context::restore(entries.clone(), &mut state.rewind);
         for entry in &entries {
             if let HistoryEntry::Rewind { rewind } = entry
                 && rewind.event_seq > state.journal.snapshot.last_event_seq

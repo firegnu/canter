@@ -290,10 +290,15 @@ acceptForSession 的授权范围为该网址的规范化主机名及有效端口
 
 - `GET /v1/sessions/{id}/rewind`：`{ data: [{ turnId, input, fileCount }] }`，最新轮在前。
 - `POST /v1/sessions/{id}/rewind/preview`：接受 `SessionRewindParams`，回复
-  `{ files: [{ path, externalChange, unavailable }] }`，不改会话或文件。
+  `{ lastEventSeq, files: [{ path, delete, externalChange, externalChangeUnknown, unavailable }] }`，
+  不改会话或文件。`delete: true` 表示删除，false 表示恢复；`externalChangeUnknown` 表示
+  最近写入内容超限，无法确认有没有外部修改，仍可经确认后回退。`unavailable` 是不可恢复原因或 null。
 - `POST /v1/sessions/{id}/rewind`：`{ beforeTurnId, rewindFiles, rewindConversation,
-  confirmedExternalChanges? }`，两个 rewind 开关至少一个为 true，确认开关缺省 false。
-  外部修改未经确认、会话正在工作时返回 conflict；边界已被压缩或退掉返回 turn_mismatch。
+  confirmedExternalChanges?, lastEventSeq }`，两个 rewind 开关至少一个为 true。
+  `confirmedExternalChanges` 是用户确认过的外部修改路径列表，缺省为空；无法比较的路径也须确认。
+  `lastEventSeq` 来自预览，执行必传，预览请求可省略。执行时重新比较：会话序号不一致、
+  外部修改或无法比较的路径有任何一项不在确认列表中，均返回 conflict，文件和对话不变，客户端重新预览并确认。
+  会话正在工作时也返回 conflict；边界已被压缩或退掉返回 turn_mismatch。
   回复 `{ eventSeq, input }`，退对话时 input 是所选轮的原输入，否则为空。
 - `session.rewound { beforeTurnId, rewindConversation, record }`：退对话时删除快照中目标轮
   及其后的轮，再附加无输入的结果记录轮；只退文件时保留对话，附加记录轮。记录轮不进模型历史。

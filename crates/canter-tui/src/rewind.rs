@@ -58,7 +58,8 @@ pub(crate) fn choose_mode(app: &mut App, turn: String) {
                 before_turn_id: turn.clone(),
                 rewind_files: files,
                 rewind_conversation: conversation,
-                confirmed_external_changes: None,
+                confirmed_external_changes: Vec::new(),
+                last_event_seq: None,
             }),
         })
         .collect(),
@@ -70,14 +71,30 @@ pub(crate) fn confirm(
     mut params: SessionRewindParams,
     report: RewindPreviewResponse,
 ) {
+    params.last_event_seq = Some(report.last_event_seq);
+    params.confirmed_external_changes = report
+        .files
+        .iter()
+        .filter(|file| file.external_change || file.external_change_unknown)
+        .map(|file| file.path.clone())
+        .collect();
     let mut lines = vec!["Rewind preview (Esc cancels):".to_owned()];
     for file in report.files {
         let detail = if let Some(reason) = file.unavailable {
             format!("cannot restore: {reason}")
-        } else if file.external_change {
-            "之后在 canter 以外被改过 — confirming overwrites these changes".into()
         } else {
-            "will restore".into()
+            let action = if file.delete {
+                "will delete"
+            } else {
+                "will restore"
+            };
+            if file.external_change_unknown {
+                format!("{action}; cannot determine changes outside canter — confirmation required")
+            } else if file.external_change {
+                format!("{action}; 之后在 canter 以外被改过 — confirming overwrites these changes")
+            } else {
+                action.into()
+            }
         };
         lines.push(format!("{}: {detail}", file.path));
     }
@@ -90,7 +107,6 @@ pub(crate) fn confirm(
             .map(|line| LogicalLine::new(vec![Span::raw("  ")], vec![Span::raw(sanitize(&line))]))
             .collect(),
     );
-    params.confirmed_external_changes = Some(true);
     app.choose(Chooser {
         title: "Confirm rewind?",
         selected: 0,

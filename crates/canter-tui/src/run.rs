@@ -393,6 +393,19 @@ where
                             ui.app_mut().rewind_draft(&response.input)
                         }
                         Ok(_) => {}
+                        Err(ClientError::Server {
+                            code: ErrorCode::Conflict,
+                            ..
+                        }) => {
+                            ui.app_mut()
+                                .warning("Changes since preview; review and confirm again.");
+                            match chat.client.rewind_preview(&chat.session, &params).await {
+                                Ok(report) => crate::rewind::confirm(ui.app_mut(), params, report),
+                                Err(error) => ui
+                                    .app_mut()
+                                    .warning(&format!("Could not preview rewind: {error}")),
+                            }
+                        }
                         Err(error) => ui.app_mut().warning(&format!("Could not rewind: {error}")),
                     }
                 }

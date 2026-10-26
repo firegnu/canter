@@ -17,6 +17,8 @@ pub(crate) struct FileChange {
     path: String,
     before: Option<String>,
     after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    after_bytes: Option<u64>,
     unavailable: Option<String>,
     #[serde(skip)]
     inactive: bool,
@@ -65,73 +67,30 @@ impl Checkpoints {
     pub fn clear_boundaries(&mut self) {
         self.boundaries.clear();
     }
-    pub fn restore(entries: &[HistoryEntry]) -> Self {
-        let mut result = Self::default();
-        let (mut messages, mut users) = (0, 0);
-        for entry in entries {
-            match entry {
-                HistoryEntry::TurnBoundary { turn_id } => {
-                    result.boundary(turn_id.clone(), messages, users)
-                }
-                HistoryEntry::Message { user_input, .. } => {
-                    messages += 1;
-                    users += usize::from(*user_input);
-                }
-                HistoryEntry::Compaction {
-                    messages: kept,
-                    user_inputs,
-                    user_messages,
-                    ..
-                } => {
-                    result.clear_boundaries();
-                    messages = kept.len();
-                    users = if user_inputs.is_empty() {
-                        user_messages.len()
-                    } else {
-                        user_inputs.len()
-                    };
-                }
-                HistoryEntry::FileCheckpoint { checkpoint } => {
-                    result.changes.push(checkpoint.clone())
-                }
-                HistoryEntry::FileAborted { id } => result.abort(id),
-                HistoryEntry::Rewind { rewind } => {
-                    if let Some(boundary) = result
-                        .boundaries
-                        .iter()
-                        .find(|b| b.turn_id == rewind.before_turn_id)
-                        .cloned()
-                    {
-                        if rewind.conversation {
-                            messages = boundary.messages;
-                            users = boundary.users;
-                        }
-                        result.apply(rewind, &boundary);
-                    }
-                }
-                _ => {}
-            }
-        }
-        result
+    pub fn record_file(&mut self, checkpoint: FileChange) {
+        self.changes.push(checkpoint);
     }
-    fn abort(&mut self, id: &str) {
+    pub fn abort(&mut self, id: &str) {
         if let Some(change) = self.changes.iter_mut().find(|change| change.id == id) {
             change.inactive = true;
         }
     }
-    fn apply(&mut self, rewind: &Rewind, boundary: &Boundary) {
+    pub fn apply(&mut self, rewind: &Rewind) -> Option<(usize, usize)> {
+        let index = self
+            .boundaries
+            .iter()
+            .position(|b| b.turn_id == rewind.before_turn_id)?;
+        let boundary = self.boundaries[index].clone();
         for change in &mut self.changes[boundary.changes..] {
             if rewind.restored.contains(&change.path) {
                 change.inactive = true;
             }
         }
-        if rewind.conversation
-            && let Some(index) = self
-                .boundaries
-                .iter()
-                .position(|b| b.turn_id == boundary.turn_id)
-        {
+        if rewind.conversation {
             self.boundaries.truncate(index);
+            Some((boundary.messages, boundary.users))
+        } else {
+            None
         }
     }
     fn files(&self, boundary: &Boundary) -> BTreeMap<String, (FileChange, FileChange)> {
@@ -164,35 +123,48 @@ impl State {
             path: file.path.to_string_lossy().into_owned(),
             before: None,
             after: None,
+            after_bytes: None,
             unavailable: None,
             inactive: false,
         };
         if file.path.to_str().is_none() {
             checkpoint.unavailable = Some("file path cannot be recorded as UTF-8".into());
-        } else if file
-            .original
-            .is_some_and(|bytes| bytes.len() > MAX_FILE_BYTES)
-            || file.content.len() > MAX_FILE_BYTES
-        {
-            checkpoint.unavailable = Some("file exceeds the 1 MiB checkpoint limit".into());
         } else {
+            if file
+                .original
+                .is_some_and(|bytes| bytes.len() > MAX_FILE_BYTES)
+            {
+                checkpoint.unavailable =
+                    Some("original file exceeds the 1 MiB checkpoint limit".into());
+            }
             let store = self.journal.store.clone();
             let session = self.journal.snapshot.id.clone();
-            let original = file.original.map(ToOwned::to_owned);
-            let content = file.content.to_vec();
+            let original = file
+                .original
+                .filter(|bytes| bytes.len() <= MAX_FILE_BYTES)
+                .map(ToOwned::to_owned);
+            let content = if file.content.len() > MAX_FILE_BYTES {
+                checkpoint.after_bytes = Some(file.content.len() as u64);
+                None
+            } else {
+                Some(file.content.to_vec())
+            };
             let (before, after) = tokio::task::spawn_blocking(move || {
                 Ok::<_, CoreError>((
                     original
                         .as_deref()
                         .map(|bytes| store.save_rewind(&session, bytes))
                         .transpose()?,
-                    store.save_rewind(&session, &content)?,
+                    content
+                        .as_deref()
+                        .map(|bytes| store.save_rewind(&session, bytes))
+                        .transpose()?,
                 ))
             })
             .await
             .map_err(|_| CoreError::internal())??;
             checkpoint.before = before;
-            checkpoint.after = Some(after);
+            checkpoint.after = after;
         }
         self.journal
             .record(HistoryEntry::FileCheckpoint {
@@ -277,8 +249,10 @@ async fn plan(state: &State, boundary: &Boundary) -> Result<Vec<PlannedFile>, Co
             .map(|(path, (first, last))| {
                 let mut preview = RewindFile {
                     path: path.clone(),
+                    delete: first.before.is_none() && first.unavailable.is_none(),
                     external_change: false,
-                    unavailable: first.unavailable.clone().or(last.unavailable.clone()),
+                    external_change_unknown: false,
+                    unavailable: first.unavailable.clone(),
                 };
                 let mut before = None;
                 if preview.unavailable.is_none() {
@@ -288,6 +262,12 @@ async fn plan(state: &State, boundary: &Boundary) -> Result<Vec<PlannedFile>, Co
                             .as_deref()
                             .map(|name| backup(&store, &session, name))
                             .transpose()?;
+                        if last
+                            .after_bytes
+                            .is_some_and(|bytes| bytes > MAX_FILE_BYTES as u64)
+                        {
+                            return Ok((before, false, true));
+                        }
                         let expected = backup(
                             &store,
                             &session,
@@ -300,12 +280,17 @@ async fn plan(state: &State, boundary: &Boundary) -> Result<Vec<PlannedFile>, Co
                             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                             Err(error) => return Err(error.to_string()),
                         };
-                        Ok((before, current.as_deref() != Some(expected.as_slice())))
+                        Ok((
+                            before,
+                            current.as_deref() != Some(expected.as_slice()),
+                            false,
+                        ))
                     })();
                     match result {
-                        Ok((original, external)) => {
+                        Ok((original, external, unknown)) => {
                             before = original;
                             preview.external_change = external;
+                            preview.external_change_unknown = unknown;
                         }
                         Err(error) => preview.unavailable = Some(error),
                     }
@@ -364,7 +349,10 @@ impl Session {
         } else {
             Vec::new()
         };
-        Ok(RewindPreviewResponse { files })
+        Ok(RewindPreviewResponse {
+            files,
+            last_event_seq: state.journal.snapshot.last_event_seq,
+        })
     }
     pub async fn rewind(
         &self,
@@ -378,18 +366,28 @@ impl Session {
         params: SessionRewindParams,
     ) -> Result<SessionRewindResponse, CoreError> {
         let mut state = self.shared.state.lock().await;
+        state.available()?;
+        if params.last_event_seq != Some(state.journal.snapshot.last_event_seq) {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "Session changed since preview; preview and confirm again",
+            ));
+        }
         let boundary = state.rewind_boundary(&params)?;
         let files = if params.rewind_files {
             plan(&state, &boundary).await?
         } else {
             Vec::new()
         };
-        if !params.confirmed_external_changes.unwrap_or(false)
-            && files.iter().any(|file| file.preview.external_change)
-        {
+        if files.iter().any(|file| {
+            (file.preview.external_change || file.preview.external_change_unknown)
+                && !params
+                    .confirmed_external_changes
+                    .contains(&file.preview.path)
+        }) {
             return Err(CoreError::new(
                 ErrorCode::Conflict,
-                "Files changed outside canter; preview and confirm before rewinding",
+                "Files changed outside canter or cannot be compared; preview and confirm these paths before rewinding",
             ));
         }
         let input = if params.rewind_conversation {
@@ -470,12 +468,11 @@ impl Session {
             })
             .await?;
         state.journal.append(vec![rewind.event()]).await?;
-        if rewind.conversation {
-            state.history.truncate(boundary.messages);
-            state.user_messages.truncate(boundary.users);
+        if let Some((messages, users)) = state.rewind.apply(&rewind) {
+            state.history.truncate(messages);
+            state.user_messages.truncate(users);
             state.measured_context = None;
         }
-        state.rewind.apply(&rewind, &boundary);
         Ok(SessionRewindResponse {
             event_seq: rewind.event_seq,
             input,

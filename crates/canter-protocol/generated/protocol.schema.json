@@ -1987,7 +1987,13 @@
     },
     "RewindFile": {
       "properties": {
+        "delete": {
+          "type": "boolean"
+        },
         "externalChange": {
+          "type": "boolean"
+        },
+        "externalChangeUnknown": {
           "type": "boolean"
         },
         "path": {
@@ -2002,7 +2008,9 @@
       },
       "required": [
         "path",
-        "externalChange"
+        "delete",
+        "externalChange",
+        "externalChangeUnknown"
       ],
       "type": "object"
     },
@@ -2027,10 +2035,16 @@
             "$ref": "#/$defs/RewindFile"
           },
           "type": "array"
+        },
+        "lastEventSeq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [
-        "files"
+        "files",
+        "lastEventSeq"
       ],
       "type": "object"
     },
@@ -2364,8 +2378,18 @@
           "type": "string"
         },
         "confirmedExternalChanges": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "lastEventSeq": {
+          "description": "Preview's sequence; required when executing, omitted when requesting a preview.",
+          "format": "uint64",
+          "minimum": 0,
           "type": [
-            "boolean",
+            "integer",
             "null"
           ]
         },
