@@ -66,9 +66,10 @@ pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> V
     rows
 }
 
-/// The model's text as markdown, indented two columns.
-pub(crate) fn agent_message(text: &str) -> Vec<LogicalLine> {
-    markdown::render(&sanitize(text))
+/// The model's text as markdown, indented two columns, for a screen `width`
+/// columns wide.
+pub(crate) fn agent_message(text: &str, width: u16) -> Vec<LogicalLine> {
+    markdown::render(&sanitize(text), width.saturating_sub(2))
         .into_iter()
         .map(|line| line.prefixed(Span::raw("  "), Span::raw("  ")))
         .collect()
@@ -78,7 +79,7 @@ pub(crate) fn agent_message(text: &str) -> Vec<LogicalLine> {
 pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Line<'static>> {
     match item {
         Item::UserMessage { content, .. } => prompt(content, None, width),
-        Item::AgentMessage { text, .. } => wrap_all(&agent_message(text), width),
+        Item::AgentMessage { text, .. } => wrap_all(&agent_message(text, width), width),
         Item::Reasoning {
             summary, content, ..
         } => reasoning(summary, content, finished, width),
