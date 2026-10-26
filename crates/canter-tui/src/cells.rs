@@ -2,6 +2,8 @@
 //! and the tool cards (read a file, change files with a diff, run a command,
 //! call an MCP tool, fetch a web page).
 
+use std::ops::Range;
+
 use canter_protocol::{
     FileUpdateChange, Item, ItemStatus, PatchChangeKind, Turn, TurnStatus, UserInput,
 };
@@ -10,6 +12,7 @@ use ratatui::text::{Line, Span};
 
 use crate::app::format_elapsed;
 use crate::diff::Diff;
+use crate::links::{self, Target};
 use crate::markdown;
 use crate::text::{
     LogicalLine, Row, char_width, drawn_width, sanitize, spans_width, str_width, truncate, visible,
@@ -159,10 +162,7 @@ pub(crate) fn item(item: &Item, finished: bool, details: bool, cwd: &str, width:
             content,
             status,
             ..
-        } => vec![Row::text_from(
-            file_read(path, *start_line, content, *status, cwd, width),
-            4,
-        )],
+        } => vec![file_read(path, *start_line, content, *status, cwd, width)],
         Item::ContextCompaction { .. } => vec![Row::text_from(
             Line::from(Span::styled(
                 "  ── Context compacted ──",
@@ -293,6 +293,8 @@ fn reasoning(
                 hang: thinking(line.hang),
                 body: thinking(line.body),
                 marker: line.marker,
+                // Thinking is not the answer: its addresses are not links.
+                links: Vec::new(),
             };
             rows.extend(wrap_rows(&line.prefixed(bar(), bar()), width));
         }
@@ -357,7 +359,7 @@ fn file_read(
     status: ItemStatus,
     cwd: &str,
     width: u16,
-) -> Line<'static> {
+) -> Row {
     let mark = if status == ItemStatus::Failed {
         cross()
     } else {
@@ -369,6 +371,10 @@ fn file_read(
         Span::styled("Read ", Style::new().bold()),
         Span::raw(display_path(path, cwd)),
     ];
+    let links: Vec<_> = links::path(path, cwd)
+        .map(|target| span_link(&spans, 3, target))
+        .into_iter()
+        .collect();
     let lines = content.lines().count() as u32;
     let detail = match status {
         ItemStatus::InProgress => None,
@@ -385,7 +391,35 @@ fn file_read(
         )),
     };
     spans.extend(detail);
-    Line::from(truncate(spans, usize::from(width)))
+    cut_row(spans, links, width)
+}
+
+/// A card's title row of `spans`, cut to `width`, with `links` on what is
+/// left of them; a copy takes it from the verb.
+fn cut_row(spans: Vec<Span<'static>>, links: Vec<(Range<usize>, Target)>, width: u16) -> Row {
+    let line = Line::from(truncate(spans, usize::from(width)));
+    let end = drawn_width(&line.spans);
+    Row {
+        links: clip(links, end),
+        ..Row::text_from(line, 4)
+    }
+}
+
+/// Where span `index` of `spans` is drawn, as a link to `target`.
+fn span_link(spans: &[Span<'static>], index: usize, target: Target) -> (Range<usize>, Target) {
+    (
+        drawn_width(&spans[..index])..drawn_width(&spans[..=index]),
+        target,
+    )
+}
+
+/// `links` in the first `end` columns: what is left of them on a row cut to fit.
+fn clip(links: Vec<(Range<usize>, Target)>, end: usize) -> Vec<(Range<usize>, Target)> {
+    links
+        .into_iter()
+        .map(|(columns, target)| (columns.start..columns.end.min(end), target))
+        .filter(|(columns, _)| !columns.is_empty())
+        .collect()
 }
 
 /// An item waiting for an approval: only its title row, marked 「等你批准」.
@@ -400,8 +434,8 @@ pub(crate) fn waiting(item: &Item, details: bool, cwd: &str, width: u16) -> Vec<
             .iter()
             .map(|change| {
                 let diff = Diff::parse(&sanitize(&change.diff), &change.kind);
-                let header = change_header(change, &diff, dot(theme::secondary()), cwd);
-                card_row(right_aligned(header, mark(), usize::from(width)))
+                let (header, links) = change_header(change, &diff, dot(theme::secondary()), cwd);
+                card_row(right_aligned(header, mark(), usize::from(width)), links)
             })
             .collect(),
         _ => self::item(item, false, details, cwd, width),
@@ -425,12 +459,9 @@ fn file_change(
         ),
         _ => (dot(theme::success()), None),
     };
-    let mut header = change_header(change, &diff, bullet, cwd);
+    let (mut header, links) = change_header(change, &diff, bullet, cwd);
     header.extend(suffix);
-    let mut rows = vec![Row::text_from(
-        Line::from(truncate(header, usize::from(width))),
-        4,
-    )];
+    let mut rows = vec![cut_row(header, links, width)];
     let limit = match &change.kind {
         _ if details => None,
         PatchChangeKind::Add => Some(ADD_LINES),
@@ -441,13 +472,15 @@ fn file_change(
     rows
 }
 
-/// `● 改 path  +a −r`: a file change's title, before any status suffix.
+/// `● 改 path  +a −r`: a file change's title, before any status suffix, and
+/// the link on its path: the file as it is after the change, so none for a
+/// deleted file, and the new path of a moved one.
 fn change_header(
     change: &FileUpdateChange,
     diff: &Diff,
     bullet: Span<'static>,
     cwd: &str,
-) -> Vec<Span<'static>> {
+) -> (Vec<Span<'static>>, Vec<(Range<usize>, Target)>) {
     let (added, removed) = (diff.added(), diff.removed());
     let verb = match &change.kind {
         PatchChangeKind::Add => "Add ",
@@ -460,12 +493,22 @@ fn change_header(
         Span::styled(verb, Style::new().bold()),
         Span::raw(display_path(&change.path, cwd)),
     ];
+    let mut link = match &change.kind {
+        PatchChangeKind::Delete => None,
+        _ => Some((3, change.path.as_str())),
+    };
     if let PatchChangeKind::Update {
         move_path: Some(to),
     } = &change.kind
     {
-        header.push(Span::raw(format!(" → {}", display_path(to, cwd))));
+        header.push(Span::raw(" → "));
+        header.push(Span::raw(display_path(to, cwd)));
+        link = Some((header.len() - 1, to.as_str()));
     }
+    let links = link
+        .and_then(|(index, path)| Some(span_link(&header, index, links::path(path, cwd)?)))
+        .into_iter()
+        .collect();
     header.push(Span::raw("  "));
     match &change.kind {
         PatchChangeKind::Add => header.push(Span::styled(format!("+{added}"), theme::success())),
@@ -478,7 +521,7 @@ fn change_header(
             Span::styled(format!("−{removed}"), theme::failure()),
         ]),
     }
-    header
+    (header, links)
 }
 
 fn command_card(
@@ -552,7 +595,7 @@ fn mcp_call(
             first_line(&arguments.to_string())
         )));
     }
-    let mut rows = vec![title(bullet, "Call ", object, right, width)];
+    let mut rows = vec![title(bullet, "Call ", object, right, None, width)];
     let fold = if details {
         Fold::Details
     } else {
@@ -592,6 +635,7 @@ fn web_fetch(url: &str, result: &str, status: ItemStatus, details: bool, width: 
         "Fetch ",
         vec![Span::raw(first_line(url))],
         right,
+        links::web(url),
         width,
     )];
     if page && !details {
@@ -706,7 +750,14 @@ fn command_title(
     if !whole && !rest.is_empty() {
         shown.push_str(" …");
     }
-    let mut rows = vec![title(bullet, "Run ", vec![Span::raw(shown)], right, width)];
+    let mut rows = vec![title(
+        bullet,
+        "Run ",
+        vec![Span::raw(shown)],
+        right,
+        None,
+        width,
+    )];
     if whole {
         rows.extend(rest.iter().map(|line| {
             let spans = truncate(
@@ -719,12 +770,14 @@ fn command_title(
     rows
 }
 
-/// A card's first row: `● Verb object` with `right` flush with the right edge.
+/// A card's first row: `● Verb object` with `right` flush with the right
+/// edge; the object a link to `link` when there is one.
 fn title(
     bullet: Span<'static>,
     verb: &'static str,
     object: Vec<Span<'static>>,
     right: Vec<Span<'static>>,
+    link: Option<Target>,
     width: u16,
 ) -> Row {
     let mut left = vec![
@@ -732,15 +785,23 @@ fn title(
         bullet,
         Span::styled(verb, Style::new().bold()),
     ];
+    let start = drawn_width(&left);
+    let links = link
+        .map(|target| (start..start + drawn_width(&object), target))
+        .into_iter()
+        .collect();
     left.extend(object);
-    card_row(right_aligned(left, right, usize::from(width)))
+    card_row(right_aligned(left, right, usize::from(width)), links)
 }
 
 /// A card's title row: a copy takes it from the verb to the end of the
-/// left side, leaving out the mark and the status on the right.
-fn card_row((line, left): (Line<'static>, usize)) -> Row {
+/// left side, leaving out the mark and the status on the right. `links`
+/// are on the left side.
+fn card_row((line, left): (Line<'static>, usize), links: Vec<(Range<usize>, Target)>) -> Row {
+    let end = left.min(drawn_width(&line.spans));
     Row {
         text: Some(4..left),
+        links: clip(links, end),
         ..Row::from(line)
     }
 }

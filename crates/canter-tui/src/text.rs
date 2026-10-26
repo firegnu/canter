@@ -7,6 +7,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
+use crate::links::Target;
+
 /// One line before wrapping: `indent` starts the first row, `hang` starts each
 /// wrapped row after it.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -17,6 +19,8 @@ pub(crate) struct LogicalLine {
     /// The last columns of `indent` that a copy keeps with the text, such as
     /// a list item's bullet. The rest of the indent and the hang are left out.
     pub marker: usize,
+    /// Where `body` links to: which of its characters, counted from its first.
+    pub links: Vec<(Range<usize>, Target)>,
 }
 
 impl LogicalLine {
@@ -28,6 +32,7 @@ impl LogicalLine {
             hang,
             body,
             marker: 0,
+            links: Vec::new(),
         }
     }
 
@@ -53,6 +58,8 @@ pub(crate) struct Row {
     /// On a row of command output: which line of the output it shows, so a
     /// selection stays on that line when the card shows other lines.
     pub source: Option<usize>,
+    /// The links on the row: the columns each is drawn in, and where it goes.
+    pub links: Vec<(Range<usize>, Target)>,
 }
 
 impl Row {
@@ -63,6 +70,7 @@ impl Row {
             text: Some(from..usize::MAX),
             joined: None,
             source: None,
+            links: Vec::new(),
         }
     }
 
@@ -73,6 +81,7 @@ impl Row {
             text: None,
             joined: None,
             source: None,
+            links: Vec::new(),
         }
     }
 
@@ -253,34 +262,168 @@ pub(crate) fn wrap(line: &LogicalLine, width: u16) -> Vec<Line<'static>> {
 
 /// [`wrap`], keeping what a copy needs: the text starts after the indent
 /// (but takes the list marker) and after the hang, and wrapped rows join the
-/// row above.
+/// row above. A link keeps going on the rows it wraps onto.
 pub(crate) fn wrap_rows(line: &LogicalLine, width: u16) -> Vec<Row> {
-    let width = usize::from(width);
-    let cells: Vec<(char, Style)> = line
-        .body
+    let cells = cells(line);
+    let link_of = link_of(line, cells.len());
+    cut(line, &cells, width)
+        .into_iter()
+        .enumerate()
+        .map(|(index, (chars, dropped))| {
+            let prefix = if index == 0 { &line.indent } else { &line.hang };
+            let prefix_width = spans_width(prefix);
+            let mut spans = prefix.clone();
+            let mut links: Vec<(Range<usize>, usize)> = Vec::new();
+            let mut column = drawn_width(prefix);
+            for (span, link) in group(&cells[chars.clone()], link_of.get(chars).unwrap_or(&[])) {
+                let end = column + drawn_width(std::slice::from_ref(&span));
+                if let Some(link) = link {
+                    match links.last_mut() {
+                        Some((columns, last)) if *last == link && columns.end == column => {
+                            columns.end = end;
+                        }
+                        _ => links.push((column..end, link)),
+                    }
+                }
+                column = end;
+                spans.push(span);
+            }
+            let row = if index == 0 {
+                Row::text_from(Line::from(spans), prefix_width.saturating_sub(line.marker))
+            } else {
+                Row {
+                    joined: Some(dropped),
+                    ..Row::text_from(Line::from(spans), prefix_width)
+                }
+            };
+            Row {
+                links: links
+                    .into_iter()
+                    .filter(|(columns, _)| !columns.is_empty())
+                    .map(|(columns, link)| (columns, line.links[link].1.clone()))
+                    .collect(),
+                ..row
+            }
+        })
+        .collect()
+}
+
+/// `line`'s body cut into rows as [`wrap_rows`] cuts it, without the indent
+/// and hang: each row's spans, with its links counted from its first character.
+pub(crate) fn wrap_body(line: &LogicalLine, width: u16) -> Vec<Linked> {
+    let cells = cells(line);
+    let link_of = link_of(line, cells.len());
+    cut(line, &cells, width)
+        .into_iter()
+        .map(|(chars, _)| {
+            let mut row = Linked::default();
+            for (span, link) in group(&cells[chars.clone()], link_of.get(chars).unwrap_or(&[])) {
+                row.push(span, link.map(|link| line.links[link].1.clone()));
+            }
+            row
+        })
+        .collect()
+}
+
+/// Text and where it links to: which of its characters, counted from its first.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Linked {
+    pub spans: Vec<Span<'static>>,
+    pub links: Vec<(Range<usize>, Target)>,
+}
+
+impl Linked {
+    /// Appends `span`, all of it a link to `target` when there is one.
+    pub fn push(&mut self, span: Span<'static>, target: Option<Target>) {
+        push_linked(&mut self.spans, &mut self.links, span, target);
+    }
+
+    /// Appends `other`, its links with it.
+    pub fn append(&mut self, other: Linked) {
+        let from = chars(&self.spans);
+        self.links.extend(
+            other
+                .links
+                .into_iter()
+                .map(|(range, target)| (range.start + from..range.end + from, target)),
+        );
+        self.spans.extend(other.spans);
+    }
+}
+
+impl From<Vec<Span<'static>>> for Linked {
+    fn from(spans: Vec<Span<'static>>) -> Self {
+        Self {
+            spans,
+            links: Vec::new(),
+        }
+    }
+}
+
+/// Appends `span` to `spans`, and when it links to `target`, its characters
+/// to `links`: to the link before it when that goes to the same place and
+/// ends where it starts.
+pub(crate) fn push_linked(
+    spans: &mut Vec<Span<'static>>,
+    links: &mut Vec<(Range<usize>, Target)>,
+    span: Span<'static>,
+    target: Option<Target>,
+) {
+    let start = chars(spans);
+    let end = start + span.content.chars().count();
+    spans.push(span);
+    let Some(target) = target else {
+        return;
+    };
+    match links.last_mut() {
+        Some((range, last)) if *last == target && range.end == start => range.end = end,
+        _ => links.push((start..end, target)),
+    }
+}
+
+fn chars(spans: &[Span]) -> usize {
+    spans.iter().map(|span| span.content.chars().count()).sum()
+}
+
+/// Each character of `line`'s body and its style.
+fn cells(line: &LogicalLine) -> Vec<(char, Style)> {
+    line.body
         .iter()
         .flat_map(|span| span.content.chars().map(move |c| (c, span.style)))
-        .collect();
-    let mut rows: Vec<Row> = Vec::new();
+        .collect()
+}
+
+/// Which of `line.links` each of its `count` body characters is in; empty
+/// when it has none.
+fn link_of(line: &LogicalLine, count: usize) -> Vec<Option<usize>> {
+    if line.links.is_empty() {
+        return Vec::new();
+    }
+    let mut link_of = vec![None; count];
+    for (index, (range, _)) in line.links.iter().enumerate() {
+        for link in link_of.iter_mut().take(range.end).skip(range.start) {
+            *link = Some(index);
+        }
+    }
+    link_of
+}
+
+/// Where wrapping cuts the body for `width`: the characters of each row, and
+/// on rows after the first how many spaces the break before it dropped.
+fn cut(line: &LogicalLine, cells: &[(char, Style)], width: u16) -> Vec<(Range<usize>, usize)> {
+    let width = usize::from(width);
+    let mut rows = Vec::new();
     let mut start = 0;
     let mut dropped = 0;
     loop {
-        let first = rows.is_empty();
-        let prefix = if first { &line.indent } else { &line.hang };
-        let prefix_width = spans_width(prefix);
-        let room = width.saturating_sub(prefix_width).max(1);
-        let (len, next) = break_row(&cells[start..], room);
-        let mut spans = prefix.clone();
-        spans.extend(group(&cells[start..start + len]));
-        let line_out = Line::from(spans);
-        rows.push(if first {
-            Row::text_from(line_out, prefix_width.saturating_sub(line.marker))
+        let prefix = if rows.is_empty() {
+            &line.indent
         } else {
-            Row {
-                joined: Some(dropped),
-                ..Row::text_from(line_out, prefix_width)
-            }
-        });
+            &line.hang
+        };
+        let room = width.saturating_sub(spans_width(prefix)).max(1);
+        let (len, next) = break_row(&cells[start..], room);
+        rows.push((start..start + len, dropped));
         dropped = next - len;
         start += next;
         if start >= cells.len() {
@@ -346,12 +489,20 @@ fn skip_spaces(cells: &[(char, Style)], mut at: usize) -> usize {
     at
 }
 
-fn group(cells: &[(char, Style)]) -> Vec<Span<'static>> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    for &(c, style) in cells {
+/// Runs of `cells` in one style and one link of `link_of` (the link each
+/// is in, or empty for none).
+fn group(
+    cells: &[(char, Style)],
+    link_of: &[Option<usize>],
+) -> Vec<(Span<'static>, Option<usize>)> {
+    let mut spans: Vec<(Span<'static>, Option<usize>)> = Vec::new();
+    for (index, &(c, style)) in cells.iter().enumerate() {
+        let link = link_of.get(index).copied().flatten();
         match spans.last_mut() {
-            Some(span) if span.style == style => span.content.to_mut().push(c),
-            _ => spans.push(Span::styled(c.to_string(), style)),
+            Some((span, last)) if span.style == style && *last == link => {
+                span.content.to_mut().push(c)
+            }
+            _ => spans.push((Span::styled(c.to_string(), style), link)),
         }
     }
     spans

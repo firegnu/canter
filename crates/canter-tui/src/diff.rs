@@ -330,6 +330,7 @@ fn line_rows(
             hang,
             body,
             marker: 0,
+            links: Vec::new(),
         },
         width,
     );

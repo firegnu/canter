@@ -28,6 +28,7 @@ mod git;
 mod highlight;
 mod images;
 mod input;
+mod links;
 mod markdown;
 mod mention;
 mod picker;

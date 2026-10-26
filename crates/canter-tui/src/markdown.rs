@@ -14,7 +14,10 @@ use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::highlight;
-use crate::text::{LogicalLine, char_width, spans_width, str_width, wrap};
+use crate::links::{self, Target};
+use crate::text::{
+    Linked, LogicalLine, char_width, push_linked, spans_width, str_width, wrap_body,
+};
 use crate::theme;
 
 /// `width` is the columns the lines may take, indents included; only tables
@@ -27,6 +30,7 @@ pub(crate) fn render(source: &str, width: u16) -> Vec<LogicalLine> {
     for event in Parser::new_ext(source, options()) {
         renderer.event(event);
     }
+    renderer.push_text();
     renderer.flush();
     renderer.lines
 }
@@ -81,8 +85,12 @@ struct Renderer {
     /// The open code block's language, as its fence names it, and its text so far.
     code: Option<(String, String)>,
     blank_pending: bool,
-    /// Destination and text so far of each open link.
-    links: Vec<(String, String)>,
+    /// Destination, text so far and, for an http or https destination,
+    /// the link of each open link.
+    links: Vec<(String, String, Option<Target>)>,
+    /// Text not pushed yet. The parser splits text at `_`, `&`, brackets
+    /// and the like, so the pieces in a row are searched for addresses together.
+    text: String,
     width: usize,
     table: Option<Table>,
 }
@@ -91,29 +99,41 @@ struct Renderer {
 #[derive(Default)]
 struct Table {
     alignments: Vec<Alignment>,
-    head: Vec<Vec<Span<'static>>>,
-    rows: Vec<Vec<Vec<Span<'static>>>>,
+    head: Vec<Linked>,
+    rows: Vec<Vec<Linked>>,
     /// The cell being read, if any.
-    cell: Option<Vec<Span<'static>>>,
+    cell: Option<Linked>,
     in_head: bool,
 }
 
 impl Renderer {
     fn event(&mut self, event: Event) {
+        if !matches!(event, Event::Text(_)) {
+            self.push_text();
+        }
         match event {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
             Event::Text(text) => {
                 if let Some((_, code)) = &mut self.code {
                     code.push_str(&text);
-                } else {
-                    for (_, link_text) in &mut self.links {
+                } else if let Some((_, _, target)) = self.links.last() {
+                    let target = target.clone();
+                    for (_, link_text, _) in &mut self.links {
                         link_text.push_str(&text);
                     }
-                    self.push(&text, self.style());
+                    self.push_to(&text, self.style(), target);
+                } else {
+                    self.text.push_str(&text);
                 }
             }
-            Event::Code(text) => self.push(&text, self.style().patch(theme::accent())),
+            Event::Code(text) => {
+                let style = self.style().patch(theme::accent());
+                match self.links.last() {
+                    Some((_, _, target)) => self.push_to(&text, style, target.clone()),
+                    None => self.push_found(&text, style),
+                }
+            }
             Event::Html(text) | Event::InlineHtml(text) => self.push_lines(&text, self.style()),
             Event::InlineMath(text) | Event::DisplayMath(text) => self.push(&text, self.style()),
             Event::FootnoteReference(name) => self.push(&format!("[^{name}]"), self.style()),
@@ -182,7 +202,7 @@ impl Renderer {
             }
             Tag::TableCell => {
                 if let Some(table) = &mut self.table {
-                    table.cell = Some(Vec::new());
+                    table.cell = Some(Linked::default());
                 }
             }
             Tag::Item => {
@@ -201,9 +221,11 @@ impl Renderer {
             Tag::Emphasis => self.styles.push(Style::new().italic()),
             Tag::Strong => self.styles.push(Style::new().bold()),
             Tag::Strikethrough => self.styles.push(Style::new().crossed_out()),
+            // Only links to http and https are underlined, when drawn.
             Tag::Link { dest_url, .. } => {
-                self.styles.push(Style::new().underlined());
-                self.links.push((dest_url.into_string(), String::new()));
+                let target = links::web(&dest_url);
+                self.links
+                    .push((dest_url.into_string(), String::new(), target));
             }
             _ => {}
         }
@@ -268,12 +290,19 @@ impl Renderer {
                 self.styles.pop();
             }
             TagEnd::Link => {
-                self.styles.pop();
-                if let Some((url, text)) = self.links.pop()
+                if let Some((url, text, target)) = self.links.pop()
                     && !url.is_empty()
                     && url != text
                 {
-                    self.push(&format!(" ({url})"), theme::secondary());
+                    let style = theme::secondary();
+                    match target {
+                        Some(target) => {
+                            self.push(" (", style);
+                            self.push_to(&url, style, Some(target));
+                            self.push(")", style);
+                        }
+                        None => self.push(&format!(" ({url})"), style),
+                    }
                 }
             }
             _ => {}
@@ -354,19 +383,50 @@ impl Renderer {
             hang,
             body: Vec::new(),
             marker,
+            links: Vec::new(),
         });
     }
 
     fn push(&mut self, text: &str, style: Style) {
+        self.push_to(text, style, None);
+    }
+
+    /// [`Renderer::push`], all of `text` a link to `target` when there is one.
+    fn push_to(&mut self, text: &str, style: Style, target: Option<Target>) {
+        let span = Span::styled(text.to_owned(), style);
         if let Some(table) = &mut self.table {
             if let Some(cell) = &mut table.cell {
-                cell.push(Span::styled(text.to_owned(), style));
+                cell.push(span, target);
             }
             return;
         }
         self.open_line();
         if let Some(line) = &mut self.current {
-            line.body.push(Span::styled(text.to_owned(), style));
+            push_linked(&mut line.body, &mut line.links, span, target);
+        }
+    }
+
+    /// The text not pushed yet, its addresses as links.
+    fn push_text(&mut self) {
+        if !self.text.is_empty() {
+            let text = std::mem::take(&mut self.text);
+            self.push_found(&text, self.style());
+        }
+    }
+
+    /// Pushes `text`, the addresses written out in it as links to them.
+    fn push_found(&mut self, text: &str, style: Style) {
+        let mut at = 0;
+        for found in links::find(text) {
+            if at < found.start {
+                self.push(&text[at..found.start], style);
+            }
+            let url = &text[found.clone()];
+            self.push_to(url, style, links::web(url));
+            at = found.end;
+        }
+        if at < text.len() || at == 0 {
+            self.push(&text[at..], style);
         }
     }
 
@@ -395,10 +455,11 @@ impl Renderer {
     }
 
     /// One finished row: the current indent, then `body`.
-    fn push_row(&mut self, body: Vec<Span<'static>>) {
+    fn push_row(&mut self, body: Linked) {
         self.open_line();
         if let Some(line) = &mut self.current {
-            line.body = body;
+            line.body = body.spans;
+            line.links = body.links;
         }
         self.flush();
     }
@@ -420,7 +481,7 @@ impl Renderer {
                 .collect()
         });
         for body in rows {
-            self.push_row(body);
+            self.push_row(body.into());
         }
     }
 
@@ -439,9 +500,9 @@ impl Renderer {
     /// must; otherwise one block of `header: value` rows per table row.
     fn draw_table(&mut self, table: Table) {
         let columns = table.alignments.len();
-        let fit = |cells: Vec<Vec<Span<'static>>>| -> Vec<Vec<Span<'static>>> {
+        let fit = |cells: Vec<Linked>| -> Vec<Linked> {
             let mut cells: Vec<_> = cells.into_iter().take(columns).collect();
-            cells.resize(columns, Vec::new());
+            cells.resize(columns, Linked::default());
             cells
         };
         let head = fit(table.head);
@@ -450,14 +511,19 @@ impl Renderer {
         let natural: Vec<usize> = (0..columns)
             .map(|c| {
                 all()
-                    .map(|row| spans_width(&row[c]))
+                    .map(|row| spans_width(&row[c].spans))
                     .max()
                     .unwrap_or(0)
                     .max(1)
             })
             .collect();
         let words: Vec<usize> = (0..columns)
-            .map(|c| all().map(|row| longest_word(&row[c])).max().unwrap_or(0))
+            .map(|c| {
+                all()
+                    .map(|row| longest_word(&row[c].spans))
+                    .max()
+                    .unwrap_or(0)
+            })
             .collect();
         let avail = self.width.saturating_sub(self.nest_width());
         match column_widths(&natural, &words, avail) {
@@ -470,10 +536,10 @@ impl Renderer {
         &mut self,
         alignments: &[Alignment],
         widths: &[usize],
-        head: &[Vec<Span<'static>>],
-        rows: &[Vec<Vec<Span<'static>>>],
+        head: &[Linked],
+        rows: &[Vec<Linked>],
     ) {
-        let wrapped = |row: &[Vec<Span<'static>>]| -> Vec<Vec<Vec<Span<'static>>>> {
+        let wrapped = |row: &[Linked]| -> Vec<Vec<Linked>> {
             row.iter()
                 .zip(widths)
                 .map(|(cell, width)| wrap_cell(cell, *width))
@@ -482,58 +548,53 @@ impl Renderer {
         let head = wrapped(head);
         let rows: Vec<_> = rows.iter().map(|row| wrapped(row)).collect();
         let lines_between = rows.iter().any(|row| row.iter().any(|cell| cell.len() > 1));
-        self.push_row(rule(widths, '┌', '┬', '┐'));
+        self.push_row(rule(widths, '┌', '┬', '┐').into());
         self.push_cells(alignments, widths, &head);
-        self.push_row(rule(widths, '├', '┼', '┤'));
+        self.push_row(rule(widths, '├', '┼', '┤').into());
         for (i, row) in rows.iter().enumerate() {
             if i > 0 && lines_between {
-                self.push_row(rule(widths, '├', '┼', '┤'));
+                self.push_row(rule(widths, '├', '┼', '┤').into());
             }
             self.push_cells(alignments, widths, row);
         }
-        self.push_row(rule(widths, '└', '┴', '┘'));
+        self.push_row(rule(widths, '└', '┴', '┘').into());
     }
 
     /// The rows of one table row, each cell's wrapped lines side by side.
-    fn push_cells(
-        &mut self,
-        alignments: &[Alignment],
-        widths: &[usize],
-        cells: &[Vec<Vec<Span<'static>>>],
-    ) {
+    fn push_cells(&mut self, alignments: &[Alignment], widths: &[usize], cells: &[Vec<Linked>]) {
         let height = cells.iter().map(Vec::len).max().unwrap_or(1);
         for line in 0..height {
-            let mut body = Vec::new();
+            let mut body = Linked::default();
             for (c, cell) in cells.iter().enumerate() {
                 let text = cell.get(line).cloned().unwrap_or_default();
-                let gap = widths[c].saturating_sub(spans_width(&text));
+                let gap = widths[c].saturating_sub(spans_width(&text.spans));
                 let left = match alignments[c] {
                     Alignment::Right => gap,
                     Alignment::Center => gap / 2,
                     Alignment::Left | Alignment::None => 0,
                 };
-                body.push(Span::styled(
-                    if c == 0 { "│ " } else { " │ " },
-                    theme::secondary(),
-                ));
-                body.push(Span::raw(" ".repeat(left)));
-                body.extend(text);
-                body.push(Span::raw(" ".repeat(gap - left)));
+                body.push(
+                    Span::styled(if c == 0 { "│ " } else { " │ " }, theme::secondary()),
+                    None,
+                );
+                body.push(Span::raw(" ".repeat(left)), None);
+                body.append(text);
+                body.push(Span::raw(" ".repeat(gap - left)), None);
             }
-            body.push(Span::styled(" │", theme::secondary()));
+            body.push(Span::styled(" │", theme::secondary()), None);
             self.push_row(body);
         }
     }
 
-    fn draw_records(&mut self, head: &[Vec<Span<'static>>], rows: &[Vec<Vec<Span<'static>>>]) {
+    fn draw_records(&mut self, head: &[Linked], rows: &[Vec<Linked>]) {
         for (i, row) in rows.iter().enumerate() {
             if i > 0 {
-                self.push_row(vec![Span::styled("────────", theme::secondary())]);
+                self.push_row(vec![Span::styled("────────", theme::secondary())].into());
             }
             for (name, value) in head.iter().zip(row) {
                 let mut body = name.clone();
-                body.push(Span::raw(": "));
-                body.extend(value.iter().cloned());
+                body.push(Span::raw(": "), None);
+                body.append(value.clone());
                 self.push_row(body);
             }
         }
@@ -619,15 +680,13 @@ fn longest_word(spans: &[Span]) -> usize {
 }
 
 /// A cell's text wrapped to `width`, one entry per line.
-fn wrap_cell(cell: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+fn wrap_cell(cell: &Linked, width: usize) -> Vec<Linked> {
     let line = LogicalLine {
-        body: cell.to_vec(),
+        body: cell.spans.clone(),
+        links: cell.links.clone(),
         ..LogicalLine::default()
     };
-    wrap(&line, u16::try_from(width).unwrap_or(u16::MAX))
-        .into_iter()
-        .map(|line| line.spans)
-        .collect()
+    wrap_body(&line, u16::try_from(width).unwrap_or(u16::MAX))
 }
 
 /// A box line across the table: `left`, `─` over each column, `middle`

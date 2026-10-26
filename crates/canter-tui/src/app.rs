@@ -25,6 +25,7 @@ use crate::cells;
 use crate::commands::{self, Chooser, Command};
 use crate::copy::Copier;
 use crate::input::InputBox;
+use crate::links::{self, Opener, Target};
 use crate::select::{self, Cell, Rows, Unit};
 use crate::text::{LogicalLine, Row, plain, sanitize, spans_width, str_width, truncate, wrap_rows};
 use crate::theme;
@@ -295,6 +296,18 @@ struct Mouse {
     /// presses on that cell came one right after another.
     press: Option<((u16, u16), i64, u8)>,
     selection: Option<Selection>,
+    /// A press on a link, not opened yet.
+    link: Option<Click>,
+}
+
+/// A press on a link. It opens once the button went up on the same cell
+/// without a drag, and no second press came in the double click time.
+struct Click {
+    target: Target,
+    /// The cell pressed, and when (Unix ms).
+    cell: (u16, u16),
+    at: i64,
+    released: bool,
 }
 
 /// Text selected with the mouse, highlighted until something clears it.
@@ -452,6 +465,8 @@ pub struct App {
     clipboard: crate::images::Clipboard,
     /// Where copies go: the clipboard, and the terminal in tmux or over SSH.
     copier: Copier,
+    /// Opens links clicked, or over SSH copies them.
+    opener: Opener,
     mouse: Mouse,
     search: Option<Search>,
     commands: CommandList,
@@ -519,6 +534,7 @@ impl App {
             image_models: vec!["deepseek-flash".into()],
             clipboard: crate::images::Clipboard::default(),
             copier: Copier::default(),
+            opener: Opener::default(),
             mouse: Mouse::default(),
             search: None,
             commands: CommandList::default(),
@@ -1269,8 +1285,9 @@ impl App {
     /// The mouse at `now_ms` (Unix ms). The wheel scrolls the conversation,
     /// also while the approval box is open. The left button selects
     /// conversation text: dragging highlights it and letting go copies it; a
-    /// double click takes a word, a triple click a row. Other mouse events
-    /// do nothing.
+    /// double click takes a word, a triple click a row. A click on a link
+    /// opens it once the double click time is over. Other mouse events do
+    /// nothing.
     pub fn handle_mouse_at(&mut self, mouse: MouseEvent, now_ms: i64) {
         let cell = (mouse.column, mouse.row);
         match mouse.kind {
@@ -1294,8 +1311,11 @@ impl App {
 
     /// Pressing the left button clears the selection and, on the
     /// conversation, starts one. Presses one right after another on the
-    /// same cell take a word, then a row, then start again.
+    /// same cell take a word, then a row, then start again. A link clicked
+    /// before that has not opened yet does not: this press is a second one.
     fn press(&mut self, cell: (u16, u16), now: i64) {
+        self.open_link(now);
+        self.mouse.link = None;
         let clicks = match self.mouse.press {
             Some((at, when, clicks)) if at == cell && now - when <= MULTI_CLICK_MS => {
                 clicks % 3 + 1
@@ -1315,6 +1335,14 @@ impl App {
         let Some(range) = self.points(unit, cell) else {
             return;
         };
+        if clicks == 1 {
+            self.mouse.link = self.link_at(cell).map(|target| Click {
+                target,
+                cell,
+                at: now,
+                released: false,
+            });
+        }
         // The text under the pointer stays put while the button is down.
         self.scroll.top = Some(self.scroll.top.unwrap_or(self.scroll.max_top));
         self.mouse.selection = Some(Selection {
@@ -1391,8 +1419,10 @@ impl App {
     }
 
     /// Letting go of the left button copies what is selected; a click that
-    /// did not drag only clears.
+    /// did not drag only clears, and on a link it was pressed on, starts
+    /// waiting to open it.
     fn release(&mut self, cell: (u16, u16)) {
+        let click = self.mouse.link.take();
         let Some(held) = self.mouse.selection.as_ref().and_then(|s| s.held) else {
             return;
         };
@@ -1405,6 +1435,15 @@ impl App {
         selection.held = None;
         if !selection.moved {
             self.mouse.selection = None;
+            if let Some(click) = click
+                && click.cell == cell
+                && self.link_at(cell).as_ref() == Some(&click.target)
+            {
+                self.mouse.link = Some(Click {
+                    released: true,
+                    ..click
+                });
+            }
             return;
         }
         let text = self.selected_text();
@@ -1413,6 +1452,44 @@ impl App {
             return;
         }
         self.copier.copy(plain(&text));
+    }
+
+    /// Opens the link clicked once no second press can make the click a
+    /// double click; at `now` (Unix ms).
+    fn open_link(&mut self, now: i64) {
+        if self
+            .mouse
+            .link
+            .as_ref()
+            .is_some_and(|click| click.released && now - click.at > MULTI_CLICK_MS)
+            && let Some(click) = self.mouse.link.take()
+        {
+            let width = usize::from(self.width);
+            self.opener
+                .open(&click.target, &mut self.copier, now, width);
+        }
+    }
+
+    /// Where the link at `cell` on screen goes, if one is there. None while
+    /// searching: an underline then marks a match, not a link.
+    fn link_at(&mut self, (x, y): (u16, u16)) -> Option<Target> {
+        let y = usize::from(y);
+        if self.search.is_some() || y >= self.scroll.area {
+            return None;
+        }
+        let (live, lead, _) = self.laid_out(self.width);
+        let rows = Rows {
+            history: &self.history.rows,
+            live: &live,
+            lead,
+        };
+        let top = self.scroll.top.unwrap_or(self.scroll.max_top);
+        let x = usize::from(x);
+        rows.get(top + y)?
+            .links
+            .iter()
+            .find(|(columns, _)| columns.contains(&x))
+            .map(|(_, target)| target.clone())
     }
 
     /// What `unit` takes at `cell` on screen, as places in the conversation.
@@ -1784,6 +1861,17 @@ impl App {
         self
     }
 
+    /// Links open only with `launch`, given the command that would start;
+    /// with `remote`, a click copies them as over SSH (for tests).
+    pub fn with_link_opener(
+        mut self,
+        remote: bool,
+        launch: impl FnMut(std::process::Command) -> Result<(), String> + Send + 'static,
+    ) -> Self {
+        self.opener = Opener::with_launcher(remote, launch);
+        self
+    }
+
     /// OSC 52 for the terminal, to write between frames.
     pub(crate) fn take_osc52(&mut self) -> Option<String> {
         self.copier.take_sequence()
@@ -2044,6 +2132,9 @@ impl App {
             self.mouse.selection = None;
         }
         self.width = width;
+        self.open_link(now_ms);
+        self.opener
+            .poll(&mut self.copier, now_ms, usize::from(width));
         // Leave the status line, the info rows, the hint and one row of the conversation.
         let box_height = height.saturating_sub(3 + INFO_ROWS);
         let approval = self.open_request().map(|request| {
@@ -2206,6 +2297,8 @@ impl App {
             self.mouse.selection = None;
         }
         let selected = selected.flatten();
+        // While searching, underlines mark matches only.
+        let searching = self.search.is_some();
         let conversation = history
             .iter()
             .chain(&live)
@@ -2219,6 +2312,16 @@ impl App {
                     .take_while(|&at| hits[at].anchor.row == index)
                     .map(|at| (hits[at].columns.clone(), Some(at) == current))
                     .collect();
+                let linked;
+                let row = if searching || row.links.is_empty() {
+                    row
+                } else {
+                    linked = Row {
+                        line: links::underline(&row.line, &row.links),
+                        ..row.clone()
+                    };
+                    &linked
+                };
                 let found;
                 let row = if marks.is_empty() {
                     row

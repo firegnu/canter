@@ -53,6 +53,8 @@ struct Pending {
     id: u64,
     lines: usize,
     chars: usize,
+    /// A link copied in place of opening it: the note says so.
+    link: bool,
     /// OSC 52 was queued for the terminal.
     sent: bool,
     /// Why OSC 52 could not be sent, in tmux or over SSH.
@@ -104,6 +106,7 @@ impl Copier {
             id: self.copies,
             lines: text.lines().count(),
             chars: text.chars().count(),
+            link: false,
             sent: false,
             terminal_error: None,
             failed: None,
@@ -127,6 +130,21 @@ impl Copier {
             Err(error) => pending.failed = Some(error),
         }
         self.pending = Some(pending);
+    }
+
+    /// [`Copier::copy`] for a link copied in place of opening it (over
+    /// SSH): the note says `Link copied`.
+    pub fn copy_link(&mut self, text: String) {
+        self.copy(text);
+        if let Some(pending) = &mut self.pending {
+            pending.link = true;
+        }
+    }
+
+    /// Shows `line` in the status line until `until` (Unix ms), in place of
+    /// the note before it: that a link opened, or why not.
+    pub fn show(&mut self, line: Line<'static>, until: i64) {
+        self.note = Some((line, until));
     }
 
     fn worker(&mut self) -> Result<&Worker, String> {
@@ -209,6 +227,7 @@ impl Copier {
             return;
         };
         let note = match result {
+            Ok(()) if pending.link => (link_copied(), now + COPIED_MS),
             Ok(()) => (copied(pending.lines, pending.chars), now + COPIED_MS),
             Err(error) => {
                 let reason = match &pending.terminal_error {
@@ -244,6 +263,14 @@ fn copied(lines: usize, chars: usize) -> Line<'static> {
             plural(lines, "line"),
             plural(chars, "char")
         )),
+    ])
+}
+
+/// ` ✓ Link copied`.
+fn link_copied() -> Line<'static> {
+    Line::from(vec![
+        Span::styled(" ✓ ", theme::success()),
+        Span::raw("Link copied"),
     ])
 }
 
