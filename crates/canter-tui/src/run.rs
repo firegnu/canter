@@ -112,6 +112,9 @@ pub struct Launch<C> {
     pub client_name: String,
     /// The user's home directory, for showing paths as `~/…`.
     pub home: Option<String>,
+    /// The version line the welcome header shows after `canter`, such as
+    /// `0.1.0 · 37489fe`.
+    pub version: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -241,6 +244,7 @@ where
         env,
         client_name,
         home,
+        version,
     } = launch;
     let client = connected.client;
     let opened = match open {
@@ -284,7 +288,9 @@ where
 
     let session = snapshot.id.clone();
     let stream = client.subscribe(&session, snapshot.last_event_seq).await?;
-    let mut app = App::new(snapshot, home.clone(), now_ms()).with_client_name(client_name.clone());
+    let mut app = App::new(snapshot, home.clone(), now_ms())
+        .with_client_name(client_name.clone())
+        .with_welcome(version.clone());
     match client.list_models().await {
         Ok(models) => app.set_models(&models),
         Err(error) => app.warning(&format!("Could not read image capabilities: {error}")),
@@ -311,6 +317,7 @@ where
         env,
         client_name,
         home,
+        version,
         sender,
         pump,
         btw: None,
@@ -596,6 +603,8 @@ struct Chat<C> {
     env: BTreeMap<String, String>,
     client_name: String,
     home: Option<String>,
+    /// The welcome header's version line, as [`Launch::version`].
+    version: String,
     /// Background tasks report here; replaced, with the receiver, when the
     /// screen switches sessions, so nothing about the session before shows.
     sender: mpsc::UnboundedSender<Message>,
@@ -733,7 +742,8 @@ impl<C: Connector> Chat<C> {
         self.sender = sender;
         self.session = snapshot.id.clone();
         *ui.app_mut() = App::new(snapshot, self.home.clone(), now_ms())
-            .with_client_name(self.client_name.clone());
+            .with_client_name(self.client_name.clone())
+            .with_welcome(self.version.clone());
         if let Ok(models) = self.client.list_models().await {
             ui.app_mut().set_models(&models);
         }

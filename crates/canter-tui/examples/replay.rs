@@ -35,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         env: BTreeMap::new(),
         client_name: CLIENT_NAME.to_owned(),
         home: std::env::var("HOME").ok(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
     };
     let result = run(launch).await;
     drop(server);

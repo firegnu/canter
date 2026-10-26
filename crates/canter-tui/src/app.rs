@@ -174,6 +174,8 @@ enum Part {
     /// The queued message with this id: once it leaves the queue, the
     /// messages after it move up, and are other parts.
     Queued(String),
+    /// The welcome header, above everything else.
+    Welcome,
 }
 
 /// What a part of the conversation is, for the blank rows between parts.
@@ -189,6 +191,8 @@ enum Kind {
     End,
     /// A queued message: queued messages in a row are one block.
     Queued,
+    /// The welcome header.
+    Welcome,
 }
 
 /// The last part laid out: what it is and whether its last row is blank.
@@ -495,6 +499,9 @@ pub struct App {
     active_btw: Option<usize>,
     history: History,
     scroll: Scroll,
+    /// The version line of the welcome header at the top of the
+    /// conversation; no header without one.
+    welcome: Option<String>,
     /// Ctrl+O shows everything folded in the conversation: whole thinking,
     /// all command output, whole diffs. Folded again each time canter opens.
     details: bool,
@@ -561,6 +568,7 @@ impl App {
             completions: 0,
             notices: Vec::new(),
             active_btw: None,
+            welcome: None,
             history: History::default(),
             scroll: Scroll::default(),
             details: false,
@@ -582,6 +590,13 @@ impl App {
             send_guard_until: i64::MIN,
             width: 80,
         }
+    }
+
+    /// Draws the welcome header at the top of the conversation, with
+    /// `version` (such as `0.1.0 · 37489fe`) after `canter`.
+    pub fn with_welcome(mut self, version: impl Into<String>) -> Self {
+        self.welcome = Some(version.into());
+        self
     }
 
     /// Sets this terminal's `clientName` (the default is [`crate::CLIENT_NAME`]).
@@ -2048,6 +2063,23 @@ impl App {
                 ..History::default()
             };
         }
+        // First, before any notice; again whenever the history starts over
+        // (a new width, Ctrl+O, a rewind).
+        if self.history.parts.is_empty()
+            && let Some(version) = &self.welcome
+        {
+            let home = self.home.as_deref();
+            let rows = crate::welcome::rows(version, &self.snapshot.settings.cwd, home, width);
+            let history = &mut self.history;
+            let part = (Part::Welcome, Kind::Welcome);
+            push_part(
+                &mut history.rows,
+                &mut history.parts,
+                &mut history.tail,
+                part,
+                rows,
+            );
+        }
         loop {
             while let Some(notice) = self.notices.get(self.history.notices)
                 && notice.at <= self.history.end
@@ -3312,7 +3344,15 @@ fn part_hits(rows: &[&Row], part: &Part, first: usize, needle: &str, hits: &mut 
         if at > 0 && keys[at - 1] != *key {
             nth = 0;
         }
+        // The welcome header's pony is not searched, only its text.
+        let from = match part {
+            Part::Welcome => row.text.as_ref().map_or(0, |text| text.start),
+            _ => 0,
+        };
         for columns in search::find(&row.line, needle) {
+            if columns.start < from {
+                continue;
+            }
             let anchor = Anchor {
                 part: part.clone(),
                 key: *key,

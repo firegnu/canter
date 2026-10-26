@@ -3,7 +3,8 @@
 //!
 //! Text uses the terminal's own 16 colours, so it follows the terminal's
 //! colour scheme. Only the diff backgrounds are true colours, and only when
-//! the terminal can show them and its background is known to be dark or light.
+//! the terminal can show them and its background is known to be dark or light;
+//! and the welcome header's pony, when the terminal can show them.
 
 use std::cell::Cell;
 use std::time::Duration;
@@ -262,5 +263,45 @@ fn word(background: Option<Color>) -> Style {
     match background {
         Some(color) => Style::new().bg(color),
         None => Style::new().reversed(),
+    }
+}
+
+/// A part of the pony on the welcome header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pony {
+    Body,
+    /// The mane, the tail and the hooves.
+    Mane,
+    Eye,
+    /// The light in the eye.
+    Shine,
+    Nose,
+    Blush,
+}
+
+/// What a part of the pony is drawn in; `None` leaves it out. True colour
+/// (chestnut body, dark brown mane, cream nose), else one of the 256 colours
+/// past the first 16, picked by hand: the nearest turns the mane grey and the
+/// body red, and the blush into the body. Body 173 (`#D7875F`), mane 94
+/// (`#875F00`), eye 234 (`#1C1C1C`), shine 231 (`#FFFFFF`), nose 223
+/// (`#FFD7AF`), blush 211 (`#FF87AF`). With 16 colours the whole pony is
+/// cyan, the accent, and without colours the text colour; then the eye is
+/// left out, a hole in the head.
+pub fn pony(part: Pony) -> Option<Style> {
+    let ([r, g, b], index) = match part {
+        Pony::Body => ([0xc0, 0x70, 0x3f], 173),
+        Pony::Mane => ([0x5b, 0x32, 0x20], 94),
+        Pony::Eye => ([0x1e, 0x1a, 0x18], 234),
+        Pony::Shine => ([0xff, 0xff, 0xff], 231),
+        Pony::Nose => ([0xf1, 0xd2, 0xa6], 223),
+        Pony::Blush => ([0xe8, 0x9a, 0x8c], 211),
+    };
+    let eye = matches!(part, Pony::Eye | Pony::Shine);
+    match current().depth {
+        Depth::TrueColor => Some(Style::new().fg(Color::Rgb(r, g, b))),
+        Depth::Ansi256 => Some(Style::new().fg(Color::Indexed(index))),
+        _ if eye => None,
+        Depth::Ansi16 => Some(accent()),
+        Depth::None => Some(Style::new()),
     }
 }

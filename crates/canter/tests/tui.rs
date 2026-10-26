@@ -169,6 +169,7 @@ async fn review_requires_the_running_servers_review_feature_before_sending() {
                 env,
                 home: Some(home.display().to_string()),
                 client_name: "test".into(),
+                version: canter::VERSION.to_owned(),
             },
         ));
         let terminal = Terminal { keys, frames, task };
@@ -2764,4 +2765,75 @@ async fn rewind_conflict_repreviews_the_changed_file_before_confirming_delete() 
     terminal.frames_later(2).await;
     terminal.quit().await;
     world.stop_server(Signal::SIGTERM).await;
+}
+
+/// The welcome header is the terminal's own: on screen at the top of every
+/// session opened, with that session's directory, but never in the session
+/// on disk or in what the model is sent.
+#[tokio::test]
+async fn the_welcome_header_is_on_screen_only() {
+    let mut world = World::new(vec![text_reply("回答一"), text_reply("回答二")]).await;
+    world.start_server().await;
+    let other = world.path("other");
+    fs::create_dir(&other).unwrap();
+    let title = format!("canter {}", canter::VERSION);
+    let header = |terminal: &Terminal, dir: &Path| {
+        let screen = terminal.screen();
+        let lines: Vec<&str> = screen.lines().collect();
+        assert!(lines[0].ends_with(&title), "{screen}");
+        assert!(lines[1].ends_with(&dir.display().to_string()), "{screen}");
+        assert!(lines[3].contains("Shift+Tab permissions"), "{screen}");
+    };
+
+    let b = Terminal::start(&["第一句"], world.context("canter-tui b", &other)).await;
+    b.wait_for("回答一").await;
+    b.wait_idle().await;
+    header(&b, &other);
+    let first = world.only_session().await;
+    b.quit().await;
+
+    let a = world.open(&["第二句"], "canter-tui a").await;
+    a.wait_for("回答二").await;
+    a.wait_idle().await;
+    header(&a, &world.path("work"));
+    // Switching sessions draws the header for the one switched to.
+    a.type_line("/resume").await;
+    a.wait_for("Which session to resume?").await;
+    // The other directory's sessions show after Tab.
+    a.press(KeyCode::Tab).await;
+    a.wait_for("Tab this directory only").await;
+    a.press(KeyCode::Down).await;
+    a.press(KeyCode::Enter).await;
+    a.wait_until("the first session", |a| {
+        a.screen().contains("回答一") && !a.screen().contains("第二句")
+    })
+    .await;
+    header(&a, &other);
+    let second = a.quit().await;
+    assert_eq!(second, first);
+
+    // Resuming opens with it too.
+    let c = world.open(&["--resume", &first], "canter-tui c").await;
+    c.wait_for("回答一").await;
+    header(&c, &other);
+    c.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+
+    let sent = serde_json::to_string(&*world.requests.lock().unwrap()).unwrap();
+    assert_eq!(world.requests.lock().unwrap().len(), 2);
+    let mut stored = String::new();
+    for entry in fs::read_dir(world.path("state/sessions")).unwrap() {
+        stored += &fs::read_to_string(entry.unwrap().path().join("events.jsonl")).unwrap();
+    }
+    assert!(stored.contains("第二句"), "the sessions are on disk");
+    for text in [
+        title.as_str(),
+        "Shift+Tab permissions",
+        "Ctrl+F find",
+        "▀",
+        "▄",
+    ] {
+        assert!(!sent.contains(text), "{text:?} sent to the model");
+        assert!(!stored.contains(text), "{text:?} in a session on disk");
+    }
 }
