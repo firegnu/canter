@@ -280,19 +280,21 @@ pub enum Pony {
 }
 
 /// What a part of the pony is drawn in; `None` leaves it out. True colour
-/// (chestnut body, dark brown mane, cream nose), else the nearest of the 256
-/// colours past the first 16: 131 (`#AF5F5F`), 237 (`#3A3A3A`), 234
-/// (`#1C1C1C`), 231 (`#FFFFFF`), 223 (`#FFD7AF`), 174 (`#D78787`). With 16
-/// colours the whole pony is cyan, the accent, and without colours the
-/// text colour; then the eye is left out, a hole in the head.
+/// (chestnut body, dark brown mane, cream nose), else one of the 256 colours
+/// past the first 16, picked by hand: the nearest turns the mane grey and the
+/// body red, and the blush into the body. Body 173 (`#D7875F`), mane 94
+/// (`#875F00`), eye 234 (`#1C1C1C`), shine 231 (`#FFFFFF`), nose 223
+/// (`#FFD7AF`), blush 211 (`#FF87AF`). With 16 colours the whole pony is
+/// cyan, the accent, and without colours the text colour; then the eye is
+/// left out, a hole in the head.
 pub fn pony(part: Pony) -> Option<Style> {
     let ([r, g, b], index) = match part {
-        Pony::Body => ([0xc0, 0x70, 0x3f], 131),
-        Pony::Mane => ([0x5b, 0x32, 0x20], 237),
+        Pony::Body => ([0xc0, 0x70, 0x3f], 173),
+        Pony::Mane => ([0x5b, 0x32, 0x20], 94),
         Pony::Eye => ([0x1e, 0x1a, 0x18], 234),
         Pony::Shine => ([0xff, 0xff, 0xff], 231),
         Pony::Nose => ([0xf1, 0xd2, 0xa6], 223),
-        Pony::Blush => ([0xe8, 0x9a, 0x8c], 174),
+        Pony::Blush => ([0xe8, 0x9a, 0x8c], 211),
     };
     let eye = matches!(part, Pony::Eye | Pony::Shine);
     match current().depth {

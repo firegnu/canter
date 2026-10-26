@@ -53,12 +53,12 @@ fn paint(pixel: u8, depth: Depth) -> Option<Color> {
         return None;
     }
     let (rgb, index) = match pixel {
-        b'b' => ((0xc0, 0x70, 0x3f), 131),
-        b'm' => ((0x5b, 0x32, 0x20), 237),
+        b'b' => ((0xc0, 0x70, 0x3f), 173),
+        b'm' => ((0x5b, 0x32, 0x20), 94),
         b'e' => ((0x1e, 0x1a, 0x18), 234),
         b'w' => ((0xff, 0xff, 0xff), 231),
         b'c' => ((0xf1, 0xd2, 0xa6), 223),
-        b'p' => ((0xe8, 0x9a, 0x8c), 174),
+        b'p' => ((0xe8, 0x9a, 0x8c), 211),
         _ => panic!("unknown pixel {}", pixel as char),
     };
     let eye = matches!(pixel, b'e' | b'w');
@@ -312,7 +312,7 @@ fn with_256_colours_the_eye_stands_out_from_the_body_on_any_background() {
         let eye = screen.buffer()[(11, 1)].fg;
         let body = screen.buffer()[(12, 1)].fg;
         assert_eq!(eye, Color::Indexed(234));
-        assert_eq!(body, Color::Indexed(131));
+        assert_eq!(body, Color::Indexed(173));
         assert_ne!(eye, body);
     }
     theme::set(Theme::default());
