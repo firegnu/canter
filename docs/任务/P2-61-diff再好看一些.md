@@ -1,11 +1,13 @@
 # 任务：diff 再好看一些（代码上色、行号一栏、块之间写函数名）
 
+2026-10-26，canter/main 交给 canter/dev-diffstyle（Claude Code，opus[1m] / high）。
+路由：常规 / 交叉审查不要 / 影响面：改行为（路由：常规（置信 0.47）、不要、改行为）
 类型：功能变更
 依据：10-26 用户加的。用户给了一张别的工具里 diff 的截图（加删行整行红绿底、代码按语言上色、改动的行行号红绿、改动的词深一档），要 canter 的 diff 做成这样，「可以设计的更加漂亮」。主控做了预览页，用户选 B：在截图的基础上，行号和 +/− 放进一栏、这一栏底色再深一点，块和块之间写出这块在哪个函数里。P2-37 已有的一列行号、整行底色、改动的词照旧。改终端界面的 diff 画法；函数名要在工具生成 diff 时写进 `@@` 行，所以也动 `canter-tools` 里生成 diff 那一处。
 提示：围绕已确认的使用目标完成变更，优先沿用现有机制。
 依赖：P2-48
 执行：派出
-待用户：P2-48 合并后主控补上交给谁、路由和 worktree，用户看过说派才派。P2-48、P2-59、P2-60、P2-61 全部做完后一起装版（用户 10-26：「再定一下，48，59，60，61全部做完之后再安装新的release」）
+待用户：用户看过说派才派。P2-48、P2-59、P2-60、P2-61 全部做完后一起装版（用户 10-26：「再定一下，48，59，60，61全部做完之后再安装新的release」）
 
 ## 用户原话
 
@@ -35,6 +37,13 @@
 - `crates/canter-tui/src/diff.rs`（现在的画法）、`highlight.rs`（代码块怎么上色）、`theme.rs`（diff 的几档底色、`bg(dark, light)`）、`cells.rs`（改文件卡片和批准框怎么用 diff）。
 - `crates/canter-tools/src/lib.rs` 的 `change_action`（用 similar 生成统一 diff）。
 - `crates/canter-tui/README.md` 的「diff」「颜色」两节。
+
+## 在哪里干活
+
+- worktree：`/Users/firegnu/Developer/personal_projs/canter-worktrees/p2-61-diffstyle`，分支 `p2-61-diffstyle`（已从 main 建好）。
+- 编译目录：命令前加 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-61-diffstyle`。
+- 只动 `crates/canter-tui/`（含测试和 README）、`crates/canter-tools/` 里生成 diff 那一处和它的测试，以及本任务文件末尾的完成记录。
+- 没有同时在跑的开发任务。P2-48 已合并：已发出的用户消息铺浅底色（`theme::user_bg`、`Row::fill`），和 diff 无关，不要动。
 
 ## 要做的
 
