@@ -39,6 +39,7 @@ use tokio::sync::mpsc;
 
 use crate::client::{Client, ClientError, EventStream};
 use crate::picker::{Pick, Picker};
+use crate::theme::{self, Theme};
 use crate::{Action, App, Ui, now_ms};
 
 /// The `clientName` prefix of the terminal client.
@@ -203,6 +204,8 @@ impl FrameSync for TestBackend {}
 /// picking one.
 pub async fn run<C: Connector>(launch: Launch<C>) -> Result<Option<String>, RunError> {
     let _session = TerminalSession::start()?;
+    // The terminal answers on its input, so ask before the reader takes it.
+    theme::set(Theme::detect());
     let terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let (sender, input) = input();
     let reader = TerminalReader::spawn(sender);

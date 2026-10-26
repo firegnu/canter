@@ -11,6 +11,7 @@ use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::text::{LogicalLine, str_width};
+use crate::theme;
 
 pub(crate) fn render(source: &str) -> Vec<LogicalLine> {
     let mut renderer = Renderer::default();
@@ -50,7 +51,7 @@ impl Renderer {
             Event::End(tag) => self.end(tag),
             Event::Text(text) => {
                 if self.code_block {
-                    self.push_lines(&text, Style::new().cyan());
+                    self.push_lines(&text, theme::accent());
                 } else {
                     for (_, link_text) in &mut self.links {
                         link_text.push_str(&text);
@@ -58,14 +59,14 @@ impl Renderer {
                     self.push(&text, self.style());
                 }
             }
-            Event::Code(text) => self.push(&text, self.style().cyan()),
+            Event::Code(text) => self.push(&text, self.style().patch(theme::accent())),
             Event::Html(text) | Event::InlineHtml(text) => self.push_lines(&text, self.style()),
             Event::InlineMath(text) | Event::DisplayMath(text) => self.push(&text, self.style()),
             Event::FootnoteReference(name) => self.push(&format!("[^{name}]"), self.style()),
             Event::SoftBreak | Event::HardBreak => self.flush(),
             Event::Rule => {
                 self.block_start();
-                self.push("────────", Style::new().dim());
+                self.push("────────", theme::secondary());
                 self.block_end();
             }
             Event::TaskListMarker(done) => {
@@ -165,7 +166,7 @@ impl Renderer {
                     && !url.is_empty()
                     && url != text
                 {
-                    self.push(&format!(" ({url})"), Style::new().dim());
+                    self.push(&format!(" ({url})"), theme::secondary());
                 }
             }
             _ => {}
@@ -208,8 +209,8 @@ impl Renderer {
         for (i, nest) in self.nest.iter().enumerate() {
             match nest {
                 Nest::Quote => {
-                    indent.push(Span::styled("▌ ", Style::new().dim()));
-                    hang.push(Span::styled("▌ ", Style::new().dim()));
+                    indent.push(Span::styled("▌ ", theme::secondary()));
+                    hang.push(Span::styled("▌ ", theme::secondary()));
                 }
                 Nest::Item(width) => {
                     let blank = " ".repeat(*width);
