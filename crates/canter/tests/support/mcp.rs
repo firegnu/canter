@@ -795,12 +795,17 @@ async fn connection_and_call_timeouts_are_bounded_and_cancel_the_request() {
     let slow = HttpMcp::start(&["echo"]).await;
     slow.state.lock().unwrap().slow_listing = true;
     let http = HttpMcp::start(&["pending"]).await;
+    // Same behaviour as the 10 s / 120 s defaults, without waiting minutes.
+    let mut slow_config = slow.config();
+    slow_config["startup_timeout_sec"] = 1.into();
+    let mut remote_config = http.config();
+    remote_config["tool_timeout_sec"] = 1.into();
     let mut fixture = Fixture::start_with_mcp(
         vec![call(&["mcp__remote__pending"]), text_reply()],
         "fake-model",
         None,
         json!({}),
-        json!({"slow":slow.config(),"remote":http.config()}),
+        json!({"slow":slow_config,"remote":remote_config}),
     )
     .await;
     let status: Value = fixture
@@ -820,7 +825,7 @@ async fn connection_and_call_timeouts_are_bounded_and_cancel_the_request() {
     let id = &created.session.id;
     fixture.input(id).await;
     until(|| !http.state.lock().unwrap().calls.is_empty()).await;
-    tokio::time::timeout(Duration::from_secs(130), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let snapshot: Value = fixture
                 .request(Method::GET, &format!("/v1/sessions/{id}"), json!(null))
@@ -867,7 +872,13 @@ async fn shutdown_during_stdio_initialization_reaps_the_process_group() {
         }}}
     }).to_string()).unwrap();
     let mut daemon = Fixture::spawn(root.path());
-    until(|| root.path().join("child-pid").is_file()).await;
+    // fs::write creates the file before writing it, so wait for the content.
+    until(|| {
+        ["pid", "child-pid"].iter().all(|name| {
+            fs::read_to_string(root.path().join(name)).is_ok_and(|text| text.parse::<i32>().is_ok())
+        })
+    })
+    .await;
     let child = OwnedPid::read(&root.path().join("pid"));
     let grandchild = OwnedPid::read(&root.path().join("child-pid"));
     nix::sys::signal::kill(

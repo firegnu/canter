@@ -12,18 +12,58 @@ pub enum ServerConfig {
         args: Vec<String>,
         #[serde(default)]
         env: BTreeMap<String, String>,
+        #[serde(default)]
+        startup_timeout_sec: Option<u64>,
+        #[serde(default)]
+        tool_timeout_sec: Option<u64>,
     },
     Http {
         url: String,
         #[serde(default)]
         headers: BTreeMap<String, String>,
+        #[serde(default)]
+        startup_timeout_sec: Option<u64>,
+        #[serde(default)]
+        tool_timeout_sec: Option<u64>,
     },
 }
 
 impl ServerConfig {
-    pub fn validate(&self) -> Result<(), &'static str> {
+    fn timeouts(&self) -> (Option<u64>, Option<u64>) {
         match self {
-            Self::Stdio { command, args, env } => {
+            Self::Stdio {
+                startup_timeout_sec,
+                tool_timeout_sec,
+                ..
+            }
+            | Self::Http {
+                startup_timeout_sec,
+                tool_timeout_sec,
+                ..
+            } => (*startup_timeout_sec, *tool_timeout_sec),
+        }
+    }
+    /// Connecting, initializing and listing tools, including later re-listing.
+    pub fn startup_timeout(&self) -> Duration {
+        Duration::from_secs(self.timeouts().0.unwrap_or(DEFAULT_STARTUP_TIMEOUT_SEC))
+    }
+    /// One tool call.
+    pub fn tool_timeout(&self) -> Duration {
+        Duration::from_secs(self.timeouts().1.unwrap_or(DEFAULT_TOOL_TIMEOUT_SEC))
+    }
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let (startup, tool) = self.timeouts();
+        if [startup, tool]
+            .into_iter()
+            .flatten()
+            .any(|seconds| !(1..=MAX_TIMEOUT_SEC).contains(&seconds))
+        {
+            return Err("MCP timeouts must be between 1 and 86400 seconds");
+        }
+        match self {
+            Self::Stdio {
+                command, args, env, ..
+            } => {
                 if command.is_empty()
                     || command.contains('\0')
                     || args.iter().any(|arg| arg.contains('\0'))
@@ -34,7 +74,7 @@ impl ServerConfig {
                     return Err("invalid MCP command or environment");
                 }
             }
-            Self::Http { url, headers } => {
+            Self::Http { url, headers, .. } => {
                 let url = reqwest::Url::parse(url).map_err(|_| "invalid MCP URL")?;
                 let local = url.host_str().is_some_and(|host| {
                     host == "localhost"
@@ -84,8 +124,10 @@ use std::{
 use tokio::{sync::Notify, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_STARTUP_TIMEOUT_SEC: u64 = 10;
+const DEFAULT_TOOL_TIMEOUT_SEC: u64 = 120;
+// Keeps deadline arithmetic far from overflow.
+const MAX_TIMEOUT_SEC: u64 = 86_400;
 const STDIO_BASE_ENV: [&str; 8] = [
     "HOME", "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL",
 ];
@@ -100,6 +142,7 @@ struct Server {
     name: String,
     state: Mutex<ServerState>,
     secrets: Vec<String>,
+    call_timeout: Duration,
 }
 #[derive(Default)]
 struct ServerState {
@@ -149,6 +192,7 @@ impl Registry {
             let server = Arc::new(Server {
                 name,
                 secrets,
+                call_timeout: config.tool_timeout(),
                 state: Mutex::new(ServerState::default()),
             });
             registry.servers.push(server.clone());
@@ -298,11 +342,14 @@ async fn connect(
     stop: CancellationToken,
 ) -> Option<JoinHandle<()>> {
     let changed = Arc::new(Notify::new());
-    let deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
+    let startup_timeout = config.startup_timeout();
+    let deadline = tokio::time::Instant::now() + startup_timeout;
     let mut process_group = None;
     let initialize = async {
         match config {
-            ServerConfig::Stdio { command, args, env } => {
+            ServerConfig::Stdio {
+                command, args, env, ..
+            } => {
                 let mut command = tokio::process::Command::new(command);
                 command
                     .args(args)
@@ -325,7 +372,7 @@ async fn connect(
                     .await
                     .map_err(|_| "MCP initialization failed")
             }
-            ServerConfig::Http { url, headers } => {
+            ServerConfig::Http { url, headers, .. } => {
                 let headers = headers
                     .into_iter()
                     .map(|(name, value)| {
@@ -340,7 +387,7 @@ async fn connect(
                 let client = reqwest::Client::builder()
                     .no_proxy()
                     .redirect(reqwest::redirect::Policy::none())
-                    .connect_timeout(CONNECT_TIMEOUT)
+                    .connect_timeout(startup_timeout)
                     .build()
                     .map_err(|_| "could not create MCP HTTP client")?;
                 let config = StreamableHttpClientTransportConfig::with_uri(url)
@@ -393,7 +440,7 @@ async fn connect(
                 _ = stop.cancelled() => { service_stop.cancel(); let _ = waiting.await; break; }
                 _ = &mut waiting => { server.disconnected("MCP connection closed"); break; }
                 _ = changed.notified() => {
-                    match tokio::time::timeout(CONNECT_TIMEOUT, peer.list_all_tools()).await {
+                    match tokio::time::timeout(startup_timeout, peer.list_all_tools()).await {
                         Ok(Ok(tools)) => server.update(tools),
                         _ => { service_stop.cancel(); let _ = waiting.await; server.disconnected("MCP tool listing failed or timed out"); break; }
                     }
@@ -428,7 +475,7 @@ impl McpTool {
         let result = tokio::select! {
             biased;
             _ = cancel.cancelled() => Err(("MCP call cancelled",ToolOutcome::Cancelled)),
-            result = tokio::time::timeout(CALL_TIMEOUT,peer.call_tool_once(params)) => match result {
+            result = tokio::time::timeout(self.server.call_timeout,peer.call_tool_once(params)) => match result {
                 Err(_) => Err(("MCP call timed out",ToolOutcome::TimedOut)),
                 Ok(Err(_)) => Err(("MCP tool call failed",ToolOutcome::Failed)),
                 Ok(Ok(CallToolResponse::Complete(result))) => Ok(result),
@@ -475,5 +522,47 @@ impl Drop for ProcessGroup {
             nix::unistd::Pid::from_raw(self.0 as i32),
             nix::sys::signal::Signal::SIGKILL,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(value: serde_json::Value) -> ServerConfig {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn timeouts_default_to_ten_and_one_hundred_twenty_seconds() {
+        for config in [
+            parse(serde_json::json!({"transport":"stdio","command":"server"})),
+            parse(serde_json::json!({"transport":"http","url":"http://127.0.0.1:1/mcp"})),
+        ] {
+            assert_eq!(config.startup_timeout(), Duration::from_secs(10));
+            assert_eq!(config.tool_timeout(), Duration::from_secs(120));
+        }
+    }
+
+    #[test]
+    fn configured_timeouts_are_used_and_out_of_range_values_are_rejected() {
+        let config = parse(serde_json::json!({
+            "transport":"stdio","command":"server","startup_timeout_sec":30,"tool_timeout_sec":600
+        }));
+        assert_eq!(config.startup_timeout(), Duration::from_secs(30));
+        assert_eq!(config.tool_timeout(), Duration::from_secs(600));
+        assert!(config.validate().is_ok());
+        for field in ["startup_timeout_sec", "tool_timeout_sec"] {
+            let mut value = serde_json::json!({"transport":"http","url":"http://127.0.0.1:1/mcp"});
+            for seconds in [0, 86_401, u64::MAX] {
+                value[field] = seconds.into();
+                assert!(
+                    parse(value.clone()).validate().is_err(),
+                    "{field} = {seconds}"
+                );
+            }
+            value[field] = 86_400.into();
+            assert!(parse(value).validate().is_ok());
+        }
     }
 }
