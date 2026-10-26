@@ -193,8 +193,14 @@ pub fn aside() -> Style {
 }
 
 /// Code coloured by syntax: colour `number` (0–15) of the terminal's palette,
-/// as the syntax theme names it.
+/// as the syntax theme names it. Yellow and bright yellow are faint on a
+/// light background, so there the default colour, not bold: code has too
+/// many of them for bold.
 pub fn palette(number: u8) -> Style {
+    let theme = current();
+    if theme.background == Background::Light && matches!(number, 3 | 11) {
+        return Style::new();
+    }
     let color = match number {
         0 => Color::Black,
         1 => Color::Red,
@@ -214,7 +220,7 @@ pub fn palette(number: u8) -> Style {
         15 => Color::White,
         _ => return Style::new(),
     };
-    current().fg(color)
+    theme.fg(color)
 }
 
 /// A diff's added line (its `+`, and its text while it has no background): green.

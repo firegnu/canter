@@ -3,11 +3,11 @@
 //! are the terminal's 16, read from each cell's foreground.
 
 use canter_protocol::{Event, SessionSnapshot};
-use canter_tui::theme::{self, Depth, Theme};
+use canter_tui::theme::{self, Background, Depth, Theme};
 use canter_tui::{App, Ui};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, Cell};
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
@@ -256,6 +256,28 @@ fn no_color_draws_code_without_colours() {
     for text in ["const", "fn tail"] {
         let colors = row_colors(buffer, text);
         assert!(colors.iter().all(|&c| c == Color::Reset), "{colors:?}");
+    }
+}
+
+#[test]
+fn numbers_are_not_yellow_on_a_light_background_but_are_on_a_dark_one() {
+    for (background, number) in [
+        (Background::Light, Color::Reset),
+        (Background::Dark, Color::Yellow),
+        (Background::Unknown, Color::Yellow),
+    ] {
+        let mut screen = Screen::with_theme(
+            60,
+            Theme {
+                background,
+                ..Theme::default()
+            },
+        );
+        screen.say(RUST);
+        let buffer = screen.draw();
+        assert_eq!(cell(buffer, "4;").fg, number, "{background:?}");
+        assert!(!cell(buffer, "4;").modifier.contains(Modifier::BOLD));
+        assert_eq!(cell(buffer, "const").fg, Color::Magenta, "{background:?}");
     }
 }
 
