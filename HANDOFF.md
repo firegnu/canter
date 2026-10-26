@@ -4,7 +4,7 @@
 
 ## 装的哪一版、怎么退回
 
-- 10-26 装了 main `043a43c`（0.1.0，含 P2-12 MCP、P2-29 服务端启动误报修复、P2-16 全屏界面、P2-1 斜杠命令、P2-15 缓存命中、P2-2 思考档位和切模型、P2-3 技能、P2-19 全局 AGENTS.md、P2-4 提问框、P2-6 两行状态栏、P2-20 Shift+Tab 轮换权限、P2-5 图片输入、P2-7 用量和花费、P2-8 /context 和 /files、P2-9 /btw、P2-10 /handoff、P2-11 /review；上一版是 `8f4e64b`）：`cargo install --locked --path crates/canter`，程序在 `~/.cargo/bin/canter`。不是系统服务，服务端由客户端在后台起，状态在 `~/.canter/`（DESIGN 第 15、16 条）。
+- 10-26 装了 main `166a3c9`（0.1.0，含 P2-13 网页抓取、P2-24 @ 引用文件、P2-12 MCP、P2-29 服务端启动误报修复、P2-16 全屏界面、P2-1 斜杠命令、P2-15 缓存命中、P2-2 思考档位和切模型、P2-3 技能、P2-19 全局 AGENTS.md、P2-4 提问框、P2-6 两行状态栏、P2-20 Shift+Tab 轮换权限、P2-5 图片输入、P2-7 用量和花费、P2-8 /context 和 /files、P2-9 /btw、P2-10 /handoff、P2-11 /review；上一版是 `043a43c`）：`cargo install --locked --path crates/canter`，程序在 `~/.cargo/bin/canter`。不是系统服务，服务端由客户端在后台起，状态在 `~/.canter/`（DESIGN 第 15、16 条）。
 - 换版本：在 main 上重新 `cargo install --locked --path crates/canter`，再 `canter serve --replace`。
 - 退回：按 `~/.canter/server.json` 的 pid 停服务端（SIGTERM），`cargo uninstall canter`。`~/.canter/` 有会话和 key，删不删问用户。
 
