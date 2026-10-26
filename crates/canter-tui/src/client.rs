@@ -96,6 +96,10 @@ impl Client {
         })
     }
 
+    pub async fn mcp(&self) -> Result<canter_protocol::McpListResponse, ClientError> {
+        decode(self.http.get(url(routes::MCP, &[])).send().await?).await
+    }
+
     pub async fn context(
         &self,
         session: &str,

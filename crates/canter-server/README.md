@@ -187,3 +187,59 @@ SSE 用协议包的 `sse_frame`、`resume_after`，`Last-Event-ID` 优先，15 �
 
 SIGINT（Ctrl-C）、SIGTERM、SIGHUP 共用退出路径，直接 await 所有会话 close_for_shutdown；升级排空
 期间仍持续接收这些信号，收到即跳过剩余的 60 秒等待。不安装系统服务、不改 PATH。
+
+## MCP
+
+`config.json` 的可选 `mcp_servers` 按名字登记服务，省略时不增加工具。例如（命令和地址由用户提供）：
+
+```json
+{
+  "mcp_servers": {
+    "local": {
+      "transport": "stdio",
+      "command": "/absolute/path/to/mcp-server",
+      "args": ["--stdio"],
+      "env": {"SERVICE_KEY": "<local-key>"}
+    },
+    "remote": {
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {"Authorization": "Bearer <remote-key>"}
+    }
+  }
+}
+```
+
+stdio 直接执行命令，不经 shell；`args`、`env` 可省略。子进程先清空环境，只从服务端复制
+已有的 `HOME`、`PATH`、`USER`、`LOGNAME`、`SHELL`、`TMPDIR`、`LANG`、`LC_ALL`，
+不继承 `CANTER_HOME` 或其它变量，再用配置里的 `env` 增加或覆盖。
+客户端后台启动的服务端环境基本为空；`command` 写绝对路径，需要的 `PATH`、`HOME` 写进 `env`。
+HTTP 使用 Streamable HTTP，`headers` 可省略；仅 localhost / 回环 IP 允许 HTTP，其余必须
+HTTPS，不走代理，不跟随重定向，不做 OAuth。配置修改在服务端下次启动时生效。
+环境变量和请求头只保存在私有配置与运行内存中；配置解析、连接及协议错误不回显配置，
+子进程 stderr 不转发到日志。脱敏候选跳过上述 8 个基础环境变量的配置值；其它 `env` 和
+全部请求头的配置值及其按空白切开的每一段，长度至少 8 字节时，在工具文字结果中替换为
+`[redacted]`；短值不替换。
+
+启动时并发连接；首次连接（握手和工具列表合计）限 10 秒，后续每次列表更新限 10 秒，
+工具调用限 120 秒。失败连接的收尾由 registry 跟踪，不阻塞其它服务就绪；退出时等待收尾。
+首次运行 `npx` 下载依赖可能超过 10 秒连接期限，可先完成安装再启动服务端。
+单个服务失败不阻止 canter 或其它 MCP 服务启动。断开的进程和 MCP 会话不自动重建；
+HTTP SSE 流的断线恢复仍由 SDK 的传输层处理，MCP 会话过期自动重建已关闭。
+单次工具调用失败只返回工具错误；连接实际结束时才标为断开。
+HTTP 远端中途挂掉时，`/mcp` 仍可能显示已连接，以调用结果为准。
+正常退出、启动期间退出和 `serve --replace` 都等待 MCP 连接关闭，清理所起进程的原进程组；
+与 shell 相同，自行脱离该进程组的后代不在进程组清理范围内。
+
+`/mcp`（`GET /v1/mcp`）显示当前连接、失败原因、工具和跳过原因，不返回启动参数或凭证。
+模型工具名是 `mcp__服务名__工具名`，只接受 ASCII 字母、数字、下划线、短横线，
+合计至多 64 字节，原服务名和工具名不能为空；不满足要求或重名的工具跳过。
+内置工具顺序保持不变，MCP 工具按完整名字排序。说明和参数 schema 沿用 MCP 定义。
+每个会话创建或重新打开时冻结工具列表；`notifications/tools/list_changed` 只更新当前目录，
+已打开会话继续使用原列表。连接断开后，原会话调用该工具得到错误结果。
+
+MCP 工具始终算执行；alwaysAsk / askForExecution 要批准，allowAll 直接调用。
+「本会话都允许」只授权当前服务的当前工具；`/review` 一律拒绝，不弹批准框。
+文字输出沿用 shell 的模型 32 KiB 头尾预算和客户端 1 MiB 上限；非文字内容只显示占位行。
+Esc 会取消调用并由 SDK 发出取消通知；工具错误、超时和断线均作为工具错误返回，继续这一轮。
+没有添加资源、提示词模板、采样、elicitation 或网页抓取能力。

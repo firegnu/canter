@@ -361,6 +361,12 @@ where
                         .app_mut()
                         .warning(&format!("Could not read usage: {error}")),
                 },
+                Some(Action::Mcp) => match chat.client.mcp().await {
+                    Ok(report) => ui.app_mut().show_mcp(&report),
+                    Err(error) => ui
+                        .app_mut()
+                        .warning(&format!("Could not read MCP status: {error}")),
+                },
                 Some(Action::Context) => match chat.client.context(&chat.session).await {
                     Ok(report) => ui.app_mut().show_context(&report),
                     Err(error) => ui
@@ -917,6 +923,7 @@ impl<C: Connector> Chat<C> {
             | Action::PickModel
             | Action::Usage
             | Action::Context
+            | Action::Mcp
             | Action::Files
             | Action::ListSkills => {}
         }

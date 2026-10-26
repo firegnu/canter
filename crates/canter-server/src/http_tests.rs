@@ -38,6 +38,7 @@ async fn failed_close_can_be_resumed_through_http() {
         reached: Notify::new(),
     });
     let app = Arc::new(App {
+        mcp: Default::default(),
         home,
         store: Arc::new(store),
         model: model.clone(),
@@ -198,6 +199,7 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
     let model = Arc::new(Replay(Mutex::new(Vec::new())));
     let store = Arc::new(Store::new(root.path().join("state/sessions")).unwrap());
     let app = Arc::new(App {
+        mcp: Default::default(),
         home: root.path().join("state"),
         store,
         model: model.clone(),
@@ -707,6 +709,7 @@ impl BtwTest {
         std::fs::write(root.path().join("file.txt"), "test content").unwrap();
         let model = Arc::new(BtwModel(Default::default()));
         let app = Arc::new(App {
+            mcp: Default::default(),
             home: root.path().join("state"),
             store: Arc::new(Store::new(root.path().join("state/sessions")).unwrap()),
             model: model.clone(),

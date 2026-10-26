@@ -35,6 +35,7 @@ pub(crate) struct App {
     pub default_model: String,
     pub models: Vec<String>,
     pub options: CoreOptions,
+    pub mcp: canter_core::mcp::Registry,
     pub sessions: Mutex<HashMap<String, Session>>,
     pub registry_changed: Notify,
     pub draining: RwLock<bool>,
@@ -56,6 +57,7 @@ impl App {
     fn runtime(&self, environment: std::collections::BTreeMap<String, String>) -> RuntimeContext {
         RuntimeContext {
             environment,
+            mcp_tools: self.mcp.snapshot(),
             protected_paths: vec![self.home.clone(), self.home.join("config.json")],
         }
     }
@@ -111,6 +113,7 @@ impl App {
 pub(crate) fn router(app: Arc<App>) -> Router {
     Router::new()
         .route(routes::INFO, get(info))
+        .route(routes::MCP, get(mcp))
         .route(routes::MODELS, get(models))
         .route(routes::USAGE, get(usage))
         .route(routes::SESSION_USAGE, get(session_usage))
@@ -679,4 +682,10 @@ async fn events(
         Body::from_stream(stream),
     )
         .into_response())
+}
+
+async fn mcp(State(app): State<Arc<App>>) -> Json<McpListResponse> {
+    Json(McpListResponse {
+        data: app.mcp.status(),
+    })
 }

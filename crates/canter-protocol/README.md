@@ -261,3 +261,15 @@ CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/main ca
 `generated/typescript/` 是 TypeScript 类型及协议版本。schema 描述当前已知的输出种类；
 跨版本客户端仍必须在解码时跳过未知种类，不能把旧 schema 当作未来事件的严格白名单。
 导出测试在临时目录生成、检查关键字段并与入库产物逐字节对比。
+
+## MCP（P2-12）
+
+`GET /v1/mcp` 返回 `McpListResponse { data }`：每项有 `name`、`connected`、`error`（无错误为
+null）、`tools: [{ name, tool }]` 和 `warnings`。`name` 是给模型的完整工具名，`tool` 是原 MCP
+工具名。此接口查询当前服务目录，已打开会话的工具快照不随它变化；不返回命令、地址、环境、
+请求头。终端 `/mcp` 使用该接口。
+
+`Item::McpToolCall` 序列化为 `mcpToolCall`，含 `id`、`server`、`tool`、`arguments`、`result`
+（有界文字）和既有 `ItemStatus`。它通过既有 item.started / item.completed 发送，没有 MCP
+专属增量事件。批准仍是 `ApprovalRequest`，tool 用完整 MCP 工具名，arguments 是调用参数；
+客户端可从对应项目显示原始服务名/工具名。旧客户端按 Unknown 忽略新项目，其它字段含义不变。

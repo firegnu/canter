@@ -61,6 +61,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         },
     },
     Command {
+        name: "mcp",
+        about: "Show MCP connections and tools",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::Mcp)),
+    },
+    Command {
         name: "mode",
         about: "Change the permission mode",
         takes_args: true,
@@ -444,4 +450,34 @@ pub(crate) fn list_rows(
             Line::from(truncate(spans, usize::from(width)))
         })
         .collect()
+}
+
+pub(crate) fn mcp(report: &canter_protocol::McpListResponse) -> Vec<String> {
+    let mut lines = Vec::new();
+    if report.data.is_empty() {
+        lines.push("No MCP services configured.".to_owned());
+    }
+    for server in &report.data {
+        let status = if server.connected {
+            "connected"
+        } else {
+            "disconnected"
+        };
+        lines.push(format!(
+            "{} — {status}{}",
+            server.name,
+            server
+                .error
+                .as_ref()
+                .map(|error| format!(": {error}"))
+                .unwrap_or_default()
+        ));
+        for tool in &server.tools {
+            lines.push(format!("  {} ({})", tool.tool, tool.name));
+        }
+        for warning in &server.warnings {
+            lines.push(format!("  {warning}"));
+        }
+    }
+    lines
 }

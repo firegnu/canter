@@ -1,5 +1,6 @@
 //! Session tools and a replaceable executor. This crate emits no protocol events.
 mod executor;
+pub mod mcp;
 mod output;
 pub use output::MAX_CLIENT_OUTPUT_BYTES;
 mod permission;
@@ -28,6 +29,7 @@ pub enum Tool {
     Edit,
     Shell,
     AskUser,
+    Mcp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +67,7 @@ impl Tool {
             Self::Edit => "edit",
             Self::Shell => "shell",
             Self::AskUser => "ask_user",
+            Self::Mcp => "mcp",
         }
     }
 
@@ -72,7 +75,7 @@ impl Tool {
         match self {
             Self::Read => Risk::Read,
             Self::Write | Self::Edit => Risk::Write,
-            Self::Shell => Risk::Execute,
+            Self::Shell | Self::Mcp => Risk::Execute,
             Self::AskUser => Risk::Interaction,
         }
     }
@@ -190,6 +193,7 @@ struct Replacement {
 }
 
 enum Action {
+    Mcp(mcp::McpTool),
     AskUser(AskUserArgs),
     Read(ReadArgs),
     Change {
@@ -233,6 +237,14 @@ impl PreparedCall {
     }
     fn item(&self, status: ItemStatus) -> Item {
         match &self.action {
+            Action::Mcp(tool) => Item::McpToolCall {
+                id: self.id.clone(),
+                server: tool.server().into(),
+                tool: tool.tool.clone(),
+                arguments: self.arguments.clone(),
+                result: String::new(),
+                status,
+            },
             Action::AskUser(args) => Item::UserInput {
                 id: self.id.clone(),
                 question: args.question.clone(),
@@ -262,6 +274,12 @@ impl PreparedCall {
             },
         }
     }
+    pub(crate) fn permission_key(&self) -> String {
+        match &self.action {
+            Action::Mcp(tool) => tool.name.clone(),
+            _ => self.tool.name().into(),
+        }
+    }
     pub fn tool(&self) -> Tool {
         self.tool
     }
@@ -286,11 +304,67 @@ impl PreparedCall {
 
 pub struct Tools {
     executor: Arc<dyn Executor>,
+    mcp: Vec<mcp::McpTool>,
 }
 
 impl Tools {
     pub fn new(executor: Arc<dyn Executor>) -> Self {
-        Self { executor }
+        Self {
+            executor,
+            mcp: Vec::new(),
+        }
+    }
+
+    pub fn with_mcp(mut self, tools: Vec<mcp::McpTool>) -> Self {
+        self.mcp = tools;
+        self
+    }
+    pub fn mcp_tools(&self) -> &[mcp::McpTool] {
+        &self.mcp
+    }
+    pub fn find(&self, name: &str) -> Option<Tool> {
+        Tool::from_name(name).or_else(|| {
+            self.mcp
+                .iter()
+                .any(|tool| tool.name == name)
+                .then_some(Tool::Mcp)
+        })
+    }
+    pub async fn prepare_named(
+        &self,
+        name: &str,
+        id: String,
+        raw_arguments: &str,
+        cancel: &CancellationToken,
+    ) -> Result<PreparedCall, ToolOutput> {
+        if let Some(tool) = Tool::from_name(name) {
+            return self.prepare(tool, id, raw_arguments, cancel).await;
+        }
+        let tool = self
+            .mcp
+            .iter()
+            .find(|tool| tool.name == name)
+            .expect("known tool")
+            .clone();
+        let arguments = serde_json::from_str::<Value>(raw_arguments)
+            .ok()
+            .filter(Value::is_object);
+        let prepared = PreparedCall {
+            executor: self.executor.clone(),
+            tool: Tool::Mcp,
+            id,
+            raw_arguments: raw_arguments.into(),
+            arguments: arguments.clone().unwrap_or(Value::Null),
+            resolved_path: None,
+            action: Action::Mcp(tool),
+        };
+        if arguments.is_none() {
+            return Err(prepared.failed_output(
+                "MCP arguments must be a JSON object".into(),
+                ToolOutcome::Failed,
+            ));
+        }
+        Ok(prepared)
     }
 
     pub async fn prepare(
@@ -364,6 +438,7 @@ impl Tools {
         cancel: &CancellationToken,
     ) -> Result<Action, String> {
         match tool {
+            Tool::Mcp => Err("prepare an MCP tool by its qualified name".into()),
             Tool::AskUser => {
                 let args: AskUserArgs = parse(arguments)?;
                 if args.question.trim().is_empty()
@@ -521,6 +596,25 @@ impl Tools {
             }
         }
         match &call.action {
+            Action::Mcp(tool) => {
+                let (text, result, outcome) = tool.call(&call.arguments, cancel).await;
+                ToolOutput {
+                    text,
+                    outcome,
+                    item: Item::McpToolCall {
+                        id: call.id.clone(),
+                        server: tool.server().into(),
+                        tool: tool.tool.clone(),
+                        arguments: call.arguments.clone(),
+                        result,
+                        status: if outcome == ToolOutcome::Completed {
+                            ItemStatus::Completed
+                        } else {
+                            ItemStatus::Failed
+                        },
+                    },
+                }
+            }
             Action::AskUser(_) => call.failed_output(
                 "User input must be handled by the session".into(),
                 ToolOutcome::Failed,
@@ -776,6 +870,14 @@ fn tool_error(
     cwd: &std::path::Path,
 ) -> ToolOutput {
     let item = match tool {
+        Tool::Mcp => Item::McpToolCall {
+            id,
+            server: String::new(),
+            tool: String::new(),
+            arguments: arguments.clone(),
+            result: String::new(),
+            status: ItemStatus::Failed,
+        },
         Tool::AskUser => Item::UserInput {
             id,
             question: arguments["question"].as_str().unwrap_or_default().into(),

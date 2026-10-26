@@ -77,6 +77,7 @@ pub enum Action {
     ListSkills,
     Usage,
     Context,
+    Mcp,
     Btw {
         id: usize,
         question: String,
@@ -829,6 +830,10 @@ impl App {
         ));
     }
 
+    pub fn show_mcp(&mut self, report: &canter_protocol::McpListResponse) {
+        self.show_report(crate::commands::mcp(report));
+    }
+
     pub fn show_context(&mut self, report: &canter_protocol::ContextResponse) {
         self.show_report(crate::context::lines(report, self.home.as_deref()));
     }
@@ -1560,7 +1565,8 @@ impl App {
     fn item_done(&self, turn: &Turn, index: usize) -> bool {
         let item = &turn.items[index];
         let status = match item {
-            Item::CommandExecution { status, .. }
+            Item::McpToolCall { status, .. }
+            | Item::CommandExecution { status, .. }
             | Item::FileChange { status, .. }
             | Item::FileRead { status, .. } => Some(*status),
             Item::UserInput { status, .. } => Some(*status),
