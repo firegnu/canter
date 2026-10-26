@@ -9,7 +9,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use similar::{ChangeTag, TextDiff};
 
-use crate::text::{LogicalLine, spans_width, wrap};
+use crate::text::{LogicalLine, Row, drawn_width, spans_width, wrap_rows};
 use crate::theme;
 
 /// Lines longer than this (in bytes) are not compared word by word: comparing
@@ -124,12 +124,7 @@ impl Diff {
 
     /// Rows `width` columns wide, each starting with `indent`. With a
     /// `limit`, at most that many lines, then `… N more lines · Ctrl+O`.
-    pub(crate) fn rows(
-        &self,
-        indent: &str,
-        width: u16,
-        limit: Option<usize>,
-    ) -> Vec<Line<'static>> {
+    pub(crate) fn rows(&self, indent: &str, width: u16, limit: Option<usize>) -> Vec<Row> {
         let all = self.lines.len();
         let mut shown = limit.map_or(all, |limit| limit.min(all));
         if shown < all && shown > 0 && self.lines[shown - 1].kind == Kind::Gap {
@@ -167,13 +162,13 @@ impl Diff {
             rows.extend(line_rows(line, words, indent, digits, width));
         }
         if hidden > 0 {
-            rows.push(Line::from(vec![
+            rows.push(Row::marks(Line::from(vec![
                 Span::raw(indent.to_owned()),
                 Span::styled(
                     format!("{:>digits$} {hidden} more lines · Ctrl+O", "…"),
                     theme::secondary(),
                 ),
-            ]));
+            ])));
         }
         rows
     }
@@ -263,7 +258,7 @@ fn line_rows(
     indent: &str,
     digits: usize,
     width: u16,
-) -> Vec<Line<'static>> {
+) -> Vec<Row> {
     let (marker, marker_style, text_style, word_style, background) = match line.kind {
         Kind::Added => (
             "+",
@@ -329,18 +324,32 @@ fn line_rows(
         Span::raw(indent.to_owned()),
         Span::styled(" ".repeat(hang_width), paint(Style::new())),
     ];
-    let mut rows = wrap(
+    let mut rows = wrap_rows(
         &LogicalLine {
             indent: first,
             hang,
             body,
+            marker: 0,
         },
         width,
     );
+    // `⋮` and notes are not the file's text.
+    if matches!(line.kind, Kind::Note | Kind::Gap) {
+        for row in &mut rows {
+            row.text = None;
+        }
+    }
     if background.is_some() {
         for row in &mut rows {
-            let gap = usize::from(width).saturating_sub(spans_width(&row.spans));
-            row.spans
+            let filled = spans_width(&row.line.spans);
+            // The background after the text is not text: it starts where the
+            // text ends as drawn.
+            if let Some(text) = &mut row.text {
+                text.end = drawn_width(&row.line.spans);
+            }
+            let gap = usize::from(width).saturating_sub(filled);
+            row.line
+                .spans
                 .push(Span::styled(" ".repeat(gap), paint(Style::new())));
         }
     }

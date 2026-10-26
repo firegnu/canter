@@ -1,5 +1,8 @@
 //! Text helpers: cleaning untrusted text, display width and wrapping.
 
+use std::ops::Range;
+
+use ratatui::buffer::CellWidth;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
@@ -11,13 +14,21 @@ pub(crate) struct LogicalLine {
     pub indent: Vec<Span<'static>>,
     pub hang: Vec<Span<'static>>,
     pub body: Vec<Span<'static>>,
+    /// The last columns of `indent` that a copy keeps with the text, such as
+    /// a list item's bullet. The rest of the indent and the hang are left out.
+    pub marker: usize,
 }
 
 impl LogicalLine {
     /// Wrapped rows line up under the first row's text.
     pub fn new(indent: Vec<Span<'static>>, body: Vec<Span<'static>>) -> Self {
         let hang = vec![Span::raw(" ".repeat(spans_width(&indent)))];
-        Self { indent, hang, body }
+        Self {
+            indent,
+            hang,
+            body,
+            marker: 0,
+        }
     }
 
     /// Adds `first` before the indent and `rest` before the hang.
@@ -25,6 +36,59 @@ impl LogicalLine {
         self.indent.insert(0, first);
         self.hang.insert(0, rest);
         self
+    }
+}
+
+/// A row of the conversation, and what a copy takes from it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Row {
+    pub line: Line<'static>,
+    /// The columns a copy takes: the marks, borders and indents before them
+    /// and the status after them are left out. `None` for a row with nothing
+    /// to copy, such as `… 3 more lines · Ctrl+O`.
+    pub text: Option<Range<usize>>,
+    /// On a row that wrapping broke off the row above: how many spaces it
+    /// dropped at the break. A copy joins the two rows again with them.
+    pub joined: Option<usize>,
+    /// On a row of command output: which line of the output it shows, so a
+    /// selection stays on that line when the card shows other lines.
+    pub source: Option<usize>,
+}
+
+impl Row {
+    /// A row whose text starts at column `from`.
+    pub fn text_from(line: Line<'static>, from: usize) -> Self {
+        Self {
+            line,
+            text: Some(from..usize::MAX),
+            joined: None,
+            source: None,
+        }
+    }
+
+    /// A row with nothing to copy.
+    pub fn marks(line: Line<'static>) -> Self {
+        Self {
+            line,
+            text: None,
+            joined: None,
+            source: None,
+        }
+    }
+
+    /// An empty row; a copy keeps it as an empty line.
+    pub fn blank() -> Self {
+        Self::from(Line::default())
+    }
+
+    pub fn is_blank(&self) -> bool {
+        self.line.width() == 0
+    }
+}
+
+impl From<Line<'static>> for Row {
+    fn from(line: Line<'static>) -> Self {
+        Self::text_from(line, 0)
     }
 }
 
@@ -38,6 +102,24 @@ pub(crate) fn str_width(text: &str) -> usize {
 
 pub(crate) fn spans_width(spans: &[Span]) -> usize {
     spans.iter().map(|span| str_width(&span.content)).sum()
+}
+
+/// How many columns a grapheme takes as ratatui draws it.
+pub(crate) fn grapheme_width(grapheme: &str) -> usize {
+    usize::from(grapheme.cell_width())
+}
+
+/// How many columns `spans` take as ratatui draws them, grapheme by
+/// grapheme: an emoji made of several characters takes two, where
+/// [`spans_width`] counts each character. Selecting counts columns this way
+/// (`select.rs`), so where a row's text ends ([`Row::text`]) is counted this
+/// way too; wrapping and cutting still go by [`spans_width`].
+pub(crate) fn drawn_width(spans: &[Span]) -> usize {
+    spans
+        .iter()
+        .flat_map(|span| span.styled_graphemes(Style::default()))
+        .map(|grapheme| grapheme_width(grapheme.symbol))
+        .sum()
 }
 
 /// Makes server text safe to draw: drops escape sequences and control
@@ -163,30 +245,64 @@ pub(crate) fn truncate(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'sta
 /// spaces or next to wide (CJK) characters, and mid-word only when a word is
 /// longer than a row.
 pub(crate) fn wrap(line: &LogicalLine, width: u16) -> Vec<Line<'static>> {
+    wrap_rows(line, width)
+        .into_iter()
+        .map(|row| row.line)
+        .collect()
+}
+
+/// [`wrap`], keeping what a copy needs: the text starts after the indent
+/// (but takes the list marker) and after the hang, and wrapped rows join the
+/// row above.
+pub(crate) fn wrap_rows(line: &LogicalLine, width: u16) -> Vec<Row> {
     let width = usize::from(width);
     let cells: Vec<(char, Style)> = line
         .body
         .iter()
         .flat_map(|span| span.content.chars().map(move |c| (c, span.style)))
         .collect();
-    let mut rows = Vec::new();
+    let mut rows: Vec<Row> = Vec::new();
     let mut start = 0;
+    let mut dropped = 0;
     loop {
-        let prefix = if rows.is_empty() {
-            &line.indent
-        } else {
-            &line.hang
-        };
-        let room = width.saturating_sub(spans_width(prefix)).max(1);
+        let first = rows.is_empty();
+        let prefix = if first { &line.indent } else { &line.hang };
+        let prefix_width = spans_width(prefix);
+        let room = width.saturating_sub(prefix_width).max(1);
         let (len, next) = break_row(&cells[start..], room);
         let mut spans = prefix.clone();
         spans.extend(group(&cells[start..start + len]));
-        rows.push(Line::from(spans));
+        let line_out = Line::from(spans);
+        rows.push(if first {
+            Row::text_from(line_out, prefix_width.saturating_sub(line.marker))
+        } else {
+            Row {
+                joined: Some(dropped),
+                ..Row::text_from(line_out, prefix_width)
+            }
+        });
+        dropped = next - len;
         start += next;
         if start >= cells.len() {
             return rows;
         }
     }
+}
+
+/// Makes text safe to put on the clipboard while keeping it as it was: drops
+/// escape sequences and control characters other than newlines and tabs.
+pub(crate) fn plain(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => skip_escape(&mut chars),
+            '\n' | '\t' => out.push(c),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Returns how many cells go on this row and how many to consume (the

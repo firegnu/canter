@@ -24,13 +24,42 @@ pub(crate) fn render(source: &str, width: u16) -> Vec<LogicalLine> {
         width: usize::from(width),
         ..Renderer::default()
     };
-    let options =
-        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES;
-    for event in Parser::new_ext(source, options) {
+    for event in Parser::new_ext(source, options()) {
         renderer.event(event);
     }
     renderer.flush();
     renderer.lines
+}
+
+fn options() -> Options {
+    Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES
+}
+
+/// The text of each code block in `source`, without its fences or the
+/// newline that ends its last line.
+pub(crate) fn code_blocks(source: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut open: Option<String> = None;
+    for event in Parser::new_ext(source, options()) {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => open = Some(String::new()),
+            Event::Text(text) => {
+                if let Some(code) = &mut open {
+                    code.push_str(&text);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                if let Some(mut code) = open.take() {
+                    if code.ends_with('\n') {
+                        code.pop();
+                    }
+                    blocks.push(code);
+                }
+            }
+            _ => {}
+        }
+    }
+    blocks
 }
 
 enum Nest {
@@ -302,6 +331,20 @@ impl Renderer {
                 }
             }
         }
+        // A copy keeps the list markers and the list nesting around them,
+        // but not quote bars or a code block's indent.
+        let marker = if self.code_block {
+            0
+        } else {
+            self.nest
+                .iter()
+                .rev()
+                .map_while(|nest| match nest {
+                    Nest::Item(width) => Some(*width),
+                    Nest::Quote => None,
+                })
+                .sum()
+        };
         if self.code_block {
             indent.push(Span::raw("  "));
             hang.push(Span::raw("  "));
@@ -310,6 +353,7 @@ impl Renderer {
             indent,
             hang,
             body: Vec::new(),
+            marker,
         });
     }
 

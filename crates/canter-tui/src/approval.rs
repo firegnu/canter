@@ -318,7 +318,7 @@ fn change_body(
     if diff.is_empty() {
         rows.push(Line::from(Span::styled("(no changes)", theme::secondary())));
     }
-    rows.extend(diff.rows("", width, None));
+    rows.extend(diff.rows("", width, None).into_iter().map(|row| row.line));
     rows
 }
 

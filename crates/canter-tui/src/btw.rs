@@ -1,9 +1,9 @@
 use canter_protocol::{BtwEvent, UserInput};
-use ratatui::text::{Line, Span};
+use ratatui::text::Span;
 
 use crate::{
     cells, markdown,
-    text::{LogicalLine, sanitize, wrap},
+    text::{LogicalLine, Row, sanitize, wrap_rows},
     theme,
 };
 
@@ -50,14 +50,14 @@ impl Answer {
         (self.handoff && self.done && self.status.is_none()).then_some(self.text.as_str())
     }
 
-    pub fn rows(&self, width: u16) -> Vec<Line<'static>> {
+    pub fn rows(&self, width: u16) -> Vec<Row> {
         if self.handoff {
             let status = self.status.as_deref().unwrap_or(if self.done {
                 "Handoff note ready"
             } else {
                 "Writing the handoff note… (Esc to cancel)"
             });
-            return wrap(
+            return wrap_rows(
                 &LogicalLine::new(
                     vec![Span::raw("  handoff  ")],
                     vec![Span::raw(status.to_owned())],
@@ -93,10 +93,10 @@ impl Answer {
                 Span::raw(if index == 0 { "  btw  " } else { "       " }),
                 Span::raw("       "),
             );
-            rows.extend(wrap(&line, width));
+            rows.extend(wrap_rows(&line, width));
         }
         for row in &mut rows {
-            for span in &mut row.spans {
+            for span in &mut row.line.spans {
                 span.style = span.style.patch(theme::aside());
             }
         }

@@ -25,8 +25,8 @@ use canter_protocol::{
 };
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event as TermEvent, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    Event as TermEvent, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
     BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
@@ -185,6 +185,11 @@ pub trait FrameSync: Backend {
     fn end_frame(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
+    /// Writes `sequence` to the terminal as it is, between frames: OSC 52
+    /// that puts a copy on the clipboard in tmux or over SSH.
+    fn write_sequence(&mut self, _sequence: &str) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 impl<W: Write> FrameSync for CrosstermBackend<W> {
@@ -193,6 +198,10 @@ impl<W: Write> FrameSync for CrosstermBackend<W> {
     }
     fn end_frame(&mut self) -> io::Result<()> {
         execute!(self, EndSynchronizedUpdate)
+    }
+    fn write_sequence(&mut self, sequence: &str) -> io::Result<()> {
+        Write::write_all(self, sequence.as_bytes())?;
+        Write::flush(self)
     }
 }
 
@@ -519,6 +528,11 @@ where
     let drawn = ui.render(now_ms());
     ui.backend_mut().end_frame().map_err(terminal_error)?;
     drawn.map_err(terminal_error)?;
+    if let Some(sequence) = ui.app_mut().take_osc52() {
+        ui.backend_mut()
+            .write_sequence(&sequence)
+            .map_err(terminal_error)?;
+    }
     // Only now is the frame on screen; keys that came in while it was drawn
     // were pressed on the one before.
     let frame = input.frame_on_screen();
@@ -563,7 +577,7 @@ fn terminal_event(app: &mut App, frame: u64, at: i64, event: TermEvent) -> Optio
             None
         }
         TermEvent::Mouse(mouse) => {
-            app.handle_mouse(mouse);
+            app.handle_mouse_at(mouse, at);
             None
         }
         _ => None,
@@ -1066,10 +1080,11 @@ async fn reconnect<C: Connector>(
 static TAKEN_OVER: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_ENHANCED: AtomicBool = AtomicBool::new(false);
 
-/// Raw mode, the alternate screen, mouse reporting (for the wheel), bracketed
-/// paste and (when the terminal has it) the keyboard protocol that tells
-/// Shift+Enter from Enter. Undone on drop, and on a panic before its message
-/// is printed, so the message shows on the normal screen.
+/// Raw mode, the alternate screen, mouse reporting (for the wheel and for
+/// selecting), bracketed paste and (when the terminal has it) the keyboard
+/// protocol that tells Shift+Enter from Enter. Undone on drop, and on a
+/// panic before its message is printed, so the message shows on the normal
+/// screen.
 struct TerminalSession;
 
 impl TerminalSession {
@@ -1140,11 +1155,16 @@ impl TerminalReader {
             while !flag.load(Ordering::Relaxed) {
                 match crossterm::event::poll(Duration::from_millis(50)) {
                     Ok(true) => match crossterm::event::read() {
-                        // Only the wheel is used; moving the mouse would just redraw.
+                        // Only the wheel and the left button are used (scrolling,
+                        // selecting); moving the mouse alone would just redraw.
                         Ok(TermEvent::Mouse(mouse))
                             if !matches!(
                                 mouse.kind,
-                                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                                MouseEventKind::ScrollUp
+                                    | MouseEventKind::ScrollDown
+                                    | MouseEventKind::Down(MouseButton::Left)
+                                    | MouseEventKind::Drag(MouseButton::Left)
+                                    | MouseEventKind::Up(MouseButton::Left)
                             ) => {}
                         Ok(event) => {
                             if !sender.send(event) {
