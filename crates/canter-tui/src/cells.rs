@@ -641,15 +641,19 @@ fn output_rows(output: &str, fold: Fold, style: Style, width: u16) -> Vec<Row> {
         lines.pop();
     }
     let all = lines.len();
-    let row = |line: &str| {
+    // Output line `source`.
+    let row = |source: usize| {
         let spans = truncate(
             vec![
                 Span::styled(GUTTER, dim),
-                Span::styled(line.to_owned(), style),
+                Span::styled(lines[source].to_owned(), style),
             ],
             usize::from(width),
         );
-        Row::text_from(Line::from(spans), str_width(GUTTER))
+        Row {
+            source: Some(source),
+            ..Row::text_from(Line::from(spans), str_width(GUTTER))
+        }
     };
     let note = |text: String| {
         Row::marks(Line::from(vec![
@@ -661,7 +665,7 @@ fn output_rows(output: &str, fold: Fold, style: Style, width: u16) -> Vec<Row> {
     let mut rows = Vec::new();
     match fold {
         Fold::Head(keep) => {
-            rows.extend(lines.iter().take(keep).map(|line| row(line)));
+            rows.extend((0..all.min(keep)).map(row));
             if all > keep {
                 rows.push(more(all - keep));
             }
@@ -670,19 +674,15 @@ fn output_rows(output: &str, fold: Fold, style: Style, width: u16) -> Vec<Row> {
             if all > keep {
                 rows.push(more(all - keep));
             }
-            rows.extend(
-                lines[all.saturating_sub(keep)..]
-                    .iter()
-                    .map(|line| row(line)),
-            );
+            rows.extend((all.saturating_sub(keep)..all).map(row));
         }
         Fold::Details if all > DETAILS_LINES => {
             let half = DETAILS_LINES / 2;
-            rows.extend(lines[..half].iter().map(|line| row(line)));
+            rows.extend((0..half).map(row));
             rows.push(note(format!("… {} lines not shown", all - DETAILS_LINES)));
-            rows.extend(lines[all - half..].iter().map(|line| row(line)));
+            rows.extend((all - half..all).map(row));
         }
-        Fold::Details => rows.extend(lines.iter().map(|line| row(line))),
+        Fold::Details => rows.extend((0..all).map(row)),
     }
     rows
 }

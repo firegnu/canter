@@ -871,3 +871,143 @@ fn a_slow_clipboard_does_not_hold_up_the_screen() {
     );
     drop(unblock);
 }
+
+/// A word the stream pushes on to the next row keeps its highlight.
+#[test]
+fn a_word_the_stream_wraps_again_stays_highlighted() {
+    let mut screen = Screen::sized(20, 20);
+    screen.start_turn("t1", "stream");
+    screen.event(json!({ "type": "item.started", "turnId": "t1",
+        "item": { "type": "agentMessage", "id": "m1", "text": "hello abcdef" } }));
+    screen.draw();
+    let from = screen.find("abcdef");
+    screen.select(from, screen.find_end("abcdef"));
+    assert_eq!(screen.clipboard(), "abcdef");
+
+    screen.event(
+        json!({ "type": "item.delta", "turnId": "t1", "itemId": "m1",
+        "delta": { "type": "agentMessage", "delta": "ghijklmn" } }),
+    );
+    screen.draw();
+    assert_eq!(screen.highlighted_text(), ["abcdef"], "{}", screen.text());
+}
+
+/// A running command shows its last 5 lines: a new line moves them up, and
+/// letting go where the drag ended still copies the line selected.
+#[test]
+fn new_command_output_does_not_move_the_selection_to_another_line() {
+    let mut screen = Screen::new();
+    screen.start_turn("t1", "run");
+    screen.event(json!({ "type": "item.started", "turnId": "t1", "item": {
+        "type": "commandExecution", "id": "c1", "command": "build", "cwd": "/work",
+        "status": "inProgress", "aggregatedOutput": "line1\nline2\nline3\nline4\nline5\nline6\n",
+        "exitCode": null, "durationMs": null,
+    }}));
+    screen.draw();
+    let from = screen.find("line3");
+    let to = screen.find_end("line3");
+    screen.press(from);
+    screen.drag(to);
+    screen.draw();
+    assert_eq!(screen.highlighted_text(), ["line3"]);
+
+    screen.event(
+        json!({ "type": "item.delta", "turnId": "t1", "itemId": "c1",
+        "delta": { "type": "commandExecution", "delta": "line7\n" } }),
+    );
+    screen.draw();
+    assert_eq!(screen.highlighted_text(), ["line3"], "{}", screen.text());
+    screen.release(to);
+    assert_eq!(screen.clipboard(), "line3", "{}", screen.text());
+}
+
+/// A command that ends folds to its last 3 lines and an answer comes after
+/// it: the selection stays on its line and never runs into the answer.
+#[test]
+fn a_command_folding_as_it_ends_keeps_the_selection_on_its_line() {
+    let mut screen = Screen::new();
+    screen.start_turn("t1", "run");
+    let command = |status: &str| {
+        json!({
+            "type": "commandExecution", "id": "c1", "command": "build", "cwd": "/work",
+            "status": status, "aggregatedOutput": "line1\nline2\nline3\nline4\nline5\nline6\n",
+            "exitCode": null, "durationMs": null,
+        })
+    };
+    screen.event(json!({ "type": "item.started", "turnId": "t1", "item": command("inProgress") }));
+    screen.draw();
+    let from = screen.find("line6");
+    let to = screen.find_end("line6");
+    screen.press(from);
+    screen.drag(to);
+
+    screen.event(json!({ "type": "item.completed", "turnId": "t1", "item": command("completed") }));
+    screen.say("t1", "m1", "abcdefghijklmnop");
+    screen.draw();
+    assert_eq!(screen.highlighted_text(), ["line6"], "{}", screen.text());
+    screen.release(to);
+    assert_eq!(screen.clipboard(), "line6", "{}", screen.text());
+}
+
+/// A queued message that leaves the queue takes its selection with it: the
+/// next queued message, now where it was, is not copied instead.
+#[test]
+fn a_queued_message_leaving_the_queue_does_not_copy_the_next_one() {
+    let mut screen = Screen::new();
+    screen.start_turn("t1", "busy");
+    for (id, text) in [("q1", "alpha"), ("q2", "bravo")] {
+        screen.event(json!({ "type": "input.queued", "input": {
+            "id": id, "input": [{ "type": "text", "text": text }], "clientName": "canter-tui",
+        }}));
+    }
+    screen.draw();
+    let from = screen.find("alpha");
+    let to = screen.find_end("alpha");
+    screen.press(from);
+    screen.drag(to);
+
+    screen.finish_turn("t1", "busy");
+    screen.event(json!({ "type": "turn.started", "inputId": "q1",
+        "turn": turn_json("t2", "alpha", "inProgress") }));
+    screen.draw();
+    assert!(
+        !screen.highlighted_text().contains(&"bravo".to_owned()),
+        "{}",
+        screen.text()
+    );
+    screen.release(to);
+    screen.nothing_copied();
+}
+
+/// An emoji made of several characters is drawn as one: the text after it
+/// copies as selected.
+#[test]
+fn text_after_a_joined_emoji_copies_as_selected() {
+    let mut screen = Screen::new();
+    screen.start_turn("t1", "say");
+    screen.say("t1", "m1", "👩\u{200d}💻 done");
+    screen.draw();
+    let from = screen.find("done");
+    screen.select(from, screen.find_end("done"));
+    assert_eq!(screen.clipboard(), "done", "{}", screen.text());
+    screen.draw();
+    assert_eq!(screen.highlighted_text(), ["done"]);
+}
+
+/// A letter written with a combining accent is one letter of the word a
+/// double click takes.
+#[test]
+fn a_double_click_takes_a_word_with_a_combining_accent_whole() {
+    let mut screen = Screen::new();
+    screen.start_turn("t1", "say");
+    screen.say("t1", "m1", "e\u{301}clair au cafe\u{301}");
+    screen.draw();
+    let at = screen.find("e\u{301}");
+    screen.click(at);
+    screen.click(at);
+    assert_eq!(screen.clipboard(), "e\u{301}clair");
+    let at = screen.find("cafe");
+    screen.click(at);
+    screen.click(at);
+    assert_eq!(screen.clipboard(), "cafe\u{301}");
+}

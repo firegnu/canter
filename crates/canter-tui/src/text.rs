@@ -49,6 +49,9 @@ pub(crate) struct Row {
     /// On a row that wrapping broke off the row above: how many spaces it
     /// dropped at the break. A copy joins the two rows again with them.
     pub joined: Option<usize>,
+    /// On a row of command output: which line of the output it shows, so a
+    /// selection stays on that line when the card shows other lines.
+    pub source: Option<usize>,
 }
 
 impl Row {
@@ -58,6 +61,7 @@ impl Row {
             line,
             text: Some(from..usize::MAX),
             joined: None,
+            source: None,
         }
     }
 
@@ -67,6 +71,7 @@ impl Row {
             line,
             text: None,
             joined: None,
+            source: None,
         }
     }
 

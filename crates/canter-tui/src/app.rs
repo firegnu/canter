@@ -161,14 +161,15 @@ impl Notice {
 }
 
 /// What a stretch of conversation rows shows, to find it again after Ctrl+O.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum Part {
     /// A turn's prompt (`prompt` false), an item, or a turn's end.
     At(Place),
     /// The notice with this index.
     Notice(usize),
-    /// The queued message with this index.
-    Queued(usize),
+    /// The queued message with this id: once it leaves the queue, the
+    /// messages after it move up, and are other parts.
+    Queued(String),
 }
 
 /// What a part of the conversation is, for the blank rows between parts.
@@ -259,12 +260,12 @@ struct Scroll {
 }
 
 /// A place in the conversation that stays on the same text while the
-/// conversation scrolls or grows: a row of a part, and a column.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// conversation scrolls or grows, or a part is laid out again: a part, and
+/// where in its text.
+#[derive(Debug, Clone, PartialEq)]
 struct Point {
     part: Part,
-    row: usize,
-    column: usize,
+    mark: select::Mark,
 }
 
 /// Clicks and the selection.
@@ -1230,7 +1231,7 @@ impl App {
         self.scroll.top = Some(self.scroll.top.unwrap_or(self.scroll.max_top));
         self.mouse.selection = Some(Selection {
             unit,
-            anchor: range,
+            anchor: range.clone(),
             pointer: range,
             held: Some(cell),
             pressed: cell,
@@ -1347,7 +1348,10 @@ impl App {
         };
         let at = if at.0 > last { (last, usize::MAX) } else { at };
         let (start, end) = rows.unit_at(unit, at);
-        Some((point(&starts, start)?, point(&starts, end)?))
+        Some((
+            point(&rows, &starts, start, false)?,
+            point(&rows, &starts, end, true)?,
+        ))
     }
 
     /// The text selected, as a copy takes it.
@@ -1362,7 +1366,7 @@ impl App {
             .mouse
             .selection
             .as_ref()
-            .and_then(|selection| span(selection, &starts))
+            .and_then(|selection| span(selection, &rows, &starts))
         {
             Some((start, end)) => rows.copied(start, end),
             None => String::new(),
@@ -1877,13 +1881,18 @@ impl App {
             .top
             .map_or(self.scroll.max_top, |top| top.min(self.scroll.max_top));
         let starts = starts(&self.history, live_parts, lead);
+        let rows = Rows {
+            history,
+            live: &live,
+            lead,
+        };
         let selected = self
             .mouse
             .selection
             .as_ref()
-            .map(|selection| span(selection, &starts));
+            .map(|selection| span(selection, &rows, &starts));
         if selected == Some(None) {
-            // What it was on is gone.
+            // What it was on is gone or changed.
             self.mouse.selection = None;
         }
         let selected = selected.flatten();
@@ -2357,7 +2366,7 @@ impl App {
             let part = (Part::Notice(index), Kind::Notice);
             push_part(&mut rows, &mut parts, &mut tail, part, notice.rows(width));
         }
-        for (index, queued) in self.snapshot.queued_inputs.iter().enumerate() {
+        for queued in &self.snapshot.queued_inputs {
             let mut text = format!(
                 "  · Queued: {}",
                 queued.review.as_ref().map_or_else(
@@ -2374,7 +2383,7 @@ impl App {
             ));
             // After `  · `.
             let row = Row::text_from(row, 4);
-            let part = (Part::Queued(index), Kind::Queued);
+            let part = (Part::Queued(queued.id.clone()), Kind::Queued);
             push_part(&mut rows, &mut parts, &mut tail, part, vec![row]);
         }
         (rows, parts)
@@ -2699,33 +2708,41 @@ fn starts(history: &History, live: Vec<(usize, Part)>, lead: usize) -> Vec<(usiz
     history
         .parts
         .iter()
-        .copied()
+        .cloned()
         .chain(live)
         .map(|(start, part)| (start.saturating_sub(lead), part))
         .collect()
 }
 
-/// The place of `cell` in the part it is in.
-fn point(starts: &[(usize, Part)], (row, column): Cell) -> Option<Point> {
-    let (start, part) = starts.iter().rev().find(|(start, _)| *start <= row)?;
+/// The rows of part `index` of `starts`, up to where the next one starts.
+fn part_rows<'a>(rows: &Rows<'a>, starts: &[(usize, Part)], index: usize) -> Vec<&'a Row> {
+    let end = starts.get(index + 1).map_or(rows.len(), |(next, _)| *next);
+    rows.part(starts[index].0..end)
+}
+
+/// The place of `cell` in the part it is in: where a selection starts, or
+/// with `end`, ends.
+fn point(rows: &Rows, starts: &[(usize, Part)], (row, column): Cell, end: bool) -> Option<Point> {
+    let index = starts.iter().rposition(|(start, _)| *start <= row)?;
+    let (start, part) = &starts[index];
+    let mark = select::mark(&part_rows(rows, starts, index), (row - start, column), end)?;
     Some(Point {
-        part: *part,
-        row: row - start,
-        column,
+        part: part.clone(),
+        mark,
     })
 }
 
 /// Where the selection runs now, from its first cell to the cell after its
-/// last; `None` once a part it was on is gone.
-fn span(selection: &Selection, starts: &[(usize, Part)]) -> Option<(Cell, Cell)> {
-    let cell = |point: Point| {
-        starts
-            .iter()
-            .find(|(_, part)| *part == point.part)
-            .map(|(start, _)| (start + point.row, point.column))
+/// last; `None` once the text it was on is gone or changed. Each end stays
+/// in its part.
+fn span(selection: &Selection, rows: &Rows, starts: &[(usize, Part)]) -> Option<(Cell, Cell)> {
+    let cell = |point: &Point| {
+        let index = starts.iter().position(|(_, part)| *part == point.part)?;
+        let (row, column) = select::place(&part_rows(rows, starts, index), &point.mark)?;
+        Some((starts[index].0 + row, column))
     };
-    let (from, to) = (cell(selection.anchor.0)?, cell(selection.anchor.1)?);
-    let (start, end) = (cell(selection.pointer.0)?, cell(selection.pointer.1)?);
+    let (from, to) = (cell(&selection.anchor.0)?, cell(&selection.anchor.1)?);
+    let (start, end) = (cell(&selection.pointer.0)?, cell(&selection.pointer.1)?);
     Some((from.min(start), to.max(end)))
 }
 
