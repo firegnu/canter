@@ -374,6 +374,28 @@ where
                         .warning(&format!("Could not read context: {error}")),
                 },
                 Some(Action::Files) => ui.app_mut().show_files().await,
+                Some(Action::RewindList) => match chat.client.rewind_list(&chat.session).await {
+                    Ok(report) => crate::rewind::choose_turn(ui.app_mut(), report),
+                    Err(error) => ui.app_mut().warning(&format!("Could not rewind: {error}")),
+                },
+                Some(Action::RewindMode(turn)) => crate::rewind::choose_mode(ui.app_mut(), turn),
+                Some(Action::RewindPreview(params)) => {
+                    match chat.client.rewind_preview(&chat.session, &params).await {
+                        Ok(report) => crate::rewind::confirm(ui.app_mut(), params, report),
+                        Err(error) => ui
+                            .app_mut()
+                            .warning(&format!("Could not preview rewind: {error}")),
+                    }
+                }
+                Some(Action::Rewind(params)) => {
+                    match chat.client.rewind(&chat.session, &params).await {
+                        Ok(response) if params.rewind_conversation => {
+                            ui.app_mut().rewind_draft(&response.input)
+                        }
+                        Ok(_) => {}
+                        Err(error) => ui.app_mut().warning(&format!("Could not rewind: {error}")),
+                    }
+                }
                 Some(Action::ListSkills) => match chat.client.list_skills(&chat.session).await {
                     Ok(skills) => ui.app_mut().show_skills(skills),
                     Err(error) => ui
@@ -918,6 +940,10 @@ impl<C: Connector> Chat<C> {
             }
             // The main loop handles these itself.
             Action::Quit
+            | Action::RewindList
+            | Action::RewindMode(_)
+            | Action::RewindPreview(_)
+            | Action::Rewind(_)
             | Action::NewSession
             | Action::PickSession
             | Action::PickModel

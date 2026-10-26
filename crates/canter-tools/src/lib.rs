@@ -230,6 +230,12 @@ pub struct PreparedCall {
     action: Action,
 }
 
+pub struct FileCheckpoint<'a> {
+    pub path: &'a std::path::Path,
+    pub original: Option<&'a [u8]>,
+    pub content: &'a [u8],
+}
+
 impl PreparedCall {
     pub fn started_item(&self) -> Item {
         self.item(ItemStatus::InProgress)
@@ -304,6 +310,19 @@ impl PreparedCall {
     pub fn tool(&self) -> Tool {
         self.tool
     }
+    /// Bytes already prepared for a write/edit, after normal path validation.
+    pub fn file_checkpoint(&self) -> Option<FileCheckpoint<'_>> {
+        match &self.action {
+            Action::Change {
+                original, content, ..
+            } => Some(FileCheckpoint {
+                path: self.resolved_path.as_deref()?,
+                original: original.as_deref(),
+                content: content.as_bytes(),
+            }),
+            _ => None,
+        }
+    }
     /// Interactions are awaited by the session, never passed to the permission gate.
     pub fn user_input_request(&self) -> Option<UserInputRequest> {
         match &self.action {
@@ -329,6 +348,40 @@ pub struct Tools {
 }
 
 impl Tools {
+    /// Explicit client rewind, using the same executor path checks and atomic replacement.
+    pub async fn restore_file(
+        &self,
+        path: &std::path::Path,
+        content: Option<&[u8]>,
+    ) -> std::io::Result<()> {
+        let cancel = CancellationToken::new();
+        let resolved = self.executor.resolve_path(path, &cancel).await?;
+        if resolved != path {
+            return Err(std::io::Error::other(
+                "file target changed since checkpoint",
+            ));
+        }
+        if let Some(content) = content {
+            let original = match self.executor.open_file(path, &cancel).await {
+                Ok(mut file) => {
+                    let mut bytes = Vec::new();
+                    file.read_to_end(&mut bytes).await?;
+                    Some(bytes)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error),
+            };
+            self.executor
+                .write_file(path, original.as_deref(), content, &cancel)
+                .await
+        } else {
+            match tokio::fs::remove_file(&resolved).await {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            }
+        }
+    }
     pub fn new(executor: Arc<dyn Executor>) -> Self {
         Self {
             executor,

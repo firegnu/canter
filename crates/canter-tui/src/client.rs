@@ -265,6 +265,49 @@ impl Client {
         decode(response).await
     }
 
+    pub async fn rewind_list(
+        &self,
+        session: &str,
+    ) -> Result<canter_protocol::RewindListResponse, ClientError> {
+        decode(
+            self.http
+                .get(url(routes::REWIND, &[session]))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn rewind_preview(
+        &self,
+        session: &str,
+        params: &canter_protocol::SessionRewindParams,
+    ) -> Result<canter_protocol::RewindPreviewResponse, ClientError> {
+        decode(
+            self.http
+                .post(url(routes::REWIND_PREVIEW, &[session]))
+                .json(params)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn rewind(
+        &self,
+        session: &str,
+        params: &canter_protocol::SessionRewindParams,
+    ) -> Result<canter_protocol::SessionRewindResponse, ClientError> {
+        decode(
+            self.http
+                .post(url(routes::REWIND, &[session]))
+                .json(params)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
     /// POST /v1/sessions/{id}/requests/{rid}: answer an approval. The first
     /// answer wins; a later one gets `alreadyResolved: true`.
     pub async fn resolve(

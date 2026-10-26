@@ -3,6 +3,9 @@ use canter_model::{FinishReason, ModelEvent, ModelStream, Request};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[path = "rewind_tests.rs"]
+mod rewind;
+
 // A failed model task is a real Core close-error path, without modifying Core or the store.
 struct PanicOnce {
     panicked: AtomicBool,

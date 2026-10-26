@@ -135,6 +135,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         takes_args: true,
         run: |_, args| Ok(Some(Action::Review(args.to_owned()))),
     },
+    Command {
+        name: "rewind",
+        about: "Rewind conversation, files, or both",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::RewindList)),
+    },
 ];
 
 pub(crate) fn skills(skills: Vec<canter_protocol::Skill>) -> Vec<LogicalLine> {

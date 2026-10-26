@@ -49,6 +49,10 @@ pub const ANSWER_GUARD_MS: i64 = 300;
 /// What the caller should do after a key press.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
+    RewindList,
+    RewindMode(String),
+    RewindPreview(canter_protocol::SessionRewindParams),
+    Rewind(canter_protocol::SessionRewindParams),
     /// Send this text to the session.
     Send(String),
     SendImages {
@@ -371,6 +375,17 @@ impl App {
             return;
         }
         match &event.payload {
+            EventPayload::SessionRewound {
+                rewind_conversation: true,
+                ..
+            } => {
+                self.history = History::default();
+                self.scroll = Scroll::default();
+                let end = self.snapshot.turns.len().saturating_sub(1);
+                self.notices.retain(|notice| notice.at.turn < end);
+                self.active_btw = None;
+                self.chooser = None;
+            }
             EventPayload::TurnStarted { .. } => self.working_since = Some(event.timestamp),
             EventPayload::TurnCompleted { turn } => {
                 if self.interrupting.as_ref() == Some(&turn.id) {
@@ -980,6 +995,11 @@ impl App {
                 source.chars().take(8).collect::<String>()
             ))],
         ));
+    }
+
+    pub fn rewind_draft(&mut self, input: &[UserInput]) {
+        self.input.clear();
+        self.input.insert(&crate::rewind::text(input));
     }
 
     pub fn show_mcp(&mut self, report: &canter_protocol::McpListResponse) {

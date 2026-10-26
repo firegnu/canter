@@ -17,6 +17,41 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 #[test]
+fn rewind_command_dispatches_and_event_removes_rendered_turns() {
+    let mut screen = Screen::new();
+    assert!(
+        screen.enter("/rewind").is_some(),
+        "rewind must dispatch a command"
+    );
+    for (id, text) in [("t1", "retained prompt"), ("t2", "removed prompt")] {
+        let mut turn = turn_json(id, "completed");
+        turn["input"] = json!([{"type":"text","text":text}]);
+        screen.event(json!({"type":"turn.started","turn":turn}));
+    }
+    screen.draw();
+    assert!(screen.text().contains("removed prompt"));
+    let mut record = turn_json("rewind", "completed");
+    record["input"] = json!([]);
+    record["items"] = json!([{"type":"agentMessage","id":"record","text":"Restored a.txt"}]);
+    screen.event(json!({"type":"session.rewound","beforeTurnId":"t2","rewindConversation":true,"record":record}));
+    screen.draw();
+    assert!(!screen.text().contains("removed prompt"));
+    assert!(screen.text().contains("retained prompt"));
+    assert!(screen.text().contains("Restored a.txt"));
+    screen
+        .ui
+        .app_mut()
+        .rewind_draft(&[canter_protocol::UserInput::Text {
+            text: "removed prompt".into(),
+        }]);
+    screen.draw();
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        Some(Action::Send("removed prompt".into()))
+    );
+}
+
+#[test]
 fn web_fetch_shows_url_domain_approval_result_length_and_interrupts_on_escape() {
     let mut screen = Screen::new();
     screen.start_turn("t1");
@@ -103,7 +138,7 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 16] = [
+const COMMANDS: [(&str, &str); 17] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/exit", "Quit canter"),
@@ -126,6 +161,7 @@ const COMMANDS: [(&str, &str); 16] = [
         "/review",
         "Review uncommitted changes or a PR number/URL (read-only)",
     ),
+    ("/rewind", "Rewind conversation, files, or both"),
 ];
 
 struct Screen {

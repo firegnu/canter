@@ -59,6 +59,7 @@ pub(crate) struct State {
     pub resolved: HashMap<String, u64>,
     pub closing: bool,
     pub measured_context: Option<(u64, u64)>,
+    pub rewind: crate::rewind::Checkpoints,
 }
 pub(crate) struct Active {
     pub turn: Turn,
@@ -86,6 +87,7 @@ impl State {
             resolved: HashMap::new(),
             closing: false,
             measured_context: None,
+            rewind: Default::default(),
         }
     }
     async fn initialize_prefix(
@@ -289,7 +291,15 @@ impl Session {
             state.history,
             state.user_messages,
             state.summary_index,
-        ) = crate::context::restore(entries);
+        ) = crate::context::restore(entries.clone());
+        state.rewind = crate::rewind::Checkpoints::restore(&entries);
+        for entry in &entries {
+            if let HistoryEntry::Rewind { rewind } = entry
+                && rewind.event_seq > state.journal.snapshot.last_event_seq
+            {
+                state.journal.append(vec![rewind.event()]).await?;
+            }
+        }
         state.initialize_prefix(home).await?;
         for event in events {
             if let EventPayload::RequestResolved { request_id, .. } = event.payload {
@@ -904,7 +914,7 @@ impl Session {
 
 // A disconnected HTTP caller may drop its future. Once accepted, a mutation
 // must finish its disk + in-memory transition, including any tool cleanup.
-async fn owned<T: Send + 'static>(
+pub(crate) async fn owned<T: Send + 'static>(
     operation: impl std::future::Future<Output = Result<T, CoreError>> + Send + 'static,
 ) -> Result<T, CoreError> {
     tokio::spawn(operation)
@@ -949,6 +959,17 @@ impl Shared {
             client_name: params.client_name,
             usage: None,
         };
+        state
+            .journal
+            .record(HistoryEntry::TurnBoundary {
+                turn_id: turn.id.clone(),
+            })
+            .await?;
+        state.rewind.boundary(
+            turn.id.clone(),
+            state.history.len(),
+            state.user_messages.len(),
+        );
         if !params.input.is_empty() {
             state.user_input(&params.input).await?;
         }

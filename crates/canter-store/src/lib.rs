@@ -200,6 +200,40 @@ impl Store {
         Ok(self.root.join(id))
     }
 
+    /// Resolve a saved rewind filename within its owning session directory.
+    pub fn rewind_path(&self, id: &str, name: &str) -> Result<PathBuf, StoreError> {
+        if !name.starts_with("rewind-")
+            || std::path::Path::new(name)
+                .file_name()
+                .and_then(|s| s.to_str())
+                != Some(name)
+        {
+            return Err(
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid rewind filename").into(),
+            );
+        }
+        Ok(self.session_dir(id)?.join(name))
+    }
+
+    /// Save a private file checkpoint before the tool may change the workspace.
+    pub fn save_rewind(&self, id: &str, bytes: &[u8]) -> Result<String, StoreError> {
+        let dir = self.session_dir(id)?;
+        let mut file = tempfile::Builder::new()
+            .prefix("rewind-")
+            .tempfile_in(&dir)?;
+        file.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(bytes)?;
+        file.as_file().sync_all()?;
+        let (_, path) = file.keep().map_err(|error| error.error)?;
+        File::open(dir)?.sync_all()?;
+        Ok(path
+            .file_name()
+            .expect("temporary filename")
+            .to_string_lossy()
+            .into_owned())
+    }
+
     /// Resolve a saved image filename within its owning session directory.
     pub fn image_path(&self, id: &str, name: &str) -> Result<PathBuf, StoreError> {
         let mut components = std::path::Path::new(name).components();

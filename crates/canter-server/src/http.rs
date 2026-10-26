@@ -127,6 +127,8 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::INPUT, post(input))
         .route(routes::INTERRUPT, post(interrupt))
         .route(routes::COMPACT, post(compact))
+        .route(routes::REWIND, get(rewind_list).post(rewind))
+        .route(routes::REWIND_PREVIEW, post(rewind_preview))
         .route(routes::REQUEST, post(resolve))
         .route(routes::EVENTS, get(events))
         .fallback(|| async { ApiError::invalid() })
@@ -688,4 +690,37 @@ async fn mcp(State(app): State<Arc<App>>) -> Json<McpListResponse> {
     Json(McpListResponse {
         data: app.mcp.status(),
     })
+}
+
+async fn rewind_list(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<RewindListResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.rewind_list().await?))
+}
+
+async fn rewind_preview(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+    params: Result<Json<SessionRewindParams>, JsonRejection>,
+) -> Result<Json<RewindPreviewResponse>, ApiError> {
+    Ok(Json(
+        app.session(&id)
+            .await?
+            .rewind_preview(body(params)?)
+            .await?,
+    ))
+}
+
+async fn rewind(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+    params: Result<Json<SessionRewindParams>, JsonRejection>,
+) -> Result<Json<SessionRewindResponse>, ApiError> {
+    let params = body(params)?;
+    let draining = app.draining.read().await;
+    if *draining {
+        return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
+    }
+    Ok(Json(app.session(&id).await?.rewind(params).await?))
 }

@@ -378,6 +378,30 @@
       "oneOf": [
         {
           "properties": {
+            "beforeTurnId": {
+              "type": "string"
+            },
+            "record": {
+              "$ref": "#/$defs/Turn"
+            },
+            "rewindConversation": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "session.rewound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "beforeTurnId",
+            "rewindConversation",
+            "record"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "settings": {
               "$ref": "#/$defs/SessionSettings"
             },
@@ -720,6 +744,30 @@
     },
     "EventPayload": {
       "oneOf": [
+        {
+          "properties": {
+            "beforeTurnId": {
+              "type": "string"
+            },
+            "record": {
+              "$ref": "#/$defs/Turn"
+            },
+            "rewindConversation": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "session.rewound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "beforeTurnId",
+            "rewindConversation",
+            "record"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "settings": {
@@ -1937,6 +1985,79 @@
       ],
       "type": "object"
     },
+    "RewindFile": {
+      "properties": {
+        "externalChange": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "unavailable": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "externalChange"
+      ],
+      "type": "object"
+    },
+    "RewindListResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/RewindTurn"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
+    "RewindPreviewResponse": {
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/$defs/RewindFile"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "files"
+      ],
+      "type": "object"
+    },
+    "RewindTurn": {
+      "properties": {
+        "fileCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input": {
+          "items": {
+            "$ref": "#/$defs/UserInput"
+          },
+          "type": "array"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId",
+        "input",
+        "fileCount"
+      ],
+      "type": "object"
+    },
     "SessionBtwParams": {
       "description": "An ephemeral question. Its response stream is private to this HTTP caller.",
       "properties": {
@@ -2234,6 +2355,51 @@
       "required": [
         "session",
         "eventSeq"
+      ],
+      "type": "object"
+    },
+    "SessionRewindParams": {
+      "properties": {
+        "beforeTurnId": {
+          "type": "string"
+        },
+        "confirmedExternalChanges": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "rewindConversation": {
+          "type": "boolean"
+        },
+        "rewindFiles": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "beforeTurnId",
+        "rewindFiles",
+        "rewindConversation"
+      ],
+      "type": "object"
+    },
+    "SessionRewindResponse": {
+      "properties": {
+        "eventSeq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input": {
+          "items": {
+            "$ref": "#/$defs/UserInput"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "eventSeq",
+        "input"
       ],
       "type": "object"
     },
