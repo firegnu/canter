@@ -2,6 +2,7 @@
 
 use std::ops::Range;
 
+use ratatui::buffer::CellWidth;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
@@ -101,6 +102,24 @@ pub(crate) fn str_width(text: &str) -> usize {
 
 pub(crate) fn spans_width(spans: &[Span]) -> usize {
     spans.iter().map(|span| str_width(&span.content)).sum()
+}
+
+/// How many columns a grapheme takes as ratatui draws it.
+pub(crate) fn grapheme_width(grapheme: &str) -> usize {
+    usize::from(grapheme.cell_width())
+}
+
+/// How many columns `spans` take as ratatui draws them, grapheme by
+/// grapheme: an emoji made of several characters takes two, where
+/// [`spans_width`] counts each character. Selecting counts columns this way
+/// (`select.rs`), so where a row's text ends ([`Row::text`]) is counted this
+/// way too; wrapping and cutting still go by [`spans_width`].
+pub(crate) fn drawn_width(spans: &[Span]) -> usize {
+    spans
+        .iter()
+        .flat_map(|span| span.styled_graphemes(Style::default()))
+        .map(|grapheme| grapheme_width(grapheme.symbol))
+        .sum()
 }
 
 /// Makes server text safe to draw: drops escape sequences and control

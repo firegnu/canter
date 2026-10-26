@@ -7,6 +7,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use canter_protocol::{Event, SessionSnapshot};
+use canter_tui::theme::{self, Background, Depth, Theme};
 use canter_tui::{Action, App, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
@@ -1010,4 +1011,54 @@ fn a_double_click_takes_a_word_with_a_combining_accent_whole() {
     screen.click(at);
     screen.click(at);
     assert_eq!(screen.clipboard(), "cafe\u{301}");
+}
+
+/// A card title with emoji, cut close to the status on the right: dragging
+/// over the whole row copies and highlights the title, not the status.
+#[test]
+fn a_card_title_with_emoji_copies_without_the_status() {
+    let mut screen = Screen::sized(40, 20);
+    screen.start_turn("t1", "run");
+    screen.event(json!({ "type": "item.completed", "turnId": "t1", "item": {
+        "type": "commandExecution", "id": "c1", "command": "echo 👩\u{200d}💻 👩\u{200d}💻 abcdefghijkl",
+        "cwd": "/work", "status": "completed", "aggregatedOutput": "", "exitCode": 0,
+        "durationMs": null,
+    }}));
+    screen.draw();
+    let at = screen.find("● Run");
+    let row = screen.lines()[usize::from(at.1)].clone();
+    assert!(row.ends_with("…  exit 0"), "{}", screen.text());
+    let title = row.trim_start().trim_start_matches("● ");
+    let title = title.trim_end_matches("exit 0").trim_end().to_owned();
+    screen.select(at, (39, at.1));
+    assert_eq!(screen.clipboard(), title, "{}", screen.text());
+    screen.draw();
+    assert_eq!(screen.highlighted_text(), [title]);
+}
+
+/// A changed line drawn on a background, with emoji in it: the highlight
+/// ends where its text does, not on the background after it.
+#[test]
+fn a_changed_line_with_emoji_highlights_only_its_text() {
+    theme::set(Theme {
+        depth: Depth::TrueColor,
+        background: Background::Dark,
+    });
+    let mut screen = Screen::new();
+    screen.start_turn("t1", "edit");
+    screen.event(json!({ "type": "item.completed", "turnId": "t1", "item": {
+        "type": "fileChange", "id": "e1", "status": "completed",
+        "changes": [{
+            "path": "/work/greet.sh",
+            "kind": { "type": "update", "movePath": null },
+            "diff": "--- a/greet.sh\n+++ b/greet.sh\n@@ -1 +1 @@\n-echo hi\n+echo 👩\u{200d}💻 👩\u{200d}💻 hi\n",
+        }],
+    }}));
+    screen.draw();
+    let line = "echo 👩\u{200d}💻 👩\u{200d}💻 hi";
+    let from = screen.find(line);
+    screen.select(from, (WIDTH - 1, from.1));
+    assert_eq!(screen.clipboard(), line);
+    screen.draw();
+    assert_eq!(screen.highlighted_text(), [line], "{}", screen.text());
 }

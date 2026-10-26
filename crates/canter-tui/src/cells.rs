@@ -12,7 +12,8 @@ use crate::app::format_elapsed;
 use crate::diff::Diff;
 use crate::markdown;
 use crate::text::{
-    LogicalLine, Row, char_width, sanitize, spans_width, str_width, truncate, visible, wrap_rows,
+    LogicalLine, Row, char_width, drawn_width, sanitize, spans_width, str_width, truncate, visible,
+    wrap_rows,
 };
 use crate::theme;
 
@@ -780,7 +781,9 @@ fn cross() -> Span<'static> {
 }
 
 /// `left` then `right` flush with the right edge; the left side is cut to fit.
-/// Also returns where the left side ends (`usize::MAX` when `right` was left out).
+/// Also returns where the left side ends as drawn (`usize::MAX` when `right`
+/// was left out): the gap is counted by character, but an emoji of several
+/// characters is drawn narrower, so the right side starts sooner.
 fn right_aligned(
     left: Vec<Span<'static>>,
     right: Vec<Span<'static>>,
@@ -792,10 +795,11 @@ fn right_aligned(
     }
     let mut spans = truncate(left, width - right_width - 2);
     let left_width = spans_width(&spans);
+    let left_end = drawn_width(&spans);
     let gap = width - right_width - left_width;
     spans.push(Span::raw(" ".repeat(gap)));
     spans.extend(right);
-    (Line::from(spans), left_width)
+    (Line::from(spans), left_end)
 }
 
 fn format_duration(ms: u64) -> String {

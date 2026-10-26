@@ -12,11 +12,10 @@
 
 use std::ops::Range;
 
-use ratatui::buffer::CellWidth;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::text::Row;
+use crate::text::{Row, grapheme_width};
 
 /// A conversation row and a column on it.
 pub(crate) type Cell = (usize, usize);
@@ -372,7 +371,7 @@ fn cells<'a>(
         .flat_map(move |(index, span)| {
             span.styled_graphemes(Style::default())
                 .map(|grapheme| {
-                    let width = usize::from(grapheme.symbol.cell_width());
+                    let width = grapheme_width(grapheme.symbol);
                     let place = match last {
                         Some(base) if width == 0 => base,
                         _ => Place { column, width },

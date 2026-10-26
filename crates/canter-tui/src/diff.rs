@@ -9,7 +9,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use similar::{ChangeTag, TextDiff};
 
-use crate::text::{LogicalLine, Row, spans_width, wrap_rows};
+use crate::text::{LogicalLine, Row, drawn_width, spans_width, wrap_rows};
 use crate::theme;
 
 /// Lines longer than this (in bytes) are not compared word by word: comparing
@@ -342,8 +342,10 @@ fn line_rows(
     if background.is_some() {
         for row in &mut rows {
             let filled = spans_width(&row.line.spans);
+            // The background after the text is not text: it starts where the
+            // text ends as drawn.
             if let Some(text) = &mut row.text {
-                text.end = filled;
+                text.end = drawn_width(&row.line.spans);
             }
             let gap = usize::from(width).saturating_sub(filled);
             row.line
