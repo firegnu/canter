@@ -117,3 +117,7 @@
 - agent 报全量跑时 `discovery_recovers_from_a_reused_pid` 偶发失败一次，重跑都过，和本件无关，记下。
 - 真终端里的底色请用户在这一批装上后看。
 - 结果：一次过
+
+## 用户试用
+
+- 10-26 装 `49216a5` 后，用户照主控给的四步试了（新建、改 hello.txt 看 diff；`/rewind` 对话和文件一起退；`web_fetch` 抓 gb18030 的 https://www.jjwxc.net/；浅色终端看警告）：「都测试了，没问题」。真调 DeepSeek 由用户在自己终端发起，次数没记。
