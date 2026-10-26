@@ -5,6 +5,13 @@ fn main() {
     if let Ok(path) = std::env::var("PID_FILE") {
         std::fs::write(path, std::process::id().to_string()).unwrap();
     }
+    if let Ok(path) = std::env::var("ENV_FILE") {
+        let environment = std::env::vars()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(path, environment).unwrap();
+    }
     if let Ok(path) = std::env::var("CHILD_PID_FILE") {
         let child = std::process::Command::new("/bin/sleep")
             .arg("600")

@@ -9,7 +9,7 @@ struct McpState {
     tools: Vec<Value>,
     calls: Vec<Value>,
     cancelled: Vec<Value>,
-    fail_transport: bool,
+    fail_next_call: bool,
     slow_listing: bool,
 }
 
@@ -104,9 +104,6 @@ async fn rpc(
     if request.get("id").is_none() {
         return StatusCode::ACCEPTED.into_response();
     }
-    if state.lock().unwrap().fail_transport {
-        return (StatusCode::SERVICE_UNAVAILABLE, "test-only-http-mcp-key").into_response();
-    }
     let result = match method {
         "initialize" => {
             let slow = state.lock().unwrap().slow_listing;
@@ -130,12 +127,20 @@ async fn rpc(
             }
         }
         "tools/call" => {
-            state.lock().unwrap().calls.push(request.clone());
+            let fail = {
+                let mut state = state.lock().unwrap();
+                state.calls.push(request.clone());
+                std::mem::take(&mut state.fail_next_call)
+            };
+            if fail {
+                return (StatusCode::SERVICE_UNAVAILABLE, "test-only-http-mcp-key").into_response();
+            }
             match request["params"]["name"].as_str().unwrap() {
                 "pending" => { std::future::pending::<()>().await; unreachable!() }
                 "content" => json!({"content":[{"type":"text","text":format!("HEAD{}TAIL","界".repeat(20_000))},{"type":"image","data":"aGVsbG8=","mimeType":"image/png"},{"type":"text","text":"end"}]}),
                 "error" => json!({"isError":true,"content":[{"type":"text","text":"operation failed test-only-http-mcp-key"}]}),
                 "rpc_error" => return Json(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32603,"message":"test-only-http-mcp-key"}})).into_response(),
+                "bearer" => json!({"content":[{"type":"text","text":headers["authorization"].to_str().unwrap().strip_prefix("Bearer ").unwrap()}]}),
                 _ => json!({"content":[{"type":"text","text":"http result"}]}),
             }
         }
@@ -196,6 +201,105 @@ fn call_with_arguments(names: &[&str], arguments: &str) -> String {
         "data: {}\n\ndata: [DONE]\n\n",
         json!({"choices":[{"index":0,"delta":{"tool_calls":calls},"finish_reason":"tool_calls"}]})
     )
+}
+
+async fn compile_stdio(temp: &std::path::Path) -> std::path::PathBuf {
+    let executable = temp.join("fake-mcp");
+    let output = Command::new("rustc")
+        .args(["--edition=2024", "tests/fixtures/mcp_stdio.rs", "-o"])
+        .arg(&executable)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    executable
+}
+
+#[tokio::test]
+async fn redaction_preserves_results_with_short_env_values() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = compile_stdio(temp.path()).await;
+    let mut fixture = Fixture::start_with_mcp(
+        vec![call(&["mcp__local__echo"]), text_reply()],
+        "fake-model", None, json!({}),
+        json!({"local":{"transport":"stdio","command":executable,"args":["--fixture"],"env":{"DEBUG":"t","LANG":"C","RUST_LOG":"info","MODE":"result"}}}),
+    ).await;
+    let created = create(&fixture, "allowAll").await;
+    fixture.input(&created.session.id).await;
+    complete(&fixture, &created.session.id, created.event_seq).await;
+    fixture.stop().await;
+    assert_eq!(tool_results(&fixture), ["stdio result"]);
+}
+
+#[tokio::test]
+async fn redaction_removes_bearer_token_echoed_without_prefix() {
+    let http = HttpMcp::start(&["bearer"]).await;
+    let mut config = http.config();
+    config["headers"]["authorization"] = json!("Bearer test-only-bearer-token");
+    let mut fixture = Fixture::start_with_mcp(
+        vec![call(&["mcp__remote__bearer"]), text_reply()],
+        "fake-model",
+        None,
+        json!({}),
+        json!({"remote":config}),
+    )
+    .await;
+    let created = create(&fixture, "allowAll").await;
+    fixture.input(&created.session.id).await;
+    let events = complete(&fixture, &created.session.id, created.event_seq).await;
+    fixture.stop().await;
+    assert_eq!(tool_results(&fixture), ["[redacted]"]);
+    assert!(
+        !serde_json::to_string(&events)
+            .unwrap()
+            .contains("test-only-bearer-token")
+    );
+}
+
+#[tokio::test]
+async fn stdio_environment_only_inherits_basics_and_applies_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = compile_stdio(temp.path()).await;
+    let environment_file = temp.path().join("environment");
+    let mut fixture = Fixture::start_with_mcp_env(
+        vec![call(&["mcp__local__echo"]), text_reply()],
+        "fake-model",
+        None,
+        json!({}),
+        json!({"local":{"transport":"stdio","command":executable,"args":["--fixture"],"env":{
+            "ENV_FILE":environment_file,"HOME":"/mcp/configured-home","EXPLICIT_MARKER":"configured"
+        }}}),
+        &[
+            ("MCP_UNRELATED_SECRET", "test-only-unrelated-secret"),
+            ("PATH", "/server/bin"),
+            ("LANG", "C"),
+        ],
+    )
+    .await;
+    let created = create(&fixture, "allowAll").await;
+    fixture.input(&created.session.id).await;
+    complete(&fixture, &created.session.id, created.event_seq).await;
+    fixture.stop().await;
+    assert_eq!(tool_results(&fixture), ["stdio result"]);
+    let contents = fs::read_to_string(environment_file).unwrap();
+    let environment: std::collections::BTreeMap<_, _> = contents
+        .lines()
+        .map(|line| line.split_once('=').unwrap())
+        .collect();
+    assert!(!environment.contains_key("MCP_UNRELATED_SECRET"));
+    assert!(!environment.contains_key("CANTER_HOME"));
+    assert!(
+        !environment.contains_key("USER"),
+        "missing base variables stay absent"
+    );
+    assert_eq!(environment["PATH"], "/server/bin");
+    assert_eq!(environment["LANG"], "C");
+    assert_eq!(environment["HOME"], "/mcp/configured-home");
+    assert_eq!(environment["EXPLICIT_MARKER"], "configured");
 }
 
 #[tokio::test]
@@ -490,9 +594,12 @@ async fn notifications_only_change_tools_after_session_is_reopened() {
 
 #[tokio::test]
 async fn connection_failure_invalid_names_and_disconnect_are_visible_without_stalling() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = compile_stdio(temp.path()).await;
     let http = HttpMcp::start(&["echo", "echo", "invalid.name"]).await;
-    let mut fixture=Fixture::start_with_mcp(vec![call(&["mcp__remote__echo"]),text_reply()],"fake-model",None,json!({}),json!({
+    let mut fixture=Fixture::start_with_mcp(vec![call(&["mcp__local__echo"]),text_reply()],"fake-model",None,json!({}),json!({
         "bad":{"transport":"stdio","command":"/nonexistent/canter-mcp-fixture","env":{"KEY":"test-only-secret"}},
+        "local":{"transport":"stdio","command":executable,"args":["--fixture"],"env":{"PID_FILE":temp.path().join("pid")}},
         "remote":http.config()
     })).await;
     let status: Value = fixture
@@ -504,13 +611,39 @@ async fn connection_failure_invalid_names_and_disconnect_are_visible_without_sta
     assert_eq!(status["data"][0]["connected"], false);
     assert!(!status["data"][0]["error"].as_str().unwrap().is_empty());
     assert_eq!(status["data"][1]["connected"], true);
-    assert_eq!(status["data"][1]["tools"].as_array().unwrap().len(), 1);
-    assert!(!status["data"][1]["warnings"].as_array().unwrap().is_empty());
+    assert_eq!(status["data"][2]["connected"], true);
+    assert_eq!(status["data"][2]["tools"].as_array().unwrap().len(), 1);
+    assert!(!status["data"][2]["warnings"].as_array().unwrap().is_empty());
     let created = create(&fixture, "allowAll").await;
-    http.state.lock().unwrap().fail_transport = true;
+    let process = OwnedPid::read(&temp.path().join("pid"));
+    nix::sys::signal::kill(process.0, nix::sys::signal::Signal::SIGKILL).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let status: Value = fixture
+                .request(Method::GET, "/v1/mcp", json!(null))
+                .await
+                .json()
+                .await
+                .unwrap();
+            if status["data"][1]["connected"] == false {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
     fixture.input(&created.session.id).await;
-    complete(&fixture, &created.session.id, created.event_seq).await;
-    assert!(tool_results(&fixture)[0].contains("MCP"));
+    let events = complete(&fixture, &created.session.id, created.event_seq).await;
+    assert_eq!(tool_results(&fixture), ["MCP service disconnected"]);
+    let EventPayload::TurnCompleted { turn } = &events.last().unwrap().payload else {
+        unreachable!()
+    };
+    assert_eq!(turn.status, canter_protocol::TurnStatus::Completed);
+    {
+        let script = fixture.script.lock().unwrap();
+        assert_eq!(script.requests[0]["tools"], script.requests[1]["tools"]);
+    }
     let status: Value = fixture
         .request(Method::GET, "/v1/mcp", json!(null))
         .await
@@ -518,7 +651,57 @@ async fn connection_failure_invalid_names_and_disconnect_are_visible_without_sta
         .await
         .unwrap();
     assert_eq!(status["data"][1]["connected"], false);
+    assert_eq!(status["data"][2]["connected"], true);
     fixture.stop().await;
+    until(|| !process.alive()).await;
+}
+
+#[tokio::test]
+async fn one_http_503_keeps_connection_and_tools_for_new_sessions() {
+    let http = HttpMcp::start(&["echo"]).await;
+    let mut fixture = Fixture::start_with_mcp(
+        vec![
+            call(&["mcp__remote__echo"]),
+            text_reply(),
+            call(&["mcp__remote__echo"]),
+            text_reply(),
+        ],
+        "fake-model",
+        None,
+        json!({}),
+        json!({"remote":http.config()}),
+    )
+    .await;
+    let first = create(&fixture, "allowAll").await;
+    http.state.lock().unwrap().fail_next_call = true;
+    fixture.input(&first.session.id).await;
+    complete(&fixture, &first.session.id, first.event_seq).await;
+    let failed_result = tool_results(&fixture);
+    let status: Value = fixture
+        .request(Method::GET, "/v1/mcp", json!(null))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let second = create(&fixture, "allowAll").await;
+    fixture.input(&second.session.id).await;
+    complete(&fixture, &second.session.id, second.event_seq).await;
+    fixture.stop().await;
+    assert_eq!(failed_result, ["MCP tool call failed"]);
+    assert_eq!(status["data"][0]["connected"], true);
+    assert!(status["data"][0]["error"].is_null());
+    let script = fixture.script.lock().unwrap();
+    assert_eq!(script.requests[0]["tools"], script.requests[2]["tools"]);
+    assert!(
+        script.requests[2]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["function"]["name"] == "mcp__remote__echo")
+    );
+    drop(script);
+    assert_eq!(tool_results(&fixture), ["http result"]);
+    assert_eq!(http.state.lock().unwrap().calls.len(), 2);
 }
 
 struct OwnedPid(nix::unistd::Pid);
@@ -717,4 +900,51 @@ async fn colliding_qualified_names_are_skipped_and_reported() {
             .contains("duplicate model tool name")
     );
     fixture.stop().await;
+}
+
+#[tokio::test]
+async fn http_mcp_ignores_server_proxy_environment() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::AsyncWriteExt;
+
+    let http = HttpMcp::start(&["echo"]).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_url = format!("http://{}", listener.local_addr().unwrap());
+    let connections = Arc::new(AtomicUsize::new(0));
+    let received = connections.clone();
+    let proxy = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            received.fetch_add(1, Ordering::SeqCst);
+            let _ = socket.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+        }
+    });
+    let mut fixture = Fixture::start_with_mcp_env(
+        vec![call(&["mcp__remote__echo"]), text_reply()],
+        "fake-model",
+        None,
+        json!({}),
+        json!({"remote":http.config()}),
+        &[("HTTP_PROXY", &proxy_url)],
+    )
+    .await;
+    let created = create(&fixture, "allowAll").await;
+    fixture.input(&created.session.id).await;
+    complete(&fixture, &created.session.id, created.event_seq).await;
+    let status: Value = fixture
+        .request(Method::GET, "/v1/mcp", json!(null))
+        .await
+        .json()
+        .await
+        .unwrap();
+    fixture.stop().await;
+    proxy.abort();
+    let _ = proxy.await;
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        0,
+        "MCP must never connect to the environment proxy"
+    );
+    assert_eq!(status["data"][0]["connected"], true);
+    assert_eq!(tool_results(&fixture), ["http result"]);
 }

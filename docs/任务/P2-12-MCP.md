@@ -81,3 +81,13 @@
 - **踩过的坑**：SDK 子进程传输默认继承 stderr，且关闭直接子进程不足以清理它再起的程序，因此改为丢弃 stderr 并持有独立进程组的清理守卫；最初把信号处理放在 MCP 握手之后，启动中退出测试暴露了回收空隙，已提前注册信号并等待连接收尾。分别给握手和初次列工具 10 秒会超过客户端 15 秒启动等待，改为共用总预算，并把失败连接的关闭任务纳入 registry 跟踪。crates.io JSON 接口返回 403，改用 `cargo info rmcp` 核实并下载 3.7.0，再读 SDK 源码核对接口。
 - **只读参考**：[MCP tools 规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)、[stdio / Streamable HTTP 规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)；本机下载的 rmcp 3.7.0 `service/client.rs`、`transport/child_process.rs`、`transport/streamable_http_client.rs`；`/tmp/r49-src/codex` 的 `rust-v0.163.0`，只读其 `app-server-protocol/src/protocol/common.rs`、`v2/mcp.rs`、`v2/item.rs` 核对协议差异。没有复制第三方源码。
 - **要主控决定的事**：本任务没有未决项；原有启动争锁的偶发失败已如实留下记录，供后续独立排查。
+
+### 交叉审查返工说明（2026-10-26）
+
+依据主仓库 `docs/任务/P2-12-交叉审查.md`「审查意见」及主控决定，修改第 1—4 条，第 5、6、7 条不改。
+
+- **主控决定与改动**：① HTTP 客户端加 `.no_proxy()`，和模型客户端一致，README 明确不走代理。② 脱敏收集每个配置值及其按空白切开的每一段，只替换长度至少 8 字节的候选；先替换长值并去重，短值不再改坏正文，单独回显的 Bearer token 也会替换。③ stdio 用 `env_clear()`，只复制服务端已有的 HOME、PATH、USER、LOGNAME、SHELL、TMPDIR、LANG、LC_ALL，再叠加配置里的 env，不继承服务端的 CANTER_HOME；README 写明客户端后台起的服务端环境基本为空、command 用绝对路径、需要的 PATH/HOME 放进 env，以及首次 npx 下载可能超过 10 秒连接期限。④ 单次调用失败只回工具错误，不再清空 peer；连接监视任务确认结束后才设断开，列表刷新失败也先关闭连接再设断开。README 和 DESIGN 同步这些约定。
+- **验证了什么**：新增 5 个端到端测试，并将原来的 503 假断线改为杀掉测试自己启动的 stdio 进程。5 个新测试先逐项确认目标失败：环境代理收到 1 次连接、短值把 `stdio result` 改坏、token 单独回显未脱敏、非白名单变量进入子进程、一次 503 后 connected 变 false；修复后均通过。最终确认代理收到 0 次连接且本机 HTTP MCP 调用成功；短值保留正文、token 从模型结果和事件中移除；非白名单变量和服务端 CANTER_HOME 不继承，基础变量存在才复制，配置 env 可覆盖；一次 503 后仍 connected，新会话保留工具并能成功调用；真实断线返回 `MCP service disconnected`，这一轮 Completed，已有会话工具列表不变。
+- **最终检查**：只选跑新增及直接相关的 11 个 MCP 测试，11 passed、0 failed；覆盖上述返工及原有输出截断/错误脱敏、通知与会话快照、取消、stdio/HTTP 调用和退出/replace/握手中退出的进程回收。命令为 `cargo test -p canter --test server mcp:: -- --skip mcp::permissions_grant_only_one_tool_and_review_never_asks --skip mcp::connection_and_call_timeouts_are_bounded_and_cancel_the_request --skip mcp::colliding_qualified_names_are_skipped_and_reported --test-threads=1`；`cargo clippy -p canter --test server -- -D warnings`、`cargo fmt --check`、stdio 夹具的 `rustfmt --edition 2024 --check`、`git diff --check` 均通过。所有 cargo 命令均前置 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-12-mcp`，全部等待前台结束。
+- **没做的事**：按主控决定不改第 5 条的真实 120 秒超时测试、不改第 6 条的重名日志、不改第 7 条的启动登记窗口；本轮不跑全套，也没有重跑这三项对应测试。未升级依赖、调用真实模型、连接外部 MCP、读取用户真实配置、操作用户服务端、合并 main 或推送。代理和非白名单环境变量仅注入测试自己的隔离服务端，没有改测试进程或用户环境。
+- **踩过的坑与未决项**：没有新坑；复现与主控诊断一致，没有额外方案取舍，没有需要主控再决定的事。

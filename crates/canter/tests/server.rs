@@ -66,6 +66,17 @@ impl Fixture {
         prices: Value,
         mcp_servers: Value,
     ) -> Self {
+        Self::start_with_mcp_env(replies, default_model, models, prices, mcp_servers, &[]).await
+    }
+
+    async fn start_with_mcp_env(
+        replies: Vec<String>,
+        default_model: &str,
+        models: Option<&[&str]>,
+        prices: Value,
+        mcp_servers: Value,
+        environment: &[(&str, &str)],
+    ) -> Self {
         // A short absolute path also works within macOS's Unix socket limit.
         let root = tempfile::Builder::new()
             .prefix("canter-")
@@ -101,7 +112,7 @@ impl Fixture {
         )
         .unwrap();
         fs::set_permissions(home.join("config.json"), fs::Permissions::from_mode(0o600)).unwrap();
-        let child = Self::spawn(root.path());
+        let child = Self::spawn_args_with_env(root.path(), &["serve"], environment);
         let client = Client::builder()
             .no_proxy()
             .unix_socket(home.join("server.sock"))
@@ -123,6 +134,14 @@ impl Fixture {
     }
 
     fn spawn_args(root: &std::path::Path, args: &[&str]) -> Child {
+        Self::spawn_args_with_env(root, args, &[])
+    }
+
+    fn spawn_args_with_env(
+        root: &std::path::Path,
+        args: &[&str],
+        environment: &[(&str, &str)],
+    ) -> Child {
         let log = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -134,6 +153,7 @@ impl Fixture {
             .env("CANTER_HOME", root.join("state"))
             .env("HOME", root.join("home"))
             .env("TZ", "Asia/Singapore")
+            .envs(environment.iter().copied())
             .current_dir(root.join("work"))
             .stdin(std::process::Stdio::null())
             .stdout(log.try_clone().unwrap())

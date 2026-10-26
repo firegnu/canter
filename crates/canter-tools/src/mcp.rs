@@ -86,6 +86,9 @@ use tokio_util::sync::CancellationToken;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+const STDIO_BASE_ENV: [&str; 8] = [
+    "HOME", "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL",
+];
 
 #[derive(Default)]
 pub struct Registry {
@@ -128,13 +131,16 @@ impl Registry {
         };
         let mut connecting = tokio::task::JoinSet::new();
         for (name, config) in config {
-            let secrets = match &config {
+            let mut secrets: Vec<_> = match &config {
                 ServerConfig::Stdio { env, .. } => env.values(),
                 ServerConfig::Http { headers, .. } => headers.values(),
             }
-            .filter(|value| !value.is_empty())
-            .cloned()
+            .flat_map(|value| std::iter::once(value.as_str()).chain(value.split_whitespace()))
+            .filter(|value| value.len() >= 8)
+            .map(str::to_owned)
             .collect();
+            secrets.sort_unstable_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+            secrets.dedup();
             let server = Arc::new(Server {
                 name,
                 secrets,
@@ -295,6 +301,12 @@ async fn connect(
                 let mut command = tokio::process::Command::new(command);
                 command
                     .args(args)
+                    .env_clear()
+                    .envs(
+                        STDIO_BASE_ENV
+                            .into_iter()
+                            .filter_map(|name| std::env::var_os(name).map(|value| (name, value))),
+                    )
                     .envs(env)
                     .kill_on_drop(true)
                     .process_group(0);
@@ -321,6 +333,7 @@ async fn connect(
                     })
                     .collect::<Result<_, &str>>()?;
                 let client = reqwest::Client::builder()
+                    .no_proxy()
                     .redirect(reqwest::redirect::Policy::none())
                     .connect_timeout(CONNECT_TIMEOUT)
                     .build()
@@ -377,7 +390,7 @@ async fn connect(
                 _ = changed.notified() => {
                     match tokio::time::timeout(CONNECT_TIMEOUT, peer.list_all_tools()).await {
                         Ok(Ok(tools)) => server.update(tools),
-                        _ => { server.disconnected("MCP tool listing failed or timed out"); service_stop.cancel(); let _ = waiting.await; break; }
+                        _ => { service_stop.cancel(); let _ = waiting.await; server.disconnected("MCP tool listing failed or timed out"); break; }
                     }
                 }
             }
@@ -412,12 +425,7 @@ impl McpTool {
             _ = cancel.cancelled() => Err(("MCP call cancelled",ToolOutcome::Cancelled)),
             result = tokio::time::timeout(CALL_TIMEOUT,peer.call_tool_once(params)) => match result {
                 Err(_) => Err(("MCP call timed out",ToolOutcome::TimedOut)),
-                Ok(Err(error)) => {
-                    if matches!(error, rmcp::ServiceError::TransportClosed | rmcp::ServiceError::TransportSend(_)) {
-                        self.server.disconnected("MCP connection failed");
-                    }
-                    Err(("MCP tool call failed",ToolOutcome::Failed))
-                },
+                Ok(Err(_)) => Err(("MCP tool call failed",ToolOutcome::Failed)),
                 Ok(Ok(CallToolResponse::Complete(result))) => Ok(result),
                 Ok(Ok(_)) => Err(("MCP returned an unsupported result",ToolOutcome::Failed)),
             }
