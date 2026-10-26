@@ -17,6 +17,7 @@ use crossterm::event::{
 };
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
@@ -2438,11 +2439,15 @@ impl App {
                     };
                     &found
                 };
-                match selected {
+                let line = match selected {
                     Some((start, end)) if (start.0..=end.0).contains(&index) => {
                         select::highlight(row, select::columns(index, start, end))
                     }
                     _ => row.line.clone(),
+                };
+                match row.fill {
+                    Some(color) => fill(line, color, width),
+                    None => line,
                 }
             })
             .collect();
@@ -3393,20 +3398,43 @@ fn echo_index(turn: &Turn) -> Option<usize> {
     )
 }
 
+/// The message that started `turn`, or a review turn's title, which counts
+/// as one: on the user's background when the terminal can show it.
 fn turn_prompt(turn: &Turn, from: Option<&str>, width: u16) -> Vec<Row> {
     match &turn.review {
-        Some(title) => vec![Row::text_from(
-            Line::from(truncate(
-                vec![Span::styled(
-                    format!("  {}", sanitize(title).replace('\n', " ")),
-                    theme::accent(),
-                )],
-                usize::from(width),
-            )),
-            2,
-        )],
-        None => cells::prompt(&turn.input, from, width),
+        Some(title) => {
+            let row = Row::text_from(
+                Line::from(truncate(
+                    vec![Span::styled(
+                        format!("  {}", sanitize(title).replace('\n', " ")),
+                        theme::accent(),
+                    )],
+                    usize::from(width),
+                )),
+                2,
+            );
+            match theme::user_bg() {
+                Some(color) => cells::on_background(vec![row], color),
+                None => vec![row],
+            }
+        }
+        None => cells::sent(&turn.input, from, width),
     }
+}
+
+/// `line` on `color` to the edge of a window `width` columns wide. Reversed
+/// text (the selection, the current match) is left as it is, so it shows
+/// over the background as it does anywhere else.
+fn fill(mut line: Line<'static>, color: Color, width: u16) -> Line<'static> {
+    for span in &mut line.spans {
+        if !span.style.add_modifier.contains(Modifier::REVERSED) {
+            span.style = span.style.bg(color);
+        }
+    }
+    let rest = usize::from(width).saturating_sub(line.width());
+    line.spans
+        .push(Span::styled(" ".repeat(rest), Style::new().bg(color)));
+    line
 }
 
 fn first_line(input: &[UserInput]) -> String {

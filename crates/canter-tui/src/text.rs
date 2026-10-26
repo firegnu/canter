@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use ratatui::buffer::CellWidth;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
@@ -60,6 +60,10 @@ pub(crate) struct Row {
     pub source: Option<usize>,
     /// The links on the row: the columns each is drawn in, and where it goes.
     pub links: Vec<(Range<usize>, Target)>,
+    /// The background the whole row is drawn on, to the edge of the window: a
+    /// sent message's. It is laid down when the row is drawn, after the
+    /// search and the selection, so they never see the spaces it adds.
+    pub fill: Option<Color>,
 }
 
 impl Row {
@@ -71,6 +75,7 @@ impl Row {
             joined: None,
             source: None,
             links: Vec::new(),
+            fill: None,
         }
     }
 
@@ -82,6 +87,7 @@ impl Row {
             joined: None,
             source: None,
             links: Vec::new(),
+            fill: None,
         }
     }
 
