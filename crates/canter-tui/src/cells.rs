@@ -74,6 +74,24 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
         Item::Reasoning {
             summary, content, ..
         } => reasoning(summary, content, finished, width),
+        Item::WebFetch {
+            url,
+            resolved_url,
+            result,
+            status,
+            ..
+        } => command_card(
+            &format!(
+                "web_fetch {} ({} bytes)",
+                resolved_url.as_deref().unwrap_or(url),
+                result.len()
+            ),
+            *status,
+            None,
+            None,
+            result,
+            width,
+        ),
         Item::McpToolCall {
             server,
             tool,

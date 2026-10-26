@@ -6,6 +6,7 @@ pub use output::MAX_CLIENT_OUTPUT_BYTES;
 mod permission;
 mod readonly;
 mod shell;
+mod web_fetch;
 pub use executor::{CommandHandle, CommandProcess, Executor, FileReader, LocalExecutor};
 pub use permission::{ExecutionPermit, PermissionCheck, PermissionGate};
 pub use shell::{DEFAULT_SHELL_TIMEOUT_MS, MAX_MODEL_OUTPUT_BYTES, MAX_SHELL_TIMEOUT_MS};
@@ -29,6 +30,7 @@ pub enum Tool {
     Edit,
     Shell,
     AskUser,
+    WebFetch,
     Mcp,
 }
 
@@ -48,12 +50,13 @@ pub struct ToolDefinition {
 }
 
 impl Tool {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Read,
         Self::Write,
         Self::Edit,
         Self::Shell,
         Self::AskUser,
+        Self::WebFetch,
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -67,6 +70,7 @@ impl Tool {
             Self::Edit => "edit",
             Self::Shell => "shell",
             Self::AskUser => "ask_user",
+            Self::WebFetch => "web_fetch",
             Self::Mcp => "mcp",
         }
     }
@@ -75,12 +79,20 @@ impl Tool {
         match self {
             Self::Read => Risk::Read,
             Self::Write | Self::Edit => Risk::Write,
-            Self::Shell | Self::Mcp => Risk::Execute,
+            Self::Shell | Self::Mcp | Self::WebFetch => Risk::Execute,
             Self::AskUser => Risk::Interaction,
         }
     }
 
     pub fn definition(self) -> ToolDefinition {
+        if self == Self::WebFetch {
+            return ToolDefinition {
+                name: self.name(),
+                description: "Fetch an HTTP or HTTPS URL without credentials or cookies. HTML becomes Markdown; text and JSON are returned unchanged; other content is omitted. Timeout: 30 seconds. Download limit: 5 MiB. Output is bounded. Redirects to another host or port require a new call and approval.",
+                parameters: json!({"type":"object","properties":{"url":{"type":"string","minLength":1}},"required":["url"],"additionalProperties":false}),
+                risk: self.risk(),
+            };
+        }
         if self == Self::AskUser {
             return ToolDefinition {
                 name: self.name(),
@@ -193,6 +205,7 @@ struct Replacement {
 }
 
 enum Action {
+    WebFetch(reqwest::Url),
     Mcp(mcp::McpTool),
     AskUser(AskUserArgs),
     Read(ReadArgs),
@@ -237,6 +250,13 @@ impl PreparedCall {
     }
     fn item(&self, status: ItemStatus) -> Item {
         match &self.action {
+            Action::WebFetch(_) => Item::WebFetch {
+                id: self.id.clone(),
+                url: self.arguments["url"].as_str().unwrap_or_default().into(),
+                resolved_url: self.arguments["resolvedUrl"].as_str().map(str::to_owned),
+                result: String::new(),
+                status,
+            },
             Action::Mcp(tool) => Item::McpToolCall {
                 id: self.id.clone(),
                 server: tool.server().into(),
@@ -276,6 +296,7 @@ impl PreparedCall {
     }
     pub(crate) fn permission_key(&self) -> String {
         match &self.action {
+            Action::WebFetch(url) => format!("web_fetch:{}", web_fetch::authority(url)),
             Action::Mcp(tool) => tool.name.clone(),
             _ => self.tool.name().into(),
         }
@@ -415,6 +436,11 @@ impl Tools {
         if let Action::Change { change, .. } = &action {
             arguments["diff"] = json!(change.diff);
         }
+        if let Action::WebFetch(url) = &action
+            && arguments["url"].as_str() != Some(url.as_str())
+        {
+            arguments["resolvedUrl"] = json!(url.as_str());
+        }
         if let Some(path) = &resolved_path
             && arguments["path"].as_str() != path.to_str()
         {
@@ -438,6 +464,7 @@ impl Tools {
         cancel: &CancellationToken,
     ) -> Result<Action, String> {
         match tool {
+            Tool::WebFetch => web_fetch::prepare(arguments).map(Action::WebFetch),
             Tool::Mcp => Err("prepare an MCP tool by its qualified name".into()),
             Tool::AskUser => {
                 let args: AskUserArgs = parse(arguments)?;
@@ -596,6 +623,24 @@ impl Tools {
             }
         }
         match &call.action {
+            Action::WebFetch(url) => {
+                let (text, result, outcome) = web_fetch::run(url, cancel).await;
+                ToolOutput {
+                    text,
+                    outcome,
+                    item: Item::WebFetch {
+                        id: call.id.clone(),
+                        url: call.arguments["url"].as_str().unwrap_or_default().into(),
+                        resolved_url: call.arguments["resolvedUrl"].as_str().map(str::to_owned),
+                        result,
+                        status: if outcome == ToolOutcome::Completed {
+                            ItemStatus::Completed
+                        } else {
+                            ItemStatus::Failed
+                        },
+                    },
+                }
+            }
             Action::Mcp(tool) => {
                 let (text, result, outcome) = tool.call(&call.arguments, cancel).await;
                 ToolOutput {
@@ -870,6 +915,13 @@ fn tool_error(
     cwd: &std::path::Path,
 ) -> ToolOutput {
     let item = match tool {
+        Tool::WebFetch => Item::WebFetch {
+            id,
+            url: arguments["url"].as_str().unwrap_or_default().into(),
+            resolved_url: None,
+            result: text.clone(),
+            status: ItemStatus::Failed,
+        },
         Tool::Mcp => Item::McpToolCall {
             id,
             server: String::new(),

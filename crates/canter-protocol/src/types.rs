@@ -232,6 +232,15 @@ pub enum Item {
         summary: Vec<String>,
         content: Vec<String>,
     },
+    WebFetch {
+        id: String,
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        resolved_url: Option<String>,
+        result: String,
+        status: ItemStatus,
+    },
     McpToolCall {
         id: String,
         server: String,
@@ -285,6 +294,7 @@ impl Item {
             | Self::AgentMessage { id, .. }
             | Self::Reasoning { id, .. }
             | Self::McpToolCall { id, .. }
+            | Self::WebFetch { id, .. }
             | Self::CommandExecution { id, .. }
             | Self::FileChange { id, .. }
             | Self::FileRead { id, .. }

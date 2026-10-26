@@ -347,11 +347,17 @@ impl App {
     pub fn apply_event(&mut self, event: &Event, now_ms: i64) {
         let open_request = match &event.payload {
             EventPayload::RequestResolved { request_id, .. } => {
-                self.snapshot.pending_requests.iter().any(|request| {
-                    request.id == *request_id && matches!(request.kind, RequestKind::Approval(_))
+                self.snapshot.pending_requests.iter().find_map(|request| {
+                    if request.id != *request_id {
+                        return None;
+                    }
+                    match &request.kind {
+                        RequestKind::Approval(approval) => Some(approval.tool.clone()),
+                        _ => None,
+                    }
                 })
             }
-            _ => false,
+            _ => None,
         };
         if let Err(error) = apply_event_mut(&mut self.snapshot, event) {
             self.notice(cells::notice(
@@ -389,8 +395,9 @@ impl App {
                 client_name,
             } => {
                 self.answered.remove(request_id);
-                if open_request
-                    && let Some(notice) = self.resolution_notice(resolution, client_name.as_deref())
+                if let Some(tool) = open_request
+                    && let Some(notice) =
+                        self.resolution_notice(resolution, client_name.as_deref(), &tool)
                 {
                     self.notice(notice);
                 }
@@ -1680,11 +1687,12 @@ impl App {
         &self,
         resolution: &ApprovalResolution,
         client: Option<&str>,
+        tool: &str,
     ) -> Option<LogicalLine> {
         let dim = Style::new().dim();
         match resolution {
             ApprovalResolution::Answered { decision } => {
-                let label = approval::decision_label(*decision);
+                let label = approval::decision_label(*decision, tool);
                 let text = match client {
                     Some(name) if name == self.client_name => format!("You chose: {label}"),
                     Some(name) => format!("{name} answered: {label}"),
@@ -1714,6 +1722,7 @@ impl App {
         let item = &turn.items[index];
         let status = match item {
             Item::McpToolCall { status, .. }
+            | Item::WebFetch { status, .. }
             | Item::CommandExecution { status, .. }
             | Item::FileChange { status, .. }
             | Item::FileRead { status, .. } => Some(*status),
