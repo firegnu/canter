@@ -14,16 +14,14 @@
 - 参考源码只读克隆在 `/tmp/r49-src/`：`codex`（`rust-v0.163.0`）、`pi`（`v1.4.0`）、`opencode`（`v2.1.3`）。`/tmp` 重启会清空，丢了照这三个标签重新 `git clone --depth 1 --branch <标签>`（地址见调研报告「本地读的源码」）。
 - 编译目录：`../canter-worktrees/.target/<子目录>`，主仓库用 `main`。
 - 测试用 cargo-nextest（10-26 用 Homebrew 装的 0.9.149，`/opt/homebrew/bin/cargo-nextest`）。
-- 主控用 Bash 跑 `corral start … -- claude --dangerously-skip-permissions …` 开 agent 会被 Claude Code 的自动权限检查拦下（10-26 起，原因「Create Unsafe Agents」，不弹确认框）。把整条命令给用户，用户在会话里用 `!` 开头运行；开起来以后提醒、送话、等待照常由主控做。
+- 主控用 Bash 跑 `corral start … -- claude --dangerously-skip-permissions …` 开 agent：10-26 上午被 Claude Code 的自动权限检查拦过（原因「Create Unsafe Agents」，不弹确认框），10-26 晚上开 P2-48 时没被拦。再被拦就把整条命令给用户，用户在会话里用 `!` 开头运行。
 
 ## 还没派的
 
 第一期 P1-1 到 P1-14 都做完了（P1-10 第 1 到 3 条除外）。排着的：
 
-- 第二期：总单是任务 P2-0（`docs/任务/P2-0-第二期需求单.md`）。做完了 P2-1～P2-13、P2-15、P2-16、P2-19、P2-20、P2-23、P2-24、P2-29、P2-35，P2-18 展示层分件 P2-36～P2-42 和补充 P2-43～P2-47、P2-58 做完，P2-18、P2-33 出了方案（P2-17 并进 P2-18）。
-  - 接下来（用户 10-26 定）：P2-48 → P2-61 → P2-59 → P2-60，四件都合并后再装下一版（「再定一下，48，59，60，61全部做完之后再安装新的release」）。
-    - P2-48 用户消息底色：任务文件已补全交给谁和路由，worktree `../canter-worktrees/p2-48-userbg`（分支 `p2-48-userbg`）已建好，用户同意派（P2-46～P2-48 连续派），只差用户用 `!` 运行 `corral start canter/dev-userbg …`：
-      `corral start canter/dev-userbg --unique --cwd /Users/firegnu/Developer/personal_projs/canter-worktrees/p2-48-userbg --env CAIRN_DISABLE=1 --label effort=high --label 'model=opus[1m]' --label role=dev --prompt "先读 CLAUDE.md，再读 docs/任务/P2-48-展示层13-用户消息底色.md，照做。命令都在前台跑完，全部做完后，回复最后一行写 DONE。" -- claude --dangerously-skip-permissions --model 'opus[1m]' --effort high`
+- 第二期：总单是任务 P2-0（`docs/任务/P2-0-第二期需求单.md`）。做完了 P2-1～P2-13、P2-15、P2-16、P2-19、P2-20、P2-23、P2-24、P2-29、P2-35，P2-18 展示层分件 P2-36～P2-42 和补充 P2-43～P2-48、P2-58 做完，P2-18、P2-33 出了方案（P2-17 并进 P2-18）。
+  - 接下来（用户 10-26 定）：P2-48（已合并）→ P2-61 → P2-59 → P2-60，四件都合并后再装下一版（「再定一下，48，59，60，61全部做完之后再安装新的release」）。
     - P2-61 diff 再好看一些：任务文件已写全（预览页 B），P2-48 合并后补交给谁、路由和 worktree，给用户看、说派才派。
     - P2-59 Esc 撤回、P2-60 状态栏定制：用户已定的几项记在各自任务文件里，主控要写全（样子、先读、验收、不要做），给用户看、说派才派。
   - P2-14、P2-22、P2-25～P2-28、P2-30～P2-34、P2-49～P2-57：各有一份入队的任务文件，要做时主控补全、给用户看过、说派才派。顺序见 P2-0「10-26 重排剩下的」：展示层一件接一件（10-26 改成 P2-58 → P2-45 → P2-44 → P2-46 → … → P2-56）（P2-43～P2-56 是 10-26 补的；P2-44～P2-48 等用户试完 P2-43 那一版再分解），然后是 P2-57 系统提示词（先出方案），之后是支持长任务的 P2-34 → P2-28（P2-27 可同时做），再往后 P2-25 等（P2-0 经过 10-26 最后一条）；P2-33 实现前要用户定方案 §7 的 4 个问题。
