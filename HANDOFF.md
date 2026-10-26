@@ -13,6 +13,7 @@
 
 - 参考源码只读克隆在 `/tmp/r49-src/`：`codex`（`rust-v0.163.0`）、`pi`（`v1.4.0`）、`opencode`（`v2.1.3`）。`/tmp` 重启会清空，丢了照这三个标签重新 `git clone --depth 1 --branch <标签>`（地址见调研报告「本地读的源码」）。
 - 编译目录：`../canter-worktrees/.target/<子目录>`，主仓库用 `main`。
+- 测试用 cargo-nextest（10-26 用 Homebrew 装的 0.9.149，`/opt/homebrew/bin/cargo-nextest`）。
 
 ## 还没派的
 

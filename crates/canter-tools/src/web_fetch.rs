@@ -10,7 +10,8 @@ use tokio_util::sync::CancellationToken;
 
 const MAX_DOWNLOAD_BYTES: usize = 5 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
-const TIMEOUT: Duration = Duration::from_secs(30);
+/// Default total time for one fetch; tests may pass a shorter one through `Tools`.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_HTML_DEPTH: usize = 256;
 const MAX_HTML_TAG_BYTES: usize = 4096;
 const HTML_STACK_BYTES: usize = 256 * 1024 * 1024;
@@ -62,12 +63,19 @@ pub(crate) fn authority(url: &Url) -> String {
     )
 }
 
-pub(crate) async fn run(url: &Url, cancel: &CancellationToken) -> (String, String, ToolOutcome) {
+pub(crate) async fn run(
+    url: &Url,
+    timeout: Duration,
+    cancel: &CancellationToken,
+) -> (String, String, ToolOutcome) {
     let result = tokio::select! {
         biased;
         _ = cancel.cancelled() => Err(("web_fetch cancelled".into(), ToolOutcome::Cancelled)),
-        result = tokio::time::timeout(TIMEOUT, fetch(url)) => match result {
-            Err(_) => Err(("web_fetch timed out after 30 seconds".into(), ToolOutcome::TimedOut)),
+        result = tokio::time::timeout(timeout, fetch(url)) => match result {
+            Err(_) => Err((
+                format!("web_fetch timed out after {} seconds", timeout.as_secs()),
+                ToolOutcome::TimedOut,
+            )),
             Ok(Err(error)) => Err((error, ToolOutcome::Failed)),
             Ok(Ok(text)) => Ok(text),
         },
