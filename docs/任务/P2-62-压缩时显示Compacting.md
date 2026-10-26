@@ -1,10 +1,12 @@
 # 任务：压缩时显示 Compacting
 
+2026-10-27，canter/main 交给 canter/dev-compacting（Claude Code，opus[1m] / high）。
+路由：常规 / 交叉审查不要 / 影响面：改行为（路由：常规（置信 0.83）、拿不准、拿不准；主控判不碰要害、改行为：要认出压缩没成功）
 类型：功能变更
 依据：10-26 用户问自动压缩在界面上有什么表现。现在压缩一开始对话里就出现 `── Context compacted ──`（还在压也这么写），状态行只写通用的 `Working`；压缩没成功时对话里照样写 `Context compacted`。照 Claude Code、Codex：压缩期间明确写 Compacting，压完再说压好了，没压成功说没成功。自动压缩和手动 `/compact` 一样。只改终端界面。
 依赖：P2-59（两件都改 `canter-tui/src/app.rs`，排在它后面）
 执行：派出
-待用户：P2-59 合并后主控补上交给谁、路由和 worktree，用户看过说派才派。P2-48、P2-59、P2-60、P2-61、P2-62 全部做完后一起装版
+待用户：用户看过说派才派。P2-48、P2-56、P2-59、P2-60、P2-61、P2-62 全部做完后一起装版
 优先：高
 
 ## 用户原话
@@ -31,7 +33,10 @@
 
 ## 在哪里干活
 
-（P2-59 合并后补。）
+- worktree：`/Users/firegnu/Developer/personal_projs/canter-worktrees/p2-62-compacting`，分支 `p2-62-compacting`（已从 main 建好）。
+- 编译目录：命令前加 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-62-compacting`。
+- 只动 `crates/canter-tui/`（含测试和 README）和本任务文件末尾的完成记录。
+- 没有同时在跑的开发任务。P2-59 已合并：撤回时正在进行的自动压缩被取消、不发 `item.completed`，但整轮随 `turn.retracted` 从快照里拿掉，对话里不会留下压缩那行，不用另做。
 
 ## 要做的
 
