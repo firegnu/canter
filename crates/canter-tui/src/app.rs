@@ -33,6 +33,8 @@ const MENTION_ROWS: usize = 10;
 const INPUT_LEFT: u16 = 4;
 const INPUT_CHROME: u16 = 6;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Columns of a running command the status line keeps however narrow the window.
+const MIN_COMMAND: usize = 12;
 /// Conversation rows one step of the mouse wheel scrolls.
 const WHEEL_ROWS: usize = 3;
 /// The info rows at the bottom: model, thinking and permission mode; then
@@ -155,6 +157,57 @@ enum Part {
     Queued(usize),
 }
 
+/// What a part of the conversation is, for the blank rows between parts.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Kind {
+    /// A file read: reads in a row are not kept apart.
+    Read,
+    /// Any other item, or a turn's prompt.
+    Item,
+    /// A notice: notices in a row, such as a command's report, are one block.
+    Notice,
+    /// A turn's end, such as `■ Turn interrupted`.
+    End,
+    /// A queued message: queued messages in a row are one block.
+    Queued,
+}
+
+/// The last part laid out: what it is and whether its last row is blank.
+#[derive(Debug, Clone, Copy)]
+struct Tail {
+    kind: Kind,
+    blank: bool,
+}
+
+/// Appends a part's rows, after a blank row between it and the part before,
+/// except between two of the same kind other than [`Kind::Item`] (reads,
+/// notices or queued messages in a row). Parts that end or start with a
+/// blank row (a prompt) get none. Empty parts are left out.
+fn push_part(
+    rows: &mut Vec<Line<'static>>,
+    parts: &mut Vec<(usize, Part)>,
+    tail: &mut Option<Tail>,
+    (part, kind): (Part, Kind),
+    new: Vec<Line<'static>>,
+) {
+    let (Some(first), Some(last)) = (new.first(), new.last()) else {
+        return;
+    };
+    let blank = |row: &Line| row.width() == 0;
+    let gap = tail.is_some_and(|before| {
+        !before.blank && !blank(first) && (before.kind != kind || kind == Kind::Item)
+    });
+    *tail = Some(Tail {
+        kind,
+        blank: blank(last),
+    });
+    if gap {
+        rows.push(Line::default());
+    }
+    parts.push((rows.len(), part));
+    rows.extend(new);
+}
+
 /// The finished part of the conversation, wrapped for `width`, with the
 /// notices in their places. Finished parts do not change, so they are wrapped
 /// once, and again only when the width changes or details are shown or folded.
@@ -169,6 +222,8 @@ struct History {
     end: Place,
     /// How many notices are among the rows.
     notices: usize,
+    /// The last part among the rows.
+    tail: Option<Tail>,
 }
 
 /// Scrolling back through the conversation.
@@ -1233,18 +1288,30 @@ impl App {
                 if matches!(&notice.content, NoticeContent::Btw(answer) if !answer.done) {
                     return;
                 }
-                let part = Part::Notice(self.history.notices);
-                self.history.parts.push((self.history.rows.len(), part));
-                self.history.rows.extend(notice.rows(width));
-                self.history.notices += 1;
+                let part = (Part::Notice(self.history.notices), Kind::Notice);
+                let history = &mut self.history;
+                push_part(
+                    &mut history.rows,
+                    &mut history.parts,
+                    &mut history.tail,
+                    part,
+                    notice.rows(width),
+                );
+                history.notices += 1;
             }
             let Some((rows, next)) = self.finished_part(self.history.end, width) else {
                 break;
             };
-            let part = Part::At(self.history.end);
-            self.history.parts.push((self.history.rows.len(), part));
-            self.history.rows.extend(rows);
-            self.history.end = next;
+            let part = (Part::At(self.history.end), self.kind(self.history.end));
+            let history = &mut self.history;
+            push_part(
+                &mut history.rows,
+                &mut history.parts,
+                &mut history.tail,
+                part,
+                rows,
+            );
+            history.end = next;
         }
     }
 
@@ -1289,6 +1356,23 @@ impl App {
             .chain(live_parts)
             .map(|(start, part)| (start.saturating_sub(lead), part))
             .collect()
+    }
+
+    /// What the part at `at` (a prompt, an item or a turn's end) is.
+    fn kind(&self, at: Place) -> Kind {
+        if !at.prompt {
+            return Kind::Item;
+        }
+        match self
+            .snapshot
+            .turns
+            .get(at.turn)
+            .and_then(|turn| turn.items.get(at.item))
+        {
+            Some(Item::FileRead { .. }) => Kind::Read,
+            Some(_) => Kind::Item,
+            None => Kind::End,
+        }
     }
 
     /// The rows of the part at `at` (a prompt, an item or a turn's end) and
@@ -1469,7 +1553,7 @@ impl App {
         let view = View {
             conversation,
             hint,
-            status: self.status_line(now_ms),
+            status: self.status_line(now_ms, width),
             list,
             bottom,
             info,
@@ -1836,30 +1920,39 @@ impl App {
             .collect();
         let mut rows = Vec::new();
         let mut parts = Vec::new();
+        let mut tail = self.history.tail;
         let mut notices = self
             .notices
             .iter()
             .enumerate()
             .skip(self.history.notices)
             .peekable();
-        let mut append_notices =
-            |rows: &mut Vec<Line<'static>>, parts: &mut Vec<(usize, Part)>, at: Place| {
-                while let Some((index, notice)) = notices.next_if(|(_, notice)| notice.at <= at) {
-                    parts.push((rows.len(), Part::Notice(index)));
-                    rows.extend(notice.rows(width));
-                }
-            };
+        let mut append_notices = |rows: &mut Vec<Line<'static>>,
+                                  parts: &mut Vec<(usize, Part)>,
+                                  tail: &mut Option<Tail>,
+                                  at: Place| {
+            while let Some((index, notice)) = notices.next_if(|(_, notice)| notice.at <= at) {
+                let part = (Part::Notice(index), Kind::Notice);
+                push_part(rows, parts, tail, part, notice.rows(width));
+            }
+        };
         for (turn_index, turn) in self.snapshot.turns.iter().enumerate().skip(end.turn) {
             let at = Place {
                 turn: turn_index,
                 ..Place::default()
             };
-            append_notices(&mut rows, &mut parts, at);
+            append_notices(&mut rows, &mut parts, &mut tail, at);
             let current = turn_index == end.turn;
             if !current || !end.prompt {
                 let from = source(&self.client_name, &turn.client_name);
-                parts.push((rows.len(), Part::At(at)));
-                rows.extend(turn_prompt(turn, from, width));
+                let part = (Part::At(at), Kind::Item);
+                push_part(
+                    &mut rows,
+                    &mut parts,
+                    &mut tail,
+                    part,
+                    turn_prompt(turn, from, width),
+                );
             }
             let echo = echo_index(turn);
             let first = if current { end.item } else { 0 };
@@ -1869,38 +1962,38 @@ impl App {
                     prompt: true,
                     item: index,
                 };
-                append_notices(&mut rows, &mut parts, at);
+                append_notices(&mut rows, &mut parts, &mut tail, at);
                 if Some(index) == echo {
                     continue;
                 }
-                parts.push((rows.len(), Part::At(at)));
                 let done = self.item_done(turn, index);
-                if !done && item.id().is_some_and(|id| waiting.contains(&id)) {
-                    rows.extend(cells::waiting(item, self.details, cwd, width));
+                let new = if !done && item.id().is_some_and(|id| waiting.contains(&id)) {
+                    cells::waiting(item, self.details, cwd, width)
                 } else {
-                    rows.extend(cells::item(item, done, self.details, cwd, width));
-                }
+                    cells::item(item, done, self.details, cwd, width)
+                };
+                let part = (Part::At(at), self.kind(at));
+                push_part(&mut rows, &mut parts, &mut tail, part, new);
             }
             let at = Place {
                 turn: turn_index,
                 prompt: true,
                 item: turn.items.len(),
             };
-            append_notices(&mut rows, &mut parts, at);
+            append_notices(&mut rows, &mut parts, &mut tail, at);
             if turn.status != TurnStatus::InProgress
                 && let Some(footer) = cells::turn_footer(turn, self.errors_shown.contains(&turn.id))
             {
-                parts.push((rows.len(), Part::At(at)));
-                rows.extend(wrap(&footer, width));
+                let part = (Part::At(at), Kind::End);
+                push_part(&mut rows, &mut parts, &mut tail, part, wrap(&footer, width));
             }
         }
         // A btw can follow all turns, including in a session without any turns.
         for (index, notice) in notices {
-            parts.push((rows.len(), Part::Notice(index)));
-            rows.extend(notice.rows(width));
+            let part = (Part::Notice(index), Kind::Notice);
+            push_part(&mut rows, &mut parts, &mut tail, part, notice.rows(width));
         }
         for (index, queued) in self.snapshot.queued_inputs.iter().enumerate() {
-            parts.push((rows.len(), Part::Queued(index)));
             let mut text = format!(
                 "  · Queued: {}",
                 queued.review.as_ref().map_or_else(
@@ -1911,34 +2004,74 @@ impl App {
             if let Some(from) = source(&self.client_name, &queued.client_name) {
                 text += &format!("  (from {})", sanitize(from));
             }
-            rows.push(Line::from(truncate(
+            let row = Line::from(truncate(
                 vec![Span::styled(text, theme::secondary())],
                 usize::from(width),
-            )));
+            ));
+            let part = (Part::Queued(index), Kind::Queued);
+            push_part(&mut rows, &mut parts, &mut tail, part, vec![row]);
         }
         (rows, parts)
     }
 
-    /// What is going on; at the end, while details are shown, how to fold them.
-    fn status_line(&self, now_ms: i64) -> Line<'static> {
-        let mut line = self.activity(now_ms);
+    /// What is going on; at the end, while details are shown, how to fold
+    /// them. While working, when the window is too narrow, a running command
+    /// is cut first; then the Ctrl+O hint is left out.
+    fn status_line(&self, now_ms: i64, width: u16) -> Line<'static> {
+        const FOLD: &str = " · Details shown · Ctrl+O to fold";
+        let width = usize::from(width);
+        let room = width.saturating_sub(if self.details { str_width(FOLD) } else { 0 });
+        let (mut line, doing) = self.activity(now_ms, room);
         if self.details {
             let text = if line.spans.is_empty() {
-                " Details shown · Ctrl+O to fold"
+                &FOLD[" ·".len()..]
             } else {
-                " · Details shown · Ctrl+O to fold"
+                FOLD
             };
-            line.spans.push(Span::styled(text, theme::secondary()));
+            // Other lines are as before: cut at the edge of the window.
+            if !doing || line.width() + str_width(text) <= width {
+                line.spans.push(Span::styled(text, theme::secondary()));
+            }
         }
         line
     }
 
-    fn activity(&self, now_ms: i64) -> Line<'static> {
+    /// What the turn in progress is doing: the verb for its latest item
+    /// not done yet, and for a command the command. `None` while nothing is
+    /// in progress, such as while waiting for the model.
+    fn doing(&self) -> Option<(&'static str, Option<String>)> {
+        let turn = self
+            .snapshot
+            .turns
+            .iter()
+            .rev()
+            .find(|turn| turn.status == TurnStatus::InProgress)?;
+        let index = (0..turn.items.len())
+            .rev()
+            .find(|&index| !self.item_done(turn, index))?;
+        Some(match &turn.items[index] {
+            Item::Reasoning { .. } => ("Thinking", None),
+            Item::AgentMessage { .. } => ("Writing", None),
+            Item::CommandExecution { command, .. } => {
+                ("Running ", Some(cells::command_line(command)))
+            }
+            Item::FileRead { .. } => ("Reading", None),
+            Item::FileChange { .. } => ("Editing", None),
+            Item::McpToolCall { .. } => ("Calling", None),
+            Item::WebFetch { .. } => ("Fetching", None),
+            _ => return None,
+        })
+    }
+
+    /// The status line without the Ctrl+O hint, a long command cut to fit
+    /// `room` columns; and whether it says what the turn is doing.
+    fn activity(&self, now_ms: i64, room: usize) -> (Line<'static>, bool) {
         if let Some(reason) = &self.reconnecting {
-            return Line::from(vec![
+            let line = Line::from(vec![
                 Span::styled(" ⟳ Reconnecting…", theme::warning()),
                 Span::styled(format!(" · {}", sanitize(reason)), theme::secondary()),
             ]);
+            return (line, false);
         }
         let interrupting = self.interrupting.as_ref().is_some_and(|id| {
             self.snapshot
@@ -1947,20 +2080,27 @@ impl App {
                 .any(|turn| turn.id == *id && turn.status == TurnStatus::InProgress)
         });
         if interrupting {
-            return Line::from(Span::styled(" ■ Interrupting…", theme::warning()));
+            let line = Line::from(Span::styled(" ■ Interrupting…", theme::warning()));
+            return (line, false);
         }
         let elapsed = self
             .working_since
             .map(|since| format_elapsed(now_ms.saturating_sub(since)))
             .unwrap_or_default();
-        match self.snapshot.status {
+        let line = match self.snapshot.status {
             SessionStatus::Working => {
                 let frame = SPINNER[(now_ms.max(0) / 80) as usize % SPINNER.len()];
-                Line::from(vec![
-                    Span::styled(format!(" {frame} "), theme::accent()),
-                    Span::raw("Working"),
-                    Span::styled(format!(" · {elapsed}"), theme::secondary()),
-                ])
+                let spinner = format!(" {frame} ");
+                let after = format!(" · {elapsed} · Esc to interrupt");
+                let (verb, command) = self.doing().unwrap_or(("Working", None));
+                let used = str_width(&spinner) + str_width(verb) + str_width(&after);
+                let mut spans = vec![Span::styled(spinner, theme::accent()), Span::raw(verb)];
+                if let Some(command) = command {
+                    let fits = room.saturating_sub(used).max(MIN_COMMAND);
+                    spans.extend(truncate(vec![Span::raw(command)], fits));
+                }
+                spans.push(Span::styled(after, theme::secondary()));
+                Line::from(spans)
             }
             SessionStatus::WaitingApproval => Line::from(vec![
                 Span::styled(
@@ -1991,7 +2131,8 @@ impl App {
                 theme::warning(),
             )),
             SessionStatus::Idle | SessionStatus::Unknown => Line::default(),
-        }
+        };
+        (line, self.snapshot.status == SessionStatus::Working)
     }
 
     /// Model, thinking and permission mode (Allow all in red); then the

@@ -486,6 +486,18 @@ fn command_card(
     rows
 }
 
+/// A command on one row: its first line, then ` …` when it has more.
+pub(crate) fn command_line(command: &str) -> String {
+    let clean = visible(command);
+    let mut lines = clean.lines();
+    let first = lines.next().unwrap_or_default().to_owned();
+    if lines.next().is_some() {
+        first + " …"
+    } else {
+        first
+    }
+}
+
 /// `● Call server/tool  {arguments}`, the arguments as JSON on one row, then
 /// the first lines of the result: an MCP result's start matters most.
 fn mcp_call(

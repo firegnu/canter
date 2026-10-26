@@ -2341,7 +2341,7 @@ async fn slash_compact_during_an_answer_shows_the_server_error() {
     world.start_server().await;
     let a = world.open(&["--yolo", "睡一会"], "canter-tui a").await;
     a.wait_until("the command running", |a| {
-        a.screen().contains("sleep 5") && a.status().contains("Working")
+        a.screen().contains("sleep 5") && a.status().contains("Running sleep 5")
     })
     .await;
 
@@ -2668,7 +2668,7 @@ async fn btw_is_private_streams_and_escape_cancels_it_before_the_main_tool() {
     world.start_server().await;
     let a = world.open(&["--yolo", "start tool"], "btw-a").await;
     a.wait_until("running tool", |a| {
-        a.screen().contains("sleep 60") && a.status().contains("Working")
+        a.screen().contains("sleep 60") && a.status().contains("Running sleep 60")
     })
     .await;
     let id = world.only_session().await;

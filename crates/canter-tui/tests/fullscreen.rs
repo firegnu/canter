@@ -88,13 +88,13 @@ impl Screen {
         self.event(json!({ "type": "session.status", "status": "waiting_approval" }));
     }
 
-    /// A turn still in progress whose messages are `line 1` to `line {count}`.
+    /// A turn still in progress with one message whose lines are `line 1`
+    /// to `line {count}`, one row each.
     fn long_turn(count: usize) -> Self {
         let mut screen = Self::new();
         screen.start_turn("t1", "show many lines");
-        for n in 1..=count {
-            screen.say("t1", &format!("m{n}"), &format!("line {n}"));
-        }
+        let lines: Vec<String> = (1..=count).map(|n| format!("line {n}")).collect();
+        screen.say("t1", "m0", &lines.join("\n"));
         screen.draw();
         screen
     }
