@@ -102,16 +102,22 @@ impl Lease {
         let home =
             fs::canonicalize(home).map_err(|_| ServerError("invalid state directory".into()))?;
         let lock = private_file(&home.join("server.lock"))?;
+        let deadline = Instant::now() + Duration::from_secs(2);
         let acquired = loop {
             match lock.try_lock() {
                 Err(TryLockError::WouldBlock) => match lock.try_lock_shared() {
-                    // Only discovery probes hold shared locks. Let them finish,
-                    // then retry exclusive ownership without mistaking them for a daemon.
+                    // Probes and competing starters can hold shared locks; acquiring one
+                    // means no daemon currently holds the exclusive lock.
                     Ok(()) => {
                         lock.unlock().map_err(|_| {
                             ServerError("cannot release the server probe lock".into())
                         })?;
-                        std::thread::yield_now();
+                        if Instant::now() >= deadline {
+                            return Err(ServerError(
+                                "timed out waiting for the server lock; try again".into(),
+                            ));
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
                     }
                     Err(error) => break Err(error),
                 },
@@ -238,6 +244,40 @@ mod tests {
         Barrier,
         atomic::{AtomicBool, Ordering},
     };
+
+    #[test]
+    fn startup_times_out_on_a_shared_lock_and_recovers_after_release() {
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        let probe = private_file(&root.path().join("server.lock")).unwrap();
+        probe.lock_shared().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let started = Instant::now();
+        let result = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                sender
+                    .send(Lease::acquire(root.path().to_path_buf(), false))
+                    .unwrap();
+            });
+            let result = receiver.recv_timeout(Duration::from_secs(5));
+            // Release even on failure so an unbounded acquire can finish and be joined.
+            drop(probe);
+            result
+        });
+        let error = match result.expect("startup must time out while the shared lock is still held")
+        {
+            Err(error) => error,
+            Ok(_) => {
+                panic!("startup must not acquire an exclusive lock while a shared lock is held")
+            }
+        };
+        assert_eq!(
+            error.to_string(),
+            "timed out waiting for the server lock; try again"
+        );
+        assert!(started.elapsed() >= Duration::from_secs(2));
+        Lease::acquire(root.path().to_path_buf(), false)
+            .expect("startup must succeed after the shared lock is released");
+    }
 
     #[test]
     fn discovery_probes_do_not_reject_server_startup() {
