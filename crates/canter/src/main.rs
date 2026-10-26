@@ -19,6 +19,10 @@ async fn main() -> ExitCode {
             print!("{USAGE}");
             Ok(())
         }
+        Ok(Command::Version) => {
+            println!("canter {}", canter::VERSION);
+            Ok(())
+        }
         Err(message) => {
             eprintln!("canter: {message}\n\n{USAGE}");
             return ExitCode::FAILURE;

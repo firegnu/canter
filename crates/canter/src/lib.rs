@@ -9,6 +9,13 @@ use canter_protocol::{PermissionMode, SessionUpdateParams};
 use canter_tui::client::Client;
 use canter_tui::{CLIENT_NAME, Connected, Connector, Launch, Open};
 
+#[cfg(test)]
+mod version;
+
+/// This build's version line, worked out by `build.rs`: `0.1.0 · 37489fe`,
+/// `0.1.0 · 37489fe-dirty`, or only `0.1.0` when it was built without git.
+pub const VERSION: &str = env!("CANTER_VERSION");
+
 pub const USAGE: &str = "\
 Usage:
   canter [options] [prompt]   start a new session in the current directory;
@@ -21,6 +28,7 @@ Usage:
 Options:
   -m, --model <model>  use this model (default: the server's config)
   --yolo               use permission mode Allow all (never ask)
+  -V, --version        show the version and commit
   -h, --help           show this help
 ";
 
@@ -30,6 +38,7 @@ pub enum Command {
     Usage,
     Chat(ChatArgs),
     Help,
+    Version,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -72,6 +81,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         match arg.as_str() {
             "--" => words.extend(args.by_ref()),
             "-h" | "--help" => return Ok(Command::Help),
+            "-V" | "--version" => return Ok(Command::Version),
             "--yolo" => chat.yolo = true,
             "-m" | "--model" => chat.model = Some(args.next().ok_or("-m needs a model name")?),
             "--resume" => chat.resume = Some(args.next_if(|next| !next.starts_with('-'))),
@@ -211,5 +221,6 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
         home: context.env.get("HOME").cloned(),
         env: context.env,
         client_name: context.client_name,
+        version: VERSION.to_owned(),
     })
 }

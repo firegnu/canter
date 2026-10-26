@@ -9,7 +9,7 @@ use canter_protocol::{InputMode, SessionInputParams, SessionStatus, TurnStatus, 
 use canter_tui::client::{Client, EventStream};
 use canter_tui::fake::{DEMO_SCRIPT, FakeServer, Pace, parse_script};
 use canter_tui::{Action, App, CLIENT_NAME, Ui};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Size};
@@ -56,7 +56,8 @@ async fn replay() {
         .subscribe(&session, snapshot.last_event_seq)
         .await
         .expect("subscribe");
-    let app = App::new(snapshot, Some("/home/dev".into()), NOW);
+    // As `canter` opens it, with a fixed version line in place of this build's.
+    let app = App::new(snapshot, Some("/home/dev".into()), NOW).with_welcome("0.1.0 · 37489fe");
     let mut ui = Ui::new(Screen(TestBackend::new(WIDTH, HEIGHT)), app).expect("ui");
     ui.draw(NOW).unwrap();
 
@@ -116,6 +117,16 @@ async fn replay() {
     );
 
     // Colors the text above cannot show: diff lines, and grey thinking.
+    // The welcome header pushed the end of the diff below: one step of the
+    // wheel down brings it back.
+    let wheel = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 0,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    };
+    ui.app_mut().handle_mouse_at(wheel, NOW);
+    ui.draw(NOW).unwrap();
     let top = ui.backend().0.buffer();
     let added = find(top, "+ cargo install --path crates/canter");
     assert_eq!(top[added].fg, Color::Green, "added lines are green");

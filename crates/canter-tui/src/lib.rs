@@ -41,6 +41,7 @@ mod select;
 mod text;
 pub mod theme;
 pub mod usage;
+mod welcome;
 
 pub use app::{ANSWER_GUARD_MS, Action, App};
 pub use links::LinkSystem;

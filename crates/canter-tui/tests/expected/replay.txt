@@ -1,12 +1,12 @@
 == 第 9 条事件后，屏幕 ==
+        ▄▄█▄▄█▄    canter 0.1.0 · 37489fe
+       ███  ████   ~/canter
+▄▀▀▄▄▄▄████████▀   /help commands · @ files · Ctrl+F find · Ctrl+O more
+   █▀█▀▀▀█▀█       Shift+Tab permissions · Esc interrupt · Ctrl+C quit
+
 › 把 README 里的安装步骤改成 cargo install
 
   Thinking… …README 的安装步骤换成 cargo install。先读 README 看现在怎么写的，
-
-
-
-
-
 
 
 
@@ -124,6 +124,11 @@
  deepseek-chat · think high · Always ask
  ~/canter
 == 发了「你好」之后，往上翻到顶 ==
+        ▄▄█▄▄█▄    canter 0.1.0 · 37489fe
+       ███  ████   ~/canter
+▄▀▀▄▄▄▄████████▀   /help commands · @ files · Ctrl+F find · Ctrl+O more
+   █▀█▀▀▀█▀█       Shift+Tab permissions · Esc interrupt · Ctrl+C quit
+
 › 把 README 里的安装步骤改成 cargo install
 
   Thought for <1s: 用户想把 README 的安装步骤换成 cargo install。先读 README 看…
@@ -137,11 +142,6 @@
       14 - git clone https://github.com/firegnu/canter
       15 - cd canter
       16 - cargo build --release
-      14 + cargo install --path crates/canter
-
-  ● Run cargo build                                               exit 0 · 12.3s
-    │ … 9 more lines · Ctrl+O
-    │    Compiling canter-store v0.1.0 (/home/dev/canter/crates/canter-store)
 
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
