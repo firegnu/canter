@@ -22,10 +22,13 @@ use crate::approval::{self, ApprovalBox, shorten_home};
 use crate::cells;
 use crate::commands::{self, Chooser, Command};
 use crate::input::InputBox;
+use crate::mention;
 use crate::text::{LogicalLine, sanitize, str_width, truncate, wrap};
 
 const PLACEHOLDER: &str = "Type a message (Enter to send, Ctrl+J for a new line)";
 const MAX_INPUT_ROWS: usize = 8;
+/// The most rows the `@` list takes above the input box.
+const MENTION_ROWS: usize = 10;
 /// Border, padding and the `› ` prompt on the left; padding and border on the right.
 const INPUT_LEFT: u16 = 4;
 const INPUT_CHROME: u16 = 6;
@@ -175,6 +178,22 @@ struct CommandList {
     closed: bool,
 }
 
+/// The `@` list: the walk of the session's directory while an `@` word is
+/// typed, its selection and whether Esc closed it for one input text and
+/// cursor, and the paths matching that text.
+#[derive(Default)]
+struct MentionList {
+    scan: Option<mention::Scan>,
+    text: String,
+    cursor: usize,
+    selected: usize,
+    closed: bool,
+    /// The matches (indices into the scan's entries) for an input text and
+    /// cursor and how many entries there were. Only drawing a frame takes
+    /// new entries, so keys act on the paths on screen.
+    matches: Option<((String, usize, usize), Vec<usize>)>,
+}
+
 /// The approval/question box's selection, body scroll and optional text answer.
 #[derive(Debug, Default)]
 struct ApprovalCursor {
@@ -228,6 +247,7 @@ pub struct App {
     image_models: Vec<String>,
     clipboard: crate::images::Clipboard,
     commands: CommandList,
+    mentions: MentionList,
     /// A choice offered above the input box, such as `/mode` alone.
     chooser: Option<Chooser>,
     /// How many choices have been offered, numbering them.
@@ -288,6 +308,7 @@ impl App {
             image_models: vec!["deepseek-flash".into()],
             clipboard: crate::images::Clipboard::default(),
             commands: CommandList::default(),
+            mentions: MentionList::default(),
             chooser: None,
             choosers: 0,
             completions: 0,
@@ -456,7 +477,9 @@ impl App {
         }
         if key.code == KeyCode::Esc
             && (shown.approval.is_some()
-                || (self.chooser.is_none() && self.command_list().is_none()))
+                || (self.chooser.is_none()
+                    && self.command_list().is_none()
+                    && self.mention_list().is_none()))
             && let Some(id) = shown.btw
         {
             if self.active_btw == Some(id) {
@@ -502,6 +525,35 @@ impl App {
                     selected,
                     closed,
                 };
+                return None;
+            }
+        }
+        if let Some((word, selected, count)) = self.mention_list() {
+            let list = match key.code {
+                // Closes only the list, not the turn in progress.
+                KeyCode::Esc => Some((selected, true)),
+                KeyCode::Up => Some((selected.saturating_sub(1), false)),
+                KeyCode::Down => Some(((selected + 1).min(count - 1), false)),
+                KeyCode::Tab => {
+                    self.complete_mention(word, selected);
+                    return None;
+                }
+                // Only completes, never sends; like Enter on a message, not
+                // right after an approval box closed or before a completion showed.
+                KeyCode::Enter if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    if !send_guarded && shown.completions == self.completions {
+                        self.complete_mention(word, selected);
+                    }
+                    return None;
+                }
+                KeyCode::BackTab => return None,
+                _ => None,
+            };
+            if let Some((selected, closed)) = list {
+                self.mentions.text = self.input.text().to_owned();
+                self.mentions.cursor = self.input.cursor();
+                self.mentions.selected = selected;
+                self.mentions.closed = closed;
                 return None;
             }
         }
@@ -654,6 +706,99 @@ impl App {
         let last = matches.len().checked_sub(1)?;
         let selected = if same { self.commands.selected } else { 0 };
         Some((matches, selected.min(last)))
+    }
+
+    /// The `@` word at the cursor while its list is open, the path selected
+    /// and how many match. None while there is no `@` word, nothing found
+    /// so far matches, or Esc closed the list.
+    fn mention_list(&mut self) -> Option<(mention::Word, usize, usize)> {
+        let text = self.input.text();
+        let cursor = self.input.cursor();
+        let word = mention::word(text, cursor)?;
+        let scan = self.mentions.scan.as_ref()?;
+        let same = self.mentions.text == text && self.mentions.cursor == cursor;
+        if same && self.mentions.closed {
+            return None;
+        }
+        let key = (text.to_owned(), cursor, scan.entries.len());
+        if self
+            .mentions
+            .matches
+            .as_ref()
+            .is_none_or(|(at, _)| *at != key)
+        {
+            let found = mention::matching(&scan.entries, &word.query);
+            self.mentions.matches = Some((key, found));
+        }
+        let count = self
+            .mentions
+            .matches
+            .as_ref()
+            .map_or(0, |(_, found)| found.len());
+        let last = count.checked_sub(1)?;
+        let selected = if same { self.mentions.selected } else { 0 };
+        Some((word, selected.min(last), count))
+    }
+
+    /// Puts the selected path in place of the `@` word.
+    fn complete_mention(&mut self, word: mention::Word, selected: usize) {
+        let (Some(scan), Some((_, found))) = (&self.mentions.scan, &self.mentions.matches) else {
+            return;
+        };
+        let (text, cursor) = scan.entries[found[selected]].completion();
+        self.completions += 1;
+        self.input.replace(word.range, &text, cursor);
+    }
+
+    /// Starts walking the session's directory when an `@` word is typed,
+    /// takes what the walk found since the last frame, and stops it once
+    /// the word is gone.
+    fn scan_mentions(&mut self) {
+        if mention::word(self.input.text(), self.input.cursor()).is_none() {
+            self.mentions.scan = None;
+            self.mentions.matches = None;
+            return;
+        }
+        let root = &self.snapshot.settings.cwd;
+        match &mut self.mentions.scan {
+            Some(scan) if scan.root == *root => scan.poll(),
+            scan => {
+                *scan = Some(mention::Scan::start(root));
+                self.mentions.matches = None;
+            }
+        }
+    }
+
+    /// Rows of the `@` list, at most `max`; the last says so when the walk
+    /// stopped at its limit.
+    fn mention_rows(&mut self, width: u16, max: usize) -> Vec<Line<'static>> {
+        let Some((_, selected, _)) = self.mention_list() else {
+            return Vec::new();
+        };
+        let (Some(scan), Some((_, found))) = (&self.mentions.scan, &self.mentions.matches) else {
+            return Vec::new();
+        };
+        let max = max.min(MENTION_ROWS);
+        let note = scan.truncated && max >= 2;
+        let shown = max - usize::from(note);
+        let first = (selected + 1).saturating_sub(shown);
+        let entries: Vec<(&str, &str)> = found
+            .iter()
+            .skip(first)
+            .take(shown)
+            .map(|&index| (scan.entries[index].label.as_str(), ""))
+            .collect();
+        let mut rows = commands::list_rows(&entries, selected - first, width, shown);
+        if note {
+            rows.push(Line::from(Span::styled(
+                format!(
+                    " ⋯ Only the first {} files and directories are listed",
+                    mention::LIMIT
+                ),
+                Style::new().dim(),
+            )));
+        }
+        rows
     }
 
     /// Keys while a choice is offered: Up and Down select, Enter chooses
@@ -1160,7 +1305,8 @@ impl App {
             }
             None => self.input_view(width, now_ms),
         };
-        // Commands are only for the input box.
+        self.scan_mentions();
+        // Commands and paths are only for the input box.
         let list = match bottom {
             Bottom::Input { .. } => self.list_view(
                 width,
@@ -1243,21 +1389,23 @@ impl App {
         // bottom, so it is drawn when the rows down to it fit.
         let bare_input = matches!(view.bottom, Bottom::Input { .. })
             && self.chooser.is_none()
-            && self.command_list().is_none();
+            && self.command_list().is_none()
+            && self.mention_list().is_none();
         let mode_drawn = view.below() - (INFO_ROWS - 1) <= height;
         self.drawing.mode = (bare_input && mode_in_full && mode_drawn)
             .then_some(self.snapshot.settings.approval_policy);
         view
     }
 
-    /// The list above the input box: the choice offered, or the commands
-    /// matching what is typed. At most `max` rows.
-    fn list_view(&self, width: u16, max: usize) -> Vec<Line<'static>> {
+    /// The list above the input box: the choice offered, the commands
+    /// matching what is typed, or the paths matching the `@` word. At most
+    /// `max` rows.
+    fn list_view(&mut self, width: u16, max: usize) -> Vec<Line<'static>> {
         if let Some(chooser) = &self.chooser {
             return chooser.rows(width, max);
         }
         let Some((matches, selected)) = self.command_list() else {
-            return Vec::new();
+            return self.mention_rows(width, max);
         };
         let names: Vec<String> = matches
             .iter()
