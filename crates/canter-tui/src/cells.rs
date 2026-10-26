@@ -7,7 +7,7 @@ use std::ops::Range;
 use canter_protocol::{
     FileUpdateChange, Item, ItemStatus, PatchChangeKind, Turn, TurnStatus, UserInput,
 };
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::format_elapsed;
@@ -45,6 +45,46 @@ const DIFF_INDENT: &str = "      ";
 /// A blank row, `› ` and the text, then another blank row. `source` names the
 /// client that sent it when that was not this terminal.
 pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> Vec<Row> {
+    let rows = prompt_rows(input, source, width);
+    if rows.is_empty() {
+        return rows;
+    }
+    let mut spaced = vec![Row::blank()];
+    spaced.extend(rows);
+    spaced.push(Row::blank());
+    spaced
+}
+
+/// A message the user sent: [`prompt`], on the user's background when the
+/// terminal can show it ([`on_background`]).
+pub(crate) fn sent(input: &[UserInput], source: Option<&str>, width: u16) -> Vec<Row> {
+    match theme::user_bg() {
+        Some(color) => on_background(prompt_rows(input, source, width), color),
+        None => prompt(input, source, width),
+    }
+}
+
+/// `rows` on `color` to the edge of the window, with a row of it above and
+/// below, and a blank row outside those. A copy leaves those two rows out.
+pub(crate) fn on_background(rows: Vec<Row>, color: Color) -> Vec<Row> {
+    if rows.is_empty() {
+        return rows;
+    }
+    let edge = Row {
+        fill: Some(color),
+        ..Row::marks(Line::default())
+    };
+    let mut out = vec![Row::blank(), edge.clone()];
+    out.extend(rows.into_iter().map(|row| Row {
+        fill: Some(color),
+        ..row
+    }));
+    out.extend([edge, Row::blank()]);
+    out
+}
+
+/// `› ` and the text, each line wrapped under the first row's text.
+fn prompt_rows(input: &[UserInput], source: Option<&str>, width: u16) -> Vec<Row> {
     let mut image_number = 0;
     let texts: Vec<String> = input
         .iter()
@@ -64,7 +104,7 @@ pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> V
         return Vec::new();
     }
     let text = sanitize(&texts.join("\n"));
-    let mut rows = vec![Row::blank()];
+    let mut rows = Vec::new();
     for (i, line) in text.split('\n').enumerate() {
         let indent = if i == 0 {
             Span::styled("› ", theme::accent().bold())
@@ -80,7 +120,6 @@ pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> V
         }
         rows.extend(wrap_rows(&LogicalLine::new(vec![indent], body), width));
     }
-    rows.push(Row::blank());
     rows
 }
 
@@ -98,7 +137,7 @@ pub(crate) fn agent_message(text: &str, width: u16) -> Vec<LogicalLine> {
 /// of a diff.
 pub(crate) fn item(item: &Item, finished: bool, details: bool, cwd: &str, width: u16) -> Vec<Row> {
     match item {
-        Item::UserMessage { content, .. } => prompt(content, None, width),
+        Item::UserMessage { content, .. } => sent(content, None, width),
         Item::AgentMessage { text, .. } => wrap_all(&agent_message(text, width), width),
         Item::Reasoning {
             summary,

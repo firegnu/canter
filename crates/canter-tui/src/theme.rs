@@ -2,9 +2,10 @@
 //! and never name a colour themselves.
 //!
 //! Text uses the terminal's own 16 colours, so it follows the terminal's
-//! colour scheme. Only the diff backgrounds are true colours, and only when
-//! the terminal can show them and its background is known to be dark or light;
-//! and the welcome header's pony, when the terminal can show them.
+//! colour scheme. Only the diff backgrounds and the background of a sent
+//! message are true colours, and only when the terminal can show them and its
+//! background is known to be dark or light; and the welcome header's pony,
+//! when the terminal can show them.
 
 use std::cell::Cell;
 use std::time::Duration;
@@ -257,6 +258,13 @@ pub fn diff_added_word() -> Style {
 /// dark, 217 (`#FFAFAF`) on light.
 pub fn diff_removed_word() -> Style {
     word(current().bg(([0x73, 0x32, 0x2a], 88), ([0xff, 0xce, 0xcb], 217)))
+}
+
+/// The background of a sent message, a grey a step off the terminal's own,
+/// when one can be shown. 256 colours: 236 (`#303030`) on dark, 254
+/// (`#E4E4E4`) on light.
+pub fn user_bg() -> Option<Color> {
+    current().bg(([0x2d, 0x2e, 0x33], 236), ([0xe9, 0xe9, 0xe5], 254))
 }
 
 fn word(background: Option<Color>) -> Style {
