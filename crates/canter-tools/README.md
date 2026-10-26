@@ -226,9 +226,14 @@ Debug/Serialize。`snapshot()` 为会话复制排序后的工具定义和调用�
 保持默认 TLS 证书验证，不执行网页脚本或加载附属资源。
 
 `text/html`、`application/xhtml+xml` 用固定版本 htmd 转 Markdown，忽略 head/script/style；
-其余 `text/*`、`application/json` 和 `application/*+json` 按 UTF-8 返回（非法字节替换）。
-Content-Type 的 charset 声明不是 UTF-8 时，在返回文字前注明
-`[Decoded as UTF-8; declared charset: xxx.]`；没有做转码或读取 HTML meta charset。
+HTML 及其余 `text/*`、`application/json` 和 `application/*+json` 在下载上限检查后、
+HTML 预检和转换前，用固定版本 encoding_rs 转成 UTF-8：开头的 UTF-8 / UTF-16LE/BE BOM
+优先，其次是 Content-Type 的 charset，最后（仅 HTML）预扫前 1024 字节的
+`<meta charset=…>` 或 `<meta http-equiv="Content-Type" content="…; charset=…">`。
+编码标签按 WHATWG 表识别（GB2312 / GBK 对应 GBK，latin-1 对应 windows-1252）；
+meta 中的 UTF-16 标签按 UTF-8、x-user-defined 按 windows-1252 处理。
+未声明时仍按 UTF-8，不猜编码；非法字节替换为 `�`。未知编码按 UTF-8 解码，结果前注明
+`[Unknown charset: xxx; decoded as UTF-8.]`；识别成功的不再附编码说明。
 响应的 Content-Encoding 任一值不是 identity 时，只返回一行编码占位，不读取或转换正文。
 其它类型只返回一行类型、大小占位，不把二进制交给模型；缺少 Content-Type 按
 application/octet-stream 处理。已知大小的非文字响应不读取内容，未知大小按流计数。

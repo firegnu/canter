@@ -896,14 +896,8 @@ async fn encoded_responses_are_omitted_and_non_utf8_declarations_are_reported() 
         );
         assert_eq!(result.lines().count(), 1);
     }
-    assert_eq!(
-        results[2],
-        "[Decoded as UTF-8; declared charset: GBK.]\n\n# heading"
-    );
-    assert_eq!(
-        results[3],
-        "[Decoded as UTF-8; declared charset: ISO-8859-1.]\n\n<b>literal</b>"
-    );
+    assert_eq!(results[2], "# heading");
+    assert_eq!(results[3], "<b>literal</b>");
     assert_eq!(results[4], "unchanged");
     session.close().await.unwrap();
 }
