@@ -452,3 +452,58 @@ async fn automatic_compaction_can_retract_until_output_but_manual_compaction_can
         server.stop().await;
     }
 }
+
+#[tokio::test]
+async fn empty_name_clears_a_retracted_prompts_title_and_the_next_name_survives_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+    let mut server = ModelServer::start().await;
+    let session = create(store.clone(), &server, temp.path(), CoreOptions::default()).await;
+    let turn = session
+        .input(input("mistyped title"))
+        .await
+        .unwrap()
+        .turn_id
+        .unwrap();
+    let (_, chunks) = server.request().await;
+    session
+        .update(SessionUpdateParams {
+            name: Some("mistyped title".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(interrupt(&session, &turn, true).await["retracted"], true);
+    drop(chunks);
+    session
+        .update(SessionUpdateParams {
+            name: Some(String::new()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(session.snapshot().await.session.settings.name, None);
+    session
+        .update(SessionUpdateParams {
+            name: Some("corrected title".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    session.close().await.unwrap();
+    let (resumed, snapshot) = Session::open(
+        store,
+        "retract".into(),
+        runtime(temp.path()),
+        server.model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        snapshot.session.settings.name.as_deref(),
+        Some("corrected title")
+    );
+    resumed.close().await.unwrap();
+    server.stop().await;
+}

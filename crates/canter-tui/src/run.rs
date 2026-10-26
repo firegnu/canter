@@ -50,6 +50,10 @@ const RETRY: Duration = Duration::from_millis(500);
 /// Longest session name taken from a first message, in characters.
 const TITLE_CHARS: usize = 80;
 
+#[cfg(test)]
+#[path = "run_retract_tests.rs"]
+mod retract_tests;
+
 /// A connection to the server.
 pub struct Connected {
     pub client: Client,
@@ -247,6 +251,7 @@ where
         version,
     } = launch;
     let client = connected.client;
+    let named_first = matches!(&open, Open::New { first: Some(_), .. });
     let opened = match open {
         Open::New {
             cwd,
@@ -301,6 +306,7 @@ where
     let mut ui = Ui::with_terminal(terminal, app);
     let connector = Arc::new(connector);
     let (sender, mut messages) = mpsc::unbounded_channel();
+    let naming = AutoName::new(ui.app().snapshot(), named_first, sender.clone());
     let pump = tokio::spawn(pump(
         connector.clone(),
         stream,
@@ -321,6 +327,7 @@ where
         sender,
         pump,
         btw: None,
+        naming,
     };
     let mut every = ui.app().redraw_every(now_ms());
     let mut tick = tokio::time::interval(every);
@@ -566,6 +573,8 @@ enum Message {
     },
     Sent {
         event_seq: u64,
+        turn_id: Option<String>,
+        title: String,
         input: Vec<UserInput>,
     },
     ImageSendFailed(String),
@@ -579,7 +588,11 @@ enum Message {
         error: String,
     },
     AnswerLate,
-    InterruptFailed(String),
+    InterruptFailed {
+        turn_id: String,
+        connection_error: bool,
+        message: String,
+    },
     Interrupted {
         turn_id: String,
         retracted: bool,
@@ -625,6 +638,99 @@ struct Chat<C> {
     /// Forwards the session's events.
     pump: tokio::task::JoinHandle<()>,
     btw: Option<(usize, tokio::task::JoinHandle<()>)>,
+    naming: AutoName,
+}
+
+/// Only titles assigned by this terminal are undone. Serialize title updates
+/// so a slow original PATCH cannot overwrite its clear or the next title.
+struct AutoName {
+    turn: Option<(String, String)>,
+    clearing: Option<String>,
+    eligible: bool,
+    updates: mpsc::UnboundedSender<(Client, String)>,
+}
+
+impl AutoName {
+    fn new(
+        snapshot: &SessionSnapshot,
+        named_first: bool,
+        messages: mpsc::UnboundedSender<Message>,
+    ) -> Self {
+        let (updates, mut receive) = mpsc::unbounded_channel::<(Client, String)>();
+        let session = snapshot.id.clone();
+        tokio::spawn(async move {
+            while let Some((client, name)) = receive.recv().await {
+                let params = SessionUpdateParams {
+                    name: Some(name),
+                    ..Default::default()
+                };
+                if let Err(error) = client.update(&session, &params).await {
+                    let _ = messages.send(Message::NameFailed(error.to_string()));
+                }
+            }
+        });
+        Self {
+            turn: if named_first {
+                snapshot
+                    .turns
+                    .first()
+                    .zip(snapshot.settings.name.as_ref())
+                    .map(|(turn, name)| (turn.id.clone(), name.clone()))
+            } else {
+                None
+            },
+            clearing: None,
+            eligible: snapshot.settings.name.is_none()
+                && snapshot.turns.is_empty()
+                && snapshot.queued_inputs.is_empty(),
+            updates,
+        }
+    }
+
+    fn sent(
+        &mut self,
+        snapshot: &SessionSnapshot,
+        client: &Client,
+        seq: u64,
+        turn_id: Option<String>,
+        title: String,
+    ) {
+        let Some(turn) = turn_id else {
+            return;
+        };
+        // A delayed input reply may arrive after this turn was retracted.
+        if !self.eligible
+            || snapshot.turns.first().is_some_and(|first| first.id != turn)
+            || (seq <= snapshot.last_event_seq && snapshot.turns.is_empty())
+            || snapshot
+                .settings
+                .name
+                .as_ref()
+                .is_some_and(|name| Some(name) != self.clearing.as_ref())
+        {
+            return;
+        }
+        self.eligible = false;
+        self.turn = Some((turn, title.clone()));
+        self.clearing = None;
+        let _ = self.updates.send((client.clone(), title));
+    }
+
+    fn retracted(&mut self, turn: &str, snapshot: &SessionSnapshot, client: &Client) {
+        if self.turn.as_ref().is_some_and(|(id, _)| id == turn) {
+            let (_, title) = self.turn.take().expect("named turn");
+            // Do not clear a name explicitly replaced by another client.
+            self.eligible = snapshot
+                .settings
+                .name
+                .as_ref()
+                .is_none_or(|name| *name == title);
+            if self.eligible {
+                self.clearing = Some(title);
+                let _ = self.updates.send((client.clone(), String::new()));
+            }
+        }
+    }
 }
 
 impl<C: Connector> Chat<C> {
@@ -755,6 +861,7 @@ impl<C: Connector> Chat<C> {
         ));
         self.sender = sender;
         self.session = snapshot.id.clone();
+        self.naming = AutoName::new(&snapshot, false, self.sender.clone());
         *ui.app_mut() = App::new(snapshot, self.home.clone(), now_ms())
             .with_client_name(self.client_name.clone())
             .with_welcome(self.version.clone());
@@ -779,10 +886,24 @@ impl<C: Connector> Chat<C> {
                 }
                 app.btw_event(id, event);
             }
-            Message::Sent { event_seq, input } => app.input_sent(event_seq, input),
+            Message::Sent {
+                event_seq,
+                turn_id,
+                title,
+                input,
+            } => {
+                self.naming
+                    .sent(app.snapshot(), &self.client, event_seq, turn_id, title);
+                app.input_sent(event_seq, input);
+            }
             Message::ImageSendFailed(error) => app.image_send_failed(&error),
             Message::Models(models) => app.set_models(&models),
-            Message::Server(event) => app.apply_event(&event, now_ms()),
+            Message::Server(event) => {
+                if let canter_protocol::EventPayload::TurnRetracted { turn_id } = &event.payload {
+                    self.naming.retracted(turn_id, app.snapshot(), &self.client);
+                }
+                app.apply_event(&event, now_ms());
+            }
             Message::SendFailed(error) => app.send_failed(&error),
             Message::NameFailed(error) => {
                 app.warning(&format!("Could not name the session: {error}"))
@@ -790,7 +911,11 @@ impl<C: Connector> Chat<C> {
             Message::Warning(message) => app.warning(&message),
             Message::AnswerFailed { request_id, error } => app.answer_failed(&request_id, &error),
             Message::AnswerLate => app.answer_late(),
-            Message::InterruptFailed(error) => app.interrupt_failed(&error),
+            Message::InterruptFailed {
+                turn_id,
+                connection_error,
+                message,
+            } => app.interrupt_failed(&turn_id, connection_error, &message),
             Message::Interrupted { turn_id, retracted } => {
                 app.interrupt_finished(&turn_id, retracted)
             }
@@ -899,12 +1024,7 @@ impl<C: Connector> Chat<C> {
                     Action::SendImages { text, input } => (text, input),
                     _ => unreachable!(),
                 };
-                let snapshot = app.snapshot();
-                // Name a new session after its first message, for the session list.
-                let unnamed = snapshot.settings.name.is_none()
-                    && snapshot.turns.is_empty()
-                    && snapshot.queued_inputs.is_empty();
-                let name = unnamed.then(|| session_title(&text));
+                let title = session_title(&text);
                 let params = SessionInputParams {
                     review: None,
                     input,
@@ -927,17 +1047,10 @@ impl<C: Connector> Chat<C> {
                     };
                     let _ = sender.send(Message::Sent {
                         event_seq: response.event_seq,
+                        turn_id: response.turn_id,
+                        title,
                         input: params.input,
                     });
-                    if let Some(name) = name {
-                        let update = SessionUpdateParams {
-                            name: Some(name),
-                            ..SessionUpdateParams::default()
-                        };
-                        if let Err(error) = client.update(&session, &update).await {
-                            let _ = sender.send(Message::NameFailed(error.to_string()));
-                        }
-                    }
                 });
             }
             action @ (Action::Resolve { .. } | Action::ResolveUserInput { .. }) => {
@@ -969,8 +1082,13 @@ impl<C: Connector> Chat<C> {
                 });
             }
             Action::Interrupt { turn_id } => {
+                let retract = app
+                    .snapshot()
+                    .turns
+                    .iter()
+                    .any(|turn| turn.id == turn_id && turn.review.is_none());
                 tokio::spawn(async move {
-                    match client.interrupt(&session, &turn_id).await {
+                    match client.interrupt(&session, &turn_id, retract).await {
                         Ok(response) => {
                             let _ = sender.send(Message::Interrupted {
                                 turn_id,
@@ -988,7 +1106,11 @@ impl<C: Connector> Chat<C> {
                             });
                         }
                         Err(error) => {
-                            let _ = sender.send(Message::InterruptFailed(error.to_string()));
+                            let _ = sender.send(Message::InterruptFailed {
+                                turn_id,
+                                connection_error: matches!(error, ClientError::Http(_)),
+                                message: error.to_string(),
+                            });
                         }
                     }
                 });

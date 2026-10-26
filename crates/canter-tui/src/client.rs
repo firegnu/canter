@@ -239,9 +239,10 @@ impl Client {
         &self,
         session: &str,
         turn_id: &str,
+        retract: bool,
     ) -> Result<SessionInterruptResponse, ClientError> {
         let params = SessionInterruptParams {
-            retract: Some(true),
+            retract: retract.then_some(true),
             turn_id: turn_id.to_owned(),
         };
         let response = self

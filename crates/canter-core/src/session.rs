@@ -804,7 +804,7 @@ impl Session {
         }
         let mut settings = state.journal.snapshot.settings.clone();
         if let Some(name) = params.name {
-            settings.name = Some(name);
+            settings.name = (!name.is_empty()).then_some(name);
         }
         if let Some(model) = params.model {
             settings.model = model;

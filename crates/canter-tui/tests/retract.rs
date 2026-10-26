@@ -267,3 +267,98 @@ fn rejected_retract_keeps_the_interrupted_turn_and_original_draft() {
         Some(Action::Send("original draft".into()))
     );
 }
+
+#[test]
+fn retract_keeps_notices_before_the_turn_and_removes_notices_inside_it() {
+    for initiating in [false, true] {
+        let mut ui = ui();
+        let previous: Turn = serde_json::from_value(json!({
+            "id":"previous", "input":text("earlier input"), "clientName":"test",
+            "status":"completed", "error":null, "usage":null,
+            "items":[{"type":"userMessage","id":"previous-user","content":text("earlier input")}]
+        }))
+        .unwrap();
+        event(
+            &mut ui,
+            EventPayload::TurnStarted {
+                turn: previous,
+                input_id: None,
+            },
+        );
+        ui.app_mut().warning("keep the previous report");
+        ui.draw(0).unwrap();
+        start(&mut ui, text("withdraw this"));
+        ui.app_mut().warning("remove the in-turn warning");
+        ui.draw(0).unwrap();
+        assert!(screen(&ui).contains("remove the in-turn warning"));
+        if initiating {
+            ui.app_mut().handle_key(key(KeyCode::Esc), 0);
+            ui.app_mut().interrupt_finished("turn", true);
+        }
+        retract(&mut ui);
+        assert!(screen(&ui).contains("earlier input"));
+        assert!(screen(&ui).contains("keep the previous report"));
+        assert!(!screen(&ui).contains("remove the in-turn warning"));
+    }
+}
+
+#[test]
+fn retract_does_not_restore_a_queued_review_as_an_ordinary_prompt() {
+    let mut ui = ui();
+    start(&mut ui, text("ordinary input"));
+    event(
+        &mut ui,
+        EventPayload::InputQueued {
+            input: QueuedInput {
+                id: "q1".into(),
+                input: text("generated review instructions and diff"),
+                client_name: "test".into(),
+                review: Some("Review changes".into()),
+            },
+        },
+    );
+    queued(&mut ui, "q2", text("ordinary queue"));
+    ui.app_mut().handle_key(key(KeyCode::Esc), 0);
+    ui.app_mut().interrupt_finished("turn", true);
+    retract(&mut ui);
+    assert_eq!(
+        ui.app_mut().handle_key(key(KeyCode::Enter), 0),
+        Some(Action::Send("ordinary input\nordinary queue".into()))
+    );
+}
+
+#[test]
+fn images_without_local_paths_become_text_and_request_repasting_in_the_status_line() {
+    for resumed in [false, true] {
+        let mut ui = ui();
+        let image = |name: &str| {
+            vec![UserInput::LocalImage {
+                path: format!("image-stored-{name}"),
+                name: Some(name.into()),
+            }]
+        };
+        start(&mut ui, image("first.png"));
+        queued(&mut ui, "q1", image("queued.png"));
+        if resumed {
+            let snapshot = ui.app().snapshot().clone();
+            ui = Ui::new(TestBackend::new(90, 28), App::new(snapshot, None, 0)).unwrap();
+            ui.draw(0).unwrap();
+        }
+        ui.app_mut().handle_key(key(KeyCode::Esc), 0);
+        ui.app_mut().interrupt_finished("turn", true);
+        retract(&mut ui);
+        let status: String = (0..90)
+            .map(|x| ui.backend().buffer()[(x, 21)].symbol())
+            .collect();
+        assert!(
+            status.contains("Paste images again with Ctrl+V"),
+            "{status}"
+        );
+        assert_eq!(
+            ui.app_mut().handle_key(key(KeyCode::Enter), 0),
+            Some(Action::Send(
+                "[image: first.png]\n[image: queued.png]".into()
+            ))
+        );
+    }
+}
