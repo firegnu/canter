@@ -141,9 +141,10 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 17] = [
+const COMMANDS: [(&str, &str); 18] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
+    ("/copy", "Copy the last answer, or code block N of it"),
     ("/exit", "Quit canter"),
     ("/files", "List session files and git status"),
     ("/help", "Show available commands"),
@@ -619,7 +620,9 @@ fn usage_displays_models_total_last_turn_and_unknown_costs() {
 /// /help shows the commands in the conversation, and sends nothing.
 #[test]
 fn help_shows_the_commands_in_the_conversation() {
-    let mut screen = Screen::new();
+    // One row per command, a row for Shift+Tab and the conversation's
+    // blank row: one more than the usual screen holds since `/copy`.
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 1);
     assert_eq!(screen.enter("/help"), None);
     screen.draw();
     let shown = screen.text();
@@ -924,7 +927,7 @@ fn the_list_shows_after_leading_blanks() {
     screen.type_text(" /co");
     screen.draw();
     assert!(
-        screen.above_box(2)[0].starts_with(" › /compact"),
+        screen.above_box(3)[0].starts_with(" › /compact"),
         "{}",
         screen.text()
     );

@@ -25,6 +25,7 @@ terminal-colorsaurus.workspace = true
 similar = { workspace = true, features = ["inline"] }
 syntect.workspace = true
 two-face.workspace = true
+arboard.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

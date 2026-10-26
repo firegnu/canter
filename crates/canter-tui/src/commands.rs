@@ -41,6 +41,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::Context)),
     },
     Command {
+        name: "copy",
+        about: "Copy the last answer, or code block N of it",
+        takes_args: true,
+        run: |app, args| app.copy_answer(args).map(|()| None),
+    },
+    Command {
         name: "exit",
         about: "Quit canter",
         takes_args: false,
@@ -338,13 +344,16 @@ fn help() -> Vec<LogicalLine> {
     let width = rows.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
     let mut lines = vec![LogicalLine::default()];
     for (name, about) in rows {
-        lines.push(LogicalLine::new(
-            vec![
-                Span::raw("  "),
-                Span::styled(format!("{name:width$}   "), theme::accent()),
-            ],
-            vec![Span::styled(about, theme::secondary())],
-        ));
+        let name = format!("{name:width$}   ");
+        let marker = str_width(&name);
+        lines.push(LogicalLine {
+            // A copy keeps the name with its line.
+            marker,
+            ..LogicalLine::new(
+                vec![Span::raw("  "), Span::styled(name, theme::accent())],
+                vec![Span::styled(about, theme::secondary())],
+            )
+        });
     }
     lines
 }

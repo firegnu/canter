@@ -12,7 +12,7 @@ use crate::app::format_elapsed;
 use crate::diff::Diff;
 use crate::markdown;
 use crate::text::{
-    LogicalLine, char_width, sanitize, spans_width, str_width, truncate, visible, wrap,
+    LogicalLine, Row, char_width, sanitize, spans_width, str_width, truncate, visible, wrap_rows,
 };
 use crate::theme;
 
@@ -40,7 +40,7 @@ const DIFF_INDENT: &str = "      ";
 
 /// A blank row, `› ` and the text, then another blank row. `source` names the
 /// client that sent it when that was not this terminal.
-pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> Vec<Line<'static>> {
+pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> Vec<Row> {
     let mut image_number = 0;
     let texts: Vec<String> = input
         .iter()
@@ -60,7 +60,7 @@ pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> V
         return Vec::new();
     }
     let text = sanitize(&texts.join("\n"));
-    let mut rows = vec![Line::default()];
+    let mut rows = vec![Row::blank()];
     for (i, line) in text.split('\n').enumerate() {
         let indent = if i == 0 {
             Span::styled("› ", theme::accent().bold())
@@ -74,9 +74,9 @@ pub(crate) fn prompt(input: &[UserInput], source: Option<&str>, width: u16) -> V
                 theme::secondary(),
             ));
         }
-        rows.extend(wrap(&LogicalLine::new(vec![indent], body), width));
+        rows.extend(wrap_rows(&LogicalLine::new(vec![indent], body), width));
     }
-    rows.push(Line::default());
+    rows.push(Row::blank());
     rows
 }
 
@@ -92,13 +92,7 @@ pub(crate) fn agent_message(text: &str, width: u16) -> Vec<LogicalLine> {
 /// Rows for an item; `finished` picks its final form over the in-progress one.
 /// With `details` (Ctrl+O), nothing is folded: whole thinking, all output, all
 /// of a diff.
-pub(crate) fn item(
-    item: &Item,
-    finished: bool,
-    details: bool,
-    cwd: &str,
-    width: u16,
-) -> Vec<Line<'static>> {
+pub(crate) fn item(item: &Item, finished: bool, details: bool, cwd: &str, width: u16) -> Vec<Row> {
     match item {
         Item::UserMessage { content, .. } => prompt(content, None, width),
         Item::AgentMessage { text, .. } => wrap_all(&agent_message(text, width), width),
@@ -164,13 +158,17 @@ pub(crate) fn item(
             content,
             status,
             ..
-        } => vec![file_read(path, *start_line, content, *status, cwd, width)],
-        Item::ContextCompaction { .. } => {
-            vec![Line::from(Span::styled(
+        } => vec![Row::text_from(
+            file_read(path, *start_line, content, *status, cwd, width),
+            4,
+        )],
+        Item::ContextCompaction { .. } => vec![Row::text_from(
+            Line::from(Span::styled(
                 "  ── Context compacted ──",
                 theme::secondary(),
-            ))]
-        }
+            )),
+            2,
+        )],
         Item::UserInput {
             question,
             answer,
@@ -185,7 +183,7 @@ pub(crate) fn item(
                 _ if *status == ItemStatus::InProgress => "Waiting for your answer".into(),
                 _ => "No answer".into(),
             };
-            wrap(
+            wrap_rows(
                 &notice(
                     "? ",
                     &format!("{} → {}", visible(question), visible(&answer)),
@@ -242,8 +240,11 @@ pub(crate) fn notice(mark: &str, text: &str, style: Style) -> LogicalLine {
     )
 }
 
-pub(crate) fn wrap_all(lines: &[LogicalLine], width: u16) -> Vec<Line<'static>> {
-    lines.iter().flat_map(|line| wrap(line, width)).collect()
+pub(crate) fn wrap_all(lines: &[LogicalLine], width: u16) -> Vec<Row> {
+    lines
+        .iter()
+        .flat_map(|line| wrap_rows(line, width))
+        .collect()
 }
 
 /// Thinking, grey and italic, from the summary when there is one. Folded it
@@ -258,7 +259,7 @@ fn reasoning(
     finished: bool,
     details: bool,
     width: u16,
-) -> Vec<Line<'static>> {
+) -> Vec<Row> {
     let style = theme::thinking();
     let summarized = summary.iter().any(|part| !part.trim().is_empty());
     let parts = if summarized { summary } else { content };
@@ -277,7 +278,7 @@ fn reasoning(
         } else {
             "  Thinking…".to_owned()
         };
-        let mut rows = vec![Line::from(Span::styled(heading, style))];
+        let mut rows = vec![Row::text_from(Line::from(Span::styled(heading, style)), 2)];
         let bar = || Span::styled("  ┊ ", theme::secondary());
         let thinking = |spans: Vec<Span<'static>>| {
             spans
@@ -290,15 +291,16 @@ fn reasoning(
                 indent: thinking(line.indent),
                 hang: thinking(line.hang),
                 body: thinking(line.body),
+                marker: line.marker,
             };
-            rows.extend(wrap(&line.prefixed(bar(), bar()), width));
+            rows.extend(wrap_rows(&line.prefixed(bar(), bar()), width));
         }
         return rows;
     }
     if !finished {
         let lead = "  Thinking…";
         let Some(latest) = lines.next_back() else {
-            return vec![Line::from(Span::styled(lead, style))];
+            return vec![Row::text_from(Line::from(Span::styled(lead, style)), 2)];
         };
         let room = usize::from(width).saturating_sub(str_width(lead) + 1);
         let shown = if str_width(latest) <= room {
@@ -306,10 +308,11 @@ fn reasoning(
         } else {
             format!("…{}", tail(latest, room.saturating_sub(1)).trim_start())
         };
-        return vec![Line::from(truncate(
+        let row = truncate(
             vec![Span::styled(format!("{lead} {shown}"), style)],
             usize::from(width),
-        ))];
+        );
+        return vec![Row::text_from(Line::from(row), 2)];
     }
     let Some(first) = lines.next() else {
         return Vec::new();
@@ -327,10 +330,11 @@ fn reasoning(
     } else {
         ""
     };
-    vec![Line::from(truncate(
+    let row = truncate(
         vec![Span::styled(format!("{thought}: {first}{more}"), style)],
         usize::from(width),
-    ))]
+    );
+    vec![Row::text_from(Line::from(row), 2)]
 }
 
 /// The end of `text` that fits in `width` columns.
@@ -385,7 +389,7 @@ fn file_read(
 
 /// An item waiting for an approval: only its title row, marked 「等你批准」.
 /// The approval box below shows the whole command or diff.
-pub(crate) fn waiting(item: &Item, details: bool, cwd: &str, width: u16) -> Vec<Line<'static>> {
+pub(crate) fn waiting(item: &Item, details: bool, cwd: &str, width: u16) -> Vec<Row> {
     let mark = || vec![Span::styled("Waiting for approval", theme::warning())];
     match item {
         Item::CommandExecution { command, .. } => {
@@ -396,7 +400,7 @@ pub(crate) fn waiting(item: &Item, details: bool, cwd: &str, width: u16) -> Vec<
             .map(|change| {
                 let diff = Diff::parse(&sanitize(&change.diff), &change.kind);
                 let header = change_header(change, &diff, dot(theme::secondary()), cwd);
-                right_aligned(header, mark(), usize::from(width))
+                card_row(right_aligned(header, mark(), usize::from(width)))
             })
             .collect(),
         _ => self::item(item, false, details, cwd, width),
@@ -409,7 +413,7 @@ fn file_change(
     details: bool,
     cwd: &str,
     width: u16,
-) -> Vec<Line<'static>> {
+) -> Vec<Row> {
     let diff = Diff::parse(&sanitize(&change.diff), &change.kind);
     let (bullet, suffix) = match status {
         ItemStatus::InProgress => (dot(theme::secondary()), None),
@@ -422,7 +426,10 @@ fn file_change(
     };
     let mut header = change_header(change, &diff, bullet, cwd);
     header.extend(suffix);
-    let mut rows = vec![Line::from(truncate(header, usize::from(width)))];
+    let mut rows = vec![Row::text_from(
+        Line::from(truncate(header, usize::from(width))),
+        4,
+    )];
     let limit = match &change.kind {
         _ if details => None,
         PatchChangeKind::Add => Some(ADD_LINES),
@@ -481,7 +488,7 @@ fn command_card(
     output: &str,
     details: bool,
     width: u16,
-) -> Vec<Line<'static>> {
+) -> Vec<Row> {
     let dim = theme::secondary();
     let took = duration_ms.map(|ms| Span::styled(format!(" · {}", format_duration(ms)), dim));
     let (bullet, mut right) = match (status, exit_code) {
@@ -534,7 +541,7 @@ fn mcp_call(
     result: &str,
     details: bool,
     width: u16,
-) -> Vec<Line<'static>> {
+) -> Vec<Row> {
     let (bullet, right) = status_marks(status);
     let mut object = vec![Span::raw(first_line(name))];
     let empty = arguments.is_null() || arguments.as_object().is_some_and(|args| args.is_empty());
@@ -562,13 +569,7 @@ fn mcp_call(
 /// `● Fetch <url>` and the size fetched. The page is for the model, so it
 /// shows only with details; a one-line note (a redirect to another host,
 /// content left out) shows as it is, and a failure's reason in red.
-fn web_fetch(
-    url: &str,
-    result: &str,
-    status: ItemStatus,
-    details: bool,
-    width: u16,
-) -> Vec<Line<'static>> {
+fn web_fetch(url: &str, result: &str, status: ItemStatus, details: bool, width: u16) -> Vec<Row> {
     let dim = theme::secondary();
     let (bullet, mut right) = status_marks(status);
     let one_line = !result.trim_end().contains('\n');
@@ -632,7 +633,7 @@ enum Fold {
 }
 
 /// Output rows, each after `    │ ` and cut to `width`, in `style`.
-fn output_rows(output: &str, fold: Fold, style: Style, width: u16) -> Vec<Line<'static>> {
+fn output_rows(output: &str, fold: Fold, style: Style, width: u16) -> Vec<Row> {
     let dim = theme::secondary();
     let output = sanitize(output);
     let mut lines: Vec<&str> = output.split('\n').collect();
@@ -641,15 +642,21 @@ fn output_rows(output: &str, fold: Fold, style: Style, width: u16) -> Vec<Line<'
     }
     let all = lines.len();
     let row = |line: &str| {
-        Line::from(truncate(
+        let spans = truncate(
             vec![
                 Span::styled(GUTTER, dim),
                 Span::styled(line.to_owned(), style),
             ],
             usize::from(width),
-        ))
+        );
+        Row::text_from(Line::from(spans), str_width(GUTTER))
     };
-    let note = |text: String| Line::from(vec![Span::styled(GUTTER, dim), Span::styled(text, dim)]);
+    let note = |text: String| {
+        Row::marks(Line::from(vec![
+            Span::styled(GUTTER, dim),
+            Span::styled(text, dim),
+        ]))
+    };
     let more = |hidden: usize| note(format!("… {hidden} more lines · Ctrl+O"));
     let mut rows = Vec::new();
     match fold {
@@ -690,7 +697,7 @@ fn command_title(
     right: Vec<Span<'static>>,
     whole: bool,
     width: u16,
-) -> Vec<Line<'static>> {
+) -> Vec<Row> {
     let clean = visible(command);
     let mut lines = clean.lines();
     let mut shown = lines.next().unwrap_or_default().to_owned();
@@ -701,10 +708,11 @@ fn command_title(
     let mut rows = vec![title(bullet, "Run ", vec![Span::raw(shown)], right, width)];
     if whole {
         rows.extend(rest.iter().map(|line| {
-            Line::from(truncate(
+            let spans = truncate(
                 vec![Span::raw(TITLE_INDENT), Span::raw((*line).to_owned())],
                 usize::from(width),
-            ))
+            );
+            Row::text_from(Line::from(spans), TITLE_INDENT.len())
         }));
     }
     rows
@@ -717,14 +725,23 @@ fn title(
     object: Vec<Span<'static>>,
     right: Vec<Span<'static>>,
     width: u16,
-) -> Line<'static> {
+) -> Row {
     let mut left = vec![
         Span::raw("  "),
         bullet,
         Span::styled(verb, Style::new().bold()),
     ];
     left.extend(object);
-    right_aligned(left, right, usize::from(width))
+    card_row(right_aligned(left, right, usize::from(width)))
+}
+
+/// A card's title row: a copy takes it from the verb to the end of the
+/// left side, leaving out the mark and the status on the right.
+fn card_row((line, left): (Line<'static>, usize)) -> Row {
+    Row {
+        text: Some(4..left),
+        ..Row::from(line)
+    }
 }
 
 /// The first line of `text` with control characters as escapes, ending with
@@ -763,20 +780,22 @@ fn cross() -> Span<'static> {
 }
 
 /// `left` then `right` flush with the right edge; the left side is cut to fit.
+/// Also returns where the left side ends (`usize::MAX` when `right` was left out).
 fn right_aligned(
     left: Vec<Span<'static>>,
     right: Vec<Span<'static>>,
     width: usize,
-) -> Line<'static> {
+) -> (Line<'static>, usize) {
     let right_width = spans_width(&right);
     if right.is_empty() || width < right_width + 12 {
-        return Line::from(truncate(left, width));
+        return (Line::from(truncate(left, width)), usize::MAX);
     }
     let mut spans = truncate(left, width - right_width - 2);
-    let gap = width - right_width - spans_width(&spans);
+    let left_width = spans_width(&spans);
+    let gap = width - right_width - left_width;
     spans.push(Span::raw(" ".repeat(gap)));
     spans.extend(right);
-    Line::from(spans)
+    (Line::from(spans), left_width)
 }
 
 fn format_duration(ms: u64) -> String {

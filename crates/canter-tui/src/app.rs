@@ -11,7 +11,9 @@ use canter_protocol::{
     PermissionMode, RequestKind, SessionSnapshot, SessionStatus, SessionUpdateParams, Turn,
     TurnStatus, UserInput, UserInputAnswer, apply_event_mut,
 };
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::text::{Line, Span};
@@ -20,10 +22,12 @@ use ratatui::widgets::{Block, BorderType, Paragraph};
 use crate::approval::{self, ApprovalBox, shorten_home};
 use crate::cells;
 use crate::commands::{self, Chooser, Command};
+use crate::copy::Copier;
 use crate::input::InputBox;
-use crate::mention;
-use crate::text::{LogicalLine, sanitize, str_width, truncate, wrap};
+use crate::select::{self, Cell, Rows, Unit};
+use crate::text::{LogicalLine, Row, plain, sanitize, spans_width, str_width, truncate, wrap_rows};
 use crate::theme;
+use crate::{markdown, mention};
 
 const PLACEHOLDER: &str = "Type a message (Enter to send, Ctrl+J for a new line)";
 const MAX_INPUT_ROWS: usize = 8;
@@ -37,6 +41,12 @@ const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 const MIN_COMMAND: usize = 12;
 /// Conversation rows one step of the mouse wheel scrolls.
 const WHEEL_ROWS: usize = 3;
+/// Presses on the same cell this close together (ms) count as a double or
+/// triple click.
+const MULTI_CLICK_MS: i64 = 400;
+/// While a drag holds at the top or bottom edge, the conversation scrolls a
+/// row this often (ms).
+const EDGE_SCROLL_MS: i64 = 50;
 /// The info rows at the bottom: model, thinking and permission mode; then
 /// directory and branch, context use and cache hits.
 const INFO_ROWS: u16 = 2;
@@ -128,7 +138,7 @@ enum NoticeContent {
 }
 
 impl Notice {
-    fn rows(&self, width: u16) -> Vec<Line<'static>> {
+    fn rows(&self, width: u16) -> Vec<Row> {
         match &self.content {
             NoticeContent::Btw(answer) => answer.rows(width),
             NoticeContent::Line {
@@ -136,12 +146,16 @@ impl Notice {
                 truncate: true,
             } => {
                 let spans = line.indent.iter().chain(&line.body).cloned().collect();
-                vec![Line::from(truncate(spans, usize::from(width)))]
+                let from = spans_width(&line.indent).saturating_sub(line.marker);
+                vec![Row::text_from(
+                    Line::from(truncate(spans, usize::from(width))),
+                    from,
+                )]
             }
             NoticeContent::Line {
                 line,
                 truncate: false,
-            } => wrap(line, width),
+            } => wrap_rows(line, width),
         }
     }
 }
@@ -184,16 +198,16 @@ struct Tail {
 /// notices or queued messages in a row). Parts that end or start with a
 /// blank row (a prompt) get none. Empty parts are left out.
 fn push_part(
-    rows: &mut Vec<Line<'static>>,
+    rows: &mut Vec<Row>,
     parts: &mut Vec<(usize, Part)>,
     tail: &mut Option<Tail>,
     (part, kind): (Part, Kind),
-    new: Vec<Line<'static>>,
+    new: Vec<Row>,
 ) {
     let (Some(first), Some(last)) = (new.first(), new.last()) else {
         return;
     };
-    let blank = |row: &Line| row.width() == 0;
+    let blank = Row::is_blank;
     let gap = tail.is_some_and(|before| {
         !before.blank && !blank(first) && (before.kind != kind || kind == Kind::Item)
     });
@@ -202,7 +216,7 @@ fn push_part(
         blank: blank(last),
     });
     if gap {
-        rows.push(Line::default());
+        rows.push(Row::blank());
     }
     parts.push((rows.len(), part));
     rows.extend(new);
@@ -215,7 +229,7 @@ fn push_part(
 struct History {
     width: u16,
     details: bool,
-    rows: Vec<Line<'static>>,
+    rows: Vec<Row>,
     /// The row each part starts on, in order.
     parts: Vec<(usize, Part)>,
     /// Where the finished part ends.
@@ -234,12 +248,51 @@ struct Scroll {
     top: Option<usize>,
     /// The conversation changed since scrolling back: the hint shows.
     unseen: bool,
-    /// From the last layout: rows in view and the furthest top row.
+    /// From the last layout: rows per page, the furthest top row and the
+    /// conversation rows on screen.
     page: usize,
     max_top: usize,
+    area: usize,
     /// The last frame's width, history length and rows after the history,
     /// to tell whether the conversation changed since.
-    seen: (u16, usize, Vec<Line<'static>>),
+    seen: (u16, usize, Vec<Row>),
+}
+
+/// A place in the conversation that stays on the same text while the
+/// conversation scrolls or grows: a row of a part, and a column.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Point {
+    part: Part,
+    row: usize,
+    column: usize,
+}
+
+/// Clicks and the selection.
+#[derive(Default)]
+struct Mouse {
+    /// The last press: its cell on screen, when (Unix ms) and how many
+    /// presses on that cell came one right after another.
+    press: Option<((u16, u16), i64, u8)>,
+    selection: Option<Selection>,
+}
+
+/// Text selected with the mouse, highlighted until something clears it.
+struct Selection {
+    unit: Unit,
+    /// What the press took: a character, a word or a row.
+    anchor: (Point, Point),
+    /// What the pointer is on: as much as the press took there.
+    pointer: (Point, Point),
+    /// The cell on screen the pointer is on while the button is down.
+    held: Option<(u16, u16)>,
+    pressed: (u16, u16),
+    /// Whether there is more than a click: a drag, or a double or triple click.
+    moved: bool,
+    /// The pointer has left the row it was pressed on; only then does an
+    /// edge scroll.
+    left_row: bool,
+    /// Unix ms before which a drag at an edge does not scroll again.
+    next_scroll: i64,
 }
 
 /// The command list's selection, and whether Esc closed it, for one input
@@ -319,6 +372,9 @@ pub struct App {
     sending_image: Option<InputBox>,
     image_models: Vec<String>,
     clipboard: crate::images::Clipboard,
+    /// Where copies go: the clipboard, and the terminal in tmux or over SSH.
+    copier: Copier,
+    mouse: Mouse,
     commands: CommandList,
     mentions: MentionList,
     /// A choice offered above the input box, such as `/mode` alone.
@@ -383,6 +439,8 @@ impl App {
             sending_image: None,
             image_models: vec!["deepseek-flash".into()],
             clipboard: crate::images::Clipboard::default(),
+            copier: Copier::default(),
+            mouse: Mouse::default(),
             commands: CommandList::default(),
             mentions: MentionList::default(),
             chooser: None,
@@ -454,6 +512,7 @@ impl App {
             } => {
                 self.history = History::default();
                 self.scroll = Scroll::default();
+                self.mouse.selection = None;
                 let end = self.snapshot.turns.len().saturating_sub(1);
                 self.notices.retain(|notice| notice.at.turn < end);
                 self.active_btw = None;
@@ -569,6 +628,15 @@ impl App {
     fn key_on(&mut self, key: KeyEvent, shown: Shown, at: i64) -> Option<Action> {
         if key.kind == KeyEventKind::Release {
             return None;
+        }
+        // Keys other than PgUp and PgDn take the highlight away; Esc does nothing else.
+        if self.mouse.selection.is_some()
+            && !matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
+        {
+            self.mouse.selection = None;
+            if key.code == KeyCode::Esc {
+                return None;
+            }
         }
         if key.code == KeyCode::Esc
             && (shown.approval.is_some()
@@ -1104,14 +1172,250 @@ impl App {
         }
     }
 
-    /// The mouse wheel scrolls the conversation, also while the approval box
-    /// is open. Other mouse events do nothing.
+    /// [`App::handle_mouse_at`] now.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        self.handle_mouse_at(mouse, crate::now_ms());
+    }
+
+    /// The mouse at `now_ms` (Unix ms). The wheel scrolls the conversation,
+    /// also while the approval box is open. The left button selects
+    /// conversation text: dragging highlights it and letting go copies it; a
+    /// double click takes a word, a triple click a row. Other mouse events
+    /// do nothing.
+    pub fn handle_mouse_at(&mut self, mouse: MouseEvent, now_ms: i64) {
+        let cell = (mouse.column, mouse.row);
         match mouse.kind {
-            MouseEventKind::ScrollUp => self.scroll_by(-(WHEEL_ROWS as isize)),
-            MouseEventKind::ScrollDown => self.scroll_by(WHEEL_ROWS as isize),
+            MouseEventKind::ScrollUp => {
+                self.scroll_by(-(WHEEL_ROWS as isize));
+                self.follow_pointer();
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_by(WHEEL_ROWS as isize);
+                self.follow_pointer();
+            }
+            MouseEventKind::Down(MouseButton::Left) => self.press(cell, now_ms),
+            MouseEventKind::Drag(MouseButton::Left) => {
+                self.move_pointer(cell);
+                self.edge_scroll(now_ms);
+            }
+            MouseEventKind::Up(MouseButton::Left) => self.release(cell),
             _ => {}
         }
+    }
+
+    /// Pressing the left button clears the selection and, on the
+    /// conversation, starts one. Presses one right after another on the
+    /// same cell take a word, then a row, then start again.
+    fn press(&mut self, cell: (u16, u16), now: i64) {
+        let clicks = match self.mouse.press {
+            Some((at, when, clicks)) if at == cell && now - when <= MULTI_CLICK_MS => {
+                clicks % 3 + 1
+            }
+            _ => 1,
+        };
+        self.mouse.press = Some((cell, now, clicks));
+        self.mouse.selection = None;
+        if usize::from(cell.1) >= self.scroll.area {
+            return;
+        }
+        let unit = match clicks {
+            1 => Unit::Char,
+            2 => Unit::Word,
+            _ => Unit::Row,
+        };
+        let Some(range) = self.points(unit, cell) else {
+            return;
+        };
+        // The text under the pointer stays put while the button is down.
+        self.scroll.top = Some(self.scroll.top.unwrap_or(self.scroll.max_top));
+        self.mouse.selection = Some(Selection {
+            unit,
+            anchor: range,
+            pointer: range,
+            held: Some(cell),
+            pressed: cell,
+            moved: unit != Unit::Char,
+            left_row: false,
+            next_scroll: i64::MIN,
+        });
+    }
+
+    /// The pointer moved to `cell` with the button down.
+    fn move_pointer(&mut self, cell: (u16, u16)) {
+        let Some(selection) = &mut self.mouse.selection else {
+            return;
+        };
+        if selection.held.is_none() {
+            return;
+        }
+        selection.held = Some(cell);
+        selection.moved |= cell != selection.pressed;
+        selection.left_row |= cell.1 != selection.pressed.1;
+        self.follow_pointer();
+    }
+
+    /// Puts the end of the selection on what the held pointer is over now,
+    /// after the pointer or the conversation under it moved.
+    fn follow_pointer(&mut self) {
+        let Some((cell, unit)) = self
+            .mouse
+            .selection
+            .as_ref()
+            .and_then(|selection| Some((selection.held?, selection.unit)))
+        else {
+            return;
+        };
+        match self.points(unit, cell) {
+            Some(pointer) => {
+                if let Some(selection) = &mut self.mouse.selection {
+                    selection.pointer = pointer;
+                }
+            }
+            None => self.mouse.selection = None,
+        }
+    }
+
+    /// While a drag holds on the top or bottom row of the conversation (or
+    /// below it), scrolls a row every [`EDGE_SCROLL_MS`]; only once the
+    /// pointer has left the row it was pressed on.
+    fn edge_scroll(&mut self, now: i64) {
+        let Some(selection) = &mut self.mouse.selection else {
+            return;
+        };
+        let Some((_, y)) = selection.held else {
+            return;
+        };
+        if !selection.left_row || now < selection.next_scroll {
+            return;
+        }
+        let y = usize::from(y);
+        let rows = if y == 0 {
+            -1
+        } else if y + 1 >= self.scroll.area {
+            1
+        } else {
+            return;
+        };
+        selection.next_scroll = now + EDGE_SCROLL_MS;
+        self.scroll_by(rows);
+        self.follow_pointer();
+    }
+
+    /// Letting go of the left button copies what is selected; a click that
+    /// did not drag only clears.
+    fn release(&mut self, cell: (u16, u16)) {
+        let Some(held) = self.mouse.selection.as_ref().and_then(|s| s.held) else {
+            return;
+        };
+        if held != cell {
+            self.move_pointer(cell);
+        }
+        let Some(selection) = &mut self.mouse.selection else {
+            return;
+        };
+        selection.held = None;
+        if !selection.moved {
+            self.mouse.selection = None;
+            return;
+        }
+        let text = self.selected_text();
+        if text.is_empty() {
+            self.mouse.selection = None;
+            return;
+        }
+        self.copier.copy(plain(&text));
+    }
+
+    /// What `unit` takes at `cell` on screen, as places in the conversation.
+    /// Below the conversation is the end of its last row in view, past the
+    /// last row the end of that row.
+    fn points(&mut self, unit: Unit, (x, y): (u16, u16)) -> Option<(Point, Point)> {
+        let (live, lead, starts) = self.laid_out(self.width);
+        let rows = Rows {
+            history: &self.history.rows,
+            live: &live,
+            lead,
+        };
+        let last = rows.len().checked_sub(1)?;
+        let top = self.scroll.top.unwrap_or(self.scroll.max_top);
+        let area = self.scroll.area;
+        let (y, x) = (usize::from(y), usize::from(x));
+        let at = if y >= area {
+            (top + area.saturating_sub(1), usize::MAX)
+        } else {
+            (top + y, x)
+        };
+        let at = if at.0 > last { (last, usize::MAX) } else { at };
+        let (start, end) = rows.unit_at(unit, at);
+        Some((point(&starts, start)?, point(&starts, end)?))
+    }
+
+    /// The text selected, as a copy takes it.
+    fn selected_text(&mut self) -> String {
+        let (live, lead, starts) = self.laid_out(self.width);
+        let rows = Rows {
+            history: &self.history.rows,
+            live: &live,
+            lead,
+        };
+        match self
+            .mouse
+            .selection
+            .as_ref()
+            .and_then(|selection| span(selection, &starts))
+        {
+            Some((start, end)) => rows.copied(start, end),
+            None => String::new(),
+        }
+    }
+
+    /// `/copy`: the last answer as the model wrote it (markdown); `/copy N`
+    /// the code of its Nth code block, without the fences.
+    pub(crate) fn copy_answer(&mut self, args: &str) -> Result<(), String> {
+        let answer = self.last_answer().ok_or("Nothing to copy")?;
+        let text = match args.trim() {
+            "" => answer.to_owned(),
+            number => {
+                let number: usize = number
+                    .parse()
+                    .ok()
+                    .filter(|number| *number > 0)
+                    .ok_or("Usage: /copy, or /copy N for code block N of the last answer")?;
+                let mut blocks = markdown::code_blocks(answer);
+                if number > blocks.len() {
+                    return Err(match blocks.len() {
+                        0 => "The last answer has no code blocks".to_owned(),
+                        1 => "The last answer has 1 code block".to_owned(),
+                        count => format!("The last answer has {count} code blocks"),
+                    });
+                }
+                blocks.swap_remove(number - 1)
+            }
+        };
+        let text = plain(&text);
+        if text.trim().is_empty() {
+            return Err("Nothing to copy".into());
+        }
+        self.copier.copy(text);
+        Ok(())
+    }
+
+    /// The text of the latest finished answer.
+    fn last_answer(&self) -> Option<&str> {
+        self.snapshot.turns.iter().rev().find_map(|turn| {
+            turn.items
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, item)| match item {
+                    Item::AgentMessage { text, .. }
+                        if !text.trim().is_empty() && self.item_done(turn, index) =>
+                    {
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                })
+        })
     }
 
     /// Moves the view `rows` up (negative) or down, as far as the last frame
@@ -1125,6 +1429,7 @@ impl App {
     /// Bracketed paste goes to an open custom answer as one line, otherwise
     /// to the message draft with its newlines intact.
     pub fn handle_paste(&mut self, text: &str) {
+        self.mouse.selection = None;
         if self.open_request().is_some_and(|request| {
             request.id == self.approval.request && matches!(request.kind, RequestKind::UserInput(_))
         }) && let Some(custom) = &mut self.approval.custom
@@ -1163,6 +1468,21 @@ impl App {
     ) -> Self {
         self.clipboard = crate::images::Clipboard::with_reader(reader);
         self
+    }
+
+    /// Copies go only to `writer`, called on a thread of its own; nothing goes
+    /// to the terminal (for headless clients and tests).
+    pub fn with_clipboard_writer(
+        mut self,
+        writer: impl FnMut(&str) -> Result<(), String> + Send + 'static,
+    ) -> Self {
+        self.copier = Copier::with_writer(writer);
+        self
+    }
+
+    /// OSC 52 for the terminal, to write between frames.
+    pub(crate) fn take_osc52(&mut self) -> Option<String> {
+        self.copier.take_sequence()
     }
 
     fn accepts_images(&mut self) -> bool {
@@ -1327,6 +1647,7 @@ impl App {
                 .map(|(_, part)| part)
         });
         self.details = !self.details;
+        self.mouse.selection = None;
         // The rows change, but not because of new output.
         self.scroll.seen = Default::default();
         if let Some(part) = top
@@ -1342,20 +1663,17 @@ impl App {
     /// The row each part of the conversation starts on, counted as the view
     /// counts them: without the leading blank row.
     fn part_starts(&mut self, width: u16) -> Vec<(usize, Part)> {
+        self.laid_out(width).2
+    }
+
+    /// The rows after the history, whether the first row is a blank one the
+    /// view leaves out, and [`App::part_starts`].
+    fn laid_out(&mut self, width: u16) -> (Vec<Row>, usize, Vec<(usize, Part)>) {
         self.extend_history(width);
         let (live, live_parts) = self.live_rows(width);
-        let history = &self.history;
-        let lead = lead(&history.rows, &live);
-        let live_parts = live_parts
-            .into_iter()
-            .map(|(start, part)| (start + history.rows.len(), part));
-        history
-            .parts
-            .iter()
-            .copied()
-            .chain(live_parts)
-            .map(|(start, part)| (start.saturating_sub(lead), part))
-            .collect()
+        let lead = lead(&self.history.rows, &live);
+        let starts = starts(&self.history, live_parts, lead);
+        (live, lead, starts)
     }
 
     /// What the part at `at` (a prompt, an item or a turn's end) is.
@@ -1377,7 +1695,7 @@ impl App {
 
     /// The rows of the part at `at` (a prompt, an item or a turn's end) and
     /// the place after it, if that part is finished.
-    fn finished_part(&self, at: Place, width: u16) -> Option<(Vec<Line<'static>>, Place)> {
+    fn finished_part(&self, at: Place, width: u16) -> Option<(Vec<Row>, Place)> {
         let turn = self.snapshot.turns.get(at.turn)?;
         if !at.prompt {
             let from = source(&self.client_name, &turn.client_name);
@@ -1405,7 +1723,7 @@ impl App {
         }
         let error_shown = self.errors_shown.contains(&turn.id);
         let rows = cells::turn_footer(turn, error_shown)
-            .map(|footer| wrap(&footer, width))
+            .map(|footer| wrap_rows(&footer, width))
             .unwrap_or_default();
         let next = Place {
             turn: at.turn + 1,
@@ -1416,6 +1734,11 @@ impl App {
 
     /// Lays out the whole screen of `width` × `height`.
     pub(crate) fn view(&mut self, width: u16, height: u16, now_ms: i64) -> View {
+        self.copier.poll(now_ms);
+        if width != self.width {
+            // The conversation wraps again: the selection would be on other text.
+            self.mouse.selection = None;
+        }
         self.width = width;
         // Leave the status line, the info rows, the hint and one row of the conversation.
         let box_height = height.saturating_sub(3 + INFO_ROWS);
@@ -1504,8 +1827,9 @@ impl App {
             .filter(|_| !list.is_empty())
             .map(|_| self.choosers);
 
+        self.edge_scroll(now_ms);
         self.extend_history(width);
-        let (live, _) = self.live_rows(width);
+        let (live, live_parts) = self.live_rows(width);
         let history = &self.history.rows;
         let (seen_width, seen_history, seen_live) = &self.scroll.seen;
         // Finished rows stay as they are, so only the rows after the history
@@ -1521,7 +1845,13 @@ impl App {
         let lead = lead(history, &live);
         let total = history.len() + live.len() - lead;
         let room = usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height())) - list.len();
-        if self.scroll.top.is_some_and(|top| top + room >= total) {
+        // While the button is down the view stays where it is.
+        let held = self
+            .mouse
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.held.is_some());
+        if !held && self.scroll.top.is_some_and(|top| top + room >= total) {
             self.scroll.top = None;
         }
         if self.scroll.top.is_none() {
@@ -1539,21 +1869,49 @@ impl App {
             ])
         });
         let area = room.saturating_sub(usize::from(hint.is_some()));
+        self.scroll.area = area;
         self.scroll.page = area.max(1);
         self.scroll.max_top = total.saturating_sub(area);
-        let top = self.scroll.top.unwrap_or(self.scroll.max_top);
+        let top = self
+            .scroll
+            .top
+            .map_or(self.scroll.max_top, |top| top.min(self.scroll.max_top));
+        let starts = starts(&self.history, live_parts, lead);
+        let selected = self
+            .mouse
+            .selection
+            .as_ref()
+            .map(|selection| span(selection, &starts));
+        if selected == Some(None) {
+            // What it was on is gone.
+            self.mouse.selection = None;
+        }
+        let selected = selected.flatten();
         let conversation = history
             .iter()
             .chain(&live)
             .skip(lead + top)
             .take(area)
-            .cloned()
+            .enumerate()
+            .map(|(y, row)| {
+                let index = top + y;
+                match selected {
+                    Some((start, end)) if (start.0..=end.0).contains(&index) => {
+                        select::highlight(row, select::columns(index, start, end))
+                    }
+                    _ => row.line.clone(),
+                }
+            })
             .collect();
         let (info, mode_in_full) = self.info_rows(width);
         let view = View {
             conversation,
             hint,
-            status: self.status_line(now_ms, width),
+            status: match self.copier.note() {
+                // What was copied, or why not, for a moment instead.
+                Some(note) => Line::from(truncate(note.spans.clone(), usize::from(width))),
+                None => self.status_line(now_ms, width),
+            },
             list,
             bottom,
             info,
@@ -1905,7 +2263,7 @@ impl App {
 
     /// The conversation after the history: what is still in progress, then
     /// the queued messages; and the row each part starts on.
-    fn live_rows(&self, width: u16) -> (Vec<Line<'static>>, Vec<(usize, Part)>) {
+    fn live_rows(&self, width: u16) -> (Vec<Row>, Vec<(usize, Part)>) {
         let end = self.history.end;
         let cwd = &self.snapshot.settings.cwd;
         let waiting: Vec<&str> = self
@@ -1927,7 +2285,7 @@ impl App {
             .enumerate()
             .skip(self.history.notices)
             .peekable();
-        let mut append_notices = |rows: &mut Vec<Line<'static>>,
+        let mut append_notices = |rows: &mut Vec<Row>,
                                   parts: &mut Vec<(usize, Part)>,
                                   tail: &mut Option<Tail>,
                                   at: Place| {
@@ -1985,7 +2343,13 @@ impl App {
                 && let Some(footer) = cells::turn_footer(turn, self.errors_shown.contains(&turn.id))
             {
                 let part = (Part::At(at), Kind::End);
-                push_part(&mut rows, &mut parts, &mut tail, part, wrap(&footer, width));
+                push_part(
+                    &mut rows,
+                    &mut parts,
+                    &mut tail,
+                    part,
+                    wrap_rows(&footer, width),
+                );
             }
         }
         // A btw can follow all turns, including in a session without any turns.
@@ -2008,6 +2372,8 @@ impl App {
                 vec![Span::styled(text, theme::secondary())],
                 usize::from(width),
             ));
+            // After `  · `.
+            let row = Row::text_from(row, 4);
             let part = (Part::Queued(index), Kind::Queued);
             push_part(&mut rows, &mut parts, &mut tail, part, vec![row]);
         }
@@ -2320,14 +2686,47 @@ impl View {
 
 /// Nothing is above the conversation, so it starts without the first
 /// prompt's blank row: 1 when there is one, else 0.
-fn lead(history: &[Line<'static>], live: &[Line<'static>]) -> usize {
-    usize::from(
-        history
+fn lead(history: &[Row], live: &[Row]) -> usize {
+    usize::from(history.iter().chain(live).next().is_some_and(Row::is_blank))
+}
+
+/// Where each part starts, counted as the view counts rows: without the
+/// leading blank row.
+fn starts(history: &History, live: Vec<(usize, Part)>, lead: usize) -> Vec<(usize, Part)> {
+    let live = live
+        .into_iter()
+        .map(|(start, part)| (start + history.rows.len(), part));
+    history
+        .parts
+        .iter()
+        .copied()
+        .chain(live)
+        .map(|(start, part)| (start.saturating_sub(lead), part))
+        .collect()
+}
+
+/// The place of `cell` in the part it is in.
+fn point(starts: &[(usize, Part)], (row, column): Cell) -> Option<Point> {
+    let (start, part) = starts.iter().rev().find(|(start, _)| *start <= row)?;
+    Some(Point {
+        part: *part,
+        row: row - start,
+        column,
+    })
+}
+
+/// Where the selection runs now, from its first cell to the cell after its
+/// last; `None` once a part it was on is gone.
+fn span(selection: &Selection, starts: &[(usize, Part)]) -> Option<(Cell, Cell)> {
+    let cell = |point: Point| {
+        starts
             .iter()
-            .chain(live)
-            .next()
-            .is_some_and(|row| row.width() == 0),
-    )
+            .find(|(_, part)| *part == point.part)
+            .map(|(start, _)| (start + point.row, point.column))
+    };
+    let (from, to) = (cell(selection.anchor.0)?, cell(selection.anchor.1)?);
+    let (start, end) = (cell(selection.pointer.0)?, cell(selection.pointer.1)?);
+    Some((from.min(start), to.max(end)))
 }
 
 /// The client to name next to what someone sent, when it was not this terminal.
@@ -2345,15 +2744,18 @@ fn echo_index(turn: &Turn) -> Option<usize> {
     )
 }
 
-fn turn_prompt(turn: &Turn, from: Option<&str>, width: u16) -> Vec<Line<'static>> {
+fn turn_prompt(turn: &Turn, from: Option<&str>, width: u16) -> Vec<Row> {
     match &turn.review {
-        Some(title) => vec![Line::from(truncate(
-            vec![Span::styled(
-                format!("  {}", sanitize(title).replace('\n', " ")),
-                theme::accent(),
-            )],
-            usize::from(width),
-        ))],
+        Some(title) => vec![Row::text_from(
+            Line::from(truncate(
+                vec![Span::styled(
+                    format!("  {}", sanitize(title).replace('\n', " ")),
+                    theme::accent(),
+                )],
+                usize::from(width),
+            )),
+            2,
+        )],
         None => cells::prompt(&turn.input, from, width),
     }
 }
