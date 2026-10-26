@@ -60,7 +60,7 @@ fn web_fetch_shows_url_domain_approval_result_length_and_interrupts_on_escape() 
         "type":"webFetch","id":"web","url":url,"result":"","status":"inProgress"
     }}));
     screen.draw();
-    assert!(screen.text().contains("web_fetch"));
+    assert!(screen.text().contains(&format!("Fetch {url}")));
     assert!(screen.text().contains("running"));
     assert_eq!(
         screen.key(KeyCode::Esc),
@@ -85,8 +85,11 @@ fn web_fetch_shows_url_domain_approval_result_length_and_interrupts_on_escape() 
     }}));
     screen.draw();
     let text = screen.text();
-    assert!(text.contains("12 bytes"), "{text}");
-    assert!(text.contains("fetched text"), "{text}");
+    assert!(text.contains("12 B"), "{text}");
+    assert!(
+        !text.contains("fetched text"),
+        "the page is for the model: {text}"
+    );
     assert!(text.contains("this host and port"), "{text}");
     assert!(!text.contains("don't ask again for this tool"), "{text}");
 }

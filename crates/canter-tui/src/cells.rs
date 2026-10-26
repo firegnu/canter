@@ -1,5 +1,6 @@
 //! Rows for each kind of item: the user's prompt, the model's text, thinking,
-//! and the tool cards (read a file, change files with a diff, run a command).
+//! and the tool cards (read a file, change files with a diff, run a command,
+//! call an MCP tool, fetch a web page).
 
 use canter_protocol::{
     FileUpdateChange, Item, ItemStatus, PatchChangeKind, Turn, TurnStatus, UserInput,
@@ -18,7 +19,16 @@ use crate::theme;
 const FINISHED_TAIL: usize = 3;
 /// Output lines shown while a command runs.
 const LIVE_TAIL: usize = 5;
+/// Output lines a failed command keeps: the error is what matters then.
+const FAILED_TAIL: usize = 10;
+/// Result lines an MCP call keeps, from the start.
+const MCP_HEAD: usize = 3;
+/// Output lines one item shows at most with details (Ctrl+O): the first
+/// and last half of them.
+const DETAILS_LINES: usize = 500;
 const GUTTER: &str = "    │ ";
+/// Where a card's title text starts: after `  ● Run `.
+const TITLE_INDENT: &str = "        ";
 /// Diff lines a changed file shows in the history; the approval box shows all.
 const EDIT_LINES: usize = 12;
 /// Diff lines a new file shows in the history. A deleted file shows none
@@ -100,30 +110,24 @@ pub(crate) fn item(
             result,
             status,
             ..
-        } => command_card(
-            &format!(
-                "web_fetch {} ({} bytes)",
-                resolved_url.as_deref().unwrap_or(url),
-                result.len()
-            ),
-            *status,
-            None,
-            None,
+        } => web_fetch(
+            resolved_url.as_deref().unwrap_or(url),
             result,
+            *status,
             details,
             width,
         ),
         Item::McpToolCall {
             server,
             tool,
+            arguments,
             status,
             result,
             ..
-        } => command_card(
-            &format!("MCP {server} / {tool}"),
+        } => mcp_call(
+            &format!("{server}/{tool}"),
+            arguments,
             *status,
-            None,
-            None,
             result,
             details,
             width,
@@ -322,9 +326,14 @@ fn file_read(
     cwd: &str,
     width: u16,
 ) -> Line<'static> {
+    let mark = if status == ItemStatus::Failed {
+        cross()
+    } else {
+        Span::styled("◇ ", theme::secondary())
+    };
     let mut spans = vec![
         Span::raw("  "),
-        Span::styled("◇ ", theme::secondary()),
+        mark,
         Span::styled("Read ", Style::new().bold()),
         Span::raw(display_path(path, cwd)),
     ];
@@ -353,12 +362,7 @@ pub(crate) fn waiting(item: &Item, details: bool, cwd: &str, width: u16) -> Vec<
     let mark = || vec![Span::styled("Waiting for approval", theme::warning())];
     match item {
         Item::CommandExecution { command, .. } => {
-            vec![command_title(
-                command,
-                dot(theme::secondary()),
-                mark(),
-                width,
-            )]
+            command_title(command, dot(theme::secondary()), mark(), false, width)
         }
         Item::FileChange { changes, .. } => changes
             .iter()
@@ -465,62 +469,248 @@ fn command_card(
         (_, None) => (dot(theme::success()), Vec::new()),
     };
     right.extend(took);
-    let mut rows = vec![command_title(command, bullet, right, width)];
+    // The same cases as the `✗` above.
+    let failed = !matches!(status, ItemStatus::InProgress | ItemStatus::Declined)
+        && exit_code.map_or(status == ItemStatus::Failed, |code| code != 0);
+    let mut rows = command_title(command, bullet, right, details, width);
+    let (fold, style) = if details {
+        (Fold::Details, if failed { Style::new() } else { dim })
+    } else if status == ItemStatus::InProgress {
+        (Fold::Tail(LIVE_TAIL), dim)
+    } else if failed {
+        (Fold::Tail(FAILED_TAIL), Style::new())
+    } else {
+        (Fold::Tail(FINISHED_TAIL), dim)
+    };
+    rows.extend(output_rows(output, fold, style, width));
+    rows
+}
 
+/// `● Call server/tool  {arguments}`, the arguments as JSON on one row, then
+/// the first lines of the result: an MCP result's start matters most.
+fn mcp_call(
+    name: &str,
+    arguments: &serde_json::Value,
+    status: ItemStatus,
+    result: &str,
+    details: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let (bullet, right) = status_marks(status);
+    let mut object = vec![Span::raw(first_line(name))];
+    let empty = arguments.is_null() || arguments.as_object().is_some_and(|args| args.is_empty());
+    if !empty {
+        object.push(Span::raw(format!(
+            "  {}",
+            first_line(&arguments.to_string())
+        )));
+    }
+    let mut rows = vec![title(bullet, "Call ", object, right, width)];
+    let fold = if details {
+        Fold::Details
+    } else {
+        Fold::Head(MCP_HEAD)
+    };
+    let style = if status == ItemStatus::Failed {
+        Style::new()
+    } else {
+        theme::secondary()
+    };
+    rows.extend(output_rows(result, fold, style, width));
+    rows
+}
+
+/// `● Fetch <url>` and the size fetched. The page is for the model, so it
+/// shows only with details; a one-line note (a redirect to another host,
+/// content left out) shows as it is, and a failure's reason in red.
+fn web_fetch(
+    url: &str,
+    result: &str,
+    status: ItemStatus,
+    details: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let dim = theme::secondary();
+    let (bullet, mut right) = status_marks(status);
+    let one_line = !result.trim_end().contains('\n');
+    let redirect = one_line && result.starts_with("Redirected to ");
+    let note = one_line
+        && (result.starts_with("[Content omitted: ")
+            || (result.starts_with("Download exceeds ")
+                && result.trim_end().ends_with("; content omitted.")));
+    let page = status == ItemStatus::Completed && !redirect && !note;
+    if status == ItemStatus::Completed {
+        if redirect {
+            right = vec![Span::styled("redirect", dim)];
+        } else if page {
+            right = vec![Span::styled(format_size(result.len()), dim)];
+        }
+    }
+    let mut rows = vec![title(
+        bullet,
+        "Fetch ",
+        vec![Span::raw(first_line(url))],
+        right,
+        width,
+    )];
+    if page && !details {
+        return rows;
+    }
+    let fold = if details {
+        Fold::Details
+    } else {
+        Fold::Head(FINISHED_TAIL)
+    };
+    let style = if status == ItemStatus::Failed {
+        theme::failure()
+    } else {
+        dim
+    };
+    rows.extend(output_rows(result, fold, style, width));
+    rows
+}
+
+/// The mark and right-hand status of a card that has no exit code.
+fn status_marks(status: ItemStatus) -> (Span<'static>, Vec<Span<'static>>) {
+    let dim = theme::secondary();
+    match status {
+        ItemStatus::InProgress => (dot(dim), vec![Span::styled("running", dim)]),
+        ItemStatus::Declined => (dot(dim), vec![Span::styled("declined", dim)]),
+        ItemStatus::Failed => (cross(), vec![Span::styled("failed", theme::failure())]),
+        _ => (dot(theme::success()), Vec::new()),
+    }
+}
+
+/// Which output lines a card keeps.
+enum Fold {
+    /// The first lines, then `… N more lines · Ctrl+O`.
+    Head(usize),
+    /// `… N more lines · Ctrl+O`, then the last lines.
+    Tail(usize),
+    /// All of them, up to `DETAILS_LINES`: past that the first and last half
+    /// with one row between saying how many are left out.
+    Details,
+}
+
+/// Output rows, each after `    │ ` and cut to `width`, in `style`.
+fn output_rows(output: &str, fold: Fold, style: Style, width: u16) -> Vec<Line<'static>> {
+    let dim = theme::secondary();
     let output = sanitize(output);
     let mut lines: Vec<&str> = output.split('\n').collect();
     if lines.last() == Some(&"") {
         lines.pop();
     }
-    let tail = if details {
-        lines.len()
-    } else if status == ItemStatus::InProgress {
-        LIVE_TAIL
-    } else {
-        FINISHED_TAIL
-    };
-    if lines.len() > tail {
-        rows.push(Line::from(vec![
-            Span::styled(GUTTER, dim),
-            Span::styled(
-                format!("… ({} lines, showing the last {tail})", lines.len()),
-                dim,
-            ),
-        ]));
-    }
-    for line in &lines[lines.len().saturating_sub(tail)..] {
-        rows.push(Line::from(truncate(
+    let all = lines.len();
+    let row = |line: &str| {
+        Line::from(truncate(
             vec![
                 Span::styled(GUTTER, dim),
-                Span::styled((*line).to_owned(), dim),
+                Span::styled(line.to_owned(), style),
             ],
             usize::from(width),
-        )));
+        ))
+    };
+    let note = |text: String| Line::from(vec![Span::styled(GUTTER, dim), Span::styled(text, dim)]);
+    let more = |hidden: usize| note(format!("… {hidden} more lines · Ctrl+O"));
+    let mut rows = Vec::new();
+    match fold {
+        Fold::Head(keep) => {
+            rows.extend(lines.iter().take(keep).map(|line| row(line)));
+            if all > keep {
+                rows.push(more(all - keep));
+            }
+        }
+        Fold::Tail(keep) => {
+            if all > keep {
+                rows.push(more(all - keep));
+            }
+            rows.extend(
+                lines[all.saturating_sub(keep)..]
+                    .iter()
+                    .map(|line| row(line)),
+            );
+        }
+        Fold::Details if all > DETAILS_LINES => {
+            let half = DETAILS_LINES / 2;
+            rows.extend(lines[..half].iter().map(|line| row(line)));
+            rows.push(note(format!("… {} lines not shown", all - DETAILS_LINES)));
+            rows.extend(lines[all - half..].iter().map(|line| row(line)));
+        }
+        Fold::Details => rows.extend(lines.iter().map(|line| row(line))),
     }
     rows
 }
 
-/// `● 跑 <first line of the command>` with `right` flush with the right edge.
-/// Control characters in the command show as escapes, as in the approval box.
+/// `● Run <first line of the command>` with `right` flush with the right
+/// edge; with `whole`, the command's other lines follow, each on its row
+/// under the first. Control characters in the command show as escapes, as in
+/// the approval box.
 fn command_title(
     command: &str,
     bullet: Span<'static>,
     right: Vec<Span<'static>>,
+    whole: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let clean = visible(command);
+    let mut lines = clean.lines();
+    let mut shown = lines.next().unwrap_or_default().to_owned();
+    let rest: Vec<&str> = lines.collect();
+    if !whole && !rest.is_empty() {
+        shown.push_str(" …");
+    }
+    let mut rows = vec![title(bullet, "Run ", vec![Span::raw(shown)], right, width)];
+    if whole {
+        rows.extend(rest.iter().map(|line| {
+            Line::from(truncate(
+                vec![Span::raw(TITLE_INDENT), Span::raw((*line).to_owned())],
+                usize::from(width),
+            ))
+        }));
+    }
+    rows
+}
+
+/// A card's first row: `● Verb object` with `right` flush with the right edge.
+fn title(
+    bullet: Span<'static>,
+    verb: &'static str,
+    object: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
     width: u16,
 ) -> Line<'static> {
-    let clean = visible(command);
+    let mut left = vec![
+        Span::raw("  "),
+        bullet,
+        Span::styled(verb, Style::new().bold()),
+    ];
+    left.extend(object);
+    right_aligned(left, right, usize::from(width))
+}
+
+/// The first line of `text` with control characters as escapes, ending with
+/// ` …` when more lines follow.
+fn first_line(text: &str) -> String {
+    let clean = visible(text);
     let mut lines = clean.lines();
     let mut shown = lines.next().unwrap_or_default().to_owned();
     if lines.next().is_some() {
         shown.push_str(" …");
     }
-    let left = vec![
-        Span::raw("  "),
-        bullet,
-        Span::styled("Run ", Style::new().bold()),
-        Span::raw(shown),
-    ];
-    right_aligned(left, right, usize::from(width))
+    shown
+}
+
+/// `12 B`, `18.4 KB`, `1.2 MB`.
+fn format_size(bytes: usize) -> String {
+    const KB: f64 = 1024.0;
+    let size = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if size < KB * KB {
+        format!("{:.1} KB", size / KB)
+    } else {
+        format!("{:.1} MB", size / KB / KB)
+    }
 }
 
 /// A card's mark: `●` in `style`.

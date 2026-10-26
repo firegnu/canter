@@ -373,12 +373,12 @@ fn history_shortens_long_changes() {
     assert_eq!(rows[9], "      10 - old 10");
     assert_eq!(rows[10], "       1 + new 1");
     assert_eq!(rows[11], "       2 + new 2");
-    assert_eq!(rows[12].trim(), "… 8 more lines");
+    assert_eq!(rows[12].trim(), "… 8 more lines · Ctrl+O");
 
     let rows = screen.rows_after("● Add b.txt  +10", 7);
     assert_eq!(rows[0], "       1 + line 1");
     assert_eq!(rows[5], "       6 + line 6");
-    assert_eq!(rows[6].trim(), "… 4 more lines");
+    assert_eq!(rows[6].trim(), "… 4 more lines · Ctrl+O");
 
     let rows = screen.rows_after("● Delete c.txt  −4", 1);
     assert!(
