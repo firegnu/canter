@@ -38,6 +38,7 @@ mod rewind;
 mod run;
 mod search;
 mod select;
+mod shimmer;
 mod text;
 pub mod theme;
 pub mod usage;

@@ -6,6 +6,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
+use std::time::Duration;
 
 use canter_protocol::{
     ApprovalDecision, ApprovalResolution, Event, EventPayload, Item, ItemStatus, PendingRequest,
@@ -28,6 +29,7 @@ use crate::copy::Copier;
 use crate::input::InputBox;
 use crate::links::{self, LinkSystem, Opener, Target};
 use crate::select::{self, Cell, Rows, Unit};
+use crate::shimmer::{self, COPY_MS, CopyLight};
 use crate::text::{LogicalLine, Row, plain, sanitize, spans_width, str_width, truncate, wrap_rows};
 use crate::theme;
 use crate::{markdown, mention, search};
@@ -57,6 +59,10 @@ const EDGE_SCROLL_MS: i64 = 50;
 const INFO_ROWS: u16 = 2;
 /// Changes of what is on screen kept for keys still waiting to be handled.
 const SHOWN_KEPT: usize = 8;
+/// How often the screen is drawn: ten times a second, and about thirty
+/// while the light of a copy sweeps the highlight.
+const REDRAW: Duration = Duration::from_millis(100);
+const REDRAW_FAST: Duration = Duration::from_millis(33);
 /// After an approval box's answers come on screen, answer keys are dropped
 /// for this long, and every key that comes in meanwhile pushes it back. The
 /// terminal may still show what was there before for a moment, so a key
@@ -345,6 +351,10 @@ struct Selection {
     left_row: bool,
     /// Unix ms before which a drag at an edge does not scroll again.
     next_scroll: i64,
+    /// The copy made of it when the button went up.
+    copy: Option<u64>,
+    /// When (Unix ms) that copy worked: a light sweeps the highlight then.
+    copied: Option<i64>,
 }
 
 /// Ctrl+F: searching the conversation. The draft in the input box stays
@@ -1417,6 +1427,8 @@ impl App {
             moved: unit != Unit::Char,
             left_row: false,
             next_scroll: i64::MIN,
+            copy: None,
+            copied: None,
         });
     }
 
@@ -1514,7 +1526,10 @@ impl App {
             self.mouse.selection = None;
             return;
         }
-        self.copier.copy(plain(&text));
+        let copy = self.copier.copy(plain(&text));
+        if let Some(selection) = &mut self.mouse.selection {
+            selection.copy = Some(copy);
+        }
     }
 
     /// Opens the link clicked once no second press can make the click a
@@ -1944,6 +1959,26 @@ impl App {
         self
     }
 
+    /// How long to wait before drawing the screen again at `now_ms`: less
+    /// while a copy of the selection waits for the clipboard and while its
+    /// light sweeps the highlight (not without colours), so that it starts
+    /// at once and moves smoothly.
+    pub fn redraw_every(&self, now_ms: i64) -> Duration {
+        let sweeping =
+            self.mouse
+                .selection
+                .as_ref()
+                .is_some_and(|selection| match selection.copied {
+                    Some(since) => now_ms - since < COPY_MS,
+                    None => selection.copy.is_some() && selection.copy == self.copier.pending(),
+                });
+        if sweeping && theme::shimmer() != theme::Shimmer::Off {
+            REDRAW_FAST
+        } else {
+            REDRAW
+        }
+    }
+
     /// OSC 52 for the terminal, to write between frames.
     pub(crate) fn take_osc52(&mut self) -> Option<String> {
         self.copier.take_sequence()
@@ -2215,7 +2250,12 @@ impl App {
 
     /// Lays out the whole screen of `width` × `height`.
     pub(crate) fn view(&mut self, width: u16, height: u16, now_ms: i64) -> View {
-        self.copier.poll(now_ms);
+        if let Some((copy, true)) = self.copier.poll(now_ms)
+            && let Some(selection) = &mut self.mouse.selection
+            && selection.copy == Some(copy)
+        {
+            selection.copied = Some(now_ms);
+        }
         if width != self.width {
             // The conversation wraps again: the selection would be on other text.
             self.mouse.selection = None;
@@ -2386,6 +2426,20 @@ impl App {
             self.mouse.selection = None;
         }
         let selected = selected.flatten();
+        // The light of a copy that worked, over the highlight's rows on screen.
+        let copied = self.mouse.selection.as_ref().and_then(|s| s.copied);
+        let light = selected.zip(copied).and_then(|((start, end), since)| {
+            let shown: Vec<(usize, Range<usize>)> = (start.0.max(top)..(end.0 + 1).min(top + area))
+                .filter_map(|index| {
+                    let columns = select::columns(index, start, end);
+                    Some((index, select::extent(rows.get(index)?, columns)?))
+                })
+                .collect();
+            let rows = shown.first()?.0..shown.last()?.0 + 1;
+            let from = shown.iter().map(|(_, columns)| columns.start).min()?;
+            let to = shown.iter().map(|(_, columns)| columns.end).max()?;
+            CopyLight::new(now_ms - since, from..to, rows)
+        });
         // While searching, underlines mark matches only.
         let searching = self.search.is_some();
         // What a click on this frame is on.
@@ -2441,7 +2495,13 @@ impl App {
                 };
                 let line = match selected {
                     Some((start, end)) if (start.0..=end.0).contains(&index) => {
-                        select::highlight(row, select::columns(index, start, end))
+                        let columns = select::columns(index, start, end);
+                        match &light {
+                            Some(light) => {
+                                select::lit(row, columns, |column| light.level(index, column))
+                            }
+                            None => select::highlight(row, columns),
+                        }
                     }
                     _ => row.line.clone(),
                 };
@@ -3062,7 +3122,8 @@ impl App {
                 let after = format!(" · {elapsed} · Esc to interrupt");
                 let (verb, command) = self.doing().unwrap_or(("Working", None));
                 let used = str_width(&spinner) + str_width(verb) + str_width(&after);
-                let mut spans = vec![Span::styled(spinner, theme::accent()), Span::raw(verb)];
+                let mut spans = vec![Span::styled(spinner, theme::accent())];
+                spans.extend(shimmer::working(verb, now_ms));
                 if let Some(command) = command {
                     let fits = room.saturating_sub(used).max(MIN_COMMAND);
                     spans.extend(truncate(vec![Span::raw(command)], fits));
@@ -3427,7 +3488,8 @@ fn turn_prompt(turn: &Turn, from: Option<&str>, width: u16) -> Vec<Row> {
 /// over the background as it does anywhere else.
 fn fill(mut line: Line<'static>, color: Color, width: u16) -> Line<'static> {
     for span in &mut line.spans {
-        if !span.style.add_modifier.contains(Modifier::REVERSED) {
+        // Not the highlight, nor the light of a copy over it.
+        if !span.style.add_modifier.contains(Modifier::REVERSED) && span.style.bg.is_none() {
             span.style = span.style.bg(color);
         }
     }

@@ -4,8 +4,8 @@
 //! Text uses the terminal's own 16 colours, so it follows the terminal's
 //! colour scheme. Only the diff backgrounds and the background of a sent
 //! message are true colours, and only when the terminal can show them and its
-//! background is known to be dark or light; and the welcome header's pony,
-//! when the terminal can show them.
+//! background is known to be dark or light; so are the shimmers' shades;
+//! and the welcome header's pony, when the terminal can show them.
 
 use std::cell::Cell;
 use std::time::Duration;
@@ -101,6 +101,14 @@ impl Theme {
             Depth::TrueColor => Some(Color::Rgb(r, g, b)),
             Depth::Ansi256 => Some(Color::Indexed(index)),
             Depth::Ansi16 | Depth::None => None,
+        }
+    }
+
+    /// `rgb` as a true colour, or else the nearest of the 256.
+    fn shade(self, rgb: [u8; 3]) -> Color {
+        match self.depth {
+            Depth::TrueColor => Color::Rgb(rgb[0], rgb[1], rgb[2]),
+            _ => Color::Indexed(nearest_256(rgb)),
         }
     }
 }
@@ -325,4 +333,108 @@ pub fn pony(part: Pony) -> Option<Style> {
         Depth::Ansi16 => Some(accent()),
         Depth::None => Some(Style::new()),
     }
+}
+
+/// How the two shimmers (see [`crate::shimmer`]) are drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Shimmer {
+    /// Fixed colours shading into each other, two sets for a dark or light
+    /// terminal: with 256 colours or more and the background known.
+    Gradient,
+    /// A few steps of the terminal's own colours and dim and bold.
+    Steps,
+    /// `NO_COLOR`: nothing sweeps.
+    Off,
+}
+
+pub(crate) fn shimmer() -> Shimmer {
+    let theme = current();
+    match (theme.depth, theme.background) {
+        (Depth::None, _) => Shimmer::Off,
+        (Depth::Ansi16, _) | (_, Background::Unknown) => Shimmer::Steps,
+        _ => Shimmer::Gradient,
+    }
+}
+
+/// A letter of the working verb on the status line, `light` (0 to 1) from
+/// the light sweeping over it. Gradient: grey shading to white on a dark
+/// terminal, to black on a light one, bold in the light's middle. Steps:
+/// dim away from the light, normal near it, bold in its middle.
+pub(crate) fn working_shimmer(light: f32) -> Style {
+    let theme = current();
+    let colours = match theme.background {
+        Background::Dark => Some(([0x7f, 0x7b, 0x75], [0xff, 0xff, 0xff])),
+        Background::Light => Some(([0x8a, 0x85, 0x7e], [0x00, 0x00, 0x00])),
+        Background::Unknown => None,
+    };
+    match (shimmer(), colours) {
+        (Shimmer::Gradient, Some((grey, bright))) => {
+            let style = Style::new().fg(theme.shade(mix(grey, bright, light * 0.95)));
+            if light > 0.5 { style.bold() } else { style }
+        }
+        (Shimmer::Off, _) => Style::new(),
+        _ if light < 0.2 => Style::new().dim(),
+        _ if light < 0.6 => Style::new(),
+        _ => Style::new().bold(),
+    }
+}
+
+/// A highlighted character, drawn in `style`, under the light (`light` 0
+/// to 1) sweeping the highlight once a copy worked. Gradient: the
+/// highlight's background shading to cyan, under text the colour of the
+/// terminal's background. Steps: a cyan background where the light is.
+pub(crate) fn copy_shimmer(style: Style, light: f32) -> Style {
+    let theme = current();
+    let colours = match theme.background {
+        Background::Dark => Some(([0xe6, 0xe4, 0xdf], [0x56, 0xc2, 0xcf], [0x1c, 0x1d, 0x20])),
+        Background::Light => Some(([0x26, 0x24, 0x1f], [0x0f, 0x8a, 0x99], [0xfb, 0xfb, 0xf9])),
+        Background::Unknown => None,
+    };
+    if light <= 0.0 {
+        return style;
+    }
+    match (shimmer(), colours) {
+        (Shimmer::Gradient, Some((highlight, cyan, text))) => style
+            .remove_modifier(Modifier::REVERSED)
+            .fg(theme.shade(text))
+            .bg(theme.shade(mix(highlight, cyan, light))),
+        (Shimmer::Off, _) => style,
+        // Reversed: cyan behind the terminal's background colour.
+        _ => style
+            .fg(Color::Cyan)
+            .bg(Color::Reset)
+            .add_modifier(Modifier::REVERSED),
+    }
+}
+
+/// `from` shaded `t` (0 to 1) of the way to `to`.
+fn mix(from: [u8; 3], to: [u8; 3], t: f32) -> [u8; 3] {
+    let t = t.clamp(0.0, 1.0);
+    std::array::from_fn(|i| {
+        let (a, b) = (f32::from(from[i]), f32::from(to[i]));
+        (a + (b - a) * t).round() as u8
+    })
+}
+
+/// The colour of the 256 nearest to `rgb`, past the first 16 (which change
+/// with the terminal's settings): the 6×6×6 cube and the greys.
+fn nearest_256(rgb: [u8; 3]) -> u8 {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    let colour = |index: u8| -> [u8; 3] {
+        if index < 232 {
+            let i = usize::from(index - 16);
+            [LEVELS[i / 36], LEVELS[i / 6 % 6], LEVELS[i % 6]]
+        } else {
+            [8 + 10 * (index - 232); 3]
+        }
+    };
+    (16..=255)
+        .min_by_key(|&index| {
+            colour(index)
+                .iter()
+                .zip(rgb)
+                .map(|(&a, b)| (i32::from(a) - i32::from(b)).pow(2))
+                .sum::<i32>()
+        })
+        .expect("not empty")
 }
