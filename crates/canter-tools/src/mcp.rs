@@ -131,14 +131,19 @@ impl Registry {
         };
         let mut connecting = tokio::task::JoinSet::new();
         for (name, config) in config {
-            let mut secrets: Vec<_> = match &config {
-                ServerConfig::Stdio { env, .. } => env.values(),
-                ServerConfig::Http { headers, .. } => headers.values(),
-            }
-            .flat_map(|value| std::iter::once(value.as_str()).chain(value.split_whitespace()))
-            .filter(|value| value.len() >= 8)
-            .map(str::to_owned)
-            .collect();
+            let (values, skip_base_env) = match &config {
+                ServerConfig::Stdio { env, .. } => (env, true),
+                ServerConfig::Http { headers, .. } => (headers, false),
+            };
+            let mut secrets: Vec<_> = values
+                .iter()
+                .filter(|(name, _)| !skip_base_env || !STDIO_BASE_ENV.contains(&name.as_str()))
+                .flat_map(|(_, value)| {
+                    std::iter::once(value.as_str()).chain(value.split_whitespace())
+                })
+                .filter(|value| value.len() >= 8)
+                .map(str::to_owned)
+                .collect();
             secrets.sort_unstable_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
             secrets.dedup();
             let server = Arc::new(Server {

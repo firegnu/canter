@@ -236,6 +236,27 @@ async fn redaction_preserves_results_with_short_env_values() {
 }
 
 #[tokio::test]
+async fn redaction_preserves_paths_from_configured_home() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = compile_stdio(temp.path()).await;
+    let mut fixture = Fixture::start_with_mcp(
+        vec![call(&["mcp__local__echo"]), text_reply()],
+        "fake-model",
+        None,
+        json!({}),
+        json!({"local":{"transport":"stdio","command":executable,"args":["--fixture"],"env":{
+            "HOME":"/mcp/test-home","RETURN_HOME_PATH":"1"
+        }}}),
+    )
+    .await;
+    let created = create(&fixture, "allowAll").await;
+    fixture.input(&created.session.id).await;
+    complete(&fixture, &created.session.id, created.event_seq).await;
+    fixture.stop().await;
+    assert_eq!(tool_results(&fixture), ["/mcp/test-home/project/file.txt"]);
+}
+
+#[tokio::test]
 async fn redaction_removes_bearer_token_echoed_without_prefix() {
     let http = HttpMcp::start(&["bearer"]).await;
     let mut config = http.config();

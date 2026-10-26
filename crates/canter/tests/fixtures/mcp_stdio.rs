@@ -42,7 +42,11 @@ fn main() {
         } else if line.contains("\"tools/list\"") {
             r#"{"tools":[{"name":"echo","description":"stdio echo","inputSchema":{"type":"object","properties":{"text":{"type":"string"}}}}]}"#
         } else if line.contains("\"tools/call\"") {
-            r#"{"content":[{"type":"text","text":"stdio result"}]}"#
+            if std::env::var_os("RETURN_HOME_PATH").is_some() {
+                r#"{"content":[{"type":"text","text":"/mcp/test-home/project/file.txt"}]}"#
+            } else {
+                r#"{"content":[{"type":"text","text":"stdio result"}]}"#
+            }
         } else {
             "{}"
         };
