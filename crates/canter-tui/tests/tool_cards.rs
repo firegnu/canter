@@ -379,3 +379,35 @@ fn ctrl_o_shows_whole_commands_and_at_most_500_lines_of_output() {
         "{conversation:#?}"
     );
 }
+
+/// A file that could not be read: a red `✗` and a red `failed`; one that
+/// was read keeps its grey `◇`.
+#[test]
+fn failed_file_read_shows_a_red_cross() {
+    let mut screen = Screen::new(30);
+    for (id, path, status) in [
+        ("f1", "/work/src/theme.rs", "failed"),
+        ("f2", "/work/src/cells.rs", "completed"),
+    ] {
+        screen.completed(json!({
+            "type": "fileRead", "id": id, "path": path, "startLine": 1,
+            "content": "one\ntwo\n", "status": status,
+        }));
+    }
+    let conversation = screen.conversation();
+    for expected in [
+        "  ✗ Read src/theme.rs  failed",
+        "  ◇ Read src/cells.rs  lines 1–2",
+    ] {
+        assert!(
+            conversation.contains(&expected.to_owned()),
+            "{expected:?} in {conversation:#?}"
+        );
+    }
+    let buffer = screen.draw();
+    for text in ["✗", "failed"] {
+        for cell in letters(&cells_of(buffer, text)) {
+            assert_eq!(cell.fg, Color::Red, "{text:?}");
+        }
+    }
+}

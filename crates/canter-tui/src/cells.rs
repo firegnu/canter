@@ -326,9 +326,14 @@ fn file_read(
     cwd: &str,
     width: u16,
 ) -> Line<'static> {
+    let mark = if status == ItemStatus::Failed {
+        cross()
+    } else {
+        Span::styled("◇ ", theme::secondary())
+    };
     let mut spans = vec![
         Span::raw("  "),
-        Span::styled("◇ ", theme::secondary()),
+        mark,
         Span::styled("Read ", Style::new().bold()),
         Span::raw(display_path(path, cwd)),
     ];
