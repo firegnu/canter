@@ -682,7 +682,7 @@ async fn binary_placeholders_report_declared_or_streamed_size_without_content() 
 }
 
 #[tokio::test]
-async fn deeply_nested_html_is_a_tool_error_and_the_process_and_turn_continue() {
+async fn deeply_nested_html_is_returned_raw_and_the_process_and_turn_continue() {
     for body in [
         "<div>".repeat(3_000),
         "<div>".repeat(1_048_000),
@@ -691,22 +691,34 @@ async fn deeply_nested_html_is_a_tool_error_and_the_process_and_turn_continue() 
         format!("<svg>{}", "<source>".repeat(3_000)),
     ] {
         assert!(body.len() < 5 * 1024 * 1024);
+        let raw_start = body[..80].to_owned();
+        let raw_end = body[body.len() - 80..].to_owned();
+        let truncated = body.len() > 32768;
         let web = WebServer::new(move |_| response("text/html", &body)).await;
         let model = ScriptModel::new(vec![json!({"url":web.url("/deep")})]);
         let (_temp, session, mut events) = create(model.clone(), PermissionMode::AllowAll).await;
         session.input(input(false)).await.unwrap();
         let seen = finished(&mut events).await;
-        assert!(model.results()[0].contains("HTML nesting limit"));
-        assert!(seen.iter().any(|e| matches!(
-            &e.payload,
-            EventPayload::ItemCompleted {
-                item: Item::WebFetch {
-                    status: ItemStatus::Failed,
+        let results = model.results();
+        assert!(results[0].starts_with(
+            "[HTML not converted: HTML nesting limit exceeded (256); showing raw HTML.]\n\n"
+        ));
+        assert!(results[0].contains(&raw_start) && results[0].ends_with(&raw_end));
+        assert!(results[0].len() <= 32768 + 64);
+        assert_eq!(results[0].contains("[truncated "), truncated);
+        let (result, status) = seen
+            .iter()
+            .find_map(|e| match &e.payload {
+                EventPayload::ItemCompleted {
+                    item: Item::WebFetch { result, status, .. },
                     ..
-                },
-                ..
-            }
-        )));
+                } => Some((result, status)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(*status, ItemStatus::Completed);
+        assert!(result.len() <= 1024 * 1024);
+        assert!(result.contains(&raw_start) && result.ends_with(&raw_end));
         assert!(seen.iter().any(|e| matches!(&e.payload, EventPayload::ItemCompleted { item: Item::AgentMessage { text, .. }, .. } if text == "continued")));
         assert!(
             matches!(&seen.last().unwrap().payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Completed)
@@ -716,7 +728,7 @@ async fn deeply_nested_html_is_a_tool_error_and_the_process_and_turn_continue() 
 }
 
 #[tokio::test]
-async fn attribute_heavy_html_is_rejected_before_conversion_and_the_turn_continues() {
+async fn attribute_heavy_html_is_returned_raw_and_the_turn_continues() {
     let mut body = "<div".to_owned();
     for i in 0..20_000 {
         body.push_str(&format!(" a{i}=x"));
@@ -727,12 +739,14 @@ async fn attribute_heavy_html_is_rejected_before_conversion_and_the_turn_continu
     let (_temp, session, mut events) = create(model.clone(), PermissionMode::AllowAll).await;
     session.input(input(false)).await.unwrap();
     let seen = finished(&mut events).await;
-    assert!(model.results()[0].contains("HTML tag length limit"));
+    let results = model.results();
+    assert!(results[0].starts_with("[HTML not converted: HTML tag length limit exceeded (4096 bytes); showing raw HTML.]\n\n<div"));
+    assert!(results[0].ends_with(">content</div>"));
     assert!(seen.iter().any(|e| matches!(
         &e.payload,
         EventPayload::ItemCompleted {
             item: Item::WebFetch {
-                status: ItemStatus::Failed,
+                status: ItemStatus::Completed,
                 ..
             },
             ..
@@ -743,7 +757,7 @@ async fn attribute_heavy_html_is_rejected_before_conversion_and_the_turn_continu
 }
 
 #[tokio::test]
-async fn html_at_the_depth_limit_still_converts_on_the_normal_worker_stack() {
+async fn html_at_the_depth_limit_still_converts() {
     let body = format!("{}visible{}", "<div>".repeat(256), "</div>".repeat(256));
     let web = WebServer::new(move |_| response("text/html", &body)).await;
     let model = ScriptModel::new(vec![json!({"url":web.url("/bounded")})]);
@@ -765,7 +779,7 @@ async fn html_at_the_depth_limit_still_converts_on_the_normal_worker_stack() {
 }
 
 #[tokio::test]
-async fn raw_text_comments_cannot_hide_nesting_from_the_preflight() {
+async fn raw_text_comments_are_returned_as_raw_html() {
     let body = format!(
         "<script><!--</script>{}visible{}",
         "<div>".repeat(257),
@@ -776,12 +790,15 @@ async fn raw_text_comments_cannot_hide_nesting_from_the_preflight() {
     let (_temp, session, mut events) = create(model.clone(), PermissionMode::AllowAll).await;
     session.input(input(false)).await.unwrap();
     let seen = finished(&mut events).await;
-    assert!(model.results()[0].contains("HTML nesting limit"));
+    let results = model.results();
+    assert!(results[0].starts_with("[HTML not converted:"));
+    assert!(results[0].contains("showing raw HTML.]\n\n<script><!--</script>"));
+    assert!(results[0].contains("visible"));
     assert!(seen.iter().any(|e| matches!(
         &e.payload,
         EventPayload::ItemCompleted {
             item: Item::WebFetch {
-                status: ItemStatus::Failed,
+                status: ItemStatus::Completed,
                 ..
             },
             ..
@@ -791,25 +808,57 @@ async fn raw_text_comments_cannot_hide_nesting_from_the_preflight() {
 }
 
 #[tokio::test]
-async fn malformed_attribute_quotes_cannot_hide_nesting_from_the_preflight() {
+async fn malformed_attribute_quotes_are_returned_as_raw_html() {
     let body = format!("<div data=x\">{}visible", "<div>".repeat(257));
     let web = WebServer::new(move |_| response("text/html", &body)).await;
     let model = ScriptModel::new(vec![json!({"url":web.url("/malformed-attribute")})]);
     let (_temp, session, mut events) = create(model.clone(), PermissionMode::AllowAll).await;
     session.input(input(false)).await.unwrap();
     let seen = finished(&mut events).await;
-    assert!(model.results()[0].contains("HTML tag contains nested markup"));
+    let results = model.results();
+    assert!(results[0].starts_with(
+        "[HTML not converted: HTML tag contains nested markup; showing raw HTML.]\n\n<div data=x\">"
+    ));
+    assert!(results[0].ends_with("visible"));
     assert!(seen.iter().any(|e| matches!(
         &e.payload,
         EventPayload::ItemCompleted {
             item: Item::WebFetch {
-                status: ItemStatus::Failed,
+                status: ItemStatus::Completed,
                 ..
             },
             ..
         }
     )));
     assert!(seen.iter().any(|e| matches!(&e.payload, EventPayload::ItemCompleted { item: Item::AgentMessage { text, .. }, .. } if text == "continued")));
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn legacy_script_comments_preserve_the_page_content_and_the_turn_continues() {
+    let body = "<html><head><script><!--\nvar legacy = true;\n//--></script></head><body><h1>Legacy page content</h1></body></html>";
+    let web = WebServer::new(move |_| response("text/html", body)).await;
+    let model = ScriptModel::new(vec![json!({"url":web.url("/legacy")})]);
+    let (_temp, session, mut events) = create(model.clone(), PermissionMode::AllowAll).await;
+    session.input(input(false)).await.unwrap();
+    let seen = finished(&mut events).await;
+    let results = model.results();
+    assert!(results[0].starts_with("[HTML not converted:"));
+    assert!(results[0].ends_with(body));
+    assert!(seen.iter().any(|e| matches!(
+        &e.payload,
+        EventPayload::ItemCompleted {
+            item: Item::WebFetch {
+                status: ItemStatus::Completed,
+                ..
+            },
+            ..
+        }
+    )));
+    assert!(seen.iter().any(|e| matches!(&e.payload, EventPayload::ItemCompleted { item: Item::AgentMessage { text, .. }, .. } if text == "continued")));
+    assert!(
+        matches!(&seen.last().unwrap().payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Completed)
+    );
     session.close().await.unwrap();
 }
 

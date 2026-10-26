@@ -12,6 +12,7 @@ const MAX_REDIRECTS: usize = 5;
 const TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_HTML_DEPTH: usize = 256;
 const MAX_HTML_TAG_BYTES: usize = 4096;
+const HTML_STACK_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -196,16 +197,29 @@ async fn fetch(url: &Url) -> Result<String, String> {
     }
     let mut text = String::from_utf8_lossy(&body).into_owned();
     if html {
-        check_html(&text)?;
-        text = tokio::task::spawn_blocking(move || {
-            htmd::HtmlToMarkdown::builder()
-                .skip_tags(vec!["script", "style", "head"])
-                .build()
-                .convert(&text)
-                .map_err(|_| "HTML conversion failed".to_owned())
-        })
-        .await
-        .map_err(|_| "HTML conversion failed")??;
+        text = match check_html(&text) {
+            Err(reason) => {
+                format!("[HTML not converted: {reason}; showing raw HTML.]\n\n{text}")
+            }
+            Ok(()) => {
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                // The dedicated stack is a second guard after check_html.
+                // Dropping the handle/receiver never waits for the worker.
+                let _thread = std::thread::Builder::new()
+                    .name("canter-web-fetch-html".into())
+                    .stack_size(HTML_STACK_BYTES)
+                    .spawn(move || {
+                        let result = htmd::HtmlToMarkdown::builder()
+                            .skip_tags(vec!["script", "style", "head"])
+                            .build()
+                            .convert(&text)
+                            .map_err(|_| "HTML conversion failed".to_owned());
+                        let _ = sender.send(result);
+                    })
+                    .map_err(|_| "Could not start HTML conversion thread")?;
+                receiver.await.map_err(|_| "HTML conversion failed")??
+            }
+        };
     }
     Ok(match charset {
         Some(charset) => format!("[Decoded as UTF-8; declared charset: {charset}.]\n\n{text}"),
@@ -230,7 +244,7 @@ fn check_html(text: &str) -> Result<(), String> {
         }
         if bytes[i..].starts_with(b"<!--") {
             // Raw-text elements do not use the ordinary HTML comment grammar.
-            // Fail closed rather than skipping a real closing tag and hiding nodes.
+            // Skip conversion rather than skipping a real closing tag and hiding nodes.
             if raw_text {
                 return Err("HTML nesting limit cannot be verified for raw-text comments".into());
             }

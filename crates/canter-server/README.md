@@ -250,7 +250,9 @@ MCP 没有添加资源、提示词模板、采样或 elicitation 能力；网页
 MCP 工具前，仍在会话创建/打开时冻结。HTML 转 Markdown，文字/JSON 原样，其它内容只留
 类型和大小占位；下载上限 5 MiB，总超时 30 秒，输出沿用模型 32 KiB / 客户端 1 MiB 截断。
 Esc 取消请求；HTTP/连接/证书/超时错误交回模型，本轮继续。
-HTML 解析前线性预检：粗估嵌套至多 256、单标签至多 4096 字节，超限作为工具错误。
+HTML 解析前线性预检：粗估嵌套至多 256、单标签至多 4096 字节；超限或不能确认安全时，
+不转换，将原始 HTML 加英文说明后按现有输出上限返回。通过预检后在独立的 256 MiB 栈
+线程转换，经 channel 返回；超时/Esc 不等该线程，照旧返回工具错误。
 非 identity 的 Content-Encoding 只给占位；声明非 UTF-8 charset 时注明仍按 UTF-8 解码。
 
 独立客户端固定 `no_proxy` 和 `User-Agent: canter/0.1 web_fetch`，不带模型 key、MCP 请求头、
