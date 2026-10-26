@@ -1,19 +1,19 @@
 //! Links in the conversation: the http and https addresses in answers, and
 //! the paths and addresses in tool card titles. They are underlined, and a
-//! click opens one: an address in the default browser, a file in the
-//! default text editor, a directory in the file manager. The program is
-//! started without a shell, the link as one argument, and not waited for.
-//! Over SSH it would open on the wrong machine, so a click copies the link
-//! instead.
+//! click opens one (see [`LinkSystem`] for how): the program is started
+//! without a shell, the link as one argument, on a thread of its own so the
+//! screen never waits. Where a program could open the wrong thing or on the
+//! wrong machine, a click copies the link instead.
 //!
 //! Follows how Codex `rust-v0.163.0` finds addresses in text and trims what
 //! follows them (`codex-rs/tui/src/terminal_hyperlinks.rs`); no code is
 //! taken from it.
 
+use std::io;
 use std::ops::Range;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread;
 
 use ratatui::style::Modifier;
@@ -162,94 +162,147 @@ pub(crate) fn underline(line: &Line<'static>, links: &[(Range<usize>, Target)]) 
     })
 }
 
+/// Where canter runs, for what a click on a link does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkSystem {
+    /// An address opens in the default browser (`open`), a file in the
+    /// default text editor (`open -t`), so it is never run; a directory is
+    /// shown in the Finder (`open -R`), so an application bundle, which is
+    /// a directory too, is never started.
+    MacOs,
+    /// Linux and the rest: an address opens with `xdg-open`. A path is
+    /// copied instead: `xdg-open` picks a program by the file's type and
+    /// may start a `.desktop` file, and there is no command sure to show a
+    /// file as text.
+    Linux,
+    /// Over SSH: a program would open on the other machine, so every link
+    /// is copied.
+    Remote,
+}
+
+impl LinkSystem {
+    /// Over SSH when `SSH_TTY` or `SSH_CONNECTION` is set, as [`Copier`]
+    /// decides; otherwise this machine's system.
+    fn here() -> Self {
+        let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+        if set("SSH_TTY") || set("SSH_CONNECTION") {
+            Self::Remote
+        } else if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Linux
+        }
+    }
+}
+
 type Launch = Box<dyn FnMut(Command) -> Result<(), String> + Send>;
+
+/// Runs work on a thread of its own, as [`run_apart`] does.
+type Spawn = fn(Box<dyn FnOnce() + Send>) -> io::Result<()>;
 
 /// Opens links, and says in the status line that it did, or why not.
 pub(crate) struct Opener {
-    /// Over SSH: links are copied, not opened.
-    remote: bool,
-    /// Starts the program; `None` for the system's own (see [`start`]).
-    launch: Option<Launch>,
-    /// Programs started that failed later: why.
-    failures: (mpsc::Sender<String>, mpsc::Receiver<String>),
+    system: LinkSystem,
+    /// Starts the program in place of the system (for tests).
+    launch: Option<Arc<Mutex<Launch>>>,
+    spawn: Spawn,
+    /// How opening each link went, from the threads that open them.
+    reports: (mpsc::Sender<Report>, mpsc::Receiver<Report>),
+}
+
+/// How opening a link went; the link as the status line shows it.
+enum Report {
+    Opened(String),
+    Failed {
+        what: &'static str,
+        shown: String,
+        why: String,
+    },
 }
 
 impl Default for Opener {
-    /// The system's programs, or copying over SSH (`SSH_TTY` or
-    /// `SSH_CONNECTION` set, as [`Copier`] decides).
+    /// This machine's programs, or copying over SSH.
     fn default() -> Self {
-        let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
-        Self::new(set("SSH_TTY") || set("SSH_CONNECTION"), None)
+        Self::new(LinkSystem::here(), None)
     }
 }
 
 impl Opener {
-    /// Starts nothing: `launch` gets each command instead (for tests).
+    /// Opens links as on `system`, but starts nothing: `launch` gets each
+    /// command instead (for tests).
     pub fn with_launcher(
-        remote: bool,
+        system: LinkSystem,
         launch: impl FnMut(Command) -> Result<(), String> + Send + 'static,
     ) -> Self {
-        Self::new(remote, Some(Box::new(launch)))
+        Self::new(system, Some(Arc::new(Mutex::new(Box::new(launch)))))
     }
 
-    fn new(remote: bool, launch: Option<Launch>) -> Self {
+    fn new(system: LinkSystem, launch: Option<Arc<Mutex<Launch>>>) -> Self {
         Self {
-            remote,
+            system,
             launch,
-            failures: mpsc::channel(),
+            spawn: run_apart,
+            reports: mpsc::channel(),
         }
     }
 
-    /// Opens `target`, or over SSH copies it; at `now` (Unix ms), the status
-    /// line `width` columns wide. The note goes where the copier's do.
+    /// Opens `target`, or copies it where it would not open as it should;
+    /// at `now` (Unix ms), the status line `width` columns wide. Looking at
+    /// the path and starting the program are on a thread of their own:
+    /// [`Opener::poll`] says how it went. The notes go where the copier's do.
     pub fn open(&mut self, target: &Target, copier: &mut Copier, now: i64, width: usize) {
-        if self.remote {
-            copier.copy_link(target.text().to_owned());
-            return;
-        }
-        let shown = visible(target.text());
-        let kind = match target {
-            Target::Web(_) => Ok(Kind::Web),
-            Target::Path(path) => match std::fs::metadata(path) {
-                Ok(meta) if meta.is_dir() => Ok(Kind::Directory),
-                Ok(_) => Ok(Kind::File),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    Err(("No such file: ", String::new()))
-                }
-                Err(error) => Err(("Could not open ", format!(": {error}"))),
-            },
-        };
-        let started = kind.and_then(|kind| {
-            let command = command(target.text(), kind);
-            match &mut self.launch {
-                Some(launch) => launch(command),
-                None => start(command, &shown, self.failures.0.clone()),
+        match (self.system, target) {
+            (LinkSystem::Remote, _) => {
+                copier.copy_link(target.text().to_owned(), "Link copied");
+                return;
             }
-            .map_err(|error| ("Could not open ", format!(": {error}")))
-        });
-        let (line, until) = match started {
-            Ok(()) => (
-                note(" ↗ ", "Opened ", &shown, "", width, false),
-                now + OPENED_MS,
-            ),
-            Err((what, why)) => (
-                note(" ✗ ", what, &shown, &why, width, true),
-                now + FAILED_MS,
-            ),
-        };
-        copier.show(line, until);
-    }
-
-    /// Says why a program started earlier failed, if one did; at `now`.
-    pub fn poll(&mut self, copier: &mut Copier, now: i64, width: usize) {
-        while let Ok(why) = self.failures.1.try_recv() {
-            let line = Line::from(Span::styled(
-                truncate_middle(&format!(" ✗ {why}"), width),
-                theme::failure(),
-            ));
+            (LinkSystem::Linux, Target::Path(path)) => {
+                copier.copy_link(path.clone(), "Path copied");
+                return;
+            }
+            _ => {}
+        }
+        let (system, launch, reports) = (self.system, self.launch.clone(), self.reports.0.clone());
+        let link = target.clone();
+        let work = Box::new(move || open_here(system, &link, launch.as_deref(), &reports));
+        if let Err(error) = (self.spawn)(work) {
+            let line = note(
+                " ✗ ",
+                "Could not open ",
+                &visible(target.text()),
+                &format!(": {error}"),
+                width,
+                true,
+            );
             copier.show(line, now + FAILED_MS);
         }
     }
+
+    /// Says how opening the links clicked went, as each thread tells; at
+    /// `now` (Unix ms), before each frame.
+    pub fn poll(&mut self, copier: &mut Copier, now: i64, width: usize) {
+        while let Ok(report) = self.reports.1.try_recv() {
+            let (line, until) = match report {
+                Report::Opened(shown) => (
+                    note(" ↗ ", "Opened ", &shown, "", width, false),
+                    now + OPENED_MS,
+                ),
+                Report::Failed { what, shown, why } => (
+                    note(" ✗ ", what, &shown, &why, width, true),
+                    now + FAILED_MS,
+                ),
+            };
+            copier.show(line, until);
+        }
+    }
+}
+
+/// Runs `work` on a thread of its own.
+fn run_apart(work: Box<dyn FnOnce() + Send>) -> io::Result<()> {
+    thread::Builder::new()
+        .name("canter-open".into())
+        .spawn(work)
+        .map(drop)
 }
 
 /// What a path is, for which program opens it.
@@ -260,46 +313,104 @@ enum Kind {
     Directory,
 }
 
-/// The command that opens `target`: macOS `open` (`open -t` for a file, so
-/// it goes to the text editor and is never run), elsewhere `xdg-open`.
-fn command(target: &str, kind: Kind) -> Command {
-    let mac = cfg!(target_os = "macos");
+/// Opens `target` on `system`, with `launch` in place of the system's
+/// program when there is one, and tells `reports` how it went; off the
+/// screen's thread. Only a file or a directory opens, symbolic links
+/// followed. A program started is waited for, so it does not stay a
+/// zombie, and when it fails, `reports` hears again, why.
+fn open_here(
+    system: LinkSystem,
+    target: &Target,
+    launch: Option<&Mutex<Launch>>,
+    reports: &mpsc::Sender<Report>,
+) {
+    let shown = visible(target.text());
+    let report = |report| {
+        let _ = reports.send(report);
+    };
+    let failed = |what, why| Report::Failed {
+        what,
+        shown: shown.clone(),
+        why,
+    };
+    let kind = match target {
+        Target::Web(_) => Kind::Web,
+        Target::Path(path) => match std::fs::metadata(path) {
+            Ok(meta) if meta.is_dir() => Kind::Directory,
+            Ok(meta) if meta.is_file() => Kind::File,
+            Ok(_) => return report(failed("Not a file: ", String::new())),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return report(failed("No such file: ", String::new()));
+            }
+            Err(error) => return report(failed("Could not open ", format!(": {error}"))),
+        },
+    };
+    let command = command(system, target.text(), kind);
+    let program = command.get_program().to_string_lossy().into_owned();
+    let child = match launch {
+        Some(launch) => {
+            let mut launch = launch.lock().unwrap_or_else(PoisonError::into_inner);
+            launch(command).map(|()| None)
+        }
+        None => start(command).map(Some),
+    };
+    match child {
+        Err(error) => report(failed("Could not open ", format!(": {error}"))),
+        Ok(child) => {
+            report(Report::Opened(shown.clone()));
+            if let Some(why) = child.and_then(|child| exit_failure(child, &program)) {
+                report(failed("Could not open ", format!(": {why}")));
+            }
+        }
+    }
+}
+
+/// The command that opens `target` on `system`: on macOS `open`, with `-t`
+/// for a file (the text editor) and `-R` for a directory (shown in the
+/// Finder); elsewhere `xdg-open`.
+fn command(system: LinkSystem, target: &str, kind: Kind) -> Command {
+    let mac = system == LinkSystem::MacOs;
     let mut command = Command::new(if mac { "open" } else { "xdg-open" });
-    if mac && kind == Kind::File {
-        command.arg("-t");
+    match kind {
+        Kind::File if mac => {
+            command.arg("-t");
+        }
+        Kind::Directory if mac => {
+            command.arg("-R");
+        }
+        _ => {}
     }
     command.arg(target);
     command
 }
 
-/// Starts `command` and lets it run. A thread of its own waits for it, so
-/// it does not stay a zombie, and sends why to `failures` if it fails.
-fn start(mut command: Command, shown: &str, failures: mpsc::Sender<String>) -> Result<(), String> {
+/// Starts `command`, what it writes to stderr kept for [`exit_failure`].
+fn start(mut command: Command) -> Result<Child, String> {
     let program = command.get_program().to_string_lossy().into_owned();
-    let child = command
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| format!("{program}: {error}"))?;
-    let shown = shown.to_owned();
-    let _ = thread::Builder::new()
-        .name("canter-open".into())
-        .spawn(move || {
-            let Ok(output) = child.wait_with_output() else {
-                return;
-            };
-            if output.status.success() {
-                return;
-            }
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let why = match stderr.lines().map(str::trim).find(|line| !line.is_empty()) {
-                Some(line) => visible(line),
-                None => format!("{program} exited with {}", output.status),
-            };
-            let _ = failures.send(format!("Could not open {shown}: {why}"));
-        });
-    Ok(())
+        .map_err(|error| format!("{program}: {error}"))
+}
+
+/// Waits for `child`, which runs `program`: why it failed, if it did.
+fn exit_failure(child: Child, program: &str) -> Option<String> {
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(error) => return Some(error.to_string()),
+    };
+    if output.status.success() {
+        return None;
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Some(
+        match stderr.lines().map(str::trim).find(|line| !line.is_empty()) {
+            Some(line) => visible(line),
+            None => format!("{program} exited with {}", output.status),
+        },
+    )
 }
 
 /// `mark` and `what`, then `target` cut in the middle so that the row,
@@ -425,17 +536,50 @@ mod tests {
                 .map(|arg| arg.to_string_lossy().into_owned())
                 .collect()
         };
-        let web = command(odd, Kind::Web);
+        let mac = |target, kind| command(LinkSystem::MacOs, target, kind);
+        let web = mac(odd, Kind::Web);
+        assert_eq!(web.get_program(), "open");
         assert_eq!(args(&web), [odd]);
-        let file = command("/work/-rf", Kind::File);
-        if cfg!(target_os = "macos") {
-            assert_eq!(web.get_program(), "open");
-            assert_eq!(args(&file), ["-t", "/work/-rf"]);
-            assert_eq!(args(&command("/work", Kind::Directory)), ["/work"]);
-        } else {
-            assert_eq!(web.get_program(), "xdg-open");
-            assert_eq!(args(&file), ["/work/-rf"]);
-        }
+        assert_eq!(args(&mac("/work/-rf", Kind::File)), ["-t", "/work/-rf"]);
+        assert_eq!(
+            args(&mac("/work/A.app", Kind::Directory)),
+            ["-R", "/work/A.app"]
+        );
+        let web = command(LinkSystem::Linux, odd, Kind::Web);
+        assert_eq!(web.get_program(), "xdg-open");
+        assert_eq!(args(&web), [odd]);
+    }
+
+    /// When no thread can start to open the link, nothing starts, and the
+    /// status line says why in red.
+    #[test]
+    fn a_thread_that_cannot_start_is_said_so() {
+        let (start, started) = mpsc::channel();
+        let mut opener = Opener::with_launcher(LinkSystem::MacOs, move |command| {
+            let _ = start.send(command.get_program().to_owned());
+            Ok(())
+        });
+        opener.spawn = |_| Err(io::Error::other("no threads left"));
+        let mut copier = Copier::with_writer(|_| Ok(()));
+        opener.open(
+            &Target::Web("https://a.example/".into()),
+            &mut copier,
+            0,
+            80,
+        );
+        let note = copier.note().expect("a note");
+        let text: String = note
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(
+            text,
+            " ✗ Could not open https://a.example/: no threads left"
+        );
+        assert_eq!(note.spans[0].style, theme::failure());
+        opener.poll(&mut copier, 0, 80);
+        assert!(started.try_recv().is_err(), "nothing started");
     }
 
     #[test]

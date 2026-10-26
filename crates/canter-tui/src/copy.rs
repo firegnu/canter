@@ -53,8 +53,8 @@ struct Pending {
     id: u64,
     lines: usize,
     chars: usize,
-    /// A link copied in place of opening it: the note says so.
-    link: bool,
+    /// A link copied in place of opening it: what the note says then.
+    link: Option<&'static str>,
     /// OSC 52 was queued for the terminal.
     sent: bool,
     /// Why OSC 52 could not be sent, in tmux or over SSH.
@@ -106,7 +106,7 @@ impl Copier {
             id: self.copies,
             lines: text.lines().count(),
             chars: text.chars().count(),
-            link: false,
+            link: None,
             sent: false,
             terminal_error: None,
             failed: None,
@@ -132,12 +132,12 @@ impl Copier {
         self.pending = Some(pending);
     }
 
-    /// [`Copier::copy`] for a link copied in place of opening it (over
-    /// SSH): the note says `Link copied`.
-    pub fn copy_link(&mut self, text: String) {
+    /// [`Copier::copy`] for a link copied in place of opening it: the note
+    /// says `done` (`Link copied`, `Path copied`).
+    pub fn copy_link(&mut self, text: String, done: &'static str) {
         self.copy(text);
         if let Some(pending) = &mut self.pending {
-            pending.link = true;
+            pending.link = Some(done);
         }
     }
 
@@ -227,8 +227,10 @@ impl Copier {
             return;
         };
         let note = match result {
-            Ok(()) if pending.link => (link_copied(), now + COPIED_MS),
-            Ok(()) => (copied(pending.lines, pending.chars), now + COPIED_MS),
+            Ok(()) => match pending.link {
+                Some(done) => (link_copied(done), now + COPIED_MS),
+                None => (copied(pending.lines, pending.chars), now + COPIED_MS),
+            },
             Err(error) => {
                 let reason = match &pending.terminal_error {
                     Some(terminal) => format!("{error}; OSC 52: {terminal}"),
@@ -266,12 +268,9 @@ fn copied(lines: usize, chars: usize) -> Line<'static> {
     ])
 }
 
-/// ` ✓ Link copied`.
-fn link_copied() -> Line<'static> {
-    Line::from(vec![
-        Span::styled(" ✓ ", theme::success()),
-        Span::raw("Link copied"),
-    ])
+/// ` ✓ ` and `done`, such as `Link copied`.
+fn link_copied(done: &'static str) -> Line<'static> {
+    Line::from(vec![Span::styled(" ✓ ", theme::success()), Span::raw(done)])
 }
 
 fn failed(reason: &str) -> Line<'static> {

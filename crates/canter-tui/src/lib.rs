@@ -43,6 +43,7 @@ pub mod theme;
 pub mod usage;
 
 pub use app::{ANSWER_GUARD_MS, Action, App};
+pub use links::LinkSystem;
 pub use run::{
     CLIENT_NAME, Connected, Connector, FrameSync, Input, InputSender, Launch, Open, RunError,
     SocketConnector, input, run, run_on,

@@ -1,9 +1,10 @@
 //! Links in the conversation: web addresses in answers, and the paths and
 //! addresses in tool card titles, are underlined; a click that does not
 //! move, with no second press within the double click time, opens one.
-//! Over SSH a click copies it instead. The program that opens links is a
-//! fake here, as is the clipboard: tests never start a browser, an editor
-//! or a file manager, and never touch the real clipboard.
+//! Over SSH a click copies it instead, and on Linux a path. The program that
+//! opens links is a fake here, as is the clipboard: tests never start a
+//! browser, an editor or a file manager, and never touch the real clipboard.
+//! The screen opens links as on macOS unless a test says otherwise.
 
 use std::path::Path;
 use std::process::Command;
@@ -11,7 +12,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use canter_protocol::{Event, SessionSnapshot};
-use canter_tui::{App, Ui};
+use canter_tui::{Action, App, LinkSystem, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -40,39 +41,47 @@ struct Screen {
     seq: u64,
     /// When frames are drawn and the mouse is used.
     now: i64,
+    /// The number of the frame on screen.
+    frame: u64,
     started: mpsc::Receiver<Started>,
     copied: mpsc::Receiver<String>,
 }
 
 impl Screen {
-    /// A screen whose session works in `cwd`, on this machine.
+    /// A screen whose session works in `cwd`, on macOS.
     fn new(cwd: &str) -> Self {
-        Self::with(cwd, false, Ok(()))
+        Self::with(cwd, LinkSystem::MacOs, Ok(()))
     }
 
-    /// `remote`: as over SSH. `result`: what starting a program gives.
-    fn with(cwd: &str, remote: bool, result: Result<(), String>) -> Self {
+    /// Links open as on `system`; `result` is what starting a program gives.
+    fn with(cwd: &str, system: LinkSystem, result: Result<(), String>) -> Self {
         let (start, started) = mpsc::channel();
+        Self::launching(cwd, system, started, move |command: Command| {
+            let _ = start.send(started_by(&command));
+            result.clone()
+        })
+    }
+
+    /// Links open as on `system`, with `launch`; `started` hears from it.
+    fn launching(
+        cwd: &str,
+        system: LinkSystem,
+        started: mpsc::Receiver<Started>,
+        launch: impl FnMut(Command) -> Result<(), String> + Send + 'static,
+    ) -> Self {
         let (copy, copied) = mpsc::channel();
         let app = App::new(SessionSnapshot::empty(SESSION), None, NOW)
             .with_clipboard_writer(move |text: &str| {
                 let _ = copy.send(text.to_owned());
                 Ok(())
             })
-            .with_link_opener(remote, move |command: Command| {
-                let program = command.get_program().to_string_lossy().into_owned();
-                let args = command
-                    .get_args()
-                    .map(|arg| arg.to_string_lossy().into_owned())
-                    .collect();
-                let _ = start.send((program, args));
-                result.clone()
-            });
+            .with_link_opener(system, launch);
         let ui = Ui::new(TestBackend::new(WIDTH, HEIGHT), app).unwrap();
         let mut screen = Self {
             ui,
             seq: 0,
             now: NOW,
+            frame: 0,
             started,
             copied,
         };
@@ -135,6 +144,12 @@ impl Screen {
 
     fn draw(&mut self) {
         self.ui.draw(self.now).unwrap();
+        self.frame += 1;
+    }
+
+    /// Makes the terminal `width` columns wide, from the next frame on.
+    fn resize(&mut self, width: u16) {
+        self.ui.backend_mut().resize(width, HEIGHT);
     }
 
     /// Lets `ms` pass and draws.
@@ -206,6 +221,17 @@ impl Screen {
         self.ui.app_mut().handle_mouse_at(event, self.now);
     }
 
+    /// The mouse, come in while frame `frame` was on screen.
+    fn mouse_on(&mut self, kind: MouseEventKind, (column, row): (u16, u16), frame: u64) {
+        let event = MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        self.ui.app_mut().handle_mouse_on(event, frame, self.now);
+    }
+
     fn press(&mut self, at: (u16, u16)) {
         self.mouse(MouseEventKind::Down(MouseButton::Left), at);
     }
@@ -233,21 +259,22 @@ impl Screen {
         );
     }
 
-    fn key(&mut self, code: KeyCode) {
+    fn key(&mut self, code: KeyCode) -> Option<Action> {
         self.ui
             .app_mut()
-            .handle_key(KeyEvent::new(code, KeyModifiers::NONE), self.now);
+            .handle_key(KeyEvent::new(code, KeyModifiers::NONE), self.now)
     }
 
-    /// What the fake opener was asked to start since the last look.
+    /// What the fake opener was asked to start since the last look. It
+    /// starts on a thread of its own.
     fn opened(&self) -> Started {
         self.started
-            .try_recv()
+            .recv_timeout(WAIT)
             .unwrap_or_else(|_| panic!("nothing was opened:\n{}", self.text()))
     }
 
     fn nothing_opened(&self) {
-        if let Ok(started) = self.started.try_recv() {
+        if let Ok(started) = self.started.recv_timeout(Duration::from_millis(200)) {
             panic!("opened {started:?} unexpectedly:\n{}", self.text());
         }
     }
@@ -295,29 +322,31 @@ fn row(buffer: &Buffer, y: u16) -> String {
     row
 }
 
-/// What opens a web address on this system.
-fn browser(url: &str) -> Started {
-    let program = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    (program.to_owned(), vec![url.to_owned()])
+/// The program `command` starts and its arguments.
+fn started_by(command: &Command) -> Started {
+    let program = command.get_program().to_string_lossy().into_owned();
+    let args = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    (program, args)
 }
 
-/// What opens a file on this system: on macOS the default text editor.
+/// What opens a web address on macOS: the default browser.
+fn browser(url: &str) -> Started {
+    ("open".to_owned(), vec![url.to_owned()])
+}
+
+/// What opens a file on macOS: the default text editor.
 fn editor(path: &Path) -> Started {
     let path = path.to_string_lossy().into_owned();
-    if cfg!(target_os = "macos") {
-        ("open".to_owned(), vec!["-t".to_owned(), path])
-    } else {
-        ("xdg-open".to_owned(), vec![path])
-    }
+    ("open".to_owned(), vec!["-t".to_owned(), path])
 }
 
-/// What opens a directory on this system: on macOS the Finder.
-fn file_manager(path: &Path) -> Started {
-    browser(&path.to_string_lossy())
+/// What shows a directory on macOS: the Finder, with it selected.
+fn finder(path: &Path) -> Started {
+    let path = path.to_string_lossy().into_owned();
+    ("open".to_owned(), vec!["-R".to_owned(), path])
 }
 
 /// A session directory of its own, with `src/main.rs`, `README.md` and `docs/`.
@@ -363,6 +392,7 @@ fn a_click_on_an_address_in_an_answer_opens_it() {
     assert!(!screen.status().contains("Opened"), "{}", screen.status());
     screen.wait(1);
     assert_eq!(screen.opened(), browser("https://doc.rust-lang.org/book/"));
+    screen.wait_status("Opened");
     assert_eq!(screen.status(), "↗ Opened https://doc.rust-lang.org/book/");
 
     screen.now += 1000;
@@ -449,6 +479,7 @@ fn paths_in_card_titles_open_as_absolute_paths() {
 
     screen.click_and_wait("src/main.rs");
     assert_eq!(screen.opened(), editor(&root.join("src/main.rs")));
+    screen.wait_status("Opened");
     assert_eq!(
         screen.status(),
         format!("↗ Opened {}", root.join("src/main.rs").display())
@@ -480,10 +511,10 @@ fn a_fetch_cards_address_opens_in_the_browser() {
     assert_eq!(screen.opened(), browser("https://docs.example/page?q=1"));
 }
 
-/// A directory opens in the file manager; a path that is not there is not
+/// A directory is shown in the Finder; a path that is not there is not
 /// opened, and the status line says so in red for about five seconds.
 #[test]
-fn a_directory_opens_in_the_file_manager_and_a_missing_path_is_not_opened() {
+fn a_directory_is_shown_in_the_finder_and_a_missing_path_is_not_opened() {
     let dir = workdir();
     let mut screen = Screen::new(&cwd(&dir));
     screen.read("r1", "docs");
@@ -491,10 +522,11 @@ fn a_directory_opens_in_the_file_manager_and_a_missing_path_is_not_opened() {
     screen.draw();
 
     screen.click_and_wait("docs");
-    assert_eq!(screen.opened(), file_manager(&dir.path().join("docs")));
+    assert_eq!(screen.opened(), finder(&dir.path().join("docs")));
 
     screen.now += 1000;
     screen.click_and_wait("missing.rs");
+    screen.wait_status("No such file");
     screen.nothing_opened();
     let missing = dir.path().join("missing.rs");
     assert_eq!(
@@ -624,13 +656,15 @@ fn a_double_or_triple_click_on_an_address_selects_and_does_not_open() {
     screen.wait(MULTI_CLICK_MS + 500);
     screen.nothing_opened();
 
+    // Each copy is waited for before the next press: the clipboard thread
+    // writes only the latest of the copies piled up.
     screen.now += 1000;
     screen.click(at);
     screen.now += 100;
     screen.click(at);
+    assert_eq!(screen.clipboard(), "//docs.example/guide");
     screen.now += 100;
     screen.click(at);
-    assert_eq!(screen.clipboard(), "//docs.example/guide");
     assert_eq!(screen.clipboard(), "Read https://docs.example/guide first.");
     screen.wait(MULTI_CLICK_MS + 500);
     screen.nothing_opened();
@@ -667,7 +701,7 @@ fn a_drag_from_an_address_selects_text() {
 #[test]
 fn over_ssh_a_click_copies_the_link() {
     let dir = workdir();
-    let mut screen = Screen::with(&cwd(&dir), true, Ok(()));
+    let mut screen = Screen::with(&cwd(&dir), LinkSystem::Remote, Ok(()));
     screen.say("m1", "See https://docs.example/guide now.");
     screen.read("r1", "src/main.rs");
     screen.draw();
@@ -700,6 +734,7 @@ fn the_note_goes_after_two_seconds_and_a_failure_shows_in_red() {
     screen.draw();
     screen.click_and_wait("docs.example/guide");
     screen.opened();
+    screen.wait_status("Opened");
     assert_eq!(screen.status(), "↗ Opened https://docs.example/guide");
     screen.wait(1999);
     assert_eq!(screen.status(), "↗ Opened https://docs.example/guide");
@@ -708,6 +743,7 @@ fn the_note_goes_after_two_seconds_and_a_failure_shows_in_red() {
 
     screen.click_and_wait("docs.example/aaa");
     assert_eq!(screen.opened(), browser(&long));
+    screen.wait_status("Opened");
     let status = screen.status();
     assert!(
         status.starts_with("↗ Opened https://docs.example/aaa") && status.ends_with("aaa/end"),
@@ -726,11 +762,12 @@ fn the_note_goes_after_two_seconds_and_a_failure_shows_in_red() {
     screen.wait(MULTI_CLICK_MS + 1);
     assert_eq!(screen.opened(), browser(&long));
 
-    let mut screen = Screen::with("/work", false, Err("no such program".into()));
+    let mut screen = Screen::with("/work", LinkSystem::MacOs, Err("no such program".into()));
     screen.say("m1", "Short https://docs.example/guide");
     screen.draw();
     screen.click_and_wait("docs.example");
     screen.opened();
+    screen.wait_status("Could not open");
     assert_eq!(
         screen.status(),
         "✗ Could not open https://docs.example/guide: no such program"
@@ -868,4 +905,274 @@ fn a_second_press_before_the_open_cancels_it() {
     screen.wait(MULTI_CLICK_MS + 500);
     screen.nothing_opened();
     screen.nothing_copied();
+}
+
+// Rework 1 (cross review, round 1).
+
+/// On macOS a directory is shown in the Finder (`open -R`), never opened:
+/// an application bundle is a directory too, and opening it would start it.
+/// So is one a symbolic link or a moved file's new path points to.
+#[test]
+fn an_app_bundle_is_shown_in_the_finder_not_started() {
+    let dir = workdir();
+    let app = dir.path().join("Tool.app");
+    std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+    std::os::unix::fs::symlink(&app, dir.path().join("tool-link")).unwrap();
+    let mut screen = Screen::new(&cwd(&dir));
+    screen.read("r1", "Tool.app");
+    screen.change(
+        "e1",
+        "old.txt",
+        json!({ "type": "update", "movePath": "tool-link" }),
+    );
+    screen.draw();
+
+    screen.click_and_wait("Tool.app");
+    assert_eq!(screen.opened(), finder(&app));
+    screen.now += 1000;
+    screen.click_and_wait("tool-link");
+    assert_eq!(screen.opened(), finder(&dir.path().join("tool-link")));
+}
+
+/// On Linux an address opens with `xdg-open`, but a path is copied: there
+/// is no program there sure to show a file as text, and `xdg-open` picks
+/// one by the file's type (a `.desktop` file can start a program).
+#[test]
+fn on_linux_an_address_opens_and_a_path_is_copied() {
+    let dir = workdir();
+    std::fs::write(dir.path().join("tool.desktop"), "[Desktop Entry]\n").unwrap();
+    std::fs::create_dir(dir.path().join("folder")).unwrap();
+    let mut screen = Screen::with(&cwd(&dir), LinkSystem::Linux, Ok(()));
+    screen.say("m1", "See https://docs.example/guide now.");
+    screen.read("r1", "tool.desktop");
+    screen.read("r2", "folder");
+    screen.read("r3", "missing.rs");
+    screen.draw();
+
+    screen.click_and_wait("docs.example");
+    assert_eq!(
+        screen.opened(),
+        (
+            "xdg-open".to_owned(),
+            vec!["https://docs.example/guide".to_owned()]
+        )
+    );
+    screen.wait_status("↗ Opened https://docs.example/guide");
+
+    for path in ["tool.desktop", "folder", "missing.rs"] {
+        screen.now += 3000;
+        screen.click_and_wait(path);
+        assert_eq!(
+            screen.clipboard(),
+            dir.path().join(path).to_string_lossy(),
+            "{path}"
+        );
+        screen.wait_status("✓ Path copied");
+        screen.nothing_opened();
+    }
+}
+
+/// A click is on what was drawn: an address that grew since the frame on
+/// screen opens as it was drawn, not as it is now.
+#[test]
+fn an_address_opens_as_drawn_before_the_answer_grew() {
+    let mut screen = Screen::new("/work");
+    let message =
+        json!({ "type": "agentMessage", "id": "m1", "text": "See https://docs.example/gu" });
+    screen.event(json!({ "type": "item.started", "turnId": "t1", "item": message }));
+    screen.draw();
+    assert_eq!(screen.underlined(), ["https://docs.example/gu"]);
+    screen.event(
+        json!({ "type": "item.delta", "turnId": "t1", "itemId": "m1",
+        "delta": { "type": "agentMessage", "delta": "ide/more and more" } }),
+    );
+
+    let at = screen.find("docs.example");
+    screen.click(at);
+    screen.wait(MULTI_CLICK_MS + 1);
+    assert_eq!(screen.opened(), browser("https://docs.example/gu"));
+    screen.nothing_opened();
+}
+
+/// The wheel moves the conversation under the pointer before the next
+/// frame shows it: a press or a release after it opens nothing. Once the
+/// frame is drawn, a click opens again.
+#[test]
+fn after_the_wheel_turns_a_click_opens_nothing_until_drawn() {
+    let mut screen = Screen::new("/work");
+    let items: String = (0..40)
+        .map(|n| format!("- item {n} https://l{n}.example/\n"))
+        .collect();
+    screen.say("m1", &items);
+    screen.draw();
+    let at = screen.find("l35.example");
+
+    screen.mouse(MouseEventKind::ScrollUp, at);
+    screen.click(at);
+    screen.wait(MULTI_CLICK_MS + 1);
+    screen.nothing_opened();
+
+    screen.now += 1000;
+    let at = screen.find("l30.example");
+    screen.press(at);
+    screen.mouse(MouseEventKind::ScrollDown, at);
+    screen.release(at);
+    screen.wait(MULTI_CLICK_MS + 1);
+    screen.nothing_opened();
+
+    screen.now += 1000;
+    screen.draw();
+    screen.click_and_wait("l35.example");
+    assert_eq!(screen.opened(), browser("https://l35.example/"));
+}
+
+/// A new width wraps the text again: a click that came in on the frame
+/// before is not taken as one on the new frame, nor does a click whose
+/// press and release are on frames of two widths open.
+#[test]
+fn across_a_change_of_width_a_click_opens_nothing() {
+    let long = format!("https://one.example/{}", "a".repeat(70));
+    let mut screen = Screen::new("/work");
+    screen.say("m1", &format!("- {long}\n- https://two.example/"));
+    screen.draw();
+    let frame = screen.frame;
+    let at = screen.find("two.example");
+
+    screen.resize(80);
+    screen.draw();
+    assert_ne!(screen.find("two.example"), at, "{}", screen.text());
+    screen.mouse_on(MouseEventKind::Down(MouseButton::Left), at, frame);
+    screen.mouse_on(MouseEventKind::Up(MouseButton::Left), at, frame);
+    screen.wait(MULTI_CLICK_MS + 1);
+    screen.nothing_opened();
+
+    screen.now += 1000;
+    screen.draw();
+    let at = screen.find("two.example");
+    screen.press(at);
+    screen.resize(WIDTH);
+    screen.draw();
+    screen.release(at);
+    screen.wait(MULTI_CLICK_MS + 1);
+    screen.nothing_opened();
+
+    screen.now += 1000;
+    screen.click_and_wait("two.example");
+    assert_eq!(screen.opened(), browser("https://two.example/"));
+}
+
+/// A click is on the frame that was on screen when it came in, though a
+/// later one is drawn by the time it is handled.
+#[test]
+fn a_click_is_on_the_frame_on_screen_when_it_came_in() {
+    let mut screen = Screen::new("/work");
+    screen.completed(json!({
+        "type": "reasoning", "id": "r0", "summary": [],
+        "content": ["one\n\ntwo\n\nthree"],
+    }));
+    screen.say("m1", "See https://docs.example/guide now.");
+    screen.draw();
+    let frame = screen.frame;
+    let at = screen.find("docs.example");
+    screen.ctrl('o');
+    screen.draw();
+    assert_ne!(screen.find("docs.example"), at, "{}", screen.text());
+
+    screen.mouse_on(MouseEventKind::Down(MouseButton::Left), at, frame);
+    screen.mouse_on(MouseEventKind::Up(MouseButton::Left), at, frame);
+    screen.wait(MULTI_CLICK_MS + 1);
+    assert_eq!(screen.opened(), browser("https://docs.example/guide"));
+
+    // The same cell on the frame on screen now is not on the link.
+    screen.now += 1000;
+    screen.click(at);
+    screen.wait(MULTI_CLICK_MS + 1);
+    screen.nothing_opened();
+}
+
+/// Esc, opening the search or switching sessions while a click waits for
+/// the double click time drops it: nothing opens.
+#[test]
+fn esc_the_search_or_a_session_switch_drops_a_click_waiting_to_open() {
+    let mut screen = Screen::new("/work");
+    screen.say("m1", "See https://docs.example/guide now.");
+    screen.draw();
+    let at = screen.find("docs.example");
+
+    screen.click(at);
+    screen.key(KeyCode::Esc);
+    screen.wait(MULTI_CLICK_MS + 1);
+    screen.nothing_opened();
+
+    screen.now += 1000;
+    screen.draw();
+    screen.click(at);
+    screen.ctrl('f');
+    screen.wait(MULTI_CLICK_MS + 1);
+    screen.nothing_opened();
+    screen.key(KeyCode::Esc);
+
+    for command in ["/new", "/resume"] {
+        screen.now += 1000;
+        screen.draw();
+        screen.click(at);
+        screen.ui.app_mut().handle_paste(command);
+        let action = screen.key(KeyCode::Enter);
+        assert!(
+            matches!(action, Some(Action::NewSession | Action::PickSession)),
+            "{command}"
+        );
+        screen.wait(MULTI_CLICK_MS + 1);
+        screen.nothing_opened();
+    }
+
+    screen.now += 1000;
+    screen.draw();
+    screen.click_and_wait("docs.example");
+    assert_eq!(screen.opened(), browser("https://docs.example/guide"));
+}
+
+/// The program starts on a thread of its own: the screen goes on drawing
+/// while it starts, and says it opened once it has.
+#[test]
+fn the_screen_does_not_wait_for_the_program_to_start() {
+    let (start, started) = mpsc::channel();
+    let (go, wait) = mpsc::channel::<()>();
+    let mut screen = Screen::launching("/work", LinkSystem::MacOs, started, move |command| {
+        let _ = start.send(started_by(&command));
+        let _ = wait.recv_timeout(WAIT);
+        Ok(())
+    });
+    screen.say("m1", "See https://docs.example/guide now.");
+    screen.draw();
+    screen.click_and_wait("docs.example");
+    assert_eq!(screen.opened(), browser("https://docs.example/guide"));
+    screen.wait(10);
+    assert!(!screen.status().contains("Opened"), "{}", screen.status());
+    go.send(()).unwrap();
+    screen.wait_status("↗ Opened https://docs.example/guide");
+}
+
+/// Only a file or a directory opens, symbolic links followed: a device, a
+/// socket and the like are not given to the editor.
+#[test]
+fn only_a_file_or_a_directory_opens() {
+    let dir = workdir();
+    std::os::unix::fs::symlink("/dev/null", dir.path().join("null-link")).unwrap();
+    let socket = dir.path().join("s.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let mut screen = Screen::new(&cwd(&dir));
+    screen.read("r1", "null-link");
+    screen.read("r2", "s.sock");
+    screen.draw();
+    for path in ["null-link", "s.sock"] {
+        screen.now += 6000;
+        screen.click_and_wait(path);
+        let shown = format!("✗ Not a file: {}", dir.path().join(path).display());
+        screen.wait_status(&shown);
+        assert_eq!(screen.status(), shown);
+        let (x, y) = screen.find("Not a file");
+        assert_eq!(screen.buffer()[(x, y)].fg, ratatui::style::Color::Red);
+        screen.nothing_opened();
+    }
 }
