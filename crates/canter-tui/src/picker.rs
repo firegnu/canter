@@ -19,11 +19,13 @@ const MAX_ROWS: usize = 12;
 const STATUS_COLUMNS: usize = 10;
 const DIRECTORY_COLUMNS: usize = 24;
 
-/// What the user chose.
+/// How the session list was left.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pick {
     Open(String),
     Cancel,
+    /// Input ended or the terminal was asked to shut down.
+    Exit,
 }
 
 pub struct Picker {

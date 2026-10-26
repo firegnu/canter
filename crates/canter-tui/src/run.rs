@@ -11,7 +11,9 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
+use std::ops::ControlFlow;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -35,7 +37,7 @@ use crossterm::terminal::{
 use crossterm::{cursor, execute, queue};
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::client::{Client, ClientError, EventStream};
 use crate::picker::{Pick, Picker};
@@ -224,7 +226,7 @@ pub async fn run<C: Connector>(launch: Launch<C>) -> Result<Option<String>, RunE
     theme::set(Theme::detect());
     let terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let (sender, input) = input();
-    let reader = TerminalReader::spawn(sender);
+    let reader = TerminalReader::spawn(sender)?;
     let result = run_on(terminal, input, launch).await;
     reader.stop().await;
     result
@@ -241,8 +243,7 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
     C: Connector,
 {
-    let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut shutdown = Shutdown::listen()?;
     let Launch {
         connector,
         connected,
@@ -283,7 +284,10 @@ where
                 Some(id) => Some(id),
                 None => {
                     let picker = Picker::new(client.list_sessions().await?, cwd, home.clone());
-                    pick(&mut terminal, &mut input, picker).await?
+                    match pick(&mut terminal, &mut input, picker, &mut shutdown).await? {
+                        Pick::Open(id) => Some(id),
+                        Pick::Cancel | Pick::Exit => return Ok(None),
+                    }
                 }
             };
             match id {
@@ -338,6 +342,9 @@ where
     let mut tick = tokio::time::interval(every);
 
     let result = 'run: loop {
+        if shutdown.requested() {
+            break Ok(());
+        }
         if let Err(error) = draw(&mut ui, &input) {
             break Err(error);
         }
@@ -349,8 +356,8 @@ where
         }
         let mut next = None;
         let mut quit = tokio::select! {
-            _ = hangup.recv() => break 'run Ok(()),
-            _ = terminate.recv() => break 'run Ok(()),
+            biased;
+            _ = shutdown.wait() => break 'run Ok(()),
             event = input.events.recv() => match event {
                 Some(event) => {
                     next = Some(event);
@@ -377,12 +384,13 @@ where
                     }
                 }
                 Some(Action::PickSession) => {
-                    let picked = chat.pick_session(&mut ui, &mut input).await;
+                    let picked = chat.pick_session(&mut ui, &mut input, &mut shutdown).await;
                     // Not the redraws missed while the list was up, all at once.
                     tick.reset();
                     match picked {
-                        Ok(Some(receiver)) => messages = receiver,
-                        Ok(None) => {}
+                        Ok(ControlFlow::Break(())) => break 'run Ok(()),
+                        Ok(ControlFlow::Continue(Some(receiver))) => messages = receiver,
+                        Ok(ControlFlow::Continue(None)) => {}
                         Err(error) => break 'run Err(error),
                     }
                 }
@@ -511,17 +519,21 @@ async fn resume(
     Ok(snapshot)
 }
 
-/// Shows the session list until the user picks one (its id) or leaves (`None`).
+/// Shows the session list, distinguishing dismissal from terminal shutdown.
 async fn pick<B>(
     terminal: &mut Terminal<B>,
     input: &mut Input,
     mut picker: Picker,
-) -> Result<Option<String>, RunError>
+    shutdown: &mut Shutdown,
+) -> Result<Pick, RunError>
 where
     B: FrameSync,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     loop {
+        if shutdown.requested() {
+            return Ok(Pick::Exit);
+        }
         terminal
             .backend_mut()
             .begin_frame()
@@ -536,13 +548,18 @@ where
         drawn.map_err(terminal_error)?;
         input.frame_on_screen();
         // The list changes only with its own keys, so every key is for this frame.
-        match input.events.recv().await {
-            None => return Ok(None),
-            Some((_, _, TermEvent::Key(key))) => match picker.handle_key(key) {
-                Some(Pick::Open(id)) => return Ok(Some(id)),
-                Some(Pick::Cancel) => return Ok(None),
-                None => {}
-            },
+        let event = tokio::select! {
+            biased;
+            _ = shutdown.wait() => return Ok(Pick::Exit),
+            event = input.events.recv() => event,
+        };
+        match event {
+            None => return Ok(Pick::Exit),
+            Some((_, _, TermEvent::Key(key))) => {
+                if let Some(picked) = picker.handle_key(key) {
+                    return Ok(picked);
+                }
+            }
             Some(_) => {}
         }
     }
@@ -807,7 +824,8 @@ impl<C: Connector> Chat<C> {
         &mut self,
         ui: &mut Ui<B>,
         input: &mut Input,
-    ) -> Result<Option<mpsc::UnboundedReceiver<Message>>, RunError>
+        shutdown: &mut Shutdown,
+    ) -> Result<ControlFlow<(), Option<mpsc::UnboundedReceiver<Message>>>, RunError>
     where
         B: FrameSync,
         B::Error: std::error::Error + Send + Sync + 'static,
@@ -817,24 +835,27 @@ impl<C: Connector> Chat<C> {
             Err(error) => {
                 ui.app_mut()
                     .warning(&format!("Could not list the sessions: {error}"));
-                return Ok(None);
+                return Ok(ControlFlow::Continue(None));
             }
         };
         let cwd = ui.app().snapshot().settings.cwd.clone();
         let picker = Picker::new(sessions, cwd, self.home.clone());
-        let id = match pick(ui.terminal_mut(), input, picker).await? {
-            Some(id) if id != self.session => id,
-            _ => return Ok(None),
+        let id = match pick(ui.terminal_mut(), input, picker, shutdown).await? {
+            Pick::Open(id) if id != self.session => id,
+            Pick::Exit => return Ok(ControlFlow::Break(())),
+            _ => return Ok(ControlFlow::Continue(None)),
         };
         let failed = "Could not resume the session";
         let update = SessionUpdateParams::default();
-        Ok(match resume(&self.client, &id, &self.env, &update).await {
-            Ok(snapshot) => self.show(ui, snapshot, failed).await,
-            Err(error) => {
-                ui.app_mut().warning(&format!("{failed}: {error}"));
-                None
-            }
-        })
+        Ok(ControlFlow::Continue(
+            match resume(&self.client, &id, &self.env, &update).await {
+                Ok(snapshot) => self.show(ui, snapshot, failed).await,
+                Err(error) => {
+                    ui.app_mut().warning(&format!("{failed}: {error}"));
+                    None
+                }
+            },
+        ))
     }
 
     /// Shows `snapshot`'s session in place of the one on screen, following
@@ -1250,6 +1271,47 @@ async fn reconnect<C: Connector>(
     Ok((connected, stream))
 }
 
+/// One signal listener for both the conversation and the nested session list.
+/// The flag stays set, so returning from a list cannot consume the shutdown.
+struct Shutdown {
+    requested: watch::Receiver<bool>,
+    listener: tokio::task::JoinHandle<()>,
+}
+
+impl Shutdown {
+    fn listen() -> io::Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut hangup = signal(SignalKind::hangup())?;
+        let mut terminate = signal(SignalKind::terminate())?;
+        let (sender, requested) = watch::channel(false);
+        let listener = tokio::spawn(async move {
+            tokio::select! {
+                _ = hangup.recv() => {}
+                _ = terminate.recv() => {}
+            }
+            sender.send_replace(true);
+        });
+        Ok(Self {
+            requested,
+            listener,
+        })
+    }
+
+    fn requested(&self) -> bool {
+        *self.requested.borrow()
+    }
+
+    async fn wait(&mut self) {
+        let _ = self.requested.wait_for(|requested| *requested).await;
+    }
+}
+
+impl Drop for Shutdown {
+    fn drop(&mut self) {
+        self.listener.abort();
+    }
+}
+
 /// Set while [`TerminalSession`] has the terminal; the first restore clears it.
 static TAKEN_OVER: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_ENHANCED: AtomicBool = AtomicBool::new(false);
@@ -1322,12 +1384,25 @@ struct TerminalReader {
 }
 
 impl TerminalReader {
-    fn spawn(sender: InputSender) -> Self {
+    fn spawn(sender: InputSender) -> io::Result<Self> {
+        // Match crossterm's input source, including redirected stdin.
+        let tty = if io::stdin().is_terminal() {
+            io::stdin().as_fd().try_clone_to_owned()?
+        } else {
+            std::fs::File::open("/dev/tty")?.into()
+        };
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let thread = std::thread::spawn(move || {
+            let mut wait_ms = 0;
             while !flag.load(Ordering::Relaxed) {
-                match crossterm::event::poll(Duration::from_millis(50)) {
+                // crossterm 0.29's mio reader loops on EOF/EIO. Wait outside
+                // it so a hangup closes the input channel instead of spinning.
+                if !terminal_input_open(tty.as_fd(), wait_ms).unwrap_or(false) {
+                    return;
+                }
+                wait_ms = 0;
+                match crossterm::event::poll(Duration::ZERO) {
                     Ok(true) => match crossterm::event::read() {
                         // Only the wheel and the left button are used (scrolling,
                         // selecting); moving the mouse alone would just redraw.
@@ -1347,19 +1422,21 @@ impl TerminalReader {
                         }
                         Err(_) => return,
                     },
-                    Ok(false) => {}
+                    // Drain crossterm's buffered events before waiting again;
+                    // polling it even on a timeout also delivers SIGWINCH.
+                    Ok(false) => wait_ms = 50,
                     Err(_) => return,
                 }
             }
         });
-        Self { stop, thread }
+        Ok(Self { stop, thread })
     }
 
     async fn stop(self) {
         self.stop.store(true, Ordering::Relaxed);
-        // Normally the 50 ms poll returns and the thread stops. A hung-up
-        // PTY can leave crossterm inside read/poll; do not let joining that
-        // thread hold the process open after all command cleanup has finished.
+        // Normally the 50 ms native poll returns and the thread stops. Keep
+        // the bound for a hangup racing crossterm's nonblocking event read;
+        // command cleanup must not be held open by the dependency's reader.
         let _ = tokio::time::timeout(Duration::from_millis(100), async {
             while !self.thread.is_finished() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -1370,4 +1447,21 @@ impl TerminalReader {
             let _ = self.thread.join();
         }
     }
+}
+
+/// A tty's EOF is reported as POLLHUP (on Linux it can also report POLLERR).
+fn terminal_input_open(tty: BorrowedFd<'_>, wait_ms: i32) -> io::Result<bool> {
+    let mut poll = nix::libc::pollfd {
+        fd: tty.as_raw_fd(),
+        events: nix::libc::POLLIN,
+        revents: 0,
+    };
+    // `tty` remains owned by the reader for the duration of this call.
+    if unsafe { nix::libc::poll(&mut poll, 1, wait_ms) } < 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+    Ok(poll.revents & (nix::libc::POLLHUP | nix::libc::POLLERR | nix::libc::POLLNVAL) == 0)
 }
