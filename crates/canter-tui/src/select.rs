@@ -109,21 +109,37 @@ pub(crate) fn columns(index: usize, start: Cell, end: Cell) -> Range<usize> {
 /// `row` with its text in `columns` reversed (and reversed text, such as a
 /// changed word, shown plain).
 pub(crate) fn highlight(row: &Row, columns: Range<usize>) -> Line<'static> {
-    let mut line = row.line.clone();
     let Some(text) = &row.text else {
-        return line;
+        return row.line.clone();
     };
-    let mut spans: Vec<(usize, Span<'static>)> = Vec::new();
-    for (place, grapheme, (from, style)) in cells(&row.line) {
-        let style = if place.within(text, &columns) {
-            if style.add_modifier.contains(Modifier::REVERSED) {
-                style.remove_modifier(Modifier::REVERSED)
-            } else {
-                style.add_modifier(Modifier::REVERSED)
-            }
+    restyle(&row.line, |place, style| {
+        if place.within(text, &columns) {
+            reverse(style)
         } else {
             style
-        };
+        }
+    })
+}
+
+/// `style` reversed, or shown plain when it already is.
+pub(crate) fn reverse(style: Style) -> Style {
+    if style.add_modifier.contains(Modifier::REVERSED) {
+        style.remove_modifier(Modifier::REVERSED)
+    } else {
+        style.add_modifier(Modifier::REVERSED)
+    }
+}
+
+/// `line` with each grapheme's style changed by `change`, given where it is
+/// drawn.
+pub(crate) fn restyle(
+    line: &Line<'static>,
+    change: impl Fn(Place, Style) -> Style,
+) -> Line<'static> {
+    let mut restyled = line.clone();
+    let mut spans: Vec<(usize, Span<'static>)> = Vec::new();
+    for (place, grapheme, (from, style)) in cells(line) {
+        let style = change(place, style);
         // Pieces of different spans stay apart, so they are drawn as before.
         match spans.last_mut() {
             Some((span_from, span)) if *span_from == from && span.style == style => {
@@ -132,8 +148,8 @@ pub(crate) fn highlight(row: &Row, columns: Range<usize>) -> Line<'static> {
             _ => spans.push((from, Span::styled(grapheme.to_owned(), style))),
         }
     }
-    line.spans = spans.into_iter().map(|(_, span)| span).collect();
-    line
+    restyled.spans = spans.into_iter().map(|(_, span)| span).collect();
+    restyled
 }
 
 /// The text of `row` in `columns`.
@@ -184,7 +200,7 @@ fn word(row: &Row, column: usize) -> Option<Range<usize>> {
 /// output (see [`Row::source`]); else how many lines of the part come before
 /// it. A row that wrapping broke off shows the line of the row above.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Key {
+pub(crate) enum Key {
     Source(usize),
     Line(usize),
 }
@@ -277,7 +293,7 @@ pub(crate) fn place(rows: &[&Row], mark: &Mark) -> Option<Cell> {
 }
 
 /// The line each of a part's `rows` shows.
-fn keys(rows: &[&Row]) -> Vec<Key> {
+pub(crate) fn keys(rows: &[&Row]) -> Vec<Key> {
     let mut keys: Vec<Key> = Vec::with_capacity(rows.len());
     let mut lines = 0;
     for row in rows {
@@ -328,9 +344,9 @@ fn line<'a>(rows: &[&'a Row], keys: &[Key], key: Key) -> (Vec<Piece<'a>>, Vec<&'
 
 /// Where a grapheme is drawn.
 #[derive(Debug, Clone, Copy)]
-struct Place {
-    column: usize,
-    width: usize,
+pub(crate) struct Place {
+    pub column: usize,
+    pub width: usize,
 }
 
 impl Place {
@@ -360,7 +376,7 @@ fn text_cells(row: &Row) -> Vec<(Place, &str)> {
 /// Each grapheme of `line` as ratatui draws it, where, and which span it is
 /// from with that span's style. Control characters are not drawn and left
 /// out; a grapheme that takes no columns goes with the one before it.
-fn cells<'a>(
+pub(crate) fn cells<'a>(
     line: &'a Line<'static>,
 ) -> impl Iterator<Item = (Place, &'a str, (usize, Style))> + 'a {
     let mut column = 0;
