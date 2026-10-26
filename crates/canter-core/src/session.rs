@@ -351,6 +351,10 @@ impl Session {
                 }
             }
             turn.status = TurnStatus::Interrupted;
+            // Replay fills the times from event timestamps; keep them out of the event.
+            turn.started_at = None;
+            turn.completed_at = None;
+            turn.duration_ms = None;
             payloads.push(EventPayload::TurnCompleted { turn });
         }
         state.discard_queue(InputRemovalReason::Interrupted).await?;

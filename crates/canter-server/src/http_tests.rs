@@ -991,7 +991,19 @@ async fn btw_during_tools_omits_the_whole_unfinished_group_and_does_not_charge_t
         "omit the assistant tool calls and partial results together"
     );
     let after = test.wait_status(&id, SessionStatus::WaitingApproval).await;
-    assert_eq!(after.turns, before.turns);
+    // The turn is still running, so its time goes on; nothing else changes.
+    let untimed = |turns: &[Turn]| {
+        turns
+            .iter()
+            .map(|turn| Turn {
+                duration_ms: None,
+                ..turn.clone()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(untimed(&after.turns), untimed(&before.turns));
+    let time = |turns: &[Turn]| turns[0].duration_ms.expect("a running turn is timed");
+    assert!(time(&after.turns) >= time(&before.turns));
     assert_eq!(after.pending_requests, before.pending_requests);
     assert_eq!(
         test.app
