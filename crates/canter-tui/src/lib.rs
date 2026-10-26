@@ -40,6 +40,7 @@ mod run;
 mod search;
 mod select;
 mod shimmer;
+mod statusline;
 mod text;
 pub mod theme;
 pub mod usage;
@@ -110,6 +111,7 @@ impl<B: Backend> Ui<B> {
     /// Draws a frame without counting it as on screen yet: with synchronized
     /// output the terminal shows it only when the frame ends.
     pub(crate) fn render(&mut self, now_ms: i64) -> Result<(), B::Error> {
+        self.app.update_status_line(now_ms);
         let app = &mut self.app;
         self.terminal.draw(|frame| {
             let area = frame.area();

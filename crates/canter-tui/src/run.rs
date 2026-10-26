@@ -250,6 +250,7 @@ where
         home,
         version,
     } = launch;
+    let status_line = crate::statusline::load(&env);
     let client = connected.client;
     let named_first = matches!(&open, Open::New { first: Some(_), .. });
     let opened = match open {
@@ -295,7 +296,8 @@ where
     let stream = client.subscribe(&session, snapshot.last_event_seq).await?;
     let mut app = App::new(snapshot, home.clone(), now_ms())
         .with_client_name(client_name.clone())
-        .with_welcome(version.clone());
+        .with_welcome(version.clone())
+        .with_status_line(status_line.clone(), env.clone());
     match client.list_models().await {
         Ok(models) => app.set_models(&models),
         Err(error) => app.warning(&format!("Could not read image capabilities: {error}")),
@@ -324,6 +326,7 @@ where
         client_name,
         home,
         version,
+        status_line,
         sender,
         pump,
         btw: None,
@@ -632,6 +635,7 @@ struct Chat<C> {
     home: Option<String>,
     /// The welcome header's version line, as [`Launch::version`].
     version: String,
+    status_line: Option<String>,
     /// Background tasks report here; replaced, with the receiver, when the
     /// screen switches sessions, so nothing about the session before shows.
     sender: mpsc::UnboundedSender<Message>,
@@ -864,7 +868,8 @@ impl<C: Connector> Chat<C> {
         self.naming = AutoName::new(&snapshot, false, self.sender.clone());
         *ui.app_mut() = App::new(snapshot, self.home.clone(), now_ms())
             .with_client_name(self.client_name.clone())
-            .with_welcome(self.version.clone());
+            .with_welcome(self.version.clone())
+            .with_status_line(self.status_line.clone(), self.env.clone());
         if let Ok(models) = self.client.list_models().await {
             ui.app_mut().set_models(&models);
         }

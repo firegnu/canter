@@ -65,6 +65,7 @@ impl Harness {
             client_name: "test".into(),
             home: Some(temp.path().to_string_lossy().into_owned()),
             version: "test".into(),
+            status_line: None,
             sender,
             pump: tokio::spawn(async {}),
             btw: None,

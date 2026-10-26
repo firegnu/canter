@@ -200,7 +200,7 @@ fn is_bidi_control(c: char) -> bool {
     )
 }
 
-fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars>) {
+pub(crate) fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars>) {
     match chars.next() {
         // CSI: parameters, then one final byte in @..~.
         Some('[') => {

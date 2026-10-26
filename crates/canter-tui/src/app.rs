@@ -481,9 +481,11 @@ impl Shown {
 
 pub struct App {
     snapshot: SessionSnapshot,
+    status_line: Option<crate::statusline::StatusLine>,
     home: Option<String>,
     /// The git branch of the session's directory; read when the screen opens
-    /// a session and again when a turn ends, not every frame.
+    /// a session and again when a turn ends. A configured status command
+    /// also checks for changes every 300 ms while idle.
     branch: Option<String>,
     /// This terminal's `clientName`; what others send is marked with theirs.
     client_name: String,
@@ -555,6 +557,64 @@ pub struct App {
 }
 
 impl App {
+    /// Configures the optional command that draws the two bottom rows.
+    pub fn with_status_line(
+        mut self,
+        command: Option<String>,
+        env: std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        self.status_line =
+            command.map(|command| crate::statusline::StatusLine::new(command, env, &self.snapshot));
+        self
+    }
+
+    pub(crate) fn update_status_line(&mut self, now_ms: i64) {
+        let Some(line) = &mut self.status_line else {
+            return;
+        };
+        if line.branch_due(&self.snapshot.settings.cwd) {
+            self.branch = crate::git::branch(&self.snapshot.settings.cwd);
+        }
+        let input = self.status_line_input(now_ms);
+        if let Some(status_line) = &mut self.status_line {
+            status_line.update(input, &self.snapshot.settings.cwd);
+        }
+    }
+
+    fn status_line_input(&self, now_ms: i64) -> serde_json::Value {
+        let settings = &self.snapshot.settings;
+        let usage = self.snapshot.token_usage.as_ref();
+        let percent = |input, used| {
+            crate::statusline::percent(input, used).and_then(|n| u64::try_from(n).ok())
+        };
+        let cost = usage.and_then(|usage| usage.cost.as_ref());
+        serde_json::json!({
+            "version": self.welcome,
+            "sessionId": self.snapshot.id,
+            "sessionName": settings.name,
+            "cwd": settings.cwd,
+            "gitBranch": self.branch,
+            "model": settings.model,
+            "reasoningEffort": match settings.reasoning_effort {
+                canter_protocol::ReasoningEffort::Unknown => "high",
+                effort => effort.as_str(),
+            },
+            "approvalPolicy": settings.approval_policy,
+            "status": self.snapshot.status,
+            "context": {
+                "usedTokens": usage.map(|usage| usage.context_tokens),
+                "windowTokens": usage.and_then(|usage| usage.model_context_window),
+                "percent": usage.and_then(|usage| percent(usage.model_context_window?, usage.context_tokens)),
+            },
+            "cost": {"usd": cost.map(|cost| cost.usd), "unknown": cost.map(|cost| cost.unknown)},
+            "cache": {
+                "totalPercent": usage.and_then(|usage| percent(usage.total.input_tokens, usage.total.cached_input_tokens)),
+                "lastPercent": usage.and_then(|usage| percent(usage.last.input_tokens, usage.last.cached_input_tokens)),
+            },
+            "tps": self.status_line.as_ref().and_then(|line| line.tps(now_ms)),
+        })
+    }
+
     /// `home` shortens paths in the info rows to `~`.
     pub fn new(snapshot: SessionSnapshot, home: Option<String>, now_ms: i64) -> Self {
         let working = matches!(
@@ -566,6 +626,7 @@ impl App {
             retract_drafts: crate::retract::Drafts::new(&snapshot),
             images_need_paste: false,
             snapshot,
+            status_line: None,
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::default(),
@@ -651,6 +712,9 @@ impl App {
             return;
         }
         self.retract_drafts.event(event);
+        if let Some(line) = &mut self.status_line {
+            line.event(event);
+        }
         self.restore_retracted();
         match &event.payload {
             EventPayload::TurnRetracted { turn_id } => {
@@ -950,7 +1014,18 @@ impl App {
             // Enter, not right after an approval box closed.
             KeyCode::BackTab => {
                 if !send_guarded && let Some(mode) = shown.mode {
-                    return Some(commands::next_mode(mode));
+                    let action = commands::next_mode(mode);
+                    if self.status_line.is_some()
+                        && let Action::Update(params) = &action
+                        && let Some(mode) = params.approval_policy
+                    {
+                        let (name, style) = mode_label(mode);
+                        self.copier.show(
+                            Line::from(vec![Span::raw(" Mode: "), Span::styled(name, style)]),
+                            at + crate::copy::COPIED_MS,
+                        );
+                    }
+                    return Some(action);
                 }
             }
             KeyCode::PageUp => self.scroll_by(-(self.scroll.page as isize)),
@@ -2588,8 +2663,9 @@ impl App {
             bottom,
             info,
         };
-        // Shift+Tab moves on only from a mode shown in full under the bare
-        // input box. The mode is in the first info row, above the bottom
+        // Shift+Tab uses the mode of this frame under the bare input box.
+        // Custom output need not include it; default rows must show it in full.
+        // The first info row is above the bottom
         // row; rows under the conversation that do not fit are cut from the
         // bottom, so it is drawn when the rows down to it fit.
         let bare_input = matches!(view.bottom, Bottom::Input { .. })
@@ -2598,7 +2674,11 @@ impl App {
             && self.command_list().is_none()
             && self.mention_list().is_none();
         let mode_drawn = view.below() - (INFO_ROWS - 1) <= height;
-        self.drawing.mode = (bare_input && mode_in_full && mode_drawn)
+        let custom_info = self
+            .status_line
+            .as_ref()
+            .is_some_and(|line| line.has_output());
+        self.drawing.mode = (bare_input && (mode_in_full || custom_info) && mode_drawn)
             .then_some(self.snapshot.settings.approval_policy);
         view
     }
@@ -3241,14 +3321,12 @@ impl App {
     /// is cut on its own when the window is too narrow. Also whether the
     /// first row shows all of the permission mode.
     fn info_rows(&self, width: u16) -> ([Line<'static>; 2], bool) {
+        if let Some(rows) = self.status_line.as_ref().and_then(|line| line.rows(width)) {
+            return (rows, false);
+        }
         let settings = &self.snapshot.settings;
         let dim = theme::secondary();
-        let (mode, mode_style) = match settings.approval_policy {
-            PermissionMode::AskForExecution => ("Ask for execution", dim),
-            PermissionMode::AllowAll => ("Allow all", theme::failure()),
-            // Unknown modes are treated as the strictest one.
-            PermissionMode::AlwaysAsk | PermissionMode::Unknown => ("Always ask", dim),
-        };
+        let (mode, mode_style) = mode_label(settings.approval_policy);
         let mut first = vec![
             Span::styled(
                 format!(
@@ -3286,10 +3364,7 @@ impl App {
             text.push_str(&format!(" ({})", sanitize(branch)));
         }
         if let Some(usage) = &self.snapshot.token_usage {
-            let percent = |input: u64, cached: u64| {
-                (input != 0)
-                    .then(|| (u128::from(cached) * 100 + u128::from(input) / 2) / u128::from(input))
-            };
+            let percent = crate::statusline::percent;
             if let Some(window) = usage.model_context_window
                 && let Some(used) = percent(window, usage.context_tokens)
             {
@@ -3312,6 +3387,11 @@ impl App {
             }
         }
         let second = vec![Span::styled(text, dim)];
+        if self.status_line.as_ref().is_some_and(|line| line.failed) {
+            let error = " statusline error";
+            first = truncate(first, usize::from(width).saturating_sub(error.len()));
+            first.push(Span::styled(error, theme::failure()));
+        }
         let rows = [first, second].map(|spans| Line::from(truncate(spans, usize::from(width))));
         let kept: String = rows[0]
             .spans
@@ -3319,6 +3399,15 @@ impl App {
             .map(|span| span.content.as_ref())
             .collect();
         (rows, kept.starts_with(&through_mode))
+    }
+}
+
+fn mode_label(mode: PermissionMode) -> (&'static str, Style) {
+    match mode {
+        PermissionMode::AskForExecution => ("Ask for execution", theme::secondary()),
+        PermissionMode::AllowAll => ("Allow all", theme::failure()),
+        // Unknown modes are treated as the strictest one.
+        PermissionMode::AlwaysAsk | PermissionMode::Unknown => ("Always ask", theme::secondary()),
     }
 }
 

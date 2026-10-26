@@ -25,6 +25,65 @@ canter 的终端客户端：对话、批准框、会话列表、断线重连。�
 - 它是对话的第一段，跟着对话往上滚，不常驻屏幕；接着旧会话时往上翻到头才看得到。改窗口宽度、Ctrl+O、`/rewind` 后照样在最上面。
 - 只画在这个终端里：不进会话存档，不发给模型。拖选复制只复制右边的字，小马不复制；Ctrl+F 搜得到右边的字，搜不到小马。
 
+## 定制状态栏
+
+默认仍是底下的两行：模型、思考档位、权限和花费；目录、分支、上下文和缓存命中。
+在已有的 `~/.canter/config.json` 里增加可选的 `statusLine` 字符串（保留原来的模型、API key 等配置）：
+
+```json
+{ "statusLine": "~/.canter/statusline.sh" }
+```
+
+设置了 `CANTER_HOME` 时读该目录下的 `config.json`。只在打开终端界面时读这一项，修改后重新打开生效；
+读不到、格式不正确、不是字符串或只有空白，均按没配置处理。保持配置文件权限为 `0600`。
+终端不保存或转交配置中的其它项，服务端照旧忽略 `statusLine`。
+
+命令用 `sh -c` 在会话目录里执行，继承终端环境。标准输入是一行 JSON，写完关闭，标准错误丢弃。
+模型输出、设置、用量、会话状态、目录或分支变化时更新，最多每 0.3 秒启动一次；同一时间只跑一个，
+运行期间的变化合并成最新状态，结束后再跑。界面不会等待脚本。
+超过 1 秒会停止命令及其进程组；超时、非零退出码、标准输出为空都算失败。
+失败保留上一次成功结果；从没成功过则显示默认两行，第一行末尾加红色 `statusline error`。
+
+脚本标准输出的头两行替换默认状态栏：只有一行时第二行留空，其余行丢弃，每行按窗口宽度截断。
+支持 SGR 颜色和文字样式（含 16 色、256 色、RGB），其它控制序列和控制字符被去掉。
+上面的转圈、用时、Copied 等状态行仍由 canter 显示。
+
+JSON 字段如下，拿不到的值为 `null`；上下文和缓存百分比与默认状态栏一样四舍五入：
+
+| 字段 | 内容 |
+| --- | --- |
+| `version` | 程序版本与编译时 git 短提交号，与欢迎头相同 |
+| `sessionId` / `sessionName` | 会话 ID / 名字 |
+| `cwd` / `gitBranch` | 会话绝对目录 / git 分支；分离 HEAD 时为短提交号 |
+| `model` / `reasoningEffort` | 当前模型 / 思考档位（`none`、`low`、`high`、`max`） |
+| `approvalPolicy` | `alwaysAsk`、`askForExecution` 或 `allowAll` |
+| `status` | `starting`、`idle`、`working`、`waiting_approval`、`error` 或 `closed` |
+| `context.usedTokens` / `windowTokens` / `percent` | 上下文已用 token / 窗口 token / 使用百分比 |
+| `cost.usd` / `unknown` | 本会话已知美元花费 / 是否还含未知金额 |
+| `cache.totalPercent` / `lastPercent` | 累计 / 最近一次请求的缓存命中百分比 |
+| `tps` | 当前请求每秒输出 token；空闲和执行工具时保留上次结果 |
+
+TPS 从本终端观察到的第一个思考或回答增量开始计时，按事件时间算到请求结束；
+输出中用 UTF-8 字节数除以 3、向上取整估算（与 `/context` 相同），结束收到用量后改用真实输出 token，
+思考 token 已包含在其中，不重复相加。一轮中的下一次请求重新计数和计时。
+尚无可计算样本（例如刚打开一个旧会话），或首字与结束落在同一毫秒时为 `null`。
+中途打开正在输出的会话时，快照没有首字时间，这次请求的 TPS 留空，下一次完整观察到的请求才开始计算。
+
+配置了命令也能用 Shift+Tab 切换权限：自定义输出不必完整显示模式，但仍按按键所属帧的模式切换；
+弹框、命令列表和 300 ms 保护期照旧。每次有效切换，上面的状态行短暂显示 `Mode: 新模式`，约 2 秒。
+从没成功过、仍显示默认两行时，照旧要求权限模式完整可见。**用 Shift+Tab 的话，脚本里显示 `approvalPolicy`。**
+
+示例脚本（需要本机有 `jq`，保存到 `~/.canter/statusline.sh` 并执行 `chmod +x ~/.canter/statusline.sh`）：
+
+```sh
+#!/bin/sh
+jq -r '
+  def show: if . == null then "?" else tostring end;
+  "\u001b[36m\(.model | show)\u001b[0m · \(.reasoningEffort | show) · \(.approvalPolicy | show) · ctx \(.context.percent | show)% · $\(.cost.usd | show)\(if .cost.unknown then "+?" else "" end) · \(.tps | if . == null then "?" else ((. * 10 | round) / 10 | tostring) end) tok/s",
+  "\(.cwd | show)\(if .gitBranch == null then "" else " (\(.gitBranch))" end)"
+'
+```
+
 ## 输入框
 
 Enter 发送，Shift+Enter 或 Ctrl+J 换行，Ctrl+V 贴图片，Ctrl+O 展开 / 收起对话里收起的东西，Ctrl+F 在对话里搜索。输入框上方一次只开一个列表：
