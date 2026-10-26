@@ -9,10 +9,11 @@
 //! rows change as more of it arrives. That is fine now that the part still in
 //! progress is redrawn every frame.
 
-use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::Style;
 use ratatui::text::Span;
 
+use crate::highlight;
 use crate::text::{LogicalLine, char_width, spans_width, str_width, wrap};
 use crate::theme;
 
@@ -48,6 +49,8 @@ struct Renderer {
     /// Marker waiting for the first line of the innermost list item.
     marker: Option<String>,
     code_block: bool,
+    /// The open code block's language, as its fence names it, and its text so far.
+    code: Option<(String, String)>,
     blank_pending: bool,
     /// Destination and text so far of each open link.
     links: Vec<(String, String)>,
@@ -72,8 +75,8 @@ impl Renderer {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
             Event::Text(text) => {
-                if self.code_block {
-                    self.push_lines(&text, theme::accent());
+                if let Some((_, code)) = &mut self.code {
+                    code.push_str(&text);
                 } else {
                     for (_, link_text) in &mut self.links {
                         link_text.push_str(&text);
@@ -113,9 +116,14 @@ impl Renderer {
                 self.block_start();
                 self.nest.push(Nest::Quote);
             }
-            Tag::CodeBlock(_) => {
+            Tag::CodeBlock(kind) => {
                 self.block_start();
                 self.code_block = true;
+                let language = match kind {
+                    CodeBlockKind::Fenced(info) => info.into_string(),
+                    CodeBlockKind::Indented => String::new(),
+                };
+                self.code = Some((language, String::new()));
             }
             Tag::List(start) => {
                 if self.in_item() {
@@ -185,6 +193,9 @@ impl Renderer {
                 self.block_end();
             }
             TagEnd::CodeBlock => {
+                if let Some((language, code)) = self.code.take() {
+                    self.draw_code(&language, &code);
+                }
                 self.code_block = false;
                 self.block_end();
             }
@@ -346,6 +357,27 @@ impl Renderer {
             line.body = body;
         }
         self.flush();
+    }
+
+    /// One row per line, coloured by its language when it can be, else all
+    /// in the accent colour.
+    fn draw_code(&mut self, language: &str, code: &str) {
+        let mut lines: Vec<&str> = code.split('\n').collect();
+        if lines.last() == Some(&"") {
+            lines.pop();
+        }
+        let rows = highlight::code_block(language, &lines).unwrap_or_else(|| {
+            lines
+                .iter()
+                .map(|line| match *line {
+                    "" => Vec::new(),
+                    line => vec![Span::styled(line.to_owned(), theme::accent())],
+                })
+                .collect()
+        });
+        for body in rows {
+            self.push_row(body);
+        }
     }
 
     /// Columns the open quotes and list items take before the text.

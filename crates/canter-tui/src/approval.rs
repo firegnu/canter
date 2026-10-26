@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use crate::cells::display_path;
 use crate::diff::Diff;
+use crate::highlight;
 use crate::text::{LogicalLine, visible, wrap};
 use crate::theme;
 
@@ -246,7 +247,7 @@ fn session_note(approval: &ApprovalRequest) -> String {
     format!("{what}, even after switching back to Always ask.")
 }
 
-/// The whole command, then the directory it runs in.
+/// The whole command, coloured as Bash, then the directory it runs in.
 fn shell_body(
     approval: &ApprovalRequest,
     item: Option<&Item>,
@@ -263,12 +264,17 @@ fn shell_body(
         .get("command")
         .and_then(Value::as_str)
         .unwrap_or(item_command);
+    let command = visible(command);
+    let lines: Vec<&str> = command.split('\n').collect();
+    let bodies = highlight::bash(&lines).unwrap_or_else(|| {
+        lines
+            .iter()
+            .map(|line| vec![Span::raw((*line).to_owned())])
+            .collect()
+    });
     let mut rows = Vec::new();
-    for line in visible(command).split('\n') {
-        rows.extend(wrap(
-            &LogicalLine::new(Vec::new(), vec![Span::raw(line.to_owned())]),
-            width,
-        ));
+    for body in bodies {
+        rows.extend(wrap(&LogicalLine::new(Vec::new(), body), width));
     }
     let cwd = if item_cwd.is_empty() {
         session_cwd
