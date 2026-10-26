@@ -70,7 +70,8 @@ fn stored_session_reopens_identically_and_continues_sequence() {
         Item::Reasoning {
             id: "r1".into(),
             summary: vec!["summary".into()],
-            content: vec!["thought".into()]
+            content: vec!["thought".into()],
+            duration_ms: Some(2),
         }
     );
     assert!(

@@ -5,4 +5,18 @@ import type { TokenUsage } from "./TokenUsage";
 import type { TurnStatus } from "./TurnStatus";
 import type { UserInput } from "./UserInput";
 
-export type Turn = { review?: string, id: string, items: Array<Item>, status: TurnStatus, error: ErrorInfo | null, input: Array<UserInput>, clientName: string, usage: TokenUsage | null, };
+export type Turn = { review?: string, id: string, items: Array<Item>, status: TurnStatus, error: ErrorInfo | null, input: Array<UserInput>, clientName: string, usage: TokenUsage | null,
+/**
+ * Unix seconds of `turn.started`. The reducer fills the three times from
+ * event timestamps; absent means unknown (old data).
+ */
+startedAt?: number,
+/**
+ * Unix seconds of `turn.completed`.
+ */
+completedAt?: number,
+/**
+ * Time worked so far: up to the latest event while the turn runs, the
+ * whole turn once it has ended.
+ */
+durationMs?: number, };

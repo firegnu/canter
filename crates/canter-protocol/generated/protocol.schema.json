@@ -1238,6 +1238,15 @@
               },
               "type": "array"
             },
+            "durationMs": {
+              "description": "Thinking time from `item.started` up to its latest delta, filled by\nthe reducer; absent means unknown. Not in Codex.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "id": {
               "type": "string"
             },
@@ -2790,6 +2799,23 @@
         "clientName": {
           "type": "string"
         },
+        "completedAt": {
+          "description": "Unix seconds of `turn.completed`.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "durationMs": {
+          "description": "Time worked so far: up to the latest event while the turn runs, the\nwhole turn once it has ended.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "error": {
           "anyOf": [
             {
@@ -2818,6 +2844,14 @@
         "review": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "startedAt": {
+          "description": "Unix seconds of `turn.started`. The reducer fills the three times from\nevent timestamps; absent means unknown (old data).",
+          "format": "int64",
+          "type": [
+            "integer",
             "null"
           ]
         },

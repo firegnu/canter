@@ -220,9 +220,13 @@ fn a_blank_row_separates_messages_cards_and_thinking_but_not_reads_in_a_row() {
             "",
             "Done.",
             "",
+            "─ Worked for",
+            "",
             "› thanks",
             "",
             "You're welcome.",
+            "",
+            "─ Worked for",
         ]
     );
 }

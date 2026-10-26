@@ -351,6 +351,10 @@ impl Session {
                 }
             }
             turn.status = TurnStatus::Interrupted;
+            // Replay fills the times from event timestamps; keep them out of the event.
+            turn.started_at = None;
+            turn.completed_at = None;
+            turn.duration_ms = None;
             payloads.push(EventPayload::TurnCompleted { turn });
         }
         state.discard_queue(InputRemovalReason::Interrupted).await?;
@@ -970,6 +974,9 @@ impl Shared {
             input: params.input.clone(),
             client_name: params.client_name,
             usage: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
         };
         state
             .journal

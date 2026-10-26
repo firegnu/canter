@@ -449,6 +449,9 @@ impl Session {
             status: TurnStatus::Completed,
             error: None,
             usage: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
             items: vec![Item::AgentMessage {
                 id: id("rewind-record"),
                 text: report.join("\n"),

@@ -18,6 +18,9 @@ fn snapshot() -> SessionSnapshot {
         }],
         client_name: "terminal".into(),
         usage: None,
+        started_at: None,
+        completed_at: None,
+        duration_ms: None,
     });
     snapshot
 }
@@ -65,6 +68,7 @@ fn rejected_events_leave_the_mutable_snapshot_unchanged() {
         id: "reasoning".into(),
         summary: vec!["first part".into()],
         content: Vec::new(),
+        duration_ms: None,
     });
     let original = state.clone();
     let invalid = [
@@ -130,6 +134,9 @@ fn completing_a_turn_preserves_item_events_and_original_input() {
         input: Vec::new(),
         client_name: String::new(),
         usage: None,
+        started_at: None,
+        completed_at: None,
+        duration_ms: None,
     };
     apply_event_mut(
         &mut state,

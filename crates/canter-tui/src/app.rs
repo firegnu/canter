@@ -2393,7 +2393,7 @@ pub(crate) fn tokens(n: u64) -> String {
     }
 }
 
-fn format_elapsed(ms: i64) -> String {
+pub(crate) fn format_elapsed(ms: i64) -> String {
     let seconds = ms.max(0) / 1000;
     if seconds < 60 {
         format!("{seconds}s")

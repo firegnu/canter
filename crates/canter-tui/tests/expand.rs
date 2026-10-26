@@ -389,7 +389,11 @@ fn ctrl_o_shows_long_output_and_diffs_in_full_and_folds_them_again() {
     assert_eq!(screen.status(), format!(" {DETAILS}"), "idle too");
 
     assert_eq!(screen.ctrl_o(), None);
-    assert_eq!(screen.conversation(), folded);
+    // Folded as before; the turn has ended, so its time follows now.
+    let mut refolded = folded.clone();
+    let end = folded.iter().rposition(|row| !row.is_empty()).unwrap() + 1;
+    refolded[end + 1] = "  ─ Worked for <1s ─".to_owned();
+    assert_eq!(screen.conversation(), refolded);
     assert_eq!(screen.status(), "");
 }
 

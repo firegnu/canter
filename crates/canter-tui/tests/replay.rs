@@ -121,7 +121,7 @@ async fn replay() {
     assert_eq!(top[added].fg, Color::Green, "added lines are green");
     let removed = find(top, "- git clone https://github.com/firegnu/canter");
     assert_eq!(top[removed].fg, Color::Red, "removed lines are red");
-    let thinking = find(top, "Thought: ");
+    let thinking = find(top, "Thought for <1s: ");
     assert!(
         top[thinking].modifier.contains(Modifier::DIM),
         "thinking is grey"

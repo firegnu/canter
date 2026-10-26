@@ -199,8 +199,9 @@ fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
         lines[last - 2].starts_with('╰'),
         "the input box is right above the info rows:\n{shown}"
     );
+    assert_eq!(lines[4], "  ─ Worked for <1s ─", "{shown}");
     assert!(
-        lines[3..last - 4].iter().all(String::is_empty),
+        lines[5..last - 4].iter().all(String::is_empty),
         "blank between:\n{shown}"
     );
 }
@@ -373,7 +374,12 @@ fn resizing_rewraps_the_whole_conversation() {
             .flat_map(|row| row.split_whitespace())
             .filter(|word| *word != "›")
             .collect();
-        let expected: Vec<&str> = question.split(' ').chain(message.split(' ')).collect();
+        let worked = ["─", "Worked", "for", "<1s", "─"];
+        let expected: Vec<&str> = question
+            .split(' ')
+            .chain(message.split(' '))
+            .chain(worked)
+            .collect();
         assert_eq!(text, expected, "width {width}, every word once:\n{shown}");
         // Each row is full: the next word would not have fitted.
         for pair in conversation.windows(2) {
