@@ -33,7 +33,7 @@ impl PartialEq for ExecutionPermit<'_> {
 /// Own one gate per session. Grants are in-memory only and must not be restored from disk.
 #[derive(Default)]
 pub struct PermissionGate {
-    grants: HashSet<Tool>,
+    grants: HashSet<String>,
 }
 
 impl PermissionGate {
@@ -44,7 +44,7 @@ impl PermissionGate {
             Tool::Shell if matches!(&call.action, Action::Shell(args) if call.executor.is_readonly_shell(&args.command)) => {
                 PermissionCheck::Execute(ExecutionPermit { call })
             }
-            Tool::Write | Tool::Edit | Tool::Shell | Tool::AskUser => {
+            Tool::Write | Tool::Edit | Tool::Shell | Tool::AskUser | Tool::Mcp => {
                 PermissionCheck::Deny { cancel_turn: false }
             }
         }
@@ -58,7 +58,7 @@ impl PermissionGate {
         match decision {
             ApprovalDecision::Accept => Ok(PermissionCheck::Execute(ExecutionPermit { call })),
             ApprovalDecision::AcceptForSession => {
-                self.grants.insert(call.tool);
+                self.grants.insert(call.permission_key());
                 Ok(PermissionCheck::Execute(ExecutionPermit { call }))
             }
             ApprovalDecision::Decline => Ok(PermissionCheck::Deny { cancel_turn: false }),
@@ -72,7 +72,7 @@ impl PermissionGate {
         call: &'a PreparedCall,
         mode: PermissionMode,
     ) -> PermissionCheck<'a> {
-        if self.grants.contains(&call.tool) {
+        if self.grants.contains(&call.permission_key()) {
             return PermissionCheck::Execute(ExecutionPermit { call });
         }
         let ask = match mode {
@@ -85,7 +85,7 @@ impl PermissionGate {
         if ask && !readonly_shell {
             PermissionCheck::Ask(ApprovalRequest {
                 item_id: call.id.clone(),
-                tool: call.tool.name().into(),
+                tool: call.permission_key(),
                 arguments: call.arguments.clone(),
                 available_decisions: vec![
                     ApprovalDecision::Accept,

@@ -231,8 +231,7 @@ pub(crate) fn request(
     state: &crate::session::State,
     max_output_tokens: u32,
 ) -> canter_model::Request {
-    use canter_model::{Request, RequestOptions, ToolDefinition};
-    use canter_tools::Tool;
+    use canter_model::{Request, RequestOptions};
     let effort = match state.journal.snapshot.settings.reasoning_effort {
         canter_protocol::ReasoningEffort::Unknown => canter_protocol::ReasoningEffort::High,
         effort => effort,
@@ -240,17 +239,7 @@ pub(crate) fn request(
     Request {
         model: state.journal.snapshot.settings.model.clone(),
         messages: state.prefix.iter().chain(&state.history).cloned().collect(),
-        tools: Tool::ALL
-            .into_iter()
-            .map(|tool| {
-                let definition = tool.definition();
-                ToolDefinition {
-                    name: definition.name.into(),
-                    description: definition.description.into(),
-                    parameters: definition.parameters,
-                }
-            })
-            .collect(),
+        tools: state.tool_definitions.clone(),
         options: RequestOptions {
             thinking: Some(effort != canter_protocol::ReasoningEffort::None),
             reasoning_effort: (effort != canter_protocol::ReasoningEffort::None)

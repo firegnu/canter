@@ -45,6 +45,7 @@ pub(crate) struct State {
     pub journal: Journal,
     pub prefix: Vec<Message>,
     pub skills: Vec<Skill>,
+    pub tool_definitions: Vec<canter_model::ToolDefinition>,
     pub prefix_sections: Vec<ContextSection>,
     pub summary_index: Option<usize>,
     pub history: Vec<Message>,
@@ -71,6 +72,7 @@ impl State {
             journal,
             prefix: Vec::new(),
             skills: Vec::new(),
+            tool_definitions: Vec::new(),
             prefix_sections: Vec::new(),
             summary_index: None,
             history: Vec::new(),
@@ -317,7 +319,8 @@ impl Session {
         for mut turn in unfinished {
             for mut item in std::mem::take(&mut turn.items) {
                 match &mut item {
-                    Item::CommandExecution { status, .. }
+                    Item::McpToolCall { status, .. }
+                    | Item::CommandExecution { status, .. }
                     | Item::FileChange { status, .. }
                     | Item::FileRead { status, .. }
                     | Item::UserInput { status, .. }
@@ -405,7 +408,33 @@ impl Session {
         Ok((Self::from_state(state, tools, model, options), response))
     }
 
-    fn from_state(state: State, tools: Tools, model: Arc<dyn Model>, options: CoreOptions) -> Self {
+    fn from_state(
+        mut state: State,
+        tools: Tools,
+        model: Arc<dyn Model>,
+        options: CoreOptions,
+    ) -> Self {
+        state.tool_definitions = canter_tools::Tool::ALL
+            .into_iter()
+            .map(|tool| {
+                let def = tool.definition();
+                canter_model::ToolDefinition {
+                    name: def.name.into(),
+                    description: def.description.into(),
+                    parameters: def.parameters,
+                }
+            })
+            .chain(
+                tools
+                    .mcp_tools()
+                    .iter()
+                    .map(|tool| canter_model::ToolDefinition {
+                        name: tool.name.clone(),
+                        description: tool.description.clone(),
+                        parameters: tool.parameters.clone(),
+                    }),
+            )
+            .collect();
         let lifetime = CancellationToken::new();
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
@@ -884,7 +913,7 @@ async fn owned<T: Send + 'static>(
 async fn executor(cwd: String, runtime: RuntimeContext) -> Result<Tools, CoreError> {
     tokio::task::spawn_blocking(move || {
         LocalExecutor::new(cwd.into(), runtime.environment, runtime.protected_paths)
-            .map(|executor| Tools::new(Arc::new(executor)))
+            .map(|executor| Tools::new(Arc::new(executor)).with_mcp(runtime.mcp_tools))
             .map_err(|_| CoreError::new(ErrorCode::InvalidRequest, "invalid execution context"))
     })
     .await

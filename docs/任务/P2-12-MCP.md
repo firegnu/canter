@@ -70,3 +70,14 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- **做了什么**：固定使用官方 `rmcp = 3.7.0`，关闭默认功能，只显式开启 client、transport-child-process、transport-streamable-http-client-reqwest；复用 workspace 的 tokio / reqwest，没有升级已有依赖。新增 `mcp_servers` 配置、stdio / Streamable HTTP 连接与工具目录、会话打开时的工具快照、经原权限闸门执行的 MCP 调用、取消和超时、原进程组清理。新增 `GET /v1/mcp`、`mcpToolCall` 项目及生成的 Schema / TypeScript，终端 `/mcp`、命令列表、帮助和批准框均接通；README 与 DESIGN 第 8、14、15 条已说明。
+- **验证了什么**：新增 9 个服务端端到端测试、1 个配置测试、2 个终端测试，假模型和自建本机 stdio / HTTP MCP 服务均不读用户状态。覆盖两种传输及参数/环境/请求头、分页列工具、固定顺序与原样 schema、结果截断/非文字占位/工具及协议错误、三种权限/单工具会话授权/审查拒绝（含非法 JSON 参数）、单服务故障/无效与重名工具、通知后原会话不变与重新打开更新、断线调用、Esc 对应的取消通知、真实 120 秒调用超时、首次连接总超时、正常退出/replace/握手中退出的进程回收，以及凭证不进入错误/日志/事件和非本机 HTTP 拒绝。先后确认了配置忽略 MCP、模型请求缺工具、/mcp 不派发、跳过原因未报告、子进程组残留、握手中信号退出、前缀重名未记日志、审查参数错误优先级、isError 文字标记、连接预算叠加这些失败，再修复到通过；编译或夹具错误不作为 RED 证据。
+- **最终检查**：均加 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-12-mcp`；`cargo test --all-targets` 最终 297 passed、0 failed，`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check` 均通过，`git diff --check` 通过。独立 rustc 编译的 stdio 夹具也用 rustfmt 格式化。全量中曾有一次原有 `thinking_none_low_and_compaction_preserve_their_wire_options` 在隔离服务端启动时报告已有服务端持锁；单独重跑通过，随后未改代码的全量重跑也通过。现有 discover 探锁与 Lease.acquire 首次取锁之间可能存在竞争窗口，未证明为此次失败的唯一原因，本轮没有改该测试、探锁或锁获取代码，也没有放宽断言、缩短超时。
+- **拿主意的地方**：配置按服务名映射，transport 用 stdio / http；名字采用 `mcp__服务名__工具名`，非法或碰撞时跳过，保持确定顺序。首次连接含握手和列工具共用 10 秒预算，之后列表刷新每次 10 秒，调用 120 秒；失败连接的收尾仍由 registry 持有并在退出时等待。不自动重建断开的子进程或 MCP 会话，HTTP SSE 流恢复沿用 SDK，过期会话自动重建关闭。配置错误和协议/连接错误只返回安全类别，子进程 stderr 不转发，返回文字中的该服务配置值脱敏。MCP 工具始终按执行批准，只授权完整工具名；不信任 readOnlyHint。
+- **没做的事**：没有 OAuth、资源/提示词模板/采样/elicitation、网页抓取或内置 MCP 服务；真实模型调用 0 次、真实外部 MCP 服务连接 0 次。未安装、重启用户服务端、合并 main 或推送。进程清理沿用原进程组边界，主动自行脱离进程组的后代不在范围内，已在 README 写明；本轮不扩展为操作系统级后代收容。上面的偶发启动争锁未作为本任务顺带修复。
+- **踩过的坑**：SDK 子进程传输默认继承 stderr，且关闭直接子进程不足以清理它再起的程序，因此改为丢弃 stderr 并持有独立进程组的清理守卫；最初把信号处理放在 MCP 握手之后，启动中退出测试暴露了回收空隙，已提前注册信号并等待连接收尾。分别给握手和初次列工具 10 秒会超过客户端 15 秒启动等待，改为共用总预算，并把失败连接的关闭任务纳入 registry 跟踪。crates.io JSON 接口返回 403，改用 `cargo info rmcp` 核实并下载 3.7.0，再读 SDK 源码核对接口。
+- **只读参考**：[MCP tools 规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)、[stdio / Streamable HTTP 规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)；本机下载的 rmcp 3.7.0 `service/client.rs`、`transport/child_process.rs`、`transport/streamable_http_client.rs`；`/tmp/r49-src/codex` 的 `rust-v0.163.0`，只读其 `app-server-protocol/src/protocol/common.rs`、`v2/mcp.rs`、`v2/item.rs` 核对协议差异。没有复制第三方源码。
+- **要主控决定的事**：本任务没有未决项；原有启动争锁的偶发失败已如实留下记录，供后续独立排查。

@@ -74,6 +74,20 @@ pub(crate) fn item(item: &Item, finished: bool, cwd: &str, width: u16) -> Vec<Li
         Item::Reasoning {
             summary, content, ..
         } => reasoning(summary, content, finished, width),
+        Item::McpToolCall {
+            server,
+            tool,
+            status,
+            result,
+            ..
+        } => command_card(
+            &format!("MCP {server} / {tool}"),
+            *status,
+            None,
+            None,
+            result,
+            width,
+        ),
         Item::CommandExecution {
             command,
             status,

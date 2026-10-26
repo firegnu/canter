@@ -19,6 +19,8 @@ pub(crate) struct Config {
     api_key: String,
     #[serde(default)]
     prices: canter_core::usage::PriceBook,
+    #[serde(default)]
+    pub mcp_servers: std::collections::BTreeMap<String, canter_core::mcp::ServerConfig>,
 }
 
 impl Config {
@@ -64,6 +66,11 @@ impl Config {
                 "prices must contain finite, non-negative dollar amounts".into(),
             ));
         }
+        for server in config.mcp_servers.values() {
+            server
+                .validate()
+                .map_err(|message| ServerError(message.into()))?;
+        }
         Ok(config)
     }
 
@@ -91,4 +98,27 @@ fn default_models() -> Vec<String> {
 
 fn default_image_models() -> Vec<String> {
     vec!["deepseek-flash".into()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn remote_mcp_http_is_rejected_without_echoing_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let config = json!({
+            "base_url":"http://127.0.0.1:1", "model":"fake", "api_key":"model-test-key",
+            "context_window":1048576,
+            "mcp_servers":{"remote":{"transport":"http", "url":"http://example.com/mcp",
+                "headers":{"authorization":"test-only-mcp-credential"}}}
+        });
+        fs::write(root.path().join("config.json"), config.to_string()).unwrap();
+        let error = Config::load(root.path())
+            .err()
+            .expect("non-local MCP HTTP must be rejected");
+        assert!(error.to_string().contains("HTTPS"));
+        assert!(!error.to_string().contains("test-only-mcp-credential"));
+    }
 }

@@ -474,7 +474,7 @@ async fn execute(
     call: ToolCall,
     cancel: &CancellationToken,
 ) -> Result<(), CoreError> {
-    let Some(tool) = Tool::from_name(&call.name) else {
+    let Some(tool) = shared.tools.find(&call.name) else {
         let mut state = shared.state.lock().await;
         state
             .message(Message::ToolResult {
@@ -510,11 +510,20 @@ async fn execute(
     } else {
         shared
             .tools
-            .prepare(tool, id("tool"), &call.arguments, cancel)
+            .prepare_named(&call.name, id("tool"), &call.arguments, cancel)
             .await
     };
     let output = match prepared {
-        Err(output) => output,
+        Err(mut output) => {
+            if review && tool == Tool::Mcp {
+                output.text = "review is read-only".into();
+                output.outcome = ToolOutcome::Declined;
+                if let Item::McpToolCall { status, .. } = &mut output.item {
+                    *status = ItemStatus::Declined;
+                }
+            }
+            output
+        }
         Ok(prepared) if prepared.tool() == Tool::AskUser => {
             ask_user(shared, turn_id, &prepared, cancel).await?
         }
@@ -524,7 +533,8 @@ async fn execute(
                 None => {
                     let mut item = prepared.started_item();
                     match &mut item {
-                        Item::FileRead { status, .. }
+                        Item::McpToolCall { status, .. }
+                        | Item::FileRead { status, .. }
                         | Item::FileChange { status, .. }
                         | Item::CommandExecution { status, .. } => *status = ItemStatus::Failed,
                         _ => unreachable!("prepared tool item"),

@@ -141,3 +141,8 @@ Codex rust-v0.163.0 的 core/src/compact.rs 与 prompts/templates/compact/prompt
 
 测试仅使用脚本假模型，不起 HTTP、不调真实接口；工具在临时目录运行。
 覆盖任务指定的四项验收及三个打断位置、两个客户端竞争回答。
+
+MCP 工具由服务端经 `RuntimeContext.mcp_tools` 在会话创建/重新打开时提供快照。
+`State` 保存内置工具与该快照组成的模型工具列表；普通请求、上下文估算和压缩沿用它，
+会话中途不从当前服务目录重建列表。连接句柄仍能发现断线并返回工具错误。
+MCP 调用沿用 prepare → permission → execute 和取消令牌；审查轮直接拒绝且不打开批准请求。

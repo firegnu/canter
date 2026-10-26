@@ -718,6 +718,7 @@ async fn reopening_restores_the_exact_model_context_and_skips_future_history_ent
         let runtime = || RuntimeContext {
             environment: BTreeMap::from([("PRIVATE_FIXTURE".into(), "not-for-disk".into())]),
             protected_paths: vec![root.clone()],
+            ..RuntimeContext::default()
         };
         let (mut session, _) = Session::create(
             store.clone(),
@@ -947,6 +948,7 @@ async fn one_turn_runs_multiple_real_tools_and_publishes_the_durable_events() {
     let runtime = RuntimeContext {
         environment: BTreeMap::from([("CORE_TEST_VALUE".into(), "isolated".into())]),
         protected_paths: vec![temp.path().join("sessions")],
+        ..RuntimeContext::default()
     };
     let (session, created) = Session::create(
         store.clone(),

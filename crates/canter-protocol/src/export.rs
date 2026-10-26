@@ -26,6 +26,7 @@ pub fn export_protocol(directory: &Path) -> Result<(), Box<dyn std::error::Error
         ModelListResponse,
         UsageResponse,
         ContextResponse,
+        McpListResponse,
         SkillListParams,
         SkillListResponse,
         SessionCreateParams,

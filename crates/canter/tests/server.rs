@@ -18,6 +18,9 @@ use tokio::{
     task::JoinHandle,
 };
 
+#[path = "support/mcp.rs"]
+mod mcp;
+
 const KEY: &str = "test-only-canter-key";
 const ENV_VALUE: &str = "test-only-client-environment";
 
@@ -53,6 +56,16 @@ impl Fixture {
         models: Option<&[&str]>,
         prices: Value,
     ) -> Self {
+        Self::start_with_mcp(replies, default_model, models, prices, json!({})).await
+    }
+
+    async fn start_with_mcp(
+        replies: Vec<String>,
+        default_model: &str,
+        models: Option<&[&str]>,
+        prices: Value,
+        mcp_servers: Value,
+    ) -> Self {
         // A short absolute path also works within macOS's Unix socket limit.
         let root = tempfile::Builder::new()
             .prefix("canter-")
@@ -81,6 +94,7 @@ impl Fixture {
             config["models"] = json!(models);
         }
         config["prices"] = prices;
+        config["mcp_servers"] = mcp_servers;
         fs::write(
             home.join("config.json"),
             serde_json::to_vec(&config).unwrap(),

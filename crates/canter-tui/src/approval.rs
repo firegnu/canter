@@ -99,6 +99,15 @@ pub(crate) fn layout(
             };
             (title.to_owned(), change_body(approval, &kind, cwd, inner))
         }
+        _ if matches!(item, Some(Item::McpToolCall { .. })) => {
+            let Some(Item::McpToolCall { server, tool, .. }) = item else {
+                unreachable!()
+            };
+            (
+                format!("Allow MCP {} / {}?", visible(server), visible(tool)),
+                json_body(&approval.arguments, inner),
+            )
+        }
         tool => (
             format!("Allow {}?", visible(tool)),
             json_body(&approval.arguments, inner),

@@ -11,6 +11,7 @@ pub mod usage;
 
 pub use btw::BtwStream;
 use canter_protocol::ErrorCode;
+pub use canter_tools::mcp;
 pub use journal::Subscription;
 pub use session::Session;
 use std::{collections::BTreeMap, path::PathBuf};
@@ -19,6 +20,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 pub struct RuntimeContext {
     pub environment: BTreeMap<String, String>,
     pub protected_paths: Vec<PathBuf>,
+    pub mcp_tools: Vec<mcp::McpTool>,
 }
 
 #[derive(Clone, Debug)]

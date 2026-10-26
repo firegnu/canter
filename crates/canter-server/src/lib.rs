@@ -63,11 +63,31 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
     })
     .await
     .map_err(|_| ServerError("initialization failed".into()))??;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
+    let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
+    let model = config.model_client()?;
+    let options = config.options();
+    let startup_stop = CancellationToken::new();
+    let connecting = canter_core::mcp::Registry::connect(config.mcp_servers, startup_stop.clone());
+    tokio::pin!(connecting);
+    let mcp = tokio::select! {
+        registry = &mut connecting => registry,
+        _ = async { tokio::select! { _ = terminate.recv() => {}, _ = interrupt.recv() => {}, _ = hangup.recv() => {} } } => {
+            startup_stop.cancel();
+            connecting.await.shutdown().await;
+            return Ok(());
+        }
+    };
     let app = Arc::new(http::App {
+        mcp,
         home: lease.home.clone(),
         store: Arc::new(store),
-        model: config.model_client()?,
-        options: config.options(),
+        model,
+        options,
         default_model: config.model,
         models: config.models,
         sessions: Default::default(),
@@ -85,12 +105,6 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
         )
         .map_err(|_| ServerError("cannot set the socket permissions".into()))?;
     }
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
-    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-        .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
-    let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-        .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
     let lease = tokio::task::spawn_blocking(move || {
         lease.publish()?;
         Ok::<_, ServerError>(lease)
@@ -142,6 +156,7 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
                 let _ = session.close_for_shutdown().await;
             }
         })).await;
+        shutdown.mcp.shutdown().await;
         shutdown.stopped.cancel();
     }).into_future();
     tokio::pin!(server);

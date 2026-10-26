@@ -18,6 +18,7 @@ pub mod routes {
     pub const SESSIONS: &str = "/v1/sessions";
     pub const SESSION: &str = "/v1/sessions/{id}";
     pub const SKILLS: &str = "/v1/sessions/{id}/skills";
+    pub const MCP: &str = "/v1/mcp";
     pub const CONTEXT: &str = "/v1/sessions/{id}/context";
     pub const BTW: &str = "/v1/sessions/{id}/btw";
     pub const HANDOFF: &str = "/v1/sessions/{id}/handoff";

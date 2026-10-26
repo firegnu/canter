@@ -1214,6 +1214,40 @@
         },
         {
           "properties": {
+            "arguments": true,
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "server": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "const": "mcpToolCall",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "server",
+            "tool",
+            "arguments",
+            "result",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "aggregatedOutput": {
               "type": "string"
             },
@@ -1489,6 +1523,70 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "McpListResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/McpServerStatus"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
+    "McpServerStatus": {
+      "properties": {
+        "connected": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/McpToolInfo"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "connected",
+        "tools",
+        "warnings"
+      ],
+      "type": "object"
+    },
+    "McpToolInfo": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "tool"
+      ],
+      "type": "object"
     },
     "Model": {
       "properties": {

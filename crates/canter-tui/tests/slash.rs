@@ -17,6 +17,12 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 #[test]
+fn mcp_command_dispatches_instead_of_sending_a_message() {
+    let mut screen = Screen::new();
+    assert!(matches!(screen.enter("/mcp"), Some(Action::Mcp)));
+}
+
+#[test]
 fn review_command_dispatches_and_hides_assembled_prompt() {
     let mut screen = Screen::new();
     assert!(
@@ -33,12 +39,13 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 15] = [
+const COMMANDS: [(&str, &str); 16] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/exit", "Quit canter"),
     ("/files", "List session files and git status"),
     ("/help", "Show available commands"),
+    ("/mcp", "Show MCP connections and tools"),
     ("/mode", "Change the permission mode"),
     ("/model", "Change the model"),
     ("/new", "Start a new session"),
@@ -1492,4 +1499,41 @@ fn btw_streaming_keeps_later_turns_notices_and_footers_when_cached() {
     screen.ui.backend_mut().resize(80, 40);
     screen.draw();
     assert_eq!(screen.text(), wide);
+}
+
+#[test]
+fn mcp_status_and_approval_show_server_tool_arguments_and_escape_interrupts() {
+    let mut screen = Screen::new();
+    let report=serde_json::from_value(json!({"data":[
+        {"name":"local","connected":true,"error":null,"tools":[{"name":"mcp__local__echo","tool":"echo"}],"warnings":[]},
+        {"name":"remote","connected":false,"error":"connection timed out","tools":[],"warnings":[]}
+    ]})).unwrap();
+    screen.ui.app_mut().show_mcp(&report);
+    screen.draw();
+    let text = screen.text();
+    for expected in [
+        "local — connected",
+        "echo (mcp__local__echo)",
+        "remote — disconnected: connection timed out",
+    ] {
+        assert!(text.contains(expected), "{text}");
+    }
+    screen.start_turn("t1");
+    screen.event(json!({"type":"item.started","turnId":"t1","item":{
+        "type":"mcpToolCall","id":"m1","server":"local","tool":"echo","arguments":{"text":"hello"},"result":"","status":"inProgress"
+    }}));
+    screen.draw();
+    assert_eq!(
+        screen.key(KeyCode::Esc),
+        Some(Action::Interrupt {
+            turn_id: "t1".into()
+        })
+    );
+    screen.event(json!({"type":"request.opened","request":{
+        "id":"r1","turnId":"t1","createdAt":NOW,"kind":{"type":"approval","itemId":"m1","tool":"mcp__local__echo","arguments":{"text":"hello"},"availableDecisions":["accept","acceptForSession","decline","cancel"]}
+    }}));
+    screen.event(json!({"type":"session.status","status":"waiting_approval"}));
+    screen.draw();
+    assert!(screen.text().contains("Allow MCP local / echo?"));
+    assert!(screen.text().contains("hello"));
 }

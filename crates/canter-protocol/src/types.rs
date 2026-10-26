@@ -232,6 +232,14 @@ pub enum Item {
         summary: Vec<String>,
         content: Vec<String>,
     },
+    McpToolCall {
+        id: String,
+        server: String,
+        tool: String,
+        arguments: serde_json::Value,
+        result: String,
+        status: ItemStatus,
+    },
     CommandExecution {
         id: String,
         command: String,
@@ -276,6 +284,7 @@ impl Item {
             Self::UserMessage { id, .. }
             | Self::AgentMessage { id, .. }
             | Self::Reasoning { id, .. }
+            | Self::McpToolCall { id, .. }
             | Self::CommandExecution { id, .. }
             | Self::FileChange { id, .. }
             | Self::FileRead { id, .. }
@@ -552,4 +561,27 @@ pub struct ContextMessages {
     pub tool_results: u64,
     #[ts(type = "number")]
     pub images: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolInfo {
+    pub name: String,
+    pub tool: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerStatus {
+    pub name: String,
+    pub connected: bool,
+    pub error: Option<String>,
+    pub tools: Vec<McpToolInfo>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpListResponse {
+    pub data: Vec<McpServerStatus>,
 }
