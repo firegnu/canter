@@ -663,7 +663,9 @@ impl App {
                 self.notices.retain(|notice| {
                     notice.at.turn < end || (notice.at.turn == end && !notice.at.prompt)
                 });
-                self.active_btw = None;
+                if self.active_btw.is_some_and(|id| id >= self.notices.len()) {
+                    self.active_btw = None;
+                }
                 if self.interrupting.as_ref() == Some(turn_id) {
                     self.interrupting = None;
                 }

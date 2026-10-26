@@ -98,3 +98,10 @@
 - 5：撤回 HTTP 请求遇到连接类错误时保留待恢复内容，以匹配的 `turn.retracted` 事件确认恢复；再次按 Esc 不覆盖已缓存的待恢复输入。明确的服务端拒绝仍清掉待恢复。新增真实本机 HTTP 断流测试，覆盖事件先到/后到以及明确拒绝的对照：旧实现只剩草稿，修改后原消息与草稿都恢复。
 - 验证：本轮只跑针对测试与两包的 retract 回归，命令为 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-59-retract cargo nextest run -p canter-tui -p canter-core -E 'binary(retract) or test(run::retract_tests)'`，14 项全部通过（终端 retract 6 项、终端 HTTP 3 项、核心 retract 5 项；其他 315 项按过滤跳过）。另运行格式整理、`cargo fmt --check` 和 `git diff --check`；没有重跑全套、doc 或 Clippy。没有改旧画面快照；新状态行由针对测试验证。
 - 没做的事与拿主意：6（旧客户端显示）、7（旧版本降级）原样保留；没有改服务端的 review 撤回判断或普通打断流程，没有改 DESIGN、增加依赖或调用真实模型。主控五条决定全部落实，无新增待主控决定事项；只在任务分支提交，不合并、不推送。所有命令均在前台运行结束。本轮没有额外的工具/环境踩坑。
+
+2026-10-27，按主控决定落实复核新增 1，保留复核新增 2。
+
+- 复核新增 1：`TurnRetracted` 保留轮前提示后，仅当 `active_btw` 指向已删除的提示（`id >= self.notices.len()`）才清空它；保留的提示下标不变。新增一条 TestBackend 测试，覆盖旁观终端在别的终端撤回后继续接收 `/btw` 回答、正常完成或按 Esc 停止，并验证随后仍能发起新的 `/btw`。
+- 验证：先只跑新增测试，旧实现因撤回后的 `PARTIAL REST` 未显示而失败；修改后运行 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-59-retract cargo nextest run -p canter-tui --test retract`，含新增测试的 7 项全部通过。另通过 `cargo fmt --check` 和 `git diff --check`；按主控限定没有跑其他测试或全套检查。所有命令均在前台运行结束。
+- 复核新增 2：主控明确同意保留状态行的 `Paste images again with Ctrl+V` 重新贴图提示；这是上一轮主控要求增加的提示，覆盖原任务「不在状态行加新提示」的限制。
+- 没做的事与拿主意：不改普通打断或 P2-23 回退，不改 DESIGN，不调用真实模型；无新增待主控决定事项，只在任务分支提交、不合并、不推送。本轮没有工具或环境踩坑。

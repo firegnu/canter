@@ -303,6 +303,53 @@ fn retract_keeps_notices_before_the_turn_and_removes_notices_inside_it() {
 }
 
 #[test]
+fn retract_on_another_terminal_keeps_btw_streaming_and_cancellable() {
+    for cancel in [false, true] {
+        let mut ui = ui();
+        ui.app_mut().handle_paste("/btw explain this");
+        let Some(Action::Btw { id, .. }) = ui.app_mut().handle_key(key(KeyCode::Enter), 0) else {
+            panic!("btw action");
+        };
+        ui.app_mut().btw_event(
+            id,
+            BtwEvent::Delta {
+                delta: "PARTIAL".into(),
+            },
+        );
+        ui.draw(0).unwrap();
+        assert!(screen(&ui).contains("PARTIAL"));
+
+        start(&mut ui, text("withdraw from another terminal"));
+        retract(&mut ui);
+        ui.app_mut().btw_event(
+            id,
+            BtwEvent::Delta {
+                delta: " REST".into(),
+            },
+        );
+        ui.draw(0).unwrap();
+        assert!(screen(&ui).contains("PARTIAL REST"));
+        assert!(!screen(&ui).contains("withdraw from another terminal"));
+        if cancel {
+            assert_eq!(
+                ui.app_mut().handle_key(key(KeyCode::Esc), 0),
+                Some(Action::CancelBtw { id })
+            );
+        } else {
+            ui.app_mut().btw_event(id, BtwEvent::Completed);
+        }
+        ui.draw(0).unwrap();
+        assert!(screen(&ui).contains("PARTIAL REST"));
+        assert_eq!(screen(&ui).contains("Stopped"), cancel);
+        ui.app_mut().handle_paste("/btw next question");
+        assert!(matches!(
+            ui.app_mut().handle_key(key(KeyCode::Enter), 0),
+            Some(Action::Btw { .. })
+        ));
+    }
+}
+
+#[test]
 fn retract_does_not_restore_a_queued_review_as_an_ordinary_prompt() {
     let mut ui = ui();
     start(&mut ui, text("ordinary input"));
