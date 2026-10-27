@@ -104,7 +104,7 @@ fn sanitize(title: &str, screen: bool) -> String {
 }
 
 /// Control characters, and formatting ones that reorder or hide text.
-fn hidden(c: char) -> bool {
+pub(crate) fn hidden(c: char) -> bool {
     c.is_control()
         || matches!(
             c,

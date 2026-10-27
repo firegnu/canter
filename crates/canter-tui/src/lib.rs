@@ -35,6 +35,7 @@ mod input_history;
 mod links;
 mod markdown;
 mod mention;
+mod notify;
 mod picker;
 mod question;
 mod report;

@@ -26,9 +26,9 @@ use canter_protocol::{
     UserInput,
 };
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event as TermEvent, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, Event as TermEvent, KeyboardEnhancementFlags,
+    MouseButton, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
     BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
@@ -160,6 +160,9 @@ pub enum RunError {
 pub struct Input {
     events: mpsc::UnboundedReceiver<(u64, i64, TermEvent)>,
     frames: Arc<AtomicU64>,
+    /// Whether the window is in front, as the terminal last reported; see
+    /// [`InputSender::send`].
+    focused: Arc<AtomicBool>,
     // Real terminals also check hangup independently of the event reader.
     tty: Option<OwnedFd>,
     /// The reader reads the terminal only holding this; the external editor
@@ -172,29 +175,40 @@ pub struct Input {
 pub struct InputSender {
     events: mpsc::UnboundedSender<(u64, i64, TermEvent)>,
     frames: Arc<AtomicU64>,
+    focused: Arc<AtomicBool>,
 }
 
 /// A channel for terminal events.
 pub fn input() -> (InputSender, Input) {
     let (sender, receiver) = mpsc::unbounded_channel();
     let frames = Arc::new(AtomicU64::new(0));
+    // A terminal that never reports focus counts as in front, as in Codex.
+    let focused = Arc::new(AtomicBool::new(true));
     let input = Input {
         events: receiver,
         frames: frames.clone(),
+        focused: focused.clone(),
         tty: None,
         reading: Arc::default(),
     };
     let sender = InputSender {
         events: sender,
         frames,
+        focused,
     };
     (sender, input)
 }
 
 impl InputSender {
     /// Sends `event`, stamped with the frame on screen and the time now.
-    /// False once the screen is gone.
+    /// False once the screen is gone. The window coming to the front or
+    /// going behind counts at once, wherever the screen is.
     pub fn send(&self, event: TermEvent) -> bool {
+        match event {
+            TermEvent::FocusGained => self.focused.store(true, Ordering::SeqCst),
+            TermEvent::FocusLost => self.focused.store(false, Ordering::SeqCst),
+            _ => {}
+        }
         let frame = self.frames.load(Ordering::SeqCst);
         self.events.send((frame, now_ms(), event)).is_ok()
     }
@@ -206,6 +220,11 @@ impl InputSender {
 }
 
 impl Input {
+    /// Whether the terminal window is in front, as far as known.
+    fn focused(&self) -> bool {
+        self.focused.load(Ordering::SeqCst)
+    }
+
     async fn recv(&mut self) -> Option<(u64, i64, TermEvent)> {
         let Some(tty) = &self.tty else {
             return self.events.recv().await;
@@ -245,7 +264,7 @@ pub trait FrameSync: Backend {
         Ok(())
     }
     /// Gives the terminal to the external editor: the normal screen, line
-    /// mode, and no mouse, paste or keyboard reporting.
+    /// mode, and no mouse, paste, focus or keyboard reporting.
     fn suspend(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -275,6 +294,7 @@ impl<W: Write> FrameSync for CrosstermBackend<W> {
         execute!(
             self,
             DisableBracketedPaste,
+            DisableFocusChange,
             DisableMouseCapture,
             LeaveAlternateScreen,
             cursor::Show
@@ -288,7 +308,8 @@ impl<W: Write> FrameSync for CrosstermBackend<W> {
             self,
             EnterAlternateScreen,
             EnableMouseCapture,
-            EnableBracketedPaste
+            EnableBracketedPaste,
+            EnableFocusChange
         )?;
         if KEYBOARD_ENHANCED.load(Ordering::SeqCst) {
             execute!(
@@ -341,6 +362,8 @@ where
         version,
     } = launch;
     let status_line = crate::statusline::load(&env);
+    let (notify, notify_warnings) = crate::notify::Settings::load(&env);
+    let notifier = crate::notify::Notifier::new(notify, &env);
     let client = connected.client;
     let named_first = matches!(&open, Open::New { first: Some(_), .. });
     let mut tab = TabTitle::new(&env);
@@ -443,6 +466,9 @@ where
     if let Some(warning) = &connected.warning {
         app.warning(warning);
     }
+    for warning in &notify_warnings {
+        app.warning(warning);
+    }
     if none_to_continue {
         app.warning("No session in this directory yet; started a new one");
     }
@@ -480,7 +506,7 @@ where
         if shutdown.requested() {
             break Ok(());
         }
-        if let Err(error) = draw(&mut ui, &input, &mut tab) {
+        if let Err(error) = draw(&mut ui, &input, &mut tab, &notifier) {
             break Err(error);
         }
         // Faster for a moment while a copy's light sweeps, then as before.
@@ -757,12 +783,21 @@ where
         unsafe { nix::libc::tcflush(tty.as_raw_fd(), nix::libc::TCIFLUSH) };
     }
     ui.backend_mut().resume().map_err(terminal_error)?;
+    // Focus was not reported meanwhile; the user just closed the editor here.
+    input.focused.store(true, Ordering::SeqCst);
     ui.terminal_mut().clear().map_err(terminal_error)?;
     ui.app_mut().editor_closed(edited, now_ms());
     Ok(())
 }
 
-fn draw<B>(ui: &mut Ui<B>, input: &Input, tab: &mut TabTitle) -> Result<(), RunError>
+/// Draws a frame, then writes what goes between frames: a copy for the
+/// clipboard, the tab title, a notification.
+fn draw<B>(
+    ui: &mut Ui<B>,
+    input: &Input,
+    tab: &mut TabTitle,
+    notifier: &crate::notify::Notifier,
+) -> Result<(), RunError>
 where
     B: FrameSync,
     B::Error: std::error::Error + Send + Sync + 'static,
@@ -781,6 +816,12 @@ where
     if !title.is_empty() {
         ui.backend_mut()
             .write_sequence(&title)
+            .map_err(terminal_error)?;
+    }
+    let pending = ui.app_mut().take_notifications();
+    if let Some(sequence) = notifier.sequence(pending, input.focused()) {
+        ui.backend_mut()
+            .write_sequence(&sequence)
             .map_err(terminal_error)?;
     }
     // Only now is the frame on screen; keys that came in while it was drawn
@@ -1584,10 +1625,10 @@ static TAKEN_OVER: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_ENHANCED: AtomicBool = AtomicBool::new(false);
 
 /// Raw mode, the alternate screen, mouse reporting (for the wheel and for
-/// selecting), bracketed paste and (when the terminal has it) the keyboard
-/// protocol that tells Shift+Enter from Enter. Undone on drop, and on a
-/// panic before its message is printed, so the message shows on the normal
-/// screen.
+/// selecting), bracketed paste, focus reporting (for notifications) and
+/// (when the terminal has it) the keyboard protocol that tells Shift+Enter
+/// from Enter. Undone on drop, and on a panic before its message is
+/// printed, so the message shows on the normal screen.
 struct TerminalSession;
 
 impl TerminalSession {
@@ -1605,7 +1646,8 @@ impl TerminalSession {
             io::stdout(),
             EnterAlternateScreen,
             EnableMouseCapture,
-            EnableBracketedPaste
+            EnableBracketedPaste,
+            EnableFocusChange
         )?;
         // The alternate screen keeps its own keyboard modes, so this comes after entering it.
         if supports_keyboard_enhancement().unwrap_or(false) {
@@ -1637,6 +1679,7 @@ fn restore_terminal() {
     let _ = execute!(
         stdout,
         DisableBracketedPaste,
+        DisableFocusChange,
         DisableMouseCapture,
         LeaveAlternateScreen,
         cursor::Show
