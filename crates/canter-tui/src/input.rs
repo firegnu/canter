@@ -418,6 +418,42 @@ impl InputBox {
             .map_or(offset, |m| m.end);
     }
 
+    /// A click `column` columns into `row`, a row of [`Self::layout`]: the
+    /// cursor goes before the character drawn there, or past the row's last
+    /// one to the row's end. On a marker it goes to the nearer side.
+    pub fn click(&mut self, row: Range<usize>, column: usize) {
+        let mut offset = row.start;
+        let mut used = 0;
+        // Half columns from the clicked character's start to the click.
+        let mut into = 0;
+        for c in self.text[row].chars() {
+            let w = char_width(c);
+            if used + w > column {
+                into = 2 * (column - used) + 1;
+                break;
+            }
+            used += w;
+            offset += c.len_utf8();
+        }
+        let marker = self
+            .markers()
+            .into_iter()
+            .find(|m| m.start < offset && offset < m.end);
+        self.cursor = match marker {
+            Some(m) => {
+                // In half columns, against the marker's width in columns:
+                // before its middle is nearer its start.
+                let before = 2 * str_width(&self.text[m.start..offset]) + into;
+                if before < str_width(&self.text[m.clone()]) {
+                    m.start
+                } else {
+                    m.end
+                }
+            }
+            None => offset,
+        };
+    }
+
     pub fn layout(&self, width: usize) -> InputLayout {
         let width = width.max(1);
         let mut rows = Vec::new();
