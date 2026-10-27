@@ -9,10 +9,18 @@ struct Source {
     input: Vec<UserInput>,
 }
 
+/// An interrupt this terminal sent with Esc.
 struct Pending {
     turn: String,
+    /// The turn's own input; comes back only when it was retracted.
     sources: Vec<Source>,
+    /// Queued inputs the interrupt discarded; they always come back.
+    queued: Vec<Source>,
+    /// `turn.retracted` arrived.
     removed: bool,
+    /// `turn.completed` arrived.
+    completed: bool,
+    /// The reply says this interrupt stopped the turn, or the reply was lost.
     accepted: bool,
 }
 
@@ -84,16 +92,20 @@ impl Drafts {
         self.pending = Some(Pending {
             turn: turn.into(),
             sources: self.sources.get(turn).cloned().unwrap_or_default(),
+            queued: Vec::new(),
             removed: false,
+            completed: false,
             accepted: false,
         });
     }
 
-    pub fn response(&mut self, turn: &str, retracted: bool) {
+    /// `stopped`: this terminal's interrupt stopped the turn (retracted or
+    /// not), or its reply was lost; otherwise nothing comes back.
+    pub fn response(&mut self, turn: &str, stopped: bool) {
         if let Some(pending) = &mut self.pending
             && pending.turn == turn
         {
-            if retracted {
+            if stopped {
                 pending.accepted = true;
             } else {
                 self.pending = None;
@@ -155,8 +167,9 @@ impl Drafts {
                     } else if *reason == InputRemovalReason::Interrupted
                         && let Some(pending) = &mut self.pending
                         && !pending.removed
+                        && !pending.completed
                     {
-                        pending.sources.extend(sources);
+                        pending.queued.extend(sources);
                     }
                 }
             }
@@ -170,7 +183,11 @@ impl Drafts {
             }
             EventPayload::TurnCompleted { turn } => {
                 self.sources.remove(&turn.id);
-                self.response(&turn.id, false);
+                if let Some(pending) = &mut self.pending
+                    && pending.turn == turn.id
+                {
+                    pending.completed = true;
+                }
             }
             _ => {}
         }
@@ -181,13 +198,18 @@ impl Drafts {
             && self
                 .pending
                 .as_ref()
-                .is_some_and(|p| p.removed && p.accepted)
+                .is_some_and(|p| p.accepted && (p.removed || p.completed))
         {
-            let pending = self.pending.take().expect("ready retraction");
+            let pending = self.pending.take().expect("ready interrupt");
+            let own = if pending.removed {
+                pending.sources
+            } else {
+                Vec::new()
+            };
             let mut missing_images = false;
-            let inputs = pending
-                .sources
+            let inputs: Vec<Vec<UserInput>> = own
                 .into_iter()
+                .chain(pending.queued)
                 .map(|source| {
                     self.originals.remove(&source.seq).unwrap_or_else(|| {
                         source
@@ -206,7 +228,7 @@ impl Drafts {
                     })
                 })
                 .collect();
-            Some((inputs, missing_images))
+            (!inputs.is_empty()).then_some((inputs, missing_images))
         } else {
             None
         };
@@ -217,10 +239,12 @@ impl Drafts {
                     .values()
                     .flatten()
                     .any(|source| source.seq == *seq)
-                || self
-                    .pending
-                    .as_ref()
-                    .is_some_and(|p| p.sources.iter().any(|source| source.seq == *seq))
+                || self.pending.as_ref().is_some_and(|p| {
+                    p.sources
+                        .iter()
+                        .chain(&p.queued)
+                        .any(|source| source.seq == *seq)
+                })
         });
         restored
     }
