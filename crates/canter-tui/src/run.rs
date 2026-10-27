@@ -988,10 +988,11 @@ impl AutoName {
         let Some(turn) = turn_id else {
             return;
         };
+        let first = snapshot.turns.iter().find(|turn| !turn.input.is_empty());
         // A delayed input reply may arrive after this turn was retracted.
         if !self.eligible
-            || snapshot.turns.first().is_some_and(|first| first.id != turn)
-            || (seq <= snapshot.last_event_seq && snapshot.turns.is_empty())
+            || first.is_some_and(|first| first.id != turn)
+            || (seq <= snapshot.last_event_seq && first.is_none())
             || snapshot
                 .settings
                 .name

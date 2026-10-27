@@ -1,6 +1,6 @@
 use super::*;
 use axum::{Router, body::Body, extract::State, response::Response};
-use canter_protocol::{EventPayload, Turn};
+use canter_protocol::{EventPayload, Turn, TurnStatus};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 use tokio::{net::UnixListener, sync::oneshot};
@@ -283,6 +283,63 @@ async fn review_escape_sends_an_ordinary_interrupt() {
     request.json(json!({"eventSeq":3}));
     test.message().await;
     test.stop().await;
+}
+
+#[tokio::test]
+async fn first_message_after_user_shell_becomes_the_session_name() {
+    for event_first in [false, true] {
+        let mut test = Harness::new().await;
+        test.ui.app_mut().handle_paste("!git status");
+        test.key(KeyCode::Enter);
+        let command = test.request().await;
+        assert_eq!(command.path, "/v1/sessions/test/shellCommand");
+        command.json(json!({"eventSeq":1,"turnId":"shell"}));
+        test.message().await;
+        let mut turn: Turn = serde_json::from_value(json!({
+            "id":"shell","input":[],"items":[],"status":"inProgress",
+            "clientName":"userShell","error":null,"usage":null,
+        }))
+        .unwrap();
+        test.event(EventPayload::TurnStarted {
+            turn: turn.clone(),
+            input_id: None,
+        });
+        test.event(EventPayload::ItemCompleted {
+            turn_id: turn.id.clone(),
+            item: serde_json::from_value(json!({
+                "type":"commandExecution","id":"shell-item","source":"userShell",
+                "command":"git status","cwd":"/work","status":"completed",
+                "aggregatedOutput":"clean","exitCode":0,"durationMs":1,
+            }))
+            .unwrap(),
+        });
+        turn.status = TurnStatus::Completed;
+        test.event(EventPayload::TurnCompleted { turn });
+        assert!(
+            test.requests.try_recv().is_err(),
+            "a command does not name the session"
+        );
+
+        let text = "修复登录页面";
+        test.ui.app_mut().handle_paste(text);
+        test.key(KeyCode::Enter);
+        let input = test.request().await;
+        assert_eq!(input.path, "/v1/sessions/test/input");
+        let seq = test.ui.app().snapshot().last_event_seq + 1;
+        if event_first {
+            test.start("first-message", text, None);
+        }
+        input.json(json!({"eventSeq":seq,"turnId":"first-message"}));
+        test.message().await;
+        if !event_first {
+            test.start("first-message", text, None);
+        }
+        let naming = test.request().await;
+        assert_eq!(naming.path, "/v1/sessions/test");
+        assert_eq!(naming.body["name"], text);
+        naming.json(json!({"eventSeq":test.ui.app().snapshot().last_event_seq + 1}));
+        test.stop().await;
+    }
 }
 
 #[tokio::test]
