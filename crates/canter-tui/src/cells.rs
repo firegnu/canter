@@ -189,13 +189,14 @@ pub(crate) fn item(
         ),
         Item::CommandExecution {
             command,
+            source,
             status,
             aggregated_output,
             exit_code,
             duration_ms,
             ..
         } => command_card(
-            command,
+            (command, *source),
             *status,
             *exit_code,
             *duration_ms,
@@ -917,7 +918,7 @@ fn single_program(command: &str) -> Option<String> {
 }
 
 fn command_card(
-    command: &str,
+    command: (&str, canter_protocol::ExecCommandSource),
     status: ItemStatus,
     exit_code: Option<i32>,
     duration_ms: Option<u64>,
@@ -925,6 +926,7 @@ fn command_card(
     details: bool,
     width: u16,
 ) -> Vec<Row> {
+    let (command, source) = command;
     let dim = theme::secondary();
     let took = duration_ms.map(|ms| Span::styled(format!(" · {}", format_duration(ms)), dim));
     let searched_nothing = no_matches(command, exit_code, output);
@@ -945,7 +947,12 @@ fn command_card(
     let failed = !searched_nothing
         && !matches!(status, ItemStatus::InProgress | ItemStatus::Declined)
         && exit_code.map_or(status == ItemStatus::Failed, |code| code != 0);
-    let mut rows = command_title(command, bullet, right, details, width);
+    let title = if source == canter_protocol::ExecCommandSource::UserShell {
+        format!("! {command}")
+    } else {
+        command.to_owned()
+    };
+    let mut rows = command_title(&title, bullet, right, details, width);
     let (fold, style) = if details {
         (Fold::Details, if failed { Style::new() } else { dim })
     } else if status == ItemStatus::InProgress {

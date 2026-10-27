@@ -65,6 +65,7 @@ pub(crate) struct State {
 pub(crate) struct Active {
     pub turn: Turn,
     pub manual_compaction: bool,
+    pub user_shell: Option<SessionShellCommandParams>,
     pub model_started: bool,
     pub retracted: bool,
     pub cancel: CancellationToken,
@@ -570,6 +571,12 @@ impl Session {
                 .await?;
             let turn_id = if params.mode == InputMode::Steer
                 && params.review.is_none()
+                && state
+                    .active
+                    .as_ref()
+                    .expect("active turn")
+                    .user_shell
+                    .is_none()
                 && !state
                     .active
                     .as_ref()
@@ -664,6 +671,7 @@ impl Session {
             if params.retract == Some(true)
                 && !active.cancel.is_cancelled()
                 && !active.manual_compaction
+                && active.user_shell.is_none()
                 && !active.model_started
             {
                 active.retracted = true;
@@ -1070,6 +1078,7 @@ impl Shared {
         state.active = Some(Active {
             turn: turn.clone(),
             manual_compaction: false,
+            user_shell: None,
             model_started: false,
             retracted: false,
             cancel: self.lifetime.child_token(),

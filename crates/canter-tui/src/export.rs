@@ -156,6 +156,7 @@ impl Body {
             }
             Item::CommandExecution {
                 command,
+                source,
                 status,
                 aggregated_output,
                 exit_code,
@@ -169,10 +170,22 @@ impl Body {
                     outcome = "No matches".into();
                 }
                 let summary = format!(
-                    "Ran {} · {outcome}",
+                    "{} {} · {outcome}",
+                    if *source == canter_protocol::ExecCommandSource::UserShell {
+                        "User ran"
+                    } else {
+                        "Ran"
+                    },
                     code_span(&one_line(command, LINE_CHARS))
                 );
-                self.block(assistant, &tool(&summary, aggregated_output, ""));
+                self.block(
+                    if *source == canter_protocol::ExecCommandSource::UserShell {
+                        "User"
+                    } else {
+                        assistant
+                    },
+                    &tool(&summary, aggregated_output, ""),
+                );
             }
             Item::FileChange {
                 changes, status, ..
@@ -479,6 +492,7 @@ mod tests {
                 },
                 Item::CommandExecution {
                     id: "c1".into(),
+                    source: Default::default(),
                     command: "cargo test".into(),
                     cwd: "/work/proj".into(),
                     status: ItemStatus::Completed,
@@ -504,6 +518,7 @@ mod tests {
                 },
                 Item::CommandExecution {
                     id: "c2".into(),
+                    source: Default::default(),
                     command: "rm -rf target".into(),
                     cwd: "/work/proj".into(),
                     status: ItemStatus::Declined,
@@ -611,6 +626,7 @@ _Failed: model unreachable_
                 "go",
                 vec![Item::CommandExecution {
                     id: "c1".into(),
+                    source: Default::default(),
                     command: "echo `date`\necho two".into(),
                     cwd: "/work/proj".into(),
                     status: ItemStatus::Completed,
@@ -642,6 +658,7 @@ _Failed: model unreachable_
                 vec![
                     Item::CommandExecution {
                         id: "c1".into(),
+                        source: Default::default(),
                         command: "rg missing".into(),
                         cwd: "/work/proj".into(),
                         status: ItemStatus::Failed,
@@ -651,6 +668,7 @@ _Failed: model unreachable_
                     },
                     Item::CommandExecution {
                         id: "c2".into(),
+                        source: Default::default(),
                         command: "diff a b".into(),
                         cwd: "/work/proj".into(),
                         status: ItemStatus::Failed,

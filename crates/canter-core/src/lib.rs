@@ -10,6 +10,7 @@ mod runner;
 mod session;
 mod skills;
 pub mod usage;
+mod user_shell;
 
 pub use btw::BtwStream;
 use canter_protocol::ErrorCode;

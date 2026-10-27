@@ -177,6 +177,45 @@ async fn failed_text_send(pastes: &[&str], typing: &str) -> Harness {
 }
 
 #[tokio::test]
+async fn user_shell_dispatches_command_and_restores_draft_on_busy_response() {
+    use axum::response::IntoResponse;
+    for busy in [false, true] {
+        let mut test = Harness::new().await;
+        test.ui.app_mut().handle_paste("! git status ");
+        test.key(KeyCode::Enter);
+        let request = test.request().await;
+        assert_eq!(request.path, "/v1/sessions/test/shellCommand");
+        assert_eq!(request.body, json!({"command":"git status"}));
+        if busy {
+            let response = (
+                axum::http::StatusCode::CONFLICT,
+                axum::Json(json!({
+                    "code":"conflict", "message":"wait for this turn to finish"
+                })),
+            )
+                .into_response();
+            assert!(request.reply.send(response).is_ok());
+        } else {
+            request.json(json!({"eventSeq":1,"turnId":"shell-turn"}));
+        }
+        test.message().await;
+        let retry = test
+            .ui
+            .app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 0);
+        assert_eq!(
+            retry,
+            busy.then(|| Action::ShellCommand("git status".into()))
+        );
+        assert!(
+            test.requests.try_recv().is_err(),
+            "never send /input for a shell command"
+        );
+        test.stop().await;
+    }
+}
+
+#[tokio::test]
 async fn failed_text_send_restores_the_draft() {
     let mut test = failed_text_send(&["first line\nsecond line"], "").await;
     assert_eq!(

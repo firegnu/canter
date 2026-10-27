@@ -15,7 +15,8 @@ use canter_protocol::{
     SessionCompactParams, SessionCompactResponse, SessionCreateParams, SessionCreateResponse,
     SessionInputParams, SessionInputResponse, SessionInterruptParams, SessionInterruptResponse,
     SessionListResponse, SessionReadResponse, SessionResumeParams, SessionResumeResponse,
-    SessionSummary, SessionUpdateParams, SessionUpdateResponse, routes,
+    SessionShellCommandParams, SessionShellCommandResponse, SessionSummary, SessionUpdateParams,
+    SessionUpdateResponse, routes,
 };
 use reqwest::header::ACCEPT;
 use reqwest::{StatusCode, Url};
@@ -227,6 +228,20 @@ impl Client {
         let response = self
             .http
             .post(url(routes::INPUT, &[session]))
+            .json(params)
+            .send()
+            .await?;
+        decode(response).await
+    }
+
+    pub async fn shell_command(
+        &self,
+        session: &str,
+        params: &SessionShellCommandParams,
+    ) -> Result<SessionShellCommandResponse, ClientError> {
+        let response = self
+            .http
+            .post(url(routes::SHELL_COMMAND, &[session]))
             .json(params)
             .send()
             .await?;

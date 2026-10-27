@@ -86,6 +86,7 @@ pub enum Action {
     Rewind(canter_protocol::SessionRewindParams),
     /// Send this text to the session.
     Send(String),
+    ShellCommand(String),
     SendImages {
         text: String,
         input: Vec<UserInput>,
@@ -544,6 +545,8 @@ pub struct App {
     sending_image: Option<InputBox>,
     /// Taken by the dispatcher so each in-flight text send owns its draft.
     sending_text: Option<InputBox>,
+    sending_shell: bool,
+    shell_wait: bool,
     image_models: Vec<String>,
     clipboard: crate::images::Clipboard,
     /// Where copies go: the clipboard, and the terminal in tmux or over SSH.
@@ -792,6 +795,8 @@ impl App {
             input_history: Default::default(),
             sending_image: None,
             sending_text: None,
+            sending_shell: false,
+            shell_wait: false,
             image_models: vec!["deepseek-flash".into()],
             clipboard: crate::images::Clipboard::default(),
             copier: Copier::default(),
@@ -1303,6 +1308,41 @@ impl App {
     /// completes the command selected, like Tab: the first one, `/compact`,
     /// cannot be undone (user's decision).
     fn enter(&mut self) -> Option<Action> {
+        if let Some(command) = self.input.full_text().trim().strip_prefix('!') {
+            let command = command.trim().to_owned();
+            if command.is_empty() {
+                return None;
+            }
+            if self.snapshot.status != SessionStatus::Idle
+                || self
+                    .snapshot
+                    .turns
+                    .iter()
+                    .any(|turn| turn.status == TurnStatus::InProgress)
+                || self.handoff_in_progress()
+                || self.sending_shell
+            {
+                self.shell_wait = true;
+                return None;
+            }
+            if self
+                .input
+                .parts()
+                .iter()
+                .any(|part| matches!(part, UserInput::LocalImage { .. }))
+            {
+                self.warning("Remove images before running a shell command");
+                return None;
+            }
+            self.shell_wait = false;
+            self.sending_shell = true;
+            self.scroll.top = None;
+            self.handoff_back = None;
+            self.record_input(None);
+            self.sending_text = Some(self.input.clone());
+            self.input.clear();
+            return Some(Action::ShellCommand(command));
+        }
         if let Some((matches, selected)) = self.command_list()
             && commands::typing(self.input.text())
                 .and_then(commands::find)
@@ -2702,6 +2742,18 @@ impl App {
         self.sending_text.take()
     }
 
+    pub(crate) fn shell_sent(&mut self) {
+        self.sending_shell = false;
+    }
+
+    pub(crate) fn shell_failed(&mut self, message: &str, draft: Option<InputBox>) {
+        self.sending_shell = false;
+        if let Some(draft) = draft {
+            self.input.restore(draft);
+        }
+        self.warning(&format!("Command not run: {message}"));
+    }
+
     pub fn input_sent(&mut self, event_seq: u64, input: Vec<UserInput>) {
         self.images_need_paste = false;
         if input
@@ -3974,6 +4026,20 @@ impl App {
     /// The status line without the Ctrl+O hint, a long command cut to fit
     /// `room` columns; and whether it says what the turn is doing.
     fn activity(&self, now_ms: i64, room: usize) -> (Line<'static>, bool) {
+        if self.shell_wait
+            && self.input.full_text().trim_start().starts_with('!')
+            && (self.snapshot.status != SessionStatus::Idle
+                || self.sending_shell
+                || self.handoff_in_progress())
+        {
+            return (
+                Line::from(Span::styled(
+                    " ! Wait for this turn to finish before running a command",
+                    theme::warning(),
+                )),
+                false,
+            );
+        }
         if let Some(reason) = &self.reconnecting {
             let line = Line::from(vec![
                 Span::styled(" ⟳ Reconnecting…", theme::warning()),

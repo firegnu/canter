@@ -21,6 +21,10 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ),
             ("Shift+Enter / Ctrl+J", "New line"),
             ("/", "Commands, typed first"),
+            (
+                "!command",
+                "Run a shell command directly, while the session is idle",
+            ),
             ("@", "Mention a file"),
             ("↑ / ↓", "Select in a list; otherwise move between lines"),
             (

@@ -1,6 +1,6 @@
 use crate::output::{BoundedText, MAX_CLIENT_OUTPUT_BYTES};
 use crate::{Executor, ToolOutcome, ToolOutput};
-use canter_protocol::{Item, ItemStatus};
+use canter_protocol::{ExecCommandSource, Item, ItemStatus};
 use serde::Deserialize;
 use std::{io, os::unix::process::ExitStatusExt, time::Instant};
 use tokio::io::AsyncReadExt;
@@ -26,6 +26,7 @@ pub(crate) async fn run(
     executor: &dyn Executor,
     id: String,
     args: &ShellArgs,
+    source: ExecCommandSource,
     cancel: &CancellationToken,
     on_output: &mut (dyn FnMut(&str) + Send),
 ) -> ToolOutput {
@@ -63,9 +64,17 @@ pub(crate) async fn run(
         ),
     };
     ToolOutput {
-        text: format!("{}\n{message}", output.model.render(false)),
+        text: if source == ExecCommandSource::UserShell
+            && exit_code.is_some()
+            && matches!(outcome, ToolOutcome::Completed | ToolOutcome::Failed)
+        {
+            output.model.render(false)
+        } else {
+            format!("{}\n{message}", output.model.render(false))
+        },
         item: Item::CommandExecution {
             id,
+            source,
             command: args.command.clone(),
             cwd: executor.cwd().to_string_lossy().into_owned(),
             status: if outcome == ToolOutcome::Completed {

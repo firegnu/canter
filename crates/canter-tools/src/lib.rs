@@ -294,6 +294,7 @@ impl PreparedCall {
             },
             Action::Shell(args) => Item::CommandExecution {
                 id: self.id.clone(),
+                source: Default::default(),
                 command: args.command.clone(),
                 cwd: self.executor.cwd().to_string_lossy().into_owned(),
                 aggregated_output: String::new(),
@@ -352,6 +353,29 @@ pub struct Tools {
 }
 
 impl Tools {
+    /// Explicit user input bypasses the model's permission gate, but uses the
+    /// same executor, capture limits and process-group cleanup as shell tools.
+    pub async fn user_shell(
+        &self,
+        id: String,
+        params: &canter_protocol::SessionShellCommandParams,
+        cancel: &CancellationToken,
+        on_output: &mut (dyn FnMut(&str) + Send),
+    ) -> ToolOutput {
+        shell::run(
+            self.executor.as_ref(),
+            id,
+            &shell::ShellArgs {
+                command: params.command.clone(),
+                timeout_ms: params.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS),
+            },
+            canter_protocol::ExecCommandSource::UserShell,
+            cancel,
+            on_output,
+        )
+        .await
+    }
+
     /// Explicit client rewind, using the same executor path checks and atomic replacement.
     pub async fn restore_file(
         &self,
@@ -800,6 +824,7 @@ impl Tools {
                     self.executor.as_ref(),
                     call.id.clone(),
                     args,
+                    canter_protocol::ExecCommandSource::Agent,
                     cancel,
                     on_output,
                 )
@@ -1057,6 +1082,7 @@ fn tool_error(
         },
         Tool::Shell => Item::CommandExecution {
             id,
+            source: Default::default(),
             command: arguments["command"].as_str().unwrap_or_default().into(),
             cwd: cwd.to_string_lossy().into_owned(),
             status: ItemStatus::Failed,

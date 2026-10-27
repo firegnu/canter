@@ -24,6 +24,7 @@ pub mod routes {
     pub const HANDOFF: &str = "/v1/sessions/{id}/handoff";
     pub const RESUME: &str = "/v1/sessions/{id}/resume";
     pub const INPUT: &str = "/v1/sessions/{id}/input";
+    pub const SHELL_COMMAND: &str = "/v1/sessions/{id}/shellCommand";
     pub const INTERRUPT: &str = "/v1/sessions/{id}/interrupt";
     pub const REQUEST: &str = "/v1/sessions/{id}/requests/{rid}";
     pub const COMPACT: &str = "/v1/sessions/{id}/compact";
@@ -275,6 +276,24 @@ pub struct SessionInputResponse {
     pub event_seq: u64,
     /// None while queued for a future turn.
     pub turn_id: Option<String>,
+}
+
+/// Run a user command as its own turn, only while the session is idle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionShellCommandParams {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionShellCommandResponse {
+    #[ts(type = "number")]
+    pub event_seq: u64,
+    pub turn_id: String,
 }
 
 /// POST /v1/sessions/{id}/interrupt, with the target turn as a precondition.

@@ -1152,6 +1152,14 @@
       "$ref": "#/$defs/Event",
       "description": "One SSE data frame, encoded as the event itself (not a JSON array)."
     },
+    "ExecCommandSource": {
+      "enum": [
+        "agent",
+        "userShell",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "FileUpdateChange": {
       "properties": {
         "diff": {
@@ -1406,6 +1414,9 @@
             },
             "id": {
               "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/ExecCommandSource"
             },
             "status": {
               "$ref": "#/$defs/ItemStatus"
@@ -2522,6 +2533,43 @@
       "required": [
         "model",
         "approvalPolicy"
+      ],
+      "type": "object"
+    },
+    "SessionShellCommandParams": {
+      "description": "Run a user command as its own turn, only while the session is idle.",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "SessionShellCommandResponse": {
+      "properties": {
+        "eventSeq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "eventSeq",
+        "turnId"
       ],
       "type": "object"
     },

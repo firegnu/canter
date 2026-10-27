@@ -2,6 +2,35 @@ use canter_protocol::{Event, EventPayload, Item, SessionSnapshot, SessionStatus,
 use serde_json::json;
 
 #[test]
+fn command_source_defaults_to_agent_and_user_shell_round_trips() {
+    use canter_protocol::ExecCommandSource;
+    let old = json!({"type":"commandExecution","id":"command","command":"git status",
+        "cwd":"/work","status":"completed","aggregatedOutput":"clean","exitCode":0,"durationMs":1});
+    let item: Item = serde_json::from_value(old.clone()).unwrap();
+    assert!(matches!(
+        item,
+        Item::CommandExecution {
+            source: ExecCommandSource::Agent,
+            ..
+        }
+    ));
+    assert_eq!(serde_json::to_value(item).unwrap(), old);
+    for (source, expected) in [
+        ("agent", ExecCommandSource::Agent),
+        ("userShell", ExecCommandSource::UserShell),
+        ("futureSource", ExecCommandSource::Unknown),
+    ] {
+        let mut value = old.clone();
+        value["source"] = json!(source);
+        let item: Item = serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(item, Item::CommandExecution { source, .. } if source == expected));
+        if expected == ExecCommandSource::UserShell {
+            assert_eq!(serde_json::to_value(item).unwrap(), value);
+        }
+    }
+}
+
+#[test]
 fn unknown_events_and_items_can_be_skipped() {
     let event: Event = serde_json::from_value(json!({
         "seq": 1, "sessionId": "s1", "timestamp": 100,
