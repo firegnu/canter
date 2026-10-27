@@ -209,10 +209,11 @@ fn image_marker_is_one_word_and_its_attachment_goes_with_it() {
     assert_eq!(text, "看看|[Image #1 screenshot.png]| ok");
     assert!(matches!(&input[1], UserInput::LocalImage { .. }));
 
-    // From inside the marker, deleting a word either way takes it all.
-    for code in [KeyCode::Backspace, KeyCode::Delete] {
+    // Next to the marker, deleting a word towards it takes it all (the
+    // cursor no longer stops inside a marker, P2-50).
+    for (code, lefts) in [(KeyCode::Backspace, 3), (KeyCode::Delete, 4)] {
         let mut app = with_image(" ok");
-        for _ in 0..8 {
+        for _ in 0..lefts {
             press(&mut app, KeyCode::Left, KeyModifiers::NONE);
         }
         press(&mut app, code, KeyModifiers::ALT);

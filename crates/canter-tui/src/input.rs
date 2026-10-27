@@ -11,6 +11,20 @@ pub(crate) struct InputBox {
     cursor: usize,
     images: Vec<(String, canter_protocol::UserInput)>,
     image_number: usize,
+    /// Folded pastes: the marker and the full text it stands for.
+    pastes: Vec<(String, String)>,
+    paste_number: usize,
+}
+
+/// A paste over this many lines or characters folds into a marker.
+const FOLD_LINES: usize = 10;
+const FOLD_CHARS: usize = 1000;
+
+/// A stretch of the draft: typed text, an image marker or a folded paste.
+enum Piece<'a> {
+    Text(&'a str),
+    Image(&'a str, &'a canter_protocol::UserInput),
+    Paste(&'a str),
 }
 
 /// Soft-wrapped rows (byte ranges, without the newlines) and the cursor's
@@ -41,10 +55,40 @@ impl InputBox {
         self.text.replace_range(range, with);
     }
 
+    /// Empties the box and returns the draft, folded pastes in full.
     pub fn take(&mut self) -> String {
+        let text = self
+            .pieces()
+            .into_iter()
+            .map(|piece| match piece {
+                Piece::Text(text) | Piece::Image(text, _) | Piece::Paste(text) => text,
+            })
+            .collect();
         self.cursor = 0;
         self.images.clear();
-        std::mem::take(&mut self.text)
+        self.pastes.clear();
+        self.text.clear();
+        text
+    }
+
+    /// A bracketed paste: over 10 lines or 1000 characters it goes in as
+    /// one marker and the full text is kept aside.
+    pub fn paste(&mut self, text: &str) {
+        let clean = clean(text);
+        let lines = clean.lines().count();
+        let chars = clean.chars().count();
+        if lines <= FOLD_LINES && chars <= FOLD_CHARS {
+            self.insert(&clean);
+            return;
+        }
+        self.paste_number += 1;
+        let marker = if lines > FOLD_LINES {
+            format!("[Pasted #{} · {lines} lines]", self.paste_number)
+        } else {
+            format!("[Pasted #{} · {chars} chars]", self.paste_number)
+        };
+        self.insert(&marker);
+        self.pastes.push((marker, clean));
     }
 
     pub fn attach(&mut self, path: String, name: String) {
@@ -64,56 +108,104 @@ impl InputBox {
         ));
     }
 
+    /// What is sent: text with folded pastes in full, and the images.
     pub fn parts(&self) -> Vec<canter_protocol::UserInput> {
         use canter_protocol::UserInput;
         let mut parts = Vec::new();
-        let mut rest = self.text.as_str();
-        while let Some((offset, marker, image)) = self
-            .images
-            .iter()
-            .filter_map(|(marker, image)| rest.find(marker).map(|offset| (offset, marker, image)))
-            .min_by_key(|(offset, _, _)| *offset)
-        {
-            if offset > 0 {
-                parts.push(UserInput::Text {
-                    text: rest[..offset].into(),
-                });
+        let mut text = String::new();
+        for piece in self.pieces() {
+            match piece {
+                Piece::Text(more) | Piece::Paste(more) => text.push_str(more),
+                Piece::Image(_, image) => {
+                    if !text.is_empty() {
+                        parts.push(UserInput::Text {
+                            text: std::mem::take(&mut text),
+                        });
+                    }
+                    parts.push(image.clone());
+                }
             }
-            parts.push(image.clone());
-            rest = &rest[offset + marker.len()..];
         }
-        if !rest.is_empty() {
-            parts.push(UserInput::Text { text: rest.into() });
+        if !text.is_empty() {
+            parts.push(UserInput::Text { text });
         }
         parts
+    }
+
+    /// The draft split at the markers, in order.
+    fn pieces(&self) -> Vec<Piece<'_>> {
+        let images = self.images.iter().flat_map(|(marker, image)| {
+            self.text
+                .match_indices(marker.as_str())
+                .map(move |(i, m)| (i, m, Piece::Image(m, image)))
+        });
+        let pastes = self.pastes.iter().flat_map(|(marker, text)| {
+            self.text
+                .match_indices(marker.as_str())
+                .map(move |(i, m)| (i, m, Piece::Paste(text)))
+        });
+        let mut found: Vec<_> = images.chain(pastes).collect();
+        found.sort_by_key(|(i, _, _)| *i);
+        let mut pieces = Vec::new();
+        let mut at = 0;
+        for (i, marker, piece) in found {
+            if i < at {
+                continue;
+            }
+            if i > at {
+                pieces.push(Piece::Text(&self.text[at..i]));
+            }
+            pieces.push(piece);
+            at = i + marker.len();
+        }
+        if at < self.text.len() {
+            pieces.push(Piece::Text(&self.text[at..]));
+        }
+        pieces
     }
 
     pub fn restore(&mut self, draft: Self) {
         self.cursor = 0;
         self.insert(&draft.text);
         self.images.extend(draft.images);
+        self.pastes.extend(draft.pastes);
     }
 
     pub fn clear(&mut self) {
         self.take();
     }
 
+    /// Puts retracted messages, in full, before the draft; the draft's own
+    /// folded pastes stay folded.
     pub fn prepend_inputs(&mut self, inputs: Vec<Vec<canter_protocol::UserInput>>) {
         use canter_protocol::UserInput;
-        let draft = self.parts();
+        enum Part {
+            Input(UserInput),
+            Paste(String),
+        }
+        let draft: Vec<Part> = self
+            .pieces()
+            .into_iter()
+            .map(|piece| match piece {
+                Piece::Text(text) => Part::Input(UserInput::Text { text: text.into() }),
+                Piece::Image(_, image) => Part::Input(image.clone()),
+                Piece::Paste(text) => Part::Paste(text.into()),
+            })
+            .collect();
         self.clear();
         for input in inputs
             .into_iter()
+            .map(|parts| parts.into_iter().map(Part::Input).collect())
             .chain([draft])
-            .filter(|parts| !parts.is_empty())
+            .filter(|parts: &Vec<Part>| !parts.is_empty())
         {
             if !self.is_empty() {
                 self.insert("\n");
             }
             for part in input {
                 match part {
-                    UserInput::Text { text } => self.insert(&text),
-                    UserInput::LocalImage { path, name } => {
+                    Part::Input(UserInput::Text { text }) => self.insert(&text),
+                    Part::Input(UserInput::LocalImage { path, name }) => {
                         let name = name.unwrap_or_else(|| {
                             std::path::Path::new(&path)
                                 .file_name()
@@ -123,7 +215,8 @@ impl InputBox {
                         });
                         self.attach(path, name);
                     }
-                    UserInput::Unknown => {}
+                    Part::Input(UserInput::Unknown) => {}
+                    Part::Paste(text) => self.paste(&text),
                 }
             }
         }
@@ -132,45 +225,39 @@ impl InputBox {
     /// Inserts typed or pasted text. Line endings become `\n`, tabs become
     /// spaces, and other control characters are dropped.
     pub fn insert(&mut self, text: &str) {
-        let mut clean = String::with_capacity(text.len());
-        let mut chars = text.chars().peekable();
-        while let Some(c) = chars.next() {
-            match c {
-                '\r' => {
-                    chars.next_if_eq(&'\n');
-                    clean.push('\n');
-                }
-                '\n' => clean.push('\n'),
-                '\t' => clean.push_str("    "),
-                c if c.is_control() => {}
-                c => clean.push(c),
-            }
-        }
+        let clean = clean(text);
         self.text.insert_str(self.cursor, &clean);
         self.cursor += clean.len();
     }
 
+    /// Deletes the character before the cursor, or the whole marker.
     pub fn backspace(&mut self) {
         if let Some(c) = self.text[..self.cursor].chars().next_back() {
-            self.cursor -= c.len_utf8();
-            self.text.remove(self.cursor);
+            self.remove(self.cursor - c.len_utf8()..self.cursor);
         }
     }
 
+    /// Deletes the character after the cursor, or the whole marker.
     pub fn delete(&mut self) {
-        if self.cursor < self.text.len() {
-            self.text.remove(self.cursor);
+        if let Some(c) = self.text[self.cursor..].chars().next() {
+            self.remove(self.cursor..self.cursor + c.len_utf8());
         }
     }
 
+    /// One character left; over a marker in one step.
     pub fn left(&mut self) {
-        if let Some(c) = self.text[..self.cursor].chars().next_back() {
+        if let Some(marker) = self.markers().into_iter().find(|m| m.end == self.cursor) {
+            self.cursor = marker.start;
+        } else if let Some(c) = self.text[..self.cursor].chars().next_back() {
             self.cursor -= c.len_utf8();
         }
     }
 
+    /// One character right; over a marker in one step.
     pub fn right(&mut self) {
-        if let Some(c) = self.text[self.cursor..].chars().next() {
+        if let Some(marker) = self.markers().into_iter().find(|m| m.start == self.cursor) {
+            self.cursor = marker.end;
+        } else if let Some(c) = self.text[self.cursor..].chars().next() {
             self.cursor += c.len_utf8();
         }
     }
@@ -224,11 +311,13 @@ impl InputBox {
         }
     }
 
-    /// Byte ranges of the image markers in the text.
+    /// Byte ranges of the image and paste markers in the text.
     fn markers(&self) -> Vec<Range<usize>> {
         self.images
             .iter()
-            .flat_map(|(marker, _)| {
+            .map(|(marker, _)| marker)
+            .chain(self.pastes.iter().map(|(marker, _)| marker))
+            .flat_map(|marker| {
                 self.text
                     .match_indices(marker.as_str())
                     .map(|(i, m)| i..i + m.len())
@@ -236,8 +325,8 @@ impl InputBox {
             .collect()
     }
 
-    /// Removes `range`, widened to whole image markers, and puts the cursor
-    /// where it was.
+    /// Removes `range`, widened to whole markers, and puts the cursor where
+    /// it was; an image or paste whose marker is gone goes with it.
     fn remove(&mut self, range: Range<usize>) {
         let mut range = range;
         for marker in self.markers() {
@@ -247,10 +336,15 @@ impl InputBox {
             }
         }
         self.replace(range, "", 0);
+        let text = &self.text;
+        self.images
+            .retain(|(marker, _)| text.contains(marker.as_str()));
+        self.pastes
+            .retain(|(marker, _)| text.contains(marker.as_str()));
     }
 
     /// Where the word before the cursor starts: past the separators, then
-    /// past one run of the same kind; an image marker is one word.
+    /// past one run of the same kind; a marker is one word.
     fn word_start(&self) -> usize {
         let markers = self.markers();
         let mut p = self.cursor;
@@ -316,7 +410,12 @@ impl InputBox {
             used += w;
             offset += c.len_utf8();
         }
-        self.cursor = offset;
+        // Inside a marker the cursor goes after it.
+        self.cursor = self
+            .markers()
+            .into_iter()
+            .find(|m| m.start < offset && offset < m.end)
+            .map_or(offset, |m| m.end);
     }
 
     pub fn layout(&self, width: usize) -> InputLayout {
@@ -360,6 +459,26 @@ impl InputBox {
             cursor: cursor.unwrap_or((0, 0)),
         }
     }
+}
+
+/// Line endings become `\n`, tabs become spaces, and other control
+/// characters are dropped.
+fn clean(text: &str) -> String {
+    let mut clean = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                chars.next_if_eq(&'\n');
+                clean.push('\n');
+            }
+            '\n' => clean.push('\n'),
+            '\t' => clean.push_str("    "),
+            c if c.is_control() => {}
+            c => clean.push(c),
+        }
+    }
+    clean
 }
 
 #[derive(PartialEq)]
