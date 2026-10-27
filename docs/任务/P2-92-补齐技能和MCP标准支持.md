@@ -42,6 +42,14 @@
    - 服务主动问用户（elicitation）、sampling、roots 这些客户端能力，没查 canter 支持到哪一步；
    - 工具列表在会话打开时定下、中途不变（为了缓存，DESIGN 第 17 条），服务发的「工具列表变了」通知不管。这是有意的。
 
+### 搜网页（10-27 加）
+
+- 10-27 用户：「把搜网页记进P2-92， 子agent写到P2-78,applu_patch写到P2-80,盯输出、目标续跑：P2-81 长任务可靠性分解时参考 这个单独写一个task。」
+- 现状：canter 只有 `web_fetch`（给网址才能读），模型不会自己搜。日常开发查报错、查库的用法常要用到。
+- 别家（P2-88 报告第 1、6 节）：Codex `web_search` 用 OpenAI 托管搜索；Claude Code `WebSearch` 走 Anthropic 后端；opencode `websearch` 用 Exa、Tavily 等第三方，要 key。DeepSeek 接口有没有托管搜索，P2-88 没查。
+- 主控倾向：先接一个 MCP 搜索服务，不自己写工具，所以记在本件。要第三方 key 的会花钱，选哪家、花多少要用户定。接 GPT 订阅（P2-80）后可以再看 OpenAI 托管搜索。
+- 要查的：DeepSeek 有没有托管搜索；常见 MCP 搜索服务（Exa、Tavily、Brave 等）的价钱、要不要 key、返回什么；搜索结果的批准和网址放行怎么和 `web_fetch` 的规矩接上（不做绕过测试）。
+
 ## 主控的建议
 
 1. 先派一个调研：对照技能标准、MCP 标准（以当时最新版为准）和 Codex、Claude Code 的做法，把 canter 缺的列全，每条给做 / 不做 / 以后再说和大小。上面的结论作起点。
