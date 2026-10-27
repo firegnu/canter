@@ -83,11 +83,11 @@ pub(crate) async fn popup(snapshot: &SessionSnapshot, home: Option<&str>) -> Rep
     if read.is_empty() {
         body.push(none("(none)"));
     }
-    body.extend(read.iter().map(|path| {
-        Part::Line(vec![Span::raw(format!(
-            "   {}",
-            clean(&display_path(path, cwd, home))
-        ))])
+    body.extend(read.iter().map(|path| Part::Path {
+        before: vec![Span::raw("   ")],
+        path: clean(&display_path(path, cwd, home)),
+        column: 0,
+        after: Vec::new(),
     }));
     body.push(Part::blank());
     body.push(heading("Changed by canter", None));
@@ -109,8 +109,12 @@ pub(crate) async fn popup(snapshot: &SessionSnapshot, home: Option<&str>) -> Rep
         }
         let pad = kinds_width - str_width(&kinds.join(" / ")) + 3;
         spans.push(Span::raw(" ".repeat(pad)));
-        spans.push(Span::raw(clean(&display_path(path, cwd, home))));
-        body.push(Part::Line(spans));
+        body.push(Part::Path {
+            before: spans,
+            path: clean(&display_path(path, cwd, home)),
+            column: 0,
+            after: Vec::new(),
+        });
     }
     body.push(Part::blank());
     match git {
@@ -138,21 +142,34 @@ pub(crate) async fn popup(snapshot: &SessionSnapshot, home: Option<&str>) -> Rep
                 .map(|(_, path)| str_width(path))
                 .max()
                 .unwrap_or(0);
+            // Marks padded alike, so the paths before them shorten alike.
+            let mark_width = rows
+                .iter()
+                .filter_map(|((.., mark), _)| mark.map(str_width))
+                .max()
+                .unwrap_or(0);
             for ((word, style, mark), path) in rows {
-                let mut spans = vec![
+                let before = vec![
                     Span::raw("   "),
                     Span::styled(word.clone(), style),
                     Span::raw(" ".repeat(word_width - str_width(&word) + 3)),
                 ];
-                match mark {
-                    Some(mark) => {
-                        let pad = path_width - str_width(&path) + 3;
-                        spans.push(Span::raw(format!("{path}{}", " ".repeat(pad))));
-                        spans.push(Span::styled(mark, theme::secondary()));
-                    }
-                    None => spans.push(Span::raw(path)),
-                }
-                body.push(Part::Line(spans));
+                let (column, after) = match mark {
+                    Some(mark) => (
+                        path_width,
+                        vec![Span::styled(
+                            format!("   {mark:<mark_width$}"),
+                            theme::secondary(),
+                        )],
+                    ),
+                    None => (0, Vec::new()),
+                };
+                body.push(Part::Path {
+                    before,
+                    path,
+                    column,
+                    after,
+                });
             }
         }
     }

@@ -15,6 +15,7 @@ use crate::diff::Diff;
 use crate::highlight;
 use crate::links::{self, Target};
 use crate::markdown;
+use crate::short_path::{PATH_MIN, fit_paths};
 use crate::text::{
     LogicalLine, Row, char_width, drawn_width, sanitize, spans_width, str_width, truncate, visible,
     wrap_rows,
@@ -40,6 +41,8 @@ const COMMAND_ROWS: usize = 5;
 const TITLE_INDENT: &str = "        ";
 /// Diff lines a changed file shows in the history; the approval box shows all.
 const EDIT_LINES: usize = 12;
+/// Between a moved file's old and new paths.
+const ARROW: &str = " → ";
 /// Diff lines a new file shows in the history. A deleted file shows none
 /// until details are shown.
 const ADD_LINES: usize = 6;
@@ -324,7 +327,8 @@ pub(crate) fn turn_end(turn: &Turn, error_shown: bool, cwd: &str, width: u16) ->
 /// they changed none. Changes that failed or were declined do not count.
 fn changed_files(turn: &Turn, cwd: &str, width: u16) -> Vec<Row> {
     struct File {
-        name: String,
+        /// The path, then where it was moved to, each time.
+        names: Vec<String>,
         added: usize,
         removed: usize,
         created: bool,
@@ -346,7 +350,7 @@ fn changed_files(turn: &Turn, cwd: &str, width: u16) -> Vec<Row> {
             let diff = Diff::parse(&sanitize(&change.diff), &change.kind, &change.path);
             let index = *at.entry(key(&change.path)).or_insert_with(|| {
                 files.push(File {
-                    name: display_path(&change.path, cwd),
+                    names: vec![display_path(&change.path, cwd)],
                     added: 0,
                     removed: 0,
                     created: false,
@@ -363,7 +367,7 @@ fn changed_files(turn: &Turn, cwd: &str, width: u16) -> Vec<Row> {
                 PatchChangeKind::Update {
                     move_path: Some(to),
                 } => {
-                    file.name = format!("{} → {}", file.name, display_path(to, cwd));
+                    file.names.push(display_path(to, cwd));
                     at.insert(key(to), index);
                 }
                 _ => {}
@@ -419,11 +423,11 @@ fn changed_files(turn: &Turn, cwd: &str, width: u16) -> Vec<Row> {
         .iter()
         .map(|file| counts(file.added, file.removed, file.deleted))
         .collect();
-    let name_width = shown
-        .iter()
-        .map(|file| str_width(&file.name))
-        .max()
-        .unwrap_or(0);
+    let full_width = |file: &File| {
+        let names: usize = file.names.iter().map(|name| str_width(name)).sum();
+        names + str_width(ARROW) * (file.names.len() - 1)
+    };
+    let name_width = shown.iter().map(full_width).max().unwrap_or(0);
     let added_width = file_counts
         .iter()
         .map(|(added, _)| added.as_deref().map_or(0, str_width))
@@ -436,23 +440,44 @@ fn changed_files(turn: &Turn, cwd: &str, width: u16) -> Vec<Row> {
                 .map_or(0, |removed| 1 + str_width(removed))
     };
     let all_counts_width = file_counts.iter().map(counts_width).max().unwrap_or(0);
-    for (file, counts) in shown.iter().zip(file_counts) {
-        let word = if file.deleted {
+    let word = |file: &File| {
+        if file.deleted {
             Some("deleted")
         } else if file.created {
             Some("new")
         } else {
             None
-        };
-        let pad = name_width - str_width(&file.name) + 2;
+        }
+    };
+    // The names take what the widest row leaves of the width, all alike so
+    // the counts stay in a column; paths lose directories to fit
+    // ([`fit_paths`]), never into fewer than [`PATH_MIN`] columns.
+    let after_names = shown
+        .iter()
+        .zip(&file_counts)
+        .map(|(file, counts)| match word(file) {
+            Some(word) => 2 + all_counts_width + 2 + str_width(word),
+            None => 2 + counts_width(counts),
+        })
+        .max()
+        .unwrap_or(0);
+    let name_width = usize::from(width)
+        .saturating_sub(6 + after_names)
+        .max(PATH_MIN)
+        .min(name_width);
+    for (file, counts) in shown.iter().zip(file_counts) {
+        let names: Vec<&str> = file.names.iter().map(String::as_str).collect();
+        let arrows = str_width(ARROW) * (names.len() - 1);
+        let name = fit_paths(&names, name_width.saturating_sub(arrows)).join(ARROW);
+        let pad = name_width.saturating_sub(str_width(&name)) + 2;
         let after = all_counts_width - counts_width(&counts) + 2;
         let mut spans = vec![
             Span::raw("      "),
-            Span::styled(file.name.clone(), theme::secondary()),
+            Span::styled(name, theme::secondary()),
             Span::raw(" ".repeat(pad)),
         ];
         spans.extend(count_spans(counts, added_width));
-        if let Some(word) = word {
+        if let Some(word) = word(file) {
             spans.push(Span::raw(" ".repeat(after)));
             spans.push(Span::styled(word, theme::secondary()));
         }
@@ -635,10 +660,6 @@ fn file_read(
         Span::styled("Read ", Style::new().bold()),
         Span::raw(display_path(path, cwd)),
     ];
-    let links: Vec<_> = links::path(path, cwd)
-        .map(|target| span_link(&spans, 3, target))
-        .into_iter()
-        .collect();
     let lines = content.lines().count() as u32;
     let detail = match status {
         ItemStatus::InProgress => None,
@@ -655,7 +676,31 @@ fn file_read(
         )),
     };
     spans.extend(detail);
+    fit_path_spans(&mut spans, &[3], usize::from(width));
+    let links: Vec<_> = links::path(path, cwd)
+        .map(|target| span_link(&spans, 3, target))
+        .into_iter()
+        .collect();
     cut_row(spans, links, width)
+}
+
+/// Shortens the paths that are spans `paths` of `spans` ([`fit_paths`]) so
+/// the row fits in `width` columns with what follows them; never into
+/// fewer than [`PATH_MIN`] columns each, and past that the row is cut at
+/// its end.
+fn fit_path_spans(spans: &mut [Span<'static>], paths: &[usize], width: usize) {
+    let texts: Vec<String> = paths
+        .iter()
+        .map(|&index| spans[index].content.to_string())
+        .collect();
+    let full: usize = texts.iter().map(|text| str_width(text)).sum();
+    let room = width
+        .saturating_sub(spans_width(spans) - full)
+        .max(full.min(PATH_MIN * paths.len()));
+    let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+    for (&index, fitted) in paths.iter().zip(fit_paths(&texts, room)) {
+        spans[index].content = fitted.into();
+    }
 }
 
 /// A card's title row of `spans`, cut to `width`, with `links` on what is
@@ -698,7 +743,9 @@ pub(crate) fn waiting(item: &Item, details: bool, cwd: &str, width: u16) -> Vec<
             .iter()
             .map(|change| {
                 let diff = Diff::parse(&sanitize(&change.diff), &change.kind, &change.path);
-                let (header, links) = change_header(change, &diff, dot(theme::secondary()), cwd);
+                let room = left_room(&mark(), usize::from(width));
+                let (header, links) =
+                    change_header(change, &diff, dot(theme::secondary()), None, cwd, room);
                 card_row(right_aligned(header, mark(), usize::from(width)), links)
             })
             .collect(),
@@ -723,8 +770,7 @@ fn file_change(
         ),
         _ => (dot(theme::success()), None),
     };
-    let (mut header, links) = change_header(change, &diff, bullet, cwd);
-    header.extend(suffix);
+    let (header, links) = change_header(change, &diff, bullet, suffix, cwd, usize::from(width));
     let mut rows = vec![cut_row(header, links, width)];
     let limit = match &change.kind {
         _ if details => None,
@@ -736,14 +782,17 @@ fn file_change(
     rows
 }
 
-/// `● 改 path  +a −r`: a file change's title, before any status suffix, and
-/// the link on its path: the file as it is after the change, so none for a
+/// `● 改 path  +a −r` and `suffix`: a file change's title, its paths
+/// shortened to fit in `width` columns ([`fit_path_spans`]), and the link
+/// on its path as drawn: the file as it is after the change, so none for a
 /// deleted file, and the new path of a moved one.
 fn change_header(
     change: &FileUpdateChange,
     diff: &Diff,
     bullet: Span<'static>,
+    suffix: Option<Span<'static>>,
     cwd: &str,
+    width: usize,
 ) -> (Vec<Span<'static>>, Vec<(Range<usize>, Target)>) {
     let (added, removed) = (diff.added(), diff.removed());
     let verb = match &change.kind {
@@ -757,6 +806,7 @@ fn change_header(
         Span::styled(verb, Style::new().bold()),
         Span::raw(display_path(&change.path, cwd)),
     ];
+    let mut paths = vec![3];
     let mut link = match &change.kind {
         PatchChangeKind::Delete => None,
         _ => Some((3, change.path.as_str())),
@@ -765,14 +815,11 @@ fn change_header(
         move_path: Some(to),
     } = &change.kind
     {
-        header.push(Span::raw(" → "));
+        header.push(Span::raw(ARROW));
         header.push(Span::raw(display_path(to, cwd)));
+        paths.push(header.len() - 1);
         link = Some((header.len() - 1, to.as_str()));
     }
-    let links = link
-        .and_then(|(index, path)| Some(span_link(&header, index, links::path(path, cwd)?)))
-        .into_iter()
-        .collect();
     header.push(Span::raw("  "));
     match &change.kind {
         PatchChangeKind::Add => header.push(Span::styled(format!("+{added}"), theme::success())),
@@ -785,6 +832,12 @@ fn change_header(
             Span::styled(format!("−{removed}"), theme::failure()),
         ]),
     }
+    header.extend(suffix);
+    fit_path_spans(&mut header, &paths, width);
+    let links = link
+        .and_then(|(index, path)| Some(span_link(&header, index, links::path(path, cwd)?)))
+        .into_iter()
+        .collect();
     (header, links)
 }
 
@@ -1153,16 +1206,28 @@ fn right_aligned(
     width: usize,
 ) -> (Line<'static>, usize) {
     let right_width = spans_width(&right);
-    if right.is_empty() || width < right_width + 12 {
+    let room = left_room(&right, width);
+    if room == width {
         return (Line::from(truncate(left, width)), usize::MAX);
     }
-    let mut spans = truncate(left, width - right_width - 2);
+    let mut spans = truncate(left, room);
     let left_width = spans_width(&spans);
     let left_end = drawn_width(&spans);
     let gap = width - right_width - left_width;
     spans.push(Span::raw(" ".repeat(gap)));
     spans.extend(right);
     (Line::from(spans), left_end)
+}
+
+/// The columns [`right_aligned`] leaves the left side: all of `width` when
+/// `right` is left out, otherwise up to two columns before it.
+fn left_room(right: &[Span<'static>], width: usize) -> usize {
+    let right_width = spans_width(right);
+    if right.is_empty() || width < right_width + 12 {
+        width
+    } else {
+        width - right_width - 2
+    }
 }
 
 fn format_duration(ms: u64) -> String {

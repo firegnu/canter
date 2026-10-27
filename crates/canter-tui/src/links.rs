@@ -21,6 +21,7 @@ use ratatui::text::{Line, Span};
 
 use crate::copy::Copier;
 use crate::select;
+use crate::short_path::fit_path;
 use crate::text::{char_width, str_width, visible};
 use crate::theme;
 
@@ -414,7 +415,9 @@ fn exit_failure(child: Child, program: &str) -> Option<String> {
 }
 
 /// `mark` and `what`, then `target` cut in the middle so that the row,
-/// `why` and all, fits in `width` columns; in red when it `failed`.
+/// `why` and all, fits in `width` columns; in red when it `failed`. A path
+/// (they are absolute) loses whole directories ([`fit_path`]), an address
+/// characters.
 fn note(
     mark: &str,
     what: &str,
@@ -424,7 +427,12 @@ fn note(
     failed: bool,
 ) -> Line<'static> {
     let room = width.saturating_sub(str_width(mark) + str_width(what) + str_width(why));
-    let text = format!("{what}{}{why}", truncate_middle(target, room));
+    let shown = if target.starts_with('/') {
+        fit_path(target, room)
+    } else {
+        truncate_middle(target, room)
+    };
+    let text = format!("{what}{shown}{why}");
     if failed {
         Line::from(Span::styled(format!("{mark}{text}"), theme::failure()))
     } else {

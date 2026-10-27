@@ -9,7 +9,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::approval::shorten_home;
-use crate::text::{Row, char_width, sanitize, spans_width, str_width, truncate};
+use crate::short_path::fit_path;
+use crate::text::{Row, sanitize, spans_width, str_width, truncate};
 use crate::theme::{self, Pony};
 
 /// 16 × 8 pixels; a cell shows two, one above the other, so the pony takes
@@ -56,7 +57,7 @@ pub(crate) fn rows(version: &str, cwd: &str, home: Option<&str>, width: u16) -> 
     let cwd = shorten_home(&sanitize(cwd).replace('\n', " "), home);
     let texts = [
         truncate(title, room),
-        vec![Span::styled(middle(&cwd, room), dim)],
+        vec![Span::styled(fit_path(&cwd, room), dim)],
         keys(KEYS[0], room, dim),
         keys(KEYS[1], room, dim),
     ];
@@ -125,46 +126,9 @@ fn keys(keys: &[&str], room: usize, style: Style) -> Vec<Span<'static>> {
     truncate(vec![Span::styled(text, style)], room)
 }
 
-/// `text` in `room` columns, cut in the middle with `…` when it is longer.
-fn middle(text: &str, room: usize) -> String {
-    if str_width(text) <= room {
-        return text.to_owned();
-    }
-    let Some(room) = room.checked_sub(1) else {
-        return String::new();
-    };
-    let take = |chars: &mut dyn Iterator<Item = char>, budget: usize| {
-        let mut used = 0;
-        let mut kept = Vec::new();
-        for c in chars {
-            used += char_width(c);
-            if used > budget {
-                break;
-            }
-            kept.push(c);
-        }
-        kept
-    };
-    let head = take(&mut text.chars(), room - room / 2);
-    let mut tail = take(&mut text.chars().rev(), room / 2);
-    tail.reverse();
-    head.into_iter().chain(['…']).chain(tail).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_middle_of_a_long_path_goes() {
-        assert_eq!(middle("~/short", 20), "~/short");
-        assert_eq!(middle("abcdefghij", 7), "abc…hij");
-        assert_eq!(middle("abcdefghij", 6), "abc…ij");
-        assert_eq!(middle("abcdefghij", 1), "…");
-        assert_eq!(middle("abcdefghij", 0), "");
-        // Wide characters never go past the room.
-        assert_eq!(middle("目录目录目录目录", 7), "目…录");
-    }
 
     #[test]
     fn keys_that_do_not_fit_are_left_out_from_the_last() {

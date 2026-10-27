@@ -4,7 +4,8 @@ use canter_protocol::{ContextResponse, ContextSectionKind};
 use ratatui::style::Style;
 use ratatui::text::Span;
 
-pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<String> {
+/// Each line, and the path that ends it (empty when none).
+pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<(String, String)> {
     let window = report.model_context_window;
     let mut lines = vec![match report.context_tokens {
         Some(used) if window > 0 => format!(
@@ -16,6 +17,7 @@ pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<String>
         Some(used) => format!("Context  {} (last request)", tokens(used)),
         None => "Context  no request yet".into(),
     }];
+    let mut paths = vec![String::new()];
     for section in &report.prefix {
         let label = match section.kind {
             ContextSectionKind::System => "System prompt".into(),
@@ -31,10 +33,8 @@ pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<String>
             .as_deref()
             .map(|path| shorten_home(path, home))
             .unwrap_or_default();
-        lines.push(format!(
-            "  {label:<24} {:>6}  {path}",
-            tokens(section.tokens)
-        ));
+        lines.push(format!("  {label:<24} {:>6}  ", tokens(section.tokens)));
+        paths.push(path);
     }
     lines.push(format!(
         "  {:<24} {:>6}",
@@ -67,24 +67,44 @@ pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<String>
     lines.push(
         "Currently loaded context; queued input and future tool results are not included.".into(),
     );
-    lines
+    paths.resize(lines.len(), String::new());
+    lines.into_iter().zip(paths).collect()
 }
 
 /// `/context` above the input box until Esc or Enter, with the numbers of
-/// when it opened: the first line, the section rows, the notes.
+/// when it opened: the first line, the section rows, the notes. A path
+/// that does not fit loses directories.
 pub(crate) fn popup(report: &ContextResponse, home: Option<&str>) -> Report {
-    let mut lines: Vec<String> = lines(report, home).iter().map(|line| clean(line)).collect();
+    let mut lines: Vec<(String, String)> = lines(report, home)
+        .iter()
+        .map(|(line, path)| (clean(line), clean(path)))
+        .collect();
     let notes = lines.split_off(lines.len() - 2);
     let sections = lines.split_off(1);
     Report::new(
-        vec![Span::styled(format!(" {}", lines[0]), Style::new().bold())],
+        vec![Span::styled(
+            format!(" {}", lines[0].0),
+            Style::new().bold(),
+        )],
         sections
             .into_iter()
-            .map(|section| Part::Line(vec![Span::raw(format!(" {section}"))]))
+            .map(|(section, path)| {
+                let before = vec![Span::raw(format!(" {section}"))];
+                if path.is_empty() {
+                    Part::Line(before)
+                } else {
+                    Part::Path {
+                        before,
+                        path,
+                        column: 0,
+                        after: Vec::new(),
+                    }
+                }
+            })
             .collect(),
         notes
             .into_iter()
-            .map(|note| vec![Span::raw(format!(" {note}"))])
+            .map(|(note, _)| vec![Span::raw(format!(" {note}"))])
             .collect(),
     )
 }

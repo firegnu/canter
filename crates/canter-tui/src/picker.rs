@@ -11,6 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::approval::shorten_home;
+use crate::short_path::fit_path;
 use crate::text::{sanitize, str_width, truncate};
 use crate::theme;
 
@@ -125,13 +126,9 @@ impl Picker {
         spans.push(Span::raw(pad(status_label(session.status), STATUS_COLUMNS)));
         if self.all {
             let directory = shorten_home(&sanitize(&session.cwd), self.home.as_deref());
-            let directory = truncate(vec![Span::raw(directory)], DIRECTORY_COLUMNS - 2);
-            let used: usize = directory.iter().map(|span| str_width(&span.content)).sum();
-            spans.extend(
-                directory
-                    .into_iter()
-                    .map(|span| span.style(theme::secondary())),
-            );
+            let directory = fit_path(&directory, DIRECTORY_COLUMNS - 2);
+            let used = str_width(&directory);
+            spans.push(Span::styled(directory, theme::secondary()));
             spans.push(Span::raw(" ".repeat(DIRECTORY_COLUMNS - used)));
         }
         match &session.name {
@@ -198,4 +195,48 @@ fn pad(text: &str, columns: usize) -> String {
         "{text}{}",
         " ".repeat(columns.saturating_sub(str_width(text)))
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// With every directory shown, a long one loses whole directories from
+    /// its middle and keeps its first part and its last: the name column
+    /// stays where it was.
+    #[test]
+    fn a_long_directory_loses_directories_from_its_middle() {
+        let session = |id: &str, cwd: &str| SessionSummary {
+            id: id.into(),
+            cwd: cwd.into(),
+            name: Some(format!("session {id}")),
+            status: SessionStatus::Idle,
+            updated_at: 0,
+            last_event_seq: 0,
+        };
+        let mut picker = Picker::new(
+            vec![
+                session("a", "/home/dev/projects/personal/worktrees/p2-55"),
+                session("b", "/home/dev/canter"),
+            ],
+            "/elsewhere".into(),
+            Some("/home/dev".into()),
+        );
+        picker.handle_key(KeyEvent::from(KeyCode::Tab));
+        let text = |line: &Line| -> String {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        };
+        let rows: Vec<String> = picker.view(100, 20).rows.iter().map(text).collect();
+        let start = 3 + 13 + STATUS_COLUMNS;
+        let directory = |row: &str| row.chars().skip(start).collect::<String>();
+        assert_eq!(
+            directory(&rows[0]),
+            format!("{:<24}session a", "~/…/worktrees/p2-55"),
+            "{rows:#?}"
+        );
+        assert_eq!(directory(&rows[1]), format!("{:<24}session b", "~/canter"));
+    }
 }
