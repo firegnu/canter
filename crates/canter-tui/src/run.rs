@@ -652,7 +652,10 @@ enum Message {
     ImageSendFailed(String),
     Models(Vec<canter_protocol::Model>),
     Server(Box<Event>),
-    SendFailed(String),
+    SendFailed {
+        error: String,
+        draft: Option<crate::input::InputBox>,
+    },
     NameFailed(String),
     Warning(String),
     /// `/diff` collected the changes.
@@ -989,7 +992,7 @@ impl<C: Connector> Chat<C> {
                 }
                 app.apply_event(&event, now_ms());
             }
-            Message::SendFailed(error) => app.send_failed(&error),
+            Message::SendFailed { error, draft } => app.text_send_failed(&error, draft),
             Message::NameFailed(error) => {
                 app.warning(&format!("Could not name the session: {error}"))
             }
@@ -1112,6 +1115,11 @@ impl<C: Connector> Chat<C> {
             }
             action @ (Action::Send(_) | Action::SendImages { .. }) => {
                 let has_images = matches!(&action, Action::SendImages { .. });
+                let draft = if has_images {
+                    None
+                } else {
+                    app.take_text_draft()
+                };
                 let (text, input) = match action {
                     Action::Send(text) => (text.clone(), vec![UserInput::Text { text }]),
                     Action::SendImages { text, input } => (text, input),
@@ -1132,7 +1140,10 @@ impl<C: Connector> Chat<C> {
                             let error = if has_images {
                                 Message::ImageSendFailed(error.to_string())
                             } else {
-                                Message::SendFailed(error.to_string())
+                                Message::SendFailed {
+                                    error: error.to_string(),
+                                    draft,
+                                }
                             };
                             let _ = sender.send(error);
                             return;
