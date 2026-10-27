@@ -43,7 +43,7 @@ const PIXELS: [&str; 8] = [
 ];
 
 const KEYS: [&str; 2] = [
-    "/help commands · @ files · Ctrl+F find · Ctrl+O more",
+    "? keys · /help commands · @ files · Ctrl+F find · Ctrl+O more",
     "Shift+Tab permissions · Esc interrupt · Ctrl+C quit",
 ];
 
@@ -331,7 +331,7 @@ fn a_narrow_window_shows_the_text_alone_with_fewer_keys() {
     let lines = screen.lines();
     assert_eq!(lines[0], format!("canter {VERSION}"), "{}", screen.text());
     assert_eq!(lines[1], "~/projects/canter");
-    assert_eq!(lines[2], "/help commands · @ files · Ctrl+F find");
+    assert_eq!(lines[2], "? keys · /help commands · @ files");
     assert_eq!(lines[3], "Shift+Tab permissions · Esc interrupt");
     assert_eq!(lines[4], "");
     assert!(!screen.text().contains('▀') && !screen.text().contains('█'));
@@ -339,7 +339,7 @@ fn a_narrow_window_shows_the_text_alone_with_fewer_keys() {
     // Just wide enough for the pony: the keys that fit beside it.
     let screen = Screen::with(41, HEIGHT, VERSION, CWD);
     assert_eq!(screen.from(TEXT, 0), format!("canter {VERSION}"));
-    assert_eq!(screen.from(TEXT, 2), "/help commands");
+    assert_eq!(screen.from(TEXT, 2), "? keys");
     assert_eq!(screen.from(TEXT, 3), "Shift+Tab permissions");
     assert_eq!(screen.lines()[4], "");
 }
@@ -432,7 +432,7 @@ fn searching_finds_the_text_of_the_header_but_not_the_pony() {
         "{}",
         screen.status()
     );
-    let found = &screen.buffer()[(TEXT as u16 + 27, 2)];
+    let found = &screen.buffer()[(TEXT as u16 + 36, 2)];
     assert_eq!(found.symbol(), "C");
     assert!(found.modifier.contains(Modifier::REVERSED));
 }

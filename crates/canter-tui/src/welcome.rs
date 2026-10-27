@@ -29,7 +29,13 @@ const PONY_WIDTH: usize = 16;
 const GAP: usize = 3;
 /// The keys on the last two rows; as many as fit, from the first.
 const KEYS: [&[&str]; 2] = [
-    &["/help commands", "@ files", "Ctrl+F find", "Ctrl+O more"],
+    &[
+        "? keys",
+        "/help commands",
+        "@ files",
+        "Ctrl+F find",
+        "Ctrl+O more",
+    ],
     &["Shift+Tab permissions", "Esc interrupt", "Ctrl+C quit"],
 ];
 const SEPARATOR: &str = " · ";
@@ -169,12 +175,13 @@ mod tests {
                 .collect::<String>()
         };
         assert_eq!(
-            text(60),
-            "/help commands · @ files · Ctrl+F find · Ctrl+O more"
+            text(61),
+            "? keys · /help commands · @ files · Ctrl+F find · Ctrl+O more"
         );
-        assert_eq!(text(51), "/help commands · @ files · Ctrl+F find");
-        assert_eq!(text(24), "/help commands · @ files");
-        assert_eq!(text(14), "/help commands");
-        assert_eq!(text(8), "/help c…");
+        assert_eq!(text(60), "? keys · /help commands · @ files · Ctrl+F find");
+        assert_eq!(text(46), "? keys · /help commands · @ files");
+        assert_eq!(text(32), "? keys · /help commands");
+        assert_eq!(text(22), "? keys");
+        assert_eq!(text(5), "? ke…");
     }
 }

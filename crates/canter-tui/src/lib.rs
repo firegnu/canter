@@ -25,6 +25,7 @@ mod diff;
 pub mod fake;
 mod files;
 mod git;
+mod help;
 mod highlight;
 mod images;
 mod input;

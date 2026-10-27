@@ -1,7 +1,7 @@
 == 第 9 条事件后，屏幕 ==
         ▄▄█▄▄█▄    canter 0.1.0 · 37489fe
        ███  ████   ~/canter
-▄▀▀▄▄▄▄████████▀   /help commands · @ files · Ctrl+F find · Ctrl+O more
+▄▀▀▄▄▄▄████████▀   ? keys · /help commands · @ files · Ctrl+F find · Ctrl+O more
    █▀█▀▀▀█▀█       Shift+Tab permissions · Esc interrupt · Ctrl+C quit
 
 › 把 README 里的安装步骤改成 cargo install
@@ -126,7 +126,7 @@
 == 发了「你好」之后，往上翻到顶 ==
         ▄▄█▄▄█▄    canter 0.1.0 · 37489fe
        ███  ████   ~/canter
-▄▀▀▄▄▄▄████████▀   /help commands · @ files · Ctrl+F find · Ctrl+O more
+▄▀▀▄▄▄▄████████▀   ? keys · /help commands · @ files · Ctrl+F find · Ctrl+O more
    █▀█▀▀▀█▀█       Shift+Tab permissions · Esc interrupt · Ctrl+C quit
 
 › 把 README 里的安装步骤改成 cargo install

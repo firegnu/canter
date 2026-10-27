@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 
 use crate::app::{Action, App};
 use crate::report::{Part, Report, clean};
-use crate::text::{LogicalLine, sanitize, str_width, truncate};
+use crate::text::{sanitize, str_width, truncate};
 use crate::theme;
 
 pub(crate) struct Command {
@@ -64,7 +64,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         about: "Show available commands",
         takes_args: false,
         run: |app, _| {
-            app.show(help());
+            app.open_help();
             Ok(None)
         },
     },
@@ -384,32 +384,6 @@ fn mode(app: &mut App, args: &str) -> Result<Option<Action>, String> {
             "Unknown mode: {args} (use always-ask, ask-for-execution or allow-all)"
         )),
     }
-}
-
-/// `/help`: every command with its line, after a blank row, then the
-/// shortcuts for the permission mode and for searching, in the same columns.
-fn help() -> Vec<LogicalLine> {
-    let mut rows: Vec<(String, &str)> = COMMANDS
-        .iter()
-        .map(|command| (format!("/{}", command.name), command.about))
-        .collect();
-    rows.push(("Shift+Tab".to_owned(), "Cycle permission mode"));
-    rows.push(("Ctrl+F".to_owned(), "Search the conversation"));
-    let width = rows.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
-    let mut lines = vec![LogicalLine::default()];
-    for (name, about) in rows {
-        let name = format!("{name:width$}   ");
-        let marker = str_width(&name);
-        lines.push(LogicalLine {
-            // A copy keeps the name with its line.
-            marker,
-            ..LogicalLine::new(
-                vec![Span::raw("  "), Span::styled(name, theme::accent())],
-                vec![Span::styled(about, theme::secondary())],
-            )
-        });
-    }
-    lines
 }
 
 pub(crate) fn find(name: &str) -> Option<&'static Command> {
