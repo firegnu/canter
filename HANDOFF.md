@@ -4,8 +4,9 @@
 
 ## 装的哪一版、怎么退回
 
-- 10-27 第五次装 main `011bdc9`（`canter --version` 显示 `canter 0.1.0 · 011bdc9`；比上一版多 P2-74 `/context` 弹框、P2-75 `/files`、`/mcp`、`/skills` 弹框和排版）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
-- 退回上一版 `a6af4ae`：旧程序备份在 `~/.canter/canter-a6af4ae`，`cp -p ~/.canter/canter-a6af4ae ~/.cargo/bin/canter`，再 `canter serve --replace`。再往前的 `71c3507`（换提示词之前；不认 `tui.json`，留着无害；会话存盘多出的 `segments` 旧版读时忽略）、`f2c02d6`、`c5d2efe` 备份在 `~/.canter/canter-<提交号>`。
+- 10-27 第六次装 main `8c29af9`（`canter --version` 显示 `canter 0.1.0 · 8c29af9`；比上一版多 P2-76 压缩和 `/handoff` 的语言规矩、P2-49 按词编辑、P2-50 大段粘贴收起、P2-51 拒绝并说一句、P2-52 标签页标题、P2-53 `?` 帮助弹框、P2-54 每轮改了哪些文件和 `/diff`、P2-55 路径中间省略、P2-82 文字发送失败放回草稿）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
+- 退回上一版 `011bdc9`：旧程序备份在 `~/.canter/canter-011bdc9`，`cp -p ~/.canter/canter-011bdc9 ~/.cargo/bin/canter`，再 `canter serve --replace`。用过「拒绝并说一句」（P2-51）的会话，P2-51 交叉审查查过新旧版本不会互相读坏，旧版不显示那句话。
+- 10-27 第五次装过 main `011bdc9`（P2-74 `/context` 弹框、P2-75 `/files`、`/mcp`、`/skills` 弹框和排版）。再往前 `a6af4ae` 备份在 `~/.canter/canter-a6af4ae`。再往前的 `71c3507`（换提示词之前；不认 `tui.json`，留着无害；会话存盘多出的 `segments` 旧版读时忽略）、`f2c02d6`、`c5d2efe` 备份在 `~/.canter/canter-<提交号>`。
 - 10-27 装过 main `a6af4ae`（含 P2-69～P2-71 新的系统提示词、工具说明、压缩和 /handoff 说明，P2-73 一次拖多张图片，P2-63 `/statusline` 选择框和 `~/.canter/tui.json`）。
 - 10-27 装过 main `71c3507`（含 P2-66 跳到底部提示）。
 - 10-27 装过 main `f2c02d6`（含 P2-65 命令卡片显示整条命令并上色、输出用粗竖线）。
