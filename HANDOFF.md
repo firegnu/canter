@@ -4,8 +4,10 @@
 
 ## 装的哪一版、怎么退回
 
-- 10-27 第九次装 main `a669963`（`canter --version` 显示 `canter 0.1.0 · a669963`；比上一版多 P2-93 输入框鼠标单击定位）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
-- 退回上一版 `e4259d0`：旧程序备份在 `~/.canter/canter-e4259d0`，`cp -p ~/.canter/canter-e4259d0 ~/.cargo/bin/canter`，再 `canter serve --replace`。只改了终端，新旧互相读没问题。
+- 10-27 第十次装 main `b78205d`（`canter --version` 显示 `canter 0.1.0 · b78205d`；比上一版多 P2-95 搜不到不画成失败和提示词加 rg、P2-25 输入历史、P2-31 外部编辑器 Ctrl+G、P2-27 做完提醒、P2-26 `!` 直接跑命令、P2-97 干活时 Tab 插队、P2-99 打断时排队的消息放回输入框）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
+- 退回上一版 `a669963`：旧程序备份在 `~/.canter/canter-a669963`，`cp -p ~/.canter/canter-a669963 ~/.cargo/bin/canter`，再 `canter serve --replace`。P2-26 给 `commandExecution` 加了可选的 `source`，交叉审查查过旧版读新存盘不坏：旧版把 `!` 跑的命令显示成普通命令卡片、回退列表里没有命令轮。旧版不认 `tui.json` 里的通知设置，留着无害；`~/.canter/input_history.jsonl` 旧版不读。
+- 10-27 第九次装过 main `a669963`（比再上一版多 P2-93 输入框鼠标单击定位）。
+- 退回再上一版 `e4259d0`：旧程序备份在 `~/.canter/canter-e4259d0`，`cp -p ~/.canter/canter-e4259d0 ~/.cargo/bin/canter`，再 `canter serve --replace`。只改了终端，新旧互相读没问题。
 - 10-27 第八次装过 main `e4259d0`（比再上一版多 P2-89 `/export` 导出 Markdown 和 `canter -c` / `--continue`）。
 - 退回再上一版 `04db0a3`：旧程序备份在 `~/.canter/canter-04db0a3`，`cp -p ~/.canter/canter-04db0a3 ~/.cargo/bin/canter`，再 `canter serve --replace`。这一版没改存盘格式，新旧互相读没问题。
 - 10-27 第七次装过 main `04db0a3`（比再上一版多 P2-86 handoff 后按两次 Esc 回原会话、P2-87 终端挂断时不再卡住、P2-77 `/theme` 代码配色和 `~/.canter/themes/`，`/statusline` 和 `/theme` 存 `tui.json` 互不覆盖）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
