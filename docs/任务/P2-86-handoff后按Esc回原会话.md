@@ -67,3 +67,10 @@
 - 拿主意的地方：2 秒按「严格小于」算（和临时提示消失的时刻一致，2000 毫秒整算新的第一次）；中间按了别的键不清掉第一次 Esc（任务没要求）；按 Enter 发出消息就把功能关掉，发送失败草稿回来也不再恢复（「发出第一条消息之后就没了」）；`/btw`、`/compact` 等命令不算发消息，但会产生轮的命令（`/review`）产生轮后按快照判断也关掉。帮助那一行写 `Esc twice` / `After /handoff, before sending: back to the original session`。`crates/canter-tui/README.md` 原来没有讲 `/handoff` 的地方，补在讲 Esc 撤回那段末尾。
 - 没做的事：没有为「原会话打不开时留在新会话、说明不丢」写测试（不在验证清单里，代码沿用 `/resume` 失败的同一条路）；没改服务端、协议、DESIGN。
 - 踩过的坑：用 perl 正则改 `key_on` 里的 `matches!` 时 `|` 没转义，替换拼坏了一行，编译报错后用编辑器改回。
+
+## 主控审查
+
+- diff 只动了 `crates/canter-tui/` 和根目录 README 的 `/handoff` 一条：`handoff_draft` 记下原会话，主输入框的 Esc 在会话没有轮、没有排队输入时走两次 Esc；选区、搜索、btw、批准框、弹框、列表先拿 Esc 的顺序没动。切回原会话和 `/resume` 共用抽出来的 `Chat::open`，打不开时提示、留在新会话。
+- 取舍：严格小于 2 秒、中间按别的键不清第一次、发过一次后就关掉（发送失败也不恢复）、`/btw` 不算发消息，都同意。「原会话打不开」没写测试，走的是 `/resume` 失败同一条路，任务没要，不补。
+- 主控重跑：nextest 709 个全过，doc、clippy、fmt 通过。
+结果：一次过
