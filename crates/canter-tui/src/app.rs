@@ -2145,7 +2145,8 @@ impl App {
     }
 
     /// Bracketed paste goes to an open custom answer as one line, otherwise
-    /// to the message draft with its newlines intact.
+    /// to the message draft with its newlines intact (a large one folds
+    /// into a marker).
     pub fn handle_paste(&mut self, text: &str) {
         self.mouse.selection = None;
         if self.open_request().is_some_and(|request| {
@@ -2176,7 +2177,7 @@ impl App {
                 }
             }
         } else {
-            self.input.insert(text);
+            self.input.paste(text);
         }
     }
 
