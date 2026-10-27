@@ -80,3 +80,11 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- **做了什么**：`context.rs` 加 `Popup`：存打开那一刻 `lines()` 出的各行（每行内容和算法没改），画成第一行 `Context …`（粗体，同 `/statusline` 标题）、空行、各段、空行、两行说明、`Esc close`（灰，同 `/statusline` 按键行）。`app.rs` 里 `show_context` 不再写对话区，改成打开弹框，和 choice、`/statusline` 一样编号、互相顶掉，算进 `choosing()`，所以按键归弹框、输入框草稿不动、对话区自动让地方。按键照 `/statusline`：↑/↓ 滚（画出来之后才算）、Enter 关（画出来之后且不在防误按时间内）、Esc 随时关、Ctrl+C/Ctrl+D 也关。放不下时只滚中间各段，规则照 `/statusline` 的 `window`：三行以上时上下各占一行写 `↑/↓ N more`，到底时最后一段顶替 `↓` 那行；连一段都放不下时不画（同 `/statusline`，Esc 照样能关）。查询失败仍走 run.rs 原来的 `warning`，不弹框。README 的 `/context` 说明跟着改。
+- **验证了什么**：新增 `crates/canter-tui/tests/context_popup.rs` 四个测试（弹框画面；Esc 和 Enter 关掉后整屏和打开前一样；草稿在开着时不被按键改动、关掉后接着打；17 行窗口里 ↑/↓ 滚、`↑/↓ N more` 对、首行和说明行、`Esc close` 一直在），先在原代码上跑，四个都因为没有弹框失败，实现后通过。`slash.rs` 里原有的 `context_lists_categories_measured_usage_and_truncates_narrow_rows` 没改也照样过（它只查屏上有没有这些字，弹框里有）；`tests/expected/` 没变。全套：`cargo nextest run --all-targets` 621 个全过（含新增 4 个），`cargo test --doc --workspace`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check` 都过。
+- **拿主意的地方**：样子里没写的显示细节都照 `/statusline`：标题粗体、`Esc close` 和 `↑/↓ N more` 灰色、`N more` 缩进三格、过宽的行截断加 `…`；说明行保持原来对话区里的普通字色。Ctrl+C/Ctrl+D 关弹框也是照 `/statusline`。样子里的 `2.3k` 是示意，实际照现有 `tokens()` 显示 `2k`，测试按实际写。
+- **没做的事**：「数字打开后不跟着变」靠弹框存打开时的文字做到，没单独写测试（任务验证清单里没有）；`/files`、`/mcp` 照旧。
+- **踩过的坑**：没有。
