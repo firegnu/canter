@@ -148,6 +148,15 @@ pub(crate) const COMMANDS: &[Command] = &[
         takes_args: false,
         run: |_, _| Ok(Some(Action::RewindList)),
     },
+    Command {
+        name: "statusline",
+        about: "Choose and order what the status line shows",
+        takes_args: false,
+        run: |app, _| {
+            app.open_status_setup();
+            Ok(None)
+        },
+    },
 ];
 
 pub(crate) fn skills(skills: Vec<canter_protocol::Skill>) -> Vec<LogicalLine> {

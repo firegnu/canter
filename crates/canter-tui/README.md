@@ -31,9 +31,78 @@ Environment 是会话打开时固定的目录、仓库根、系统/架构和本�
 - 它是对话的第一段，跟着对话往上滚，不常驻屏幕；接着旧会话时往上翻到头才看得到。改窗口宽度、Ctrl+O、`/rewind` 后照样在最上面。
 - 只画在这个终端里：不进会话存档，不发给模型。拖选复制只复制右边的字，小马不复制；Ctrl+F 搜得到右边的字，搜不到小马。
 
+## `/statusline`
+
+`/statusline` 在输入框上方打开一个选择框，选底下两行状态栏显示哪几项、什么顺序、哪些放第二行：
+
+```
+ Configure status line
+ Space toggle · ←/→ move · Enter save · Esc cancel
+
+ › [x] model        deepseek-v4-pro
+   [x] thinking     think high
+   [x] permission   Always ask
+   [x] cost         $0.12
+   ─── line 2 ───
+   [x] directory    ~/src/canter
+   [x] branch       (main)
+   [x] context      ctx 12% 120k/1M
+   [x] cache        cache 95% (last 98%)
+   [ ] tps          32.5 tok/s
+   [ ] version      0.1.0 · a3b8fe7
+   [ ] session      会话名字
+
+ Preview
+  deepseek-v4-pro · think high · Always ask · $0.12
+  ~/src/canter (main) · ctx 12% 120k/1M · cache 95% (last 98%)
+```
+
+- **项**：model、thinking、permission、cost、directory、branch、context、cache、tps、version、session。
+  右边是这一项现在在状态栏里的样子，写法和颜色同默认状态栏（Allow all 红色，其余暗色）：
+  tps 是 `32.5 tok/s`（最多一位小数，整数不写 `.0`，同示例脚本；算法见「定制状态栏」里的 `tps`），version 同欢迎头的版本行，session 是会话名字。
+  拿不到值的项（还没有花费、不在 git 仓库里、还没有 TPS、会话没名字等）在状态栏里不出现，选择框里右边空着。
+  项之间隔 ` · `；branch 紧跟在 directory 后面时只隔一个空格（`~/src/canter (main)`）。
+- **分行线** `─── line 2 ───` 和项一样能移：线上面的在第一行，下面的在第二行；移到最后就只有第一行，第二行空着。
+- **按键**：↑↓ 选；空格开关当前项；←/→ 把当前项（或分行线）往前、往后挪一位；下面的预览跟着变。
+  Enter 保存并关掉，Esc、Ctrl+C 或 Ctrl+D 不保存关掉。和单打 `/mode` 的选择框一样：选择框画到屏幕上之前按的键不算，
+  刚关掉批准框时 Enter 不算，开着时 PgUp/PgDn 照旧翻对话，输入框为空时 End 照旧跳到最下面。
+- **默认**（从没存过）是原来的两行：第一行 model、thinking、permission、cost，第二行 directory、branch、context、cache，
+  其余不勾。不改时状态栏和原来一样。
+- **窗口矮**：选择框占的是输入框上方对话区的地方，放不下时对话区先让出来。还放不下，项和分行线只显示放得下的几行，
+  跟着光标滚（和其它选择框一样，光标尽量落在显示出来的最后一项），光标所在的那行总看得见；上面还有没显示的写一行
+  `   ↑ N more`，下面有写 `   ↓ N more`（暗色），剩不到 3 行时不写这两行。标题、按键说明、空行、
+  `Use statusLine script` 开关和预览一直留着；留给项的不到 3 行时，预览连同 `Preview` 那行和它上面的空行一起收起。
+  连一行都放不下时不画，Esc 照样关。窗口够高时和上面的样子一样。
+- **窄窗口和 Shift+Tab**：状态栏每行放不下时照旧从行尾截。permission 勾着且在第一行时，照旧要求权限模式完整可见，
+  Shift+Tab 才切换；没勾或挪到第二行时，Shift+Tab 照样切换，上面的状态行短暂显示 `Mode: 新模式`，约 2 秒（同配了命令时）。
+
+**保存**：Enter 存到 `~/.canter/tui.json`（设了 `CANTER_HOME` 时是该目录下的 `tui.json`），权限 `0600`，
+目录不在时建一个（`0700`）；先写同目录下的临时文件再改名，不留写了一半的文件。文件里只有状态栏的项和顺序
+（含分行线的位置）和下面「定制状态栏」里的脚本开关；`config.json` 不写。
+保存后这个终端的状态栏立刻换；别的开着的终端下次打开 canter 才换，不监视文件。`/new`、`/resume` 换会话时沿用这个终端当前的设置，不重读。
+存不了时对话里提示一行 `Could not save the status line: …`，这个终端照样换。
+
+**读**：打开终端界面时读一次。文件不在时用默认；读不了或不是下面的格式时用默认，上面的状态行提示一次
+`! Could not read tui.json; the status line uses the defaults`（约 5 秒）。里面不认识的项跳过，其余照用；
+没列到的项不勾、排在最后，没有分行线时补在最后。格式（一般不用手改）：
+
+```json
+{
+  "statusLine": {
+    "items": [
+      { "name": "model", "show": true },
+      { "name": "line2" },
+      { "name": "directory", "show": true },
+      { "name": "tps", "show": false }
+    ],
+    "useScript": true
+  }
+}
+```
+
 ## 定制状态栏
 
-默认仍是底下的两行：模型、思考档位、权限和花费；目录、分支、上下文和缓存命中。
+默认仍是底下的两行：模型、思考档位、权限和花费；目录、分支、上下文和缓存命中。用 `/statusline` 可以选显示哪几项（见上一节）。
 在已有的 `~/.canter/config.json` 里增加可选的 `statusLine` 字符串（保留原来的模型、API key 等配置）：
 
 ```json
@@ -44,13 +113,19 @@ Environment 是会话打开时固定的目录、仓库根、系统/架构和本�
 读不到、格式不正确、不是字符串或只有空白，均按没配置处理。保持配置文件权限为 `0600`。
 终端不保存或转交配置中的其它项，服务端照旧忽略 `statusLine`。
 
+**`/statusline` 里的脚本开关**：配了 `statusLine` 时，`/statusline` 最上面多一行 `[x] Use statusLine script`
+（不参与排序，和下面的项之间隔一条线），空格开关。勾着（默认）时状态栏照旧显示命令的输出，
+预览写 `From the statusLine script: <命令>`；取消勾选并保存后改用下面选的项，命令不再跑（正在跑的连同进程组停掉），
+开关状态记进 `tui.json`，重开终端仍然这样；再勾上并保存就回到命令。`config.json` 不改。
+没配命令时不出现这一行，`tui.json` 里记着的开关状态不影响什么。
+
 命令用 `sh -c` 在会话目录里执行，继承终端环境，在独立会话中运行，不带控制终端。
 标准输入是一行 JSON，写完关闭，标准错误丢弃。
 模型输出、设置、用量、会话状态、目录或分支变化时更新，最多每 0.3 秒启动一次；同一时间只跑一个，
 运行期间的变化合并成最新状态，结束后再跑。界面不会等待脚本。
 超过 1 秒会停止命令及其进程组；超时、非零退出码、标准输出为空都算失败。
 关闭终端（SIGHUP）或收到 SIGTERM 时正常退出，并停止运行中的状态栏命令及其子进程。
-失败保留上一次成功结果；从没成功过则显示默认两行，第一行末尾加红色 `statusline error`。
+失败保留上一次成功结果；从没成功过则显示默认两行（`/statusline` 改过时是选的那些项），第一行末尾加红色 `statusline error`。
 
 脚本标准输出的头两行替换默认状态栏：只有一行时第二行留空，其余行丢弃，每行按窗口宽度截断。
 每行最多保留 4 KiB（包括 SGR），多出的字节继续读完并丢弃；按窗口宽度裁好的行会缓存，结果或窗口宽度变化时才重算。
@@ -80,7 +155,7 @@ TPS 从本终端观察到的第一个思考或回答增量开始计时，按事�
 
 配置了命令也能用 Shift+Tab 切换权限：自定义输出不必完整显示模式，但仍按按键所属帧的模式切换；
 弹框、命令列表和 300 ms 保护期照旧。正在显示命令输出时，每次有效切换，上面的状态行短暂显示 `Mode: 新模式`，约 2 秒。
-从没成功过、仍显示默认两行时，照旧要求权限模式完整可见，也不弹 Mode 提示。**用 Shift+Tab 的话，脚本里显示 `approvalPolicy`。**
+从没成功过、仍显示默认两行时，照旧要求权限模式完整可见，也不弹 Mode 提示（`/statusline` 改过时照那一节的规则）。**用 Shift+Tab 的话，脚本里显示 `approvalPolicy`。**
 
 示例脚本（需要本机有 `jq`，保存到 `~/.canter/statusline.sh` 并执行 `chmod +x ~/.canter/statusline.sh`）：
 

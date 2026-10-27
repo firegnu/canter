@@ -30,6 +30,9 @@ use crate::input::InputBox;
 use crate::links::{self, LinkSystem, Opener, Target};
 use crate::select::{self, Cell, Rows, Unit};
 use crate::shimmer::{self, COPY_MS, CopyLight};
+use crate::statusline::bar::{self, Bar};
+use crate::statusline::setup::Setup;
+use crate::statusline::tps::Tps;
 use crate::text::{LogicalLine, Row, plain, sanitize, spans_width, str_width, truncate, wrap_rows};
 use crate::theme;
 use crate::{markdown, mention, search};
@@ -465,7 +468,8 @@ struct Shown {
     turn: Option<String>,
     /// The private answer in progress on this frame.
     btw: Option<usize>,
-    /// The choice whose choices showed, numbered as [`App::choose`] opened it.
+    /// The choice (or `/statusline`) whose rows showed, numbered as
+    /// [`App::choose`] or [`App::open_status_setup`] opened it.
     chooser: Option<u64>,
     /// How many completions the input box showed.
     completions: u64,
@@ -485,6 +489,19 @@ impl Shown {
 pub struct App {
     snapshot: SessionSnapshot,
     status_line: Option<crate::statusline::StatusLine>,
+    /// The status command from `config.json` and the environment it runs
+    /// in, kept while `/statusline` has it switched off.
+    script: Option<(String, std::collections::BTreeMap<String, String>)>,
+    /// What the rows at the bottom show without the command, from `tui.json`.
+    bar: Bar,
+    /// Where `/statusline` saves; `None` without a home directory.
+    bar_file: Option<std::path::PathBuf>,
+    /// `tui.json` could not be read; the next frame says so.
+    bar_unreadable: bool,
+    /// `/statusline`, open above the input box.
+    setup: Option<Setup>,
+    /// Output tokens a second, for the `tps` item and the status command.
+    tps: Tps,
     home: Option<String>,
     /// The git branch of the session's directory; read when the screen opens
     /// a session and again when a turn ends. A configured status command
@@ -506,7 +523,7 @@ pub struct App {
     mentions: MentionList,
     /// A choice offered above the input box, such as `/mode` alone.
     chooser: Option<Chooser>,
-    /// How many choices have been offered, numbering them.
+    /// How many choices (and `/statusline`s) have been offered, numbering them.
     choosers: u64,
     /// How many times a command name was completed in the input box.
     completions: u64,
@@ -560,15 +577,45 @@ pub struct App {
 }
 
 impl App {
-    /// Configures the optional command that draws the two bottom rows.
+    /// Configures the optional command that draws the two bottom rows, and
+    /// reads what `/statusline` saved in `tui.json` under `env`'s home.
     pub fn with_status_line(
         mut self,
         command: Option<String>,
         env: std::collections::BTreeMap<String, String>,
     ) -> Self {
-        self.status_line =
-            command.map(|command| crate::statusline::StatusLine::new(command, env, &self.snapshot));
+        self.bar_file = bar::path(&env);
+        if let Some(path) = &self.bar_file {
+            (self.bar, self.bar_unreadable) = bar::load(path);
+        }
+        self.script = command.map(|command| (command, env));
+        self.run_script();
         self
+    }
+
+    /// Keeps what `/statusline` set on the screen this one replaces: a
+    /// terminal reads `tui.json` only when it opens.
+    pub(crate) fn with_bar_from(mut self, before: &App) -> Self {
+        self.bar = before.bar.clone();
+        self.bar_unreadable = false;
+        self.run_script();
+        self
+    }
+
+    /// Starts or stops the status command as `/statusline` has it.
+    fn run_script(&mut self) {
+        let wanted = self.script.as_ref().filter(|_| self.bar.use_script);
+        match (wanted, &self.status_line) {
+            (Some((command, env)), None) => {
+                self.status_line = Some(crate::statusline::StatusLine::new(
+                    command.clone(),
+                    env.clone(),
+                ));
+            }
+            // Stops a run in progress, with its process group.
+            (None, Some(_)) => self.status_line = None,
+            _ => {}
+        }
     }
 
     pub(crate) fn update_status_line(&mut self, now_ms: i64) {
@@ -620,7 +667,7 @@ impl App {
                 "totalPercent": usage.and_then(|usage| percent(usage.total.input_tokens, usage.total.cached_input_tokens)),
                 "lastPercent": usage.and_then(|usage| percent(usage.last.input_tokens, usage.last.cached_input_tokens)),
             },
-            "tps": self.status_line.as_ref().and_then(|line| line.tps(now_ms)),
+            "tps": self.tps.rate(now_ms),
         })
     }
 
@@ -634,8 +681,14 @@ impl App {
             branch: crate::git::branch(&snapshot.settings.cwd),
             retract_drafts: crate::retract::Drafts::new(&snapshot),
             images_need_paste: false,
+            tps: Tps::new(&snapshot),
             snapshot,
             status_line: None,
+            script: None,
+            bar: Bar::default(),
+            bar_file: None,
+            bar_unreadable: false,
+            setup: None,
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::default(),
@@ -721,6 +774,7 @@ impl App {
             return;
         }
         self.retract_drafts.event(event);
+        self.tps.event(event);
         if let Some(line) = &mut self.status_line {
             line.event(event);
         }
@@ -896,13 +950,13 @@ impl App {
             }
         }
         // A choice offered meanwhile takes the keys until it closes.
-        if self.search.is_some() && shown.approval.is_none() && self.chooser.is_none() {
+        if self.search.is_some() && shown.approval.is_none() && !self.choosing() {
             self.search_key(key);
             return None;
         }
         if key.code == KeyCode::Esc
             && (shown.approval.is_some()
-                || (self.chooser.is_none()
+                || (!self.choosing()
                     && self.command_list().is_none()
                     && self.mention_list().is_none()))
             && let Some(id) = shown.btw
@@ -936,8 +990,11 @@ impl App {
             self.scroll.top = None;
             return None;
         }
-        if self.chooser.is_some() && !matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
+        if self.choosing() && !matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
             let seen = shown.chooser == Some(self.choosers);
+            if self.setup.is_some() {
+                return self.setup_key(key, seen, send_guarded);
+            }
             return self.chooser_key(key, seen, send_guarded);
         }
         if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -1030,10 +1087,7 @@ impl App {
             KeyCode::BackTab => {
                 if !send_guarded && let Some(mode) = shown.mode {
                     let action = commands::next_mode(mode);
-                    if self
-                        .status_line
-                        .as_ref()
-                        .is_some_and(|line| line.has_output())
+                    if self.mode_elsewhere()
                         && let Action::Update(params) = &action
                         && let Some(mode) = params.approval_policy
                     {
@@ -1286,7 +1340,63 @@ impl App {
     /// Offers a choice above the input box.
     pub(crate) fn choose(&mut self, chooser: Chooser) {
         self.choosers += 1;
+        self.setup = None;
         self.chooser = Some(chooser);
+    }
+
+    /// Whether a choice or `/statusline` is open above the input box.
+    fn choosing(&self) -> bool {
+        self.chooser.is_some() || self.setup.is_some()
+    }
+
+    /// `/statusline`: opens with what the rows at the bottom show now,
+    /// numbered like a choice.
+    pub(crate) fn open_status_setup(&mut self) {
+        self.choosers += 1;
+        self.chooser = None;
+        let script = self.script.as_ref().map(|(command, _)| command.clone());
+        self.setup = Some(Setup::new(self.bar.clone(), script));
+    }
+
+    /// Keys while `/statusline` is open, as for a choice: Up and Down
+    /// select, Space switches the row selected on or off, Left and Right
+    /// move it, Enter saves; Esc, Ctrl+C or Ctrl+D closes it unsaved.
+    fn setup_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
+        let setup = self.setup.as_mut()?;
+        let plain = !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Up if seen => setup.up(),
+            KeyCode::Down if seen => setup.down(),
+            KeyCode::Left if seen => setup.shift(false),
+            KeyCode::Right if seen => setup.shift(true),
+            KeyCode::Char(' ') if seen && plain => setup.toggle(),
+            KeyCode::Enter if seen && !send_guarded => {
+                let setup = self.setup.take()?;
+                self.save_bar(setup.bar);
+            }
+            KeyCode::Esc => self.setup = None,
+            KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.setup = None;
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Shows `bar` from now on, and keeps it in `tui.json` for terminals
+    /// opened later.
+    fn save_bar(&mut self, bar: Bar) {
+        self.bar = bar;
+        self.run_script();
+        let saved = match &self.bar_file {
+            Some(path) => bar::save(path, &self.bar).map_err(|error| error.to_string()),
+            None => Err("no home directory".to_owned()),
+        };
+        if let Err(error) = saved {
+            self.warning(&format!("Could not save the status line: {error}"));
+        }
     }
 
     /// Lines for the conversation from the client, such as `/help`'s.
@@ -2023,7 +2133,7 @@ impl App {
             custom.push_str(&pasted.text().replace('\n', " "));
             return;
         }
-        if self.chooser.is_none()
+        if !self.choosing()
             && let Some(search) = &mut self.search
         {
             let mut pasted = InputBox::default();
@@ -2439,6 +2549,15 @@ impl App {
         self.open_link(now_ms);
         self.opener
             .poll(&mut self.copier, now_ms, usize::from(width));
+        if std::mem::take(&mut self.bar_unreadable) {
+            self.copier.show(
+                Line::from(Span::styled(
+                    " ! Could not read tui.json; the status line uses the defaults",
+                    theme::warning(),
+                )),
+                now_ms + crate::copy::FAILED_MS,
+            );
+        }
         // Leave the status line, the info rows, the hint and one row of the conversation.
         let box_height = height.saturating_sub(3 + INFO_ROWS);
         let approval = self.open_request().map(|request| {
@@ -2520,15 +2639,12 @@ impl App {
             Bottom::Input { .. } => self.list_view(
                 width,
                 usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height())),
+                now_ms,
             ),
             Bottom::Approval(_) => Vec::new(),
         };
         // The choice offered is on screen when any of its choices fit.
-        self.drawing.chooser = self
-            .chooser
-            .as_ref()
-            .filter(|_| !list.is_empty())
-            .map(|_| self.choosers);
+        self.drawing.chooser = (self.choosing() && !list.is_empty()).then_some(self.choosers);
 
         self.edge_scroll(now_ms);
         self.extend_history(width);
@@ -2696,7 +2812,7 @@ impl App {
             })
             .collect();
         let found = current.map(|current| (current, hits.len()));
-        let (info, mode_in_full) = self.info_rows(width);
+        let (info, mode_in_full) = self.info_rows(width, now_ms);
         let view = View {
             conversation,
             hint,
@@ -2711,31 +2827,41 @@ impl App {
             info,
         };
         // Shift+Tab uses the mode of this frame under the bare input box.
-        // Custom output need not include it; default rows must show it in full.
+        // Custom output, or items without it on the first row, need not
+        // include it; a first row with it must show it in full.
         // The first info row is above the bottom
         // row; rows under the conversation that do not fit are cut from the
         // bottom, so it is drawn when the rows down to it fit.
         let bare_input = matches!(view.bottom, Bottom::Input { .. })
             && self.search.is_none()
-            && self.chooser.is_none()
+            && !self.choosing()
             && self.command_list().is_none()
             && self.mention_list().is_none();
         let mode_drawn = view.below() - (INFO_ROWS - 1) <= height;
-        let custom_info = self
-            .status_line
-            .as_ref()
-            .is_some_and(|line| line.has_output());
-        self.drawing.mode = (bare_input && (mode_in_full || custom_info) && mode_drawn)
+        self.drawing.mode = (bare_input && (mode_in_full || self.mode_elsewhere()) && mode_drawn)
             .then_some(self.snapshot.settings.approval_policy);
         view
     }
 
-    /// The list above the input box: the choice offered, the commands
-    /// matching what is typed, or the paths matching the `@` word. At most
-    /// `max` rows.
-    fn list_view(&mut self, width: u16, max: usize) -> Vec<Line<'static>> {
+    /// Whether the rows at the bottom leave out the permission mode, or
+    /// draw it from the status command; then Shift+Tab says the new mode
+    /// on the status line.
+    fn mode_elsewhere(&self) -> bool {
+        self.status_line
+            .as_ref()
+            .is_some_and(|line| line.has_output())
+            || !self.bar.mode_on_first_row()
+    }
+
+    /// The list above the input box: the choice offered, `/statusline`, the
+    /// commands matching what is typed, or the paths matching the `@` word.
+    /// At most `max` rows.
+    fn list_view(&mut self, width: u16, max: usize, now_ms: i64) -> Vec<Line<'static>> {
         if let Some(chooser) = &self.chooser {
             return chooser.rows(width, max);
+        }
+        if let Some(setup) = &self.setup {
+            return setup.rows(width, max, &self.bar_values(now_ms));
         }
         // The lists are for the draft, which is put away while searching.
         if self.search.is_some() {
@@ -3363,77 +3489,17 @@ impl App {
         (line, self.snapshot.status == SessionStatus::Working)
     }
 
-    /// Model, thinking and permission mode (Allow all in red); then the
-    /// directory with its git branch, context use and cache hits. Each row
-    /// is cut on its own when the window is too narrow. Also whether the
-    /// first row shows all of the permission mode.
-    fn info_rows(&mut self, width: u16) -> ([Line<'static>; 2], bool) {
+    /// The items `/statusline` chose, by default model, thinking and
+    /// permission mode (Allow all in red) and cost; then the directory with
+    /// its git branch, context use and cache hits. Each row is cut on its
+    /// own when the window is too narrow. Also whether the first row shows
+    /// all of the permission mode.
+    fn info_rows(&mut self, width: u16, now_ms: i64) -> ([Line<'static>; 2], bool) {
         if let Some(rows) = self.status_line.as_mut().and_then(|line| line.rows(width)) {
             return (rows, false);
         }
-        let settings = &self.snapshot.settings;
-        let dim = theme::secondary();
-        let (mode, mode_style) = mode_label(settings.approval_policy);
-        let mut first = vec![
-            Span::styled(
-                format!(
-                    " {} · think {} · ",
-                    sanitize(&settings.model),
-                    match settings.reasoning_effort {
-                        canter_protocol::ReasoningEffort::Unknown => "high",
-                        effort => effort.as_str(),
-                    }
-                ),
-                dim,
-            ),
-            Span::styled(mode, mode_style),
-        ];
         // Permission shortcuts only require the mode itself to be fully visible.
-        let through_mode: String = first.iter().map(|span| span.content.as_ref()).collect();
-        if let Some(cost) = self
-            .snapshot
-            .token_usage
-            .as_ref()
-            .and_then(|usage| usage.cost.as_ref())
-        {
-            first.push(Span::styled(
-                format!(
-                    " · {}{}",
-                    crate::usage::dollars(cost.usd),
-                    if cost.unknown { "+?" } else { "" }
-                ),
-                dim,
-            ));
-        }
-        let cwd = shorten_home(&sanitize(&settings.cwd), self.home.as_deref());
-        let mut text = format!(" {cwd}");
-        if let Some(branch) = &self.branch {
-            text.push_str(&format!(" ({})", sanitize(branch)));
-        }
-        if let Some(usage) = &self.snapshot.token_usage {
-            let percent = crate::statusline::percent;
-            if let Some(window) = usage.model_context_window
-                && let Some(used) = percent(window, usage.context_tokens)
-            {
-                text.push_str(&format!(
-                    " · ctx {used}% {}/{}",
-                    tokens(usage.context_tokens),
-                    tokens(window)
-                ));
-            }
-            let total = percent(usage.total.input_tokens, usage.total.cached_input_tokens);
-            let last = percent(usage.last.input_tokens, usage.last.cached_input_tokens);
-            if total.is_some() || last.is_some() {
-                text.push_str(" · cache");
-                if let Some(total) = total {
-                    text.push_str(&format!(" {total}%"));
-                }
-                if let Some(last) = last {
-                    text.push_str(&format!(" (last {last}%)"));
-                }
-            }
-        }
-        let second = vec![Span::styled(text, dim)];
+        let ([mut first, second], through_mode) = self.bar.draw(&self.bar_values(now_ms));
         if self.status_line.as_ref().is_some_and(|line| line.failed) {
             let error = " statusline error";
             first = truncate(first, usize::from(width).saturating_sub(error.len()));
@@ -3445,7 +3511,85 @@ impl App {
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        (rows, kept.starts_with(&through_mode))
+        (
+            rows,
+            through_mode.is_some_and(|through| kept.starts_with(&through)),
+        )
+    }
+
+    /// What each item of the rows at the bottom says now, dim except the
+    /// permission mode; `None` for what is not known (yet).
+    fn bar_values(&self, now_ms: i64) -> bar::Values {
+        let settings = &self.snapshot.settings;
+        let usage = self.snapshot.token_usage.as_ref();
+        let percent = crate::statusline::percent;
+        let dim = |text: String| Some(vec![Span::styled(text, theme::secondary())]);
+        bar::Item::ALL.map(|item| match item {
+            bar::Item::Model => dim(sanitize(&settings.model)),
+            bar::Item::Thinking => dim(format!(
+                "think {}",
+                match settings.reasoning_effort {
+                    canter_protocol::ReasoningEffort::Unknown => "high",
+                    effort => effort.as_str(),
+                }
+            )),
+            bar::Item::Permission => {
+                let (mode, style) = mode_label(settings.approval_policy);
+                Some(vec![Span::styled(mode, style)])
+            }
+            bar::Item::Cost => usage
+                .and_then(|usage| usage.cost.as_ref())
+                .and_then(|cost| {
+                    dim(format!(
+                        "{}{}",
+                        crate::usage::dollars(cost.usd),
+                        if cost.unknown { "+?" } else { "" }
+                    ))
+                }),
+            bar::Item::Directory => {
+                dim(shorten_home(&sanitize(&settings.cwd), self.home.as_deref()))
+            }
+            bar::Item::Branch => self
+                .branch
+                .as_ref()
+                .and_then(|branch| dim(format!("({})", sanitize(branch)))),
+            bar::Item::Context => usage.and_then(|usage| {
+                let window = usage.model_context_window?;
+                let used = percent(window, usage.context_tokens)?;
+                dim(format!(
+                    "ctx {used}% {}/{}",
+                    tokens(usage.context_tokens),
+                    tokens(window)
+                ))
+            }),
+            bar::Item::Cache => usage.and_then(|usage| {
+                let total = percent(usage.total.input_tokens, usage.total.cached_input_tokens);
+                let last = percent(usage.last.input_tokens, usage.last.cached_input_tokens);
+                if total.is_none() && last.is_none() {
+                    return None;
+                }
+                let mut text = "cache".to_owned();
+                if let Some(total) = total {
+                    text.push_str(&format!(" {total}%"));
+                }
+                if let Some(last) = last {
+                    text.push_str(&format!(" (last {last}%)"));
+                }
+                dim(text)
+            }),
+            // One decimal, as the example script in the README shows it.
+            bar::Item::Tps => self
+                .tps
+                .rate(now_ms)
+                .and_then(|rate| dim(format!("{} tok/s", (rate * 10.0).round() / 10.0))),
+            bar::Item::Version => self.welcome.clone().and_then(dim),
+            bar::Item::Session => settings
+                .name
+                .as_deref()
+                .map(|name| sanitize(name).replace('\n', " "))
+                .filter(|name| !name.trim().is_empty())
+                .and_then(dim),
+        })
     }
 }
 

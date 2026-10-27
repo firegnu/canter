@@ -892,10 +892,12 @@ impl<C: Connector> Chat<C> {
         self.sender = sender;
         self.session = snapshot.id.clone();
         self.naming = AutoName::new(&snapshot, false, self.sender.clone());
-        *ui.app_mut() = App::new(snapshot, self.home.clone(), now_ms())
+        let app = App::new(snapshot, self.home.clone(), now_ms())
             .with_client_name(self.client_name.clone())
             .with_welcome(self.version.clone())
-            .with_status_line(self.status_line.clone(), self.env.clone());
+            .with_status_line(self.status_line.clone(), self.env.clone())
+            .with_bar_from(ui.app());
+        *ui.app_mut() = app;
         if let Ok(models) = self.client.list_models().await {
             ui.app_mut().set_models(&models);
         }
