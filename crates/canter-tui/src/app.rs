@@ -585,6 +585,9 @@ pub struct App {
     /// How the last turn ended, for the terminal tab: `Done` or `Failed`
     /// until a key is pressed here. An interrupted turn leaves none.
     turn_mark: Option<crate::tab_title::TabState>,
+    /// What the user is wanted for since the last frame, for
+    /// [`App::take_notifications`].
+    notifications: Vec<crate::notify::Notification>,
     /// Why the event stream is down while reconnecting.
     reconnecting: Option<String>,
     /// The turn an interrupt was sent for.
@@ -812,6 +815,7 @@ impl App {
             errors_shown: HashSet::new(),
             working_since: working.then_some(now_ms),
             turn_mark: None,
+            notifications: Vec::new(),
             reconnecting: None,
             interrupting: None,
             answered: HashSet::new(),
@@ -922,6 +926,30 @@ impl App {
                     self.interrupting = None;
                 }
                 self.branch = crate::git::branch(&self.snapshot.settings.cwd);
+                // As Codex: not when a queued message starts the next turn.
+                if turn.status == TurnStatus::Completed && self.snapshot.queued_inputs.is_empty() {
+                    let answer = self
+                        .snapshot
+                        .turns
+                        .iter()
+                        .find(|done| done.id == turn.id)
+                        .and_then(|done| {
+                            done.items.iter().rev().find_map(|item| match item {
+                                Item::AgentMessage { text, .. } => Some(text.as_str()),
+                                _ => None,
+                            })
+                        })
+                        .unwrap_or_default();
+                    self.notifications
+                        .push(crate::notify::Notification::turn_complete(answer));
+                }
+            }
+            EventPayload::RequestOpened { request } => {
+                if let Some(notification) =
+                    crate::notify::Notification::request(request, &self.snapshot)
+                {
+                    self.notifications.push(notification);
+                }
             }
             EventPayload::SessionStatus { status, .. } => match status {
                 SessionStatus::Working | SessionStatus::WaitingApproval => {
@@ -2620,6 +2648,12 @@ impl App {
     /// The directory in the terminal tab's title.
     pub(crate) fn tab_dir(&self) -> String {
         crate::tab_title::dir_name(&self.snapshot.settings.cwd, self.home.as_deref())
+    }
+
+    /// What the user was wanted for since this was last called: turns done,
+    /// approvals and questions, oldest first.
+    pub(crate) fn take_notifications(&mut self) -> Vec<crate::notify::Notification> {
+        std::mem::take(&mut self.notifications)
     }
 
     /// OSC 52 for the terminal, to write between frames.
