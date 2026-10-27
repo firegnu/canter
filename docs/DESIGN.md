@@ -99,6 +99,6 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 分段：固定段 `core`、模型家族补充 `model_family`、全局说明 `global_instructions`、技能 `skills`、项目说明 `project_instructions`（每个文件一段）、环境 `environment`，按这个顺序，空段不出现；稳定性由种类决定（前三种所有会话都一样，后三种本会话固定）。模型历史的 `context` 记录在拼好的 `messages` 旁加 `segments`（种类、路径、内容）；打开会话时重算，段或 `messages` 不同才追加新记录。已有的旧会话第一次重开时换成新提示词（冷一次缓存）。
    - 每个接口一个转换器，转换器是纯函数。Chat Completions（DeepSeek 等）拼成一条 `system`：固定段和家族补充原样，其余段用 `<global_instructions path="…">`、`<skills>`、`<project_instructions path="…">`、`<environment>` 包住，段之间空一行。Responses（ChatGPT）照 P2-33 方案整段放最前面的 developer 消息，接上后用对比场景再比「AGENTS.md 和环境放 user 消息」（Codex 的放法）；Anthropic 两块 system、各打缓存断点；Gemini 放 `systemInstruction`。后三种接那一家时做。
    - 环境段：工作目录、git 仓库根（不是仓库写 none）、系统和架构、打开会话时的本地日期、星期和时区（原来是 UTC 日期）。
-   - 压缩和 `/handoff` 共用 9 个固定小节（Goal、User's words、Constraints and preferences、Decisions、Files、Commands and results、Where it stopped、Open issues、Next steps），纯 Markdown、用用户的语言；`/handoff` 开头多一节 Task。
+   - 压缩和 `/handoff` 共用 9 个固定小节（Goal、User's words、Constraints and preferences、Decisions、Files、Commands and results、Where it stopped、Open issues、Next steps），纯 Markdown、用用户的语言；`/handoff` 开头多一节 Task。 10-27 P2-72 真调里新版 `/handoff` 第一次用英文写（Rules 只说「用用户主要说的语言」，模板和默认方向是英文），用户同意补一句（P2-76）：语言按对话里用户自己的话来定，不按这些说明的语言。
    - 方案 §9 的选择：长任务中途在开始新一段、换方向、发现要紧的事时写一句进度，不逐个工具说；网页抓取和 MCP 结果这次不加「不可信」标记，先看提示词的效果；新旧对比用用户平时用的模型、避开高峰，真调上限 130 次请求或 1.5 美元，到了先停下报告。
    - 实现分件：分段结构（先不换文字）→ 固定段和工具说明；压缩和 `/handoff` 可同时做；最后用户在场真调做新旧对比，跑完、没有明显变差再装给用户日常用。
