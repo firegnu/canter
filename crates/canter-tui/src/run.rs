@@ -65,6 +65,10 @@ mod input_tests;
 #[path = "run_handoff_tests.rs"]
 mod handoff_tests;
 
+#[cfg(test)]
+#[path = "run_editor_tests.rs"]
+mod editor_tests;
+
 /// A connection to the server.
 pub struct Connected {
     pub client: Client,
@@ -158,6 +162,9 @@ pub struct Input {
     frames: Arc<AtomicU64>,
     // Real terminals also check hangup independently of the event reader.
     tty: Option<OwnedFd>,
+    /// The reader reads the terminal only holding this; the external editor
+    /// holds it while it runs, so its keys stay its own.
+    reading: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Sends terminal events to [`run_on`]; see [`input`].
@@ -175,6 +182,7 @@ pub fn input() -> (InputSender, Input) {
         events: receiver,
         frames: frames.clone(),
         tty: None,
+        reading: Arc::default(),
     };
     let sender = InputSender {
         events: sender,
@@ -236,6 +244,15 @@ pub trait FrameSync: Backend {
     fn write_sequence(&mut self, _sequence: &str) -> Result<(), Self::Error> {
         Ok(())
     }
+    /// Gives the terminal to the external editor: the normal screen, line
+    /// mode, and no mouse, paste or keyboard reporting.
+    fn suspend(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// Takes the terminal back after [`FrameSync::suspend`], as it was.
+    fn resume(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 impl<W: Write> FrameSync for CrosstermBackend<W> {
@@ -248,6 +265,38 @@ impl<W: Write> FrameSync for CrosstermBackend<W> {
     fn write_sequence(&mut self, sequence: &str) -> io::Result<()> {
         Write::write_all(self, sequence.as_bytes())?;
         Write::flush(self)
+    }
+    /// As [`restore_terminal`], keeping [`TerminalSession`]'s flags for
+    /// [`FrameSync::resume`].
+    fn suspend(&mut self) -> io::Result<()> {
+        if KEYBOARD_ENHANCED.load(Ordering::SeqCst) {
+            execute!(self, PopKeyboardEnhancementFlags)?;
+        }
+        execute!(
+            self,
+            DisableBracketedPaste,
+            DisableMouseCapture,
+            LeaveAlternateScreen,
+            cursor::Show
+        )?;
+        disable_raw_mode()
+    }
+    /// As [`TerminalSession::start`].
+    fn resume(&mut self) -> io::Result<()> {
+        enable_raw_mode()?;
+        execute!(
+            self,
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste
+        )?;
+        if KEYBOARD_ENHANCED.load(Ordering::SeqCst) {
+            execute!(
+                self,
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -263,7 +312,7 @@ pub async fn run<C: Connector>(launch: Launch<C>) -> Result<Option<String>, RunE
     theme::set(Theme::detect());
     let terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let (sender, mut input) = input();
-    let (reader, tty) = TerminalReader::spawn(sender)?;
+    let (reader, tty) = TerminalReader::spawn(sender, input.reading.clone())?;
     input.tty = Some(tty);
     let result = run_on(terminal, input, launch).await;
     reader.stop().await;
@@ -515,6 +564,14 @@ where
                         .warning(&format!("Could not read context: {error}")),
                 },
                 Some(Action::Files) => ui.app_mut().show_files().await,
+                Some(Action::ExternalEditor) => {
+                    let temp = std::env::temp_dir();
+                    if let Err(error) = edit_draft(&mut ui, &input, &chat.env, &temp).await {
+                        break 'run Err(error);
+                    }
+                    // Not the redraws missed while the editor was open, all at once.
+                    tick.reset();
+                }
                 Some(Action::RewindList) => match chat.client.rewind_list(&chat.session).await {
                     Ok(report) => crate::rewind::choose_turn(ui.app_mut(), report),
                     Err(error) => ui.app_mut().warning(&format!("Could not rewind: {error}")),
@@ -666,6 +723,43 @@ where
             Some(_) => {}
         }
     }
+}
+
+/// Ctrl+G: the draft in the user's editor, run on a file under `temp`. The
+/// editor has the terminal to itself meanwhile: the reader leaves the keys
+/// alone, and server events wait in their channel. Afterwards the whole
+/// screen is drawn again. Errs only when the terminal cannot be handed over
+/// or taken back.
+async fn edit_draft<B>(
+    ui: &mut Ui<B>,
+    input: &Input,
+    env: &BTreeMap<String, String>,
+    temp: &std::path::Path,
+) -> Result<(), RunError>
+where
+    B: FrameSync,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    let (program, args) = match crate::editor::command(env) {
+        Ok(command) => command,
+        Err(reason) => {
+            ui.app_mut().editor_failed(&reason, now_ms());
+            return Ok(());
+        }
+    };
+    let draft = ui.app().editor_draft();
+    let _reading = input.reading.lock().await;
+    ui.backend_mut().suspend().map_err(terminal_error)?;
+    let edited = crate::editor::edit(&program, &args, &draft, temp).await;
+    if let Some(tty) = &input.tty {
+        // Typed after the editor quit, or the terminal's late answers to it:
+        // not keys for canter. `tty` stays open through the call.
+        unsafe { nix::libc::tcflush(tty.as_raw_fd(), nix::libc::TCIFLUSH) };
+    }
+    ui.backend_mut().resume().map_err(terminal_error)?;
+    ui.terminal_mut().clear().map_err(terminal_error)?;
+    ui.app_mut().editor_closed(edited, now_ms());
+    Ok(())
 }
 
 fn draw<B>(ui: &mut Ui<B>, input: &Input, tab: &mut TabTitle) -> Result<(), RunError>
@@ -1348,7 +1442,8 @@ impl<C: Connector> Chat<C> {
             | Action::Context
             | Action::Mcp
             | Action::Files
-            | Action::ListSkills => {}
+            | Action::ListSkills
+            | Action::ExternalEditor => {}
         }
     }
 }
@@ -1556,7 +1651,10 @@ struct TerminalReader {
 }
 
 impl TerminalReader {
-    fn spawn(sender: InputSender) -> io::Result<(Self, OwnedFd)> {
+    fn spawn(
+        sender: InputSender,
+        reading: Arc<tokio::sync::Mutex<()>>,
+    ) -> io::Result<(Self, OwnedFd)> {
         // Match crossterm's input source, including redirected stdin.
         let tty = if io::stdin().is_terminal() {
             io::stdin().as_fd().try_clone_to_owned()?
@@ -1575,6 +1673,8 @@ impl TerminalReader {
                     return;
                 }
                 wait_ms = 0;
+                // Not while the external editor has the terminal.
+                let _reading = reading.blocking_lock();
                 match crossterm::event::poll(Duration::ZERO) {
                     Ok(true) => match crossterm::event::read() {
                         // Only the wheel and the left button are used (scrolling,

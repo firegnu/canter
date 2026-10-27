@@ -30,6 +30,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Tab", "Complete the command or file selected in the list"),
             ("Esc", "Close the / or @ list"),
             ("Ctrl+V", "Attach the image on the clipboard"),
+            ("Ctrl+G", "Edit the message in $VISUAL or $EDITOR"),
             ("Alt+← / Ctrl+← / Alt+B", "Back a word"),
             ("Alt+→ / Ctrl+→ / Alt+F", "Forward a word"),
             (
