@@ -257,3 +257,63 @@ async fn reopening_only_appends_when_segments_or_messages_change_and_upgrades_le
             .collect::<Vec<_>>()
     );
 }
+
+#[tokio::test]
+async fn reopening_unknown_segment_without_text_appends_context_and_preserves_old_lines() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+    let (session, _) = Session::create(
+        store.clone(),
+        "prompt".into(),
+        settings(temp.path()),
+        runtime(&home),
+        Arc::new(NoRequests),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    session.close().await.unwrap();
+    drop(session);
+
+    let mut future = contexts(&store)[0].clone();
+    future["segments"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"kind": "future_kind", "items": [1]}));
+    store
+        .open("prompt")
+        .unwrap()
+        .append_model_history(&future)
+        .unwrap();
+    let previous = contexts(&store);
+    let history_path = temp.path().join("sessions/prompt/model-history.jsonl");
+    let previous_bytes = std::fs::read(&history_path).unwrap();
+
+    let (session, _) = Session::open(
+        store.clone(),
+        "prompt".into(),
+        runtime(&home),
+        Arc::new(NoRequests),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let reopened = contexts(&store);
+    assert_eq!(reopened.len(), previous.len() + 1);
+    assert_eq!(reopened[..previous.len()], previous);
+    assert!(
+        std::fs::read(&history_path)
+            .unwrap()
+            .starts_with(&previous_bytes)
+    );
+    let segments = reopened.last().unwrap()["segments"].as_array().unwrap();
+    assert_eq!(
+        segments
+            .iter()
+            .map(|segment| &segment["kind"])
+            .collect::<Vec<_>>(),
+        ["core", "environment"]
+    );
+    session.close().await.unwrap();
+}
