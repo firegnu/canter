@@ -63,6 +63,8 @@ const EDGE_SCROLL_MS: i64 = 50;
 const INFO_ROWS: u16 = 2;
 /// Changes of what is on screen kept for keys still waiting to be handled.
 const SHOWN_KEPT: usize = 8;
+/// After `/handoff`, how long after the first Esc a second one goes back.
+const HANDOFF_BACK_MS: i64 = 2000;
 /// How often the screen is drawn: ten times a second, and about thirty
 /// while the light of a copy sweeps the highlight.
 const REDRAW: Duration = Duration::from_millis(100);
@@ -106,6 +108,8 @@ pub enum Action {
     NewSession,
     /// Show the session list and switch to the session picked.
     PickSession,
+    /// Go back to this session, the one `/handoff` came from.
+    ReturnFromHandoff(String),
     /// Fetch the available models and offer a choice.
     PickModel,
     /// Fetch the skills fixed when this session opened.
@@ -525,6 +529,9 @@ pub struct App {
     /// In the order they came, which is also the order of their places.
     notices: Vec<Notice>,
     active_btw: Option<usize>,
+    /// In the session `/handoff` opened, until a message is sent: the
+    /// session the note came from, and when Esc was first pressed.
+    handoff_back: Option<(String, Option<i64>)>,
     history: History,
     scroll: Scroll,
     /// The version line of the welcome header at the top of the
@@ -706,6 +713,7 @@ impl App {
             completions: 0,
             notices: Vec::new(),
             active_btw: None,
+            handoff_back: None,
             welcome: None,
             history: History::default(),
             scroll: Scroll::default(),
@@ -942,7 +950,10 @@ impl App {
             self.mouse.link = None;
         }
         let action = self.key_action(key, shown, at);
-        if matches!(action, Some(Action::NewSession | Action::PickSession)) {
+        if matches!(
+            action,
+            Some(Action::NewSession | Action::PickSession | Action::ReturnFromHandoff(_))
+        ) {
             self.mouse.link = None;
         }
         action
@@ -1072,6 +1083,7 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
+            KeyCode::Esc if self.handoff_back_open() => return self.handoff_back(at),
             KeyCode::Esc => return self.interrupt_seen(shown.turn),
             KeyCode::Char('c') if ctrl => {
                 if self.input.is_empty() {
@@ -1181,6 +1193,7 @@ impl App {
                 }
                 // Sending follows the latest output again.
                 self.scroll.top = None;
+                self.handoff_back = None;
                 let input = self.input.parts();
                 if input
                     .iter()
@@ -1582,6 +1595,7 @@ impl App {
 
     pub(crate) fn handoff_draft(&mut self, source: &str, note: &str) {
         self.input.insert(note);
+        self.handoff_back = Some((source.to_owned(), None));
         self.notice(LogicalLine::new(
             vec![Span::raw("  ")],
             vec![Span::raw(format!(
@@ -1589,6 +1603,29 @@ impl App {
                 source.chars().take(8).collect::<String>()
             ))],
         ));
+    }
+
+    /// Esc goes back to where the note came from: nothing sent here yet.
+    fn handoff_back_open(&self) -> bool {
+        self.handoff_back.is_some()
+            && self.snapshot.turns.is_empty()
+            && self.snapshot.queued_inputs.is_empty()
+    }
+
+    /// Esc at `at`: the first says to press again, one within
+    /// [`HANDOFF_BACK_MS`] of it goes back, dropping the note.
+    fn handoff_back(&mut self, at: i64) -> Option<Action> {
+        let (source, first) = self.handoff_back.as_mut()?;
+        if first.is_some_and(|first| at - first < HANDOFF_BACK_MS) {
+            *first = None;
+            return Some(Action::ReturnFromHandoff(source.clone()));
+        }
+        *first = Some(at);
+        self.copier.show(
+            Line::from(" Esc again to return to the original session"),
+            at + HANDOFF_BACK_MS,
+        );
+        None
     }
 
     pub fn rewind_draft(&mut self, input: &[UserInput]) {
