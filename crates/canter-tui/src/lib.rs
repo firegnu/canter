@@ -48,6 +48,7 @@ mod select;
 mod shimmer;
 mod short_path;
 mod statusline;
+mod steer;
 mod tab_title;
 mod text;
 pub mod theme;

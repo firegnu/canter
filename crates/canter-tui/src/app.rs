@@ -91,6 +91,11 @@ pub enum Action {
         text: String,
         input: Vec<UserInput>,
     },
+    /// Tab while working: send this into the turn in progress (`mode: steer`).
+    Steer {
+        text: String,
+        input: Vec<UserInput>,
+    },
     /// Answer an approval request.
     Resolve {
         request_id: String,
@@ -596,6 +601,8 @@ pub struct App {
     /// The turn an interrupt was sent for.
     interrupting: Option<String>,
     retract_drafts: crate::retract::Drafts,
+    /// Queued messages this terminal sent to steer the turn in progress.
+    steering: crate::steer::Steering,
     images_need_paste: bool,
     /// Approval requests this terminal answered; their box stays closed
     /// while the answer is on its way.
@@ -688,6 +695,13 @@ impl App {
         self
     }
 
+    /// Keeps marking the steers sent from `before` that are still waiting,
+    /// when their session shows again (`/resume`).
+    pub fn with_steering_from(mut self, before: &App) -> Self {
+        self.steering = before.steering.carried();
+        self
+    }
+
     /// Keeps `draft`, or else what is in the input box, sent from it now.
     fn record_input(&mut self, draft: Option<&InputBox>) {
         self.input_history.record(
@@ -775,6 +789,7 @@ impl App {
         Self {
             branch: crate::git::branch(&snapshot.settings.cwd),
             retract_drafts: crate::retract::Drafts::new(&snapshot),
+            steering: crate::steer::Steering::default(),
             images_need_paste: false,
             tps: Tps::new(&snapshot),
             snapshot,
@@ -882,6 +897,7 @@ impl App {
             return;
         }
         self.retract_drafts.event(event);
+        self.steering.event(event);
         self.tps.event(event);
         if let Some(line) = &mut self.status_line {
             line.event(event);
@@ -1235,6 +1251,13 @@ impl App {
                     return self.enter();
                 }
             }
+            // While a turn showed in progress, into that turn; Enter queues
+            // (user's choice, the other way round from Codex). Guarded like Enter.
+            KeyCode::Tab => {
+                if !send_guarded && shown.completions == self.completions && shown.turn.is_some() {
+                    return self.steer();
+                }
+            }
             // From the mode the key's frame showed, so presses before the
             // change shows ask for the same mode; none on a frame with a
             // choice or the list, even one a key before this closed. Like
@@ -1363,37 +1386,65 @@ impl App {
                 None
             }
             None if self.input.text().trim().is_empty() => None,
-            None => {
-                if self.handoff_in_progress() {
-                    self.warning("Wait for handoff to finish or press Esc to cancel");
-                    return None;
-                }
-                if self.sending_image.is_some() {
-                    return None;
-                }
-                // Sending follows the latest output again.
-                self.scroll.top = None;
-                self.handoff_back = None;
-                let input = self.input.parts();
-                if input
-                    .iter()
-                    .any(|part| matches!(part, UserInput::LocalImage { .. }))
-                {
-                    if !self.accepts_images() {
-                        return None;
-                    }
-                    self.record_input(None);
-                    self.sending_image = Some(self.input.clone());
-                    return Some(Action::SendImages {
-                        text: self.input.take(),
-                        input,
-                    });
-                }
-                self.record_input(None);
-                self.sending_text = Some(self.input.clone());
-                Some(Action::Send(self.input.take()))
-            }
+            None => self.send(false),
         }
+    }
+
+    /// Tab while working: like Enter on a message, but into the turn in
+    /// progress. Commands, `!` commands and an empty box do nothing.
+    fn steer(&mut self) -> Option<Action> {
+        if !self.steerable() {
+            return None;
+        }
+        self.send(true)
+    }
+
+    /// Whether the draft is a message Tab can steer with.
+    fn steerable(&self) -> bool {
+        let text = self.input.text();
+        !text.trim().is_empty()
+            && !text.trim_start().starts_with('!')
+            && commands::parse(text).is_none()
+    }
+
+    /// Sends the message in the input box: queued, or with `steer` into the
+    /// turn in progress.
+    fn send(&mut self, steer: bool) -> Option<Action> {
+        if self.handoff_in_progress() {
+            self.warning("Wait for handoff to finish or press Esc to cancel");
+            return None;
+        }
+        if self.sending_image.is_some() {
+            return None;
+        }
+        // Sending follows the latest output again.
+        self.scroll.top = None;
+        self.handoff_back = None;
+        let input = self.input.parts();
+        if input
+            .iter()
+            .any(|part| matches!(part, UserInput::LocalImage { .. }))
+        {
+            if !self.accepts_images() {
+                return None;
+            }
+            self.record_input(None);
+            self.sending_image = Some(self.input.clone());
+            let text = self.input.take();
+            return Some(if steer {
+                Action::Steer { text, input }
+            } else {
+                Action::SendImages { text, input }
+            });
+        }
+        self.record_input(None);
+        self.sending_text = Some(self.input.clone());
+        let text = self.input.take();
+        Some(if steer {
+            Action::Steer { text, input }
+        } else {
+            Action::Send(text)
+        })
     }
 
     /// Puts `/name ` in the input box; the list closes, and Enter runs it.
@@ -2766,6 +2817,12 @@ impl App {
         self.restore_retracted();
     }
 
+    /// The reply to a steer: `accepted` when the server put it into the
+    /// turn in progress, not the queue.
+    pub fn steer_sent(&mut self, event_seq: u64, accepted: bool) {
+        self.steering.reply(event_seq, accepted);
+    }
+
     pub fn interrupt_finished(&mut self, turn_id: &str, retracted: bool) {
         self.retract_drafts.response(turn_id, retracted);
         self.restore_retracted();
@@ -3368,7 +3425,14 @@ impl App {
                 // What was copied, or why not, for a moment instead.
                 Some(note) => Line::from(truncate(note.spans.clone(), usize::from(width))),
                 None if self.search.is_some() => self.search_status(found, width),
-                None => self.status_line(now_ms, width),
+                None => {
+                    // Tab sends what is typed only when no list above takes it.
+                    let steer = list.is_empty()
+                        && matches!(bottom, Bottom::Input { .. })
+                        && self.drawing.turn.is_some()
+                        && self.steerable();
+                    self.status_line(now_ms, width, steer)
+                }
             },
             list,
             bottom,
@@ -3914,9 +3978,20 @@ impl App {
             let part = (Part::Notice(index), Kind::Notice);
             push_part(&mut rows, &mut parts, &mut tail, part, notice.rows(width));
         }
-        for queued in &self.snapshot.queued_inputs {
+        // Steers go in before the queued messages: into this turn.
+        let (steering, queued): (Vec<_>, Vec<_>) = self
+            .snapshot
+            .queued_inputs
+            .iter()
+            .partition(|queued| self.steering.contains(&queued.id));
+        for queued in steering.into_iter().chain(queued) {
+            let label = if self.steering.contains(&queued.id) {
+                "  ↳ Steering"
+            } else {
+                "  · Queued"
+            };
             let mut text = format!(
-                "  · Queued: {}",
+                "{label}: {}",
                 queued.review.as_ref().map_or_else(
                     || first_line(&queued.input),
                     |title| sanitize(title).replace('\n', " ")
@@ -3940,11 +4015,11 @@ impl App {
     /// What is going on; at the end, while details are shown, how to fold
     /// them. While working, when the window is too narrow, a running command
     /// is cut first; then the Ctrl+O hint is left out.
-    fn status_line(&self, now_ms: i64, width: u16) -> Line<'static> {
+    fn status_line(&self, now_ms: i64, width: u16, steer: bool) -> Line<'static> {
         const FOLD: &str = " · Details shown · Ctrl+O to fold";
         let width = usize::from(width);
         let room = width.saturating_sub(if self.details { str_width(FOLD) } else { 0 });
-        let (mut line, doing) = self.activity(now_ms, room);
+        let (mut line, doing) = self.activity(now_ms, room, steer);
         if self.details {
             let text = if line.spans.is_empty() {
                 &FOLD[" ·".len()..]
@@ -4025,7 +4100,7 @@ impl App {
 
     /// The status line without the Ctrl+O hint, a long command cut to fit
     /// `room` columns; and whether it says what the turn is doing.
-    fn activity(&self, now_ms: i64, room: usize) -> (Line<'static>, bool) {
+    fn activity(&self, now_ms: i64, room: usize, steer: bool) -> (Line<'static>, bool) {
         if self.shell_wait
             && self.input.full_text().trim_start().starts_with('!')
             && (self.snapshot.status != SessionStatus::Idle
@@ -4061,11 +4136,12 @@ impl App {
             .working_since
             .map(|since| format_elapsed(now_ms.saturating_sub(since)))
             .unwrap_or_default();
+        let steer = if steer { " · Tab to steer" } else { "" };
         let line = match self.snapshot.status {
             SessionStatus::Working => {
                 let frame = SPINNER[(now_ms.max(0) / 80) as usize % SPINNER.len()];
                 let spinner = format!(" {frame} ");
-                let after = format!(" · {elapsed} · Esc to interrupt");
+                let after = format!(" · {elapsed} · Esc to interrupt{steer}");
                 let (verb, command) = self.doing().unwrap_or(("Working", None));
                 let used = str_width(&spinner) + str_width(verb) + str_width(&after);
                 let mut spans = vec![Span::styled(spinner, theme::accent())];
@@ -4091,7 +4167,7 @@ impl App {
                     },
                     theme::warning(),
                 ),
-                Span::styled(format!(" · {elapsed}"), theme::secondary()),
+                Span::styled(format!(" · {elapsed}{steer}"), theme::secondary()),
             ]),
             SessionStatus::Starting => Line::from(Span::styled(" Starting…", theme::secondary())),
             SessionStatus::Error => {

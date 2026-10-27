@@ -69,6 +69,10 @@ mod handoff_tests;
 #[path = "run_editor_tests.rs"]
 mod editor_tests;
 
+#[cfg(test)]
+#[path = "run_steer_tests.rs"]
+mod steer_tests;
+
 /// A connection to the server.
 pub struct Connected {
     pub client: Client,
@@ -858,6 +862,8 @@ enum Message {
     Sent {
         event_seq: u64,
         turn_id: Option<String>,
+        /// Sent with Tab, `mode: steer`.
+        steer: bool,
         title: String,
         input: Vec<UserInput>,
     },
@@ -1187,6 +1193,7 @@ impl<C: Connector> Chat<C> {
             .with_welcome(self.version.clone())
             .with_status_line(self.status_line.clone(), self.env.clone())
             .with_bar_from(ui.app())
+            .with_steering_from(ui.app())
             .with_input_history_from(ui.app_mut());
         *ui.app_mut() = app;
         if let Ok(models) = self.client.list_models().await {
@@ -1217,7 +1224,11 @@ impl<C: Connector> Chat<C> {
                 turn_id,
                 title,
                 input,
+                steer,
             } => {
+                if steer {
+                    app.steer_sent(event_seq, turn_id.is_some());
+                }
                 self.naming
                     .sent(app.snapshot(), &self.client, event_seq, turn_id, title);
                 app.input_sent(event_seq, input);
@@ -1369,8 +1380,15 @@ impl<C: Connector> Chat<C> {
                     let _ = sender.send(message);
                 });
             }
-            action @ (Action::Send(_) | Action::SendImages { .. }) => {
-                let has_images = matches!(&action, Action::SendImages { .. });
+            action @ (Action::Send(_) | Action::SendImages { .. } | Action::Steer { .. }) => {
+                let steer = matches!(&action, Action::Steer { .. });
+                let has_images = match &action {
+                    Action::SendImages { .. } => true,
+                    Action::Steer { input, .. } => input
+                        .iter()
+                        .any(|part| matches!(part, UserInput::LocalImage { .. })),
+                    _ => false,
+                };
                 let draft = if has_images {
                     None
                 } else {
@@ -1378,14 +1396,20 @@ impl<C: Connector> Chat<C> {
                 };
                 let (text, input) = match action {
                     Action::Send(text) => (text.clone(), vec![UserInput::Text { text }]),
-                    Action::SendImages { text, input } => (text, input),
+                    Action::SendImages { text, input } | Action::Steer { text, input } => {
+                        (text, input)
+                    }
                     _ => unreachable!(),
                 };
                 let title = session_title(&text);
                 let params = SessionInputParams {
                     review: None,
                     input,
-                    mode: InputMode::Queue,
+                    mode: if steer {
+                        InputMode::Steer
+                    } else {
+                        InputMode::Queue
+                    },
                     client_name: self.client_name.clone(),
                 };
                 app.input_sending();
@@ -1410,6 +1434,7 @@ impl<C: Connector> Chat<C> {
                         turn_id: response.turn_id,
                         title,
                         input: params.input,
+                        steer,
                     });
                 });
             }
