@@ -233,7 +233,7 @@ async fn retract_filters_text_and_images_immediately_and_after_reopen() {
             "data:image",
             "queued one",
             "queued two",
-            "interrupted",
+            "[This turn was interrupted",
         ] {
             assert!(!text.contains(removed), "{removed}: {text}");
         }

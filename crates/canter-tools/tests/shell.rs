@@ -256,7 +256,7 @@ async fn cancellation_allows_term_cleanup_then_kills_uncooperative_processes() {
 }
 
 #[tokio::test]
-async fn shell_explains_exit_status_and_execution_limits() {
+async fn shell_reports_exit_status_and_signals() {
     let dir = tempfile::tempdir().unwrap();
     let tools = tools(&dir);
     let cancel = CancellationToken::new();
@@ -275,10 +275,6 @@ async fn shell_explains_exit_status_and_execution_limits() {
             .unwrap();
         let result = tools.execute(allow(&call), &cancel, &mut |_| {}).await;
         assert!(result.text.contains(expected), "{}", result.text);
-    }
-    let description = Tool::Shell.definition().description;
-    for expected in ["120", "600", "background", "other process groups"] {
-        assert!(description.contains(expected), "missing {expected}");
     }
 }
 

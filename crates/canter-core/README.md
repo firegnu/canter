@@ -93,6 +93,12 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
 `prompt` 模块的 Chat Completions 转换器是纯函数：固定段和家族补充原样放置，其余各段包在
 `<global_instructions path="…">`、`<skills>`、`<project_instructions path="…">`、`<environment>` 中，
 段之间空一行。文件内容不转义、不裁空白，path 属性转义 `&`、`"`、`<`、`>`；空段不出现。
+
+固定段原文在 `src/prompt/core.txt`（P2-57 方案 §3.1）：行首 `- [条件]` 的要点只在条件成立时出现，
+条件按打开会话时的工具名求值，支持 `&`、`|` 和括号，`mcp` 指至少有一个 `mcp__…` 工具；
+`{approval_list}`、`{data_list}` 按同一工具集依次拼接，清单为空时整句不出现。
+当前六个内置工具和没接 MCP 时渲染出的全文放在 `tests/data/core_deepseek.txt`，测试逐字核对。
+
 环境段固定四行：工作目录、git 仓库根（没有则 none）、系统和架构、本地打开日期、英文星期和 UTC 偏移。
 日期后提示当前日期可能更晚；不加入权限模式、git 分支/状态或模型名。会话中途改文件或跨本地零点都不重读，
 普通请求、手动和自动压缩沿用打开时的前缀，下次打开才更新。

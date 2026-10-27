@@ -80,7 +80,11 @@ async fn prefix_renders_ordered_sections_and_allocates_the_whole_message() {
     assert_eq!(records.len(), 1);
     let message = &records[0]["messages"][0];
     let text = message["text"].as_str().unwrap();
-    let (_, after_core) = text.split_once("\n\n").unwrap();
+    let core = records[0]["segments"][0]["text"].as_str().unwrap();
+    let after_core = text
+        .strip_prefix(core)
+        .and_then(|rest| rest.strip_prefix("\n\n"))
+        .unwrap();
     let escaped_root = format!("{}/project&amp;&quot;&lt;&gt;", temp.path().display());
     let expected = format!(
         "<global_instructions path=\"{}/.agents/AGENTS.md\">\n global <raw> & text \n\n</global_instructions>\n\n\
