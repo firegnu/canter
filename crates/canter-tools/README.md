@@ -3,6 +3,10 @@
 六个内置工具、每会话的执行器和权限判断；不依赖模型包，不发送事件、不弹批准框。
 本机实现使用 Unix 进程组，面向 macOS / Linux。
 
+六个工具的 `description` 用 P2-57 方案 §4 的原文：只属于单个工具的规矩写在这里，
+跨工具的选择（看文件用 read 不用 cat）放在系统提示词固定段；参数的 JSON Schema 不变。
+原文存在 `tests/data/descriptions/*.txt`，`tests/descriptions.rs` 逐字核对。
+
 ## 第 4 件接入
 
 1. 每个会话创建一个 `LocalExecutor::new(absolute_cwd, environment, protected_paths)`，包装为
