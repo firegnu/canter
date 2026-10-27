@@ -395,7 +395,7 @@ fn rows(buffer: &Buffer) -> Vec<String> {
 }
 
 #[test]
-fn skills_show_names_sources_and_manual_marker_in_single_truncated_rows() {
+fn skills_show_names_by_source_with_manual_marker_and_descriptions_below() {
     for width in [90, 40] {
         let mut screen = Screen::sized(width, HEIGHT);
         assert_eq!(screen.enter("/skills"), Some(Action::ListSkills));
@@ -406,23 +406,27 @@ fn skills_show_names_sources_and_manual_marker_in_single_truncated_rows() {
         screen.ui.app_mut().show_skills(skills);
         screen.draw();
         let lines = screen.lines();
-        let manual = lines
+        let global = lines
             .iter()
-            .position(|line| line.contains("manual [global] [not for model]"))
-            .unwrap();
-        let tdd = &lines[manual + 1];
-        assert!(
-            tdd.contains("tdd [project]  Write a failing"),
-            "{}",
-            screen.text()
-        );
+            .position(|line| line == " Global  ~/.agents/skills")
+            .unwrap_or_else(|| panic!("{}", screen.text()));
+        assert_eq!(lines[global + 1], "   manual   not for model");
+        assert_eq!(lines[global + 2], "     Review all interface states");
+        assert_eq!(lines[global + 3], "");
+        assert_eq!(lines[global + 4], " Project  .agents/skills");
+        assert_eq!(lines[global + 5], "   tdd");
         if width == 40 {
-            assert!(lines[manual].ends_with('…'));
-            assert!(tdd.ends_with('…'));
-            assert!(!screen.text().contains("changing implementation"));
+            assert_eq!(lines[global + 6], "     Write a failing test before");
+            assert_eq!(
+                lines[global + 7],
+                "     changing implementation and verify…"
+            );
+            assert!(!screen.text().contains("the result"));
         } else {
-            assert!(lines[manual].contains("Review all interface states"));
-            assert!(tdd.contains("verify the result"));
+            assert_eq!(
+                lines[global + 6],
+                "     Write a failing test before changing implementation and verify the result"
+            );
         }
     }
 }
@@ -1192,18 +1196,24 @@ async fn files_lists_deduplicated_history_and_isolated_git_status() {
     screen.ui.app_mut().show_files().await;
     screen.draw();
     let shown = screen.text();
-    assert!(shown.contains("Read files"), "{shown}");
-    let shown = &shown[shown.find("Read files").unwrap()..];
-    assert!(shown.contains("Changed files"), "{shown}");
+    assert!(
+        shown.contains(" Files  read 2 · changed 2 · git 3"),
+        "{shown}"
+    );
+    let shown = &shown[shown.find(" Files  read").unwrap()..];
+    assert!(shown.contains("Changed by canter"), "{shown}");
     assert_eq!(shown.matches("~/other.txt").count(), 1, "{shown}");
     assert_eq!(shown.matches("created.txt").count(), 1, "{shown}");
-    assert!(shown.contains("新增 / 修改  created.txt"), "{shown}");
-    assert!(shown.contains("删除  gone.txt"), "{shown}");
+    assert!(shown.contains("added / modified   created.txt"), "{shown}");
+    assert!(shown.contains("deleted            gone.txt"), "{shown}");
     assert!(shown.find("tracked.txt").unwrap() < shown.find("~/other.txt").unwrap());
-    assert!(shown.contains("Git: main"), "{shown}");
-    assert!(shown.contains(" M  tracked.txt"), "{shown}");
-    assert!(shown.contains("??  untracked space.txt"), "{shown}");
-    assert!(shown.contains("Shell edits"), "{shown}");
+    assert!(shown.contains("Git status · main"), "{shown}");
+    assert!(shown.contains("modified    tracked.txt"), "{shown}");
+    assert!(shown.contains("untracked   untracked space.txt"), "{shown}");
+    assert!(
+        shown.contains("Edits made through shell commands"),
+        "{shown}"
+    );
     assert!(!repo.join("forbidden-marker").exists());
     assert!(!repo.join("forbidden-filter").exists());
     screen.ui.backend_mut().resize(40, 32);
@@ -1212,7 +1222,7 @@ async fn files_lists_deduplicated_history_and_isolated_git_status() {
         screen
             .lines()
             .iter()
-            .any(|line| line.contains("Shell edits") && line.ends_with('…')),
+            .any(|line| line.contains("Edits made") && line.ends_with('…')),
         "{}",
         screen.text()
     );
@@ -1226,7 +1236,7 @@ async fn files_lists_deduplicated_history_and_isolated_git_status() {
     screen.ui.app_mut().show_files().await;
     screen.draw();
     let shown = screen.text();
-    assert_eq!(shown.matches("none").count(), 2, "{shown}");
+    assert_eq!(shown.matches("(none)").count(), 2, "{shown}");
     assert!(shown.contains("not a git repository"), "{shown}");
 }
 
@@ -1625,12 +1635,15 @@ fn mcp_status_and_approval_show_server_tool_arguments_and_escape_interrupts() {
     screen.draw();
     let text = screen.text();
     for expected in [
-        "local — connected",
-        "echo (mcp__local__echo)",
-        "remote — disconnected: connection timed out",
+        " ● local    connected · 1 tool\n   echo\n",
+        " ○ remote   disconnected\n   connection timed out\n",
     ] {
         assert!(text.contains(expected), "{text}");
     }
+    // The result is in a box above the input box, which takes the keys.
+    assert_eq!(screen.key(KeyCode::Esc), None);
+    screen.draw();
+    assert!(!screen.text().contains("remote"));
     screen.start_turn("t1");
     screen.event(json!({"type":"item.started","turnId":"t1","item":{
         "type":"mcpToolCall","id":"m1","server":"local","tool":"echo","arguments":{"text":"hello"},"result":"","status":"inProgress"

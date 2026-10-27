@@ -38,19 +38,45 @@ pub(crate) fn branch(dir: &str) -> Option<String> {
     }
 }
 
+/// What `/files` shows of git.
+pub(crate) enum Status {
+    /// The branch, and each entry's two-letter code and path as shown.
+    Repository {
+        branch: String,
+        entries: Vec<(String, String)>,
+    },
+    /// Why there is no status, such as `not a git repository`.
+    Unavailable(&'static str),
+}
+
+/// The branch in the first line of `git status --branch`: `main`,
+/// `main...origin/main [ahead 1]`, `No commits yet on main`.
+fn branch_of(header: &str) -> String {
+    let header = header.trim_start_matches("## ");
+    let header = header
+        .strip_prefix("No commits yet on ")
+        .or_else(|| header.strip_prefix("Initial commit on "))
+        .unwrap_or(header);
+    let branch = match header.split_once("...") {
+        Some((branch, _)) => branch,
+        None => header.split(" [").next().unwrap_or(header),
+    };
+    branch.to_owned()
+}
+
 /// Read-only status, with all git work bounded by one timeout. Dropping an
 /// unfinished output future kills and reaps its child through tokio.
-pub(crate) async fn status(cwd: &str, home: Option<&str>) -> Vec<String> {
+pub(crate) async fn status(cwd: &str, home: Option<&str>) -> Status {
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         let root = git_output(cwd, &["rev-parse", "--show-toplevel"]).await?;
         if !root.status.success() {
-            return Ok(vec![
+            return Ok(Status::Unavailable(
                 if String::from_utf8_lossy(&root.stderr).contains("not a git repository") {
-                    "Git: not a git repository".into()
+                    "not a git repository"
                 } else {
-                    "Git: could not read repository status".into()
+                    "could not read repository status"
                 },
-            ]);
+            ));
         }
         let root = String::from_utf8_lossy(&root.stdout);
         let root = Path::new(root.strip_suffix('\n').unwrap_or(&root));
@@ -78,37 +104,34 @@ pub(crate) async fn status(cwd: &str, home: Option<&str>) -> Vec<String> {
         )
         .await?;
         if !output.status.success() {
-            return Ok(vec!["Git: could not read repository status".into()]);
+            return Ok(Status::Unavailable("could not read repository status"));
         }
         let text = String::from_utf8_lossy(&output.stdout);
         let mut entries = text.split('\0').filter(|entry| !entry.is_empty());
-        let mut lines = vec![format!(
-            "Git: {}",
-            entries.next().unwrap_or_default().trim_start_matches("## ")
-        )];
+        let branch = branch_of(entries.next().unwrap_or_default());
+        let mut changes = Vec::new();
         for entry in entries {
             if let Some(path) = entry.get(3..) {
-                lines.push(format!(
-                    "  {}  {}",
-                    &entry[..2],
+                changes.push((
+                    entry[..2].to_owned(),
                     crate::files::display_path(
                         &root.join(path),
                         &display_cwd.to_string_lossy(),
-                        display_home.as_ref().and_then(|home| home.to_str())
-                    )
+                        display_home.as_ref().and_then(|home| home.to_str()),
+                    ),
                 ));
             }
         }
-        if lines.len() == 1 {
-            lines.push("  clean".into());
-        }
-        Ok::<_, std::io::Error>(lines)
+        Ok::<_, std::io::Error>(Status::Repository {
+            branch,
+            entries: changes,
+        })
     })
     .await;
     match result {
-        Ok(Ok(lines)) => lines,
-        Ok(Err(_)) => vec!["Git: could not run git status".into()],
-        Err(_) => vec!["Git: status timed out".into()],
+        Ok(Ok(status)) => status,
+        Ok(Err(_)) => Status::Unavailable("could not run git status"),
+        Err(_) => Status::Unavailable("status timed out"),
     }
 }
 
