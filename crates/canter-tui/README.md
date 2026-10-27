@@ -13,7 +13,7 @@ Environment 是会话打开时固定的目录、仓库根、系统/架构和本�
 窗口放不下时先让对话区让出地方，还放不下就让中间各段跟着 ↑/↓ 滚，上下写 `↑ N more` / `↓ N more`，
 第一行、说明行和 `Esc close` 一直留着。查询失败（比如会话还没打开）照旧在对话区提示一行，不弹框。
 
-`/files`、`/mcp`、`/skills` 的结果也这样弹框，打开、关闭、按键、草稿和放不下时的滚动都和 `/context` 一样。
+`/files`、`/diff`、`/mcp`、`/skills` 的结果也这样弹框，打开、关闭、按键、草稿和放不下时的滚动都和 `/context` 一样。
 第一行是标题（加粗）加灰色的数量摘要，节之间空一行，节标题加粗，次要信息灰色，最后一行 `Esc close`。
 
 - `/files`：`Read`、`Changed by canter`、`Git status · <分支>` 三节，空的节写 `(none)`，不在 git 仓库里写 `(not a git repository)`。
@@ -22,6 +22,14 @@ Environment 是会话打开时固定的目录、仓库根、系统/架构和本�
   Git status 把 git 的两位代码写成词，词那一栏对齐：modified（黄）、added（绿）、deleted（红）、renamed 和 untracked（灰）、
   conflict（红加粗；`U`、`AA`、`DD`）。只暂存了的后面灰色写 `staged`，暂存后又改过的写 `partly staged`。
   最后一行说明：`Edits made through shell commands only show up under Git status.`
+- `/diff`：会话目录所在 git 仓库未提交的改动，标题 `Diff`，分 `Staged`、`Unstaged`、`Untracked` 三节，没有内容的节不写。
+  diff 每个文件一行 `路径  +a −r`（新建、删除的后面灰色写 `new`、`deleted`），下面照对话里的 diff 画（行号、底色、语法色），
+  不折叠；没有文本改动的文件（二进制、只改了权限）灰色写 git 的那句话；未跟踪的只列文件名，不读内容。路径相对仓库根。
+  git 照 `/review` 收集本地改动的办法跑（同一份代码，`src/git.rs` 的 `local`）：关掉外部 diff、textconv、fsmonitor、hooks
+  和仓库配的过滤器，暂存加未暂存最多 256 KiB、未跟踪列表最多 32 KiB，超了截断，最后写黄色
+  `Truncated at 256 KiB; run git diff for the rest`（列表是 `Untracked files truncated at 32 KiB; run git status for the rest`）。
+  在后台跑，最多 15 秒，跑完才弹框，界面不卡。不在 git 仓库里写 `Not a git repository`，没有改动写 `No uncommitted changes`，
+  git 出错红色写 `git: <出错原因>`。
 - `/mcp`：第一行 `MCP  N services · M tools`。每个服务一行，名字一栏对齐：连上了是绿色 `●` 和灰色的 `connected · N tools`，
   没连上是红色 `○` 和 `disconnected`，下一行写出错原因。工具只写短名，两个空格隔开，铺满宽度再换行，
   比整行还长的名字单独一行、截断；warnings 灰色写在服务下面。最后一行 `Tools are called as mcp__<service>__<tool>.`；
@@ -432,6 +440,23 @@ Enter 在命令名没打完时只补全、不执行，打完整了才执行。Es
   用时来自快照里轮的 `durationMs`（协议包 README「归并」）；不知道的（旧数据、打开时已在进行中的轮）
   照旧不写。失败时出错已经作为提示显示过的（实时看着失败的那次），没有那行，也就不写用时。
   服务端崩溃后补记为被中断的轮，用时算到补记那一刻。
+- **一轮改了哪些文件**（P2-54）：一轮结束时（正常、被中断、失败都算），这一轮里 canter 改文件的工具改成功了文件，
+  就在用时那一行上面列出来，不空行：
+
+  ```
+    ● Changed 3 files  +40 −12
+        src/app.rs    +30 −8
+        src/input.rs   +8 −4
+        README.md      +2     new
+    ─ Worked for 1m 12s ─
+  ```
+
+  第一行文件数（`1 file` / `N files`）和加删总行数；每个文件一行，路径照改文件卡片的写法（会话目录里的写相对路径，
+  改名的写 `旧 → 新`），行数对齐成一栏，`+` 绿、`−` 红，没有删的不写 `−0`，只删了的不写 `+0`；
+  新建的后面写 `new`，删除的写 `deleted`；其余灰色。同一个文件这一轮改了几次合成一行、行数加总，
+  顺序照第一次改它的先后；改名后再改新路径也算同一行。多于 8 个文件只列前 8 个，最后一行 `… and N more`。
+  只算状态是 completed 的改文件项目，失败、被拒的不算，shell 命令改的不算。从快照里的项目算，不存盘，重开会话照样有；
+  进行中的轮不画；Ctrl+O 不影响；路径不可点。
 
 ## 工具卡片
 

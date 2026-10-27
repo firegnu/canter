@@ -212,3 +212,146 @@ pub(crate) fn command(cwd: &str) -> tokio::process::Command {
         .kill_on_drop(true);
     command
 }
+
+/// Bytes kept of one command's output, and of the diffs in all.
+pub(crate) const LIMIT: usize = 256 * 1024;
+/// Bytes kept of the untracked file list.
+pub(crate) const LIST_LIMIT: usize = 32 * 1024;
+
+/// What a command printed, at most [`LIMIT`] bytes of it.
+pub(crate) struct Output {
+    pub text: String,
+    pub truncated: bool,
+}
+
+/// The uncommitted changes of a repository, as git printed them.
+pub(crate) struct Local {
+    /// The repository's top directory, which the diffs' paths are relative to.
+    pub root: String,
+    /// [`filter_overrides`] for the repository.
+    pub filters: Vec<String>,
+    pub staged: Output,
+    pub unstaged: Output,
+    /// `git ls-files --others --exclude-standard`, one path a line.
+    pub untracked: Output,
+}
+
+/// The staged and unstaged diffs and the untracked files of the repository
+/// holding `cwd`, without running programs the repository configures. An
+/// error is `<program>: <why>`, as [`run`] gives it.
+pub(crate) async fn local(cwd: &str) -> Result<Local, String> {
+    let root = run(command(cwd).args(["rev-parse", "--show-toplevel"])).await?;
+    let root = root
+        .text
+        .strip_suffix('\n')
+        .unwrap_or(&root.text)
+        .to_owned();
+    let filters = filter_overrides(&root).await.map_err(|e| e.to_string())?;
+    let staged = run(&mut diff(&root, &filters, true, false)).await?;
+    let unstaged = run(&mut diff(&root, &filters, false, false)).await?;
+    let untracked =
+        run(command(&root).args(["ls-files", "--others", "--exclude-standard"])).await?;
+    Ok(Local {
+        root,
+        filters,
+        staged,
+        unstaged,
+        untracked,
+    })
+}
+
+/// `git diff` in `root` with `filters` ([`filter_overrides`]): no external
+/// diff, textconv or colour; `cached` for the staged changes, `stat` for
+/// `--stat`.
+pub(crate) fn diff(
+    root: &str,
+    filters: &[String],
+    cached: bool,
+    stat: bool,
+) -> tokio::process::Command {
+    let mut command = command(root);
+    command.env("GIT_NO_LAZY_FETCH", "1").args(filters).args([
+        "-c",
+        "diff.submodule=short",
+        "-c",
+        "diff.mnemonicPrefix=false",
+        "-c",
+        "diff.relative=false",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--no-renames",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "--ignore-submodules=none",
+    ]);
+    if cached {
+        command.arg("--cached");
+    }
+    if stat {
+        command.arg("--stat");
+    }
+    command.arg("--");
+    command
+}
+
+/// The longest start of `text` at most `limit` bytes long.
+pub(crate) fn prefix(text: &str, limit: usize) -> &str {
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+async fn read_bounded(mut reader: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<Output> {
+    use tokio::io::AsyncReadExt;
+    let mut bytes = Vec::new();
+    let mut truncated = false;
+    let mut buffer = [0; 8192];
+    loop {
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 {
+            break;
+        }
+        let keep = count.min(LIMIT.saturating_sub(bytes.len()));
+        bytes.extend_from_slice(&buffer[..keep]);
+        truncated |= keep < count;
+    }
+    Ok(Output {
+        text: String::from_utf8_lossy(&bytes).into_owned(),
+        truncated,
+    })
+}
+
+/// Runs `command` (git or gh) to the end, keeping at most [`LIMIT`] bytes
+/// of what it prints. It failing is `<program>: <its error output>`.
+pub(crate) async fn run(command: &mut tokio::process::Command) -> Result<Output, String> {
+    use std::process::Stdio;
+    let program = command
+        .as_std()
+        .get_program()
+        .to_string_lossy()
+        .into_owned();
+    let result = async {
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+        let (stdout, stderr, status) = tokio::join!(
+            read_bounded(child.stdout.take().unwrap()),
+            read_bounded(child.stderr.take().unwrap()),
+            child.wait(),
+        );
+        Ok::<_, std::io::Error>((stdout?, stderr?, status?))
+    }
+    .await
+    .map_err(|e| format!("{program}: {e}"))?;
+    if !result.2.success() {
+        return Err(format!("{program}: {}", result.1.text.trim()));
+    }
+    Ok(result.0)
+}

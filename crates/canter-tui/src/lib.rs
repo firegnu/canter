@@ -46,6 +46,7 @@ mod statusline;
 mod tab_title;
 mod text;
 pub mod theme;
+pub mod uncommitted;
 pub mod usage;
 mod welcome;
 

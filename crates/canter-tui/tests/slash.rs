@@ -141,10 +141,11 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 19] = [
+const COMMANDS: [(&str, &str); 20] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
+    ("/diff", "Show uncommitted git changes"),
     ("/exit", "Quit canter"),
     ("/files", "List session files and git status"),
     ("/help", "Show available commands"),
@@ -455,8 +456,8 @@ fn skills_empty_screen_explains_both_directories() {
 /// narrows the list; deleting the `/` closes it.
 #[test]
 fn a_slash_lists_the_commands_above_the_input_box() {
-    // Since /statusline the whole list is a row taller than the usual screen holds.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 1);
+    // Since /statusline and /diff the whole list is two rows taller than the usual screen holds.
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 2);
     screen.type_text("/");
     screen.draw();
     let list = screen.above_box(COMMANDS.len());
@@ -490,7 +491,7 @@ fn a_slash_lists_the_commands_above_the_input_box() {
 #[test]
 fn up_down_tab_and_enter_work_on_the_list() {
     // The whole list, as above.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 1);
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 2);
     screen.type_text("/");
     screen.draw();
     assert_eq!(screen.key(KeyCode::Down), None);

@@ -281,7 +281,7 @@ pub(crate) fn item(
 
 /// What a turn leaves behind once it has ended: `─ Worked for 12s ─`, or
 /// why it did not end normally, with ` · 12s` when its time is known.
-pub(crate) fn turn_footer(turn: &Turn, error_shown: bool) -> Option<LogicalLine> {
+fn turn_footer(turn: &Turn, error_shown: bool) -> Option<LogicalLine> {
     let time = turn.duration_ms.map(took);
     let mut line = match turn.status {
         TurnStatus::Completed => {
@@ -303,6 +303,171 @@ pub(crate) fn turn_footer(turn: &Turn, error_shown: bool) -> Option<LogicalLine>
             .push(Span::styled(format!(" · {time}"), theme::secondary()));
     }
     Some(line)
+}
+
+/// Files a turn's end lists at most; the rest are counted.
+const CHANGED_FILES: usize = 8;
+
+/// The rows a turn leaves once it has ended: what files canter's tools
+/// changed in it ([`changed_files`]), then [`turn_footer`].
+pub(crate) fn turn_end(turn: &Turn, error_shown: bool, cwd: &str, width: u16) -> Vec<Row> {
+    let mut rows = changed_files(turn, cwd, width);
+    rows.extend(
+        turn_footer(turn, error_shown).map_or_else(Vec::new, |footer| wrap_rows(&footer, width)),
+    );
+    rows
+}
+
+/// `● Changed 3 files  +40 −12` and a row for each file the turn's
+/// file-changing tools changed, in the order first changed, with its lines
+/// added and removed in all; `new` and `deleted` after them. Nothing when
+/// they changed none. Changes that failed or were declined do not count.
+fn changed_files(turn: &Turn, cwd: &str, width: u16) -> Vec<Row> {
+    struct File {
+        name: String,
+        added: usize,
+        removed: usize,
+        created: bool,
+        deleted: bool,
+    }
+    let mut files: Vec<File> = Vec::new();
+    let mut at = std::collections::HashMap::new();
+    let key = |path: &str| std::path::Path::new(cwd).join(path);
+    for item in &turn.items {
+        let Item::FileChange {
+            changes,
+            status: ItemStatus::Completed,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        for change in changes {
+            let diff = Diff::parse(&sanitize(&change.diff), &change.kind, &change.path);
+            let index = *at.entry(key(&change.path)).or_insert_with(|| {
+                files.push(File {
+                    name: display_path(&change.path, cwd),
+                    added: 0,
+                    removed: 0,
+                    created: false,
+                    deleted: false,
+                });
+                files.len() - 1
+            });
+            let file = &mut files[index];
+            file.added += diff.added();
+            file.removed += diff.removed();
+            match &change.kind {
+                PatchChangeKind::Add => (file.created, file.deleted) = (true, false),
+                PatchChangeKind::Delete => file.deleted = true,
+                PatchChangeKind::Update {
+                    move_path: Some(to),
+                } => {
+                    file.name = format!("{} → {}", file.name, display_path(to, cwd));
+                    at.insert(key(to), index);
+                }
+                _ => {}
+            }
+        }
+    }
+    if files.is_empty() {
+        return Vec::new();
+    }
+    // `+a` unless only lines were removed (or none from a deleted file),
+    // `−r` unless none were.
+    let counts = |added: usize, removed: usize, deleted: bool| {
+        (
+            (added > 0 || (removed == 0 && !deleted)).then(|| format!("+{added}")),
+            (removed > 0).then(|| format!("−{removed}")),
+        )
+    };
+    let count_spans = |(added, removed): (Option<String>, Option<String>), added_width: usize| {
+        let mut spans = Vec::new();
+        let added = added.unwrap_or_default();
+        spans.push(Span::raw(
+            " ".repeat(added_width.saturating_sub(str_width(&added))),
+        ));
+        spans.push(Span::styled(added, theme::success()));
+        if let Some(removed) = removed {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(removed, theme::failure()));
+        }
+        spans
+    };
+    let (added, removed) = files
+        .iter()
+        .fold((0, 0), |(a, r), file| (a + file.added, r + file.removed));
+    let count = files.len();
+    let mut header = vec![
+        Span::raw("  "),
+        dot(theme::secondary()),
+        Span::styled(
+            format!(
+                "Changed {count} file{}  ",
+                if count == 1 { "" } else { "s" }
+            ),
+            theme::secondary(),
+        ),
+    ];
+    header.extend(count_spans(counts(added, removed, false), 0));
+    let cut = |spans: Vec<Span<'static>>, from: usize| {
+        Row::text_from(Line::from(truncate(spans, usize::from(width))), from)
+    };
+    let mut rows = vec![cut(header, 4)];
+    let shown = &files[..count.min(CHANGED_FILES)];
+    let file_counts: Vec<_> = shown
+        .iter()
+        .map(|file| counts(file.added, file.removed, file.deleted))
+        .collect();
+    let name_width = shown
+        .iter()
+        .map(|file| str_width(&file.name))
+        .max()
+        .unwrap_or(0);
+    let added_width = file_counts
+        .iter()
+        .map(|(added, _)| added.as_deref().map_or(0, str_width))
+        .max()
+        .unwrap_or(0);
+    let counts_width = |(_, removed): &(Option<String>, Option<String>)| {
+        added_width
+            + removed
+                .as_deref()
+                .map_or(0, |removed| 1 + str_width(removed))
+    };
+    let all_counts_width = file_counts.iter().map(counts_width).max().unwrap_or(0);
+    for (file, counts) in shown.iter().zip(file_counts) {
+        let word = if file.deleted {
+            Some("deleted")
+        } else if file.created {
+            Some("new")
+        } else {
+            None
+        };
+        let pad = name_width - str_width(&file.name) + 2;
+        let after = all_counts_width - counts_width(&counts) + 2;
+        let mut spans = vec![
+            Span::raw("      "),
+            Span::styled(file.name.clone(), theme::secondary()),
+            Span::raw(" ".repeat(pad)),
+        ];
+        spans.extend(count_spans(counts, added_width));
+        if let Some(word) = word {
+            spans.push(Span::raw(" ".repeat(after)));
+            spans.push(Span::styled(word, theme::secondary()));
+        }
+        rows.push(cut(spans, 6));
+    }
+    if count > CHANGED_FILES {
+        rows.push(cut(
+            vec![Span::styled(
+                format!("      … and {} more", count - CHANGED_FILES),
+                theme::secondary(),
+            )],
+            6,
+        ));
+    }
+    rows
 }
 
 /// How long a turn or its thinking took: `<1s` under a second, otherwise

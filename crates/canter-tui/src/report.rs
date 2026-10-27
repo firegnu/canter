@@ -1,11 +1,12 @@
 //! A report above the input box until Esc or Enter: `/context`, `/files`,
-//! `/mcp` and `/skills`. The first line is the title; the body rows scroll
+//! `/diff`, `/mcp` and `/skills`. The first line is the title; the body rows scroll
 //! with Up and Down when they do not all fit, with how many more there are
 //! above and below; the notes and `Esc close` stay.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::diff::Diff;
 use crate::text::{LogicalLine, sanitize, str_width, truncate, wrap};
 use crate::theme;
 
@@ -31,6 +32,8 @@ pub(crate) enum Part {
         style: Style,
         rows: usize,
     },
+    /// A diff as the conversation draws it, each row after `indent`.
+    Diff { indent: &'static str, diff: Diff },
 }
 
 impl Part {
@@ -43,6 +46,11 @@ impl Part {
         match self {
             Self::Line(spans) => vec![Line::from(truncate(spans.clone(), width))],
             Self::Flow { indent, words } => flow(*indent, words, width),
+            Self::Diff { indent, diff } => diff
+                .rows(indent, u16::try_from(width).unwrap_or(u16::MAX), None)
+                .into_iter()
+                .map(|row| row.line)
+                .collect(),
             Self::Wrap {
                 indent,
                 text,
@@ -102,6 +110,8 @@ pub(crate) struct Report {
     top: usize,
     /// The largest `top`, for the room the last frame had.
     last_top: usize,
+    /// The body laid out for a width, so a long one is not laid out every frame.
+    laid_out: Option<(usize, Vec<Line<'static>>)>,
 }
 
 impl Report {
@@ -112,6 +122,7 @@ impl Report {
             notes,
             top: 0,
             last_top: 0,
+            laid_out: None,
         }
     }
 
@@ -135,8 +146,11 @@ impl Report {
         if room == 0 {
             return Vec::new();
         }
-        let body: Vec<Line<'static>> = self.body.iter().flat_map(|part| part.rows(width)).collect();
-        let total = body.len();
+        if self.laid_out.as_ref().is_none_or(|(at, _)| *at != width) {
+            let body = self.body.iter().flat_map(|part| part.rows(width)).collect();
+            self.laid_out = Some((width, body));
+        }
+        let total = self.laid_out.as_ref().map_or(0, |(_, body)| body.len());
         // With three rows or more, a row each for how many more there are.
         self.last_top = match total.checked_sub(room) {
             None | Some(0) => 0,
@@ -161,7 +175,9 @@ impl Report {
         if first > 0 && room >= 3 {
             rows.push(more('↑', first));
         }
-        rows.extend(body.into_iter().skip(first).take(shown));
+        if let Some((_, body)) = &self.laid_out {
+            rows.extend(body.iter().skip(first).take(shown).cloned());
+        }
         let below = total.saturating_sub(first + shown);
         if below > 0 && room >= 3 {
             rows.push(more('↓', below));
