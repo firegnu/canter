@@ -339,6 +339,7 @@ mod tests {
     fn core_includes_each_conditional_sentence_only_when_its_tools_exist() {
         const READ_BULLET: &str =
             "- To look at a file, use read rather than cat, head, or sed in the shell.";
+        const SEARCH_BULLET: &str = "- To search file contents, use `rg`; to find files, use `rg --files` rather than `grep -r` or `find`.";
         const FILE_BULLET: &str =
             "- To change files, use the file tools rather than shell redirection or `sed -i`";
         const EXACT_BULLET: &str =
@@ -352,49 +353,49 @@ mod tests {
         for (names, expected, approval, data) in [
             (
                 all.as_slice(),
-                [true, true, true, true, true],
+                [true, true, true, true, true, true],
                 Some("file changes, commands that aren't read-only, web fetches."),
                 Some("file contents, command output, web pages, and documents"),
             ),
             (
                 ["write", "edit", "shell", "ask_user", "web_fetch"].as_slice(),
-                [false, true, true, true, true],
+                [false, true, true, true, true, true],
                 Some("file changes, commands that aren't read-only, web fetches."),
                 Some("command output, web pages, and documents"),
             ),
             (
                 ["read", "shell"].as_slice(),
-                [true, false, true, true, false],
+                [true, true, false, true, true, false],
                 Some("commands that aren't read-only."),
                 Some("file contents, command output, and documents"),
             ),
             (
                 ["write", "edit"].as_slice(),
-                [false, false, false, false, false],
+                [false, false, false, false, false, false],
                 Some("file changes."),
                 None,
             ),
             (
                 ["ask_user"].as_slice(),
-                [false, false, false, false, true],
+                [false, false, false, false, false, true],
                 None,
                 None,
             ),
             (
                 ["web_fetch"].as_slice(),
-                [false, false, false, false, false],
+                [false, false, false, false, false, false],
                 Some("web fetches."),
                 Some("web pages, and documents"),
             ),
             (
                 ["mcp__demo__search"].as_slice(),
-                [false, false, false, false, false],
+                [false, false, false, false, false, false],
                 Some("MCP tools."),
                 Some("MCP tool results, and documents"),
             ),
             (
                 [].as_slice(),
-                [false, false, false, false, false],
+                [false, false, false, false, false, false],
                 None,
                 None,
             ),
@@ -402,10 +403,11 @@ mod tests {
             let prompt = core(&named(names));
             for (present, sentence) in [
                 (expected[0], READ_BULLET),
-                (expected[1], FILE_BULLET),
-                (expected[2], EXACT_BULLET),
-                (expected[3], ONE_PURPOSE_BULLET),
-                (expected[4], ASK_BULLET),
+                (expected[1], SEARCH_BULLET),
+                (expected[2], FILE_BULLET),
+                (expected[3], EXACT_BULLET),
+                (expected[4], ONE_PURPOSE_BULLET),
+                (expected[5], ASK_BULLET),
             ] {
                 assert_eq!(
                     prompt.lines().any(|line| line.starts_with(sentence)),

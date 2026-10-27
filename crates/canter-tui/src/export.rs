@@ -165,6 +165,9 @@ impl Body {
                 if let Some(code) = exit_code {
                     outcome.push_str(&format!(", exit {code}"));
                 }
+                if crate::cells::no_matches(command, *exit_code, aggregated_output) {
+                    outcome = "No matches".into();
+                }
                 let summary = format!(
                     "Ran {} · {outcome}",
                     code_span(&one_line(command, LINE_CHARS))
@@ -623,6 +626,48 @@ _Failed: model unreachable_
             text.contains(
                 "**Tool** · Ran ``echo `date` …`` · ok, exit 0\n\n````\n```\ninside\n```\n````\n"
             ),
+            "{text}"
+        );
+    }
+
+    /// A search that found nothing is exported as `No matches`, not as
+    /// `failed, exit 1`; another command's exit code 1 stays a failure.
+    #[test]
+    fn a_search_that_finds_nothing_is_not_exported_as_failed() {
+        let snapshot = snapshot(
+            None,
+            vec![turn(
+                "t1",
+                "search",
+                vec![
+                    Item::CommandExecution {
+                        id: "c1".into(),
+                        command: "rg missing".into(),
+                        cwd: "/work/proj".into(),
+                        status: ItemStatus::Failed,
+                        aggregated_output: String::new(),
+                        exit_code: Some(1),
+                        duration_ms: None,
+                    },
+                    Item::CommandExecution {
+                        id: "c2".into(),
+                        command: "diff a b".into(),
+                        cwd: "/work/proj".into(),
+                        status: ItemStatus::Failed,
+                        aggregated_output: "< a\n> b\n".into(),
+                        exit_code: Some(1),
+                        duration_ms: None,
+                    },
+                ],
+            )],
+        );
+        let text = markdown(&snapshot, "now").unwrap();
+        assert!(
+            text.contains("**Tool** · Ran `rg missing` · No matches\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("**Tool** · Ran `diff a b` · failed, exit 1\n"),
             "{text}"
         );
     }

@@ -17,6 +17,7 @@ The user's messages are your instructions. The instruction files included below 
 
 - When tool calls don't depend on each other, such as reading several files or running independent read-only commands, make them in the same reply so they run together. Make calls one at a time only when a later call needs an earlier result.
 - [read & shell] To look at a file, use read rather than cat, head, or sed in the shell.
+- [shell] To search file contents, use `rg`; to find files, use `rg --files` rather than `grep -r` or `find`.
 - [shell & (write | edit)] To change files, use the file tools rather than shell redirection or `sed -i`: the user then sees a reviewable diff, and canter can undo the change later.
 - [shell] When the user gives you a command to run, run exactly that command. Don't append or wrap anything: no `; echo $?`, no `|| true`, no extra pipes or redirections. The exit code is already reported to you and shown to the user, and additions can hide a failure. If you think the command should be different, say so instead of changing it.
 - [shell] Give each shell call one purpose. Don't chain unrelated commands or print separator lines between them; make separate calls.

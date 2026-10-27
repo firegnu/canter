@@ -841,6 +841,81 @@ fn change_header(
     (header, links)
 }
 
+/// Whether a command's exit code 1 only means its search found nothing: the
+/// whole command is one `rg` or `grep`, it printed nothing, and it exited 1.
+/// Other commands' exit code 1 still means failure.
+pub(crate) fn no_matches(command: &str, exit_code: Option<i32>, output: &str) -> bool {
+    exit_code == Some(1)
+        && output.trim().is_empty()
+        && matches!(single_program(command).as_deref(), Some("rg" | "grep"))
+}
+
+/// The name of the one program a command runs, without its directory, when
+/// the shell would run exactly that simple command. `None` when it would do
+/// more: pipes, `&&`, `;`, redirection, substitutions, several lines.
+fn single_program(command: &str) -> Option<String> {
+    let mut lines = command.lines().filter(|line| !line.trim().is_empty());
+    let line = lines.next()?;
+    if lines.next().is_some() {
+        return None;
+    }
+    let mut words: Vec<String> = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for c in line.chars() {
+        if escaped {
+            word.push(c);
+            escaped = false;
+            continue;
+        }
+        if let Some(open) = quote {
+            if c == open {
+                quote = None;
+            } else if open == '"' && matches!(c, '$' | '`') {
+                // Substitutions still run inside double quotes.
+                return None;
+            } else {
+                word.push(c);
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' => {
+                quote = Some(c);
+                started = true;
+            }
+            '\\' => {
+                escaped = true;
+                started = true;
+            }
+            // A comment starts at the beginning of a word and runs to the line's end.
+            '#' if !started => break,
+            '|' | '&' | ';' | '<' | '>' | '(' | ')' | '`' | '$' => return None,
+            c if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            c => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if quote.is_some() || escaped {
+        return None;
+    }
+    if started {
+        words.push(word);
+    }
+    let first = words.first()?;
+    let name = first.rsplit('/').next()?;
+    Some(name.strip_suffix(".exe").unwrap_or(name).to_owned())
+}
+
 fn command_card(
     command: &str,
     status: ItemStatus,
@@ -852,9 +927,11 @@ fn command_card(
 ) -> Vec<Row> {
     let dim = theme::secondary();
     let took = duration_ms.map(|ms| Span::styled(format!(" · {}", format_duration(ms)), dim));
+    let searched_nothing = no_matches(command, exit_code, output);
     let (bullet, mut right) = match (status, exit_code) {
         (ItemStatus::InProgress, _) => (dot(dim), vec![Span::styled("running", dim)]),
         (ItemStatus::Declined, _) => (dot(dim), vec![Span::styled("declined", dim)]),
+        _ if searched_nothing => (dot(dim), vec![Span::styled("No matches", dim)]),
         (_, Some(0)) => (dot(theme::success()), vec![Span::styled("exit 0", dim)]),
         (_, Some(code)) => (
             cross(),
@@ -865,7 +942,8 @@ fn command_card(
     };
     right.extend(took);
     // The same cases as the `✗` above.
-    let failed = !matches!(status, ItemStatus::InProgress | ItemStatus::Declined)
+    let failed = !searched_nothing
+        && !matches!(status, ItemStatus::InProgress | ItemStatus::Declined)
         && exit_code.map_or(status == ItemStatus::Failed, |code| code != 0);
     let mut rows = command_title(command, bullet, right, details, width);
     let (fold, style) = if details {
