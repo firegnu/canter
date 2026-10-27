@@ -5,7 +5,7 @@
 
 use canter_protocol::{Event, SessionSnapshot};
 use canter_tui::{Action, App, Ui};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use serde_json::{Value, json};
@@ -17,7 +17,9 @@ const WIDTH: u16 = 60;
 const HEIGHT: u16 = 20;
 /// Rows below the conversation: status line, input box (3) and info rows (2).
 const BELOW: usize = 6;
-const HINT: &str = "↓ New output below · scroll down or press PgDn";
+/// The hint while scrolled back, with nothing new below and with new output.
+const JUMP: &str = " ↓ Jump to bottom · click or End";
+const NEW: &str = " ↓ New output below · click or End";
 
 struct Screen {
     ui: Ui<TestBackend>,
@@ -118,6 +120,21 @@ impl Screen {
         });
     }
 
+    /// A left click on row `row`.
+    fn click(&mut self, row: u16) {
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            self.ui.app_mut().handle_mouse(MouseEvent {
+                kind,
+                column: 5,
+                row,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+    }
+
     fn resize(&mut self, width: u16, height: u16) {
         self.ui.backend_mut().resize(width, height);
     }
@@ -131,7 +148,7 @@ impl Screen {
     fn conversation(&self) -> Vec<String> {
         let lines = self.lines();
         let mut end = lines.len() - BELOW;
-        if lines[end - 1].contains(HINT) {
+        if lines[end - 1].starts_with(" ↓ ") {
             end -= 1;
         }
         lines[..end].to_vec()
@@ -273,17 +290,18 @@ fn a_long_conversation_follows_the_latest_output() {
     assert_eq!(screen.above_status(), "  line 41");
 }
 
-/// After scrolling up with the wheel, new output does not move the view; a
+/// After scrolling up with the wheel, new output does not move the view; the
 /// hint above the status line says there is more below. Scrolling back down
 /// to the bottom follows the latest output again.
 #[test]
 fn the_wheel_scrolls_back_and_new_output_does_not_pull_the_view_down() {
     let mut screen = Screen::long_turn(40);
+    let area = usize::from(HEIGHT) - BELOW;
     screen.wheel(MouseEventKind::ScrollUp);
     screen.draw();
     assert_eq!(
-        screen.above_status(),
-        "  line 37",
+        screen.lines()[0],
+        format!("  line {}", 40 - area + 1 - 3),
         "one wheel step scrolls three rows"
     );
     let before = screen.conversation();
@@ -292,8 +310,8 @@ fn the_wheel_scrolls_back_and_new_output_does_not_pull_the_view_down() {
     screen.draw();
     let shown = screen_text(&screen.lines());
     assert_eq!(
-        screen.above_status().trim(),
-        HINT,
+        screen.above_status(),
+        NEW,
         "the hint is right above the status line:\n{shown}"
     );
     let after = screen.conversation();
@@ -310,7 +328,7 @@ fn the_wheel_scrolls_back_and_new_output_does_not_pull_the_view_down() {
     }
     let shown = screen_text(&screen.lines());
     assert_eq!(screen.above_status(), "  line 41", "{shown}");
-    assert!(!shown.contains(HINT), "{shown}");
+    assert!(!shown.contains("↓"), "{shown}");
 
     // Following again: more output comes into view.
     screen.say("t1", "m42", "line 42");
@@ -326,17 +344,18 @@ fn page_up_then_sending_a_message_follows_again() {
     let area = usize::from(HEIGHT) - BELOW;
     assert_eq!(screen.key(KeyCode::PageUp), None);
     screen.draw();
-    assert_eq!(screen.above_status(), format!("  line {}", 40 - area));
+    assert_eq!(screen.lines()[0], format!("  line {}", 40 - 2 * area + 1));
+    assert_eq!(screen.above_status(), JUMP);
 
     screen.say("t1", "m41", "line 41");
     screen.draw();
-    assert_eq!(screen.above_status().trim(), HINT);
+    assert_eq!(screen.above_status(), NEW);
 
     // PgDn scrolls back a page, not past the end.
     assert_eq!(screen.key(KeyCode::PageUp), None);
     assert_eq!(screen.key(KeyCode::PageDown), None);
     screen.draw();
-    assert_eq!(screen.above_status().trim(), HINT, "still scrolled up");
+    assert_eq!(screen.above_status(), NEW, "still scrolled up");
 
     for c in "next".chars() {
         assert_eq!(screen.key(KeyCode::Char(c)), None);
@@ -348,7 +367,7 @@ fn page_up_then_sending_a_message_follows_again() {
     screen.draw();
     let shown = screen_text(&screen.lines());
     assert_eq!(screen.above_status(), "  line 41", "{shown}");
-    assert!(!shown.contains(HINT), "{shown}");
+    assert!(!shown.contains("↓"), "{shown}");
 }
 
 /// When the window changes size, the whole conversation wraps again at the
@@ -397,10 +416,10 @@ fn resizing_rewraps_the_whole_conversation() {
     }
 }
 
-/// While the approval box is open, PgDn scrolls the box, not the
-/// conversation, so the hint does not tell to press it.
+/// While the approval box is open, End does not go to the bottom, so the
+/// hint only tells to click.
 #[test]
-fn with_the_approval_box_open_the_hint_does_not_mention_pgdn() {
+fn with_the_approval_box_open_the_hint_does_not_mention_end() {
     let mut screen = Screen::long_turn(40);
     screen.wheel(MouseEventKind::ScrollUp);
     screen.draw();
@@ -414,6 +433,99 @@ fn with_the_approval_box_open_the_hint_does_not_mention_pgdn() {
         .iter()
         .find(|row| row.contains("New output below"))
         .unwrap_or_else(|| panic!("no hint:\n{shown}"));
-    assert!(!hint.contains("PgDn"), "{shown}");
-    assert_eq!(hint, " ↓ New output below · scroll down", "{shown}");
+    assert_eq!(hint, " ↓ New output below · click", "{shown}");
+}
+
+/// Scrolled back with nothing new below: the row above the status line
+/// offers to jump to the bottom, and says how.
+#[test]
+fn scrolled_back_without_new_output_the_hint_offers_to_jump() {
+    let mut screen = Screen::long_turn(40);
+    assert!(!screen_text(&screen.lines()).contains("↓"), "following");
+    screen.wheel(MouseEventKind::ScrollUp);
+    screen.draw();
+    let shown = screen_text(&screen.lines());
+    assert_eq!(screen.above_status(), JUMP, "{shown}");
+}
+
+/// Scrolled back and new output comes: the hint says so, with the same way
+/// to jump.
+#[test]
+fn scrolled_back_with_new_output_the_hint_says_so() {
+    let mut screen = Screen::long_turn(40);
+    screen.wheel(MouseEventKind::ScrollUp);
+    screen.draw();
+    screen.say("t1", "m41", "line 41");
+    screen.draw();
+    let shown = screen_text(&screen.lines());
+    assert_eq!(screen.above_status(), NEW, "{shown}");
+}
+
+/// A click on the hint goes to the bottom and follows the latest output
+/// again; it neither selects nor copies.
+#[test]
+fn clicking_the_hint_jumps_to_the_bottom_and_follows() {
+    let mut screen = Screen::long_turn(40);
+    screen.key(KeyCode::PageUp);
+    screen.draw();
+    screen.say("t1", "m41", "line 41");
+    screen.draw();
+    assert_eq!(screen.above_status(), NEW);
+
+    screen.click(hint_row());
+    screen.draw();
+    let shown = screen_text(&screen.lines());
+    assert_eq!(screen.above_status(), "  line 41", "{shown}");
+    assert!(!shown.contains("↓"), "{shown}");
+
+    screen.say("t1", "m42", "line 42");
+    screen.draw();
+    assert_eq!(screen.above_status(), "  line 42");
+}
+
+/// End with nothing typed goes to the bottom and follows again.
+#[test]
+fn end_with_an_empty_input_jumps_to_the_bottom() {
+    let mut screen = Screen::long_turn(40);
+    screen.key(KeyCode::PageUp);
+    screen.draw();
+    assert_eq!(screen.above_status(), JUMP);
+
+    assert_eq!(screen.key(KeyCode::End), None);
+    screen.draw();
+    let shown = screen_text(&screen.lines());
+    assert_eq!(screen.above_status(), "  line 40", "{shown}");
+
+    screen.say("t1", "m41", "line 41");
+    screen.draw();
+    assert_eq!(screen.above_status(), "  line 41");
+}
+
+/// End with words typed only moves the cursor to the end of the line.
+#[test]
+fn end_with_words_typed_moves_the_cursor_only() {
+    let mut screen = Screen::long_turn(40);
+    screen.key(KeyCode::PageUp);
+    for c in "ab".chars() {
+        screen.key(KeyCode::Char(c));
+    }
+    screen.key(KeyCode::Home);
+    screen.draw();
+    let before = screen.conversation();
+
+    assert_eq!(screen.key(KeyCode::End), None);
+    screen.key(KeyCode::Char('c'));
+    screen.draw();
+    let shown = screen_text(&screen.lines());
+    assert_eq!(screen.above_status(), JUMP, "still scrolled back:\n{shown}");
+    assert_eq!(screen.conversation(), before, "{shown}");
+    assert!(
+        shown.contains("│ › abc"),
+        "the cursor went to the end:\n{shown}"
+    );
+}
+
+/// The hint row while scrolled back.
+fn hint_row() -> u16 {
+    HEIGHT - BELOW as u16 - 1
 }

@@ -451,8 +451,9 @@ fn dragging_to_the_bottom_edge_scrolls_and_extends_the_selection() {
         "{}",
         screen.text()
     );
-    let bottom = HEIGHT - BELOW - 1;
-    assert_eq!(screen.lines()[bottom as usize].trim(), "line 12");
+    // The hint to jump to the bottom is on the row under it.
+    let bottom = HEIGHT - BELOW - 2;
+    assert_eq!(screen.lines()[bottom as usize].trim(), "line 11");
 
     screen.press(screen.find("line 3"));
     screen.drag((20, 8));
@@ -464,13 +465,13 @@ fn dragging_to_the_bottom_edge_scrolls_and_extends_the_selection() {
     screen.draw();
     assert_eq!(
         screen.lines()[bottom as usize].trim(),
-        "line 15",
+        "line 14",
         "three rows on:\n{}",
         screen.text()
     );
     screen.release((20, bottom));
     let copied = screen.clipboard();
-    let expected: Vec<String> = (3..=15).map(|n| format!("line {n}")).collect();
+    let expected: Vec<String> = (3..=14).map(|n| format!("line {n}")).collect();
     assert_eq!(copied, expected.join("\n"));
 }
 

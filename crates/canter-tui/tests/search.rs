@@ -326,7 +326,9 @@ fn enter_stays_at_the_match() {
     assert!(screen.reversed().is_empty(), "{}", screen.text());
     assert!(screen.underlined().is_empty(), "{}", screen.text());
     assert_eq!(screen.find("line 5 README"), at);
-    assert_eq!(screen.conversation(), rows);
+    // The rows stay; the hint under them now offers End too.
+    let last = rows.len() - 1;
+    assert_eq!(screen.conversation()[..last], rows[..last]);
 
     screen.start_turn("t2", "more");
     screen.say("t2", "m3", "new answer");

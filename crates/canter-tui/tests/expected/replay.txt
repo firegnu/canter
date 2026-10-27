@@ -141,7 +141,7 @@
       13   ```sh
       14 - git clone https://github.com/firegnu/canter
       15 - cd canter
-      16 - cargo build --release
+ ↓ Jump to bottom · click or End
 
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │

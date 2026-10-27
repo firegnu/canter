@@ -264,8 +264,11 @@ struct Scroll {
     /// The conversation row at the top of the view while scrolled back;
     /// `None` while following the latest output.
     top: Option<usize>,
-    /// The conversation changed since scrolling back: the hint shows.
+    /// The conversation changed since scrolling back: the hint says so.
     unseen: bool,
+    /// From the last layout: the hint shows, on the row right under the
+    /// conversation.
+    hint: bool,
     /// From the last layout: rows per page, the furthest top row and the
     /// conversation rows on screen.
     page: usize,
@@ -927,6 +930,12 @@ impl App {
         if shown.approval.is_some() {
             return self.approval_key(key, shown, guarded);
         }
+        // With nothing typed, End goes to the bottom and follows again, also
+        // with a choice open.
+        if key.code == KeyCode::End && self.input.is_empty() {
+            self.scroll.top = None;
+            return None;
+        }
         if self.chooser.is_some() && !matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
             let seen = shown.chooser == Some(self.choosers);
             return self.chooser_key(key, seen, send_guarded);
@@ -1458,8 +1467,9 @@ impl App {
     /// also while the approval box is open. The left button selects
     /// conversation text: dragging highlights it and letting go copies it; a
     /// double click takes a word, a triple click a row. A click on a link
-    /// opens it once the double click time is over. Other mouse events do
-    /// nothing. The mouse is on the latest frame on screen.
+    /// opens it once the double click time is over. A click on the hint under
+    /// the conversation goes to the bottom. Other mouse events do nothing.
+    /// The mouse is on the latest frame on screen.
     pub fn handle_mouse_at(&mut self, mouse: MouseEvent, now_ms: i64) {
         self.handle_mouse_on(mouse, self.latest_frame, now_ms);
     }
@@ -1503,6 +1513,14 @@ impl App {
         };
         self.mouse.press = Some((cell, now, clicks));
         self.mouse.selection = None;
+        // The hint under the conversation goes to the bottom and follows
+        // again. A press right after it is not a double click: the
+        // conversation is under it now.
+        if self.scroll.hint && usize::from(cell.1) == self.scroll.area {
+            self.scroll.top = None;
+            self.mouse.press = None;
+            return;
+        }
         if usize::from(cell.1) >= self.scroll.area {
             return;
         }
@@ -2534,17 +2552,26 @@ impl App {
         if self.scroll.top.is_none() {
             self.scroll.unseen = false;
         }
-        let hint = self.scroll.unseen.then(|| {
-            // PgDn scrolls the approval box while it is open.
+        // Scrolled back, or held with new output below: the hint shows.
+        let back = self.scroll.top.is_some_and(|top| top + room < total);
+        let hint = (back || self.scroll.unseen).then(|| {
+            let what = if self.scroll.unseen {
+                " ↓ New output below"
+            } else {
+                " ↓ Jump to bottom"
+            };
+            // End goes to the bottom from the input box, not from the
+            // approval box or the search box.
             let how = match bottom {
-                Bottom::Input { .. } => " · scroll down or press PgDn",
-                Bottom::Approval(_) => " · scroll down",
+                Bottom::Input { .. } if self.search.is_none() => " · click or End",
+                _ => " · click",
             };
             Line::from(vec![
-                Span::styled(" ↓ New output below", theme::accent()),
+                Span::styled(what, theme::accent()),
                 Span::styled(how, theme::secondary()),
             ])
         });
+        self.scroll.hint = hint.is_some();
         let area = room.saturating_sub(usize::from(hint.is_some()));
         self.scroll.area = area;
         self.scroll.page = area.max(1);
@@ -3424,7 +3451,8 @@ fn mode_label(mode: PermissionMode) -> (&'static str, Style) {
 pub(crate) struct View {
     /// The conversation rows in view, from the top of the screen.
     conversation: Vec<Line<'static>>,
-    /// Says there is new output below while scrolled back.
+    /// While scrolled back: goes to the bottom when clicked, and says when
+    /// there is new output below.
     hint: Option<Line<'static>>,
     status: Line<'static>,
     /// The command list or a choice, right above the input box.
