@@ -1048,6 +1048,7 @@ impl App {
             }
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
             KeyCode::Esc => return self.interrupt_seen(shown.turn),
             KeyCode::Char('c') if ctrl => {
@@ -1095,6 +1096,18 @@ impl App {
             }
             KeyCode::PageUp => self.scroll_by(-(self.scroll.page as isize)),
             KeyCode::PageDown => self.scroll_by(self.scroll.page as isize),
+            KeyCode::Left if alt || ctrl => self.input.word_left(),
+            KeyCode::Right if alt || ctrl => self.input.word_right(),
+            KeyCode::Char('b') if alt => self.input.word_left(),
+            KeyCode::Char('f') if alt => self.input.word_right(),
+            KeyCode::Backspace if alt => self.input.delete_word_before(),
+            KeyCode::Char('w') if ctrl => self.input.delete_word_before(),
+            KeyCode::Delete if alt => self.input.delete_word_after(),
+            KeyCode::Char('d') if alt => self.input.delete_word_after(),
+            KeyCode::Char('a') if ctrl => self.input.home(),
+            KeyCode::Char('e') if ctrl => self.input.end(),
+            KeyCode::Char('k') if ctrl => self.input.delete_to_line_end(),
+            KeyCode::Char('u') if ctrl => self.input.delete_to_line_start(),
             KeyCode::Char(c) if !ctrl => self.input.insert(c.encode_utf8(&mut [0; 4])),
             KeyCode::Backspace => self.input.backspace(),
             KeyCode::Delete => self.input.delete(),
