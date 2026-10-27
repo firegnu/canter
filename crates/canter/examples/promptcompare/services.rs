@@ -136,7 +136,10 @@ pub fn enqueue(state: &Arc<Mutex<Script>>, scenario: u8, url: &str) -> Result<()
         6 => vec![
             read("README.md"),
             edit("README.md", "Version: 0.1.0", "Version: 0.2.0"),
-            text("批准被拒，未修改。希望换什么做法？"),
+            calls(vec![(
+                "ask_user",
+                json!({"question":"批准被拒，未修改。希望换什么做法？","options":[{"label":"保持原样","description":"不修改文件"},{"label":"说明原因","description":"说明拒绝原因后再决定"}]}),
+            )]),
         ],
         7 => {
             let paths: Vec<String> = (0..6)

@@ -401,9 +401,15 @@ async fn drive_turn(
                         return Ok(());
                     },
                     EventPayload::RequestOpened { request } if !interrupted => {
+                        if let RequestKind::UserInput(question) = &request.kind {
+                            append(&root.join("questions.jsonl"), &json!({"version":server.version,"scenario":scenario,"session":session,"request":request.id,"question":question,"answered":false}))?;
+                            server.client.interrupt(session, &request.turn_id, false).await?;
+                            interrupted = true;
+                            continue;
+                        }
                         let RequestKind::Approval(approval) = request.kind else {
                             server.client.interrupt(session, &request.turn_id, false).await?;
-                            return Err("model asked a question outside the prescribed approval policy; stopped for controller".into());
+                            return Err("unknown request kind; stopped for controller".into());
                         };
                         let deny = (scenario == 4 && approval.tool == "shell") || (scenario == 6 && !declined && matches!(approval.tool.as_str(), "edit" | "write" | "shell"));
                         if deny { declined = true; }
