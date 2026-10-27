@@ -2032,8 +2032,15 @@ impl App {
             self.search_from_newest();
             return;
         }
-        if let Some(path) = crate::images::pasted_path(text, &self.snapshot.settings.cwd) {
-            self.attach_image(path);
+        if let Some(paths) = crate::images::pasted_paths(text, &self.snapshot.settings.cwd) {
+            if self.accepts_images() {
+                for (index, path) in paths.into_iter().enumerate() {
+                    if index > 0 {
+                        self.input.insert(" ");
+                    }
+                    self.attach_accepted_image(path);
+                }
+            }
         } else {
             self.input.insert(text);
         }
@@ -2125,13 +2132,17 @@ impl App {
 
     fn attach_image(&mut self, path: std::path::PathBuf) {
         if self.accepts_images() {
-            let name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            self.input.attach(path.to_string_lossy().into_owned(), name);
+            self.attach_accepted_image(path);
         }
+    }
+
+    fn attach_accepted_image(&mut self, path: std::path::PathBuf) {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        self.input.attach(path.to_string_lossy().into_owned(), name);
     }
 
     pub fn sent(&mut self) {

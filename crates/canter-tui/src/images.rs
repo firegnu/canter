@@ -107,30 +107,46 @@ fn read_clipboard(_path: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-/// A single shell word as pasted by Finder/terminals. No expansion or execution.
-pub(crate) fn pasted_path(text: &str, cwd: &str) -> Option<PathBuf> {
+/// Shell words as pasted by Finder/terminals for one or several dropped
+/// files, in order; `None` unless there are words and every one is an image.
+/// No expansion or execution.
+pub(crate) fn pasted_paths(text: &str, cwd: &str) -> Option<Vec<PathBuf>> {
     let text = text.trim_matches(|c: char| c.is_ascii_whitespace());
     let raw = Path::new(cwd).join(text);
     if let Some(path) = recognized_image(raw) {
-        return Some(path);
+        return Some(vec![path]);
     }
-    let mut path = String::new();
+    let mut words = Vec::new();
+    // `Some` once the word has started, so `''` is an (empty) word.
+    let mut word: Option<String> = None;
     let mut quote = None;
     let mut chars = text.chars();
     while let Some(c) = chars.next() {
         match (quote, c) {
             (Some('\''), '\'') | (Some('"'), '"') => quote = None,
-            (None, '\'' | '"') => quote = Some(c),
-            (None | Some('"'), '\\') => path.push(chars.next()?),
-            (None, c) if c.is_ascii_whitespace() => return None,
-            _ => path.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                word.get_or_insert_default();
+            }
+            (None | Some('"'), '\\') => word.get_or_insert_default().push(chars.next()?),
+            (None, c) if c.is_ascii_whitespace() => words.extend(word.take()),
+            _ => word.get_or_insert_default().push(c),
         }
     }
-    if quote.is_some() || path.is_empty() {
+    if quote.is_some() {
         return None;
     }
-    let path = Path::new(cwd).join(path);
-    recognized_image(path)
+    words.extend(word);
+    if words.is_empty() {
+        return None;
+    }
+    words
+        .into_iter()
+        .map(|word| match word.is_empty() {
+            true => None,
+            false => recognized_image(Path::new(cwd).join(word)),
+        })
+        .collect()
 }
 
 fn recognized_image(path: PathBuf) -> Option<PathBuf> {
