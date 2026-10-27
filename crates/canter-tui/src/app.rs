@@ -1124,6 +1124,8 @@ impl App {
             KeyCode::Char('e') if ctrl => self.input.end(),
             KeyCode::Char('k') if ctrl => self.input.delete_to_line_end(),
             KeyCode::Char('u') if ctrl => self.input.delete_to_line_start(),
+            // With nothing typed, `?` opens the shortcuts instead of typing.
+            KeyCode::Char('?') if !ctrl && !alt && self.input.is_empty() => self.open_help(),
             KeyCode::Char(c) if !ctrl => self.input.insert(c.encode_utf8(&mut [0; 4])),
             KeyCode::Backspace => self.input.backspace(),
             KeyCode::Delete => self.input.delete(),
@@ -1442,7 +1444,7 @@ impl App {
         }
     }
 
-    /// Lines for the conversation from the client, such as `/help`'s.
+    /// Lines for the conversation from the client, such as `/usage`'s.
     pub(crate) fn show(&mut self, lines: Vec<LogicalLine>) {
         for line in lines {
             self.notice(line);
@@ -1598,6 +1600,11 @@ impl App {
     pub async fn show_files(&mut self) {
         let report = crate::files::popup(&self.snapshot, self.home.as_deref()).await;
         self.open_report(report);
+    }
+
+    /// `?` and `/help`: the shortcuts and the commands, above the input box.
+    pub(crate) fn open_help(&mut self) {
+        self.open_report(crate::help::popup());
     }
 
     /// Opens `report` above the input box, numbered like a choice.

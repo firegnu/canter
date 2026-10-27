@@ -679,7 +679,8 @@ fn slash_copy_copies_the_last_answer_or_one_of_its_code_blocks() {
 /// `/copy` is in the command list and in `/help`.
 #[test]
 fn slash_copy_is_listed() {
-    let mut screen = Screen::sized(80, 30);
+    // Tall enough for the whole `/help` box.
+    let mut screen = Screen::sized(80, 100);
     screen.type_text("/cop");
     screen.draw();
     assert!(

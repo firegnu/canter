@@ -624,24 +624,26 @@ fn usage_displays_models_total_last_turn_and_unknown_costs() {
     );
 }
 
-/// /help shows the commands in the conversation, and sends nothing.
+/// /help opens the Help box above the input box with every command, prints
+/// nothing in the conversation, and sends nothing.
 #[test]
-fn help_shows_the_commands_in_the_conversation() {
-    // One row per command, rows for Shift+Tab and Ctrl+F and the conversation's
-    // blank row: three more than the usual screen holds since /statusline.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 3);
+fn help_shows_the_commands_in_a_box() {
+    // The shortcut sections come first: tall enough for the whole box.
+    let mut screen = Screen::sized(WIDTH, 100);
     assert_eq!(screen.enter("/help"), None);
     screen.draw();
     let shown = screen.text();
     let box_top = screen.lines().iter().rposition(|row| row.starts_with('╭'));
+    let title = screen.lines().iter().position(|row| row == " Help");
+    assert!(title.is_some(), "{shown}");
     for (name, about) in COMMANDS {
         let row = screen
             .lines()
             .iter()
             .position(|row| row.contains(name) && row.contains(about));
         assert!(
-            row.is_some_and(|row| Some(row) < box_top),
-            "{name} in the conversation:\n{shown}"
+            row.is_some_and(|row| Some(row) > title && Some(row) < box_top),
+            "{name} in the box:\n{shown}"
         );
     }
     assert!(screen.input().contains("Type a message"), "{shown}");
