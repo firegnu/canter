@@ -108,8 +108,8 @@ fn read_clipboard(_path: &Path) -> Result<bool, String> {
 }
 
 /// Shell words as pasted by Finder/terminals for one or several dropped
-/// files, in order; `None` unless every word is an image. No expansion or
-/// execution.
+/// files, in order; `None` unless there are words and every one is an image.
+/// No expansion or execution.
 pub(crate) fn pasted_paths(text: &str, cwd: &str) -> Option<Vec<PathBuf>> {
     let text = text.trim_matches(|c: char| c.is_ascii_whitespace());
     let raw = Path::new(cwd).join(text);
@@ -137,6 +137,9 @@ pub(crate) fn pasted_paths(text: &str, cwd: &str) -> Option<Vec<PathBuf>> {
         return None;
     }
     words.extend(word);
+    if words.is_empty() {
+        return None;
+    }
     words
         .into_iter()
         .map(|word| match word.is_empty() {

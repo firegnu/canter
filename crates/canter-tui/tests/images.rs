@@ -255,3 +255,37 @@ fn text_models_warn_once_for_several_dropped_images_and_attach_none() {
         Some(Action::Send("text draft".into()))
     );
 }
+
+#[test]
+fn pasting_only_spaces_or_newlines_stays_text_without_an_image_warning() {
+    for model in ["deepseek-flash", "deepseek-v4-pro"] {
+        for blank in [" ", "  ", "\n", " \n "] {
+            let mut snapshot = SessionSnapshot::empty("image-test");
+            snapshot.settings.model = model.into();
+            let mut app = App::new(snapshot, None, 0);
+            app.handle_paste("before");
+            app.handle_paste(blank);
+            app.handle_paste("after");
+            let mut ui =
+                canter_tui::Ui::new(ratatui::backend::TestBackend::new(110, 15), app).unwrap();
+            ui.draw(0).unwrap();
+            let rendered = ui
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(
+                !rendered.contains("does not accept images"),
+                "{model} {blank:?}"
+            );
+            assert_eq!(
+                ui.app_mut()
+                    .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 0),
+                Some(Action::Send(format!("before{blank}after"))),
+                "{model} {blank:?}"
+            );
+        }
+    }
+}
