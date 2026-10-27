@@ -4,7 +4,16 @@ use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::{CoreError, Session, context, runner, session::Shared};
+use crate::{
+    CoreError, Session,
+    compaction::{RULES, SECTIONS},
+    context, runner,
+    session::Shared,
+};
+
+const HANDOFF_PROMPT: &str = r###"Write a handoff note for a new session that will continue this work. The new session starts in the same project with the same instructions but sees none of this conversation. The user will read the note, may edit it, and then sends it as the new session's first message.
+
+Start with a "## Task" heading that states the task below as an instruction to the new session. Then use exactly these headings, in this order:"###;
 
 pub(crate) struct ActiveBtw {
     pub handoff: bool,
@@ -46,7 +55,17 @@ impl Session {
             .filter(|s| !s.is_empty())
             .unwrap_or("Continue the current task.");
         let prompt = format!(
-            "Write a self-contained handoff note for a new session. Include completed work, decisions, key findings, relevant files, and next steps so the new session can proceed without this conversation. Write in the user's language. Output only the note, without a preamble. Do not call tools.\n\nTask for the new session:\n{direction}"
+            r#"{HANDOFF_PROMPT}
+
+{SECTIONS}
+
+{RULES}
+- Under "Where it stopped", describe the state of the working tree: what is changed, uncommitted, or committed.
+- Under "Next steps", put first what the new session should check before changing anything, such as git status or rerunning a failing test.
+- Output only the note, without a preamble.
+
+Task for the new session:
+{direction}"#
         );
         self.private_answer(prompt, true).await
     }

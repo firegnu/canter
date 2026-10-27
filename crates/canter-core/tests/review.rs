@@ -1563,6 +1563,144 @@ async fn failed_automatic_compaction_continues_only_when_the_request_still_fits(
 }
 
 #[tokio::test]
+async fn compaction_prompt_wraps_each_chunk_and_fits_the_context_budget() {
+    let old_reply = "old中文\n\"quoted\"\\".repeat(40_000);
+    let mut scripts = vec![vec![text(&old_reply), finish()]];
+    scripts.extend((0..100).map(|_| vec![text("previous chunk summary"), finish()]));
+    let model = ScriptModel::new(scripts);
+    let options = CoreOptions {
+        context_window: 100_000,
+        ..CoreOptions::default()
+    };
+    let (_temp, _store, session) = create(model.clone(), options).await;
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("seed")).await.unwrap();
+    finished(&mut events).await;
+    session.compact().await.unwrap();
+    let seen = finished(&mut events).await;
+    assert!(matches!(&seen.last().unwrap().payload,
+        EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Completed));
+    {
+        let requests = model.requests.lock().unwrap();
+        assert!(
+            requests.len() > 2,
+            "the transcript must span multiple requests"
+        );
+        let mut transcript = String::new();
+        for (index, request) in requests[1..].iter().enumerate() {
+            assert!(request.tools.is_empty());
+            assert_eq!(request.options.thinking, Some(false));
+            let Message::User { text } = request.messages.last().unwrap() else {
+                panic!("compaction instructions");
+            };
+            let chunk = text
+                .split_once("\n<transcript>\n")
+                .expect("transcript opening tag")
+                .1
+                .split_once("\n</transcript>\n")
+                .expect("transcript closing tag")
+                .0;
+            let earlier =
+                "<earlier_summary>\n…上一段摘要，分段压缩到第二段以后才有…\n</earlier_summary>\n\n";
+            let expected = prompt_spec("### 6.2 压缩")
+                .replace(
+                    earlier,
+                    if index == 0 {
+                        ""
+                    } else {
+                        "<earlier_summary>\nprevious chunk summary\n</earlier_summary>\n\n"
+                    },
+                )
+                .replace(
+                    "…转写，格式照现在：User: / Assistant: / Tool call … / Tool result …",
+                    chunk,
+                );
+            assert_eq!(text, &expected);
+            transcript.push_str(chunk);
+            // The documented byte/3 estimate includes each message's JSON and
+            // eight-token overhead, tool definitions, output, and reserve.
+            let input_tokens: u64 = request
+                .messages
+                .iter()
+                .map(|message| {
+                    (serde_json::to_string(message).unwrap().len() as u64).div_ceil(3) + 8
+                })
+                .sum::<u64>()
+                + (serde_json::to_string(&request.tools).unwrap().len() as u64).div_ceil(3);
+            assert!(
+                input_tokens + u64::from(request.options.max_output_tokens.unwrap()) + 16_384
+                    <= 100_000,
+                "chunk {index} exceeds the context budget"
+            );
+        }
+        assert_eq!(
+            transcript,
+            format!("\nUser: seed\n\nAssistant: {old_reply}\n")
+        );
+    }
+    session.close().await.unwrap();
+}
+
+fn prompt_spec(section: &str) -> String {
+    let spec = include_str!("../../../docs/调研/P2-57-系统提示词方案.md");
+    let block = |heading| {
+        spec.split_once(heading)
+            .unwrap()
+            .1
+            .split_once("```text\n")
+            .unwrap()
+            .1
+            .split_once("\n```")
+            .unwrap()
+            .0
+    };
+    block(section)
+        .replace("{SECTIONS}", block("`{SECTIONS}`："))
+        .replace("{RULES}", block("`{RULES}`："))
+}
+
+#[tokio::test]
+async fn handoff_prompt_requests_task_and_ends_with_explicit_or_default_direction() {
+    let model = ScriptModel::new(vec![
+        vec![text("seed reply"), finish()],
+        vec![text("handoff note"), finish()],
+        vec![text("handoff note"), finish()],
+    ]);
+    let (_temp, _store, session) = create(model.clone(), CoreOptions::default()).await;
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("seed")).await.unwrap();
+    finished(&mut events).await;
+    for direction in [Some("继续修复测试，先检查 git status。"), None] {
+        let mut answer = session.handoff(direction.map(str::to_owned)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                match answer.recv().await.expect("handoff stream ended early") {
+                    BtwEvent::Delta { .. } => {}
+                    BtwEvent::Completed => break,
+                    event => panic!("unexpected handoff event: {event:?}"),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let requests = model.requests.lock().unwrap();
+        let request = requests.last().unwrap();
+        let Message::User { text } = request.messages.last().unwrap() else {
+            panic!("handoff instructions");
+        };
+        let direction = direction.unwrap_or("Continue the current task.");
+        assert_eq!(
+            text,
+            &prompt_spec("### 6.3 `/handoff`").replace("{DIRECTION}", direction)
+        );
+        assert!(text.ends_with(&format!("Task for the new session:\n{direction}")));
+        assert_eq!(request.tools, requests[0].tools);
+        assert!(!request.tools.is_empty());
+    }
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn oversized_summary_request_retries_smaller_chunks_without_losing_transcript() {
     let old_reply = "old中文".repeat(256);
     let model = ScriptModel::new(vec![
@@ -1589,7 +1727,13 @@ async fn oversized_summary_request_retries_smaller_chunks_without_losing_transcr
             let Message::User { text } = requests[index].messages.last().unwrap() else {
                 unreachable!()
             };
-            text.split_once("\n\nTranscript:\n").unwrap().1.to_owned()
+            text.split_once("\n<transcript>\n")
+                .unwrap()
+                .1
+                .split_once("\n</transcript>\n")
+                .unwrap()
+                .0
+                .to_owned()
         };
         assert!(transcript(2).len() < transcript(1).len());
         assert_eq!(
@@ -1597,7 +1741,7 @@ async fn oversized_summary_request_retries_smaller_chunks_without_losing_transcr
             format!("\nUser: seed\n\nAssistant: {old_reply}\n")
         );
         assert!(
-            matches!(requests[3].messages.last().unwrap(), Message::User { text } if text.contains("Earlier summary:\nfirst half"))
+            matches!(requests[3].messages.last().unwrap(), Message::User { text } if text.contains("<earlier_summary>\nfirst half\n</earlier_summary>"))
         );
     }
     session.input(input("continue")).await.unwrap();
