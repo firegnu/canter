@@ -6,7 +6,7 @@
 依据：P2-57 实现第 3 件：照方案原文换掉压缩和 `/handoff` 发给模型的说明，两者共用 9 个小节。压缩后的历史格式（`[Context summary]`）不变。
 提示：围绕已确认的使用目标完成变更，优先沿用现有机制。
 执行：派出
-依赖：P2-57
+依赖：P2-70
 优先：高
 你是被委派的 agent：照本文件做，不要再开别的 agent。
 
@@ -23,9 +23,8 @@
 
 ## 在哪里干活
 
-- worktree：`/Users/firegnu/Developer/personal_projs/canter-worktrees/p2-71-compactprompt`，分支 `p2-71-compactprompt`（已从 main 建好）。
+- worktree：`/Users/firegnu/Developer/personal_projs/canter-worktrees/p2-71-compactprompt`，分支 `p2-71-compactprompt`（P2-70 合并后从 main 建好）。
 - 只动 `crates/canter-core/src/compaction.rs`、`crates/canter-core/src/btw.rs` 和它们的测试，相关 README。
-- 同时在跑的 P2-69（`p2-69-segments`）改 canter-core 的前缀、存盘和 `/context`（`context.rs`、`session.rs` 等）。你不要动那些文件；需要动的话停下问主控。
 - 编译目录：`CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-71-compactprompt`。
 
 ## 要做的
