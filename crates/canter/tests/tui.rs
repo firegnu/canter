@@ -2280,6 +2280,85 @@ async fn slash_resume_switches_to_the_session_picked() {
     world.stop_server(Signal::SIGTERM).await;
 }
 
+/// `-c` and `--continue` take no first message and do not go with
+/// `--resume`; `canter --help` lists them.
+#[test]
+fn continue_parses_without_a_prompt() {
+    let parse = |args: &[&str]| canter::parse(args.iter().map(OsString::from));
+    for flag in ["-c", "--continue"] {
+        let Ok(Command::Chat(args)) = parse(&[flag, "--yolo"]) else {
+            panic!("{flag}");
+        };
+        assert!(args.continue_latest && args.yolo && args.first.is_none());
+        assert!(parse(&[flag, "hello"]).is_err());
+        assert!(parse(&[flag, "--resume"]).is_err());
+    }
+    assert!(canter::USAGE.contains("-c, --continue"));
+}
+
+/// `canter -c` (or `--continue`) opens this directory's latest session at
+/// once, the first row of the `/resume` list, with no list shown; a newer
+/// session in another directory does not count.
+#[tokio::test]
+async fn continue_opens_the_latest_session_in_this_directory() {
+    let mut world = World::new(vec![
+        text_reply("回答一"),
+        text_reply("回答二"),
+        text_reply("别处的回答"),
+    ])
+    .await;
+    world.start_server().await;
+    let a = world.open(&["第一句"], "canter-tui a").await;
+    a.wait_for("回答一").await;
+    a.wait_idle().await;
+    let first = a.quit().await;
+    let b = world.open(&["第二句"], "canter-tui b").await;
+    b.wait_for("回答二").await;
+    b.wait_idle().await;
+    let second = b.quit().await;
+    assert_ne!(first, second);
+    fs::create_dir(world.path("elsewhere")).unwrap();
+    let context = world.context("canter-tui c", &world.path("elsewhere"));
+    let c = Terminal::start(&["别处"], context).await;
+    c.wait_for("别处的回答").await;
+    c.wait_idle().await;
+    c.quit().await;
+
+    for flag in ["-c", "--continue"] {
+        let d = world.open(&[flag], "canter-tui d").await;
+        d.wait_for("回答二").await;
+        d.wait_idle().await;
+        let screen = d.screen();
+        assert!(!screen.contains("Which session to resume?"), "{screen}");
+        assert!(
+            !screen.contains("回答一") && !screen.contains("别处"),
+            "{screen}"
+        );
+        assert_eq!(d.quit().await, second, "{flag}");
+    }
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+/// Without a session in this directory, `canter -c` says so and starts a
+/// new one there.
+#[tokio::test]
+async fn continue_without_a_session_here_starts_a_new_one() {
+    let mut world = World::new(Vec::new()).await;
+    world.start_server().await;
+    let a = world.open(&["-c"], "canter-tui a").await;
+    a.wait_for("No session in this directory yet; started a new one")
+        .await;
+    let id = world.only_session().await;
+    let snapshot = world.snapshot(&id).await;
+    assert!(snapshot.turns.is_empty());
+    assert_eq!(
+        snapshot.settings.cwd,
+        world.path("work").display().to_string()
+    );
+    assert_eq!(a.quit().await, id);
+    world.stop_server(Signal::SIGTERM).await;
+}
+
 /// Esc on the `/resume` list goes back to the session on screen.
 #[tokio::test]
 async fn slash_resume_esc_goes_back_to_the_same_session() {

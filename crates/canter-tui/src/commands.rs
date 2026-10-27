@@ -10,6 +10,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::{Action, App};
+use crate::export::Export;
 use crate::report::{Part, Report, clean};
 use crate::text::{sanitize, str_width, truncate};
 use crate::theme;
@@ -58,6 +59,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         about: "Quit canter",
         takes_args: false,
         run: |_, _| Ok(Some(Action::Quit)),
+    },
+    Command {
+        name: "export",
+        about: "Save or copy the conversation as Markdown",
+        takes_args: true,
+        run: export,
     },
     Command {
         name: "files",
@@ -399,6 +406,32 @@ fn mode(app: &mut App, args: &str) -> Result<Option<Action>, String> {
             "Unknown mode: {args} (use always-ask, ask-for-execution or allow-all)"
         )),
     }
+}
+
+/// `/export <path>` writes there; `/export` alone offers a file with the
+/// default name or the clipboard.
+fn export(app: &mut App, args: &str) -> Result<Option<Action>, String> {
+    let path = args.trim();
+    if !path.is_empty() {
+        return Ok(Some(Action::Export(Export::File(Some(path.to_owned())))));
+    }
+    app.choose(Chooser {
+        title: "Export conversation",
+        choices: vec![
+            Choice {
+                label: "Save to file".into(),
+                about: "canter-<session name>-<time>.md in the session's directory".into(),
+                action: Action::Export(Export::File(None)),
+            },
+            Choice {
+                label: "Copy to clipboard".into(),
+                about: "The same Markdown".into(),
+                action: Action::Export(Export::Clipboard),
+            },
+        ],
+        selected: 0,
+    });
+    Ok(None)
 }
 
 pub(crate) fn find(name: &str) -> Option<&'static Command> {

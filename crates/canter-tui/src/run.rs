@@ -113,6 +113,13 @@ pub enum Open {
         cwd: String,
         update: SessionUpdateParams,
     },
+    /// The latest session in `cwd`, the first in the session list, then
+    /// `update`. Without one, a new session there (with `update`'s model
+    /// and permission mode) and a line saying so.
+    Continue {
+        cwd: String,
+        update: SessionUpdateParams,
+    },
 }
 
 /// Everything [`run`] needs.
@@ -290,7 +297,32 @@ where
     let mut tab = TabTitle::new(&env);
     // Every way out of here, a title written over the session list included,
     // goes through the clearing below.
+    let mut none_to_continue = false;
     let opened: Result<Option<(SessionSnapshot, EventStream)>, RunError> = async {
+        let open = match open {
+            Open::Continue { cwd, update } => {
+                let sessions = client.list_sessions().await?;
+                match Picker::new(sessions, cwd.clone(), None).first() {
+                    Some(id) => Open::Resume {
+                        id: Some(id),
+                        cwd,
+                        update,
+                    },
+                    None => {
+                        none_to_continue = true;
+                        Open::New {
+                            cwd,
+                            model: update.model.unwrap_or_default(),
+                            approval_policy: update
+                                .approval_policy
+                                .unwrap_or(PermissionMode::AlwaysAsk),
+                            first: None,
+                        }
+                    }
+                }
+            }
+            open => open,
+        };
         let opened = match open {
             Open::New {
                 cwd,
@@ -332,6 +364,7 @@ where
                     None => return Ok(None),
                 }
             }
+            Open::Continue { .. } => unreachable!("opened as Resume or New above"),
         };
         let snapshot = opened?;
         let stream = client
@@ -359,6 +392,9 @@ where
     }
     if let Some(warning) = &connected.warning {
         app.warning(warning);
+    }
+    if none_to_continue {
+        app.warning("No session in this directory yet; started a new one");
     }
     let mut ui = Ui::with_terminal(terminal, app);
     let connector = Arc::new(connector);
@@ -1089,6 +1125,7 @@ impl<C: Connector> Chat<C> {
         let session = self.session.clone();
         let sender = self.sender.clone();
         match action {
+            Action::Export(to) => app.export(to, crate::now_ms()),
             Action::Diff => {
                 let cwd = app.snapshot().settings.cwd.clone();
                 tokio::spawn(async move {
