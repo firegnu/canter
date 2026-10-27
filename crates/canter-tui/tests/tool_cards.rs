@@ -332,6 +332,52 @@ fn failed_command_keeps_ten_lines_in_the_default_colour() {
     }
 }
 
+/// A search that found nothing is not a failure: `● Run rg …` with a grey
+/// `No matches`, no `✗` and no `exit 1`. Only a whole `rg` or `grep` call
+/// with exit code 1 and no output counts: another command's exit code 1, a
+/// search that printed something, and a search combined with other commands
+/// keep the red `✗` and `exit 1`.
+#[test]
+fn a_search_that_finds_nothing_says_no_matches_in_grey() {
+    let mut screen = Screen::new(40);
+    screen.command("c1", "rg missing src", "", 1);
+    screen.command("c2", "grep -rn missing .", "", 1);
+    screen.command("c3", "rg \"a|b\"", "", 1);
+    screen.command("c4", "diff a.txt b.txt", "1c1\n< a\n---\n> b\n", 1);
+    screen.command("c5", "rg missing | wc -l", "", 1);
+    screen.command("c6", "rg missing && echo done", "", 1);
+    screen.command("c7", "rg missing src", "src/a.rs:1:missing\n", 1);
+    let conversation = screen.conversation();
+
+    for title in [
+        "  ● Run rg missing src  ",
+        "  ● Run grep -rn missing .  ",
+        "  ● Run rg \"a|b\"  ",
+    ] {
+        let rows = card(&conversation, title);
+        assert_eq!(rows.len(), 1, "{title:?}: {conversation:#?}");
+        assert!(rows[0].ends_with("  No matches · 1.2s"), "{rows:?}");
+    }
+    for title in [
+        "  ✗ Run diff a.txt b.txt  ",
+        "  ✗ Run rg missing | wc -l  ",
+        "  ✗ Run rg missing && echo done  ",
+        "  ✗ Run rg missing src  ",
+    ] {
+        let rows = card(&conversation, title);
+        assert!(rows[0].ends_with("  exit 1 · 1.2s"), "{title:?}: {rows:?}");
+    }
+
+    let buffer = screen.draw();
+    for cell in letters(&cells_of(buffer, "No matches")) {
+        assert!(cell.modifier.contains(Modifier::DIM), "grey");
+        assert_eq!(cell.fg, Color::Reset);
+    }
+    for cell in letters(&cells_of(buffer, "exit 1")) {
+        assert_eq!(cell.fg, Color::Red);
+    }
+}
+
 /// With Ctrl+O, a command shows all its lines and all its output; over 500
 /// lines, the first and last 250 and one row between saying how many are
 /// left out. No `· Ctrl+O` rows are left.
