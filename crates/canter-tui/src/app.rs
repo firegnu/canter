@@ -140,6 +140,8 @@ pub enum Action {
     Update(SessionUpdateParams),
     /// `/export` to a file or the clipboard.
     Export(Export),
+    /// Ctrl+G: edit the draft in `$VISUAL` or `$EDITOR`.
+    ExternalEditor,
 }
 
 /// A place in the conversation: a turn, whether its prompt is before it, and
@@ -1189,6 +1191,7 @@ impl App {
                 Ok(None) => {}
                 Err(error) => self.warning(&error),
             },
+            KeyCode::Char('g') if ctrl => return Some(Action::ExternalEditor),
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.input.insert("\n")
             }
@@ -1808,6 +1811,28 @@ impl App {
             at + HANDOFF_BACK_MS,
         );
         None
+    }
+
+    /// What the external editor opens: the draft, folded pastes in full.
+    pub(crate) fn editor_draft(&self) -> String {
+        self.input.full_text()
+    }
+
+    /// The external editor closed at `now`: what it saved is the draft now,
+    /// or the status line says why not and the draft stays.
+    pub(crate) fn editor_closed(&mut self, edited: Result<String, String>, now: i64) {
+        match edited {
+            Ok(text) => self.input.replace_all(&text),
+            Err(reason) => self.editor_failed(&format!("{reason}; draft unchanged"), now),
+        }
+    }
+
+    /// The external editor did not open or close normally, for `reason`.
+    pub(crate) fn editor_failed(&mut self, reason: &str, now: i64) {
+        self.copier.show(
+            Line::from(Span::styled(format!(" ! {reason}"), theme::warning())),
+            now + crate::copy::FAILED_MS,
+        );
     }
 
     pub fn rewind_draft(&mut self, input: &[UserInput]) {

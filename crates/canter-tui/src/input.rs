@@ -55,15 +55,30 @@ impl InputBox {
         self.text.replace_range(range, with);
     }
 
-    /// Empties the box and returns the draft, folded pastes in full.
-    pub fn take(&mut self) -> String {
-        let text = self
-            .pieces()
+    /// The draft with folded pastes in full; image markers stay.
+    pub fn full_text(&self) -> String {
+        self.pieces()
             .into_iter()
             .map(|piece| match piece {
                 Piece::Text(text) | Piece::Image(text, _) | Piece::Paste(text) => text,
             })
-            .collect();
+            .collect()
+    }
+
+    /// Puts `text` in place of the whole draft, the cursor at the end. An
+    /// image stays while its marker is there; pastes are no longer folded.
+    pub fn replace_all(&mut self, text: &str) {
+        self.text = clean(text);
+        self.cursor = self.text.len();
+        self.pastes.clear();
+        let text = &self.text;
+        self.images
+            .retain(|(marker, _)| text.contains(marker.as_str()));
+    }
+
+    /// Empties the box and returns the draft, folded pastes in full.
+    pub fn take(&mut self) -> String {
+        let text = self.full_text();
         self.cursor = 0;
         self.images.clear();
         self.pastes.clear();

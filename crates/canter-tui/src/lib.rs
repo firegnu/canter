@@ -22,6 +22,7 @@ mod commands;
 mod context;
 mod copy;
 mod diff;
+mod editor;
 mod export;
 pub mod fake;
 mod files;
