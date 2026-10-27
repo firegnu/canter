@@ -49,19 +49,24 @@ pub(crate) enum Status {
     Unavailable(&'static str),
 }
 
-/// The branch in the first line of `git status --branch`: `main`,
-/// `main...origin/main [ahead 1]`, `No commits yet on main`.
+/// The branch in the first line of `git status --branch`, with its upstream
+/// and how far apart they are in git's words: `main...origin/main [ahead 1]`
+/// is `main  origin/main · ahead 1`; `No commits yet on main` is `main`.
 fn branch_of(header: &str) -> String {
     let header = header.trim_start_matches("## ");
     let header = header
         .strip_prefix("No commits yet on ")
         .or_else(|| header.strip_prefix("Initial commit on "))
         .unwrap_or(header);
-    let branch = match header.split_once("...") {
-        Some((branch, _)) => branch,
-        None => header.split(" [").next().unwrap_or(header),
+    let Some((branch, upstream)) = header.split_once("...") else {
+        return header.split(" [").next().unwrap_or(header).to_owned();
     };
-    branch.to_owned()
+    match upstream.split_once(" [") {
+        Some((upstream, apart)) => {
+            format!("{branch}  {upstream} · {}", apart.trim_end_matches(']'))
+        }
+        None => format!("{branch}  {upstream}"),
+    }
 }
 
 /// Read-only status, with all git work bounded by one timeout. Dropping an

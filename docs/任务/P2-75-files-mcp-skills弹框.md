@@ -143,7 +143,7 @@
   - `skills_show_names_sources_and_manual_marker_in_single_truncated_rows` 改名 `skills_show_names_by_source_with_manual_marker_and_descriptions_below`：原来查「一行写完、窄了截断」，现在样子改成分节、描述另起一行，改查 90 宽一行写完、40 宽折两行加 `…`。
   - `mcp_status_and_approval_show_server_tool_arguments_and_escape_interrupts`：要找的字换成新写法；后半段要按 Esc 打断回合，弹框开着时 Esc 归弹框，所以先按一次 Esc 关掉弹框再往下走。
 - **拿主意的地方**（样子没写到的，都照已有写法定了，主控可改）：
-  - Git status 节标题只写分支名：git 给的 `main...origin/main [ahead 1]` 里的上游和 ahead/behind 不再显示（原来 `Git: …` 那行有）。
+  - Git status 节标题原先只写分支名，交主控定，见下面「主控决定」。
   - 对齐的栏（git 的词、Changed by canter 的词、MCP 服务名、技能名后的 `not for model`）都是最宽的加 3 格；`staged` 那栏只按带标记的行对齐，免得一条很长的 untracked 路径把它推出屏。样子里的空格数是手画的，没照抄。窄窗口不另排，每行照现有规则截断加 `…`。
   - 两位代码：暂存区有改动时词取暂存区那边（`AM` 是 added partly staged，`MD` 是 modified partly staged）；`T` 算 modified；表外的字母原样显示。`--no-renames` 下 renamed 实际出不来，映射留着。
   - git 出错（读不了、跑不了、超时）和不在仓库一样写在括号里；干净的仓库写 `(none)`；这几种第一行写 `git 0`。
@@ -151,4 +151,5 @@
   - `/mcp`：`disconnected` 和 `○` 一样红；出错原因用正常字色；单数写 `1 service`、`1 tool`；连上了但有 error 的也写原因；没配服务时第一行 `MCP  0 services · 0 tools`，下面 `No MCP services configured.`，不写最后那句说明。
   - `/skills`：没有说明行，所以最后是空行加 `Esc close`；`not for model` 放在名字栏后面，不贴右边；服务端以后给的未知来源放第三节 `Other`（不写目录），只算进总数；没技能时第一行 `Skills  0 · global 0 · project 0`，下面原来那四行。
 - **没做的事**：三个命令矮窗口滚动、Enter 和 Ctrl+C 关、草稿保留没有单独写测试（和 `/context` 走同一段代码，`context_popup.rs` 测着；任务清单里也没要）。服务端、协议、`/context` 内容和别的命令没动。
+- **主控决定**（10-27）：Git status 那节把上游和领先、落后补回来，灰色写在分支名后面，用 git 自己的词：有上游时 `Git status · main  origin/main · ahead 1`（落后 `behind 2`，都有 `ahead 1, behind 2`，都没有只写上游名）；没上游只写分支名；第一行摘要不变。已照做：方括号里的内容原样搬到 ` · ` 后面，所以上游没了时是 git 的 `gone`。补了 `files_git_status_names_the_upstream_and_how_far_ahead`（克隆一个本地仓库再多提交一次），先在原代码上失败（只出 `main`），改后通过；只跑了 `report_popup`、`slash` 两组，51 个全过，fmt、clippy 过。
 - **踩过的坑**：第一次跑全套时 `canter::tui statusline::startup_picker_exits_on_input_end_without_sighup` 失败一次（起真终端进程、带超时的测试），单独跑和再跑全套都过，和这次改动无关。`slash.rs` 的 `Screen::key` 按完键不重画，查关没关要先 `draw()`。

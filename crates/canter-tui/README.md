@@ -18,6 +18,7 @@ Environment 是会话打开时固定的目录、仓库根、系统/架构和本�
 
 - `/files`：`Read`、`Changed by canter`、`Git status · <分支>` 三节，空的节写 `(none)`，不在 git 仓库里写 `(not a git repository)`。
   Changed by canter 每行前写 added / modified / deleted，一个文件改过几种用 ` / ` 连起来。
+  有上游时分支名后面灰色写上游和 git 的 ahead / behind，比如 `Git status · main  origin/main · ahead 1`。
   Git status 把 git 的两位代码写成词，词那一栏对齐：modified（黄）、added（绿）、deleted（红）、renamed 和 untracked（灰）、
   conflict（红加粗；`U`、`AA`、`DD`）。只暂存了的后面灰色写 `staged`，暂存后又改过的写 `partly staged`。
   最后一行说明：`Edits made through shell commands only show up under Git status.`

@@ -434,3 +434,43 @@ async fn after_esc_the_conversation_has_no_rows_of_the_three() {
         assert_eq!(screen.rows(), before, "{command}");
     }
 }
+
+#[tokio::test]
+async fn files_git_status_names_the_upstream_and_how_far_ahead() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let origin = temp.path().join("origin");
+    let ok = |dir: &Path, args: &[&str]| {
+        let output = git(dir, &home, args);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+    };
+    std::fs::create_dir_all(&origin).unwrap();
+    ok(&origin, &["init", "-q", "-b", "main"]);
+    std::fs::write(origin.join("README.md"), "base").unwrap();
+    ok(&origin, &["add", "."]);
+    ok(&origin, &["commit", "-qm", "initial"]);
+    let repo = temp.path().join("project");
+    ok(
+        temp.path(),
+        &["clone", "-q", &origin.to_string_lossy(), "project"],
+    );
+    std::fs::write(repo.join("README.md"), "ahead").unwrap();
+    ok(&repo, &["commit", "-qam", "ahead"]);
+    let mut screen = Screen::new(80, 30, &repo.to_string_lossy(), None);
+    assert_eq!(screen.enter("/files"), Some(Action::Files));
+    screen.ui.app_mut().show_files().await;
+    screen.draw();
+    let popup = screen.popup(" Files");
+    assert!(
+        popup
+            .iter()
+            .any(|row| row == " Git status · main  origin/main · ahead 1"),
+        "{popup:#?}"
+    );
+    assert!(
+        screen
+            .style_on("Git status", "origin/main")
+            .1
+            .contains(Modifier::DIM)
+    );
+}
