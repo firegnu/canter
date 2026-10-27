@@ -4,8 +4,10 @@
 
 ## 装的哪一版、怎么退回
 
-- 10-27 第八次装 main `e4259d0`（`canter --version` 显示 `canter 0.1.0 · e4259d0`；比上一版多 P2-89 `/export` 导出 Markdown 和 `canter -c` / `--continue`）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
-- 退回上一版 `04db0a3`：旧程序备份在 `~/.canter/canter-04db0a3`，`cp -p ~/.canter/canter-04db0a3 ~/.cargo/bin/canter`，再 `canter serve --replace`。这一版没改存盘格式，新旧互相读没问题。
+- 10-27 第九次装 main `a669963`（`canter --version` 显示 `canter 0.1.0 · a669963`；比上一版多 P2-93 输入框鼠标单击定位）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
+- 退回上一版 `e4259d0`：旧程序备份在 `~/.canter/canter-e4259d0`，`cp -p ~/.canter/canter-e4259d0 ~/.cargo/bin/canter`，再 `canter serve --replace`。只改了终端，新旧互相读没问题。
+- 10-27 第八次装过 main `e4259d0`（比再上一版多 P2-89 `/export` 导出 Markdown 和 `canter -c` / `--continue`）。
+- 退回再上一版 `04db0a3`：旧程序备份在 `~/.canter/canter-04db0a3`，`cp -p ~/.canter/canter-04db0a3 ~/.cargo/bin/canter`，再 `canter serve --replace`。这一版没改存盘格式，新旧互相读没问题。
 - 10-27 第七次装过 main `04db0a3`（比再上一版多 P2-86 handoff 后按两次 Esc 回原会话、P2-87 终端挂断时不再卡住、P2-77 `/theme` 代码配色和 `~/.canter/themes/`，`/statusline` 和 `/theme` 存 `tui.json` 互不覆盖）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
 - 退回再上一版 `8c29af9`：旧程序备份在 `~/.canter/canter-8c29af9`，`cp -p ~/.canter/canter-8c29af9 ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版不认 `tui.json` 里的 `theme`，照旧用 `ansi`；旧版的 `/statusline` 保存时会整个重写 `tui.json`，把 `theme` 冲掉。
 - 10-27 第六次装过 main `8c29af9`（比再上一版多 P2-76 压缩和 `/handoff` 的语言规矩、P2-49 按词编辑、P2-50 大段粘贴收起、P2-51 拒绝并说一句、P2-52 标签页标题、P2-53 `?` 帮助弹框、P2-54 每轮改了哪些文件和 `/diff`、P2-55 路径中间省略、P2-82 文字发送失败放回草稿）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
