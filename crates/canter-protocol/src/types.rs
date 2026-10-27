@@ -275,6 +275,9 @@ pub enum Item {
     },
     CommandExecution {
         id: String,
+        #[serde(default, skip_serializing_if = "ExecCommandSource::is_agent")]
+        #[ts(optional = nullable)]
+        source: ExecCommandSource,
         command: String,
         cwd: String,
         status: ItemStatus,
@@ -309,6 +312,22 @@ pub enum Item {
     },
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecCommandSource {
+    #[default]
+    Agent,
+    UserShell,
+    #[serde(other)]
+    Unknown,
+}
+
+impl ExecCommandSource {
+    fn is_agent(&self) -> bool {
+        *self == Self::Agent
+    }
 }
 
 impl Item {

@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[path = "rewind_tests.rs"]
 mod rewind;
 
+#[path = "user_shell_tests.rs"]
+mod user_shell;
+
 // A failed model task is a real Core close-error path, without modifying Core or the store.
 struct PanicOnce {
     panicked: AtomicBool,

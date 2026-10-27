@@ -846,6 +846,11 @@ fn leave_tab<B: FrameSync>(backend: &mut B, tab: &mut TabTitle) {
 
 /// What the background tasks tell the screen.
 enum Message {
+    ShellSent,
+    ShellFailed {
+        error: String,
+        draft: Option<crate::input::InputBox>,
+    },
     Btw {
         id: usize,
         event: canter_protocol::BtwEvent,
@@ -983,10 +988,11 @@ impl AutoName {
         let Some(turn) = turn_id else {
             return;
         };
+        let first = snapshot.turns.iter().find(|turn| !turn.input.is_empty());
         // A delayed input reply may arrive after this turn was retracted.
         if !self.eligible
-            || snapshot.turns.first().is_some_and(|first| first.id != turn)
-            || (seq <= snapshot.last_event_seq && snapshot.turns.is_empty())
+            || first.is_some_and(|first| first.id != turn)
+            || (seq <= snapshot.last_event_seq && first.is_none())
             || snapshot
                 .settings
                 .name
@@ -1192,6 +1198,8 @@ impl<C: Connector> Chat<C> {
     fn message<B: Backend>(&mut self, ui: &mut Ui<B>, message: Message) -> bool {
         let app = ui.app_mut();
         match message {
+            Message::ShellSent => app.shell_sent(),
+            Message::ShellFailed { error, draft } => app.shell_failed(&error, draft),
             Message::Btw { id, event } => {
                 if matches!(
                     event,
@@ -1343,6 +1351,23 @@ impl<C: Connector> Chat<C> {
                 if self.btw.as_ref().is_some_and(|(active, _)| *active == id) {
                     self.cancel_btw();
                 }
+            }
+            Action::ShellCommand(command) => {
+                let draft = app.take_text_draft();
+                tokio::spawn(async move {
+                    let params = canter_protocol::SessionShellCommandParams {
+                        command,
+                        timeout_ms: None,
+                    };
+                    let message = match client.shell_command(&session, &params).await {
+                        Ok(_) => Message::ShellSent,
+                        Err(error) => Message::ShellFailed {
+                            error: error.to_string(),
+                            draft,
+                        },
+                    };
+                    let _ = sender.send(message);
+                });
             }
             action @ (Action::Send(_) | Action::SendImages { .. }) => {
                 let has_images = matches!(&action, Action::SendImages { .. });

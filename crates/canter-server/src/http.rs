@@ -125,6 +125,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::HANDOFF, post(handoff))
         .route(routes::RESUME, post(resume))
         .route(routes::INPUT, post(input))
+        .route(routes::SHELL_COMMAND, post(shell_command))
         .route(routes::INTERRUPT, post(interrupt))
         .route(routes::COMPACT, post(compact))
         .route(routes::REWIND, get(rewind_list).post(rewind))
@@ -492,6 +493,19 @@ async fn input(
         return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
     }
     Ok(Json(app.session(&id).await?.input(params).await?))
+}
+
+async fn shell_command(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+    params: Result<Json<SessionShellCommandParams>, JsonRejection>,
+) -> Result<Json<SessionShellCommandResponse>, ApiError> {
+    let params = body(params)?;
+    let draining = app.draining.read().await;
+    if *draining {
+        return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
+    }
+    Ok(Json(app.session(&id).await?.shell_command(params).await?))
 }
 
 async fn resolve(

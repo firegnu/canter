@@ -212,7 +212,7 @@ impl State {
                     .snapshot
                     .turns
                     .iter()
-                    .any(|turn| turn.id == params.before_turn_id && !turn.input.is_empty())
+                    .any(|turn| turn.id == params.before_turn_id && rewind_input(turn).is_some())
             })
             .cloned()
             .ok_or_else(|| {
@@ -222,6 +222,22 @@ impl State {
                 )
             })
     }
+}
+
+fn rewind_input(turn: &Turn) -> Option<Vec<UserInput>> {
+    if !turn.input.is_empty() {
+        return Some(turn.input.clone());
+    }
+    turn.items.iter().find_map(|item| match item {
+        Item::CommandExecution {
+            command,
+            source: ExecCommandSource::UserShell,
+            ..
+        } => Some(vec![UserInput::Text {
+            text: format!("!{command}"),
+        }]),
+        _ => None,
+    })
 }
 
 fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
@@ -332,9 +348,9 @@ impl Session {
                     .boundaries
                     .iter()
                     .find(|b| b.turn_id == turn.id)?;
-                (!turn.input.is_empty()).then(|| RewindTurn {
+                Some(RewindTurn {
                     turn_id: turn.id.clone(),
-                    input: turn.input.clone(),
+                    input: rewind_input(turn)?,
                     file_count: state.rewind.files(boundary).len(),
                 })
             })
@@ -398,15 +414,16 @@ impl Session {
             ));
         }
         let input = if params.rewind_conversation {
-            state
-                .journal
-                .snapshot
-                .turns
-                .iter()
-                .find(|turn| turn.id == params.before_turn_id)
-                .expect("validated turn")
-                .input
-                .clone()
+            rewind_input(
+                state
+                    .journal
+                    .snapshot
+                    .turns
+                    .iter()
+                    .find(|turn| turn.id == params.before_turn_id)
+                    .expect("validated turn"),
+            )
+            .expect("validated rewind input")
         } else {
             Vec::new()
         };

@@ -100,6 +100,9 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         "SessionResumeResponse",
         "SessionInputParams",
         "SessionInputResponse",
+        "SessionShellCommandParams",
+        "SessionShellCommandResponse",
+        "ExecCommandSource",
         "SessionInterruptParams",
         "SessionInterruptResponse",
         "RequestResolveParams",
@@ -233,6 +236,27 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
     );
     let item_ts = fs::read_to_string(temp.path().join("typescript/Item.ts")).unwrap();
     assert!(item_ts.contains("aggregatedOutput: string"));
+    assert!(item_ts.contains("source?: ExecCommandSource"));
+    let command = definitions["Item"]["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|variant| variant["properties"]["type"]["const"] == "commandExecution")
+        .unwrap();
+    assert!(
+        !command["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "source")
+    );
+    assert!(
+        !definitions["SessionShellCommandParams"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "timeoutMs")
+    );
     assert!(item_ts.contains("exitCode: number | null"));
     let patch_ts =
         fs::read_to_string(temp.path().join("typescript/SessionUpdateParams.ts")).unwrap();
