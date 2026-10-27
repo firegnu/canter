@@ -50,6 +50,10 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
         "Conversation",
         &[
             ("Esc", "Interrupt; before any output, take the message back"),
+            (
+                "Esc twice",
+                "After /handoff, before sending: back to the original session",
+            ),
             ("PgUp / PgDn", "Scroll a page"),
             ("Mouse wheel", "Scroll 3 lines"),
             ("End", "Jump to the bottom, when the input is empty"),

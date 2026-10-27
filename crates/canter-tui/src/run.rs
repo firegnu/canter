@@ -57,6 +57,10 @@ const TITLE_CHARS: usize = 80;
 #[path = "run_retract_tests.rs"]
 mod retract_tests;
 
+#[cfg(test)]
+#[path = "run_handoff_tests.rs"]
+mod handoff_tests;
+
 /// A connection to the server.
 pub struct Connected {
     pub client: Client,
@@ -413,6 +417,11 @@ where
                         Ok(ControlFlow::Continue(Some(receiver))) => messages = receiver,
                         Ok(ControlFlow::Continue(None)) => {}
                         Err(error) => break 'run Err(error),
+                    }
+                }
+                Some(Action::ReturnFromHandoff(source)) => {
+                    if let Some(receiver) = chat.return_from_handoff(&mut ui, &source).await {
+                        messages = receiver;
                     }
                 }
                 Some(Action::PickModel) => match chat.client.list_models().await {
@@ -900,17 +909,39 @@ impl<C: Connector> Chat<C> {
             Pick::Exit => return Ok(ControlFlow::Break(())),
             _ => return Ok(ControlFlow::Continue(None)),
         };
-        let failed = "Could not resume the session";
-        let update = SessionUpdateParams::default();
         Ok(ControlFlow::Continue(
-            match resume(&self.client, &id, &self.env, &update).await {
-                Ok(snapshot) => self.show(ui, snapshot, failed).await,
-                Err(error) => {
-                    ui.app_mut().warning(&format!("{failed}: {error}"));
-                    None
-                }
-            },
+            self.open(ui, &id, "Could not resume the session").await,
         ))
+    }
+
+    /// Esc twice after `/handoff`: back to `source`, the session the note
+    /// came from, as if picked from `/resume`. When that fails, the new
+    /// session and its note stay.
+    async fn return_from_handoff<B: Backend>(
+        &mut self,
+        ui: &mut Ui<B>,
+        source: &str,
+    ) -> Option<mpsc::UnboundedReceiver<Message>> {
+        self.open(ui, source, "Could not return to the original session")
+            .await
+    }
+
+    /// Shows session `id`, open on the server, in place of the one on
+    /// screen. When that fails, the screen stays and says why after `failed`.
+    async fn open<B: Backend>(
+        &mut self,
+        ui: &mut Ui<B>,
+        id: &str,
+        failed: &str,
+    ) -> Option<mpsc::UnboundedReceiver<Message>> {
+        let update = SessionUpdateParams::default();
+        match resume(&self.client, id, &self.env, &update).await {
+            Ok(snapshot) => self.show(ui, snapshot, failed).await,
+            Err(error) => {
+                ui.app_mut().warning(&format!("{failed}: {error}"));
+                None
+            }
+        }
     }
 
     /// Shows `snapshot`'s session in place of the one on screen, following
@@ -1246,6 +1277,7 @@ impl<C: Connector> Chat<C> {
             | Action::Rewind(_)
             | Action::NewSession
             | Action::PickSession
+            | Action::ReturnFromHandoff(_)
             | Action::PickModel
             | Action::Usage
             | Action::Context
