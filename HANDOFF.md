@@ -4,7 +4,9 @@
 
 ## 装的哪一版、怎么退回
 
-- 10-27 第十次装 main `b78205d`（`canter --version` 显示 `canter 0.1.0 · b78205d`；比上一版多 P2-95 搜不到不画成失败和提示词加 rg、P2-25 输入历史、P2-31 外部编辑器 Ctrl+G、P2-27 做完提醒、P2-26 `!` 直接跑命令、P2-97 干活时 Tab 插队、P2-99 打断时排队的消息放回输入框）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
+- 10-27 第十一次装 main `9eb44dd`（`canter --version` 显示 `canter 0.1.0 · 9eb44dd`；比上一版多 P2-100 全局说明改读 `~/.canter/AGENTS.md`，不再读 `~/.agents/AGENTS.md`）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。`~/.canter/AGENTS.md` 是从 `~/.codex/AGENTS.md` 复制的一份（10-27，用户要用自己实际用的），两份各自独立，改一份另一份不跟着变。
+- 退回上一版 `b78205d`：旧程序备份在 `~/.canter/canter-b78205d`，`cp -p ~/.canter/canter-b78205d ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版读 `~/.agents/AGENTS.md`（现在没有这个文件），不读 `~/.canter/AGENTS.md`。
+- 10-27 第十次装过 main `b78205d`（`canter --version` 显示 `canter 0.1.0 · b78205d`；比上一版多 P2-95 搜不到不画成失败和提示词加 rg、P2-25 输入历史、P2-31 外部编辑器 Ctrl+G、P2-27 做完提醒、P2-26 `!` 直接跑命令、P2-97 干活时 Tab 插队、P2-99 打断时排队的消息放回输入框）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
 - 退回上一版 `a669963`：旧程序备份在 `~/.canter/canter-a669963`，`cp -p ~/.canter/canter-a669963 ~/.cargo/bin/canter`，再 `canter serve --replace`。P2-26 给 `commandExecution` 加了可选的 `source`，交叉审查查过旧版读新存盘不坏：旧版把 `!` 跑的命令显示成普通命令卡片、回退列表里没有命令轮。旧版不认 `tui.json` 里的通知设置，留着无害；`~/.canter/input_history.jsonl` 旧版不读。
 - 10-27 第九次装过 main `a669963`（比再上一版多 P2-93 输入框鼠标单击定位）。
 - 退回再上一版 `e4259d0`：旧程序备份在 `~/.canter/canter-e4259d0`，`cp -p ~/.canter/canter-e4259d0 ~/.cargo/bin/canter`，再 `canter serve --replace`。只改了终端，新旧互相读没问题。
