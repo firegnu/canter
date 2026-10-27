@@ -537,6 +537,8 @@ pub struct App {
     /// This terminal's `clientName`; what others send is marked with theirs.
     client_name: String,
     input: InputBox,
+    /// What was sent from the input box, for ↑ and ↓.
+    input_history: crate::input_history::InputHistory,
     sending_image: Option<InputBox>,
     /// Taken by the dispatcher so each in-flight text send owns its draft.
     sending_text: Option<InputBox>,
@@ -663,6 +665,30 @@ impl App {
         self
     }
 
+    /// Reads the input history saved under `env`'s home (`CANTER_HOME`, or
+    /// else `~/.canter`); what is sent from now on is saved there too.
+    pub fn with_input_history(mut self, env: &std::collections::BTreeMap<String, String>) -> Self {
+        self.input_history = crate::input_history::InputHistory::load(env);
+        self
+    }
+
+    /// Takes over the input history of the screen this one replaces, with
+    /// the pastes and images of what was sent from it.
+    pub fn with_input_history_from(mut self, before: &mut App) -> Self {
+        self.input_history = std::mem::take(&mut before.input_history);
+        self.input_history.stop_browsing();
+        self
+    }
+
+    /// Keeps `draft`, or else what is in the input box, sent from it now.
+    fn record_input(&mut self, draft: Option<&InputBox>) {
+        self.input_history.record(
+            &self.snapshot.settings.cwd,
+            draft.unwrap_or(&self.input),
+            crate::now_ms() / 1000,
+        );
+    }
+
     /// Starts or stops the status command as `/statusline` has it.
     fn run_script(&mut self) {
         let wanted = self.script.as_ref().filter(|_| self.bar.use_script);
@@ -758,6 +784,7 @@ impl App {
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::default(),
+            input_history: Default::default(),
             sending_image: None,
             sending_text: None,
             image_models: vec!["deepseek-flash".into()],
@@ -1213,8 +1240,26 @@ impl App {
             KeyCode::Delete => self.input.delete(),
             KeyCode::Left => self.input.left(),
             KeyCode::Right => self.input.right(),
-            KeyCode::Up => self.input.vertical(-1, self.input_width()),
-            KeyCode::Down => self.input.vertical(1, self.input_width()),
+            // The history in the empty box, or on a message recalled and
+            // unchanged with the cursor at its start or end.
+            KeyCode::Up => {
+                let width = self.input_width();
+                if !self
+                    .input_history
+                    .up(&self.snapshot.settings.cwd, &mut self.input)
+                {
+                    self.input.vertical(-1, width);
+                }
+            }
+            KeyCode::Down => {
+                let width = self.input_width();
+                if !self
+                    .input_history
+                    .down(&self.snapshot.settings.cwd, &mut self.input)
+                {
+                    self.input.vertical(1, width);
+                }
+            }
             KeyCode::Home => self.input.home(),
             KeyCode::End => self.input.end(),
             _ => {}
@@ -1266,12 +1311,14 @@ impl App {
                     if !self.accepts_images() {
                         return None;
                     }
+                    self.record_input(None);
                     self.sending_image = Some(self.input.clone());
                     return Some(Action::SendImages {
                         text: self.input.take(),
                         input,
                     });
                 }
+                self.record_input(None);
                 self.sending_text = Some(self.input.clone());
                 Some(Action::Send(self.input.take()))
             }
@@ -1291,6 +1338,7 @@ impl App {
     fn run_command(&mut self, command: &Command, args: &str) -> Option<Action> {
         // Like sending, so that what the command shows is in view.
         self.scroll.top = None;
+        let draft = self.input.clone();
         let run = if command.takes_args || args.is_empty() {
             (command.run)(self, args)
         } else {
@@ -1298,6 +1346,7 @@ impl App {
         };
         match run {
             Ok(action) => {
+                self.record_input(Some(&draft));
                 self.input.clear();
                 action
             }
@@ -1312,6 +1361,9 @@ impl App {
     /// one selected. None while the input cannot be a command, nothing
     /// matches, or Esc closed the list.
     fn command_list(&self) -> Option<(Vec<&'static Command>, usize)> {
+        if self.input_history.showing(&self.input) {
+            return None;
+        }
         let text = self.input.text();
         let typed = commands::typing(text)?;
         let same = self.commands.text == text;
@@ -1328,6 +1380,9 @@ impl App {
     /// and how many match. None while there is no `@` word, nothing found
     /// so far matches, or Esc closed the list.
     fn mention_list(&mut self) -> Option<(mention::Word, usize, usize)> {
+        if self.input_history.showing(&self.input) {
+            return None;
+        }
         let text = self.input.text();
         let cursor = self.input.cursor();
         let word = mention::word(text, cursor)?;
@@ -2907,6 +2962,12 @@ impl App {
                     " ! Could not read tui.json; the status line uses the defaults",
                     theme::warning(),
                 )),
+                now_ms + crate::copy::FAILED_MS,
+            );
+        }
+        if let Some(message) = self.input_history.take_warning() {
+            self.copier.show(
+                Line::from(Span::styled(format!(" ! {message}"), theme::warning())),
                 now_ms + crate::copy::FAILED_MS,
             );
         }

@@ -385,7 +385,8 @@ where
     let mut app = App::new(snapshot, home.clone(), now_ms())
         .with_client_name(client_name.clone())
         .with_welcome(version.clone())
-        .with_status_line(status_line.clone(), env.clone());
+        .with_status_line(status_line.clone(), env.clone())
+        .with_input_history(&env);
     match client.list_models().await {
         Ok(models) => app.set_models(&models),
         Err(error) => app.warning(&format!("Could not read image capabilities: {error}")),
@@ -1044,7 +1045,8 @@ impl<C: Connector> Chat<C> {
             .with_client_name(self.client_name.clone())
             .with_welcome(self.version.clone())
             .with_status_line(self.status_line.clone(), self.env.clone())
-            .with_bar_from(ui.app());
+            .with_bar_from(ui.app())
+            .with_input_history_from(ui.app_mut());
         *ui.app_mut() = app;
         if let Ok(models) = self.client.list_models().await {
             ui.app_mut().set_models(&models);
