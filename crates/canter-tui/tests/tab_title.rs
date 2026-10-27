@@ -53,7 +53,7 @@ struct Canter {
 }
 
 impl Canter {
-    /// canter in Ghostty, on a session in `<temp>/project`.
+    /// canter in Ghostty itself, on a session in `<temp>/project`.
     async fn start() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("project");
@@ -79,6 +79,7 @@ impl Canter {
             ("HOME".to_owned(), home.clone()),
             ("CANTER_HOME".to_owned(), format!("{home}/.canter")),
             ("TERM_PROGRAM".to_owned(), "ghostty".to_owned()),
+            ("TERM".to_owned(), "xterm-ghostty".to_owned()),
         ]);
         let launch = Launch {
             connector: SocketConnector(socket.clone()),

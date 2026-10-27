@@ -8,9 +8,12 @@
 //! neither read nor restored (terminals differ, and Codex does the same).
 //!
 //! OSC 9 is a desktop notification in many terminals, and ones that do not
-//! know `9;4` would pop one up; so the mark goes only to Ghostty and to
-//! iTerm2 3.6.6 or later (3.6.0–3.6.5 take it as a notification), never
-//! through tmux or screen.
+//! know `9;4` would pop one up; so the mark goes only to Ghostty itself
+//! (`TERM_PROGRAM=ghostty` and `TERM=xterm-ghostty`), never through tmux or
+//! screen. A terminal emulated inside another one (paddock, herdr) inherits
+//! `TERM_PROGRAM` but sets its own `TERM`. iTerm2 gets the title only: it
+//! knows `9;4` from 3.6.6 on, older ones pop a notification, and its
+//! variables are inherited the same way with nothing to tell them apart.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -33,9 +36,9 @@ const SPIN_MS: i64 = 100;
 const MAX_CHARS: usize = 240;
 
 const BUSY: &str = "\x1b]9;4;3\x07";
-/// iTerm2 before 3.7.0 needs a percentage with state 4.
+/// With a percentage, which some terminals need for state 4.
 const PAUSED: &str = "\x1b]9;4;4;100\x07";
-/// Never the short `OSC 9;4`: iTerm2 3.6.6 and 3.6.7 crash on it.
+/// Never the short `OSC 9;4`, which some terminals crash on.
 const CLEAR: &str = "\x1b]9;4;0\x07";
 
 /// The title for `state` in directory `dir`, the spinner at `now_ms`.
@@ -124,36 +127,14 @@ fn set(env: &BTreeMap<String, String>, name: &str) -> bool {
     env.get(name).is_some_and(|value| !value.is_empty())
 }
 
-/// Whether the terminal in `env` shows OSC 9;4 on its tab: Ghostty, or
-/// iTerm2 3.6.6 or later, and not through tmux or screen.
+/// Whether the terminal in `env` shows OSC 9;4 on its tab: Ghostty itself,
+/// not through tmux or screen.
 pub(crate) fn shows_progress(env: &BTreeMap<String, String>) -> bool {
-    let program = env.get("TERM_PROGRAM").map(String::as_str);
-    if set(env, "TMUX") || set(env, "STY") || program == Some("tmux") {
-        return false;
-    }
-    match program {
-        Some("ghostty") => true,
-        Some("iTerm.app") => env
-            .get("TERM_PROGRAM_VERSION")
-            .and_then(|version| version_parts(version))
-            .is_some_and(|version| version >= [3, 6, 6]),
-        _ => false,
-    }
-}
-
-/// The leading numbers of each dotted part: `3.6.6beta2` is 3.6.6, `3.7`
-/// is 3.7.0. `None` when the first part has no number.
-fn version_parts(version: &str) -> Option<[u64; 3]> {
-    let mut parts = [0; 3];
-    for (index, part) in version.split('.').take(3).enumerate() {
-        let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
-        match digits.parse() {
-            Ok(number) => parts[index] = number,
-            Err(_) if index == 0 => return None,
-            Err(_) => break,
-        }
-    }
-    Some(parts)
+    let var = |name: &str| env.get(name).map(String::as_str);
+    !set(env, "TMUX")
+        && !set(env, "STY")
+        && var("TERM_PROGRAM") == Some("ghostty")
+        && var("TERM") == Some("xterm-ghostty")
 }
 
 /// What canter last wrote to the tab, so it writes only changes.
@@ -279,39 +260,39 @@ mod tests {
         assert_eq!(sanitize("⠇ canter · 项目", true), "| canter ? ??");
     }
 
+    const GHOSTTY: [(&str, &str); 2] = [("TERM_PROGRAM", "ghostty"), ("TERM", "xterm-ghostty")];
+
     #[test]
-    fn the_tab_mark_goes_only_to_ghostty_and_iterm2_from_3_6_6() {
-        assert!(shows_progress(&env(&[("TERM_PROGRAM", "ghostty")])));
-        for version in ["3.6.6", "3.6.6beta2", "3.6.10", "3.7.0", "4.0"] {
+    fn the_tab_mark_goes_only_to_ghostty_itself() {
+        assert!(shows_progress(&env(&GHOSTTY)));
+        // A terminal emulated inside Ghostty keeps TERM_PROGRAM but sets its own TERM.
+        let inside = env(&[("TERM_PROGRAM", "ghostty"), ("TERM", "xterm-256color")]);
+        assert!(!shows_progress(&inside));
+        assert!(!shows_progress(&env(&[("TERM_PROGRAM", "ghostty")])));
+        for version in ["3.6.5", "3.6.6", "3.7.0"] {
             let env = env(&[
                 ("TERM_PROGRAM", "iTerm.app"),
                 ("TERM_PROGRAM_VERSION", version),
             ]);
-            assert!(shows_progress(&env), "iTerm2 {version}");
-        }
-        for version in ["3.6.5", "3.6", "3.5.14", "", "beta"] {
-            let env = env(&[
-                ("TERM_PROGRAM", "iTerm.app"),
-                ("TERM_PROGRAM_VERSION", version),
-            ]);
-            assert!(!shows_progress(&env), "iTerm2 {version:?}");
+            assert!(!shows_progress(&env), "iTerm2 {version}");
         }
         assert!(!shows_progress(&env(&[("TERM_PROGRAM", "iTerm.app")])));
         assert!(!shows_progress(&env(&[("TERM_PROGRAM", "Apple_Terminal")])));
         assert!(!shows_progress(&env(&[])));
         assert!(!shows_progress(&env(&[("TERM_PROGRAM", "tmux")])));
         let in_tmux = env(&[
-            ("TERM_PROGRAM", "ghostty"),
+            GHOSTTY[0],
+            GHOSTTY[1],
             ("TMUX", "/tmp/tmux-501/default,1,0"),
         ]);
         assert!(!shows_progress(&in_tmux));
-        let in_screen = env(&[("TERM_PROGRAM", "ghostty"), ("STY", "123.pts-0.host")]);
+        let in_screen = env(&[GHOSTTY[0], GHOSTTY[1], ("STY", "123.pts-0.host")]);
         assert!(!shows_progress(&in_screen));
     }
 
     #[test]
     fn writes_only_what_changed() {
-        let mut tab = TabTitle::new(&env(&[("TERM_PROGRAM", "ghostty")]));
+        let mut tab = TabTitle::new(&env(&GHOSTTY));
         assert_eq!(
             tab.update(TabState::Idle, DIR, 0),
             "\x1b]0;canter · canter\x07"
@@ -365,7 +346,7 @@ mod tests {
 
     #[test]
     fn nothing_to_leave_before_anything_was_written() {
-        let mut tab = TabTitle::new(&env(&[("TERM_PROGRAM", "ghostty")]));
+        let mut tab = TabTitle::new(&env(&GHOSTTY));
         assert_eq!(tab.leave(), "");
     }
 
