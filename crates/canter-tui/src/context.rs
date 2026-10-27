@@ -16,9 +16,11 @@ pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<String>
     for section in &report.prefix {
         let label = match section.kind {
             ContextSectionKind::System => "System prompt".into(),
+            ContextSectionKind::ModelFamily => "Model notes".into(),
             ContextSectionKind::GlobalInstructions => "Global AGENTS.md".into(),
             ContextSectionKind::ProjectInstructions => "Project AGENTS.md".into(),
             ContextSectionKind::Skills => format!("Skills ({})", report.skill_count),
+            ContextSectionKind::Environment => "Environment".into(),
             ContextSectionKind::Unknown => continue,
         };
         let path = section

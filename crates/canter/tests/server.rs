@@ -858,12 +858,7 @@ async fn skills_empty_prefix_and_list_stay_frozen_until_session_reopens() {
     let script = fixture.script.lock().unwrap();
     let before = script.requests[0]["messages"].as_array().unwrap();
     let during = script.requests[1]["messages"].as_array().unwrap();
-    assert!(
-        !before[0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("Available skills:")
-    );
+    assert!(!before[0]["content"].as_str().unwrap().contains("<skills>"));
     assert_eq!(before.as_slice(), &during[..before.len()]);
     assert!(
         script.requests[2]["messages"][0]["content"]
@@ -912,8 +907,14 @@ async fn global_agents_instructions_precede_project_instructions() {
         .expect("the system prompt must include global instructions from the session HOME");
     let project_position = system.find("Project instruction marker").unwrap();
     assert!(global_position < project_position);
-    assert!(system.contains(&format!("Global instructions ({}):", global.display())));
-    assert!(system.contains(&format!("Project instructions ({}):", project.display())));
+    assert!(system.contains(&format!(
+        "<global_instructions path=\"{}\">",
+        global.display()
+    )));
+    assert!(system.contains(&format!(
+        "<project_instructions path=\"{}\">",
+        project.display()
+    )));
 }
 
 #[tokio::test]
@@ -939,7 +940,7 @@ async fn global_agents_missing_file_adds_no_prompt_section_or_warning() {
     let system = script.requests[0]["messages"][0]["content"]
         .as_str()
         .unwrap();
-    assert!(!system.contains("Global instructions ("));
+    assert!(!system.contains("<global_instructions "));
 }
 
 #[tokio::test]
@@ -977,7 +978,7 @@ async fn global_agents_oversized_file_is_skipped_with_a_warning() {
     let system = script.requests[0]["messages"][0]["content"]
         .as_str()
         .unwrap();
-    assert!(!system.contains("Global instructions ("));
+    assert!(!system.contains("<global_instructions "));
     assert!(!system.contains(&"x".repeat(64 * 1024 + 1)));
 }
 

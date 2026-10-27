@@ -569,9 +569,11 @@ pub struct ContextSection {
 #[serde(rename_all = "camelCase")]
 pub enum ContextSectionKind {
     System,
+    ModelFamily,
     GlobalInstructions,
     ProjectInstructions,
     Skills,
+    Environment,
     #[serde(other)]
     Unknown,
 }

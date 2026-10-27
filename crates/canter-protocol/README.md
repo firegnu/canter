@@ -136,8 +136,10 @@ input、interrupt、批准回答、compact、PATCH、DELETE 返回 `session_not_
 `GET /v1/sessions/{id}/context` 返回已打开会话当前装入的上下文估算；未打开时返回
 `session_not_resumed`。查询不改变事件、存盘或模型请求。返回字段：
 
-- `prefix`：`{kind, path, tokens}` 数组，kind 为 `system`、`globalInstructions`、
-  `projectInstructions`（每个文件一行）、`skills`；非文件段的 path 为 null。
+- `prefix`：`{kind, path, tokens}` 数组，按 `system`、`modelFamily`、`globalInstructions`、
+  `skills`、`projectInstructions`（每个文件一行）、`environment` 排列；空段不出现，非文件段的 path 为 null。
+  `system` 为固定提示词，`modelFamily` 为可选模型家族补充，`environment` 为打开会话时的环境。
+  旧客户端将新增的 modelFamily、environment 读成 Unknown 并跳过。
 - `skillCount`：模型可调用的技能数量；`toolCount`、`toolTokens`：工具定义数量及估算。
 - `compactionTokens`：压缩摘要估算，未压缩时为 null。
 - `messages`：`count`、`tokens`、`user`、`assistant`、`toolResults`、`images`；摘要单独统计。
@@ -146,7 +148,7 @@ input、interrupt、批准回答、compact、PATCH、DELETE 返回 `session_not_
   尚无用量记录时为 null。
 
 估算沿用压缩判断的字节启发式和图片固定估算；系统消息的角色、JSON 开销计入 system，
-其余前缀段按追加前后的估算差分计入，保持总和一致。排队输入、尚未产生的工具结果和
+其余前缀段（含标签和段间空行）按追加前后的估算差分计入，保持总和一致。排队输入、尚未产生的工具结果和
 输出预留不计入；实际下一次请求还可能因新输入、工具执行或压缩而变化。
 
 ### 顺口问

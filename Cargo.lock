@@ -256,6 +256,7 @@ dependencies = [
  "canter-protocol",
  "canter-store",
  "canter-tools",
+ "chrono",
  "futures-util",
  "httpdate",
  "nix",

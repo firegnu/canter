@@ -1232,13 +1232,15 @@ fn context_lists_categories_measured_usage_and_truncates_narrow_rows() {
     let report = serde_json::from_value(json!({
         "prefix":[
             {"kind":"system","path":null,"tokens":3000},
+            {"kind":"modelFamily","path":null,"tokens":100},
             {"kind":"globalInstructions","path":"/home/test/.agents/AGENTS.md","tokens":1000},
+            {"kind":"skills","path":null,"tokens":1000},
             {"kind":"projectInstructions","path":"/project/AGENTS.md","tokens":2000},
-            {"kind":"skills","path":null,"tokens":1000}
+            {"kind":"environment","path":null,"tokens":200}
         ],
         "skillCount":5,"toolCount":9,"toolTokens":4000,"compactionTokens":12000,
         "messages":{"count":34,"tokens":395000,"user":20000,"assistant":80000,"toolResults":290000,"images":5000},
-        "estimatedTokens":418000,"freeTokens":582000,"modelContextWindow":1000000,"contextTokens":420000
+        "estimatedTokens":418300,"freeTokens":581700,"modelContextWindow":1000000,"contextTokens":420000
     })).unwrap();
     for width in [140, 40] {
         let mut screen = Screen::sized(width, 30);
@@ -1247,9 +1249,11 @@ fn context_lists_categories_measured_usage_and_truncates_narrow_rows() {
         let shown = screen.text();
         for label in [
             "System prompt",
+            "Model notes",
             "Global AGENTS.md",
             "Project AGENTS.md",
             "Skills (5)",
+            "Environment",
             "Tools (9)",
             "Compaction summary",
             "Messages (34)",

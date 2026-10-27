@@ -75,7 +75,7 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
 
 私有 JSONL 条目带 `type`，目前有：
 
-- `context { messages }`：系统提示词、目录、操作系统/架构、UTC 日期、全局及项目 AGENTS.md、可供模型使用的技能简介与路径。全局说明从会话环境 `HOME` 下的 `.agents/AGENTS.md` 读取，标明来源和路径，排在所有项目说明之前；未提供 HOME 时不读全局说明，不读取服务端进程的 HOME。项目说明从最近 git 根读到 cwd，没有 git 根则只读 cwd。创建或打开会话时读一次；与恢复的开头不同才追加新记录。会话中途改文件或跨 UTC 零点不重读，普通请求、手动和自动压缩都沿用这份开头，下次打开会话才更新。
+- `context { messages, segments? }`：`segments` 保存提示词各段的 `kind`、可选 `path` 和原文 `text`；`messages` 保存转换器拼出的一条 system。顺序为固定段 `core`、模型家族补充 `model_family`（目前为空）、全局说明 `global_instructions`、技能 `skills`、项目说明 `project_instructions`（每个文件一段）、环境 `environment`。前三种跨会话稳定，后三种本会话固定；稳定性由种类的常量表决定，不另存盘。创建或打开会话时先固定内置及 MCP 工具集，再读文件、生成各段；段和 messages 都与最后一条 context 相同就沿用存盘字节，有一样不同才追加。只有 messages 的旧记录第一次重开会追加带 segments 的新记录，旧行不改；旧版仍可忽略 segments 读取 messages。
 - `message { message, user_input }`：一条模型消息；user_input 区分用户原话和核心的中断提示，旧条目缺字段时默认 false。
 - `compaction_request { messages }`：每次摘要调用收到的完整消息，仅作审计，不混入正常对话。
 - `compaction { summary, messages, user_messages }`：压缩后的完整对话替换及保留的用户原话，恢复从最后一次压缩继续。原记录不删除。
@@ -86,8 +86,20 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
   副本按当前会话目录解析，不可读时换成 unavailable 占位并发 warning，历史引用不改。
   图片每张估 1024 token，并计入压缩保留用户消息的现有预算。
 
-全局和项目的每份 AGENTS.md 至多 64 KiB；文件不存在不警告，其他读取失败、非 UTF-8 或超限时整份跳过，warning 写明文件路径和原因，继续正常请求。
+全局说明从会话环境 `HOME` 下的 `.agents/AGENTS.md` 读取；未提供 HOME 时不读全局说明，不读取服务端进程的 HOME。项目说明从最近 git 根读到 cwd，没有 git 根则只读 cwd。
+全局和项目的每份 AGENTS.md 至多 64 KiB；文件不存在或只有空白时不加段落、不警告，其他读取失败、非 UTF-8 或超限时整份跳过，warning 写明文件路径和原因，继续正常请求。
 警告也只在创建或打开会话时发送；中途问题变化不重新提示，下次打开时按当时的读取结果报告。
+
+`prompt` 模块的 Chat Completions 转换器是纯函数：固定段和家族补充原样放置，其余各段包在
+`<global_instructions path="…">`、`<skills>`、`<project_instructions path="…">`、`<environment>` 中，
+段之间空一行。文件内容不转义、不裁空白，path 属性转义 `&`、`"`、`<`、`>`；空段不出现。
+环境段固定四行：工作目录、git 仓库根（没有则 none）、系统和架构、本地打开日期、英文星期和 UTC 偏移。
+日期后提示当前日期可能更晚；不加入权限模式、git 分支/状态或模型名。会话中途改文件或跨本地零点都不重读，
+普通请求、手动和自动压缩沿用打开时的前缀，下次打开才更新。
+
+`/context` 每段一行：固定段为 system，家族补充为 modelFamily（非空才有），其余为
+globalInstructions、skills、projectInstructions、environment。路径保留为原路径。
+角色和 JSON 开销计入 system，标签及段间空行随各段按累计估算差分计入，合计等于整条 system 的估算。
 
 技能从会话环境 `HOME` 下的 `.agents/skills/<目录>/SKILL.md` 和同一项目根目录下的
 `.agents/skills/<目录>/SKILL.md` 发现；未提供 HOME 时只查项目，不读取服务端进程的 HOME。
@@ -96,7 +108,7 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
 忽略其他元数据。缺少头部、名字或简介，以及读取或 UTF-8 错误，都跳过并沿用 warning；
 技能根目录不存在不警告。`disable-model-invocation: true` 的技能仍列在 `skills()` 中，
 但不进入系统提示词。没有可供模型使用的技能时不加技能段落。全文只在模型需要时由现有
-read 工具读取，权限与受保护路径规则不变。技能列表只驻内存，不改变存盘格式。
+read 工具读取，权限与受保护路径规则不变。完整技能列表只驻内存，提供给模型的简介和路径随 skills 段存盘。
 
 未知条目/消息/助手内容会跳过，绝不把 Unknown 再写回。恢复模型上下文只读模型历史；
 事件用于恢复显示、请求处理序号和轮状态。重新打开时取消遗留批准和排队输入，未完成轮

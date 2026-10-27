@@ -252,9 +252,10 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
         [
             "system",
             "globalInstructions",
+            "skills",
             "projectInstructions",
             "projectInstructions",
-            "skills"
+            "environment"
         ]
     );
     assert_eq!(
@@ -262,10 +263,10 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
         home.join(".agents/AGENTS.md").to_str().unwrap()
     );
     assert_eq!(
-        sections[2]["path"],
+        sections[3]["path"],
         project.join("AGENTS.md").to_str().unwrap()
     );
-    assert_eq!(sections[3]["path"], cwd.join("AGENTS.md").to_str().unwrap());
+    assert_eq!(sections[4]["path"], cwd.join("AGENTS.md").to_str().unwrap());
     for (endpoint, body) in [
         (
             "input",
@@ -393,18 +394,19 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
         panic!("system prefix")
     };
     let boundaries = [
-        text.find("\nGlobal instructions (").unwrap(),
+        text.find("\n\n<global_instructions path=\"").unwrap(),
+        text.find("\n\n<skills>\n").unwrap(),
         text.find(&format!(
-            "\nProject instructions ({}):",
+            "\n\n<project_instructions path=\"{}\">",
             project.join("AGENTS.md").display()
         ))
         .unwrap(),
         text.find(&format!(
-            "\nProject instructions ({}):",
+            "\n\n<project_instructions path=\"{}\">",
             cwd.join("AGENTS.md").display()
         ))
         .unwrap(),
-        text.find("\nAvailable skills:\n").unwrap(),
+        text.find("\n\n<environment>\n").unwrap(),
         text.len(),
     ];
     let mut prior = 0;
