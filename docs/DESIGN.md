@@ -8,7 +8,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
 
 2026-10-23，用户在 ranch 主控那里定的。
 
-1. **独立，不和 ranch 这一套绑死**：「这个coding agent不需要和ranch/corral/paddock/cairn等绑定死。这样我随时可以在任何terminal中启动。」canter 仓库里不放任何 ranch 的东西；以后要接 corral，由 corral 去适配 canter 的公开接口。
+1. **独立，不和 ranch 这一套绑死**：「这个coding agent不需要和ranch/corral/paddock/cairn等绑定死。这样我随时可以在任何terminal中启动。」canter 仓库里不放任何 ranch 的东西；以后要接 corral，由 corral 去适配 canter 的公开接口。 不和任何终端绑定（10-27 用户：「agent不能和任何terminal绑定」「其他的terminal不能崩，这是底线」）：基本功能只用所有终端都认的写法；针对某个终端的效果（如 P2-52 Ghostty 标签上的进度）只能是额外的，要确认真是那个终端才发，别的终端什么都收不到、照常能用。
 2. **一台机器一个常驻服务端、多个客户端**：「我要的是一个服务器，多个客户端。主要的考虑是，我肯定会先做tui，然后对接上corral这一套，但是也可以单独发布桌面app」。循环、工具、权限、会话都在服务端；终端界面、桌面应用、网页、corral 都是客户端。
 3. **语言 Rust**：服务端和终端客户端用 Rust。用户：「我接受你的建议Rust」。
 4. **模型不自研**：「我是想拥有一个自研的agent。model就算了。」
