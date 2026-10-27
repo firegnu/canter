@@ -42,6 +42,7 @@ mod search;
 mod select;
 mod shimmer;
 mod statusline;
+mod tab_title;
 mod text;
 pub mod theme;
 pub mod usage;
