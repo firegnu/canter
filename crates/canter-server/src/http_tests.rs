@@ -481,7 +481,7 @@ impl Model for BtwModel {
                 ModelEvent::Finished(FinishReason::ToolCalls),
             ]
         } else if question.starts_with("btw-only")
-            || question.starts_with("Write a self-contained handoff note")
+            || question.starts_with("Write a handoff note for a new session")
         {
             vec![
                 ModelEvent::TextDelta("private **btw answer**".into()),
@@ -555,14 +555,19 @@ async fn handoff_appends_instructions_without_changing_history_and_charges_sourc
         let Message::User { text } = request.messages.last().unwrap() else {
             panic!("handoff instructions");
         };
-        assert!(text.starts_with("Write a self-contained handoff note"));
+        assert!(text.starts_with("Write a handoff note for a new session"));
         for required in [
-            "completed work",
-            "decisions",
-            "key findings",
-            "files",
-            "next steps",
-            "user's language",
+            "\"## Task\"",
+            "## Goal",
+            "## User's words",
+            "## Constraints and preferences",
+            "## Decisions",
+            "## Files",
+            "## Commands and results",
+            "## Where it stopped",
+            "## Open issues",
+            "## Next steps",
+            "the language the user mostly writes in",
             "only the note",
         ] {
             assert!(text.contains(required), "missing {required}: {text}");

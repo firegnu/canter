@@ -406,7 +406,7 @@ async fn automatic_compaction_can_retract_until_output_but_manual_compaction_can
         assert!(
             request["messages"]
                 .to_string()
-                .contains("Summarize the supplied conversation")
+                .contains("Summarize the conversation in <transcript> below.")
         );
         if mode == "automatic-output" {
             // The usage event follows the summary delta on this same stream,

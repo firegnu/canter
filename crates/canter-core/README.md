@@ -152,6 +152,14 @@ Length 摘要仍视为不完整，走上述失败回退，不用截断的摘要�
 压缩后保留最近约 20,000 token 的用户原话，再加摘要；小窗口会进一步缩减保留预算，
 边界消息只保留可容纳的原文尾部，按 UTF-8 边界截取。
 
+压缩和 `/handoff` 的说明原文采用 P2-57 方案 §6，共用 Goal、User's words、
+Constraints and preferences、Decisions、Files、Commands and results、Where it stopped、
+Open issues、Next steps 九个小节及规则。压缩转写包在 `<transcript>` 中，分段时前一块
+摘要包在 `<earlier_summary>` 中（没有则整块省略），末尾提醒只输出摘要；标签和尾句
+均计入每段预算。压缩后的历史仍为保留的最近用户消息加 `[Context summary]\n<摘要>`。
+`/handoff` 先要求 `## Task`，另强调工作区状态和动手前的检查，用户方向放在说明末尾，
+未给方向时用 `Continue the current task.`；沿用前缀、历史和工具定义，但不执行工具。
+
 系统提示词独立撰写；循环/插话参考 pi v1.4.0 的 agent-loop.ts、agent.ts，压缩触发参考
 packages/coding-agent/docs/compaction.md；摘要结构和保留用户消息的方式参考
 Codex rust-v0.163.0 的 core/src/compact.rs 与 prompts/templates/compact/prompt.md。
