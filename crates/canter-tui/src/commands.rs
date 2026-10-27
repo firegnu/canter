@@ -48,6 +48,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |app, args| app.copy_answer(args).map(|()| None),
     },
     Command {
+        name: "diff",
+        about: "Show uncommitted git changes",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::Diff)),
+    },
+    Command {
         name: "exit",
         about: "Quit canter",
         takes_args: false,

@@ -655,6 +655,8 @@ enum Message {
     SendFailed(String),
     NameFailed(String),
     Warning(String),
+    /// `/diff` collected the changes.
+    Diff(crate::uncommitted::Changes),
     AnswerFailed {
         request_id: String,
         error: String,
@@ -992,6 +994,7 @@ impl<C: Connector> Chat<C> {
                 app.warning(&format!("Could not name the session: {error}"))
             }
             Message::Warning(message) => app.warning(&message),
+            Message::Diff(changes) => app.show_diff(changes),
             Message::AnswerFailed { request_id, error } => app.answer_failed(&request_id, &error),
             Message::AnswerLate => app.answer_late(),
             Message::InterruptFailed {
@@ -1026,6 +1029,13 @@ impl<C: Connector> Chat<C> {
         let session = self.session.clone();
         let sender = self.sender.clone();
         match action {
+            Action::Diff => {
+                let cwd = app.snapshot().settings.cwd.clone();
+                tokio::spawn(async move {
+                    let changes = crate::uncommitted::collect(&cwd).await;
+                    let _ = sender.send(Message::Diff(changes));
+                });
+            }
             Action::Review(target) => {
                 let cwd = app.snapshot().settings.cwd.clone();
                 let env = self.env.clone();

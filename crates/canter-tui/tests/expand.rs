@@ -389,10 +389,13 @@ fn ctrl_o_shows_long_output_and_diffs_in_full_and_folds_them_again() {
     assert_eq!(screen.status(), format!(" {DETAILS}"), "idle too");
 
     assert_eq!(screen.ctrl_o(), None);
-    // Folded as before; the turn has ended, so its time follows now.
+    // Folded as before; the turn has ended, so the file it changed and its
+    // time follow now.
     let mut refolded = folded.clone();
     let end = folded.iter().rposition(|row| !row.is_empty()).unwrap() + 1;
-    refolded[end + 1] = "  ─ Worked for <1s ─".to_owned();
+    refolded[end + 1] = "  ● Changed 1 file  +10 −10".to_owned();
+    refolded[end + 2] = "      a.txt  +10 −10".to_owned();
+    refolded[end + 3] = "  ─ Worked for <1s ─".to_owned();
     assert_eq!(screen.conversation(), refolded);
     assert_eq!(screen.status(), "");
 }

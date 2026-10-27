@@ -220,6 +220,8 @@ fn a_blank_row_separates_messages_cards_and_thinking_but_not_reads_in_a_row() {
             "",
             "Done.",
             "",
+            "● Changed 1",
+            "a.txt +1 −1",
             "─ Worked for",
             "",
             "› thanks",

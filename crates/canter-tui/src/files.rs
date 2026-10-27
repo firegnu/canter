@@ -167,7 +167,7 @@ pub(crate) async fn popup(snapshot: &SessionSnapshot, home: Option<&str>) -> Rep
 }
 
 /// A section's first row, in bold, and after it what it is about in grey.
-fn heading(name: &str, about: Option<&str>) -> Part {
+pub(crate) fn heading(name: &str, about: Option<&str>) -> Part {
     let mut spans = vec![Span::styled(format!(" {name}"), Style::new().bold())];
     if let Some(about) = about {
         spans.push(Span::styled(format!(" · {about}"), theme::secondary()));
@@ -176,7 +176,7 @@ fn heading(name: &str, about: Option<&str>) -> Part {
 }
 
 /// An empty section's row.
-fn none(text: &str) -> Part {
+pub(crate) fn none(text: &str) -> Part {
     Part::Line(vec![Span::styled(format!("   {text}"), theme::secondary())])
 }
 

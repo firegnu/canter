@@ -124,6 +124,8 @@ pub enum Action {
         id: usize,
     },
     Files,
+    /// Collect the uncommitted git changes and show them.
+    Diff,
     Review(String),
     /// Compact this session's context.
     Compact,
@@ -1596,6 +1598,11 @@ impl App {
         self.open_report(crate::context::popup(report, self.home.as_deref()));
     }
 
+    /// `/diff`: opens above the input box.
+    pub fn show_diff(&mut self, changes: crate::uncommitted::Changes) {
+        self.open_report(crate::uncommitted::popup(changes));
+    }
+
     /// `/files`: opens above the input box.
     pub async fn show_files(&mut self) {
         let report = crate::files::popup(&self.snapshot, self.home.as_deref()).await;
@@ -2596,9 +2603,7 @@ impl App {
             return None;
         }
         let error_shown = self.errors_shown.contains(&turn.id);
-        let rows = cells::turn_footer(turn, error_shown)
-            .map(|footer| wrap_rows(&footer, width))
-            .unwrap_or_default();
+        let rows = cells::turn_end(turn, error_shown, &self.snapshot.settings.cwd, width);
         let next = Place {
             turn: at.turn + 1,
             ..Place::default()
@@ -3425,17 +3430,12 @@ impl App {
                 item: turn.items.len(),
             };
             append_notices(&mut rows, &mut parts, &mut tail, at);
-            if turn.status != TurnStatus::InProgress
-                && let Some(footer) = cells::turn_footer(turn, self.errors_shown.contains(&turn.id))
-            {
-                let part = (Part::At(at), Kind::End);
-                push_part(
-                    &mut rows,
-                    &mut parts,
-                    &mut tail,
-                    part,
-                    wrap_rows(&footer, width),
-                );
+            if turn.status != TurnStatus::InProgress {
+                let end = cells::turn_end(turn, self.errors_shown.contains(&turn.id), cwd, width);
+                if !end.is_empty() {
+                    let part = (Part::At(at), Kind::End);
+                    push_part(&mut rows, &mut parts, &mut tail, part, end);
+                }
             }
         }
         // A btw can follow all turns, including in a session without any turns.
