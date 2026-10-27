@@ -16,4 +16,8 @@ closeReason?: SessionCloseReason,
 /**
  * Unix time in milliseconds; zero until the first event is applied.
  */
-createdAt: number, updatedAt: number, turns: Array<Turn>, pendingRequests: Array<PendingRequest>, queuedInputs: Array<QueuedInput>, tokenUsage: TokenUsage | null, error: ErrorInfo | null, lastEventSeq: number, };
+createdAt: number, updatedAt: number, turns: Array<Turn>, pendingRequests: Array<PendingRequest>,
+/**
+ * User feedback from declined approvals, keyed by tool item ID.
+ */
+approvalFeedback?: { [key in string]: string }, queuedInputs: Array<QueuedInput>, tokenUsage: TokenUsage | null, error: ErrorInfo | null, lastEventSeq: number, };

@@ -89,6 +89,10 @@ pub struct SessionSnapshot {
     pub updated_at: i64,
     pub turns: Vec<Turn>,
     pub pending_requests: Vec<PendingRequest>,
+    /// User feedback from declined approvals, keyed by tool item ID.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[ts(optional = nullable)]
+    pub approval_feedback: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub queued_inputs: Vec<QueuedInput>,
     pub token_usage: Option<TokenUsage>,
@@ -115,6 +119,7 @@ impl SessionSnapshot {
             updated_at: 0,
             turns: Vec::new(),
             pending_requests: Vec::new(),
+            approval_feedback: Default::default(),
             queued_inputs: Vec::new(),
             token_usage: None,
             error: None,
@@ -354,6 +359,7 @@ pub enum ApprovalDecision {
     Accept,
     AcceptForSession,
     Decline,
+    DeclineWithFeedback,
     Cancel,
     #[serde(other)]
     Unknown,
@@ -420,6 +426,9 @@ pub enum UserInputAnswer {
 pub enum ApprovalResolution {
     Answered {
         decision: ApprovalDecision,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        feedback: Option<String>,
     },
     UserInput {
         answer: UserInputAnswer,

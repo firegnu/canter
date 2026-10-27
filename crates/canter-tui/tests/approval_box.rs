@@ -93,6 +93,21 @@ impl Screen {
 
     /// The model wants to run `command` and asks first.
     fn ask(&mut self, request: &str, turn: &str, command: &str) {
+        self.ask_with_decisions(
+            request,
+            turn,
+            command,
+            &[
+                "accept",
+                "acceptForSession",
+                "decline",
+                "declineWithFeedback",
+                "cancel",
+            ],
+        );
+    }
+
+    fn ask_with_decisions(&mut self, request: &str, turn: &str, command: &str, decisions: &[&str]) {
         let item = format!("item-{request}");
         self.event(json!({
             "type": "item.started", "turnId": turn,
@@ -105,7 +120,7 @@ impl Screen {
                 "kind": {
                     "type": "approval", "itemId": item, "tool": "shell",
                     "arguments": { "command": command },
-                    "availableDecisions": ["accept", "acceptForSession", "decline", "cancel"],
+                    "availableDecisions": decisions,
                 },
             },
         }));
@@ -146,6 +161,7 @@ fn resolve(request: &str, decision: ApprovalDecision) -> Option<Action> {
     Some(Action::Resolve {
         request_id: request.to_owned(),
         decision,
+        feedback: None,
     })
 }
 
@@ -557,7 +573,8 @@ fn a_small_window_never_hides_an_answer_it_accepts() {
                 "1. Allow once",
                 "2. Allow for this session",
                 "3. Decline",
-                "4. Decline and stop",
+                "4. Decline and say what to do instead",
+                "5. Decline and stop",
             ] {
                 assert!(
                     shown.contains(answer),
@@ -652,4 +669,196 @@ fn enter_right_after_answering_does_not_send_the_draft() {
     screen.draw();
     assert!(!screen.dim("稿"));
     assert_eq!(screen.key(KeyCode::Enter), Some(Action::Send("稿".into())));
+}
+
+#[test]
+fn decline_feedback_is_fourth_and_sends_typed_and_pasted_text() {
+    for enter in [false, true] {
+        let mut screen = Screen::new(100, 30);
+        screen.start_turn("t1");
+        screen.draw();
+        screen.ui.app_mut().handle_paste("message draft");
+        screen.ask("r1", "t1", "touch must-not-exist");
+        screen.draw();
+        let shown = screen.screen();
+        assert!(shown.contains("3. Decline"));
+        assert!(shown.contains("4. Decline and say what to do instead"));
+        assert!(shown.contains("5. Decline and stop"));
+        assert_eq!(screen.key(KeyCode::Char('4')), None, "300 ms guard");
+        screen.draw();
+        assert!(!screen.screen().contains("What to do instead:"));
+        screen.read_the_box();
+        if enter {
+            for _ in 0..3 {
+                assert_eq!(screen.key(KeyCode::Down), None);
+            }
+            assert_eq!(screen.key(KeyCode::Enter), None);
+        } else {
+            assert_eq!(screen.key(KeyCode::Char('4')), None);
+        }
+        assert_eq!(screen.key(KeyCode::Char('1')), None);
+        assert_eq!(screen.key(KeyCode::Enter), None);
+        screen.draw();
+        assert!(screen.screen().contains("What to do instead:"));
+        assert_eq!(screen.key(KeyCode::Enter), None, "empty input is not sent");
+        for c in "Try ".chars() {
+            assert_eq!(screen.key(KeyCode::Char(c)), None);
+        }
+        screen
+            .ui
+            .app_mut()
+            .handle_paste("read\nonly\r\nplease\rnow");
+        screen.draw();
+        assert!(screen.screen().contains("› Try read only please now▏"));
+        assert_eq!(
+            screen.key(KeyCode::Enter),
+            Some(Action::Resolve {
+                request_id: "r1".into(),
+                decision: ApprovalDecision::DeclineWithFeedback,
+                feedback: Some("Try read only please now".into()),
+            })
+        );
+        screen.draw();
+        assert_eq!(
+            screen.key(KeyCode::Enter),
+            None,
+            "draft is guarded after answering"
+        );
+        screen.ui.app_mut().handle_paste(" kept");
+        screen.read_the_box();
+        assert_eq!(
+            screen.key(KeyCode::Enter),
+            Some(Action::Send("message draft kept".into()))
+        );
+    }
+}
+
+#[test]
+fn decline_feedback_empty_input_returns_to_options_and_escape_interrupts() {
+    for back in [KeyCode::Backspace, KeyCode::Up] {
+        let mut screen = Screen::new(100, 30);
+        screen.start_turn("t1");
+        screen.ask("r1", "t1", "touch must-not-exist");
+        screen.draw();
+        screen.read_the_box();
+        assert_eq!(screen.key(KeyCode::Char('4')), None);
+        screen.draw();
+        assert_eq!(screen.key(KeyCode::Char('x')), None);
+        assert_eq!(screen.key(KeyCode::Up), None);
+        screen.draw();
+        assert!(screen.screen().contains("› x▏"));
+        assert_eq!(screen.key(KeyCode::Backspace), None);
+        screen.draw();
+        assert!(screen.screen().contains("What to do instead:"));
+        assert_eq!(screen.key(back), None);
+        assert_eq!(screen.key(KeyCode::Char('1')), None);
+        assert_eq!(screen.key(KeyCode::Enter), None);
+        screen.draw();
+        assert!(
+            screen
+                .screen()
+                .contains("4. Decline and say what to do instead")
+        );
+        screen.read_the_box();
+        assert_eq!(screen.key(KeyCode::Char('4')), None);
+        screen.draw();
+        assert!(screen.screen().contains("What to do instead:"));
+        assert_eq!(
+            screen.key(KeyCode::Esc),
+            Some(Action::Interrupt {
+                turn_id: "t1".into()
+            })
+        );
+    }
+}
+
+#[test]
+fn decline_feedback_returning_to_options_restarts_the_answer_guard() {
+    for back in [KeyCode::Backspace, KeyCode::Up] {
+        let mut screen = Screen::new(100, 30);
+        screen.start_turn("t1");
+        screen.ask("r1", "t1", "touch must-not-exist");
+        screen.draw();
+        screen.read_the_box();
+        assert_eq!(screen.key(KeyCode::Char('4')), None);
+        screen.draw();
+        assert_eq!(screen.key(KeyCode::Char('x')), None);
+        screen.draw();
+        assert_eq!(screen.key(KeyCode::Backspace), None);
+        screen.draw();
+        assert_eq!(screen.key(back), None);
+        screen.draw();
+        assert_eq!(
+            screen.key(KeyCode::Char('2')),
+            None,
+            "returning with {back:?} must not grant permission"
+        );
+        screen.draw();
+        assert!(screen.dim("2. Allow for this session"));
+        screen.wait(ANSWER_GUARD_MS - 1);
+        assert_eq!(
+            screen.key(KeyCode::Char('2')),
+            None,
+            "the guard is still active"
+        );
+        screen.read_the_box();
+        screen.draw();
+        assert!(!screen.dim("2. Allow for this session"));
+        assert_eq!(
+            screen.key(KeyCode::Char('2')),
+            resolve("r1", ApprovalDecision::AcceptForSession)
+        );
+    }
+}
+
+#[test]
+fn decline_feedback_is_hidden_when_the_server_does_not_offer_it() {
+    let mut screen = Screen::new(100, 30);
+    screen.start_turn("t1");
+    screen.ask_with_decisions(
+        "r1",
+        "t1",
+        "touch must-not-exist",
+        &["accept", "acceptForSession", "decline", "cancel"],
+    );
+    screen.draw();
+    assert!(!screen.screen().contains("say what to do instead"));
+    assert!(screen.screen().contains("4. Decline and stop"));
+    screen.read_the_box();
+    assert_eq!(
+        screen.key(KeyCode::Char('4')),
+        resolve("r1", ApprovalDecision::Cancel)
+    );
+}
+
+#[test]
+fn decline_feedback_shows_under_the_card_live_and_from_a_snapshot() {
+    let mut screen = Screen::new(100, 30);
+    screen.start_turn("t1");
+    screen.ask("r1", "t1", "touch must-not-exist");
+    screen.event(json!({
+        "type":"request.resolved", "requestId":"r1", "clientName":"other terminal",
+        "resolution":{"type":"answered", "decision":"declineWithFeedback", "feedback":"Try \u{001b}[31mreading\u{001b}[0m\u{0007} instead"}
+    }));
+    screen.event(json!({"type":"item.completed", "turnId":"t1",
+        "item":command_json("item-r1", "touch must-not-exist", "declined")}));
+    screen.finish_turn("t1");
+    screen.draw();
+    for reopened in [false, true] {
+        if reopened {
+            let serialized = serde_json::to_value(screen.ui.app().snapshot()).unwrap();
+            let snapshot = serde_json::from_value(serialized).unwrap();
+            screen.ui = Ui::new(TestBackend::new(100, 30), App::new(snapshot, None, NOW)).unwrap();
+            screen.draw();
+        }
+        let shown = screen.screen();
+        let lines: Vec<_> = shown.lines().collect();
+        let card = lines
+            .iter()
+            .position(|line| line.contains("declined"))
+            .unwrap();
+        assert!(lines[card + 1].contains("Try reading instead"), "{shown}");
+        assert!(screen.dim("Try reading instead"));
+        assert!(!shown.contains("[31m"));
+    }
 }

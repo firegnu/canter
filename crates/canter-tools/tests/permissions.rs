@@ -228,7 +228,7 @@ async fn readonly_shell_still_asks_for_literal_protected_paths() {
         )
         .await
         .unwrap();
-    gate.resolve(&call, ApprovalDecision::AcceptForSession)
+    gate.resolve(&call, ApprovalDecision::AcceptForSession, None)
         .unwrap();
     assert!(matches!(
         gate.evaluate(&call, PermissionMode::AlwaysAsk),
@@ -362,6 +362,7 @@ async fn permission_modes_use_tool_risk_and_unknown_means_always_ask() {
                             ApprovalDecision::Accept,
                             ApprovalDecision::AcceptForSession,
                             ApprovalDecision::Decline,
+                            ApprovalDecision::DeclineWithFeedback,
                             ApprovalDecision::Cancel
                         ]
                     );
@@ -417,20 +418,41 @@ async fn approval_answers_and_grants_are_scoped_to_one_session_and_one_tool() {
         .unwrap();
     let mut first_session = PermissionGate::default();
     assert_eq!(
-        first_session.resolve(&shell, ApprovalDecision::Decline),
-        Ok(PermissionCheck::Deny { cancel_turn: false })
+        first_session.resolve(&shell, ApprovalDecision::Decline, None),
+        Ok(PermissionCheck::Deny {
+            cancel_turn: false,
+            feedback: None
+        })
     );
+    for (decision, feedback) in [
+        (ApprovalDecision::Decline, None),
+        (
+            ApprovalDecision::DeclineWithFeedback,
+            Some("read instead".to_owned()),
+        ),
+    ] {
+        assert_eq!(
+            first_session.resolve(&shell, decision, Some("read instead".into())),
+            Ok(PermissionCheck::Deny {
+                cancel_turn: false,
+                feedback
+            })
+        );
+    }
     assert_eq!(
-        first_session.resolve(&shell, ApprovalDecision::Cancel),
-        Ok(PermissionCheck::Deny { cancel_turn: true })
+        first_session.resolve(&shell, ApprovalDecision::Cancel, None),
+        Ok(PermissionCheck::Deny {
+            cancel_turn: true,
+            feedback: None
+        })
     );
     assert!(
         first_session
-            .resolve(&shell, ApprovalDecision::Unknown)
+            .resolve(&shell, ApprovalDecision::Unknown, None)
             .is_err()
     );
     assert!(matches!(
-        first_session.resolve(&shell, ApprovalDecision::Accept),
+        first_session.resolve(&shell, ApprovalDecision::Accept, None),
         Ok(PermissionCheck::Execute(_))
     ));
     assert!(matches!(
@@ -438,7 +460,7 @@ async fn approval_answers_and_grants_are_scoped_to_one_session_and_one_tool() {
         PermissionCheck::Ask(_)
     ));
     assert!(matches!(
-        first_session.resolve(&shell, ApprovalDecision::AcceptForSession),
+        first_session.resolve(&shell, ApprovalDecision::AcceptForSession, None),
         Ok(PermissionCheck::Execute(_))
     ));
     assert!(matches!(

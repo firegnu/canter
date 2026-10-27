@@ -5,4 +5,4 @@ import type { UserInputAnswer } from "./UserInputAnswer";
 /**
  * POST /v1/sessions/{id}/requests/{rid}.
  */
-export type RequestResolveParams = { decision?: ApprovalDecision, answer?: UserInputAnswer, clientName: string, };
+export type RequestResolveParams = { decision?: ApprovalDecision, feedback?: string, answer?: UserInputAnswer, clientName: string, };

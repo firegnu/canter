@@ -5,6 +5,7 @@
         "accept",
         "acceptForSession",
         "decline",
+        "declineWithFeedback",
         "cancel",
         "unknown"
       ],
@@ -42,6 +43,12 @@
           "properties": {
             "decision": {
               "$ref": "#/$defs/ApprovalDecision"
+            },
+            "feedback": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "const": "answered",
@@ -2003,6 +2010,12 @@
               "type": "null"
             }
           ]
+        },
+        "feedback": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -2514,6 +2527,13 @@
     },
     "SessionSnapshot": {
       "properties": {
+        "approvalFeedback": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "User feedback from declined approvals, keyed by tool item ID.",
+          "type": "object"
+        },
         "closeReason": {
           "anyOf": [
             {

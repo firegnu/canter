@@ -89,6 +89,7 @@ pub enum Action {
     Resolve {
         request_id: String,
         decision: ApprovalDecision,
+        feedback: Option<String>,
     },
     ResolveUserInput {
         request_id: String,
@@ -972,7 +973,7 @@ impl App {
             return None;
         }
         if shown.approval.is_some() {
-            return self.approval_key(key, shown, guarded);
+            return self.approval_key(key, shown, guarded, at);
         }
         // With nothing typed, End goes to the bottom and follows again, also
         // with a choice open.
@@ -2150,7 +2151,11 @@ impl App {
     pub fn handle_paste(&mut self, text: &str) {
         self.mouse.selection = None;
         if self.open_request().is_some_and(|request| {
-            request.id == self.approval.request && matches!(request.kind, RequestKind::UserInput(_))
+            request.id == self.approval.request
+                && matches!(
+                    request.kind,
+                    RequestKind::UserInput(_) | RequestKind::Approval(_)
+                )
         }) && let Some(custom) = &mut self.approval.custom
         {
             let mut pasted = InputBox::default();
@@ -2532,7 +2537,16 @@ impl App {
                 // Already shown as the turn's prompt.
                 Vec::new()
             } else {
-                cells::item(item, true, self.details, &self.snapshot.settings.cwd, width)
+                cells::item(
+                    item,
+                    true,
+                    self.details,
+                    &self.snapshot.settings.cwd,
+                    width,
+                    item.id()
+                        .and_then(|id| self.snapshot.approval_feedback.get(id))
+                        .map(String::as_str),
+                )
             };
             let next = Place {
                 item: at.item + 1,
@@ -2600,6 +2614,10 @@ impl App {
                     approval,
                     home,
                     selected,
+                    self.approval
+                        .custom
+                        .as_deref()
+                        .filter(|_| self.approval.request == request.id),
                     scroll,
                     taken,
                     width,
@@ -2976,7 +2994,13 @@ impl App {
     /// Keys pressed on an approval box. They answer only the request that box
     /// showed, and only when its answers were on screen; once that request is
     /// gone, they do nothing. While `guarded`, answer keys are dropped.
-    fn approval_key(&mut self, key: KeyEvent, shown: Shown, guarded: bool) -> Option<Action> {
+    fn approval_key(
+        &mut self,
+        key: KeyEvent,
+        shown: Shown,
+        guarded: bool,
+        at: i64,
+    ) -> Option<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('c' | 'd') if ctrl => return Some(Action::Quit),
@@ -3014,6 +3038,46 @@ impl App {
             };
         }
         let cursor = &mut self.approval;
+        if shown.custom_input != cursor.custom.is_some() {
+            return None;
+        }
+        if let Some(text) = &mut cursor.custom {
+            if guarded {
+                return None;
+            }
+            match key.code {
+                KeyCode::PageUp => cursor.scroll = cursor.scroll.saturating_sub(self.approval_page),
+                KeyCode::PageDown => {
+                    cursor.scroll =
+                        (cursor.scroll + self.approval_page).min(self.approval_max_scroll)
+                }
+                KeyCode::Backspace | KeyCode::Up if text.is_empty() => {
+                    cursor.custom = None;
+                    self.guard_until = self.guard_until.max(at + ANSWER_GUARD_MS);
+                }
+                KeyCode::Enter if !text.trim().is_empty() => {
+                    self.answered.insert(request_id.clone());
+                    return Some(Action::Resolve {
+                        request_id,
+                        decision: ApprovalDecision::DeclineWithFeedback,
+                        feedback: Some(text.clone()),
+                    });
+                }
+                KeyCode::Backspace => {
+                    text.pop();
+                }
+                KeyCode::Char(c)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                        && !c.is_control() =>
+                {
+                    text.push(c)
+                }
+                _ => {}
+            }
+            return None;
+        }
         let decision = match key.code {
             KeyCode::Up => {
                 cursor.selected = cursor.selected.saturating_sub(1);
@@ -3037,10 +3101,19 @@ impl App {
             }
             _ => None,
         }?;
+        if decision == ApprovalDecision::DeclineWithFeedback {
+            cursor.selected = options
+                .iter()
+                .position(|option| *option == decision)
+                .unwrap();
+            cursor.custom = Some(String::new());
+            return None;
+        }
         self.answered.insert(request_id.clone());
         Some(Action::Resolve {
             request_id,
             decision,
+            feedback: None,
         })
     }
 
@@ -3180,7 +3253,7 @@ impl App {
     ) -> Option<LogicalLine> {
         let dim = theme::secondary();
         match resolution {
-            ApprovalResolution::Answered { decision } => {
+            ApprovalResolution::Answered { decision, .. } => {
                 let label = approval::decision_label(*decision, tool);
                 let text = match client {
                     Some(name) if name == self.client_name => format!("You chose: {label}"),
@@ -3294,7 +3367,16 @@ impl App {
                 let new = if !done && item.id().is_some_and(|id| waiting.contains(&id)) {
                     cells::waiting(item, self.details, cwd, width)
                 } else {
-                    cells::item(item, done, self.details, cwd, width)
+                    cells::item(
+                        item,
+                        done,
+                        self.details,
+                        cwd,
+                        width,
+                        item.id()
+                            .and_then(|id| self.snapshot.approval_feedback.get(id))
+                            .map(String::as_str),
+                    )
                 };
                 let part = (Part::At(at), self.kind(at));
                 push_part(&mut rows, &mut parts, &mut tail, part, new);

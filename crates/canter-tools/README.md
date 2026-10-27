@@ -31,9 +31,10 @@
    交循环/客户端处理。请求包含完整参数，write/edit 另加顶层 `diff`；文件路径解析后
    与模型提供的不同时另带 `resolvedPath`，客户端应显示这个实际目标。shell 保留完整命令。
    先由循环/服务端核对待处理请求归属、重复回答，再把回答交给
-   `gate.resolve(&call, decision)`。它返回 `Execute(permit)` 或 `Deny { cancel_turn }`；
+   `gate.resolve(&call, decision, feedback)`。它返回 `Execute(permit)` 或 `Deny { cancel_turn, feedback }`；
    未知回答返回 `invalid_decision` 错误，符合协议 README。
-   拒绝时用 `call.declined_output()` 得到 `Declined` 项目和模型文字，循环另根据
+   服务端先校验 decision 在可用选项内、feedback 只随 DeclineWithFeedback 提供且非空白。
+   拒绝时用 `call.declined_output(feedback.as_deref())` 得到 `Declined` 项目和模型文字，循环另根据
    `cancel_turn` 决定是否停止一轮。
 5. 得到允许后，调用 `tools.execute(permit, &cancel, &mut on_output).await`。
    许可只能由闸门创建、不能复制，借用这一个 call；调用期间保留 call。
@@ -117,6 +118,8 @@ shell 回收后管道最多再读取 2000 ms；取消和原始超时在此期间
 | allowAll | 执行 | 执行 | 执行 |
 
 Accept 仅允许当前调用；AcceptForSession 记住本会话的这个工具；Decline 拒绝；
+DeclineWithFeedback 拒绝并将原样说明交回模型，结果为 `Tool call declined. The user says: <说明>`；
+需要批准时按 Accept、AcceptForSession、Decline、DeclineWithFeedback、Cancel 的顺序提供选项。
 Cancel 拒绝并向调用方返回 `cancel_turn: true`，gate 本身不取消一轮、不发事件。
 风险档来自内置 Tool 定义，不接受模型自报的风险档。
 对 shell 的会话授权等于放行这个会话的所有命令；改回 alwaysAsk 后已有授权仍有效。

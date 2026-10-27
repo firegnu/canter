@@ -1087,17 +1087,19 @@ impl<C: Connector> Chat<C> {
                 });
             }
             action @ (Action::Resolve { .. } | Action::ResolveUserInput { .. }) => {
-                let (request_id, decision, answer) = match action {
+                let (request_id, decision, feedback, answer) = match action {
                     Action::Resolve {
                         request_id,
                         decision,
-                    } => (request_id, Some(decision), None),
+                        feedback,
+                    } => (request_id, Some(decision), feedback, None),
                     Action::ResolveUserInput { request_id, answer } => {
-                        (request_id, None, Some(answer))
+                        (request_id, None, None, Some(answer))
                     }
                     _ => unreachable!(),
                 };
                 let params = RequestResolveParams {
+                    feedback,
                     decision,
                     answer,
                     client_name: self.client_name.clone(),

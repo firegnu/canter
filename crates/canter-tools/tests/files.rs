@@ -304,7 +304,7 @@ async fn lifecycle_items_preserve_paths_diffs_and_failure_context() {
         matches!(&started, Item::FileChange {changes, status:ItemStatus::InProgress, ..} if changes[0].path == "new" && changes[0].kind == PatchChangeKind::Add && changes[0].diff.contains("+created"))
     );
     assert!(
-        matches!(call.declined_output().item, Item::FileChange {changes, status:ItemStatus::Declined, ..} if changes[0].diff.contains("+created"))
+        matches!(call.declined_output(None).item, Item::FileChange {changes, status:ItemStatus::Declined, ..} if changes[0].diff.contains("+created"))
     );
     std::fs::write(dir.path().join("new"), "external edit").unwrap();
     let result = tools.execute(allow(&call), &cancel, &mut |_| {}).await;
@@ -351,7 +351,7 @@ async fn lifecycle_items_preserve_paths_diffs_and_failure_context() {
             } => assert_eq!(cwd, dir.path().to_string_lossy()),
             _ => panic!("incorrect started item"),
         }
-        assert_eq!(call.declined_output().outcome, ToolOutcome::Declined);
+        assert_eq!(call.declined_output(None).outcome, ToolOutcome::Declined);
     }
 }
 

@@ -351,6 +351,7 @@ async fn approve(session: &Session, request: &PendingRequest) {
         .resolve(
             &request.id,
             RequestResolveParams {
+                feedback: None,
                 decision: Some(ApprovalDecision::AcceptForSession),
                 answer: None,
                 client_name: "test".into(),

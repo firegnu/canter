@@ -48,6 +48,10 @@ Length/Other 发出可见 warning，并为没有执行的调用补结果。工�
 request.resolved(cancelled)，再记录“被打断，没有执行”的工具结果和 failed 项目；
 已收到拒绝或“拒绝并停下”的回答时，工具结果仍是 declined，后者同时停止本轮；
 收不到回答的取消才记为被打断。打断（包括压缩）以 interrupted 收尾，不设置轮错误或发 error。
+`declineWithFeedback` 同样不执行工具、保留 declined 卡片、继续本轮；模型收到
+`Tool call declined. The user says: <原样说明>`，不翻译、不截断说明。
+缺失或空白说明、其它 decision 携带说明、未提供的选项均报 `invalid_decision`，仍等待原请求。
+说明随 `request.resolved` 存盘，并归并到快照的 `approvalFeedback`，重开后仍可显示。
 完整思考内容写入模型历史，显示事件不是模型历史的替代品。
 
 同会话的命令、批准回答和落盘更新串行；耗时的模型/工具等待不持会话锁。

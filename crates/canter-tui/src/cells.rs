@@ -139,8 +139,15 @@ pub(crate) fn agent_message(text: &str, width: u16) -> Vec<LogicalLine> {
 /// Rows for an item; `finished` picks its final form over the in-progress one.
 /// With `details` (Ctrl+O), nothing is folded: whole thinking, all output, all
 /// of a diff.
-pub(crate) fn item(item: &Item, finished: bool, details: bool, cwd: &str, width: u16) -> Vec<Row> {
-    match item {
+pub(crate) fn item(
+    item: &Item,
+    finished: bool,
+    details: bool,
+    cwd: &str,
+    width: u16,
+    feedback: Option<&str>,
+) -> Vec<Row> {
+    let mut rows = match item {
         Item::UserMessage { content, .. } => sent(content, None, width),
         Item::AgentMessage { text, .. } => wrap_all(&agent_message(text, width), width),
         Item::Reasoning {
@@ -237,7 +244,39 @@ pub(crate) fn item(item: &Item, finished: bool, details: bool, cwd: &str, width:
             )
         }
         Item::Unknown => Vec::new(),
+    };
+    if let Some(feedback) = feedback
+        && matches!(
+            item,
+            Item::CommandExecution {
+                status: ItemStatus::Declined,
+                ..
+            } | Item::FileChange {
+                status: ItemStatus::Declined,
+                ..
+            } | Item::FileRead {
+                status: ItemStatus::Declined,
+                ..
+            } | Item::WebFetch {
+                status: ItemStatus::Declined,
+                ..
+            } | Item::McpToolCall {
+                status: ItemStatus::Declined,
+                ..
+            }
+        )
+    {
+        for line in sanitize(feedback).lines() {
+            rows.extend(wrap_rows(
+                &LogicalLine::new(
+                    vec![Span::raw("    ")],
+                    vec![Span::styled(line.to_owned(), theme::secondary())],
+                ),
+                width,
+            ));
+        }
     }
+    rows
 }
 
 /// What a turn leaves behind once it has ended: `─ Worked for 12s ─`, or
@@ -498,7 +537,7 @@ pub(crate) fn waiting(item: &Item, details: bool, cwd: &str, width: u16) -> Vec<
                 card_row(right_aligned(header, mark(), usize::from(width)), links)
             })
             .collect(),
-        _ => self::item(item, false, details, cwd, width),
+        _ => self::item(item, false, details, cwd, width, None),
     }
 }
 

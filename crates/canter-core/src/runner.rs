@@ -588,11 +588,14 @@ async fn execute(
                         outcome: ToolOutcome::Cancelled,
                     }
                 }
-                Some(PermissionCheck::Deny { cancel_turn }) => {
+                Some(PermissionCheck::Deny {
+                    cancel_turn,
+                    feedback,
+                }) => {
                     if cancel_turn {
                         cancel.cancel();
                     }
-                    let mut output = prepared.declined_output();
+                    let mut output = prepared.declined_output(feedback.as_deref());
                     if review {
                         output.text = "review is read-only".into();
                     }
@@ -730,7 +733,7 @@ async fn permission<'a>(
         },
         decision = &mut receiver => decision.map_err(|_| CoreError::internal())?,
     };
-    let ApprovalResolution::Answered { decision } = resolution else {
+    let ApprovalResolution::Answered { decision, feedback } = resolution else {
         return Err(CoreError::internal());
     };
     shared
@@ -738,7 +741,7 @@ async fn permission<'a>(
         .lock()
         .await
         .gate
-        .resolve(call, decision)
+        .resolve(call, decision, feedback)
         .map(Some)
         .map_err(|_| CoreError::new(ErrorCode::InvalidDecision, "invalid approval decision"))
 }
