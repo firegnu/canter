@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span};
 
 use crate::app::format_elapsed;
 use crate::diff::Diff;
+use crate::highlight;
 use crate::links::{self, Target};
 use crate::markdown;
 use crate::text::{
@@ -31,7 +32,10 @@ const MCP_HEAD: usize = 3;
 /// Output lines one item shows at most with details (Ctrl+O): the first
 /// and last half of them.
 const DETAILS_LINES: usize = 500;
-const GUTTER: &str = "    │ ";
+const GUTTER: &str = "    ┃ ";
+/// Rows a command takes at most in a folded card, counting the rows
+/// wrapping adds.
+const COMMAND_ROWS: usize = 5;
 /// Where a card's title text starts: after `  ● Run `.
 const TITLE_INDENT: &str = "        ";
 /// Diff lines a changed file shows in the history; the approval box shows all.
@@ -616,8 +620,17 @@ fn command_card(
     } else {
         (Fold::Tail(FINISHED_TAIL), dim)
     };
-    rows.extend(output_rows(output, fold, style, width));
+    rows.extend(output_rows(output, fold, style, bar(failed), width));
     rows
+}
+
+/// The bar before a card's output: red when the card failed, else grey.
+fn bar(failed: bool) -> Style {
+    if failed {
+        theme::failure()
+    } else {
+        theme::secondary()
+    }
 }
 
 /// A command on one row: its first line, then ` …` when it has more.
@@ -657,12 +670,13 @@ fn mcp_call(
     } else {
         Fold::Head(MCP_HEAD)
     };
-    let style = if status == ItemStatus::Failed {
+    let failed = status == ItemStatus::Failed;
+    let style = if failed {
         Style::new()
     } else {
         theme::secondary()
     };
-    rows.extend(output_rows(result, fold, style, width));
+    rows.extend(output_rows(result, fold, style, bar(failed), width));
     rows
 }
 
@@ -702,12 +716,9 @@ fn web_fetch(url: &str, result: &str, status: ItemStatus, details: bool, width: 
     } else {
         Fold::Head(FINISHED_TAIL)
     };
-    let style = if status == ItemStatus::Failed {
-        theme::failure()
-    } else {
-        dim
-    };
-    rows.extend(output_rows(result, fold, style, width));
+    let failed = status == ItemStatus::Failed;
+    let style = if failed { theme::failure() } else { dim };
+    rows.extend(output_rows(result, fold, style, bar(failed), width));
     rows
 }
 
@@ -733,8 +744,8 @@ enum Fold {
     Details,
 }
 
-/// Output rows, each after `    │ ` and cut to `width`, in `style`.
-fn output_rows(output: &str, fold: Fold, style: Style, width: u16) -> Vec<Row> {
+/// Output rows, each after `    ┃ ` in `bar` and cut to `width`, in `style`.
+fn output_rows(output: &str, fold: Fold, style: Style, bar: Style, width: u16) -> Vec<Row> {
     let dim = theme::secondary();
     let output = sanitize(output);
     let mut lines: Vec<&str> = output.split('\n').collect();
@@ -746,7 +757,7 @@ fn output_rows(output: &str, fold: Fold, style: Style, width: u16) -> Vec<Row> {
     let row = |source: usize| {
         let spans = truncate(
             vec![
-                Span::styled(GUTTER, dim),
+                Span::styled(GUTTER, bar),
                 Span::styled(lines[source].to_owned(), style),
             ],
             usize::from(width),
@@ -758,7 +769,7 @@ fn output_rows(output: &str, fold: Fold, style: Style, width: u16) -> Vec<Row> {
     };
     let note = |text: String| {
         Row::marks(Line::from(vec![
-            Span::styled(GUTTER, dim),
+            Span::styled(GUTTER, bar),
             Span::styled(text, dim),
         ]))
     };
@@ -788,10 +799,11 @@ fn output_rows(output: &str, fold: Fold, style: Style, width: u16) -> Vec<Row> {
     rows
 }
 
-/// `● Run <first line of the command>` with `right` flush with the right
-/// edge; with `whole`, the command's other lines follow, each on its row
-/// under the first. Control characters in the command show as escapes, as in
-/// the approval box.
+/// `● Run <command>` with `right` flush with the right edge of the first
+/// row. The command is coloured as Bash, as in the approval box, and each of
+/// its lines wraps by words under where it starts. Unless `whole`, it takes
+/// at most `COMMAND_ROWS` rows, then a row saying how many more there are.
+/// Control characters in the command show as escapes.
 fn command_title(
     command: &str,
     bullet: Span<'static>,
@@ -800,28 +812,58 @@ fn command_title(
     width: u16,
 ) -> Vec<Row> {
     let clean = visible(command);
-    let mut lines = clean.lines();
-    let mut shown = lines.next().unwrap_or_default().to_owned();
-    let rest: Vec<&str> = lines.collect();
-    if !whole && !rest.is_empty() {
-        shown.push_str(" …");
+    let mut lines: Vec<&str> = clean.lines().collect();
+    if lines.is_empty() {
+        lines.push("");
     }
-    let mut rows = vec![title(
+    let bodies = highlight::bash(&lines).unwrap_or_else(|| {
+        lines
+            .iter()
+            .map(|line| vec![Span::raw((*line).to_owned())])
+            .collect()
+    });
+    // The first row leaves room for `right` where `right_aligned` puts it.
+    let right_width = spans_width(&right);
+    let reserve = if right.is_empty() || usize::from(width) < right_width + 12 {
+        0
+    } else {
+        right_width + 2
+    };
+    let hang = || vec![Span::raw(TITLE_INDENT)];
+    let mut rows = Vec::new();
+    for (index, body) in bodies.into_iter().enumerate() {
+        let indent = if index == 0 {
+            vec![Span::raw(" ".repeat(TITLE_INDENT.len() + reserve))]
+        } else {
+            hang()
+        };
+        let line = LogicalLine {
+            indent,
+            hang: hang(),
+            body,
+            marker: 0,
+            links: Vec::new(),
+        };
+        rows.extend(wrap_rows(&line, width));
+    }
+    // The mark and verb in place of the first row's indent, the status after it.
+    let mut left = vec![
+        Span::raw("  "),
         bullet,
-        "Run ",
-        vec![Span::raw(shown)],
-        right,
-        None,
-        width,
-    )];
-    if whole {
-        rows.extend(rest.iter().map(|line| {
-            let spans = truncate(
-                vec![Span::raw(TITLE_INDENT), Span::raw((*line).to_owned())],
-                usize::from(width),
-            );
-            Row::text_from(Line::from(spans), TITLE_INDENT.len())
-        }));
+        Span::styled("Run ", Style::new().bold()),
+    ];
+    left.extend(rows[0].line.spans.drain(1..));
+    rows[0] = card_row(right_aligned(left, right, usize::from(width)), Vec::new());
+    if !whole && rows.len() > COMMAND_ROWS {
+        let hidden = rows.len() - COMMAND_ROWS;
+        rows.truncate(COMMAND_ROWS);
+        rows.push(Row::marks(Line::from(vec![
+            Span::raw(TITLE_INDENT),
+            Span::styled(
+                format!("… {hidden} more lines · Ctrl+O"),
+                theme::secondary(),
+            ),
+        ])));
     }
     rows
 }

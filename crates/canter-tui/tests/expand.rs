@@ -365,12 +365,12 @@ fn ctrl_o_shows_long_output_and_diffs_in_full_and_folds_them_again() {
     let shown = screen.conversation();
     for n in 1..=20 {
         assert!(
-            shown.iter().any(|row| row == &format!("    │ done {n}")),
+            shown.iter().any(|row| row == &format!("    ┃ done {n}")),
             "done {n}: {shown:#?}"
         );
     }
     for n in 1..=10 {
-        assert!(shown.iter().any(|row| row == &format!("    │ busy {n}")));
+        assert!(shown.iter().any(|row| row == &format!("    ┃ busy {n}")));
         assert!(shown.iter().any(|row| row.ends_with(&format!("+ new {n}"))));
         assert!(shown.iter().any(|row| row.ends_with(&format!("- old {n}"))));
     }
@@ -433,14 +433,14 @@ fn ctrl_o_keeps_the_top_item_in_place() {
     }
     screen.wheel(MouseEventKind::ScrollDown);
     let conversation = screen.conversation();
-    assert!(conversation[0].starts_with("    │"), "{conversation:#?}");
+    assert!(conversation[0].starts_with("    ┃"), "{conversation:#?}");
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
     assert!(
         conversation[0].starts_with("  ● Run cargo test"),
         "{conversation:#?}"
     );
-    assert_eq!(conversation[1], "    │ out 1");
+    assert_eq!(conversation[1], "    ┃ out 1");
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
     assert!(
@@ -462,7 +462,7 @@ fn ctrl_o_works_with_the_approval_box_open() {
         .position(|row| row.starts_with('╭'))
         .expect("the approval box");
     let approval_box = lines[box_top..].to_vec();
-    assert!(!lines[..box_top].iter().any(|row| row == "    │ out 1"));
+    assert!(!lines[..box_top].iter().any(|row| row == "    ┃ out 1"));
 
     assert_eq!(screen.ctrl_o(), None);
     let lines = screen.lines();
@@ -474,7 +474,7 @@ fn ctrl_o_works_with_the_approval_box_open() {
     assert!(
         lines[..box_top_after]
             .iter()
-            .any(|row| row == "    │ out 1")
+            .any(|row| row == "    ┃ out 1")
     );
     // The status line, cut at this width.
     assert!(
@@ -484,6 +484,6 @@ fn ctrl_o_works_with_the_approval_box_open() {
 
     assert_eq!(screen.ctrl_o(), None);
     let lines = screen.lines();
-    assert!(!lines.iter().any(|row| row == "    │ out 1"));
+    assert!(!lines.iter().any(|row| row == "    ┃ out 1"));
     assert_eq!(lines[box_top..], approval_box[..]);
 }
