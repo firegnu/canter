@@ -77,3 +77,56 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+**做了什么**
+
+- 加 `/theme`（`Choose the code colour theme`）：输入框上方的选择框，列表依次是 `terminal`、`auto · catppuccin-mocha/latte`、two-face 自带的 32 个（名字同 Codex 那张表）、`themes/*.tmTheme`（`CANTER_HOME` 或 `~/.canter` 下，按名字排，标 `(custom)`；和上面重名的不列；读不了的标 `(unreadable)`）。正在用的标 `(current)`，打开时光标在它上面。宽窗口（预览半宽至少 44 列、列表至少 40 列）左右排，否则预览在列表下面。窄的预览是 4 行 diff，宽的是 4 行 diff 加 3 行 Rust 代码块，都用对话里同一套画法。窗口矮时照 P2-63：列表最多 8 行、跟着光标滚，剩不到 3 行收起预览。16 色和 `NO_COLOR` 时标题下面写 `This terminal shows 16 colours; only terminal applies`。
+- 上下移动实时换：`highlight.rs` 里记着当前配色（按线程，和 `theme::current` 一样）。代码块和 diff 的颜色缓存按配色分开；对话历史行原来在宽度变了、Ctrl+O 时整份重画，现在换了配色也整份重画。Esc、Ctrl+C、Ctrl+D 还原成打开前的配色；打开别的选择框、`/statusline`、弹框时也照 Esc 关掉。
+- 配色只取字色：`ansi`、`base16` 那种 alpha 0 的照调色板号画（前 16 个走原来的 `theme::palette`，浅色底黄字的处理不变）；alpha 1 用默认色；别的真彩终端照原色，256 色终端换成最近的 256 色（`theme::code_rgb`，用原有的 `nearest_256`）。不用背景、粗体、斜体、下划线。
+- `tui.json`：读写抽到新的 `src/tui_json.rs`。`/theme` 存 `theme`，`/statusline` 存 `statusLine`，各自只换自己那一项、别的项照留（以前 `/statusline` 保存是整个文件重写）。打开终端时读一次；名字找不到（内置里没有、文件没了或读不了）照 `terminal` 画，状态行提示一次 `! Theme <名字> not found; using terminal`，不改 `tui.json`。`/new`、`/resume` 换屏时沿用当前配色，不重读。
+- 依赖：根目录 `Cargo.toml` 里 syntect 加 `plist-load`（主控 10-27 同意），用来读 `.tmTheme`。Cargo.lock 只多出 `plist 1.10.1`、`quick-xml 0.42.0`、`time-macros 0.2.32`，已有包的版本都没动。`THIRD-PARTY-NOTICES.md` 补了 plist、quick-xml，以及 time、time-core、time-macros、deranged、num-conv、powerfmt 的许可证声明。后面五个包原来就在 Cargo.lock 里，但以前没编进 canter（临时退回那一行，用 `cargo tree --locked` 查过），这次随 plist 编进来，所以一起列上；time-macros 只在编译时跑。
+- README：加「`/theme`」一节；`/statusline` 的保存说明、「代码块和命令的语法色」、颜色表的「语法色」一行跟着改。帮助弹框的命令一节由 `COMMANDS` 自动带出 `/theme`。
+
+**验证了什么**
+
+- 新加 `tests/theme_picker.rs` 7 个测试，先写，在原来的代码上 7 个都失败（原因都是没有 `/theme`，对话里的代码块找得到）：
+  - 列表顺序和 32 个名字；
+  - 上下移动对话里代码块的颜色跟着换、Esc 还原、Enter 只往 `tui.json` 加 `theme`、别的项不变，之后再存 `/statusline` 时 `theme` 还在；
+  - 重开终端画出存的配色、光标在它上面；
+  - `auto` 在深色、不知道、浅色底下分别和 mocha、mocha、latte 一样，存的是 `auto`；
+  - 自定义文件列出来、和内置重名的不重复列、坏文件标 `unreadable`，移上去颜色不变、Enter 不存；
+  - `tui.json` 里的名字找不到（没有这个名字、文件坏了）时退回 `terminal`、提示、`tui.json` 不变；
+  - 16 色只照 `terminal` 画、能存。
+- 现有画面测试和 `tests/expected` 都没改就通过。只有 `help_popup.rs` 里那份手抄的命令清单补了一行 `/theme`（数组长度 20 → 21），这是这件要加的。
+- 全套（带编译目录 `.target/p2-77-theme`）：`cargo nextest run --all-targets` 716 个全过，`cargo test --doc --workspace` 通过，`cargo clippy --all-targets -- -D warnings` 无警告，`cargo fmt --check` 通过。
+- 另外临时写了一个只打印画面的测试，看了 120×40、80×40、80×14、120×12 和 16 色几种样子，看完删了，没留在代码里。
+
+**拿主意的地方**
+
+- 主控 10-27 决定（第一轮停下来问的）：开 syntect 的 `plist-load`，允许改根目录 `Cargo.toml` 那一行，Cargo.lock 跟着变；新带进来的包补许可证声明；已有包不许升级（实际没有升级）。另外同意了我列的 5 条：
+  1. `/statusline` 保存改成只换自己那一项，并测存了配色再存状态栏后 `theme` 还在；
+  2. 坏的 `.tmTheme` 标 `unreadable`，移上去不换配色，Enter 不存也不关；
+  3. 只用前景色，不用粗体（Codex 保留粗体）；
+  4. 自定义的排在内置 32 个后面、按名字排（Codex 是混在一起按字母排）；
+  5. 256 色换算、宽窄排法、窗口矮不另加测试。
+- 16 色那句提示放在标题下面一行（照 P2-63 选择框顶上开关的位置理解「最上面」）。
+- 宽窗口时，左右中间画一道暗色 `│`，照示意图；Codex 是空两格。
+- 列表最多 8 行（Codex 弹出列表的高度），宽排时预览也是 8 行，正好对齐。
+- 对话历史换配色就整份重画，和改窗口宽度、Ctrl+O 同一个办法。只在 `/theme` 里移动时发生，平时不多算。
+- `tui.json` 里的名字带 `/`、`\` 或以 `.` 开头的不当文件名找，只读 `themes/` 目录里的文件。
+- 读不了的 `tui.json` 照旧：状态栏用默认、提示；这时配色用 `terminal`，不另提示。
+
+**没做的事**
+
+- 没给 256 色换算、宽窄排法、窗口矮写测试（主控定的）。
+- 没改 `docs/DESIGN.md`（设计没变）。开 `plist-load` 只是依赖改动，写在这里。
+- 选择框不支持鼠标点选、不支持打字过滤（Codex 能打字过滤，任务没要）。
+
+**踩过的坑**
+
+- syntect 读 `.tmTheme` 要 `plist-load`，workspace 没开，按任务文件停下来问了主控。
+- 起初以为高亮缓存是唯一的渲染缓存，结果对话历史行另有一层缓存，移动时已经写完的回答不换色。改成换了配色就重画历史。
+- `App` 要能跨线程（`tokio::spawn`），存自定义配色用 `Rc` 编不过，换成 `Arc`。
+- 用 perl 改 app.rs 时拿 `|` 当分隔符，和 `||` 撞了，把一段插到了文件开头，发现后删掉改用 Edit。还有一次命令末尾误带了一个读标准输入的 `python3 -`，卡住后停掉，没执行任何东西。

@@ -35,6 +35,6 @@ ignore = "=0.4.33"
 nix = { version = "=0.31.3", features = ["signal", "process"] }
 chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
 terminal-colorsaurus = { version = "=1.0.3", default-features = false }
-syntect = { version = "=5.3.0", default-features = false, features = ["parsing", "regex-onig"] }
+syntect = { version = "=5.3.0", default-features = false, features = ["parsing", "regex-onig", "plist-load"] }
 two-face = { version = "=0.5.2", default-features = false, features = ["syntect-onig"] }
 arboard = { version = "=3.7.0", default-features = false }

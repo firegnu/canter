@@ -164,6 +164,15 @@ pub(crate) const COMMANDS: &[Command] = &[
             Ok(None)
         },
     },
+    Command {
+        name: "theme",
+        about: "Choose the code colour theme",
+        takes_args: false,
+        run: |app, _| {
+            app.open_theme_picker();
+            Ok(None)
+        },
+    },
 ];
 
 /// `/skills`: global and project skills, each a section; every skill's

@@ -136,8 +136,9 @@ Esc 照旧打断本轮，300 毫秒的按键保护照旧。拒绝说明随工具
   Shift+Tab 才切换；没勾或挪到第二行时，Shift+Tab 照样切换，上面的状态行短暂显示 `Mode: 新模式`，约 2 秒（同配了命令时）。
 
 **保存**：Enter 存到 `~/.canter/tui.json`（设了 `CANTER_HOME` 时是该目录下的 `tui.json`），权限 `0600`，
-目录不在时建一个（`0700`）；先写同目录下的临时文件再改名，不留写了一半的文件。文件里只有状态栏的项和顺序
-（含分行线的位置）和下面「定制状态栏」里的脚本开关；`config.json` 不写。
+目录不在时建一个（`0700`）；先写同目录下的临时文件再改名，不留写了一半的文件。`statusLine` 里是状态栏的项和顺序
+（含分行线的位置）和下面「定制状态栏」里的脚本开关；同一个文件里还有 `/theme` 存的 `theme`（见「`/theme`」），
+保存时只换 `statusLine`，别的项照留；`config.json` 不写。
 保存后这个终端的状态栏立刻换；别的开着的终端下次打开 canter 才换，不监视文件。`/new`、`/resume` 换会话时沿用这个终端当前的设置，不重读。
 存不了时对话里提示一行 `Could not save the status line: …`，这个终端照样换。
 
@@ -558,12 +559,58 @@ Enter 在命令名没打完时只补全、不执行，打完整了才执行。Es
 - 已知限制：终端设成把「东亚模糊宽度」字符（`→`、`…`、`①`，以及框线本身）画成 2 列时会错位；
   个别 emoji 在各终端里宽度不一，也可能错一格。只有表头、没有数据行的表格在改成记录时不显示。
 
+## `/theme`
+
+`/theme` 在输入框上方打开一个选择框，选代码块和 diff 里代码的语法配色（照 Codex `rust-v0.163.0` 的 `/theme`）。
+窗口够宽（预览半宽至少 44 列、列表至少 40 列，即大约 90 列起）时左边列表、右边预览，否则预览放在列表下面：
+
+```
+ Theme · code and diff colours
+   terminal                 (current)                      │  12   fn greet(name: &str) -> String {
+   auto · catppuccin-mocha                                 │  13 -     format!("Hello, {}!", name)
+   1337                                                    │  13 +     format!("Hello, {name}!")
+ › ansi                                                    │  14   }
+   base16                                                  │
+   base16-256                                              │     // Greet everyone
+   base16-eighties-dark                                    │     let names = ["Ada", "Linus"];
+   ↓ 29 more                                               │     let count = names.len() + 1;
+ ↑/↓ preview · Enter save · Esc cancel
+```
+
+- **列表**：`terminal`、`auto`（后面写它现在代表 `catppuccin-mocha` 还是 `catppuccin-latte`）、two-face 自带的 32 个
+  （名字同 Codex：`1337`、`ansi`、`base16`、`base16-256`、`base16-eighties-dark`、`base16-mocha-dark`、`base16-ocean-dark`、
+  `base16-ocean-light`、`catppuccin-frappe`、`catppuccin-latte`、`catppuccin-macchiato`、`catppuccin-mocha`、`coldark-cold`、
+  `coldark-dark`、`dark-neon`、`dracula`、`github`、`gruvbox-dark`、`gruvbox-light`、`inspired-github`、`monokai-extended`、
+  `monokai-extended-bright`、`monokai-extended-light`、`monokai-extended-origin`、`nord`、`one-half-dark`、`one-half-light`、
+  `solarized-dark`、`solarized-light`、`sublime-snazzy`、`two-dark`、`zenburn`），最后是 `~/.canter/themes/` 里的 `.tmTheme` 文件
+  （设了 `CANTER_HOME` 时是该目录下的 `themes/`），名字是文件名去掉 `.tmTheme`，按名字排（不分大小写），后面标 `(custom)`；
+  和上面重名的不列（照 Codex 只列内置的）；读不了的标红色 `(unreadable)`。正在用的标 `(current)`，打开时光标在它上面。
+- **`terminal`**（默认）：two-face 的 `ansi`，只用终端自己的 16 色，见下面「代码块和命令的语法色」。什么都没配时就是它，和以前一样。
+- **`auto`**：照 Codex，终端底色是浅的用 `catppuccin-latte`，深的或不知道深浅用 `catppuccin-mocha`；深浅的判断见「颜色」（含 `CANTER_THEME`）。
+- **按键**：↑↓ 选，选到哪个，预览和对话里看得到的代码块、diff、批准框里的命令马上换成那个配色；选到读不了的文件时配色不变。
+  Enter 保存并关掉（读不了的文件按 Enter 不存也不关）；Esc、Ctrl+C 或 Ctrl+D 不保存关掉，配色回到打开前。
+  其余规矩同 `/statusline`（画到屏幕上之前按的键不算、刚关掉批准框时 Enter 不算、PgUp/PgDn 照旧翻对话）。
+- **只换代码的字色**：配色自带的背景、粗体、斜体、下划线都不用；界面别的颜色、diff 加删行和用户消息的底色照旧。
+- **颜色深度**：真彩终端照配色原色；256 色终端换成最接近的 256 色（不用会随终端配色变的前 16 个）；16 色终端和
+  `NO_COLOR` 时只有 `terminal` 起作用，选择框标题下面写一行 `This terminal shows 16 colours; only terminal applies`，
+  选别的照样能存，但照 `terminal` 画。
+- **窗口矮**：同 `/statusline`：对话区先让地方；列表最多 8 行，放不下时跟着光标滚、写 `↑ N more` / `↓ N more`；
+  留给列表的不到 3 行时收起预览（左右排时预览从下面截短）。
+
+**保存**：Enter 把名字存进 `tui.json` 的 `theme`（`{ "theme": "dracula" }`，文件位置、权限和写法同 `/statusline`），
+别的项不动；这个终端立刻换，别的开着的终端下次打开才换；`/new`、`/resume` 换会话时沿用当前的，不重读。存不了时对话里提示
+`Could not save the theme: …`，这个终端照样换。
+
+**读**：打开终端界面时读一次。没有 `theme` 时用 `terminal`。名字找不到（内置里没有、文件没了或读不了）时照 `terminal` 画，
+上面的状态行提示一次 `! Theme <名字> not found; using terminal`（约 5 秒），`tui.json` 不改。`.tmTheme` 用 syntect 的
+`plist-load` 读；名字里有 `/`、`\` 或以 `.` 开头的不当文件名，只读 `themes/` 目录里的文件。
+
 ## 代码块和命令的语法色
 
 模型回答里的围栏代码块按语言上语法色（`src/highlight.rs`，syntect 5.3.0 加 two-face 0.5.2 的语法定义，正则用 onig）：
 
-- 配色是 two-face 的 `ansi`：只用终端调色板的 16 色，普通文字是终端默认色，跟着终端配色走，
-  不用真彩。
+- 默认配色 `terminal` 是 two-face 的 `ansi`：只用终端调色板的 16 色，普通文字是终端默认色，跟着终端配色走，
+  不用真彩。用 `/theme` 可以换成别的配色（见上一节），下面黄字那条只管调色板里的颜色。
 - 认语言只看围栏后面写的第一个词（```` ```rust ````、```` ```ts ````），按 syntect 的扩展名和语法名找，
   不分大小写；另认 `golang`、`shell`、`python3`、`csharp`。没写语言的块，第一行是 `#!` 时按它认
   （`#!/bin/bash`、`#!/usr/bin/env python3`）。都没有、认不出或是纯文本，整块青色。不按内容去猜。
@@ -573,6 +620,7 @@ Enter 在命令名没打完时只补全、不执行，打完整了才执行。Es
   加粗抢眼）；深色底和不知道深浅时照旧黄色。`ansi` 配色只用调色板 1～6 号，没有白、亮白这类浅色。
 - 样子不变：不显示围栏和语言名，块在正文里再缩 2 列，长行折行；行内代码照旧青色。
 - 流式时每帧从头渲染，但同一个块已经写完的行记着颜色和语法分析到哪里，只算新来的行。
+  记着的颜色按配色分开；换了配色，对话里已经画好的部分整个重画一遍（同改窗口宽度、Ctrl+O）。
 
 批准框里要跑的 shell 命令整条按 Bash 上色，规则同上（上限、`NO_COLOR`）。只改颜色：照旧先把控制字符
 显示成转义再上色，折行和 `Directory:` 那行不变。命令卡片里的命令（历史里的、正在跑的、等批准的）也这样上色。
@@ -594,7 +642,7 @@ Enter 在命令名没打完时只补全、不执行，打完整了才执行。Es
 | 思考 | 思考 | 暗 + 斜体 |
 | 旁注 | `/btw` 的回答 | 深灰 + 暗 |
 | 小马 | 欢迎头的小马 | 真彩：栗色身体 `#C0703F`、深棕鬃毛尾巴蹄子 `#5B3220`、眼睛 `#1E1A18`、眼睛高光 `#FFFFFF`、奶油色鼻头 `#F1D2A6`、粉色腮红 `#E89A8C`；256 色用手挑的色号（最接近的会把鬃毛变灰、身体偏红，腮红和身体分不开；不用会随终端配色变的前 16 个）：身体 173、鬃毛 94、眼睛 234、高光 231、鼻头 223、腮红 211，深浅底一样；16 色整匹用青色、眼睛留空；不上颜色时用默认色、眼睛留空 |
-| 语法色 | 代码块、批准框和命令卡片里的命令、能铺底色时 diff 里的代码 | `ansi` 配色给的 16 色之一，普通文字默认色；浅色底上黄和亮黄改成默认色（不加粗） |
+| 语法色 | 代码块、批准框和命令卡片里的命令、能铺底色时 diff 里的代码 | 默认 `terminal`（`ansi` 配色）给的 16 色之一，普通文字默认色；浅色底上黄和亮黄改成默认色（不加粗）。`/theme` 选了别的配色时用那个配色的字色，见「`/theme`」 |
 | diff 加 / 删行 | `+` / `-` 号；有底色时也是行号，没有底色时整行文字 | 绿 / 红 |
 | diff 加 / 删行底色 | 真彩或 256 色、且知道深浅时，整行铺到行尾 | 深色底 `#213A2B` / `#4A221D`，浅色底 `#DAFBE1` / `#FFEBE9`；256 色用色号 22 / 52（深）、194 / 224（浅） |
 | diff 加 / 删行的行号栏 | 同上，行号和 `+` / `-` 号那一栏 | 比整行底色深一点，和改动的词分得开：深色底 `#1B3024` / `#3D1C18`，浅色底 `#C6EFD0` / `#FFD9D5`；256 色浅色底 151 / 181，深色底找不到比 22 / 52 更深的绿 / 红，用整行的 22 / 52 |
