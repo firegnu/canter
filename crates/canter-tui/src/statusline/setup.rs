@@ -84,17 +84,31 @@ impl Setup {
         }
     }
 
-    /// At most `max` rows: the title, the keys, the list, then the preview,
-    /// with blank rows between them. When they do not fit, the blank rows
-    /// go first, then the list shows only the rows around the one selected;
-    /// nothing when not even one list row fits.
+    /// At most `max` rows: the title and the keys, the switch, the entries,
+    /// then the preview. When the entries do not all fit, they show only
+    /// the rows around the one selected, with how many more there are above
+    /// and below; the rest stays. With fewer than three rows left for the
+    /// entries, the preview folds away; nothing when not even one fits.
     pub fn rows(&self, width: u16, max: usize, values: &Values) -> Vec<Line<'static>> {
         let width = usize::from(width);
         let cut = |spans: Vec<Span<'static>>| Line::from(truncate(spans, width));
-        let head = [
+        let mut head = vec![
             cut(vec![Span::styled(TITLE, Style::new().bold())]),
             cut(vec![Span::styled(KEYS, theme::secondary())]),
+            Line::default(),
         ];
+        if self.script.is_some() {
+            let mark = if self.bar.use_script { "[x]" } else { "[ ]" };
+            head.push(cut(row(
+                SWITCH.replacen("[x]", mark, 1),
+                None,
+                self.selected == 0,
+            )));
+            head.push(cut(vec![
+                Span::raw("   "),
+                Span::styled("─".repeat(SWITCH.len()), theme::secondary()),
+            ]));
+        }
         let preview = match &self.script {
             Some(command) if self.bar.use_script => [
                 vec![Span::styled(
@@ -114,79 +128,102 @@ impl Setup {
             }),
         };
         let [first, second] = preview.map(cut);
-        let tail = [
+        let mut tail = vec![
+            Line::default(),
             cut(vec![Span::styled(" Preview", Style::new().bold())]),
             first,
             second,
         ];
-        let (list, selected) = self.list(values);
-        let fixed = head.len() + tail.len();
-        let blank = fixed + list.len() + 2 <= max;
-        let room = max.saturating_sub(fixed).min(list.len());
+        let entries = self.entries(values);
+        let mut room = max.saturating_sub(head.len() + tail.len());
+        if room < entries.len() && room < 3 {
+            tail.clear();
+            room = max.saturating_sub(head.len());
+        }
         if room == 0 {
             return Vec::new();
         }
-        let first = (selected + 1).saturating_sub(room);
-        let mut rows = Vec::from(head);
-        if blank {
-            rows.push(Line::default());
-        }
-        rows.extend(list.into_iter().skip(first).take(room).map(cut));
-        if blank {
-            rows.push(Line::default());
-        }
-        rows.extend(tail);
-        rows
+        // With the switch selected, the entries show from the top.
+        let at = self.selected.saturating_sub(self.switch());
+        head.extend(window(entries, at, room).into_iter().map(cut));
+        head.extend(tail);
+        head
     }
 
-    /// The list's rows, not cut to any width, and the place of the selected
-    /// one among them.
-    fn list(&self, values: &Values) -> (Vec<Vec<Span<'static>>>, usize) {
-        // Marked and bold when selected, like a choice's rows.
-        let row = |label: String, value: Option<&Vec<Span<'static>>>, chosen: bool| {
-            let mut spans = if chosen {
-                vec![
-                    Span::styled(" › ", theme::accent().bold()),
-                    Span::styled(label, Style::new().bold()),
-                ]
-            } else {
-                vec![Span::raw("   "), Span::raw(label)]
-            };
-            spans.extend(value.into_iter().flatten().cloned());
-            spans
-        };
-        let mut rows = Vec::new();
-        let mut selected = 0;
-        if self.script.is_some() {
-            let mark = if self.bar.use_script { "[x]" } else { "[ ]" };
-            rows.push(row(
-                SWITCH.replacen("[x]", mark, 1),
-                None,
-                self.selected == 0,
-            ));
-            rows.push(vec![
-                Span::raw("   "),
-                Span::styled("─".repeat(SWITCH.len()), theme::secondary()),
-            ]);
-        }
-        for (index, entry) in self.bar.entries.iter().enumerate() {
-            let chosen = self.selected == self.switch() + index;
-            if chosen {
-                selected = rows.len();
-            }
-            rows.push(match *entry {
-                Entry::Item(item, shown) => {
-                    let mark = if shown { 'x' } else { ' ' };
-                    let value = values[item as usize].as_ref();
-                    let name = match value {
-                        Some(_) => format!("{:NAME_WIDTH$}", item.name()),
-                        None => item.name().to_owned(),
-                    };
-                    row(format!("[{mark}] {name}"), value, chosen)
+    /// A row for each entry, not cut to any width.
+    fn entries(&self, values: &Values) -> Vec<Vec<Span<'static>>> {
+        let at = self.selected.checked_sub(self.switch());
+        self.bar
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let chosen = at == Some(index);
+                match *entry {
+                    Entry::Item(item, shown) => {
+                        let mark = if shown { 'x' } else { ' ' };
+                        let value = values[item as usize].as_ref();
+                        let name = match value {
+                            Some(_) => format!("{:NAME_WIDTH$}", item.name()),
+                            None => item.name().to_owned(),
+                        };
+                        row(format!("[{mark}] {name}"), value, chosen)
+                    }
+                    Entry::Line2 => row("─── line 2 ───".to_owned(), None, chosen),
                 }
-                Entry::Line2 => row("─── line 2 ───".to_owned(), None, chosen),
-            });
-        }
-        (rows, selected)
+            })
+            .collect()
     }
+}
+
+/// A list row, marked and bold when selected like a choice's rows.
+fn row(label: String, value: Option<&Vec<Span<'static>>>, chosen: bool) -> Vec<Span<'static>> {
+    let mut spans = if chosen {
+        vec![
+            Span::styled(" › ", theme::accent().bold()),
+            Span::styled(label, Style::new().bold()),
+        ]
+    } else {
+        vec![Span::raw("   "), Span::raw(label)]
+    };
+    spans.extend(value.into_iter().flatten().cloned());
+    spans
+}
+
+/// `room` of `rows` with row `at` among them: like a choice's list, as low
+/// as it goes, with a row each for how many more there are above and below
+/// when there are three rows or more.
+fn window(rows: Vec<Vec<Span<'static>>>, at: usize, room: usize) -> Vec<Vec<Span<'static>>> {
+    let total = rows.len();
+    if total <= room {
+        return rows;
+    }
+    if room < 3 {
+        let first = (at + 1).saturating_sub(room);
+        return rows.into_iter().skip(first).take(room).collect();
+    }
+    let (first, shown) = if at < room - 1 {
+        (0, room - 1)
+    } else if at >= total - (room - 1) {
+        (total - (room - 1), room - 1)
+    } else {
+        // Room for both counts; `at` the last row between them.
+        (at + 3 - room, room - 2)
+    };
+    let more = |arrow: char, count: usize| {
+        vec![Span::styled(
+            format!("   {arrow} {count} more"),
+            theme::secondary(),
+        )]
+    };
+    let below = total - first - shown;
+    let mut window = Vec::new();
+    if first > 0 {
+        window.push(more('↑', first));
+    }
+    window.extend(rows.into_iter().skip(first).take(shown));
+    if below > 0 {
+        window.push(more('↓', below));
+    }
+    window
 }

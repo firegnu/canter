@@ -154,6 +154,11 @@ impl Screen {
         self.ui.draw(self.now).unwrap();
     }
 
+    fn resize(&mut self, height: u16) {
+        self.ui.backend_mut().resize(WIDTH, height);
+        self.draw();
+    }
+
     fn press(&mut self, key: KeyEvent) -> Option<Action> {
         let action = self.ui.app_mut().handle_key(key, self.now);
         self.draw();
@@ -590,4 +595,106 @@ fn with_permission_hidden_shift_tab_says_the_new_mode() {
     screen.now += 2000;
     screen.draw();
     assert_eq!(screen.status(), before);
+}
+
+#[test]
+fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
+    let home = Home::new();
+    let mut screen = home.open(None);
+    // 12 rows above the input box: 5 for the list.
+    screen.resize(18);
+    screen.enter("/statusline");
+    let preview = [
+        "",
+        " Preview",
+        "  test-model · think high · Always ask",
+        "  ~/src/canter (main)",
+    ];
+    let shown = |list: &[&str]| -> Vec<String> {
+        let head = [
+            TITLE,
+            " Space toggle · ←/→ move · Enter save · Esc cancel",
+            "",
+        ];
+        head.iter()
+            .chain(list)
+            .chain(&preview)
+            .map(|row| row.to_string())
+            .collect()
+    };
+    assert_eq!(
+        screen.picker(),
+        shown(&[
+            " › [x] model        test-model",
+            "   [x] thinking     think high",
+            "   [x] permission   Always ask",
+            "   [x] cost",
+            "   ↓ 8 more",
+        ])
+    );
+
+    screen.keys(&[KeyCode::Down; 4]);
+    assert_eq!(
+        screen.picker(),
+        shown(&[
+            "   ↑ 2 more",
+            "   [x] permission   Always ask",
+            "   [x] cost",
+            " › ─── line 2 ───",
+            "   ↓ 7 more",
+        ])
+    );
+
+    // Moving the line along keeps it in view; the preview follows.
+    screen.keys(&[KeyCode::Right; 2]);
+    let picker = screen.picker();
+    assert_eq!(
+        picker[3..8],
+        [
+            "   ↑ 4 more",
+            "   [x] directory    ~/src/canter",
+            "   [x] branch       (main)",
+            " › ─── line 2 ───",
+            "   ↓ 5 more",
+        ]
+    );
+    assert_eq!(
+        picker[8..],
+        [
+            "",
+            " Preview",
+            "  test-model · think high · Always ask · ~/src/canter (main)",
+            "",
+        ]
+    );
+    screen.keys(&[KeyCode::Left; 2]);
+
+    screen.keys(&[KeyCode::Down; 10]);
+    assert_eq!(
+        screen.picker(),
+        shown(&[
+            "   ↑ 8 more",
+            "   [x] cache",
+            "   [ ] tps",
+            "   [ ] version      0.1.0 · a3b8fe7",
+            " › [ ] session      会话名字",
+        ])
+    );
+
+    // Fewer than three rows left for the list: the preview folds away.
+    screen.resize(15);
+    assert_eq!(
+        screen.picker(),
+        [
+            TITLE,
+            " Space toggle · ←/→ move · Enter save · Esc cancel",
+            "",
+            "   ↑ 7 more",
+            "   [x] context",
+            "   [x] cache",
+            "   [ ] tps",
+            "   [ ] version      0.1.0 · a3b8fe7",
+            " › [ ] session      会话名字",
+        ]
+    );
 }
