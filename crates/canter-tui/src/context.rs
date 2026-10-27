@@ -1,11 +1,8 @@
-use crate::text::{sanitize, truncate};
-use crate::theme;
+use crate::report::{Part, Report, clean};
 use crate::{app::tokens, approval::shorten_home};
 use canter_protocol::{ContextResponse, ContextSectionKind};
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
-
-const KEYS: &str = " Esc close";
+use ratatui::text::Span;
 
 pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<String> {
     let window = report.model_context_window;
@@ -74,103 +71,20 @@ pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<String>
 }
 
 /// `/context` above the input box until Esc or Enter, with the numbers of
-/// when it opened. When the section rows do not all fit, they scroll with
-/// Up and Down, with how many more there are above and below; the first
-/// line, the notes and the keys stay.
-pub(crate) struct Popup {
-    title: String,
-    sections: Vec<String>,
-    notes: Vec<String>,
-    /// The first section row shown.
-    top: usize,
-    /// The largest `top`, for the room the last frame had.
-    last_top: usize,
-}
-
-impl Popup {
-    pub fn new(report: &ContextResponse, home: Option<&str>) -> Self {
-        let mut lines: Vec<String> = lines(report, home)
-            .iter()
-            .map(|line| sanitize(line).replace('\n', " "))
-            .collect();
-        let notes = lines.split_off(lines.len() - 2);
-        let sections = lines.split_off(1);
-        Self {
-            title: lines.remove(0),
-            sections,
-            notes,
-            top: 0,
-            last_top: 0,
-        }
-    }
-
-    pub fn up(&mut self) {
-        self.top = self.top.saturating_sub(1);
-    }
-
-    pub fn down(&mut self) {
-        self.top = (self.top + 1).min(self.last_top);
-    }
-
-    /// At most `max` rows; nothing when not even one section row fits.
-    pub fn rows(&mut self, width: u16, max: usize) -> Vec<Line<'static>> {
-        let width = usize::from(width);
-        let cut = |spans: Vec<Span<'static>>| Line::from(truncate(spans, width));
-        let mut rows = vec![
-            cut(vec![Span::styled(
-                format!(" {}", self.title),
-                Style::new().bold(),
-            )]),
-            Line::default(),
-        ];
-        let mut tail = vec![Line::default()];
-        tail.extend(
-            self.notes
-                .iter()
-                .map(|note| cut(vec![Span::raw(format!(" {note}"))])),
-        );
-        tail.push(cut(vec![Span::styled(KEYS, theme::secondary())]));
-        let room = max.saturating_sub(rows.len() + tail.len());
-        if room == 0 {
-            return Vec::new();
-        }
-        let total = self.sections.len();
-        // With three rows or more, a row each for how many more there are.
-        self.last_top = match total.checked_sub(room) {
-            None | Some(0) => 0,
-            Some(over) if room < 3 => over,
-            Some(over) => over + 1,
-        };
-        self.top = self.top.min(self.last_top);
-        let first = self.top;
-        let shown = if total <= room || room < 3 {
-            room
-        } else if first == 0 || first == self.last_top {
-            room - 1
-        } else {
-            room - 2
-        };
-        let more = |arrow: char, count: usize| {
-            Line::from(vec![Span::styled(
-                format!("   {arrow} {count} more"),
-                theme::secondary(),
-            )])
-        };
-        if first > 0 && room >= 3 {
-            rows.push(more('↑', first));
-        }
-        rows.extend(
-            self.sections
-                .iter()
-                .skip(first)
-                .take(shown)
-                .map(|section| cut(vec![Span::raw(format!(" {section}"))])),
-        );
-        let below = total.saturating_sub(first + shown);
-        if below > 0 && room >= 3 {
-            rows.push(more('↓', below));
-        }
-        rows.extend(tail);
-        rows
-    }
+/// when it opened: the first line, the section rows, the notes.
+pub(crate) fn popup(report: &ContextResponse, home: Option<&str>) -> Report {
+    let mut lines: Vec<String> = lines(report, home).iter().map(|line| clean(line)).collect();
+    let notes = lines.split_off(lines.len() - 2);
+    let sections = lines.split_off(1);
+    Report::new(
+        vec![Span::styled(format!(" {}", lines[0]), Style::new().bold())],
+        sections
+            .into_iter()
+            .map(|section| Part::Line(vec![Span::raw(format!(" {section}"))]))
+            .collect(),
+        notes
+            .into_iter()
+            .map(|note| vec![Span::raw(format!(" {note}"))])
+            .collect(),
+    )
 }

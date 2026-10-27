@@ -133,3 +133,23 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- **做了什么**：把 P2-74 的 `/context` 弹框抽成共用的 `report.rs`（标题、中间各行、说明行，按键、滚动、`↑/↓ N more` 规则原样搬过来），中间各行按窗口宽度现排（单行截断、工具名铺行、描述折行最多两行）。`/context` 改用它，画出来和原来一样；`/files`、`/mcp`、`/skills` 也改成打开这个弹框，不再写对话区，按键、草稿、互相顶掉都和 `/context` 同一套。`git.rs` 的 status 改成返回分支和各条（代码、路径），跑的 git 命令不变；`files.rs`、`commands.rs` 的 `mcp`、`skills` 照样子分节上色，颜色只用 `theme.rs` 已有的（modified 用 `warning`，added `success`，deleted `failure`，conflict `failure` 加粗，灰色用 `secondary`，技能名 `accent`）。原来只有这三个命令用的「对话区单行截断」开关没人用了，一并删掉。README 加了三个命令的说明。
+- **验证了什么**：新增 `tests/report_popup.rs` 五个测试：`/files` 整框画面（合并冲突中的仓库：modified、partly staged、conflict、staged 的 added/deleted、未暂存 deleted、untracked，加颜色和粗细）、不在仓库里的 `(none)` 和 `(not a git repository)`、`/mcp` 整框（有没连上的服务、warning、工具铺行、超长名字单独一行截断，加颜色）、`/skills` 整框（两节、`not for model`、描述超过两行截断、中文描述，加颜色）、三个命令 Esc 关掉后整屏和打开前一样。先在原代码上跑，五个都因为没有弹框失败，实现后通过。`context_popup.rs` 四个没改照样过。全套：`cargo nextest run --all-targets` 626 个全过，`cargo test --doc --workspace`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check` 都过。
+- **现有测试的变化**（`slash.rs` 三个，`tests/expected/` 没变，都逐屏打出来看过）：
+  - `files_lists_deduplicated_history_and_isolated_git_status`：只换了要找的字（`Read files`→标题行和 `Read`，`新增 / 修改`→`added / modified`，`Git: main`→`Git status · main`，` M`/`??`→`modified`/`untracked`，说明行换新句，`none`→`(none)`），原来查的去重、`~` 缩写、不执行 fsmonitor 和 filter、窄窗口截断都还在。
+  - `skills_show_names_sources_and_manual_marker_in_single_truncated_rows` 改名 `skills_show_names_by_source_with_manual_marker_and_descriptions_below`：原来查「一行写完、窄了截断」，现在样子改成分节、描述另起一行，改查 90 宽一行写完、40 宽折两行加 `…`。
+  - `mcp_status_and_approval_show_server_tool_arguments_and_escape_interrupts`：要找的字换成新写法；后半段要按 Esc 打断回合，弹框开着时 Esc 归弹框，所以先按一次 Esc 关掉弹框再往下走。
+- **拿主意的地方**（样子没写到的，都照已有写法定了，主控可改）：
+  - Git status 节标题原先只写分支名，交主控定，见下面「主控决定」。
+  - 对齐的栏（git 的词、Changed by canter 的词、MCP 服务名、技能名后的 `not for model`）都是最宽的加 3 格；`staged` 那栏只按带标记的行对齐，免得一条很长的 untracked 路径把它推出屏。样子里的空格数是手画的，没照抄。窄窗口不另排，每行照现有规则截断加 `…`。
+  - 两位代码：暂存区有改动时词取暂存区那边（`AM` 是 added partly staged，`MD` 是 modified partly staged）；`T` 算 modified；表外的字母原样显示。`--no-renames` 下 renamed 实际出不来，映射留着。
+  - git 出错（读不了、跑不了、超时）和不在仓库一样写在括号里；干净的仓库写 `(none)`；这几种第一行写 `git 0`。
+  - 第一行的数量摘要、节标题后的分支和目录、`(none)` 用灰色；Changed by canter 的词和 git 的词同样上色。
+  - `/mcp`：`disconnected` 和 `○` 一样红；出错原因用正常字色；单数写 `1 service`、`1 tool`；连上了但有 error 的也写原因；没配服务时第一行 `MCP  0 services · 0 tools`，下面 `No MCP services configured.`，不写最后那句说明。
+  - `/skills`：没有说明行，所以最后是空行加 `Esc close`；`not for model` 放在名字栏后面，不贴右边；服务端以后给的未知来源放第三节 `Other`（不写目录），只算进总数；没技能时第一行 `Skills  0 · global 0 · project 0`，下面原来那四行。
+- **没做的事**：三个命令矮窗口滚动、Enter 和 Ctrl+C 关、草稿保留没有单独写测试（和 `/context` 走同一段代码，`context_popup.rs` 测着；任务清单里也没要）。服务端、协议、`/context` 内容和别的命令没动。
+- **主控决定**（10-27）：Git status 那节把上游和领先、落后补回来，灰色写在分支名后面，用 git 自己的词：有上游时 `Git status · main  origin/main · ahead 1`（落后 `behind 2`，都有 `ahead 1, behind 2`，都没有只写上游名）；没上游只写分支名；第一行摘要不变。已照做：方括号里的内容原样搬到 ` · ` 后面，所以上游没了时是 git 的 `gone`。补了 `files_git_status_names_the_upstream_and_how_far_ahead`（克隆一个本地仓库再多提交一次），先在原代码上失败（只出 `main`），改后通过；只跑了 `report_popup`、`slash` 两组，51 个全过，fmt、clippy 过。
+- **踩过的坑**：第一次跑全套时 `canter::tui statusline::startup_picker_exits_on_input_end_without_sighup` 失败一次（起真终端进程、带超时的测试），单独跑和再跑全套都过，和这次改动无关。`slash.rs` 的 `Screen::key` 按完键不重画，查关没关要先 `draw()`。

@@ -10,6 +10,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::{Action, App};
+use crate::report::{Part, Report, clean};
 use crate::text::{LogicalLine, sanitize, str_width, truncate};
 use crate::theme;
 
@@ -159,41 +160,84 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
 ];
 
-pub(crate) fn skills(skills: Vec<canter_protocol::Skill>) -> Vec<LogicalLine> {
+/// `/skills`: global and project skills, each a section; every skill's
+/// name, then its description in at most two rows.
+pub(crate) fn skills(skills: &[canter_protocol::Skill]) -> Report {
+    use canter_protocol::SkillSource;
+    let count = |source| skills.iter().filter(|skill| skill.source == source).count();
+    let title = vec![
+        Span::styled(" Skills", Style::new().bold()),
+        Span::styled(
+            format!(
+                "  {} · global {} · project {}",
+                skills.len(),
+                count(SkillSource::Global),
+                count(SkillSource::Project)
+            ),
+            theme::secondary(),
+        ),
+    ];
     if skills.is_empty() {
-        return [
+        let body = [
             "No skills in this session.",
             "Add skills to either location, then reopen the session:",
             "Global: ~/.agents/skills/<name>/SKILL.md",
             "Project: <project root>/.agents/skills/<name>/SKILL.md",
         ]
         .into_iter()
-        .map(|text| LogicalLine::new(vec![Span::raw("  ")], vec![Span::raw(text)]))
+        .map(|text| Part::Line(vec![Span::raw(format!(" {text}"))]))
         .collect();
+        return Report::new(title, body, Vec::new());
     }
-    skills
-        .into_iter()
-        .map(|skill| {
-            let source = match skill.source {
-                canter_protocol::SkillSource::Global => "global",
-                canter_protocol::SkillSource::Project => "project",
-                canter_protocol::SkillSource::Unknown => "unknown",
-            };
-            let manual = if skill.model_invocation {
-                ""
-            } else {
-                " [not for model]"
-            };
-            LogicalLine::new(
-                vec![Span::raw("  ")],
-                vec![
-                    Span::styled(sanitize(&skill.name).replace('\n', " "), theme::accent()),
-                    Span::styled(format!(" [{source}]{manual}  "), theme::secondary()),
-                    Span::raw(sanitize(&skill.description).replace('\n', " ")),
-                ],
-            )
-        })
-        .collect()
+    let name_width = skills
+        .iter()
+        .map(|skill| str_width(&clean(&skill.name)))
+        .max()
+        .unwrap_or(0);
+    let mut body = Vec::new();
+    for (source, heading, directory) in [
+        (SkillSource::Global, "Global", Some("~/.agents/skills")),
+        (SkillSource::Project, "Project", Some(".agents/skills")),
+        (SkillSource::Unknown, "Other", None),
+    ] {
+        let mut shown = skills
+            .iter()
+            .filter(|skill| skill.source == source)
+            .peekable();
+        if shown.peek().is_none() {
+            continue;
+        }
+        if !body.is_empty() {
+            body.push(Part::blank());
+        }
+        let mut spans = vec![Span::styled(format!(" {heading}"), Style::new().bold())];
+        if let Some(directory) = directory {
+            spans.push(Span::styled(format!("  {directory}"), theme::secondary()));
+        }
+        body.push(Part::Line(spans));
+        for skill in shown {
+            let name = clean(&skill.name);
+            let mut spans = vec![
+                Span::raw("   "),
+                Span::styled(name.clone(), theme::accent()),
+            ];
+            if !skill.model_invocation {
+                spans.push(Span::raw(" ".repeat(name_width - str_width(&name) + 3)));
+                spans.push(Span::styled("not for model", theme::secondary()));
+            }
+            body.push(Part::Line(spans));
+            let description = clean(&skill.description);
+            if !description.trim().is_empty() {
+                body.push(Part::Wrap {
+                    indent: 5,
+                    text: description,
+                    style: theme::secondary(),
+                    rows: 2,
+                });
+            }
+        }
+    }
+    Report::new(title, body, Vec::new())
 }
 
 fn think(app: &mut App, args: &str) -> Result<Option<Action>, String> {
@@ -475,32 +519,84 @@ pub(crate) fn list_rows(
         .collect()
 }
 
-pub(crate) fn mcp(report: &canter_protocol::McpListResponse) -> Vec<String> {
-    let mut lines = Vec::new();
+/// `/mcp`: each service with whether it is connected, then its tools'
+/// short names filling rows, and its warnings.
+pub(crate) fn mcp(report: &canter_protocol::McpListResponse) -> Report {
+    let plural =
+        |count: usize, word: &str| format!("{count} {word}{}", if count == 1 { "" } else { "s" });
+    let tools: usize = report.data.iter().map(|server| server.tools.len()).sum();
+    let title = vec![
+        Span::styled(" MCP", Style::new().bold()),
+        Span::styled(
+            format!(
+                "  {} · {}",
+                plural(report.data.len(), "service"),
+                plural(tools, "tool")
+            ),
+            theme::secondary(),
+        ),
+    ];
     if report.data.is_empty() {
-        lines.push("No MCP services configured.".to_owned());
+        let body = vec![Part::Line(vec![Span::raw(" No MCP services configured.")])];
+        return Report::new(title, body, Vec::new());
     }
+    let name_width = report
+        .data
+        .iter()
+        .map(|server| str_width(&clean(&server.name)))
+        .max()
+        .unwrap_or(0);
+    let mut body = Vec::new();
     for server in &report.data {
-        let status = if server.connected {
-            "connected"
+        if !body.is_empty() {
+            body.push(Part::blank());
+        }
+        let name = clean(&server.name);
+        let pad = " ".repeat(name_width - str_width(&name) + 3);
+        let (mark, status) = if server.connected {
+            (
+                Span::styled("●", theme::success()),
+                Span::styled(
+                    format!("connected · {}", plural(server.tools.len(), "tool")),
+                    theme::secondary(),
+                ),
+            )
         } else {
-            "disconnected"
+            (
+                Span::styled("○", theme::failure()),
+                Span::styled("disconnected", theme::failure()),
+            )
         };
-        lines.push(format!(
-            "{} — {status}{}",
-            server.name,
-            server
-                .error
-                .as_ref()
-                .map(|error| format!(": {error}"))
-                .unwrap_or_default()
-        ));
-        for tool in &server.tools {
-            lines.push(format!("  {} ({})", tool.tool, tool.name));
+        body.push(Part::Line(vec![
+            Span::raw(" "),
+            mark,
+            Span::raw(" "),
+            Span::styled(name, Style::new().bold()),
+            Span::raw(pad),
+            status,
+        ]));
+        if let Some(error) = &server.error {
+            body.push(Part::Line(vec![Span::raw(format!("   {}", clean(error)))]));
+        }
+        if !server.tools.is_empty() {
+            body.push(Part::Flow {
+                indent: 3,
+                words: server.tools.iter().map(|tool| clean(&tool.tool)).collect(),
+            });
         }
         for warning in &server.warnings {
-            lines.push(format!("  {warning}"));
+            body.push(Part::Line(vec![Span::styled(
+                format!("   {}", clean(warning)),
+                theme::secondary(),
+            )]));
         }
     }
-    lines
+    Report::new(
+        title,
+        body,
+        vec![vec![Span::styled(
+            " Tools are called as mcp__<service>__<tool>.",
+            theme::secondary(),
+        )]],
+    )
 }

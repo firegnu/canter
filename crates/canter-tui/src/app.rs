@@ -147,7 +147,7 @@ struct Notice {
 }
 
 enum NoticeContent {
-    Line { line: LogicalLine, truncate: bool },
+    Line(LogicalLine),
     Btw(crate::btw::Answer),
 }
 
@@ -155,21 +155,7 @@ impl Notice {
     fn rows(&self, width: u16) -> Vec<Row> {
         match &self.content {
             NoticeContent::Btw(answer) => answer.rows(width),
-            NoticeContent::Line {
-                line,
-                truncate: true,
-            } => {
-                let spans = line.indent.iter().chain(&line.body).cloned().collect();
-                let from = spans_width(&line.indent).saturating_sub(line.marker);
-                vec![Row::text_from(
-                    Line::from(truncate(spans, usize::from(width))),
-                    from,
-                )]
-            }
-            NoticeContent::Line {
-                line,
-                truncate: false,
-            } => wrap_rows(line, width),
+            NoticeContent::Line(line) => wrap_rows(line, width),
         }
     }
 }
@@ -468,9 +454,9 @@ struct Shown {
     turn: Option<String>,
     /// The private answer in progress on this frame.
     btw: Option<usize>,
-    /// The choice (or `/statusline`, `/context`) whose rows showed, numbered
-    /// as [`App::choose`], [`App::open_status_setup`] or [`App::show_context`]
-    /// opened it.
+    /// The choice (or `/statusline`, a report such as `/context`) whose rows
+    /// showed, numbered as [`App::choose`], [`App::open_status_setup`] or
+    /// [`App::open_report`] opened it.
     chooser: Option<u64>,
     /// How many completions the input box showed.
     completions: u64,
@@ -501,8 +487,8 @@ pub struct App {
     bar_unreadable: bool,
     /// `/statusline`, open above the input box.
     setup: Option<Setup>,
-    /// `/context`, open above the input box.
-    context: Option<crate::context::Popup>,
+    /// `/context`, `/files`, `/mcp` or `/skills`, open above the input box.
+    report: Option<crate::report::Report>,
     /// Output tokens a second, for the `tps` item and the status command.
     tps: Tps,
     home: Option<String>,
@@ -692,7 +678,7 @@ impl App {
             bar_file: None,
             bar_unreadable: false,
             setup: None,
-            context: None,
+            report: None,
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::default(),
@@ -999,8 +985,8 @@ impl App {
             if self.setup.is_some() {
                 return self.setup_key(key, seen, send_guarded);
             }
-            if self.context.is_some() {
-                return self.context_key(key, seen, send_guarded);
+            if self.report.is_some() {
+                return self.report_key(key, seen, send_guarded);
             }
             return self.chooser_key(key, seen, send_guarded);
         }
@@ -1348,14 +1334,14 @@ impl App {
     pub(crate) fn choose(&mut self, chooser: Chooser) {
         self.choosers += 1;
         self.setup = None;
-        self.context = None;
+        self.report = None;
         self.chooser = Some(chooser);
     }
 
-    /// Whether a choice, `/statusline` or `/context` is open above the
-    /// input box.
+    /// Whether a choice, `/statusline` or a report is open above the input
+    /// box.
     fn choosing(&self) -> bool {
-        self.chooser.is_some() || self.setup.is_some() || self.context.is_some()
+        self.chooser.is_some() || self.setup.is_some() || self.report.is_some()
     }
 
     /// `/statusline`: opens with what the rows at the bottom show now,
@@ -1363,7 +1349,7 @@ impl App {
     pub(crate) fn open_status_setup(&mut self) {
         self.choosers += 1;
         self.chooser = None;
-        self.context = None;
+        self.report = None;
         let script = self.script.as_ref().map(|(command, _)| command.clone());
         self.setup = Some(Setup::new(self.bar.clone(), script));
     }
@@ -1395,18 +1381,18 @@ impl App {
         None
     }
 
-    /// Keys while `/context` is open, as for `/statusline`: Up and Down
+    /// Keys while a report is open, as for `/statusline`: Up and Down
     /// scroll the rows that do not fit; Enter, Esc, Ctrl+C or Ctrl+D
     /// closes it.
-    fn context_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
-        let context = self.context.as_mut()?;
+    fn report_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
+        let report = self.report.as_mut()?;
         match key.code {
-            KeyCode::Up if seen => context.up(),
-            KeyCode::Down if seen => context.down(),
-            KeyCode::Enter if seen && !send_guarded => self.context = None,
-            KeyCode::Esc => self.context = None,
+            KeyCode::Up if seen => report.up(),
+            KeyCode::Down if seen => report.down(),
+            KeyCode::Enter if seen && !send_guarded => self.report = None,
+            KeyCode::Esc => self.report = None,
             KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.context = None;
+                self.report = None;
             }
             _ => {}
         }
@@ -1434,12 +1420,9 @@ impl App {
         }
     }
 
-    /// Displays `/skills`, one row per skill; descriptions truncate on narrow screens.
+    /// `/skills`: opens above the input box.
     pub fn show_skills(&mut self, skills: Vec<canter_protocol::Skill>) {
-        let truncate = !skills.is_empty();
-        for line in commands::skills(skills) {
-            self.push_notice(line, truncate);
-        }
+        self.open_report(commands::skills(&skills));
     }
 
     pub fn show_usage(&mut self, report: &canter_protocol::UsageResponse) {
@@ -1572,32 +1555,28 @@ impl App {
         self.input.insert(&crate::rewind::text(input));
     }
 
+    /// `/mcp`: opens above the input box.
     pub fn show_mcp(&mut self, report: &canter_protocol::McpListResponse) {
-        self.show_report(crate::commands::mcp(report));
+        self.open_report(crate::commands::mcp(report));
     }
 
-    /// `/context`: opens above the input box, numbered like a choice.
+    /// `/context`: opens above the input box.
     pub fn show_context(&mut self, report: &canter_protocol::ContextResponse) {
+        self.open_report(crate::context::popup(report, self.home.as_deref()));
+    }
+
+    /// `/files`: opens above the input box.
+    pub async fn show_files(&mut self) {
+        let report = crate::files::popup(&self.snapshot, self.home.as_deref()).await;
+        self.open_report(report);
+    }
+
+    /// Opens `report` above the input box, numbered like a choice.
+    fn open_report(&mut self, report: crate::report::Report) {
         self.choosers += 1;
         self.chooser = None;
         self.setup = None;
-        self.context = Some(crate::context::Popup::new(report, self.home.as_deref()));
-    }
-
-    pub async fn show_files(&mut self) {
-        self.show_report(crate::files::lines(&self.snapshot, self.home.as_deref()).await);
-    }
-
-    fn show_report(&mut self, lines: Vec<String>) {
-        for line in lines {
-            self.push_notice(
-                LogicalLine::new(
-                    vec![Span::raw("  ")],
-                    vec![Span::raw(sanitize(&line).replace('\n', " "))],
-                ),
-                true,
-            );
-        }
+        self.report = Some(report);
     }
 
     /// [`App::handle_mouse_at`] now.
@@ -2327,17 +2306,13 @@ impl App {
     /// Puts `line` after everything finished so far, before what is still
     /// in progress.
     fn notice(&mut self, line: LogicalLine) {
-        self.push_notice(line, false);
-    }
-
-    fn push_notice(&mut self, line: LogicalLine, truncate: bool) {
         self.extend_history(self.width);
         self.notices.push(Notice {
             at: self
                 .notices
                 .last()
                 .map_or(self.history.end, |last| last.at.max(self.history.end)),
-            content: NoticeContent::Line { line, truncate },
+            content: NoticeContent::Line(line),
         });
     }
 
@@ -2886,7 +2861,7 @@ impl App {
     }
 
     /// The list above the input box: the choice offered, `/statusline`,
-    /// `/context`, the commands matching what is typed, or the paths
+    /// a report such as `/context`, the commands matching what is typed, or the paths
     /// matching the `@` word. At most `max` rows.
     fn list_view(&mut self, width: u16, max: usize, now_ms: i64) -> Vec<Line<'static>> {
         if let Some(chooser) = &self.chooser {
@@ -2895,8 +2870,8 @@ impl App {
         if let Some(setup) = &self.setup {
             return setup.rows(width, max, &self.bar_values(now_ms));
         }
-        if let Some(context) = &mut self.context {
-            return context.rows(width, max);
+        if let Some(report) = &mut self.report {
+            return report.rows(width, max);
         }
         // The lists are for the draft, which is put away while searching.
         if self.search.is_some() {

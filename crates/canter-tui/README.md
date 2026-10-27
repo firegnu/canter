@@ -13,6 +13,23 @@ Environment 是会话打开时固定的目录、仓库根、系统/架构和本�
 窗口放不下时先让对话区让出地方，还放不下就让中间各段跟着 ↑/↓ 滚，上下写 `↑ N more` / `↓ N more`，
 第一行、说明行和 `Esc close` 一直留着。查询失败（比如会话还没打开）照旧在对话区提示一行，不弹框。
 
+`/files`、`/mcp`、`/skills` 的结果也这样弹框，打开、关闭、按键、草稿和放不下时的滚动都和 `/context` 一样。
+第一行是标题（加粗）加灰色的数量摘要，节之间空一行，节标题加粗，次要信息灰色，最后一行 `Esc close`。
+
+- `/files`：`Read`、`Changed by canter`、`Git status · <分支>` 三节，空的节写 `(none)`，不在 git 仓库里写 `(not a git repository)`。
+  Changed by canter 每行前写 added / modified / deleted，一个文件改过几种用 ` / ` 连起来。
+  有上游时分支名后面灰色写上游和 git 的 ahead / behind，比如 `Git status · main  origin/main · ahead 1`。
+  Git status 把 git 的两位代码写成词，词那一栏对齐：modified（黄）、added（绿）、deleted（红）、renamed 和 untracked（灰）、
+  conflict（红加粗；`U`、`AA`、`DD`）。只暂存了的后面灰色写 `staged`，暂存后又改过的写 `partly staged`。
+  最后一行说明：`Edits made through shell commands only show up under Git status.`
+- `/mcp`：第一行 `MCP  N services · M tools`。每个服务一行，名字一栏对齐：连上了是绿色 `●` 和灰色的 `connected · N tools`，
+  没连上是红色 `○` 和 `disconnected`，下一行写出错原因。工具只写短名，两个空格隔开，铺满宽度再换行，
+  比整行还长的名字单独一行、截断；warnings 灰色写在服务下面。最后一行 `Tools are called as mcp__<service>__<tool>.`；
+  没配服务时写 `No MCP services configured.`
+- `/skills`：第一行 `Skills  N · global X · project Y`，按 Global（`~/.agents/skills`）、Project（`.agents/skills`）分节，
+  没有的节不写。名字用强调色，不给模型用的在同一行灰色写 `not for model`；描述另起一行，灰色，最多两行，超出用 `…` 截。
+  没技能时写原来那四行说明：两个目录放在哪、放好后重新打开会话。
+
 ## 欢迎头
 
 每次打开 canter（新会话、接着旧会话、`/new`、`/resume` 换过去的会话），对话最上面先画欢迎头，不画框：
