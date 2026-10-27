@@ -1251,7 +1251,7 @@ fn context_lists_categories_measured_usage_and_truncates_narrow_rows() {
         "prefix":[
             {"kind":"system","path":null,"tokens":3000},
             {"kind":"modelFamily","path":null,"tokens":100},
-            {"kind":"globalInstructions","path":"/home/test/.agents/AGENTS.md","tokens":1000},
+            {"kind":"globalInstructions","path":"/home/test/.canter/AGENTS.md","tokens":1000},
             {"kind":"skills","path":null,"tokens":1000},
             {"kind":"projectInstructions","path":"/project/AGENTS.md","tokens":2000},
             {"kind":"environment","path":null,"tokens":200}

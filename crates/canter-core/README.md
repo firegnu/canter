@@ -90,7 +90,7 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
   副本按当前会话目录解析，不可读时换成 unavailable 占位并发 warning，历史引用不改。
   图片每张估 1024 token，并计入压缩保留用户消息的现有预算。
 
-全局说明从会话环境 `HOME` 下的 `.agents/AGENTS.md` 读取；未提供 HOME 时不读全局说明，不读取服务端进程的 HOME。项目说明从最近 git 根读到 cwd，没有 git 根则只读 cwd。
+全局说明从会话环境的 `CANTER_HOME` 下的 `AGENTS.md` 读取，没有 `CANTER_HOME` 时读 `HOME` 下的 `.canter/AGENTS.md`；两个都没有或不是绝对路径时不读全局说明，不读取服务端进程的环境。项目说明从最近 git 根读到 cwd，没有 git 根则只读 cwd。
 全局和项目的每份 AGENTS.md 至多 64 KiB；文件不存在或只有空白时不加段落、不警告，其他读取失败、非 UTF-8 或超限时整份跳过，warning 写明文件路径和原因，继续正常请求。
 警告也只在创建或打开会话时发送；中途问题变化不重新提示，下次打开时按当时的读取结果报告。
 

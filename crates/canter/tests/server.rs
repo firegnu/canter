@@ -872,7 +872,7 @@ async fn skills_empty_prefix_and_list_stay_frozen_until_session_reopens() {
 async fn global_agents_instructions_precede_project_instructions() {
     let mut fixture = Fixture::start(vec![text_reply()]).await;
     let home = fixture.root.path().join("client-home");
-    let global = home.join(".agents/AGENTS.md");
+    let global = home.join(".canter/AGENTS.md");
     let work = fixture.root.path().join("work");
     let project = work.join("AGENTS.md");
     fs::create_dir_all(global.parent().unwrap()).unwrap();
@@ -946,7 +946,7 @@ async fn global_agents_missing_file_adds_no_prompt_section_or_warning() {
 #[tokio::test]
 async fn global_agents_oversized_file_is_skipped_with_a_warning() {
     let mut fixture = Fixture::start(vec![text_reply()]).await;
-    let global = fixture.root.path().join("home/.agents/AGENTS.md");
+    let global = fixture.root.path().join("home/.canter/AGENTS.md");
     fs::create_dir_all(global.parent().unwrap()).unwrap();
     fs::write(&global, "x".repeat(64 * 1024 + 1)).unwrap();
     let created = fixture
@@ -985,7 +985,7 @@ async fn global_agents_oversized_file_is_skipped_with_a_warning() {
 #[tokio::test]
 async fn global_agents_edits_do_not_change_the_open_session_prefix() {
     let mut fixture = Fixture::start(vec![text_reply(), text_reply()]).await;
-    let global = fixture.root.path().join("home/.agents/AGENTS.md");
+    let global = fixture.root.path().join("home/.canter/AGENTS.md");
     fs::create_dir_all(global.parent().unwrap()).unwrap();
     fs::write(&global, "Original global instructions").unwrap();
     let created = fixture

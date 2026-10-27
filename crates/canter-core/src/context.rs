@@ -4,7 +4,7 @@ use crate::{
 };
 use canter_model::{AssistantContent, Message, ToolDefinition};
 use serde::{Deserialize, Serialize};
-use std::{io::Read, path::PathBuf};
+use std::{collections::BTreeMap, io::Read, path::PathBuf};
 
 const MAX_INSTRUCTION_BYTES: u64 = 64 * 1024;
 
@@ -177,9 +177,20 @@ pub(crate) fn message_tokens(message: &Message) -> u64 {
     estimate(&serde_json::to_string(message).expect("known message")) + 8
 }
 
+/// The global AGENTS.md lives in canter's own directory: `CANTER_HOME`, or else
+/// `~/.canter`, from the session environment; only an absolute path.
+pub(crate) fn canter_home(environment: &BTreeMap<String, String>) -> Option<PathBuf> {
+    let dir = match environment.get("CANTER_HOME") {
+        Some(dir) => PathBuf::from(dir),
+        None => PathBuf::from(environment.get("HOME")?).join(".canter"),
+    };
+    dir.is_absolute().then_some(dir)
+}
+
 pub(crate) async fn prefix(
     cwd: String,
     home: Option<PathBuf>,
+    canter_home: Option<PathBuf>,
     tools: Vec<ToolDefinition>,
 ) -> Result<(Vec<Segment>, Vec<String>, Vec<canter_protocol::Skill>), CoreError> {
     tokio::task::spawn_blocking(move || {
@@ -199,9 +210,7 @@ pub(crate) async fn prefix(
             text: prompt::core(&tools),
         }];
         let mut warnings = Vec::new();
-        let global = home
-            .as_ref()
-            .map(|home| ("Global", home.join(".agents/AGENTS.md")));
+        let global = canter_home.map(|dir| ("Global", dir.join("AGENTS.md")));
         let project = paths
             .into_iter()
             .map(|dir| ("Project", dir.join("AGENTS.md")));

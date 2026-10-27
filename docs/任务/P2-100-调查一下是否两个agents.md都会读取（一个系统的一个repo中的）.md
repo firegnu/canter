@@ -45,3 +45,11 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：`canter-core` 的 `context::canter_home` 从会话环境取 canter 自己的目录（`CANTER_HOME`，没有就 `<HOME>/.canter`，只认绝对路径，和终端 `statusline::home` 同一规矩），打开会话时全局说明读这个目录下的 `AGENTS.md`，不再读 `~/.agents/AGENTS.md`。排序、64 KiB 上限、UTF-8、出错跳过并警告、只在打开会话时读都照 P2-19 不变；全局技能 `~/.agents/skills` 不动。同步改 `canter-core` README 和 DESIGN 第 20 条分段那一项（写明位置和理由）。
+- 验证了什么：先改测试，5 条因还读旧位置而失败：`prompts.rs` 的分段测试（全局放 `<HOME>/.canter/AGENTS.md`，另放一份旧位置的，断言旧的不进提示词）、`http_tests.rs` 的上下文报告（会话环境带 `CANTER_HOME`，全局放那里）、`tests/server.rs` 三条全局说明测试（只带 HOME）；改代码后全过。终端两处测试里的示例路径同步改成 `~/.canter/AGENTS.md`（只是假数据）。全套：`cargo nextest run --all-targets` 813 条通过，`cargo test --doc --workspace`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check` 通过。
+- 拿主意的地方：目录按会话环境（终端发来的）取，不读服务端进程的环境，照 P2-19「不读服务端进程的 HOME」；`CANTER_HOME` 不是绝对路径时不读全局说明。
+- 没做的事：没读别家的全局文件，没加 `CLAUDE.md` 后备；没帮用户建 `~/.canter/AGENTS.md`。
+- 踩过的坑：没有。
