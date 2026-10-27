@@ -320,9 +320,11 @@
     "ContextSectionKind": {
       "enum": [
         "system",
+        "modelFamily",
         "globalInstructions",
         "projectInstructions",
         "skills",
+        "environment",
         "unknown"
       ],
       "type": "string"

@@ -44,6 +44,7 @@ pub(crate) struct Shared {
 pub(crate) struct State {
     pub journal: Journal,
     pub prefix: Vec<Message>,
+    pub prefix_segments: Option<Vec<crate::prompt::Segment>>,
     pub skills: Vec<Skill>,
     pub tool_definitions: Vec<canter_model::ToolDefinition>,
     pub prefix_sections: Vec<ContextSection>,
@@ -74,6 +75,7 @@ impl State {
         Self {
             journal,
             prefix: Vec::new(),
+            prefix_segments: None,
             skills: Vec::new(),
             tool_definitions: Vec::new(),
             prefix_sections: Vec::new(),
@@ -95,18 +97,47 @@ impl State {
     async fn initialize_prefix(
         &mut self,
         home: Option<std::path::PathBuf>,
+        tools: &Tools,
     ) -> Result<(), CoreError> {
-        let (prefix, warnings, skills, sections) =
-            crate::context::prefix(self.journal.snapshot.settings.cwd.clone(), home).await?;
+        self.tool_definitions = canter_tools::Tool::ALL
+            .into_iter()
+            .map(|tool| {
+                let def = tool.definition();
+                canter_model::ToolDefinition {
+                    name: def.name.into(),
+                    description: def.description.into(),
+                    parameters: def.parameters,
+                }
+            })
+            .chain(
+                tools
+                    .mcp_tools()
+                    .iter()
+                    .map(|tool| canter_model::ToolDefinition {
+                        name: tool.name.clone(),
+                        description: tool.description.clone(),
+                        parameters: tool.parameters.clone(),
+                    }),
+            )
+            .collect();
+        let (segments, warnings, skills) = crate::context::prefix(
+            self.journal.snapshot.settings.cwd.clone(),
+            home,
+            self.tool_definitions.clone(),
+        )
+        .await?;
+        let (prefix, sections) = crate::prompt::chat_completions(&segments);
         self.skills = skills;
         self.prefix_sections = sections;
-        if self.prefix != prefix {
+        if self.prefix != prefix || self.prefix_segments.as_ref() != Some(&segments) {
             self.journal
                 .record(HistoryEntry::Context {
                     messages: prefix.clone(),
+                    segments: Some(segments.clone()),
                 })
                 .await?;
             self.prefix = prefix;
+            self.prefix_segments = Some(segments);
         }
         if !warnings.is_empty() {
             self.journal
@@ -293,12 +324,12 @@ impl Session {
         let mut state = State::new(Journal::new(store, writer));
         crate::usage::Ledger::replay(&events, &options.prices)
             .fill_costs(&mut state.journal.snapshot);
-        (
-            state.prefix,
-            state.history,
-            state.user_messages,
-            state.summary_index,
-        ) = crate::context::restore(entries.clone(), &mut state.rewind);
+        let restored = crate::context::restore(entries.clone(), &mut state.rewind);
+        state.prefix = restored.prefix;
+        state.prefix_segments = restored.segments;
+        state.history = restored.history;
+        state.user_messages = restored.users;
+        state.summary_index = restored.summary_index;
         for entry in &entries {
             let recovery = match entry {
                 HistoryEntry::Rewind { rewind } => Some((rewind.event_seq, rewind.event())),
@@ -316,7 +347,7 @@ impl Session {
                 state.journal.append(vec![event]).await?;
             }
         }
-        state.initialize_prefix(home).await?;
+        state.initialize_prefix(home, &tools).await?;
         for event in events {
             if let EventPayload::RequestResolved { request_id, .. } = event.payload {
                 state.resolved.insert(request_id, event.seq);
@@ -431,7 +462,7 @@ impl Session {
             }])
             .await?;
         let mut state = State::new(journal);
-        state.initialize_prefix(home).await?;
+        state.initialize_prefix(home, &tools).await?;
         let response = SessionCreateResponse {
             session: state.journal.snapshot.clone(),
             event_seq: state.journal.snapshot.last_event_seq,
@@ -439,33 +470,7 @@ impl Session {
         Ok((Self::from_state(state, tools, model, options), response))
     }
 
-    fn from_state(
-        mut state: State,
-        tools: Tools,
-        model: Arc<dyn Model>,
-        options: CoreOptions,
-    ) -> Self {
-        state.tool_definitions = canter_tools::Tool::ALL
-            .into_iter()
-            .map(|tool| {
-                let def = tool.definition();
-                canter_model::ToolDefinition {
-                    name: def.name.into(),
-                    description: def.description.into(),
-                    parameters: def.parameters,
-                }
-            })
-            .chain(
-                tools
-                    .mcp_tools()
-                    .iter()
-                    .map(|tool| canter_model::ToolDefinition {
-                        name: tool.name.clone(),
-                        description: tool.description.clone(),
-                        parameters: tool.parameters.clone(),
-                    }),
-            )
-            .collect();
+    fn from_state(state: State, tools: Tools, model: Arc<dyn Model>, options: CoreOptions) -> Self {
         let lifetime = CancellationToken::new();
         let shared = Arc::new(Shared {
             state: Mutex::new(state),

@@ -132,7 +132,7 @@ pub(crate) fn append_prompt(text: &mut String, skills: &[Skill]) {
     if available.peek().is_none() {
         return;
     }
-    text.push_str("\nAvailable skills:\nWhen a task matches a skill below, first use the read tool to read its SKILL.md in full, then follow its instructions.\n");
+    text.push_str("When a task matches one of these skills, read its SKILL.md in full first, then follow its instructions.\n");
     for skill in available {
         text.push_str(&format!(
             "- {}: {} (SKILL.md: {})\n",
