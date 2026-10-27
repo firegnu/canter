@@ -130,3 +130,11 @@
 - 起初以为高亮缓存是唯一的渲染缓存，结果对话历史行另有一层缓存，移动时已经写完的回答不换色。改成换了配色就重画历史。
 - `App` 要能跨线程（`tokio::spawn`），存自定义配色用 `Rc` 编不过，换成 `Arc`。
 - 用 perl 改 app.rs 时拿 `|` 当分隔符，和 `||` 撞了，把一段插到了文件开头，发现后删掉改用 Edit。还有一次命令末尾误带了一个读标准输入的 `python3 -`，卡住后停掉，没执行任何东西。
+
+## 主控审查
+
+- 开发中途问一处：读 `.tmTheme` 要开 syntect 的 `plist-load`。主控定开（Codex 用的是同一个 `ThemeSet::get_theme`），允许改根目录 `Cargo.toml` 那一行；条件是新带进来的包补许可证声明、已有包不升级。核对：Cargo.lock 只多了 `plist`、`quick-xml`、`time-macros`，已有包版本都没变；`THIRD-PARTY-NOTICES.md` 补了 plist、quick-xml 和随之编进来的 time 一族。
+- `tui.json` 读写抽成 `tui_json.rs`，`/statusline` 和 `/theme` 各存自己的键、互不覆盖；照旧先写临时文件再改名、0600。
+- 开发列的取舍都同意：坏文件标 `unreadable`、只用前景色不用粗体、自定义排在内置后面、16 色提示在标题下、宽排中间画暗色 `│`、列表最多 8 行、换配色时整份重画、名字带路径的不当文件名找。256 色、宽窄、窗口矮没写测试，主控定的。
+- 主控重跑：分支上 nextest 716 个全过，doc、clippy、fmt 通过；合进 main（含 P2-86、P2-87）后 nextest 717 个全过，doc、clippy、fmt 通过。
+结果：一次过
