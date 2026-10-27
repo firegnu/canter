@@ -4,8 +4,9 @@
 
 ## 装的哪一版、怎么退回
 
-- 10-27 第四次装 main `a6af4ae`（`canter --version` 显示 `canter 0.1.0 · a6af4ae`；比上一版多 P2-69～P2-71 新的系统提示词、工具说明、压缩和 /handoff 说明，P2-73 一次拖多张图片，P2-63 `/statusline` 选择框和 `~/.canter/tui.json`）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
-- 退回上一版 `71c3507`：旧程序备份在 `~/.canter/canter-71c3507`，`cp -p ~/.canter/canter-71c3507 ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版不认 `tui.json`，留着无害；新版写过的会话存盘多了 `segments`，旧版读时忽略。再往前的 `f2c02d6`、`c5d2efe` 备份在 `~/.canter/canter-<提交号>`。
+- 10-27 第五次装 main `011bdc9`（`canter --version` 显示 `canter 0.1.0 · 011bdc9`；比上一版多 P2-74 `/context` 弹框、P2-75 `/files`、`/mcp`、`/skills` 弹框和排版）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
+- 退回上一版 `a6af4ae`：旧程序备份在 `~/.canter/canter-a6af4ae`，`cp -p ~/.canter/canter-a6af4ae ~/.cargo/bin/canter`，再 `canter serve --replace`。再往前的 `71c3507`（换提示词之前；不认 `tui.json`，留着无害；会话存盘多出的 `segments` 旧版读时忽略）、`f2c02d6`、`c5d2efe` 备份在 `~/.canter/canter-<提交号>`。
+- 10-27 装过 main `a6af4ae`（含 P2-69～P2-71 新的系统提示词、工具说明、压缩和 /handoff 说明，P2-73 一次拖多张图片，P2-63 `/statusline` 选择框和 `~/.canter/tui.json`）。
 - 10-27 装过 main `71c3507`（含 P2-66 跳到底部提示）。
 - 10-27 装过 main `f2c02d6`（含 P2-65 命令卡片显示整条命令并上色、输出用粗竖线）。
 - 10-27 装过 main `c5d2efe`（`canter --version` 显示 `canter 0.1.0 · c5d2efe`；比上一版多 P2-48 用户消息底色、P2-61 diff 上色和行号栏、P2-56 流光、P2-59 Esc 撤回刚发的消息、P2-62 压缩时显示 Compacting、P2-60 状态栏定制）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。用户的 `~/.canter/config.json` 加了 `statusLine` 指向 `~/.canter/statusline.sh`（10-27 主控写的，用 `/usr/bin/jq`），改前的配置备份在 `~/.canter/config.json.bak-p2-60`（0600）。
