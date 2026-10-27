@@ -478,6 +478,21 @@ struct Shown {
     /// row showed in full, under the bare input box (no approval or question
     /// box, choice or command list). `None` on any other frame.
     mode: Option<PermissionMode>,
+    /// The draft's rows in the input box, for a click on them; `None` while
+    /// the box showed something else or a choice was open above it.
+    input: Option<DrawnInput>,
+}
+
+/// The draft as the input box drew it.
+#[derive(Debug, Clone, PartialEq)]
+struct DrawnInput {
+    /// The screen's width and the draft.
+    width: u16,
+    text: String,
+    /// The screen row of the first row shown.
+    top: usize,
+    /// The rows shown, top to bottom, as byte ranges of the draft.
+    rows: Vec<Range<usize>>,
 }
 
 impl Shown {
@@ -1790,7 +1805,8 @@ impl App {
     /// conversation text: dragging highlights it and letting go copies it; a
     /// double click takes a word, a triple click a row. A click on a link
     /// opens it once the double click time is over. A click on the hint under
-    /// the conversation goes to the bottom. Other mouse events do nothing.
+    /// the conversation goes to the bottom. A click on the draft in the input
+    /// box puts the cursor there. Other mouse events do nothing.
     /// The mouse is on the latest frame on screen.
     pub fn handle_mouse_at(&mut self, mouse: MouseEvent, now_ms: i64) {
         self.handle_mouse_on(mouse, self.latest_frame, now_ms);
@@ -1824,6 +1840,7 @@ impl App {
     /// conversation, starts one. Presses one right after another on the
     /// same cell take a word, then a row, then start again. A link clicked
     /// before that has not opened yet does not: this press is a second one.
+    /// On the draft in the input box it only moves the cursor.
     fn press(&mut self, cell: (u16, u16), frame: u64, now: i64) {
         self.open_link(now);
         self.mouse.link = None;
@@ -1835,6 +1852,10 @@ impl App {
         };
         self.mouse.press = Some((cell, now, clicks));
         self.mouse.selection = None;
+        if let Some((row, column)) = self.input_click(cell, frame) {
+            self.input.click(row, column);
+            return;
+        }
         // The hint under the conversation goes to the bottom and follows
         // again. A press right after it is not a double click: the
         // conversation is under it now.
@@ -2023,6 +2044,27 @@ impl App {
             .iter()
             .find(|(row, columns, _)| *row == y && columns.contains(&x))
             .map(|(_, _, target)| (target.clone(), drawn.view))
+    }
+
+    /// The draft's row drawn at `cell` on frame `frame` and the column in
+    /// it; below the last row shown, in the box, past that row's end. None
+    /// while searching or a choice is open, and when that frame drew no
+    /// draft or one that is not in the box now, or at another width.
+    fn input_click(&self, (x, y): (u16, u16), frame: u64) -> Option<(Range<usize>, usize)> {
+        if self.search.is_some() || self.choosing() || frame > self.latest_frame {
+            return None;
+        }
+        let (_, shown) = self.shown.iter().rev().find(|(since, _)| *since <= frame)?;
+        let drawn = shown.input.as_ref()?;
+        if drawn.width != self.width || drawn.text != self.input.text() {
+            return None;
+        }
+        let row = usize::from(y).checked_sub(drawn.top)?;
+        if row == drawn.rows.len() {
+            return Some((drawn.rows.last()?.clone(), usize::MAX));
+        }
+        let range = drawn.rows.get(row)?;
+        Some((range.clone(), usize::from(x.saturating_sub(INPUT_LEFT))))
     }
 
     /// What `unit` takes at `cell` on screen, as places in the conversation.
@@ -2944,15 +2986,16 @@ impl App {
             btw: self.active_btw,
             completions: self.completions,
             mode: None,
+            input: None,
         };
-        let bottom = match approval {
+        let (bottom, input_rows) = match approval {
             Some((request, laid)) => {
                 self.approval_page = laid.page;
                 self.approval_max_scroll = laid.max_scroll;
                 if self.approval.request == request {
                     self.approval.scroll = self.approval.scroll.min(laid.max_scroll);
                 }
-                Bottom::Approval(laid)
+                (Bottom::Approval(laid), Vec::new())
             }
             None => self.input_view(width, now_ms),
         };
@@ -3024,6 +3067,16 @@ impl App {
         self.scroll.hint = hint.is_some();
         let area = room.saturating_sub(usize::from(hint.is_some()));
         self.scroll.area = area;
+        let draft_shown =
+            matches!(bottom, Bottom::Input { .. }) && self.search.is_none() && !self.choosing();
+        self.drawing.input = draft_shown.then(|| DrawnInput {
+            width,
+            text: self.input.text().to_owned(),
+            // Under the conversation: the hint, the status line, the list
+            // and the box's top border.
+            top: area + usize::from(hint.is_some()) + 1 + list.len() + 1,
+            rows: input_rows,
+        });
         self.scroll.page = area.max(1);
         self.scroll.max_top = total.saturating_sub(area);
         if reveal && let Some(current) = current {
@@ -3211,7 +3264,8 @@ impl App {
         commands::list_rows(&entries, selected, width, max)
     }
 
-    fn input_view(&self, width: u16, now_ms: i64) -> Bottom {
+    /// The input box, and the byte ranges of the rows it shows.
+    fn input_view(&self, width: u16, now_ms: i64) -> (Bottom, Vec<Range<usize>>) {
         // Like the approval box's answers, the rows show dim while Enter does
         // not send; a frame that replaces an approval box starts the guard.
         let guarded = now_ms < self.send_guard_until
@@ -3263,7 +3317,8 @@ impl App {
             INPUT_LEFT + (extra + layout.cursor.1) as u16,
             1 + (layout.cursor.0 - first) as u16,
         );
-        Bottom::Input { rows, cursor }
+        let shown = layout.rows[first..].iter().take(MAX_INPUT_ROWS).cloned();
+        (Bottom::Input { rows, cursor }, shown.collect())
     }
 
     fn input_width(&self) -> usize {
