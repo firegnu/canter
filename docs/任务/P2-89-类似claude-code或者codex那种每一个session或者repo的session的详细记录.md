@@ -80,3 +80,11 @@
 - **参考**：Codex `rust-v0.163.0` 的 `codex-rs/tui/src/app/transcript_export.rs`、`chatwidget/transcript_export.rs`（选择框两项、`persist_noclobber`、`~` 展开），`codex-rs/cli/src/main.rs` 的 `resume --last`；只参考，没搬代码。
 - **没做的事**：删除、清理会话，按仓库或日期分目录（需求说不做）；会话存盘格式、目录结构、协议没改；没有导出前让用户改文件名的输入框（Codex 有，需求没要）。
 - **踩过的坑**：用 perl 一次改多处时，一条替换里的 `|` 和定界符冲突，把 `while let Some(arg) = args.next()` 改坏了，编译报错后手工改回。
+
+## 主控审查
+
+- diff 只动了 `crates/canter-tui`、`crates/canter` 命令行、DESIGN 第 19 条和本文件；存盘格式、协议没动，「不要做」一条没碰。
+- 重跑标准测试：nextest 730 个全过（和完成记录一致），文档测试、clippy、fmt 过。
+- 看了 `export.rs`：回答全文导出、空回答跳过，`Reasoning` 不导出；写文件用 `create_new`，已有文件不覆盖、写坏删掉；`-c` 走 `Picker::first`，和 `/resume` 列表第一条同一条规则。
+- 取舍：`/export <路径>` 指定的文件已存在也不覆盖，主控同意（不会误删用户文件，想覆盖自己先删）；复制成功在对话里也写一句、改 `copy.rs` 一个函数的返回值，同意；支持 `~/` 开头，同意；开头不写会话 id，同意。
+结果：一次过
