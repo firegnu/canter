@@ -1013,8 +1013,9 @@ fn a_double_click_takes_a_word_with_a_combining_accent_whole() {
     assert_eq!(screen.clipboard(), "cafe\u{301}");
 }
 
-/// A card title with emoji, cut close to the status on the right: dragging
-/// over the whole row copies and highlights the title, not the status.
+/// A card title with emoji, close to the status on the right (the rest of
+/// the command wraps below): dragging over the whole row copies and
+/// highlights the title, not the status.
 #[test]
 fn a_card_title_with_emoji_copies_without_the_status() {
     let mut screen = Screen::sized(40, 20);
@@ -1027,7 +1028,11 @@ fn a_card_title_with_emoji_copies_without_the_status() {
     screen.draw();
     let at = screen.find("● Run");
     let row = screen.lines()[usize::from(at.1)].clone();
-    assert!(row.ends_with("…  exit 0"), "{}", screen.text());
+    assert!(row.ends_with("  exit 0"), "{}", screen.text());
+    assert_eq!(
+        screen.lines()[usize::from(at.1) + 1],
+        "        abcdefghijkl"
+    );
     let title = row.trim_start().trim_start_matches("● ");
     let title = title.trim_end_matches("exit 0").trim_end().to_owned();
     screen.select(at, (39, at.1));
@@ -1093,4 +1098,28 @@ fn dragging_over_coloured_hunks_copies_only_the_code() {
         screen.clipboard(),
         "fn one() {\n    let a = 1;\n    let a = 2;\n    let b = \"x\";\n    let b = \"y\";"
     );
+}
+
+/// A command that wraps copies as it was written: its rows join again where
+/// wrapping broke them, and its own new lines stay.
+#[test]
+fn a_wrapped_command_copies_as_one_line() {
+    let mut screen = Screen::new();
+    screen.start_turn("t1", "run");
+    let words: Vec<String> = (1..=12).map(|n| format!("arg{n:02}")).collect();
+    let line = format!("echo {}", words.join(" "));
+    screen.event(json!({ "type": "item.completed", "turnId": "t1", "item": {
+        "type": "commandExecution", "id": "c1", "command": format!("{line}\nls -la"),
+        "cwd": "/work", "status": "completed", "aggregatedOutput": "", "exitCode": 0,
+        "durationMs": 1200,
+    }}));
+    screen.draw();
+    let title = screen.find("● Run echo arg01");
+    assert_eq!(
+        screen.lines()[usize::from(title.1) + 1],
+        "        arg06 arg07 arg08 arg09 arg10 arg11 arg12"
+    );
+    let end = screen.find_end("ls -la");
+    screen.select(title, end);
+    assert_eq!(screen.clipboard(), format!("Run {line}\nls -la"));
 }

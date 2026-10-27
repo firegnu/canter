@@ -1,5 +1,5 @@
 //! Tool cards: `● Verb object` with the status on the right, output after
-//! `    │ `. MCP calls keep the first lines of their result, web fetches show
+//! `    ┃ `. A command wraps under where it starts and is coloured as Bash. MCP calls keep the first lines of their result, web fetches show
 //! only notes, failed commands keep more lines in the default colour, and
 //! Ctrl+O shows at most 500 lines of one item's output.
 
@@ -148,7 +148,7 @@ fn card(conversation: &[String], title: &str) -> Vec<String> {
     rows.extend(
         conversation[at + 1..]
             .iter()
-            .take_while(|row| row.starts_with("    │"))
+            .take_while(|row| row.starts_with("    ┃"))
             .cloned(),
     );
     rows
@@ -173,10 +173,10 @@ fn mcp_card_shows_arguments_and_the_first_lines_of_its_result() {
         rows,
         [
             "  ● Call github/search_issues  {\"limit\":3,\"query\":\"diff render\"}",
-            "    │ issue 1",
-            "    │ issue 2",
-            "    │ issue 3",
-            "    │ … 4 more lines · Ctrl+O",
+            "    ┃ issue 1",
+            "    ┃ issue 2",
+            "    ┃ issue 3",
+            "    ┃ … 4 more lines · Ctrl+O",
         ]
     );
     let long_row = conversation
@@ -188,7 +188,7 @@ fn mcp_card_shows_arguments_and_the_first_lines_of_its_result() {
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
     let rows = card(&conversation, "  ● Call github/search_issues  {\"limit\"");
-    let expected: Vec<String> = (1..=7).map(|n| format!("    │ issue {n}")).collect();
+    let expected: Vec<String> = (1..=7).map(|n| format!("    ┃ issue {n}")).collect();
     assert_eq!(rows[1..], expected[..]);
 }
 
@@ -218,9 +218,9 @@ fn web_fetch_shows_only_its_title_and_size() {
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
     let rows = card(&conversation, "  ● Fetch https://docs.example/page");
-    assert_eq!(rows[1], "    │ # Docs");
+    assert_eq!(rows[1], "    ┃ # Docs");
     let small = card(&conversation, "  ● Fetch https://docs.example/small");
-    assert_eq!(small[1..], ["    │ hello world"]);
+    assert_eq!(small[1..], ["    ┃ hello world"]);
 }
 
 /// A redirect to another host says `redirect` on the right and shows the
@@ -251,20 +251,20 @@ fn web_fetch_shows_redirects_and_omitted_content_as_their_line() {
     assert!(redirect[0].ends_with("  redirect"), "{redirect:?}");
     assert_eq!(
         redirect[1..],
-        ["    │ Redirected to https://example.org/new"]
+        ["    ┃ Redirected to https://example.org/new"]
     );
     assert_eq!(
         card(&conversation, "  ● Fetch https://example.com/a.png"),
         [
             "  ● Fetch https://example.com/a.png",
-            "    │ [Content omitted: image/png, 20480 bytes]",
+            "    ┃ [Content omitted: image/png, 20480 bytes]",
         ]
     );
     assert_eq!(
         card(&conversation, "  ● Fetch https://example.com/big"),
         [
             "  ● Fetch https://example.com/big",
-            "    │ Download exceeds 10485760 bytes; content omitted.",
+            "    ┃ Download exceeds 10485760 bytes; content omitted.",
         ]
     );
 }
@@ -278,7 +278,7 @@ fn failed_web_fetch_shows_its_reason_in_red() {
     let conversation = screen.conversation();
     let rows = card(&conversation, "  ✗ Fetch http://localhost:9/");
     assert!(rows[0].ends_with("  failed"), "{rows:?}");
-    assert_eq!(rows[1..], [format!("    │ {reason}")]);
+    assert_eq!(rows[1..], [format!("    ┃ {reason}")]);
     let buffer = screen.draw();
     for text in ["✗", "failed", reason] {
         for cell in letters(&cells_of(buffer, text)) {
@@ -302,17 +302,17 @@ fn failed_command_keeps_ten_lines_in_the_default_colour() {
     }));
     let conversation = screen.conversation();
     let failed = card(&conversation, "  ✗ Run cargo clippy");
-    let mut expected = vec!["    │ … 5 more lines · Ctrl+O".to_owned()];
-    expected.extend((6..=15).map(|n| format!("    │ error {n}")));
+    let mut expected = vec!["    ┃ … 5 more lines · Ctrl+O".to_owned()];
+    expected.extend((6..=15).map(|n| format!("    ┃ error {n}")));
     assert_eq!(failed[1..], expected[..]);
     let worked = card(&conversation, "  ● Run cargo test");
     assert_eq!(
         worked[1..],
         [
-            "    │ … 5 more lines · Ctrl+O",
-            "    │ ok 6",
-            "    │ ok 7",
-            "    │ ok 8",
+            "    ┃ … 5 more lines · Ctrl+O",
+            "    ┃ ok 6",
+            "    ┃ ok 7",
+            "    ┃ ok 8",
         ]
     );
     assert!(
@@ -346,12 +346,9 @@ fn ctrl_o_shows_whole_commands_and_at_most_500_lines_of_output() {
     );
     screen.command("c2", "cargo test", &numbered(1200, "line"), 0);
     let folded = screen.conversation();
-    assert!(
-        folded
-            .iter()
-            .any(|row| row.starts_with("  ● Run cargo build \\ …"))
-    );
-    assert!(!folded.iter().any(|row| row.contains("--release")));
+    assert!(!folded.iter().any(|row| row.contains("\\ …")));
+    assert!(folded.iter().any(|row| row == "          --release"));
+    assert!(!folded.iter().any(|row| row == "    ┃ small 1"));
 
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
@@ -364,13 +361,13 @@ fn ctrl_o_shows_whole_commands_and_at_most_500_lines_of_output() {
     assert_eq!(conversation[at + 1], "          --release");
     assert_eq!(conversation[at + 2], "        ls");
     let small = card(&conversation[at + 2..], "        ls");
-    let expected: Vec<String> = (1..=20).map(|n| format!("    │ small {n}")).collect();
+    let expected: Vec<String> = (1..=20).map(|n| format!("    ┃ small {n}")).collect();
     assert_eq!(small[1..], expected[..]);
 
     let long = card(&conversation, "  ● Run cargo test");
-    let mut expected: Vec<String> = (1..=250).map(|n| format!("    │ line {n}")).collect();
-    expected.push("    │ … 700 lines not shown".into());
-    expected.extend((951..=1200).map(|n| format!("    │ line {n}")));
+    let mut expected: Vec<String> = (1..=250).map(|n| format!("    ┃ line {n}")).collect();
+    expected.push("    ┃ … 700 lines not shown".into());
+    expected.extend((951..=1200).map(|n| format!("    ┃ line {n}")));
     assert_eq!(long[1..], expected[..]);
     assert!(
         !conversation
@@ -409,5 +406,155 @@ fn failed_file_read_shows_a_red_cross() {
         for cell in letters(&cells_of(buffer, text)) {
             assert_eq!(cell.fg, Color::Red, "{text:?}");
         }
+    }
+}
+
+/// `echo arg01 arg02 …` up to `arg{count}`.
+fn args(count: usize) -> String {
+    let mut words = vec!["echo".to_owned()];
+    words.extend((1..=count).map(|n| format!("arg{n:02}")));
+    words.join(" ")
+}
+
+/// A row of a command after the title: `arg{from}` to `arg{to}` under the
+/// command's start.
+fn arg_row(from: usize, to: usize) -> String {
+    let words: Vec<String> = (from..=to).map(|n| format!("arg{n:02}")).collect();
+    format!("        {}", words.join(" "))
+}
+
+/// A long command wraps by words, its rows under where it starts, the status
+/// on the first row only. Folded it takes at most 5 rows and then says how
+/// many more there are; Ctrl+O shows all of it.
+#[test]
+fn a_long_command_wraps_under_its_start_and_folds_past_five_rows() {
+    let mut screen = Screen::new(40);
+    screen.command("c1", &args(80), "done\n", 0);
+    let conversation = screen.conversation();
+    let at = conversation
+        .iter()
+        .position(|row| row.starts_with("  ● Run echo"))
+        .unwrap_or_else(|| panic!("{conversation:#?}"));
+    let first = format!("{:<67}exit 0 · 1.2s", format!("  ● Run {}", args(8)));
+    assert_eq!(
+        conversation[at..at + 8],
+        [
+            first.clone(),
+            arg_row(9, 20),
+            arg_row(21, 32),
+            arg_row(33, 44),
+            arg_row(45, 56),
+            "        … 2 more lines · Ctrl+O".to_owned(),
+            "    ┃ done".to_owned(),
+            String::new(),
+        ]
+    );
+
+    assert_eq!(screen.ctrl_o(), None);
+    let conversation = screen.conversation();
+    let at = conversation.iter().position(|row| row == &first).unwrap();
+    assert_eq!(
+        conversation[at..at + 9],
+        [
+            first.clone(),
+            arg_row(9, 20),
+            arg_row(21, 32),
+            arg_row(33, 44),
+            arg_row(45, 56),
+            arg_row(57, 68),
+            arg_row(69, 80),
+            "    ┃ done".to_owned(),
+            String::new(),
+        ]
+    );
+}
+
+/// Each line of a command of several lines wraps the same way, and the rows
+/// wrapping adds count toward the 5.
+#[test]
+fn each_line_of_a_command_wraps_and_counts_toward_the_fold() {
+    let mut screen = Screen::new(40);
+    let command = format!(
+        "cat <<'EOF'\n{}\nEOF\nwc -l notes.txt\nls\nrm notes.txt",
+        args(20)
+    );
+    screen.command("c1", &command, "", 0);
+    let conversation = screen.conversation();
+    let at = conversation
+        .iter()
+        .position(|row| row.starts_with("  ● Run cat <<'EOF'"))
+        .unwrap_or_else(|| panic!("{conversation:#?}"));
+    assert!(conversation[at].ends_with("exit 0 · 1.2s"));
+    let first_args: Vec<String> = (1..=11).map(|n| format!("arg{n:02}")).collect();
+    assert_eq!(
+        conversation[at + 1..at + 6],
+        [
+            format!("        echo {}", first_args.join(" ")),
+            arg_row(12, 20),
+            "        EOF".to_owned(),
+            "        wc -l notes.txt".to_owned(),
+            "        … 2 more lines · Ctrl+O".to_owned(),
+        ]
+    );
+
+    assert_eq!(screen.ctrl_o(), None);
+    let conversation = screen.conversation();
+    let at = conversation
+        .iter()
+        .position(|row| row.starts_with("  ● Run cat <<'EOF'"))
+        .unwrap();
+    assert_eq!(
+        conversation[at + 4..at + 7],
+        [
+            "        wc -l notes.txt",
+            "        ls",
+            "        rm notes.txt"
+        ]
+    );
+}
+
+/// The command in a card is coloured as Bash, like the approval box's.
+#[test]
+fn the_command_is_coloured_as_bash() {
+    let mut screen = Screen::new(30);
+    screen.command("c1", "grep -rn \"pub struct\" src | head -5", "", 0);
+    let buffer = screen.draw();
+    for cell in letters(&cells_of(buffer, "\"pub struct\"")) {
+        assert_ne!(cell.fg, Color::Reset, "a string has a colour");
+    }
+    for cell in letters(&cells_of(buffer, "Run ")) {
+        assert!(cell.modifier.contains(Modifier::BOLD));
+    }
+}
+
+/// Output follows a thick bar: grey on a card that worked, is running or
+/// was declined, red on one that failed. Its text keeps its colours.
+#[test]
+fn the_output_bar_is_red_when_the_card_failed() {
+    let mut screen = Screen::new(60);
+    screen.command("c1", "cargo test", "fine\n", 0);
+    screen.command("c2", "cargo clippy", &numbered(15, "broken"), 101);
+    screen.mcp("m1", json!({}), "mcp worked\n", "completed");
+    screen.mcp("m2", json!({}), "mcp broke\n", "failed");
+    screen.fetch("w1", "http://localhost:9/", "fetch broke", "failed");
+    let buffer = screen.draw();
+    for text in ["┃ fine", "┃ mcp worked"] {
+        let bar = cells_of(buffer, text)[0];
+        assert_eq!(bar.symbol(), "┃");
+        assert!(bar.modifier.contains(Modifier::DIM), "{text:?} grey");
+        assert_ne!(bar.fg, Color::Red, "{text:?}");
+    }
+    for text in [
+        "┃ … 5 more lines",
+        "┃ broken 15",
+        "┃ mcp broke",
+        "┃ fetch broke",
+    ] {
+        let bar = cells_of(buffer, text)[0];
+        assert_eq!(bar.symbol(), "┃");
+        assert_eq!(bar.fg, Color::Red, "{text:?}");
+    }
+    for cell in letters(&cells_of(buffer, "more lines · Ctrl+O")) {
+        assert!(cell.modifier.contains(Modifier::DIM), "the note stays grey");
     }
 }

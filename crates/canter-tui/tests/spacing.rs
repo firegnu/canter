@@ -216,7 +216,7 @@ fn a_blank_row_separates_messages_cards_and_thinking_but_not_reads_in_a_row() {
             "1 + new",
             "",
             "● Run cargo",
-            "│ ok",
+            "┃ ok",
             "",
             "Done.",
             "",

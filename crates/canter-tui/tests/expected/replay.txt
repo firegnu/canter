@@ -39,9 +39,9 @@
       14 + cargo install --path crates/canter
 
   ● Run cargo build                                                      running
-    │    Compiling proc-macro2 v1.0.101
-    │    Compiling unicode-ident v1.0.19
-    │    Compiling libc v0.2.177
+    ┃    Compiling proc-macro2 v1.0.101
+    ┃    Compiling unicode-ident v1.0.19
+    ┃    Compiling libc v0.2.177
  ⠋ Running cargo build · 0s · Esc to interrupt
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
@@ -61,12 +61,12 @@
       14 + cargo install --path crates/canter
 
   ● Run cargo build                                                      running
-    │ … 4 more lines · Ctrl+O
-    │    Compiling quote v1.0.41
-    │    Compiling syn v2.0.106
-    │    Compiling serde_derive v1.0.228
-    │    Compiling serde_json v1.0.145
-    │    Compiling canter-protocol v0.1.0 (/home/dev/canter/crates/canter-proto…
+    ┃ … 4 more lines · Ctrl+O
+    ┃    Compiling quote v1.0.41
+    ┃    Compiling syn v2.0.106
+    ┃    Compiling serde_derive v1.0.228
+    ┃    Compiling serde_json v1.0.145
+    ┃    Compiling canter-protocol v0.1.0 (/home/dev/canter/crates/canter-proto…
  ⠋ Running cargo build · 0s · Esc to interrupt
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
@@ -82,10 +82,10 @@
       14 + cargo install --path crates/canter
 
   ● Run cargo build                                               exit 0 · 12.3s
-    │ … 9 more lines · Ctrl+O
-    │    Compiling canter-store v0.1.0 (/home/dev/canter/crates/canter-store)
-    │    Compiling canter v0.1.0 (/home/dev/canter/crates/canter)
-    │     Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.1s
+    ┃ … 9 more lines · Ctrl+O
+    ┃    Compiling canter-store v0.1.0 (/home/dev/canter/crates/canter-store)
+    ┃    Compiling canter v0.1.0 (/home/dev/canter/crates/canter)
+    ┃     Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.1s
 
   改好了，安装步骤现在只有一行 cargo install --path crates/canter。
 
