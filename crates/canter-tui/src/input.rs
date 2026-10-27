@@ -164,6 +164,24 @@ impl InputBox {
         pieces
     }
 
+    /// The text kept in the input history file: folded pastes in full,
+    /// image markers left out.
+    pub fn text_only(&self) -> String {
+        self.pieces()
+            .into_iter()
+            .map(|piece| match piece {
+                Piece::Text(text) | Piece::Paste(text) => text,
+                Piece::Image(..) => "",
+            })
+            .collect()
+    }
+
+    /// Puts back a draft sent before, as it was, the cursor at the end.
+    pub fn recall(&mut self, draft: &Self) {
+        *self = draft.clone();
+        self.cursor = self.text.len();
+    }
+
     pub fn restore(&mut self, draft: Self) {
         self.cursor = 0;
         self.insert(&draft.text);

@@ -30,6 +30,7 @@ mod help;
 mod highlight;
 mod images;
 mod input;
+mod input_history;
 mod links;
 mod markdown;
 mod mention;

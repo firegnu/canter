@@ -23,6 +23,10 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("/", "Commands, typed first"),
             ("@", "Mention a file"),
             ("↑ / ↓", "Select in a list; otherwise move between lines"),
+            (
+                "↑ / ↓ (empty input)",
+                "Earlier / later messages sent in this directory",
+            ),
             ("Tab", "Complete the command or file selected in the list"),
             ("Esc", "Close the / or @ list"),
             ("Ctrl+V", "Attach the image on the clipboard"),
