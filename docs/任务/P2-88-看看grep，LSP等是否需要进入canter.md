@@ -72,3 +72,11 @@
   - zsh 下命令里不加引号的 `--include=*.rs` 报 `no matches found`（zsh 先展开通配符，没匹配就报错），改用 `rg -g '*.rs'`。
   - 文档页太大（85–96 KB），抓下来存成文件，再按标题行号分段读。
   - 用 `perl -CSD -i -pe` 改报告里的中文时一处都没替换上、也不报错（源码里的中文按字节、输入按字符），去掉 `-CSD` 才生效。
+
+## 主控审查
+
+- diff 只新建了 `docs/调研/P2-88-内置工具调研.md` 和本文件完成记录，没动代码；`git diff --check` 过。
+- 抽查出处 4 条，都对得上：Codex `spec_plan.rs:1315` 的 `update_plan` 受配置开关、`config_toml.rs` 的 `UpdatePlanToolConfig.enabled`；pi `settings-manager.ts:85` 默认 read、bash、edit、write；Codex 全仓搜不到 LSP。
+- 取舍：另参照 omp、Gemini CLI 的工具名单并标「补充」，同意；Claude Code 只用公开文档、抓下来的页面存在它自己会话的 tool-results 里，没读别的配置和会话，可以接受。
+- 要用户定的三处（两处小改要不要做、P2-34 待办默认开关和要不要真调、LSP 以后再说）转给用户。
+结果：一次过
