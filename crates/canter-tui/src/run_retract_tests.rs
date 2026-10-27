@@ -5,29 +5,29 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 use tokio::{net::UnixListener, sync::oneshot};
 
-struct Request {
-    path: String,
-    body: Value,
-    reply: oneshot::Sender<Response>,
+pub(super) struct Request {
+    pub(super) path: String,
+    pub(super) body: Value,
+    pub(super) reply: oneshot::Sender<Response>,
 }
 impl Request {
-    fn json(self, value: Value) {
+    pub(super) fn json(self, value: Value) {
         use axum::response::IntoResponse;
         assert!(self.reply.send(axum::Json(value).into_response()).is_ok());
     }
 }
 
 // Exercise the terminal dispatcher against a real local HTTP boundary.
-struct Harness {
-    chat: Chat<SocketConnector>,
-    ui: Ui<TestBackend>,
-    requests: mpsc::UnboundedReceiver<Request>,
+pub(super) struct Harness {
+    pub(super) chat: Chat<SocketConnector>,
+    pub(super) ui: Ui<TestBackend>,
+    pub(super) requests: mpsc::UnboundedReceiver<Request>,
     messages: mpsc::UnboundedReceiver<Message>,
-    server: tokio::task::JoinHandle<()>,
+    pub(super) server: tokio::task::JoinHandle<()>,
     _temp: tempfile::TempDir,
 }
 impl Harness {
-    async fn new() -> Self {
+    pub(super) async fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let socket = temp.path().join("s");
         let listener = UnixListener::bind(&socket).unwrap();
@@ -86,7 +86,7 @@ impl Harness {
             _temp: temp,
         }
     }
-    async fn request(&mut self) -> Request {
+    pub(super) async fn request(&mut self) -> Request {
         tokio::time::timeout(Duration::from_secs(5), self.requests.recv())
             .await
             .unwrap()

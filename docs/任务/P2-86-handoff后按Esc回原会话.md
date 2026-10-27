@@ -59,3 +59,18 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：`App` 记下 `/handoff` 开出的新会话的原会话 ID（`handoff_draft` 时设），只在这个会话没有轮、没有排队输入、本终端还没按 Enter 发过消息时生效。Esc 在主输入框分支里最后才判断（选区、搜索、btw、批准框、选择框和弹框、`/` 和 `@` 列表都在前面先拿走），第一次用状态行临时提示（和 `Mode: …`、`Copied …` 同一个 `copier.show`）显示 `Esc again to return to the original session`，2 秒后消失；2 秒内再按发 `Action::ReturnFromHandoff(原会话)`。`run.rs` 收到后和 `/resume` 选它一样 `resume` + `show`；把 `pick_session` 里这一段抽成 `Chat::open` 两处共用。打不开时照旧 `warning`（`Could not return to the original session: …`），界面不换、说明还在。切会话后整个 `App` 换新，功能自然没了。帮助弹框 Conversation 节加 `Esc twice`，根 `README.md` 的 `/handoff` 条、`crates/canter-tui/README.md` 讲 Esc 撤回那一段后面各补一句。
+- 验证了什么：新加 `src/run_handoff_tests.rs` 6 个测试（两次 Esc 回原会话并看到原会话对话、说明丢掉；一次只提示、说明还在、还在新会话；隔 2 秒以上不回；发过消息后不切；弹框开着时 Esc 只关弹框、不算次数；`/new` 的会话不切）。先在只加了 `Action` 变体和 `Chat` 方法、没有 Esc 逻辑的代码上跑：4 个失败在提示或动作那一行，「发过消息后不切」「`/new` 不切」两个本来就过（它们守的是不该变的行为）。实现后 6 个全过。第一个测试走真的本机 HTTP（复用 `run_retract_tests.rs` 的假服务端，把它的 `Harness`、`Request` 改成 `pub(super)` 给同级模块用），回放 resume、events、models 三个回复。全套 `cargo nextest run --all-targets` 709 个全过，`cargo test --doc --workspace`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check` 都过，`tests/expected` 没有变化。
+- 拿主意的地方：2 秒按「严格小于」算（和临时提示消失的时刻一致，2000 毫秒整算新的第一次）；中间按了别的键不清掉第一次 Esc（任务没要求）；按 Enter 发出消息就把功能关掉，发送失败草稿回来也不再恢复（「发出第一条消息之后就没了」）；`/btw`、`/compact` 等命令不算发消息，但会产生轮的命令（`/review`）产生轮后按快照判断也关掉。帮助那一行写 `Esc twice` / `After /handoff, before sending: back to the original session`。`crates/canter-tui/README.md` 原来没有讲 `/handoff` 的地方，补在讲 Esc 撤回那段末尾。
+- 没做的事：没有为「原会话打不开时留在新会话、说明不丢」写测试（不在验证清单里，代码沿用 `/resume` 失败的同一条路）；没改服务端、协议、DESIGN。
+- 踩过的坑：用 perl 正则改 `key_on` 里的 `matches!` 时 `|` 没转义，替换拼坏了一行，编译报错后用编辑器改回。
+
+## 主控审查
+
+- diff 只动了 `crates/canter-tui/` 和根目录 README 的 `/handoff` 一条：`handoff_draft` 记下原会话，主输入框的 Esc 在会话没有轮、没有排队输入时走两次 Esc；选区、搜索、btw、批准框、弹框、列表先拿 Esc 的顺序没动。切回原会话和 `/resume` 共用抽出来的 `Chat::open`，打不开时提示、留在新会话。
+- 取舍：严格小于 2 秒、中间按别的键不清第一次、发过一次后就关掉（发送失败也不恢复）、`/btw` 不算发消息，都同意。「原会话打不开」没写测试，走的是 `/resume` 失败同一条路，任务没要，不补。
+- 主控重跑：nextest 709 个全过，doc、clippy、fmt 通过。
+结果：一次过
