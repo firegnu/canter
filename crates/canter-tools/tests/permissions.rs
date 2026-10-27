@@ -424,6 +424,21 @@ async fn approval_answers_and_grants_are_scoped_to_one_session_and_one_tool() {
             feedback: None
         })
     );
+    for (decision, feedback) in [
+        (ApprovalDecision::Decline, None),
+        (
+            ApprovalDecision::DeclineWithFeedback,
+            Some("read instead".to_owned()),
+        ),
+    ] {
+        assert_eq!(
+            first_session.resolve(&shell, decision, Some("read instead".into())),
+            Ok(PermissionCheck::Deny {
+                cancel_turn: false,
+                feedback
+            })
+        );
+    }
     assert_eq!(
         first_session.resolve(&shell, ApprovalDecision::Cancel, None),
         Ok(PermissionCheck::Deny {

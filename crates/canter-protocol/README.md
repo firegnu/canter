@@ -72,7 +72,7 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 `declineWithFeedback` 必须附带非空白的 `feedback` 字符串，其它 decision 不得带 feedback；
 选项不在请求的 `availableDecisions` 内也返回 `invalid_decision`，请求保持等待。
 说明原样保存在 `request.resolved.resolution.feedback`，归并到快照的可选
-`approvalFeedback`（工具项目 ID → 说明），供重开及其它客户端显示，回退对话时随项目移除。
+`approvalFeedback`（工具项目 ID → 说明），供重开及其它客户端显示，回退对话、撤回时移除已删项目的说明。
 旧事件/快照缺少这些字段照旧可读；旧客户端滤掉未知选项，新客户端只显示服务端提供的选项。
 
 解决请求的 `decision` 和 `answer` 都可省略，但必须恰好提供一个，且匹配请求类型。

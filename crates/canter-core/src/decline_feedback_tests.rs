@@ -119,6 +119,23 @@ async fn pending(
     server: &mut ModelServer,
     path: &Path,
 ) -> (Session, Subscription, PendingRequest) {
+    pending_call(
+        store,
+        server,
+        path,
+        "write",
+        r#"{"path":"must-not-exist","content":"changed"}"#,
+    )
+    .await
+}
+
+async fn pending_call(
+    store: Arc<Store>,
+    server: &mut ModelServer,
+    path: &Path,
+    tool: &str,
+    arguments: &str,
+) -> (Session, Subscription, PendingRequest) {
     let (session, _) = Session::create(
         store,
         "feedback".into(),
@@ -141,8 +158,8 @@ async fn pending(
     })).unwrap()).await.unwrap();
     let (_, chunks) = server.request().await;
     let chunk = json!({"choices":[{"index":0,"delta":{"tool_calls":[{
-        "index":0,"id":"write-call","type":"function","function":{"name":"write",
-        "arguments":r#"{"path":"must-not-exist","content":"changed"}"#}
+        "index":0,"id":"tool-call","type":"function","function":{"name":tool,
+        "arguments":arguments}
     }]},"finish_reason":"tool_calls"}]});
     chunks
         .send(format!("data: {chunk}\n\ndata: [DONE]\n\n"))
@@ -298,6 +315,34 @@ async fn decline_feedback_not_offered_leaves_the_tool_pending() {
     assert_eq!(error.code, ErrorCode::InvalidDecision);
     assert_eq!(session.snapshot().await, before);
     assert!(!temp.path().join("must-not-exist").exists());
+    session.close().await.unwrap();
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn question_feedback_is_rejected_without_changing_the_snapshot() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+    let mut server = ModelServer::start().await;
+    let (session, _, request) = pending_call(
+        store, &mut server, temp.path(), "ask_user",
+        r#"{"question":"Which storage?","options":[{"label":"Files","description":"Local files"},{"label":"Database","description":"Shared database"}]}"#,
+    ).await;
+    assert!(matches!(request.kind, RequestKind::UserInput(_)));
+    let before = session.snapshot().await;
+    let error = session
+        .resolve(
+            &request.id,
+            serde_json::from_value(json!({
+                "answer": {"type":"option", "label":"Files"},
+                "feedback":"read instead", "clientName":"test"
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidDecision);
+    assert_eq!(session.snapshot().await, before);
     session.close().await.unwrap();
     server.stop().await;
 }

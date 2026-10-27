@@ -69,12 +69,14 @@ impl PermissionGate {
                 self.grants.insert(call.permission_key());
                 Ok(PermissionCheck::Execute(ExecutionPermit { call }))
             }
-            ApprovalDecision::Decline | ApprovalDecision::DeclineWithFeedback => {
-                Ok(PermissionCheck::Deny {
-                    cancel_turn: false,
-                    feedback,
-                })
-            }
+            ApprovalDecision::Decline => Ok(PermissionCheck::Deny {
+                cancel_turn: false,
+                feedback: None,
+            }),
+            ApprovalDecision::DeclineWithFeedback => Ok(PermissionCheck::Deny {
+                cancel_turn: false,
+                feedback,
+            }),
             ApprovalDecision::Cancel => Ok(PermissionCheck::Deny {
                 cancel_turn: true,
                 feedback: None,

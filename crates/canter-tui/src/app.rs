@@ -973,7 +973,7 @@ impl App {
             return None;
         }
         if shown.approval.is_some() {
-            return self.approval_key(key, shown, guarded);
+            return self.approval_key(key, shown, guarded, at);
         }
         // With nothing typed, End goes to the bottom and follows again, also
         // with a choice open.
@@ -2994,7 +2994,13 @@ impl App {
     /// Keys pressed on an approval box. They answer only the request that box
     /// showed, and only when its answers were on screen; once that request is
     /// gone, they do nothing. While `guarded`, answer keys are dropped.
-    fn approval_key(&mut self, key: KeyEvent, shown: Shown, guarded: bool) -> Option<Action> {
+    fn approval_key(
+        &mut self,
+        key: KeyEvent,
+        shown: Shown,
+        guarded: bool,
+        at: i64,
+    ) -> Option<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('c' | 'd') if ctrl => return Some(Action::Quit),
@@ -3045,7 +3051,10 @@ impl App {
                     cursor.scroll =
                         (cursor.scroll + self.approval_page).min(self.approval_max_scroll)
                 }
-                KeyCode::Backspace | KeyCode::Up if text.is_empty() => cursor.custom = None,
+                KeyCode::Backspace | KeyCode::Up if text.is_empty() => {
+                    cursor.custom = None;
+                    self.guard_until = self.guard_until.max(at + ANSWER_GUARD_MS);
+                }
                 KeyCode::Enter if !text.trim().is_empty() => {
                     self.answered.insert(request_id.clone());
                     return Some(Action::Resolve {

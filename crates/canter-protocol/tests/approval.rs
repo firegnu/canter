@@ -36,6 +36,76 @@ fn legacy_resolution_and_unknown_decisions_remain_readable() {
 }
 
 #[test]
+fn approval_feedback_follows_items_when_rewinding_or_retracting() {
+    let turn = |id: &str| -> Turn {
+        serde_json::from_value(json!({
+            "id": id, "items": [], "status": "completed", "error": null,
+            "input": [], "clientName": "terminal", "usage": null
+        }))
+        .unwrap()
+    };
+    let mut initial = SessionSnapshot::empty("s1");
+    for (turn_id, item_id, feedback) in
+        [("t1", "i1", "keep this"), ("t2", "i2", "remove with item")]
+    {
+        let mut turn = turn(turn_id);
+        turn.items.push(
+            serde_json::from_value(json!({
+                "type": "commandExecution", "id": item_id, "command": "touch file", "cwd": "/work",
+                "status": "declined", "aggregatedOutput": "", "exitCode": null, "durationMs": null
+            }))
+            .unwrap(),
+        );
+        initial.turns.push(turn);
+        initial
+            .approval_feedback
+            .insert(item_id.into(), feedback.into());
+    }
+    for (payload, removes_item) in [
+        (
+            EventPayload::SessionRewound {
+                before_turn_id: "t2".into(),
+                rewind_conversation: true,
+                record: turn("record"),
+            },
+            true,
+        ),
+        (
+            EventPayload::SessionRewound {
+                before_turn_id: "t2".into(),
+                rewind_conversation: false,
+                record: turn("record"),
+            },
+            false,
+        ),
+        (
+            EventPayload::TurnRetracted {
+                turn_id: "t2".into(),
+            },
+            true,
+        ),
+    ] {
+        let event = Event {
+            seq: 1,
+            session_id: "s1".into(),
+            timestamp: 20,
+            payload,
+        };
+        let snapshot = apply_event(&initial, &event).unwrap();
+        let expected = if removes_item {
+            [("i1".to_owned(), "keep this".to_owned())].into()
+        } else {
+            initial.approval_feedback.clone()
+        };
+        assert_eq!(snapshot.approval_feedback, expected, "{:?}", event.payload);
+        assert_eq!(
+            snapshot.turns.iter().any(|turn| turn.id == "t2"),
+            !removes_item
+        );
+    }
+}
+
+#[test]
 fn resolving_an_already_processed_approval_is_idempotent() {
     let mut initial = SessionSnapshot::empty("s1");
     initial.pending_requests.push(PendingRequest {

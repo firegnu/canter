@@ -759,13 +759,54 @@ fn decline_feedback_empty_input_returns_to_options_and_escape_interrupts() {
                 .screen()
                 .contains("4. Decline and say what to do instead")
         );
+        screen.read_the_box();
         assert_eq!(screen.key(KeyCode::Char('4')), None);
         screen.draw();
+        assert!(screen.screen().contains("What to do instead:"));
         assert_eq!(
             screen.key(KeyCode::Esc),
             Some(Action::Interrupt {
                 turn_id: "t1".into()
             })
+        );
+    }
+}
+
+#[test]
+fn decline_feedback_returning_to_options_restarts_the_answer_guard() {
+    for back in [KeyCode::Backspace, KeyCode::Up] {
+        let mut screen = Screen::new(100, 30);
+        screen.start_turn("t1");
+        screen.ask("r1", "t1", "touch must-not-exist");
+        screen.draw();
+        screen.read_the_box();
+        assert_eq!(screen.key(KeyCode::Char('4')), None);
+        screen.draw();
+        assert_eq!(screen.key(KeyCode::Char('x')), None);
+        screen.draw();
+        assert_eq!(screen.key(KeyCode::Backspace), None);
+        screen.draw();
+        assert_eq!(screen.key(back), None);
+        screen.draw();
+        assert_eq!(
+            screen.key(KeyCode::Char('2')),
+            None,
+            "returning with {back:?} must not grant permission"
+        );
+        screen.draw();
+        assert!(screen.dim("2. Allow for this session"));
+        screen.wait(ANSWER_GUARD_MS - 1);
+        assert_eq!(
+            screen.key(KeyCode::Char('2')),
+            None,
+            "the guard is still active"
+        );
+        screen.read_the_box();
+        screen.draw();
+        assert!(!screen.dim("2. Allow for this session"));
+        assert_eq!(
+            screen.key(KeyCode::Char('2')),
+            resolve("r1", ApprovalDecision::AcceptForSession)
         );
     }
 }
