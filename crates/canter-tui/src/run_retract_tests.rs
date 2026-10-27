@@ -1,6 +1,6 @@
 use super::*;
 use axum::{Router, body::Body, extract::State, response::Response};
-use canter_protocol::{EventPayload, Turn, TurnStatus};
+use canter_protocol::{EventPayload, InputRemovalReason, Turn, TurnStatus};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 use tokio::{net::UnixListener, sync::oneshot};
@@ -438,6 +438,59 @@ async fn lost_interrupt_reply_still_restores_when_the_retraction_event_arrives()
                     "recover this input\nexisting draft"
                 } else {
                     "existing draft"
+                }
+                .into()
+            ))
+        );
+        test.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn escape_restores_queued_inputs_only_when_this_terminal_stopped_the_turn() {
+    use axum::response::IntoResponse;
+    for stopped in [true, false] {
+        let mut test = Harness::new().await;
+        test.start("first", "keep this turn", None);
+        test.event(EventPayload::InputQueued {
+            input: serde_json::from_value(json!({
+                "id":"q1","input":[{"type":"text","text":"queued input"}],"clientName":"test",
+            }))
+            .unwrap(),
+        });
+        test.ui.app_mut().handle_paste("draft");
+        test.key(KeyCode::Esc);
+        let request = test.request().await;
+        assert_eq!(request.path, "/v1/sessions/test/interrupt");
+        test.event(EventPayload::InputRemoved {
+            input_ids: vec!["q1".into()],
+            reason: InputRemovalReason::Interrupted,
+            turn_id: None,
+        });
+        let mut turn = test.ui.app().snapshot().turns[0].clone();
+        turn.status = TurnStatus::Interrupted;
+        test.event(EventPayload::TurnCompleted { turn });
+        if stopped {
+            request.json(json!({"eventSeq":5,"retracted":false}));
+        } else {
+            // Another terminal stopped the turn before this request arrived.
+            let response = (
+                axum::http::StatusCode::CONFLICT,
+                axum::Json(json!({"code":"turn_mismatch","message":"turn is not active"})),
+            )
+                .into_response();
+            assert!(request.reply.send(response).is_ok());
+        }
+        test.message().await;
+        assert_eq!(
+            test.ui
+                .app_mut()
+                .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 0),
+            Some(Action::Send(
+                if stopped {
+                    "queued input\ndraft"
+                } else {
+                    "draft"
                 }
                 .into()
             ))

@@ -224,48 +224,184 @@ fn retract_restores_original_image_paths_even_when_send_replies_arrive_last() {
     }
 }
 
-#[test]
-fn rejected_retract_keeps_the_interrupted_turn_and_original_draft() {
-    let mut ui = ui();
-    start(&mut ui, text("keep in conversation"));
-    queued(&mut ui, "q1", text("ordinary discard"));
+fn interrupted(ui: &mut Ui<TestBackend>, turn_id: &str) {
     event(
-        &mut ui,
-        EventPayload::ItemStarted {
-            turn_id: "turn".into(),
-            item: Item::AgentMessage {
-                id: "answer".into(),
-                text: "already speaking".into(),
-            },
-        },
-    );
-    ui.app_mut().handle_paste("original draft");
-    ui.app_mut().handle_key(key(KeyCode::Esc), 0);
-    ui.app_mut().interrupt_finished("turn", false);
-    event(
-        &mut ui,
+        ui,
         EventPayload::InputRemoved {
             input_ids: vec!["q1".into()],
             reason: InputRemovalReason::Interrupted,
             turn_id: None,
         },
     );
-    let mut turn = ui.app().snapshot().turns[0].clone();
+    let mut turn = ui
+        .app()
+        .snapshot()
+        .turns
+        .iter()
+        .find(|turn| turn.id == turn_id)
+        .unwrap()
+        .clone();
     turn.status = TurnStatus::Interrupted;
-    event(&mut ui, EventPayload::TurnCompleted { turn });
+    event(ui, EventPayload::TurnCompleted { turn });
     event(
-        &mut ui,
+        ui,
         EventPayload::SessionStatus {
             status: SessionStatus::Idle,
             close_reason: None,
         },
     );
-    assert!(screen(&ui).contains("keep in conversation"));
-    assert!(screen(&ui).contains("Turn interrupted"));
+}
+
+#[test]
+fn interrupt_after_the_model_spoke_restores_queued_inputs_but_keeps_the_turn() {
+    for reply_first in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let picture = temp.path().join("picture.png");
+        std::fs::write(&picture, b"\x89PNG\r\n\x1a\n").unwrap();
+        let picture = picture.to_string_lossy().into_owned();
+        let queue = vec![
+            UserInput::Text {
+                text: "queued one\nsecond line".into(),
+            },
+            UserInput::LocalImage {
+                path: picture.clone(),
+                name: Some("picture.png".into()),
+            },
+        ];
+        let mut ui = ui();
+        start(&mut ui, text("keep in conversation"));
+        event(
+            &mut ui,
+            EventPayload::ItemStarted {
+                turn_id: "turn".into(),
+                item: Item::AgentMessage {
+                    id: "answer".into(),
+                    text: "already speaking".into(),
+                },
+            },
+        );
+        ui.app_mut().input_sending();
+        ui.app_mut().input_sent(5, queue);
+        queued(
+            &mut ui,
+            "q1",
+            vec![
+                UserInput::Text {
+                    text: "queued one\nsecond line".into(),
+                },
+                UserInput::LocalImage {
+                    path: "image-server-queued.png".into(),
+                    name: Some("picture.png".into()),
+                },
+            ],
+        );
+        ui.app_mut().handle_paste("original draft");
+        assert!(matches!(
+            ui.app_mut().handle_key(key(KeyCode::Esc), 0),
+            Some(Action::Interrupt { .. })
+        ));
+        if reply_first {
+            ui.app_mut().interrupt_finished("turn", true);
+        }
+        interrupted(&mut ui, "turn");
+        if !reply_first {
+            ui.app_mut().interrupt_finished("turn", true);
+        }
+        ui.draw(0).unwrap();
+        assert!(screen(&ui).contains("keep in conversation"));
+        assert!(screen(&ui).contains("Turn interrupted"));
+        let Some(Action::SendImages { input, .. }) =
+            ui.app_mut().handle_key(key(KeyCode::Enter), 0)
+        else {
+            panic!("the queued image must come back as an attachment");
+        };
+        let contents: String = input
+            .iter()
+            .filter_map(|part| match part {
+                UserInput::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(contents, "queued one\nsecond line\noriginal draft");
+        assert!(
+            input
+                .iter()
+                .any(|part| matches!(part, UserInput::LocalImage { path, .. } if *path == picture))
+        );
+    }
+}
+
+#[test]
+fn interrupting_a_user_shell_turn_restores_queued_inputs() {
+    let mut ui = ui();
+    let turn = serde_json::from_value(json!({
+        "id":"shell", "input":[], "items":[], "clientName":"userShell",
+        "status":"inProgress", "error":null, "usage":null,
+    }))
+    .unwrap();
+    event(
+        &mut ui,
+        EventPayload::TurnStarted {
+            turn,
+            input_id: None,
+        },
+    );
+    event(
+        &mut ui,
+        EventPayload::ItemStarted {
+            turn_id: "shell".into(),
+            item: serde_json::from_value(json!({
+                "type":"commandExecution", "id":"command", "command":"sleep 100",
+                "source":"userShell", "cwd":"/work", "status":"inProgress",
+                "aggregatedOutput":"", "exitCode":null, "durationMs":null,
+            }))
+            .unwrap(),
+        },
+    );
+    event(
+        &mut ui,
+        EventPayload::SessionStatus {
+            status: SessionStatus::Working,
+            close_reason: None,
+        },
+    );
+    queued(&mut ui, "q1", text("queued behind the command"));
+    ui.app_mut().handle_paste("draft");
+    assert_eq!(
+        ui.app_mut().handle_key(key(KeyCode::Esc), 0),
+        Some(Action::Interrupt {
+            turn_id: "shell".into()
+        })
+    );
+    ui.app_mut().interrupt_finished("shell", true);
+    interrupted(&mut ui, "shell");
     assert_eq!(
         ui.app_mut().handle_key(key(KeyCode::Enter), 0),
-        Some(Action::Send("original draft".into()))
+        Some(Action::Send("queued behind the command\ndraft".into()))
     );
+}
+
+#[test]
+fn interrupt_from_another_terminal_does_not_restore_queued_inputs() {
+    // `false`: this terminal pressed Esc too, but the server answered that
+    // the turn was no longer running, so the other terminal stopped it.
+    for pressed_esc in [false, true] {
+        let mut ui = ui();
+        start(&mut ui, text("someone else stops this"));
+        queued(&mut ui, "q1", text("queued input"));
+        ui.app_mut().handle_paste("own draft");
+        if pressed_esc {
+            ui.app_mut().handle_key(key(KeyCode::Esc), 0);
+        }
+        interrupted(&mut ui, "turn");
+        if pressed_esc {
+            ui.app_mut().interrupt_finished("turn", false);
+        }
+        assert_eq!(
+            ui.app_mut().handle_key(key(KeyCode::Enter), 0),
+            Some(Action::Send("own draft".into()))
+        );
+    }
 }
 
 #[test]

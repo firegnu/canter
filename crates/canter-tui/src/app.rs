@@ -2823,8 +2823,10 @@ impl App {
         self.steering.reply(event_seq, accepted);
     }
 
-    pub fn interrupt_finished(&mut self, turn_id: &str, retracted: bool) {
-        self.retract_drafts.response(turn_id, retracted);
+    /// The reply to this terminal's Esc. `stopped`: the interrupt stopped the
+    /// turn, retracted or not; false when the turn had already ended.
+    pub fn interrupt_finished(&mut self, turn_id: &str, stopped: bool) {
+        self.retract_drafts.response(turn_id, stopped);
         self.restore_retracted();
     }
 

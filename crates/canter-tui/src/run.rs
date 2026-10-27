@@ -888,9 +888,10 @@ enum Message {
         connection_error: bool,
         message: String,
     },
+    /// `stopped`: this request stopped the turn, retracted or not.
     Interrupted {
         turn_id: String,
-        retracted: bool,
+        stopped: bool,
     },
     Reconnecting(String),
     Reconnected(Connected),
@@ -1254,9 +1255,7 @@ impl<C: Connector> Chat<C> {
                 connection_error,
                 message,
             } => app.interrupt_failed(&turn_id, connection_error, &message),
-            Message::Interrupted { turn_id, retracted } => {
-                app.interrupt_finished(&turn_id, retracted)
-            }
+            Message::Interrupted { turn_id, stopped } => app.interrupt_finished(&turn_id, stopped),
             Message::Reconnecting(reason) => app.reconnecting(&reason),
             Message::Reconnected(connected) => {
                 self.client = connected.client;
@@ -1476,20 +1475,21 @@ impl<C: Connector> Chat<C> {
                     .any(|turn| turn.id == turn_id && turn.review.is_none());
                 tokio::spawn(async move {
                     match client.interrupt(&session, &turn_id, retract).await {
-                        Ok(response) => {
+                        Ok(_) => {
                             let _ = sender.send(Message::Interrupted {
                                 turn_id,
-                                retracted: response.retracted == Some(true),
+                                stopped: true,
                             });
                         }
-                        // The turn ended on its own meanwhile.
+                        // The turn ended on its own or another terminal
+                        // stopped it meanwhile.
                         Err(ClientError::Server {
                             code: ErrorCode::TurnMismatch,
                             ..
                         }) => {
                             let _ = sender.send(Message::Interrupted {
                                 turn_id,
-                                retracted: false,
+                                stopped: false,
                             });
                         }
                         Err(error) => {
