@@ -41,6 +41,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::client::{Client, ClientError, EventStream};
 use crate::picker::{Pick, Picker};
+use crate::tab_title::{TabState, TabTitle};
 use crate::theme::{self, Theme};
 use crate::{Action, App, Ui, now_ms};
 
@@ -256,50 +257,68 @@ where
     let status_line = crate::statusline::load(&env);
     let client = connected.client;
     let named_first = matches!(&open, Open::New { first: Some(_), .. });
-    let opened = match open {
-        Open::New {
-            cwd,
-            model,
-            approval_policy,
-            first,
-        } => {
-            let params = SessionCreateParams {
+    let mut tab = TabTitle::new(&env);
+    // Every way out of here, a title written over the session list included,
+    // goes through the clearing below.
+    let opened: Result<Option<(SessionSnapshot, EventStream)>, RunError> = async {
+        let opened = match open {
+            Open::New {
                 cwd,
-                env: env.clone(),
                 model,
                 approval_policy,
-                input: first.clone().map(|text| vec![UserInput::Text { text }]),
-                reasoning_effort: None,
-                name: first.as_deref().map(session_title),
-                client_name: client_name.clone(),
-            };
-            client
-                .create_session(&params)
-                .await
-                .map(|created| created.session)
-                .map_err(RunError::from)
-        }
-        Open::Resume { id, cwd, update } => {
-            let id = match id {
-                Some(id) => Some(id),
-                None => {
-                    let picker = Picker::new(client.list_sessions().await?, cwd, home.clone());
-                    match pick(&mut terminal, &mut input, picker, &mut shutdown).await? {
-                        Pick::Open(id) => Some(id),
-                        Pick::Cancel | Pick::Exit => return Ok(None),
-                    }
-                }
-            };
-            match id {
-                Some(id) => resume(&client, &id, &env, &update).await,
-                None => return Ok(None),
+                first,
+            } => {
+                let params = SessionCreateParams {
+                    cwd,
+                    env: env.clone(),
+                    model,
+                    approval_policy,
+                    input: first.clone().map(|text| vec![UserInput::Text { text }]),
+                    reasoning_effort: None,
+                    name: first.as_deref().map(session_title),
+                    client_name: client_name.clone(),
+                };
+                client
+                    .create_session(&params)
+                    .await
+                    .map(|created| created.session)
+                    .map_err(RunError::from)
             }
+            Open::Resume { id, cwd, update } => {
+                let id = match id {
+                    Some(id) => Some(id),
+                    None => {
+                        let dir = crate::tab_title::dir_name(&cwd, home.as_deref());
+                        let picker = Picker::new(client.list_sessions().await?, cwd, home.clone());
+                        let tab = (&mut tab, dir.as_str());
+                        match pick(&mut terminal, &mut input, picker, &mut shutdown, tab).await? {
+                            Pick::Open(id) => Some(id),
+                            Pick::Cancel | Pick::Exit => return Ok(None),
+                        }
+                    }
+                };
+                match id {
+                    Some(id) => resume(&client, &id, &env, &update).await,
+                    None => return Ok(None),
+                }
+            }
+        };
+        let snapshot = opened?;
+        let stream = client
+            .subscribe(&snapshot.id, snapshot.last_event_seq)
+            .await?;
+        Ok(Some((snapshot, stream)))
+    }
+    .await;
+    let (snapshot, stream) = match opened {
+        Ok(Some(opened)) => opened,
+        other => {
+            leave_tab(terminal.backend_mut(), &mut tab);
+            return other.map(|_| None);
         }
     };
-    let snapshot = opened?;
 
     let session = snapshot.id.clone();
-    let stream = client.subscribe(&session, snapshot.last_event_seq).await?;
     let mut app = App::new(snapshot, home.clone(), now_ms())
         .with_client_name(client_name.clone())
         .with_welcome(version.clone())
@@ -345,7 +364,7 @@ where
         if shutdown.requested() {
             break Ok(());
         }
-        if let Err(error) = draw(&mut ui, &input) {
+        if let Err(error) = draw(&mut ui, &input, &mut tab) {
             break Err(error);
         }
         // Faster for a moment while a copy's light sweeps, then as before.
@@ -384,7 +403,9 @@ where
                     }
                 }
                 Some(Action::PickSession) => {
-                    let picked = chat.pick_session(&mut ui, &mut input, &mut shutdown).await;
+                    let picked = chat
+                        .pick_session(&mut ui, &mut input, &mut shutdown, &mut tab)
+                        .await;
                     // Not the redraws missed while the list was up, all at once.
                     tick.reset();
                     match picked {
@@ -478,6 +499,7 @@ where
     chat.pump.abort();
     chat.cancel_btw();
     ui.app_mut().stop_status_line().await;
+    leave_tab(ui.backend_mut(), &mut tab);
     result.map(|()| Some(chat.session))
 }
 
@@ -520,11 +542,13 @@ async fn resume(
 }
 
 /// Shows the session list, distinguishing dismissal from terminal shutdown.
+/// Meanwhile the tab shows `tab`'s directory, idle.
 async fn pick<B>(
     terminal: &mut Terminal<B>,
     input: &mut Input,
     mut picker: Picker,
     shutdown: &mut Shutdown,
+    (tab, dir): (&mut TabTitle, &str),
 ) -> Result<Pick, RunError>
 where
     B: FrameSync,
@@ -546,6 +570,13 @@ where
             .map(drop);
         terminal.backend_mut().end_frame().map_err(terminal_error)?;
         drawn.map_err(terminal_error)?;
+        let title = tab.update(TabState::Idle, dir, now_ms());
+        if !title.is_empty() {
+            terminal
+                .backend_mut()
+                .write_sequence(&title)
+                .map_err(terminal_error)?;
+        }
         input.frame_on_screen();
         // The list changes only with its own keys, so every key is for this frame.
         let event = tokio::select! {
@@ -565,7 +596,7 @@ where
     }
 }
 
-fn draw<B>(ui: &mut Ui<B>, input: &Input) -> Result<(), RunError>
+fn draw<B>(ui: &mut Ui<B>, input: &Input, tab: &mut TabTitle) -> Result<(), RunError>
 where
     B: FrameSync,
     B::Error: std::error::Error + Send + Sync + 'static,
@@ -579,6 +610,13 @@ where
             .write_sequence(&sequence)
             .map_err(terminal_error)?;
     }
+    let app = ui.app();
+    let title = tab.update(app.tab_state(), &app.tab_dir(), now_ms());
+    if !title.is_empty() {
+        ui.backend_mut()
+            .write_sequence(&title)
+            .map_err(terminal_error)?;
+    }
     // Only now is the frame on screen; keys that came in while it was drawn
     // were pressed on the one before.
     let frame = input.frame_on_screen();
@@ -588,6 +626,15 @@ where
 
 fn terminal_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> RunError {
     RunError::Io(io::Error::other(error))
+}
+
+/// Empties the tab's title and mark on quitting. The terminal may be gone
+/// (SIGHUP), so a failed write is let go.
+fn leave_tab<B: FrameSync>(backend: &mut B, tab: &mut TabTitle) {
+    let sequence = tab.leave();
+    if !sequence.is_empty() {
+        let _ = backend.write_sequence(&sequence);
+    }
 }
 
 /// What the background tasks tell the screen.
@@ -825,6 +872,7 @@ impl<C: Connector> Chat<C> {
         ui: &mut Ui<B>,
         input: &mut Input,
         shutdown: &mut Shutdown,
+        tab: &mut TabTitle,
     ) -> Result<ControlFlow<(), Option<mpsc::UnboundedReceiver<Message>>>, RunError>
     where
         B: FrameSync,
@@ -840,7 +888,9 @@ impl<C: Connector> Chat<C> {
         };
         let cwd = ui.app().snapshot().settings.cwd.clone();
         let picker = Picker::new(sessions, cwd, self.home.clone());
-        let id = match pick(ui.terminal_mut(), input, picker, shutdown).await? {
+        let dir = ui.app().tab_dir();
+        let tab = (tab, dir.as_str());
+        let id = match pick(ui.terminal_mut(), input, picker, shutdown, tab).await? {
             Pick::Open(id) if id != self.session => id,
             Pick::Exit => return Ok(ControlFlow::Break(())),
             _ => return Ok(ControlFlow::Continue(None)),

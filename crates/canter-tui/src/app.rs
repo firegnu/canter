@@ -46,7 +46,7 @@ const MENTION_ROWS: usize = 10;
 /// Border, padding and the `› ` prompt on the left; padding and border on the right.
 const INPUT_LEFT: u16 = 4;
 const INPUT_CHROME: u16 = 6;
-const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+pub(crate) const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Columns of a running command the status line keeps however narrow the window.
 const MIN_COMMAND: usize = 12;
 /// Conversation rows one step of the mouse wheel scrolls.
@@ -534,6 +534,9 @@ pub struct App {
     errors_shown: HashSet<String>,
     /// Unix ms when the current turn started.
     working_since: Option<i64>,
+    /// How the last turn ended, for the terminal tab: `Done` or `Failed`
+    /// until a key is pressed here. An interrupted turn leaves none.
+    turn_mark: Option<crate::tab_title::TabState>,
     /// Why the event stream is down while reconnecting.
     reconnecting: Option<String>,
     /// The turn an interrupt was sent for.
@@ -704,6 +707,7 @@ impl App {
             completed: HashSet::new(),
             errors_shown: HashSet::new(),
             working_since: working.then_some(now_ms),
+            turn_mark: None,
             reconnecting: None,
             interrupting: None,
             answered: HashSet::new(),
@@ -800,8 +804,16 @@ impl App {
                 self.active_btw = None;
                 self.chooser = None;
             }
-            EventPayload::TurnStarted { .. } => self.working_since = Some(event.timestamp),
+            EventPayload::TurnStarted { .. } => {
+                self.working_since = Some(event.timestamp);
+                self.turn_mark = None;
+            }
             EventPayload::TurnCompleted { turn } => {
+                self.turn_mark = match turn.status {
+                    TurnStatus::Completed => Some(crate::tab_title::TabState::Done),
+                    TurnStatus::Failed => Some(crate::tab_title::TabState::Failed),
+                    _ => None,
+                };
                 if self.interrupting.as_ref() == Some(&turn.id) {
                     self.interrupting = None;
                 }
@@ -917,6 +929,9 @@ impl App {
     /// [`App::key_action`]. Esc drops a click waiting to open a link, and
     /// so does switching to another session.
     fn key_on(&mut self, key: KeyEvent, shown: Shown, at: i64) -> Option<Action> {
+        if key.kind != KeyEventKind::Release {
+            self.turn_mark = None;
+        }
         if key.code == KeyCode::Esc && key.kind != KeyEventKind::Release {
             self.mouse.link = None;
         }
@@ -2249,6 +2264,22 @@ impl App {
         } else {
             REDRAW
         }
+    }
+
+    /// What the terminal tab shows: the session working or waiting, else how
+    /// the last turn ended, until a key is pressed in this terminal.
+    pub(crate) fn tab_state(&self) -> crate::tab_title::TabState {
+        use crate::tab_title::TabState;
+        match self.snapshot.status {
+            SessionStatus::Working => TabState::Working,
+            SessionStatus::WaitingApproval => TabState::Waiting,
+            _ => self.turn_mark.unwrap_or(TabState::Idle),
+        }
+    }
+
+    /// The directory in the terminal tab's title.
+    pub(crate) fn tab_dir(&self) -> String {
+        crate::tab_title::dir_name(&self.snapshot.settings.cwd, self.home.as_deref())
     }
 
     /// OSC 52 for the terminal, to write between frames.

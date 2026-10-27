@@ -397,6 +397,12 @@ Enter 在命令名没打完时只补全、不执行，打完整了才执行。Es
 - 展开着时末尾还有 `· Details shown · Ctrl+O to fold`。窗口放不下时先截命令（最少留 12 列，截掉的写 `…`），
   还放不下就不显示 Ctrl+O 那句，再放不下行尾直接截掉。
 - 卡片里不转圈、不计时；只有状态行变了不算新输出，往上翻着时提示行照旧是 `↓ Jump to bottom`，不变成 `↓ New output below`。
+- **标签页标题**：canter 用 OSC 0 写终端标签页的标题 `<符号> canter · <目录名>`（工作目录的最后一段，家目录本身写 `~`）。
+  干活时符号照状态行的转圈，每 100 毫秒一格；等批准、等回答 `✋`；一轮做完 `✓`、出错 `✗`，留到在这个 canter 里按任意键，
+  才回到空闲的 `canter · <目录名>`；Esc 打断的轮直接回空闲。会话列表（`--resume`、`/resume`）开着时是空闲的样子。
+  只在标题变了时写；去掉控制字符和双向、不可见字符，最长 240 字，screen 里只写 ASCII。退出时写空标题，
+  终端用回自己的默认标题，不读、不恢复原来的。Ghostty 和 iTerm2 3.6.6 及以上另发 OSC 9;4，在标签上显示忙（`9;4;3`）
+  或等待（`9;4;4;100`），做完、出错、空闲和退出时清掉（`9;4;0`）；tmux、screen 和别的终端里不发（OSC 9 在不少终端里是弹通知）。
 - **压缩**（灰色一行）：压缩中 `── Compacting context… ──`（不扫流光），压完 `── Context compacted ──`，
   没压成功（出错、被 Esc 打断，或一轮结束了还没压完）`── Compaction did not finish; the original context is kept ──`。
   没压成功靠核心写进摘要的固定那句话（`Compaction did not finish; the original context is kept.`）或摘要为空认出来。
