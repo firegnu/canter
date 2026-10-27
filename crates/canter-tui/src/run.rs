@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::io::{self, IsTerminal, Write};
 use std::ops::ControlFlow;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -56,6 +56,10 @@ const TITLE_CHARS: usize = 80;
 #[cfg(test)]
 #[path = "run_retract_tests.rs"]
 mod retract_tests;
+
+#[cfg(test)]
+#[path = "run_input_tests.rs"]
+mod input_tests;
 
 /// A connection to the server.
 pub struct Connected {
@@ -141,6 +145,8 @@ pub enum RunError {
 pub struct Input {
     events: mpsc::UnboundedReceiver<(u64, i64, TermEvent)>,
     frames: Arc<AtomicU64>,
+    // Real terminals also check hangup independently of the event reader.
+    tty: Option<OwnedFd>,
 }
 
 /// Sends terminal events to [`run_on`]; see [`input`].
@@ -157,6 +163,7 @@ pub fn input() -> (InputSender, Input) {
     let input = Input {
         events: receiver,
         frames: frames.clone(),
+        tty: None,
     };
     let sender = InputSender {
         events: sender,
@@ -180,6 +187,24 @@ impl InputSender {
 }
 
 impl Input {
+    async fn recv(&mut self) -> Option<(u64, i64, TermEvent)> {
+        let Some(tty) = &self.tty else {
+            return self.events.recv().await;
+        };
+        loop {
+            // A hangup can race the reader's native poll and trap crossterm
+            // inside its EOF/EIO loop, leaving the sender alive indefinitely.
+            // Detect it here too, then use the ordinary input-ended cleanup.
+            if !terminal_input_open(tty.as_fd(), 0).unwrap_or(false) {
+                return None;
+            }
+            tokio::select! {
+                event = self.events.recv() => return event,
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+        }
+    }
+
     /// The frame just drawn is on screen now; returns its number. Events sent
     /// from here on carry it.
     fn frame_on_screen(&self) -> u64 {
@@ -226,8 +251,9 @@ pub async fn run<C: Connector>(launch: Launch<C>) -> Result<Option<String>, RunE
     // The terminal answers on its input, so ask before the reader takes it.
     theme::set(Theme::detect());
     let terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-    let (sender, input) = input();
-    let reader = TerminalReader::spawn(sender)?;
+    let (sender, mut input) = input();
+    let (reader, tty) = TerminalReader::spawn(sender)?;
+    input.tty = Some(tty);
     let result = run_on(terminal, input, launch).await;
     reader.stop().await;
     result
@@ -377,7 +403,7 @@ where
         let mut quit = tokio::select! {
             biased;
             _ = shutdown.wait() => break 'run Ok(()),
-            event = input.events.recv() => match event {
+            event = input.recv() => match event {
                 Some(event) => {
                     next = Some(event);
                     false
@@ -582,7 +608,7 @@ where
         let event = tokio::select! {
             biased;
             _ = shutdown.wait() => return Ok(Pick::Exit),
-            event = input.events.recv() => event,
+            event = input.recv() => event,
         };
         match event {
             None => return Ok(Pick::Exit),
@@ -1459,13 +1485,14 @@ struct TerminalReader {
 }
 
 impl TerminalReader {
-    fn spawn(sender: InputSender) -> io::Result<Self> {
+    fn spawn(sender: InputSender) -> io::Result<(Self, OwnedFd)> {
         // Match crossterm's input source, including redirected stdin.
         let tty = if io::stdin().is_terminal() {
             io::stdin().as_fd().try_clone_to_owned()?
         } else {
             std::fs::File::open("/dev/tty")?.into()
         };
+        let monitor = tty.try_clone()?;
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let thread = std::thread::spawn(move || {
@@ -1504,7 +1531,7 @@ impl TerminalReader {
                 }
             }
         });
-        Ok(Self { stop, thread })
+        Ok((Self { stop, thread }, monitor))
     }
 
     async fn stop(self) {
