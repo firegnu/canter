@@ -32,6 +32,10 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
                 "Earlier / later messages sent in this directory",
             ),
             ("Tab", "Complete the command or file selected in the list"),
+            (
+                "Tab (while working)",
+                "Steer: send into the turn in progress; Enter queues",
+            ),
             ("Esc", "Close the / or @ list"),
             ("Ctrl+V", "Attach the image on the clipboard"),
             ("Ctrl+G", "Edit the message in $VISUAL or $EDITOR"),

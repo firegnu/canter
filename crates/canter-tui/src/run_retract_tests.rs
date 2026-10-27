@@ -92,7 +92,7 @@ impl Harness {
             .unwrap()
             .unwrap()
     }
-    async fn message(&mut self) {
+    pub(super) async fn message(&mut self) {
         let message = tokio::time::timeout(Duration::from_secs(5), self.messages.recv())
             .await
             .unwrap()
@@ -100,7 +100,7 @@ impl Harness {
         self.chat.message(&mut self.ui, message);
         self.ui.draw(0).unwrap();
     }
-    fn event(&mut self, payload: EventPayload) {
+    pub(super) fn event(&mut self, payload: EventPayload) {
         let event = Event {
             seq: self.ui.app().snapshot().last_event_seq + 1,
             session_id: "test".into(),
@@ -111,7 +111,7 @@ impl Harness {
             .message(&mut self.ui, Message::Server(Box::new(event)));
         self.ui.draw(0).unwrap();
     }
-    fn start(&mut self, id: &str, text: &str, review: Option<&str>) {
+    pub(super) fn start(&mut self, id: &str, text: &str, review: Option<&str>) {
         let turn: Turn = serde_json::from_value(json!({
             "id":id,"input":[{"type":"text","text":text}],"items":[],"status":"inProgress",
             "clientName":"test","error":null,"usage":null,"review":review,
@@ -126,7 +126,7 @@ impl Harness {
             close_reason: None,
         });
     }
-    fn key(&mut self, code: KeyCode) {
+    pub(super) fn key(&mut self, code: KeyCode) {
         if let Some(action) = self
             .ui
             .app_mut()
@@ -135,7 +135,7 @@ impl Harness {
             self.chat.act(self.ui.app_mut(), action);
         }
     }
-    async fn stop(self) {
+    pub(super) async fn stop(self) {
         self.server.abort();
         assert!(self.server.await.unwrap_err().is_cancelled());
         self.chat.pump.await.unwrap();
