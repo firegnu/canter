@@ -133,7 +133,7 @@ fn report() -> ContextResponse {
     serde_json::from_value(json!({
         "prefix": [
             { "kind": "system", "path": null, "tokens": 2300 },
-            { "kind": "globalInstructions", "path": "/home/test/.agents/AGENTS.md", "tokens": 1100 },
+            { "kind": "globalInstructions", "path": "/home/test/.canter/AGENTS.md", "tokens": 1100 },
             { "kind": "projectInstructions", "path": "/work/AGENTS.md", "tokens": 3400 },
             { "kind": "environment", "path": null, "tokens": 80 },
         ],
@@ -148,7 +148,7 @@ fn report() -> ContextResponse {
 
 const SECTIONS: [&str; 8] = [
     "   System prompt                2k",
-    "   Global AGENTS.md             1k  ~/.agents/AGENTS.md",
+    "   Global AGENTS.md             1k  ~/.canter/AGENTS.md",
     "   Project AGENTS.md            3k  /work/AGENTS.md",
     "   Environment                  80",
     "   Tools (6)                    3k",

@@ -194,7 +194,8 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
     std::fs::create_dir_all(project.join(".git")).unwrap();
     std::fs::write(project.join("AGENTS.md"), "root instructions").unwrap();
     std::fs::create_dir_all(home.join(".agents/skills/demo")).unwrap();
-    std::fs::write(home.join(".agents/AGENTS.md"), "global instructions").unwrap();
+    std::fs::create_dir_all(root.path().join("state")).unwrap();
+    std::fs::write(root.path().join("state/AGENTS.md"), "global instructions").unwrap();
     std::fs::write(cwd.join("AGENTS.md"), "project instructions").unwrap();
     std::fs::write(
         home.join(".agents/skills/demo/SKILL.md"),
@@ -263,7 +264,7 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
     );
     assert_eq!(
         sections[1]["path"],
-        home.join(".agents/AGENTS.md").to_str().unwrap()
+        root.path().join("state/AGENTS.md").to_str().unwrap()
     );
     assert_eq!(
         sections[3]["path"],

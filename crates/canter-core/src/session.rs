@@ -98,6 +98,7 @@ impl State {
     async fn initialize_prefix(
         &mut self,
         home: Option<std::path::PathBuf>,
+        canter_home: Option<std::path::PathBuf>,
         tools: &Tools,
     ) -> Result<(), CoreError> {
         self.tool_definitions = canter_tools::Tool::ALL
@@ -124,6 +125,7 @@ impl State {
         let (segments, warnings, skills) = crate::context::prefix(
             self.journal.snapshot.settings.cwd.clone(),
             home,
+            canter_home,
             self.tool_definitions.clone(),
         )
         .await?;
@@ -316,6 +318,7 @@ impl Session {
             .environment
             .get("HOME")
             .map(std::path::PathBuf::from);
+        let canter_home = crate::context::canter_home(&runtime.environment);
         let tools = executor(
             writer.snapshot().settings.cwd.clone(),
             runtime,
@@ -348,7 +351,7 @@ impl Session {
                 state.journal.append(vec![event]).await?;
             }
         }
-        state.initialize_prefix(home, &tools).await?;
+        state.initialize_prefix(home, canter_home, &tools).await?;
         for event in events {
             if let EventPayload::RequestResolved { request_id, .. } = event.payload {
                 state.resolved.insert(request_id, event.seq);
@@ -450,6 +453,7 @@ impl Session {
             .environment
             .get("HOME")
             .map(std::path::PathBuf::from);
+        let canter_home = crate::context::canter_home(&runtime.environment);
         let tools = executor(cwd, runtime, options.web_fetch_timeout).await?;
         let owned_store = store.clone();
         let writer = tokio::task::spawn_blocking(move || owned_store.create(&id, settings, now()))
@@ -463,7 +467,7 @@ impl Session {
             }])
             .await?;
         let mut state = State::new(journal);
-        state.initialize_prefix(home, &tools).await?;
+        state.initialize_prefix(home, canter_home, &tools).await?;
         let response = SessionCreateResponse {
             session: state.journal.snapshot.clone(),
             event_seq: state.journal.snapshot.last_event_seq,

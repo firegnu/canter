@@ -56,7 +56,9 @@ async fn prefix_renders_ordered_sections_and_allocates_the_whole_message() {
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir(root.join(".git")).unwrap();
     std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
-    std::fs::write(home.join(".agents/AGENTS.md"), " global <raw> & text \n\n").unwrap();
+    std::fs::create_dir_all(home.join(".canter")).unwrap();
+    std::fs::write(home.join(".canter/AGENTS.md"), " global <raw> & text \n\n").unwrap();
+    std::fs::write(home.join(".agents/AGENTS.md"), "old global location").unwrap();
     std::fs::write(root.join("AGENTS.md"), "root instruction").unwrap();
     std::fs::write(root.join("blank/AGENTS.md"), " \n\t\r\n").unwrap();
     std::fs::write(cwd.join("AGENTS.md"), "nested instruction\n").unwrap();
@@ -87,7 +89,7 @@ async fn prefix_renders_ordered_sections_and_allocates_the_whole_message() {
         .unwrap();
     let escaped_root = format!("{}/project&amp;&quot;&lt;&gt;", temp.path().display());
     let expected = format!(
-        "<global_instructions path=\"{}/.agents/AGENTS.md\">\n global <raw> & text \n\n</global_instructions>\n\n\
+        "<global_instructions path=\"{}/.canter/AGENTS.md\">\n global <raw> & text \n\n</global_instructions>\n\n\
          <skills>\nWhen a task matches one of these skills, read its SKILL.md in full first, then follow its instructions.\n\
          - example: Example skill (SKILL.md: {})\n</skills>\n\n\
          <project_instructions path=\"{escaped_root}/AGENTS.md\">\nroot instruction\n</project_instructions>\n\n\
@@ -97,6 +99,7 @@ async fn prefix_renders_ordered_sections_and_allocates_the_whole_message() {
         skill.display()
     );
     assert!(after_core.starts_with(&expected), "{after_core}");
+    assert!(!text.contains("old global location"));
     assert!(text.ends_with("\n</environment>"));
     let report = serde_json::to_value(session.context().await).unwrap();
     let sections = report["prefix"].as_array().unwrap();
