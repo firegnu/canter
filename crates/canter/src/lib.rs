@@ -22,6 +22,8 @@ Usage:
                               starts a server in the background if none runs
   canter [options] --resume [session id]
                               resume a session; without an id, pick from a list
+  canter [options] -c, --continue
+                              resume the latest session in the current directory
   canter serve [--replace]    run the server in the foreground
   canter usage                show daily token usage and cost by model
 
@@ -49,6 +51,8 @@ pub struct ChatArgs {
     pub model: Option<String>,
     /// `--resume`, with the session id when one was given.
     pub resume: Option<Option<String>>,
+    /// `-c` / `--continue`: this directory's latest session.
+    pub continue_latest: bool,
 }
 
 /// Parses the arguments after the program name.
@@ -85,16 +89,23 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             "--yolo" => chat.yolo = true,
             "-m" | "--model" => chat.model = Some(args.next().ok_or("-m needs a model name")?),
             "--resume" => chat.resume = Some(args.next_if(|next| !next.starts_with('-'))),
+            "-c" | "--continue" => chat.continue_latest = true,
             option if option.starts_with('-') && option.len() > 1 => {
                 return Err(format!("unknown option: {option}"));
             }
             _ => words.push(arg),
         }
     }
+    if chat.continue_latest && chat.resume.is_some() {
+        return Err("use either --continue or --resume".into());
+    }
     let first = words.join(" ");
     if !first.trim().is_empty() {
         if chat.resume.is_some() {
             return Err("--resume does not take a prompt; send it after resuming".into());
+        }
+        if chat.continue_latest {
+            return Err("--continue does not take a prompt; send it after resuming".into());
         }
         chat.first = Some(first);
     }
@@ -194,16 +205,21 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
         .await
         .map_err(|error| error.to_string())?;
     let yolo = args.yolo.then_some(PermissionMode::AllowAll);
+    let update = |model| SessionUpdateParams {
+        name: None,
+        model,
+        reasoning_effort: None,
+        approval_policy: yolo,
+    };
     let open = match args.resume {
         Some(id) => Open::Resume {
             id,
             cwd,
-            update: SessionUpdateParams {
-                name: None,
-                model: args.model,
-                reasoning_effort: None,
-                approval_policy: yolo,
-            },
+            update: update(args.model),
+        },
+        None if args.continue_latest => Open::Continue {
+            cwd,
+            update: update(args.model),
         },
         None => Open::New {
             cwd,

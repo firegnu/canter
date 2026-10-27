@@ -141,12 +141,13 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 20] = [
+const COMMANDS: [(&str, &str); 21] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
     ("/diff", "Show uncommitted git changes"),
     ("/exit", "Quit canter"),
+    ("/export", "Save or copy the conversation as Markdown"),
     ("/files", "List session files and git status"),
     ("/help", "Show available commands"),
     ("/mcp", "Show MCP connections and tools"),
@@ -456,8 +457,8 @@ fn skills_empty_screen_explains_both_directories() {
 /// narrows the list; deleting the `/` closes it.
 #[test]
 fn a_slash_lists_the_commands_above_the_input_box() {
-    // Since /statusline and /diff the whole list is two rows taller than the usual screen holds.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 2);
+    // Since /statusline, /diff and /export the whole list is three rows taller than the usual screen holds.
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 3);
     screen.type_text("/");
     screen.draw();
     let list = screen.above_box(COMMANDS.len());
@@ -474,9 +475,10 @@ fn a_slash_lists_the_commands_above_the_input_box() {
     screen.type_text("e");
     screen.draw();
     let shown = screen.text();
+    let left = screen.above_box(2);
     assert!(
-        screen.above_box(1)[0].starts_with(" › /exit"),
-        "only /exit is left:\n{shown}"
+        left[0].starts_with(" › /exit") && left[1].starts_with("   /export"),
+        "only /exit and /export are left:\n{shown}"
     );
     assert!(!shown.contains("/compact"), "{shown}");
 
@@ -491,7 +493,7 @@ fn a_slash_lists_the_commands_above_the_input_box() {
 #[test]
 fn up_down_tab_and_enter_work_on_the_list() {
     // The whole list, as above.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 2);
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 3);
     screen.type_text("/");
     screen.draw();
     assert_eq!(screen.key(KeyCode::Down), None);

@@ -78,6 +78,11 @@ impl Picker {
         None
     }
 
+    /// The session at the top of the list as it opens: `canter -c`.
+    pub fn first(&self) -> Option<String> {
+        self.shown().first().map(|session| session.id.clone())
+    }
+
     fn shown(&self) -> Vec<&SessionSummary> {
         self.sessions
             .iter()

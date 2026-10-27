@@ -184,8 +184,8 @@ impl Copier {
 
     /// Finds out how the latest copy went and lets an old note go; at `now`
     /// (Unix ms), before each frame. Returns the copy that answered now, if
-    /// one did, and whether it worked.
-    pub fn poll(&mut self, now: i64) -> Option<(u64, bool)> {
+    /// one did, and whether it worked or why not.
+    pub fn poll(&mut self, now: i64) -> Option<(u64, Result<(), String>)> {
         if self.note.as_ref().is_some_and(|(_, until)| now >= *until) {
             self.note = None;
         }
@@ -229,20 +229,18 @@ impl Copier {
         } else {
             return None;
         };
-        let answer = (pending.id, result.is_ok());
-        let note = match result {
+        let reason = result.map_err(|error| match &pending.terminal_error {
+            Some(terminal) => format!("{error}; OSC 52: {terminal}"),
+            None => error,
+        });
+        let note = match &reason {
             Ok(()) => match pending.link {
                 Some(done) => (link_copied(done), now + COPIED_MS),
                 None => (copied(pending.lines, pending.chars), now + COPIED_MS),
             },
-            Err(error) => {
-                let reason = match &pending.terminal_error {
-                    Some(terminal) => format!("{error}; OSC 52: {terminal}"),
-                    None => error,
-                };
-                (failed(&reason), now + FAILED_MS)
-            }
+            Err(reason) => (failed(reason), now + FAILED_MS),
         };
+        let answer = (pending.id, reason);
         self.note = Some(note);
         self.pending = None;
         Some(answer)

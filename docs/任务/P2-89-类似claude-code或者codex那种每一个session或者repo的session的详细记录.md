@@ -60,3 +60,23 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- **做了什么**
+  - `/export`（`crates/canter-tui/src/export.rs`，接进 `commands.rs`、`app.rs`、`run.rs`）：不带参数弹「Export conversation」选择框，两项 `Save to file` / `Copy to clipboard`，Esc 取消；`/export <路径>` 直接写，相对路径按会话工作目录，`~/` 按家目录。默认文件 `canter-<会话名>-<本地时间 YYYYMMDD-HHMMSS>.md` 写在会话工作目录，会话名里字母数字和 `._-` 以外的换成 `-`（连着的并成一个，最多 60 字），名字为空用会话 id。用 `create_new` 写，已有同名文件不覆盖，提示 `… already exists; not overwritten`。内容：标题是会话名（没有用 id），下面 Directory、Model、Exported 三行；然后按轮 `## User` / `## Assistant`（`/review` 的轮写 `## Review` 加标题，不写拼好的提示词）；回答全文；工具调用一行 `**Tool** · Ran/Edited/Created/Deleted/Moved/Read/Fetched/Called … · ok / failed / declined[: 拒绝理由]`（命令加 exit 码，改文件加 +/− 行数），下面最多 8 行输出（每行最多 200 字，多了写 `… N more lines`），代码围栏按内容里最长的反引号加长；思考不导出；图片写 `[Image: 文件名]`；提问框写 Question / Answer；压缩写 `_Context compacted_`；被打断、出错的轮末尾写一行。复制走 `/copy` 用的 `Copier`（本机剪贴板，tmux / SSH 加 OSC 52，太长时是 `/copy` 那句 `too long for the terminal`），状态栏照 `/copy` 提示；另外对话里写 `✓ Copied N lines of Markdown to the clipboard` 或 `✗ Export failed: <原因>`。为此 `Copier::poll` 的返回值从「成没成」改成带上失败原因（只有 `app.rs` 一处调用）。写文件成功写 `✓ Exported N lines to <路径>`。自动进了 `/help` 和 `/` 命令列表。
+  - `canter -c` / `--continue`（`crates/canter/src/lib.rs`，`run.rs` 加 `Open::Continue`）：列出会话，用 `Picker::new(...).first()`（新加，就是列表打开时第一条：当前目录、按更新时间倒序）拿 id，照 `--resume <id>` 打开，`-m`、`--yolo` 照样生效；当前目录没有会话时开一个新会话，对话里写 `! No session in this directory yet; started a new one`。带一句话、和 `--resume` 一起用都报错。进了 `canter --help`。
+  - DESIGN 第 19 条末尾补了这两样的定法。
+- **验证了什么**
+  - 新测试：`export.rs` 单元测试 6 个（整份 Markdown 逐字对照：表头、全文、工具摘要和截短、拒绝理由、图片占位、出错轮、不含思考；反引号；空会话；默认文件名；路径；不覆盖和目录不在）；`tests/export.rs` 4 个（选择框 / Esc / 默认文件 / 不覆盖；指定路径和出错；剪贴板成功和失败；空会话）；`canter/tests/tui.rs` 3 个（参数解析和 `--help`；`-c`、`--continue` 打开本目录最近的会话、不弹列表、别的目录更新的不算；本目录没有会话时提示并新开）。都用假会话数据或本机假模型，隔离的 `CANTER_HOME`、HOME，没调真模型。
+  - 改了两个已有测试的命令清单：`help_popup.rs`、`slash.rs` 的 `COMMANDS` 加上 `/export`；`slash.rs` 里整张列表又高了一行，屏幕从 `HEIGHT + 2` 改 `HEIGHT + 3`，打 `/e` 后原来只剩 `/exit`，现在是 `/exit`、`/export` 两条，断言照改。
+  - 全套：`cargo nextest run --all-targets` 730 个全过，`cargo test --doc --workspace` 过，`cargo clippy --all-targets -- -D warnings` 无警告，`cargo fmt --check` 过。
+- **拿主意的地方**
+  - `/export <路径>` 指定的文件已存在时也不覆盖（照 Codex `persist_noclobber`），只提示一句。需求里「不覆盖」只写在默认文件名下，指定路径时要不要覆盖请主控定。
+  - 复制到剪贴板除了照 `/copy` 在状态栏提示，还在对话里写一句（需求要求「在对话里提示一句」），为此改了 `Copier::poll` 的返回值。
+  - `/export <路径>` 支持 `~/` 开头（Codex 也支持），需求没写。
+  - 文件开头只写需求列的四项（会话名、工作目录、模型、导出时间），没写会话 id；没有会话名时标题用 id。
+  - `-c` 没有会话时的提示用黄色 `!` 那种提示（`app.warning`），和服务端版本不同的提示同一种。
+- **参考**：Codex `rust-v0.163.0` 的 `codex-rs/tui/src/app/transcript_export.rs`、`chatwidget/transcript_export.rs`（选择框两项、`persist_noclobber`、`~` 展开），`codex-rs/cli/src/main.rs` 的 `resume --last`；只参考，没搬代码。
+- **没做的事**：删除、清理会话，按仓库或日期分目录（需求说不做）；会话存盘格式、目录结构、协议没改；没有导出前让用户改文件名的输入框（Codex 有，需求没要）。
+- **踩过的坑**：用 perl 一次改多处时，一条替换里的 `|` 和定界符冲突，把 `while let Some(arg) = args.next()` 改坏了，编译报错后手工改回。

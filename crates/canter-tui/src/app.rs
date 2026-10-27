@@ -13,6 +13,7 @@ use canter_protocol::{
     PermissionMode, RequestKind, SessionSnapshot, SessionStatus, SessionUpdateParams, Turn,
     TurnStatus, UserInput, UserInputAnswer, apply_event_mut,
 };
+use chrono::TimeZone;
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -26,6 +27,7 @@ use crate::approval::{self, ApprovalBox, shorten_home};
 use crate::cells;
 use crate::commands::{self, Chooser, Command};
 use crate::copy::Copier;
+use crate::export::{self, Export};
 use crate::input::InputBox;
 use crate::links::{self, LinkSystem, Opener, Target};
 use crate::select::{self, Cell, Rows, Unit};
@@ -136,6 +138,8 @@ pub enum Action {
     Compact,
     /// Change this session's settings.
     Update(SessionUpdateParams),
+    /// `/export` to a file or the clipboard.
+    Export(Export),
 }
 
 /// A place in the conversation: a turn, whether its prompt is before it, and
@@ -525,6 +529,8 @@ pub struct App {
     clipboard: crate::images::Clipboard,
     /// Where copies go: the clipboard, and the terminal in tmux or over SSH.
     copier: Copier,
+    /// The `/export` copy waiting for the clipboard, and its line count.
+    export_copy: Option<(u64, usize)>,
     /// Opens links clicked, or over SSH copies them.
     opener: Opener,
     mouse: Mouse,
@@ -742,6 +748,7 @@ impl App {
             image_models: vec!["deepseek-flash".into()],
             clipboard: crate::images::Clipboard::default(),
             copier: Copier::default(),
+            export_copy: None,
             opener: Opener::default(),
             mouse: Mouse::default(),
             search: None,
@@ -2095,6 +2102,52 @@ impl App {
         Ok(())
     }
 
+    /// `/export`: the session as Markdown, to a file or the clipboard. The
+    /// conversation then says where it went and how many lines, or why not.
+    pub fn export(&mut self, to: Export, now_ms: i64) {
+        let time = chrono::Local
+            .timestamp_millis_opt(now_ms)
+            .single()
+            .unwrap_or_else(chrono::Local::now);
+        let Some(text) = export::markdown(
+            &self.snapshot,
+            &time.format("%Y-%m-%d %H:%M:%S").to_string(),
+        ) else {
+            self.export_failed("nothing to export yet");
+            return;
+        };
+        let lines = text.lines().count();
+        match to {
+            Export::Clipboard => {
+                let copy = self.copier.copy(text);
+                self.export_copy = Some((copy, lines));
+            }
+            Export::File(path) => {
+                let name = path.unwrap_or_else(|| {
+                    export::default_name(&self.snapshot, &time.format("%Y%m%d-%H%M%S").to_string())
+                });
+                let path =
+                    export::resolve(&name, &self.snapshot.settings.cwd, self.home.as_deref());
+                match export::write(&path, &text) {
+                    Ok(()) => self.notice(cells::notice(
+                        "✓ ",
+                        &format!("Exported {lines} lines to {}", path.display()),
+                        theme::secondary(),
+                    )),
+                    Err(error) => self.export_failed(&error),
+                }
+            }
+        }
+    }
+
+    fn export_failed(&mut self, reason: &str) {
+        self.notice(cells::notice(
+            "✗ ",
+            &format!("Export failed: {reason}"),
+            theme::failure(),
+        ));
+    }
+
     /// The text of the latest finished answer.
     fn last_answer(&self) -> Option<&str> {
         self.snapshot.turns.iter().rev().find_map(|turn| {
@@ -2780,11 +2833,23 @@ impl App {
 
     /// Lays out the whole screen of `width` × `height`.
     pub(crate) fn view(&mut self, width: u16, height: u16, now_ms: i64) -> View {
-        if let Some((copy, true)) = self.copier.poll(now_ms)
-            && let Some(selection) = &mut self.mouse.selection
-            && selection.copy == Some(copy)
-        {
-            selection.copied = Some(now_ms);
+        if let Some((copy, result)) = self.copier.poll(now_ms) {
+            if result.is_ok()
+                && let Some(selection) = &mut self.mouse.selection
+                && selection.copy == Some(copy)
+            {
+                selection.copied = Some(now_ms);
+            }
+            if let Some((_, lines)) = self.export_copy.take_if(|(id, _)| *id == copy) {
+                match result {
+                    Ok(()) => self.notice(cells::notice(
+                        "✓ ",
+                        &format!("Copied {lines} lines of Markdown to the clipboard"),
+                        theme::secondary(),
+                    )),
+                    Err(reason) => self.export_failed(&reason),
+                }
+            }
         }
         if width != self.width {
             // The conversation wraps again: the selection would be on other text.

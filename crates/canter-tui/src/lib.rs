@@ -22,6 +22,7 @@ mod commands;
 mod context;
 mod copy;
 mod diff;
+mod export;
 pub mod fake;
 mod files;
 mod git;
@@ -54,6 +55,7 @@ pub mod usage;
 mod welcome;
 
 pub use app::{ANSWER_GUARD_MS, Action, App};
+pub use export::Export;
 pub use links::LinkSystem;
 pub use run::{
     CLIENT_NAME, Connected, Connector, FrameSync, Input, InputSender, Launch, Open, RunError,

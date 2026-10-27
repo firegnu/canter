@@ -12,12 +12,13 @@ const SESSION: &str = "s1";
 const NOW: i64 = 0;
 
 /// Every command, in the command list's order, with its line.
-const COMMANDS: [(&str, &str); 21] = [
+const COMMANDS: [(&str, &str); 22] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
     ("/diff", "Show uncommitted git changes"),
     ("/exit", "Quit canter"),
+    ("/export", "Save or copy the conversation as Markdown"),
     ("/files", "List session files and git status"),
     ("/help", "Show available commands"),
     ("/mcp", "Show MCP connections and tools"),
