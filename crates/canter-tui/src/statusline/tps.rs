@@ -5,7 +5,7 @@ use canter_protocol::{
 };
 
 #[derive(Default)]
-pub(super) struct Tps {
+pub(crate) struct Tps {
     current: Option<Output>,
     last: Option<f64>,
     /// Snapshots have text but no first-delta time. Wait for a request boundary

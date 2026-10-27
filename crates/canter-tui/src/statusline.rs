@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeMap, process::Stdio, time::Duration};
 
-use canter_protocol::{Event, EventPayload, SessionSnapshot};
+use canter_protocol::{Event, EventPayload};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -26,18 +26,20 @@ pub(crate) fn load(env: &BTreeMap<String, String>) -> Option<String> {
         #[serde(rename = "statusLine")]
         status_line: Option<String>,
     }
-    let home = match env.get("CANTER_HOME") {
-        Some(home) => std::path::PathBuf::from(home),
-        None => std::path::PathBuf::from(env.get("HOME")?).join(".canter"),
-    };
-    if !home.is_absolute() {
-        return None;
-    }
-    let file = std::fs::File::open(home.join("config.json")).ok()?;
+    let file = std::fs::File::open(home(env)?.join("config.json")).ok()?;
     let config: Config = serde_json::from_reader(std::io::BufReader::new(file)).ok()?;
     config
         .status_line
         .filter(|command| !command.trim().is_empty())
+}
+
+/// `CANTER_HOME`, or else `~/.canter`; only an absolute path.
+fn home(env: &BTreeMap<String, String>) -> Option<std::path::PathBuf> {
+    let home = match env.get("CANTER_HOME") {
+        Some(home) => std::path::PathBuf::from(home),
+        None => std::path::PathBuf::from(env.get("HOME")?).join(".canter"),
+    };
+    home.is_absolute().then_some(home)
 }
 
 /// The same rounded percentages used by the default info rows.
@@ -56,7 +58,6 @@ pub(crate) struct StatusLine {
     output: Option<[Line<'static>; 2]>,
     fitted: Option<(u16, [Line<'static>; 2])>,
     pub failed: bool,
-    tps: tps::Tps,
 }
 
 struct Running {
@@ -71,7 +72,7 @@ impl Drop for Running {
 }
 
 impl StatusLine {
-    pub fn new(command: String, env: BTreeMap<String, String>, snapshot: &SessionSnapshot) -> Self {
+    pub fn new(command: String, env: BTreeMap<String, String>) -> Self {
         Self {
             command,
             env,
@@ -83,7 +84,6 @@ impl StatusLine {
             output: None,
             fitted: None,
             failed: false,
-            tps: tps::Tps::new(snapshot),
         }
     }
 
@@ -103,11 +103,6 @@ impl StatusLine {
         // New text must refresh the command even when the public numbers have
         // not changed (for example, another delta at the same token rate).
         self.changed |= matches!(event.payload, EventPayload::ItemDelta { .. });
-        self.tps.event(event);
-    }
-
-    pub fn tps(&self, now_ms: i64) -> Option<f64> {
-        self.tps.rate(now_ms)
     }
 
     pub fn update(&mut self, input: Value, cwd: &str) {
@@ -400,6 +395,8 @@ fn color(index: u16) -> Color {
     ][index as usize]
 }
 
+pub(crate) mod bar;
+pub(crate) mod setup;
 #[cfg(test)]
 mod tests;
-mod tps;
+pub(crate) mod tps;

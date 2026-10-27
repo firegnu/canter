@@ -141,7 +141,7 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 18] = [
+const COMMANDS: [(&str, &str); 19] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
@@ -166,6 +166,7 @@ const COMMANDS: [(&str, &str); 18] = [
         "Review uncommitted changes or a PR number/URL (read-only)",
     ),
     ("/rewind", "Rewind conversation, files, or both"),
+    ("/statusline", "Choose and order what the status line shows"),
 ];
 
 struct Screen {
@@ -450,7 +451,8 @@ fn skills_empty_screen_explains_both_directories() {
 /// narrows the list; deleting the `/` closes it.
 #[test]
 fn a_slash_lists_the_commands_above_the_input_box() {
-    let mut screen = Screen::new();
+    // Since /statusline the whole list is a row taller than the usual screen holds.
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 1);
     screen.type_text("/");
     screen.draw();
     let list = screen.above_box(COMMANDS.len());
@@ -483,7 +485,8 @@ fn a_slash_lists_the_commands_above_the_input_box() {
 /// full, completes the input to the selected command; Enter then runs it.
 #[test]
 fn up_down_tab_and_enter_work_on_the_list() {
-    let mut screen = Screen::new();
+    // The whole list, as above.
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 1);
     screen.type_text("/");
     screen.draw();
     assert_eq!(screen.key(KeyCode::Down), None);
@@ -621,8 +624,8 @@ fn usage_displays_models_total_last_turn_and_unknown_costs() {
 #[test]
 fn help_shows_the_commands_in_the_conversation() {
     // One row per command, rows for Shift+Tab and Ctrl+F and the conversation's
-    // blank row: two more than the usual screen holds since Ctrl+F.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 2);
+    // blank row: three more than the usual screen holds since /statusline.
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 3);
     assert_eq!(screen.enter("/help"), None);
     screen.draw();
     let shown = screen.text();
