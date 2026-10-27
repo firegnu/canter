@@ -176,16 +176,55 @@ fn lists_search_and_boxes_keep_their_own_keys() {
     key(&mut ui, KeyCode::Esc);
     assert_eq!(input_row(&mut ui), "");
 
-    // A recalled command opens its list; ↑ selects in the list.
+    // A recalled command, once changed, opens its list; ↑ selects in it.
     ui.app_mut().handle_paste("/help");
     assert_eq!(enter(&mut ui), None);
     key(&mut ui, KeyCode::Esc);
     up(&mut ui);
-    assert_eq!(input_row(&mut ui), "/help");
+    key(&mut ui, KeyCode::Backspace);
     let shown = screen(&mut ui);
     assert!(shown.contains("Show available commands"), "{shown}");
     up(&mut ui);
+    assert_eq!(input_row(&mut ui), "/hel");
+}
+
+#[test]
+fn up_goes_on_past_recalled_commands_without_their_list() {
+    let home = tempfile::tempdir().unwrap();
+    let mut ui = ui(home.path(), "/work");
+    let command = |ui: &mut Ui<TestBackend>, text: &str| {
+        ui.app_mut().handle_paste(text);
+        assert_eq!(enter(ui), None);
+        key(ui, KeyCode::Esc);
+    };
+    send(&mut ui, "first");
+    command(&mut ui, "/help");
+    send(&mut ui, "second");
+    command(&mut ui, "/statusline");
+
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        up(&mut ui);
+        let shown = screen(&mut ui);
+        assert!(!shown.contains("Show available commands"), "{shown}");
+        assert!(
+            !shown.contains("Choose and order what the status line shows"),
+            "{shown}"
+        );
+        seen.push(input_row(&mut ui));
+    }
+    assert_eq!(seen, ["/statusline", "second", "/help", "first"]);
+    down(&mut ui);
     assert_eq!(input_row(&mut ui), "/help");
+    down(&mut ui);
+    assert_eq!(input_row(&mut ui), "second");
+
+    // Enter on a recalled command runs it.
+    up(&mut ui);
+    assert_eq!(enter(&mut ui), None);
+    let shown = screen(&mut ui);
+    assert!(shown.contains("Send, or run the command"), "{shown}");
+    assert_eq!(input_row(&mut ui), "");
 }
 
 #[test]

@@ -176,6 +176,14 @@ impl InputHistory {
         true
     }
 
+    /// Whether the box shows a recalled message, unchanged: the `/` and `@`
+    /// lists stay closed so that ↑ and ↓ go on through the history.
+    pub fn showing(&self, input: &InputBox) -> bool {
+        self.browsing
+            .as_ref()
+            .is_some_and(|(_, text)| input.text() == text)
+    }
+
     /// `Some(Some(i))` while entry `i` is shown unchanged with the cursor at
     /// its start or end; `Some(None)` in the empty box; otherwise `None`.
     fn navigating(&self, input: &InputBox) -> Option<Option<usize>> {

@@ -1361,6 +1361,9 @@ impl App {
     /// one selected. None while the input cannot be a command, nothing
     /// matches, or Esc closed the list.
     fn command_list(&self) -> Option<(Vec<&'static Command>, usize)> {
+        if self.input_history.showing(&self.input) {
+            return None;
+        }
         let text = self.input.text();
         let typed = commands::typing(text)?;
         let same = self.commands.text == text;
@@ -1377,6 +1380,9 @@ impl App {
     /// and how many match. None while there is no `@` word, nothing found
     /// so far matches, or Esc closed the list.
     fn mention_list(&mut self) -> Option<(mention::Word, usize, usize)> {
+        if self.input_history.showing(&self.input) {
+            return None;
+        }
         let text = self.input.text();
         let cursor = self.input.cursor();
         let word = mention::word(text, cursor)?;
