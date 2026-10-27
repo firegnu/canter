@@ -142,6 +142,93 @@ impl Harness {
     }
 }
 
+async fn failed_text_send(pastes: &[&str], typing: &str) -> Harness {
+    use axum::response::IntoResponse;
+    let mut test = Harness::new().await;
+    for paste in pastes {
+        test.ui.app_mut().handle_paste(paste);
+    }
+    test.key(KeyCode::Enter);
+    let request = test.request().await;
+    assert_eq!(request.path, "/v1/sessions/test/input");
+    assert_eq!(
+        request.body["input"],
+        json!([{"type":"text","text":pastes.concat()}])
+    );
+    test.ui.app_mut().handle_paste(typing);
+    let response = (
+        axum::http::StatusCode::CONFLICT,
+        axum::Json(json!({"code":"conflict","message":"offline"})),
+    )
+        .into_response();
+    assert!(request.reply.send(response).is_ok());
+    test.message().await;
+    let shown: String = test
+        .ui
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(shown.contains("✗ Not sent:"), "{shown}");
+    assert!(shown.contains("offline"), "{shown}");
+    test
+}
+
+#[tokio::test]
+async fn failed_text_send_restores_the_draft() {
+    let mut test = failed_text_send(&["first line\nsecond line"], "").await;
+    assert_eq!(
+        test.ui
+            .app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 0),
+        Some(Action::Send("first line\nsecond line".into()))
+    );
+    test.stop().await;
+}
+
+#[tokio::test]
+async fn failed_text_send_keeps_newly_typed_text() {
+    let mut test = failed_text_send(&["original draft"], "new typing").await;
+    assert_eq!(
+        test.ui
+            .app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 0),
+        Some(Action::Send("original draftnew typing".into()))
+    );
+    test.stop().await;
+}
+
+#[tokio::test]
+async fn failed_text_send_keeps_pastes_folded() {
+    let paste = (1..=11)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut test = failed_text_send(&["before ", &paste, " after"], "").await;
+    let shown: String = test
+        .ui
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(
+        shown.contains("before [Pasted #1 · 11 lines] after"),
+        "{shown}"
+    );
+    assert!(!shown.contains("line 5"), "{shown}");
+    assert_eq!(
+        test.ui
+            .app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 0),
+        Some(Action::Send(format!("before {paste} after")))
+    );
+    test.stop().await;
+}
+
 #[tokio::test]
 async fn review_escape_sends_an_ordinary_interrupt() {
     let mut test = Harness::new().await;

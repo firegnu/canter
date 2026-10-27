@@ -504,6 +504,8 @@ pub struct App {
     client_name: String,
     input: InputBox,
     sending_image: Option<InputBox>,
+    /// Taken by the dispatcher so each in-flight text send owns its draft.
+    sending_text: Option<InputBox>,
     image_models: Vec<String>,
     clipboard: crate::images::Clipboard,
     /// Where copies go: the clipboard, and the terminal in tmux or over SSH.
@@ -690,6 +692,7 @@ impl App {
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::default(),
             sending_image: None,
+            sending_text: None,
             image_models: vec!["deepseek-flash".into()],
             clipboard: crate::images::Clipboard::default(),
             copier: Copier::default(),
@@ -1192,6 +1195,7 @@ impl App {
                         input,
                     });
                 }
+                self.sending_text = Some(self.input.clone());
                 Some(Action::Send(self.input.take()))
             }
         }
@@ -2342,6 +2346,10 @@ impl App {
         self.retract_drafts.sending();
     }
 
+    pub(crate) fn take_text_draft(&mut self) -> Option<InputBox> {
+        self.sending_text.take()
+    }
+
     pub fn input_sent(&mut self, event_seq: u64, input: Vec<UserInput>) {
         self.images_need_paste = false;
         if input
@@ -2392,6 +2400,13 @@ impl App {
             &format!("Not sent: {message}"),
             theme::failure(),
         ));
+    }
+
+    pub(crate) fn text_send_failed(&mut self, message: &str, draft: Option<InputBox>) {
+        if let Some(draft) = draft {
+            self.input.restore(draft);
+        }
+        self.send_failed(message);
     }
 
     pub fn image_send_failed(&mut self, message: &str) {
