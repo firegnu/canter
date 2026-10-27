@@ -1558,7 +1558,7 @@ fn terminal_input_open(tty: BorrowedFd<'_>, wait_ms: i32) -> io::Result<bool> {
         events: nix::libc::POLLIN,
         revents: 0,
     };
-    // `tty` remains owned by the reader for the duration of this call.
+    // the caller keeps tty open for the duration of this call.
     if unsafe { nix::libc::poll(&mut poll, 1, wait_ms) } < 0 {
         let error = io::Error::last_os_error();
         if error.kind() != io::ErrorKind::Interrupted {
