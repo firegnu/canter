@@ -468,8 +468,9 @@ struct Shown {
     turn: Option<String>,
     /// The private answer in progress on this frame.
     btw: Option<usize>,
-    /// The choice (or `/statusline`) whose rows showed, numbered as
-    /// [`App::choose`] or [`App::open_status_setup`] opened it.
+    /// The choice (or `/statusline`, `/context`) whose rows showed, numbered
+    /// as [`App::choose`], [`App::open_status_setup`] or [`App::show_context`]
+    /// opened it.
     chooser: Option<u64>,
     /// How many completions the input box showed.
     completions: u64,
@@ -500,6 +501,8 @@ pub struct App {
     bar_unreadable: bool,
     /// `/statusline`, open above the input box.
     setup: Option<Setup>,
+    /// `/context`, open above the input box.
+    context: Option<crate::context::Popup>,
     /// Output tokens a second, for the `tps` item and the status command.
     tps: Tps,
     home: Option<String>,
@@ -689,6 +692,7 @@ impl App {
             bar_file: None,
             bar_unreadable: false,
             setup: None,
+            context: None,
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::default(),
@@ -994,6 +998,9 @@ impl App {
             let seen = shown.chooser == Some(self.choosers);
             if self.setup.is_some() {
                 return self.setup_key(key, seen, send_guarded);
+            }
+            if self.context.is_some() {
+                return self.context_key(key, seen, send_guarded);
             }
             return self.chooser_key(key, seen, send_guarded);
         }
@@ -1341,12 +1348,14 @@ impl App {
     pub(crate) fn choose(&mut self, chooser: Chooser) {
         self.choosers += 1;
         self.setup = None;
+        self.context = None;
         self.chooser = Some(chooser);
     }
 
-    /// Whether a choice or `/statusline` is open above the input box.
+    /// Whether a choice, `/statusline` or `/context` is open above the
+    /// input box.
     fn choosing(&self) -> bool {
-        self.chooser.is_some() || self.setup.is_some()
+        self.chooser.is_some() || self.setup.is_some() || self.context.is_some()
     }
 
     /// `/statusline`: opens with what the rows at the bottom show now,
@@ -1354,6 +1363,7 @@ impl App {
     pub(crate) fn open_status_setup(&mut self) {
         self.choosers += 1;
         self.chooser = None;
+        self.context = None;
         let script = self.script.as_ref().map(|(command, _)| command.clone());
         self.setup = Some(Setup::new(self.bar.clone(), script));
     }
@@ -1379,6 +1389,24 @@ impl App {
             KeyCode::Esc => self.setup = None,
             KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.setup = None;
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Keys while `/context` is open, as for `/statusline`: Up and Down
+    /// scroll the rows that do not fit; Enter, Esc, Ctrl+C or Ctrl+D
+    /// closes it.
+    fn context_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
+        let context = self.context.as_mut()?;
+        match key.code {
+            KeyCode::Up if seen => context.up(),
+            KeyCode::Down if seen => context.down(),
+            KeyCode::Enter if seen && !send_guarded => self.context = None,
+            KeyCode::Esc => self.context = None,
+            KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.context = None;
             }
             _ => {}
         }
@@ -1548,8 +1576,12 @@ impl App {
         self.show_report(crate::commands::mcp(report));
     }
 
+    /// `/context`: opens above the input box, numbered like a choice.
     pub fn show_context(&mut self, report: &canter_protocol::ContextResponse) {
-        self.show_report(crate::context::lines(report, self.home.as_deref()));
+        self.choosers += 1;
+        self.chooser = None;
+        self.setup = None;
+        self.context = Some(crate::context::Popup::new(report, self.home.as_deref()));
     }
 
     pub async fn show_files(&mut self) {
@@ -2853,15 +2885,18 @@ impl App {
             || !self.bar.mode_on_first_row()
     }
 
-    /// The list above the input box: the choice offered, `/statusline`, the
-    /// commands matching what is typed, or the paths matching the `@` word.
-    /// At most `max` rows.
+    /// The list above the input box: the choice offered, `/statusline`,
+    /// `/context`, the commands matching what is typed, or the paths
+    /// matching the `@` word. At most `max` rows.
     fn list_view(&mut self, width: u16, max: usize, now_ms: i64) -> Vec<Line<'static>> {
         if let Some(chooser) = &self.chooser {
             return chooser.rows(width, max);
         }
         if let Some(setup) = &self.setup {
             return setup.rows(width, max, &self.bar_values(now_ms));
+        }
+        if let Some(context) = &mut self.context {
+            return context.rows(width, max);
         }
         // The lists are for the draft, which is put away while searching.
         if self.search.is_some() {
