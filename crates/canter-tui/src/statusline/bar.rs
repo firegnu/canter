@@ -3,11 +3,8 @@
 //! the second row. Kept in `tui.json`, beside `config.json`, which the
 //! terminal never writes.
 
-use std::collections::BTreeMap;
-use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::io;
+use std::path::Path;
 
 use ratatui::text::Span;
 use serde_json::{Value, json};
@@ -209,6 +206,7 @@ impl Bar {
         })
     }
 
+    /// What `tui.json` keeps under `statusLine`.
     fn to_json(&self) -> Value {
         let items: Vec<Value> = self
             .entries
@@ -218,7 +216,7 @@ impl Bar {
                 Entry::Line2 => json!({ "name": LINE2 }),
             })
             .collect();
-        json!({ "statusLine": { "items": items, "useScript": self.use_script } })
+        json!({ "items": items, "useScript": self.use_script })
     }
 }
 
@@ -236,60 +234,20 @@ fn entry(value: &Value) -> Option<Entry> {
     Some(Entry::Item(item, show))
 }
 
-/// `tui.json` in `CANTER_HOME`, or else in `~/.canter`, like `config.json`.
-pub(crate) fn path(env: &BTreeMap<String, String>) -> Option<PathBuf> {
-    super::home(env).map(|home| home.join("tui.json"))
-}
-
 /// The settings saved at `path`; the defaults when there are none. Also
 /// whether the file is there but cannot be read.
 pub(crate) fn load(path: &Path) -> (Bar, bool) {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return (Bar::default(), false),
-        Err(_) => return (Bar::default(), true),
-    };
-    match serde_json::from_str(&text)
-        .ok()
-        .and_then(|value| Bar::from_json(&value))
-    {
-        Some(bar) => (bar, false),
-        None => (Bar::default(), true),
+    match crate::tui_json::read(path) {
+        Ok(None) => (Bar::default(), false),
+        Ok(Some(value)) => match Bar::from_json(&value) {
+            Some(bar) => (bar, false),
+            None => (Bar::default(), true),
+        },
+        Err(()) => (Bar::default(), true),
     }
 }
 
-/// Writes `bar` to `path`, readable only by the user: into a new file
-/// beside it first, which then takes its name, so the file is never half
-/// written.
+/// Keeps `bar` in `tui.json` at `path`; the other settings there stay.
 pub(crate) fn save(path: &Path, bar: &Bar) -> io::Result<()> {
-    static SAVES: AtomicU64 = AtomicU64::new(0);
-    let dir = path
-        .parent()
-        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)?;
-    let temp = dir.join(format!(
-        ".tui.json.{}.{}.tmp",
-        std::process::id(),
-        SAVES.fetch_add(1, Ordering::Relaxed)
-    ));
-    let saved = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temp)?;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        let mut text = serde_json::to_string_pretty(&bar.to_json())?;
-        text.push('\n');
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        std::fs::rename(&temp, path)
-    })();
-    if saved.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    saved
+    crate::tui_json::save_key(path, "statusLine", bar.to_json())
 }

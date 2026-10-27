@@ -5,7 +5,9 @@
 //! colour scheme. Only the diff backgrounds and the background of a sent
 //! message are true colours, and only when the terminal can show them and its
 //! background is known to be dark or light; so are the shimmers' shades;
-//! and the welcome header's pony, when the terminal can show them.
+//! and the welcome header's pony, when the terminal can show them; and
+//! code, when `/theme` chose a theme other than `terminal` and the terminal
+//! shows 256 colours or more.
 
 use std::cell::Cell;
 use std::time::Duration;
@@ -231,6 +233,19 @@ pub fn palette(number: u8) -> Style {
         _ => return Style::new(),
     };
     theme.fg(color)
+}
+
+/// Code coloured by a theme of `/theme` that names colour `number` of the
+/// 256 past the first 16.
+pub fn code_indexed(number: u8) -> Style {
+    current().fg(Color::Indexed(number))
+}
+
+/// Code coloured by a theme of `/theme` in true colour `rgb`: as it is, or
+/// the nearest of the 256 without true colour.
+pub fn code_rgb(rgb: [u8; 3]) -> Style {
+    let theme = current();
+    theme.fg(theme.shade(rgb))
 }
 
 /// A diff's added line (its `+`, and its text while it has no background): green.

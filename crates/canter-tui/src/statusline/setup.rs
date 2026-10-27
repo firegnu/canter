@@ -193,7 +193,11 @@ fn row(label: String, value: Option<&Vec<Span<'static>>>, chosen: bool) -> Vec<S
 /// `room` of `rows` with row `at` among them: like a choice's list, as low
 /// as it goes, with a row each for how many more there are above and below
 /// when there are three rows or more.
-fn window(rows: Vec<Vec<Span<'static>>>, at: usize, room: usize) -> Vec<Vec<Span<'static>>> {
+pub(crate) fn window(
+    rows: Vec<Vec<Span<'static>>>,
+    at: usize,
+    room: usize,
+) -> Vec<Vec<Span<'static>>> {
     let total = rows.len();
     if total <= room {
         return rows;

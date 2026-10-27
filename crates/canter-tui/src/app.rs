@@ -242,6 +242,8 @@ fn push_part(
 struct History {
     width: u16,
     details: bool,
+    /// The code theme the rows were drawn in: [`crate::highlight::code_revision`].
+    code: u64,
     rows: Vec<Row>,
     /// The row each part starts on, in order.
     parts: Vec<(usize, Part)>,
@@ -495,6 +497,15 @@ pub struct App {
     bar_unreadable: bool,
     /// `/statusline`, open above the input box.
     setup: Option<Setup>,
+    /// `/theme`, open above the input box.
+    theme_picker: Option<crate::theme_picker::ThemePicker>,
+    /// The name of the theme code is drawn in, and the theme; `terminal`
+    /// until `tui.json` says otherwise.
+    code_theme: (String, crate::highlight::CodeTheme),
+    /// Where `/theme` finds theme files; `None` without a home directory.
+    themes_dir: Option<std::path::PathBuf>,
+    /// The theme `tui.json` names, not found; the next frame says so.
+    theme_missing: Option<String>,
     /// `/context`, `/files`, `/mcp` or `/skills`, open above the input box.
     report: Option<crate::report::Report>,
     /// Output tokens a second, for the `tps` item and the status command.
@@ -583,26 +594,50 @@ pub struct App {
 
 impl App {
     /// Configures the optional command that draws the two bottom rows, and
-    /// reads what `/statusline` saved in `tui.json` under `env`'s home.
+    /// reads what `/statusline` and `/theme` saved in `tui.json` under
+    /// `env`'s home; code is drawn in that theme from now on.
     pub fn with_status_line(
         mut self,
         command: Option<String>,
         env: std::collections::BTreeMap<String, String>,
     ) -> Self {
-        self.bar_file = bar::path(&env);
+        self.bar_file = crate::tui_json::path(&env);
+        self.themes_dir = crate::tui_json::themes_dir(&env);
         if let Some(path) = &self.bar_file {
             (self.bar, self.bar_unreadable) = bar::load(path);
         }
+        self.load_code_theme();
         self.script = command.map(|command| (command, env));
         self.run_script();
         self
     }
 
-    /// Keeps what `/statusline` set on the screen this one replaces: a
-    /// terminal reads `tui.json` only when it opens.
+    /// The theme `tui.json` names, or `terminal`; one not found is drawn as
+    /// `terminal` and said once, and `tui.json` keeps its name.
+    fn load_code_theme(&mut self) {
+        let saved = self
+            .bar_file
+            .as_deref()
+            .and_then(|path| crate::tui_json::read(path).ok().flatten())
+            .and_then(|value| value.get("theme")?.as_str().map(str::to_owned));
+        self.code_theme = ("terminal".to_owned(), crate::highlight::CodeTheme::Terminal);
+        if let Some(name) = saved {
+            match crate::highlight::find(&name, self.themes_dir.as_deref()) {
+                Some(theme) => self.code_theme = (name, theme),
+                None => self.theme_missing = Some(name),
+            }
+        }
+        crate::highlight::set_code_theme(self.code_theme.1.clone());
+    }
+
+    /// Keeps what `/statusline` and `/theme` set on the screen this one
+    /// replaces: a terminal reads `tui.json` only when it opens.
     pub(crate) fn with_bar_from(mut self, before: &App) -> Self {
         self.bar = before.bar.clone();
         self.bar_unreadable = false;
+        self.code_theme = before.code_theme.clone();
+        self.theme_missing = None;
+        crate::highlight::set_code_theme(self.code_theme.1.clone());
         self.run_script();
         self
     }
@@ -694,6 +729,10 @@ impl App {
             bar_file: None,
             bar_unreadable: false,
             setup: None,
+            theme_picker: None,
+            code_theme: ("terminal".to_owned(), crate::highlight::CodeTheme::Terminal),
+            themes_dir: None,
+            theme_missing: None,
             report: None,
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
@@ -1017,6 +1056,9 @@ impl App {
             let seen = shown.chooser == Some(self.choosers);
             if self.setup.is_some() {
                 return self.setup_key(key, seen, send_guarded);
+            }
+            if self.theme_picker.is_some() {
+                return self.theme_key(key, seen, send_guarded);
             }
             if self.report.is_some() {
                 return self.report_key(key, seen, send_guarded);
@@ -1389,13 +1431,75 @@ impl App {
         self.choosers += 1;
         self.setup = None;
         self.report = None;
+        self.close_theme_picker();
         self.chooser = Some(chooser);
     }
 
-    /// Whether a choice, `/statusline` or a report is open above the input
-    /// box.
+    /// Whether a choice, `/statusline`, `/theme` or a report is open above
+    /// the input box.
     fn choosing(&self) -> bool {
-        self.chooser.is_some() || self.setup.is_some() || self.report.is_some()
+        self.chooser.is_some()
+            || self.setup.is_some()
+            || self.report.is_some()
+            || self.theme_picker.is_some()
+    }
+
+    /// `/theme`: opens with the theme in use selected, numbered like a
+    /// choice.
+    pub(crate) fn open_theme_picker(&mut self) {
+        self.choosers += 1;
+        self.chooser = None;
+        self.setup = None;
+        self.report = None;
+        self.close_theme_picker();
+        self.theme_picker = Some(crate::theme_picker::ThemePicker::new(
+            &self.code_theme.0,
+            self.themes_dir.as_deref(),
+        ));
+    }
+
+    /// Closes `/theme` unsaved: code is drawn as before it opened.
+    fn close_theme_picker(&mut self) {
+        if let Some(picker) = self.theme_picker.take() {
+            picker.cancel();
+        }
+    }
+
+    /// Keys while `/theme` is open, as for `/statusline`: Up and Down select
+    /// and draw code in the theme selected, Enter saves it (not a file that
+    /// cannot be read); Esc, Ctrl+C or Ctrl+D closes it unsaved.
+    fn theme_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
+        let picker = self.theme_picker.as_mut()?;
+        match key.code {
+            KeyCode::Up if seen => picker.up(),
+            KeyCode::Down if seen => picker.down(),
+            KeyCode::Enter if seen && !send_guarded => {
+                let (name, theme) = picker.chosen()?;
+                self.theme_picker = None;
+                self.save_code_theme(name, theme);
+            }
+            KeyCode::Esc => self.close_theme_picker(),
+            KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.close_theme_picker();
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Draws code in `theme` from now on, and keeps its `name` in `tui.json`
+    /// for terminals opened later.
+    fn save_code_theme(&mut self, name: String, theme: crate::highlight::CodeTheme) {
+        crate::highlight::set_code_theme(theme.clone());
+        let saved = match &self.bar_file {
+            Some(path) => crate::tui_json::save_key(path, "theme", name.clone().into())
+                .map_err(|error| error.to_string()),
+            None => Err("no home directory".to_owned()),
+        };
+        self.code_theme = (name, theme);
+        if let Err(error) = saved {
+            self.warning(&format!("Could not save the theme: {error}"));
+        }
     }
 
     /// `/statusline`: opens with what the rows at the bottom show now,
@@ -1404,6 +1508,7 @@ impl App {
         self.choosers += 1;
         self.chooser = None;
         self.report = None;
+        self.close_theme_picker();
         let script = self.script.as_ref().map(|(command, _)| command.clone());
         self.setup = Some(Setup::new(self.bar.clone(), script));
     }
@@ -1664,6 +1769,7 @@ impl App {
         self.choosers += 1;
         self.chooser = None;
         self.setup = None;
+        self.close_theme_picker();
         self.report = Some(report);
     }
 
@@ -2501,18 +2607,23 @@ impl App {
 
     /// Adds what finished since the last call to the history, notices in
     /// their places. A part is finished once it and everything before it is
-    /// done. A new width, or showing or folding details, draws the whole
-    /// history again.
+    /// done. A new width, showing or folding details, or another code theme
+    /// draws the whole history again.
     fn extend_history(&mut self, width: u16) {
-        if self.history.width != width || self.history.details != self.details {
+        let code = crate::highlight::code_revision();
+        if self.history.width != width
+            || self.history.details != self.details
+            || self.history.code != code
+        {
             self.history = History {
                 width,
                 details: self.details,
+                code,
                 ..History::default()
             };
         }
         // First, before any notice; again whenever the history starts over
-        // (a new width, Ctrl+O, a rewind).
+        // (a new width, Ctrl+O, another code theme, a rewind).
         if self.history.parts.is_empty()
             && let Some(version) = &self.welcome
         {
@@ -2687,6 +2798,15 @@ impl App {
             self.copier.show(
                 Line::from(Span::styled(
                     " ! Could not read tui.json; the status line uses the defaults",
+                    theme::warning(),
+                )),
+                now_ms + crate::copy::FAILED_MS,
+            );
+        }
+        if let Some(name) = self.theme_missing.take() {
+            self.copier.show(
+                Line::from(Span::styled(
+                    format!(" ! Theme {} not found; using terminal", sanitize(&name)),
                     theme::warning(),
                 )),
                 now_ms + crate::copy::FAILED_MS,
@@ -3000,6 +3120,9 @@ impl App {
         }
         if let Some(setup) = &self.setup {
             return setup.rows(width, max, &self.bar_values(now_ms));
+        }
+        if let Some(picker) = &self.theme_picker {
+            return picker.rows(width, max);
         }
         if let Some(report) = &mut self.report {
             return report.rows(width, max);

@@ -34,7 +34,7 @@ pub(crate) fn load(env: &BTreeMap<String, String>) -> Option<String> {
 }
 
 /// `CANTER_HOME`, or else `~/.canter`; only an absolute path.
-fn home(env: &BTreeMap<String, String>) -> Option<std::path::PathBuf> {
+pub(crate) fn home(env: &BTreeMap<String, String>) -> Option<std::path::PathBuf> {
     let home = match env.get("CANTER_HOME") {
         Some(home) => std::path::PathBuf::from(home),
         None => std::path::PathBuf::from(env.get("HOME")?).join(".canter"),
