@@ -42,6 +42,7 @@ mod run;
 mod search;
 mod select;
 mod shimmer;
+mod short_path;
 mod statusline;
 mod tab_title;
 mod text;

@@ -7,7 +7,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::diff::Diff;
-use crate::text::{LogicalLine, sanitize, str_width, truncate, wrap};
+use crate::short_path::{PATH_MIN, fit_path};
+use crate::text::{LogicalLine, sanitize, spans_width, str_width, truncate, wrap};
 use crate::theme;
 
 const KEYS: &str = " Esc close";
@@ -21,6 +22,15 @@ pub(crate) fn clean(text: &str) -> String {
 pub(crate) enum Part {
     /// One row, cut to the width.
     Line(Vec<Span<'static>>),
+    /// One row: `before`, then `path` padded to `column` columns, then
+    /// `after`. A path that does not fit loses directories ([`fit_path`]),
+    /// never into fewer than [`PATH_MIN`] columns; past that the row is cut.
+    Path {
+        before: Vec<Span<'static>>,
+        path: String,
+        column: usize,
+        after: Vec<Span<'static>>,
+    },
     /// Words two spaces apart, `indent` columns in, filling rows; a word
     /// longer than a row takes a row of its own, cut.
     Flow { indent: usize, words: Vec<String> },
@@ -45,6 +55,24 @@ impl Part {
     fn rows(&self, width: usize) -> Vec<Line<'static>> {
         match self {
             Self::Line(spans) => vec![Line::from(truncate(spans.clone(), width))],
+            Self::Path {
+                before,
+                path,
+                column,
+                after,
+            } => {
+                let full = str_width(path).max(*column);
+                let room = width
+                    .saturating_sub(spans_width(before) + spans_width(after))
+                    .max(full.min(PATH_MIN))
+                    .min(full);
+                let shown = fit_path(path, room);
+                let pad = " ".repeat(column.min(&room).saturating_sub(str_width(&shown)));
+                let mut spans = before.clone();
+                spans.push(Span::raw(format!("{shown}{pad}")));
+                spans.extend(after.iter().cloned());
+                vec![Line::from(truncate(spans, width))]
+            }
             Self::Flow { indent, words } => flow(*indent, words, width),
             Self::Diff { indent, diff } => diff
                 .rows(indent, u16::try_from(width).unwrap_or(u16::MAX), None)

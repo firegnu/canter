@@ -30,6 +30,7 @@ use crate::input::InputBox;
 use crate::links::{self, LinkSystem, Opener, Target};
 use crate::select::{self, Cell, Rows, Unit};
 use crate::shimmer::{self, COPY_MS, CopyLight};
+use crate::short_path::fit_path;
 use crate::statusline::bar::{self, Bar};
 use crate::statusline::setup::Setup;
 use crate::statusline::tps::Tps;
@@ -1316,12 +1317,15 @@ impl App {
         let note = scan.truncated && max >= 2;
         let shown = max - usize::from(note);
         let first = (selected + 1).saturating_sub(shown);
-        let entries: Vec<(&str, &str)> = found
+        // After the 3 columns of ` › `; a long path loses directories.
+        let room = usize::from(width).saturating_sub(3);
+        let labels: Vec<String> = found
             .iter()
             .skip(first)
             .take(shown)
-            .map(|&index| (scan.entries[index].label.as_str(), ""))
+            .map(|&index| fit_path(&scan.entries[index].label, room))
             .collect();
+        let entries: Vec<(&str, &str)> = labels.iter().map(|label| (label.as_str(), "")).collect();
         let mut rows = commands::list_rows(&entries, selected - first, width, shown);
         if note {
             rows.push(Line::from(Span::styled(

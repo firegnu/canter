@@ -345,14 +345,16 @@ fn a_narrow_window_shows_the_text_alone_with_fewer_keys() {
 }
 
 #[test]
-fn a_long_directory_is_cut_in_the_middle() {
+fn a_long_directory_loses_whole_directories_from_the_middle() {
     let cwd = "/home/dev/work/a/very/long/path/to/some/deeply/nested/project";
     let screen = Screen::with(60, HEIGHT, VERSION, cwd);
     let path = screen.from(TEXT, 1);
-    assert_eq!(path.width(), 60 - TEXT, "{}", screen.text());
-    assert!(path.starts_with("~/work/a/very"), "{path}");
-    assert!(path.ends_with("nested/project"), "{path}");
-    assert!(path.contains('…'), "{path}");
+    assert_eq!(
+        path,
+        "~/…/path/to/some/deeply/nested/project",
+        "{}",
+        screen.text()
+    );
     assert_eq!(screen.lines()[4], "", "one row, not wrapped");
 }
 
