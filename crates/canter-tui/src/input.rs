@@ -185,6 +185,117 @@ impl InputBox {
             .map_or(self.text.len(), |i| self.cursor + i);
     }
 
+    pub fn word_left(&mut self) {
+        self.cursor = self.word_start();
+    }
+
+    pub fn word_right(&mut self) {
+        self.cursor = self.word_end();
+    }
+
+    pub fn delete_word_before(&mut self) {
+        self.remove(self.word_start()..self.cursor);
+    }
+
+    pub fn delete_word_after(&mut self) {
+        self.remove(self.cursor..self.word_end());
+    }
+
+    /// Ctrl+K: to the end of the line, or the newline when already there.
+    pub fn delete_to_line_end(&mut self) {
+        let line_end = self.text[self.cursor..]
+            .find('\n')
+            .map_or(self.text.len(), |i| self.cursor + i);
+        if line_end == self.cursor && line_end < self.text.len() {
+            self.remove(self.cursor..self.cursor + 1);
+        } else {
+            self.remove(self.cursor..line_end);
+        }
+    }
+
+    /// Ctrl+U: to the start of the line, or the newline before it when
+    /// already there.
+    pub fn delete_to_line_start(&mut self) {
+        let line_start = self.text[..self.cursor].rfind('\n').map_or(0, |i| i + 1);
+        if line_start == self.cursor && line_start > 0 {
+            self.remove(self.cursor - 1..self.cursor);
+        } else {
+            self.remove(line_start..self.cursor);
+        }
+    }
+
+    /// Byte ranges of the image markers in the text.
+    fn markers(&self) -> Vec<Range<usize>> {
+        self.images
+            .iter()
+            .flat_map(|(marker, _)| {
+                self.text
+                    .match_indices(marker.as_str())
+                    .map(|(i, m)| i..i + m.len())
+            })
+            .collect()
+    }
+
+    /// Removes `range`, widened to whole image markers, and puts the cursor
+    /// where it was.
+    fn remove(&mut self, range: Range<usize>) {
+        let mut range = range;
+        for marker in self.markers() {
+            if marker.start < range.end && range.start < marker.end {
+                range.start = range.start.min(marker.start);
+                range.end = range.end.max(marker.end);
+            }
+        }
+        self.replace(range, "", 0);
+    }
+
+    /// Where the word before the cursor starts: past the separators, then
+    /// past one run of the same kind; an image marker is one word.
+    fn word_start(&self) -> usize {
+        let markers = self.markers();
+        let mut p = self.cursor;
+        let before = |p: usize| self.text[..p].chars().next_back();
+        loop {
+            if let Some(marker) = markers.iter().find(|m| m.start < p && p <= m.end) {
+                return marker.start;
+            }
+            match before(p) {
+                Some(c) if word_kind(c).is_none() => p -= c.len_utf8(),
+                _ => break,
+            }
+        }
+        let kind = before(p).and_then(word_kind);
+        while let Some(c) = before(p)
+            && word_kind(c) == kind
+        {
+            p -= c.len_utf8();
+        }
+        p
+    }
+
+    /// Where the word after the cursor ends, like [`Self::word_start`].
+    fn word_end(&self) -> usize {
+        let markers = self.markers();
+        let mut p = self.cursor;
+        let after = |p: usize| self.text[p..].chars().next();
+        loop {
+            if let Some(marker) = markers.iter().find(|m| m.start <= p && p < m.end) {
+                return marker.end;
+            }
+            match after(p) {
+                Some(c) if word_kind(c).is_none() => p += c.len_utf8(),
+                _ => break,
+            }
+        }
+        let kind = after(p).and_then(word_kind);
+        while let Some(c) = after(p)
+            && word_kind(c) == kind
+        {
+            p += c.len_utf8();
+        }
+        p
+    }
+
     /// Moves one wrapped row up (`-1`) or down (`1`), keeping the column.
     pub fn vertical(&mut self, delta: isize, width: usize) {
         let layout = self.layout(width);
@@ -248,5 +359,32 @@ impl InputBox {
             rows,
             cursor: cursor.unwrap_or((0, 0)),
         }
+    }
+}
+
+#[derive(PartialEq)]
+enum WordKind {
+    /// Letters, digits and `_`.
+    Word,
+    /// A run of Chinese characters.
+    Han,
+}
+
+/// What kind of word `c` belongs to; `None` for separators (punctuation,
+/// spaces, newlines).
+fn word_kind(c: char) -> Option<WordKind> {
+    let han = matches!(
+        c,
+        '\u{3400}'..='\u{4DBF}'
+            | '\u{4E00}'..='\u{9FFF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{20000}'..='\u{3134F}'
+    );
+    if han {
+        Some(WordKind::Han)
+    } else if c.is_alphanumeric() || c == '_' {
+        Some(WordKind::Word)
+    } else {
+        None
     }
 }
