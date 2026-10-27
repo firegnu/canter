@@ -30,6 +30,17 @@ Environment 是会话打开时固定的目录、仓库根、系统/架构和本�
   没有的节不写。名字用强调色，不给模型用的在同一行灰色写 `not for model`；描述另起一行，灰色，最多两行，超出用 `…` 截。
   没技能时写原来那四行说明：两个目录放在哪、放好后重新打开会话。
 
+## 批准框
+
+需要批准时依次显示：1 `Allow once`、2 `Allow for this session …`、3 `Decline`、
+4 `Decline and say what to do instead`、5 `Decline and stop`。
+旧服务端没有提供第 4 项时隐藏它，`Decline and stop` 仍是第 4 项。
+
+用 Enter 或数字 4 选「拒绝并说明」，框内切到 `What to do instead:` 输入行。
+打字、粘贴都合成一行；非空白时 Enter 交出说明，空着 Enter 不提交；空着按退格或 ↑ 回到选项。
+Esc 照旧打断本轮，300 毫秒的按键保护照旧。拒绝说明随工具结果交给模型，本轮继续；
+对话里 declined 卡片下用暗色显示这句话，显示前去掉控制字符，重开会话及其它终端也能看到。
+
 ## 欢迎头
 
 每次打开 canter（新会话、接着旧会话、`/new`、`/resume` 换过去的会话），对话最上面先画欢迎头，不画框：

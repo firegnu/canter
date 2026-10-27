@@ -200,6 +200,7 @@ async fn review_turn_is_readonly_even_with_session_grants_and_restores_permissio
                                 .resolve(
                                     &request.id,
                                     RequestResolveParams {
+                                        feedback: None,
                                         decision: Some(ApprovalDecision::AcceptForSession),
                                         answer: None,
                                         client_name: "test".into(),
@@ -280,6 +281,7 @@ async fn review_turn_is_readonly_even_with_session_grants_and_restores_permissio
                             .resolve(
                                 &request.id,
                                 RequestResolveParams {
+                                    feedback: None,
                                     decision: Some(ApprovalDecision::Accept),
                                     answer: None,
                                     client_name: "test".into(),
@@ -520,6 +522,7 @@ async fn interrupted_review_restores_the_next_inputs_original_permissions() {
         .resolve(
             &request.id,
             RequestResolveParams {
+                feedback: None,
                 decision: Some(ApprovalDecision::Accept),
                 answer: None,
                 client_name: "test".into(),
@@ -1246,6 +1249,7 @@ async fn cancel_approval_keeps_the_declined_result_and_stops_the_turn() {
         .resolve(
             &request.id,
             RequestResolveParams {
+                feedback: None,
                 decision: Some(ApprovalDecision::Cancel),
                 answer: None,
                 client_name: "test".into(),
@@ -1259,7 +1263,8 @@ async fn cancel_approval_keeps_the_declined_result_and_stops_the_turn() {
             event.payload,
             EventPayload::RequestResolved {
                 resolution: ApprovalResolution::Answered {
-                    decision: ApprovalDecision::Cancel
+                    decision: ApprovalDecision::Cancel,
+                    ..
                 },
                 ..
             }

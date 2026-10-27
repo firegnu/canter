@@ -287,6 +287,7 @@ async fn request_prefix_is_frozen_until_reopening_and_only_compaction_replaces_h
         .resolve(
             &request.id,
             RequestResolveParams {
+                feedback: None,
                 decision: Some(ApprovalDecision::Decline),
                 answer: None,
                 client_name: "terminal".into(),
@@ -561,6 +562,7 @@ async fn two_clients_resolve_once_and_steering_precedes_the_next_model_request()
     assert_eq!(steer.turn_id, first.turn_id);
     assert!(queued.turn_id.is_none());
     let params = RequestResolveParams {
+        feedback: None,
         decision: Some(ApprovalDecision::Accept),
         answer: None,
         client_name: "client-a".into(),

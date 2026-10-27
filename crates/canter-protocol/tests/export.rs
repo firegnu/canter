@@ -170,13 +170,20 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         fs::read_to_string(temp.path().join("typescript/RequestResolveParams.ts")).unwrap();
     assert!(resolve_ts.contains("decision?: ApprovalDecision"));
     assert!(resolve_ts.contains("answer?: UserInputAnswer"));
+    assert!(resolve_ts.contains("feedback?: string"));
+    let resolution_ts =
+        fs::read_to_string(temp.path().join("typescript/ApprovalResolution.ts")).unwrap();
+    assert!(resolution_ts.contains("feedback?: string"));
+    let snapshot_ts =
+        fs::read_to_string(temp.path().join("typescript/SessionSnapshot.ts")).unwrap();
+    assert!(snapshot_ts.contains("approvalFeedback?:"));
     let required = definitions["RequestResolveParams"]["required"]
         .as_array()
         .unwrap();
     assert!(
         !required
             .iter()
-            .any(|field| field == "decision" || field == "answer")
+            .any(|field| field == "decision" || field == "answer" || field == "feedback")
     );
     let legacy: canter_protocol::RequestResolveParams =
         serde_json::from_value(serde_json::json!({"decision":"accept","clientName":"old-client"}))

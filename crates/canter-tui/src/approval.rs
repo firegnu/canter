@@ -38,6 +38,7 @@ pub(crate) fn options(approval: &ApprovalRequest) -> Vec<ApprovalDecision> {
         ApprovalDecision::Accept,
         ApprovalDecision::AcceptForSession,
         ApprovalDecision::Decline,
+        ApprovalDecision::DeclineWithFeedback,
         ApprovalDecision::Cancel,
     ]
     .into_iter()
@@ -55,6 +56,7 @@ pub(crate) fn decision_label(decision: ApprovalDecision, tool: &str) -> &'static
             "Allow for this session (don't ask again for this tool)"
         }
         ApprovalDecision::Decline => "Decline",
+        ApprovalDecision::DeclineWithFeedback => "Decline and say what to do instead",
         ApprovalDecision::Cancel => "Decline and stop",
         ApprovalDecision::Unknown => "(unknown answer)",
     }
@@ -70,6 +72,7 @@ pub(crate) fn layout(
     approval: &ApprovalRequest,
     home: Option<&str>,
     selected: usize,
+    custom: Option<&str>,
     scroll: usize,
     taken: bool,
     width: u16,
@@ -127,32 +130,55 @@ pub(crate) fn layout(
     let options = options(approval);
     let selected = selected.min(options.len().saturating_sub(1));
     let mut tail = vec![Line::default()];
-    for (index, decision) in options.iter().enumerate() {
-        let text = format!(
-            "{}. {}",
-            index + 1,
-            decision_label(*decision, &approval.tool)
+    if let Some(text) = custom {
+        tail.push(Line::from("What to do instead:"));
+        let input = wrap(
+            &LogicalLine::new(Vec::new(), vec![Span::raw(format!("› {}▏", visible(text)))]),
+            inner,
         );
-        let line = if index == selected {
-            Line::from(vec![
-                Span::styled("› ", theme::accent().bold()),
-                Span::styled(text, Style::new().bold()),
-            ])
-        } else {
-            Line::from(vec![Span::raw("  "), Span::raw(text)])
-        };
-        tail.push(if taken {
-            line
-        } else {
-            line.patch_style(theme::secondary())
-        });
-        // What it grants, readable before choosing it (also with its number key).
-        if *decision == ApprovalDecision::AcceptForSession {
-            let note = LogicalLine::new(
-                vec![Span::raw("     ")],
-                vec![Span::styled(session_note(approval), theme::warning())],
+        let room = usize::from(max_height.saturating_sub(6)).max(1);
+        tail.extend(
+            input
+                .into_iter()
+                .rev()
+                .take(room)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev(),
+        );
+        if !taken {
+            for row in &mut tail {
+                *row = row.clone().patch_style(theme::secondary());
+            }
+        }
+    } else {
+        for (index, decision) in options.iter().enumerate() {
+            let text = format!(
+                "{}. {}",
+                index + 1,
+                decision_label(*decision, &approval.tool)
             );
-            tail.extend(wrap(&note, inner));
+            let line = if index == selected {
+                Line::from(vec![
+                    Span::styled("› ", theme::accent().bold()),
+                    Span::styled(text, Style::new().bold()),
+                ])
+            } else {
+                Line::from(vec![Span::raw("  "), Span::raw(text)])
+            };
+            tail.push(if taken {
+                line
+            } else {
+                line.patch_style(theme::secondary())
+            });
+            // What it grants, readable before choosing it (also with its number key).
+            if *decision == ApprovalDecision::AcceptForSession {
+                let note = LogicalLine::new(
+                    vec![Span::raw("     ")],
+                    vec![Span::styled(session_note(approval), theme::warning())],
+                );
+                tail.extend(wrap(&note, inner));
+            }
         }
     }
 
@@ -194,7 +220,9 @@ pub(crate) fn layout(
         row.spans.insert(0, Span::raw(" "));
     }
 
-    let hint = if max_scroll > 0 {
+    let hint = if custom.is_some() {
+        "Enter send, Backspace/↑ back if empty, PgUp/PgDn scroll, Esc interrupt"
+    } else if max_scroll > 0 {
         "↑↓ select, PgUp/PgDn scroll, Enter confirm, number keys pick, Esc interrupt"
     } else {
         "↑↓ select, Enter confirm, number keys pick, Esc interrupt"

@@ -6,7 +6,10 @@ use std::collections::HashSet;
 pub enum PermissionCheck<'a> {
     Execute(ExecutionPermit<'a>),
     Ask(ApprovalRequest),
-    Deny { cancel_turn: bool },
+    Deny {
+        cancel_turn: bool,
+        feedback: Option<String>,
+    },
 }
 
 /// An unforgeable, single-use permission for this exact prepared call.
@@ -45,15 +48,20 @@ impl PermissionGate {
                 PermissionCheck::Execute(ExecutionPermit { call })
             }
             Tool::Write | Tool::Edit | Tool::Shell | Tool::AskUser | Tool::Mcp | Tool::WebFetch => {
-                PermissionCheck::Deny { cancel_turn: false }
+                PermissionCheck::Deny {
+                    cancel_turn: false,
+                    feedback: None,
+                }
             }
         }
     }
-    /// The caller must first correlate the answer with this session's pending request.
+    /// The caller must first correlate the answer with this session's pending request
+    /// and validate its available decisions and feedback.
     pub fn resolve<'a>(
         &mut self,
         call: &'a PreparedCall,
         decision: ApprovalDecision,
+        feedback: Option<String>,
     ) -> Result<PermissionCheck<'a>, &'static str> {
         match decision {
             ApprovalDecision::Accept => Ok(PermissionCheck::Execute(ExecutionPermit { call })),
@@ -61,8 +69,16 @@ impl PermissionGate {
                 self.grants.insert(call.permission_key());
                 Ok(PermissionCheck::Execute(ExecutionPermit { call }))
             }
-            ApprovalDecision::Decline => Ok(PermissionCheck::Deny { cancel_turn: false }),
-            ApprovalDecision::Cancel => Ok(PermissionCheck::Deny { cancel_turn: true }),
+            ApprovalDecision::Decline | ApprovalDecision::DeclineWithFeedback => {
+                Ok(PermissionCheck::Deny {
+                    cancel_turn: false,
+                    feedback,
+                })
+            }
+            ApprovalDecision::Cancel => Ok(PermissionCheck::Deny {
+                cancel_turn: true,
+                feedback: None,
+            }),
             ApprovalDecision::Unknown => Err("invalid_decision: unknown approval answer"),
         }
     }
@@ -94,6 +110,7 @@ impl PermissionGate {
                     ApprovalDecision::Accept,
                     ApprovalDecision::AcceptForSession,
                     ApprovalDecision::Decline,
+                    ApprovalDecision::DeclineWithFeedback,
                     ApprovalDecision::Cancel,
                 ],
             })

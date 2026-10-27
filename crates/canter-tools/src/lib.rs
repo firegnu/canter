@@ -240,9 +240,12 @@ impl PreparedCall {
     pub fn started_item(&self) -> Item {
         self.item(ItemStatus::InProgress)
     }
-    pub fn declined_output(&self) -> ToolOutput {
+    pub fn declined_output(&self, feedback: Option<&str>) -> ToolOutput {
         ToolOutput {
-            text: "Tool call declined.".into(),
+            text: feedback.map_or_else(
+                || "Tool call declined.".into(),
+                |text| format!("Tool call declined. The user says: {text}"),
+            ),
             item: self.item(ItemStatus::Declined),
             outcome: ToolOutcome::Declined,
         }

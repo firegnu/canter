@@ -2,4 +2,4 @@
 import type { ApprovalDecision } from "./ApprovalDecision";
 import type { UserInputAnswer } from "./UserInputAnswer";
 
-export type ApprovalResolution = { "type": "answered", decision: ApprovalDecision, } | { "type": "userInput", answer: UserInputAnswer, } | { "type": "cancelled" } | { "type": "timedOut" } | { "type": "unknown" };
+export type ApprovalResolution = { "type": "answered", decision: ApprovalDecision, feedback?: string, } | { "type": "userInput", answer: UserInputAnswer, } | { "type": "cancelled" } | { "type": "timedOut" } | { "type": "unknown" };

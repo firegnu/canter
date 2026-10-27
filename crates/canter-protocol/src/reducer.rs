@@ -1,4 +1,7 @@
-use crate::{Event, EventPayload, Item, ItemDelta, SessionSnapshot, SessionStatus, TurnStatus};
+use crate::{
+    ApprovalDecision, ApprovalResolution, Event, EventPayload, Item, ItemDelta, RequestKind,
+    SessionSnapshot, SessionStatus, TurnStatus,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReduceError {
@@ -294,15 +297,46 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
                 snapshot.pending_requests.push(request.clone());
             }
         }
-        EventPayload::RequestResolved { request_id, .. } => snapshot
-            .pending_requests
-            .retain(|request| request.id != *request_id),
+        EventPayload::RequestResolved {
+            request_id,
+            resolution,
+            ..
+        } => {
+            if let ApprovalResolution::Answered {
+                decision: ApprovalDecision::DeclineWithFeedback,
+                feedback: Some(feedback),
+            } = resolution
+                && let Some(request) = snapshot
+                    .pending_requests
+                    .iter()
+                    .find(|r| r.id == *request_id)
+                && let RequestKind::Approval(approval) = &request.kind
+            {
+                snapshot
+                    .approval_feedback
+                    .insert(approval.item_id.clone(), feedback.clone());
+            }
+            snapshot
+                .pending_requests
+                .retain(|request| request.id != *request_id);
+        }
         EventPayload::SessionUsage { token_usage }
         | EventPayload::SessionBtwUsage { token_usage } => {
             snapshot.token_usage = Some(token_usage.clone())
         }
         EventPayload::Error { error, .. } => snapshot.error = Some(error.clone()),
         EventPayload::Warning { .. } | EventPayload::Unknown => {}
+    }
+    if matches!(
+        event.payload,
+        EventPayload::SessionRewound { .. } | EventPayload::TurnRetracted { .. }
+    ) {
+        snapshot.approval_feedback.retain(|id, _| {
+            snapshot
+                .turns
+                .iter()
+                .any(|turn| turn.items.iter().any(|item| item.id() == Some(id)))
+        });
     }
     if snapshot.last_event_seq == 0 {
         snapshot.created_at = event.timestamp;

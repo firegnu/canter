@@ -67,10 +67,16 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 批准和提问先到先得：后到的回答由服务端返回 `alreadyResolved: true` 和原处理事件序号，
 不再产生一个处理事件。取消、超时的 `clientName` 可为空。
 权限模式为 `alwaysAsk`、`askForExecution`、`allowAll`；批准回答为
-`accept`、`acceptForSession`、`decline`、`cancel`。
+`accept`、`acceptForSession`、`decline`、`declineWithFeedback`、`cancel`。
+
+`declineWithFeedback` 必须附带非空白的 `feedback` 字符串，其它 decision 不得带 feedback；
+选项不在请求的 `availableDecisions` 内也返回 `invalid_decision`，请求保持等待。
+说明原样保存在 `request.resolved.resolution.feedback`，归并到快照的可选
+`approvalFeedback`（工具项目 ID → 说明），供重开及其它客户端显示，回退对话时随项目移除。
+旧事件/快照缺少这些字段照旧可读；旧客户端滤掉未知选项，新客户端只显示服务端提供的选项。
 
 解决请求的 `decision` 和 `answer` 都可省略，但必须恰好提供一个，且匹配请求类型。
-批准仍发送 `{ decision, clientName }`；提问发送 `{ answer, clientName }`，其中 answer 为
+普通批准发送 `{ decision, clientName }`，拒绝并说明另带 `feedback`；提问发送 `{ answer, clientName }`，其中 answer 为
 `{ "type": "option", "label": "选项标签" }` 或 `{ "type": "text", "text": "自己写的一句话" }`。
 选项标签必须在请求中，文字不能只有空白或包含换行。类型错、空回答、未知选项返回
 `invalid_request`，请求、会话状态和事件序号不变；非法批准 decision 仍为 `invalid_decision`。

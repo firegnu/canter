@@ -713,6 +713,20 @@ impl Session {
             .iter()
             .find(|request| request.id == request_id)
             .ok_or_else(|| CoreError::new(ErrorCode::RequestNotFound, "request not found"))?;
+        let valid_feedback = if params.decision == Some(ApprovalDecision::DeclineWithFeedback) {
+            params
+                .feedback
+                .as_ref()
+                .is_some_and(|text| !text.trim().is_empty())
+        } else {
+            params.feedback.is_none()
+        };
+        if !valid_feedback {
+            return Err(CoreError::new(
+                ErrorCode::InvalidDecision,
+                "invalid approval feedback",
+            ));
+        }
         let resolution = match (&request.kind, params.decision, &params.answer) {
             (RequestKind::Approval(approval), Some(decision), None) => {
                 if decision == ApprovalDecision::Unknown
@@ -723,7 +737,10 @@ impl Session {
                         "invalid approval decision",
                     ));
                 }
-                ApprovalResolution::Answered { decision }
+                ApprovalResolution::Answered {
+                    decision,
+                    feedback: params.feedback,
+                }
             }
             (RequestKind::UserInput(question), None, Some(answer)) => {
                 let valid = match answer {
@@ -1079,3 +1096,7 @@ fn validate_options(options: &CoreOptions) -> Result<(), CoreError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "decline_feedback_tests.rs"]
+mod decline_feedback_tests;

@@ -306,6 +306,9 @@ pub struct RequestResolveParams {
     pub decision: Option<ApprovalDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub feedback: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub answer: Option<crate::UserInputAnswer>,
     pub client_name: String,
 }
