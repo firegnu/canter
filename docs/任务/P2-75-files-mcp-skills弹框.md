@@ -153,3 +153,12 @@
 - **没做的事**：三个命令矮窗口滚动、Enter 和 Ctrl+C 关、草稿保留没有单独写测试（和 `/context` 走同一段代码，`context_popup.rs` 测着；任务清单里也没要）。服务端、协议、`/context` 内容和别的命令没动。
 - **主控决定**（10-27）：Git status 那节把上游和领先、落后补回来，灰色写在分支名后面，用 git 自己的词：有上游时 `Git status · main  origin/main · ahead 1`（落后 `behind 2`，都有 `ahead 1, behind 2`，都没有只写上游名）；没上游只写分支名；第一行摘要不变。已照做：方括号里的内容原样搬到 ` · ` 后面，所以上游没了时是 git 的 `gone`。补了 `files_git_status_names_the_upstream_and_how_far_ahead`（克隆一个本地仓库再多提交一次），先在原代码上失败（只出 `main`），改后通过；只跑了 `report_popup`、`slash` 两组，51 个全过，fmt、clippy 过。
 - **踩过的坑**：第一次跑全套时 `canter::tui statusline::startup_picker_exits_on_input_end_without_sighup` 失败一次（起真终端进程、带超时的测试），单独跑和再跑全套都过，和这次改动无关。`slash.rs` 的 `Screen::key` 按完键不重画，查关没关要先 `draw()`。
+
+## 主控审查
+
+- diff 只动了 `crates/canter-tui/`（新 `report.rs` 四个命令共用弹框、`files.rs`、`commands.rs`、`git.rs`、测试、README）和本任务文件；服务端、协议、`/context` 内容没动，`/context` 的四个测试原样通过。
+- 外来文字（路径、分支、服务名、工具名、技能名和描述、出错原因、警告）画之前都经 `report::clean`（去控制字符、换行）。
+- agent 问 Git status 要不要补回上游和 ahead / behind（原来的 `Git: …` 行有，新样子丢了），主控定补回，灰色写在分支名后；agent 补了并加一条先红后绿的测试。同意它把远端分支已删的 `gone` 照 git 原词显示。
+- 同意其余取舍：对齐栏按最宽加 3 格、staged 栏只按带标记的行对齐；空时第一行照写 0；`disconnected` 红色；未知来源的技能放 `Other` 节；删掉只有这三个命令用的单行截断开关。
+- 主控重跑：nextest 627 通过，doc、clippy、fmt 通过。
+结果：一次过
