@@ -44,6 +44,7 @@ pub enum Tool {
     Shell,
     ShellOutput,
     ShellStop,
+    Monitor,
     AskUser,
     WebFetch,
     UpdatePlan,
@@ -67,7 +68,7 @@ pub struct ToolDefinition {
 }
 
 impl Tool {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Read,
         Self::Write,
         Self::Edit,
@@ -78,6 +79,7 @@ impl Tool {
         Self::SubmitPlan,
         Self::ShellOutput,
         Self::ShellStop,
+        Self::Monitor,
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -92,6 +94,7 @@ impl Tool {
             Self::Shell => "shell",
             Self::ShellOutput => "shell_output",
             Self::ShellStop => "shell_stop",
+            Self::Monitor => "monitor",
             Self::AskUser => "ask_user",
             Self::WebFetch => "web_fetch",
             Self::UpdatePlan => "update_plan",
@@ -102,7 +105,7 @@ impl Tool {
 
     pub fn risk(self) -> Risk {
         match self {
-            Self::Read | Self::ShellOutput | Self::ShellStop => Risk::Read,
+            Self::Read | Self::ShellOutput | Self::ShellStop | Self::Monitor => Risk::Read,
             Self::Write | Self::Edit => Risk::Write,
             Self::Shell | Self::Mcp | Self::WebFetch => Risk::Execute,
             Self::AskUser | Self::UpdatePlan | Self::SubmitPlan => Risk::Interaction,
@@ -110,6 +113,14 @@ impl Tool {
     }
 
     pub fn definition(self) -> ToolDefinition {
+        if self == Self::Monitor {
+            return ToolDefinition {
+                name: self.name(),
+                description: "Watch new output lines from an existing background shell command by its session-local integer id. Set pattern to a regular expression; calling again replaces it, omitting pattern cancels monitoring. Use after starting a development server, long tests, or a build to catch error lines without polling. Matches wake an idle model, or join its next request while it is busy. Notifications keep the latest 20 matching lines / 4 KiB and report omissions; use shell_output for all retained output. Monitoring does not consume the shell_output cursor. Monitoring ends with the command; a monitored user command's natural exit also notifies the model. No approval is needed; available in Plan mode.",
+                parameters: json!({"type":"object","properties":{"id":{"type":"integer","minimum":1},"pattern":{"type":"string"}},"required":["id"],"additionalProperties":false}),
+                risk: self.risk(),
+            };
+        }
         if matches!(self, Self::ShellOutput | Self::ShellStop) {
             return ToolDefinition {
                 name: self.name(),
@@ -318,6 +329,10 @@ struct Replacement {
 }
 
 enum Action {
+    Monitor {
+        id: u64,
+        pattern: Option<String>,
+    },
     Background {
         id: u64,
         stop: bool,
@@ -378,6 +393,13 @@ impl PreparedCall {
     }
     fn item(&self, status: ItemStatus) -> Item {
         match &self.action {
+            Action::Monitor { id, .. } => Item::BackgroundCommandAction {
+                id: self.id.clone(),
+                command_id: *id,
+                action: "monitor".into(),
+                result: String::new(),
+                status,
+            },
             Action::Background { id, stop } => Item::BackgroundCommandAction {
                 id: self.id.clone(),
                 command_id: *id,
@@ -505,7 +527,8 @@ impl Tools {
                 | Tool::AskUser
                 | Tool::SubmitPlan
                 | Tool::ShellOutput
-                | Tool::ShellStop,
+                | Tool::ShellStop
+                | Tool::Monitor,
             ) => true,
             Some(Tool::Shell) => serde_json::from_str::<Value>(raw_arguments)
                 .ok()
@@ -767,6 +790,22 @@ impl Tools {
         cancel: &CancellationToken,
     ) -> Result<Action, String> {
         match tool {
+            Tool::Monitor => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Args {
+                    id: u64,
+                    pattern: Option<String>,
+                }
+                let args: Args = parse(arguments)?;
+                if args.id == 0 {
+                    return Err("id must be a positive integer".into());
+                }
+                Ok(Action::Monitor {
+                    id: args.id,
+                    pattern: args.pattern,
+                })
+            }
             Tool::ShellOutput | Tool::ShellStop => {
                 #[derive(Deserialize)]
                 #[serde(deny_unknown_fields)]
@@ -973,6 +1012,34 @@ impl Tools {
             }
         }
         match &call.action {
+            Action::Monitor { id, pattern } => {
+                let result = self.background.monitor(*id, pattern.as_deref());
+                let (text, outcome) = match result {
+                    Ok(()) => (
+                        match pattern {
+                            Some(pattern) => format!(
+                                "Monitoring background command {id} for `{pattern}` in new output."
+                            ),
+                            None => format!("Stopped monitoring background command {id}."),
+                        },
+                        ToolOutcome::Completed,
+                    ),
+                    Err(error) => (error, ToolOutcome::Failed),
+                };
+                let mut item = call.item(if outcome == ToolOutcome::Completed {
+                    ItemStatus::Completed
+                } else {
+                    ItemStatus::Failed
+                });
+                if let Item::BackgroundCommandAction { result, .. } = &mut item {
+                    *result = text.clone();
+                }
+                ToolOutput {
+                    text,
+                    item,
+                    outcome,
+                }
+            }
             Action::Background { id, stop } => {
                 let result = if *stop {
                     match self.background.stop(*id).await {
@@ -1331,10 +1398,12 @@ fn tool_error(
     cwd: &std::path::Path,
 ) -> ToolOutput {
     let item = match tool {
-        Tool::ShellOutput | Tool::ShellStop => Item::BackgroundCommandAction {
+        Tool::ShellOutput | Tool::ShellStop | Tool::Monitor => Item::BackgroundCommandAction {
             id,
             command_id: arguments["id"].as_u64().unwrap_or_default(),
-            action: if tool == Tool::ShellStop {
+            action: if tool == Tool::Monitor {
+                "monitor"
+            } else if tool == Tool::ShellStop {
                 "stop"
             } else {
                 "output"

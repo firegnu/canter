@@ -958,7 +958,8 @@ async fn ask_user_second_option_returns_to_the_model_and_continues() {
                 "update_plan",
                 "submit_plan",
                 "shell_output",
-                "shell_stop"
+                "shell_stop",
+                "monitor"
             ]
         );
     }

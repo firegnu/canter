@@ -15,6 +15,12 @@
 服务端重启只恢复状态，不恢复进程和日志，残留运行条目转为已退出、退出码未知。
 已完成命令仅最近 8 条保留日志，更早的输出回复说明已丢弃；重启后模型工具与 HTTP 均返回已恢复状态及输出不可用的说明。
 新增 `backgroundCommandAction` 项目记录 shell_output / shell_stop 的有界结果；旧客户端跳过新项目和事件。
+P2-101 增加 action 为 `monitor` 的工具记录，以及 `backgroundEvent {id, commandId?, text}` 项目。
+后台完成或匹配输出的通知沿用 item.started / item.completed；自动叫醒轮沿用普通轮事件，
+input 为空，没有 userMessage，clientName 为 background。每批可以有多张事件卡片，只有一个叫醒轮。
+事件 id 同时关联私有模型历史，回退后补记沿用同一 id；重新打开、其它客户端和导出使用同一快照内容。
+叫醒上限提示使用没有 commandId 的 backgroundEvent；空闲时附在最后一轮，不因此调用模型。
+这些通知项目和自动开轮是 canter 在 Codex 会话→轮→项目结构上的扩展；旧客户端按 Unknown 跳过项目。
 参考 Codex app-server v2 `rust-v0.163.0` 的稳定结构及字段名，独立编写，未复制源码。
 
 ## HTTP 对照

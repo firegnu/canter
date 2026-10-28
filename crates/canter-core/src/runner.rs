@@ -155,9 +155,11 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         state.active = None;
         let _ = done.send(Some(finish.clone()));
         if finish.is_err() || cancel.is_cancelled() || state.closing {
+            state.background_events.interrupt();
             break;
         }
         let Some(input) = state.queue.pop_front() else {
+            state.background_events.turn_finished();
             break;
         };
         let params = SessionInputParams {
@@ -191,6 +193,7 @@ async fn conversation(
         let request = {
             let mut state = shared.state.lock().await;
             state.consume_steering(turn_id).await?;
+            state.background_cards(turn_id).await?;
             context::request(&state, shared.options.max_output_tokens)
         };
         let estimated = context::request_tokens(&request);
@@ -242,6 +245,11 @@ async fn conversation(
                 "context remains too large after compaction",
             ));
         }
+        shared
+            .state
+            .lock()
+            .await
+            .consume_background_notices(&request.messages);
         let (content, reason, error) = model_response(shared, turn_id, request, cancel).await?;
         let calls: Vec<_> = content
             .iter()

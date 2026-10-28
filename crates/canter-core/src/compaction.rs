@@ -95,11 +95,16 @@ pub(crate) async fn compact(
     }
     match result {
         Ok((summary, messages, history_len)) if !cancel.is_cancelled() => {
-            let notices: Vec<_> = state.history[history_len..]
+            let mut notices: Vec<_> = state.history[history_len..]
                 .iter()
                 .filter(|message| crate::background::notice_id(message).is_some())
                 .cloned()
                 .collect();
+            for message in state.pending_background_messages() {
+                if !notices.contains(&message) {
+                    notices.push(message);
+                }
+            }
             let user_inputs = messages[..messages.len() - 1].to_vec();
             let user_messages = messages[..messages.len() - 1]
                 .iter()
@@ -198,7 +203,12 @@ async fn summarize(
                 } else {
                     text
                 };
-                transcript.push_str(&format!("\nUser: {text}\n"));
+                let source = if crate::background::notice_id(message).is_some() {
+                    "Background event"
+                } else {
+                    "User"
+                };
+                transcript.push_str(&format!("\n{source}: {text}\n"));
             }
             Message::UserParts { content } => {
                 transcript.push_str("\nUser: ");

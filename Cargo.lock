@@ -339,6 +339,7 @@ dependencies = [
  "encoding_rs",
  "htmd",
  "nix",
+ "regex-automata",
  "reqwest",
  "rmcp",
  "serde",

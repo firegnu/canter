@@ -294,6 +294,13 @@ pub struct PlanStep {
     rename_all_fields = "camelCase"
 )]
 pub enum Item {
+    BackgroundEvent {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        command_id: Option<u64>,
+        text: String,
+    },
     BackgroundCommandAction {
         id: String,
         #[ts(type = "number")]
@@ -435,7 +442,7 @@ impl ExecCommandSource {
 impl Item {
     pub fn id(&self) -> Option<&str> {
         match self {
-            Self::BackgroundCommandAction { id, .. } => Some(id),
+            Self::BackgroundCommandAction { id, .. } | Self::BackgroundEvent { id, .. } => Some(id),
             Self::UserMessage { id, .. }
             | Self::Plan { id, .. }
             | Self::PlanProposal { id, .. }

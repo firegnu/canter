@@ -174,6 +174,11 @@ impl Body {
     fn item(&mut self, item: &Item, cwd: &str, feedback: Option<&str>) {
         let assistant = "Assistant";
         match item {
+            Item::BackgroundEvent { text, .. } => {
+                let text = sanitize(text);
+                let fence = "`".repeat((longest_run(&text, '`') + 1).max(3));
+                self.block("Event", &format!("{fence}text\n{text}\n{fence}"));
+            }
             Item::BackgroundCommandAction {
                 command_id,
                 action,
@@ -182,7 +187,18 @@ impl Body {
             } => {
                 self.block(
                     assistant,
-                    &tool(&format!("shell_{action} #{command_id}"), result, ""),
+                    &tool(
+                        &format!(
+                            "{} #{command_id}",
+                            if action == "monitor" {
+                                action.clone()
+                            } else {
+                                format!("shell_{action}")
+                            }
+                        ),
+                        result,
+                        "",
+                    ),
                 );
             }
             Item::PlanProposal {
@@ -758,6 +774,34 @@ _Failed: model unreachable_
         assert!(
             text.contains("**Tool** · Ran `diff a b` · failed, exit 1\n"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn wake_event_export_keeps_all_matching_lines_and_pause_notice() {
+        let lines = (1..=20).map(|i| format!("error {i}\n")).collect::<String>();
+        let mut wake = turn("wake", "", vec![]);
+        wake.input.clear();
+        wake.items = vec![
+            Item::BackgroundEvent {
+                id: "event".into(),
+                command_id: Some(1),
+                text: lines.clone(),
+            },
+            Item::BackgroundEvent {
+                id: "limit".into(),
+                command_id: None,
+                text: "Auto wake paused: send a message to resume.".into(),
+            },
+        ];
+        let exported = markdown(&snapshot(None, vec![wake]), "now").unwrap();
+        assert!(
+            exported.contains(&lines) && exported.contains("Auto wake paused"),
+            "{exported}"
+        );
+        assert!(
+            exported.contains("Event") && !exported.contains("User"),
+            "{exported}"
         );
     }
 

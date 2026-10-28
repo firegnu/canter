@@ -33,6 +33,72 @@ fn text(ui: &mut Ui<TestBackend>) -> String {
 }
 
 #[test]
+fn wake_event_cards_replay_identically_without_user_messages() {
+    let mut snapshot = SessionSnapshot::empty("wake");
+    snapshot.status = SessionStatus::Working;
+    snapshot.turns.push(serde_json::from_value(serde_json::json!({
+        "id":"wake-turn", "status":"inProgress", "input":[], "clientName":"background", "error":null,"usage":null,"items":[]
+    })).unwrap());
+    let mut ui = Ui::new(
+        TestBackend::new(100, 24),
+        App::new(snapshot.clone(), None, 0),
+    )
+    .unwrap();
+    for (index, kind) in ["item.started", "item.completed"].into_iter().enumerate() {
+        let event = serde_json::from_value(serde_json::json!({
+            "seq":index+1,"sessionId":"wake","timestamp":0,"type":kind,"turnId":"wake-turn",
+            "item":{"type":"backgroundEvent","id":"event-1","commandId":1,"text":"#1 output matched `error`: error building\nUse shell_output with id=1."}
+        })).unwrap();
+        ui.app_mut().apply_event(&event, 0);
+        canter_protocol::apply_event_mut(&mut snapshot, &event).unwrap();
+    }
+    let shown = text(&mut ui);
+    assert!(
+        shown.contains("Event Background #1") && shown.contains("error building"),
+        "{shown}"
+    );
+    assert!(
+        !shown.lines().take(4).any(|line| line.contains('›')),
+        "events must not look like a user message: {shown}"
+    );
+    let mut reopened = Ui::new(TestBackend::new(100, 24), App::new(snapshot, None, 0)).unwrap();
+    assert_eq!(shown, text(&mut reopened));
+    assert!(matches!(
+        ui.app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), 1000),
+        Some(Action::Interrupt { .. })
+    ));
+}
+
+#[test]
+fn wake_limit_notice_added_while_idle_matches_a_reopened_view() {
+    let mut snapshot = SessionSnapshot::empty("limit");
+    snapshot.status = SessionStatus::Idle;
+    snapshot.turns.push(serde_json::from_value(serde_json::json!({
+        "id":"turn", "status":"completed", "input":[], "clientName":"test", "error":null,"usage":null,
+        "items":[{"type":"agentMessage","id":"reply","text":"Waiting for command."}]
+    })).unwrap());
+    let mut ui = Ui::new(
+        TestBackend::new(100, 24),
+        App::new(snapshot.clone(), None, 0),
+    )
+    .unwrap();
+    text(&mut ui);
+    for (index, kind) in ["item.started", "item.completed"].into_iter().enumerate() {
+        let event = serde_json::from_value(serde_json::json!({
+            "seq":index+1,"sessionId":"limit","timestamp":0,"type":kind,"turnId":"turn",
+            "item":{"type":"backgroundEvent","id":"limit-1","text":"Auto wake paused: send a message to resume."}
+        })).unwrap();
+        ui.app_mut().apply_event(&event, 0);
+        canter_protocol::apply_event_mut(&mut snapshot, &event).unwrap();
+    }
+    let shown = text(&mut ui);
+    assert!(shown.contains("Auto wake paused"), "{shown}");
+    let mut reopened = Ui::new(TestBackend::new(100, 24), App::new(snapshot, None, 0)).unwrap();
+    assert_eq!(shown, text(&mut reopened));
+}
+
+#[test]
 fn background_card_and_pinned_count_survive_opening_the_snapshot() {
     let mut snapshot = SessionSnapshot::empty("background");
     snapshot.status = SessionStatus::Idle;

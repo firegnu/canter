@@ -35,10 +35,11 @@ pub(crate) async fn run(
     cancel: &CancellationToken,
     on_output: &mut (dyn FnMut(&str) + Send),
 ) -> ToolOutput {
-    let control = match background.control(id.clone(), args.command.clone(), args.background) {
-        Ok(control) => control,
-        Err(message) => return failed_start(executor.as_ref(), id, args, source, message),
-    };
+    let control =
+        match background.control(id.clone(), args.command.clone(), args.background, source) {
+            Ok(control) => control,
+            Err(message) => return failed_start(executor.as_ref(), id, args, source, message),
+        };
     let (sender, mut receiver) = mpsc::unbounded_channel();
     let args = args.clone();
     let cancel = cancel.clone();

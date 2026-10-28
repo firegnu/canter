@@ -69,12 +69,13 @@
 | shell | `command`, 可选 `timeoutMs`、`background`（默认 false） | 前台结果或后台编号、状态、初始输出；`commandExecution` |
 | shell_output | `id`（会话内小整数） | 上次模型读取后的新输出及状态；`backgroundCommandAction` |
 | shell_stop | `id` | 停整个进程组，返回剩余输出及状态；`backgroundCommandAction` |
+| monitor | `id`、可选正则 `pattern` | 监视新输出；省略 pattern 取消，再设则替换；`backgroundCommandAction` |
 | ask_user | `question`, `options: [{label, description}]`（2–4 个，标签不重复，内容非空） | 会话循环等待选项或自写文字；模型结果 `{question, answer}`，客户端项目 `userInput` |
 | web_fetch | `url`（HTTP(S)，不含用户名/密码） | HTML 转 Markdown，文字和 JSON 原样；有界文字结果，客户端项目 `webFetch` |
 | update_plan | 可选 `explanation`，`plan: [{step, status}]` | 整份替换清单，回 `Plan updated`；客户端项目 `plan` |
 | submit_plan | `plan`（完整 Markdown） | 计划模式中等待用户批准；客户端项目 `planProposal` |
 
-`Tool::ALL` 固定按 read/write/edit/shell/ask_user/web_fetch/update_plan/submit_plan/shell_output/shell_stop 排列，保证会话每次请求的工具前缀稳定。
+`Tool::ALL` 固定按 read/write/edit/shell/ask_user/web_fetch/update_plan/submit_plan/shell_output/shell_stop/monitor 排列，保证会话每次请求的工具前缀稳定。
 `Tools::with_plan_enabled(false)` 关闭待办；会话通过 `Tools::find` 过滤工具定义和调用，
 在创建或打开时冻结。`update_plan` 属于交互风险，但 gate 始终直接发 permit，审查轮也一样，
 不会调用执行器。步骤状态为 `pending` / `in_progress` / `completed`，至多一个进行中，
@@ -105,6 +106,12 @@ shell 使用 `/bin/sh -c`，非登录、非交互，stdin 关闭；先 `env_clea
 后台只保留最近 1 MiB，模型每次读新增输出最多最后 32 KiB，报告跳过字节数；终端读取不推进模型游标。
 已完成的命令只保留最近完成的 8 条输出，更早的保留状态并说明输出已丢弃。重启后模型读取/停止同样返回已恢复状态、说明输出不可用。
 `Tools::background()` 提供列表、读取、停止和按前台 item ID 转后台；Tools 由会话持有，退出/切换终端不影响进程。
+`monitor` 无需批准，Plan/审查轮可用。条件只看调用之后收到的新输出，按现有 stdout/stderr 合流分行，
+退出时也匹配末尾没有换行的一段；换条件重置未完成行，非法正则保留原条件。命令退出自动移除条件。
+每条命令每批只留最近 20 条匹配行、4 KiB，记录跳过行数和字节数；不推进 shell_output 的游标。
+会话忙、达到叫醒上限或禁用叫醒时，待送匹配继续留在同一缓冲内合并，下一次请求或叫醒时一次取走。
+未完成的一行最多保留最近 1 MiB，避免无换行日志无限占内存。正则使用已有锁定版本的 regex-automata。
+核心负责两秒合并、空闲叫醒、用户输入优先和次数限制；工具层只留匹配结果、命令来源及停止状态。
 服务端关闭会话前等待 `stop_all()` 清理，Tools 的 Drop 也会取消任务；后台与前台均清理整个原进程组。
 所有本机 shell 在 exec 前建立管道看护进程，服务端独占写端；服务端被 SIGKILL 或崩溃时，看护进程在读到 EOF 后杀掉原进程组。正常清理杀组后通知看护进程退出。
 看护经过两次 fork 脱离命令，由命令回收中间进程，再 exec 短小的 `/bin/sh` 程序（标记 `canter-shell-guardian`）；不保留服务端内存或信号处理，也不成为命令要等待的子进程。进程级锁保护本机 shell 的管道创建和 spawn，exec 通过 CLOEXEC 关闭描述符，不按 nofile 上限扫描；正常清理向管道写换行让看护退出。
