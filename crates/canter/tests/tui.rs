@@ -2638,11 +2638,11 @@ async fn shift_tab_cycles_the_permission_mode() {
     let id = world.only_session().await;
 
     for (mode, shown) in [
-        (PermissionMode::AllowAll, "Plan"),
+        (PermissionMode::AllowAll, "Plan (then Allow all)"),
         (PermissionMode::AlwaysAsk, "Always ask"),
         (PermissionMode::AskForExecution, "Ask for execution"),
         (PermissionMode::AllowAll, "Allow all"),
-        (PermissionMode::AllowAll, "Plan"),
+        (PermissionMode::AllowAll, "Plan (then Allow all)"),
         (PermissionMode::AlwaysAsk, "Always ask"),
     ] {
         a.press_with(KeyCode::BackTab, KeyModifiers::SHIFT).await;
@@ -2651,7 +2651,7 @@ async fn shift_tab_cycles_the_permission_mode() {
         assert_eq!(world.snapshot(&id).await.settings.approval_policy, mode);
         assert_eq!(
             world.snapshot(&id).await.settings.plan_mode,
-            shown == "Plan"
+            shown == "Plan (then Allow all)"
         );
     }
     assert_eq!(a.quit().await, id);
@@ -3038,7 +3038,9 @@ async fn plan_approval_implements_in_place_or_starts_the_plan_in_a_fresh_session
         let source = world.only_session().await;
         terminal.type_line("/plan").await;
         terminal
-            .wait_until("Plan status", |t| t.info().contains(" · Plan ·"))
+            .wait_until("Plan status", |t| {
+                t.info().contains(" · Plan (then Always ask) ·")
+            })
             .await;
         terminal.type_line("Plan this change.").await;
         terminal.wait_for("Implement this plan?").await;
