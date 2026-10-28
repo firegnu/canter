@@ -31,6 +31,9 @@ pub struct CoreOptions {
     pub plan_enabled: bool,
     pub context_window: u64,
     pub max_output_tokens: u32,
+    /// Compact automatically past this many context tokens instead of the
+    /// window's own line, when lower than it.
+    pub auto_compact_tokens: Option<u64>,
     pub image_models: Vec<String>,
     pub prices: usage::PriceBook,
     /// Clock at the model-request boundary; replaceable for deterministic replay tests.
@@ -44,6 +47,7 @@ impl Default for CoreOptions {
             plan_enabled: true,
             context_window: 1_048_576,
             max_output_tokens: 65_536,
+            auto_compact_tokens: None,
             image_models: vec!["deepseek-flash".into()],
             prices: usage::builtin_prices(),
             request_time: journal::now,

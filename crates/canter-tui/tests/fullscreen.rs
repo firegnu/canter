@@ -8,6 +8,7 @@ use canter_tui::{Action, App, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::style::{Color, Modifier};
 use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
@@ -256,12 +257,23 @@ fn info_line_shows_total_and_last_cache_hit_rates_only_with_input_usage() {
         }));
         screen.draw();
         assert_eq!(screen.lines()[last], format!("{base}{suffix}"));
+        // The percentages cyan, the words around them dim.
         let buffer = screen.ui.backend().buffer();
-        for x in 0..(base.width() + suffix.width()) as u16 {
-            assert_eq!(
-                buffer[(x, HEIGHT - 1)].style(),
-                buffer[(1, HEIGHT - 1)].style()
-            );
+        for x in base.width() as u16..(base.width() + suffix.width()) as u16 {
+            let cell = &buffer[(x, HEIGHT - 1)];
+            let number = cell
+                .symbol()
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '%');
+            if number {
+                assert_eq!(cell.style().fg, Some(Color::Cyan), "column {x}");
+            } else {
+                assert_eq!(cell.style().fg, Some(Color::Reset), "column {x}");
+                assert!(
+                    cell.style().add_modifier.contains(Modifier::DIM),
+                    "column {x}"
+                );
+            }
         }
     }
 }

@@ -213,6 +213,53 @@ pub fn aside() -> Style {
     current().fg(Color::DarkGray).add_modifier(Modifier::DIM)
 }
 
+/// What an item of the status bar at the bottom shows, for its colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarItem {
+    /// Cyan.
+    Model,
+    /// Magenta.
+    Thinking,
+    /// Yellow.
+    Cost,
+    /// Blue.
+    Directory,
+    /// Green.
+    Branch,
+    /// The cache hit percentages and the tokens a second: cyan.
+    Number,
+}
+
+/// An item of the status bar in its colour; the words around it are
+/// [`secondary`]. Without colours dim, as the bar was before it had colours.
+pub fn bar_item(item: BarItem) -> Style {
+    bar(match item {
+        BarItem::Model | BarItem::Number => Color::Cyan,
+        BarItem::Thinking => Color::Magenta,
+        BarItem::Cost => Color::Yellow,
+        BarItem::Directory => Color::Blue,
+        BarItem::Branch => Color::Green,
+    })
+}
+
+/// The context percentages on the status bar, by how much room is left
+/// before automatic compaction (`left`, 0 to 100): 50% or more green, 20% or
+/// more yellow, less red. Without colours dim.
+pub fn bar_room(left: u64) -> Style {
+    bar(match left {
+        50.. => Color::Green,
+        20.. => Color::Yellow,
+        _ => Color::Red,
+    })
+}
+
+fn bar(color: Color) -> Style {
+    match current().depth {
+        Depth::None => secondary(),
+        _ => Style::new().fg(color),
+    }
+}
+
 /// Code coloured by syntax: colour `number` (0–15) of the terminal's palette,
 /// as the syntax theme names it. Yellow and bright yellow are faint on a
 /// light background, so there the default colour, not bold: code has too

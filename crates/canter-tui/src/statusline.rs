@@ -47,6 +47,15 @@ pub(crate) fn percent(input: u64, used: u64) -> Option<u128> {
     (input != 0).then(|| (u128::from(used) * 100 + u128::from(input) / 2) / u128::from(input))
 }
 
+/// How much of `limit` is still free with `used` in use, in whole percent
+/// rounded down; 0 at or past it.
+pub(crate) fn percent_left(limit: u64, used: u64) -> Option<u64> {
+    (limit != 0).then(|| {
+        let left = u128::from(limit.saturating_sub(used)) * 100 / u128::from(limit);
+        left as u64
+    })
+}
+
 pub(crate) struct StatusLine {
     command: String,
     env: BTreeMap<String, String>,

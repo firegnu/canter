@@ -2886,6 +2886,15 @@
     },
     "TokenUsage": {
       "properties": {
+        "autoCompactTokens": {
+          "description": "The context occupancy past which the server compacts automatically.\nAbsent in old events.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "contextTokens": {
           "description": "Current context occupancy, distinct from cumulative billed input tokens.",
           "format": "uint64",

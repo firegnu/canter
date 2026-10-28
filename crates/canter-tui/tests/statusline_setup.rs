@@ -12,6 +12,7 @@ use canter_protocol::{Event, PermissionMode, SessionSnapshot, SessionStatus, Ses
 use canter_tui::{Action, App, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
+use ratatui::style::{Color, Modifier};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use unicode_width::UnicodeWidthStr;
@@ -296,6 +297,7 @@ fn statusline_shows_every_item_with_its_value_and_a_preview() {
             "   [x] directory    ~/src/canter",
             "   [x] branch       (main)",
             "   [x] context      ctx 12% 120k/1M",
+            "   [x] compact",
             "   [x] cache        cache 95% (last 98%)",
             "   [ ] tps          32.5 tok/s",
             "   [ ] version      0.1.0 · a3b8fe7",
@@ -352,9 +354,14 @@ fn space_and_arrows_change_the_preview_as_they_go() {
     );
 
     // tps checked, and moved up to after the branch.
-    screen.keys(&[KeyCode::Down; 6]);
-    assert_eq!(screen.picker()[12], " › [ ] tps          32.5 tok/s");
-    screen.keys(&[KeyCode::Char(' '), KeyCode::Left, KeyCode::Left]);
+    screen.keys(&[KeyCode::Down; 7]);
+    assert_eq!(screen.picker()[13], " › [ ] tps          32.5 tok/s");
+    screen.keys(&[
+        KeyCode::Char(' '),
+        KeyCode::Left,
+        KeyCode::Left,
+        KeyCode::Left,
+    ]);
     assert_eq!(screen.picker()[10], " › [x] tps          32.5 tok/s");
     let second = &screen.preview()[1];
     assert!(
@@ -366,7 +373,7 @@ fn space_and_arrows_change_the_preview_as_they_go() {
     screen.keys(&[KeyCode::Up; 4]);
     assert_eq!(screen.picker()[6], " › ─── line 2 ───");
     screen.keys(&[KeyCode::Right; 11]);
-    assert_eq!(screen.picker()[14], " › ─── line 2 ───");
+    assert_eq!(screen.picker()[15], " › ─── line 2 ───");
     let [first, second] = screen.preview();
     assert!(
         first.starts_with(
@@ -395,9 +402,9 @@ fn enter_saves_tui_json_0600_and_the_bar_changes_at_once() {
         screen.enter("/statusline");
         // Model off; version on, moved to the top of line 1.
         screen.key(KeyCode::Char(' '));
-        screen.keys(&[KeyCode::Down; 10]);
+        screen.keys(&[KeyCode::Down; 11]);
         screen.key(KeyCode::Char(' '));
-        screen.keys(&[KeyCode::Left; 10]);
+        screen.keys(&[KeyCode::Left; 11]);
         assert_eq!(screen.key(KeyCode::Enter), None);
 
         assert!(screen.picker().is_empty(), "closed");
@@ -447,8 +454,8 @@ fn a_terminal_opened_later_reads_the_same_settings_back() {
     screen.enter("/statusline");
     let picker = screen.picker();
     assert_eq!(picker[7], "   [x] cost");
-    assert_eq!(picker[11], "   [ ] tps");
-    assert_eq!(picker[14], "   [x] session      会话名字");
+    assert_eq!(picker[12], "   [ ] tps");
+    assert_eq!(picker[15], "   [x] session      会话名字");
 
     let mut again = home.open(None);
     assert_eq!(again.bar(), bar);
@@ -629,7 +636,7 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
             "   [x] thinking     think high",
             "   [x] permission   Always ask",
             "   [x] cost",
-            "   ↓ 8 more",
+            "   ↓ 9 more",
         ])
     );
 
@@ -641,7 +648,7 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
             "   [x] permission   Always ask",
             "   [x] cost",
             " › ─── line 2 ───",
-            "   ↓ 7 more",
+            "   ↓ 8 more",
         ])
     );
 
@@ -655,7 +662,7 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
             "   [x] directory    ~/src/canter",
             "   [x] branch       (main)",
             " › ─── line 2 ───",
-            "   ↓ 5 more",
+            "   ↓ 6 more",
         ]
     );
     assert_eq!(
@@ -673,7 +680,7 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
     assert_eq!(
         screen.picker(),
         shown(&[
-            "   ↑ 8 more",
+            "   ↑ 9 more",
             "   [x] cache",
             "   [ ] tps",
             "   [ ] version      0.1.0 · a3b8fe7",
@@ -689,12 +696,96 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
             TITLE,
             " Space toggle · ←/→ move · Enter save · Esc cancel",
             "",
-            "   ↑ 7 more",
-            "   [x] context",
+            "   ↑ 8 more",
+            "   [x] compact",
             "   [x] cache",
             "   [ ] tps",
             "   [ ] version      0.1.0 · a3b8fe7",
             " › [ ] session      会话名字",
         ]
     );
+}
+
+#[test]
+fn a_tui_json_saved_before_compact_gets_it_after_context_until_turned_off() {
+    let home = Home::new();
+    let saved = |context: bool| {
+        json!({ "statusLine": { "useScript": true, "items": [
+            { "name": "model", "show": true }, { "name": "thinking", "show": true },
+            { "name": "permission", "show": true }, { "name": "cost", "show": true },
+            { "name": "line2" }, { "name": "directory", "show": true },
+            { "name": "branch", "show": true }, { "name": "context", "show": context },
+            { "name": "cache", "show": true }, { "name": "tps", "show": false },
+            { "name": "version", "show": false }, { "name": "session", "show": false },
+        ]}})
+        .to_string()
+    };
+    for context in [true, false] {
+        std::fs::write(home.tui_json(), saved(context)).unwrap();
+        let mut screen = home.open(None);
+        screen.work();
+        screen.event(
+            3000,
+            json!({ "type": "session.usage", "tokenUsage": {
+                "total": {"inputTokens":1000,"cachedInputTokens":950,"outputTokens":65,
+                    "reasoningOutputTokens":0,"totalTokens":1065},
+                "last": {"inputTokens":100,"cachedInputTokens":98,"outputTokens":65,
+                    "reasoningOutputTokens":0,"totalTokens":165},
+                "contextTokens": 120_000, "modelContextWindow": 1_000_000,
+                "autoCompactTokens": 400_000,
+                "cost": { "usd": 0.12, "unknown": false },
+            }}),
+        );
+        screen.draw();
+        let ctx = if context { "ctx 12% 120k/1M · " } else { "" };
+        assert_eq!(
+            screen.bar()[1],
+            format!(" ~/src/canter (main) · {ctx}70% to compact · cache 95% (last 98%)")
+        );
+        screen.enter("/statusline");
+        let mark = if context { 'x' } else { ' ' };
+        assert_eq!(
+            screen.picker()[10..12],
+            [
+                format!("   [{mark}] context      ctx 12% 120k/1M"),
+                "   [x] compact      70% to compact".to_owned(),
+            ]
+        );
+    }
+
+    // Turned off and saved, it stays off.
+    let mut screen = home.open(None);
+    screen.enter("/statusline");
+    screen.keys(&[KeyCode::Down; 8]);
+    assert_eq!(screen.picker()[11], " › [x] compact");
+    screen.keys(&[KeyCode::Char(' '), KeyCode::Enter]);
+    let mut again = home.open(None);
+    again.enter("/statusline");
+    assert_eq!(again.picker()[11], "   [ ] compact");
+}
+
+#[test]
+fn hidden_items_keep_their_colours_in_the_list() {
+    let home = Home::new();
+    let mut screen = home.open(None);
+    screen.work();
+    screen.enter("/statusline");
+    let rows = screen.rows();
+    let buffer = screen.ui.backend().buffer();
+    // `text` in the list row of item `name`.
+    let style = |name: &str, text: &str| {
+        let label = format!("[ ] {name}");
+        let y = rows.iter().position(|row| row.contains(&label)).unwrap();
+        let at = rows[y].rfind(text).unwrap();
+        let x = rows[y][..at].width() as u16;
+        let style = buffer[(x, y as u16)].style();
+        (style.fg, style.add_modifier.contains(Modifier::DIM))
+    };
+    assert_eq!(style("tps", "32.5"), (Some(Color::Cyan), false));
+    assert_eq!(style("tps", " tok/s"), (Some(Color::Reset), true));
+    assert_eq!(
+        style("version", "0.1.0 · a3b8fe7"),
+        (Some(Color::Reset), true)
+    );
+    assert_eq!(style("session", "会话名字"), (Some(Color::Reset), true));
 }

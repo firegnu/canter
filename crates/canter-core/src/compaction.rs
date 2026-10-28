@@ -54,12 +54,19 @@ Use exactly these headings, in this order:"#;
 
 const FOOTER: &str = "\n</transcript>\n\nEnd of transcript. Write the summary now with the headings above, and output only the summary.";
 
+/// Past this context occupancy the conversation compacts automatically: the
+/// window minus the output limit and [`RESERVE`], or `auto_compact_tokens`
+/// when it is lower.
 pub(crate) fn input_limit(shared: &Shared) -> u64 {
-    shared
+    let window = shared
         .options
         .context_window
         .saturating_sub(u64::from(shared.options.max_output_tokens))
-        .saturating_sub(RESERVE)
+        .saturating_sub(RESERVE);
+    shared
+        .options
+        .auto_compact_tokens
+        .map_or(window, |tokens| tokens.min(window))
 }
 
 pub(crate) async fn compact(

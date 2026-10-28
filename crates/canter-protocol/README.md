@@ -130,6 +130,8 @@ request 是一次请求的已记金额，startedAt 是请求发出时刻（Unix 
 事件 timestamp 和此前最近一次 session.updated 的模型补算，不写回文件。
 cost 对应该 TokenUsage.total 的金额：session.usage 中是会话累计，Turn.usage 中是该轮累计。
 客户端显示服务端给出的金额，不取价、不自行估算；旧客户端可以忽略这两个字段。
+`TokenUsage` 另有可选 `autoCompactTokens`：生效的自动压缩线（上下文占用超过它就压缩，见服务端的
+`auto_compact_tokens`），供客户端显示离压缩还剩多少；旧事件没有这个字段，旧客户端可以忽略。
 
 `POST /v1/sessions/{id}/resume` 的请求体为 `{ "env": { ... } }`，也不实现 Debug、
 不得记录请求体。服务端重启后，会话默认未打开；接着聊用新环境打开，并返回快照及其
