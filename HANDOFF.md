@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-28 第二十四次装 main `157db9f`（`canter --version` 显示 `canter 0.1.0 · 157db9f`；比上一版多 P2-110：模型请求出错（限流、5xx、过载、网络、超时）最多重试 10 次，0.5 秒起翻倍、最长 32 秒，`Retry-After` 最多等 60 秒；回复到一半断了丢掉半截整段重发；等重试时对话里有一行 `Retrying in …`；`config.json` 写 `"model_max_retries": N`（0～100）可改，0 不重试，改了要重启服务端；按 Esc 打断的行为没变）。服务端要用户自己 `canter serve --replace`。
+- 退回上一版 `4a5bb91`：`cp -p ~/.canter/canter-4a5bb91 ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版打开带重试行的会话不坏（不认识的项目跳过），断流丢掉的半截读成正常回答（旧版不认 `status`）；旧版不认 `model_max_retries`，按旧的 3 次重试。
 - 10-28 第二十三次装 main `4a5bb91`（`canter --version` 显示 `canter 0.1.0 · 4a5bb91`；比上一版多 P2-101：模型起的后台命令结束、`monitor` 盯到匹配的输出时，模型空闲就自己开一轮；没人说话最多连续叫醒 10 次，`config.json` 写 `"auto_wake_limit": N` 可改，0 关掉，改了要重启服务端）。服务端要用户自己 `canter serve --replace`。
 - 退回上一版 `aa2a18a`：`cp -p ~/.canter/canter-aa2a18a ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版打开带叫醒卡片的会话不坏（跳过不认识的项目），只是不显示卡片、不再叫醒。
 - 10-28 第二十二次装 main `aa2a18a`（`canter --version` 显示 `canter 0.1.0 · aa2a18a`；比上一版多 P2-117：输入框上方 `▸ N background commands` 可以用鼠标点开 `/ps` 列表，点某一条看日志）。服务端要用户自己 `canter serve --replace`。
@@ -69,6 +71,11 @@
 - P1-10 修第一期已知问题（`docs/任务/P1-10-第一期已知问题.md`）：第 4、5 条拆成 P1-13、P1-14 已派；第 1 到 3 条（性能）先不做。
 
 ## 已知没修的问题
+
+- 模型重试（P2-110 交叉审查，10-28 主控按「只有必须改挡合并」不返工）：
+  - 重试那一行的原因带 `retried N times`，第一次显示 `(1/10) … retried 0 times`，和「第几次」并排读着像矛盾；只影响显示。改法：重试行的原因不带次数，只在最后的错误里写。
+  - 以后接会逐项报完成的接口（P2-80 Responses），「保留收完整的接着做」那条路不出重试行、不算进 `model_max_retries`；DeepSeek 走不到。接 P2-80 时再看。
+  - 存盘事件里回答、思考的 ID 前缀从 `message-`、`reasoning-` 变成 `model-`，回复结束时的完成事件先后也变了；快照、界面、导出不受影响，记一笔。
 
 - 后台叫醒（P2-101 复核建议改，用户 10-28 定不再返工）：
   - 事件排着叫醒的 2 秒里用户敲 `!cmd`，就不再叫醒，卡片要等用户下次说话才出来（用户在场时才会碰到）。
