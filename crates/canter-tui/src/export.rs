@@ -153,6 +153,25 @@ impl Body {
     fn item(&mut self, item: &Item, cwd: &str, feedback: Option<&str>) {
         let assistant = "Assistant";
         match item {
+            Item::PlanProposal {
+                plan,
+                answer,
+                status,
+                ..
+            } => {
+                let mut text = format!(
+                    "**{}**\n\n{}",
+                    crate::plan_mode::result_label(answer.as_ref(), *status),
+                    sanitize(plan)
+                );
+                if let Some(feedback) = answer
+                    .as_ref()
+                    .and_then(|answer| answer.feedback.as_deref())
+                {
+                    text.push_str(&format!("\n\nFeedback: {}", sanitize(feedback)));
+                }
+                self.block(assistant, &text);
+            }
             Item::UserMessage { content, .. } => self.block("User", &user_text(content)),
             Item::AgentMessage { text, .. } if !text.trim().is_empty() => {
                 self.block(assistant, sanitize(text).trim_end());
@@ -372,6 +391,7 @@ fn file_change(change: &FileUpdateChange, cwd: &str) -> String {
 /// How a tool call went, with the reason given when it was declined.
 fn outcome(status: ItemStatus, feedback: Option<&str>) -> String {
     match status {
+        ItemStatus::Blocked => "blocked (Plan mode)".into(),
         ItemStatus::Completed => "ok".into(),
         ItemStatus::Failed => "failed".into(),
         ItemStatus::Declined => match feedback {
@@ -475,6 +495,8 @@ mod tests {
     fn snapshot(name: Option<&str>, turns: Vec<Turn>) -> SessionSnapshot {
         let mut snapshot = SessionSnapshot::empty("4f2a-id");
         snapshot.settings = SessionSettings {
+            plan_mode: false,
+            pre_plan_approval_policy: None,
             cwd: "/work/proj".into(),
             name: name.map(str::to_owned),
             model: "deepseek-v4".into(),

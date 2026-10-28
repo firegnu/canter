@@ -38,6 +38,7 @@ mod mention;
 mod notify;
 mod picker;
 mod plan;
+mod plan_mode;
 mod question;
 mod report;
 mod retract;

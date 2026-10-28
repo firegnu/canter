@@ -36,6 +36,21 @@ pub(crate) struct Drafts {
 }
 
 impl Drafts {
+    /// Recover a completed planning turn's withdrawn queue using the same
+    /// ordering and attachment fallback as an interrupt. In-flight send replies
+    /// are not carried to the new session; unknown image paths stay placeholders.
+    pub fn plan_handoff(&self, turn: &str) -> Self {
+        let mut drafts = Self {
+            sources: self.sources.clone(),
+            originals: self.originals.clone(),
+            last_seq: self.last_seq,
+            ..Self::default()
+        };
+        drafts.interrupt(turn);
+        drafts.response(turn, true);
+        drafts
+    }
+
     pub fn new(snapshot: &SessionSnapshot) -> Self {
         let mut drafts = Self {
             last_seq: snapshot.last_event_seq,

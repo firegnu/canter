@@ -77,6 +77,10 @@ impl Notification {
     /// The model waits for `request` in `snapshot`.
     pub(crate) fn request(request: &PendingRequest, snapshot: &SessionSnapshot) -> Option<Self> {
         match &request.kind {
+            RequestKind::PlanApproval(_) => Some(Self {
+                kind: Kind::ApprovalRequested,
+                text: "Implement this plan?".into(),
+            }),
             RequestKind::Approval(approval) => {
                 let item = snapshot
                     .turns

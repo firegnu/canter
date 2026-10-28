@@ -41,6 +41,22 @@
       "oneOf": [
         {
           "properties": {
+            "answer": {
+              "$ref": "#/$defs/PlanAnswer"
+            },
+            "type": {
+              "const": "plan",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "answer"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "decision": {
               "$ref": "#/$defs/ApprovalDecision"
             },
@@ -1238,6 +1254,40 @@
       "oneOf": [
         {
           "properties": {
+            "answer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PlanAnswer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "plan": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "type": {
+              "const": "planProposal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "plan",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "explanation": {
               "type": [
                 "string",
@@ -1692,6 +1742,7 @@
     },
     "ItemStatus": {
       "enum": [
+        "blocked",
         "inProgress",
         "completed",
         "failed",
@@ -1911,6 +1962,55 @@
       ],
       "type": "string"
     },
+    "PlanAnswer": {
+      "properties": {
+        "approvalPolicy": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "decision": {
+          "$ref": "#/$defs/PlanDecision"
+        },
+        "feedback": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "decision",
+        "approvalPolicy"
+      ],
+      "type": "object"
+    },
+    "PlanApprovalRequest": {
+      "properties": {
+        "approvalPolicy": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "plan": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "plan",
+        "approvalPolicy"
+      ],
+      "type": "object"
+    },
+    "PlanDecision": {
+      "enum": [
+        "implement",
+        "clearContext",
+        "keepPlanning",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "PlanStep": {
       "properties": {
         "status": {
@@ -1999,6 +2099,19 @@
     "RequestKind": {
       "oneOf": [
         {
+          "$ref": "#/$defs/PlanApprovalRequest",
+          "properties": {
+            "type": {
+              "const": "planApproval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "$ref": "#/$defs/ApprovalRequest",
           "properties": {
             "type": {
@@ -2083,6 +2196,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanAnswer"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -2589,6 +2712,20 @@
             "null"
           ]
         },
+        "planMode": {
+          "type": "boolean"
+        },
+        "prePlanApprovalPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Permission mode to restore when the user leaves planning without a selection."
+        },
         "reasoningEffort": {
           "$ref": "#/$defs/ReasoningEffort",
           "default": "high"
@@ -2802,6 +2939,12 @@
         "name": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "planMode": {
+          "type": [
+            "boolean",
             "null"
           ]
         },

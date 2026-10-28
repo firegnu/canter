@@ -11,6 +11,102 @@ use serde_json::json;
 const HINT: &str = "Esc again to return to the original session";
 const NOTE: &str = "handoff note to edit";
 
+#[tokio::test]
+async fn clear_context_plan_resolves_then_starts_a_new_session_with_selected_permissions() {
+    let mut test = Harness::new().await;
+    test.start("planning", "Plan the change", None);
+    test.event(serde_json::from_value(json!({"type":"request.opened","request":{
+        "id":"proposal","turnId":"planning","createdAt":0,
+        "kind":{"type":"planApproval","itemId":"p1","plan":"Build and verify.","approvalPolicy":"alwaysAsk"}
+    }})).unwrap());
+    test.ui.app_mut().handle_paste("Existing draft");
+    let mut finished = test.ui.app().snapshot().turns[0].clone();
+    finished.status = canter_protocol::TurnStatus::Completed;
+    let mut fresh = SessionSnapshot::empty("implementation");
+    fresh.status = SessionStatus::Working;
+    fresh.settings.cwd = test.ui.app().snapshot().settings.cwd.clone();
+    fresh.settings.approval_policy = PermissionMode::AskForExecution;
+    let answer = canter_protocol::PlanAnswer {
+        decision: canter_protocol::PlanDecision::ClearContext,
+        approval_policy: PermissionMode::AskForExecution,
+        feedback: None,
+    };
+    let Harness {
+        chat, ui, requests, ..
+    } = &mut test;
+    let (receiver, ()) = tokio::join!(
+        chat.resolve_plan(ui, "proposal", "# Build\n\nImplement and verify.", answer),
+        async {
+            let resolve = next(requests).await;
+            assert!(resolve.path.ends_with("/requests/proposal"));
+            assert_eq!(resolve.body["plan"]["decision"], "clearContext");
+            assert_eq!(resolve.body["plan"]["approvalPolicy"], "askForExecution");
+            resolve.json(json!({"eventSeq":8,"alreadyResolved":false}));
+            let events = next(requests).await;
+            assert_eq!(
+                events.path, "/v1/events",
+                "wait for the original turn and recover its withdrawn input before creating a session"
+            );
+            let payloads = [
+                json!({"type":"input.queued","input":{"id":"q1","input":[{"type":"text","text":"Queued follow-up"}],"clientName":"other terminal","review":null}}),
+                json!({"type":"input.queued","input":{"id":"q2","input":[{"type":"text","text":"Steering correction"}],"clientName":"other terminal","review":null}}),
+                json!({"type":"input.removed","inputIds":["q1","q2"],"reason":"interrupted","turnId":null}),
+                json!({"type":"turn.completed","turn":finished}),
+            ];
+            let data = payloads
+                .into_iter()
+                .enumerate()
+                .map(|(i, mut payload)| {
+                    let fields = payload.as_object_mut().unwrap();
+                    fields.insert("seq".into(), json!(9 + i));
+                    fields.insert("sessionId".into(), json!("test"));
+                    fields.insert("timestamp".into(), json!(0));
+                    format!("data: {payload}\n\n")
+                })
+                .collect::<String>();
+            assert!(events.reply.send(Response::new(Body::from(data))).is_ok());
+            let create = next(requests).await;
+            assert_eq!(create.path, "/v1/sessions");
+            assert_eq!(create.body["cwd"], fresh.settings.cwd);
+            assert_eq!(create.body["approvalPolicy"], "askForExecution");
+            let text = create.body["input"][0]["text"].as_str().unwrap();
+            assert!(text.contains("# Build\n\nImplement and verify."));
+            assert!(text.contains("Implement this plan"));
+            assert!(text.contains("update_plan"));
+            assert!(!text.contains("Queued follow-up"));
+            assert!(!text.contains("Steering correction"));
+            create.json(json!({"session":fresh,"eventSeq":1}));
+            let events = next(requests).await;
+            assert_eq!(events.path, "/v1/events");
+            let open = futures_util::stream::pending::<Result<axum::body::Bytes, io::Error>>();
+            assert!(
+                events
+                    .reply
+                    .send(Response::new(Body::from_stream(open)))
+                    .is_ok()
+            );
+            next(requests)
+                .await
+                .json(json!({"data":[],"nextCursor":null}));
+        }
+    );
+    assert!(receiver.is_some());
+    assert_eq!(test.chat.session, "implementation");
+    assert!(!test.ui.app().snapshot().settings.plan_mode);
+    assert_eq!(
+        test.ui.app().editor_draft(),
+        "Queued follow-up\nSteering correction\nExisting draft"
+    );
+    test.ui.draw(now_ms()).unwrap();
+    assert!(text(&test.ui).contains("2 inputs withdrawn to draft"));
+    assert!(
+        test.requests.try_recv().is_err(),
+        "withdrawn input is not automatically sent"
+    );
+    test.chat.pump.abort();
+    test.server.abort();
+}
+
 fn text(ui: &Ui<TestBackend>) -> String {
     ui.backend()
         .buffer()

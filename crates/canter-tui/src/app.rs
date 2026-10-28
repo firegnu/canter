@@ -106,6 +106,11 @@ pub enum Action {
         request_id: String,
         answer: UserInputAnswer,
     },
+    ResolvePlan {
+        request_id: String,
+        plan: String,
+        answer: canter_protocol::PlanAnswer,
+    },
     /// Stop this turn.
     Interrupt {
         turn_id: String,
@@ -460,6 +465,7 @@ struct ApprovalCursor {
     selected: usize,
     scroll: usize,
     custom: Option<String>,
+    mode: Option<PermissionMode>,
 }
 
 /// What a frame showed. A key acts on the frame that was on screen when it
@@ -486,6 +492,8 @@ struct Shown {
     /// row showed in full, under the bare input box (no approval or question
     /// box, choice or command list). `None` on any other frame.
     mode: Option<PermissionMode>,
+    plan_mode: bool,
+    plan_approval_policy: Option<PermissionMode>,
     /// The draft's rows in the input box, for a click on them; `None` while
     /// the box showed something else or a choice was open above it.
     input: Option<DrawnInput>,
@@ -790,6 +798,7 @@ impl App {
                 effort => effort.as_str(),
             },
             "approvalPolicy": settings.approval_policy,
+            "planMode": settings.plan_mode,
             "status": self.snapshot.status,
             "context": {
                 "usedTokens": usage.map(|usage| usage.context_tokens),
@@ -1304,12 +1313,15 @@ impl App {
             // Enter, not right after an approval box closed.
             KeyCode::BackTab => {
                 if !send_guarded && let Some(mode) = shown.mode {
-                    let action = commands::next_mode(mode);
+                    let action = commands::next_mode(mode, shown.plan_mode);
                     if self.mode_elsewhere()
                         && let Action::Update(params) = &action
-                        && let Some(mode) = params.approval_policy
                     {
-                        let (name, style) = mode_label(mode);
+                        let (name, style) = if params.plan_mode == Some(true) {
+                            plan_mode_label()
+                        } else {
+                            mode_label(params.approval_policy.unwrap_or(mode))
+                        };
                         self.copier.show(
                             Line::from(vec![Span::raw(" Mode: "), Span::styled(name, style)]),
                             at + crate::copy::COPIED_MS,
@@ -1947,6 +1959,28 @@ impl App {
                 source.chars().take(8).collect::<String>()
             ))],
         ));
+    }
+
+    pub(crate) fn plan_handoff_drafts(&self, turn: &str) -> (crate::retract::Drafts, InputBox) {
+        (self.retract_drafts.plan_handoff(turn), self.input.clone())
+    }
+
+    pub(crate) fn restore_plan_draft(
+        &mut self,
+        draft: InputBox,
+        inputs: Vec<Vec<UserInput>>,
+        missing_images: bool,
+    ) {
+        let count = inputs.len();
+        self.input = draft;
+        self.input.prepend_inputs(inputs);
+        self.images_need_paste |= missing_images;
+        if count > 0 {
+            self.copier.show(
+                Line::from(format!(" {count} inputs withdrawn to draft")),
+                crate::now_ms() + crate::copy::FAILED_MS,
+            );
+        }
     }
 
     /// Esc goes back to where the note came from: nothing sent here yet.
@@ -2668,7 +2702,9 @@ impl App {
             request.id == self.approval.request
                 && matches!(
                     request.kind,
-                    RequestKind::UserInput(_) | RequestKind::Approval(_)
+                    RequestKind::UserInput(_)
+                        | RequestKind::Approval(_)
+                        | RequestKind::PlanApproval(_)
                 )
         }) && let Some(custom) = &mut self.approval.custom
         {
@@ -3208,6 +3244,22 @@ impl App {
                 && self.shown.back().and_then(|(_, shown)| shown.answering())
                     == Some(request.id.as_str());
             let laid = match &request.kind {
+                RequestKind::PlanApproval(plan) => crate::plan_mode::layout(
+                    plan,
+                    self.approval
+                        .mode
+                        .filter(|_| self.approval.request == request.id)
+                        .unwrap_or(plan.approval_policy),
+                    selected,
+                    self.approval
+                        .custom
+                        .as_deref()
+                        .filter(|_| self.approval.request == request.id),
+                    scroll,
+                    taken,
+                    width,
+                    box_height,
+                ),
                 RequestKind::Approval(approval) => approval::layout(
                     &self.snapshot,
                     request,
@@ -3260,6 +3312,16 @@ impl App {
             btw: self.active_btw,
             completions: self.completions,
             mode: None,
+            plan_mode: self.snapshot.settings.plan_mode,
+            plan_approval_policy: self.open_request().and_then(|request| match &request.kind {
+                RequestKind::PlanApproval(plan) => Some(
+                    self.approval
+                        .mode
+                        .filter(|_| self.approval.request == request.id)
+                        .unwrap_or(plan.approval_policy),
+                ),
+                _ => None,
+            }),
             input: None,
         };
         let (bottom, input_rows) = match approval {
@@ -3655,6 +3717,9 @@ impl App {
         if !shown.answers {
             return None;
         }
+        if let Some(mode) = shown.plan_approval_policy {
+            return self.plan_key(key, &request_id, mode, shown.custom_input, guarded, at);
+        }
         if self.snapshot.pending_requests.iter().any(|request| {
             request.id == request_id && matches!(request.kind, RequestKind::UserInput(_))
         }) {
@@ -3755,6 +3820,131 @@ impl App {
             request_id,
             decision,
             feedback: None,
+        })
+    }
+
+    fn plan_key(
+        &mut self,
+        key: KeyEvent,
+        request_id: &str,
+        shown_mode: PermissionMode,
+        custom_shown: bool,
+        guarded: bool,
+        at: i64,
+    ) -> Option<Action> {
+        if guarded || self.answered.contains(request_id) {
+            return None;
+        }
+        let proposal = self
+            .snapshot
+            .pending_requests
+            .iter()
+            .find_map(|r| match &r.kind {
+                RequestKind::PlanApproval(plan) if r.id == request_id => Some(plan.clone()),
+                _ => None,
+            })?;
+        if self.approval.request != request_id {
+            self.approval = ApprovalCursor {
+                request: request_id.into(),
+                mode: Some(shown_mode),
+                ..Default::default()
+            };
+        }
+        let cursor = &mut self.approval;
+        if custom_shown != cursor.custom.is_some() {
+            return None;
+        }
+        match key.code {
+            KeyCode::BackTab => {
+                cursor.mode = Some(commands::next_permission(shown_mode));
+                return None;
+            }
+            KeyCode::PageUp => {
+                cursor.scroll = cursor.scroll.saturating_sub(self.approval_page);
+                return None;
+            }
+            KeyCode::PageDown => {
+                cursor.scroll = (cursor.scroll + self.approval_page).min(self.approval_max_scroll);
+                return None;
+            }
+            _ => {}
+        }
+        let decision = if let Some(text) = &mut cursor.custom {
+            match key.code {
+                KeyCode::Enter if text.trim() == "/plan" => {
+                    return Some(Action::Update(SessionUpdateParams {
+                        plan_mode: Some(false),
+                        ..Default::default()
+                    }));
+                }
+                KeyCode::Enter if text.trim_start().starts_with('/') => {
+                    self.copier.show(
+                        Line::from(" Only /plan is available here; edit the command to continue"),
+                        at + crate::copy::FAILED_MS,
+                    );
+                    return None;
+                }
+                KeyCode::Enter => canter_protocol::PlanDecision::KeepPlanning,
+                KeyCode::Backspace | KeyCode::Up if text.is_empty() => {
+                    cursor.custom = None;
+                    self.guard_until = self.guard_until.max(at + ANSWER_GUARD_MS);
+                    return None;
+                }
+                KeyCode::Backspace => {
+                    text.pop();
+                    return None;
+                }
+                KeyCode::Char(c)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                        && !c.is_control() =>
+                {
+                    text.push(c);
+                    return None;
+                }
+                _ => return None,
+            }
+        } else {
+            let selected = match key.code {
+                KeyCode::Up => {
+                    cursor.selected = cursor.selected.saturating_sub(1);
+                    return None;
+                }
+                KeyCode::Down => {
+                    cursor.selected = (cursor.selected + 1).min(2);
+                    return None;
+                }
+                KeyCode::Enter => cursor.selected,
+                KeyCode::Char(c @ '1'..='3') if key.modifiers.is_empty() => {
+                    (c as usize) - ('1' as usize)
+                }
+                KeyCode::Char('/') => {
+                    cursor.custom = Some("/".into());
+                    return None;
+                }
+                _ => return None,
+            };
+            match selected {
+                0 => canter_protocol::PlanDecision::Implement,
+                1 => canter_protocol::PlanDecision::ClearContext,
+                _ => {
+                    cursor.selected = 2;
+                    cursor.custom = Some(String::new());
+                    return None;
+                }
+            }
+        };
+        let feedback = cursor.custom.clone().filter(|text| !text.trim().is_empty());
+        self.answered.insert(request_id.into());
+        Some(Action::ResolvePlan {
+            request_id: request_id.into(),
+            plan: proposal.plan,
+            answer: canter_protocol::PlanAnswer {
+                decision,
+                approval_policy: shown_mode,
+                feedback,
+            },
         })
     }
 
@@ -3915,7 +4105,9 @@ impl App {
             ApprovalResolution::TimedOut => {
                 Some(cells::notice("■ ", "Approval request timed out", dim))
             }
-            ApprovalResolution::UserInput { .. } | ApprovalResolution::Unknown => None,
+            ApprovalResolution::Plan { .. }
+            | ApprovalResolution::UserInput { .. }
+            | ApprovalResolution::Unknown => None,
         }
     }
 
@@ -3924,7 +4116,8 @@ impl App {
     fn item_done(&self, turn: &Turn, index: usize) -> bool {
         let item = &turn.items[index];
         let status = match item {
-            Item::Plan { status, .. }
+            Item::PlanProposal { status, .. }
+            | Item::Plan { status, .. }
             | Item::McpToolCall { status, .. }
             | Item::WebFetch { status, .. }
             | Item::CommandExecution { status, .. }
@@ -3952,6 +4145,7 @@ impl App {
             .pending_requests
             .iter()
             .filter_map(|request| match &request.kind {
+                RequestKind::PlanApproval(plan) => Some(plan.item_id.as_str()),
                 RequestKind::Approval(approval) => Some(approval.item_id.as_str()),
                 RequestKind::UserInput(question) => Some(question.item_id.as_str()),
                 RequestKind::Unknown => None,
@@ -4314,7 +4508,11 @@ impl App {
                 BarItem::Thinking,
             ),
             bar::Item::Permission => {
-                let (mode, style) = mode_label(settings.approval_policy);
+                let (mode, style) = if settings.plan_mode {
+                    plan_mode_label()
+                } else {
+                    mode_label(settings.approval_policy)
+                };
                 Some(vec![Span::styled(mode, style)])
             }
             bar::Item::Cost => usage
@@ -4406,13 +4604,17 @@ impl App {
     }
 }
 
-fn mode_label(mode: PermissionMode) -> (&'static str, Style) {
+pub(crate) fn mode_label(mode: PermissionMode) -> (&'static str, Style) {
     match mode {
         PermissionMode::AskForExecution => ("Ask for execution", theme::secondary()),
         PermissionMode::AllowAll => ("Allow all", theme::failure()),
         // Unknown modes are treated as the strictest one.
         PermissionMode::AlwaysAsk | PermissionMode::Unknown => ("Always ask", theme::secondary()),
     }
+}
+
+fn plan_mode_label() -> (&'static str, Style) {
+    ("Plan", Style::new().fg(ratatui::style::Color::Magenta))
 }
 
 /// The screen's content, laid out for one frame.

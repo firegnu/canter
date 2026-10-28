@@ -4,6 +4,7 @@ mod compaction;
 mod context;
 mod images;
 mod journal;
+mod plan_mode;
 mod prompt;
 mod rewind;
 mod runner;

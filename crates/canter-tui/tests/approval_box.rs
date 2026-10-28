@@ -15,6 +15,128 @@ use unicode_width::UnicodeWidthStr;
 const NOW: i64 = 0;
 const SESSION: &str = "s1";
 
+#[test]
+fn plan_approval_modes_choices_feedback_and_full_markdown_scroll() {
+    for choice in ['1', '2', '3'] {
+        let mut screen = Screen::new(90, 26);
+        screen.start_turn("t1");
+        let plan = (0..60).map(|i| format!("- Step {i}\n")).collect::<String>();
+        screen.event(json!({"type":"request.opened","request":{
+            "id":"proposal","turnId":"t1","createdAt":NOW,
+            "kind":{"type":"planApproval","itemId":"p1","plan":plan,"approvalPolicy":"alwaysAsk"}
+        }}));
+        screen.draw();
+        screen.read_the_box();
+        assert!(screen.screen().contains("Yes, clear context and implement"));
+        assert!(screen.screen().contains("Mode: Always ask"));
+        assert_eq!(screen.key(KeyCode::BackTab), None);
+        screen.draw();
+        assert!(
+            screen.screen().contains("Mode: Ask for execution"),
+            "{}",
+            screen.screen()
+        );
+        screen.key(KeyCode::BackTab);
+        screen.draw();
+        assert!(screen.screen().contains("Mode: Allow all"));
+        screen.key(KeyCode::BackTab);
+        screen.draw();
+        assert!(screen.screen().contains("Mode: Always ask"));
+        for _ in 0..20 {
+            screen.key(KeyCode::PageDown);
+            screen.draw();
+        }
+        assert!(
+            screen.screen().contains("Step 59"),
+            "all Markdown must be reachable"
+        );
+        let action = if choice == '3' {
+            assert_eq!(screen.key(KeyCode::Char(choice)), None);
+            screen.draw();
+            screen.read_the_box();
+            screen.ui.app_mut().handle_paste("Keep the API stable.");
+            screen.draw();
+            screen.key(KeyCode::Enter)
+        } else {
+            screen.key(KeyCode::Char(choice))
+        };
+        let Some(Action::ResolvePlan { answer, .. }) = action else {
+            panic!("plan choice must resolve: {action:?}");
+        };
+        assert_eq!(
+            answer.approval_policy,
+            canter_protocol::PermissionMode::AlwaysAsk
+        );
+        assert_eq!(
+            answer.decision,
+            match choice {
+                '1' => canter_protocol::PlanDecision::Implement,
+                '2' => canter_protocol::PlanDecision::ClearContext,
+                _ => canter_protocol::PlanDecision::KeepPlanning,
+            }
+        );
+        if choice == '3' {
+            assert_eq!(answer.feedback.as_deref(), Some("Keep the API stable."));
+        }
+    }
+}
+
+#[test]
+fn an_unknown_slash_command_in_the_plan_box_is_not_sent_as_feedback() {
+    let mut screen = Screen::new(90, 26);
+    screen.start_turn("t1");
+    screen.event(json!({"type":"request.opened","request":{
+        "id":"proposal","turnId":"t1","createdAt":NOW,
+        "kind":{"type":"planApproval","itemId":"p1","plan":"Investigate and verify.","approvalPolicy":"alwaysAsk"}
+    }}));
+    screen.draw();
+    screen.read_the_box();
+    for c in "/pla".chars() {
+        assert_eq!(screen.key(KeyCode::Char(c)), None);
+        screen.draw();
+    }
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        None,
+        "a command typo must not decline the plan or send feedback"
+    );
+    screen.draw();
+    assert!(screen.screen().contains("Only /plan is available here"));
+    assert_eq!(screen.key(KeyCode::Char('n')), None);
+    screen.draw();
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        Some(Action::Update(canter_protocol::SessionUpdateParams {
+            plan_mode: Some(false),
+            ..Default::default()
+        }))
+    );
+}
+
+#[test]
+fn slash_plan_leaves_the_mode_from_the_proposal_box() {
+    let mut screen = Screen::new(90, 26);
+    screen.start_turn("t1");
+    screen.event(json!({"type":"request.opened","request":{
+        "id":"proposal","turnId":"t1","createdAt":NOW,
+        "kind":{"type":"planApproval","itemId":"p1","plan":"Investigate and verify.","approvalPolicy":"askForExecution"}
+    }}));
+    screen.draw();
+    screen.read_the_box();
+    assert!(screen.screen().contains("Mode: Ask for execution"));
+    for c in "/plan".chars() {
+        assert_eq!(screen.key(KeyCode::Char(c)), None);
+        screen.draw();
+    }
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        Some(Action::Update(canter_protocol::SessionUpdateParams {
+            plan_mode: Some(false),
+            ..Default::default()
+        }))
+    );
+}
+
 struct Screen {
     ui: Ui<TestBackend>,
     seq: u64,

@@ -115,6 +115,17 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::NewSession)),
     },
     Command {
+        name: "plan",
+        about: "Enter or leave read-only Plan mode",
+        takes_args: false,
+        run: |app, _| {
+            Ok(Some(Action::Update(SessionUpdateParams {
+                plan_mode: Some(!app.snapshot().settings.plan_mode),
+                ..Default::default()
+            })))
+        },
+    },
+    Command {
         name: "resume",
         about: "Switch to another session",
         takes_args: false,
@@ -362,15 +373,31 @@ fn set_mode(mode: PermissionMode) -> Action {
     })
 }
 
-/// Shift+Tab: changes to the mode after `shown` in [`MODES`], and from the
-/// last back to the first. An unknown mode counts as always-ask, as the info
-/// rows show it.
-pub(crate) fn next_mode(shown: PermissionMode) -> Action {
+/// Shift+Tab cycles through the three permissions, Plan, then always-ask.
+/// An unknown permission counts as always-ask, as the info rows show it.
+pub(crate) fn next_mode(shown: PermissionMode, plan_mode: bool) -> Action {
+    if plan_mode {
+        return Action::Update(SessionUpdateParams {
+            plan_mode: Some(false),
+            approval_policy: Some(PermissionMode::AlwaysAsk),
+            ..Default::default()
+        });
+    }
+    if shown == PermissionMode::AllowAll {
+        return Action::Update(SessionUpdateParams {
+            plan_mode: Some(true),
+            ..Default::default()
+        });
+    }
+    set_mode(next_permission(shown))
+}
+
+pub(crate) fn next_permission(shown: PermissionMode) -> PermissionMode {
     let index = MODES
         .iter()
         .position(|&(_, mode, _)| mode == shown)
         .unwrap_or(0);
-    set_mode(MODES[(index + 1) % MODES.len()].1)
+    MODES[(index + 1) % MODES.len()].1
 }
 
 /// `/mode <mode>` changes the permission mode; `/mode` alone offers the three.

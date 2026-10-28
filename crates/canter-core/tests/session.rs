@@ -287,6 +287,7 @@ async fn request_prefix_is_frozen_until_reopening_and_only_compaction_replaces_h
         .resolve(
             &request.id,
             RequestResolveParams {
+                plan: None,
                 feedback: None,
                 decision: Some(ApprovalDecision::Decline),
                 answer: None,
@@ -562,6 +563,7 @@ async fn two_clients_resolve_once_and_steering_precedes_the_next_model_request()
     assert_eq!(steer.turn_id, first.turn_id);
     assert!(queued.turn_id.is_none());
     let params = RequestResolveParams {
+        plan: None,
         feedback: None,
         decision: Some(ApprovalDecision::Accept),
         answer: None,
@@ -572,6 +574,7 @@ async fn two_clients_resolve_once_and_steering_precedes_the_next_model_request()
         session.resolve(
             &request.id,
             RequestResolveParams {
+                plan: None,
                 client_name: "client-b".into(),
                 ..params
             }
@@ -971,6 +974,8 @@ fn input(text: &str) -> SessionInputParams {
 }
 fn settings(cwd: &std::path::Path) -> SessionSettings {
     SessionSettings {
+        plan_mode: false,
+        pre_plan_approval_policy: None,
         plan_enabled: None,
         cwd: cwd.to_string_lossy().into(),
         name: None,

@@ -322,6 +322,9 @@ pub struct SessionInterruptResponse {
 pub struct RequestResolveParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub plan: Option<crate::PlanAnswer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub decision: Option<ApprovalDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -347,6 +350,7 @@ pub struct RequestResolveResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(optional_fields = nullable)]
 pub struct SessionUpdateParams {
+    pub plan_mode: Option<bool>,
     pub name: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,

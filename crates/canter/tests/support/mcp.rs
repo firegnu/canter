@@ -368,17 +368,18 @@ async fn stdio_and_http_tools_reach_model_in_fixed_order_and_return_results() {
                 "ask_user",
                 "web_fetch",
                 "update_plan",
+                "submit_plan",
                 "mcp__local__echo",
                 "mcp__remote__echo"
             ]
         );
         assert_eq!(script.requests[0]["tools"], script.requests[1]["tools"]);
         assert_eq!(
-            script.requests[0]["tools"][8]["function"]["description"],
+            script.requests[0]["tools"][9]["function"]["description"],
             "http echo"
         );
         assert_eq!(
-            script.requests[0]["tools"][8]["function"]["parameters"],
+            script.requests[0]["tools"][9]["function"]["parameters"],
             definition("echo")["inputSchema"]
         );
         let results: Vec<_> = script.requests[1]["messages"]
@@ -926,7 +927,7 @@ async fn colliding_qualified_names_are_skipped_and_reported() {
             .as_array()
             .unwrap()
             .len(),
-        8 // Seven built-ins and the one non-colliding MCP tool.
+        9 // Eight built-ins and the one non-colliding MCP tool.
     );
     assert!(
         fs::read_to_string(fixture.root.path().join("server.log"))
@@ -981,4 +982,70 @@ async fn http_mcp_ignores_server_proxy_environment() {
     );
     assert_eq!(status["data"][0]["connected"], true);
     assert_eq!(tool_results(&fixture), ["http result"]);
+}
+
+#[tokio::test]
+async fn plan_mode_blocks_all_mcp_tools_even_readonly_hints_without_approval() {
+    for policy in ["alwaysAsk", "askForExecution", "allowAll"] {
+        let http = HttpMcp::start(&["echo", "content"]).await;
+        let mut fixture = start(
+            &http,
+            vec![
+                call(&["mcp__remote__echo", "mcp__second__content"]),
+                text_reply(),
+            ],
+        )
+        .await;
+        let created = create(&fixture, policy).await;
+        let id = &created.session.id;
+        let response = fixture
+            .request(
+                Method::PATCH,
+                &format!("/v1/sessions/{id}"),
+                json!({"planMode":true}),
+            )
+            .await;
+        assert_eq!(response.status(), 200);
+        fixture.input(id).await;
+        let events = complete(&fixture, id, created.event_seq).await;
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::RequestOpened { .. }))
+        );
+        let blocked: Vec<_> = events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::ItemCompleted {
+                    item:
+                        canter_protocol::Item::McpToolCall {
+                            server,
+                            tool,
+                            status: canter_protocol::ItemStatus::Blocked,
+                            ..
+                        },
+                    ..
+                } => Some((server.as_str(), tool.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(blocked, [("remote", "echo"), ("second", "content")]);
+        assert!(http.state.lock().unwrap().calls.is_empty());
+        assert!(
+            tool_results(&fixture)
+                .iter()
+                .all(|result| result.contains("Plan mode"))
+        );
+        {
+            let script = fixture.script.lock().unwrap();
+            assert_eq!(script.requests[0]["tools"], script.requests[1]["tools"]);
+            let mut next = script.requests[1].clone();
+            next["messages"]
+                .as_array_mut()
+                .unwrap()
+                .truncate(script.requests[0]["messages"].as_array().unwrap().len());
+            assert_eq!(next, script.requests[0]);
+        }
+        fixture.stop().await;
+    }
 }

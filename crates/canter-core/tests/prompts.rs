@@ -15,6 +15,8 @@ impl Model for NoRequests {
 
 fn settings(cwd: &Path) -> SessionSettings {
     SessionSettings {
+        plan_mode: false,
+        pre_plan_approval_policy: None,
         plan_enabled: None,
         cwd: cwd.to_string_lossy().into_owned(),
         name: None,

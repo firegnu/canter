@@ -151,6 +151,43 @@ pub(crate) fn item(
     feedback: Option<&str>,
 ) -> Vec<Row> {
     let mut rows = match item {
+        Item::PlanProposal {
+            plan,
+            answer,
+            status,
+            ..
+        } => {
+            let mut rows = wrap_all(
+                &agent_message(
+                    &format!(
+                        "**{}**",
+                        crate::plan_mode::result_label(answer.as_ref(), *status)
+                    ),
+                    width,
+                ),
+                width,
+            );
+            let mut body = wrap_all(&agent_message(plan, width), width);
+            if !details && body.len() > 8 {
+                let count = body.len() - 8;
+                body.truncate(8);
+                body.extend(wrap_all(
+                    &agent_message(&format!("… {count} more lines · Ctrl+O to expand"), width),
+                    width,
+                ));
+            }
+            rows.extend(body);
+            if let Some(feedback) = answer
+                .as_ref()
+                .and_then(|answer| answer.feedback.as_deref())
+            {
+                rows.extend(wrap_all(
+                    &agent_message(&format!("Feedback: {feedback}"), width),
+                    width,
+                ));
+            }
+            rows
+        }
         Item::UserMessage { content, .. } => sent(content, None, width),
         Item::AgentMessage { text, .. } => wrap_all(&agent_message(text, width), width),
         Item::Reasoning {
@@ -774,6 +811,10 @@ fn file_change(
 ) -> Vec<Row> {
     let diff = Diff::parse(&sanitize(&change.diff), &change.kind, &change.path);
     let (bullet, suffix) = match status {
+        ItemStatus::Blocked => (
+            dot(theme::warning()),
+            Some(Span::styled("  blocked (Plan mode)", theme::warning())),
+        ),
         ItemStatus::InProgress => (dot(theme::secondary()), None),
         ItemStatus::Failed => (cross(), Some(Span::styled("  failed", theme::failure()))),
         ItemStatus::Declined => (
@@ -944,6 +985,10 @@ fn command_card(
     let (bullet, mut right) = match (status, exit_code) {
         (ItemStatus::InProgress, _) => (dot(dim), vec![Span::styled("running", dim)]),
         (ItemStatus::Declined, _) => (dot(dim), vec![Span::styled("declined", dim)]),
+        (ItemStatus::Blocked, _) => (
+            dot(theme::warning()),
+            vec![Span::styled("blocked (Plan mode)", theme::warning())],
+        ),
         _ if searched_nothing => (dot(dim), vec![Span::styled("No matches", dim)]),
         (_, Some(0)) => (dot(theme::success()), vec![Span::styled("exit 0", dim)]),
         (_, Some(code)) => (
@@ -1075,6 +1120,10 @@ fn web_fetch(url: &str, result: &str, status: ItemStatus, details: bool, width: 
 fn status_marks(status: ItemStatus) -> (Span<'static>, Vec<Span<'static>>) {
     let dim = theme::secondary();
     match status {
+        ItemStatus::Blocked => (
+            dot(theme::warning()),
+            vec![Span::styled("blocked (Plan mode)", theme::warning())],
+        ),
         ItemStatus::InProgress => (dot(dim), vec![Span::styled("running", dim)]),
         ItemStatus::Declined => (dot(dim), vec![Span::styled("declined", dim)]),
         ItemStatus::Failed => (cross(), vec![Span::styled("failed", theme::failure())]),

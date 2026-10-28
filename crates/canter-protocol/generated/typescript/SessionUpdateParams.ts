@@ -6,4 +6,4 @@ import type { ReasoningEffort } from "./ReasoningEffort";
  * PATCH /v1/sessions/{id}. Omitted/null fields retain their current values.
  * The resulting complete public settings are emitted in session.updated.
  */
-export type SessionUpdateParams = { name?: string | null, model?: string | null, reasoningEffort?: ReasoningEffort | null, approvalPolicy?: PermissionMode | null, };
+export type SessionUpdateParams = { planMode?: boolean | null, name?: string | null, model?: string | null, reasoningEffort?: ReasoningEffort | null, approvalPolicy?: PermissionMode | null, };

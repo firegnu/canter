@@ -70,8 +70,9 @@
 | ask_user | `question`, `options: [{label, description}]`（2–4 个，标签不重复，内容非空） | 会话循环等待选项或自写文字；模型结果 `{question, answer}`，客户端项目 `userInput` |
 | web_fetch | `url`（HTTP(S)，不含用户名/密码） | HTML 转 Markdown，文字和 JSON 原样；有界文字结果，客户端项目 `webFetch` |
 | update_plan | 可选 `explanation`，`plan: [{step, status}]` | 整份替换清单，回 `Plan updated`；客户端项目 `plan` |
+| submit_plan | `plan`（完整 Markdown） | 计划模式中等待用户批准；客户端项目 `planProposal` |
 
-`Tool::ALL` 固定按 read/write/edit/shell/ask_user/web_fetch/update_plan 排列，保证会话每次请求的工具前缀稳定。
+`Tool::ALL` 固定按 read/write/edit/shell/ask_user/web_fetch/update_plan/submit_plan 排列，保证会话每次请求的工具前缀稳定。
 `Tools::with_plan_enabled(false)` 关闭待办；会话通过 `Tools::find` 过滤工具定义和调用，
 在创建或打开时冻结。`update_plan` 属于交互风险，但 gate 始终直接发 permit，审查轮也一样，
 不会调用执行器。步骤状态为 `pending` / `in_progress` / `completed`，至多一个进行中，
@@ -221,7 +222,7 @@ cd 目标存在时会额外检查解析后的路径，
 `mcp::Registry` 用固定版本的官方 rmcp 客户端维护进程/HTTP 连接；配置和运行句柄没有
 Debug/Serialize。`snapshot()` 为会话复制排序后的工具定义和调用句柄，`Tools::with_mcp`
 绑定这份快照。模型名字用 `Tools::find` 查找，`prepare_named` 只解析对象参数；MCP 参数中的
-`path` 不经过内置文件工具的路径准备。`Tool::ALL` 只列七个内置工具。
+`path` 不经过内置文件工具的路径准备。`Tool::ALL` 只列八个内置工具。
 
 `Tool::Mcp` 是执行风险分类；具体名字、服务和参数由准备好的调用保存。权限闸门仍发放
 不可伪造的单次 permit，会话授权改用完整工具名字，MCP 与内置工具没有共用授权。
@@ -284,3 +285,9 @@ alwaysAsk / askForExecution 均须批准；「本会话都允许」只保存这�
 GET 接口或暴露内部服务内容。需要逐个把关时使用询问模式；这里没有网络沙箱。
 不做搜索、JavaScript 渲染、登录、cookie、代理配置、网页摘要、PDF 解析、图片输入或 URL 缓存。
 会话创建/打开时固定工具列表；旧会话下次打开会获得这个新内置工具，历史存盘不改写。
+
+`submit_plan {plan: Markdown}` 始终在内置列表中，交互由核心等待用户批准。
+计划模式使用 `PermissionGate::evaluate_plan`，限制先于权限档和会话授权；
+read/ask_user/submit_plan 允许，shell 复用现有只读白名单，web_fetch 复用原审批。
+write/edit、非白名单 shell、所有 MCP、update_plan 返回 blocked，不生成审批。
+核心在准备前也拦一次，避免为禁止的改动读文件或生成 diff。

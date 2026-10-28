@@ -452,6 +452,8 @@ mod creation_tests {
             let temp = tempfile::tempdir().unwrap();
             let store = Store::new(temp.path()).unwrap();
             let settings = SessionSettings {
+                plan_mode: false,
+                pre_plan_approval_policy: None,
                 plan_enabled: None,
                 cwd: "/work".into(),
                 name: None,

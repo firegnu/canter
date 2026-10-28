@@ -955,7 +955,8 @@ async fn ask_user_second_option_returns_to_the_model_and_continues() {
                 "shell",
                 "ask_user",
                 "web_fetch",
-                "update_plan"
+                "update_plan",
+                "submit_plan"
             ]
         );
     }
@@ -2552,15 +2553,21 @@ async fn shift_tab_cycles_the_permission_mode() {
     let id = world.only_session().await;
 
     for (mode, shown) in [
+        (PermissionMode::AllowAll, "Plan"),
         (PermissionMode::AlwaysAsk, "Always ask"),
         (PermissionMode::AskForExecution, "Ask for execution"),
         (PermissionMode::AllowAll, "Allow all"),
+        (PermissionMode::AllowAll, "Plan"),
         (PermissionMode::AlwaysAsk, "Always ask"),
     ] {
         a.press_with(KeyCode::BackTab, KeyModifiers::SHIFT).await;
         let info = format!("fake-model · think high · {shown} ·");
         a.wait_until(shown, |a| a.info().starts_with(&info)).await;
         assert_eq!(world.snapshot(&id).await.settings.approval_policy, mode);
+        assert_eq!(
+            world.snapshot(&id).await.settings.plan_mode,
+            shown == "Plan"
+        );
     }
     assert_eq!(a.quit().await, id);
     world.stop_server(Signal::SIGTERM).await;
@@ -2925,5 +2932,105 @@ async fn the_welcome_header_is_on_screen_only() {
     ] {
         assert!(!sent.contains(text), "{text:?} sent to the model");
         assert!(!stored.contains(text), "{text:?} in a session on disk");
+    }
+}
+
+#[tokio::test]
+async fn plan_approval_implements_in_place_or_starts_the_plan_in_a_fresh_session() {
+    for choice in ['1', '2'] {
+        let plan = "# Approved change\n\n1. Implement the change.\n2. Verify the behavior.";
+        let proposal = format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            json!({"choices":[{"index":0,"delta":{"tool_calls":[{
+            "index":0,"id":"proposal","type":"function","function":{"name":"submit_plan","arguments":json!({"plan":plan}).to_string()}
+        }]},"finish_reason":"tool_calls"}]})
+        );
+        let mut world =
+            World::new(vec![proposal, text_reply("Implementation session ready.")]).await;
+        world.start_server().await;
+        let terminal = world.open(&[], "canter-tui plan-test").await;
+        terminal.wait_idle().await;
+        let source = world.only_session().await;
+        terminal.type_line("/plan").await;
+        terminal
+            .wait_until("Plan status", |t| t.info().contains(" · Plan ·"))
+            .await;
+        terminal.type_line("Plan this change.").await;
+        terminal.wait_for("Implement this plan?").await;
+        terminal.wait_for("Mode: Always ask").await;
+        if choice == '2' {
+            let client = Client::new(&world.path("state/server.sock")).unwrap();
+            for (mode, text) in [
+                ("queue", "Queued follow-up"),
+                ("steer", "Steering correction"),
+            ] {
+                client.send_input(&source, &serde_json::from_value(json!({
+                    "input":[{"type":"text","text":text}],"mode":mode,"clientName":"other terminal"
+                })).unwrap()).await.unwrap();
+            }
+        }
+        read_the_box().await;
+        terminal
+            .press_with(KeyCode::BackTab, KeyModifiers::SHIFT)
+            .await;
+        terminal.wait_for("Mode: Ask for execution").await;
+        terminal.press(KeyCode::Char(choice)).await;
+        terminal.wait_for("Implementation session ready.").await;
+        if choice == '2' {
+            terminal.wait_for("2 inputs withdrawn to draft").await;
+            assert!(terminal.screen().contains("Queued follow-up"));
+            assert!(terminal.screen().contains("Steering correction"));
+            terminal
+                .press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
+                .await;
+            terminal.frames_later(2).await;
+        }
+        terminal.wait_idle().await;
+        let target = terminal.quit().await;
+        let original = world.snapshot(&source).await;
+        assert_eq!(original.status, SessionStatus::Idle);
+        assert!(original.queued_inputs.is_empty());
+        assert_eq!(original.turns.len(), 1);
+        assert_eq!(world.requests.lock().unwrap().len(), 2);
+        assert_eq!(
+            original.turns[0].status,
+            canter_protocol::TurnStatus::Completed
+        );
+        assert!(!original.settings.plan_mode);
+        assert_eq!(
+            original.settings.approval_policy,
+            PermissionMode::AskForExecution
+        );
+        if choice == '1' {
+            assert_eq!(target, source);
+            let requests = world.requests.lock().unwrap();
+            let messages = requests[1]["messages"].as_array().unwrap();
+            assert!(messages.iter().any(|message| {
+                message["role"] == "tool"
+                    && message["content"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("update_plan"))
+            }));
+        } else {
+            assert_ne!(target, source);
+            let fresh = world.snapshot(&target).await;
+            assert_eq!(fresh.settings.cwd, original.settings.cwd);
+            assert_eq!(
+                fresh.settings.approval_policy,
+                PermissionMode::AskForExecution
+            );
+            assert!(!fresh.settings.plan_mode);
+            let canter_protocol::UserInput::Text { text } = &fresh.turns[0].input[0] else {
+                panic!("first message must contain the plan")
+            };
+            assert!(text.contains(plan));
+            assert!(text.contains("Implement this plan"));
+            assert!(text.contains("update_plan"));
+            assert!(!text.contains("Queued follow-up"));
+            assert!(!text.contains("Steering correction"));
+            let client = Client::new(&world.path("state/server.sock")).unwrap();
+            assert_eq!(client.list_sessions().await.unwrap().len(), 2);
+        }
+        world.stop_server(Signal::SIGTERM).await;
     }
 }

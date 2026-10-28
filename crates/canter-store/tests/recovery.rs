@@ -7,6 +7,8 @@ use serde_json::json;
 
 fn settings() -> SessionSettings {
     SessionSettings {
+        plan_mode: false,
+        pre_plan_approval_policy: None,
         plan_enabled: None,
         cwd: "/isolated/workspace".into(),
         name: Some("demo".into()),

@@ -230,3 +230,70 @@ fn export_preserves_each_plan_and_disabling_hides_cards_and_pinned_steps() {
     assert!(!text.contains("Updated Plan"), "{text}");
     assert!(!text.contains("Implement"), "{text}");
 }
+
+#[test]
+fn proposals_fold_expand_replay_and_export_the_full_plan_and_decision() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    for (decision, label) in [
+        ("implement", "Plan approved"),
+        ("clearContext", "Plan approved · clear context"),
+        ("keepPlanning", "Keep planning"),
+    ] {
+        let mut screen = Screen::new();
+        let plan = (0..14)
+            .map(|n| format!("- Implementation step {n}\n"))
+            .collect::<String>();
+        screen.event(json!({"type":"item.completed","turnId":"t1","item":{
+            "type":"planProposal","id":"proposal","plan":plan,"status":"completed",
+            "answer":{"decision":decision,"approvalPolicy":"askForExecution","feedback":"User feedback"}
+        }}));
+        let folded = screen.lines();
+        assert!(folded.join("\n").contains(label));
+        assert!(!folded.join("\n").contains("Implementation step 13"));
+        assert!(folded.join("\n").contains("Ctrl+O"));
+        let saved = serde_json::to_value(screen.ui.app().snapshot()).unwrap();
+        let mut resumed = Screen {
+            ui: Ui::new(
+                TestBackend::new(70, 32),
+                App::new(serde_json::from_value(saved).unwrap(), None, 0),
+            )
+            .unwrap(),
+        };
+        assert_eq!(resumed.lines(), folded);
+        resumed.ui.app_mut().handle_key(
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+            1000,
+        );
+        assert!(
+            resumed
+                .lines()
+                .join("\n")
+                .contains("Implementation step 13")
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("plan.md");
+        resumed.ui.app_mut().export(
+            Export::File(Some(path.to_string_lossy().into_owned())),
+            1000,
+        );
+        let exported = std::fs::read_to_string(path).unwrap();
+        assert!(exported.contains(&plan));
+        assert!(exported.contains(label));
+        assert!(exported.contains("User feedback"));
+    }
+}
+
+#[test]
+fn plan_blocked_tool_cards_are_marked_in_the_conversation() {
+    let mut screen = Screen::new();
+    for item in [
+        json!({"type":"fileChange","id":"w","changes":[{"path":"file.rs","kind":{"type":"unknown"},"diff":""}],"status":"blocked"}),
+        json!({"type":"commandExecution","id":"s","command":"touch file","cwd":"/work","aggregatedOutput":"","exitCode":null,"durationMs":null,"status":"blocked"}),
+        json!({"type":"mcpToolCall","id":"m","server":"remote","tool":"echo","arguments":{},"result":"","status":"blocked"}),
+        json!({"type":"plan","id":"p","plan":[],"status":"blocked"}),
+    ] {
+        screen.event(json!({"type":"item.completed","turnId":"t1","item":item}));
+    }
+    let text = screen.lines().join("\n");
+    assert_eq!(text.matches("blocked (Plan mode)").count(), 4, "{text}");
+}

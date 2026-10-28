@@ -5,7 +5,11 @@ import type { ReasoningEffort } from "./ReasoningEffort";
 /**
  * Public settings. Environment variables never belong here.
  */
-export type SessionSettings = {
+export type SessionSettings = { planMode?: boolean,
+/**
+ * Permission mode to restore when the user leaves planning without a selection.
+ */
+prePlanApprovalPolicy?: PermissionMode,
 /**
  * Effective tool switch, frozen when the server opens this session.
  */
