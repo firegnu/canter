@@ -504,3 +504,63 @@ async fn before_the_first_commit_the_staged_lines_count() {
         .wait_for_second_row(" ~/canter (main) · (+3,-0)")
         .await;
 }
+
+/// In Plan the permission item also names the mode `/plan` leaves Plan for,
+/// in that mode's colour; `/mode` in Plan changes it at once.
+#[test]
+fn plan_names_the_mode_it_leaves_for() {
+    use canter_tui::Action;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (home, dir) = repo();
+    let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
+    let colour = |color| (Some(color), false);
+    let grey = (Some(Color::Reset), true);
+    let settings = |policy: &str, plan: bool| {
+        let mut settings = json!({
+            "cwd": dir.to_str().unwrap(), "name": null, "model": "deepseek-flash",
+            "approvalPolicy": policy, "planMode": plan,
+        });
+        if plan {
+            settings["prePlanApprovalPolicy"] = json!(policy);
+        }
+        json!({ "type": "session.updated", "settings": settings })
+    };
+
+    screen.event(settings("alwaysAsk", true));
+    assert_eq!(
+        screen.bar()[0],
+        " deepseek-flash · think high · Plan (then Always ask)"
+    );
+    assert_eq!(screen.style_of(0, "Plan"), colour(Color::Magenta));
+    assert_eq!(screen.style_of(0, " (then "), grey);
+    assert_eq!(screen.style_of(0, "Always ask"), grey);
+    assert_eq!(screen.style_of(0, ")"), grey);
+
+    // `/mode allow-all` in Plan, and the update the server sends back.
+    for c in "/mode allow-all".chars() {
+        screen.ui.draw(NOW).unwrap();
+        let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        assert_eq!(screen.ui.app_mut().handle_key(key, NOW), None);
+    }
+    screen.ui.draw(NOW).unwrap();
+    let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    assert!(matches!(
+        screen.ui.app_mut().handle_key(enter, NOW),
+        Some(Action::Update(params))
+            if params.approval_policy == Some(PermissionMode::AllowAll) && params.plan_mode.is_none()
+    ));
+    screen.event(settings("allowAll", true));
+    assert_eq!(
+        screen.bar()[0],
+        " deepseek-flash · think high · Plan (then Allow all)"
+    );
+    assert_eq!(screen.style_of(0, "Plan"), colour(Color::Magenta));
+    assert_eq!(screen.style_of(0, "Allow all"), colour(Color::Red));
+    assert_eq!(screen.style_of(0, ")"), grey);
+
+    // Out of Plan, the mode alone as before.
+    screen.event(settings("allowAll", false));
+    assert_eq!(screen.bar()[0], " deepseek-flash · think high · Allow all");
+    assert_eq!(screen.style_of(0, "Allow all"), colour(Color::Red));
+}

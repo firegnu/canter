@@ -1317,15 +1317,17 @@ impl App {
                     if self.mode_elsewhere()
                         && let Action::Update(params) = &action
                     {
-                        let (name, style) = if params.plan_mode == Some(true) {
-                            plan_mode_label()
+                        // Entering Plan keeps the mode shown for after it.
+                        let label = if params.plan_mode == Some(true) {
+                            plan_mode_spans(mode)
                         } else {
-                            mode_label(params.approval_policy.unwrap_or(mode))
+                            let (name, style) = mode_label(params.approval_policy.unwrap_or(mode));
+                            vec![Span::styled(name, style)]
                         };
-                        self.copier.show(
-                            Line::from(vec![Span::raw(" Mode: "), Span::styled(name, style)]),
-                            at + crate::copy::COPIED_MS,
-                        );
+                        let mut spans = vec![Span::raw(" Mode: ")];
+                        spans.extend(label);
+                        self.copier
+                            .show(Line::from(spans), at + crate::copy::COPIED_MS);
                     }
                     return Some(action);
                 }
@@ -4508,11 +4510,10 @@ impl App {
                 BarItem::Thinking,
             ),
             bar::Item::Permission => {
-                let (mode, style) = if settings.plan_mode {
-                    plan_mode_label()
-                } else {
-                    mode_label(settings.approval_policy)
-                };
+                if settings.plan_mode {
+                    return Some(plan_mode_spans(after_plan(settings)));
+                }
+                let (mode, style) = mode_label(settings.approval_policy);
                 Some(vec![Span::styled(mode, style)])
             }
             bar::Item::Cost => usage
@@ -4613,8 +4614,23 @@ pub(crate) fn mode_label(mode: PermissionMode) -> (&'static str, Style) {
     }
 }
 
-fn plan_mode_label() -> (&'static str, Style) {
-    ("Plan", Style::new().fg(ratatui::style::Color::Magenta))
+/// `Plan (then <mode>)`: Plan in its own colour, then the permission mode
+/// used after Plan, named and coloured as `mode_label` does.
+fn plan_mode_spans(after: PermissionMode) -> Vec<Span<'static>> {
+    let (name, style) = mode_label(after);
+    vec![
+        Span::styled("Plan", Style::new().fg(ratatui::style::Color::Magenta)),
+        Span::styled(" (then ", theme::secondary()),
+        Span::styled(name, style),
+        Span::styled(")", theme::secondary()),
+    ]
+}
+
+/// The permission mode `/plan` leaves Plan for.
+fn after_plan(settings: &canter_protocol::SessionSettings) -> PermissionMode {
+    settings
+        .pre_plan_approval_policy
+        .unwrap_or(settings.approval_policy)
 }
 
 /// The screen's content, laid out for one frame.
