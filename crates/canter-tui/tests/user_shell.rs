@@ -42,7 +42,10 @@ fn user_shell_busy_keeps_draft_and_bare_bang_is_not_sent() {
                 .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 0),
             None
         );
-        assert!(text(&mut ui).contains(draft.trim_end()));
+        // Kept as it was: in shell mode, the rest after the prompt.
+        let (prompt, rest) = input_row(&mut ui);
+        assert_eq!(prompt.symbol(), "!");
+        assert_eq!(rest.trim_end(), draft[1..].trim_end());
         if status != SessionStatus::Idle {
             assert!(text(&mut ui).contains("Wait for this turn to finish"));
         }
@@ -102,7 +105,10 @@ fn user_shell_enter_trims_command_and_records_input_history() {
     ui.draw(0).unwrap();
     ui.app_mut()
         .handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), 0);
-    assert!(text(&mut ui).contains("!  git status"));
+    // A `!` command from the history comes back in shell mode.
+    assert_shell_mode(&mut ui, true);
+    let (_, rest) = input_row(&mut ui);
+    assert_eq!(rest.trim_end(), "  git status");
     assert_eq!(
         ui.app_mut()
             .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 0),
@@ -178,49 +184,135 @@ fn find(ui: &mut Ui<TestBackend>, needle: &str) -> (usize, usize) {
         .unwrap_or_else(|| panic!("{needle:?} not on screen:\n{screen}"))
 }
 
-/// The input box's top-left corner and the cell of the draft's first
-/// character.
-fn input_cells(ui: &mut Ui<TestBackend>) -> (ratatui::buffer::Cell, ratatui::buffer::Cell) {
-    let (y, x) = find(ui, "› ");
-    (cell(ui, 0, y - 1), cell(ui, x + 2, y))
+/// The input box's rows from the top border down, in cells: the top-left
+/// corner, the first row (its prompt cell and what is after the prompt)
+/// and the bottom border.
+fn input_box(
+    ui: &mut Ui<TestBackend>,
+) -> (ratatui::buffer::Cell, ratatui::buffer::Cell, String, String) {
+    let screen = text(ui);
+    let rows: Vec<&str> = screen.lines().collect();
+    let top = (0..24)
+        .rev()
+        .find(|&y| rows[y].starts_with('╭'))
+        .unwrap_or_else(|| panic!("no input box:\n{screen}"));
+    let bottom = (top + 1..24)
+        .find(|&y| rows[y].starts_with('╰'))
+        .unwrap_or_else(|| panic!("no bottom border:\n{screen}"));
+    let rest = rows[top + 1].chars().skip(4).collect::<String>();
+    let rest = rest.trim_end_matches('│').to_owned();
+    (
+        cell(ui, 0, top),
+        cell(ui, 2, top + 1),
+        rest,
+        rows[bottom].to_owned(),
+    )
+}
+
+/// The prompt cell and what is after the prompt on the box's first row.
+fn input_row(ui: &mut Ui<TestBackend>) -> (ratatui::buffer::Cell, String) {
+    let (_, prompt, rest, _) = input_box(ui);
+    (prompt, rest)
+}
+
+/// In shell mode: a magenta border, a magenta `!` in place of `› ` and
+/// `! for shell mode` in magenta on the bottom border; otherwise none of it.
+fn assert_shell_mode(ui: &mut Ui<TestBackend>, shell: bool) {
+    use ratatui::style::Color;
+    let (corner, prompt, _, bottom) = input_box(ui);
+    assert_eq!(corner.symbol(), "╭");
+    if shell {
+        assert_eq!(corner.fg, Color::Magenta);
+        assert_eq!(prompt.symbol(), "!");
+        assert_eq!(prompt.fg, Color::Magenta);
+        let at = bottom
+            .find("! for shell mode")
+            .unwrap_or_else(|| panic!("no hint on {bottom:?}"));
+        let x = bottom[..at].chars().count();
+        let y = (0..24)
+            .rev()
+            .find(|&y| cell(ui, 0, y).symbol() == "╰")
+            .unwrap();
+        assert!(x < 5, "the hint is at the left: {bottom:?}");
+        for column in 0.."! for shell mode".len() {
+            assert_eq!(cell(ui, x + column, y).fg, Color::Magenta, "{bottom:?}");
+        }
+    } else {
+        assert_ne!(corner.fg, Color::Magenta);
+        assert_eq!(prompt.symbol(), "›");
+        assert!(!bottom.contains("shell mode"), "{bottom:?}");
+    }
+}
+
+fn press(ui: &mut Ui<TestBackend>, code: KeyCode) -> Option<Action> {
+    let action = ui
+        .app_mut()
+        .handle_key(KeyEvent::new(code, KeyModifiers::NONE), 0);
+    ui.draw(0).unwrap();
+    action
+}
+
+fn type_text(ui: &mut Ui<TestBackend>, text: &str) {
+    for c in text.chars() {
+        press(ui, KeyCode::Char(c));
+    }
 }
 
 #[test]
-fn user_shell_bang_draft_shows_red_border_and_bang() {
-    use ratatui::style::Color;
+fn user_shell_bang_draft_shows_magenta_prompt_and_hint() {
     let mut ui = screen(SessionStatus::Idle);
-    for c in "!ls".chars() {
-        ui.app_mut()
-            .handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE), 0);
-    }
-    let (corner, first) = input_cells(&mut ui);
-    assert_eq!(corner.symbol(), "╭");
-    assert_eq!(corner.fg, Color::Red);
-    assert_eq!(first.symbol(), "!");
-    assert_eq!(first.fg, Color::Red);
-    let (y, x) = find(&mut ui, "!ls");
-    assert_ne!(cell(&ui, x + 1, y).fg, Color::Red, "only the bang is red");
-
-    // Deleting the `!` puts the box back at once.
-    ui.app_mut()
-        .handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE), 0);
-    ui.app_mut()
-        .handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE), 0);
-    let (corner, first) = input_cells(&mut ui);
-    assert_eq!(first.symbol(), "l");
-    assert_ne!(corner.fg, Color::Red);
-    assert_ne!(first.fg, Color::Red);
+    type_text(&mut ui, "!ls");
+    assert_shell_mode(&mut ui, true);
+    // The `!` is the prompt, not part of the text.
+    let (_, rest) = input_row(&mut ui);
+    assert_eq!(rest.trim_end(), "ls");
+    assert!(!text(&mut ui).contains("!ls"));
 
     let mut ui = screen(SessionStatus::Idle);
     ui.app_mut().handle_paste("ls");
-    let (corner, first) = input_cells(&mut ui);
-    assert_eq!(first.symbol(), "l");
-    assert_ne!(corner.fg, Color::Red);
-    assert_ne!(first.fg, Color::Red);
+    assert_shell_mode(&mut ui, false);
+    let (_, rest) = input_row(&mut ui);
+    assert_eq!(rest.trim_end(), "ls");
 }
 
 #[test]
-fn user_shell_card_bang_is_red_and_agent_card_is_unchanged() {
+fn user_shell_backspace_leaves_shell_mode_only_when_empty() {
+    // With text, at the start: nothing happens, the command stays one.
+    let mut ui = screen(SessionStatus::Idle);
+    type_text(&mut ui, "!ls");
+    press(&mut ui, KeyCode::Home);
+    press(&mut ui, KeyCode::Backspace);
+    assert_shell_mode(&mut ui, true);
+    let (_, rest) = input_row(&mut ui);
+    assert_eq!(rest.trim_end(), "ls");
+    assert_eq!(
+        press(&mut ui, KeyCode::Enter),
+        Some(Action::ShellCommand("ls".into()))
+    );
+
+    // With only the `!`: back to a message.
+    let mut ui = screen(SessionStatus::Idle);
+    type_text(&mut ui, "!");
+    assert_shell_mode(&mut ui, true);
+    press(&mut ui, KeyCode::Backspace);
+    assert_shell_mode(&mut ui, false);
+    assert!(text(&mut ui).contains("Type a message"));
+}
+
+#[test]
+fn user_shell_box_is_back_to_messages_after_running() {
+    let mut ui = screen(SessionStatus::Idle);
+    type_text(&mut ui, "!ls");
+    assert_eq!(
+        press(&mut ui, KeyCode::Enter),
+        Some(Action::ShellCommand("ls".into()))
+    );
+    assert_shell_mode(&mut ui, false);
+    assert!(text(&mut ui).contains("Type a message"));
+}
+
+#[test]
+fn user_shell_card_bang_is_magenta_and_agent_card_is_unchanged() {
     use ratatui::style::Color;
     let mut snapshot = SessionSnapshot::empty("user-shell");
     for (turn, source) in [("agent-turn", "agent"), ("shell-turn", "userShell")] {
@@ -243,7 +335,7 @@ fn user_shell_card_bang_is_red_and_agent_card_is_unchanged() {
     assert_ne!(agent_y, shell_y);
     let bang = cell(&ui, shell_x + 4, shell_y);
     assert_eq!(bang.symbol(), "!");
-    assert_eq!(bang.fg, Color::Red);
+    assert_eq!(bang.fg, Color::Magenta);
     // The command reads the same on both cards; only the user's has the `!`.
     for column in 0.."git status".len() {
         let agent = cell(&ui, agent_x + 4 + column, agent_y);
