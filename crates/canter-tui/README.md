@@ -697,7 +697,7 @@ Enter 在命令名没打完时只补全、不执行，打完整了才执行。Es
   7、9–15 浅）；还不知道就当「不知道」。只有知道是浅色底时，警告文字才换成默认色加粗。
 
 计划模式：`/plan` 进出；Shift+Tab 轮换 Always ask → Ask for execution → Allow all → Plan → Always ask。
-状态栏权限项显示洋红色 `Plan`；自定义状态命令还会收到公开布尔字段 `planMode`。
+状态栏权限项显示 `Plan (then <档位>)`：洋红色 `Plan`，后面是 `/plan` 出来后用的那一档（`prePlanApprovalPolicy`，没有时用 `approvalPolicy`），名字和颜色同普通状态栏（`Allow all` 红，另两档灰），括号和 `then` 灰；在计划模式里 `/mode` 改了，后半截跟着变，Shift+Tab 进计划模式时闪的提示同样写 `Mode: Plan (then <档位>)`，`/statusline` 预览同样显示；自定义状态命令还会收到公开布尔字段 `planMode`。
 方案批准框完整显示 Markdown，PgUp/PgDn 滚动；Mode 行用 Shift+Tab 只轮换三档权限。
 可批准本轮实施、批准清空上下文后实施，或保持计划模式并附一行意见（空意见 Enter 也可）。
 清空上下文复用新建会话与切换，自动发送方案和实施指令，原会话保留。批准框内可输入 `/plan`
