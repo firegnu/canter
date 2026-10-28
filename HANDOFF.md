@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-28 第十九次装 main `1736cf5`（`canter --version` 显示 `canter 0.1.0 · 1736cf5`；比上一版多 P2-103 计划模式：Shift+Tab 第四档 Plan、`/plan`、`submit_plan` 批准框）。服务端要用户自己 `canter serve --replace`。
+- 退回上一版 `c8d9451`：`cp -p ~/.canter/canter-c8d9451 ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版打开在计划模式里的会话不坏，但按底下那一档照常干活、没有计划模式的限制，方案批准框看不到（P2-103 交叉审查第 9 条）。
 - 10-28 第十八次装 main `c8d9451`（`canter --version` 显示 `canter 0.1.0 · c8d9451`；比上一版多 P2-114：状态栏 `context` 是以压缩线为满的进度条，分支后面 `(+加,-删)`）。服务端要用户自己 `canter serve --replace`。
 - 退回上一版 `b19fb3a`：`cp -p ~/.canter/canter-b19fb3a ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-28 第十七次装 main `b19fb3a`（`canter --version` 显示 `canter 0.1.0 · b19fb3a`；比上一版多 P2-113：状态栏 `xx% to compact`、各项上色，`config.json` 写 `"auto_compact_tokens": 400000` 可把压缩线调低，改了要重启服务端）。服务端要用户自己 `canter serve --replace`。
