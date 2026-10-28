@@ -346,17 +346,17 @@ fn the_status_line_names_what_the_turn_is_doing() {
     screen.command("c1", "cargo build\ncargo test", "inProgress");
     assert_eq!(
         screen.status(),
-        " ⠋ Running cargo build … · 0s · Esc to interrupt"
+        " ⠋ Running cargo build… · 0s … · ctrl+b to run in background"
     );
     screen.command("c1", "cargo build\ncargo test", "completed");
 
-    // A long command is cut so that the time and Esc still show.
+    // In a narrow window the background shortcut stays whole.
     let long = format!("cargo test {}", "--package canter-tui ".repeat(5));
     screen.command("c2", &long, "inProgress");
     let status = screen.status();
     assert!(
-        status.starts_with(" ⠋ Running cargo test --package")
-            && status.ends_with("… · 0s · Esc to interrupt"),
+        status.starts_with(" ⠋ Running cargo test")
+            && status.ends_with(" · ctrl+b to run in background"),
         "{status:?}"
     );
     assert_eq!(status.width(), usize::from(WIDTH));
@@ -372,7 +372,7 @@ fn with_details_shown_both_hints_show_and_a_narrow_window_cuts_the_command_first
     );
     assert_eq!(
         screen.status(),
-        " ⠋ Running cargo build · 0s · Esc to interrupt · Details shown · Ctrl+O to fold"
+        " ⠋ Running cargo build · 0s · Esc to interrupt · ctrl+b to run in background · Ctrl+O to fold"
     );
 
     let long = format!("cargo test {}", "--package canter-tui ".repeat(5));
@@ -380,8 +380,10 @@ fn with_details_shown_both_hints_show_and_a_narrow_window_cuts_the_command_first
     screen.command("c2", &long, "inProgress");
     let status = screen.status();
     assert!(
-        status.starts_with(" ⠋ Running cargo test --package")
-            && status.ends_with("… · 0s · Esc to interrupt · Details shown · Ctrl+O to fold"),
+        status.starts_with(" ⠋ Running cargo test")
+            && status.ends_with(
+                "… · 0s · Esc to interrupt · ctrl+b to run in background · Ctrl+O to fold"
+            ),
         "{status:?}"
     );
     assert_eq!(status.width(), 100);
@@ -390,7 +392,7 @@ fn with_details_shown_both_hints_show_and_a_narrow_window_cuts_the_command_first
     screen.ui.backend_mut().resize(50, 20);
     assert_eq!(
         screen.status(),
-        " ⠋ Running cargo test … · 0s · Esc to interrupt"
+        " ⠋ Running cargo te… · ctrl+b to run in background"
     );
 }
 

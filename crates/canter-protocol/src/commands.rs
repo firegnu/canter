@@ -25,6 +25,11 @@ pub mod routes {
     pub const RESUME: &str = "/v1/sessions/{id}/resume";
     pub const INPUT: &str = "/v1/sessions/{id}/input";
     pub const SHELL_COMMAND: &str = "/v1/sessions/{id}/shellCommand";
+    pub const SHELL_BACKGROUND: &str = "/v1/sessions/{id}/shellBackground";
+    pub const BACKGROUND_COMMANDS: &str = "/v1/sessions/{id}/backgroundCommands";
+    pub const BACKGROUND_OUTPUT: &str = "/v1/sessions/{id}/backgroundCommands/{commandId}";
+    pub const BACKGROUND_STOP: &str = "/v1/sessions/{id}/backgroundCommands/{commandId}/stop";
+    pub const BACKGROUND_STOP_ALL: &str = "/v1/sessions/{id}/backgroundCommands/stop";
     pub const INTERRUPT: &str = "/v1/sessions/{id}/interrupt";
     pub const REQUEST: &str = "/v1/sessions/{id}/requests/{rid}";
     pub const COMPACT: &str = "/v1/sessions/{id}/compact";
@@ -36,6 +41,26 @@ pub mod routes {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct SessionPath {
     pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct BackgroundCommandListResponse {
+    pub data: Vec<crate::BackgroundCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellBackgroundParams {
+    pub item_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellBackgroundResponse {
+    #[ts(type = "number | null")]
+    pub command_id: Option<u64>,
+    #[ts(type = "number")]
+    pub event_seq: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

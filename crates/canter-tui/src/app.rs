@@ -87,6 +87,10 @@ pub enum Action {
     /// Send this text to the session.
     Send(String),
     ShellCommand(String),
+    ShellBackground(String),
+    BackgroundList,
+    BackgroundOutput(u64),
+    BackgroundStop(Option<u64>),
     SendImages {
         text: String,
         input: Vec<UserInput>,
@@ -473,6 +477,7 @@ struct ApprovalCursor {
 /// for one request never answers the next request.
 #[derive(Debug, Default, Clone, PartialEq)]
 struct Shown {
+    foreground: Option<String>,
     /// The request in the approval/question box; `None` for the message input.
     approval: Option<String>,
     /// Whether that box had room for its answers.
@@ -543,6 +548,7 @@ pub struct App {
     theme_missing: Option<String>,
     /// `/context`, `/files`, `/mcp` or `/skills`, open above the input box.
     report: Option<crate::report::Report>,
+    background_view: Option<u64>,
     /// Output tokens a second, for the `tps` item and the status command.
     tps: Tps,
     home: Option<String>,
@@ -844,6 +850,7 @@ impl App {
             themes_dir: None,
             theme_missing: None,
             report: None,
+            background_view: None,
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::messages(),
@@ -950,6 +957,10 @@ impl App {
         }
         self.restore_retracted();
         match &event.payload {
+            EventPayload::BackgroundCommandUpdated { .. } => {
+                self.history = History::default();
+                self.scroll.seen = Default::default();
+            }
             EventPayload::TurnRetracted { turn_id } => {
                 self.history = History::default();
                 self.scroll = Scroll::default();
@@ -1290,6 +1301,7 @@ impl App {
                 Err(error) => self.warning(&error),
             },
             KeyCode::Char('g') if ctrl => return Some(Action::ExternalEditor),
+            KeyCode::Char('b') if ctrl => return shown.foreground.map(Action::ShellBackground),
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.input.insert("\n")
             }
@@ -1662,6 +1674,15 @@ impl App {
         match key.code {
             KeyCode::Up if seen => chooser.selected = chooser.selected.saturating_sub(1),
             KeyCode::Down if seen => chooser.selected = (chooser.selected + 1).min(last),
+            KeyCode::Char('s') if seen && !send_guarded && key.modifiers.is_empty() => {
+                if let Some(commands::Choice {
+                    action: Action::BackgroundOutput(id),
+                    ..
+                }) = chooser.choices.get(chooser.selected)
+                {
+                    return Some(Action::BackgroundStop(Some(*id)));
+                }
+            }
             KeyCode::Enter if seen && !send_guarded => {
                 let chooser = self.chooser.take()?;
                 return chooser
@@ -1798,6 +1819,18 @@ impl App {
     /// closes it.
     fn report_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
         let report = self.report.as_mut()?;
+        if seen
+            && !send_guarded
+            && key.modifiers.is_empty()
+            && let Some(id) = self.background_view
+        {
+            match key.code {
+                KeyCode::Char('s') => return Some(Action::BackgroundStop(Some(id))),
+                KeyCode::Char('r') => return Some(Action::BackgroundOutput(id)),
+                KeyCode::Backspace => return Some(Action::BackgroundList),
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Up if seen => report.up(),
             KeyCode::Down if seen => report.down(),
@@ -2063,11 +2096,125 @@ impl App {
 
     /// Opens `report` above the input box, numbered like a choice.
     fn open_report(&mut self, report: crate::report::Report) {
+        self.background_view = None;
         self.choosers += 1;
         self.chooser = None;
         self.setup = None;
         self.close_theme_picker();
         self.report = Some(report);
+    }
+
+    pub fn show_background(
+        &mut self,
+        list: &canter_protocol::BackgroundCommandListResponse,
+        now_ms: i64,
+    ) {
+        if list.data.is_empty() {
+            self.open_report(crate::background::empty());
+        } else {
+            self.choose(crate::background::chooser(&list.data, now_ms));
+        }
+    }
+
+    pub fn show_background_output(&mut self, output: &canter_protocol::BackgroundCommandOutput) {
+        self.open_report(crate::background::output(output));
+        self.background_view = Some(output.command.id);
+    }
+
+    fn foreground_command(&self) -> Option<&str> {
+        if !self.snapshot.pending_requests.is_empty() {
+            return None;
+        }
+        self.snapshot
+            .turns
+            .iter()
+            .rev()
+            .filter(|turn| turn.status == TurnStatus::InProgress)
+            .flat_map(|turn| turn.items.iter().rev())
+            .find_map(|item| match item {
+                Item::CommandExecution {
+                    id,
+                    status: ItemStatus::InProgress,
+                    ..
+                } if !self
+                    .snapshot
+                    .background_commands
+                    .iter()
+                    .any(|command| command.item_id == *id) =>
+                {
+                    Some(id.as_str())
+                }
+                _ => None,
+            })
+    }
+
+    fn render_item(&self, item: &Item, done: bool, width: u16) -> Vec<Row> {
+        let background = item.id().and_then(|id| {
+            self.snapshot
+                .background_commands
+                .iter()
+                .find(|command| command.item_id == id)
+        });
+        let mut changed;
+        let shown = if let Some(background) = background {
+            changed = item.clone();
+            if let Item::CommandExecution {
+                status,
+                exit_code,
+                duration_ms,
+                ..
+            } = &mut changed
+            {
+                *status = if background.running {
+                    ItemStatus::InProgress
+                } else if background.exit_code == Some(0) {
+                    ItemStatus::Completed
+                } else {
+                    ItemStatus::Failed
+                };
+                *exit_code = background.exit_code;
+                *duration_ms = background
+                    .completed_at
+                    .map(|end| end.saturating_sub(background.started_at).max(0) as u64);
+            }
+            &changed
+        } else {
+            item
+        };
+        let mut rows = cells::item(
+            shown,
+            done,
+            self.details,
+            &self.snapshot.settings.cwd,
+            width,
+            item.id()
+                .and_then(|id| self.snapshot.approval_feedback.get(id))
+                .map(String::as_str),
+        );
+        if let Some(background) = background {
+            let text = if background.running {
+                format!("Background #{} · 后台运行中", background.id)
+            } else {
+                format!(
+                    "Background #{} finished: {} · exit code: {}",
+                    background.id,
+                    background.command,
+                    background
+                        .exit_code
+                        .map_or_else(|| "unknown".into(), |code| code.to_string())
+                )
+            };
+            rows.extend(wrap_rows(
+                &cells::notice("    ", &text, theme::secondary()),
+                width,
+            ));
+        } else if item.id().is_some() && item.id() == self.foreground_command() {
+            rows.extend(wrap_rows(
+                &cells::notice("    ", "ctrl+b to run in background", theme::secondary()),
+                width,
+            ));
+        }
+        rows
     }
 
     /// [`App::handle_mouse_at`] now.
@@ -3150,16 +3297,7 @@ impl App {
                 // Already shown as the turn's prompt, or hidden by configuration.
                 Vec::new()
             } else {
-                cells::item(
-                    item,
-                    true,
-                    self.details,
-                    &self.snapshot.settings.cwd,
-                    width,
-                    item.id()
-                        .and_then(|id| self.snapshot.approval_feedback.get(id))
-                        .map(String::as_str),
-                )
+                self.render_item(item, true, width)
             };
             let next = Place {
                 item: at.item + 1,
@@ -3298,6 +3436,7 @@ impl App {
             self.search = None;
         }
         self.drawing = Shown {
+            foreground: self.foreground_command().map(str::to_owned),
             approval: approval.as_ref().map(|(request, _)| request.clone()),
             answers: approval.as_ref().is_some_and(|(_, laid)| laid.fits),
             custom_input: approval.as_ref().is_some_and(|(id, _)| {
@@ -3352,7 +3491,27 @@ impl App {
 
         let plan_room = usize::from(height.saturating_sub(3 + INFO_ROWS + bottom.height()))
             .saturating_sub(list.len());
-        let plan = crate::plan::pinned(&self.snapshot, width, plan_room);
+        let background_count = self
+            .snapshot
+            .background_commands
+            .iter()
+            .filter(|command| command.running)
+            .count();
+        let mut plan = Vec::new();
+        if background_count > 0 && plan_room > 0 {
+            plan.push(Line::from(truncate(
+                vec![Span::styled(
+                    format!("  {background_count} background commands · /ps"),
+                    theme::secondary(),
+                )],
+                usize::from(width),
+            )));
+        }
+        plan.extend(crate::plan::pinned(
+            &self.snapshot,
+            width,
+            plan_room.saturating_sub(plan.len()),
+        ));
 
         self.edge_scroll(now_ms);
         self.extend_history(width);
@@ -4208,16 +4367,7 @@ impl App {
                 let new = if !done && item.id().is_some_and(|id| waiting.contains(&id)) {
                     cells::waiting(item, self.details, cwd, width)
                 } else {
-                    cells::item(
-                        item,
-                        done,
-                        self.details,
-                        cwd,
-                        width,
-                        item.id()
-                            .and_then(|id| self.snapshot.approval_feedback.get(id))
-                            .map(String::as_str),
-                    )
+                    self.render_item(item, done, width)
                 };
                 let part = (Part::At(at), self.kind(at));
                 push_part(&mut rows, &mut parts, &mut tail, part, new);
@@ -4279,15 +4429,28 @@ impl App {
     /// them. While working, when the window is too narrow, a running command
     /// is cut first; then the Ctrl+O hint is left out.
     fn status_line(&self, now_ms: i64, width: u16, steer: bool) -> Line<'static> {
-        const FOLD: &str = " · Details shown · Ctrl+O to fold";
+        const BACKGROUND: &str = " · ctrl+b to run in background";
         let width = usize::from(width);
-        let room = width.saturating_sub(if self.details { str_width(FOLD) } else { 0 });
+        let foreground = self.foreground_command().is_some();
+        let fold = if foreground {
+            " · Ctrl+O to fold"
+        } else {
+            " · Details shown · Ctrl+O to fold"
+        };
+        let room = width
+            .saturating_sub(if self.details { str_width(fold) } else { 0 })
+            .saturating_sub(if foreground { str_width(BACKGROUND) } else { 0 });
         let (mut line, doing) = self.activity(now_ms, room, steer);
+        if foreground {
+            line.spans = truncate(line.spans, width.saturating_sub(str_width(BACKGROUND)));
+            line.spans
+                .push(Span::styled(BACKGROUND, theme::secondary()));
+        }
         if self.details {
             let text = if line.spans.is_empty() {
-                &FOLD[" ·".len()..]
+                &fold[" ·".len()..]
             } else {
-                FOLD
+                fold
             };
             // Other lines are as before: cut at the edge of the window.
             if !doing || line.width() + str_width(text) <= width {

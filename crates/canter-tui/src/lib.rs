@@ -15,6 +15,7 @@
 
 mod app;
 mod approval;
+mod background;
 mod btw;
 mod cells;
 pub mod client;

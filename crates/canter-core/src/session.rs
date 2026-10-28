@@ -413,6 +413,7 @@ impl Session {
         state
             .complete_missing_tools("No result: the server stopped and this turn was interrupted")
             .await?;
+        state.recover_background().await?;
         state.cancel_requests().await?;
         let unfinished = state
             .journal
@@ -538,6 +539,9 @@ impl Session {
     }
 
     fn from_state(state: State, tools: Tools, model: Arc<dyn Model>, options: CoreOptions) -> Self {
+        tools
+            .background()
+            .restore(&state.journal.snapshot.background_commands);
         let lifetime = CancellationToken::new();
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
@@ -546,6 +550,7 @@ impl Session {
             options,
             lifetime: lifetime.clone(),
         });
+        crate::background::watch(&shared);
         Self {
             shared,
             _lifetime: Arc::new(Lifetime(lifetime)),
@@ -1063,6 +1068,10 @@ impl Session {
         };
         if let Some(done) = btw_done {
             stopped = stopped.and(wait_done(done).await.map(|_| ()));
+        }
+        self.shared.tools.background().stop_all().await;
+        if !self.shared.state.lock().await.journal.failed {
+            self.shared.sync_background().await?;
         }
         let mut state = self.shared.state.lock().await;
         if stopped.is_err() || state.journal.failed {

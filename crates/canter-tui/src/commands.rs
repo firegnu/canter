@@ -183,6 +183,18 @@ pub(crate) const COMMANDS: &[Command] = &[
         },
     },
     Command {
+        name: "ps",
+        about: "List background commands and inspect or stop one",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::BackgroundList)),
+    },
+    Command {
+        name: "stop",
+        about: "Stop all background commands in this session",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::BackgroundStop(None))),
+    },
+    Command {
         name: "theme",
         about: "Choose the code colour theme",
         takes_args: false,

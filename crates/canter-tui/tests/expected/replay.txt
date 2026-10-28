@@ -24,7 +24,6 @@
  deepseek-chat · think high · Always ask
  ~/canter
 == 第 21 条事件后，屏幕 ==
-
   Thought for <1s: 用户想把 README 的安装步骤换成 cargo install。先读 README 看…
 
   先看一下 README 现在怎么写的。
@@ -42,14 +41,14 @@
     ┃    Compiling proc-macro2 v1.0.101
     ┃    Compiling unicode-ident v1.0.19
     ┃    Compiling libc v0.2.177
- ⠋ Running cargo build · 0s · Esc to interrupt
+      ctrl+b to run in background
+ ⠋ Running cargo build · 0s · Esc to interrupt · ctrl+b to run in background
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
  deepseek-chat · think high · Always ask
  ~/canter
 == 第 23 条事件后，屏幕 ==
-  先看一下 README 现在怎么写的。
 
   ◇ Read README.md  lines 1–21
 
@@ -67,7 +66,8 @@
     ┃    Compiling serde_derive v1.0.228
     ┃    Compiling serde_json v1.0.145
     ┃    Compiling canter-protocol v0.1.0 (/home/dev/canter/crates/canter-proto…
- ⠋ Running cargo build · 0s · Esc to interrupt
+      ctrl+b to run in background
+ ⠋ Running cargo build · 0s · Esc to interrupt · ctrl+b to run in background
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯

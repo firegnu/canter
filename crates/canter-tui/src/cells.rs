@@ -151,6 +151,20 @@ pub(crate) fn item(
     feedback: Option<&str>,
 ) -> Vec<Row> {
     let mut rows = match item {
+        Item::BackgroundCommandAction {
+            command_id,
+            action,
+            result,
+            status,
+            ..
+        } => mcp_call(
+            &format!("shell_{action} #{command_id}"),
+            &serde_json::Value::Null,
+            *status,
+            result,
+            details,
+            width,
+        ),
         Item::PlanProposal {
             plan,
             answer,

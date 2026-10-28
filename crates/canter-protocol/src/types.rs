@@ -103,6 +103,9 @@ pub struct SessionSnapshot {
     #[ts(type = "number")]
     pub updated_at: i64,
     pub turns: Vec<Turn>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
+    pub background_commands: Vec<BackgroundCommand>,
     pub pending_requests: Vec<PendingRequest>,
     /// User feedback from declined approvals, keyed by tool item ID.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -136,6 +139,7 @@ impl SessionSnapshot {
             created_at: 0,
             updated_at: 0,
             turns: Vec::new(),
+            background_commands: Vec::new(),
             pending_requests: Vec::new(),
             approval_feedback: Default::default(),
             queued_inputs: Vec::new(),
@@ -290,6 +294,14 @@ pub struct PlanStep {
     rename_all_fields = "camelCase"
 )]
 pub enum Item {
+    BackgroundCommandAction {
+        id: String,
+        #[ts(type = "number")]
+        command_id: u64,
+        action: String,
+        result: String,
+        status: ItemStatus,
+    },
     PlanProposal {
         id: String,
         plan: String,
@@ -390,6 +402,30 @@ pub enum ExecCommandSource {
     Unknown,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundCommand {
+    #[ts(type = "number")]
+    pub id: u64,
+    pub item_id: String,
+    pub command: String,
+    #[ts(type = "number")]
+    pub started_at: i64,
+    #[ts(type = "number | null")]
+    pub completed_at: Option<i64>,
+    pub running: bool,
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundCommandOutput {
+    pub command: BackgroundCommand,
+    pub output: String,
+    #[ts(type = "number")]
+    pub skipped_bytes: u64,
+}
+
 impl ExecCommandSource {
     fn is_agent(&self) -> bool {
         *self == Self::Agent
@@ -399,6 +435,7 @@ impl ExecCommandSource {
 impl Item {
     pub fn id(&self) -> Option<&str> {
         match self {
+            Self::BackgroundCommandAction { id, .. } => Some(id),
             Self::UserMessage { id, .. }
             | Self::Plan { id, .. }
             | Self::PlanProposal { id, .. }

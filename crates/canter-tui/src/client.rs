@@ -46,6 +46,56 @@ pub struct Client {
 }
 
 impl Client {
+    pub async fn background_commands(
+        &self,
+        session: &str,
+    ) -> Result<canter_protocol::BackgroundCommandListResponse, ClientError> {
+        decode(
+            self.http
+                .get(url(routes::BACKGROUND_COMMANDS, &[session]))
+                .send()
+                .await?,
+        )
+        .await
+    }
+    pub async fn background_output(
+        &self,
+        session: &str,
+        id: u64,
+    ) -> Result<canter_protocol::BackgroundCommandOutput, ClientError> {
+        decode(
+            self.http
+                .get(url(routes::BACKGROUND_OUTPUT, &[session, &id.to_string()]))
+                .send()
+                .await?,
+        )
+        .await
+    }
+    pub async fn background_stop(
+        &self,
+        session: &str,
+        id: Option<u64>,
+    ) -> Result<canter_protocol::BackgroundCommandListResponse, ClientError> {
+        let endpoint = match id {
+            Some(id) => url(routes::BACKGROUND_STOP, &[session, &id.to_string()]),
+            None => url(routes::BACKGROUND_STOP_ALL, &[session]),
+        };
+        decode(self.http.post(endpoint).send().await?).await
+    }
+    pub async fn shell_background(
+        &self,
+        session: &str,
+        item_id: String,
+    ) -> Result<canter_protocol::ShellBackgroundResponse, ClientError> {
+        decode(
+            self.http
+                .post(url(routes::SHELL_BACKGROUND, &[session]))
+                .json(&canter_protocol::ShellBackgroundParams { item_id })
+                .send()
+                .await?,
+        )
+        .await
+    }
     pub async fn info(&self) -> Result<canter_protocol::InfoResponse, ClientError> {
         decode(self.http.get(url(routes::INFO, &[])).send().await?).await
     }

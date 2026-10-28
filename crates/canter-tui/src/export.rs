@@ -136,7 +136,28 @@ impl Body {
                 .id()
                 .and_then(|id| snapshot.approval_feedback.get(id))
                 .map(String::as_str);
-            self.item(item, cwd, feedback);
+            let mut shown = item.clone();
+            if let Item::CommandExecution {
+                id,
+                status,
+                exit_code,
+                ..
+            } = &mut shown
+                && let Some(command) = snapshot
+                    .background_commands
+                    .iter()
+                    .find(|command| command.item_id == *id)
+            {
+                *status = if command.running {
+                    ItemStatus::InProgress
+                } else if command.exit_code == Some(0) {
+                    ItemStatus::Completed
+                } else {
+                    ItemStatus::Failed
+                };
+                *exit_code = command.exit_code;
+            }
+            self.item(&shown, cwd, feedback);
         }
         match turn.status {
             TurnStatus::Interrupted => self.block("Assistant", "_Interrupted_"),
@@ -153,6 +174,17 @@ impl Body {
     fn item(&mut self, item: &Item, cwd: &str, feedback: Option<&str>) {
         let assistant = "Assistant";
         match item {
+            Item::BackgroundCommandAction {
+                command_id,
+                action,
+                result,
+                ..
+            } => {
+                self.block(
+                    assistant,
+                    &tool(&format!("shell_{action} #{command_id}"), result, ""),
+                );
+            }
             Item::PlanProposal {
                 plan,
                 answer,
@@ -727,6 +759,50 @@ _Failed: model unreachable_
             text.contains("**Tool** · Ran `diff a b` · failed, exit 1\n"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn background_export_uses_process_state_instead_of_tool_call_state() {
+        let mut snapshot = snapshot(
+            None,
+            vec![turn(
+                "t1",
+                "go",
+                vec![Item::CommandExecution {
+                    id: "c1".into(),
+                    source: Default::default(),
+                    command: "long-test".into(),
+                    cwd: "/work/proj".into(),
+                    status: ItemStatus::Completed,
+                    aggregated_output: "ready".into(),
+                    exit_code: None,
+                    duration_ms: Some(1000),
+                }],
+            )],
+        );
+        snapshot
+            .background_commands
+            .push(canter_protocol::BackgroundCommand {
+                id: 1,
+                item_id: "c1".into(),
+                command: "long-test".into(),
+                started_at: 0,
+                completed_at: None,
+                running: true,
+                exit_code: None,
+            });
+        assert!(
+            markdown(&snapshot, "now")
+                .unwrap()
+                .contains("Ran `long-test` · running")
+        );
+        let command = &mut snapshot.background_commands[0];
+        command.running = false;
+        command.exit_code = Some(7);
+        command.completed_at = Some(2000);
+        let text = markdown(&snapshot, "now").unwrap();
+        assert!(text.contains("Ran `long-test` · failed, exit 7"), "{text}");
+        assert!(!text.contains("running"));
     }
 
     #[test]

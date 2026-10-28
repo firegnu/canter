@@ -1,6 +1,20 @@
 # canter-protocol
 
 只有公开协议类型、事件归并和类型导出；没有网络服务或 agent 循环。
+
+后台命令：快照可选 `backgroundCommands`（旧数据默认空）；`backgroundCommand.updated`
+事件更新其中按 id 对应的状态，`itemId` 关联原 `commandExecution` 卡片。工具调用完成后进程可以仍运行。
+后台 shell 的 `item.completed` 使用 `status: completed`、`exitCode: null` 表示调用返回；进程状态及退出码以 `backgroundCommands` 为准，终端和导出按 itemId 叠加。启动失败仍使用失败态，不产生后台状态或完成通知。
+后台开始和结束有事件，日志仅在服务端保留最近 1 MiB，不持续追加进事件文件。
+`GET /v1/sessions/{id}/backgroundCommands` 返回 `{data:[...]}`；
+`GET .../backgroundCommands/{commandId}` 返回 `{command, output, skippedBytes}`，不消费模型日志游标；
+`POST .../backgroundCommands/{commandId}/stop` 或 `POST .../backgroundCommands/stop` 停单条或全部，返回列表。
+`POST .../shellBackground {itemId}` 将指定前台命令转后台，回复 `{commandId, eventSeq}`；
+命令已结束或 id 过期时 commandId 为 null，不会影响后来执行的命令；超过 8 条返回 conflict。
+编号会话内从 1 起单调增加；startedAt/completedAt 为 Unix 毫秒，running 与可空 exitCode 表达状态。
+服务端重启只恢复状态，不恢复进程和日志，残留运行条目转为已退出、退出码未知。
+已完成命令仅最近 8 条保留日志，更早的输出回复说明已丢弃；重启后模型工具与 HTTP 均返回已恢复状态及输出不可用的说明。
+新增 `backgroundCommandAction` 项目记录 shell_output / shell_stop 的有界结果；旧客户端跳过新项目和事件。
 参考 Codex app-server v2 `rust-v0.163.0` 的稳定结构及字段名，独立编写，未复制源码。
 
 ## HTTP 对照

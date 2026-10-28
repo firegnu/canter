@@ -23,6 +23,8 @@ pub struct Event {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum EventPayload {
+    #[serde(rename = "backgroundCommand.updated")]
+    BackgroundCommandUpdated { command: crate::BackgroundCommand },
     #[serde(rename = "session.rewound")]
     SessionRewound {
         before_turn_id: String,

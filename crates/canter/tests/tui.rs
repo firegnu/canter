@@ -956,7 +956,9 @@ async fn ask_user_second_option_returns_to_the_model_and_continues() {
                 "ask_user",
                 "web_fetch",
                 "update_plan",
-                "submit_plan"
+                "submit_plan",
+                "shell_output",
+                "shell_stop"
             ]
         );
     }
@@ -1308,6 +1310,138 @@ fn shell_reply(command: &str) -> String {
             "function":{"name":"shell","arguments":arguments}
         }]},"finish_reason":"tool_calls"}]})
     )
+}
+
+#[tokio::test]
+async fn killing_server_with_sigkill_also_kills_background_process_groups() {
+    struct Cleanup(Vec<i32>);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            for pid in &self.0 {
+                let _ = nix::sys::signal::killpg(Pid::from_raw(*pid), Signal::SIGKILL);
+            }
+        }
+    }
+    let mut world = World::new(Vec::new()).await;
+    world.start_server().await;
+    let terminal = world.open(&["--yolo"], "guard-test").await;
+    terminal.wait_idle().await;
+    terminal
+        .type_line("!echo $$ > leader.pid; /bin/sleep 60 & echo $! > child.pid; printf guard-ready; wait &")
+        .await;
+    terminal.wait_for("1 background commands · /ps").await;
+    terminal.wait_for("┃ guard-ready").await;
+    let leader: i32 = fs::read_to_string(world.path("work/leader.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let child: i32 = fs::read_to_string(world.path("work/child.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let mut cleanup = Cleanup(vec![leader]);
+    terminal.quit().await;
+    world.stop_server(Signal::SIGKILL).await;
+    let gone = tokio::time::timeout(Duration::from_secs(2), async {
+        while kill(Pid::from_raw(leader), None) != Err(Errno::ESRCH)
+            || kill(Pid::from_raw(child), None) != Err(Errno::ESRCH)
+            || nix::sys::signal::killpg(Pid::from_raw(leader), None) != Err(Errno::ESRCH)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        gone.is_ok(),
+        "server SIGKILL must remove the command's entire group within two seconds"
+    );
+    cleanup.0.clear();
+}
+
+#[tokio::test]
+async fn background_shell_controls_work_through_terminal_and_survive_client_exit() {
+    struct Cleanup(Vec<PathBuf>);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            for path in &self.0 {
+                if let Ok(text) = fs::read_to_string(path)
+                    && let Ok(pid) = text.trim().parse::<i32>()
+                {
+                    let _ = nix::sys::signal::killpg(Pid::from_raw(pid), Signal::SIGKILL);
+                }
+            }
+        }
+    }
+    let mut world = World::new(vec![
+        shell_reply("echo $$ > model.pid; printf model-ready; exec /bin/sleep 60"),
+        text_reply("continued after backgrounding"),
+    ])
+    .await;
+    let mut cleanup = Cleanup(vec![
+        world.path("work/user.pid"),
+        world.path("work/model.pid"),
+    ]);
+    world.start_server().await;
+    let a = world.open(&["--yolo"], "background-a").await;
+    a.wait_idle().await;
+    a.type_line("!echo $$ > user.pid; printf user-ready; exec /bin/sleep 60 &")
+        .await;
+    a.wait_for("1 background commands · /ps").await;
+    a.wait_for("user-ready").await;
+    let id = world.only_session().await;
+    let b = world.open(&["--resume", &id], "background-b").await;
+    b.wait_for("后台运行中").await;
+    assert_eq!(a.quit().await, id);
+    assert!(world.snapshot(&id).await.background_commands[0].running);
+    b.type_line("/ps").await;
+    b.wait_for("Background commands · s stop").await;
+    b.press(KeyCode::Enter).await;
+    b.wait_for("s stop · r refresh").await;
+    assert!(b.screen().contains("user-ready"));
+    b.press(KeyCode::Char('s')).await;
+    b.wait_for("exit code:").await;
+    b.press(KeyCode::Esc).await;
+    b.wait_idle().await;
+    let user_pid: i32 = fs::read_to_string(world.path("work/user.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(kill(Pid::from_raw(user_pid), None), Err(Errno::ESRCH));
+    cleanup.0.remove(0);
+    assert!(world.requests.lock().unwrap().is_empty());
+
+    b.type_line("start model command").await;
+    b.wait_for("ctrl+b to run in background").await;
+    // Match streamed output, not the command text shown before spawn completes.
+    b.wait_for("┃ model-ready").await;
+    b.press_with(KeyCode::Char('b'), KeyModifiers::CONTROL)
+        .await;
+    b.wait_for("continued after backgrounding").await;
+    b.wait_for("1 background commands · /ps").await;
+    b.type_line("/stop").await;
+    b.wait_for("Background commands · s stop").await;
+    assert!(
+        world
+            .snapshot(&id)
+            .await
+            .background_commands
+            .iter()
+            .all(|command| !command.running)
+    );
+    b.press(KeyCode::Esc).await;
+    b.wait_idle().await;
+    b.quit().await;
+    let model_pid: i32 = fs::read_to_string(world.path("work/model.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(kill(Pid::from_raw(model_pid), None), Err(Errno::ESRCH));
+    cleanup.0.clear();
+    world.stop_server(Signal::SIGTERM).await;
 }
 
 #[tokio::test]
@@ -2553,11 +2687,11 @@ async fn shift_tab_cycles_the_permission_mode() {
     let id = world.only_session().await;
 
     for (mode, shown) in [
-        (PermissionMode::AllowAll, "Plan"),
+        (PermissionMode::AllowAll, "Plan (then Allow all)"),
         (PermissionMode::AlwaysAsk, "Always ask"),
         (PermissionMode::AskForExecution, "Ask for execution"),
         (PermissionMode::AllowAll, "Allow all"),
-        (PermissionMode::AllowAll, "Plan"),
+        (PermissionMode::AllowAll, "Plan (then Allow all)"),
         (PermissionMode::AlwaysAsk, "Always ask"),
     ] {
         a.press_with(KeyCode::BackTab, KeyModifiers::SHIFT).await;
@@ -2566,7 +2700,7 @@ async fn shift_tab_cycles_the_permission_mode() {
         assert_eq!(world.snapshot(&id).await.settings.approval_policy, mode);
         assert_eq!(
             world.snapshot(&id).await.settings.plan_mode,
-            shown == "Plan"
+            shown == "Plan (then Allow all)"
         );
     }
     assert_eq!(a.quit().await, id);
@@ -2953,7 +3087,9 @@ async fn plan_approval_implements_in_place_or_starts_the_plan_in_a_fresh_session
         let source = world.only_session().await;
         terminal.type_line("/plan").await;
         terminal
-            .wait_until("Plan status", |t| t.info().contains(" · Plan ·"))
+            .wait_until("Plan status", |t| {
+                t.info().contains(" · Plan (then Always ask) ·")
+            })
             .await;
         terminal.type_line("Plan this change.").await;
         terminal.wait_for("Implement this plan?").await;
