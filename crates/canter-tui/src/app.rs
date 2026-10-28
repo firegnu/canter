@@ -3516,6 +3516,12 @@ impl App {
             Some(search) => (&search.query, FIND, ""),
             None => (&self.input, "› ", PLACEHOLDER),
         };
+        // A `!` command, by the rule Enter runs it by: a red border, and the
+        // `!` red where the box shows it (a folded paste can hide it).
+        let shell = self.search.is_none() && input.full_text().trim_start().starts_with('!');
+        let bang = shell
+            .then(|| input.text().len() - input.text().trim_start().len())
+            .filter(|&at| input.text()[at..].starts_with('!'));
         // The prompt's columns past those of `› `, which INPUT_CHROME counts.
         let extra = str_width(prompt) - 2;
         let input_width = usize::from(width.saturating_sub(INPUT_CHROME)).saturating_sub(extra);
@@ -3541,6 +3547,11 @@ impl App {
             let mut spans = vec![Span::raw(" "), Span::styled(prompt, theme::accent().bold())];
             if input.is_empty() {
                 spans.push(Span::styled(placeholder, theme::secondary()));
+            } else if let Some(at) = bang.filter(|at| range.contains(at)) {
+                let text = input.text();
+                spans.push(Span::raw(text[range.start..at].to_owned()));
+                spans.push(Span::styled("!", theme::shell()));
+                spans.push(Span::raw(text[at + 1..range.end].to_owned()));
             } else {
                 spans.push(Span::raw(input.text()[range.clone()].to_owned()));
             }
@@ -3556,7 +3567,14 @@ impl App {
             1 + (layout.cursor.0 - first) as u16,
         );
         let shown = layout.rows[first..].iter().take(MAX_INPUT_ROWS).cloned();
-        (Bottom::Input { rows, cursor }, shown.collect())
+        (
+            Bottom::Input {
+                rows,
+                cursor,
+                shell,
+            },
+            shown.collect(),
+        )
     }
 
     fn input_width(&self) -> usize {
@@ -4329,6 +4347,8 @@ enum Bottom {
         rows: Vec<Line<'static>>,
         /// Cursor inside the box, relative to the box's top-left corner.
         cursor: (u16, u16),
+        /// The draft is a `!` command: the border is red.
+        shell: bool,
     },
     Approval(ApprovalBox),
 }
@@ -4377,12 +4397,21 @@ impl View {
         let boxed = row(self.bottom.height());
         let info = row(INFO_ROWS);
         match self.bottom {
-            Bottom::Input { rows, cursor } => {
+            Bottom::Input {
+                rows,
+                cursor,
+                shell,
+            } => {
+                let border = if shell {
+                    theme::shell()
+                } else {
+                    theme::secondary()
+                };
                 frame.render_widget(
                     Paragraph::new(rows).block(
                         Block::bordered()
                             .border_type(BorderType::Rounded)
-                            .border_style(theme::secondary()),
+                            .border_style(border),
                     ),
                     boxed,
                 );
