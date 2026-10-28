@@ -14,6 +14,9 @@ pub(crate) struct InputBox {
     /// Folded pastes: the marker and the full text it stands for.
     pastes: Vec<(String, String)>,
     paste_number: usize,
+    /// The message box, not the search box: a draft that is a `!` command
+    /// puts it in shell mode.
+    shell: bool,
 }
 
 /// A paste over this many lines or characters folds into a marker.
@@ -35,6 +38,31 @@ pub(crate) struct InputLayout {
 }
 
 impl InputBox {
+    /// The message box, where a `!` command puts the box in shell mode.
+    pub fn messages() -> Self {
+        Self {
+            shell: true,
+            ..Self::default()
+        }
+    }
+
+    /// In shell mode, where the text after the `!` starts: the `!` and the
+    /// blanks before it are drawn as the prompt, not in the text, and the
+    /// cursor stays past them. 0 otherwise.
+    pub fn start(&self) -> usize {
+        let blanks = self.text.len() - self.text.trim_start().len();
+        if self.shell && self.text[blanks..].starts_with('!') {
+            blanks + 1
+        } else {
+            0
+        }
+    }
+
+    /// Keeps the cursor past the `!` of shell mode.
+    fn settle(&mut self) {
+        self.cursor = self.cursor.max(self.start());
+    }
+
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -53,6 +81,7 @@ impl InputBox {
     pub fn replace(&mut self, range: Range<usize>, with: &str, cursor: usize) {
         self.cursor = range.start + cursor;
         self.text.replace_range(range, with);
+        self.settle();
     }
 
     /// The draft with folded pastes in full; image markers stay.
@@ -261,10 +290,21 @@ impl InputBox {
         let clean = clean(text);
         self.text.insert_str(self.cursor, &clean);
         self.cursor += clean.len();
+        self.settle();
     }
 
-    /// Deletes the character before the cursor, or the whole marker.
+    /// Deletes the character before the cursor, or the whole marker. Right
+    /// past the `!` of shell mode it leaves shell mode when nothing else is
+    /// typed, and otherwise does nothing, so a command does not become a
+    /// message.
     pub fn backspace(&mut self) {
+        let start = self.start();
+        if start > 0 && self.cursor == start {
+            if self.text.len() == start {
+                self.clear();
+            }
+            return;
+        }
         if let Some(c) = self.text[..self.cursor].chars().next_back() {
             self.remove(self.cursor - c.len_utf8()..self.cursor);
         }
@@ -284,6 +324,7 @@ impl InputBox {
         } else if let Some(c) = self.text[..self.cursor].chars().next_back() {
             self.cursor -= c.len_utf8();
         }
+        self.settle();
     }
 
     /// One character right; over a marker in one step.
@@ -296,7 +337,13 @@ impl InputBox {
     }
 
     pub fn home(&mut self) {
-        self.cursor = self.text[..self.cursor].rfind('\n').map_or(0, |i| i + 1);
+        self.cursor = self.line_start();
+    }
+
+    /// Where the cursor's line starts, past the `!` of shell mode.
+    fn line_start(&self) -> usize {
+        let start = self.text[..self.cursor].rfind('\n').map_or(0, |i| i + 1);
+        start.max(self.start())
     }
 
     pub fn end(&mut self) {
@@ -336,8 +383,8 @@ impl InputBox {
     /// Ctrl+U: to the start of the line, or the newline before it when
     /// already there.
     pub fn delete_to_line_start(&mut self) {
-        let line_start = self.text[..self.cursor].rfind('\n').map_or(0, |i| i + 1);
-        if line_start == self.cursor && line_start > 0 {
+        let line_start = self.line_start();
+        if line_start == self.cursor && line_start > self.start() {
             self.remove(self.cursor - 1..self.cursor);
         } else {
             self.remove(line_start..self.cursor);
@@ -377,7 +424,8 @@ impl InputBox {
     }
 
     /// Where the word before the cursor starts: past the separators, then
-    /// past one run of the same kind; a marker is one word.
+    /// past one run of the same kind; a marker is one word. Never before
+    /// the `!` of shell mode.
     fn word_start(&self) -> usize {
         let markers = self.markers();
         let mut p = self.cursor;
@@ -397,7 +445,7 @@ impl InputBox {
         {
             p -= c.len_utf8();
         }
-        p
+        p.max(self.start())
     }
 
     /// Where the word after the cursor ends, like [`Self::word_start`].
@@ -487,13 +535,15 @@ impl InputBox {
         };
     }
 
+    /// In shell mode the rows start past the `!`.
     pub fn layout(&self, width: usize) -> InputLayout {
         let width = width.max(1);
+        let hidden = self.start();
         let mut rows = Vec::new();
-        let mut start = 0;
+        let mut start = hidden;
         let mut used = 0;
         let mut cursor = None;
-        for (i, c) in self.text.char_indices() {
+        for (i, c) in self.text.char_indices().skip_while(|&(i, _)| i < hidden) {
             if c == '\n' {
                 if i == self.cursor {
                     cursor = Some((rows.len(), used));

@@ -4,6 +4,10 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-28 第十三次装 main `2302c00`（`canter --version` 显示 `canter 0.1.0 · 2302c00`；比上一版多 P2-112 `!` 做成 shell 模式：品红、提示符换成 `!`、下边框 `! for shell mode`）。只改了终端，没重启服务端（还是 `9eb44dd` 起的那个）。
+- 退回上一版 `d69e2f7`：旧程序备份在 `~/.canter/canter-d69e2f7`，`cp -p ~/.canter/canter-d69e2f7 ~/.cargo/bin/canter`，重开终端即可。只改了终端，新旧互相读没问题。
+- 10-28 第十二次装 main `d69e2f7`（`canter --version` 显示 `canter 0.1.0 · d69e2f7`；比上一版多 P2-111 `!` 命令在输入框和对话卡片里标红）。只改了终端，服务端代码没变，没重启服务端（还是 `9eb44dd` 起的那个，不影响）。
+- 退回上一版 `9eb44dd`：旧程序备份在 `~/.canter/canter-9eb44dd`，`cp -p ~/.canter/canter-9eb44dd ~/.cargo/bin/canter`，重开终端即可。只改了终端，新旧互相读没问题。
 - 10-27 第十一次装 main `9eb44dd`（`canter --version` 显示 `canter 0.1.0 · 9eb44dd`；比上一版多 P2-100 全局说明改读 `~/.canter/AGENTS.md`，不再读 `~/.agents/AGENTS.md`）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。`~/.canter/AGENTS.md` 是从 `~/.codex/AGENTS.md` 复制的一份（10-27，用户要用自己实际用的），两份各自独立，改一份另一份不跟着变。
 - 退回上一版 `b78205d`：旧程序备份在 `~/.canter/canter-b78205d`，`cp -p ~/.canter/canter-b78205d ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版读 `~/.agents/AGENTS.md`（现在没有这个文件），不读 `~/.canter/AGENTS.md`。
 - 10-27 第十次装过 main `b78205d`（`canter --version` 显示 `canter 0.1.0 · b78205d`；比上一版多 P2-95 搜不到不画成失败和提示词加 rg、P2-25 输入历史、P2-31 外部编辑器 Ctrl+G、P2-27 做完提醒、P2-26 `!` 直接跑命令、P2-97 干活时 Tab 插队、P2-99 打断时排队的消息放回输入框）。服务端已换新版（`canter serve --replace`，nohup 起在后台）。
