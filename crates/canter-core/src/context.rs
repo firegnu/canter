@@ -394,6 +394,7 @@ mod tests {
             Arc::new(canter_store::Store::new(temp.path().join("state")).unwrap()),
             "context".into(),
             SessionSettings {
+                plan_enabled: None,
                 cwd: temp.path().to_string_lossy().into_owned(),
                 name: None,
                 model: "deepseek-flash".into(),

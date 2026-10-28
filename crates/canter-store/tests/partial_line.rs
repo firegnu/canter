@@ -11,6 +11,7 @@ fn an_incomplete_last_line_is_discarded_before_further_appends() {
         .create(
             "s1",
             SessionSettings {
+                plan_enabled: None,
                 cwd: temp.path().to_string_lossy().into(),
                 name: Some("intact".into()),
                 model: "fake".into(),

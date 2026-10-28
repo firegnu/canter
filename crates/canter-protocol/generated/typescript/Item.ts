@@ -2,11 +2,12 @@
 import type { ExecCommandSource } from "./ExecCommandSource";
 import type { FileUpdateChange } from "./FileUpdateChange";
 import type { ItemStatus } from "./ItemStatus";
+import type { PlanStep } from "./PlanStep";
 import type { UserInput } from "./UserInput";
 import type { UserInputAnswer } from "./UserInputAnswer";
 import type { JsonValue } from "./serde_json/JsonValue";
 
-export type Item = { "type": "userMessage", id: string, content: Array<UserInput>, } | { "type": "agentMessage", id: string, text: string, } | { "type": "reasoning", id: string, summary: Array<string>, content: Array<string>,
+export type Item = { "type": "plan", id: string, explanation?: string, plan: Array<PlanStep>, status: ItemStatus, } | { "type": "userMessage", id: string, content: Array<UserInput>, } | { "type": "agentMessage", id: string, text: string, } | { "type": "reasoning", id: string, summary: Array<string>, content: Array<string>,
 /**
  * Thinking time from `item.started` up to its latest delta, filled by
  * the reducer; absent means unknown. Not in Codex.

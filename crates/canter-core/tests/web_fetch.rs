@@ -160,6 +160,7 @@ async fn create_with(
         store,
         "fetch".into(),
         SessionSettings {
+            plan_enabled: None,
             cwd: temp.path().to_string_lossy().into(),
             name: None,
             model: "fake".into(),
@@ -257,7 +258,15 @@ async fn model_fetches_html_as_markdown_and_continues_with_a_fixed_tool_list() {
             .collect();
         assert_eq!(
             names,
-            ["read", "write", "edit", "shell", "ask_user", "web_fetch"]
+            [
+                "read",
+                "write",
+                "edit",
+                "shell",
+                "ask_user",
+                "web_fetch",
+                "update_plan"
+            ]
         );
         assert_eq!(tools, serde_json::to_value(&requests[1].tools).unwrap());
     }

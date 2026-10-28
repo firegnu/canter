@@ -109,6 +109,7 @@ async fn create(
         store,
         "retract".into(),
         SessionSettings {
+            plan_enabled: None,
             cwd: path.to_string_lossy().into(),
             model: "deepseek-flash".into(),
             name: None,

@@ -103,6 +103,7 @@ impl State {
     ) -> Result<(), CoreError> {
         self.tool_definitions = canter_tools::Tool::ALL
             .into_iter()
+            .filter(|tool| tools.find(tool.name()).is_some())
             .map(|tool| {
                 let def = tool.definition();
                 canter_model::ToolDefinition {
@@ -323,6 +324,7 @@ impl Session {
             writer.snapshot().settings.cwd.clone(),
             runtime,
             options.web_fetch_timeout,
+            options.plan_enabled,
         )
         .await?;
         let mut state = State::new(Journal::new(store, writer));
@@ -352,6 +354,14 @@ impl Session {
             }
         }
         state.initialize_prefix(home, canter_home, &tools).await?;
+        if state.journal.snapshot.settings.plan_enabled != Some(options.plan_enabled) {
+            let mut settings = state.journal.snapshot.settings.clone();
+            settings.plan_enabled = Some(options.plan_enabled);
+            state
+                .journal
+                .append(vec![EventPayload::SessionUpdated { settings }])
+                .await?;
+        }
         for event in events {
             if let EventPayload::RequestResolved { request_id, .. } = event.payload {
                 state.resolved.insert(request_id, event.seq);
@@ -380,7 +390,8 @@ impl Session {
         for mut turn in unfinished {
             for mut item in std::mem::take(&mut turn.items) {
                 match &mut item {
-                    Item::McpToolCall { status, .. }
+                    Item::Plan { status, .. }
+                    | Item::McpToolCall { status, .. }
                     | Item::WebFetch { status, .. }
                     | Item::CommandExecution { status, .. }
                     | Item::FileChange { status, .. }
@@ -433,7 +444,7 @@ impl Session {
     async fn create_inner(
         store: Arc<Store>,
         id: String,
-        settings: SessionSettings,
+        mut settings: SessionSettings,
         runtime: RuntimeContext,
         model: Arc<dyn Model>,
         options: CoreOptions,
@@ -454,7 +465,14 @@ impl Session {
             .get("HOME")
             .map(std::path::PathBuf::from);
         let canter_home = crate::context::canter_home(&runtime.environment);
-        let tools = executor(cwd, runtime, options.web_fetch_timeout).await?;
+        let tools = executor(
+            cwd,
+            runtime,
+            options.web_fetch_timeout,
+            options.plan_enabled,
+        )
+        .await?;
+        settings.plan_enabled = Some(options.plan_enabled);
         let owned_store = store.clone();
         let writer = tokio::task::spawn_blocking(move || owned_store.create(&id, settings, now()))
             .await
@@ -987,11 +1005,13 @@ async fn executor(
     cwd: String,
     runtime: RuntimeContext,
     web_fetch_timeout: std::time::Duration,
+    plan_enabled: bool,
 ) -> Result<Tools, CoreError> {
     tokio::task::spawn_blocking(move || {
         LocalExecutor::new(cwd.into(), runtime.environment, runtime.protected_paths)
             .map(|executor| {
                 Tools::new(Arc::new(executor))
+                    .with_plan_enabled(plan_enabled)
                     .with_mcp(runtime.mcp_tools)
                     .with_web_fetch_timeout(web_fetch_timeout)
             })

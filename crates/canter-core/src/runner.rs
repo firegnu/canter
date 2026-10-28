@@ -578,7 +578,8 @@ async fn execute(
                 None => {
                     let mut item = prepared.started_item();
                     match &mut item {
-                        Item::McpToolCall { status, .. }
+                        Item::Plan { status, .. }
+                        | Item::McpToolCall { status, .. }
                         | Item::WebFetch { status, .. }
                         | Item::FileRead { status, .. }
                         | Item::FileChange { status, .. }

@@ -43,6 +43,20 @@ pub(crate) struct App {
 }
 
 impl App {
+    async fn session_options(&self) -> Result<CoreOptions, ApiError> {
+        let home = self.home.clone();
+        let enabled =
+            tokio::task::spawn_blocking(move || crate::config::Config::plan_enabled(&home))
+                .await
+                .map_err(|_| ApiError::internal())?
+                .map_err(|error| ApiError::new(ErrorCode::InvalidRequest, &error.to_string()))?;
+        let mut options = self.options.clone();
+        if let Some(enabled) = enabled {
+            options.plan_enabled = enabled;
+        }
+        Ok(options)
+    }
+
     fn validate_model(&self, model: &str) -> Result<(), ApiError> {
         if self.models.iter().any(|available| available == model) {
             Ok(())
@@ -401,7 +415,7 @@ async fn resume(
                 id.clone(),
                 app.runtime(params.env),
                 app.model.clone(),
-                app.options.clone(),
+                app.session_options().await?,
             )
             .await?;
             sessions.insert(id, session);
@@ -439,6 +453,7 @@ async fn create(
         let mut sessions = app.sessions.lock().await;
         let id = crate::new_id();
         let settings = SessionSettings {
+            plan_enabled: None,
             cwd: params.cwd,
             name: params.name,
             model: if params.model.is_empty() {
@@ -456,7 +471,7 @@ async fn create(
             settings,
             app.runtime(params.env),
             app.model.clone(),
-            app.options.clone(),
+            app.session_options().await?,
         )
         .await?;
         sessions.insert(id, session.clone());

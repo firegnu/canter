@@ -247,6 +247,12 @@ pub(crate) fn item(
                 width,
             )
         }
+        Item::Plan {
+            plan,
+            explanation,
+            status,
+            ..
+        } => crate::plan::card(plan, explanation.as_deref(), *status, width),
         Item::Unknown => Vec::new(),
     };
     if let Some(feedback) = feedback

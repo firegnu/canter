@@ -9,6 +9,9 @@ mod rewind;
 #[path = "user_shell_tests.rs"]
 mod user_shell;
 
+#[path = "plan_tests.rs"]
+mod plan;
+
 // A failed model task is a real Core close-error path, without modifying Core or the store.
 struct PanicOnce {
     panicked: AtomicBool,

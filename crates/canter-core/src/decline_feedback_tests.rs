@@ -140,6 +140,7 @@ async fn pending_call(
         store,
         "feedback".into(),
         SessionSettings {
+            plan_enabled: None,
             cwd: path.to_string_lossy().into(),
             model: "deepseek-flash".into(),
             name: None,

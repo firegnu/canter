@@ -28,6 +28,7 @@ pub struct RuntimeContext {
 
 #[derive(Clone, Debug)]
 pub struct CoreOptions {
+    pub plan_enabled: bool,
     pub context_window: u64,
     pub max_output_tokens: u32,
     pub image_models: Vec<String>,
@@ -40,6 +41,7 @@ pub struct CoreOptions {
 impl Default for CoreOptions {
     fn default() -> Self {
         Self {
+            plan_enabled: true,
             context_window: 1_048_576,
             max_output_tokens: 65_536,
             image_models: vec!["deepseek-flash".into()],

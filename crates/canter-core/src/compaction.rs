@@ -149,13 +149,14 @@ async fn summarize(
     shared: &Shared,
     cancel: &CancellationToken,
 ) -> Result<(String, Vec<Message>), CoreError> {
-    let (prefix, history, user_messages, model) = {
+    let (prefix, history, user_messages, model, plan) = {
         let state = shared.state.lock().await;
         (
             state.prefix.clone(),
             state.history.clone(),
             state.user_messages.clone(),
             state.journal.snapshot.settings.model.clone(),
+            state.journal.snapshot.current_plan().map(<[_]>::to_vec),
         )
     };
     let output_limit = shared.options.max_output_tokens.min(8192);
@@ -370,6 +371,13 @@ async fn summarize(
             break;
         }
     }
+    let mut summary_message = format!("[Context summary]\n{summary}");
+    if let Some(plan) = plan {
+        // Preserve the exact checklist independently of the model's summary.
+        // Keep it in the summary message, outside user_inputs and the prompt.
+        summary_message.push_str("\n\n[Current plan]\n");
+        summary_message.push_str(&serde_json::to_string(&plan).expect("plan serialization"));
+    }
     let base = Request {
         messages: prefix,
         ..Request::default()
@@ -377,7 +385,7 @@ async fn summarize(
     let budget = KEEP_USER_TOKENS.min(
         input_limit(shared)
             .saturating_sub(context::request_tokens(&base))
-            .saturating_sub(context::estimate(&summary) + 1024),
+            .saturating_sub(context::estimate(&summary_message) + 1024),
     );
     let mut kept = Vec::new();
     let mut left = budget;
@@ -408,7 +416,7 @@ async fn summarize(
     }
     kept.reverse();
     kept.push(Message::User {
-        text: format!("[Context summary]\n{summary}"),
+        text: summary_message,
     });
     Ok((summary, kept))
 }
