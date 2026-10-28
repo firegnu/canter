@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-28 第二十二次装 main `aa2a18a`（`canter --version` 显示 `canter 0.1.0 · aa2a18a`；比上一版多 P2-117：输入框上方 `▸ N background commands` 可以用鼠标点开 `/ps` 列表，点某一条看日志）。服务端要用户自己 `canter serve --replace`。
+- 退回上一版 `48ae357`：`cp -p ~/.canter/canter-48ae357 ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-28 第二十一次装 main `48ae357`（`canter --version` 显示 `canter 0.1.0 · 48ae357`；比上一版多 P2-28 后台长命令：模型 `shell` 放后台、`shell_output`、`shell_stop`，`!cmd &`，Ctrl+B 转后台，`/ps`、`/stop`，命令外套看护进程，服务端被强杀时命令进程组也跟着没）。服务端要用户自己 `canter serve --replace`。
 - 退回上一版 `ced920e`：`cp -p ~/.canter/canter-ced920e ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版打开用过后台命令的会话不坏（不认识的事件和项目跳过），后台命令的卡片按已完成显示，`/ps` 没有。
 - 10-28 第二十次装 main `ced920e`（`canter --version` 显示 `canter 0.1.0 · ced920e`；比上一版多 P2-115：计划模式里状态栏写 `Plan (then <档位>)`）。服务端要用户自己 `canter serve --replace`。
