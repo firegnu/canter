@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-28 第十七次装 main `b19fb3a`（`canter --version` 显示 `canter 0.1.0 · b19fb3a`；比上一版多 P2-113：状态栏 `xx% to compact`、各项上色，`config.json` 写 `"auto_compact_tokens": 400000` 可把压缩线调低，改了要重启服务端）。服务端要用户自己 `canter serve --replace`。
+- 退回上一版 `4516c70`：`cp -p ~/.canter/canter-4516c70 ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版不认 `auto_compact_tokens`（照旧忽略不认识的项，按窗口压缩），存盘格式没变。
 - 10-28 第十六次装 main `4516c70`（`canter --version` 显示 `canter 0.1.0 · 4516c70`；P2-34 合并后的正式版：计划和待办默认开，`config.json` 写 `"plan_enabled": false` 可关）。服务端要用户自己 `canter serve --replace`。
 - 退回到装 P2-34 之前的 `2302c00`：`cp -p ~/.canter/canter-2302c00 ~/.cargo/bin/canter`，再 `canter serve --replace`；旧版打开用过清单的会话不坏，清单不显示。上一次的分支版 `583ef2e` 备份在 `~/.canter/canter-583ef2e`。
 - 10-28 第十五次装 **未合并的分支** `p2-34-todo` 的 `583ef2e`（`canter --version` 显示 `canter 0.1.0 · 583ef2e`；比上一版多清单拖着不勾时提醒模型、工具说明加「做完一步立刻更新」）：用户长程回测用。服务端要用户自己 `canter serve --replace`。
