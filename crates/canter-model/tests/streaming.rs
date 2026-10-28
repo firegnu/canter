@@ -25,6 +25,44 @@ fn request() -> Request {
 }
 
 #[tokio::test]
+async fn default_backoff_is_exponential_jittered_and_capped() {
+    let server = Server::start(
+        (0..11)
+            .map(|_| Reply {
+                status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                body: "{}".into(),
+                retry_after: None,
+                hang: false,
+            })
+            .collect(),
+    )
+    .await;
+    let model = ChatCompletions::new(&server.base_url, ApiKey::new(KEY))
+        .unwrap()
+        .with_retry_policy(canter_model::RetryPolicy {
+            sleep: |_| Box::pin(tokio::time::sleep(Duration::from_millis(1))),
+            ..Default::default()
+        });
+    let events: Vec<_> = model
+        .stream(request(), CancellationToken::new())
+        .collect()
+        .await;
+    let expected = [
+        500, 1000, 2000, 4000, 8000, 16000, 32000, 32000, 32000, 32000,
+    ];
+    for (event, max) in events.iter().zip(expected) {
+        let Ok(ModelEvent::Retrying { delay, .. }) = event else {
+            panic!("expected retry: {event:?}")
+        };
+        assert!((max * 9 / 10..=max).contains(&delay.as_millis()));
+    }
+    assert_eq!(events.len(), 11);
+    assert_eq!(events.last().unwrap().as_ref().unwrap_err().retries, 10);
+    assert_eq!(server.requests.lock().unwrap().len(), 11);
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn request_repairs_tool_pairs_after_unknown_history_or_interruption() {
     let messages = serde_json::from_value(json!([
         {"type":"user","text":"Read the files"},
@@ -97,7 +135,10 @@ async fn cancellation_stops_pending_reads_and_discards_buffered_events() {
         let mut events = client.stream(request(), cancellation.clone());
         assert_eq!(
             events.next().await,
-            Some(Ok(ModelEvent::TextDelta("first".into())))
+            Some(Ok(ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "first".into()
+            }))
         );
         if tail.is_empty() {
             // Exercise a read that is already waiting when cancellation arrives.
@@ -133,10 +174,12 @@ async fn cancellation_interrupts_retry_after_and_local_backoff() {
         let client = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
         let cancellation = CancellationToken::new();
         let mut events = client.stream(request(), cancellation.clone());
-        tokio::select! {
-            event = events.next() => panic!("unexpected event before cancellation: {event:?}"),
-            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
-        }
+        let event = tokio::time::timeout(Duration::from_secs(5), events.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(matches!(event, ModelEvent::Retrying { .. }));
         assert_eq!(server.requests.lock().unwrap().len(), 1);
         cancellation.cancel();
         assert_eq!(
@@ -152,49 +195,39 @@ async fn cancellation_interrupts_retry_after_and_local_backoff() {
 }
 
 #[tokio::test]
-async fn retry_after_over_sixty_seconds_returns_the_original_error_without_waiting() {
+async fn retry_after_over_sixty_seconds_is_capped_and_cancellable() {
     let far_date =
         httpdate::fmt_http_date(std::time::SystemTime::now() + Duration::from_secs(86400));
-    for (header, expected_seconds) in [
-        ("61".to_owned(), Some(61)),
-        ("86400".to_owned(), Some(86400)),
-        (far_date, None),
-    ] {
-        let server = Server::start(vec![
-            Reply {
-                status: axum::http::StatusCode::TOO_MANY_REQUESTS,
-                body: "{}".into(),
-                retry_after: Some(header),
-                hang: false,
-            },
-            Reply::sse(STOP),
-        ])
+    for header in ["61".to_owned(), "86400".to_owned(), far_date] {
+        let server = Server::start(vec![Reply {
+            status: axum::http::StatusCode::TOO_MANY_REQUESTS,
+            body: "{}".into(),
+            retry_after: Some(header),
+            hang: false,
+        }])
         .await;
-        let client = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
-        let events: Vec<_> = tokio::time::timeout(
-            Duration::from_secs(1),
-            client.stream(request(), CancellationToken::new()).collect(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(events.len(), 1);
-        let error = events[0].as_ref().unwrap_err();
-        assert_eq!(error.kind, ErrorKind::RateLimited);
-        assert_eq!(error.status, Some(429));
-        let delay = error.retry_after.unwrap();
-        if let Some(seconds) = expected_seconds {
-            assert_eq!(delay, Duration::from_secs(seconds));
-        } else {
-            assert!(delay > Duration::from_secs(86390));
-            assert!(delay <= Duration::from_secs(86400));
-        }
+        let model = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
+        let cancel = CancellationToken::new();
+        let mut stream = model.stream(request(), cancel.clone());
+        let event = stream.next().await.unwrap().unwrap();
+        assert!(
+            matches!(event, ModelEvent::Retrying { delay, attempt: 1, .. } if delay == Duration::from_secs(60))
+        );
+        cancel.cancel();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(250), stream.next())
+                .await
+                .unwrap(),
+            None
+        );
         assert_eq!(server.requests.lock().unwrap().len(), 1);
+        drop(stream);
         server.stop().await;
     }
 }
 
 #[tokio::test]
-async fn interrupted_finish_reasons_retry_only_before_emitting_content() {
+async fn interrupted_finish_reasons_retry_with_or_without_partial_content() {
     for reason in ["insufficient_system_resource", "aborted"] {
         for emitted_content in [false, true] {
             let chunk = json!({"choices":[{"index":0,"delta":{
@@ -211,15 +244,19 @@ async fn interrupted_finish_reasons_retry_only_before_emitting_content() {
                 .stream(request(), CancellationToken::new())
                 .collect()
                 .await;
-            if emitted_content {
-                assert_eq!(events.len(), 2);
-                assert_eq!(events[0], Ok(ModelEvent::TextDelta("partial".into())));
-                assert_eq!(events[1].as_ref().unwrap_err().kind, ErrorKind::Server);
-                assert_eq!(server.requests.lock().unwrap().len(), 1);
-            } else {
-                assert_eq!(events, vec![Ok(ModelEvent::Finished(FinishReason::Stop))]);
-                assert_eq!(server.requests.lock().unwrap().len(), 2);
-            }
+            assert!(events.iter().any(|event| matches!(event, Ok(ModelEvent::Retrying { error, attempt: 1, .. }) if error.kind == ErrorKind::Server)));
+            assert_eq!(
+                events.last(),
+                Some(&Ok(ModelEvent::Finished(FinishReason::Stop)))
+            );
+            assert_eq!(server.requests.lock().unwrap().len(), 2);
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Ok(ModelEvent::TextDelta { .. })))
+                    .count(),
+                usize::from(emitted_content)
+            );
             server.stop().await;
         }
     }
@@ -327,8 +364,14 @@ async fn streams_content_tools_and_usage_and_replays_reasoning() {
     assert_eq!(
         events,
         vec![
-            Ok(ModelEvent::ReasoningDelta("想一想".into())),
-            Ok(ModelEvent::TextDelta("Reading.".into())),
+            Ok(ModelEvent::ReasoningDelta {
+                item_id: "reasoning".into(),
+                delta: "想一想".into()
+            }),
+            Ok(ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "Reading.".into()
+            }),
             Ok(ModelEvent::Usage(Usage {
                 input_tokens: 10,
                 output_tokens: 7,
@@ -370,6 +413,85 @@ async fn streams_content_tools_and_usage_and_replays_reasoning() {
 }
 
 #[tokio::test]
+async fn zero_retries_and_exhaustion_report_the_actual_retry_count() {
+    for limit in [0, 2, 10] {
+        let server = Server::start(
+            (0..=limit)
+                .map(|_| Reply {
+                    status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    body: "{}".into(),
+                    retry_after: Some("0".into()),
+                    hang: false,
+                })
+                .collect(),
+        )
+        .await;
+        let model = ChatCompletions::new(&server.base_url, ApiKey::new(KEY))
+            .unwrap()
+            .with_retry_policy(canter_model::RetryPolicy {
+                max_retries: limit,
+                ..Default::default()
+            });
+        let events: Vec<_> = model
+            .stream(request(), CancellationToken::new())
+            .collect()
+            .await;
+        let error = events.last().unwrap().as_ref().unwrap_err();
+        assert_eq!(error.retries, limit);
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("retried {limit} times"))
+        );
+        assert_eq!(server.requests.lock().unwrap().len(), limit as usize + 1);
+        server.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn retries_more_than_three_server_errors_before_success() {
+    let mut replies = (0..5)
+        .map(|_| Reply {
+            status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            body: "{}".into(),
+            retry_after: Some("0".into()),
+            hang: false,
+        })
+        .collect::<Vec<_>>();
+    replies.push(Reply::sse(STOP));
+    let server = Server::start(replies).await;
+    let model = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
+    let events: Vec<_> = model
+        .stream(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert_eq!(
+        events.last(),
+        Some(&Ok(ModelEvent::Finished(FinishReason::Stop)))
+    );
+    assert_eq!(server.requests.lock().unwrap().len(), 6);
+    let retries: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Ok(ModelEvent::Retrying {
+                attempt,
+                max_retries,
+                delay,
+                error,
+            }) => {
+                assert_eq!(*max_retries, 10);
+                assert_eq!(*delay, Duration::ZERO);
+                assert_eq!(error.status, Some(503));
+                Some(*attempt)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(retries, vec![1, 2, 3, 4, 5]);
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn retries_rate_limit_server_and_early_disconnect_honoring_retry_after() {
     use axum::http::StatusCode;
     let server = Server::start(vec![
@@ -397,7 +519,17 @@ async fn retries_rate_limit_server_and_early_disconnect_honoring_retry_after() {
     )
     .await
     .unwrap();
-    assert_eq!(events, vec![Ok(ModelEvent::Finished(FinishReason::Stop))]);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, Ok(ModelEvent::Retrying { .. })))
+            .count(),
+        3
+    );
+    assert_eq!(
+        events.last(),
+        Some(&Ok(ModelEvent::Finished(FinishReason::Stop)))
+    );
     {
         let requests = server.requests.lock().unwrap();
         assert_eq!(requests.len(), 4);
@@ -458,7 +590,7 @@ async fn errors_are_classified_retries_are_bounded_and_credentials_are_redacted(
             expected,
             ErrorKind::RateLimited | ErrorKind::Server | ErrorKind::Timeout
         );
-        let attempts = if retryable { 4 } else { 1 };
+        let attempts = if retryable { 11 } else { 1 };
         let body = json!({"error":{"code":code,"message":format!("{message}; Authorization: Bearer {KEY}"),"type":KEY}}).to_string();
         let replies = (0..attempts)
             .map(|_| Reply {
@@ -475,8 +607,8 @@ async fn errors_are_classified_retries_are_bounded_and_credentials_are_redacted(
             .stream(request(), CancellationToken::new())
             .collect()
             .await;
-        assert_eq!(events.len(), 1);
-        let error = events[0].as_ref().unwrap_err();
+        assert_eq!(events.len(), attempts);
+        let error = events.last().unwrap().as_ref().unwrap_err();
         assert_eq!(error.kind, expected);
         assert_eq!(error.status, Some(status));
         assert_eq!(error.is_retryable(), retryable);
@@ -501,7 +633,7 @@ async fn errors_are_classified_retries_are_bounded_and_credentials_are_redacted(
 }
 
 #[tokio::test]
-async fn disconnect_after_any_emitted_event_returns_error_without_retry() {
+async fn disconnect_after_any_emitted_event_retries_the_same_request() {
     for chunk in [
         json!({"choices":[{"index":0,"delta":{"content":"partial"}}]}),
         json!({"choices":[{"index":0,"delta":{"reasoning_content":"partial"}}]}),
@@ -519,10 +651,16 @@ async fn disconnect_after_any_emitted_event_returns_error_without_retry() {
             .stream(request(), CancellationToken::new())
             .collect()
             .await;
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 3);
         assert!(events[0].is_ok());
-        assert_eq!(events[1].as_ref().unwrap_err().kind, ErrorKind::Network);
-        assert_eq!(server.requests.lock().unwrap().len(), 1);
+        assert!(
+            matches!(&events[1], Ok(ModelEvent::Retrying { error, attempt: 1, .. }) if error.kind == ErrorKind::Network)
+        );
+        assert_eq!(events[2], Ok(ModelEvent::Finished(FinishReason::Stop)));
+        let requests = server.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0], requests[1]);
+
         server.stop().await;
     }
 }

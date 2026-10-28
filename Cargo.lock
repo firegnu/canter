@@ -252,6 +252,7 @@ name = "canter-core"
 version = "0.1.0"
 dependencies = [
  "async-stream",
+ "axum",
  "canter-model",
  "canter-protocol",
  "canter-store",
@@ -275,6 +276,7 @@ dependencies = [
  "async-stream",
  "axum",
  "eventsource-stream",
+ "fastrand",
  "futures-util",
  "httpdate",
  "reqwest",

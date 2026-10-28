@@ -2846,10 +2846,17 @@ async fn handoff_cancellation_and_errors_leave_the_original_session_open() {
         text_reply("Original answer"),
         format!("hold:{partial}"),
         text_reply("   "),
+        partial.clone(),
         partial,
+        model_error.clone(),
         model_error,
     ])
     .await;
+    // Exercise the final error after a real retry without waiting for ten backoffs.
+    let config = world.path("state/config.json");
+    let mut value: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    value["model_max_retries"] = json!(1);
+    fs::write(config, serde_json::to_vec(&value).unwrap()).unwrap();
     world.start_server().await;
     let a = world.open(&["original task"], "handoff-errors").await;
     a.wait_for("Original answer").await;
@@ -2875,12 +2882,17 @@ async fn handoff_cancellation_and_errors_leave_the_original_session_open() {
     a.frames_later(2).await;
     for expected in ["handoff note is empty", "Network", "Server"] {
         a.type_line("/handoff").await;
-        a.wait_for(expected).await;
+        a.wait_until(expected, |a| {
+            a.screen()
+                .lines()
+                .any(|line| line.contains("Error:") && line.contains(expected))
+        })
+        .await;
         assert_eq!(world.only_session().await, original);
         assert_eq!(world.snapshot(&original).await, before);
         assert!(!a.screen().contains("unshown"));
     }
-    assert_eq!(world.requests.lock().unwrap().len(), 5);
+    assert_eq!(world.requests.lock().unwrap().len(), 7);
     assert_eq!(a.quit().await, original);
     world.stop_server(Signal::SIGTERM).await;
 }
@@ -2895,9 +2907,14 @@ async fn btw_is_private_streams_and_escape_cancels_it_before_the_main_tool() {
         shell_reply("sleep 60"),
         format!("hold:{partial}"),
         text_reply("private final answer"),
-        partial, // EOF after text: an error belongs in the btw block.
+        partial.clone(), // EOF after text: retry, then report exhaustion privately.
+        partial,
     ])
     .await;
+    let config = world.path("state/config.json");
+    let mut value: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    value["model_max_retries"] = json!(1);
+    fs::write(config, serde_json::to_vec(&value).unwrap()).unwrap();
     world.start_server().await;
     let a = world.open(&["--yolo", "start tool"], "btw-a").await;
     a.wait_until("running tool", |a| {
@@ -2939,7 +2956,11 @@ async fn btw_is_private_streams_and_escape_cancels_it_before_the_main_tool() {
     a.type_line("/btw try again").await;
     a.wait_for("private final answer").await;
     a.type_line("/btw broken connection").await;
+    a.wait_for("Retrying in").await;
+    assert!(!b.screen().contains("Retrying in"));
     a.wait_for("Error:").await;
+    assert!(a.screen().contains("retried 1 times"));
+    assert_eq!(world.requests.lock().unwrap().len(), 5);
     assert_eq!(world.snapshot(&id).await.turns.len(), 1);
     let events =
         fs::read_to_string(world.path(&format!("state/sessions/{id}/events.jsonl"))).unwrap();

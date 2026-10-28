@@ -38,7 +38,10 @@ impl ScriptModel {
                 vec![
                     events,
                     vec![
-                        ModelEvent::TextDelta("continued".into()),
+                        ModelEvent::TextDelta {
+                            item_id: "text".into(),
+                            delta: "continued".into(),
+                        },
                         ModelEvent::Finished(FinishReason::Stop),
                     ],
                 ]

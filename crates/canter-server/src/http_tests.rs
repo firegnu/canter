@@ -24,7 +24,10 @@ impl Model for PanicOnce {
             panic!("test-only failed model task");
         }
         Box::pin(futures_util::stream::iter([
-            Ok(ModelEvent::TextDelta("recovered".into())),
+            Ok(ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "recovered".into(),
+            }),
             Ok(ModelEvent::Finished(FinishReason::Stop)),
         ]))
     }
@@ -175,7 +178,10 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
                 ]
             } else {
                 vec![
-                    ModelEvent::TextDelta(if compact { "saved summary" } else { "done" }.into()),
+                    ModelEvent::TextDelta {
+                        item_id: "text".into(),
+                        delta: if compact { "saved summary" } else { "done" }.into(),
+                    },
                     ModelEvent::Usage(canter_model::Usage {
                         input_tokens: 1234,
                         ..Default::default()
@@ -471,7 +477,7 @@ impl Model for BtwModel {
         if question == "btw-held" || question.ends_with("handoff-held") {
             return Box::pin(async_stream::stream! {
                 yield Ok(ModelEvent::Usage(Usage { input_tokens: 1000, cache_read_tokens: Some(800), output_tokens: 100, total_tokens: 1100, ..Default::default() }));
-                yield Ok(ModelEvent::TextDelta("held answer".into()));
+                yield Ok(ModelEvent::TextDelta { item_id: "text".into(), delta: "held answer".into() });
                 std::future::pending::<()>().await;
             });
         }
@@ -491,7 +497,10 @@ impl Model for BtwModel {
             || question.starts_with("Write a handoff note for a new session")
         {
             vec![
-                ModelEvent::TextDelta("private **btw answer**".into()),
+                ModelEvent::TextDelta {
+                    item_id: "text".into(),
+                    delta: "private **btw answer**".into(),
+                },
                 ModelEvent::Usage(Usage {
                     input_tokens: 1000,
                     cache_read_tokens: Some(800),
@@ -508,7 +517,10 @@ impl Model for BtwModel {
             ]
         } else {
             vec![
-                ModelEvent::TextDelta("main answer".into()),
+                ModelEvent::TextDelta {
+                    item_id: "text".into(),
+                    delta: "main answer".into(),
+                },
                 ModelEvent::Usage(Usage {
                     input_tokens: 100,
                     cache_read_tokens: Some(80),

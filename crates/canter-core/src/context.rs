@@ -436,7 +436,10 @@ mod tests {
     impl Model for Reply {
         fn stream(&self, _: Request, _: CancellationToken) -> ModelStream<'_> {
             Box::pin(futures_util::stream::iter([
-                Ok(ModelEvent::TextDelta("saved summary".into())),
+                Ok(ModelEvent::TextDelta {
+                    item_id: "text".into(),
+                    delta: "saved summary".into(),
+                }),
                 Ok(ModelEvent::Finished(FinishReason::Stop)),
             ]))
         }

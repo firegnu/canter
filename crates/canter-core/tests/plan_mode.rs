@@ -238,7 +238,10 @@ async fn compacting_omits_mode_notices_and_restates_current_mode_after_replay() 
         let model = ScriptModel::new(vec![
             done(),
             vec![
-                ModelEvent::TextDelta("Summary: investigate the requested change.".into()),
+                ModelEvent::TextDelta {
+                    item_id: "text".into(),
+                    delta: "Summary: investigate the requested change.".into(),
+                },
                 ModelEvent::Finished(FinishReason::Stop),
             ],
             done(),

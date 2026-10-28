@@ -174,6 +174,9 @@ impl Body {
     fn item(&mut self, item: &Item, cwd: &str, feedback: Option<&str>) {
         let assistant = "Assistant";
         match item {
+            Item::ModelRetry { .. } => {
+                self.block("Retry", &sanitize(&item.retry_message().unwrap()))
+            }
             Item::BackgroundEvent { text, .. } => {
                 let text = sanitize(text);
                 let fence = "`".repeat((longest_run(&text, '`') + 1).max(3));
@@ -221,8 +224,11 @@ impl Body {
                 self.block(assistant, &text);
             }
             Item::UserMessage { content, .. } => self.block("User", &user_text(content)),
-            Item::AgentMessage { text, .. } if !text.trim().is_empty() => {
+            Item::AgentMessage { text, status, .. } if !text.trim().is_empty() => {
                 self.block(assistant, sanitize(text).trim_end());
+                if *status == Some(ItemStatus::Interrupted) {
+                    self.block(assistant, "_Interrupted_");
+                }
             }
             Item::CommandExecution {
                 command,
@@ -439,6 +445,7 @@ fn file_change(change: &FileUpdateChange, cwd: &str) -> String {
 /// How a tool call went, with the reason given when it was declined.
 fn outcome(status: ItemStatus, feedback: Option<&str>) -> String {
     match status {
+        ItemStatus::Interrupted => "interrupted".into(),
         ItemStatus::Blocked => "blocked (Plan mode)".into(),
         ItemStatus::Completed => "ok".into(),
         ItemStatus::Failed => "failed".into(),
@@ -556,6 +563,7 @@ mod tests {
 
     fn answer(id: &str, text: &str) -> Item {
         Item::AgentMessage {
+            status: None,
             id: id.into(),
             text: text.into(),
         }
@@ -572,6 +580,7 @@ mod tests {
             "跑一下测试",
             vec![
                 Item::Reasoning {
+                    status: None,
                     id: "r1".into(),
                     summary: vec!["SECRET THOUGHT".into()],
                     content: vec!["SECRET CONTENT".into()],

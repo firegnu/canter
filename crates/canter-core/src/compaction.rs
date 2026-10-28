@@ -88,7 +88,7 @@ pub(crate) async fn compact(
             },
         }])
         .await?;
-    let result = summarize(shared, cancel).await;
+    let result = summarize(shared, turn_id, cancel).await;
     let mut state = shared.state.lock().await;
     if state.active.as_ref().is_some_and(|active| active.retracted) {
         return Ok(());
@@ -168,6 +168,7 @@ pub(crate) async fn compact(
 
 async fn summarize(
     shared: &Shared,
+    turn_id: &str,
     cancel: &CancellationToken,
 ) -> Result<(String, Vec<Message>, usize), CoreError> {
     let (prefix, history, summary_index, user_messages, model, plan) = {
@@ -318,6 +319,8 @@ async fn summarize(
                 ));
             }
         }
+        let request_len = request.messages.len();
+        let mut confirmed_summary = String::new();
         let next_summary = loop {
             shared
                 .state
@@ -331,10 +334,11 @@ async fn summarize(
             let prepared = crate::images::prepare(shared, request.clone()).await?;
             let started_at = (shared.options.request_time)();
             let mut stream = shared.model.stream(prepared, cancel.clone());
-            let mut next_summary = String::new();
+            let mut response = crate::response::Response::default();
             let mut output_started = false;
             let mut finished = false;
             let mut too_large = false;
+            let mut continuation = false;
             loop {
                 let event = tokio::select! {
                     biased;
@@ -342,7 +346,10 @@ async fn summarize(
                     event = stream.next() => event,
                 };
                 match event {
-                    Some(Ok(ModelEvent::TextDelta(delta))) => {
+                    Some(Ok(event @ ModelEvent::TextDelta { .. })) => {
+                        let ModelEvent::TextDelta { ref delta, .. } = event else {
+                            unreachable!()
+                        };
                         if !delta.is_empty() && !output_started {
                             if !shared.accept_model_output().await {
                                 return Err(CoreError::new(
@@ -352,16 +359,21 @@ async fn summarize(
                             }
                             output_started = true;
                         }
-                        next_summary.push_str(&delta);
+                        response.apply(&event);
                     }
                     Some(Ok(ModelEvent::Usage(usage))) => {
                         runner::record_usage(shared, usage, None, &model, started_at, true).await?
                     }
                     Some(Ok(ModelEvent::Finished(FinishReason::Stop))) => {
+                        response.apply(&ModelEvent::Finished(FinishReason::Stop));
                         finished = true;
                         break;
                     }
-                    Some(Ok(ModelEvent::ReasoningDelta(delta))) => {
+                    Some(Ok(event @ ModelEvent::ReasoningDelta { .. })) => {
+                        response.apply(&event);
+                        let ModelEvent::ReasoningDelta { ref delta, .. } = event else {
+                            unreachable!()
+                        };
                         if !delta.is_empty() && !output_started {
                             if !shared.accept_model_output().await {
                                 return Err(CoreError::new(
@@ -371,6 +383,38 @@ async fn summarize(
                             }
                             output_started = true;
                         }
+                    }
+                    Some(Ok(ModelEvent::Retrying {
+                        error,
+                        attempt,
+                        max_retries,
+                        delay,
+                    })) => {
+                        response = crate::response::Response::default();
+                        runner::record_retry(shared, turn_id, &error, attempt, max_retries, delay)
+                            .await?;
+                    }
+                    Some(Ok(event @ ModelEvent::ItemCompleted { .. })) => {
+                        shared.accept_model_output().await;
+                        if matches!(
+                            &event,
+                            ModelEvent::ItemCompleted {
+                                content: AssistantContent::ToolCall(_),
+                                ..
+                            }
+                        ) {
+                            break;
+                        }
+                        response.apply(&event);
+                    }
+                    Some(Err(error))
+                        if error.is_retryable() && !response.completed().is_empty() =>
+                    {
+                        continuation = true;
+                        break;
+                    }
+                    Some(Err(error)) if error.kind != ErrorKind::ContextLength => {
+                        return Err(CoreError::new(ErrorCode::Internal, &error.to_string()));
                     }
                     Some(Ok(ModelEvent::ToolCall(_))) => {
                         shared.accept_model_output().await;
@@ -383,7 +427,17 @@ async fn summarize(
                     _ => break,
                 }
             }
+            if continuation {
+                confirmed_summary.push_str(&response.text());
+                request.messages.push(Message::Assistant {
+                    content: response.completed(),
+                });
+                continue;
+            }
             if too_large {
+                confirmed_summary.clear();
+                request.messages.truncate(request_len);
+
                 // Retry the same prefix of the transcript; only advance it
                 // after a complete summary. Halving bounds failed attempts.
                 end /= 2;
@@ -402,6 +456,7 @@ async fn summarize(
                 });
                 continue;
             }
+            let next_summary = format!("{confirmed_summary}{}", response.text());
             if !finished || next_summary.trim().is_empty() {
                 return Err(CoreError::new(
                     ErrorCode::Internal,
@@ -410,6 +465,7 @@ async fn summarize(
             }
             break next_summary;
         };
+        request.messages.truncate(request_len);
         summary = next_summary;
         remaining = &remaining[end..];
         if remaining.is_empty() {

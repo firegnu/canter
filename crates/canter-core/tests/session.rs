@@ -51,6 +51,107 @@ fn assert_request_extension(previous: &Request, next: &Request) {
     );
 }
 
+struct InterruptedModel {
+    scripts: Mutex<VecDeque<Vec<Result<ModelEvent, canter_model::ModelError>>>>,
+    requests: Mutex<Vec<Request>>,
+}
+impl Model for InterruptedModel {
+    fn stream(&self, request: Request, _: CancellationToken) -> ModelStream<'_> {
+        self.requests.lock().unwrap().push(request);
+        let script = self
+            .scripts
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("unexpected request");
+        Box::pin(futures_util::stream::iter(script))
+    }
+}
+
+#[tokio::test]
+async fn completed_items_survive_disconnect_and_tools_run_once() {
+    for tool in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let completed = if tool {
+            AssistantContent::ToolCall(ToolCall {
+                id: "once".into(),
+                name: "shell".into(),
+                arguments: r#"{"command":"printf x >> executions"}"#.into(),
+            })
+        } else {
+            AssistantContent::Text {
+                text: "complete answer".into(),
+            }
+        };
+        let model = Arc::new(InterruptedModel {
+            requests: Mutex::new(Vec::new()),
+            scripts: Mutex::new(VecDeque::from([
+                vec![
+                    Ok(ModelEvent::ItemCompleted {
+                        item_id: "complete".into(),
+                        content: completed.clone(),
+                    }),
+                    Ok(ModelEvent::TextDelta {
+                        item_id: "unfinished".into(),
+                        delta: "partial answer".into(),
+                    }),
+                    Ok(ModelEvent::ReasoningDelta {
+                        item_id: "unfinished-thinking".into(),
+                        delta: "partial thought".into(),
+                    }),
+                    Err(canter_model::ModelError {
+                        kind: canter_model::ErrorKind::Network,
+                        status: None,
+                        retry_after: None,
+                        retries: 0,
+                    }),
+                ],
+                vec![
+                    Ok(ModelEvent::TextDelta {
+                        item_id: "next".into(),
+                        delta: "continued".into(),
+                    }),
+                    Ok(ModelEvent::Finished(FinishReason::Stop)),
+                ],
+            ])),
+        });
+        let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+        let (session, _) = Session::create(
+            store.clone(),
+            "retry".into(),
+            settings(temp.path()),
+            RuntimeContext::default(),
+            model.clone(),
+            CoreOptions::default(),
+        )
+        .await
+        .unwrap();
+        let mut events = session.subscribe(0).await.unwrap();
+        session.input(input("start")).await.unwrap();
+        finished(&mut events).await;
+        let snapshot = session.snapshot().await.session;
+        assert_eq!(snapshot.turns[0].status, TurnStatus::Completed);
+        let requests = model.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2);
+        assert_request_extension(&requests[0], &requests[1]);
+        assert!(requests[1].messages.iter().any(|message| matches!(message, Message::Assistant { content } if content == &vec![completed.clone()])));
+        let history = serde_json::to_string(&requests[1].messages).unwrap();
+        assert!(!history.contains("partial answer") && !history.contains("partial thought"));
+        if tool {
+            assert_eq!(
+                std::fs::read_to_string(temp.path().join("executions")).unwrap(),
+                "x"
+            );
+            assert_eq!(requests[1].messages.iter().filter(|message| matches!(message, Message::ToolResult { tool_call_id, .. } if tool_call_id == "once")).count(), 1);
+        } else {
+            assert!(snapshot.turns[0].items.iter().any(
+                |item| matches!(item, Item::AgentMessage { text, .. } if text == "complete answer")
+            ));
+        }
+        session.close().await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn ordinary_and_compaction_requests_persist_their_model_and_charge() {
     // 1970-01-05 was Monday. Each case replays an ordinary and a compaction request.
@@ -65,7 +166,10 @@ async fn ordinary_and_compaction_requests_persist_their_model_and_charge() {
         let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
         let reply = || {
             vec![
-                ModelEvent::TextDelta("summary or reply".into()),
+                ModelEvent::TextDelta {
+                    item_id: "text".into(),
+                    delta: "summary or reply".into(),
+                },
                 ModelEvent::Usage(canter_model::Usage {
                     input_tokens: 1_000_000,
                     output_tokens: 100_000,
@@ -159,7 +263,10 @@ async fn request_prefix_is_frozen_until_reopening_and_only_compaction_replaces_h
     let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
     let reply = || {
         vec![
-            ModelEvent::TextDelta("answer".into()),
+            ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "answer".into(),
+            },
             ModelEvent::Finished(FinishReason::Stop),
         ]
     };
@@ -388,7 +495,10 @@ async fn interrupt_during_model_stream_repairs_history_and_discards_queued_input
     let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
     let model = ScriptModel::new(vec![
         vec![
-            ModelEvent::TextDelta("partial".into()),
+            ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "partial".into(),
+            },
             call(
                 "unfinished",
                 "shell",
@@ -396,7 +506,10 @@ async fn interrupt_during_model_stream_repairs_history_and_discards_queued_input
             ),
         ],
         vec![
-            ModelEvent::TextDelta("continued".into()),
+            ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "continued".into(),
+            },
             ModelEvent::Finished(FinishReason::Stop),
         ],
     ]);
@@ -457,6 +570,111 @@ async fn interrupt_during_model_stream_repairs_history_and_discards_queued_input
     );
     assert!(!temp.path().join("must-not-exist").exists());
     session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn user_interrupt_preserves_partial_history_and_normal_item_status_after_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+    let partial = vec![
+        call(
+            "unfinished",
+            "shell",
+            r#"{"command":"touch must-not-exist"}"#,
+        ),
+        ModelEvent::ReasoningDelta {
+            item_id: "reasoning".into(),
+            delta: "partial thought".into(),
+        },
+        ModelEvent::TextDelta {
+            item_id: "text".into(),
+            delta: "partial answer".into(),
+        },
+    ];
+    let model = ScriptModel::new(vec![
+        partial,
+        vec![ModelEvent::Finished(FinishReason::Stop)],
+    ]);
+    let (session, _) = Session::create(
+        store.clone(),
+        "s1".into(),
+        settings(temp.path()),
+        RuntimeContext::default(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    let turn = session
+        .input(input("start"))
+        .await
+        .unwrap()
+        .turn_id
+        .unwrap();
+    until(&mut events, |payload| {
+        matches!(
+            payload,
+            EventPayload::ItemDelta {
+                delta: ItemDelta::AgentMessage { .. },
+                ..
+            }
+        )
+    })
+    .await;
+    session
+        .interrupt(SessionInterruptParams {
+            turn_id: turn,
+            retract: None,
+        })
+        .await
+        .unwrap();
+    finished(&mut events).await;
+    let interrupted = session.snapshot().await.session.turns[0].clone();
+    assert_eq!(interrupted.status, TurnStatus::Interrupted);
+    assert!(interrupted.items.iter().any(|item| matches!(item, Item::AgentMessage { text, status: None, .. } if text == "partial answer")));
+    assert!(interrupted.items.iter().any(|item| matches!(item, Item::Reasoning { content, status: None, .. } if content == &vec!["partial thought".to_string()])));
+    for item in &interrupted.items {
+        if matches!(item, Item::AgentMessage { .. } | Item::Reasoning { .. }) {
+            assert!(serde_json::to_value(item).unwrap().get("status").is_none());
+        }
+    }
+    session.input(input("continue")).await.unwrap();
+    finished(&mut events).await;
+    let requests = model.requests.lock().unwrap().clone();
+    let assistant = requests[1]
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            Message::Assistant { content } => Some(content),
+            _ => None,
+        })
+        .unwrap();
+    assert!(assistant.contains(&AssistantContent::Text {
+        text: "partial answer".into()
+    }));
+    assert!(assistant.contains(&AssistantContent::Reasoning {
+        text: "partial thought".into()
+    }));
+    assert!(
+        assistant.iter().any(
+            |part| matches!(part, AssistantContent::ToolCall(call) if call.id == "unfinished")
+        )
+    );
+    assert!(requests[1].messages.iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "unfinished" && text.contains("interrupted"))));
+    assert!(!temp.path().join("must-not-exist").exists());
+    session.close().await.unwrap();
+    let (reopened, response) = Session::open(
+        store,
+        "s1".into(),
+        RuntimeContext::default(),
+        ScriptModel::new(vec![]),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.session.turns[0], interrupted);
+    reopened.close().await.unwrap();
 }
 
 #[tokio::test]
@@ -522,11 +740,17 @@ async fn two_clients_resolve_once_and_steering_precedes_the_next_model_request()
             ModelEvent::Finished(FinishReason::ToolCalls),
         ],
         vec![
-            ModelEvent::TextDelta("steered answer".into()),
+            ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "steered answer".into(),
+            },
             ModelEvent::Finished(FinishReason::Stop),
         ],
         vec![
-            ModelEvent::TextDelta("queued answer".into()),
+            ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "queued answer".into(),
+            },
             ModelEvent::Finished(FinishReason::Stop),
         ],
     ]);
@@ -710,16 +934,25 @@ async fn reopening_restores_the_exact_model_context_and_skips_future_history_ent
         let store = Arc::new(Store::new(&root).unwrap());
         let model = ScriptModel::new(vec![
             vec![
-                ModelEvent::ReasoningDelta("read instructions".into()),
+                ModelEvent::ReasoningDelta {
+                    item_id: "reasoning".into(),
+                    delta: "read instructions".into(),
+                },
                 call("read", "read", "{ \"path\": \"AGENTS.md\" }"),
                 ModelEvent::Finished(FinishReason::ToolCalls),
             ],
             vec![
-                ModelEvent::TextDelta("first answer".into()),
+                ModelEvent::TextDelta {
+                    item_id: "text".into(),
+                    delta: "first answer".into(),
+                },
                 ModelEvent::Finished(FinishReason::Stop),
             ],
             vec![
-                ModelEvent::TextDelta("second answer".into()),
+                ModelEvent::TextDelta {
+                    item_id: "text".into(),
+                    delta: "second answer".into(),
+                },
                 ModelEvent::Finished(FinishReason::Stop),
             ],
         ]);
@@ -786,21 +1019,31 @@ async fn automatic_compaction_keeps_recent_user_words_and_can_continue_after_reo
     let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
     let model = ScriptModel::new(vec![
         vec![
-            ModelEvent::TextDelta("old output ".repeat(16_000)),
+            ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "old output ".repeat(16_000),
+            },
             ModelEvent::Finished(FinishReason::Stop),
         ],
         vec![
-            ModelEvent::TextDelta(
-                "Summary: first task completed; continue with the second task.".into(),
-            ),
+            ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "Summary: first task completed; continue with the second task.".into(),
+            },
             ModelEvent::Finished(FinishReason::Stop),
         ],
         vec![
-            ModelEvent::TextDelta("after compaction".into()),
+            ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "after compaction".into(),
+            },
             ModelEvent::Finished(FinishReason::Stop),
         ],
         vec![
-            ModelEvent::TextDelta("resumed".into()),
+            ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "resumed".into(),
+            },
             ModelEvent::Finished(FinishReason::Stop),
         ],
     ]);
@@ -886,7 +1129,10 @@ async fn auto_compact_tokens_sets_the_compaction_line_and_usage_reports_it() {
         let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
         let reply = |text: &str| {
             vec![
-                ModelEvent::TextDelta(text.into()),
+                ModelEvent::TextDelta {
+                    item_id: "text".into(),
+                    delta: text.into(),
+                },
                 ModelEvent::Finished(FinishReason::Stop),
             ]
         };
@@ -1013,7 +1259,10 @@ async fn one_turn_runs_multiple_real_tools_and_publishes_the_durable_events() {
     let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
     let model = ScriptModel::new(vec![
         vec![
-            ModelEvent::ReasoningDelta("Inspect and edit.".into()),
+            ModelEvent::ReasoningDelta {
+                item_id: "reasoning".into(),
+                delta: "Inspect and edit.".into(),
+            },
             call(
                 "w",
                 "write",
@@ -1039,7 +1288,10 @@ async fn one_turn_runs_multiple_real_tools_and_publishes_the_durable_events() {
             ModelEvent::Finished(FinishReason::ToolCalls),
         ],
         vec![
-            ModelEvent::TextDelta("Done".into()),
+            ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "Done".into(),
+            },
             ModelEvent::Finished(FinishReason::Stop),
         ],
     ]);
@@ -1095,7 +1347,10 @@ async fn rewind_after_reopen_uses_filtered_history_boundaries() {
         (0..4)
             .map(|_| {
                 vec![
-                    ModelEvent::TextDelta("done".into()),
+                    ModelEvent::TextDelta {
+                        item_id: "text".into(),
+                        delta: "done".into(),
+                    },
                     ModelEvent::Finished(FinishReason::Stop),
                 ]
             })
@@ -1252,7 +1507,10 @@ async fn rewind_large_outputs_keeps_small_originals_and_confirms_unknown_changes
             ModelEvent::Finished(FinishReason::ToolCalls),
         ],
         vec![
-            ModelEvent::TextDelta("done".into()),
+            ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "done".into(),
+            },
             ModelEvent::Finished(FinishReason::Stop),
         ],
     ]);

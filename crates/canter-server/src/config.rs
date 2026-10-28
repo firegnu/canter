@@ -20,6 +20,8 @@ pub(crate) struct Config {
     auto_compact_tokens: Option<u64>,
     #[serde(default = "default_auto_wake_limit")]
     auto_wake_limit: u32,
+    #[serde(default = "default_model_max_retries")]
+    model_max_retries: u32,
     api_key: String,
     #[serde(default)]
     prices: canter_core::usage::PriceBook,
@@ -88,6 +90,11 @@ impl Config {
                 "auto_compact_tokens must be greater than 0".into(),
             ));
         }
+        if config.model_max_retries > 100 {
+            return Err(ServerError(
+                "model_max_retries must be between 0 and 100".into(),
+            ));
+        }
         if !config.models.contains(&config.model) {
             config.models.insert(0, config.model.clone());
         }
@@ -106,6 +113,12 @@ impl Config {
 
     pub fn model_client(&self) -> Result<Arc<dyn Model>, ServerError> {
         ChatCompletions::new(&self.base_url, ApiKey::new(self.api_key.clone()))
+            .map(|model| {
+                model.with_retry_policy(canter_model::RetryPolicy {
+                    max_retries: self.model_max_retries,
+                    ..Default::default()
+                })
+            })
             .map(|model| Arc::new(model) as Arc<dyn Model>)
             .map_err(|_| ServerError("invalid model config".into()))
     }
@@ -129,6 +142,9 @@ fn default_models() -> Vec<String> {
 }
 fn default_auto_wake_limit() -> u32 {
     10
+}
+fn default_model_max_retries() -> u32 {
+    canter_model::RetryPolicy::default().max_retries
 }
 
 fn default_image_models() -> Vec<String> {
@@ -169,6 +185,30 @@ mod tests {
             .extend(extra.as_object().unwrap().clone());
         fs::write(root.path().join("config.json"), config.to_string()).unwrap();
         Config::load(root.path())
+    }
+
+    #[test]
+    fn model_retry_limit_defaults_to_ten_and_accepts_zero_through_one_hundred() {
+        assert_eq!(load(json!({})).ok().unwrap().model_max_retries, 10);
+        for limit in [0, 1, 100] {
+            assert_eq!(
+                load(json!({"model_max_retries":limit}))
+                    .ok()
+                    .unwrap()
+                    .model_max_retries,
+                limit
+            );
+        }
+        assert_eq!(
+            load(json!({"model_max_retries":101}))
+                .err()
+                .unwrap()
+                .to_string(),
+            "model_max_retries must be between 0 and 100"
+        );
+        for value in [json!(-1), json!(1.5), json!("10")] {
+            assert!(load(json!({"model_max_retries":value})).is_err());
+        }
     }
 
     #[test]

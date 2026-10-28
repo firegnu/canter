@@ -262,6 +262,7 @@ pub enum UserInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ItemStatus {
+    Interrupted,
     Blocked,
     InProgress,
     Completed,
@@ -294,6 +295,14 @@ pub struct PlanStep {
     rename_all_fields = "camelCase"
 )]
 pub enum Item {
+    ModelRetry {
+        id: String,
+        error: ErrorInfo,
+        will_retry: bool,
+        attempt: u32,
+        max_retries: u32,
+        delay_seconds: f64,
+    },
     BackgroundEvent {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -330,11 +339,17 @@ pub enum Item {
     AgentMessage {
         id: String,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        status: Option<ItemStatus>,
     },
     Reasoning {
         id: String,
         summary: Vec<String>,
         content: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        status: Option<ItemStatus>,
         /// Thinking time from `item.started` up to its latest delta, filled by
         /// the reducer; absent means unknown. Not in Codex.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -440,8 +455,26 @@ impl ExecCommandSource {
 }
 
 impl Item {
+    pub fn retry_message(&self) -> Option<String> {
+        match self {
+            Self::ModelRetry {
+                error,
+                attempt,
+                max_retries,
+                delay_seconds,
+                ..
+            } => Some(model_retry_message(
+                &error.message,
+                *attempt,
+                *max_retries,
+                *delay_seconds,
+            )),
+            _ => None,
+        }
+    }
     pub fn id(&self) -> Option<&str> {
         match self {
+            Self::ModelRetry { id, .. } => Some(id),
             Self::BackgroundCommandAction { id, .. } | Self::BackgroundEvent { id, .. } => Some(id),
             Self::UserMessage { id, .. }
             | Self::Plan { id, .. }
@@ -458,6 +491,15 @@ impl Item {
             Self::Unknown => None,
         }
     }
+}
+
+pub fn model_retry_message(
+    reason: &str,
+    attempt: u32,
+    max_retries: u32,
+    delay_seconds: f64,
+) -> String {
+    format!("Retrying in {delay_seconds:.1}s ({attempt}/{max_retries}): {reason}")
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

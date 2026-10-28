@@ -19,6 +19,40 @@ const SESSION: &str = "s1";
 const NOW: i64 = 1_800_000_000_000;
 const WAIT: Duration = Duration::from_secs(5);
 
+#[test]
+fn retry_and_interrupted_reply_remain_visible_after_snapshot_reload_and_export() {
+    let mut screen = Screen::with_turn(Ok(()));
+    let mut turn = json!({"id":"t2","items":[],"status":"inProgress","error":null,"input":[],"clientName":"test","usage":null});
+    screen.event(json!({"type":"turn.started","turn":turn}));
+    for item in [
+        json!({"type":"agentMessage","id":"partial","text":"partial reply","status":"interrupted"}),
+        json!({"type":"modelRetry","id":"retry","error":{"message":"server error 503","additionalDetails":null},"willRetry":true,"attempt":3,"maxRetries":10,"delaySeconds":4.0}),
+    ] {
+        screen.event(json!({"type":"item.completed","turnId":"t2","item":item}));
+    }
+    turn["status"] = json!("completed");
+    screen.event(json!({"type":"turn.completed","turn":turn}));
+    screen.draw();
+    assert!(screen.text().contains("Interrupted"), "{}", screen.text());
+    assert!(
+        screen
+            .text()
+            .contains("Retrying in 4.0s (3/10): server error 503"),
+        "{}",
+        screen.text()
+    );
+    let stored = serde_json::to_value(screen.ui.app().snapshot()).unwrap();
+    let restored: SessionSnapshot = serde_json::from_value(stored).unwrap();
+    let mut other = Ui::new(TestBackend::new(80, 24), App::new(restored, None, NOW)).unwrap();
+    other.draw(NOW).unwrap();
+    assert_eq!(other.backend().buffer(), screen.ui.backend().buffer());
+    screen.export(Export::File(Some("retry.md".into())));
+    screen.wait_for("retry.md");
+    let text = std::fs::read_to_string(screen.path("retry.md")).unwrap();
+    assert!(text.contains("partial reply") && text.contains("_Interrupted_"));
+    assert!(text.contains("Retrying in 4.0s (3/10): server error 503"));
+}
+
 struct Screen {
     ui: Ui<TestBackend>,
     seq: u64,

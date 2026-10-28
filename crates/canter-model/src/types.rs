@@ -1,3 +1,4 @@
+use crate::ModelError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -110,10 +111,32 @@ pub enum FinishReason {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelEvent {
-    TextDelta(String),
-    ReasoningDelta(String),
+    TextDelta {
+        item_id: String,
+        delta: String,
+    },
+    ReasoningDelta {
+        item_id: String,
+        delta: String,
+    },
+    /// Fully assembled arguments, still provisional until Finished or
+    /// ItemCompleted with item_id equal to the call's id. Adapters may also
+    /// emit ItemCompleted directly without this provisional event.
     ToolCall(ToolCall),
     Usage(Usage),
-    /// Successful transport completion. Inspect the reason before executing tools.
+    /// Provider-confirmed complete item. IDs are scoped to one attempt.
+    ItemCompleted {
+        item_id: String,
+        content: AssistantContent,
+    },
+    /// The incomplete attempt was discarded; the identical request will be sent again.
+    Retrying {
+        error: ModelError,
+        attempt: u32,
+        max_retries: u32,
+        delay: std::time::Duration,
+    },
+    /// Successful transport completion; confirms all remaining items. Inspect
+    /// the reason before executing tools. Providers may confirm items earlier.
     Finished(FinishReason),
 }

@@ -7,8 +7,8 @@
 - `ChatCompletions::new(base_url, ApiKey::new(key))` 创建客户端。URL 可带 `/v1` 和尾部斜杠；适配器追加 `/chat/completions`。模型名在每次 `Request.model` 中传入。
 - `Model::stream(Request, CancellationToken) -> ModelStream<'_>` 返回 `Send` 的拉取式流，可以通过 `dyn Model` 注入假模型。调用方持续 poll；丢弃流即丢弃请求，本包不开后台任务。
 - `Request` 包含 `model`、`messages`、`tools`、`options`。`ToolDefinition.parameters` 是 `serde_json::Value`。`RequestOptions.thinking: Option<bool>` 控制思考开关，`reasoning_effort: Option<String>` 传思考档位，`max_output_tokens: Option<u32>` 控制输出上限；`None` 不发送对应字段，沿用提供方默认值。显式关闭思考时不发送 `reasoning_effort`。
-- `ModelEvent` 包括 `TextDelta`、`ReasoningDelta`、完整的 `ToolCall`、`Usage` 和 `Finished`。用量包含输入、输出、总 token 数，以及提供方给出时的缓存命中、未命中和思考 token 数；缓存、思考计数是细分，不能再叠加到总量。
-- `Finished` 是成功收完传输后的最后一个事件，原因是 `Stop`、`ToolCalls`、`Length` 或 `Other`。`Finished(Length)` 和 `Finished(Other)` 都表示回复不完整，核心需向用户说明。工具调用按序号拼接，id 和名字取第一个非空值、参数逐段追加，在 `[DONE]` 到达且结束原因为 `ToolCalls` 时交出。调用方必须等到 `Finished(ToolCalls)` 后才执行工具；取消、错误或截断都不能执行这一批工具。
+- `ModelEvent` 包括带尝试内项目 ID 的 `TextDelta`、`ReasoningDelta`，参数已拼齐的 `ToolCall`、`Usage`、`Finished`，以及 `ItemCompleted { item_id, content }` 和 `Retrying { error, attempt, max_retries, delay }`。这些都是模型层内部事件，不是客户端协议。提供方可用 `ItemCompleted` 提前确认单项（完整内容为准）；`Finished` 确认这次响应剩余的全部项目。重试前发 `Retrying`，调用方把上次尝试的半截显示为中断，并清空未完成内容。用量包含输入、输出、总 token 数，以及提供方给出时的缓存命中、未命中和思考 token 数；缓存、思考计数是细分，不能再叠加到总量。
+- `Finished` 是成功收完传输后的最后一个事件，原因是 `Stop`、`ToolCalls`、`Length` 或 `Other`。`Finished(Length)` 和 `Finished(Other)` 都表示回复不完整，核心需向用户说明。工具调用按序号拼接，id 和名字取第一个非空值、参数逐段追加，在 `[DONE]` 到达且结束原因为 `ToolCalls` 时交出。Chat Completions 调用方必须等到 `Finished(ToolCalls)` 后才执行工具；取消、错误或截断都不能执行该接口未确认的工具。其它提供方已用 `ItemCompleted` 确认的工具在可重试断流后仍照常执行一次，随后以完整项和工具结果继续请求。断流出错重发时，未完成内容不写进模型历史；用户按 Esc 打断则保留已收到的半截回答、思考和工具调用，未执行的工具由核心补 interrupted 占位结果，界面、存盘和导出照旧，不给用户打断的半截新增 status 标记。
 - 错误以流中的一次 `Err(ModelError)` 结束。用 `kind` 区分 `RateLimited`、`Server`、`Network`、`Timeout`、`ContextLength`、`Authentication`、`InvalidRequest` 和 `Other`；`ContextLength` 供核心触发压缩。可选的 `status`、`retry_after` 只保留安全的状态码与时长，不带提供方原始错误内容。
 - 取消优先于读取和重试等待，之后直接结束流，不再返回事件或错误；调用方用自己持有的 token 区分取消与成功结束。正常成功必有 `Finished`。
 
@@ -30,7 +30,7 @@ DeepSeek 要求带工具清单的后续请求回传所有历史助手消息的�
 
 ## 传输和凭证
 
-固定最多重试 3 次（含首次共 4 次请求），本地退避依次为 250 ms、500 ms、1 s，上限 1 s。有效的 `Retry-After`（秒数或 HTTP 日期）优先于本地退避，但自动等待上限为 60 s；超过上限就立即返回带原始 `retry_after` 时长的错误，由调用方决定何时再试，不截短服务端要求的等待。过去的日期立即重试。仅在尚未向调用方返回任何事件时自动重试可重试错误，任意内容或用量交出后发生断流就报错。DeepSeek 的 `insufficient_system_resource` 和 `aborted` 结束原因归为 `ErrorKind::Server`，同样遵守这一重试条件；`content_filter` 仍为 `Finished(Other)`。收到结束原因但未收到 `[DONE]` 也算断流。连接超时 30 s，每次网络读取超时 300 s。
+`RetryPolicy` 是各提供方共用的重试模块；Chat Completions 用 `with_retry_policy` 注入，默认最多重试 10 次（含首次共 11 次请求）。本地退避为 0.5 秒起翻倍、最多 32 秒，向下加最多 10% 随机抖动。有效的 `Retry-After`（秒数或 HTTP 日期）优先，超过 60 秒按 60 秒，过去的日期立即重试。限流、5xx、网络和超时可重试，认证、无效请求、上下文过长不重试。没有任何已确认完整项时，无论是否出现过增量或用量，都可重发原请求；已有完整项则把错误交核心保留完整项并继续。错误的 `retries` 和错误文字报告实际重试次数。测试可注入 `RetryPolicy.sleep` 缩短等待，不改变报告给调用方的延迟。DeepSeek 的 `insufficient_system_resource`、`aborted` 仍归为 Server，`content_filter` 仍为 `Finished(Other)`；收到结束原因但没有 `[DONE]` 仍算断流。连接超时 30 秒、每次网络读取超时 300 秒不变。
 
 本包不读取配置文件或环境变量，不使用环境代理，也不自动跟随重定向。`ApiKey` 的 `Debug` 和 `Display` 只输出遮罩；认证头标记为 sensitive，客户端 Debug 不暴露内部 HTTP 客户端。错误不保留 HTTP/SSE/JSON 底层错误链、响应正文、URL 或请求头，本包不写请求日志。
 

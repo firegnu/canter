@@ -2,11 +2,13 @@
 
 mod chat_completions;
 mod error;
+mod retry;
 mod types;
 mod wire;
 
 pub use chat_completions::{ApiKey, ChatCompletions};
 pub use error::{ErrorKind, ModelError};
+pub use retry::{RetryPolicy, RetrySleep};
 pub use types::*;
 
 use futures_util::Stream;
