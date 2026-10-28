@@ -44,7 +44,7 @@
 - 参考源码只读克隆在 `/tmp/r49-src/`：`codex`（`rust-v0.163.0`）、`pi`（`v1.4.0`）、`opencode`（`v2.1.3`）。`/tmp` 重启会清空，丢了照这三个标签重新 `git clone --depth 1 --branch <标签>`（地址见调研报告「本地读的源码」）。
 - 编译目录：`../canter-worktrees/.target/<子目录>`，主仓库用 `main`。
 - 测试用 cargo-nextest（10-26 用 Homebrew 装的 0.9.149，`/opt/homebrew/bin/cargo-nextest`）。
-- 主控用 Bash 跑 `corral start … -- claude --dangerously-skip-permissions …` 开 agent：10-26 上午被 Claude Code 的自动权限检查拦过（原因「Create Unsafe Agents」，不弹确认框），10-26 晚上开 P2-48、P2-61 时没被拦，开 P2-56 时又被拦。被拦就把整条命令给用户，用户在会话里用 `!` 开头运行。
+- 开 agent：`corral start` 单独一条运行，前后不用 `&&`、`;`、`|` 接别的命令，一次只开一个；建 worktree、`corral wait`、取结果都另起一条（用户的放行规则 `Bash(corral start:*)` 只认单独的 `corral start`，串起来会被自动权限检查以「Create Unsafe Agents」拦下；corral-dispatch 技能第 4 节，ranch f4a9a29，10-28）。单独一条仍被拦，再把命令给用户用 `!` 运行。
 
 ## 还没派的
 
