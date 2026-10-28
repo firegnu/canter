@@ -12,7 +12,8 @@ pub use permission::{ExecutionPermit, PermissionCheck, PermissionGate};
 pub use shell::{DEFAULT_SHELL_TIMEOUT_MS, MAX_MODEL_OUTPUT_BYTES, MAX_SHELL_TIMEOUT_MS};
 
 use canter_protocol::{
-    FileUpdateChange, Item, ItemStatus, PatchChangeKind, UserInputOption, UserInputRequest,
+    FileUpdateChange, Item, ItemStatus, PatchChangeKind, PlanStep, PlanStepStatus, UserInputOption,
+    UserInputRequest,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -31,6 +32,7 @@ pub enum Tool {
     Shell,
     AskUser,
     WebFetch,
+    UpdatePlan,
     Mcp,
 }
 
@@ -50,13 +52,14 @@ pub struct ToolDefinition {
 }
 
 impl Tool {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Read,
         Self::Write,
         Self::Edit,
         Self::Shell,
         Self::AskUser,
         Self::WebFetch,
+        Self::UpdatePlan,
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -71,6 +74,7 @@ impl Tool {
             Self::Shell => "shell",
             Self::AskUser => "ask_user",
             Self::WebFetch => "web_fetch",
+            Self::UpdatePlan => "update_plan",
             Self::Mcp => "mcp",
         }
     }
@@ -80,11 +84,25 @@ impl Tool {
             Self::Read => Risk::Read,
             Self::Write | Self::Edit => Risk::Write,
             Self::Shell | Self::Mcp | Self::WebFetch => Risk::Execute,
-            Self::AskUser => Risk::Interaction,
+            Self::AskUser | Self::UpdatePlan => Risk::Interaction,
         }
     }
 
     pub fn definition(self) -> ToolDefinition {
+        if self == Self::UpdatePlan {
+            return ToolDefinition {
+                name: self.name(),
+                description: "Update the task checklist for work with three or more steps; skip it for simple tasks. Each call replaces the whole plan. Give each step a non-empty description and a status: pending, in_progress, or completed. At most one step may be in_progress. Mark a step in_progress when you start it and completed as soon as it is done. Call immediately after completing each step, before starting the next; never save updates for the end. Update only when progress or the plan changes; do not repeat unchanged updates. Optionally explain a change to the plan.",
+                parameters: json!({"type":"object","properties":{
+                    "explanation":{"type":"string"},
+                    "plan":{"type":"array","items":{"type":"object","properties":{
+                        "step":{"type":"string","minLength":1},
+                        "status":{"type":"string","enum":["pending","in_progress","completed"]}
+                    },"required":["step","status"],"additionalProperties":false}}
+                },"required":["plan"],"additionalProperties":false}),
+                risk: self.risk(),
+            };
+        }
         if self == Self::WebFetch {
             return ToolDefinition {
                 name: self.name(),
@@ -198,6 +216,54 @@ struct AskUserArgs {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdatePlanArgs {
+    explanation: Option<String>,
+    #[serde(deserialize_with = "deserialize_plan")]
+    plan: Vec<PlanStep>,
+}
+
+// Model arguments use snake_case; protocol events use camelCase.
+fn deserialize_plan<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<PlanStep>, D::Error> {
+    #[derive(Deserialize)]
+    struct Step {
+        step: String,
+        status: String,
+    }
+    Ok(Vec::<Step>::deserialize(deserializer)?
+        .into_iter()
+        .map(|step| PlanStep {
+            step: step.step,
+            status: match step.status.as_str() {
+                "pending" => PlanStepStatus::Pending,
+                "in_progress" => PlanStepStatus::InProgress,
+                "completed" => PlanStepStatus::Completed,
+                _ => PlanStepStatus::Unknown,
+            },
+        })
+        .collect())
+}
+
+/// The `update_plan` plan array in model-facing snake_case, skipping unknown statuses.
+pub fn serialize_plan(plan: &[PlanStep]) -> Value {
+    Value::Array(
+        plan.iter()
+            .filter_map(|step| {
+                let status = match step.status {
+                    PlanStepStatus::Pending => "pending",
+                    PlanStepStatus::InProgress => "in_progress",
+                    PlanStepStatus::Completed => "completed",
+                    PlanStepStatus::Unknown => return None,
+                };
+                Some(json!({"step": step.step, "status": status}))
+            })
+            .collect(),
+    )
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Replacement {
     old_text: String,
@@ -205,6 +271,7 @@ struct Replacement {
 }
 
 enum Action {
+    UpdatePlan(UpdatePlanArgs),
     WebFetch(reqwest::Url),
     Mcp(mcp::McpTool),
     AskUser(AskUserArgs),
@@ -259,6 +326,12 @@ impl PreparedCall {
     }
     fn item(&self, status: ItemStatus) -> Item {
         match &self.action {
+            Action::UpdatePlan(args) => Item::Plan {
+                id: self.id.clone(),
+                explanation: args.explanation.clone(),
+                plan: args.plan.clone(),
+                status,
+            },
             Action::WebFetch(_) => Item::WebFetch {
                 id: self.id.clone(),
                 url: self.arguments["url"].as_str().unwrap_or_default().into(),
@@ -347,6 +420,7 @@ impl PreparedCall {
 }
 
 pub struct Tools {
+    plan_enabled: bool,
     executor: Arc<dyn Executor>,
     mcp: Vec<mcp::McpTool>,
     web_fetch_timeout: std::time::Duration,
@@ -412,6 +486,7 @@ impl Tools {
     }
     pub fn new(executor: Arc<dyn Executor>) -> Self {
         Self {
+            plan_enabled: true,
             executor,
             mcp: Vec::new(),
             web_fetch_timeout: web_fetch::DEFAULT_TIMEOUT,
@@ -431,7 +506,14 @@ impl Tools {
     pub fn mcp_tools(&self) -> &[mcp::McpTool] {
         &self.mcp
     }
+    pub fn with_plan_enabled(mut self, enabled: bool) -> Self {
+        self.plan_enabled = enabled;
+        self
+    }
     pub fn find(&self, name: &str) -> Option<Tool> {
+        if name == "update_plan" && !self.plan_enabled {
+            return None;
+        }
         Tool::from_name(name).or_else(|| {
             self.mcp
                 .iter()
@@ -552,6 +634,31 @@ impl Tools {
         cancel: &CancellationToken,
     ) -> Result<Action, String> {
         match tool {
+            Tool::UpdatePlan => {
+                let args: UpdatePlanArgs = parse(arguments)?;
+                if args.plan.iter().any(|step| step.step.trim().is_empty()) {
+                    return Err("update_plan steps must not be empty".into());
+                }
+                if args
+                    .plan
+                    .iter()
+                    .any(|step| step.status == PlanStepStatus::Unknown)
+                {
+                    return Err(
+                        "update_plan status must be pending, in_progress, or completed".into(),
+                    );
+                }
+                if args
+                    .plan
+                    .iter()
+                    .filter(|step| step.status == PlanStepStatus::InProgress)
+                    .count()
+                    > 1
+                {
+                    return Err("update_plan allows at most one in_progress step".into());
+                }
+                Ok(Action::UpdatePlan(args))
+            }
             Tool::WebFetch => web_fetch::prepare(arguments).map(Action::WebFetch),
             Tool::Mcp => Err("prepare an MCP tool by its qualified name".into()),
             Tool::AskUser => {
@@ -711,6 +818,11 @@ impl Tools {
             }
         }
         match &call.action {
+            Action::UpdatePlan(_) => ToolOutput {
+                text: "Plan updated".into(),
+                item: call.item(ItemStatus::Completed),
+                outcome: ToolOutcome::Completed,
+            },
             Action::WebFetch(url) => {
                 let (text, result, outcome) =
                     web_fetch::run(url, self.web_fetch_timeout, cancel).await;
@@ -1036,6 +1148,12 @@ fn tool_error(
     cwd: &std::path::Path,
 ) -> ToolOutput {
     let item = match tool {
+        Tool::UpdatePlan => Item::Plan {
+            id,
+            explanation: Some(text.clone()),
+            plan: Vec::new(),
+            status: ItemStatus::Failed,
+        },
         Tool::WebFetch => Item::WebFetch {
             id,
             url: arguments["url"].as_str().unwrap_or_default().into(),

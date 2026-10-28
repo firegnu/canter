@@ -87,6 +87,7 @@ async fn create(
         store.clone(),
         "s1".into(),
         SessionSettings {
+            plan_enabled: None,
             cwd: temp.path().to_string_lossy().into(),
             model: "fake".into(),
             reasoning_effort: Default::default(),
@@ -1061,6 +1062,7 @@ async fn unreadable_project_instructions_warn_and_do_not_block_the_model() {
             store.clone(),
             "s1".into(),
             SessionSettings {
+                plan_enabled: None,
                 cwd: temp.path().to_string_lossy().into(),
                 model: "fake".into(),
                 reasoning_effort: Default::default(),

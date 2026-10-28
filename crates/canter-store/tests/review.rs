@@ -10,6 +10,7 @@ fn create(store: &Store, id: &str) -> SessionWriter {
         .create(
             id,
             SessionSettings {
+                plan_enabled: None,
                 cwd: "/work/project".into(),
                 name: Some(id.into()),
                 model: "fake".into(),

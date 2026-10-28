@@ -948,7 +948,15 @@ async fn ask_user_second_option_returns_to_the_model_and_continues() {
             .collect();
         assert_eq!(
             names,
-            ["read", "write", "edit", "shell", "ask_user", "web_fetch"]
+            [
+                "read",
+                "write",
+                "edit",
+                "shell",
+                "ask_user",
+                "web_fetch",
+                "update_plan"
+            ]
         );
     }
     a.wait_for("Which storage should we use?").await;

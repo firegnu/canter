@@ -54,6 +54,12 @@ request.resolved(cancelled)，再记录“被打断，没有执行”的工具�
 说明随 `request.resolved` 存盘，并归并到快照的 `approvalFeedback`，重开后仍可显示。
 完整思考内容写入模型历史，显示事件不是模型历史的替代品。
 
+清单开启且当前有 pending / inProgress 步骤时，从上次成功的 `update_plan` 起，
+每 10 次其它工具调用在第 10 次结果末尾追加英文进度提醒；同一回复的多个调用逐个计数。
+提醒和成功更新清单后清零，失败更新不清零也不计数；无清单、全部完成或关闭时不计数、不提醒。
+计数跨轮保留，仅放内存，重新打开会话从 0 起。提醒只进模型历史的工具结果，
+不改已有内容，不进入界面事件或 `/export`；压缩仍按工具结果拼稿，不计作用户原话。
+
 同会话的命令、批准回答和落盘更新串行；耗时的模型/工具等待不持会话锁。
 一条批准请求只写一次处理事件，取消/恢复时也记录原处理序号供晚到回答查询。
 模型内部重试不暴露重试事件，核心保持 working；没有伪造“正在重试”提示，也未修改模型接口。
@@ -83,6 +89,12 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
 - `message { message, user_input }`：一条模型消息；user_input 区分用户原话和核心的中断提示，旧条目缺字段时默认 false。
 - `compaction_request { messages }`：每次摘要调用收到的完整消息，仅作审计，不混入正常对话。
 - `compaction { summary, messages, user_messages }`：压缩后的完整对话替换及保留的用户原话，恢复从最后一次压缩继续。原记录不删除。
+  清单开启且存在时，在 `messages` 的摘要消息末尾附 `\n\n[Current plan]\n` 和当前
+  清单的工具参数形式（snake_case）的 JSON，由工具层将 `inProgress` 转成 `in_progress`，
+  保留已知步骤的内容和状态含义，跳过 Unknown 状态的步骤，模型可原样回传给 `update_plan`；
+  不放进 `summary`、`user_messages` 或 `user_inputs`。`settings.planEnabled` 为 false 时不附清单。再次压缩拼稿按
+  `summary_index` 定位上一份摘要，只去掉其中的附带清单，保留摘要正文；用户消息中
+  同名标记照常保留，存盘历史不改。固定的九个压缩小节不变。
   有图片时另加可选 `user_inputs` 保存保留的完整用户消息；旧的纯文字记录仍原样读写。
   图片用户消息用 `user_parts` 保存按顺序排列的文字和会话副本文件名，不存绝对路径或内联 base64。
   常规与压缩请求都临时读取副本，支持图片的模型收到 data URL；不支持的模型收到文字占位。
@@ -101,7 +113,7 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
 固定段原文在 `src/prompt/core.txt`（P2-57 方案 §3.1）：行首 `- [条件]` 的要点只在条件成立时出现，
 条件按打开会话时的工具名求值，支持 `&`、`|` 和括号，`mcp` 指至少有一个 `mcp__…` 工具；
 `{approval_list}`、`{data_list}` 按同一工具集依次拼接，清单为空时整句不出现。
-当前六个内置工具和没接 MCP 时渲染出的全文放在 `tests/data/core_deepseek.txt`，测试逐字核对。
+当前七个内置工具和没接 MCP 时渲染出的全文放在 `tests/data/core_deepseek.txt`，测试逐字核对。
 
 环境段固定四行：工作目录、git 仓库根（没有则 none）、系统和架构、本地打开日期、英文星期和 UTC 偏移。
 日期后提示当前日期可能更晚；不加入权限模式、git 分支/状态或模型名。会话中途改文件或跨本地零点都不重读，

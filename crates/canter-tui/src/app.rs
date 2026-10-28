@@ -871,6 +871,7 @@ impl App {
     }
 
     pub fn apply_event(&mut self, event: &Event, now_ms: i64) {
+        let plan_visible = self.snapshot.settings.plan_enabled != Some(false);
         let open_request = match &event.payload {
             EventPayload::RequestResolved { request_id, .. } => {
                 self.snapshot.pending_requests.iter().find_map(|request| {
@@ -895,6 +896,11 @@ impl App {
                 theme::failure(),
             ));
             return;
+        }
+        if plan_visible != (self.snapshot.settings.plan_enabled != Some(false)) {
+            self.history = History::default();
+            self.scroll = Scroll::default();
+            self.mouse.selection = None;
         }
         self.retract_drafts.event(event);
         self.steering.event(event);
@@ -3065,8 +3071,11 @@ impl App {
             if !self.item_done(turn, at.item) {
                 return None;
             }
-            let rows = if Some(at.item) == echo_index(turn) {
-                // Already shown as the turn's prompt.
+            let rows = if Some(at.item) == echo_index(turn)
+                || (matches!(item, Item::Plan { .. })
+                    && self.snapshot.settings.plan_enabled == Some(false))
+            {
+                // Already shown as the turn's prompt, or hidden by configuration.
                 Vec::new()
             } else {
                 cells::item(
@@ -3243,6 +3252,10 @@ impl App {
         // The choice offered is on screen when any of its choices fit.
         self.drawing.chooser = (self.choosing() && !list.is_empty()).then_some(self.choosers);
 
+        let plan_room = usize::from(height.saturating_sub(3 + INFO_ROWS + bottom.height()))
+            .saturating_sub(list.len());
+        let plan = crate::plan::pinned(&self.snapshot, width, plan_room);
+
         self.edge_scroll(now_ms);
         self.extend_history(width);
         let (live, live_parts) = self.live_rows(width);
@@ -3261,7 +3274,8 @@ impl App {
 
         let lead = lead(history, &live);
         let total = history.len() + live.len() - lead;
-        let room = usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height())) - list.len();
+        let room = usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height()))
+            .saturating_sub(list.len() + plan.len());
         // While the button is down the view stays where it is.
         let held = self
             .mouse
@@ -3303,9 +3317,9 @@ impl App {
         self.drawing.input = draft_shown.then(|| DrawnInput {
             width,
             text: self.input.text().to_owned(),
-            // Under the conversation: the hint, the status line, the list
+            // Under the conversation: the hint, status line, plan, list
             // and the box's top border.
-            top: area + usize::from(hint.is_some()) + 1 + list.len() + 1,
+            top: area + usize::from(hint.is_some()) + 1 + plan.len() + list.len() + 1,
             rows: input_rows,
         });
         self.scroll.page = area.max(1);
@@ -3421,6 +3435,7 @@ impl App {
         let found = current.map(|current| (current, hits.len()));
         let (info, mode_in_full) = self.info_rows(width, now_ms);
         let view = View {
+            plan,
             conversation,
             hint,
             status: match self.copier.note() {
@@ -3875,7 +3890,8 @@ impl App {
     fn item_done(&self, turn: &Turn, index: usize) -> bool {
         let item = &turn.items[index];
         let status = match item {
-            Item::McpToolCall { status, .. }
+            Item::Plan { status, .. }
+            | Item::McpToolCall { status, .. }
             | Item::WebFetch { status, .. }
             | Item::CommandExecution { status, .. }
             | Item::FileChange { status, .. }
@@ -3952,7 +3968,10 @@ impl App {
                     item: index,
                 };
                 append_notices(&mut rows, &mut parts, &mut tail, at);
-                if Some(index) == echo {
+                if Some(index) == echo
+                    || (matches!(item, Item::Plan { .. })
+                        && self.snapshot.settings.plan_enabled == Some(false))
+                {
                     continue;
                 }
                 let done = self.item_done(turn, index);
@@ -4323,6 +4342,7 @@ fn mode_label(mode: PermissionMode) -> (&'static str, Style) {
 
 /// The screen's content, laid out for one frame.
 pub(crate) struct View {
+    plan: Vec<Line<'static>>,
     /// The conversation rows in view, from the top of the screen.
     conversation: Vec<Line<'static>>,
     /// While scrolled back: goes to the bottom when clicked, and says when
@@ -4364,6 +4384,7 @@ impl View {
     fn below(&self) -> u16 {
         u16::from(self.hint.is_some())
             + 1
+            + self.plan.len() as u16
             + self.list.len() as u16
             + self.bottom.height()
             + INFO_ROWS
@@ -4387,6 +4408,8 @@ impl View {
             frame.render_widget(Paragraph::new(hint), row(1));
         }
         frame.render_widget(Paragraph::new(self.status), row(1));
+        let plan_height = self.plan.len() as u16;
+        frame.render_widget(Paragraph::new(self.plan), row(plan_height));
         frame.render_widget(Paragraph::new(self.list), row(list));
         let boxed = row(self.bottom.height());
         let info = row(INFO_ROWS);

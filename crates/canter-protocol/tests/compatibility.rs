@@ -2,6 +2,50 @@ use canter_protocol::{Event, EventPayload, Item, SessionSnapshot, SessionStatus,
 use serde_json::json;
 
 #[test]
+fn plan_fields_are_optional_and_legacy_clients_skip_plan_items() {
+    // A minimal legacy view, using the protocol's existing unknown-item rule.
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type", rename_all = "camelCase")]
+    enum LegacyItem {
+        AgentMessage {
+            text: String,
+        },
+        #[serde(other)]
+        Unknown,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct LegacySettings {
+        model: String,
+    }
+    let settings = json!({"cwd":"/work","name":null,"model":"fake","approvalPolicy":"alwaysAsk"});
+    let old: canter_protocol::SessionSettings = serde_json::from_value(settings.clone()).unwrap();
+    assert_eq!(old.plan_enabled, None);
+    assert_eq!(serde_json::to_value(old).unwrap().get("planEnabled"), None);
+    let mut new = settings;
+    new["planEnabled"] = json!(false);
+    assert_eq!(
+        serde_json::from_value::<LegacySettings>(new).unwrap().model,
+        "fake"
+    );
+    let value = json!({"type":"plan","id":"p1","plan":[{"step":"Read","status":"inProgress"}],"status":"completed"});
+    assert!(matches!(
+        serde_json::from_value::<LegacyItem>(value.clone()).unwrap(),
+        LegacyItem::Unknown
+    ));
+    let parsed: Item = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+    let following: LegacyItem =
+        serde_json::from_value(json!({"type":"agentMessage","id":"m1","text":"still readable"}))
+            .unwrap();
+    assert!(matches!(following, LegacyItem::AgentMessage { text } if text == "still readable"));
+    assert_eq!(
+        serde_json::from_value::<canter_protocol::PlanStepStatus>(json!("futureStatus")).unwrap(),
+        canter_protocol::PlanStepStatus::Unknown
+    );
+}
+
+#[test]
 fn command_source_defaults_to_agent_and_user_shell_round_trips() {
     use canter_protocol::ExecCommandSource;
     let old = json!({"type":"commandExecution","id":"command","command":"git status",

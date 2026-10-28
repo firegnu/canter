@@ -23,6 +23,7 @@ fn private_typed_model_history_survives_reopen_and_a_torn_last_line() {
         .create(
             "s1",
             SessionSettings {
+                plan_enabled: None,
                 cwd: "/work".into(),
                 name: None,
                 model: "fake".into(),

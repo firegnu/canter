@@ -43,7 +43,7 @@ impl PermissionGate {
     /// Review restrictions precede both permission mode and session grants.
     pub fn evaluate_review<'a>(&self, call: &'a PreparedCall) -> PermissionCheck<'a> {
         match call.tool {
-            Tool::Read => PermissionCheck::Execute(ExecutionPermit { call }),
+            Tool::Read | Tool::UpdatePlan => PermissionCheck::Execute(ExecutionPermit { call }),
             Tool::Shell if matches!(&call.action, Action::Shell(args) if call.executor.is_readonly_shell(&args.command)) => {
                 PermissionCheck::Execute(ExecutionPermit { call })
             }
@@ -90,7 +90,7 @@ impl PermissionGate {
         call: &'a PreparedCall,
         mode: PermissionMode,
     ) -> PermissionCheck<'a> {
-        if self.grants.contains(&call.permission_key()) {
+        if call.tool == Tool::UpdatePlan || self.grants.contains(&call.permission_key()) {
             return PermissionCheck::Execute(ExecutionPermit { call });
         }
         let ask = match mode {

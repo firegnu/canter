@@ -5,4 +5,8 @@ import type { ReasoningEffort } from "./ReasoningEffort";
 /**
  * Public settings. Environment variables never belong here.
  */
-export type SessionSettings = { cwd: string, name: string | null, model: string, reasoningEffort?: ReasoningEffort, approvalPolicy: PermissionMode, };
+export type SessionSettings = {
+/**
+ * Effective tool switch, frozen when the server opens this session.
+ */
+planEnabled?: boolean, cwd: string, name: string | null, model: string, reasoningEffort?: ReasoningEffort, approvalPolicy: PermissionMode, };

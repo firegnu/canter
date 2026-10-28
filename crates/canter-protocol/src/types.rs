@@ -62,6 +62,10 @@ impl ReasoningEffort {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSettings {
+    /// Effective tool switch, frozen when the server opens this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plan_enabled: Option<bool>,
     #[serde(default)]
     pub cwd: String,
     pub name: Option<String>,
@@ -107,6 +111,7 @@ impl SessionSnapshot {
         Self {
             id: id.into(),
             settings: SessionSettings {
+                plan_enabled: None,
                 cwd: String::new(),
                 name: None,
                 model: String::new(),
@@ -136,6 +141,23 @@ impl SessionSnapshot {
             updated_at: self.updated_at,
             last_event_seq: self.last_event_seq,
         }
+    }
+
+    /// The latest successful replacement, including an explicitly empty plan.
+    /// Deriving it from retained turns also handles conversation rewinds.
+    pub fn current_plan(&self) -> Option<&[PlanStep]> {
+        self.turns
+            .iter()
+            .rev()
+            .flat_map(|turn| turn.items.iter().rev())
+            .find_map(|item| match item {
+                Item::Plan {
+                    plan,
+                    status: ItemStatus::Completed,
+                    ..
+                } => Some(plan.as_slice()),
+                _ => None,
+            })
     }
 }
 
@@ -231,6 +253,22 @@ pub enum ItemStatus {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum PlanStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct PlanStep {
+    pub step: String,
+    pub status: PlanStepStatus,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(
     tag = "type",
@@ -238,6 +276,14 @@ pub enum ItemStatus {
     rename_all_fields = "camelCase"
 )]
 pub enum Item {
+    Plan {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        explanation: Option<String>,
+        plan: Vec<PlanStep>,
+        status: ItemStatus,
+    },
     UserMessage {
         id: String,
         content: Vec<UserInput>,
@@ -334,6 +380,7 @@ impl Item {
     pub fn id(&self) -> Option<&str> {
         match self {
             Self::UserMessage { id, .. }
+            | Self::Plan { id, .. }
             | Self::AgentMessage { id, .. }
             | Self::Reasoning { id, .. }
             | Self::McpToolCall { id, .. }

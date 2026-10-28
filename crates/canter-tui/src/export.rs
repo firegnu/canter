@@ -126,7 +126,10 @@ impl Body {
             })
             .flatten();
         for (index, item) in turn.items.iter().enumerate() {
-            if Some(index) == echo {
+            if Some(index) == echo
+                || (matches!(item, Item::Plan { .. })
+                    && snapshot.settings.plan_enabled == Some(false))
+            {
                 continue;
             }
             let feedback = item
@@ -269,8 +272,22 @@ impl Body {
                 );
             }
             Item::ContextCompaction { .. } => self.block(assistant, "_Context compacted_"),
-            // No thinking.
-            Item::Reasoning { .. } | Item::AgentMessage { .. } | Item::Unknown => {}
+            Item::Plan {
+                plan,
+                explanation,
+                status,
+                ..
+            } if *status != ItemStatus::InProgress => {
+                self.block(
+                    assistant,
+                    &crate::plan::markdown(plan, explanation.as_deref(), *status),
+                );
+            }
+            // No thinking or unfinished plan updates.
+            Item::Plan { .. }
+            | Item::Reasoning { .. }
+            | Item::AgentMessage { .. }
+            | Item::Unknown => {}
         }
     }
 

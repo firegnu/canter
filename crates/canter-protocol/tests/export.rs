@@ -129,6 +129,20 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         );
     }
     let settings = &definitions["SessionSettings"]["properties"];
+    assert_eq!(
+        settings["planEnabled"]["type"],
+        serde_json::json!(["boolean", "null"])
+    );
+    assert!(
+        definitions["SessionSettings"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|field| field != "planEnabled")
+    );
+    let settings_ts =
+        fs::read_to_string(temp.path().join("typescript/SessionSettings.ts")).unwrap();
+    assert!(settings_ts.contains("planEnabled?: boolean"));
     assert!(settings.get("model").is_some());
     assert!(settings.get("approvalPolicy").is_some());
     assert!(settings.get("env").is_none());

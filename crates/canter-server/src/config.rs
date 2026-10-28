@@ -24,6 +24,27 @@ pub(crate) struct Config {
 }
 
 impl Config {
+    /// Only this switch is refreshed at session open; credentials and model
+    /// settings keep their existing server-start lifetime.
+    pub fn plan_enabled(home: &Path) -> Result<Option<bool>, ServerError> {
+        #[derive(Deserialize)]
+        struct PlanConfig {
+            #[serde(default = "enabled")]
+            plan_enabled: bool,
+        }
+        fn enabled() -> bool {
+            true
+        }
+        let file = match fs::File::open(home.join("config.json")) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(ServerError("cannot read config.json".into())),
+        };
+        let config: PlanConfig = serde_json::from_reader(file)
+            .map_err(|_| ServerError("config.json is not valid".into()))?;
+        Ok(Some(config.plan_enabled))
+    }
+
     pub fn load(home: &Path) -> Result<Self, ServerError> {
         let path = home.join("config.json");
         let file = fs::File::open(path).map_err(|_| {

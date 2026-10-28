@@ -37,6 +37,7 @@ mod markdown;
 mod mention;
 mod notify;
 mod picker;
+mod plan;
 mod question;
 mod report;
 mod retract;

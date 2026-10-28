@@ -277,6 +277,21 @@ kind 内层为带 type 的 RequestKind，包含 approval、userInput 及未知�
 终端连接新服务端时先读快照：停机关闭、无原因的旧会话，以及崩溃留下的非关闭状态
 可自动 resume；客户端主动关闭或未知关闭原因保持关闭。用户主动 resume 不受此限制。
 
+## 计划和待办（P2-34）
+
+`Item::Plan` 的 JSON 为 `{ "type": "plan", "id": "…", "explanation": "…",
+"plan": [{ "step": "…", "status": "inProgress" }], "status": "completed" }`，
+沿用 `item.started` / `item.completed`；`explanation` 可省略。
+`PlanStep.status` 是 `PlanStepStatus`：`pending` / `inProgress` / `completed`，
+与协议其他枚举及 Codex v2 一样用 camelCase。模型的 `update_plan` 参数仍用
+`in_progress`，由工具层转换。项目自己的 `status` 表示这次工具调用的结果。
+每次成功更新整份替换；`SessionSnapshot::current_plan()` 取最后一个成功项目的步骤，
+失败项目不替换清单，空数组表示清空，回退截断轮后恢复此前清单。
+
+`settings.planEnabled` 是可选布尔值，报告服务端打开会话时冻结的开关；旧快照缺省
+按开启处理，`false` 时客户端隐藏卡片和常驻清单。旧客户端忽略新设置，将 `plan`
+项目读成 Unknown 跳过；未知步骤状态同样跳过。
+
 ## 重新生成
 
 在 workspace 根目录运行：

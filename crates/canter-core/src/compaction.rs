@@ -149,21 +149,38 @@ async fn summarize(
     shared: &Shared,
     cancel: &CancellationToken,
 ) -> Result<(String, Vec<Message>), CoreError> {
-    let (prefix, history, user_messages, model) = {
+    let (prefix, history, summary_index, user_messages, model, plan) = {
         let state = shared.state.lock().await;
         (
             state.prefix.clone(),
             state.history.clone(),
+            state.summary_index,
             state.user_messages.clone(),
             state.journal.snapshot.settings.model.clone(),
+            state
+                .journal
+                .snapshot
+                .current_plan()
+                .filter(|_| state.journal.snapshot.settings.plan_enabled != Some(false))
+                .map(<[_]>::to_vec),
         )
     };
     let output_limit = shared.options.max_output_tokens.min(8192);
     let mut transcript = String::new();
     let mut images = Vec::new();
-    for message in &history {
+    for (index, message) in history.iter().enumerate() {
         match message {
-            Message::User { text } => transcript.push_str(&format!("\nUser: {text}\n")),
+            Message::User { text } => {
+                // Only the previous summary has an attached checklist. Keep
+                // literal markers in user messages untouched.
+                let text = if Some(index) == summary_index {
+                    text.split_once("\n\n[Current plan]\n")
+                        .map_or(text.as_str(), |(summary, _)| summary)
+                } else {
+                    text
+                };
+                transcript.push_str(&format!("\nUser: {text}\n"));
+            }
             Message::UserParts { content } => {
                 transcript.push_str("\nUser: ");
                 for part in content {
@@ -370,6 +387,13 @@ async fn summarize(
             break;
         }
     }
+    let mut summary_message = format!("[Context summary]\n{summary}");
+    if let Some(plan) = plan {
+        // Preserve the checklist in tool-argument form so the model can reuse it.
+        // Keep it in the summary message, outside user_inputs and the prompt.
+        summary_message.push_str("\n\n[Current plan]\n");
+        summary_message.push_str(&canter_tools::serialize_plan(&plan).to_string());
+    }
     let base = Request {
         messages: prefix,
         ..Request::default()
@@ -377,7 +401,7 @@ async fn summarize(
     let budget = KEEP_USER_TOKENS.min(
         input_limit(shared)
             .saturating_sub(context::request_tokens(&base))
-            .saturating_sub(context::estimate(&summary) + 1024),
+            .saturating_sub(context::estimate(&summary_message) + 1024),
     );
     let mut kept = Vec::new();
     let mut left = budget;
@@ -408,7 +432,7 @@ async fn summarize(
     }
     kept.reverse();
     kept.push(Message::User {
-        text: format!("[Context summary]\n{summary}"),
+        text: summary_message,
     });
     Ok((summary, kept))
 }

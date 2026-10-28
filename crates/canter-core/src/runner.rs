@@ -517,10 +517,7 @@ async fn execute(
     let Some(tool) = shared.tools.find(&call.name) else {
         let mut state = shared.state.lock().await;
         state
-            .message(Message::ToolResult {
-                tool_call_id: call.id,
-                text: "Unknown tool".into(),
-            })
+            .tool_result(&call, "Unknown tool".into(), false)
             .await?;
         state
             .journal
@@ -578,7 +575,8 @@ async fn execute(
                 None => {
                     let mut item = prepared.started_item();
                     match &mut item {
-                        Item::McpToolCall { status, .. }
+                        Item::Plan { status, .. }
+                        | Item::McpToolCall { status, .. }
                         | Item::WebFetch { status, .. }
                         | Item::FileRead { status, .. }
                         | Item::FileChange { status, .. }
@@ -656,10 +654,7 @@ async fn execute(
         cancel.cancel();
     }
     state
-        .message(Message::ToolResult {
-            tool_call_id: call.id,
-            text: output.text,
-        })
+        .tool_result(&call, output.text, output.outcome == ToolOutcome::Completed)
         .await?;
     state
         .journal

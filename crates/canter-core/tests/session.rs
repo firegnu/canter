@@ -884,6 +884,7 @@ fn input(text: &str) -> SessionInputParams {
 }
 fn settings(cwd: &std::path::Path) -> SessionSettings {
     SessionSettings {
+        plan_enabled: None,
         cwd: cwd.to_string_lossy().into(),
         name: None,
         model: "fake".into(),

@@ -1238,6 +1238,39 @@
       "oneOf": [
         {
           "properties": {
+            "explanation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "plan": {
+              "items": {
+                "$ref": "#/$defs/PlanStep"
+              },
+              "type": "array"
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "type": {
+              "const": "plan",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "plan",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "content": {
               "items": {
                 "$ref": "#/$defs/UserInput"
@@ -1874,6 +1907,30 @@
         "alwaysAsk",
         "askForExecution",
         "allowAll",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "PlanStep": {
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/PlanStepStatus"
+        },
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "step",
+        "status"
+      ],
+      "type": "object"
+    },
+    "PlanStepStatus": {
+      "enum": [
+        "pending",
+        "inProgress",
+        "completed",
         "unknown"
       ],
       "type": "string"
@@ -2522,6 +2579,13 @@
         "name": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "planEnabled": {
+          "description": "Effective tool switch, frozen when the server opens this session.",
+          "type": [
+            "boolean",
             "null"
           ]
         },

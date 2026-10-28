@@ -4,7 +4,7 @@ use crate::{
     journal::{Journal, now},
     runner,
 };
-use canter_model::{AssistantContent, Message, Model};
+use canter_model::{AssistantContent, Message, Model, ToolCall};
 use canter_protocol::*;
 use canter_store::Store;
 use canter_tools::{LocalExecutor, PermissionGate, Tools};
@@ -61,6 +61,7 @@ pub(crate) struct State {
     pub closing: bool,
     pub measured_context: Option<(u64, u64)>,
     pub rewind: crate::rewind::Checkpoints,
+    plan_tool_calls: u8,
 }
 pub(crate) struct Active {
     pub turn: Turn,
@@ -93,6 +94,7 @@ impl State {
             closing: false,
             measured_context: None,
             rewind: Default::default(),
+            plan_tool_calls: 0,
         }
     }
     async fn initialize_prefix(
@@ -103,6 +105,7 @@ impl State {
     ) -> Result<(), CoreError> {
         self.tool_definitions = canter_tools::Tool::ALL
             .into_iter()
+            .filter(|tool| tools.find(tool.name()).is_some())
             .map(|tool| {
                 let def = tool.definition();
                 canter_model::ToolDefinition {
@@ -163,6 +166,41 @@ impl State {
             .await?;
         self.history.push(message);
         Ok(())
+    }
+    pub async fn tool_result(
+        &mut self,
+        call: &ToolCall,
+        mut text: String,
+        succeeded: bool,
+    ) -> Result<(), CoreError> {
+        if call.name == "update_plan" {
+            if succeeded {
+                self.plan_tool_calls = 0;
+            }
+        } else if self.journal.snapshot.settings.plan_enabled != Some(false)
+            && self.journal.snapshot.current_plan().is_some_and(|plan| {
+                plan.iter().any(|step| {
+                    matches!(
+                        step.status,
+                        PlanStepStatus::Pending | PlanStepStatus::InProgress
+                    )
+                })
+            })
+        {
+            self.plan_tool_calls += 1;
+            if self.plan_tool_calls == 10 {
+                // Append only to this new model result, never to the UI item or user input.
+                text.push_str("\n\n[Plan reminder] If any plan steps are complete, call update_plan to mark them completed before continuing.");
+                self.plan_tool_calls = 0;
+            }
+        } else {
+            self.plan_tool_calls = 0;
+        }
+        self.message(Message::ToolResult {
+            tool_call_id: call.id.clone(),
+            text,
+        })
+        .await
     }
     async fn user_input(&mut self, input: &[UserInput]) -> Result<(), CoreError> {
         let message = crate::images::message(input);
@@ -323,6 +361,7 @@ impl Session {
             writer.snapshot().settings.cwd.clone(),
             runtime,
             options.web_fetch_timeout,
+            options.plan_enabled,
         )
         .await?;
         let mut state = State::new(Journal::new(store, writer));
@@ -352,6 +391,14 @@ impl Session {
             }
         }
         state.initialize_prefix(home, canter_home, &tools).await?;
+        if state.journal.snapshot.settings.plan_enabled != Some(options.plan_enabled) {
+            let mut settings = state.journal.snapshot.settings.clone();
+            settings.plan_enabled = Some(options.plan_enabled);
+            state
+                .journal
+                .append(vec![EventPayload::SessionUpdated { settings }])
+                .await?;
+        }
         for event in events {
             if let EventPayload::RequestResolved { request_id, .. } = event.payload {
                 state.resolved.insert(request_id, event.seq);
@@ -380,7 +427,8 @@ impl Session {
         for mut turn in unfinished {
             for mut item in std::mem::take(&mut turn.items) {
                 match &mut item {
-                    Item::McpToolCall { status, .. }
+                    Item::Plan { status, .. }
+                    | Item::McpToolCall { status, .. }
                     | Item::WebFetch { status, .. }
                     | Item::CommandExecution { status, .. }
                     | Item::FileChange { status, .. }
@@ -433,7 +481,7 @@ impl Session {
     async fn create_inner(
         store: Arc<Store>,
         id: String,
-        settings: SessionSettings,
+        mut settings: SessionSettings,
         runtime: RuntimeContext,
         model: Arc<dyn Model>,
         options: CoreOptions,
@@ -454,7 +502,14 @@ impl Session {
             .get("HOME")
             .map(std::path::PathBuf::from);
         let canter_home = crate::context::canter_home(&runtime.environment);
-        let tools = executor(cwd, runtime, options.web_fetch_timeout).await?;
+        let tools = executor(
+            cwd,
+            runtime,
+            options.web_fetch_timeout,
+            options.plan_enabled,
+        )
+        .await?;
+        settings.plan_enabled = Some(options.plan_enabled);
         let owned_store = store.clone();
         let writer = tokio::task::spawn_blocking(move || owned_store.create(&id, settings, now()))
             .await
@@ -987,11 +1042,13 @@ async fn executor(
     cwd: String,
     runtime: RuntimeContext,
     web_fetch_timeout: std::time::Duration,
+    plan_enabled: bool,
 ) -> Result<Tools, CoreError> {
     tokio::task::spawn_blocking(move || {
         LocalExecutor::new(cwd.into(), runtime.environment, runtime.protected_paths)
             .map(|executor| {
                 Tools::new(Arc::new(executor))
+                    .with_plan_enabled(plan_enabled)
                     .with_mcp(runtime.mcp_tools)
                     .with_web_fetch_timeout(web_fetch_timeout)
             })

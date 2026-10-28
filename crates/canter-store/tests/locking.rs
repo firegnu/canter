@@ -16,6 +16,7 @@ fn a_second_writer_cannot_lock_the_same_session() {
         .create(
             "locked",
             SessionSettings {
+                plan_enabled: None,
                 cwd: temp.path().to_string_lossy().into(),
                 name: None,
                 model: "fake".into(),
