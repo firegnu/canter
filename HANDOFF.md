@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-28 第二十五次装 main `058a564`（`canter --version` 显示 `canter 0.1.0 · 058a564`；比上一版多 P2-120：一轮出错停下（重试用完、或认证这类不重试的错误）时，最近一次写出内容的半截回答和思考留给模型，说「继续」能接着写，Esc 没变；P2-121：重试那一行不再带 `retried N times`，最后的错误照旧写次数）。服务端要用户自己 `canter serve --replace`。
+- 退回上一版 `157db9f`：`cp -p ~/.canter/canter-157db9f ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-28 第二十四次装 main `157db9f`（`canter --version` 显示 `canter 0.1.0 · 157db9f`；比上一版多 P2-110：模型请求出错（限流、5xx、过载、网络、超时）最多重试 10 次，0.5 秒起翻倍、最长 32 秒，`Retry-After` 最多等 60 秒；回复到一半断了丢掉半截整段重发；等重试时对话里有一行 `Retrying in …`；`config.json` 写 `"model_max_retries": N`（0～100）可改，0 不重试，改了要重启服务端；按 Esc 打断的行为没变）。服务端要用户自己 `canter serve --replace`。
 - 退回上一版 `4a5bb91`：`cp -p ~/.canter/canter-4a5bb91 ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版打开带重试行的会话不坏（不认识的项目跳过），断流丢掉的半截读成正常回答（旧版不认 `status`）；旧版不认 `model_max_retries`，按旧的 3 次重试。
 - 10-28 第二十三次装 main `4a5bb91`（`canter --version` 显示 `canter 0.1.0 · 4a5bb91`；比上一版多 P2-101：模型起的后台命令结束、`monitor` 盯到匹配的输出时，模型空闲就自己开一轮；没人说话最多连续叫醒 10 次，`config.json` 写 `"auto_wake_limit": N` 可改，0 关掉，改了要重启服务端）。服务端要用户自己 `canter serve --replace`。
@@ -72,8 +74,8 @@
 
 ## 已知没修的问题
 
-- 模型重试（P2-110 交叉审查，10-28 主控按「只有必须改挡合并」不返工）：
-  - 重试那一行的原因带 `retried N times`，第一次显示 `(1/10) … retried 0 times`，和「第几次」并排读着像矛盾；只影响显示。改法：重试行的原因不带次数，只在最后的错误里写。
+- 模型重试（P2-110 交叉审查，10-28 主控按「只有必须改挡合并」不返工；`retried N times` 那条 P2-121 已修）：
+  - 出错停下时拿回来的那段半截（P2-120），正在看着的终端里可能还挂着 `[Interrupted]`，改窗口宽度、按 Ctrl+O 或重开会话才去掉；模型历史、存盘、导出不受影响（P2-120 复核建议改，读代码判断、没实测）。
   - 以后接会逐项报完成的接口（P2-80 Responses），「保留收完整的接着做」那条路不出重试行、不算进 `model_max_retries`；DeepSeek 走不到。接 P2-80 时再看。
   - 存盘事件里回答、思考的 ID 前缀从 `message-`、`reasoning-` 变成 `model-`，回复结束时的完成事件先后也变了；快照、界面、导出不受影响，记一笔。
 
