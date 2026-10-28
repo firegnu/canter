@@ -561,15 +561,7 @@ async fn interrupt_during_model_stream_repairs_history_and_discards_queued_input
             |message| matches!(message, Message::User { text } if text.contains("interrupted"))
         )
     );
-    assert!(!requests[1].messages.iter().any(|message| match message {
-        Message::Assistant { content } => content.iter().any(|part| matches!(part,
-            AssistantContent::ToolCall(call) if call.id == "unfinished")
-            || matches!(part,
-            AssistantContent::Text { text } if text == "partial")),
-        Message::ToolResult { tool_call_id, .. } => tool_call_id == "unfinished",
-        _ => false,
-    }));
-
+    assert!(requests[1].messages.iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "unfinished" && text.contains("interrupted"))));
     assert!(
         !requests[1]
             .messages
@@ -578,6 +570,111 @@ async fn interrupt_during_model_stream_repairs_history_and_discards_queued_input
     );
     assert!(!temp.path().join("must-not-exist").exists());
     session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn user_interrupt_preserves_partial_history_and_normal_item_status_after_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+    let partial = vec![
+        call(
+            "unfinished",
+            "shell",
+            r#"{"command":"touch must-not-exist"}"#,
+        ),
+        ModelEvent::ReasoningDelta {
+            item_id: "reasoning".into(),
+            delta: "partial thought".into(),
+        },
+        ModelEvent::TextDelta {
+            item_id: "text".into(),
+            delta: "partial answer".into(),
+        },
+    ];
+    let model = ScriptModel::new(vec![
+        partial,
+        vec![ModelEvent::Finished(FinishReason::Stop)],
+    ]);
+    let (session, _) = Session::create(
+        store.clone(),
+        "s1".into(),
+        settings(temp.path()),
+        RuntimeContext::default(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    let turn = session
+        .input(input("start"))
+        .await
+        .unwrap()
+        .turn_id
+        .unwrap();
+    until(&mut events, |payload| {
+        matches!(
+            payload,
+            EventPayload::ItemDelta {
+                delta: ItemDelta::AgentMessage { .. },
+                ..
+            }
+        )
+    })
+    .await;
+    session
+        .interrupt(SessionInterruptParams {
+            turn_id: turn,
+            retract: None,
+        })
+        .await
+        .unwrap();
+    finished(&mut events).await;
+    let interrupted = session.snapshot().await.session.turns[0].clone();
+    assert_eq!(interrupted.status, TurnStatus::Interrupted);
+    assert!(interrupted.items.iter().any(|item| matches!(item, Item::AgentMessage { text, status: None, .. } if text == "partial answer")));
+    assert!(interrupted.items.iter().any(|item| matches!(item, Item::Reasoning { content, status: None, .. } if content == &vec!["partial thought".to_string()])));
+    for item in &interrupted.items {
+        if matches!(item, Item::AgentMessage { .. } | Item::Reasoning { .. }) {
+            assert!(serde_json::to_value(item).unwrap().get("status").is_none());
+        }
+    }
+    session.input(input("continue")).await.unwrap();
+    finished(&mut events).await;
+    let requests = model.requests.lock().unwrap().clone();
+    let assistant = requests[1]
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            Message::Assistant { content } => Some(content),
+            _ => None,
+        })
+        .unwrap();
+    assert!(assistant.contains(&AssistantContent::Text {
+        text: "partial answer".into()
+    }));
+    assert!(assistant.contains(&AssistantContent::Reasoning {
+        text: "partial thought".into()
+    }));
+    assert!(
+        assistant.iter().any(
+            |part| matches!(part, AssistantContent::ToolCall(call) if call.id == "unfinished")
+        )
+    );
+    assert!(requests[1].messages.iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "unfinished" && text.contains("interrupted"))));
+    assert!(!temp.path().join("must-not-exist").exists());
+    session.close().await.unwrap();
+    let (reopened, response) = Session::open(
+        store,
+        "s1".into(),
+        RuntimeContext::default(),
+        ScriptModel::new(vec![]),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.session.turns[0], interrupted);
+    reopened.close().await.unwrap();
 }
 
 #[tokio::test]

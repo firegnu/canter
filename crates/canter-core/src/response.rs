@@ -1,7 +1,7 @@
 use canter_model::{AssistantContent, ModelEvent};
 use canter_protocol::{Item, ItemStatus};
 
-/// Per-attempt output. Only provider-confirmed content enters model history.
+/// Per-attempt output, with provider completion tracked separately from content.
 #[derive(Default)]
 pub(crate) struct Response {
     pub items: Vec<ReceivedItem>,
@@ -105,8 +105,8 @@ impl Response {
 }
 
 impl ReceivedItem {
-    pub fn display(&self, ended: bool) -> Option<Item> {
-        let status = (ended && !self.complete).then_some(ItemStatus::Interrupted);
+    pub fn display(&self, discarded_incomplete: bool) -> Option<Item> {
+        let status = (discarded_incomplete && !self.complete).then_some(ItemStatus::Interrupted);
         Some(match &self.content {
             AssistantContent::Text { text } => Item::AgentMessage {
                 id: self.id.clone(),

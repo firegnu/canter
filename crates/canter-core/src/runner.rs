@@ -366,7 +366,7 @@ async fn model_response(
             _ = timer.tick(), if !pending.is_empty() => flush(shared, &mut pending).await?,
             event = stream.next() => match event {
                 Some(Ok(ModelEvent::Retrying { error, attempt, max_retries, delay })) => {
-                    finish_items(turn_id, &response, &mut pending);
+                    finish_items(turn_id, &response, &mut pending, true);
                     flush(shared, &mut pending).await?;
                     response = crate::response::Response::default();
                     if let Some(usage) = usage.take() {
@@ -413,8 +413,19 @@ async fn model_response(
             flush(shared, &mut pending).await?;
         }
     }
-    let content = response.completed();
-    // Persist only complete items, before publishing their final display state.
+    // User interruption preserves received content; stream failures keep only
+    // complete items. The turn cleanup supplies results for unexecuted tools.
+    let interrupted = cancel.is_cancelled();
+    let content = if interrupted {
+        response
+            .items
+            .iter()
+            .map(|item| item.content.clone())
+            .collect()
+    } else {
+        response.completed()
+    };
+    // Persist history before publishing the final display state.
     if !content.is_empty() {
         shared
             .state
@@ -425,13 +436,13 @@ async fn model_response(
             })
             .await?;
     }
-    finish_items(turn_id, &response, &mut pending);
+    finish_items(turn_id, &response, &mut pending, !interrupted);
     flush(shared, &mut pending).await?;
     if let Some(usage) = usage {
         record_usage(
             shared,
             usage,
-            reason.as_ref().map(|_| estimated),
+            (reason.is_some() || interrupted).then_some(estimated),
             &model,
             started_at,
             true,
@@ -445,9 +456,10 @@ fn finish_items(
     turn_id: &str,
     response: &crate::response::Response,
     pending: &mut Vec<EventPayload>,
+    discarded_incomplete: bool,
 ) {
     for item in &response.items {
-        if let Some(item) = item.display(true) {
+        if let Some(item) = item.display(discarded_incomplete) {
             pending.push(EventPayload::ItemCompleted {
                 turn_id: turn_id.into(),
                 item,
