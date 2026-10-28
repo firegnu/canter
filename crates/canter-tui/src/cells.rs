@@ -737,9 +737,14 @@ fn clip(links: Vec<(Range<usize>, Target)>, end: usize) -> Vec<(Range<usize>, Ta
 pub(crate) fn waiting(item: &Item, details: bool, cwd: &str, width: u16) -> Vec<Row> {
     let mark = || vec![Span::styled("Waiting for approval", theme::warning())];
     match item {
-        Item::CommandExecution { command, .. } => {
-            command_title(command, dot(theme::secondary()), mark(), false, width)
-        }
+        Item::CommandExecution { command, .. } => command_title(
+            command,
+            false,
+            dot(theme::secondary()),
+            mark(),
+            false,
+            width,
+        ),
         Item::FileChange { changes, .. } => changes
             .iter()
             .map(|change| {
@@ -947,12 +952,8 @@ fn command_card(
     let failed = !searched_nothing
         && !matches!(status, ItemStatus::InProgress | ItemStatus::Declined)
         && exit_code.map_or(status == ItemStatus::Failed, |code| code != 0);
-    let title = if source == canter_protocol::ExecCommandSource::UserShell {
-        format!("! {command}")
-    } else {
-        command.to_owned()
-    };
-    let mut rows = command_title(&title, bullet, right, details, width);
+    let user = source == canter_protocol::ExecCommandSource::UserShell;
+    let mut rows = command_title(command, user, bullet, right, details, width);
     let (fold, style) = if details {
         (Fold::Details, if failed { Style::new() } else { dim })
     } else if status == ItemStatus::InProgress {
@@ -1146,8 +1147,10 @@ fn output_rows(output: &str, fold: Fold, style: Style, bar: Style, width: u16) -
 /// its lines wraps by words under where it starts. Unless `whole`, it takes
 /// at most `COMMAND_ROWS` rows, then a row saying how many more there are.
 /// Control characters in the command show as escapes.
+/// With `bang`, the user ran it: `! ` before it, the `!` red.
 fn command_title(
     command: &str,
+    bang: bool,
     bullet: Span<'static>,
     right: Vec<Span<'static>>,
     whole: bool,
@@ -1158,12 +1161,15 @@ fn command_title(
     if lines.is_empty() {
         lines.push("");
     }
-    let bodies = highlight::bash(&lines).unwrap_or_else(|| {
+    let mut bodies = highlight::bash(&lines).unwrap_or_else(|| {
         lines
             .iter()
             .map(|line| vec![Span::raw((*line).to_owned())])
             .collect()
     });
+    if bang {
+        bodies[0].splice(0..0, [Span::styled("!", theme::shell()), Span::raw(" ")]);
+    }
     // The first row leaves room for `right` where `right_aligned` puts it.
     let right_width = spans_width(&right);
     let reserve = if right.is_empty() || usize::from(width) < right_width + 12 {

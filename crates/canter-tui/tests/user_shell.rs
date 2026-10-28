@@ -156,3 +156,103 @@ fn user_shell_expands_folded_paste_before_running() {
         );
     }
 }
+
+/// Cell `(x, y)` of the last frame.
+fn cell(ui: &Ui<TestBackend>, x: usize, y: usize) -> ratatui::buffer::Cell {
+    ui.backend().buffer().content[y * 100 + x].clone()
+}
+
+/// Row and column of the first `needle` on screen, in cells.
+fn find(ui: &mut Ui<TestBackend>, needle: &str) -> (usize, usize) {
+    let screen = text(ui);
+    let content = &ui.backend().buffer().content;
+    (0..24)
+        .flat_map(|y| (0..100).map(move |x| (y, x)))
+        .find(|&(y, x)| {
+            content[y * 100 + x..(y + 1) * 100]
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+                .starts_with(needle)
+        })
+        .unwrap_or_else(|| panic!("{needle:?} not on screen:\n{screen}"))
+}
+
+/// The input box's top-left corner and the cell of the draft's first
+/// character.
+fn input_cells(ui: &mut Ui<TestBackend>) -> (ratatui::buffer::Cell, ratatui::buffer::Cell) {
+    let (y, x) = find(ui, "› ");
+    (cell(ui, 0, y - 1), cell(ui, x + 2, y))
+}
+
+#[test]
+fn user_shell_bang_draft_shows_red_border_and_bang() {
+    use ratatui::style::Color;
+    let mut ui = screen(SessionStatus::Idle);
+    for c in "!ls".chars() {
+        ui.app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE), 0);
+    }
+    let (corner, first) = input_cells(&mut ui);
+    assert_eq!(corner.symbol(), "╭");
+    assert_eq!(corner.fg, Color::Red);
+    assert_eq!(first.symbol(), "!");
+    assert_eq!(first.fg, Color::Red);
+    let (y, x) = find(&mut ui, "!ls");
+    assert_ne!(cell(&ui, x + 1, y).fg, Color::Red, "only the bang is red");
+
+    // Deleting the `!` puts the box back at once.
+    ui.app_mut()
+        .handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE), 0);
+    ui.app_mut()
+        .handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE), 0);
+    let (corner, first) = input_cells(&mut ui);
+    assert_eq!(first.symbol(), "l");
+    assert_ne!(corner.fg, Color::Red);
+    assert_ne!(first.fg, Color::Red);
+
+    let mut ui = screen(SessionStatus::Idle);
+    ui.app_mut().handle_paste("ls");
+    let (corner, first) = input_cells(&mut ui);
+    assert_eq!(first.symbol(), "l");
+    assert_ne!(corner.fg, Color::Red);
+    assert_ne!(first.fg, Color::Red);
+}
+
+#[test]
+fn user_shell_card_bang_is_red_and_agent_card_is_unchanged() {
+    use ratatui::style::Color;
+    let mut snapshot = SessionSnapshot::empty("user-shell");
+    for (turn, source) in [("agent-turn", "agent"), ("shell-turn", "userShell")] {
+        snapshot.turns.push(
+            serde_json::from_value(serde_json::json!({
+                "id":turn, "status":"completed", "input":[], "clientName":"tui",
+                "error":null, "usage":null, "items":[{
+                    "type":"commandExecution", "id":format!("{turn}-item"),
+                    "command":"git status", "source":source, "cwd":"/work",
+                    "status":"completed", "aggregatedOutput":"On branch main",
+                    "exitCode":0, "durationMs":10
+                }]
+            }))
+            .unwrap(),
+        );
+    }
+    let mut ui = Ui::new(TestBackend::new(100, 24), App::new(snapshot, None, 0)).unwrap();
+    let (agent_y, agent_x) = find(&mut ui, "Run git status");
+    let (shell_y, shell_x) = find(&mut ui, "Run ! git status");
+    assert_ne!(agent_y, shell_y);
+    let bang = cell(&ui, shell_x + 4, shell_y);
+    assert_eq!(bang.symbol(), "!");
+    assert_eq!(bang.fg, Color::Red);
+    // The command reads the same on both cards; only the user's has the `!`.
+    for column in 0.."git status".len() {
+        let agent = cell(&ui, agent_x + 4 + column, agent_y);
+        let shell = cell(&ui, shell_x + 6 + column, shell_y);
+        assert_eq!(agent.symbol(), shell.symbol());
+        assert_eq!(agent.style(), shell.style(), "column {column}");
+    }
+    assert!(
+        (0..100).all(|x| cell(&ui, x, agent_y).symbol() != "!"),
+        "the agent's card has no bang"
+    );
+}
