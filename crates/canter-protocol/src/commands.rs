@@ -133,6 +133,14 @@ pub struct SessionHandoffParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum BtwEvent {
+    /// Replaces the answer after an attempt is discarded or an item is confirmed.
+    Replace {
+        text: String,
+        interrupted: bool,
+    },
+    Retrying {
+        message: String,
+    },
     Delta {
         delta: String,
     },

@@ -81,6 +81,7 @@ fn a_batch_is_prevalidated_and_commits_contiguous_events_together() {
                     EventPayload::ItemStarted {
                         turn_id: "missing".into(),
                         item: Item::AgentMessage {
+                            status: None,
                             id: "a1".into(),
                             text: "text".into()
                         }
@@ -117,6 +118,7 @@ fn a_batch_is_prevalidated_and_commits_contiguous_events_together() {
                 EventPayload::ItemStarted {
                     turn_id: "t1".into(),
                     item: Item::AgentMessage {
+                        status: None,
                         id: "a1".into(),
                         text: String::new(),
                     },

@@ -481,6 +481,7 @@ impl Session {
             completed_at: None,
             duration_ms: None,
             items: vec![Item::AgentMessage {
+                status: None,
                 id: id("rewind-record"),
                 text: report.join("\n"),
             }],

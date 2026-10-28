@@ -52,7 +52,10 @@ impl Model for Replay {
             })
             .collect();
         if calls.is_empty() {
-            events.push(Ok(ModelEvent::TextDelta("done".into())));
+            events.push(Ok(ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "done".into(),
+            }));
         }
         events.push(Ok(ModelEvent::Finished(if calls.is_empty() {
             FinishReason::Stop

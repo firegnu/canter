@@ -12,11 +12,12 @@ pub enum ErrorKind {
 
 /// Safe diagnostics only: never retains response bodies, URLs, headers or sources.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("model request failed: {kind:?} (HTTP status: {status:?})")]
+#[error("model request failed: {kind:?} (HTTP status: {status:?}); retried {retries} times")]
 pub struct ModelError {
     pub kind: ErrorKind,
     pub status: Option<u16>,
     pub retry_after: Option<std::time::Duration>,
+    pub retries: u32,
 }
 
 impl ModelError {
@@ -32,6 +33,7 @@ impl ModelError {
             kind,
             status: None,
             retry_after: None,
+            retries: 0,
         }
     }
 }

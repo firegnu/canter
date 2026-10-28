@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use eventsource_stream::{EventStreamError, Eventsource};
 use futures_util::StreamExt;
@@ -38,6 +38,7 @@ impl fmt::Display for ApiKey {
 }
 
 pub struct ChatCompletions {
+    retry: crate::RetryPolicy,
     client: Client,
     endpoint: Url,
     authorization: HeaderValue,
@@ -50,6 +51,11 @@ impl fmt::Debug for ChatCompletions {
 }
 
 impl ChatCompletions {
+    pub fn with_retry_policy(mut self, policy: crate::RetryPolicy) -> Self {
+        self.retry = policy;
+        self
+    }
+
     pub fn new(base_url: &str, key: ApiKey) -> Result<Self, ModelError> {
         let endpoint = Url::parse(&format!(
             "{}/chat/completions",
@@ -77,6 +83,7 @@ impl ChatCompletions {
             .build()
             .map_err(|_| ModelError::new(ErrorKind::Other))?;
         Ok(Self {
+            retry: crate::RetryPolicy::default(),
             client,
             endpoint,
             authorization,
@@ -117,10 +124,10 @@ impl ChatCompletions {
                 for choice in chunk.choices {
                     if choice.index != 0 { continue; }
                     if let Some(text) = choice.delta.reasoning_content.filter(|s| !s.is_empty()) {
-                        yield ModelEvent::ReasoningDelta(text);
+                        yield ModelEvent::ReasoningDelta { item_id: "reasoning".into(), delta: text };
                     }
                     if let Some(text) = choice.delta.content.filter(|s| !s.is_empty()) {
-                        yield ModelEvent::TextDelta(text);
+                        yield ModelEvent::TextDelta { item_id: "text".into(), delta: text };
                     }
                     for delta in choice.delta.tool_calls.into_iter().flatten() {
                         let call = calls.entry(delta.index).or_insert_with(|| ToolCall {
@@ -157,63 +164,10 @@ impl ChatCompletions {
 
 impl Model for ChatCompletions {
     fn stream(&self, request: Request, cancellation: CancellationToken) -> ModelStream<'_> {
-        Box::pin(async_stream::stream! {
-            if cancellation.is_cancelled() { return; }
-            let body = wire::request_body(&request);
-            let mut emitted = false;
-            for retry in 0..=3 {
-                let mut attempt = self.attempt(body.clone());
-                let mut retry_delay = None;
-                loop {
-                    let event = tokio::select! {
-                        biased;
-                        _ = cancellation.cancelled() => return,
-                        event = attempt.next() => event,
-                    };
-                    if cancellation.is_cancelled() { return; }
-                    let Some(event) = event else { break; };
-                    match event {
-                        Ok(event) => {
-                            emitted = true;
-                            yield Ok(event);
-                        }
-                        Err(error) => {
-                            if !emitted && error.is_retryable() && retry < 3
-                                && error.retry_after.is_none_or(|delay| delay <= Duration::from_secs(60)) {
-                                retry_delay = Some(error.retry_after.unwrap_or_else(|| {
-                                    Duration::from_millis(250 * (1 << retry)).min(Duration::from_secs(1))
-                                }));
-                                break;
-                            }
-                            yield Err(error);
-                            return;
-                        }
-                    }
-                }
-                drop(attempt);
-                match retry_delay {
-                    Some(delay) => tokio::select! {
-                        biased;
-                        _ = cancellation.cancelled() => return,
-                        _ = tokio::time::sleep(delay) => {}
-                    },
-                    None => return,
-                }
-            }
-        })
+        let body = wire::request_body(&request);
+        self.retry
+            .stream(cancellation, move || self.attempt(body.clone()))
     }
-}
-
-fn parse_retry_after(value: &str) -> Option<Duration> {
-    value
-        .parse::<u64>()
-        .ok()
-        .map(Duration::from_secs)
-        .or_else(|| {
-            httpdate::parse_http_date(value)
-                .ok()
-                .map(|date| date.duration_since(SystemTime::now()).unwrap_or_default())
-        })
 }
 
 async fn http_error(response: reqwest::Response) -> ModelError {
@@ -222,7 +176,7 @@ async fn http_error(response: reqwest::Response) -> ModelError {
         .headers()
         .get("retry-after")
         .and_then(|value| value.to_str().ok())
-        .and_then(parse_retry_after);
+        .and_then(crate::retry::parse_retry_after);
     let mut kind = match status {
         401 | 403 => ErrorKind::Authentication,
         400 | 422 => ErrorKind::InvalidRequest,
@@ -255,6 +209,7 @@ async fn http_error(response: reqwest::Response) -> ModelError {
         kind,
         status: Some(status),
         retry_after,
+        retries: 0,
     }
 }
 

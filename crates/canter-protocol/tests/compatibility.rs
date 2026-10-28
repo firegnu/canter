@@ -2,6 +2,40 @@ use canter_protocol::{Event, EventPayload, Item, SessionSnapshot, SessionStatus,
 use serde_json::json;
 
 #[test]
+fn retry_items_are_skipped_by_legacy_readers_and_missing_status_stays_normal() {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type", rename_all = "camelCase")]
+    enum LegacyItem {
+        AgentMessage {
+            text: String,
+        },
+        #[serde(other)]
+        Unknown,
+    }
+    let retry = json!({"type":"modelRetry","id":"r1","error":{"message":"server error 503","additionalDetails":null},"willRetry":true,"attempt":3,"maxRetries":10,"delaySeconds":4.0});
+    assert!(matches!(
+        serde_json::from_value::<LegacyItem>(retry.clone()).unwrap(),
+        LegacyItem::Unknown
+    ));
+    let parsed: Item = serde_json::from_value(retry.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), retry);
+    let old = json!({"type":"agentMessage","id":"m1","text":"old answer"});
+    let parsed: Item = serde_json::from_value(old.clone()).unwrap();
+    assert!(matches!(parsed, Item::AgentMessage { status: None, .. }));
+    assert_eq!(serde_json::to_value(parsed).unwrap(), old);
+    let old_thinking = json!({"type":"reasoning","id":"r1","summary":[],"content":["old thought"]});
+    assert!(matches!(
+        serde_json::from_value::<Item>(old_thinking).unwrap(),
+        Item::Reasoning { status: None, .. }
+    ));
+    let mut interrupted = old;
+    interrupted["status"] = json!("interrupted");
+    assert!(
+        matches!(serde_json::from_value::<LegacyItem>(interrupted).unwrap(), LegacyItem::AgentMessage { text } if text == "old answer")
+    );
+}
+
+#[test]
 fn plan_fields_are_optional_and_legacy_clients_skip_plan_items() {
     // A minimal legacy view, using the protocol's existing unknown-item rule.
     #[derive(serde::Deserialize)]
@@ -124,6 +158,7 @@ fn unknown_events_and_items_can_be_skipped() {
     assert_eq!(
         item,
         Item::AgentMessage {
+            status: None,
             id: "i2".into(),
             text: "hello".into()
         }

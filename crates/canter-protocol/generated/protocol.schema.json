@@ -213,6 +213,43 @@
     "BtwEvent": {
       "oneOf": [
         {
+          "description": "Replaces the answer after an attempt is discarded or an item is confirmed.",
+          "properties": {
+            "interrupted": {
+              "type": "boolean"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "replace",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text",
+            "interrupted"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "const": "retrying",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "delta": {
               "type": "string"
@@ -1365,6 +1402,47 @@
       "oneOf": [
         {
           "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "delaySeconds": {
+              "format": "double",
+              "type": "number"
+            },
+            "error": {
+              "$ref": "#/$defs/ErrorInfo"
+            },
+            "id": {
+              "type": "string"
+            },
+            "maxRetries": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "modelRetry",
+              "type": "string"
+            },
+            "willRetry": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "error",
+            "willRetry",
+            "attempt",
+            "maxRetries",
+            "delaySeconds"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "commandId": {
               "format": "uint64",
               "minimum": 0,
@@ -1520,6 +1598,16 @@
             "id": {
               "type": "string"
             },
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "text": {
               "type": "string"
             },
@@ -1554,6 +1642,16 @@
             },
             "id": {
               "type": "string"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ItemStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "summary": {
               "items": {
@@ -1915,6 +2013,7 @@
     },
     "ItemStatus": {
       "enum": [
+        "interrupted",
         "blocked",
         "inProgress",
         "completed",

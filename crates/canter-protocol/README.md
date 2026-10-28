@@ -1,5 +1,12 @@
 # canter-protocol
 
+模型重试（P2-110）：新增 `modelRetry { id, error, willRetry, attempt, maxRetries, delaySeconds }`，
+复用项目开始/完成事件。`error` 和 `willRetry` 对齐 Codex `rust-v0.163.0` 的 ErrorNotification；
+canter 把提示作为项目持久保存，另外提供次数和等待秒数，支持快照、重放和导出。
+回答/思考项目的可选 `status: interrupted` 标识半截；省略时保持旧会话的正常语义。
+`BtwEvent` 增加 `retrying {message}` 和 `replace {text, interrupted}`，只给发起端，
+不存盘；后者在重发前丢弃半截，或用提供方确认的内容更新私有回答。旧客户端忽略未知事件/项目。
+
 只有公开协议类型、事件归并和类型导出；没有网络服务或 agent 循环。
 
 后台命令：快照可选 `backgroundCommands`（旧数据默认空）；`backgroundCommand.updated`

@@ -151,6 +151,9 @@ pub(crate) fn item(
     feedback: Option<&str>,
 ) -> Vec<Row> {
     let mut rows = match item {
+        Item::ModelRetry { .. } => {
+            wrap_all(&agent_message(&item.retry_message().unwrap(), width), width)
+        }
         Item::BackgroundEvent {
             command_id, text, ..
         } => {
@@ -236,13 +239,27 @@ pub(crate) fn item(
             rows
         }
         Item::UserMessage { content, .. } => sent(content, None, width),
-        Item::AgentMessage { text, .. } => wrap_all(&agent_message(text, width), width),
+        Item::AgentMessage { text, status, .. } => {
+            let text = if *status == Some(ItemStatus::Interrupted) {
+                format!("{text}\n\n[Interrupted]")
+            } else {
+                text.clone()
+            };
+            wrap_all(&agent_message(&text, width), width)
+        }
         Item::Reasoning {
             summary,
             content,
             duration_ms,
+            status,
             ..
-        } => reasoning(summary, content, *duration_ms, finished, details, width),
+        } => {
+            let mut rows = reasoning(summary, content, *duration_ms, finished, details, width);
+            if *status == Some(ItemStatus::Interrupted) {
+                rows.extend(wrap_all(&agent_message("[Interrupted]", width), width));
+            }
+            rows
+        }
         Item::WebFetch {
             url,
             resolved_url,

@@ -275,6 +275,7 @@ fn interrupt_after_the_model_spoke_restores_queued_inputs_but_keeps_the_turn() {
             EventPayload::ItemStarted {
                 turn_id: "turn".into(),
                 item: Item::AgentMessage {
+                    status: None,
                     id: "answer".into(),
                     text: "already speaking".into(),
                 },

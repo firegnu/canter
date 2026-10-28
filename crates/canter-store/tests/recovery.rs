@@ -64,6 +64,7 @@ fn stored_session_reopens_identically_and_continues_sequence() {
     assert_eq!(
         expected.turns[0].items[1],
         Item::AgentMessage {
+            status: None,
             id: "a1".into(),
             text: "hello back".into()
         }
@@ -71,6 +72,7 @@ fn stored_session_reopens_identically_and_continues_sequence() {
     assert_eq!(
         expected.turns[0].items[2],
         Item::Reasoning {
+            status: None,
             id: "r1".into(),
             summary: vec!["summary".into()],
             content: vec!["thought".into()],

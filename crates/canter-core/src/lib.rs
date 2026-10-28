@@ -7,6 +7,7 @@ mod images;
 mod journal;
 mod plan_mode;
 mod prompt;
+mod response;
 mod rewind;
 mod runner;
 mod session;

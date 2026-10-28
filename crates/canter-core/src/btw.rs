@@ -150,35 +150,108 @@ async fn answer(
     cancel: &CancellationToken,
     sender: &mpsc::UnboundedSender<BtwEvent>,
 ) -> Result<(), CoreError> {
-    let (request, _) = crate::images::prepare_request(shared, request).await?;
-    if cancel.is_cancelled() {
-        return Ok(());
-    }
+    let (mut request, _) = crate::images::prepare_request(shared, request).await?;
     let model = request.model.clone();
-    let started_at = (shared.options.request_time)();
-    let mut stream = shared.model.stream(request, cancel.clone());
-    let mut usage = None;
-    let result = loop {
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => break Ok(()),
-            event = stream.next() => match event {
-                Some(Ok(ModelEvent::TextDelta(delta))) => {
+    let mut confirmed = String::new();
+    loop {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        let mut started_at = (shared.options.request_time)();
+        let mut stream = shared.model.stream(request.clone(), cancel.clone());
+        let mut response = crate::response::Response::default();
+        let mut usage = None;
+        let result = loop {
+            let event = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break Ok(false),
+                event = stream.next() => event,
+            };
+            match event {
+                Some(Ok(event @ ModelEvent::TextDelta { .. })) => {
+                    response.apply(&event);
+                    let ModelEvent::TextDelta { delta, .. } = event else {
+                        unreachable!()
+                    };
                     if sender.send(BtwEvent::Delta { delta }).is_err() {
                         cancel.cancel();
                     }
                 }
+                Some(Ok(event @ ModelEvent::ItemCompleted { .. })) => {
+                    response.apply(&event);
+                    let _ = sender.send(BtwEvent::Replace {
+                        text: format!("{confirmed}{}", response.visible_text()),
+                        interrupted: false,
+                    });
+                }
+                Some(Ok(ModelEvent::Retrying {
+                    error,
+                    attempt,
+                    max_retries,
+                    delay,
+                })) => {
+                    response = crate::response::Response::default();
+                    let _ = sender.send(BtwEvent::Replace {
+                        text: confirmed.clone(),
+                        interrupted: true,
+                    });
+                    let _ = sender.send(BtwEvent::Retrying {
+                        message: canter_protocol::model_retry_message(
+                            &error.to_string(),
+                            attempt,
+                            max_retries,
+                            delay.as_secs_f64(),
+                        ),
+                    });
+                    if let Some(usage) = usage.take() {
+                        runner::record_usage(shared, usage, None, &model, started_at, false)
+                            .await?;
+                    }
+                    started_at = (shared.options.request_time)();
+                }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),
-                // Tool definitions stay in the prefix, but no tool is ever executed.
-                Some(Ok(ModelEvent::Finished(_))) => break Ok(()),
-                Some(Ok(ModelEvent::ToolCall(_) | ModelEvent::ReasoningDelta(_))) => {},
-                Some(Err(error)) => break Err(CoreError::new(ErrorCode::Internal, &error.to_string())),
-                None => break Err(CoreError::new(ErrorCode::Internal, "model stream ended without a finish reason")),
+                Some(Ok(ModelEvent::Finished(_))) => break Ok(false),
+                // Definitions stay in the prefix; side requests never execute tools.
+                Some(Ok(event @ (ModelEvent::ToolCall(_) | ModelEvent::ReasoningDelta { .. }))) => {
+                    response.apply(&event);
+                }
+                Some(Err(error)) if error.is_retryable() && !response.completed().is_empty() => {
+                    break Ok(true);
+                }
+                Some(Err(error)) => {
+                    break Err(CoreError::new(ErrorCode::Internal, &error.to_string()));
+                }
+                None => {
+                    break Err(CoreError::new(
+                        ErrorCode::Internal,
+                        "model stream ended without a finish reason",
+                    ));
+                }
             }
+        };
+        if let Some(usage) = usage {
+            runner::record_usage(shared, usage, None, &model, started_at, false).await?;
         }
-    };
-    if let Some(usage) = usage {
-        runner::record_usage(shared, usage, None, &model, started_at, false).await?;
+        if !result? {
+            return Ok(());
+        }
+        let content = response.completed();
+        // A side request must not leave a tool call without a result in its
+        // follow-up request. Preserve its completed text, but never run tools.
+        if content
+            .iter()
+            .any(|part| matches!(part, AssistantContent::ToolCall(_)))
+        {
+            return Err(CoreError::new(
+                ErrorCode::Internal,
+                "side request returned a tool call",
+            ));
+        }
+        confirmed.push_str(&response.text());
+        let _ = sender.send(BtwEvent::Replace {
+            text: confirmed.clone(),
+            interrupted: true,
+        });
+        request.messages.push(Message::Assistant { content });
     }
-    result
 }

@@ -8,6 +8,7 @@ fn snapshot() -> SessionSnapshot {
         review: None,
         id: "t1".into(),
         items: vec![Item::AgentMessage {
+            status: None,
             id: "a1".into(),
             text: output,
         }],
@@ -65,6 +66,7 @@ fn mutable_replay_keeps_large_buffers_and_matches_pure_replay() {
 fn rejected_events_leave_the_mutable_snapshot_unchanged() {
     let mut state = snapshot();
     state.turns[0].items.push(Item::Reasoning {
+        status: None,
         id: "reasoning".into(),
         summary: vec!["first part".into()],
         content: Vec::new(),
@@ -87,6 +89,7 @@ fn rejected_events_leave_the_mutable_snapshot_unchanged() {
         event(EventPayload::ItemStarted {
             turn_id: "missing".into(),
             item: Item::AgentMessage {
+                status: None,
                 id: "new".into(),
                 text: "text".into(),
             },

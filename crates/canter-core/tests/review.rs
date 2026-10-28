@@ -43,7 +43,7 @@ impl Model for ScriptModel {
             for step in steps {
                 match step {
                     Step::Event(event) => yield Ok(event),
-                    Step::Error(kind) => yield Err(ModelError { kind, status: None, retry_after: None }),
+                    Step::Error(kind) => yield Err(ModelError { kind, status: None, retry_after: None, retries: 0 }),
                     Step::Wait(notify) => tokio::select! {
                         _ = cancel.cancelled() => break,
                         _ = notify.notified() => {},
@@ -54,7 +54,10 @@ impl Model for ScriptModel {
     }
 }
 fn text(value: &str) -> Step {
-    Step::Event(ModelEvent::TextDelta(value.into()))
+    Step::Event(ModelEvent::TextDelta {
+        item_id: "text".into(),
+        delta: value.into(),
+    })
 }
 fn finish() -> Step {
     Step::Event(ModelEvent::Finished(FinishReason::Stop))
@@ -1116,7 +1119,10 @@ async fn unreadable_project_instructions_warn_and_do_not_block_the_model() {
 #[tokio::test]
 async fn completed_assistant_items_already_have_durable_model_history() {
     let model = ScriptModel::new(vec![vec![
-        Step::Event(ModelEvent::ReasoningDelta("reasoning".into())),
+        Step::Event(ModelEvent::ReasoningDelta {
+            item_id: "reasoning".into(),
+            delta: "reasoning".into(),
+        }),
         text("answer"),
         Step::Event(ModelEvent::Usage(Usage {
             input_tokens: 10,

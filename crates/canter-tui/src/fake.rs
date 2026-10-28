@@ -291,6 +291,7 @@ async fn send_input(
         duration_ms: None,
     };
     let message = |text: &str| Item::AgentMessage {
+        status: None,
         id: item_id.clone(),
         text: text.to_owned(),
     };

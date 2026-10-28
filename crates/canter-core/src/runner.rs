@@ -264,7 +264,9 @@ async fn conversation(
         if cancel.is_cancelled() {
             return Ok(());
         }
-        if let Some(error) = error {
+        let interrupted_with_content =
+            error.as_ref().is_some_and(|error| error.is_retryable()) && !content.is_empty();
+        if let Some(error) = error.filter(|_| !interrupted_with_content) {
             shared
                 .state
                 .lock()
@@ -281,13 +283,13 @@ async fn conversation(
                 message: error.to_string(),
             });
         }
-        if reason.is_none() {
+        if reason.is_none() && !interrupted_with_content {
             return Err(CoreError::new(
                 ErrorCode::Internal,
                 "model stream ended without a finish reason",
             ));
         }
-        if reason != Some(FinishReason::ToolCalls) {
+        if reason != Some(FinishReason::ToolCalls) && !interrupted_with_content {
             shared
                 .state
                 .lock()
@@ -310,7 +312,7 @@ async fn conversation(
             }
             return Ok(());
         }
-        if calls.is_empty() {
+        if calls.is_empty() && !interrupted_with_content {
             return Ok(());
         }
         for call in calls {
@@ -349,13 +351,9 @@ async fn model_response(
     let estimated = context::request_tokens(&request);
     let request = crate::images::prepare(shared, request).await?;
     let model = request.model.clone();
-    let started_at = (shared.options.request_time)();
+    let mut started_at = (shared.options.request_time)();
     let mut stream = shared.model.stream(request, cancel.clone());
-    let mut content = Vec::new();
-    let mut text = String::new();
-    let mut reasoning = String::new();
-    let text_id = id("message");
-    let reasoning_id = id("reasoning");
+    let mut response = crate::response::Response::default();
     let mut pending = Vec::new();
     let mut timer = tokio::time::interval(Duration::from_millis(20));
     let mut reason = None;
@@ -365,32 +363,48 @@ async fn model_response(
         tokio::select! {
             biased;
             _ = cancel.cancelled() => break,
-            _ = timer.tick(), if !pending.is_empty() => { flush(shared, &mut pending).await?; }
+            _ = timer.tick(), if !pending.is_empty() => flush(shared, &mut pending).await?,
             event = stream.next() => match event {
-                Some(Ok(ModelEvent::TextDelta(delta))) => {
-                    if delta.is_empty() { continue; }
-                    if content.is_empty() && !shared.accept_model_output().await { break; }
-                    if text.is_empty() { pending.push(EventPayload::ItemStarted { turn_id: turn_id.into(), item: Item::AgentMessage { id: text_id.clone(), text: String::new() } }); }
-                    text.push_str(&delta);
-                    if let Some(AssistantContent::Text { text }) = content.last_mut() { text.push_str(&delta); }
-                    else { content.push(AssistantContent::Text { text: delta.clone() }); }
-                    pending.push(EventPayload::ItemDelta { turn_id: turn_id.into(), item_id: text_id.clone(), delta: ItemDelta::AgentMessage { delta } });
-                }
-                Some(Ok(ModelEvent::ReasoningDelta(delta))) => {
-                    if delta.is_empty() { continue; }
-                    if content.is_empty() && !shared.accept_model_output().await { break; }
-                    if reasoning.is_empty() { pending.push(EventPayload::ItemStarted { turn_id: turn_id.into(), item: Item::Reasoning { id: reasoning_id.clone(), summary: Vec::new(), content: Vec::new(), duration_ms: None } }); }
-                    reasoning.push_str(&delta);
-                    if let Some(AssistantContent::Reasoning { text }) = content.last_mut() { text.push_str(&delta); }
-                    else { content.push(AssistantContent::Reasoning { text: delta.clone() }); }
-                    pending.push(EventPayload::ItemDelta { turn_id: turn_id.into(), item_id: reasoning_id.clone(), delta: ItemDelta::ReasoningContent { content_index: 0, delta } });
-                }
-                Some(Ok(ModelEvent::ToolCall(call))) => {
-                    if content.is_empty() && !shared.accept_model_output().await { break; }
-                    content.push(AssistantContent::ToolCall(call));
+                Some(Ok(ModelEvent::Retrying { error, attempt, max_retries, delay })) => {
+                    finish_items(turn_id, &response, &mut pending);
+                    flush(shared, &mut pending).await?;
+                    response = crate::response::Response::default();
+                    if let Some(usage) = usage.take() {
+                        record_usage(shared, usage, None, &model, started_at, true).await?;
+                    }
+                    record_retry(shared, turn_id, &error, attempt, max_retries, delay).await?;
+                    started_at = (shared.options.request_time)();
                 }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),
-                Some(Ok(ModelEvent::Finished(finish))) => { reason = Some(finish); break; }
+                Some(Ok(ModelEvent::Finished(finish))) => {
+                    response.apply(&ModelEvent::Finished(finish.clone()));
+                    reason = Some(finish);
+                    break;
+                }
+                Some(Ok(event)) => {
+                    if matches!(&event, ModelEvent::TextDelta { delta, .. } | ModelEvent::ReasoningDelta { delta, .. } if delta.is_empty()) { continue; }
+                    if response.items.is_empty() && !shared.accept_model_output().await { break; }
+                    if let Some((item, new)) = response.apply(&event) {
+                        if new && let Some(mut display) = item.display(false) {
+                            // Deltas below supply the initial text; a completion-only item
+                            // already has its authoritative content.
+                            match (&event, &mut display) {
+                                (ModelEvent::TextDelta { .. }, Item::AgentMessage { text, .. }) => text.clear(),
+                                (ModelEvent::ReasoningDelta { .. }, Item::Reasoning { content, .. }) => content.clear(),
+                                _ => {}
+                            }
+                            pending.push(EventPayload::ItemStarted { turn_id: turn_id.into(), item: display });
+                        }
+                        let delta = match event {
+                            ModelEvent::TextDelta { delta, .. } => Some(ItemDelta::AgentMessage { delta }),
+                            ModelEvent::ReasoningDelta { delta, .. } => Some(ItemDelta::ReasoningContent { content_index: 0, delta }),
+                            _ => None,
+                        };
+                        if let Some(delta) = delta {
+                            pending.push(EventPayload::ItemDelta { turn_id: turn_id.into(), item_id: item.id.clone(), delta });
+                        }
+                    }
+                }
                 Some(Err(value)) => { error = Some(value); break; }
                 None => break,
             }
@@ -399,8 +413,8 @@ async fn model_response(
             flush(shared, &mut pending).await?;
         }
     }
-    // Stream deltas immediately, but make the full assistant message durable
-    // before publishing either final text or final reasoning items.
+    let content = response.completed();
+    // Persist only complete items, before publishing their final display state.
     if !content.is_empty() {
         shared
             .state
@@ -411,28 +425,73 @@ async fn model_response(
             })
             .await?;
     }
-    if !text.is_empty() {
-        pending.push(EventPayload::ItemCompleted {
-            turn_id: turn_id.into(),
-            item: Item::AgentMessage { id: text_id, text },
-        });
-    }
-    if !reasoning.is_empty() {
-        pending.push(EventPayload::ItemCompleted {
-            turn_id: turn_id.into(),
-            item: Item::Reasoning {
-                id: reasoning_id,
-                summary: Vec::new(),
-                content: vec![reasoning],
-                duration_ms: None,
-            },
-        });
-    }
+    finish_items(turn_id, &response, &mut pending);
     flush(shared, &mut pending).await?;
     if let Some(usage) = usage {
-        record_usage(shared, usage, Some(estimated), &model, started_at, true).await?;
+        record_usage(
+            shared,
+            usage,
+            reason.as_ref().map(|_| estimated),
+            &model,
+            started_at,
+            true,
+        )
+        .await?;
     }
     Ok((content, reason, error))
+}
+
+fn finish_items(
+    turn_id: &str,
+    response: &crate::response::Response,
+    pending: &mut Vec<EventPayload>,
+) {
+    for item in &response.items {
+        if let Some(item) = item.display(true) {
+            pending.push(EventPayload::ItemCompleted {
+                turn_id: turn_id.into(),
+                item,
+            });
+        }
+    }
+}
+
+pub(crate) async fn record_retry(
+    shared: &Shared,
+    turn_id: &str,
+    error: &ModelError,
+    attempt: u32,
+    max_retries: u32,
+    delay: Duration,
+) -> Result<(), CoreError> {
+    let item = Item::ModelRetry {
+        id: id("retry"),
+        error: ErrorInfo {
+            message: error.to_string(),
+            additional_details: None,
+        },
+        will_retry: true,
+        attempt,
+        max_retries,
+        delay_seconds: delay.as_secs_f64(),
+    };
+    shared
+        .state
+        .lock()
+        .await
+        .journal
+        .append(vec![
+            EventPayload::ItemStarted {
+                turn_id: turn_id.into(),
+                item: item.clone(),
+            },
+            EventPayload::ItemCompleted {
+                turn_id: turn_id.into(),
+                item,
+            },
+        ])
+        .await?;
+    Ok(())
 }
 
 pub(crate) async fn record_usage(

@@ -16,6 +16,7 @@ futures-util.workspace = true
 async-stream.workspace = true
 eventsource-stream.workspace = true
 httpdate.workspace = true
+fastrand = "=2.5.0"
 
 [dev-dependencies]
 axum.workspace = true

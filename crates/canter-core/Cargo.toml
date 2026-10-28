@@ -21,5 +21,6 @@ httpdate.workspace = true
 nix.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 tempfile.workspace = true
 async-stream.workspace = true
