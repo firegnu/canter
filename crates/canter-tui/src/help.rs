@@ -90,6 +90,10 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Drag", "Select text; letting go copies it"),
             ("Double / triple click", "Copy a word / a row"),
             ("Click", "Open a link, or a path in a card title"),
+            (
+                "Click ▸ N background commands",
+                "Open or close the /ps list; click a command for its log",
+            ),
         ],
     ),
     (
