@@ -246,6 +246,23 @@ fn deserialize_plan<'de, D: serde::Deserializer<'de>>(
         .collect())
 }
 
+/// The `update_plan` plan array in model-facing snake_case, skipping unknown statuses.
+pub fn serialize_plan(plan: &[PlanStep]) -> Value {
+    Value::Array(
+        plan.iter()
+            .filter_map(|step| {
+                let status = match step.status {
+                    PlanStepStatus::Pending => "pending",
+                    PlanStepStatus::InProgress => "in_progress",
+                    PlanStepStatus::Completed => "completed",
+                    PlanStepStatus::Unknown => return None,
+                };
+                Some(json!({"step": step.step, "status": status}))
+            })
+            .collect(),
+    )
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Replacement {

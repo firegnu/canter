@@ -35,6 +35,11 @@ impl Fixture {
                     Some("replace") => Some(REPLACEMENT),
                     Some("invalid") => Some(r#"[{"step":"A","status":"in_progress"},{"step":"B","status":"in_progress"}]"#),
                     Some("complete") => Some(r#"[{"step":"Report","status":"completed"}]"#),
+                    Some("copy compacted plan") => request["messages"].as_array().unwrap().iter()
+                        .filter_map(|message| message["content"].as_str())
+                        .find(|text| text.starts_with("[Context summary]"))
+                        .and_then(|text| text.split_once("\n\n[Current plan]\n"))
+                        .map(|(_, plan)| plan),
                     _ => None,
                 }} else { None };
                 let chunk = if let Some(plan) = plan {
@@ -370,6 +375,42 @@ async fn repeated_compaction_strips_only_the_previous_summary_plan() {
 }
 
 #[tokio::test]
+async fn compacted_plan_can_be_copied_verbatim_into_update_plan() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create().await;
+    let first = fixture.say(&url, "initial").await;
+    fixture.post(&format!("{url}/compact"), json!({})).await;
+    fixture.idle(&url).await;
+    let copied = fixture.say(&url, "copy compacted plan").await;
+    let request = fixture.last_request();
+    let reply = request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "tool")
+        .expect("the model must copy the attached plan into a tool call");
+    assert_eq!(reply["content"], "Plan updated");
+    assert!(
+        copied
+            .turns
+            .last()
+            .unwrap()
+            .items
+            .iter()
+            .any(|item| matches!(
+                item,
+                Item::Plan {
+                    status: ItemStatus::Completed,
+                    ..
+                }
+            ))
+    );
+    assert_eq!(current_plan(&copied), current_plan(&first));
+    fixture.close(&url).await;
+}
+
+#[tokio::test]
 async fn plans_replace_persist_rewind_and_survive_repeated_compaction() {
     let fixture = Fixture::new().await;
     let url = fixture.create().await;
@@ -427,7 +468,7 @@ async fn plans_replace_persist_rewind_and_survive_repeated_compaction() {
             .expect("compaction must retain the exact plan outside the model-written summary");
         assert_eq!(
             serde_json::from_str::<Value>(plan).unwrap(),
-            current_plan(&first)
+            serde_json::from_str::<Value>(INITIAL).unwrap()
         );
     }
     let reopened = fixture.reopen(&url).await;

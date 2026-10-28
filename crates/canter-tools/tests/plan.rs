@@ -4,6 +4,26 @@ use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
+#[test]
+fn plan_serialization_uses_tool_statuses_and_skips_unknown_steps() {
+    let plan: Vec<canter_protocol::PlanStep> = serde_json::from_value(json!([
+        {"step":"Read", "status":"completed"},
+        {"step":"Future step", "status":"futureStatus"},
+        {"step":"Implement", "status":"inProgress"},
+        {"step":"Verify", "status":"pending"}
+    ]))
+    .unwrap();
+    assert_eq!(
+        canter_tools::serialize_plan(&plan),
+        json!([
+            {"step":"Read", "status":"completed"},
+            {"step":"Implement", "status":"in_progress"},
+            {"step":"Verify", "status":"pending"}
+        ])
+    );
+    assert_eq!(canter_tools::serialize_plan(&[]), json!([]));
+}
+
 #[tokio::test]
 async fn invalid_plan_steps_return_errors_instead_of_a_successful_update() {
     let root = tempfile::tempdir().unwrap();

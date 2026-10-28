@@ -84,8 +84,9 @@ reason=merged，单条为 steered。模型失败时仍把已接受插话写入�
 - `compaction_request { messages }`：每次摘要调用收到的完整消息，仅作审计，不混入正常对话。
 - `compaction { summary, messages, user_messages }`：压缩后的完整对话替换及保留的用户原话，恢复从最后一次压缩继续。原记录不删除。
   清单开启且存在时，在 `messages` 的摘要消息末尾附 `\n\n[Current plan]\n` 和当前
-  `PlanStep` 数组的 JSON，步骤和状态原样保留，不放进 `summary`、`user_messages` 或
-  `user_inputs`。`settings.planEnabled` 为 false 时不附清单。再次压缩拼稿按
+  清单的工具参数形式（snake_case）的 JSON，由工具层将 `inProgress` 转成 `in_progress`，
+  保留已知步骤的内容和状态含义，跳过 Unknown 状态的步骤，模型可原样回传给 `update_plan`；
+  不放进 `summary`、`user_messages` 或 `user_inputs`。`settings.planEnabled` 为 false 时不附清单。再次压缩拼稿按
   `summary_index` 定位上一份摘要，只去掉其中的附带清单，保留摘要正文；用户消息中
   同名标记照常保留，存盘历史不改。固定的九个压缩小节不变。
   有图片时另加可选 `user_inputs` 保存保留的完整用户消息；旧的纯文字记录仍原样读写。

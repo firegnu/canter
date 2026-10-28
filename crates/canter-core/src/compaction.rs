@@ -389,10 +389,10 @@ async fn summarize(
     }
     let mut summary_message = format!("[Context summary]\n{summary}");
     if let Some(plan) = plan {
-        // Preserve the exact checklist independently of the model's summary.
+        // Preserve the checklist in tool-argument form so the model can reuse it.
         // Keep it in the summary message, outside user_inputs and the prompt.
         summary_message.push_str("\n\n[Current plan]\n");
-        summary_message.push_str(&serde_json::to_string(&plan).expect("plan serialization"));
+        summary_message.push_str(&canter_tools::serialize_plan(&plan).to_string());
     }
     let base = Request {
         messages: prefix,
