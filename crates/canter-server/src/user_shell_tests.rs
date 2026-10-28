@@ -9,6 +9,7 @@ struct Fixture {
     requests: Arc<SyncMutex<Vec<serde_json::Value>>>,
     pause_compaction: Arc<AtomicBool>,
     release_compaction: Arc<tokio::sync::Notify>,
+    release_reply: Arc<tokio::sync::Notify>,
     pause_wakes: Arc<AtomicBool>,
     wake_tool: Arc<SyncMutex<Option<(String, serde_json::Value)>>>,
     stop: CancellationToken,
@@ -45,6 +46,8 @@ impl Fixture {
         let pause = pause_compaction.clone();
         let release_compaction = Arc::new(tokio::sync::Notify::new());
         let release = release_compaction.clone();
+        let release_reply = Arc::new(tokio::sync::Notify::new());
+        let reply = release_reply.clone();
         let pause_wakes = Arc::new(AtomicBool::new(false));
         let pause_wake = pause_wakes.clone();
         let wake_tool: Arc<SyncMutex<Option<(String, serde_json::Value)>>> = Arc::default();
@@ -55,6 +58,7 @@ impl Fixture {
                 let recorded = recorded.clone();
                 let pause = pause.clone();
                 let release = release.clone();
+                let reply = reply.clone();
                 let pause_wake = pause_wake.clone();
                 let on_wake = on_wake.clone();
                 async move {
@@ -63,6 +67,7 @@ impl Fixture {
                     let text = last["content"].as_str().unwrap_or_default();
                     let compact = request.get("tools").is_none_or(|tools| tools.as_array().is_some_and(Vec::is_empty));
                     let wake = text.starts_with("[Background command ") && text.contains("[Background event:");
+                    let delayed_reply = text == "finish-later";
                     let wait = text == "wait" || (wake && pause_wake.load(Ordering::Relaxed)) || (compact && pause.load(Ordering::Relaxed));
                     let tool = match text {
                         "wake-background" => Some(("shell", json!({"command":"while [ ! -e release-wake ]; do sleep 0.01; done; exit 7", "background":true}))),
@@ -84,7 +89,16 @@ impl Fixture {
                         .or_else(|| if wake { on_wake.lock().unwrap().clone() } else { None });
                     recorded.lock().unwrap().push(request);
                     let done = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
-                    let body = if compact && wait {
+                    let body = if delayed_reply {
+                        use futures_util::StreamExt;
+                        let started = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"working\"},\"finish_reason\":null}]}\n\n";
+                        axum::body::Body::from_stream(futures_util::stream::once(async move {
+                            Ok::<_, std::convert::Infallible>(axum::body::Bytes::from_static(started.as_bytes()))
+                        }).chain(futures_util::stream::once(async move {
+                            reply.notified().await;
+                            Ok::<_, std::convert::Infallible>(axum::body::Bytes::from_static(done.as_bytes()))
+                        })))
+                    } else if compact && wait {
                         axum::body::Body::from_stream(futures_util::stream::once(async move {
                             release.notified().await;
                             Ok::<_, std::convert::Infallible>(axum::body::Bytes::from_static(done.as_bytes()))
@@ -150,6 +164,7 @@ impl Fixture {
             requests,
             pause_compaction,
             release_compaction,
+            release_reply,
             pause_wakes,
             wake_tool,
             stop,
@@ -323,19 +338,22 @@ impl Fixture {
 mod wake;
 
 #[tokio::test]
-async fn auto_wake_zero_records_pause_and_preserves_event_for_user_input() {
+async fn auto_wake_zero_stays_silent_and_preserves_event_for_user_input() {
     let fixture = Fixture::with_wake_limit(Some(0)).await;
     let url = fixture.create("allowAll").await;
     fixture.say(&url, "wake-background").await;
     std::fs::write(fixture.root.path().join("project/release-wake"), "").unwrap();
-    let snapshot = fixture
-        .until(&url, |session| {
-            serde_json::to_string(session)
-                .unwrap()
-                .contains("Auto wake paused")
-        })
+    fixture
+        .until(&url, |session| !session.background_commands[0].running)
         .await;
+    tokio::time::sleep(Duration::from_millis(2300)).await;
+    let snapshot = fixture.idle(&url).await.session;
     assert_eq!(snapshot.turns.len(), 1);
+    assert!(
+        !serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("Auto wake paused")
+    );
     assert_eq!(fixture.requests.lock().unwrap().len(), 2);
     fixture.say(&url, "check completion").await;
     let requests = fixture.requests.lock().unwrap().clone();

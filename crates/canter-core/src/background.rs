@@ -13,8 +13,12 @@ pub(crate) struct PendingEvents {
     pub all: std::collections::BTreeMap<String, Item>,
     cards: Vec<Item>,
     deadline: Option<Instant>,
+    wake_pending: bool,
+    changed: Arc<tokio::sync::Notify>,
     output_due: Option<Instant>,
-    output_wakes: std::collections::BTreeMap<u64, bool>,
+    // Match count and wake eligibility; Esc suppresses the observed batch,
+    // while later matching lines can make the command eligible again.
+    output_wakes: std::collections::BTreeMap<u64, (usize, bool)>,
     count: u32,
     reported: bool,
     pub draining: bool,
@@ -28,9 +32,20 @@ impl PendingEvents {
     }
     pub fn interrupt(&mut self) {
         self.deadline = None;
-        for wake in self.output_wakes.values_mut() {
+        self.wake_pending = false;
+        self.output_due = None;
+        for (_, wake) in self.output_wakes.values_mut() {
             *wake = false;
         }
+    }
+    pub fn turn_finished(&mut self) {
+        if self.draining {
+            return;
+        }
+        if self.wake_pending {
+            self.deadline = Some(Instant::now() + Duration::from_secs(2));
+        }
+        self.changed.notify_one();
     }
 }
 
@@ -88,14 +103,16 @@ impl State {
                 .insert(item.id().unwrap().into(), item.clone());
             self.background_events.cards.push(item);
         }
-        if let Some(deadline) = wake_at
-            && self.active.is_none()
-            && self.queue.is_empty()
-            && self.requests.is_empty()
-            && !self.background_events.draining
-        {
-            let previous = self.background_events.deadline.get_or_insert(deadline);
-            *previous = (*previous).min(deadline);
+        if let Some(deadline) = wake_at {
+            self.background_events.wake_pending = true;
+            if self.active.is_none()
+                && self.queue.is_empty()
+                && self.requests.is_empty()
+                && !self.background_events.draining
+            {
+                let previous = self.background_events.deadline.get_or_insert(deadline);
+                *previous = (*previous).min(deadline);
+            }
         }
         self.background_notice(message).await
     }
@@ -131,7 +148,10 @@ impl State {
         self.background_events
             .cards
             .retain(|item| !messages.contains(&card_message(item)));
-        self.background_events.deadline = None;
+        if self.background_events.cards.is_empty() {
+            self.background_events.wake_pending = false;
+            self.background_events.deadline = None;
+        }
     }
     pub(crate) async fn background_cards(&mut self, turn_id: &str) -> Result<(), CoreError> {
         let payloads = self
@@ -156,7 +176,7 @@ impl State {
         Ok(())
     }
     async fn report_wake_limit(&mut self, limit: u32) -> Result<(), CoreError> {
-        if self.background_events.reported {
+        if limit == 0 || self.background_events.reported {
             return Ok(());
         }
         let Some(turn_id) = self
@@ -168,13 +188,9 @@ impl State {
         else {
             return Ok(());
         };
-        let text = if limit == 0 {
-            "Auto wake paused: auto_wake_limit is 0. Events are kept for your next message. Enable auto_wake_limit to allow automatic wake-ups.".into()
-        } else {
-            format!(
-                "Auto wake paused: reached {limit} consecutive wake-ups without user input. Events are kept; send a message to resume."
-            )
-        };
+        let text = format!(
+            "Auto wake paused: reached {limit} consecutive wake-ups without user input. Events are kept; send a message to resume."
+        );
         let item = Item::BackgroundEvent {
             id: crate::session::id("wake-limit"),
             command_id: None,
@@ -300,17 +316,37 @@ impl Shared {
     }
     async fn sync_background_inner(&self, collect_output: bool) -> Result<(), CoreError> {
         let mut state = self.state.lock().await;
-        let idle = state.active.is_none() && state.queue.is_empty() && state.requests.is_empty();
-        for id in self.tools.background().matching_commands() {
-            state
+        let can_wake = state.active.is_none()
+            && state.queue.is_empty()
+            && state.requests.is_empty()
+            && !state.background_events.draining
+            && state.available().is_ok()
+            && state.background_events.count < self.options.auto_wake_limit
+            && self.input_waiters.load(std::sync::atomic::Ordering::SeqCst) == 0;
+        for (id, count, allowed) in self.tools.background().matching_commands() {
+            let pending = state
                 .background_events
                 .output_wakes
                 .entry(id)
-                .or_insert(idle);
+                .or_insert((count, allowed));
+            if pending.0 != count {
+                *pending = (count, allowed);
+            }
+            pending.1 &= allowed;
+        }
+        if can_wake
+            && state
+                .background_events
+                .output_wakes
+                .values()
+                .any(|(_, wake)| *wake)
+        {
             state
                 .background_events
                 .output_due
                 .get_or_insert(Instant::now() + Duration::from_secs(2));
+        } else {
+            state.background_events.output_due = None;
         }
         if collect_output
             || state
@@ -324,7 +360,7 @@ impl Shared {
                         .background_events
                         .output_wakes
                         .remove(&id)
-                        .unwrap_or(false);
+                        .is_some_and(|(_, wake)| wake);
                 state
                     .new_background_notice(id, text, true, wake.then(Instant::now))
                     .await?;
@@ -354,22 +390,24 @@ pub(crate) fn watch(shared: &Arc<Shared>) {
     let shared: Weak<Shared> = Arc::downgrade(shared);
     tokio::spawn(async move {
         loop {
-            let deadline = {
+            let (deadline, ready) = {
                 let Some(shared) = shared.upgrade() else {
                     break;
                 };
                 let state = shared.state.lock().await;
-                [
+                let deadline = [
                     state.background_events.deadline,
                     state.background_events.output_due,
                 ]
                 .into_iter()
                 .flatten()
-                .min()
+                .min();
+                (deadline, state.background_events.changed.clone())
             };
             tokio::select! {
                 biased;
                 _ = lifetime.cancelled() => break,
+                _ = ready.notified() => {},
                 _ = async {
                     if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; }
                     else { std::future::pending::<()>().await; }

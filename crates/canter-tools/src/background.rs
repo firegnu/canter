@@ -227,14 +227,21 @@ impl BackgroundCommands {
         entry.monitor = monitor;
         Ok(())
     }
-    pub fn matching_commands(&self) -> Vec<u64> {
+    /// Pending command ids, matching line counts, and whether they may wake.
+    pub fn matching_commands(&self) -> Vec<(u64, usize, bool)> {
         self.state
             .lock()
             .unwrap()
             .entries
             .iter()
             .filter(|(_, entry)| !entry.matches.lines.is_empty())
-            .map(|(id, _)| *id)
+            .map(|(id, entry)| {
+                (
+                    *id,
+                    entry.matches.skipped_lines + entry.matches.lines.len(),
+                    !entry.stop.is_cancelled() && !self.shutdown.is_cancelled(),
+                )
+            })
             .collect()
     }
     pub fn take_matches(&self) -> Vec<(u64, String, bool)> {

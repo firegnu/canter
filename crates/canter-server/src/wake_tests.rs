@@ -80,6 +80,174 @@ fn cards(snapshot: &SessionSnapshot) -> Vec<&str> {
         .collect()
 }
 
+async fn completion_during_turn(action: &str, interrupt: bool) {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("allowAll").await;
+    fixture.say(&url, "wake-background").await;
+    match action {
+        "reply" => {
+            fixture.input(&url, "finish-later").await;
+            fixture
+                .until(&url, |s| {
+                    s.turns.last().unwrap().items.iter().any(
+                        |item| matches!(item, Item::AgentMessage { text, .. } if text == "working"),
+                    )
+                })
+                .await;
+        }
+        "shell" => {
+            fixture.client.post(format!("{url}/shellCommand"))
+                .json(&json!({"command":"printf ready; while [ ! -e release-shell ]; do sleep 0.01; done"}))
+                .send().await.unwrap().error_for_status().unwrap();
+            fixture.until(&url, |s| s.turns.last().unwrap().items.iter().any(|item| {
+                matches!(item, Item::CommandExecution { aggregated_output, .. } if aggregated_output == "ready")
+            })).await;
+        }
+        "compact" => {
+            fixture.pause_compaction.store(true, Ordering::Relaxed);
+            fixture
+                .client
+                .post(format!("{url}/compact"))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+            fixture
+                .until(&url, |_| {
+                    fixture
+                        .requests
+                        .lock()
+                        .unwrap()
+                        .last()
+                        .unwrap()
+                        .get("tools")
+                        .is_none()
+                })
+                .await;
+        }
+        _ => unreachable!(),
+    }
+    fixture.release("release-wake");
+    let busy = fixture
+        .until(&url, |s| !s.background_commands[0].running)
+        .await;
+    fixture.no_extra_turn(&url, 2).await;
+    assert!(cards(&busy).is_empty());
+    if interrupt {
+        fixture.interrupt_turn(&url, &busy.turns[1].id, false).await;
+        fixture.no_extra_turn(&url, 2).await;
+        assert_eq!(fixture.requests.lock().unwrap().len(), 3);
+    } else {
+        match action {
+            "reply" => fixture.release_reply.notify_one(),
+            "shell" => fixture.release("release-shell"),
+            "compact" => fixture.release_compaction.notify_one(),
+            _ => unreachable!(),
+        }
+        let snapshot = fixture.turns(&url, 3).await;
+        let wake = &snapshot.turns[2];
+        assert!(wake.input.is_empty());
+        assert!(
+            !wake
+                .items
+                .iter()
+                .any(|item| matches!(item, Item::UserMessage { .. }))
+        );
+        assert_eq!(cards(&snapshot).len(), 1);
+        assert!(cards(&snapshot)[0].contains("Exit code: 7"));
+        let requests = fixture.requests.lock().unwrap().clone();
+        assert_eq!(
+            requests.last().unwrap()["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| {
+                    m["content"]
+                        .as_str()
+                        .is_some_and(|text| text.starts_with("[Background command 1 finished:"))
+                })
+                .count(),
+            1
+        );
+        fixture.no_extra_turn(&url, 3).await;
+    }
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn completion_during_last_response_wakes_after_turn_finishes() {
+    completion_during_turn("reply", false).await;
+}
+
+#[tokio::test]
+async fn completion_during_last_response_does_not_wake_after_interrupt() {
+    completion_during_turn("reply", true).await;
+}
+
+#[tokio::test]
+async fn completion_during_user_shell_wakes_after_turn_finishes() {
+    completion_during_turn("shell", false).await;
+}
+
+#[tokio::test]
+async fn completion_during_manual_compaction_wakes_after_turn_finishes() {
+    completion_during_turn("compact", false).await;
+}
+
+#[tokio::test]
+async fn matches_after_wake_limit_stay_in_one_bounded_notice() {
+    let fixture = Fixture::with_wake_limit(Some(1)).await;
+    let url = fixture.create("allowAll").await;
+    fixture.shell(&url, "while [ ! -e first ]; do sleep 0.01; done; printf 'error first\n'; batch=1; while [ $batch -le 3 ]; do while [ ! -e batch-$batch ]; do sleep 0.01; done; line=1; while [ $line -le 15 ]; do printf 'error queued %s-%s\n' $batch $line; line=$((line+1)); done; batch=$((batch+1)); done; exec sleep 30 &").await;
+    fixture.say(&url, "monitor-errors").await;
+    fixture.release("first");
+    fixture.turns(&url, 3).await;
+    for batch in 1..=3 {
+        fixture.release(&format!("batch-{batch}"));
+        fixture
+            .output_contains(&url, &format!("error queued {batch}-15"))
+            .await;
+        fixture.no_extra_turn(&url, 3).await;
+    }
+    let snapshot = fixture.say(&url, "collect pending matches").await.session;
+    let requests = fixture.requests.lock().unwrap().clone();
+    let notices: Vec<_> = requests.last().unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["content"].as_str())
+        .filter(|text| {
+            text.starts_with("[Background command 1 output matched")
+                && text.contains("error queued")
+        })
+        .collect();
+    assert_eq!(
+        notices.len(),
+        1,
+        "pending matches must stay in one bounded notice"
+    );
+    assert!(notices[0].contains("Skipped 25 matching lines"));
+    assert_eq!(
+        notices[0]
+            .lines()
+            .filter(|line| line.starts_with("error queued"))
+            .count(),
+        20
+    );
+    assert!(notices[0].contains("error queued 2-11\n"));
+    assert!(notices[0].contains("error queued 3-15\n"));
+    assert_eq!(
+        cards(&snapshot)
+            .iter()
+            .filter(|text| text.contains("error queued"))
+            .count(),
+        1
+    );
+    fixture.no_extra_turn(&url, 4).await;
+    fixture.close().await;
+}
+
 #[tokio::test]
 async fn promoted_foreground_preserves_model_or_user_origin_for_waking() {
     for model in [true, false] {
@@ -523,10 +691,12 @@ async fn matching_event_during_compaction_survives_and_is_not_user_words() {
         .await;
     fixture.release("release-match");
     fixture.output_contains(&url, "error during compact").await;
-    // Let the monitoring batch reach the history while the summary is pending.
+    // The batch must stay pending while the summary is being generated.
     tokio::time::sleep(Duration::from_millis(2300)).await;
     fixture.release_compaction.notify_one();
-    fixture.idle(&url).await;
+    let woken = fixture.turns(&url, 4).await;
+    assert!(woken.turns[3].input.is_empty());
+    assert_eq!(cards(&woken).len(), 1);
     fixture.say(&url, "after compaction").await;
     let requests = fixture.requests.lock().unwrap().clone();
     assert_eq!(

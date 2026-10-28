@@ -155,9 +155,11 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         state.active = None;
         let _ = done.send(Some(finish.clone()));
         if finish.is_err() || cancel.is_cancelled() || state.closing {
+            state.background_events.interrupt();
             break;
         }
         let Some(input) = state.queue.pop_front() else {
+            state.background_events.turn_finished();
             break;
         };
         let params = SessionInputParams {
