@@ -82,6 +82,38 @@ fn plan_approval_modes_choices_feedback_and_full_markdown_scroll() {
 }
 
 #[test]
+fn an_unknown_slash_command_in_the_plan_box_is_not_sent_as_feedback() {
+    let mut screen = Screen::new(90, 26);
+    screen.start_turn("t1");
+    screen.event(json!({"type":"request.opened","request":{
+        "id":"proposal","turnId":"t1","createdAt":NOW,
+        "kind":{"type":"planApproval","itemId":"p1","plan":"Investigate and verify.","approvalPolicy":"alwaysAsk"}
+    }}));
+    screen.draw();
+    screen.read_the_box();
+    for c in "/pla".chars() {
+        assert_eq!(screen.key(KeyCode::Char(c)), None);
+        screen.draw();
+    }
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        None,
+        "a command typo must not decline the plan or send feedback"
+    );
+    screen.draw();
+    assert!(screen.screen().contains("Only /plan is available here"));
+    assert_eq!(screen.key(KeyCode::Char('n')), None);
+    screen.draw();
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        Some(Action::Update(canter_protocol::SessionUpdateParams {
+            plan_mode: Some(false),
+            ..Default::default()
+        }))
+    );
+}
+
+#[test]
 fn slash_plan_leaves_the_mode_from_the_proposal_box() {
     let mut screen = Screen::new(90, 26);
     screen.start_turn("t1");

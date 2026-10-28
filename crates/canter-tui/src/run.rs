@@ -1076,6 +1076,27 @@ impl<C: Connector> Chat<C> {
         if answer.decision != canter_protocol::PlanDecision::ClearContext {
             return None;
         }
+        let turn_id = ui
+            .app()
+            .snapshot()
+            .pending_requests
+            .iter()
+            .find(|request| request.id == request_id)?
+            .turn_id
+            .clone();
+        let (drafts, draft) = ui.app().plan_handoff_drafts(&turn_id);
+        let (inputs, missing_images) = match self
+            .plan_withdrawn_inputs(&turn_id, ui.app().snapshot().last_event_seq, drafts)
+            .await
+        {
+            Ok(restored) => restored,
+            Err(error) => {
+                ui.app_mut().warning(&format!(
+                    "Could not recover the original session's withdrawn input: {error}"
+                ));
+                return None;
+            }
+        };
         let settings = &ui.app().snapshot().settings;
         let checklist = if settings.plan_enabled != Some(false) {
             " First call update_plan to turn the plan's steps into a checklist, then implement and update each step as it is completed."
@@ -1097,7 +1118,7 @@ impl<C: Connector> Chat<C> {
             client_name: self.client_name.clone(),
         };
         let failed = "Could not start the plan in a new session";
-        match self.client.create_session(&params).await {
+        let receiver = match self.client.create_session(&params).await {
             Ok(created) => self.show(ui, created.session, failed).await,
             Err(error) => {
                 ui.app_mut().warning(&format!(
@@ -1105,7 +1126,30 @@ impl<C: Connector> Chat<C> {
                 ));
                 None
             }
+        };
+        ui.app_mut()
+            .restore_plan_draft(draft, inputs, missing_images);
+        receiver
+    }
+
+    async fn plan_withdrawn_inputs(
+        &self,
+        turn_id: &str,
+        after: u64,
+        mut drafts: crate::retract::Drafts,
+    ) -> Result<(Vec<Vec<UserInput>>, bool), ClientError> {
+        let mut stream = self.client.subscribe(&self.session, after).await?;
+        while let Some(event) = stream.next().await {
+            let event = event?;
+            drafts.event(&event);
+            if matches!(&event.payload, canter_protocol::EventPayload::TurnCompleted { turn } if turn.id == turn_id)
+            {
+                return Ok(drafts.take_restored().unwrap_or_default());
+            }
         }
+        Err(ClientError::Protocol(
+            "original session event stream ended before the turn completed".into(),
+        ))
     }
     /// `/new`: a session with the directory, model and permission mode of the
     /// one on screen, shown in its place. The one before stays open on the

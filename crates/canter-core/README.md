@@ -232,3 +232,7 @@ submit_plan 始终提供，在 Plan 中通过普通待答请求等待三种决�
 `plan_mode_notice` 记录立即落盘，在当前工具批次结果收齐后追加到模型历史；恢复按同一规则
 重建，避免接入层因工具调用/结果被打断而丢掉结果。提示没有 UI 项目，也不属于用户原话。
 Plan 中暂停清单勾选提醒，批准后若 planEnabled 开启，工具结果要求先 update_plan 再实施。
+clearContext 原轮收尾会以 InputRemoved/interrupted 撤掉所有未消费的插话和排队输入，
+停在 Idle。压缩拼稿跳过内置模式说明；压缩替换历史、回退截断对话后仍在 Plan 时，
+追加当前模式说明并持久化，恢复重放该记录。Plan 中只更新 approvalPolicy 时也同步
+prePlanApprovalPolicy，退出及下一次批准默认值尊重最近选择。

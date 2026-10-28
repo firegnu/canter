@@ -58,6 +58,37 @@ struct Fixture {
     session: Session,
 }
 impl Fixture {
+    async fn reopen(&self, model: Arc<dyn Model>) -> Session {
+        let runtime = RuntimeContext {
+            environment: [
+                (
+                    "HOME".into(),
+                    self.root.path().join("home").to_string_lossy().into_owned(),
+                ),
+                (
+                    "CANTER_HOME".into(),
+                    self.root
+                        .path()
+                        .join("state")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        Session::open(
+            self.store.clone(),
+            "s1".into(),
+            runtime,
+            model,
+            CoreOptions::default(),
+        )
+        .await
+        .unwrap()
+        .0
+    }
+
     async fn new(model: Arc<dyn Model>) -> Self {
         let root = tempfile::tempdir().unwrap();
         for name in ["home", "project", "state"] {
@@ -137,6 +168,278 @@ async fn until(events: &mut Subscription, predicate: impl Fn(&EventPayload) -> b
     })
     .await
     .expect("expected event")
+}
+
+#[tokio::test]
+async fn permission_updates_in_plan_mode_set_the_resume_and_proposal_default_policy() {
+    for policy in ["alwaysAsk", "askForExecution", "allowAll"] {
+        let model = ScriptModel::new(vec![
+            calls(&[("submit_plan", json!({"plan":"Investigate and implement."}))]),
+            done(),
+        ]);
+        let fixture = Fixture::new(model).await;
+        fixture.update(json!({"planMode":true})).await;
+        fixture.update(json!({"approvalPolicy":policy})).await;
+        let settings = fixture.session.snapshot().await.session.settings;
+        assert!(settings.plan_mode);
+        assert_eq!(
+            serde_json::to_value(settings.pre_plan_approval_policy).unwrap(),
+            policy,
+            "the latest permission selection must survive leaving Plan mode"
+        );
+        let mut events = fixture.start().await;
+        let seen = until(&mut events, |p| {
+            matches!(p, EventPayload::RequestOpened { .. })
+        })
+        .await;
+        let request = seen
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::RequestOpened { request } => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        let RequestKind::PlanApproval(proposal) = &request.kind else {
+            panic!("plan approval");
+        };
+        assert_eq!(
+            serde_json::to_value(proposal.approval_policy).unwrap(),
+            if policy == "allowAll" {
+                "alwaysAsk"
+            } else {
+                policy
+            }
+        );
+        fixture.update(json!({"planMode":false})).await;
+        until(&mut events, |p| {
+            matches!(p, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+        assert_eq!(
+            serde_json::to_value(
+                fixture
+                    .session
+                    .snapshot()
+                    .await
+                    .session
+                    .settings
+                    .approval_policy
+            )
+            .unwrap(),
+            policy
+        );
+        fixture.session.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn compacting_omits_mode_notices_and_restates_current_mode_after_replay() {
+    for enabled in [false, true] {
+        let model = ScriptModel::new(vec![
+            done(),
+            vec![
+                ModelEvent::TextDelta("Summary: investigate the requested change.".into()),
+                ModelEvent::Finished(FinishReason::Stop),
+            ],
+            done(),
+            done(),
+        ]);
+        let mut fixture = Fixture::new(model.clone()).await;
+        let mut events = fixture.start().await;
+        until(&mut events, |p| {
+            matches!(p, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+        fixture.update(json!({"planMode":true})).await;
+        if !enabled {
+            fixture.update(json!({"planMode":false})).await;
+        }
+        let mut events = fixture
+            .session
+            .subscribe(fixture.session.snapshot().await.event_seq)
+            .await
+            .unwrap();
+        fixture.session.compact().await.unwrap();
+        until(&mut events, |p| {
+            matches!(p, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+        {
+            let requests = model.requests.lock().unwrap();
+            let transcript = format!("{:?}", requests[1].messages);
+            assert!(transcript.contains("User: work"));
+            assert!(
+                !transcript.contains("[Plan mode"),
+                "hidden mode notices are not user speech for compaction"
+            );
+        }
+        let mut events = fixture.start().await;
+        until(&mut events, |p| {
+            matches!(p, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+        let expected = model.requests.lock().unwrap()[2].messages.clone();
+        let notice = matches!(&expected[expected.len() - 2], canter_model::Message::User { text } if text.contains("[Plan mode enabled]"));
+        assert_eq!(
+            notice, enabled,
+            "compaction must restate the current planning mode independently of the summary"
+        );
+        fixture.session.close().await.unwrap();
+        fixture.session = fixture.reopen(model.clone()).await;
+        let mut events = fixture.start().await;
+        until(&mut events, |p| {
+            matches!(p, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+        assert_eq!(
+            &model.requests.lock().unwrap()[3].messages[..expected.len()],
+            expected
+        );
+        fixture.session.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn rewinding_in_plan_mode_restates_the_mode_and_replays_the_same_history() {
+    let model = ScriptModel::new(vec![done(), done(), done()]);
+    let mut fixture = Fixture::new(model.clone()).await;
+    let mut events = fixture.start().await;
+    until(&mut events, |p| {
+        matches!(p, EventPayload::TurnCompleted { .. })
+    })
+    .await;
+    let target = fixture.session.snapshot().await.session.turns[0].id.clone();
+    fixture.update(json!({"planMode":true})).await;
+    let mut params: SessionRewindParams = serde_json::from_value(json!({
+        "beforeTurnId":target,"rewindFiles":false,"rewindConversation":true
+    }))
+    .unwrap();
+    params.last_event_seq = Some(
+        fixture
+            .session
+            .rewind_preview(params.clone())
+            .await
+            .unwrap()
+            .last_event_seq,
+    );
+    fixture.session.rewind(params).await.unwrap();
+    let mut events = fixture.start().await;
+    until(&mut events, |p| {
+        matches!(p, EventPayload::TurnCompleted { .. })
+    })
+    .await;
+    let expected = model.requests.lock().unwrap()[1].messages.clone();
+    assert!(
+        matches!(&expected[expected.len() - 2], canter_model::Message::User { text } if text.contains("[Plan mode enabled]")),
+        "rewind must restate the current mode before the next input"
+    );
+    fixture.session.close().await.unwrap();
+    fixture.session = fixture.reopen(model.clone()).await;
+    assert!(fixture.session.snapshot().await.session.settings.plan_mode);
+    let mut events = fixture.start().await;
+    until(&mut events, |p| {
+        matches!(p, EventPayload::TurnCompleted { .. })
+    })
+    .await;
+    assert_eq!(
+        &model.requests.lock().unwrap()[2].messages[..expected.len()],
+        expected
+    );
+    fixture.session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn clear_context_with_queued_input_and_steering_leaves_the_original_idle() {
+    let model = ScriptModel::new(vec![
+        calls(&[(
+            "submit_plan",
+            json!({"plan":"Implement the approved change."}),
+        )]),
+        calls(&[(
+            "write",
+            json!({"path":"unexpected","content":"must not run"}),
+        )]),
+        done(),
+    ]);
+    let fixture = Fixture::new(model.clone()).await;
+    fixture.update(json!({"planMode":true})).await;
+    let mut events = fixture.start().await;
+    let seen = until(&mut events, |p| {
+        matches!(p, EventPayload::RequestOpened { .. })
+    })
+    .await;
+    let request = seen
+        .iter()
+        .find_map(|e| match &e.payload {
+            EventPayload::RequestOpened { request } => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    for (mode, text) in [
+        ("queue", "Queued follow-up"),
+        ("steer", "Steering correction"),
+    ] {
+        fixture
+            .session
+            .input(
+                serde_json::from_value(json!({
+                    "input":[{"type":"text","text":text}],"mode":mode,"clientName":"other terminal"
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    let queued = fixture.session.snapshot().await.session.queued_inputs;
+    assert_eq!(queued.len(), 2);
+    fixture
+        .session
+        .resolve(
+            &request.id,
+            serde_json::from_value(json!({
+                "plan":{"decision":"clearContext","approvalPolicy":"allowAll"},"clientName":"test"
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let seen = until(&mut events, |p| {
+        matches!(
+            p,
+            EventPayload::SessionStatus {
+                status: SessionStatus::Idle,
+                ..
+            }
+        )
+    })
+    .await;
+    let snapshot = fixture.session.snapshot().await.session;
+    assert!(
+        snapshot.queued_inputs.is_empty(),
+        "clearContext must withdraw both queued input and steering"
+    );
+    assert_eq!(snapshot.status, SessionStatus::Idle);
+    assert_eq!(snapshot.turns.len(), 1);
+    assert_eq!(snapshot.turns[0].status, TurnStatus::Completed);
+    assert_eq!(model.requests.lock().unwrap().len(), 1);
+    assert!(!fixture.root.path().join("project/unexpected").exists());
+    let removed: Vec<_> = seen
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::InputRemoved {
+                input_ids,
+                reason: InputRemovalReason::Interrupted,
+                ..
+            } => Some(input_ids),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(
+        removed,
+        queued.iter().map(|input| &input.id).collect::<Vec<_>>()
+    );
+    fixture.session.close().await.unwrap();
 }
 
 #[tokio::test]

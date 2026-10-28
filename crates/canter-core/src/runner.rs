@@ -102,6 +102,13 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             state
                 .complete_missing_tools("No result: interrupted, or the turn did not finish")
                 .await?;
+            if state
+                .active
+                .as_ref()
+                .is_some_and(|active| active.plan_handoff)
+            {
+                state.discard_queue(InputRemovalReason::Interrupted).await?;
+            }
             if cancel.is_cancelled() {
                 state
                     .message(Message::User {

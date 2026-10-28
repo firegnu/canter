@@ -9,8 +9,20 @@ use tokio_util::sync::CancellationToken;
 
 const ENTER: &str = "[Plan mode enabled] Investigate the task and the existing project before proposing changes. Use ask_user for requirements and decisions that investigation cannot resolve. Do not modify files, run commands outside the read-only whitelist, use MCP tools, or call update_plan. Produce a complete, actionable plan with implementation steps and verification, then call submit_plan with the full Markdown plan. Only the user can leave Plan mode or approve implementation.";
 const EXIT: &str = "[Plan mode disabled] The user has left Plan mode. Continue under the current permission policy.";
+pub(crate) const APPROVED: &str = "[Plan mode disabled] The user approved the plan for implementation under the selected permission policy.";
+
+pub(crate) fn is_notice(message: &Message) -> bool {
+    matches!(message, Message::User { text } if matches!(text.as_str(), ENTER | EXIT | APPROVED))
+}
 
 impl State {
+    pub(crate) async fn restate_plan_mode(&mut self) -> Result<(), CoreError> {
+        if self.journal.snapshot.settings.plan_mode {
+            self.plan_mode_notice(ENTER).await?;
+        }
+        Ok(())
+    }
+
     pub(crate) async fn plan_mode_notice(&mut self, text: &str) -> Result<(), CoreError> {
         let message = Message::User { text: text.into() };
         self.journal

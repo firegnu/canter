@@ -360,3 +360,6 @@ acceptForSession 的授权范围为该网址的规范化主机名及有效端口
 Markdown 全文和 answer，`blocked` 状态表示计划模式硬挡。退出模式取消待答方案，晚答返回
 alreadyResolved。clearContext 正常结束原轮，由作答客户端按普通创建接口新建同目录会话、
 带所选权限和整份方案作为 input；其它客户端和 /resume 仍可读取原会话。
+原轮结束前通过 InputRemoved/interrupted 撤掉未消费的插话和排队，作答客户端等待
+TurnCompleted 后将撤回内容放到新会话草稿。Plan 中不带 planMode 的 approvalPolicy
+更新同时更新 prePlanApprovalPolicy，保持计划模式；下一次批准的默认权限跟随它。

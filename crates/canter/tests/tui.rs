@@ -2958,6 +2958,17 @@ async fn plan_approval_implements_in_place_or_starts_the_plan_in_a_fresh_session
         terminal.type_line("Plan this change.").await;
         terminal.wait_for("Implement this plan?").await;
         terminal.wait_for("Mode: Always ask").await;
+        if choice == '2' {
+            let client = Client::new(&world.path("state/server.sock")).unwrap();
+            for (mode, text) in [
+                ("queue", "Queued follow-up"),
+                ("steer", "Steering correction"),
+            ] {
+                client.send_input(&source, &serde_json::from_value(json!({
+                    "input":[{"type":"text","text":text}],"mode":mode,"clientName":"other terminal"
+                })).unwrap()).await.unwrap();
+            }
+        }
         read_the_box().await;
         terminal
             .press_with(KeyCode::BackTab, KeyModifiers::SHIFT)
@@ -2965,9 +2976,22 @@ async fn plan_approval_implements_in_place_or_starts_the_plan_in_a_fresh_session
         terminal.wait_for("Mode: Ask for execution").await;
         terminal.press(KeyCode::Char(choice)).await;
         terminal.wait_for("Implementation session ready.").await;
+        if choice == '2' {
+            terminal.wait_for("2 inputs withdrawn to draft").await;
+            assert!(terminal.screen().contains("Queued follow-up"));
+            assert!(terminal.screen().contains("Steering correction"));
+            terminal
+                .press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
+                .await;
+            terminal.frames_later(2).await;
+        }
         terminal.wait_idle().await;
         let target = terminal.quit().await;
         let original = world.snapshot(&source).await;
+        assert_eq!(original.status, SessionStatus::Idle);
+        assert!(original.queued_inputs.is_empty());
+        assert_eq!(original.turns.len(), 1);
+        assert_eq!(world.requests.lock().unwrap().len(), 2);
         assert_eq!(
             original.turns[0].status,
             canter_protocol::TurnStatus::Completed
@@ -3002,6 +3026,8 @@ async fn plan_approval_implements_in_place_or_starts_the_plan_in_a_fresh_session
             assert!(text.contains(plan));
             assert!(text.contains("Implement this plan"));
             assert!(text.contains("update_plan"));
+            assert!(!text.contains("Queued follow-up"));
+            assert!(!text.contains("Steering correction"));
             let client = Client::new(&world.path("state/server.sock")).unwrap();
             assert_eq!(client.list_sessions().await.unwrap().len(), 2);
         }

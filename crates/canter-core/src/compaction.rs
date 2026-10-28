@@ -124,6 +124,7 @@ pub(crate) async fn compact(
             state.summary_index = state.history.len().checked_sub(1);
             state.user_messages = user_inputs;
             state.measured_context = None;
+            state.restate_plan_mode().await?;
             state
                 .journal
                 .append(vec![EventPayload::ItemCompleted {
@@ -176,6 +177,9 @@ async fn summarize(
     let mut transcript = String::new();
     let mut images = Vec::new();
     for (index, message) in history.iter().enumerate() {
+        if crate::plan_mode::is_notice(message) {
+            continue;
+        }
         match message {
             Message::User { text } => {
                 // Only the previous summary has an attached checklist. Keep

@@ -1961,6 +1961,28 @@ impl App {
         ));
     }
 
+    pub(crate) fn plan_handoff_drafts(&self, turn: &str) -> (crate::retract::Drafts, InputBox) {
+        (self.retract_drafts.plan_handoff(turn), self.input.clone())
+    }
+
+    pub(crate) fn restore_plan_draft(
+        &mut self,
+        draft: InputBox,
+        inputs: Vec<Vec<UserInput>>,
+        missing_images: bool,
+    ) {
+        let count = inputs.len();
+        self.input = draft;
+        self.input.prepend_inputs(inputs);
+        self.images_need_paste |= missing_images;
+        if count > 0 {
+            self.copier.show(
+                Line::from(format!(" {count} inputs withdrawn to draft")),
+                crate::now_ms() + crate::copy::FAILED_MS,
+            );
+        }
+    }
+
     /// Esc goes back to where the note came from: nothing sent here yet.
     fn handoff_back_open(&self) -> bool {
         self.handoff_back.is_some()
@@ -3854,6 +3876,13 @@ impl App {
                         plan_mode: Some(false),
                         ..Default::default()
                     }));
+                }
+                KeyCode::Enter if text.trim_start().starts_with('/') => {
+                    self.copier.show(
+                        Line::from(" Only /plan is available here; edit the command to continue"),
+                        at + crate::copy::FAILED_MS,
+                    );
+                    return None;
                 }
                 KeyCode::Enter => canter_protocol::PlanDecision::KeepPlanning,
                 KeyCode::Backspace | KeyCode::Up if text.is_empty() => {

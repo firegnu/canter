@@ -499,6 +499,7 @@ impl Session {
             state.history.truncate(messages);
             state.user_messages.truncate(users);
             state.measured_context = None;
+            state.restate_plan_mode().await?;
         }
         Ok(SessionRewindResponse {
             event_seq: rewind.event_seq,

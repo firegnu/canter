@@ -881,7 +881,7 @@ impl Session {
             settings.plan_mode = false;
             settings.pre_plan_approval_policy = None;
             settings.approval_policy = answer.approval_policy;
-            state.plan_mode_notice("[Plan mode disabled] The user approved the plan for implementation under the selected permission policy.").await?;
+            state.plan_mode_notice(crate::plan_mode::APPROVED).await?;
             state
                 .journal
                 .append(vec![EventPayload::SessionUpdated { settings }])
@@ -960,6 +960,9 @@ impl Session {
         }
         if let Some(policy) = params.approval_policy {
             settings.approval_policy = policy;
+            if settings.plan_mode && params.plan_mode.is_none() {
+                settings.pre_plan_approval_policy = Some(policy);
+            }
         }
         if let Some(effort) = params.reasoning_effort {
             settings.reasoning_effort = effort;
