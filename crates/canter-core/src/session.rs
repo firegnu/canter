@@ -12,7 +12,7 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 use tokio::sync::{Mutex, oneshot, watch};
@@ -35,6 +35,7 @@ impl Drop for Lifetime {
     }
 }
 pub(crate) struct Shared {
+    pub input_waiters: AtomicUsize,
     pub state: Mutex<State>,
     pub model: Arc<dyn Model>,
     pub tools: Tools,
@@ -42,6 +43,7 @@ pub(crate) struct Shared {
     pub lifetime: CancellationToken,
 }
 pub(crate) struct State {
+    pub background_events: crate::background::PendingEvents,
     pub journal: Journal,
     pub prefix: Vec<Message>,
     pub prefix_segments: Option<Vec<crate::prompt::Segment>>,
@@ -65,6 +67,7 @@ pub(crate) struct State {
     plan_tool_calls: u8,
 }
 pub(crate) struct Active {
+    pub auto_wake: bool,
     pub plan_handoff: bool,
     pub turn: Turn,
     pub manual_compaction: bool,
@@ -77,6 +80,7 @@ pub(crate) struct Active {
 impl State {
     fn new(journal: Journal) -> Self {
         Self {
+            background_events: Default::default(),
             journal,
             prefix: Vec::new(),
             prefix_segments: None,
@@ -379,6 +383,8 @@ impl Session {
         state.plan_mode_notices = restored.plan_mode_notices;
         state.user_messages = restored.users;
         state.summary_index = restored.summary_index;
+        state.background_events.all = restored.background_cards;
+        state.requeue_background_cards();
         for entry in &entries {
             let recovery = match entry {
                 HistoryEntry::Rewind { rewind } => Some((rewind.event_seq, rewind.event())),
@@ -544,6 +550,7 @@ impl Session {
             .restore(&state.journal.snapshot.background_commands);
         let lifetime = CancellationToken::new();
         let shared = Arc::new(Shared {
+            input_waiters: AtomicUsize::new(0),
             state: Mutex::new(state),
             model,
             tools,
@@ -562,7 +569,12 @@ impl Session {
         params: SessionInputParams,
     ) -> Result<SessionInputResponse, CoreError> {
         let session = self.clone();
-        owned(async move { session.input_inner(params).await }).await
+        session.shared.input_waiters.fetch_add(1, Ordering::SeqCst);
+        owned(async move {
+            let _waiting = InputWaiting(session.shared.clone());
+            session.input_inner(params).await
+        })
+        .await
     }
     async fn input_inner(
         &self,
@@ -627,6 +639,7 @@ impl Session {
         } else {
             None
         };
+        state.background_events.user_input();
         if state.active.is_some() {
             let input = QueuedInput {
                 review: params.review.clone(),
@@ -743,12 +756,15 @@ impl Session {
                 && !active.cancel.is_cancelled()
                 && !active.manual_compaction
                 && active.user_shell.is_none()
+                && !active.auto_wake
                 && !active.model_started
             {
                 active.retracted = true;
             }
             active.cancel.cancel();
-            (active.done.clone(), active.retracted)
+            let result = (active.done.clone(), active.retracted);
+            state.background_events.interrupt();
+            result
         };
         Ok(SessionInterruptResponse {
             event_seq: wait_done(done).await?,
@@ -1209,6 +1225,7 @@ impl Shared {
         let events = state.journal.append(payloads).await?;
         let (done, receiver) = watch::channel(None);
         state.active = Some(Active {
+            auto_wake: false,
             plan_handoff: false,
             turn: turn.clone(),
             manual_compaction: false,
@@ -1225,6 +1242,12 @@ impl Shared {
             },
             done,
         ))
+    }
+}
+struct InputWaiting(Arc<Shared>);
+impl Drop for InputWaiting {
+    fn drop(&mut self) {
+        self.0.input_waiters.fetch_sub(1, Ordering::SeqCst);
     }
 }
 fn validate_options(options: &CoreOptions) -> Result<(), CoreError> {

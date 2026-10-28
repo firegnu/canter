@@ -43,6 +43,12 @@ pub(crate) enum HistoryEntry {
     },
     BackgroundNotice {
         message: Message,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        event_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command_id: Option<u64>,
+        #[serde(default)]
+        visible: bool,
     },
     CompactionRequest {
         messages: Vec<Message>,
@@ -75,6 +81,7 @@ pub(crate) fn known(message: Message) -> Option<Message> {
 }
 
 pub(crate) struct Restored {
+    pub background_cards: BTreeMap<String, canter_protocol::Item>,
     pub prefix: Vec<Message>,
     pub segments: Option<Vec<Segment>>,
     pub history: Vec<Message>,
@@ -93,10 +100,28 @@ pub(crate) fn restore(
     let mut users = Vec::new();
     let mut summary_index = None;
     let mut plan_mode_notices = Vec::new();
+    let mut background_cards = BTreeMap::new();
     for entry in entries {
         match entry {
-            HistoryEntry::PlanModeNotice { message }
-            | HistoryEntry::BackgroundNotice { message } => plan_mode_notices.push(message),
+            HistoryEntry::PlanModeNotice { message } => plan_mode_notices.push(message),
+            HistoryEntry::BackgroundNotice {
+                message,
+                event_id,
+                command_id,
+                visible,
+            } => {
+                if visible && let (Some(id), Message::User { text }) = (event_id, &message) {
+                    background_cards.insert(
+                        id.clone(),
+                        canter_protocol::Item::BackgroundEvent {
+                            id,
+                            command_id,
+                            text: crate::background::notice_text(text).into(),
+                        },
+                    );
+                }
+                plan_mode_notices.push(message);
+            }
             HistoryEntry::TurnBoundary { turn_id } => {
                 rewind.boundary(turn_id, history.len(), users.len())
             }
@@ -155,6 +180,7 @@ pub(crate) fn restore(
         flush_plan_mode_notices(&mut history, &mut plan_mode_notices);
     }
     Restored {
+        background_cards,
         prefix,
         segments,
         history,

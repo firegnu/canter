@@ -1054,6 +1054,16 @@ impl App {
                 _ => self.working_since = None,
             },
             EventPayload::ItemCompleted { turn_id, item } => {
+                if matches!(item, Item::BackgroundEvent { .. })
+                    && self
+                        .snapshot
+                        .turns
+                        .iter()
+                        .any(|turn| turn.id == *turn_id && turn.status != TurnStatus::InProgress)
+                {
+                    self.history = History::default();
+                    self.scroll.seen = Default::default();
+                }
                 // Tool calls and `!` commands among them.
                 self.refresh_git_diff();
                 if let Some(id) = item.id() {

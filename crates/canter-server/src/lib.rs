@@ -133,6 +133,7 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
         let replacing = tokio::select! { _ = &mut exit => false, _ = upgrade => true };
         *shutdown.draining.write().await = true;
         let sessions: Vec<_> = shutdown.sessions.lock().await.values().cloned().collect();
+        for session in &sessions { session.drain().await; }
         if replacing {
             let wait = async {
                 loop {

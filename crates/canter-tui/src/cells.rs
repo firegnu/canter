@@ -151,6 +151,32 @@ pub(crate) fn item(
     feedback: Option<&str>,
 ) -> Vec<Row> {
     let mut rows = match item {
+        Item::BackgroundEvent {
+            command_id, text, ..
+        } => {
+            let label =
+                command_id.map_or_else(|| "Auto wake".into(), |id| format!("Background #{id}"));
+            let mut rows = vec![title(
+                dot(theme::accent()),
+                "Event ",
+                vec![Span::raw(label)],
+                Vec::new(),
+                None,
+                width,
+            )];
+            rows.extend(output_rows(
+                text,
+                if details {
+                    Fold::Details
+                } else {
+                    Fold::Head(20)
+                },
+                theme::secondary(),
+                theme::accent(),
+                width,
+            ));
+            rows
+        }
         Item::BackgroundCommandAction {
             command_id,
             action,
@@ -158,7 +184,14 @@ pub(crate) fn item(
             status,
             ..
         } => mcp_call(
-            &format!("shell_{action} #{command_id}"),
+            &format!(
+                "{} #{command_id}",
+                if action == "monitor" {
+                    action.clone()
+                } else {
+                    format!("shell_{action}")
+                }
+            ),
             &serde_json::Value::Null,
             *status,
             result,

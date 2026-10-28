@@ -8,7 +8,7 @@ import type { UserInput } from "./UserInput";
 import type { UserInputAnswer } from "./UserInputAnswer";
 import type { JsonValue } from "./serde_json/JsonValue";
 
-export type Item = { "type": "backgroundCommandAction", id: string, commandId: number, action: string, result: string, status: ItemStatus, } | { "type": "planProposal", id: string, plan: string, answer: PlanAnswer | null, status: ItemStatus, } | { "type": "plan", id: string, explanation?: string, plan: Array<PlanStep>, status: ItemStatus, } | { "type": "userMessage", id: string, content: Array<UserInput>, } | { "type": "agentMessage", id: string, text: string, } | { "type": "reasoning", id: string, summary: Array<string>, content: Array<string>,
+export type Item = { "type": "backgroundEvent", id: string, commandId?: number, text: string, } | { "type": "backgroundCommandAction", id: string, commandId: number, action: string, result: string, status: ItemStatus, } | { "type": "planProposal", id: string, plan: string, answer: PlanAnswer | null, status: ItemStatus, } | { "type": "plan", id: string, explanation?: string, plan: Array<PlanStep>, status: ItemStatus, } | { "type": "userMessage", id: string, content: Array<UserInput>, } | { "type": "agentMessage", id: string, text: string, } | { "type": "reasoning", id: string, summary: Array<string>, content: Array<string>,
 /**
  * Thinking time from `item.started` up to its latest delta, filled by
  * the reducer; absent means unknown. Not in Codex.

@@ -18,6 +18,8 @@ pub(crate) struct Config {
     context_window: u64,
     #[serde(default)]
     auto_compact_tokens: Option<u64>,
+    #[serde(default = "default_auto_wake_limit")]
+    auto_wake_limit: u32,
     api_key: String,
     #[serde(default)]
     prices: canter_core::usage::PriceBook,
@@ -112,6 +114,7 @@ impl Config {
         let mut prices = canter_core::usage::builtin_prices();
         prices.extend(self.prices.clone());
         CoreOptions {
+            auto_wake_limit: self.auto_wake_limit,
             prices,
             context_window: self.context_window,
             auto_compact_tokens: self.auto_compact_tokens,
@@ -123,6 +126,9 @@ impl Config {
 
 fn default_models() -> Vec<String> {
     vec!["deepseek-flash".into(), "deepseek-v4-pro".into()]
+}
+fn default_auto_wake_limit() -> u32 {
+    10
 }
 
 fn default_image_models() -> Vec<String> {

@@ -191,6 +191,7 @@ async fn conversation(
         let request = {
             let mut state = shared.state.lock().await;
             state.consume_steering(turn_id).await?;
+            state.background_cards(turn_id).await?;
             context::request(&state, shared.options.max_output_tokens)
         };
         let estimated = context::request_tokens(&request);
@@ -242,6 +243,11 @@ async fn conversation(
                 "context remains too large after compaction",
             ));
         }
+        shared
+            .state
+            .lock()
+            .await
+            .consume_background_notices(&request.messages);
         let (content, reason, error) = model_response(shared, turn_id, request, cancel).await?;
         let calls: Vec<_> = content
             .iter()

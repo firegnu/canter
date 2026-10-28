@@ -9,12 +9,17 @@ struct Fixture {
     requests: Arc<SyncMutex<Vec<serde_json::Value>>>,
     pause_compaction: Arc<AtomicBool>,
     release_compaction: Arc<tokio::sync::Notify>,
+    pause_wakes: Arc<AtomicBool>,
+    wake_tool: Arc<SyncMutex<Option<(String, serde_json::Value)>>>,
     stop: CancellationToken,
     servers: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl Fixture {
     async fn new() -> Self {
+        Self::with_wake_limit(None).await
+    }
+    async fn with_wake_limit(limit: Option<u32>) -> Self {
         let root = tempfile::Builder::new()
             .prefix("canter-user-shell-")
             .tempdir_in("/tmp")
@@ -22,35 +27,61 @@ impl Fixture {
         for directory in ["home", "project", "state"] {
             std::fs::create_dir(root.path().join(directory)).unwrap();
         }
+        std::fs::write(
+            root.path().join("state/config.json"),
+            json!({
+                "base_url":"http://127.0.0.1:1/v1", "model":"fake", "api_key":"test-key",
+                "context_window":1048576, "auto_wake_limit":limit.unwrap_or(10)
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let options = crate::config::Config::load(&root.path().join("state"))
+            .unwrap()
+            .options();
         let requests = Arc::new(SyncMutex::new(Vec::new()));
         let recorded = requests.clone();
         let pause_compaction = Arc::new(AtomicBool::new(false));
         let pause = pause_compaction.clone();
         let release_compaction = Arc::new(tokio::sync::Notify::new());
         let release = release_compaction.clone();
+        let pause_wakes = Arc::new(AtomicBool::new(false));
+        let pause_wake = pause_wakes.clone();
+        let wake_tool: Arc<SyncMutex<Option<(String, serde_json::Value)>>> = Arc::default();
+        let on_wake = wake_tool.clone();
         let model_router = Router::new().route(
             "/v1/chat/completions",
             post(move |Json(request): Json<serde_json::Value>| {
                 let recorded = recorded.clone();
                 let pause = pause.clone();
                 let release = release.clone();
+                let pause_wake = pause_wake.clone();
+                let on_wake = on_wake.clone();
                 async move {
                     use axum::response::IntoResponse;
                     let last = request["messages"].as_array().unwrap().last().unwrap();
                     let text = last["content"].as_str().unwrap_or_default();
                     let compact = request.get("tools").is_none_or(|tools| tools.as_array().is_some_and(Vec::is_empty));
-                    let wait = text == "wait" || (compact && pause.load(Ordering::Relaxed));
+                    let wake = text.starts_with("[Background command ") && text.contains("[Background event:");
+                    let wait = text == "wait" || (wake && pause_wake.load(Ordering::Relaxed)) || (compact && pause.load(Ordering::Relaxed));
                     let tool = match text {
+                        "wake-background" => Some(("shell", json!({"command":"while [ ! -e release-wake ]; do sleep 0.01; done; exit 7", "background":true}))),
                         "background" => Some(("shell", json!({"command":"echo $$; exec sleep 30", "background":true,"timeoutMs":1}))),
                         "foreground" => Some(("shell", json!({"command":"echo $$; exec sleep 30"}))),
+                        "wake-foreground" => Some(("shell", json!({"command":"printf ready; while [ ! -e release-wake ]; do sleep 0.01; done; exit 7"}))),
                         "background-denied" => Some(("shell", json!({"command":"touch must-not-run; exec sleep 30", "background":true}))),
                         "background-readonly" => Some(("shell", json!({"command":"pwd", "background":true}))),
                         "output" => Some(("shell_output", json!({"id":1}))),
+                        "monitor-errors" => Some(("monitor", json!({"id":1,"pattern":"error"}))),
+                        "monitor-warnings" => Some(("monitor", json!({"id":1,"pattern":"warning"}))),
+                        "monitor-off" => Some(("monitor", json!({"id":1}))),
+                        "monitor-invalid" => Some(("monitor", json!({"id":1,"pattern":"["}))),
                         "stop" => Some(("shell_stop", json!({"id":1}))),
                         "approve" => Some(("shell", json!({"command":"printf model-command > model-result.txt"}))),
                         "question" => Some(("ask_user", json!({"question":"Choose?","options":[{"label":"A","description":"A"},{"label":"B","description":"B"}]}))),
                         _ => None,
-                    };
+                    }.map(|(name, args)| (name.to_owned(), args))
+                        .or_else(|| if wake { on_wake.lock().unwrap().clone() } else { None });
                     recorded.lock().unwrap().push(request);
                     let done = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
                     let body = if compact && wait {
@@ -90,7 +121,7 @@ impl Fixture {
             model: Arc::new(model),
             default_model: "fake".into(),
             models: vec!["fake".into()],
-            options: CoreOptions::default(),
+            options,
             sessions: Default::default(),
             registry_changed: Default::default(),
             draining: Default::default(),
@@ -119,6 +150,8 @@ impl Fixture {
             requests,
             pause_compaction,
             release_compaction,
+            pause_wakes,
+            wake_tool,
             stop,
             servers: vec![server, model_server],
         }
@@ -284,6 +317,136 @@ impl Fixture {
             );
         }
     }
+}
+
+#[path = "wake_tests.rs"]
+mod wake;
+
+#[tokio::test]
+async fn auto_wake_zero_records_pause_and_preserves_event_for_user_input() {
+    let fixture = Fixture::with_wake_limit(Some(0)).await;
+    let url = fixture.create("allowAll").await;
+    fixture.say(&url, "wake-background").await;
+    std::fs::write(fixture.root.path().join("project/release-wake"), "").unwrap();
+    let snapshot = fixture
+        .until(&url, |session| {
+            serde_json::to_string(session)
+                .unwrap()
+                .contains("Auto wake paused")
+        })
+        .await;
+    assert_eq!(snapshot.turns.len(), 1);
+    assert_eq!(fixture.requests.lock().unwrap().len(), 2);
+    fixture.say(&url, "check completion").await;
+    let requests = fixture.requests.lock().unwrap().clone();
+    let messages = requests.last().unwrap()["messages"].as_array().unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|m| m["content"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("[Background command 1 finished:")))
+            .count(),
+        1
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn wake_turn_can_be_rewound_and_event_is_replayed_once() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("allowAll").await;
+    fixture.say(&url, "wake-background").await;
+    std::fs::write(fixture.root.path().join("project/release-wake"), "").unwrap();
+    let snapshot = fixture
+        .until(&url, |s| {
+            s.turns.len() == 2 && s.status == SessionStatus::Idle
+        })
+        .await;
+    let wake_id = &snapshot.turns[1].id;
+    let candidates: serde_json::Value = fixture
+        .client
+        .get(format!("{url}/rewind"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        candidates["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate["turnId"] == *wake_id),
+        "{candidates}"
+    );
+    let params = json!({"beforeTurnId":wake_id,"rewindFiles":false,"rewindConversation":true,"lastEventSeq":snapshot.last_event_seq});
+    fixture
+        .client
+        .post(format!("{url}/rewind"))
+        .json(&params)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fixture.assert_background_notice(&url, &snapshot.id).await;
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn monitor_matches_new_output_and_wakes_user_command() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("alwaysAsk").await;
+    fixture.shell(&url, "printf 'error old\n'; while [ ! -e release-match ]; do sleep 0.01; done; printf 'error new\n'; exec sleep 30 &").await;
+    let monitored = fixture.say(&url, "monitor-errors").await;
+    assert_eq!(monitored.session.turns.len(), 2);
+    std::fs::write(fixture.root.path().join("project/release-match"), "").unwrap();
+    let snapshot = fixture
+        .until(&url, |session| {
+            session.turns.len() == 3 && session.status == SessionStatus::Idle
+        })
+        .await;
+    let card = serde_json::to_value(&snapshot.turns[2].items[0]).unwrap();
+    assert_eq!(card["type"], "backgroundEvent");
+    let text = card["text"].as_str().unwrap();
+    assert!(
+        text.contains("error new") && text.contains("shell_output"),
+        "{text}"
+    );
+    assert!(!text.contains("error old"), "{text}");
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn model_background_completion_wakes_idle_session_without_user_message() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("allowAll").await;
+    let started = fixture.say(&url, "wake-background").await;
+    assert!(started.session.background_commands[0].running);
+    std::fs::write(fixture.root.path().join("project/release-wake"), "").unwrap();
+    let snapshot = fixture
+        .until(&url, |session| {
+            session.turns.len() == 2 && session.status == SessionStatus::Idle
+        })
+        .await;
+    let turn = &snapshot.turns[1];
+    assert!(turn.input.is_empty());
+    assert!(
+        !turn
+            .items
+            .iter()
+            .any(|item| matches!(item, Item::UserMessage { .. }))
+    );
+    let card = serde_json::to_value(&turn.items[0]).unwrap();
+    assert_eq!(card["type"], "backgroundEvent");
+    assert!(card["text"].as_str().unwrap().contains("Exit code: 7"));
+    assert_eq!(fixture.requests.lock().unwrap().len(), 3);
+    fixture.reopen(&url, &snapshot.id).await;
+    let reopened = fixture.idle(&url).await;
+    assert_eq!(reopened.session.turns, snapshot.turns);
+    fixture.close().await;
 }
 
 #[tokio::test]

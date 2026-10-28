@@ -229,6 +229,10 @@ fn rewind_input(turn: &Turn) -> Option<Vec<UserInput>> {
         return Some(turn.input.clone());
     }
     turn.items.iter().find_map(|item| match item {
+        Item::BackgroundEvent {
+            command_id: Some(_),
+            ..
+        } => Some(Vec::new()),
         Item::CommandExecution {
             command,
             source: ExecCommandSource::UserShell,

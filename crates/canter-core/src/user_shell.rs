@@ -38,6 +38,7 @@ impl Session {
                 "wait for this turn to finish before running a user command",
             ));
         }
+        state.background_events.user_input();
         let (response, done) = self
             .shared
             .start(

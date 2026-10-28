@@ -60,6 +60,103 @@ struct Entry {
     cursor: u64,
     stop: CancellationToken,
     done: watch::Receiver<bool>,
+    source: canter_protocol::ExecCommandSource,
+    monitor: Option<Monitor>,
+    monitored_at_exit: bool,
+    matches: Matches,
+}
+
+struct Monitor {
+    pattern: String,
+    regex: regex_automata::meta::Regex,
+    line: String,
+}
+
+#[derive(Default)]
+struct Matches {
+    lines: VecDeque<(String, String)>,
+    bytes: usize,
+    skipped_lines: usize,
+    skipped_bytes: usize,
+}
+
+impl Matches {
+    fn push(&mut self, pattern: &str, line: &str) {
+        let mut start = line.len().saturating_sub(4096);
+        while !line.is_char_boundary(start) {
+            start += 1;
+        }
+        let tail = &line[start..];
+        self.skipped_bytes += start;
+        while self.lines.len() >= 20 || self.bytes + tail.len() > 4096 {
+            let (_, removed) = self.lines.pop_front().expect("nonempty match buffer");
+            self.bytes -= removed.len();
+            self.skipped_lines += 1;
+            self.skipped_bytes += removed.len();
+        }
+        self.bytes += tail.len();
+        self.lines.push_back((pattern.into(), tail.into()));
+    }
+
+    fn render(self, id: u64) -> String {
+        let mut patterns = Vec::new();
+        for (pattern, _) in &self.lines {
+            if !patterns.contains(pattern) {
+                patterns.push(pattern.clone());
+            }
+        }
+        let lines: String = self.lines.into_iter().map(|(_, line)| line).collect();
+        let skipped = if self.skipped_lines > 0 || self.skipped_bytes > 0 {
+            format!(
+                "Skipped {} matching lines / {} bytes; showing the tail.\n",
+                self.skipped_lines, self.skipped_bytes
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            "[Background command {id} output matched {}]\n{skipped}{lines}\nUse shell_output with id={id} to read all retained output.",
+            patterns
+                .iter()
+                .map(|pattern| format!("`{pattern}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+impl Monitor {
+    fn push(&mut self, text: &str, matches: &mut Matches, finish: bool) {
+        for part in text.split_inclusive('\n') {
+            self.line.push_str(part);
+            if self.line.len() > MAX_BACKGROUND_OUTPUT_BYTES {
+                let mut start = self.line.len() - MAX_BACKGROUND_OUTPUT_BYTES;
+                while !self.line.is_char_boundary(start) {
+                    start += 1;
+                }
+                self.line.drain(..start);
+            }
+            if part.ends_with('\n') {
+                self.flush(matches);
+            }
+        }
+        if finish && !self.line.is_empty() {
+            self.flush(matches);
+        }
+    }
+
+    fn flush(&mut self, matches: &mut Matches) {
+        if self
+            .regex
+            .is_match(self.line.trim_end_matches(['\n', '\r']))
+        {
+            if !self.line.ends_with('\n') {
+                self.line.push('\n');
+            }
+            matches.push(&self.pattern, &self.line);
+        }
+        self.line.clear();
+    }
 }
 type Promotion = oneshot::Sender<Result<Option<u64>, String>>;
 #[derive(Default)]
@@ -93,6 +190,71 @@ impl Drop for BackgroundCommands {
     }
 }
 impl BackgroundCommands {
+    pub fn wakes_on_exit(&self, id: u64) -> bool {
+        !self.shutdown.is_cancelled()
+            && self
+                .state
+                .lock()
+                .unwrap()
+                .entries
+                .get(&id)
+                .is_some_and(|entry| {
+                    !entry.stop.is_cancelled()
+                        && (entry.source == canter_protocol::ExecCommandSource::Agent
+                            || entry.monitored_at_exit)
+                })
+    }
+    pub fn monitor(&self, id: u64, pattern: Option<&str>) -> Result<(), String> {
+        let monitor = pattern
+            .map(|pattern| {
+                regex_automata::meta::Regex::new(pattern)
+                    .map(|regex| Monitor {
+                        pattern: pattern.into(),
+                        regex,
+                        line: String::new(),
+                    })
+                    .map_err(|_| "Invalid monitor regular expression".to_owned())
+            })
+            .transpose()?;
+        let mut state = self.state.lock().unwrap();
+        let entry = state
+            .entries
+            .get_mut(&id)
+            .ok_or_else(|| format!("Unknown background command {id}"))?;
+        if !entry.command.running && monitor.is_some() {
+            return Err(format!("Background command {id} has already exited"));
+        }
+        entry.monitor = monitor;
+        Ok(())
+    }
+    pub fn matching_commands(&self) -> Vec<u64> {
+        self.state
+            .lock()
+            .unwrap()
+            .entries
+            .iter()
+            .filter(|(_, entry)| !entry.matches.lines.is_empty())
+            .map(|(id, _)| *id)
+            .collect()
+    }
+    pub fn take_matches(&self) -> Vec<(u64, String, bool)> {
+        let mut state = self.state.lock().unwrap();
+        state
+            .entries
+            .iter_mut()
+            .filter_map(|(id, entry)| {
+                if entry.matches.lines.is_empty() {
+                    return None;
+                }
+                let matches = std::mem::take(&mut entry.matches);
+                Some((
+                    *id,
+                    matches.render(*id),
+                    !entry.stop.is_cancelled() && !self.shutdown.is_cancelled(),
+                ))
+            })
+            .collect()
+    }
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
     }
@@ -173,6 +335,7 @@ impl BackgroundCommands {
         item_id: String,
         command: String,
         background: bool,
+        source: canter_protocol::ExecCommandSource,
     ) -> Result<Control, String> {
         let (sender, receiver) = mpsc::channel(1);
         let (done, _) = watch::channel(false);
@@ -205,6 +368,7 @@ impl BackgroundCommands {
             promotions: receiver,
             sender: Some(sender),
             reserved: background,
+            source,
         };
         Ok(control)
     }
@@ -254,6 +418,7 @@ fn read_output(
 }
 
 pub(crate) struct Control {
+    source: canter_protocol::ExecCommandSource,
     state: Arc<Mutex<State>>,
     pub shutdown: CancellationToken,
     changed: watch::Sender<u64>,
@@ -314,6 +479,10 @@ impl Control {
                 cursor: 0,
                 stop: self.stop.clone(),
                 done: self.done.subscribe(),
+                source: self.source,
+                monitor: None,
+                monitored_at_exit: false,
+                matches: Matches::default(),
             },
         );
         if state
@@ -333,16 +502,15 @@ impl Control {
     }
     pub fn push(&self, text: &str) {
         if let Some(id) = self.background_id {
-            self.state
-                .lock()
-                .unwrap()
-                .entries
-                .get_mut(&id)
-                .unwrap()
-                .output
-                .as_mut()
-                .unwrap()
-                .push(text);
+            let mut state = self.state.lock().unwrap();
+            let entry = state.entries.get_mut(&id).unwrap();
+            entry.output.as_mut().unwrap().push(text);
+            if let Some(monitor) = &mut entry.monitor {
+                monitor.push(text, &mut entry.matches, false);
+                if !entry.matches.lines.is_empty() {
+                    self.changed.send_modify(|revision| *revision += 1);
+                }
+            }
         }
     }
     pub fn output(&self, consume: bool) -> BackgroundCommandOutput {
@@ -352,6 +520,10 @@ impl Control {
         let mut state = self.state.lock().unwrap();
         if let Some(id) = self.background_id {
             let entry = state.entries.get_mut(&id).unwrap();
+            if let Some(mut monitor) = entry.monitor.take() {
+                monitor.push("", &mut entry.matches, true);
+                entry.monitored_at_exit = true;
+            }
             entry.command.running = false;
             entry.command.exit_code = exit_code;
             entry.command.completed_at = Some(now());
