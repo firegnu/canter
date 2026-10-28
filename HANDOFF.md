@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-28 第二十一次装 main `48ae357`（`canter --version` 显示 `canter 0.1.0 · 48ae357`；比上一版多 P2-28 后台长命令：模型 `shell` 放后台、`shell_output`、`shell_stop`，`!cmd &`，Ctrl+B 转后台，`/ps`、`/stop`，命令外套看护进程，服务端被强杀时命令进程组也跟着没）。服务端要用户自己 `canter serve --replace`。
+- 退回上一版 `ced920e`：`cp -p ~/.canter/canter-ced920e ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版打开用过后台命令的会话不坏（不认识的事件和项目跳过），后台命令的卡片按已完成显示，`/ps` 没有。
 - 10-28 第二十次装 main `ced920e`（`canter --version` 显示 `canter 0.1.0 · ced920e`；比上一版多 P2-115：计划模式里状态栏写 `Plan (then <档位>)`）。服务端要用户自己 `canter serve --replace`。
 - 退回上一版 `1736cf5`：`cp -p ~/.canter/canter-1736cf5 ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-28 第十九次装 main `1736cf5`（`canter --version` 显示 `canter 0.1.0 · 1736cf5`；比上一版多 P2-103 计划模式：Shift+Tab 第四档 Plan、`/plan`、`submit_plan` 批准框）。服务端要用户自己 `canter serve --replace`。
@@ -64,6 +66,12 @@
 
 ## 已知没修的问题
 
+- 后台命令看护进程（P2-28 第二轮复核建议改，用户 10-28 定不再返工）：
+  - macOS 上 std 建管道和设 CLOEXEC 不是一步，锁外（MCP 起进程、HTTP 接连接、模型连接）建的描述符可能被看护进程捡到，拿到命令结束为止；反方向（MCP 进程捡到看护管道）读代码可能、实测没复现。改法：看护脚本 exec 后关掉 `/dev/fd` 里除 0 以外的，或把所有起进程的地方收到一把锁。
+  - 起命令时 `spawn()` 在 tokio 工作线程上同步阻塞约 5 ms、拿着锁；可放进 `spawn_blocking`。
+  - 看护进程 `execv` 继承服务端的环境变量（推测没测），改 `execve` 传空环境。
+  - macOS 上进程组只剩僵尸时 `killpg` 返回 EPERM，`kill_group`/`terminate` 只认 ESRCH，取消或超时恰好碰上时会报 IO 错误（main 原来就有）。
+  - `restate_background_notices` 靠文字前缀认后台说明，用户自己写同样开头的话，回退时会被多补一次（R5，几乎碰不到）。
 - 计划模式选「清空上下文再做」后，作答的终端要等原会话这一轮结束才建新会话，等的时候没有超时、不收按键；原会话收尾写盘失败（比如磁盘满）时可能一直卡住，等待中出错时新会话不建、提示也没说方案没开工（P2-103 交叉审查复核建议改第 1 条，读代码推断）。另：新会话建好、切过去失败时提示写成「没能开始」，用户可能再选一次、两个会话做同一份方案（第 2 条，很少见）。
 - `canter-model` 的 `cancellation_interrupts_retry_after_and_local_backoff`（`crates/canter-model/tests/streaming.rs`）在全套并行跑时偶发失败过一次（10-28 P2-34 交叉审查），之后连跑多次都过，原因未知；测试里有 50ms、250ms 两个时间窗口，怀疑高负载时超出。没查。
 - 订阅落后时，`Store::events_after` 每次从头读整份事件文件（P1-4 交叉审查第 8 条）。结果对，长会话会慢。
