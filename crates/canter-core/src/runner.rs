@@ -413,36 +413,39 @@ async fn model_response(
             flush(shared, &mut pending).await?;
         }
     }
-    // User interruption preserves received content; stream failures keep only
-    // complete items. The turn cleanup supplies results for unexecuted tools.
+    // Only completed items may drive continuation. Preserve partial history on
+    // user interruption or a terminal error; cleanup repairs unexecuted tools.
+    let content = response.completed();
     let interrupted = cancel.is_cancelled();
-    let content = if interrupted {
+    let preserve_partial = interrupted
+        || error
+            .as_ref()
+            .is_some_and(|error| !error.is_retryable() || content.is_empty());
+    let history = if preserve_partial {
         response
             .items
             .iter()
             .map(|item| item.content.clone())
             .collect()
     } else {
-        response.completed()
+        content.clone()
     };
     // Persist history before publishing the final display state.
-    if !content.is_empty() {
+    if !history.is_empty() {
         shared
             .state
             .lock()
             .await
-            .message(Message::Assistant {
-                content: content.clone(),
-            })
+            .message(Message::Assistant { content: history })
             .await?;
     }
-    finish_items(turn_id, &response, &mut pending, !interrupted);
+    finish_items(turn_id, &response, &mut pending, !preserve_partial);
     flush(shared, &mut pending).await?;
     if let Some(usage) = usage {
         record_usage(
             shared,
             usage,
-            (reason.is_some() || interrupted).then_some(estimated),
+            (reason.is_some() || preserve_partial).then_some(estimated),
             &model,
             started_at,
             true,
