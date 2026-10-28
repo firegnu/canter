@@ -3252,7 +3252,7 @@ impl App {
         // The choice offered is on screen when any of its choices fit.
         self.drawing.chooser = (self.choosing() && !list.is_empty()).then_some(self.choosers);
 
-        let plan_room = usize::from(height.saturating_sub(2 + INFO_ROWS + bottom.height()))
+        let plan_room = usize::from(height.saturating_sub(3 + INFO_ROWS + bottom.height()))
             .saturating_sub(list.len());
         let plan = crate::plan::pinned(&self.snapshot, width, plan_room);
 

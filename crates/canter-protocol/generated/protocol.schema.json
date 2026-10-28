@@ -1929,7 +1929,7 @@
     "PlanStepStatus": {
       "enum": [
         "pending",
-        "in_progress",
+        "inProgress",
         "completed",
         "unknown"
       ],

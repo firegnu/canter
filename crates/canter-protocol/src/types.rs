@@ -254,7 +254,7 @@ pub enum ItemStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum PlanStepStatus {
     Pending,
     InProgress,

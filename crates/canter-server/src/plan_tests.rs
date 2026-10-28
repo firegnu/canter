@@ -318,6 +318,58 @@ async fn plan_switch_is_read_at_session_open_and_does_not_change_active_tools() 
 }
 
 #[tokio::test]
+async fn compaction_does_not_append_a_stored_plan_when_disabled() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create().await;
+    let first = fixture.say(&url, "initial").await;
+    let path = fixture.root.path().join("state/config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["plan_enabled"] = json!(false);
+    std::fs::write(&path, config.to_string()).unwrap();
+    let reopened = fixture.reopen(&url).await;
+    assert_eq!(reopened.settings.plan_enabled, Some(false));
+    assert_eq!(current_plan(&reopened), current_plan(&first));
+    fixture.post(&format!("{url}/compact"), json!({})).await;
+    fixture.idle(&url).await;
+    fixture.say(&url, "after disabled compaction").await;
+    assert!(
+        !fixture.last_request()["messages"]
+            .to_string()
+            .contains("[Current plan]")
+    );
+    fixture.close(&url).await;
+}
+
+#[tokio::test]
+async fn repeated_compaction_strips_only_the_previous_summary_plan() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create().await;
+    fixture.say(&url, "initial").await;
+    fixture.post(&format!("{url}/compact"), json!({})).await;
+    fixture.idle(&url).await;
+    let user_text = "Keep this literal marker:\n\n[Current plan]\nuser words";
+    fixture.say(&url, user_text).await;
+    fixture.post(&format!("{url}/compact"), json!({})).await;
+    fixture.idle(&url).await;
+    let request = fixture.last_request();
+    let transcript = request["messages"].as_array().unwrap().last().unwrap()["content"]
+        .as_str()
+        .unwrap();
+    assert!(transcript.contains("[Context summary]\nsummary or answer"));
+    assert!(transcript.contains(user_text));
+    assert_eq!(
+        transcript.matches("[Current plan]").count(),
+        1,
+        "{transcript}"
+    );
+    assert!(
+        !transcript.contains("Implement"),
+        "old plan must not enter the summary: {transcript}"
+    );
+    fixture.close(&url).await;
+}
+
+#[tokio::test]
 async fn plans_replace_persist_rewind_and_survive_repeated_compaction() {
     let fixture = Fixture::new().await;
     let url = fixture.create().await;
@@ -325,12 +377,19 @@ async fn plans_replace_persist_rewind_and_survive_repeated_compaction() {
     let first = fixture.say(&url, "initial").await;
     assert_eq!(
         current_plan(&first),
-        serde_json::from_str::<Value>(INITIAL).unwrap()
+        json!([
+            {"step":"Read","status":"completed"},
+            {"step":"Implement","status":"inProgress"},
+            {"step":"Verify","status":"pending"}
+        ])
     );
     let replaced = fixture.say(&url, "replace").await;
     assert_eq!(
         current_plan(&replaced),
-        serde_json::from_str::<Value>(REPLACEMENT).unwrap()
+        json!([
+            {"step":"Verify","status":"inProgress"},
+            {"step":"Report","status":"pending"}
+        ])
     );
     let rejected = fixture.say(&url, "invalid").await;
     assert_eq!(current_plan(&rejected), current_plan(&replaced));

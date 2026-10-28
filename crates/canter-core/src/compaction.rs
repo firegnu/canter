@@ -149,22 +149,38 @@ async fn summarize(
     shared: &Shared,
     cancel: &CancellationToken,
 ) -> Result<(String, Vec<Message>), CoreError> {
-    let (prefix, history, user_messages, model, plan) = {
+    let (prefix, history, summary_index, user_messages, model, plan) = {
         let state = shared.state.lock().await;
         (
             state.prefix.clone(),
             state.history.clone(),
+            state.summary_index,
             state.user_messages.clone(),
             state.journal.snapshot.settings.model.clone(),
-            state.journal.snapshot.current_plan().map(<[_]>::to_vec),
+            state
+                .journal
+                .snapshot
+                .current_plan()
+                .filter(|_| state.journal.snapshot.settings.plan_enabled != Some(false))
+                .map(<[_]>::to_vec),
         )
     };
     let output_limit = shared.options.max_output_tokens.min(8192);
     let mut transcript = String::new();
     let mut images = Vec::new();
-    for message in &history {
+    for (index, message) in history.iter().enumerate() {
         match message {
-            Message::User { text } => transcript.push_str(&format!("\nUser: {text}\n")),
+            Message::User { text } => {
+                // Only the previous summary has an attached checklist. Keep
+                // literal markers in user messages untouched.
+                let text = if Some(index) == summary_index {
+                    text.split_once("\n\n[Current plan]\n")
+                        .map_or(text.as_str(), |(summary, _)| summary)
+                } else {
+                    text
+                };
+                transcript.push_str(&format!("\nUser: {text}\n"));
+            }
             Message::UserParts { content } => {
                 transcript.push_str("\nUser: ");
                 for part in content {

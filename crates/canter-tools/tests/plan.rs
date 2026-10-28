@@ -15,6 +15,7 @@ async fn invalid_plan_steps_return_errors_instead_of_a_successful_update() {
         json!([{"step":"", "status":"pending"}]),
         json!([{"step":" \n\t", "status":"pending"}]),
         json!([{"step":"Read", "status":"invented"}]),
+        json!([{"step":"Read", "status":"inProgress"}]),
     ] {
         let result = tools
             .prepare(
@@ -43,6 +44,10 @@ async fn update_plan_returns_a_complete_checklist_without_approval_in_every_mode
         LocalExecutor::new(root.path().into(), BTreeMap::new(), vec![]).unwrap(),
     ));
     let tool = Tool::from_name("update_plan").expect("update_plan is a built-in tool");
+    assert_eq!(
+        tool.definition().parameters["properties"]["plan"]["items"]["properties"]["status"]["enum"],
+        json!(["pending", "in_progress", "completed"])
+    );
     let args = json!({"explanation":"Starting the work", "plan":[
         {"step":"Read the code", "status":"completed"},
         {"step":"Implement", "status":"in_progress"},
@@ -68,7 +73,14 @@ async fn update_plan_returns_a_complete_checklist_without_approval_in_every_mode
         assert_eq!(result.text, "Plan updated");
         let item = serde_json::to_value(result.item).unwrap();
         assert_eq!(item["type"], "plan");
-        assert_eq!(item["plan"], args["plan"]);
+        assert_eq!(
+            item["plan"],
+            json!([
+                {"step":"Read the code", "status":"completed"},
+                {"step":"Implement", "status":"inProgress"},
+                {"step":"Verify", "status":"pending"}
+            ])
+        );
         assert_eq!(item["explanation"], args["explanation"]);
         assert_eq!(item["status"], "completed");
     }

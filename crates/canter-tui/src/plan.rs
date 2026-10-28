@@ -6,7 +6,7 @@ use ratatui::{
 };
 
 use crate::{
-    text::{LogicalLine, Row, sanitize, truncate, wrap_rows},
+    text::{LogicalLine, Row, sanitize, str_width, truncate, wrap_rows},
     theme,
 };
 
@@ -97,6 +97,19 @@ pub(crate) fn pinned(snapshot: &SessionSnapshot, width: u16, room: usize) -> Vec
         )
         .collect();
     let limit = room.min(5);
+    if limit == 1 && steps.len() > 1 {
+        let step = steps[0];
+        let suffix = format!("（还有 {} 步）", steps.len() - 1);
+        let mut spans = truncate(
+            vec![
+                Span::raw("  "),
+                Span::styled(format!("□ {}", text(&step.step)), step_style(step.status)),
+            ],
+            usize::from(width).saturating_sub(str_width(&suffix)),
+        );
+        spans.push(Span::styled(suffix, theme::secondary()));
+        return vec![Line::from(truncate(spans, usize::from(width)))];
+    }
     let shown = if steps.len() > limit {
         limit - 1
     } else {

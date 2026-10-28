@@ -28,7 +28,7 @@ fn plan_fields_are_optional_and_legacy_clients_skip_plan_items() {
         serde_json::from_value::<LegacySettings>(new).unwrap().model,
         "fake"
     );
-    let value = json!({"type":"plan","id":"p1","plan":[{"step":"Read","status":"in_progress"}],"status":"completed"});
+    let value = json!({"type":"plan","id":"p1","plan":[{"step":"Read","status":"inProgress"}],"status":"completed"});
     assert!(matches!(
         serde_json::from_value::<LegacyItem>(value.clone()).unwrap(),
         LegacyItem::Unknown

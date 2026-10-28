@@ -219,7 +219,31 @@ struct AskUserArgs {
 #[serde(deny_unknown_fields)]
 struct UpdatePlanArgs {
     explanation: Option<String>,
+    #[serde(deserialize_with = "deserialize_plan")]
     plan: Vec<PlanStep>,
+}
+
+// Model arguments use snake_case; protocol events use camelCase.
+fn deserialize_plan<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<PlanStep>, D::Error> {
+    #[derive(Deserialize)]
+    struct Step {
+        step: String,
+        status: String,
+    }
+    Ok(Vec::<Step>::deserialize(deserializer)?
+        .into_iter()
+        .map(|step| PlanStep {
+            step: step.step,
+            status: match step.status.as_str() {
+                "pending" => PlanStepStatus::Pending,
+                "in_progress" => PlanStepStatus::InProgress,
+                "completed" => PlanStepStatus::Completed,
+                _ => PlanStepStatus::Unknown,
+            },
+        })
+        .collect())
 }
 
 #[derive(Deserialize)]

@@ -64,7 +64,7 @@ impl Screen {
 fn steps() -> Value {
     json!([
         {"step":"Read","status":"completed"},
-        {"step":"Implement","status":"in_progress"},
+        {"step":"Implement","status":"inProgress"},
         {"step":"Verify","status":"pending"}
     ])
 }
@@ -117,7 +117,7 @@ fn pinned_plan_uses_at_most_five_rows_with_active_first_and_overflow_count() {
     let mut plan: Vec<Value> = (1..=7)
         .map(|n| json!({"step":format!("Step {n}"),"status":"pending"}))
         .collect();
-    plan[6]["status"] = json!("in_progress");
+    plan[6]["status"] = json!("inProgress");
     screen.plan("p1", json!(plan));
     assert_eq!(
         screen.pinned(),
@@ -132,7 +132,7 @@ fn pinned_plan_uses_at_most_five_rows_with_active_first_and_overflow_count() {
     screen.ui.backend_mut().resize(20, 12);
     screen.plan(
         "p2",
-        json!([{"step":"这是一条很长很长需要显示但不能挤掉输入框的步骤","status":"in_progress"}]),
+        json!([{"step":"这是一条很长很长需要显示但不能挤掉输入框的步骤","status":"inProgress"}]),
     );
     let lines = screen.lines();
     assert!(
@@ -141,6 +141,59 @@ fn pinned_plan_uses_at_most_five_rows_with_active_first_and_overflow_count() {
     );
     let input = lines.iter().position(|line| line.starts_with('╭')).unwrap();
     assert!(lines[input - 1].starts_with("  □ "), "{lines:#?}");
+}
+
+#[test]
+fn a_single_plan_row_keeps_the_active_step_and_overflow_count() {
+    let mut screen = Screen::new();
+    screen.ui.backend_mut().resize(40, 9);
+    screen.plan("p1", json!([
+        {"step":"Later","status":"pending"},
+        {"step":"Implement the very long active step without hiding the count","status":"inProgress"},
+        {"step":"Verify","status":"pending"}
+    ]));
+    let pinned = screen.pinned();
+    assert_eq!(pinned.len(), 1, "{pinned:#?}");
+    assert!(pinned[0].starts_with("  □ Implement"), "{pinned:#?}");
+    assert!(pinned[0].ends_with("（还有 2 步）"), "{pinned:#?}");
+}
+
+#[test]
+fn a_tall_approval_with_a_plan_leaves_room_for_conversation_and_scroll_hint() {
+    let mut screen = Screen::new();
+    screen.ui.backend_mut().resize(60, 20);
+    screen.plan("p1", steps());
+    let command = (0..61)
+        .map(|n| format!("echo {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    screen.event(json!({"type":"request.opened","request":{
+        "id":"r1","turnId":"t1","createdAt":0,"kind":{
+            "type":"approval","itemId":"shell1","tool":"shell",
+            "arguments":{"command":command},"availableDecisions":["accept","decline","cancel"]
+        }
+    }}));
+    screen.event(json!({"type":"session.status","status":"waiting_approval"}));
+    screen.lines();
+    screen.ui.app_mut().handle_mouse_at(
+        crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        },
+        0,
+    );
+    let lines = screen.lines();
+    let hint = lines
+        .iter()
+        .position(|line| line.contains("Jump to bottom"))
+        .expect("scroll hint");
+    assert!(
+        hint > 0,
+        "conversation must keep at least one row: {lines:#?}"
+    );
+    assert!(!lines[0].trim().is_empty(), "{lines:#?}");
 }
 
 #[test]
