@@ -153,6 +153,92 @@ async fn completed_items_survive_disconnect_and_tools_run_once() {
 }
 
 #[tokio::test]
+async fn authentication_error_preserves_partial_reply_for_the_next_turn() {
+    let temp = tempfile::tempdir().unwrap();
+    let model = Arc::new(InterruptedModel {
+        requests: Mutex::new(Vec::new()),
+        scripts: Mutex::new(VecDeque::from([
+            vec![
+                Ok(ModelEvent::ReasoningDelta {
+                    item_id: "reasoning".into(),
+                    delta: "partial thought".into(),
+                }),
+                Ok(ModelEvent::TextDelta {
+                    item_id: "text".into(),
+                    delta: "partial answer".into(),
+                }),
+                Ok(call(
+                    "unfinished",
+                    "shell",
+                    r#"{"command":"touch must-not-exist"}"#,
+                )),
+                Err(canter_model::ModelError {
+                    kind: canter_model::ErrorKind::Authentication,
+                    status: Some(401),
+                    retry_after: None,
+                    retries: 0,
+                }),
+            ],
+            vec![Ok(ModelEvent::Finished(FinishReason::Stop))],
+        ])),
+    });
+    let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+    let (session, _) = Session::create(
+        store,
+        "s1".into(),
+        settings(temp.path()),
+        RuntimeContext::default(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("start")).await.unwrap();
+    let seen = finished(&mut events).await;
+    let EventPayload::TurnCompleted { turn } = &seen.last().unwrap().payload else {
+        unreachable!()
+    };
+    assert_eq!(turn.status, TurnStatus::Failed);
+    assert!(
+        turn.error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("Authentication")
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 1);
+
+    session.input(input("continue")).await.unwrap();
+    finished(&mut events).await;
+    let requests = model.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    assert_request_extension(&requests[0], &requests[1]);
+    let assistant = requests[1]
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            Message::Assistant { content } => Some(content),
+            _ => None,
+        })
+        .expect("last partial reply must be retained");
+    assert!(assistant.contains(&AssistantContent::Text {
+        text: "partial answer".into()
+    }));
+    assert!(assistant.contains(&AssistantContent::Reasoning {
+        text: "partial thought".into()
+    }));
+    assert!(
+        assistant.iter().any(
+            |part| matches!(part, AssistantContent::ToolCall(call) if call.id == "unfinished")
+        )
+    );
+    assert!(requests[1].messages.iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "unfinished" && text == "No result: the model request did not finish")));
+    assert!(!temp.path().join("must-not-exist").exists());
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn ordinary_and_compaction_requests_persist_their_model_and_charge() {
     // 1970-01-05 was Monday. Each case replays an ordinary and a compaction request.
     for (model_name, clock, expected) in [
