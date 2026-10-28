@@ -1,7 +1,11 @@
 # 任务：`!` 做成 shell 模式
 
+2026-10-28，canter/main 交给 canter/dev-shell-mode（Claude Code，opus[1m] / high）。
+路由：常规 / 交叉审查不要 / 影响面：改行为（路由：常规（置信 0.97）、不要、改行为）
 类型：功能变更
 依据：P2-111 把 `!` 命令标成了红色，用户试过说没问题，又拿 Claude Code 的截图说「我觉得最好是这样」：颜色是品红；打了 `!` 后输入框开头的提示符换成 `!`，`!` 不再算在文字里；框下有一行同色提示 `! for shell mode`。P2-111 当时明说不做「模式切换」，本件补上。
+提示：围绕已确认的使用目标完成变更，优先沿用现有机制。
+你是被委派的 agent：照本文件做，不要再开别的 agent。
 依赖：P2-111
 执行：派出
 
@@ -20,6 +24,7 @@
 
 - worktree：`/Users/firegnu/Developer/personal_projs/canter-worktrees/p2-112-shell-mode`，分支 `p2-112-shell-mode`（已从 main 建好）。
 - 编译目录：命令前加 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-112-shell-mode`。
+- 同时在做的：P2-34（`canter/dev-todo-1`，分支 `p2-34-todo`）也会改 `crates/canter-tui`（加计划卡片和输入框上方的常驻清单）。你只动 shell 模式相关的地方，不要顺手整理 `app.rs` 里别的代码，合并时冲突少。
 
 ## 要做的
 
@@ -34,7 +39,7 @@
 
 - （用户 10-28）「我觉得最好是这样。」：照截图，品红；打 `!` 后提示符换成 `!`；框下有 `! for shell mode`。
 - （用户 10-28 选的）颜色用终端自带的品红；提示画在下边框上；跑完回到普通输入。
-- 验证：改 P2-111 的两个画面测试（红改品红），再加：打 `!` 后提示符是品红 `!`、文字里没有 `!`、下边框有 `! for shell mode`；退格出模式；有字时光标在最前按退格不出模式；发出后回到 `› `；翻输入历史到一条 `!` 命令时是 shell 模式。再跑 `cargo nextest run -p canter-tui`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check`。觉得不够，在回复里说，不要自己加。
+- 验证只做这些：先写测试、确认因为还没做而失败，再实现。改 P2-111 的两个画面测试（红改品红），再加：打 `!` 后提示符是品红 `!`、文字里没有 `!`、下边框有 `! for shell mode`；退格出模式；有字时光标在最前按退格不出模式；发出后回到 `› `；翻输入历史到一条 `!` 命令时是 shell 模式。再跑 `cargo nextest run -p canter-tui`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check`。觉得不够，在回复里说，不要自己加。
 
 ## 不要做
 
