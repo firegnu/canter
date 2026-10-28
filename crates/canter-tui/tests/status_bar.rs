@@ -29,11 +29,15 @@ struct Screen {
 impl Screen {
     /// A session in `cwd`, paths under `home` shown as `~`.
     fn new(cwd: &Path, home: &Path, mode: PermissionMode) -> Self {
-        let mut snapshot = SessionSnapshot::empty(SESSION);
-        snapshot.settings.cwd = cwd.to_str().unwrap().to_owned();
-        snapshot.settings.model = "deepseek-flash".to_owned();
-        snapshot.settings.approval_policy = mode;
-        let app = App::new(snapshot, Some(home.to_str().unwrap().to_owned()), NOW);
+        Self::of(app(cwd, home, mode))
+    }
+
+    /// As `canter` opens it: the lines changed in git are counted too.
+    fn with_git_diff(cwd: &Path, home: &Path) -> Self {
+        Self::of(app(cwd, home, PermissionMode::AlwaysAsk).with_git_diff())
+    }
+
+    fn of(app: App) -> Self {
         let ui = Ui::new(TestBackend::new(WIDTH, HEIGHT), app).unwrap();
         Self { ui, seq: 0 }
     }
@@ -93,6 +97,14 @@ impl Screen {
     }
 }
 
+fn app(cwd: &Path, home: &Path, mode: PermissionMode) -> App {
+    let mut snapshot = SessionSnapshot::empty(SESSION);
+    snapshot.settings.cwd = cwd.to_str().unwrap().to_owned();
+    snapshot.settings.model = "deepseek-flash".to_owned();
+    snapshot.settings.approval_policy = mode;
+    App::new(snapshot, Some(home.to_str().unwrap().to_owned()), NOW)
+}
+
 fn rows(buffer: &Buffer) -> Vec<String> {
     (0..buffer.area.height)
         .map(|y| {
@@ -147,7 +159,7 @@ fn two_rows_with_usage_in_a_git_repository() {
         screen.bar(),
         [
             " deepseek-flash · think high · Always ask".to_owned(),
-            " ~/canter (main) · ctx 42% 420k/1M · cache 92% (last 99%)".to_owned(),
+            " ~/canter (main) · ████░░░░░░ 420k/1M (42%) · cache 92% (last 99%)".to_owned(),
         ]
     );
 }
@@ -210,7 +222,7 @@ fn outside_a_git_repository_there_are_no_brackets() {
     screen.usage(Some(1_000_000));
     assert_eq!(
         screen.bar()[1],
-        " ~/plain · ctx 42% 420k/1M · cache 92% (last 99%)"
+        " ~/plain · ████░░░░░░ 420k/1M (42%) · cache 92% (last 99%)"
     );
 }
 
@@ -271,7 +283,7 @@ fn a_narrow_window_cuts_each_row_on_its_own() {
         screen.bar(),
         [
             " deepseek-flash · think…".to_owned(),
-            " ~/canter (main) · ctx …".to_owned(),
+            " ~/canter (main) · ████…".to_owned(),
         ]
     );
 }
@@ -340,38 +352,38 @@ impl Screen {
 }
 
 #[test]
-fn compact_says_how_much_is_left_before_automatic_compaction() {
+fn context_is_a_bar_that_is_full_at_the_compaction_line() {
     let (home, dir) = repo();
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
-    // 420k in use: (line − 420k) ÷ line, rounded down; 0% at or over the line.
-    for (line, left) in [
-        (800_000, "47%"),
-        (600_000, "30%"),
-        (420_000, "0%"),
-        (400_000, "0%"),
+    // Ten cells and the percent of the line in use, both rounded; past the
+    // line the bar stays full and the percent says how far past.
+    for (used, expected) in [
+        (0, "░░░░░░░░░░ 0/400k (0%)"),
+        (120_000, "███░░░░░░░ 120k/400k (30%)"),
+        (184_000, "█████░░░░░ 184k/400k (46%)"),
+        (400_000, "██████████ 400k/400k (100%)"),
+        (420_000, "██████████ 420k/400k (105%)"),
     ] {
-        screen.usage_with_line(420_000, 1_000_000, Some(line));
+        screen.usage_with_line(used, 1_000_000, Some(400_000));
         assert_eq!(
             screen.bar()[1],
-            format!(
-                " ~/canter (main) · ctx 42% 420k/1M · {left} to compact · cache 92% (last 99%)"
-            ),
-            "line {line}"
+            format!(" ~/canter (main) · {expected} · cache 92% (last 99%)"),
+            "{used} used"
         );
     }
-    // An older server sends no line: no compact item.
+    // An older server sends no line: full is the window.
     screen.usage_with_line(420_000, 1_000_000, None);
     assert_eq!(
         screen.bar()[1],
-        " ~/canter (main) · ctx 42% 420k/1M · cache 92% (last 99%)"
+        " ~/canter (main) · ████░░░░░░ 420k/1M (42%) · cache 92% (last 99%)"
     );
 }
 
 #[test]
-fn each_item_has_its_colour_and_the_percentages_turn_with_the_room_left() {
+fn each_item_has_its_colour_and_the_bar_turns_with_the_room_left() {
     let (home, dir) = repo();
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
-    screen.usage_with_line(420_000, 1_000_000, Some(1_050_000));
+    screen.usage_with_line(400_000, 1_000_000, Some(1_000_000));
     let colour = |color| (Some(color), false);
     let grey = (Some(Color::Reset), true);
     assert_eq!(screen.style_of(0, "deepseek-flash"), colour(Color::Cyan));
@@ -381,45 +393,114 @@ fn each_item_has_its_colour_and_the_percentages_turn_with_the_room_left() {
     assert_eq!(screen.style_of(0, " · "), grey);
     assert_eq!(screen.style_of(1, "~/canter"), colour(Color::Blue));
     assert_eq!(screen.style_of(1, "(main)"), colour(Color::Green));
-    assert_eq!(screen.style_of(1, "ctx "), grey);
-    assert_eq!(screen.style_of(1, " 420k/1M"), grey);
-    assert_eq!(screen.style_of(1, " to compact"), grey);
-    assert_eq!(screen.style_of(1, "cache "), grey);
+    assert_eq!(screen.style_of(1, "░░░░░░"), grey);
+    assert_eq!(screen.style_of(1, " 400k/1M ("), grey);
+    assert_eq!(screen.style_of(1, ") · cache "), grey);
     assert_eq!(screen.style_of(1, "92%"), colour(Color::Cyan));
     assert_eq!(screen.style_of(1, " (last "), grey);
     assert_eq!(screen.style_of(1, "99%"), colour(Color::Cyan));
 
-    // ctx and compact numbers by the room left before the line.
-    for (line, left, color) in [
-        (1_050_000, "60%", Color::Green),
-        (600_000, "30%", Color::Yellow),
-        (466_700, "10%", Color::Red),
+    // The cells in use and the percent by the room left before the line.
+    for (used, cells, percent, color) in [
+        (400_000, "████", "40%", Color::Green),
+        (700_000, "███████", "70%", Color::Yellow),
+        (900_000, "█████████", "90%", Color::Red),
     ] {
-        screen.usage_with_line(420_000, 1_000_000, Some(line));
-        assert_eq!(screen.style_of(1, "42%"), colour(color), "line {line}");
-        assert_eq!(screen.style_of(1, left), colour(color), "line {line}");
+        screen.usage_with_line(used, 1_000_000, Some(1_000_000));
+        assert_eq!(screen.style_of(1, cells), colour(color), "{used}");
+        assert_eq!(screen.style_of(1, percent), colour(color), "{used}");
+        assert_eq!(screen.style_of(1, "░"), grey, "{used}");
     }
-    // Without a line, ctx's number by the room left in the window.
+    // Without a line, by the room left in the window.
     screen.usage_with_line(420_000, 450_000, None);
+    assert_eq!(screen.style_of(1, "█████████"), colour(Color::Red));
     assert_eq!(screen.style_of(1, "93%"), colour(Color::Red));
     screen.usage_with_line(420_000, 1_000_000, None);
+    assert_eq!(screen.style_of(1, "████"), colour(Color::Green));
     assert_eq!(screen.style_of(1, "42%"), colour(Color::Green));
 
-    // NO_COLOR: grey as before, no colours.
+    // NO_COLOR: grey as before, no colours; the cells still tell how much.
     theme::set(Theme {
         depth: Depth::None,
         ..Theme::default()
     });
-    screen.usage_with_line(420_000, 1_000_000, Some(466_700));
+    screen.usage_with_line(900_000, 1_000_000, Some(1_000_000));
+    assert_eq!(
+        screen.bar()[1],
+        " ~/canter (main) · █████████░ 900k/1M (90%) · cache 92% (last 99%)"
+    );
     for (row, text) in [
         (0, "deepseek-flash"),
         (0, "$0.12"),
         (1, "(main)"),
-        (1, "42%"),
-        (1, "10%"),
+        (1, "█████████"),
+        (1, "90%"),
         (1, "92%"),
     ] {
         assert_eq!(screen.style_of(row, text), grey, "{text}");
     }
     theme::set(Theme::default());
+}
+
+impl Screen {
+    /// Draws until the second row is `expected`, letting git run meanwhile.
+    async fn wait_for_second_row(&mut self, expected: &str) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if self.bar()[1] == expected {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{:?}",
+                self.bar()[1]
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_branch_is_followed_by_the_lines_changed_since_the_last_commit() {
+    let (home, dir) = repo();
+    std::fs::write(dir.join("a.txt"), "1\n2\n3\n4\n5\n").unwrap();
+    std::fs::write(dir.join("b.txt"), "x\ny\nz\n").unwrap();
+    std::fs::write(dir.join("image.bin"), b"\0\x01\x02binary\0").unwrap();
+    git(&dir, &["add", "."]);
+    commit(&dir);
+    let mut screen = Screen::with_git_diff(&dir, home.path());
+    screen
+        .wait_for_second_row(" ~/canter (main) · (+0,-0)")
+        .await;
+
+    // Not staged: one line changed and two added. Staged: one line changed.
+    std::fs::write(dir.join("a.txt"), "1\nTWO\n3\n4\n5\n6\n7\n").unwrap();
+    std::fs::write(dir.join("b.txt"), "x\nY\nz\n").unwrap();
+    git(&dir, &["add", "b.txt"]);
+    // Neither a binary file nor an untracked one counts lines.
+    std::fs::write(dir.join("image.bin"), b"\0\x03\x04other\0\n\n").unwrap();
+    std::fs::write(dir.join("new.txt"), "a\nb\nc\n").unwrap();
+    screen.turn("completed");
+    screen
+        .wait_for_second_row(" ~/canter (main) · (+4,-2)")
+        .await;
+
+    let colour = |color| (Some(color), false);
+    let grey = (Some(Color::Reset), true);
+    assert_eq!(screen.style_of(1, " · ("), grey);
+    assert_eq!(screen.style_of(1, "+4"), colour(Color::Green));
+    assert_eq!(screen.style_of(1, ","), grey);
+    assert_eq!(screen.style_of(1, "-2"), colour(Color::Red));
+}
+
+#[tokio::test]
+async fn before_the_first_commit_the_staged_lines_count() {
+    let (home, dir) = repo();
+    std::fs::write(dir.join("a.txt"), "1\n2\n3\n").unwrap();
+    git(&dir, &["add", "a.txt"]);
+    std::fs::write(dir.join("a.txt"), "1\n2\n3\n4\n").unwrap();
+    let mut screen = Screen::with_git_diff(&dir, home.path());
+    screen
+        .wait_for_second_row(" ~/canter (main) · (+3,-0)")
+        .await;
 }

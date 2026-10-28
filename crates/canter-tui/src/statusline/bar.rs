@@ -19,8 +19,8 @@ pub(crate) enum Item {
     Cost,
     Directory,
     Branch,
+    Diff,
     Context,
-    Compact,
     Cache,
     Tps,
     Version,
@@ -36,8 +36,8 @@ impl Item {
         Item::Cost,
         Item::Directory,
         Item::Branch,
+        Item::Diff,
         Item::Context,
-        Item::Compact,
         Item::Cache,
         Item::Tps,
         Item::Version,
@@ -53,8 +53,8 @@ impl Item {
             Item::Cost => "cost",
             Item::Directory => "directory",
             Item::Branch => "branch",
+            Item::Diff => "diff",
             Item::Context => "context",
-            Item::Compact => "compact",
             Item::Cache => "cache",
             Item::Tps => "tps",
             Item::Version => "version",
@@ -84,8 +84,8 @@ pub(crate) struct Bar {
 }
 
 impl Default for Bar {
-    /// The two rows as they always were, with `compact` after `context`;
-    /// the other newer items hidden.
+    /// The two rows as they always were, with `diff` after `branch`; the
+    /// other newer items hidden.
     fn default() -> Self {
         let shown = |item| Entry::Item(item, true);
         let hidden = |item| Entry::Item(item, false);
@@ -98,8 +98,8 @@ impl Default for Bar {
                 Entry::Line2,
                 shown(Item::Directory),
                 shown(Item::Branch),
+                shown(Item::Diff),
                 shown(Item::Context),
-                shown(Item::Compact),
                 shown(Item::Cache),
                 hidden(Item::Tps),
                 hidden(Item::Version),
@@ -163,10 +163,10 @@ impl Bar {
         (rows, through_mode)
     }
 
-    /// Reads what [`Bar::to_json`] wrote. Entries it does not know are
-    /// skipped and items not listed come hidden at the end, except `compact`,
-    /// which comes shown after `context`; `None` when the
-    /// file is not even the shape it writes.
+    /// Reads what [`Bar::to_json`] wrote. Entries it does not know (such as
+    /// `compact`, which the context bar replaced) are skipped and items not
+    /// listed come hidden at the end, except `diff`, which comes shown after
+    /// `branch`; `None` when the file is not even the shape it writes.
     fn from_json(value: &Value) -> Option<Self> {
         let Some(setting) = value.as_object()?.get("statusLine") else {
             return Some(Self::default());
@@ -205,13 +205,13 @@ impl Bar {
             {
                 continue;
             }
-            // Files saved before `compact` came get it as the defaults have
-            // it: shown, right after `context`, which is listed by now.
-            let context = entries
+            // Files saved before `diff` came get it as the defaults have it:
+            // shown, right after `branch`, which is listed by now.
+            let branch = entries
                 .iter()
-                .position(|entry| matches!(entry, Entry::Item(Item::Context, _)));
-            match (item, context) {
-                (Item::Compact, Some(at)) => entries.insert(at + 1, Entry::Item(item, true)),
+                .position(|entry| matches!(entry, Entry::Item(Item::Branch, _)));
+            match (item, branch) {
+                (Item::Diff, Some(at)) => entries.insert(at + 1, Entry::Item(item, true)),
                 _ => entries.push(Entry::Item(item, false)),
             }
         }

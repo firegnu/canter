@@ -405,6 +405,7 @@ fn color(index: u16) -> Color {
 }
 
 pub(crate) mod bar;
+pub(crate) mod git_diff;
 pub(crate) mod setup;
 #[cfg(test)]
 mod tests;

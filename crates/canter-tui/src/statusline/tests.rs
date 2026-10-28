@@ -529,7 +529,7 @@ async fn config_command_gets_only_public_json_and_terminal_environment() {
             "context":{"usedTokens":85000,"windowTokens":200000,"percent":43,
                 "autoCompactTokens":100000,"autoCompactPercentLeft":15},
             "cost":{"usd":0.31,"unknown":false},"cache":{"totalPercent":92,"lastPercent":99},
-            "tps":null
+            "tps":null, "gitDiff":null
         })
     );
     assert!(!input.contains("private"));
@@ -650,4 +650,13 @@ async fn branch_changes_refresh_the_script_while_idle() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+#[tokio::test]
+async fn outside_a_git_repository_no_lines_are_counted() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(
+        crate::git::changed_lines(dir.path().to_str().unwrap()).await,
+        None
+    );
 }

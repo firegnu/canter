@@ -270,7 +270,7 @@ fn git(dir: &Path, args: &[&str]) {
 
 const DEFAULT_BAR: [&str; 2] = [
     " deepseek-v4-pro · think high · Always ask · $0.12",
-    " ~/src/canter (main) · ctx 12% 120k/1M · cache 95% (last 98%)",
+    " ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12%) · cache 95% (last 98%)",
 ];
 
 #[test]
@@ -296,8 +296,8 @@ fn statusline_shows_every_item_with_its_value_and_a_preview() {
             "   ─── line 2 ───",
             "   [x] directory    ~/src/canter",
             "   [x] branch       (main)",
-            "   [x] context      ctx 12% 120k/1M",
-            "   [x] compact",
+            "   [x] diff",
+            "   [x] context      █░░░░░░░░░ 120k/1M (12%)",
             "   [x] cache        cache 95% (last 98%)",
             "   [ ] tps          32.5 tok/s",
             "   [ ] version      0.1.0 · a3b8fe7",
@@ -305,7 +305,7 @@ fn statusline_shows_every_item_with_its_value_and_a_preview() {
             "",
             " Preview",
             "  deepseek-v4-pro · think high · Always ask · $0.12",
-            "  ~/src/canter (main) · ctx 12% 120k/1M · cache 95% (last 98%)",
+            "  ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12%) · cache 95% (last 98%)",
         ]
     );
     // Nothing is saved or changed yet.
@@ -329,7 +329,7 @@ fn space_and_arrows_change_the_preview_as_they_go() {
         screen.preview(),
         [
             "  think high · Always ask · $0.12",
-            "  ~/src/canter (main) · ctx 12% 120k/1M · cache 95% (last 98%)",
+            "  ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12%) · cache 95% (last 98%)",
         ]
     );
 
@@ -349,7 +349,7 @@ fn space_and_arrows_change_the_preview_as_they_go() {
         screen.preview(),
         [
             "  think high · deepseek-v4-pro · Always ask",
-            "  $0.12 · ~/src/canter (main) · ctx 12% 120k/1M · cache 95% (last 98%)",
+            "  $0.12 · ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12%) · cache 95% (last 98%)",
         ]
     );
 
@@ -365,7 +365,7 @@ fn space_and_arrows_change_the_preview_as_they_go() {
     assert_eq!(screen.picker()[10], " › [x] tps          32.5 tok/s");
     let second = &screen.preview()[1];
     assert!(
-        second.starts_with("  $0.12 · ~/src/canter (main) · 32.5 tok/s · ctx 12% 120k/1M"),
+        second.starts_with("  $0.12 · ~/src/canter (main) · 32.5 tok/s · █░░░░░░░░░ 120k/1M (12%)"),
         "{second}"
     );
 
@@ -697,7 +697,7 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
             " Space toggle · ←/→ move · Enter save · Esc cancel",
             "",
             "   ↑ 8 more",
-            "   [x] compact",
+            "   [x] context",
             "   [x] cache",
             "   [ ] tps",
             "   [ ] version      0.1.0 · a3b8fe7",
@@ -707,22 +707,25 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
 }
 
 #[test]
-fn a_tui_json_saved_before_compact_gets_it_after_context_until_turned_off() {
+fn a_tui_json_saved_with_compact_and_before_diff_gets_diff_after_the_branch_until_turned_off() {
     let home = Home::new();
-    let saved = |context: bool| {
+    // As P2-113 saved it: `compact` after `context`, no `diff` yet.
+    let saved = |branch: bool| {
         json!({ "statusLine": { "useScript": true, "items": [
             { "name": "model", "show": true }, { "name": "thinking", "show": true },
             { "name": "permission", "show": true }, { "name": "cost", "show": true },
             { "name": "line2" }, { "name": "directory", "show": true },
-            { "name": "branch", "show": true }, { "name": "context", "show": context },
+            { "name": "branch", "show": branch }, { "name": "context", "show": true },
+            { "name": "compact", "show": true },
             { "name": "cache", "show": true }, { "name": "tps", "show": false },
             { "name": "version", "show": false }, { "name": "session", "show": false },
         ]}})
         .to_string()
     };
-    for context in [true, false] {
-        std::fs::write(home.tui_json(), saved(context)).unwrap();
+    for branch in [true, false] {
+        std::fs::write(home.tui_json(), saved(branch)).unwrap();
         let mut screen = home.open(None);
+        assert!(!screen.status().contains("tui.json"), "{}", screen.status());
         screen.work();
         screen.event(
             3000,
@@ -737,31 +740,38 @@ fn a_tui_json_saved_before_compact_gets_it_after_context_until_turned_off() {
             }}),
         );
         screen.draw();
-        let ctx = if context { "ctx 12% 120k/1M · " } else { "" };
+        let shown = if branch { " (main)" } else { "" };
         assert_eq!(
             screen.bar()[1],
-            format!(" ~/src/canter (main) · {ctx}70% to compact · cache 95% (last 98%)")
+            format!(" ~/src/canter{shown} · ███░░░░░░░ 120k/400k (30%) · cache 95% (last 98%)")
         );
         screen.enter("/statusline");
-        let mark = if context { 'x' } else { ' ' };
+        let mark = if branch { 'x' } else { ' ' };
+        let picker = screen.picker();
         assert_eq!(
-            screen.picker()[10..12],
+            picker[9..13],
             [
-                format!("   [{mark}] context      ctx 12% 120k/1M"),
-                "   [x] compact      70% to compact".to_owned(),
+                format!("   [{mark}] branch       (main)"),
+                "   [x] diff".to_owned(),
+                "   [x] context      ███░░░░░░░ 120k/400k (30%)".to_owned(),
+                "   [x] cache        cache 95% (last 98%)".to_owned(),
             ]
+        );
+        assert!(
+            !picker.iter().any(|row| row.contains("compact")),
+            "{picker:#?}"
         );
     }
 
     // Turned off and saved, it stays off.
     let mut screen = home.open(None);
     screen.enter("/statusline");
-    screen.keys(&[KeyCode::Down; 8]);
-    assert_eq!(screen.picker()[11], " › [x] compact");
+    screen.keys(&[KeyCode::Down; 7]);
+    assert_eq!(screen.picker()[10], " › [x] diff");
     screen.keys(&[KeyCode::Char(' '), KeyCode::Enter]);
     let mut again = home.open(None);
     again.enter("/statusline");
-    assert_eq!(again.picker()[11], "   [ ] compact");
+    assert_eq!(again.picker()[10], "   [ ] diff");
 }
 
 #[test]

@@ -542,6 +542,10 @@ pub struct App {
     /// a session and again when a turn ends. A configured status command
     /// also checks for changes every 300 ms while idle.
     branch: Option<String>,
+    /// The lines changed since the last commit, after [`App::with_git_diff`];
+    /// counted again when a turn ends, a tool call or `!` command is done,
+    /// the directory changes, and every 5 seconds.
+    git_diff: Option<crate::statusline::git_diff::GitDiff>,
     /// This terminal's `clientName`; what others send is marked with theirs.
     client_name: String,
     input: InputBox,
@@ -650,6 +654,13 @@ impl App {
         self
     }
 
+    /// Counts the lines changed in git since the last commit for the `diff`
+    /// item, in the background (on a tokio runtime) while the screen draws.
+    pub fn with_git_diff(mut self) -> Self {
+        self.git_diff = Some(crate::statusline::git_diff::GitDiff::new());
+        self
+    }
+
     /// The theme `tui.json` names, or `terminal`; one not found is drawn as
     /// `terminal` and said once, and `tui.json` keeps its name.
     fn load_code_theme(&mut self) {
@@ -727,7 +738,21 @@ impl App {
         }
     }
 
+    fn refresh_git_diff(&mut self) {
+        if let Some(git_diff) = &mut self.git_diff {
+            git_diff.refresh();
+        }
+    }
+
+    /// Lines added and removed since the last commit, when counted.
+    fn git_diff_lines(&self) -> Option<(u64, u64)> {
+        self.git_diff.as_ref().and_then(|git_diff| git_diff.lines())
+    }
+
     pub(crate) fn update_status_line(&mut self, now_ms: i64) {
+        if let Some(git_diff) = &mut self.git_diff {
+            git_diff.poll(&self.snapshot.settings.cwd);
+        }
         let Some(line) = &mut self.status_line else {
             return;
         };
@@ -779,6 +804,9 @@ impl App {
                 "lastPercent": usage.and_then(|usage| percent(usage.last.input_tokens, usage.last.cached_input_tokens)),
             },
             "tps": self.tps.rate(now_ms),
+            "gitDiff": self.git_diff_lines().map(|(added, removed)| {
+                serde_json::json!({"added": added, "removed": removed})
+            }),
         })
     }
 
@@ -790,6 +818,7 @@ impl App {
         );
         Self {
             branch: crate::git::branch(&snapshot.settings.cwd),
+            git_diff: None,
             retract_drafts: crate::retract::Drafts::new(&snapshot),
             steering: crate::steer::Steering::default(),
             images_need_paste: false,
@@ -955,6 +984,7 @@ impl App {
                     self.interrupting = None;
                 }
                 self.branch = crate::git::branch(&self.snapshot.settings.cwd);
+                self.refresh_git_diff();
                 // As Codex: not when a queued message starts the next turn.
                 if turn.status == TurnStatus::Completed && self.snapshot.queued_inputs.is_empty() {
                     let answer = self
@@ -987,6 +1017,8 @@ impl App {
                 _ => self.working_since = None,
             },
             EventPayload::ItemCompleted { turn_id, item } => {
+                // Tool calls and `!` commands among them.
+                self.refresh_git_diff();
                 if let Some(id) = item.id() {
                     self.completed.insert((turn_id.clone(), id.to_owned()));
                 }
@@ -4231,9 +4263,9 @@ impl App {
 
     /// The items `/statusline` chose, by default model, thinking and
     /// permission mode (Allow all in red) and cost; then the directory with
-    /// its git branch, context use, room left before compaction and cache
-    /// hits. Each row is cut on its
-    /// own when the window is too narrow. Also whether the first row shows
+    /// its git branch, the lines changed since the last commit, context use
+    /// as a bar full at the compaction line and cache hits. Each row is cut on
+    /// its own when the window is too narrow. Also whether the first row shows
     /// all of the permission mode.
     fn info_rows(&mut self, width: u16, now_ms: i64) -> ([Line<'static>; 2], bool) {
         if let Some(rows) = self.status_line.as_mut().and_then(|line| line.rows(width)) {
@@ -4269,11 +4301,6 @@ impl App {
         let dim = |text: String| Some(vec![Span::styled(text, theme::secondary())]);
         let coloured =
             |text: String, item: BarItem| Some(vec![Span::styled(text, theme::bar_item(item))]);
-        // Room left before automatic compaction, or else in the window.
-        let room = usage.and_then(|usage| match usage.auto_compact_tokens {
-            Some(line) => percent_left(line, usage.context_tokens),
-            None => percent_left(usage.model_context_window?, usage.context_tokens),
-        });
         bar::Item::ALL.map(|item| match item {
             bar::Item::Model => coloured(sanitize(&settings.model), BarItem::Model),
             bar::Item::Thinking => coloured(
@@ -4310,23 +4337,33 @@ impl App {
                 .branch
                 .as_ref()
                 .and_then(|branch| coloured(format!("({})", sanitize(branch)), BarItem::Branch)),
+            bar::Item::Diff => self.git_diff_lines().map(|(added, removed)| {
+                vec![
+                    Span::styled("(", theme::secondary()),
+                    Span::styled(format!("+{added}"), theme::bar_item(BarItem::Added)),
+                    Span::styled(",", theme::secondary()),
+                    Span::styled(format!("-{removed}"), theme::bar_item(BarItem::Removed)),
+                    Span::styled(")", theme::secondary()),
+                ]
+            }),
+            // Ten cells, full at the compaction line, or else at the window;
+            // past it full, and the percent says how far past.
             bar::Item::Context => usage.and_then(|usage| {
-                let window = usage.model_context_window?;
-                let used = percent(window, usage.context_tokens)?;
+                let full = usage.auto_compact_tokens.or(usage.model_context_window)?;
+                let used = usage.context_tokens;
+                let percent = percent(full, used)?;
+                let cells = ((u128::from(used) * 10 + u128::from(full) / 2) / u128::from(full))
+                    .min(10) as usize;
+                let room = theme::bar_room(percent_left(full, used)?);
                 Some(vec![
-                    Span::styled("ctx ", theme::secondary()),
-                    Span::styled(format!("{used}%"), theme::bar_room(room?)),
+                    Span::styled("█".repeat(cells), room),
+                    Span::styled("░".repeat(10 - cells), theme::secondary()),
                     Span::styled(
-                        format!(" {}/{}", tokens(usage.context_tokens), tokens(window)),
+                        format!(" {}/{} (", tokens(used), tokens(full)),
                         theme::secondary(),
                     ),
-                ])
-            }),
-            bar::Item::Compact => usage.and_then(|usage| {
-                let left = percent_left(usage.auto_compact_tokens?, usage.context_tokens)?;
-                Some(vec![
-                    Span::styled(format!("{left}%"), theme::bar_room(left)),
-                    Span::styled(" to compact", theme::secondary()),
+                    Span::styled(format!("{percent}%"), room),
+                    Span::styled(")", theme::secondary()),
                 ])
             }),
             bar::Item::Cache => usage.and_then(|usage| {
