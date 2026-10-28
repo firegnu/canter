@@ -10,6 +10,10 @@ use tokio_util::sync::CancellationToken;
 
 pub type FileReader = Box<dyn AsyncRead + Unpin + Send>;
 
+// On macOS pipe creation and FD_CLOEXEC are separate operations. Keep every
+// local shell's pipe creation and fork/exec in one process-wide critical section.
+static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub struct CommandHandle {
     pub stdout: FileReader,
     pub stderr: FileReader,
@@ -200,6 +204,7 @@ impl Executor for LocalExecutor {
 
     async fn spawn(&self, command: &str, cancel: &CancellationToken) -> io::Result<CommandHandle> {
         use std::process::Stdio;
+        let _spawn = SPAWN_LOCK.lock().unwrap();
         check_cancel(cancel)?;
         let mut launch = tokio::process::Command::new("/bin/sh");
         launch
@@ -328,7 +333,7 @@ impl LocalProcess {
                 Ok(()) | Err(nix::errno::Errno::ESRCH) => {
                     self.group = None;
                     // Disarm only after the original group has been cleaned up.
-                    let _ = std::io::Write::write_all(&mut self.guardian, &[1]);
+                    let _ = std::io::Write::write_all(&mut self.guardian, b"\n");
                 }
                 Err(error) => return Err(io::Error::from_raw_os_error(error as i32)),
             }
