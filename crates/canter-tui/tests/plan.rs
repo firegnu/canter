@@ -126,7 +126,7 @@ fn pinned_plan_uses_at_most_five_rows_with_active_first_and_overflow_count() {
             "  □ Step 1",
             "  □ Step 2",
             "  □ Step 3",
-            "  还有 3 步"
+            "  … and 3 more"
         ]
     );
     screen.ui.backend_mut().resize(20, 12);
@@ -155,7 +155,7 @@ fn a_single_plan_row_keeps_the_active_step_and_overflow_count() {
     let pinned = screen.pinned();
     assert_eq!(pinned.len(), 1, "{pinned:#?}");
     assert!(pinned[0].starts_with("  □ Implement"), "{pinned:#?}");
-    assert!(pinned[0].ends_with("（还有 2 步）"), "{pinned:#?}");
+    assert!(pinned[0].ends_with(" (+2 more)"), "{pinned:#?}");
 }
 
 #[test]

@@ -99,7 +99,7 @@ pub(crate) fn pinned(snapshot: &SessionSnapshot, width: u16, room: usize) -> Vec
     let limit = room.min(5);
     if limit == 1 && steps.len() > 1 {
         let step = steps[0];
-        let suffix = format!("（还有 {} 步）", steps.len() - 1);
+        let suffix = format!(" (+{} more)", steps.len() - 1);
         let mut spans = truncate(
             vec![
                 Span::raw("  "),
@@ -131,7 +131,7 @@ pub(crate) fn pinned(snapshot: &SessionSnapshot, width: u16, room: usize) -> Vec
     if steps.len() > shown {
         rows.push(Line::from(truncate(
             vec![Span::styled(
-                format!("  还有 {} 步", steps.len() - shown),
+                format!("  … and {} more", steps.len() - shown),
                 theme::secondary(),
             )],
             usize::from(width),
