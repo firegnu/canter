@@ -251,6 +251,21 @@ async fn exhausted_empty_retries_preserve_the_last_nonempty_reply_once() {
             if let EventPayload::TurnCompleted { turn } = event.payload {
                 assert_eq!(turn.status, TurnStatus::Failed);
                 assert!(turn.error.unwrap().message.contains("retried 10 times"));
+                let snapshot = session.snapshot().await.session;
+                let retries: Vec<_> = snapshot.turns[0].items.iter().filter(|item| matches!(item, Item::ModelRetry { .. })).collect();
+                assert_eq!(retries.len(), 10);
+                for item in retries {
+                    let Item::ModelRetry { attempt, max_retries, delay_seconds, .. } = item else { unreachable!() };
+                    let reason = if *attempt == 1 {
+                        "Network (HTTP status: None)"
+                    } else {
+                        "Server (HTTP status: Some(503))"
+                    };
+                    assert_eq!(
+                        item.retry_message().unwrap(),
+                        format!("Retrying in {delay_seconds:.1}s ({attempt}/{max_retries}): model request failed: {reason}")
+                    );
+                }
                 break;
             }
         }

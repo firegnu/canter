@@ -489,7 +489,7 @@ pub(crate) async fn record_retry(
     let item = Item::ModelRetry {
         id: id("retry"),
         error: ErrorInfo {
-            message: error.to_string(),
+            message: error.retry_reason(),
             additional_details: None,
         },
         will_retry: true,
