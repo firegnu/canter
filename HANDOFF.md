@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-28 第十六次装 main `4516c70`（`canter --version` 显示 `canter 0.1.0 · 4516c70`；P2-34 合并后的正式版：计划和待办默认开，`config.json` 写 `"plan_enabled": false` 可关）。服务端要用户自己 `canter serve --replace`。
+- 退回到装 P2-34 之前的 `2302c00`：`cp -p ~/.canter/canter-2302c00 ~/.cargo/bin/canter`，再 `canter serve --replace`；旧版打开用过清单的会话不坏，清单不显示。上一次的分支版 `583ef2e` 备份在 `~/.canter/canter-583ef2e`。
 - 10-28 第十五次装 **未合并的分支** `p2-34-todo` 的 `583ef2e`（`canter --version` 显示 `canter 0.1.0 · 583ef2e`；比上一版多清单拖着不勾时提醒模型、工具说明加「做完一步立刻更新」）：用户长程回测用。服务端要用户自己 `canter serve --replace`。
 - 退回上一版 `12ffad2`：旧程序备份在 `~/.canter/canter-12ffad2`，`cp -p ~/.canter/canter-12ffad2 ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-28 第十四次装 **未合并的分支** `p2-34-todo` 的 `12ffad2`（`canter --version` 显示 `canter 0.1.0 · 12ffad2`；比上一版多 P2-34 计划和待办，清单默认开）：用户要亲自开着清单测一个长程任务，测完定默认开关再合并。服务端已换新版（用户自己跑的 `canter serve --replace`，10-28 10:20 起）。
