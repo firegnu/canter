@@ -806,7 +806,7 @@ impl App {
             report: None,
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
-            input: InputBox::default(),
+            input: InputBox::messages(),
             input_history: Default::default(),
             sending_image: None,
             sending_text: None,
@@ -3511,17 +3511,16 @@ impl App {
                 .shown
                 .back()
                 .is_some_and(|(_, shown)| shown.approval.is_some());
+        // A `!` command, by the rule Enter runs it by, is in shell mode: the
+        // `!` is the prompt, not in the text (see `InputBox::start`), and
+        // the border and the hint below are magenta.
+        let shell = self.search.is_none() && self.input.full_text().trim_start().starts_with('!');
         // While searching, the words searched for in place of the draft.
-        let (input, prompt, placeholder) = match &self.search {
-            Some(search) => (&search.query, FIND, ""),
-            None => (&self.input, "› ", PLACEHOLDER),
+        let (input, prompt, prompt_style, placeholder) = match &self.search {
+            Some(search) => (&search.query, FIND, theme::accent(), ""),
+            None if shell => (&self.input, "! ", theme::shell(), ""),
+            None => (&self.input, "› ", theme::accent(), PLACEHOLDER),
         };
-        // A `!` command, by the rule Enter runs it by: a red border, and the
-        // `!` red where the box shows it (a folded paste can hide it).
-        let shell = self.search.is_none() && input.full_text().trim_start().starts_with('!');
-        let bang = shell
-            .then(|| input.text().len() - input.text().trim_start().len())
-            .filter(|&at| input.text()[at..].starts_with('!'));
         // The prompt's columns past those of `› `, which INPUT_CHROME counts.
         let extra = str_width(prompt) - 2;
         let input_width = usize::from(width.saturating_sub(INPUT_CHROME)).saturating_sub(extra);
@@ -3544,14 +3543,9 @@ impl App {
             } else {
                 " ".repeat(str_width(prompt))
             };
-            let mut spans = vec![Span::raw(" "), Span::styled(prompt, theme::accent().bold())];
+            let mut spans = vec![Span::raw(" "), Span::styled(prompt, prompt_style.bold())];
             if input.is_empty() {
                 spans.push(Span::styled(placeholder, theme::secondary()));
-            } else if let Some(at) = bang.filter(|at| range.contains(at)) {
-                let text = input.text();
-                spans.push(Span::raw(text[range.start..at].to_owned()));
-                spans.push(Span::styled("!", theme::shell()));
-                spans.push(Span::raw(text[at + 1..range.end].to_owned()));
             } else {
                 spans.push(Span::raw(input.text()[range.clone()].to_owned()));
             }
@@ -4402,19 +4396,16 @@ impl View {
                 cursor,
                 shell,
             } => {
-                let border = if shell {
-                    theme::shell()
+                let block = Block::bordered().border_type(BorderType::Rounded);
+                let block = if shell {
+                    // On the bottom border, so it takes no row.
+                    block
+                        .border_style(theme::shell())
+                        .title_bottom(Span::styled(" ! for shell mode ", theme::shell()))
                 } else {
-                    theme::secondary()
+                    block.border_style(theme::secondary())
                 };
-                frame.render_widget(
-                    Paragraph::new(rows).block(
-                        Block::bordered()
-                            .border_type(BorderType::Rounded)
-                            .border_style(border),
-                    ),
-                    boxed,
-                );
+                frame.render_widget(Paragraph::new(rows).block(block), boxed);
                 let cursor = Position::new(boxed.x + cursor.0, boxed.y + cursor.1);
                 if boxed.contains(cursor) {
                     frame.set_cursor_position(cursor);

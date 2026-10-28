@@ -174,12 +174,13 @@ pub fn failure() -> Style {
     current().fg(Color::Red)
 }
 
-/// A `!` command, which runs in the shell without the model: the input box's
-/// border and the `!` in the box and on its card. Red, the terminal's own,
-/// which its colour scheme keeps readable on a dark or light background and
-/// with 256 colours; not bright red, which is faint on a light one.
+/// A `!` command, which runs in the shell without the model: in shell mode
+/// the input box's border, its `!` prompt and the hint on its bottom border;
+/// the `!` on the command's card. Magenta, the terminal's own, which its
+/// colour scheme keeps readable on a dark or light background and with 256
+/// colours (user's choice).
 pub fn shell() -> Style {
-    current().fg(Color::Red)
+    current().fg(Color::Magenta)
 }
 
 /// Warnings and waiting for approval: yellow, which is faint on a light

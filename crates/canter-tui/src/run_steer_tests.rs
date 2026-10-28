@@ -352,14 +352,21 @@ fn ctrl(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
 }
 
-/// What the input box shows: the text after its `› ` (the last on screen).
+/// What the input box shows: the text after its `› ` (the last on screen),
+/// or in shell mode `!` and the text after its `! ` prompt.
 fn draft(ui: &Ui<TestBackend>) -> String {
     let screen = shown(ui);
-    let row = screen.lines().rfind(|row| row.contains("› ")).unwrap_or("");
-    let after = row.split_once("› ").map_or("", |(_, after)| after);
+    let row = screen
+        .lines()
+        .rfind(|row| row.contains("› ") || row.starts_with("│ ! "))
+        .unwrap_or("");
+    let (bang, after) = match row.strip_prefix("│ ! ") {
+        Some(after) => ("!", after),
+        None => ("", row.split_once("› ").map_or("", |(_, after)| after)),
+    };
     let after = after.trim_end_matches([' ', '│', '┃']).trim_end();
     if after.starts_with("Type a message") {
         return String::new();
     }
-    after.to_owned()
+    format!("{bang}{after}")
 }

@@ -189,7 +189,7 @@ impl InputHistory {
     fn navigating(&self, input: &InputBox) -> Option<Option<usize>> {
         if let Some((i, text)) = &self.browsing
             && input.text() == text
-            && (input.cursor() == 0 || input.cursor() == text.len())
+            && (input.cursor() == input.start() || input.cursor() == text.len())
         {
             return Some(Some(*i));
         }
