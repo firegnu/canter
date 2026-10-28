@@ -153,6 +153,17 @@ impl Body {
     fn item(&mut self, item: &Item, cwd: &str, feedback: Option<&str>) {
         let assistant = "Assistant";
         match item {
+            Item::BackgroundCommandAction {
+                command_id,
+                action,
+                result,
+                ..
+            } => {
+                self.block(
+                    assistant,
+                    &tool(&format!("shell_{action} #{command_id}"), result, ""),
+                );
+            }
             Item::PlanProposal {
                 plan,
                 answer,

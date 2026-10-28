@@ -39,6 +39,14 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Esc", "Close the / or @ list"),
             ("Ctrl+V", "Attach the image on the clipboard"),
             ("Ctrl+G", "Edit the message in $VISUAL or $EDITOR"),
+            (
+                "Ctrl+B",
+                "Move the running foreground shell command to the background",
+            ),
+            (
+                "!command &",
+                "Run in background; /ps to inspect, /stop to stop all",
+            ),
             ("Alt+← / Ctrl+← / Alt+B", "Back a word"),
             ("Alt+→ / Ctrl+→ / Alt+F", "Forward a word"),
             (

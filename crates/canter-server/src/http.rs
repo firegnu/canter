@@ -140,6 +140,11 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::RESUME, post(resume))
         .route(routes::INPUT, post(input))
         .route(routes::SHELL_COMMAND, post(shell_command))
+        .route(routes::SHELL_BACKGROUND, post(shell_background))
+        .route(routes::BACKGROUND_COMMANDS, get(background_commands))
+        .route(routes::BACKGROUND_OUTPUT, get(background_output))
+        .route(routes::BACKGROUND_STOP, post(background_stop))
+        .route(routes::BACKGROUND_STOP_ALL, post(background_stop_all))
         .route(routes::INTERRUPT, post(interrupt))
         .route(routes::COMPACT, post(compact))
         .route(routes::REWIND, get(rewind_list).post(rewind))
@@ -523,6 +528,53 @@ async fn shell_command(
         return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
     }
     Ok(Json(app.session(&id).await?.shell_command(params).await?))
+}
+
+async fn shell_background(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+    params: Result<Json<ShellBackgroundParams>, JsonRejection>,
+) -> Result<Json<ShellBackgroundResponse>, ApiError> {
+    Ok(Json(
+        app.session(&id)
+            .await?
+            .shell_background(body(params)?)
+            .await?,
+    ))
+}
+async fn background_commands(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<BackgroundCommandListResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.background_commands().await?))
+}
+async fn background_output(
+    State(app): State<Arc<App>>,
+    ApiPath((id, command_id)): ApiPath<(String, u64)>,
+) -> Result<Json<BackgroundCommandOutput>, ApiError> {
+    Ok(Json(
+        app.session(&id)
+            .await?
+            .background_output(command_id)
+            .await?,
+    ))
+}
+async fn background_stop(
+    State(app): State<Arc<App>>,
+    ApiPath((id, command_id)): ApiPath<(String, u64)>,
+) -> Result<Json<BackgroundCommandListResponse>, ApiError> {
+    Ok(Json(
+        app.session(&id)
+            .await?
+            .stop_background(Some(command_id))
+            .await?,
+    ))
+}
+async fn background_stop_all(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<BackgroundCommandListResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.stop_background(None).await?))
 }
 
 async fn resolve(

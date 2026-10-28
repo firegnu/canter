@@ -379,10 +379,10 @@ fn ctrl_o_shows_long_output_and_diffs_in_full_and_folds_them_again() {
         "{shown:#?}"
     );
     assert!(!shown.iter().any(|row| row.contains("showing the last")));
-    // 60 columns are too few for both hints: the Ctrl+O one is left out.
+    // A narrow status row keeps the complete background shortcut.
     assert_eq!(
         screen.status(),
-        " ⠋ Running cargo build · 0s · Esc to interrupt"
+        " ⠋ Running cargo build · 0s ·… · ctrl+b to run in background"
     );
 
     screen.finish_turn();
@@ -392,7 +392,9 @@ fn ctrl_o_shows_long_output_and_diffs_in_full_and_folds_them_again() {
     // Folded as before; the turn has ended, so the file it changed and its
     // time follow now.
     let mut refolded = folded.clone();
-    let end = folded.iter().rposition(|row| !row.is_empty()).unwrap() + 1;
+    refolded.retain(|row| !row.contains("ctrl+b to run in background"));
+    refolded.push(String::new());
+    let end = refolded.iter().rposition(|row| !row.is_empty()).unwrap() + 1;
     refolded[end + 1] = "  ● Changed 1 file  +10 −10".to_owned();
     refolded[end + 2] = "      a.txt  +10 −10".to_owned();
     refolded[end + 3] = "  ─ Worked for <1s ─".to_owned();

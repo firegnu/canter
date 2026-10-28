@@ -186,6 +186,7 @@ async fn conversation(
         if cancel.is_cancelled() {
             return Ok(());
         }
+        shared.sync_background().await?;
         let request = {
             let mut state = shared.state.lock().await;
             state.consume_steering(turn_id).await?;
@@ -632,6 +633,9 @@ async fn execute(
                 None => {
                     let mut item = prepared.started_item();
                     match &mut item {
+                        Item::BackgroundCommandAction { status, .. } => {
+                            *status = ItemStatus::Failed
+                        }
                         Item::Plan { status, .. }
                         | Item::McpToolCall { status, .. }
                         | Item::WebFetch { status, .. }
@@ -723,6 +727,7 @@ async fn execute(
             }
         }
     };
+    shared.sync_background().await?;
     let mut state = shared.state.lock().await;
     if output.outcome == ToolOutcome::Cancelled {
         cancel.cancel();

@@ -37,6 +37,12 @@ impl Fixture {
                     let compact = request.get("tools").is_none_or(|tools| tools.as_array().is_some_and(Vec::is_empty));
                     let wait = text == "wait" || (compact && pause.load(Ordering::Relaxed));
                     let tool = match text {
+                        "background" => Some(("shell", json!({"command":"echo $$; exec sleep 30", "background":true,"timeoutMs":1}))),
+                        "foreground" => Some(("shell", json!({"command":"echo $$; exec sleep 30"}))),
+                        "background-denied" => Some(("shell", json!({"command":"touch must-not-run; exec sleep 30", "background":true}))),
+                        "background-readonly" => Some(("shell", json!({"command":"pwd", "background":true}))),
+                        "output" => Some(("shell_output", json!({"id":1}))),
+                        "stop" => Some(("shell_stop", json!({"id":1}))),
                         "approve" => Some(("shell", json!({"command":"printf model-command > model-result.txt"}))),
                         "question" => Some(("ask_user", json!({"question":"Choose?","options":[{"label":"A","description":"A"},{"label":"B","description":"B"}]}))),
                         _ => None,
@@ -184,6 +190,45 @@ impl Fixture {
         self.idle(url).await
     }
 
+    async fn until(
+        &self,
+        url: &str,
+        predicate: impl Fn(&SessionSnapshot) -> bool,
+    ) -> SessionSnapshot {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let snapshot: SessionReadResponse = self
+                    .client
+                    .get(url)
+                    .send()
+                    .await
+                    .unwrap()
+                    .error_for_status()
+                    .unwrap()
+                    .json()
+                    .await
+                    .unwrap();
+                if predicate(&snapshot.session) {
+                    return snapshot.session;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("session did not reach expected state")
+    }
+
+    async fn input(&self, url: &str, text: &str) {
+        self.client
+            .post(format!("{url}/input"))
+            .json(&json!({"input":[{"type":"text","text":text}],"clientName":"test"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    }
+
     async fn close(self) {
         for session in self.app.sessions.lock().await.values() {
             session.close_for_shutdown().await.unwrap();
@@ -193,6 +238,317 @@ impl Fixture {
             server.await.unwrap();
         }
     }
+}
+
+#[tokio::test]
+async fn user_shell_background_survives_turn_and_is_visible_to_another_client() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("alwaysAsk").await;
+    let snapshot = fixture.shell(&url, "printf ready; exec sleep 30 &  ").await;
+    assert_eq!(
+        snapshot.session.background_commands.len(),
+        1,
+        "a trailing single & must register a background command"
+    );
+    assert!(snapshot.session.background_commands[0].running);
+    assert_eq!(snapshot.session.background_commands[0].id, 1);
+    let other: SessionReadResponse = fixture
+        .client
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        other.session.background_commands,
+        snapshot.session.background_commands
+    );
+    assert!(fixture.requests.lock().unwrap().is_empty());
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn background_completion_appends_history_without_waking_the_model() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("allowAll").await;
+    fixture.say(&url, "before").await;
+    let previous = fixture.requests.lock().unwrap().last().unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let started = fixture
+        .shell(
+            &url,
+            "printf initial; while [ ! -e release ]; do sleep 0.01; done; printf final; exit 7 &",
+        )
+        .await;
+    let history_path = fixture
+        .root
+        .path()
+        .join("state/sessions")
+        .join(&started.session.id)
+        .join("model-history.jsonl");
+    let history_before = std::fs::read(&history_path).unwrap();
+    let count = fixture.requests.lock().unwrap().len();
+    std::fs::write(fixture.root.path().join("project/release"), "").unwrap();
+    fixture
+        .until(&url, |session| {
+            session.background_commands[0].exit_code == Some(7)
+        })
+        .await;
+    assert_eq!(
+        fixture.requests.lock().unwrap().len(),
+        count,
+        "completion must not start a model turn"
+    );
+    assert!(
+        std::fs::read(&history_path)
+            .unwrap()
+            .starts_with(&history_before)
+    );
+    fixture.say(&url, "output").await;
+    let messages = fixture.requests.lock().unwrap().last().unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(&messages[..previous.len()], &previous);
+    assert!(
+        messages.iter().any(|message| message["content"]
+            .as_str()
+            .is_some_and(|text| text.contains("[Background command 1 finished:")
+                && text.contains("Exit code: 7")
+                && text.contains("shell_output")))
+    );
+    assert!(messages.iter().any(|message| {
+        message["role"] == "tool"
+            && message["content"]
+                .as_str()
+                .is_some_and(|text| text.ends_with("final"))
+    }));
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn model_can_start_read_stop_and_shutdown_stops_all_groups() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("allowAll").await;
+    let started = fixture.say(&url, "background").await;
+    assert!(started.session.background_commands[0].running);
+    fixture.say(&url, "output").await;
+    let stopped = fixture.say(&url, "stop").await;
+    assert!(!stopped.session.background_commands[0].running);
+    fixture.say(&url, "background").await;
+    let output: BackgroundCommandOutput = fixture
+        .client
+        .get(format!("{url}/backgroundCommands/2"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pid: i32 = output.output.trim().parse().unwrap();
+    let session = fixture
+        .app
+        .sessions
+        .lock()
+        .await
+        .get(&started.session.id)
+        .unwrap()
+        .clone();
+    session.close_for_shutdown().await.unwrap();
+    assert_eq!(
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
+        Err(nix::errno::Errno::ESRCH)
+    );
+    fixture
+        .app
+        .sessions
+        .lock()
+        .await
+        .remove(&started.session.id);
+    drop(session);
+    let resumed: SessionResumeResponse = fixture
+        .client
+        .post(format!("{url}/resume"))
+        .json(&json!({"env":fixture.env()}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        resumed
+            .session
+            .background_commands
+            .iter()
+            .all(|command| !command.running)
+    );
+    fixture.say(&url, "background-readonly").await;
+    assert_eq!(
+        fixture
+            .idle(&url)
+            .await
+            .session
+            .background_commands
+            .last()
+            .unwrap()
+            .id,
+        3
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn both_user_and_model_foreground_shells_can_be_backgrounded_and_stopped_over_http() {
+    let fixture = Fixture::new().await;
+    for model in [false, true] {
+        let url = fixture.create("allowAll").await;
+        if model {
+            fixture.input(&url, "foreground").await;
+        } else {
+            fixture
+                .client
+                .post(format!("{url}/shellCommand"))
+                .json(&json!({"command":"echo $$; exec sleep 30"}))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+        }
+        let snapshot = fixture.until(&url, |session| session.turns.last().is_some_and(|turn| turn.items.iter().any(|item| matches!(item, Item::CommandExecution { aggregated_output, .. } if !aggregated_output.is_empty())))).await;
+        let item = snapshot
+            .turns
+            .last()
+            .unwrap()
+            .items
+            .iter()
+            .find(|item| matches!(item, Item::CommandExecution { .. }))
+            .unwrap();
+        let moved: ShellBackgroundResponse = fixture
+            .client
+            .post(format!("{url}/shellBackground"))
+            .json(&json!({"itemId":item.id().unwrap()}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(moved.command_id, Some(1));
+        let idle = fixture.idle(&url).await;
+        assert!(idle.session.background_commands[0].running);
+        let output: BackgroundCommandOutput = fixture
+            .client
+            .get(format!("{url}/backgroundCommands/1"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let pid: i32 = output.output.trim().parse().unwrap();
+        let other = fixture.create("allowAll").await;
+        fixture.shell(&other, "printf elsewhere").await;
+        let resumed: SessionResumeResponse = fixture
+            .client
+            .post(format!("{url}/resume"))
+            .json(&json!({"env":fixture.env()}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(resumed.session.background_commands[0].running);
+        let stopped: BackgroundCommandListResponse = fixture
+            .client
+            .post(format!("{url}/backgroundCommands/stop"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(!stopped.data[0].running);
+        assert_eq!(
+            nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
+            Err(nix::errno::Errno::ESRCH)
+        );
+    }
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn background_shell_is_not_started_after_decline_or_plan_mode_block() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("alwaysAsk").await;
+    fixture.input(&url, "background-denied").await;
+    let pending = fixture
+        .until(&url, |session| !session.pending_requests.is_empty())
+        .await;
+    assert!(pending.background_commands.is_empty());
+    let request = &pending.pending_requests[0];
+    fixture
+        .client
+        .post(format!("{url}/requests/{}", request.id))
+        .json(&json!({"decision":"decline","clientName":"test"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert!(
+        fixture
+            .idle(&url)
+            .await
+            .session
+            .background_commands
+            .is_empty()
+    );
+    assert!(!fixture.root.path().join("project/must-not-run").exists());
+    fixture
+        .client
+        .patch(&url)
+        .json(&json!({"planMode":true,"approvalPolicy":"allowAll"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let blocked = fixture.say(&url, "background-denied").await;
+    assert!(blocked.session.background_commands.is_empty());
+    assert!(
+        blocked
+            .session
+            .turns
+            .last()
+            .unwrap()
+            .items
+            .iter()
+            .any(|item| matches!(
+                item,
+                Item::CommandExecution {
+                    status: ItemStatus::Blocked,
+                    ..
+                }
+            ))
+    );
+    let readonly = fixture.say(&url, "background-readonly").await;
+    assert_eq!(readonly.session.background_commands[0].exit_code, Some(0));
+    fixture.say(&url, "output").await;
+    fixture.say(&url, "stop").await;
+    fixture.close().await;
 }
 
 #[tokio::test]

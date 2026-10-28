@@ -66,13 +66,15 @@
 | read | `path`, 可选 `startLine`（默认 1）、`lineCount`（默认 2000） | 带行号的 UTF-8 文本，`fileRead` |
 | write | `path`, `content` | 整文件写，创建父目录；`fileChange` 和 unified diff |
 | edit | `path`, `edits: [{oldText, newText}]` | 一次替换多处；`fileChange` 和 unified diff |
-| shell | `command`, 可选 `timeoutMs` | 文字输出、退出码、耗时；`commandExecution` |
+| shell | `command`, 可选 `timeoutMs`、`background`（默认 false） | 前台结果或后台编号、状态、初始输出；`commandExecution` |
+| shell_output | `id`（会话内小整数） | 上次模型读取后的新输出及状态；`backgroundCommandAction` |
+| shell_stop | `id` | 停整个进程组，返回剩余输出及状态；`backgroundCommandAction` |
 | ask_user | `question`, `options: [{label, description}]`（2–4 个，标签不重复，内容非空） | 会话循环等待选项或自写文字；模型结果 `{question, answer}`，客户端项目 `userInput` |
 | web_fetch | `url`（HTTP(S)，不含用户名/密码） | HTML 转 Markdown，文字和 JSON 原样；有界文字结果，客户端项目 `webFetch` |
 | update_plan | 可选 `explanation`，`plan: [{step, status}]` | 整份替换清单，回 `Plan updated`；客户端项目 `plan` |
 | submit_plan | `plan`（完整 Markdown） | 计划模式中等待用户批准；客户端项目 `planProposal` |
 
-`Tool::ALL` 固定按 read/write/edit/shell/ask_user/web_fetch/update_plan/submit_plan 排列，保证会话每次请求的工具前缀稳定。
+`Tool::ALL` 固定按 read/write/edit/shell/ask_user/web_fetch/update_plan/submit_plan/shell_output/shell_stop 排列，保证会话每次请求的工具前缀稳定。
 `Tools::with_plan_enabled(false)` 关闭待办；会话通过 `Tools::find` 过滤工具定义和调用，
 在创建或打开时冻结。`update_plan` 属于交互风险，但 gate 始终直接发 permit，审查轮也一样，
 不会调用执行器。步骤状态为 `pending` / `in_progress` / `completed`，至多一个进行中，
@@ -99,6 +101,11 @@ read 每次最多 2000 行、64 KiB 带行号的内容，续读提示另计；�
 起始行超过 EOF 时说明总行数，空文件按 0 行处理。
 
 shell 使用 `/bin/sh -c`，非登录、非交互，stdin 关闭；先 `env_clear` 再装入会话环境。
+`background=true` 等 1 秒或命令先结束后返回，不使用 timeoutMs；会话最多同时 8 条。
+后台只保留最近 1 MiB，模型每次读新增输出最多最后 32 KiB，报告跳过字节数；终端读取不推进模型游标。
+`Tools::background()` 提供列表、读取、停止和按前台 item ID 转后台；Tools 由会话持有，退出/切换终端不影响进程。
+服务端关闭会话前等待 `stop_all()` 清理，Tools 的 Drop 也会取消任务；后台与前台均清理整个原进程组。
+下面的默认超时和头尾保留规则适用于前台；转后台之后沿用后台规则。
 shell 自己按其规则建立的变量（例如 PWD）仍然存在。
 默认超时 120000 ms，上限 600000 ms，超限参数报错。
 模型结果超过 32768 字节时保留头尾各至多 16384 字节，在 UTF-8 边界截断，

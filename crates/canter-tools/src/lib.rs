@@ -3,9 +3,11 @@ mod executor;
 pub mod mcp;
 mod output;
 pub use output::MAX_CLIENT_OUTPUT_BYTES;
+mod background;
 mod permission;
 mod readonly;
 mod shell;
+pub use background::{BackgroundCommands, MAX_BACKGROUND_COMMANDS, MAX_BACKGROUND_OUTPUT_BYTES};
 mod web_fetch;
 pub use executor::{CommandHandle, CommandProcess, Executor, FileReader, LocalExecutor};
 pub use permission::{ExecutionPermit, PermissionCheck, PermissionGate};
@@ -24,12 +26,23 @@ use tokio_util::sync::CancellationToken;
 pub const MAX_READ_LINES: u32 = 2_000;
 pub const MAX_READ_BYTES: usize = 64 * 1024;
 
+pub fn split_background_command(command: &str) -> (&str, bool) {
+    let command = command.trim_end();
+    if command.ends_with('&') && !command.ends_with("&&") {
+        (command[..command.len() - 1].trim_end(), true)
+    } else {
+        (command, false)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tool {
     Read,
     Write,
     Edit,
     Shell,
+    ShellOutput,
+    ShellStop,
     AskUser,
     WebFetch,
     UpdatePlan,
@@ -53,7 +66,7 @@ pub struct ToolDefinition {
 }
 
 impl Tool {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Read,
         Self::Write,
         Self::Edit,
@@ -62,6 +75,8 @@ impl Tool {
         Self::WebFetch,
         Self::UpdatePlan,
         Self::SubmitPlan,
+        Self::ShellOutput,
+        Self::ShellStop,
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -74,6 +89,8 @@ impl Tool {
             Self::Write => "write",
             Self::Edit => "edit",
             Self::Shell => "shell",
+            Self::ShellOutput => "shell_output",
+            Self::ShellStop => "shell_stop",
             Self::AskUser => "ask_user",
             Self::WebFetch => "web_fetch",
             Self::UpdatePlan => "update_plan",
@@ -84,7 +101,7 @@ impl Tool {
 
     pub fn risk(self) -> Risk {
         match self {
-            Self::Read => Risk::Read,
+            Self::Read | Self::ShellOutput | Self::ShellStop => Risk::Read,
             Self::Write | Self::Edit => Risk::Write,
             Self::Shell | Self::Mcp | Self::WebFetch => Risk::Execute,
             Self::AskUser | Self::UpdatePlan | Self::SubmitPlan => Risk::Interaction,
@@ -92,6 +109,18 @@ impl Tool {
     }
 
     pub fn definition(self) -> ToolDefinition {
+        if matches!(self, Self::ShellOutput | Self::ShellStop) {
+            return ToolDefinition {
+                name: self.name(),
+                description: if self == Self::ShellOutput {
+                    "Read new output from a background shell command by its session-local integer id. Returns output since the previous model read, whether it is running, and its exit code when finished. Keeps the last 32 KiB of new output and reports skipped bytes. Use after shell with background=true, a user !command &, or Ctrl+B. Stop services and watchers with shell_stop when finished."
+                } else {
+                    "Stop a background shell command and its entire process group by its session-local integer id. Returns the remaining new output and final exit status. Stop development servers, watchers, and long tests when they are no longer needed."
+                },
+                parameters: json!({"type":"object","properties":{"id":{"type":"integer","minimum":1}},"required":["id"],"additionalProperties":false}),
+                risk: self.risk(),
+            };
+        }
         if self == Self::SubmitPlan {
             return ToolDefinition {
                 name: self.name(),
@@ -139,8 +168,8 @@ impl Tool {
         if self == Self::Shell {
             return ToolDefinition {
                 name: self.name(),
-                description: r#"Run a command with /bin/sh -c in the session's working directory and environment. Each call starts a new shell, so cd, variables, and other shell state don't carry over to the next call. There is no terminal and no input: interactive programs such as editors, pagers, prompts, or git rebase -i will wait until the timeout, so use non-interactive forms (for example git --no-pager log, git commit -m). Timeout: 120 seconds by default, at most 600 (timeoutMs). Standard output and error are combined, and long output keeps only its beginning and end. The result ends with the exit code, which the user also sees, so never add commands to print it. When the command finishes, background processes it started are stopped, so servers and watchers don't keep running. Read-only commands such as listing, searching, viewing files, and git status, log, or diff usually run without approval; other commands may wait for the user to approve them."#,
-                parameters: json!({"type":"object","properties":{"command":{"type":"string","minLength":1},"timeoutMs":{"type":"integer","minimum":1,"maximum":MAX_SHELL_TIMEOUT_MS,"default":DEFAULT_SHELL_TIMEOUT_MS}},"required":["command"],"additionalProperties":false}),
+                description: r#"Run a command with /bin/sh -c in the session's working directory and environment. Each call starts a new shell, so cd, variables, and other shell state don't carry over to the next call. There is no terminal and no input: use non-interactive commands. Foreground timeout: 120 seconds by default, at most 600 (timeoutMs); output keeps its beginning and end. Set background=true for development servers, file watchers, or long tests: returns after about one second with an integer id, initial output and running/exited status. Background commands have no timeoutMs deadline and belong to the session, surviving client disconnects and session switches. Read new output with shell_output and stop the entire process group with shell_stop when finished. At most 8 background commands may run per session; each retains the last 1 MiB of output. The user can also move a running foreground command to the background with Ctrl+B. When a shell exits, its remaining process group is stopped. Results include exit status, so never add commands to print it. Background execution follows the same approval and Plan-mode read-only rules as foreground execution."#,
+                parameters: json!({"type":"object","properties":{"command":{"type":"string","minLength":1},"background":{"type":"boolean","default":false},"timeoutMs":{"type":"integer","minimum":1,"maximum":MAX_SHELL_TIMEOUT_MS,"default":DEFAULT_SHELL_TIMEOUT_MS}},"required":["command"],"additionalProperties":false}),
                 risk: self.risk(),
             };
         }
@@ -288,6 +317,10 @@ struct Replacement {
 }
 
 enum Action {
+    Background {
+        id: u64,
+        stop: bool,
+    },
     SubmitPlan(SubmitPlanArgs),
     UpdatePlan(UpdatePlanArgs),
     WebFetch(reqwest::Url),
@@ -344,6 +377,13 @@ impl PreparedCall {
     }
     fn item(&self, status: ItemStatus) -> Item {
         match &self.action {
+            Action::Background { id, stop } => Item::BackgroundCommandAction {
+                id: self.id.clone(),
+                command_id: *id,
+                action: if *stop { "stop" } else { "output" }.into(),
+                result: String::new(),
+                status,
+            },
             Action::SubmitPlan(args) => Item::PlanProposal {
                 id: self.id.clone(),
                 plan: args.plan.clone(),
@@ -444,6 +484,7 @@ impl PreparedCall {
 }
 
 pub struct Tools {
+    background: BackgroundCommands,
     plan_enabled: bool,
     executor: Arc<dyn Executor>,
     mcp: Vec<mcp::McpTool>,
@@ -451,10 +492,20 @@ pub struct Tools {
 }
 
 impl Tools {
+    pub fn background(&self) -> &BackgroundCommands {
+        &self.background
+    }
     /// Plan mode uses exactly the executor's existing read-only shell whitelist.
     pub fn allowed_in_plan_mode(&self, name: &str, raw_arguments: &str) -> bool {
         match self.find(name) {
-            Some(Tool::Read | Tool::WebFetch | Tool::AskUser | Tool::SubmitPlan) => true,
+            Some(
+                Tool::Read
+                | Tool::WebFetch
+                | Tool::AskUser
+                | Tool::SubmitPlan
+                | Tool::ShellOutput
+                | Tool::ShellStop,
+            ) => true,
             Some(Tool::Shell) => serde_json::from_str::<Value>(raw_arguments)
                 .ok()
                 .and_then(|args| {
@@ -513,12 +564,15 @@ impl Tools {
         cancel: &CancellationToken,
         on_output: &mut (dyn FnMut(&str) + Send),
     ) -> ToolOutput {
+        let (command, background) = split_background_command(&params.command);
         shell::run(
-            self.executor.as_ref(),
+            self.executor.clone(),
+            &self.background,
             id,
             &shell::ShellArgs {
-                command: params.command.clone(),
+                command: command.into(),
                 timeout_ms: params.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS),
+                background,
             },
             canter_protocol::ExecCommandSource::UserShell,
             cancel,
@@ -563,6 +617,7 @@ impl Tools {
     }
     pub fn new(executor: Arc<dyn Executor>) -> Self {
         Self {
+            background: BackgroundCommands::default(),
             plan_enabled: true,
             executor,
             mcp: Vec::new(),
@@ -711,6 +766,21 @@ impl Tools {
         cancel: &CancellationToken,
     ) -> Result<Action, String> {
         match tool {
+            Tool::ShellOutput | Tool::ShellStop => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Args {
+                    id: u64,
+                }
+                let args: Args = parse(arguments)?;
+                if args.id == 0 {
+                    return Err("id must be a positive integer".into());
+                }
+                Ok(Action::Background {
+                    id: args.id,
+                    stop: tool == Tool::ShellStop,
+                })
+            }
             Tool::SubmitPlan => {
                 let args: SubmitPlanArgs = parse(arguments)?;
                 if args.plan.trim().is_empty() {
@@ -902,6 +972,33 @@ impl Tools {
             }
         }
         match &call.action {
+            Action::Background { id, stop } => {
+                let result = if *stop {
+                    match self.background.stop(*id).await {
+                        Ok(_) => self.background.output(*id, true),
+                        Err(error) => Err(error),
+                    }
+                } else {
+                    self.background.output(*id, true)
+                };
+                let (text, outcome) = match result {
+                    Ok(output) => (background::render(&output), ToolOutcome::Completed),
+                    Err(error) => (error, ToolOutcome::Failed),
+                };
+                let mut item = call.item(if outcome == ToolOutcome::Completed {
+                    ItemStatus::Completed
+                } else {
+                    ItemStatus::Failed
+                });
+                if let Item::BackgroundCommandAction { result, .. } = &mut item {
+                    *result = text.clone();
+                }
+                ToolOutput {
+                    text,
+                    item,
+                    outcome,
+                }
+            }
             Action::UpdatePlan(_) => ToolOutput {
                 text: "Plan updated".into(),
                 item: call.item(ItemStatus::Completed),
@@ -1017,7 +1114,8 @@ impl Tools {
             }
             Action::Shell(args) => {
                 shell::run(
-                    self.executor.as_ref(),
+                    self.executor.clone(),
+                    &self.background,
                     call.id.clone(),
                     args,
                     canter_protocol::ExecCommandSource::Agent,
@@ -1232,6 +1330,18 @@ fn tool_error(
     cwd: &std::path::Path,
 ) -> ToolOutput {
     let item = match tool {
+        Tool::ShellOutput | Tool::ShellStop => Item::BackgroundCommandAction {
+            id,
+            command_id: arguments["id"].as_u64().unwrap_or_default(),
+            action: if tool == Tool::ShellStop {
+                "stop"
+            } else {
+                "output"
+            }
+            .into(),
+            result: text.clone(),
+            status: ItemStatus::Failed,
+        },
         Tool::SubmitPlan => Item::PlanProposal {
             id,
             plan: arguments["plan"].as_str().unwrap_or_default().into(),

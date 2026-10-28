@@ -131,6 +131,17 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
         EventPayload::TurnRetracted { turn_id } => {
             snapshot.turns.retain(|turn| turn.id != *turn_id);
         }
+        EventPayload::BackgroundCommandUpdated { command } => {
+            if let Some(existing) = snapshot
+                .background_commands
+                .iter_mut()
+                .find(|entry| entry.id == command.id)
+            {
+                *existing = command.clone();
+            } else {
+                snapshot.background_commands.push(command.clone());
+            }
+        }
         EventPayload::SessionRewound {
             before_turn_id,
             rewind_conversation,

@@ -47,7 +47,7 @@ impl PermissionGate {
         mode: PermissionMode,
     ) -> PermissionCheck<'a> {
         match call.tool {
-            Tool::Read | Tool::AskUser | Tool::SubmitPlan => {
+            Tool::Read | Tool::AskUser | Tool::SubmitPlan | Tool::ShellOutput | Tool::ShellStop => {
                 PermissionCheck::Execute(ExecutionPermit { call })
             }
             Tool::WebFetch => self.evaluate(call, mode),
@@ -63,7 +63,9 @@ impl PermissionGate {
     /// Review restrictions precede both permission mode and session grants.
     pub fn evaluate_review<'a>(&self, call: &'a PreparedCall) -> PermissionCheck<'a> {
         match call.tool {
-            Tool::Read | Tool::UpdatePlan => PermissionCheck::Execute(ExecutionPermit { call }),
+            Tool::Read | Tool::UpdatePlan | Tool::ShellOutput | Tool::ShellStop => {
+                PermissionCheck::Execute(ExecutionPermit { call })
+            }
             Tool::Shell if matches!(&call.action, Action::Shell(args) if call.executor.is_readonly_shell(&args.command)) => {
                 PermissionCheck::Execute(ExecutionPermit { call })
             }

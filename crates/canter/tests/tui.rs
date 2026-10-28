@@ -956,7 +956,9 @@ async fn ask_user_second_option_returns_to_the_model_and_continues() {
                 "ask_user",
                 "web_fetch",
                 "update_plan",
-                "submit_plan"
+                "submit_plan",
+                "shell_output",
+                "shell_stop"
             ]
         );
     }
@@ -1308,6 +1310,89 @@ fn shell_reply(command: &str) -> String {
             "function":{"name":"shell","arguments":arguments}
         }]},"finish_reason":"tool_calls"}]})
     )
+}
+
+#[tokio::test]
+async fn background_shell_controls_work_through_terminal_and_survive_client_exit() {
+    struct Cleanup(Vec<PathBuf>);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            for path in &self.0 {
+                if let Ok(text) = fs::read_to_string(path)
+                    && let Ok(pid) = text.trim().parse::<i32>()
+                {
+                    let _ = nix::sys::signal::killpg(Pid::from_raw(pid), Signal::SIGKILL);
+                }
+            }
+        }
+    }
+    let mut world = World::new(vec![
+        shell_reply("echo $$ > model.pid; printf model-ready; exec /bin/sleep 60"),
+        text_reply("continued after backgrounding"),
+    ])
+    .await;
+    let mut cleanup = Cleanup(vec![
+        world.path("work/user.pid"),
+        world.path("work/model.pid"),
+    ]);
+    world.start_server().await;
+    let a = world.open(&["--yolo"], "background-a").await;
+    a.wait_idle().await;
+    a.type_line("!echo $$ > user.pid; printf user-ready; exec /bin/sleep 60 &")
+        .await;
+    a.wait_for("1 background commands · /ps").await;
+    a.wait_for("user-ready").await;
+    let id = world.only_session().await;
+    let b = world.open(&["--resume", &id], "background-b").await;
+    b.wait_for("后台运行中").await;
+    assert_eq!(a.quit().await, id);
+    assert!(world.snapshot(&id).await.background_commands[0].running);
+    b.type_line("/ps").await;
+    b.wait_for("Background commands · s stop").await;
+    b.press(KeyCode::Enter).await;
+    b.wait_for("s stop · r refresh").await;
+    assert!(b.screen().contains("user-ready"));
+    b.press(KeyCode::Char('s')).await;
+    b.wait_for("exit code:").await;
+    b.press(KeyCode::Esc).await;
+    b.wait_idle().await;
+    let user_pid: i32 = fs::read_to_string(world.path("work/user.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(kill(Pid::from_raw(user_pid), None), Err(Errno::ESRCH));
+    cleanup.0.remove(0);
+    assert!(world.requests.lock().unwrap().is_empty());
+
+    b.type_line("start model command").await;
+    b.wait_for("ctrl+b to run in background").await;
+    b.wait_for("model-ready").await;
+    b.press_with(KeyCode::Char('b'), KeyModifiers::CONTROL)
+        .await;
+    b.wait_for("continued after backgrounding").await;
+    b.wait_for("1 background commands · /ps").await;
+    b.type_line("/stop").await;
+    b.wait_for("Background commands · s stop").await;
+    assert!(
+        world
+            .snapshot(&id)
+            .await
+            .background_commands
+            .iter()
+            .all(|command| !command.running)
+    );
+    b.press(KeyCode::Esc).await;
+    b.wait_idle().await;
+    b.quit().await;
+    let model_pid: i32 = fs::read_to_string(world.path("work/model.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(kill(Pid::from_raw(model_pid), None), Err(Errno::ESRCH));
+    cleanup.0.clear();
+    world.stop_server(Signal::SIGTERM).await;
 }
 
 #[tokio::test]

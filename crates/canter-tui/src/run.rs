@@ -593,6 +593,36 @@ where
                         .app_mut()
                         .warning(&format!("Could not read usage: {error}")),
                 },
+                Some(Action::BackgroundList) => {
+                    match chat.client.background_commands(&chat.session).await {
+                        Ok(list) => ui.app_mut().show_background(&list, now_ms()),
+                        Err(error) => ui
+                            .app_mut()
+                            .warning(&format!("Could not list background commands: {error}")),
+                    }
+                }
+                Some(Action::BackgroundOutput(id)) => {
+                    match chat.client.background_output(&chat.session, id).await {
+                        Ok(output) => ui.app_mut().show_background_output(&output),
+                        Err(error) => ui
+                            .app_mut()
+                            .warning(&format!("Could not read background output: {error}")),
+                    }
+                }
+                Some(Action::BackgroundStop(id)) => {
+                    match chat.client.background_stop(&chat.session, id).await {
+                        Ok(list) => ui.app_mut().show_background(&list, now_ms()),
+                        Err(error) => ui
+                            .app_mut()
+                            .warning(&format!("Could not stop background commands: {error}")),
+                    }
+                }
+                Some(Action::ShellBackground(item_id)) => {
+                    if let Err(error) = chat.client.shell_background(&chat.session, item_id).await {
+                        ui.app_mut()
+                            .warning(&format!("Could not move command to background: {error}"));
+                    }
+                }
                 Some(Action::Mcp) => match chat.client.mcp().await {
                     Ok(report) => ui.app_mut().show_mcp(&report),
                     Err(error) => ui
@@ -1651,6 +1681,10 @@ impl<C: Connector> Chat<C> {
             | Action::ReturnFromHandoff(_)
             | Action::PickModel
             | Action::Usage
+            | Action::BackgroundList
+            | Action::BackgroundOutput(_)
+            | Action::BackgroundStop(_)
+            | Action::ShellBackground(_)
             | Action::Context
             | Action::Mcp
             | Action::Files

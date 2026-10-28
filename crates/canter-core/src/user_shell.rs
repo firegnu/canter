@@ -21,7 +21,10 @@ impl Session {
         mut params: SessionShellCommandParams,
     ) -> Result<SessionShellCommandResponse, CoreError> {
         params.command = params.command.trim().to_owned();
-        if params.command.is_empty() {
+        if canter_tools::split_background_command(&params.command)
+            .0
+            .is_empty()
+        {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 "command must not be empty",
@@ -76,7 +79,9 @@ pub(crate) async fn run(
         let item = Item::CommandExecution {
             id: item_id.clone(),
             source: ExecCommandSource::UserShell,
-            command: params.command.clone(),
+            command: canter_tools::split_background_command(&params.command)
+                .0
+                .into(),
             cwd: state.journal.snapshot.settings.cwd.clone(),
             status: ItemStatus::InProgress,
             aggregated_output: String::new(),
@@ -129,13 +134,27 @@ pub(crate) async fn run(
     else {
         unreachable!("shell result");
     };
-    let text = format!(
-        "<user_shell_command>\n<command>\n{}\n</command>\n<result>\nExit code: {}\nDuration: {:.4} seconds\nOutput:\n{}\n</result>\n</user_shell_command>",
-        params.command,
-        exit_code.unwrap_or(-1),
-        duration_ms.unwrap_or_default() as f64 / 1000.0,
-        output.text,
-    );
+    let text = if shared
+        .tools
+        .background()
+        .list()
+        .iter()
+        .any(|command| command.item_id == item_id)
+    {
+        format!(
+            "<user_shell_command>\n<command>\n{}\n</command>\n<result>\n{}\n</result>\n</user_shell_command>",
+            params.command, output.text
+        )
+    } else {
+        format!(
+            "<user_shell_command>\n<command>\n{}\n</command>\n<result>\nExit code: {}\nDuration: {:.4} seconds\nOutput:\n{}\n</result>\n</user_shell_command>",
+            params.command,
+            exit_code.unwrap_or(-1),
+            duration_ms.unwrap_or_default() as f64 / 1000.0,
+            output.text,
+        )
+    };
+    shared.sync_background().await?;
     let mut state = shared.state.lock().await;
     state.message(Message::User { text }).await?;
     state

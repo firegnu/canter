@@ -1,4 +1,5 @@
 //! Conversation sessions independent of HTTP and terminal clients.
+mod background;
 mod btw;
 mod compaction;
 mod context;

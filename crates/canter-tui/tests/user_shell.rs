@@ -2,6 +2,7 @@ use canter_protocol::{SessionSnapshot, SessionStatus};
 use canter_tui::{Action, App, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
+use unicode_width::UnicodeWidthStr;
 
 fn screen(status: SessionStatus) -> Ui<TestBackend> {
     let mut snapshot = SessionSnapshot::empty("user-shell");
@@ -17,9 +18,147 @@ fn text(ui: &mut Ui<TestBackend>) -> String {
         .buffer()
         .content
         .chunks(100)
-        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+        .map(|row| {
+            let mut text = String::new();
+            let mut column = 0;
+            while column < row.len() {
+                let symbol = row[column].symbol();
+                text.push_str(symbol);
+                column += symbol.width().max(1);
+            }
+            text
+        })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[test]
+fn background_card_and_pinned_count_survive_opening_the_snapshot() {
+    let mut snapshot = SessionSnapshot::empty("background");
+    snapshot.status = SessionStatus::Idle;
+    snapshot.turns.push(serde_json::from_value(serde_json::json!({
+        "id":"shell-turn", "status":"completed", "input":[], "clientName":"userShell", "error":null,"usage":null,
+        "items":[{"type":"commandExecution","id":"shell-item","command":"npm run dev","source":"userShell","cwd":"/work","status":"inProgress","aggregatedOutput":"ready","exitCode":null,"durationMs":1000}]
+    })).unwrap());
+    snapshot.background_commands.push(serde_json::from_value(serde_json::json!({"id":1,"itemId":"shell-item","command":"npm run dev","startedAt":0,"completedAt":null,"running":true,"exitCode":null})).unwrap());
+    let mut ui = Ui::new(TestBackend::new(100, 24), App::new(snapshot, None, 0)).unwrap();
+    let shown = text(&mut ui);
+    assert!(shown.contains("后台运行中"), "{shown}");
+    assert!(shown.contains("1 background commands · /ps"), "{shown}");
+    let event = serde_json::from_value(serde_json::json!({"seq":1,"sessionId":"background","timestamp":2000,"type":"backgroundCommand.updated","command":{"id":1,"itemId":"shell-item","command":"npm run dev","startedAt":0,"completedAt":2000,"running":false,"exitCode":7}})).unwrap();
+    ui.app_mut().apply_event(&event, 2000);
+    let done = text(&mut ui);
+    assert!(!done.contains("后台运行中"));
+    assert!(!done.contains("1 background commands"));
+    assert!(done.contains("Background #1 finished: npm run dev · exit code: 7"));
+    let mut reopened = Ui::new(
+        TestBackend::new(100, 24),
+        App::new(ui.app().snapshot().clone(), None, 0),
+    )
+    .unwrap();
+    assert_eq!(text(&mut reopened), done);
+}
+
+fn foreground(source: &str) -> Ui<TestBackend> {
+    let mut snapshot = SessionSnapshot::empty("foreground");
+    snapshot.status = SessionStatus::Working;
+    snapshot.turns.push(serde_json::from_value(serde_json::json!({
+        "id":"turn","status":"inProgress","input":[],"clientName":"test","error":null,"usage":null,
+        "items":[{"type":"commandExecution","id":"command","source":source,"command":"sleep 30","cwd":"/tmp","status":"inProgress","aggregatedOutput":"ready","exitCode":null,"durationMs":null}]
+    })).unwrap());
+    let mut ui = Ui::new(TestBackend::new(100, 24), App::new(snapshot, None, 0)).unwrap();
+    ui.draw(0).unwrap();
+    ui
+}
+
+#[test]
+fn ctrl_b_uses_the_shown_command_and_respects_search_and_popups() {
+    let key = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    for source in ["agent", "userShell"] {
+        let mut ui = foreground(source);
+        let shown = text(&mut ui);
+        assert_eq!(
+            shown.matches("ctrl+b to run in background").count(),
+            2,
+            "{shown}"
+        );
+        assert_eq!(
+            ui.app_mut().handle_key(key, 1000),
+            Some(Action::ShellBackground("command".into()))
+        );
+        ui.app_mut().handle_key(
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            1000,
+        );
+        ui.draw(1000).unwrap();
+        assert_eq!(ui.app_mut().handle_key(key, 1500), None);
+        ui.app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), 2000);
+        ui.app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE), 2500);
+        ui.draw(2500).unwrap();
+        assert_eq!(ui.app_mut().handle_key(key, 3000), None);
+    }
+    let mut idle = screen(SessionStatus::Idle);
+    assert_eq!(idle.app_mut().handle_key(key, 1000), None);
+}
+
+#[test]
+fn background_initial_output_arriving_after_started_state_is_not_frozen_out() {
+    let mut ui = foreground("agent");
+    let background = serde_json::json!({"id":1,"itemId":"command","command":"sleep 30","startedAt":0,"completedAt":null,"running":true,"exitCode":null});
+    let started = serde_json::from_value(serde_json::json!({"seq":1,"sessionId":"foreground","timestamp":10,"type":"backgroundCommand.updated","command":background})).unwrap();
+    ui.app_mut().apply_event(&started, 10);
+    text(&mut ui);
+    let result = serde_json::from_value(serde_json::json!({"seq":2,"sessionId":"foreground","timestamp":1000,"type":"item.completed","turnId":"turn","item":{"type":"commandExecution","id":"command","command":"sleep 30","cwd":"/tmp","status":"inProgress","aggregatedOutput":"served-after-start","exitCode":null,"durationMs":1000}})).unwrap();
+    ui.app_mut().apply_event(&result, 1000);
+    assert!(text(&mut ui).contains("served-after-start"));
+}
+
+#[test]
+fn background_count_and_unfinished_plan_both_have_pinned_rows() {
+    let mut snapshot = SessionSnapshot::empty("pinned");
+    snapshot.status = SessionStatus::Idle;
+    snapshot.background_commands.push(serde_json::from_value(serde_json::json!({"id":1,"itemId":"c","command":"server","startedAt":0,"completedAt":null,"running":true,"exitCode":null})).unwrap());
+    snapshot.turns.push(serde_json::from_value(serde_json::json!({"id":"t","status":"completed","input":[],"clientName":"test","usage":null,"error":null,"items":[{"type":"plan","id":"p","status":"completed","plan":[{"step":"Verify background commands","status":"inProgress"}]}]})).unwrap());
+    let mut ui = Ui::new(TestBackend::new(100, 24), App::new(snapshot, None, 0)).unwrap();
+    let shown = text(&mut ui);
+    let lines: Vec<_> = shown.lines().collect();
+    let input = lines.iter().position(|line| line.starts_with('╭')).unwrap();
+    assert!(lines[input - 2].contains("1 background commands · /ps"));
+    assert!(lines[input - 1].contains("Verify background commands"));
+}
+
+#[test]
+fn ps_opens_output_and_stops_selected_command_and_stop_is_a_slash_command() {
+    let mut ui = screen(SessionStatus::Idle);
+    let list = serde_json::from_value(serde_json::json!({"data":[{"id":1,"itemId":"c","command":"npm run dev","startedAt":0,"completedAt":null,"running":true,"exitCode":null}]})).unwrap();
+    ui.app_mut().show_background(&list, 5000);
+    let shown = text(&mut ui);
+    assert!(shown.contains("#1 npm run dev"));
+    assert!(shown.contains("5s"));
+    assert_eq!(
+        ui.app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 1000),
+        Some(Action::BackgroundOutput(1))
+    );
+    let output = serde_json::from_value(serde_json::json!({"command":list.data[0],"output":"server ready\nlast log line","skippedBytes":0})).unwrap();
+    ui.app_mut().show_background_output(&output);
+    assert!(text(&mut ui).contains("last log line"));
+    assert_eq!(
+        ui.app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE), 2000),
+        Some(Action::BackgroundStop(Some(1)))
+    );
+    ui.app_mut()
+        .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), 2500);
+    ui.app_mut().handle_paste("/stop");
+    ui.draw(3000).unwrap();
+    assert_eq!(
+        ui.app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 3500),
+        Some(Action::BackgroundStop(None))
+    );
 }
 
 #[test]

@@ -369,17 +369,19 @@ async fn stdio_and_http_tools_reach_model_in_fixed_order_and_return_results() {
                 "web_fetch",
                 "update_plan",
                 "submit_plan",
+                "shell_output",
+                "shell_stop",
                 "mcp__local__echo",
                 "mcp__remote__echo"
             ]
         );
         assert_eq!(script.requests[0]["tools"], script.requests[1]["tools"]);
         assert_eq!(
-            script.requests[0]["tools"][9]["function"]["description"],
+            script.requests[0]["tools"][11]["function"]["description"],
             "http echo"
         );
         assert_eq!(
-            script.requests[0]["tools"][9]["function"]["parameters"],
+            script.requests[0]["tools"][11]["function"]["parameters"],
             definition("echo")["inputSchema"]
         );
         let results: Vec<_> = script.requests[1]["messages"]
@@ -927,7 +929,7 @@ async fn colliding_qualified_names_are_skipped_and_reported() {
             .as_array()
             .unwrap()
             .len(),
-        9 // Eight built-ins and the one non-colliding MCP tool.
+        11 // Ten built-ins and the one non-colliding MCP tool.
     );
     assert!(
         fs::read_to_string(fixture.root.path().join("server.log"))

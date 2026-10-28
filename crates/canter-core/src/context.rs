@@ -41,6 +41,9 @@ pub(crate) enum HistoryEntry {
     PlanModeNotice {
         message: Message,
     },
+    BackgroundNotice {
+        message: Message,
+    },
     CompactionRequest {
         messages: Vec<Message>,
     },
@@ -92,7 +95,8 @@ pub(crate) fn restore(
     let mut plan_mode_notices = Vec::new();
     for entry in entries {
         match entry {
-            HistoryEntry::PlanModeNotice { message } => plan_mode_notices.push(message),
+            HistoryEntry::PlanModeNotice { message }
+            | HistoryEntry::BackgroundNotice { message } => plan_mode_notices.push(message),
             HistoryEntry::TurnBoundary { turn_id } => {
                 rewind.boundary(turn_id, history.len(), users.len())
             }

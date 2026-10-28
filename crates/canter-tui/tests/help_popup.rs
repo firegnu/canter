@@ -12,7 +12,7 @@ const SESSION: &str = "s1";
 const NOW: i64 = 0;
 
 /// Every command, in the command list's order, with its line.
-const COMMANDS: [(&str, &str); 23] = [
+const COMMANDS: [(&str, &str); 25] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
@@ -41,6 +41,8 @@ const COMMANDS: [(&str, &str); 23] = [
     ),
     ("/rewind", "Rewind conversation, files, or both"),
     ("/statusline", "Choose and order what the status line shows"),
+    ("/ps", "List background commands and inspect or stop one"),
+    ("/stop", "Stop all background commands in this session"),
     ("/theme", "Choose the code colour theme"),
 ];
 
