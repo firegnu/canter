@@ -105,8 +105,8 @@ Esc 照旧打断本轮，300 毫秒的按键保护照旧。拒绝说明随工具
    ─── line 2 ───
    [x] directory    ~/src/canter
    [x] branch       (main)
-   [x] context      ctx 12% 120k/1M
-   [x] compact      70% to compact
+   [x] diff         (+120,-8)
+   [x] context      ███░░░░░░░ 120k/400k (30%)
    [x] cache        cache 95% (last 98%)
    [ ] tps          32.5 tok/s
    [ ] version      0.1.0 · a3b8fe7
@@ -114,27 +114,33 @@ Esc 照旧打断本轮，300 毫秒的按键保护照旧。拒绝说明随工具
 
  Preview
   deepseek-v4-pro · think high · Always ask · $0.12
-  ~/src/canter (main) · ctx 12% 120k/1M · 70% to compact · cache 95% (last 98%)
+  ~/src/canter (main) · (+120,-8) · ███░░░░░░░ 120k/400k (30%) · cache 95% (last 98%)
 ```
 
-- **项**：model、thinking、permission、cost、directory、branch、context、compact、cache、tps、version、session。
+- **项**：model、thinking、permission、cost、directory、branch、diff、context、cache、tps、version、session。
   右边是这一项现在在状态栏里的样子，写法和颜色同状态栏（颜色见下面「颜色」）：
-  compact 是离自动压缩还剩多少，`70% to compact`：（压缩线 − 当前占用）÷ 压缩线，向下取整，到了或超过压缩线写 `0%`；
-  压缩线由服务端在用量里给（`autoCompactTokens`），旧服务端不给时这一项不出现。
+  diff 是没提交的改动行数，`(+加的行,-删的行)`：工作区和暂存区相对 HEAD 加删的行数（`git diff HEAD --numstat` 那种），
+  二进制文件不计行，没 `git add` 的新文件不算，还没有提交的新仓库照暂存区算，干净时 `(+0,-0)`；
+  不在 git 仓库里、git 出错或超过 2 秒时不出现。在后台跑只读的 git（关掉外部 diff、textconv 和会起程序的过滤器，不写 index 锁），
+  不卡打字和画面；打开会话、换目录、每轮结束、每次工具调用或 `!` 命令跑完时重算，此外每 5 秒一次，上一次没跑完不起新的。
+  context 是上下文进度条，`███░░░░░░░ 120k/400k (30%)`：10 格，满 = 自动压缩线（服务端在用量里给的 `autoCompactTokens`），
+  旧服务端不给时满 = 窗口；格数和百分比按已用 ÷ 满四舍五入，超过满时条全满、百分比照实写（比如 `(105%)`），条长满就压缩。
   tps 是 `32.5 tok/s`（最多一位小数，整数不写 `.0`，同示例脚本；算法见「定制状态栏」里的 `tps`），version 同欢迎头的版本行，session 是会话名字。
   拿不到值的项（还没有花费、不在 git 仓库里、还没有 TPS、会话没名字等）在状态栏里不出现，选择框里右边空着。
   项之间隔 ` · `；branch 紧跟在 directory 后面时只隔一个空格（`~/src/canter (main)`）。
 - **颜色**（终端的 16 色，`NO_COLOR` 时全部暗色、不上色）：模型青色，思考档位品红，花费黄色，目录蓝色，分支绿色；
-  权限 `Allow all` 红色，另外两种暗色；`ctx` 和 `to compact` 的字暗色，百分比数字按离压缩线还剩多少变色
-  （剩 50% 及以上绿、20% 到 50% 黄、不到 20% 红；拿不到压缩线时 `ctx` 的数字按离窗口还剩多少算）；
+  权限 `Allow all` 红色，另外两种暗色；diff 的 `+` 数绿色、`-` 数红色，括号和逗号暗色；
+  context 已用的格 `█` 和百分比按离满还剩多少变色（剩 50% 及以上绿、20% 到 50% 黄、不到 20% 红），
+  空格 `░` 和 `120k/400k`、括号暗色（不上色时照样能从 `█`/`░` 看出用了多少）；
   `cache` 的字暗色、百分比青色；`tok/s` 的数字青色；版本、会话名暗色；项之间的 ` · ` 暗色。
   配了状态栏脚本时照旧显示脚本的输出，不上色。
 - **分行线** `─── line 2 ───` 和项一样能移：线上面的在第一行，下面的在第二行；移到最后就只有第一行，第二行空着。
 - **按键**：↑↓ 选；空格开关当前项；←/→ 把当前项（或分行线）往前、往后挪一位；下面的预览跟着变。
   Enter 保存并关掉，Esc、Ctrl+C 或 Ctrl+D 不保存关掉。和单打 `/mode` 的选择框一样：选择框画到屏幕上之前按的键不算，
   刚关掉批准框时 Enter 不算，开着时 PgUp/PgDn 照旧翻对话，输入框为空时 End 照旧跳到最下面。
-- **默认**（从没存过）是原来的两行：第一行 model、thinking、permission、cost，第二行 directory、branch、context、compact、cache，
-  其余不勾。存过 `tui.json`、里面还没有 compact 的，compact 照默认勾着、放在 context 后面；在 `/statusline` 里关掉、保存后照存的。
+- **默认**（从没存过）是原来的两行：第一行 model、thinking、permission、cost，第二行 directory、branch、diff、context、cache，
+  其余不勾。存过 `tui.json`、里面还没有 diff 的，diff 照默认勾着、放在 branch 后面；在 `/statusline` 里关掉、保存后照存的。
+  以前存下的 `compact`（P2-113 的「离压缩还剩多少」，已并进 context 的进度条）当作不认识的项跳过，不报错。
 - **窗口矮**：选择框占的是输入框上方对话区的地方，放不下时对话区先让出来。还放不下，项和分行线只显示放得下的几行，
   跟着光标滚（和其它选择框一样，光标尽量落在显示出来的最后一项），光标所在的那行总看得见；上面还有没显示的写一行
   `   ↑ N more`，下面有写 `   ↓ N more`（暗色），剩不到 3 行时不写这两行。标题、按键说明、空行、
@@ -215,6 +221,7 @@ JSON 字段如下，拿不到的值为 `null`；上下文和缓存百分比与�
 | `cost.usd` / `unknown` | 本会话已知美元花费 / 是否还含未知金额 |
 | `cache.totalPercent` / `lastPercent` | 累计 / 最近一次请求的缓存命中百分比 |
 | `tps` | 当前请求每秒输出 token；空闲和执行工具时保留上次结果 |
+| `gitDiff` | `{"added": 加的行, "removed": 删的行}`，同状态栏的 diff；不在 git 仓库、git 出错或超时为 `null` |
 
 TPS 从本终端观察到的第一个思考或回答增量开始计时，按事件时间算到请求结束；
 输出中用 UTF-8 字节数除以 3、向上取整估算（与 `/context` 相同），结束收到用量后改用真实输出 token，

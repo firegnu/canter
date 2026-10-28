@@ -269,6 +269,19 @@ pub(crate) fn diff(
     cached: bool,
     stat: bool,
 ) -> tokio::process::Command {
+    let mut command = diff_options(root, filters);
+    if cached {
+        command.arg("--cached");
+    }
+    if stat {
+        command.arg("--stat");
+    }
+    command.arg("--");
+    command
+}
+
+/// `git diff` and its options as [`diff`] runs it, before what to compare.
+fn diff_options(root: &str, filters: &[String]) -> tokio::process::Command {
     let mut command = command(root);
     command.env("GIT_NO_LAZY_FETCH", "1").args(filters).args([
         "-c",
@@ -286,14 +299,55 @@ pub(crate) fn diff(
         "--dst-prefix=b/",
         "--ignore-submodules=none",
     ]);
-    if cached {
-        command.arg("--cached");
-    }
-    if stat {
-        command.arg("--stat");
-    }
-    command.arg("--");
     command
+}
+
+/// The lines added and removed by the uncommitted changes of the repository
+/// holding `cwd`, staged or not, against HEAD (`git diff HEAD --numstat`);
+/// before the first commit, the staged ones. Binary files count no lines and
+/// untracked files are left out. Run as [`local`] runs git, read-only and
+/// within 2 seconds; `None` outside a repository, when git fails or is late.
+pub(crate) async fn changed_lines(cwd: &str) -> Option<(u64, u64)> {
+    let count = async {
+        let root = run(command(cwd).args(["rev-parse", "--show-toplevel"]))
+            .await
+            .ok()?;
+        let root = root.text.strip_suffix('\n').unwrap_or(&root.text);
+        let filters = filter_overrides(root).await.ok()?;
+        let head = command(root)
+            .args(["rev-parse", "--verify", "--quiet", "HEAD"])
+            .output()
+            .await
+            .ok()?;
+        let mut diff = diff_options(root, &filters);
+        diff.arg("--numstat")
+            .arg(if head.status.success() {
+                "HEAD"
+            } else {
+                "--cached"
+            })
+            .arg("--");
+        let output = run(&mut diff).await.ok()?;
+        // A count of only the start would be wrong.
+        if output.truncated {
+            return None;
+        }
+        let mut lines = (0, 0);
+        for line in output.text.lines() {
+            // `<added>\t<removed>\t<path>`; `-\t-\t<path>` for a binary file.
+            let mut fields = line.split('\t');
+            let added = fields.next()?;
+            let removed = fields.next()?;
+            if added != "-" {
+                lines.0 += added.parse::<u64>().ok()?;
+                lines.1 += removed.parse::<u64>().ok()?;
+            }
+        }
+        Some(lines)
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), count)
+        .await
+        .ok()?
 }
 
 /// The longest start of `text` at most `limit` bytes long.

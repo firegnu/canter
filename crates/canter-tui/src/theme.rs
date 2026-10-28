@@ -228,6 +228,10 @@ pub enum BarItem {
     Branch,
     /// The cache hit percentages and the tokens a second: cyan.
     Number,
+    /// The lines added since the last commit: green.
+    Added,
+    /// The lines removed since the last commit: red.
+    Removed,
 }
 
 /// An item of the status bar in its colour; the words around it are
@@ -238,12 +242,13 @@ pub fn bar_item(item: BarItem) -> Style {
         BarItem::Thinking => Color::Magenta,
         BarItem::Cost => Color::Yellow,
         BarItem::Directory => Color::Blue,
-        BarItem::Branch => Color::Green,
+        BarItem::Branch | BarItem::Added => Color::Green,
+        BarItem::Removed => Color::Red,
     })
 }
 
-/// The context percentages on the status bar, by how much room is left
-/// before automatic compaction (`left`, 0 to 100): 50% or more green, 20% or
+/// The context bar and its percent on the status bar, by how much room is
+/// left before automatic compaction (`left`, 0 to 100): 50% or more green, 20% or
 /// more yellow, less red. Without colours dim.
 pub fn bar_room(left: u64) -> Style {
     bar(match left {
