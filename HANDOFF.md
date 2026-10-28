@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-28 第二十三次装 main `4a5bb91`（`canter --version` 显示 `canter 0.1.0 · 4a5bb91`；比上一版多 P2-101：模型起的后台命令结束、`monitor` 盯到匹配的输出时，模型空闲就自己开一轮；没人说话最多连续叫醒 10 次，`config.json` 写 `"auto_wake_limit": N` 可改，0 关掉，改了要重启服务端）。服务端要用户自己 `canter serve --replace`。
+- 退回上一版 `aa2a18a`：`cp -p ~/.canter/canter-aa2a18a ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版打开带叫醒卡片的会话不坏（跳过不认识的项目），只是不显示卡片、不再叫醒。
 - 10-28 第二十二次装 main `aa2a18a`（`canter --version` 显示 `canter 0.1.0 · aa2a18a`；比上一版多 P2-117：输入框上方 `▸ N background commands` 可以用鼠标点开 `/ps` 列表，点某一条看日志）。服务端要用户自己 `canter serve --replace`。
 - 退回上一版 `48ae357`：`cp -p ~/.canter/canter-48ae357 ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-28 第二十一次装 main `48ae357`（`canter --version` 显示 `canter 0.1.0 · 48ae357`；比上一版多 P2-28 后台长命令：模型 `shell` 放后台、`shell_output`、`shell_stop`，`!cmd &`，Ctrl+B 转后台，`/ps`、`/stop`，命令外套看护进程，服务端被强杀时命令进程组也跟着没）。服务端要用户自己 `canter serve --replace`。
@@ -68,6 +70,11 @@
 
 ## 已知没修的问题
 
+- 后台叫醒（P2-101 复核建议改，用户 10-28 定不再返工）：
+  - 事件排着叫醒的 2 秒里用户敲 `!cmd`，就不再叫醒，卡片要等用户下次说话才出来（用户在场时才会碰到）。
+  - Esc 只压住已经看到的事件；盯着的命令之后再匹配，2 秒后照样叫醒（受上限挡）。要不要「Esc 后暂停叫醒到用户下次输入」是新规矩，要问用户。另有 Esc 前后几毫秒的时机会漏压。
+  - 一轮在请求发出前失败（压缩失败且放不下）时会 2 秒后再叫醒，每次多发一次压缩请求，直到上限。
+  - 匹配留在缓冲里不取走时，那条命令每出一块输出都跑一次完整同步，只费 CPU。
 - 后台命令看护进程（P2-28 第二轮复核建议改，用户 10-28 定不再返工）：
   - macOS 上 std 建管道和设 CLOEXEC 不是一步，锁外（MCP 起进程、HTTP 接连接、模型连接）建的描述符可能被看护进程捡到，拿到命令结束为止；反方向（MCP 进程捡到看护管道）读代码可能、实测没复现。改法：看护脚本 exec 后关掉 `/dev/fd` 里除 0 以外的，或把所有起进程的地方收到一把锁。
   - 起命令时 `spawn()` 在 tokio 工作线程上同步阻塞约 5 ms、拿着锁；可放进 `spawn_blocking`。
