@@ -4,7 +4,7 @@ use crate::{
     journal::{Journal, now},
     runner,
 };
-use canter_model::{AssistantContent, Message, Model};
+use canter_model::{AssistantContent, Message, Model, ToolCall};
 use canter_protocol::*;
 use canter_store::Store;
 use canter_tools::{LocalExecutor, PermissionGate, Tools};
@@ -61,6 +61,7 @@ pub(crate) struct State {
     pub closing: bool,
     pub measured_context: Option<(u64, u64)>,
     pub rewind: crate::rewind::Checkpoints,
+    plan_tool_calls: u8,
 }
 pub(crate) struct Active {
     pub turn: Turn,
@@ -93,6 +94,7 @@ impl State {
             closing: false,
             measured_context: None,
             rewind: Default::default(),
+            plan_tool_calls: 0,
         }
     }
     async fn initialize_prefix(
@@ -164,6 +166,41 @@ impl State {
             .await?;
         self.history.push(message);
         Ok(())
+    }
+    pub async fn tool_result(
+        &mut self,
+        call: &ToolCall,
+        mut text: String,
+        succeeded: bool,
+    ) -> Result<(), CoreError> {
+        if call.name == "update_plan" {
+            if succeeded {
+                self.plan_tool_calls = 0;
+            }
+        } else if self.journal.snapshot.settings.plan_enabled != Some(false)
+            && self.journal.snapshot.current_plan().is_some_and(|plan| {
+                plan.iter().any(|step| {
+                    matches!(
+                        step.status,
+                        PlanStepStatus::Pending | PlanStepStatus::InProgress
+                    )
+                })
+            })
+        {
+            self.plan_tool_calls += 1;
+            if self.plan_tool_calls == 10 {
+                // Append only to this new model result, never to the UI item or user input.
+                text.push_str("\n\n[Plan reminder] If any plan steps are complete, call update_plan to mark them completed before continuing.");
+                self.plan_tool_calls = 0;
+            }
+        } else {
+            self.plan_tool_calls = 0;
+        }
+        self.message(Message::ToolResult {
+            tool_call_id: call.id.clone(),
+            text,
+        })
+        .await
     }
     async fn user_input(&mut self, input: &[UserInput]) -> Result<(), CoreError> {
         let message = crate::images::message(input);

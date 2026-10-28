@@ -92,7 +92,7 @@ impl Tool {
         if self == Self::UpdatePlan {
             return ToolDefinition {
                 name: self.name(),
-                description: "Update the task checklist for work with three or more steps; skip it for simple tasks. Each call replaces the whole plan. Give each step a non-empty description and a status: pending, in_progress, or completed. At most one step may be in_progress. Mark a step in_progress when you start it and completed as soon as it is done. Update only when progress or the plan changes; do not repeat unchanged updates. Optionally explain a change to the plan.",
+                description: "Update the task checklist for work with three or more steps; skip it for simple tasks. Each call replaces the whole plan. Give each step a non-empty description and a status: pending, in_progress, or completed. At most one step may be in_progress. Mark a step in_progress when you start it and completed as soon as it is done. Call immediately after completing each step, before starting the next; never save updates for the end. Update only when progress or the plan changes; do not repeat unchanged updates. Optionally explain a change to the plan.",
                 parameters: json!({"type":"object","properties":{
                     "explanation":{"type":"string"},
                     "plan":{"type":"array","items":{"type":"object","properties":{
