@@ -540,6 +540,11 @@ impl Chooser {
     }
 }
 
+/// The first entry [`list_rows`] shows in `max` rows.
+pub(crate) fn first_shown(selected: usize, max: usize) -> usize {
+    (selected + 1).saturating_sub(max)
+}
+
 /// Rows of a list above the input box, like the session list's: the selected
 /// row marked with `›` and bold, each label followed by a dim line about it.
 /// At most `max` rows, keeping the selected one in view.
@@ -554,7 +559,7 @@ pub(crate) fn list_rows(
         .map(|(label, _)| str_width(label))
         .max()
         .unwrap_or(0);
-    let first = (selected + 1).saturating_sub(max);
+    let first = first_shown(selected, max);
     entries
         .iter()
         .enumerate()

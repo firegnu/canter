@@ -948,10 +948,7 @@ fn terminal_event(app: &mut App, frame: u64, at: i64, event: TermEvent) -> Optio
             app.handle_paste(&text);
             None
         }
-        TermEvent::Mouse(mouse) => {
-            app.handle_mouse_on(mouse, frame, at);
-            None
-        }
+        TermEvent::Mouse(mouse) => app.handle_mouse_on(mouse, frame, at),
         _ => None,
     }
 }

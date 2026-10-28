@@ -1329,7 +1329,7 @@ async fn killing_server_with_sigkill_also_kills_background_process_groups() {
     terminal
         .type_line("!echo $$ > leader.pid; /bin/sleep 60 & echo $! > child.pid; printf guard-ready; wait &")
         .await;
-    terminal.wait_for("1 background commands · /ps").await;
+    terminal.wait_for("▸ 1 background commands").await;
     terminal.wait_for("┃ guard-ready").await;
     let leader: i32 = fs::read_to_string(world.path("work/leader.pid"))
         .unwrap()
@@ -1388,7 +1388,7 @@ async fn background_shell_controls_work_through_terminal_and_survive_client_exit
     a.wait_idle().await;
     a.type_line("!echo $$ > user.pid; printf user-ready; exec /bin/sleep 60 &")
         .await;
-    a.wait_for("1 background commands · /ps").await;
+    a.wait_for("▸ 1 background commands").await;
     a.wait_for("user-ready").await;
     let id = world.only_session().await;
     let b = world.open(&["--resume", &id], "background-b").await;
@@ -1420,7 +1420,7 @@ async fn background_shell_controls_work_through_terminal_and_survive_client_exit
     b.press_with(KeyCode::Char('b'), KeyModifiers::CONTROL)
         .await;
     b.wait_for("continued after backgrounding").await;
-    b.wait_for("1 background commands · /ps").await;
+    b.wait_for("▸ 1 background commands").await;
     b.type_line("/stop").await;
     b.wait_for("Background commands · s stop").await;
     assert!(

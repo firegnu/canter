@@ -502,6 +502,20 @@ struct Shown {
     /// The draft's rows in the input box, for a click on them; `None` while
     /// the box showed something else or a choice was open above it.
     input: Option<DrawnInput>,
+    /// `▸ N background commands` and the `/ps` list, for a click on them.
+    background: DrawnBackground,
+}
+
+/// `▸ N background commands` and the `/ps` list as a frame drew them.
+#[derive(Debug, Default, Clone, PartialEq)]
+struct DrawnBackground {
+    /// The row's screen row; `None` while it did not show.
+    row: Option<usize>,
+    /// Whether the list (or a command's log) showed open under it: `▾`.
+    open: bool,
+    /// The screen row of the list's first command shown, and the ids of
+    /// the commands shown from there; empty while the list did not show.
+    choices: (usize, Vec<u64>),
 }
 
 /// The draft as the input box drew it.
@@ -586,6 +600,8 @@ pub struct App {
     chooser: Option<Chooser>,
     /// How many choices (and `/statusline`s) have been offered, numbering them.
     choosers: u64,
+    /// The number of the `/ps` list or log page opened last.
+    background_list: Option<u64>,
     /// How many times a command name was completed in the input box.
     completions: u64,
     /// In the order they came, which is also the order of their places.
@@ -870,6 +886,7 @@ impl App {
             mentions: MentionList::default(),
             chooser: None,
             choosers: 0,
+            background_list: None,
             completions: 0,
             notices: Vec::new(),
             active_btw: None,
@@ -2114,11 +2131,70 @@ impl App {
         } else {
             self.choose(crate::background::chooser(&list.data, now_ms));
         }
+        self.background_list = Some(self.choosers);
     }
 
     pub fn show_background_output(&mut self, output: &canter_protocol::BackgroundCommandOutput) {
         self.open_report(crate::background::output(output));
         self.background_view = Some(output.command.id);
+        self.background_list = Some(self.choosers);
+    }
+
+    /// Whether the `/ps` list or a command's log is open above the input box.
+    fn background_open(&self) -> bool {
+        self.choosing() && self.background_list == Some(self.choosers)
+    }
+
+    /// The ids of the commands the open `/ps` list shows in `rows` rows;
+    /// empty while it is not open.
+    fn background_choices(&self, rows: usize) -> Vec<u64> {
+        let Some(chooser) = self.chooser.as_ref().filter(|_| self.background_open()) else {
+            return Vec::new();
+        };
+        chooser
+            .choices
+            .iter()
+            .skip(commands::first_shown(chooser.selected, rows))
+            .take(rows)
+            .filter_map(|choice| match choice.action {
+                Action::BackgroundOutput(id) => Some(id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A click on `▸ N background commands` drawn on frame `frame` opens
+    /// the `/ps` list, or closes it (or a command's log) when it showed
+    /// open; a click on a command in that list opens its log, as Enter.
+    /// Not while an approval box or the search box is open.
+    fn background_click(&mut self, y: usize, frame: u64) -> Option<Action> {
+        if self.search.is_some() || frame > self.latest_frame {
+            return None;
+        }
+        let (_, shown) = self.shown.iter().rev().find(|(since, _)| *since <= frame)?;
+        if shown.approval.is_some() {
+            return None;
+        }
+        let drawn = &shown.background;
+        // Still the list (or log) that frame showed.
+        let same = shown.chooser == Some(self.choosers) && self.background_open();
+        if drawn.row == Some(y) {
+            if !drawn.open {
+                return Some(Action::BackgroundList);
+            }
+            if same {
+                self.chooser = None;
+                self.report = None;
+            }
+            return None;
+        }
+        let (top, ids) = &drawn.choices;
+        let id = *ids.get(y.checked_sub(*top)?)?;
+        if !same {
+            return None;
+        }
+        self.chooser = None;
+        Some(Action::BackgroundOutput(id))
     }
 
     fn foreground_command(&self) -> Option<&str> {
@@ -2218,8 +2294,8 @@ impl App {
     }
 
     /// [`App::handle_mouse_at`] now.
-    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
-        self.handle_mouse_at(mouse, crate::now_ms());
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) -> Option<Action> {
+        self.handle_mouse_at(mouse, crate::now_ms())
     }
 
     /// The mouse at `now_ms` (Unix ms). The wheel scrolls the conversation,
@@ -2228,18 +2304,29 @@ impl App {
     /// double click takes a word, a triple click a row. A click on a link
     /// opens it once the double click time is over. A click on the hint under
     /// the conversation goes to the bottom. A click on the draft in the input
-    /// box puts the cursor there. Other mouse events do nothing.
+    /// box puts the cursor there. A click on `▸ N background commands` or
+    /// on a command in the `/ps` list returns what to do, as `/ps` and
+    /// Enter do. Other mouse events do nothing.
     /// The mouse is on the latest frame on screen.
-    pub fn handle_mouse_at(&mut self, mouse: MouseEvent, now_ms: i64) {
-        self.handle_mouse_on(mouse, self.latest_frame, now_ms);
+    pub fn handle_mouse_at(&mut self, mouse: MouseEvent, now_ms: i64) -> Option<Action> {
+        self.handle_mouse_on(mouse, self.latest_frame, now_ms)
     }
 
     /// [`App::handle_mouse_at`] for the mouse that came in at `now_ms`
     /// while frame `frame` was on screen: a click on a link is on the
     /// links that frame drew.
-    pub fn handle_mouse_on(&mut self, mouse: MouseEvent, frame: u64, now_ms: i64) {
+    pub fn handle_mouse_on(
+        &mut self,
+        mouse: MouseEvent,
+        frame: u64,
+        now_ms: i64,
+    ) -> Option<Action> {
         let cell = (mouse.column, mouse.row);
         match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.press(cell, frame, now_ms);
+                return self.background_click(usize::from(cell.1), frame);
+            }
             MouseEventKind::ScrollUp => {
                 self.scroll_by(-(WHEEL_ROWS as isize));
                 self.follow_pointer();
@@ -2248,7 +2335,6 @@ impl App {
                 self.scroll_by(WHEEL_ROWS as isize);
                 self.follow_pointer();
             }
-            MouseEventKind::Down(MouseButton::Left) => self.press(cell, frame, now_ms),
             MouseEventKind::Drag(MouseButton::Left) => {
                 self.move_pointer(cell);
                 self.edge_scroll(now_ms);
@@ -2256,6 +2342,7 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => self.release(cell, frame),
             _ => {}
         }
+        None
     }
 
     /// Pressing the left button clears the selection and, on the
@@ -3464,6 +3551,7 @@ impl App {
                 _ => None,
             }),
             input: None,
+            background: DrawnBackground::default(),
         };
         let (bottom, input_rows) = match approval {
             Some((request, laid)) => {
@@ -3498,10 +3586,13 @@ impl App {
             .filter(|command| command.running)
             .count();
         let mut plan = Vec::new();
-        if background_count > 0 && plan_room > 0 {
+        let background_row = background_count > 0 && plan_room > 0;
+        let background_open = self.background_open() && !list.is_empty();
+        if background_row {
+            let mark = if background_open { '▾' } else { '▸' };
             plan.push(Line::from(truncate(
                 vec![Span::styled(
-                    format!("  {background_count} background commands · /ps"),
+                    format!("  {mark} {background_count} background commands"),
                     theme::secondary(),
                 )],
                 usize::from(width),
@@ -3579,6 +3670,17 @@ impl App {
             top: area + usize::from(hint.is_some()) + 1 + plan.len() + list.len() + 1,
             rows: input_rows,
         });
+        // Under the conversation: the hint and the status line; the list
+        // starts with its title.
+        let background_top = area + usize::from(hint.is_some()) + 1;
+        self.drawing.background = DrawnBackground {
+            row: background_row.then_some(background_top),
+            open: background_open,
+            choices: (
+                background_top + plan.len() + 1,
+                self.background_choices(list.len().saturating_sub(1)),
+            ),
+        };
         self.scroll.page = area.max(1);
         self.scroll.max_top = total.saturating_sub(area);
         if reveal && let Some(current) = current {

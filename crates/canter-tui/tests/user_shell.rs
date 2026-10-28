@@ -1,6 +1,6 @@
 use canter_protocol::{SessionSnapshot, SessionStatus};
 use canter_tui::{Action, App, Ui};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use unicode_width::UnicodeWidthStr;
 
@@ -44,7 +44,7 @@ fn background_card_and_pinned_count_survive_opening_the_snapshot() {
     let mut ui = Ui::new(TestBackend::new(100, 24), App::new(snapshot, None, 0)).unwrap();
     let shown = text(&mut ui);
     assert!(shown.contains("后台运行中"), "{shown}");
-    assert!(shown.contains("1 background commands · /ps"), "{shown}");
+    assert!(shown.contains("▸ 1 background commands"), "{shown}");
     let event = serde_json::from_value(serde_json::json!({"seq":1,"sessionId":"background","timestamp":2000,"type":"backgroundCommand.updated","command":{"id":1,"itemId":"shell-item","command":"npm run dev","startedAt":0,"completedAt":2000,"running":false,"exitCode":7}})).unwrap();
     ui.app_mut().apply_event(&event, 2000);
     let done = text(&mut ui);
@@ -125,8 +125,70 @@ fn background_count_and_unfinished_plan_both_have_pinned_rows() {
     let shown = text(&mut ui);
     let lines: Vec<_> = shown.lines().collect();
     let input = lines.iter().position(|line| line.starts_with('╭')).unwrap();
-    assert!(lines[input - 2].contains("1 background commands · /ps"));
+    assert!(lines[input - 2].contains("▸ 1 background commands"));
     assert!(lines[input - 1].contains("Verify background commands"));
+}
+
+/// A left click at screen row `row`, then letting go.
+fn click(ui: &mut Ui<TestBackend>, row: usize, at: i64) -> Option<Action> {
+    let mouse = |kind| MouseEvent {
+        kind,
+        column: 4,
+        row: row as u16,
+        modifiers: KeyModifiers::NONE,
+    };
+    let action = ui
+        .app_mut()
+        .handle_mouse_at(mouse(MouseEventKind::Down(MouseButton::Left)), at);
+    assert_eq!(
+        ui.app_mut()
+            .handle_mouse_at(mouse(MouseEventKind::Up(MouseButton::Left)), at),
+        None
+    );
+    action
+}
+
+fn row_of(ui: &mut Ui<TestBackend>, words: &str) -> usize {
+    let shown = text(ui);
+    shown
+        .lines()
+        .position(|line| line.contains(words))
+        .unwrap_or_else(|| panic!("no {words:?} in\n{shown}"))
+}
+
+#[test]
+fn clicking_the_background_row_opens_the_list_a_command_its_log_and_closes_it() {
+    let mut snapshot = SessionSnapshot::empty("click");
+    snapshot.status = SessionStatus::Idle;
+    let command = serde_json::json!({"id":1,"itemId":"c","command":"npm run dev","startedAt":0,"completedAt":null,"running":true,"exitCode":null});
+    snapshot
+        .background_commands
+        .push(serde_json::from_value(command.clone()).unwrap());
+    let mut ui = Ui::new(TestBackend::new(100, 24), App::new(snapshot, None, 0)).unwrap();
+    let row = row_of(&mut ui, "▸ 1 background commands");
+    assert!(!text(&mut ui).contains("/ps"));
+    assert_eq!(click(&mut ui, row, 1000), Some(Action::BackgroundList));
+    // What the main loop does with it, as for `/ps`.
+    let list = serde_json::from_value(serde_json::json!({ "data": [command] })).unwrap();
+    ui.app_mut().show_background(&list, 5000);
+    let shown = text(&mut ui);
+    assert!(shown.contains("▾ 1 background commands"), "{shown}");
+    assert!(!shown.contains("▸ 1 background commands"), "{shown}");
+    let choice = row_of(&mut ui, "#1 npm run dev");
+    assert!(choice > row_of(&mut ui, "▾ 1 background commands"));
+    assert_eq!(
+        click(&mut ui, choice, 2000),
+        Some(Action::BackgroundOutput(1))
+    );
+    let output = serde_json::from_value(serde_json::json!({"command":command,"output":"server ready\nlast log line","skippedBytes":0})).unwrap();
+    ui.app_mut().show_background_output(&output);
+    let shown = text(&mut ui);
+    assert!(shown.contains("last log line"), "{shown}");
+    let open = row_of(&mut ui, "▾ 1 background commands");
+    assert_eq!(click(&mut ui, open, 3000), None);
+    let shown = text(&mut ui);
+    assert!(!shown.contains("last log line"), "{shown}");
+    assert_eq!(row_of(&mut ui, "▸ 1 background commands"), row);
 }
 
 #[test]
