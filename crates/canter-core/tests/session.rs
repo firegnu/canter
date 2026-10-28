@@ -867,6 +867,93 @@ async fn automatic_compaction_keeps_recent_user_words_and_can_continue_after_reo
     assert_eq!(&resumed[..compacted.len()], compacted);
     session.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn auto_compact_tokens_sets_the_compaction_line_and_usage_reports_it() {
+    // The window's own line: 1_048_576 − 65_536 − 16_384.
+    const WINDOW_LINE: u64 = 966_656;
+    // (configured line, context the first answer reports, compacts, line in effect)
+    for (auto, measured, compacts, line) in [
+        (Some(200_000), 300_000, true, 200_000),
+        (Some(400_000), 300_000, false, 400_000),
+        (Some(2_000_000), 970_000, true, WINDOW_LINE),
+        (None, 300_000, false, WINDOW_LINE),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+        let reply = |text: &str| {
+            vec![
+                ModelEvent::TextDelta(text.into()),
+                ModelEvent::Finished(FinishReason::Stop),
+            ]
+        };
+        let mut first = reply("first");
+        first.insert(
+            1,
+            ModelEvent::Usage(canter_model::Usage {
+                input_tokens: measured,
+                output_tokens: 10,
+                total_tokens: measured + 10,
+                cache_read_tokens: None,
+                cache_miss_tokens: None,
+                reasoning_tokens: None,
+            }),
+        );
+        let mut scripts = vec![first];
+        if compacts {
+            scripts.push(reply("Summary: the first task."));
+        }
+        scripts.push(reply("second"));
+        let model = ScriptModel::new(scripts);
+        let (session, _) = Session::create(
+            store,
+            "s1".into(),
+            settings(temp.path()),
+            RuntimeContext::default(),
+            model.clone(),
+            CoreOptions {
+                auto_compact_tokens: auto,
+                ..CoreOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+        let mut events = session.subscribe(0).await.unwrap();
+        session.input(input("first task")).await.unwrap();
+        let seen = finished(&mut events).await;
+        let usage = seen
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::SessionUsage { token_usage } => Some(token_usage.clone()),
+                _ => None,
+            })
+            .expect("usage reported");
+        assert_eq!(usage.auto_compact_tokens, Some(line), "{auto:?}");
+        assert_eq!(
+            serde_json::to_value(&usage).unwrap()["autoCompactTokens"],
+            line,
+            "{auto:?}"
+        );
+        session.input(input("second task")).await.unwrap();
+        let seen = finished(&mut events).await;
+        let compacted = seen.iter().any(|event| {
+            matches!(
+                &event.payload,
+                EventPayload::ItemCompleted {
+                    item: Item::ContextCompaction { .. },
+                    ..
+                }
+            )
+        });
+        assert_eq!(compacted, compacts, "{auto:?} at {measured}");
+        assert_eq!(
+            model.requests.lock().unwrap().len(),
+            if compacts { 3 } else { 2 },
+            "{auto:?}"
+        );
+        session.close().await.unwrap();
+    }
+}
 fn call(id: &str, name: &str, arguments: &str) -> ModelEvent {
     ModelEvent::ToolCall(ToolCall {
         id: id.into(),

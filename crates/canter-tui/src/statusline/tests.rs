@@ -509,7 +509,7 @@ async fn config_command_gets_only_public_json_and_terminal_environment() {
     snapshot.settings.approval_policy = canter_protocol::PermissionMode::AskForExecution;
     snapshot.status = canter_protocol::SessionStatus::Working;
     snapshot.token_usage = Some(serde_json::from_value::<TokenUsage>(json!({
-        "contextTokens":85000,"modelContextWindow":200000,
+        "contextTokens":85000,"modelContextWindow":200000,"autoCompactTokens":100000,
         "total":{"inputTokens":1000,"cachedInputTokens":920,"outputTokens":20,"reasoningOutputTokens":5,"totalTokens":1020},
         "last":{"inputTokens":100,"cachedInputTokens":99,"outputTokens":10,"reasoningOutputTokens":3,"totalTokens":110},
         "cost":{"usd":0.31,"unknown":false}
@@ -526,7 +526,8 @@ async fn config_command_gets_only_public_json_and_terminal_environment() {
             "version":"0.1.0 · test", "sessionId":"s1", "sessionName":"task",
             "cwd":home,"gitBranch":null,"model":"test-model","reasoningEffort":"high",
             "approvalPolicy":"askForExecution","status":"working",
-            "context":{"usedTokens":85000,"windowTokens":200000,"percent":43},
+            "context":{"usedTokens":85000,"windowTokens":200000,"percent":43,
+                "autoCompactTokens":100000,"autoCompactPercentLeft":15},
             "cost":{"usd":0.31,"unknown":false},"cache":{"totalPercent":92,"lastPercent":99},
             "tps":null
         })

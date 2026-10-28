@@ -106,6 +106,7 @@ Esc 照旧打断本轮，300 毫秒的按键保护照旧。拒绝说明随工具
    [x] directory    ~/src/canter
    [x] branch       (main)
    [x] context      ctx 12% 120k/1M
+   [x] compact      70% to compact
    [x] cache        cache 95% (last 98%)
    [ ] tps          32.5 tok/s
    [ ] version      0.1.0 · a3b8fe7
@@ -113,20 +114,27 @@ Esc 照旧打断本轮，300 毫秒的按键保护照旧。拒绝说明随工具
 
  Preview
   deepseek-v4-pro · think high · Always ask · $0.12
-  ~/src/canter (main) · ctx 12% 120k/1M · cache 95% (last 98%)
+  ~/src/canter (main) · ctx 12% 120k/1M · 70% to compact · cache 95% (last 98%)
 ```
 
-- **项**：model、thinking、permission、cost、directory、branch、context、cache、tps、version、session。
-  右边是这一项现在在状态栏里的样子，写法和颜色同默认状态栏（Allow all 红色，其余暗色）：
+- **项**：model、thinking、permission、cost、directory、branch、context、compact、cache、tps、version、session。
+  右边是这一项现在在状态栏里的样子，写法和颜色同状态栏（颜色见下面「颜色」）：
+  compact 是离自动压缩还剩多少，`70% to compact`：（压缩线 − 当前占用）÷ 压缩线，向下取整，到了或超过压缩线写 `0%`；
+  压缩线由服务端在用量里给（`autoCompactTokens`），旧服务端不给时这一项不出现。
   tps 是 `32.5 tok/s`（最多一位小数，整数不写 `.0`，同示例脚本；算法见「定制状态栏」里的 `tps`），version 同欢迎头的版本行，session 是会话名字。
   拿不到值的项（还没有花费、不在 git 仓库里、还没有 TPS、会话没名字等）在状态栏里不出现，选择框里右边空着。
   项之间隔 ` · `；branch 紧跟在 directory 后面时只隔一个空格（`~/src/canter (main)`）。
+- **颜色**（终端的 16 色，`NO_COLOR` 时全部暗色、不上色）：模型青色，思考档位品红，花费黄色，目录蓝色，分支绿色；
+  权限 `Allow all` 红色，另外两种暗色；`ctx` 和 `to compact` 的字暗色，百分比数字按离压缩线还剩多少变色
+  （剩 50% 及以上绿、20% 到 50% 黄、不到 20% 红；拿不到压缩线时 `ctx` 的数字按离窗口还剩多少算）；
+  `cache` 的字暗色、百分比青色；`tok/s` 的数字青色；版本、会话名暗色；项之间的 ` · ` 暗色。
+  配了状态栏脚本时照旧显示脚本的输出，不上色。
 - **分行线** `─── line 2 ───` 和项一样能移：线上面的在第一行，下面的在第二行；移到最后就只有第一行，第二行空着。
 - **按键**：↑↓ 选；空格开关当前项；←/→ 把当前项（或分行线）往前、往后挪一位；下面的预览跟着变。
   Enter 保存并关掉，Esc、Ctrl+C 或 Ctrl+D 不保存关掉。和单打 `/mode` 的选择框一样：选择框画到屏幕上之前按的键不算，
   刚关掉批准框时 Enter 不算，开着时 PgUp/PgDn 照旧翻对话，输入框为空时 End 照旧跳到最下面。
-- **默认**（从没存过）是原来的两行：第一行 model、thinking、permission、cost，第二行 directory、branch、context、cache，
-  其余不勾。不改时状态栏和原来一样。
+- **默认**（从没存过）是原来的两行：第一行 model、thinking、permission、cost，第二行 directory、branch、context、compact、cache，
+  其余不勾。存过 `tui.json`、里面还没有 compact 的，compact 照默认勾着、放在 context 后面；在 `/statusline` 里关掉、保存后照存的。
 - **窗口矮**：选择框占的是输入框上方对话区的地方，放不下时对话区先让出来。还放不下，项和分行线只显示放得下的几行，
   跟着光标滚（和其它选择框一样，光标尽量落在显示出来的最后一项），光标所在的那行总看得见；上面还有没显示的写一行
   `   ↑ N more`，下面有写 `   ↓ N more`（暗色），剩不到 3 行时不写这两行。标题、按键说明、空行、
@@ -162,7 +170,7 @@ Esc 照旧打断本轮，300 毫秒的按键保护照旧。拒绝说明随工具
 
 ## 定制状态栏
 
-默认仍是底下的两行：模型、思考档位、权限和花费；目录、分支、上下文和缓存命中。用 `/statusline` 可以选显示哪几项（见上一节）。
+默认仍是底下的两行：模型、思考档位、权限和花费；目录、分支、上下文、离自动压缩还剩多少和缓存命中。用 `/statusline` 可以选显示哪几项（见上一节）。
 在已有的 `~/.canter/config.json` 里增加可选的 `statusLine` 字符串（保留原来的模型、API key 等配置）：
 
 ```json
@@ -203,6 +211,7 @@ JSON 字段如下，拿不到的值为 `null`；上下文和缓存百分比与�
 | `approvalPolicy` | `alwaysAsk`、`askForExecution` 或 `allowAll` |
 | `status` | `starting`、`idle`、`working`、`waiting_approval`、`error` 或 `closed` |
 | `context.usedTokens` / `windowTokens` / `percent` | 上下文已用 token / 窗口 token / 使用百分比 |
+| `context.autoCompactTokens` / `autoCompactPercentLeft` | 自动压缩线（服务端给的）/ 离压缩线还剩的百分比（向下取整，超过为 0）；旧服务端为 `null` |
 | `cost.usd` / `unknown` | 本会话已知美元花费 / 是否还含未知金额 |
 | `cache.totalPercent` / `lastPercent` | 累计 / 最近一次请求的缓存命中百分比 |
 | `tps` | 当前请求每秒输出 token；空闲和执行工具时保留上次结果 |

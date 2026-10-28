@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::Command;
 
 use canter_protocol::{Event, PermissionMode, SessionSnapshot};
+use canter_tui::theme::{self, Depth, Theme};
 use canter_tui::{App, Ui};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -176,7 +177,7 @@ fn session_cost_is_shown_after_the_permission_mode() {
 }
 
 #[test]
-fn allow_all_is_red_and_the_rest_stays_dim() {
+fn allow_all_is_red_and_nothing_else_is() {
     let (home, dir) = repo();
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AllowAll);
     screen.usage(Some(1_000_000));
@@ -192,13 +193,11 @@ fn allow_all_is_red_and_the_rest_stays_dim() {
             assert_eq!(style.fg, Some(Color::Red), "column {x}");
         } else {
             assert_ne!(style.fg, Some(Color::Red), "column {x}");
-            assert!(style.add_modifier.contains(Modifier::DIM), "column {x}");
         }
     }
     for x in 0..second.width() as u16 {
         let style = buffer[(x, HEIGHT - 1)].style();
         assert_ne!(style.fg, Some(Color::Red), "column {x}");
-        assert!(style.add_modifier.contains(Modifier::DIM), "column {x}");
     }
 }
 
@@ -292,4 +291,135 @@ fn the_branch_is_read_again_when_a_turn_ends() {
     );
     screen.turn("completed");
     assert_eq!(screen.bar()[1], " ~/canter (other)");
+}
+
+impl Screen {
+    /// `used` of a `window` context, with the compaction line at `line` when
+    /// the server sends one; cost and cache hits as in [`Screen::usage`].
+    fn usage_with_line(&mut self, used: u64, window: u64, line: Option<u64>) {
+        let counts = |input: u64, cached: u64| {
+            json!({
+                "inputTokens": input, "cachedInputTokens": cached,
+                "outputTokens": 0, "reasoningOutputTokens": 0, "totalTokens": input,
+            })
+        };
+        let mut usage = json!({
+            "total": counts(1000, 924),
+            "last": counts(100, 99),
+            "contextTokens": used, "modelContextWindow": window,
+            "cost": { "usd": 0.12, "unknown": false },
+        });
+        if let Some(line) = line {
+            usage["autoCompactTokens"] = json!(line);
+        }
+        self.event(json!({ "type": "session.usage", "tokenUsage": usage }));
+    }
+
+    /// The text colour of `text` on bottom row `row` (0 or 1), and whether it
+    /// is dim; the same in every column of it.
+    fn style_of(&mut self, row: usize, text: &str) -> (Option<Color>, bool) {
+        let line = self.bar()[row].clone();
+        let at = line
+            .find(text)
+            .unwrap_or_else(|| panic!("{text:?} in {line:?}"));
+        let start = line[..at].width() as u16;
+        let y = HEIGHT - 2 + row as u16;
+        let buffer = self.ui.backend().buffer();
+        let styles: Vec<_> = (start..start + text.width() as u16)
+            .map(|x| {
+                let style = buffer[(x, y)].style();
+                (style.fg, style.add_modifier.contains(Modifier::DIM))
+            })
+            .collect();
+        assert!(
+            styles.windows(2).all(|pair| pair[0] == pair[1]),
+            "{text:?}: {styles:?}"
+        );
+        styles[0]
+    }
+}
+
+#[test]
+fn compact_says_how_much_is_left_before_automatic_compaction() {
+    let (home, dir) = repo();
+    let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
+    // 420k in use: (line − 420k) ÷ line, rounded down; 0% at or over the line.
+    for (line, left) in [
+        (800_000, "47%"),
+        (600_000, "30%"),
+        (420_000, "0%"),
+        (400_000, "0%"),
+    ] {
+        screen.usage_with_line(420_000, 1_000_000, Some(line));
+        assert_eq!(
+            screen.bar()[1],
+            format!(
+                " ~/canter (main) · ctx 42% 420k/1M · {left} to compact · cache 92% (last 99%)"
+            ),
+            "line {line}"
+        );
+    }
+    // An older server sends no line: no compact item.
+    screen.usage_with_line(420_000, 1_000_000, None);
+    assert_eq!(
+        screen.bar()[1],
+        " ~/canter (main) · ctx 42% 420k/1M · cache 92% (last 99%)"
+    );
+}
+
+#[test]
+fn each_item_has_its_colour_and_the_percentages_turn_with_the_room_left() {
+    let (home, dir) = repo();
+    let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
+    screen.usage_with_line(420_000, 1_000_000, Some(1_050_000));
+    let colour = |color| (Some(color), false);
+    let grey = (Some(Color::Reset), true);
+    assert_eq!(screen.style_of(0, "deepseek-flash"), colour(Color::Cyan));
+    assert_eq!(screen.style_of(0, "think high"), colour(Color::Magenta));
+    assert_eq!(screen.style_of(0, "Always ask"), grey);
+    assert_eq!(screen.style_of(0, "$0.12"), colour(Color::Yellow));
+    assert_eq!(screen.style_of(0, " · "), grey);
+    assert_eq!(screen.style_of(1, "~/canter"), colour(Color::Blue));
+    assert_eq!(screen.style_of(1, "(main)"), colour(Color::Green));
+    assert_eq!(screen.style_of(1, "ctx "), grey);
+    assert_eq!(screen.style_of(1, " 420k/1M"), grey);
+    assert_eq!(screen.style_of(1, " to compact"), grey);
+    assert_eq!(screen.style_of(1, "cache "), grey);
+    assert_eq!(screen.style_of(1, "92%"), colour(Color::Cyan));
+    assert_eq!(screen.style_of(1, " (last "), grey);
+    assert_eq!(screen.style_of(1, "99%"), colour(Color::Cyan));
+
+    // ctx and compact numbers by the room left before the line.
+    for (line, left, color) in [
+        (1_050_000, "60%", Color::Green),
+        (600_000, "30%", Color::Yellow),
+        (466_700, "10%", Color::Red),
+    ] {
+        screen.usage_with_line(420_000, 1_000_000, Some(line));
+        assert_eq!(screen.style_of(1, "42%"), colour(color), "line {line}");
+        assert_eq!(screen.style_of(1, left), colour(color), "line {line}");
+    }
+    // Without a line, ctx's number by the room left in the window.
+    screen.usage_with_line(420_000, 450_000, None);
+    assert_eq!(screen.style_of(1, "93%"), colour(Color::Red));
+    screen.usage_with_line(420_000, 1_000_000, None);
+    assert_eq!(screen.style_of(1, "42%"), colour(Color::Green));
+
+    // NO_COLOR: grey as before, no colours.
+    theme::set(Theme {
+        depth: Depth::None,
+        ..Theme::default()
+    });
+    screen.usage_with_line(420_000, 1_000_000, Some(466_700));
+    for (row, text) in [
+        (0, "deepseek-flash"),
+        (0, "$0.12"),
+        (1, "(main)"),
+        (1, "42%"),
+        (1, "10%"),
+        (1, "92%"),
+    ] {
+        assert_eq!(screen.style_of(row, text), grey, "{text}");
+    }
+    theme::set(Theme::default());
 }

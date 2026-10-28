@@ -42,6 +42,9 @@
 启动时收紧已有配置权限；缺失或无效时用不含配置内容的错误退出。配置格式为 JSON，
 `base_url`、`model`、`context_window`、`api_key` 必填；窗口必须大于 81,920
 （核心的输出预留 65,536 加压缩余量 16,384）。
+`auto_compact_tokens` 是可选的正整数：上下文占用超过它就自动压缩（压缩后保留多少用户原话也按它算）；
+不写时压缩线是窗口减输出预留再减 16,384，比这条线大时也按这条线。和窗口一样启动时读，改了重启服务端生效；
+写 0 报错退出。生效的压缩线随用量发给客户端（`TokenUsage.autoCompactTokens`）。
 `models` 是可选的模型名数组，省略时为 `deepseek-flash`、`deepseek-v4-pro`；
 默认模型 `model` 不在列表中时，自动加在最前。`GET /v1/models` 返回该列表。
 `image_models` 是可选的收图片模型名数组，省略时只有 `deepseek-flash`；空数组表示全部不收。

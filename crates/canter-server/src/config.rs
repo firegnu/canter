@@ -16,6 +16,8 @@ pub(crate) struct Config {
     #[serde(default = "default_image_models")]
     image_models: Vec<String>,
     context_window: u64,
+    #[serde(default)]
+    auto_compact_tokens: Option<u64>,
     api_key: String,
     #[serde(default)]
     prices: canter_core::usage::PriceBook,
@@ -79,6 +81,11 @@ impl Config {
                 "context_window must be greater than 81920".into(),
             ));
         }
+        if config.auto_compact_tokens == Some(0) {
+            return Err(ServerError(
+                "auto_compact_tokens must be greater than 0".into(),
+            ));
+        }
         if !config.models.contains(&config.model) {
             config.models.insert(0, config.model.clone());
         }
@@ -107,6 +114,7 @@ impl Config {
         CoreOptions {
             prices,
             context_window: self.context_window,
+            auto_compact_tokens: self.auto_compact_tokens,
             image_models: self.image_models.clone(),
             ..CoreOptions::default()
         }
@@ -141,5 +149,39 @@ mod tests {
             .expect("non-local MCP HTTP must be rejected");
         assert!(error.to_string().contains("HTTPS"));
         assert!(!error.to_string().contains("test-only-mcp-credential"));
+    }
+
+    fn load(extra: serde_json::Value) -> Result<Config, ServerError> {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = json!({
+            "base_url":"http://127.0.0.1:1", "model":"fake", "api_key":"model-test-key",
+            "context_window":1048576,
+        });
+        config
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        fs::write(root.path().join("config.json"), config.to_string()).unwrap();
+        Config::load(root.path())
+    }
+
+    #[test]
+    fn auto_compact_tokens_is_optional_and_must_be_a_positive_integer() {
+        let options = load(json!({})).ok().unwrap().options();
+        assert_eq!(options.auto_compact_tokens, None);
+        let options = load(json!({"auto_compact_tokens": 400000}))
+            .ok()
+            .unwrap()
+            .options();
+        assert_eq!(options.auto_compact_tokens, Some(400_000));
+        let error = load(json!({"auto_compact_tokens": 0})).err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            "auto_compact_tokens must be greater than 0"
+        );
+        for bad in [json!(-1), json!(1.5), json!("400000")] {
+            let error = load(json!({ "auto_compact_tokens": bad })).err().unwrap();
+            assert_eq!(error.to_string(), "config.json is not valid", "{bad}");
+        }
     }
 }

@@ -11,4 +11,9 @@ request?: RequestCharge, cost?: UsageCost, total: TokenUsageBreakdown, last: Tok
 /**
  * Current context occupancy, distinct from cumulative billed input tokens.
  */
-contextTokens: number, modelContextWindow: number | null, };
+contextTokens: number, modelContextWindow: number | null,
+/**
+ * The context occupancy past which the server compacts automatically.
+ * Absent in old events.
+ */
+autoCompactTokens?: number, };

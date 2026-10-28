@@ -20,6 +20,7 @@ pub(crate) enum Item {
     Directory,
     Branch,
     Context,
+    Compact,
     Cache,
     Tps,
     Version,
@@ -28,7 +29,7 @@ pub(crate) enum Item {
 
 impl Item {
     /// In the order of [`Values`].
-    pub const ALL: [Item; 11] = [
+    pub const ALL: [Item; 12] = [
         Item::Model,
         Item::Thinking,
         Item::Permission,
@@ -36,6 +37,7 @@ impl Item {
         Item::Directory,
         Item::Branch,
         Item::Context,
+        Item::Compact,
         Item::Cache,
         Item::Tps,
         Item::Version,
@@ -52,6 +54,7 @@ impl Item {
             Item::Directory => "directory",
             Item::Branch => "branch",
             Item::Context => "context",
+            Item::Compact => "compact",
             Item::Cache => "cache",
             Item::Tps => "tps",
             Item::Version => "version",
@@ -81,7 +84,8 @@ pub(crate) struct Bar {
 }
 
 impl Default for Bar {
-    /// The two rows as they always were; the newer items hidden.
+    /// The two rows as they always were, with `compact` after `context`;
+    /// the other newer items hidden.
     fn default() -> Self {
         let shown = |item| Entry::Item(item, true);
         let hidden = |item| Entry::Item(item, false);
@@ -95,6 +99,7 @@ impl Default for Bar {
                 shown(Item::Directory),
                 shown(Item::Branch),
                 shown(Item::Context),
+                shown(Item::Compact),
                 shown(Item::Cache),
                 hidden(Item::Tps),
                 hidden(Item::Version),
@@ -107,7 +112,7 @@ impl Default for Bar {
 
 /// What each item says now, in the order of [`Item::ALL`]; `None` while it
 /// has nothing to say, and it is left out.
-pub(crate) type Values = [Option<Vec<Span<'static>>>; 11];
+pub(crate) type Values = [Option<Vec<Span<'static>>>; 12];
 
 impl Bar {
     /// The items shown on each row, in order.
@@ -159,7 +164,8 @@ impl Bar {
     }
 
     /// Reads what [`Bar::to_json`] wrote. Entries it does not know are
-    /// skipped and items not listed come hidden at the end; `None` when the
+    /// skipped and items not listed come hidden at the end, except `compact`,
+    /// which comes shown after `context`; `None` when the
     /// file is not even the shape it writes.
     fn from_json(value: &Value) -> Option<Self> {
         let Some(setting) = value.as_object()?.get("statusLine") else {
@@ -193,11 +199,20 @@ impl Bar {
             entries.push(Entry::Line2);
         }
         for item in Item::ALL {
-            if !entries
+            if entries
                 .iter()
                 .any(|entry| matches!(entry, Entry::Item(listed, _) if *listed == item))
             {
-                entries.push(Entry::Item(item, false));
+                continue;
+            }
+            // Files saved before `compact` came get it as the defaults have
+            // it: shown, right after `context`, which is listed by now.
+            let context = entries
+                .iter()
+                .position(|entry| matches!(entry, Entry::Item(Item::Context, _)));
+            match (item, context) {
+                (Item::Compact, Some(at)) => entries.insert(at + 1, Entry::Item(item, true)),
+                _ => entries.push(Entry::Item(item, false)),
             }
         }
         Some(Self {

@@ -462,6 +462,16 @@ pub(crate) async fn record_usage(
                 .as_ref()
                 .and_then(|usage| usage.model_context_window)
         },
+        auto_compact_tokens: if in_turn {
+            Some(compaction::input_limit(shared))
+        } else {
+            state
+                .journal
+                .snapshot
+                .token_usage
+                .as_ref()
+                .and_then(|usage| usage.auto_compact_tokens)
+        },
     };
     if let Some(active) = &mut state.active
         && in_turn

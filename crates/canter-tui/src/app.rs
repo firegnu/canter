@@ -770,6 +770,8 @@ impl App {
                 "usedTokens": usage.map(|usage| usage.context_tokens),
                 "windowTokens": usage.and_then(|usage| usage.model_context_window),
                 "percent": usage.and_then(|usage| percent(usage.model_context_window?, usage.context_tokens)),
+                "autoCompactTokens": usage.and_then(|usage| usage.auto_compact_tokens),
+                "autoCompactPercentLeft": usage.and_then(|usage| crate::statusline::percent_left(usage.auto_compact_tokens?, usage.context_tokens)),
             },
             "cost": {"usd": cost.map(|cost| cost.usd), "unknown": cost.map(|cost| cost.unknown)},
             "cache": {
@@ -4229,7 +4231,8 @@ impl App {
 
     /// The items `/statusline` chose, by default model, thinking and
     /// permission mode (Allow all in red) and cost; then the directory with
-    /// its git branch, context use and cache hits. Each row is cut on its
+    /// its git branch, context use, room left before compaction and cache
+    /// hits. Each row is cut on its
     /// own when the window is too narrow. Also whether the first row shows
     /// all of the permission mode.
     fn info_rows(&mut self, width: u16, now_ms: i64) -> ([Line<'static>; 2], bool) {
@@ -4255,22 +4258,34 @@ impl App {
         )
     }
 
-    /// What each item of the rows at the bottom says now, dim except the
-    /// permission mode; `None` for what is not known (yet).
+    /// What each item of the rows at the bottom says now, each in its colour
+    /// and the words around it dim; `None` for what is not known (yet).
     fn bar_values(&self, now_ms: i64) -> bar::Values {
+        use theme::BarItem;
         let settings = &self.snapshot.settings;
         let usage = self.snapshot.token_usage.as_ref();
         let percent = crate::statusline::percent;
+        let percent_left = crate::statusline::percent_left;
         let dim = |text: String| Some(vec![Span::styled(text, theme::secondary())]);
+        let coloured =
+            |text: String, item: BarItem| Some(vec![Span::styled(text, theme::bar_item(item))]);
+        // Room left before automatic compaction, or else in the window.
+        let room = usage.and_then(|usage| match usage.auto_compact_tokens {
+            Some(line) => percent_left(line, usage.context_tokens),
+            None => percent_left(usage.model_context_window?, usage.context_tokens),
+        });
         bar::Item::ALL.map(|item| match item {
-            bar::Item::Model => dim(sanitize(&settings.model)),
-            bar::Item::Thinking => dim(format!(
-                "think {}",
-                match settings.reasoning_effort {
-                    canter_protocol::ReasoningEffort::Unknown => "high",
-                    effort => effort.as_str(),
-                }
-            )),
+            bar::Item::Model => coloured(sanitize(&settings.model), BarItem::Model),
+            bar::Item::Thinking => coloured(
+                format!(
+                    "think {}",
+                    match settings.reasoning_effort {
+                        canter_protocol::ReasoningEffort::Unknown => "high",
+                        effort => effort.as_str(),
+                    }
+                ),
+                BarItem::Thinking,
+            ),
             bar::Item::Permission => {
                 let (mode, style) = mode_label(settings.approval_policy);
                 Some(vec![Span::styled(mode, style)])
@@ -4278,27 +4293,41 @@ impl App {
             bar::Item::Cost => usage
                 .and_then(|usage| usage.cost.as_ref())
                 .and_then(|cost| {
-                    dim(format!(
-                        "{}{}",
-                        crate::usage::dollars(cost.usd),
-                        if cost.unknown { "+?" } else { "" }
-                    ))
+                    coloured(
+                        format!(
+                            "{}{}",
+                            crate::usage::dollars(cost.usd),
+                            if cost.unknown { "+?" } else { "" }
+                        ),
+                        BarItem::Cost,
+                    )
                 }),
-            bar::Item::Directory => {
-                dim(shorten_home(&sanitize(&settings.cwd), self.home.as_deref()))
-            }
+            bar::Item::Directory => coloured(
+                shorten_home(&sanitize(&settings.cwd), self.home.as_deref()),
+                BarItem::Directory,
+            ),
             bar::Item::Branch => self
                 .branch
                 .as_ref()
-                .and_then(|branch| dim(format!("({})", sanitize(branch)))),
+                .and_then(|branch| coloured(format!("({})", sanitize(branch)), BarItem::Branch)),
             bar::Item::Context => usage.and_then(|usage| {
                 let window = usage.model_context_window?;
                 let used = percent(window, usage.context_tokens)?;
-                dim(format!(
-                    "ctx {used}% {}/{}",
-                    tokens(usage.context_tokens),
-                    tokens(window)
-                ))
+                Some(vec![
+                    Span::styled("ctx ", theme::secondary()),
+                    Span::styled(format!("{used}%"), theme::bar_room(room?)),
+                    Span::styled(
+                        format!(" {}/{}", tokens(usage.context_tokens), tokens(window)),
+                        theme::secondary(),
+                    ),
+                ])
+            }),
+            bar::Item::Compact => usage.and_then(|usage| {
+                let left = percent_left(usage.auto_compact_tokens?, usage.context_tokens)?;
+                Some(vec![
+                    Span::styled(format!("{left}%"), theme::bar_room(left)),
+                    Span::styled(" to compact", theme::secondary()),
+                ])
             }),
             bar::Item::Cache => usage.and_then(|usage| {
                 let total = percent(usage.total.input_tokens, usage.total.cached_input_tokens);
@@ -4306,20 +4335,29 @@ impl App {
                 if total.is_none() && last.is_none() {
                     return None;
                 }
-                let mut text = "cache".to_owned();
+                let number = |n| Span::styled(format!("{n}%"), theme::bar_item(BarItem::Number));
+                let mut spans = vec![Span::styled("cache", theme::secondary())];
                 if let Some(total) = total {
-                    text.push_str(&format!(" {total}%"));
+                    spans.push(Span::styled(" ", theme::secondary()));
+                    spans.push(number(total));
                 }
                 if let Some(last) = last {
-                    text.push_str(&format!(" (last {last}%)"));
+                    spans.push(Span::styled(" (last ", theme::secondary()));
+                    spans.push(number(last));
+                    spans.push(Span::styled(")", theme::secondary()));
                 }
-                dim(text)
+                Some(spans)
             }),
             // One decimal, as the example script in the README shows it.
-            bar::Item::Tps => self
-                .tps
-                .rate(now_ms)
-                .and_then(|rate| dim(format!("{} tok/s", (rate * 10.0).round() / 10.0))),
+            bar::Item::Tps => self.tps.rate(now_ms).map(|rate| {
+                vec![
+                    Span::styled(
+                        format!("{}", (rate * 10.0).round() / 10.0),
+                        theme::bar_item(BarItem::Number),
+                    ),
+                    Span::styled(" tok/s", theme::secondary()),
+                ]
+            }),
             bar::Item::Version => self.welcome.clone().and_then(dim),
             bar::Item::Session => settings
                 .name
