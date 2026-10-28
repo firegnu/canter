@@ -8,6 +8,7 @@ struct Fixture {
     client: reqwest::Client,
     requests: Arc<SyncMutex<Vec<serde_json::Value>>>,
     pause_compaction: Arc<AtomicBool>,
+    release_compaction: Arc<tokio::sync::Notify>,
     stop: CancellationToken,
     servers: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -25,11 +26,14 @@ impl Fixture {
         let recorded = requests.clone();
         let pause_compaction = Arc::new(AtomicBool::new(false));
         let pause = pause_compaction.clone();
+        let release_compaction = Arc::new(tokio::sync::Notify::new());
+        let release = release_compaction.clone();
         let model_router = Router::new().route(
             "/v1/chat/completions",
             post(move |Json(request): Json<serde_json::Value>| {
                 let recorded = recorded.clone();
                 let pause = pause.clone();
+                let release = release.clone();
                 async move {
                     use axum::response::IntoResponse;
                     let last = request["messages"].as_array().unwrap().last().unwrap();
@@ -48,7 +52,13 @@ impl Fixture {
                         _ => None,
                     };
                     recorded.lock().unwrap().push(request);
-                    let body = if wait {
+                    let done = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+                    let body = if compact && wait {
+                        axum::body::Body::from_stream(futures_util::stream::once(async move {
+                            release.notified().await;
+                            Ok::<_, std::convert::Infallible>(axum::body::Bytes::from_static(done.as_bytes()))
+                        }))
+                    } else if wait {
                         axum::body::Body::from_stream(futures_util::stream::pending::<Result<axum::body::Bytes, std::convert::Infallible>>())
                     } else if let Some((name, args)) = tool {
                         axum::body::Body::from(format!("data: {}\n\ndata: [DONE]\n\n", json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"model-call","type":"function","function":{"name":name,"arguments":args.to_string()}}]},"finish_reason":"tool_calls"}]})))
@@ -108,6 +118,7 @@ impl Fixture {
             client,
             requests,
             pause_compaction,
+            release_compaction,
             stop,
             servers: vec![server, model_server],
         }
@@ -238,6 +249,150 @@ impl Fixture {
             server.await.unwrap();
         }
     }
+
+    async fn reopen(&self, url: &str, id: &str) {
+        let session = self.app.sessions.lock().await.remove(id).unwrap();
+        session.close_for_shutdown().await.unwrap();
+        drop(session);
+        self.client
+            .post(format!("{url}/resume"))
+            .json(&json!({"env":self.env()}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    }
+
+    async fn assert_background_notice(&self, url: &str, id: &str) {
+        for reopened in [false, true] {
+            if reopened {
+                self.reopen(url, id).await;
+            }
+            self.say(url, "check completion").await;
+            let requests = self.requests.lock().unwrap();
+            let messages = requests.last().unwrap()["messages"].as_array().unwrap();
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|message| message["content"]
+                        .as_str()
+                        .is_some_and(|text| text.starts_with("[Background command 1 finished:")))
+                    .count(),
+                1,
+                "reopened={reopened}: {messages:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn background_completion_survives_rewind_and_retraction() {
+    for retract in [false, true] {
+        let fixture = Fixture::new().await;
+        let url = fixture.create("allowAll").await;
+        let started = fixture
+            .shell(
+                &url,
+                "while [ ! -e release ]; do sleep 0.01; done; printf final &",
+            )
+            .await;
+        fixture.input(&url, "wait").await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fixture.requests.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        std::fs::write(fixture.root.path().join("project/release"), "").unwrap();
+        let finished = fixture
+            .until(&url, |session| !session.background_commands[0].running)
+            .await;
+        let turn_id = &finished.turns.last().unwrap().id;
+        let response: serde_json::Value = fixture
+            .client
+            .post(format!("{url}/interrupt"))
+            .json(&json!({"turnId":turn_id,"retract":retract}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(response["retracted"], retract);
+        fixture.idle(&url).await;
+        if !retract {
+            let mut params =
+                json!({"beforeTurnId":turn_id,"rewindFiles":false,"rewindConversation":true});
+            let preview: RewindPreviewResponse = fixture
+                .client
+                .post(format!("{url}/rewind/preview"))
+                .json(&params)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            params["lastEventSeq"] = json!(preview.last_event_seq);
+            fixture
+                .client
+                .post(format!("{url}/rewind"))
+                .json(&params)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+        }
+        fixture
+            .assert_background_notice(&url, &started.session.id)
+            .await;
+        fixture.close().await;
+    }
+}
+
+#[tokio::test]
+async fn background_completion_during_compaction_survives_replacement_and_reopen() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("allowAll").await;
+    let started = fixture
+        .shell(
+            &url,
+            "while [ ! -e release ]; do sleep 0.01; done; printf final &",
+        )
+        .await;
+    fixture.pause_compaction.store(true, Ordering::Relaxed);
+    fixture
+        .client
+        .post(format!("{url}/compact"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.requests.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    std::fs::write(fixture.root.path().join("project/release"), "").unwrap();
+    fixture
+        .until(&url, |session| !session.background_commands[0].running)
+        .await;
+    fixture.release_compaction.notify_one();
+    fixture.idle(&url).await;
+    fixture
+        .assert_background_notice(&url, &started.session.id)
+        .await;
+    fixture.close().await;
 }
 
 #[tokio::test]
@@ -327,6 +482,67 @@ async fn background_completion_appends_history_without_waking_the_model() {
                 .as_str()
                 .is_some_and(|text| text.ends_with("final"))
     }));
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn restarted_background_tools_report_unavailable_output_instead_of_unknown() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("allowAll").await;
+    let started = fixture.say(&url, "background").await;
+    fixture
+        .app
+        .sessions
+        .lock()
+        .await
+        .remove(&started.session.id);
+    tokio::task::yield_now().await;
+    let resumed: SessionResumeResponse = fixture
+        .client
+        .post(format!("{url}/resume"))
+        .json(&json!({"env":fixture.env()}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!resumed.session.background_commands[0].running);
+    for tool in ["output", "stop"] {
+        let snapshot = fixture.say(&url, tool).await;
+        let result = snapshot
+            .session
+            .turns
+            .last()
+            .unwrap()
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::BackgroundCommandAction { result, status, .. } => Some((result, status)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(*result.1, ItemStatus::Completed);
+        assert!(
+            result
+                .0
+                .contains("Output unavailable after server restart."),
+            "{}",
+            result.0
+        );
+    }
+    let messages = fixture.requests.lock().unwrap().last().unwrap()["messages"].clone();
+    let notice = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["content"].as_str())
+        .find(|text| text.starts_with("[Background command 1 finished:"))
+        .unwrap();
+    assert!(notice.contains("Output unavailable after server restart."));
+    assert!(!notice.contains("Use shell_output"));
     fixture.close().await;
 }
 

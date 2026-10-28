@@ -1,5 +1,6 @@
 //! Session tools and a replaceable executor. This crate emits no protocol events.
 mod executor;
+mod guardian;
 pub mod mcp;
 mod output;
 pub use output::MAX_CLIENT_OUTPUT_BYTES;

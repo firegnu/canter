@@ -1313,6 +1313,54 @@ fn shell_reply(command: &str) -> String {
 }
 
 #[tokio::test]
+async fn killing_server_with_sigkill_also_kills_background_process_groups() {
+    struct Cleanup(Vec<i32>);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            for pid in &self.0 {
+                let _ = nix::sys::signal::killpg(Pid::from_raw(*pid), Signal::SIGKILL);
+            }
+        }
+    }
+    let mut world = World::new(Vec::new()).await;
+    world.start_server().await;
+    let terminal = world.open(&["--yolo"], "guard-test").await;
+    terminal.wait_idle().await;
+    terminal
+        .type_line("!echo $$ > leader.pid; /bin/sleep 60 & echo $! > child.pid; printf guard-ready; wait &")
+        .await;
+    terminal.wait_for("1 background commands · /ps").await;
+    terminal.wait_for("┃ guard-ready").await;
+    let leader: i32 = fs::read_to_string(world.path("work/leader.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let child: i32 = fs::read_to_string(world.path("work/child.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let mut cleanup = Cleanup(vec![leader]);
+    terminal.quit().await;
+    world.stop_server(Signal::SIGKILL).await;
+    let gone = tokio::time::timeout(Duration::from_secs(2), async {
+        while kill(Pid::from_raw(leader), None) != Err(Errno::ESRCH)
+            || kill(Pid::from_raw(child), None) != Err(Errno::ESRCH)
+            || nix::sys::signal::killpg(Pid::from_raw(leader), None) != Err(Errno::ESRCH)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        gone.is_ok(),
+        "server SIGKILL must remove the command's entire group within two seconds"
+    );
+    cleanup.0.clear();
+}
+
+#[tokio::test]
 async fn background_shell_controls_work_through_terminal_and_survive_client_exit() {
     struct Cleanup(Vec<PathBuf>);
     impl Drop for Cleanup {
@@ -1367,7 +1415,8 @@ async fn background_shell_controls_work_through_terminal_and_survive_client_exit
 
     b.type_line("start model command").await;
     b.wait_for("ctrl+b to run in background").await;
-    b.wait_for("model-ready").await;
+    // Match streamed output, not the command text shown before spawn completes.
+    b.wait_for("┃ model-ready").await;
     b.press_with(KeyCode::Char('b'), KeyModifiers::CONTROL)
         .await;
     b.wait_for("continued after backgrounding").await;

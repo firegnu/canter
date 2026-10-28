@@ -25,6 +25,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 传输：客户端用普通 HTTP 请求下命令；服务端用一条 SSE 长连接按顺序推事件，每条带递增序号，断线后从序号接着收（报告 §5.2 的甲，传输学 opencode）。
    - 结构：照 Codex app-server v2，会话 → 一轮 → 一条条项目；批准、提问是服务端等客户端回答的请求；事件分开始、增量、完成。字段名尽量和 Codex 一样。只参考，不拷 Codex 的协议代码；参考的版本写进任务文件。
    - 后台命令（P2-28）：参考 Codex `rust-v0.163.0` 的 commandExecution、后台进程管理和 `/ps`、`/stop`，不提供 PTY 或写 stdin。新增 `backgroundCommand.updated` 事件和快照 `backgroundCommands`（旧存盘默认空），记录会话内从 1 起的 `id`、原卡片 `itemId`、命令、开始/结束时间、运行状态和退出码；原卡片仍用 commandExecution，后台状态按 itemId 关联，工具调用返回不代表进程结束。新增 backgroundCommandAction 项目记录 shell_output / shell_stop。`GET /v1/sessions/{id}/backgroundCommands` 列状态，`GET .../backgroundCommands/{commandId}` 取最后 1 MiB 输出，`POST .../backgroundCommands/{commandId}/stop` 停一条，`POST .../backgroundCommands/stop` 停全部，`POST .../shellBackground {itemId}` 把指定前台命令转后台（过期请求不影响后来的命令）。UI 读取不消耗模型的增量游标；输出只留会话内存中，避免将常驻服务日志无限写入只追加的事件文件。开始、结束事件存盘；服务端重启不恢复进程和日志，残留运行状态恢复为已退出、退出码未知。与 Codex 的进程编号和 write_stdin 不同，canter 用会话内小整数、独立看输出和停止工具。结束事件不发起模型轮，下一次请求之前将完成通知追加到模型历史。
+   - P2-28 交叉审查后补充：后台 shell 的 `item.completed` 表示该次工具调用已返回，原 commandExecution 卡片使用 `status: completed`、`exitCode: null`；进程是否还在跑、最终退出码只看按 itemId 关联的 backgroundCommands，终端显示和导出都叠加该状态，旧客户端不会把已返回的调用永久当作进行中。启动失败用失败态，不登记后台编号或发送完成通知。
    - 协议类型放单独的 Rust 包，从它生成 JSON Schema 和 TypeScript 类型；agent 核心和协议之间隔一层转换。
    - 理由：A 拷过来、不跟上游以后，同样是 canter 自己维护的协议，和 C 只差传输方式和拷不拷类型代码。传输上 HTTP + SSE 更贴合 canter：一台机器多个客户端，断线能接着收，以后 corral、pony 这类同步程序直接接，curl 就能排错。
    - 代价：离用户原来要的「使用成熟的现有的coding agent使用的协议」远一步，用的是 Codex 的结构，不是它的协议本身；协议包要自己写，估 1,000–1,500 行（报告 §9.1）。
@@ -125,3 +126,5 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 每会话同时最多 8 条，拒绝第 9 条，不挤掉旧任务。每条仅保留最近 1 MiB 日志（包括没有换行的大块），模型和终端的读取互不影响。命令跟会话，关终端、`/new`、`/resume` 不停；结束、显式停掉和服务端停止（包括 `--replace`）清理整个进程组。后台 shell 领导进程退出时也清理残留子进程。不改前台超时、头尾输出上限和清理规则；不恢复服务端重启前的进程。
    - 卡片标「后台运行中」，结束改退出码并给出含编号、命令和退出码的完成行；输入框上方 `N background commands · /ps` 与待办清单一起显示。`/ps` 列编号、命令、时长和状态，Enter 看日志，`s` 停选中命令，日志页 `r` 刷新、Backspace 回列表；`/stop` 停本会话全部后台命令。
    - 完成时将英文说明存为私有历史 `background_notice`，与模式通知共用工具批次收齐后再追加的机制，不打断工具调用/结果相邻性，不改已有历史，也不自动开一轮；下一次模型请求可见编号、命令、退出码和 shell_output 提示。协议见第 8 条。
+   - 10-28 主控采纳交叉审查：压缩等待期间新增的完成说明在 Compaction 记录后重新追加；回退或撤回截去的说明，若启动命令的卡片仍保留，也在截断记录后补记，重放保持一致。重启后的 shell_output / shell_stop 从已恢复状态返回退出状态及「输出不可用」，恢复通知不再要求读取日志。已完成命令只保留最近完成的 8 条输出，更早的保留状态、返回「输出已丢弃」；在跑的仍最多 8 条、每条最多 1 MiB。
+   - 同日用户选定看护进程：模型 shell 和用户 `!` 的每条命令（包括前台）在 exec 前创建独立看护进程；服务端独占管道写端，看护进程等待读端，服务端正常退出、崩溃或被 SIGKILL 时管道断开，看护进程杀掉命令原进程组并退出。正常清理仍先按原规则停止进程组，再通知看护进程退出；不依赖服务端重启后按 PID 补杀，也不让命令继承管道写端。

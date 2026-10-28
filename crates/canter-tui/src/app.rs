@@ -4276,17 +4276,6 @@ impl App {
     /// arrived, their turn ended, or a later item started.
     fn item_done(&self, turn: &Turn, index: usize) -> bool {
         let item = &turn.items[index];
-        if self
-            .snapshot
-            .background_commands
-            .iter()
-            .any(|command| Some(command.item_id.as_str()) == item.id())
-        {
-            return turn.status != TurnStatus::InProgress
-                || item
-                    .id()
-                    .is_some_and(|id| self.completed.contains(&(turn.id.clone(), id.to_owned())));
-        }
         let status = match item {
             Item::PlanProposal { status, .. }
             | Item::Plan { status, .. }

@@ -155,6 +155,117 @@ async fn foreground_can_move_to_background_without_turn_cancellation_stopping_it
 }
 
 #[tokio::test]
+async fn concurrent_promotions_both_return_while_the_command_is_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools(&dir);
+    let cancel = CancellationToken::new();
+    let prepared = tools
+        .prepare(
+            Tool::Shell,
+            "foreground",
+            r#"{"command":"printf ready; exec sleep 30"}"#,
+            &cancel,
+        )
+        .await
+        .unwrap();
+    let ready = tokio::sync::Notify::new();
+    let mut stream = |_: &str| ready.notify_one();
+    let execute = tools.execute(common::allow(&prepared), &cancel, &mut stream);
+    let promote = async {
+        ready.notified().await;
+        let replies = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(
+                tools.background().promote("foreground"),
+                tools.background().promote("foreground")
+            )
+        })
+        .await;
+        let running = tools.background().list()[0].running;
+        tools.background().stop_all().await;
+        assert!(running);
+        let (first, second) = replies.expect("both promotion requests must return before exit");
+        assert_eq!(first.unwrap(), Some(1));
+        assert!(matches!(second.unwrap(), Some(1) | None));
+    };
+    tokio::join!(execute, promote);
+}
+
+#[tokio::test]
+async fn background_result_completes_the_tool_call_while_the_process_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools(&dir);
+    let output = call(
+        &tools,
+        "shell",
+        serde_json::json!({"background":true,"command":"exec sleep 30"}),
+    )
+    .await;
+    let running = tools.background().list()[0].running;
+    tools.background().stop_all().await;
+    assert!(running);
+    assert!(matches!(
+        output.item,
+        canter_protocol::Item::CommandExecution {
+            status: canter_protocol::ItemStatus::Completed,
+            exit_code: None,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn background_spawn_failure_does_not_register_a_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools(&dir);
+    std::fs::remove_dir(dir.path()).unwrap();
+    let output = call(
+        &tools,
+        "shell",
+        serde_json::json!({"background":true,"command":"printf unreachable"}),
+    )
+    .await;
+    assert_eq!(output.outcome, canter_tools::ToolOutcome::Failed);
+    assert!(
+        tools.background().list().is_empty(),
+        "failed starts must not produce completion notices"
+    );
+    std::fs::create_dir(dir.path()).unwrap();
+    let next = call(
+        &tools,
+        "shell",
+        serde_json::json!({"background":true,"command":"printf ready"}),
+    )
+    .await;
+    assert!(next.text.contains("Background command 1:"));
+}
+
+#[tokio::test]
+async fn completed_output_keeps_only_the_last_eight_completions() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools(&dir);
+    for id in 1..=9 {
+        call(
+            &tools,
+            "shell",
+            serde_json::json!({"background":true,"command":format!("printf output-{id}")}),
+        )
+        .await;
+    }
+    let old = tools.background().output(1, false).unwrap();
+    assert_eq!(old.command.exit_code, Some(0));
+    assert!(old.output.contains("Output discarded"), "{}", old.output);
+    for id in 2..=9 {
+        assert_eq!(
+            tools.background().output(id, false).unwrap().output,
+            format!("output-{id}")
+        );
+    }
+    let model = call(&tools, "shell_output", serde_json::json!({"id":1})).await;
+    assert!(model.text.contains("Output discarded"));
+    assert_eq!(tools.background().list().len(), 9);
+}
+
+#[tokio::test]
 async fn background_retains_one_megabyte_and_model_reads_only_last_32k_of_new_output() {
     let dir = tempfile::tempdir().unwrap();
     let tools = tools(&dir);

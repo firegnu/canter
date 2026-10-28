@@ -201,7 +201,8 @@ impl Executor for LocalExecutor {
     async fn spawn(&self, command: &str, cancel: &CancellationToken) -> io::Result<CommandHandle> {
         use std::process::Stdio;
         check_cancel(cancel)?;
-        let child = tokio::process::Command::new("/bin/sh")
+        let mut launch = tokio::process::Command::new("/bin/sh");
+        launch
             .args(["-c", command])
             .current_dir(&self.cwd)
             .env_clear()
@@ -210,10 +211,16 @@ impl Executor for LocalExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0)
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        let guardian = crate::guardian::attach(&mut launch)?;
+        let child = launch.spawn()?;
+        drop(launch);
         let group = child.id().map(|id| nix::unistd::Pid::from_raw(id as i32));
-        let mut process = LocalProcess { child, group };
+        let mut process = LocalProcess {
+            child,
+            group,
+            guardian,
+        };
         let stdout = process
             .child
             .stdout
@@ -311,13 +318,18 @@ fn check_protected(path: &Path, protected_paths: &[PathBuf]) -> io::Result<()> {
 struct LocalProcess {
     child: tokio::process::Child,
     group: Option<nix::unistd::Pid>,
+    guardian: std::io::PipeWriter,
 }
 
 impl LocalProcess {
     fn kill_group(&mut self) -> io::Result<()> {
         if let Some(group) = self.group {
             match nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL) {
-                Ok(()) | Err(nix::errno::Errno::ESRCH) => self.group = None,
+                Ok(()) | Err(nix::errno::Errno::ESRCH) => {
+                    self.group = None;
+                    // Disarm only after the original group has been cleaned up.
+                    let _ = std::io::Write::write_all(&mut self.guardian, &[1]);
+                }
                 Err(error) => return Err(io::Error::from_raw_os_error(error as i32)),
             }
         }

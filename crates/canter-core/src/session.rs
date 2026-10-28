@@ -539,16 +539,9 @@ impl Session {
     }
 
     fn from_state(state: State, tools: Tools, model: Arc<dyn Model>, options: CoreOptions) -> Self {
-        tools.background().set_next_id(
-            state
-                .journal
-                .snapshot
-                .background_commands
-                .iter()
-                .map(|command| command.id)
-                .max()
-                .unwrap_or(0),
-        );
+        tools
+            .background()
+            .restore(&state.journal.snapshot.background_commands);
         let lifetime = CancellationToken::new();
         let shared = Arc::new(Shared {
             state: Mutex::new(state),

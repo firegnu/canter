@@ -81,7 +81,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                     .rewind
                     .retract(&completed.id)
                     .ok_or_else(CoreError::internal)?;
-                state.history.truncate(messages);
+                let removed = state.history.split_off(messages);
                 state.user_messages.truncate(users);
                 state.measured_context = None;
                 state
@@ -96,6 +96,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                         },
                     ])
                     .await?;
+                state.restate_background_notices(removed).await?;
                 return Ok(event_seq);
             }
             state.cancel_requests().await?;

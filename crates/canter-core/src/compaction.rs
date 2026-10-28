@@ -94,7 +94,12 @@ pub(crate) async fn compact(
         return Ok(());
     }
     match result {
-        Ok((summary, messages)) if !cancel.is_cancelled() => {
+        Ok((summary, messages, history_len)) if !cancel.is_cancelled() => {
+            let notices: Vec<_> = state.history[history_len..]
+                .iter()
+                .filter(|message| crate::background::notice_id(message).is_some())
+                .cloned()
+                .collect();
             let user_inputs = messages[..messages.len() - 1].to_vec();
             let user_messages = messages[..messages.len() - 1]
                 .iter()
@@ -125,6 +130,9 @@ pub(crate) async fn compact(
             state.user_messages = user_inputs;
             state.measured_context = None;
             state.restate_plan_mode().await?;
+            for message in notices {
+                state.background_notice(message).await?;
+            }
             state
                 .journal
                 .append(vec![EventPayload::ItemCompleted {
@@ -156,7 +164,7 @@ pub(crate) async fn compact(
 async fn summarize(
     shared: &Shared,
     cancel: &CancellationToken,
-) -> Result<(String, Vec<Message>), CoreError> {
+) -> Result<(String, Vec<Message>, usize), CoreError> {
     let (prefix, history, summary_index, user_messages, model, plan) = {
         let state = shared.state.lock().await;
         (
@@ -445,5 +453,5 @@ async fn summarize(
     kept.push(Message::User {
         text: summary_message,
     });
-    Ok((summary, kept))
+    Ok((summary, kept, history.len()))
 }

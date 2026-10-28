@@ -7,28 +7,85 @@ use canter_model::Message;
 use canter_protocol::*;
 use std::sync::{Arc, Weak};
 
+pub(crate) fn notice_id(message: &Message) -> Option<u64> {
+    let Message::User { text } = message else {
+        return None;
+    };
+    text.strip_prefix("[Background command ")?
+        .split_once(" finished:")?
+        .0
+        .parse()
+        .ok()
+}
+
 impl State {
-    async fn background_update(&mut self, command: BackgroundCommand) -> Result<(), CoreError> {
+    pub(crate) async fn restate_background_notices(
+        &mut self,
+        removed: Vec<Message>,
+    ) -> Result<(), CoreError> {
+        for message in removed {
+            let Some(id) = notice_id(&message) else {
+                continue;
+            };
+            let retained = self
+                .journal
+                .snapshot
+                .background_commands
+                .iter()
+                .find(|command| command.id == id)
+                .is_some_and(|command| {
+                    self.journal.snapshot.turns.iter().any(|turn| {
+                        turn.items
+                            .iter()
+                            .any(|item| item.id() == Some(command.item_id.as_str()))
+                    })
+                });
+            if retained
+                && !self.history.contains(&message)
+                && !self.plan_mode_notices.contains(&message)
+            {
+                self.background_notice(message).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn background_notice(&mut self, message: Message) -> Result<(), CoreError> {
+        self.journal
+            .record(HistoryEntry::BackgroundNotice {
+                message: message.clone(),
+            })
+            .await?;
+        self.plan_mode_notices.push(message);
+        crate::context::flush_plan_mode_notices(&mut self.history, &mut self.plan_mode_notices);
+        Ok(())
+    }
+    async fn background_update(
+        &mut self,
+        command: BackgroundCommand,
+        recovered: bool,
+    ) -> Result<(), CoreError> {
         if !command.running {
             let message = Message::User {
                 text: format!(
-                    "[Background command {} finished: {}. Exit code: {}. Use shell_output with id={} to read the remaining output.]",
+                    "[Background command {} finished: {}. Exit code: {}. {}]",
                     command.id,
                     command.command,
                     command.exit_code.map_or_else(
                         || "unknown (signal or server shutdown)".into(),
                         |code| code.to_string()
                     ),
-                    command.id,
+                    if recovered {
+                        "Output unavailable after server restart.".into()
+                    } else {
+                        format!(
+                            "Use shell_output with id={} to read the remaining output.",
+                            command.id
+                        )
+                    },
                 ),
             };
-            self.journal
-                .record(HistoryEntry::BackgroundNotice {
-                    message: message.clone(),
-                })
-                .await?;
-            self.plan_mode_notices.push(message);
-            crate::context::flush_plan_mode_notices(&mut self.history, &mut self.plan_mode_notices);
+            self.background_notice(message).await?;
         }
         self.journal
             .append(vec![EventPayload::BackgroundCommandUpdated { command }])
@@ -41,7 +98,7 @@ impl State {
                 command.running = false;
                 command.completed_at = Some(crate::journal::now());
                 command.exit_code = None;
-                self.background_update(command).await?;
+                self.background_update(command, true).await?;
             }
         }
         Ok(())
@@ -59,7 +116,7 @@ impl Shared {
                 .iter()
                 .any(|old| old == &command)
             {
-                state.background_update(command).await?;
+                state.background_update(command, false).await?;
             }
         }
         Ok(())

@@ -218,15 +218,9 @@ fn background_output(
             source,
             command: args.command.clone(),
             cwd: executor.cwd().to_string_lossy().into_owned(),
-            status: if output.command.running {
-                ItemStatus::InProgress
-            } else if output.command.exit_code == Some(0) {
-                ItemStatus::Completed
-            } else {
-                ItemStatus::Failed
-            },
+            status: ItemStatus::Completed,
             aggregated_output: output.output,
-            exit_code: output.command.exit_code,
+            exit_code: None,
             duration_ms: Some(start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64),
         },
     }

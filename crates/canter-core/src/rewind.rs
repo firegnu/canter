@@ -496,10 +496,11 @@ impl Session {
             .await?;
         state.journal.append(vec![rewind.event()]).await?;
         if let Some((messages, users)) = state.rewind.apply(&rewind) {
-            state.history.truncate(messages);
+            let removed = state.history.split_off(messages);
             state.user_messages.truncate(users);
             state.measured_context = None;
             state.restate_plan_mode().await?;
+            state.restate_background_notices(removed).await?;
         }
         Ok(SessionRewindResponse {
             event_seq: rewind.event_seq,

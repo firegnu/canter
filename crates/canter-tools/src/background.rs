@@ -56,7 +56,7 @@ impl Tail {
 
 struct Entry {
     command: BackgroundCommand,
-    output: Tail,
+    output: Option<Tail>,
     cursor: u64,
     stop: CancellationToken,
     done: watch::Receiver<bool>,
@@ -66,7 +66,10 @@ type Promotion = oneshot::Sender<Result<Option<u64>, String>>;
 struct State {
     next_id: u64,
     entries: BTreeMap<u64, Entry>,
+    restored: BTreeMap<u64, BackgroundCommand>,
     foreground: Option<(String, mpsc::Sender<Promotion>)>,
+    completed: VecDeque<u64>,
+    reserved: usize,
 }
 
 /// Owned by Tools for the whole session, independent of a turn or client.
@@ -103,8 +106,13 @@ impl BackgroundCommands {
             .collect()
     }
     /// Keep IDs monotonic when reopening a session after a server restart.
-    pub fn set_next_id(&self, last_id: u64) {
-        self.state.lock().unwrap().next_id = last_id;
+    pub fn restore(&self, commands: &[BackgroundCommand]) {
+        let mut state = self.state.lock().unwrap();
+        state.next_id = commands.iter().map(|command| command.id).max().unwrap_or(0);
+        state.restored = commands
+            .iter()
+            .map(|command| (command.id, command.clone()))
+            .collect();
     }
     pub fn output(&self, id: u64, consume: bool) -> Result<BackgroundCommandOutput, String> {
         read_output(&self.state, id, consume)
@@ -112,10 +120,10 @@ impl BackgroundCommands {
     pub async fn stop(&self, id: u64) -> Result<BackgroundCommandOutput, String> {
         let mut done = {
             let state = self.state.lock().unwrap();
-            let entry = state
-                .entries
-                .get(&id)
-                .ok_or_else(|| format!("Unknown background command {id}"))?;
+            let Some(entry) = state.entries.get(&id) else {
+                drop(state);
+                return self.output(id, false);
+            };
             entry.stop.cancel();
             entry.done.clone()
         };
@@ -168,7 +176,23 @@ impl BackgroundCommands {
     ) -> Result<Control, String> {
         let (sender, receiver) = mpsc::channel(1);
         let (done, _) = watch::channel(false);
-        let mut control = Control {
+        if background {
+            let mut state = self.state.lock().unwrap();
+            if state
+                .entries
+                .values()
+                .filter(|entry| entry.command.running)
+                .count()
+                + state.reserved
+                >= MAX_BACKGROUND_COMMANDS
+            {
+                return Err(
+                    "At most 8 background commands may run in one session; stop one first.".into(),
+                );
+            }
+            state.reserved += 1;
+        }
+        let control = Control {
             state: self.state.clone(),
             shutdown: self.shutdown.clone(),
             changed: self.changed.clone(),
@@ -180,10 +204,8 @@ impl BackgroundCommands {
             done,
             promotions: receiver,
             sender: Some(sender),
+            reserved: background,
         };
-        if background {
-            control.detach(&mut Tail::default())?;
-        }
         Ok(control)
     }
 }
@@ -194,11 +216,26 @@ fn read_output(
     consume: bool,
 ) -> Result<BackgroundCommandOutput, String> {
     let mut state = state.lock().unwrap();
+    if let Some(command) = state.restored.get(&id) {
+        return Ok(BackgroundCommandOutput {
+            command: command.clone(),
+            output: "Output unavailable after server restart.".into(),
+            skipped_bytes: 0,
+        });
+    }
     let entry = state
         .entries
         .get_mut(&id)
         .ok_or_else(|| format!("Unknown background command {id}"))?;
-    let (output, skipped_bytes) = entry.output.read(
+    let Some(tail) = &entry.output else {
+        return Ok(BackgroundCommandOutput {
+            command: entry.command.clone(),
+            output: "Output discarded: only the most recent 8 completed commands retain output."
+                .into(),
+            skipped_bytes: 0,
+        });
+    };
+    let (output, skipped_bytes) = tail.read(
         if consume { entry.cursor } else { 0 },
         if consume {
             crate::MAX_MODEL_OUTPUT_BYTES
@@ -207,7 +244,7 @@ fn read_output(
         },
     );
     if consume {
-        entry.cursor = entry.output.total;
+        entry.cursor = tail.total;
     }
     Ok(BackgroundCommandOutput {
         command: entry.command.clone(),
@@ -228,10 +265,14 @@ pub(crate) struct Control {
     done: watch::Sender<bool>,
     pub promotions: mpsc::Receiver<Promotion>,
     sender: Option<mpsc::Sender<Promotion>>,
+    reserved: bool,
 }
 impl Control {
     pub fn started(&mut self) {
-        if self.background_id.is_none() {
+        if self.reserved {
+            self.detach(&mut Tail::default())
+                .expect("reserved background slot");
+        } else {
             self.state.lock().unwrap().foreground =
                 Some((self.item_id.clone(), self.sender.take().unwrap()));
         }
@@ -243,11 +284,17 @@ impl Control {
             .values()
             .filter(|entry| entry.command.running)
             .count()
+            + state.reserved
+            - usize::from(self.reserved)
             >= MAX_BACKGROUND_COMMANDS
         {
             return Err(
                 "At most 8 background commands may run in one session; stop one first.".into(),
             );
+        }
+        if self.reserved {
+            state.reserved -= 1;
+            self.reserved = false;
         }
         state.next_id += 1;
         let id = state.next_id;
@@ -263,7 +310,7 @@ impl Control {
                     running: true,
                     exit_code: None,
                 },
-                output: std::mem::take(output),
+                output: Some(std::mem::take(output)),
                 cursor: 0,
                 stop: self.stop.clone(),
                 done: self.done.subscribe(),
@@ -277,6 +324,10 @@ impl Control {
             state.foreground = None;
         }
         self.background_id = Some(id);
+        self.promotions.close();
+        while let Ok(reply) = self.promotions.try_recv() {
+            let _ = reply.send(Ok(Some(id)));
+        }
         self.changed.send_modify(|revision| *revision += 1);
         Ok(id)
     }
@@ -289,6 +340,8 @@ impl Control {
                 .get_mut(&id)
                 .unwrap()
                 .output
+                .as_mut()
+                .unwrap()
                 .push(text);
         }
     }
@@ -302,6 +355,11 @@ impl Control {
             entry.command.running = false;
             entry.command.exit_code = exit_code;
             entry.command.completed_at = Some(now());
+            state.completed.push_back(id);
+            if state.completed.len() > 8 {
+                let oldest = state.completed.pop_front().unwrap();
+                state.entries.get_mut(&oldest).unwrap().output = None;
+            }
             self.changed.send_modify(|revision| *revision += 1);
         }
         if state
@@ -316,6 +374,9 @@ impl Control {
 }
 impl Drop for Control {
     fn drop(&mut self) {
+        if self.reserved {
+            self.state.lock().unwrap().reserved -= 1;
+        }
         if !*self.done.borrow() {
             self.finish(None);
         }
