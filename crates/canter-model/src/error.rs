@@ -21,6 +21,14 @@ pub struct ModelError {
 }
 
 impl ModelError {
+    /// The retry notice already includes its attempt counter.
+    pub fn retry_reason(&self) -> String {
+        format!(
+            "model request failed: {:?} (HTTP status: {:?})",
+            self.kind, self.status
+        )
+    }
+
     pub fn is_retryable(&self) -> bool {
         matches!(
             self.kind,

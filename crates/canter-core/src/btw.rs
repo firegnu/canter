@@ -197,7 +197,7 @@ async fn answer(
                     });
                     let _ = sender.send(BtwEvent::Retrying {
                         message: canter_protocol::model_retry_message(
-                            &error.to_string(),
+                            &error.retry_reason(),
                             attempt,
                             max_retries,
                             delay.as_secs_f64(),
