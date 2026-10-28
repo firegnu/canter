@@ -227,6 +227,69 @@ async fn exhausted_retries_preserve_last_partial_reply_for_the_next_turn() {
 }
 
 #[tokio::test]
+async fn exhausted_empty_retries_preserve_the_last_nonempty_reply_once() {
+    let root = tempfile::tempdir().unwrap();
+    let mut replies = vec![Reply::sse(chunk(
+        json!({"content":"partial answer","reasoning_content":"partial thought"}),
+        None,
+    ))];
+    replies.extend((0..10).map(|_| Reply {
+        status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        body: "{}".into(),
+        retry_after: None,
+        hang: false,
+    }));
+    replies.push(complete("continued"));
+    let server = Server::start(replies).await;
+    let store = Arc::new(Store::new(root.path().join("sessions")).unwrap());
+    let session = create(root.path(), store, model(&server)).await;
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = events.recv().await.unwrap().unwrap();
+            if let EventPayload::TurnCompleted { turn } = event.payload {
+                assert_eq!(turn.status, TurnStatus::Failed);
+                assert!(turn.error.unwrap().message.contains("retried 10 times"));
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(server.requests.lock().unwrap().len(), 11);
+
+    session.input(input()).await.unwrap();
+    finished(&mut events).await;
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 12);
+    let assistant: Vec<_> = requests[11]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "assistant")
+        .collect();
+    assert_eq!(
+        assistant.len(),
+        1,
+        "last nonempty reply must be retained once"
+    );
+    assert_eq!(assistant[0]["content"], "partial answer");
+    assert_eq!(assistant[0]["reasoning_content"], "partial thought");
+    let snapshot = session.snapshot().await.session;
+    let displayed: Vec<_> = snapshot.turns[0]
+        .items
+        .iter()
+        .filter(|item| matches!(item, Item::AgentMessage { .. } | Item::Reasoning { .. }))
+        .collect();
+    assert_eq!(displayed.len(), 2);
+    assert!(displayed.iter().any(|item| matches!(item, Item::AgentMessage { text, status: None, .. } if text == "partial answer")));
+    assert!(displayed.iter().any(|item| matches!(item, Item::Reasoning { content, status: None, .. } if content == &vec!["partial thought".to_string()])));
+    session.close().await.unwrap();
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn interruption_cancels_a_long_retry_wait_without_another_request() {
     let server = Server::start(vec![Reply {
         status: axum::http::StatusCode::SERVICE_UNAVAILABLE,

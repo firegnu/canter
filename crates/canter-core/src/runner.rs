@@ -354,6 +354,7 @@ async fn model_response(
     let mut started_at = (shared.options.request_time)();
     let mut stream = shared.model.stream(request, cancel.clone());
     let mut response = crate::response::Response::default();
+    let mut last_nonempty_response = crate::response::Response::default();
     let mut pending = Vec::new();
     let mut timer = tokio::time::interval(Duration::from_millis(20));
     let mut reason = None;
@@ -368,7 +369,9 @@ async fn model_response(
                 Some(Ok(ModelEvent::Retrying { error, attempt, max_retries, delay })) => {
                     finish_items(turn_id, &response, &mut pending, true);
                     flush(shared, &mut pending).await?;
-                    response = crate::response::Response::default();
+                    if !response.items.is_empty() {
+                        last_nonempty_response = std::mem::take(&mut response);
+                    }
                     if let Some(usage) = usage.take() {
                         record_usage(shared, usage, None, &model, started_at, true).await?;
                     }
@@ -421,6 +424,10 @@ async fn model_response(
         || error
             .as_ref()
             .is_some_and(|error| !error.is_retryable() || content.is_empty());
+    // Empty failed retries may recover the last partial output, but Esc must not.
+    if !interrupted && preserve_partial && response.items.is_empty() {
+        response = last_nonempty_response;
+    }
     let history = if preserve_partial {
         response
             .items
