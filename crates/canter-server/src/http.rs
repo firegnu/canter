@@ -453,6 +453,8 @@ async fn create(
         let mut sessions = app.sessions.lock().await;
         let id = crate::new_id();
         let settings = SessionSettings {
+            plan_mode: false,
+            pre_plan_approval_policy: None,
             plan_enabled: None,
             cwd: params.cwd,
             name: params.name,

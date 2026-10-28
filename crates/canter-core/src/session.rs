@@ -50,6 +50,7 @@ pub(crate) struct State {
     pub prefix_sections: Vec<ContextSection>,
     pub summary_index: Option<usize>,
     pub history: Vec<Message>,
+    pub plan_mode_notices: Vec<Message>,
     pub user_messages: Vec<Message>,
     pub gate: PermissionGate,
     pub active: Option<Active>,
@@ -64,6 +65,7 @@ pub(crate) struct State {
     plan_tool_calls: u8,
 }
 pub(crate) struct Active {
+    pub plan_handoff: bool,
     pub turn: Turn,
     pub manual_compaction: bool,
     pub user_shell: Option<SessionShellCommandParams>,
@@ -83,6 +85,7 @@ impl State {
             prefix_sections: Vec::new(),
             summary_index: None,
             history: Vec::new(),
+            plan_mode_notices: Vec::new(),
             user_messages: Vec::new(),
             gate: PermissionGate::default(),
             active: None,
@@ -165,6 +168,7 @@ impl State {
             })
             .await?;
         self.history.push(message);
+        crate::context::flush_plan_mode_notices(&mut self.history, &mut self.plan_mode_notices);
         Ok(())
     }
     pub async fn tool_result(
@@ -177,7 +181,8 @@ impl State {
             if succeeded {
                 self.plan_tool_calls = 0;
             }
-        } else if self.journal.snapshot.settings.plan_enabled != Some(false)
+        } else if !self.journal.snapshot.settings.plan_mode
+            && self.journal.snapshot.settings.plan_enabled != Some(false)
             && self.journal.snapshot.current_plan().is_some_and(|plan| {
                 plan.iter().any(|step| {
                     matches!(
@@ -371,6 +376,7 @@ impl Session {
         state.prefix = restored.prefix;
         state.prefix_segments = restored.segments;
         state.history = restored.history;
+        state.plan_mode_notices = restored.plan_mode_notices;
         state.user_messages = restored.users;
         state.summary_index = restored.summary_index;
         for entry in &entries {
@@ -427,7 +433,8 @@ impl Session {
         for mut turn in unfinished {
             for mut item in std::mem::take(&mut turn.items) {
                 match &mut item {
-                    Item::Plan { status, .. }
+                    Item::PlanProposal { status, .. }
+                    | Item::Plan { status, .. }
                     | Item::McpToolCall { status, .. }
                     | Item::WebFetch { status, .. }
                     | Item::CommandExecution { status, .. }
@@ -794,49 +801,99 @@ impl Session {
                 "invalid approval feedback",
             ));
         }
-        let resolution = match (&request.kind, params.decision, &params.answer) {
-            (RequestKind::Approval(approval), Some(decision), None) => {
-                if decision == ApprovalDecision::Unknown
-                    || !approval.available_decisions.contains(&decision)
-                {
-                    return Err(CoreError::new(
-                        ErrorCode::InvalidDecision,
-                        "invalid approval decision",
-                    ));
-                }
-                ApprovalResolution::Answered {
-                    decision,
-                    feedback: params.feedback,
-                }
-            }
-            (RequestKind::UserInput(question), None, Some(answer)) => {
-                let valid = match answer {
-                    UserInputAnswer::Option { label } => {
-                        !label.trim().is_empty()
-                            && question.options.iter().any(|option| option.label == *label)
-                    }
-                    UserInputAnswer::Text { text } => {
-                        !text.trim().is_empty() && !text.contains(['\n', '\r'])
-                    }
-                    UserInputAnswer::Unknown => false,
-                };
-                if !valid {
-                    return Err(CoreError::new(
-                        ErrorCode::InvalidRequest,
-                        "invalid user input answer",
-                    ));
-                }
-                ApprovalResolution::UserInput {
-                    answer: answer.clone(),
-                }
-            }
-            _ => {
+        let plan_answer = params.plan;
+        if plan_answer.is_some()
+            && (params.decision.is_some() || params.answer.is_some() || params.feedback.is_some())
+        {
+            return Err(CoreError::new(
+                ErrorCode::InvalidDecision,
+                "answer must match the request type",
+            ));
+        }
+        let resolution = if let Some(answer) = plan_answer {
+            if !matches!(request.kind, RequestKind::PlanApproval(_))
+                || !state.journal.snapshot.settings.plan_mode
+                || answer.decision == PlanDecision::Unknown
+                || answer.approval_policy == PermissionMode::Unknown
+                || (answer.feedback.is_some()
+                    && (answer.decision != PlanDecision::KeepPlanning
+                        || answer
+                            .feedback
+                            .as_ref()
+                            .is_some_and(|text| text.trim().is_empty())))
+            {
                 return Err(CoreError::new(
-                    ErrorCode::InvalidRequest,
-                    "answer must match the request type",
+                    ErrorCode::InvalidDecision,
+                    "invalid plan answer",
                 ));
             }
+            ApprovalResolution::Plan { answer }
+        } else {
+            match (&request.kind, params.decision, &params.answer) {
+                (RequestKind::Approval(approval), Some(decision), None) => {
+                    if decision == ApprovalDecision::Unknown
+                        || !approval.available_decisions.contains(&decision)
+                    {
+                        return Err(CoreError::new(
+                            ErrorCode::InvalidDecision,
+                            "invalid approval decision",
+                        ));
+                    }
+                    ApprovalResolution::Answered {
+                        decision,
+                        feedback: params.feedback,
+                    }
+                }
+                (RequestKind::UserInput(question), None, Some(answer)) => {
+                    let valid = match answer {
+                        UserInputAnswer::Option { label } => {
+                            !label.trim().is_empty()
+                                && question.options.iter().any(|option| option.label == *label)
+                        }
+                        UserInputAnswer::Text { text } => {
+                            !text.trim().is_empty() && !text.contains(['\n', '\r'])
+                        }
+                        UserInputAnswer::Unknown => false,
+                    };
+                    if !valid {
+                        return Err(CoreError::new(
+                            ErrorCode::InvalidRequest,
+                            "invalid user input answer",
+                        ));
+                    }
+                    ApprovalResolution::UserInput {
+                        answer: answer.clone(),
+                    }
+                }
+                _ => {
+                    return Err(CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "answer must match the request type",
+                    ));
+                }
+            }
         };
+        if let ApprovalResolution::Plan { answer } = &resolution
+            && answer.decision != PlanDecision::KeepPlanning
+        {
+            // The accepted decision and mode transition share the session lock.
+            let mut settings = state.journal.snapshot.settings.clone();
+            settings.plan_mode = false;
+            settings.pre_plan_approval_policy = None;
+            settings.approval_policy = answer.approval_policy;
+            state.plan_mode_notice("[Plan mode disabled] The user approved the plan for implementation under the selected permission policy.").await?;
+            state
+                .journal
+                .append(vec![EventPayload::SessionUpdated { settings }])
+                .await?;
+            if answer.decision == PlanDecision::ClearContext {
+                state
+                    .active
+                    .as_mut()
+                    .expect("plan request has an active turn")
+                    .plan_handoff = true;
+            }
+        }
         let events = state
             .journal
             .append(vec![
@@ -892,6 +949,9 @@ impl Session {
             ));
         }
         let mut settings = state.journal.snapshot.settings.clone();
+        if let Some(plan_mode) = params.plan_mode {
+            state.set_plan_mode(&mut settings, plan_mode).await?;
+        }
         if let Some(name) = params.name {
             settings.name = (!name.is_empty()).then_some(name);
         }
@@ -1137,6 +1197,7 @@ impl Shared {
         let events = state.journal.append(payloads).await?;
         let (done, receiver) = watch::channel(None);
         state.active = Some(Active {
+            plan_handoff: false,
             turn: turn.clone(),
             manual_compaction: false,
             user_shell: None,

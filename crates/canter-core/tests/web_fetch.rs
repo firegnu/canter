@@ -160,6 +160,8 @@ async fn create_with(
         store,
         "fetch".into(),
         SessionSettings {
+            plan_mode: false,
+            pre_plan_approval_policy: None,
             plan_enabled: None,
             cwd: temp.path().to_string_lossy().into(),
             name: None,
@@ -265,7 +267,8 @@ async fn model_fetches_html_as_markdown_and_continues_with_a_fixed_tool_list() {
                 "shell",
                 "ask_user",
                 "web_fetch",
-                "update_plan"
+                "update_plan",
+                "submit_plan"
             ]
         );
         assert_eq!(tools, serde_json::to_value(&requests[1].tools).unwrap());
@@ -360,6 +363,7 @@ async fn approve(session: &Session, request: &PendingRequest) {
         .resolve(
             &request.id,
             RequestResolveParams {
+                plan: None,
                 feedback: None,
                 decision: Some(ApprovalDecision::AcceptForSession),
                 answer: None,

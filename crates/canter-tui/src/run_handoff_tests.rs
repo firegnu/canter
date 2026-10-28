@@ -11,6 +11,59 @@ use serde_json::json;
 const HINT: &str = "Esc again to return to the original session";
 const NOTE: &str = "handoff note to edit";
 
+#[tokio::test]
+async fn clear_context_plan_resolves_then_starts_a_new_session_with_selected_permissions() {
+    let mut test = Harness::new().await;
+    let mut fresh = SessionSnapshot::empty("implementation");
+    fresh.status = SessionStatus::Working;
+    fresh.settings.cwd = test.ui.app().snapshot().settings.cwd.clone();
+    fresh.settings.approval_policy = PermissionMode::AskForExecution;
+    let answer = canter_protocol::PlanAnswer {
+        decision: canter_protocol::PlanDecision::ClearContext,
+        approval_policy: PermissionMode::AskForExecution,
+        feedback: None,
+    };
+    let Harness {
+        chat, ui, requests, ..
+    } = &mut test;
+    let (receiver, ()) = tokio::join!(
+        chat.resolve_plan(ui, "proposal", "# Build\n\nImplement and verify.", answer),
+        async {
+            let resolve = next(requests).await;
+            assert!(resolve.path.ends_with("/requests/proposal"));
+            assert_eq!(resolve.body["plan"]["decision"], "clearContext");
+            assert_eq!(resolve.body["plan"]["approvalPolicy"], "askForExecution");
+            resolve.json(json!({"eventSeq":8,"alreadyResolved":false}));
+            let create = next(requests).await;
+            assert_eq!(create.path, "/v1/sessions");
+            assert_eq!(create.body["cwd"], fresh.settings.cwd);
+            assert_eq!(create.body["approvalPolicy"], "askForExecution");
+            let text = create.body["input"][0]["text"].as_str().unwrap();
+            assert!(text.contains("# Build\n\nImplement and verify."));
+            assert!(text.contains("Implement this plan"));
+            assert!(text.contains("update_plan"));
+            create.json(json!({"session":fresh,"eventSeq":1}));
+            let events = next(requests).await;
+            assert_eq!(events.path, "/v1/events");
+            let open = futures_util::stream::pending::<Result<axum::body::Bytes, io::Error>>();
+            assert!(
+                events
+                    .reply
+                    .send(Response::new(Body::from_stream(open)))
+                    .is_ok()
+            );
+            next(requests)
+                .await
+                .json(json!({"data":[],"nextCursor":null}));
+        }
+    );
+    assert!(receiver.is_some());
+    assert_eq!(test.chat.session, "implementation");
+    assert!(!test.ui.app().snapshot().settings.plan_mode);
+    test.chat.pump.abort();
+    test.server.abort();
+}
+
 fn text(ui: &Ui<TestBackend>) -> String {
     ui.backend()
         .buffer()

@@ -567,6 +567,17 @@ where
                         messages = receiver;
                     }
                 }
+                Some(Action::ResolvePlan {
+                    request_id,
+                    plan,
+                    answer,
+                }) => {
+                    if let Some(receiver) =
+                        chat.resolve_plan(&mut ui, &request_id, &plan, answer).await
+                    {
+                        messages = receiver;
+                    }
+                }
                 Some(Action::PickModel) => match chat.client.list_models().await {
                     Ok(models) => {
                         ui.app_mut().set_models(&models);
@@ -1033,6 +1044,69 @@ impl AutoName {
 }
 
 impl<C: Connector> Chat<C> {
+    async fn resolve_plan<B: Backend>(
+        &mut self,
+        ui: &mut Ui<B>,
+        request_id: &str,
+        plan: &str,
+        answer: canter_protocol::PlanAnswer,
+    ) -> Option<mpsc::UnboundedReceiver<Message>> {
+        let params = RequestResolveParams {
+            plan: Some(answer.clone()),
+            decision: None,
+            feedback: None,
+            answer: None,
+            client_name: self.client_name.clone(),
+        };
+        match self
+            .client
+            .resolve(&self.session, request_id, &params)
+            .await
+        {
+            Ok(response) if response.already_resolved => {
+                ui.app_mut().answer_late();
+                return None;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                ui.app_mut().answer_failed(request_id, &error.to_string());
+                return None;
+            }
+        }
+        if answer.decision != canter_protocol::PlanDecision::ClearContext {
+            return None;
+        }
+        let settings = &ui.app().snapshot().settings;
+        let checklist = if settings.plan_enabled != Some(false) {
+            " First call update_plan to turn the plan's steps into a checklist, then implement and update each step as it is completed."
+        } else {
+            ""
+        };
+        let params = SessionCreateParams {
+            cwd: settings.cwd.clone(),
+            env: self.env.clone(),
+            model: settings.model.clone(),
+            reasoning_effort: (settings.reasoning_effort
+                != canter_protocol::ReasoningEffort::Unknown)
+                .then_some(settings.reasoning_effort),
+            approval_policy: answer.approval_policy,
+            input: Some(vec![UserInput::Text {
+                text: format!("Implement this plan and verify the result.{checklist}\n\n{plan}"),
+            }]),
+            name: None,
+            client_name: self.client_name.clone(),
+        };
+        let failed = "Could not start the plan in a new session";
+        match self.client.create_session(&params).await {
+            Ok(created) => self.show(ui, created.session, failed).await,
+            Err(error) => {
+                ui.app_mut().warning(&format!(
+                    "{failed}: {error}. The complete plan is retained in this conversation."
+                ));
+                None
+            }
+        }
+    }
     /// `/new`: a session with the directory, model and permission mode of the
     /// one on screen, shown in its place. The one before stays open on the
     /// server. Returns where the new session's events come in.
@@ -1452,6 +1526,7 @@ impl<C: Connector> Chat<C> {
                     _ => unreachable!(),
                 };
                 let params = RequestResolveParams {
+                    plan: None,
                     feedback,
                     decision,
                     answer,
@@ -1536,7 +1611,8 @@ impl<C: Connector> Chat<C> {
             | Action::Mcp
             | Action::Files
             | Action::ListSkills
-            | Action::ExternalEditor => {}
+            | Action::ExternalEditor
+            | Action::ResolvePlan { .. } => {}
         }
     }
 }

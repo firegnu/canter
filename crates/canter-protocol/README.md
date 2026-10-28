@@ -351,3 +351,12 @@ acceptForSession 的授权范围为该网址的规范化主机名及有效端口
 
 只参考 Codex `rust-v0.163.0` 的 `thread/revert.beforeTurnId`，没有复制代码。
 与 Codex 的差异：canter 也恢复自己的 write/edit 文件，提供预览和外部修改确认，日志只追加。
+
+计划模式（P2-103）：PATCH 的可选 `planMode` 独立于 `approvalPolicy`，会话设置同时保存
+`prePlanApprovalPolicy`；缺少 planMode 按 false，false 序列化时省略。`planApproval` 请求带
+`itemId/plan/approvalPolicy`，以 `RequestResolveParams.plan` 的
+`{decision: implement | clearContext | keepPlanning, approvalPolicy, feedback?}` 回答，
+与 decision/answer 互斥。结果为 `ApprovalResolution::Plan`；`planProposal` 项目保存
+Markdown 全文和 answer，`blocked` 状态表示计划模式硬挡。退出模式取消待答方案，晚答返回
+alreadyResolved。clearContext 正常结束原轮，由作答客户端按普通创建接口新建同目录会话、
+带所选权限和整份方案作为 input；其它客户端和 /resume 仍可读取原会话。

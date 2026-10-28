@@ -16,6 +16,8 @@ fn a_second_writer_cannot_lock_the_same_session() {
         .create(
             "locked",
             SessionSettings {
+                plan_mode: false,
+                pre_plan_approval_policy: None,
                 plan_enabled: None,
                 cwd: temp.path().to_string_lossy().into(),
                 name: None,

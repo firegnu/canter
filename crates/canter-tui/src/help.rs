@@ -75,7 +75,10 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
                 "Show or fold thinking, long output and long diffs",
             ),
             ("Ctrl+F", "Find in the conversation"),
-            ("Shift+Tab", "Next permission mode"),
+            (
+                "Shift+Tab",
+                "Next mode: Always ask → Ask for execution → Allow all → Plan",
+            ),
             ("Drag", "Select text; letting go copies it"),
             ("Double / triple click", "Copy a word / a row"),
             ("Click", "Open a link, or a path in a card title"),
@@ -84,6 +87,10 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     (
         "Approvals and questions",
         &[
+            (
+                "Shift+Tab (plan)",
+                "Choose the permission mode for implementation",
+            ),
             ("↑ / ↓", "Select an option"),
             ("Enter", "Choose the selected option; send what you wrote"),
             ("1–9", "Choose option N"),

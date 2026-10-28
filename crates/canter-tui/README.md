@@ -695,3 +695,10 @@ Enter 在命令名没打完时只补全、不执行，打完整了才执行。Es
 - **深浅**：`CANTER_THEME=dark` 或 `light` 优先（别的值不算）；否则问一次终端底色（OSC 11，用
   terminal-colorsaurus，最多等 200 ms，亮度过半算浅色）；问不到看 `COLORFGBG` 的最后一个数（0–6、8 深，
   7、9–15 浅）；还不知道就当「不知道」。只有知道是浅色底时，警告文字才换成默认色加粗。
+
+计划模式：`/plan` 进出；Shift+Tab 轮换 Always ask → Ask for execution → Allow all → Plan → Always ask。
+状态栏权限项显示洋红色 `Plan`；自定义状态命令还会收到公开布尔字段 `planMode`。
+方案批准框完整显示 Markdown，PgUp/PgDn 滚动；Mode 行用 Shift+Tab 只轮换三档权限。
+可批准本轮实施、批准清空上下文后实施，或保持计划模式并附一行意见（空意见 Enter 也可）。
+清空上下文复用新建会话与切换，自动发送方案和实施指令，原会话保留。批准框内可输入 `/plan`
+退出计划模式；服务端取消待答方案。对话里的方案卡片用 Ctrl+O 展开，/export 保留全文和结果。

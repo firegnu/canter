@@ -44,6 +44,8 @@ pub(crate) fn card(
     }
     let (title, style) = if status == ItemStatus::Completed {
         (label(plan), Style::default().bold())
+    } else if status == ItemStatus::Blocked {
+        ("Plan update blocked (Plan mode)".into(), theme::warning())
     } else {
         ("Plan update failed".into(), theme::failure())
     };
@@ -143,6 +145,8 @@ pub(crate) fn pinned(snapshot: &SessionSnapshot, width: u16, room: usize) -> Vec
 pub(crate) fn markdown(plan: &[PlanStep], explanation: Option<&str>, status: ItemStatus) -> String {
     let mut out = if status == ItemStatus::Completed {
         label(plan)
+    } else if status == ItemStatus::Blocked {
+        "Plan update blocked (Plan mode)".into()
     } else {
         "Plan update failed".into()
     };

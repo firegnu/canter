@@ -17,6 +17,23 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 #[test]
+fn plan_command_and_four_position_mode_cycle() {
+    let mut screen = Screen::new();
+    assert!(
+        matches!(screen.enter("/plan"), Some(Action::Update(params)) if params.plan_mode == Some(true)),
+        "/plan must enter Plan mode"
+    );
+    screen.event(json!({"type":"session.updated","settings":{
+        "cwd":"/tmp","name":null,"model":"fake","approvalPolicy":"allowAll","planMode":true,"prePlanApprovalPolicy":"allowAll"
+    }}));
+    screen.draw();
+    assert!(screen.text().contains("Plan"));
+    assert!(
+        matches!(screen.enter("/plan"), Some(Action::Update(params)) if params.plan_mode == Some(false) && params.approval_policy.is_none())
+    );
+}
+
+#[test]
 fn rewind_command_dispatches_and_event_removes_rendered_turns() {
     let mut screen = Screen::new();
     assert!(
@@ -141,7 +158,7 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 21] = [
+const COMMANDS: [(&str, &str); 22] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
@@ -154,6 +171,7 @@ const COMMANDS: [(&str, &str); 21] = [
     ("/mode", "Change the permission mode"),
     ("/model", "Change the model"),
     ("/new", "Start a new session"),
+    ("/plan", "Enter or leave read-only Plan mode"),
     ("/resume", "Switch to another session"),
     ("/skills", "List this session's skills"),
     ("/think", "Change thinking effort (none, low, high, max)"),
@@ -457,8 +475,8 @@ fn skills_empty_screen_explains_both_directories() {
 /// narrows the list; deleting the `/` closes it.
 #[test]
 fn a_slash_lists_the_commands_above_the_input_box() {
-    // Since /statusline, /diff and /export the whole list is three rows taller than the usual screen holds.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 3);
+    // Leave room for the command list, including /plan.
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 4);
     screen.type_text("/");
     screen.draw();
     let list = screen.above_box(COMMANDS.len());
@@ -493,7 +511,7 @@ fn a_slash_lists_the_commands_above_the_input_box() {
 #[test]
 fn up_down_tab_and_enter_work_on_the_list() {
     // The whole list, as above.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 3);
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 4);
     screen.type_text("/");
     screen.draw();
     assert_eq!(screen.key(KeyCode::Down), None);

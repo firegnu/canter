@@ -87,6 +87,8 @@ async fn create(
         store.clone(),
         "s1".into(),
         SessionSettings {
+            plan_mode: false,
+            pre_plan_approval_policy: None,
             plan_enabled: None,
             cwd: temp.path().to_string_lossy().into(),
             model: "fake".into(),
@@ -201,6 +203,7 @@ async fn review_turn_is_readonly_even_with_session_grants_and_restores_permissio
                                 .resolve(
                                     &request.id,
                                     RequestResolveParams {
+                                        plan: None,
                                         feedback: None,
                                         decision: Some(ApprovalDecision::AcceptForSession),
                                         answer: None,
@@ -282,6 +285,7 @@ async fn review_turn_is_readonly_even_with_session_grants_and_restores_permissio
                             .resolve(
                                 &request.id,
                                 RequestResolveParams {
+                                    plan: None,
                                     feedback: None,
                                     decision: Some(ApprovalDecision::Accept),
                                     answer: None,
@@ -523,6 +527,7 @@ async fn interrupted_review_restores_the_next_inputs_original_permissions() {
         .resolve(
             &request.id,
             RequestResolveParams {
+                plan: None,
                 feedback: None,
                 decision: Some(ApprovalDecision::Accept),
                 answer: None,
@@ -1062,6 +1067,8 @@ async fn unreadable_project_instructions_warn_and_do_not_block_the_model() {
             store.clone(),
             "s1".into(),
             SessionSettings {
+                plan_mode: false,
+                pre_plan_approval_policy: None,
                 plan_enabled: None,
                 cwd: temp.path().to_string_lossy().into(),
                 model: "fake".into(),
@@ -1251,6 +1258,7 @@ async fn cancel_approval_keeps_the_declined_result_and_stops_the_turn() {
         .resolve(
             &request.id,
             RequestResolveParams {
+                plan: None,
                 feedback: None,
                 decision: Some(ApprovalDecision::Cancel),
                 answer: None,

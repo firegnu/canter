@@ -40,6 +40,26 @@ pub struct PermissionGate {
 }
 
 impl PermissionGate {
+    /// Planning restrictions precede grants and ordinary permission decisions.
+    pub fn evaluate_plan<'a>(
+        &self,
+        call: &'a PreparedCall,
+        mode: PermissionMode,
+    ) -> PermissionCheck<'a> {
+        match call.tool {
+            Tool::Read | Tool::AskUser | Tool::SubmitPlan => {
+                PermissionCheck::Execute(ExecutionPermit { call })
+            }
+            Tool::WebFetch => self.evaluate(call, mode),
+            Tool::Shell if matches!(&call.action, Action::Shell(args) if call.executor.is_readonly_shell(&args.command)) => {
+                PermissionCheck::Execute(ExecutionPermit { call })
+            }
+            _ => PermissionCheck::Deny {
+                cancel_turn: false,
+                feedback: None,
+            },
+        }
+    }
     /// Review restrictions precede both permission mode and session grants.
     pub fn evaluate_review<'a>(&self, call: &'a PreparedCall) -> PermissionCheck<'a> {
         match call.tool {
@@ -47,12 +67,16 @@ impl PermissionGate {
             Tool::Shell if matches!(&call.action, Action::Shell(args) if call.executor.is_readonly_shell(&args.command)) => {
                 PermissionCheck::Execute(ExecutionPermit { call })
             }
-            Tool::Write | Tool::Edit | Tool::Shell | Tool::AskUser | Tool::Mcp | Tool::WebFetch => {
-                PermissionCheck::Deny {
-                    cancel_turn: false,
-                    feedback: None,
-                }
-            }
+            Tool::Write
+            | Tool::Edit
+            | Tool::Shell
+            | Tool::AskUser
+            | Tool::Mcp
+            | Tool::WebFetch
+            | Tool::SubmitPlan => PermissionCheck::Deny {
+                cancel_turn: false,
+                feedback: None,
+            },
         }
     }
     /// The caller must first correlate the answer with this session's pending request

@@ -525,7 +525,7 @@ async fn config_command_gets_only_public_json_and_terminal_environment() {
         json!({
             "version":"0.1.0 · test", "sessionId":"s1", "sessionName":"task",
             "cwd":home,"gitBranch":null,"model":"test-model","reasoningEffort":"high",
-            "approvalPolicy":"askForExecution","status":"working",
+            "approvalPolicy":"askForExecution","planMode":false,"status":"working",
             "context":{"usedTokens":85000,"windowTokens":200000,"percent":43,
                 "autoCompactTokens":100000,"autoCompactPercentLeft":15},
             "cost":{"usd":0.31,"unknown":false},"cache":{"totalPercent":92,"lastPercent":99},

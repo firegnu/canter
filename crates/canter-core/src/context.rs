@@ -37,6 +37,10 @@ pub(crate) enum HistoryEntry {
         #[serde(default)]
         user_input: bool,
     },
+    /// A hidden mode notice is queued until the current tool batch is complete.
+    PlanModeNotice {
+        message: Message,
+    },
     CompactionRequest {
         messages: Vec<Message>,
     },
@@ -73,6 +77,7 @@ pub(crate) struct Restored {
     pub history: Vec<Message>,
     pub users: Vec<Message>,
     pub summary_index: Option<usize>,
+    pub plan_mode_notices: Vec<Message>,
 }
 
 pub(crate) fn restore(
@@ -84,8 +89,10 @@ pub(crate) fn restore(
     let mut history = Vec::new();
     let mut users = Vec::new();
     let mut summary_index = None;
+    let mut plan_mode_notices = Vec::new();
     for entry in entries {
         match entry {
+            HistoryEntry::PlanModeNotice { message } => plan_mode_notices.push(message),
             HistoryEntry::TurnBoundary { turn_id } => {
                 rewind.boundary(turn_id, history.len(), users.len())
             }
@@ -141,6 +148,7 @@ pub(crate) fn restore(
             HistoryEntry::CompactionRequest { .. } => {}
             HistoryEntry::Unknown => {}
         }
+        flush_plan_mode_notices(&mut history, &mut plan_mode_notices);
     }
     Restored {
         prefix,
@@ -148,7 +156,26 @@ pub(crate) fn restore(
         history,
         users,
         summary_index,
+        plan_mode_notices,
     }
+}
+
+/// Never separate an assistant's tool calls from their results. The notice record
+/// itself is durable; replay applies this same rule without rewriting old entries.
+pub(crate) fn flush_plan_mode_notices(history: &mut Vec<Message>, notices: &mut Vec<Message>) {
+    if notices.is_empty() {
+        return;
+    }
+    if let Some(index) = history.iter().rposition(|message| matches!(message, Message::Assistant { .. }))
+        && let Message::Assistant { content } = &history[index]
+        && content.iter().any(|part| match part {
+            AssistantContent::ToolCall(call) => !history[index + 1..].iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, .. } if tool_call_id == &call.id)),
+            _ => false,
+        })
+    {
+        return;
+    }
+    history.append(notices);
 }
 
 pub(crate) fn estimate(text: &str) -> u64 {
@@ -394,6 +421,8 @@ mod tests {
             Arc::new(canter_store::Store::new(temp.path().join("state")).unwrap()),
             "context".into(),
             SessionSettings {
+                plan_mode: false,
+                pre_plan_approval_policy: None,
                 plan_enabled: None,
                 cwd: temp.path().to_string_lossy().into_owned(),
                 name: None,

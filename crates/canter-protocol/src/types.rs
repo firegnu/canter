@@ -62,6 +62,13 @@ impl ReasoningEffort {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSettings {
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
+    pub plan_mode: bool,
+    /// Permission mode to restore when the user leaves planning without a selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pre_plan_approval_policy: Option<PermissionMode>,
     /// Effective tool switch, frozen when the server opens this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -74,6 +81,10 @@ pub struct SessionSettings {
     #[ts(optional = nullable)]
     pub reasoning_effort: ReasoningEffort,
     pub approval_policy: PermissionMode,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -111,6 +122,8 @@ impl SessionSnapshot {
         Self {
             id: id.into(),
             settings: SessionSettings {
+                plan_mode: false,
+                pre_plan_approval_policy: None,
                 plan_enabled: None,
                 cwd: String::new(),
                 name: None,
@@ -245,6 +258,7 @@ pub enum UserInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ItemStatus {
+    Blocked,
     InProgress,
     Completed,
     Failed,
@@ -276,6 +290,12 @@ pub struct PlanStep {
     rename_all_fields = "camelCase"
 )]
 pub enum Item {
+    PlanProposal {
+        id: String,
+        plan: String,
+        answer: Option<PlanAnswer>,
+        status: ItemStatus,
+    },
     Plan {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -381,6 +401,7 @@ impl Item {
         match self {
             Self::UserMessage { id, .. }
             | Self::Plan { id, .. }
+            | Self::PlanProposal { id, .. }
             | Self::AgentMessage { id, .. }
             | Self::Reasoning { id, .. }
             | Self::McpToolCall { id, .. }
@@ -444,10 +465,39 @@ pub struct PendingRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum RequestKind {
+    PlanApproval(PlanApprovalRequest),
     Approval(ApprovalRequest),
     UserInput(UserInputRequest),
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum PlanDecision {
+    Implement,
+    ClearContext,
+    KeepPlanning,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanAnswer {
+    pub decision: PlanDecision,
+    pub approval_policy: PermissionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub feedback: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanApprovalRequest {
+    pub item_id: String,
+    pub plan: String,
+    pub approval_policy: PermissionMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -490,6 +540,9 @@ pub enum UserInputAnswer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ApprovalResolution {
+    Plan {
+        answer: PlanAnswer,
+    },
     Answered {
         decision: ApprovalDecision,
         #[serde(default, skip_serializing_if = "Option::is_none")]

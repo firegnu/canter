@@ -33,6 +33,7 @@ pub enum Tool {
     AskUser,
     WebFetch,
     UpdatePlan,
+    SubmitPlan,
     Mcp,
 }
 
@@ -52,7 +53,7 @@ pub struct ToolDefinition {
 }
 
 impl Tool {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Read,
         Self::Write,
         Self::Edit,
@@ -60,6 +61,7 @@ impl Tool {
         Self::AskUser,
         Self::WebFetch,
         Self::UpdatePlan,
+        Self::SubmitPlan,
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -75,6 +77,7 @@ impl Tool {
             Self::AskUser => "ask_user",
             Self::WebFetch => "web_fetch",
             Self::UpdatePlan => "update_plan",
+            Self::SubmitPlan => "submit_plan",
             Self::Mcp => "mcp",
         }
     }
@@ -84,11 +87,19 @@ impl Tool {
             Self::Read => Risk::Read,
             Self::Write | Self::Edit => Risk::Write,
             Self::Shell | Self::Mcp | Self::WebFetch => Risk::Execute,
-            Self::AskUser | Self::UpdatePlan => Risk::Interaction,
+            Self::AskUser | Self::UpdatePlan | Self::SubmitPlan => Risk::Interaction,
         }
     }
 
     pub fn definition(self) -> ToolDefinition {
+        if self == Self::SubmitPlan {
+            return ToolDefinition {
+                name: self.name(),
+                description: "Submit a complete Markdown implementation plan for the user's approval while in Plan mode. Investigate first and clarify unresolved requirements with ask_user. Include the intended changes, steps, and verification so implementation can proceed from this plan alone. This tool does not enter Plan mode; only the user can enable it. Outside Plan mode, continue the task under the current permissions.",
+                parameters: json!({"type":"object","properties":{"plan":{"type":"string","minLength":1}},"required":["plan"],"additionalProperties":false}),
+                risk: self.risk(),
+            };
+        }
         if self == Self::UpdatePlan {
             return ToolDefinition {
                 name: self.name(),
@@ -223,6 +234,12 @@ struct UpdatePlanArgs {
     plan: Vec<PlanStep>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubmitPlanArgs {
+    plan: String,
+}
+
 // Model arguments use snake_case; protocol events use camelCase.
 fn deserialize_plan<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -271,6 +288,7 @@ struct Replacement {
 }
 
 enum Action {
+    SubmitPlan(SubmitPlanArgs),
     UpdatePlan(UpdatePlanArgs),
     WebFetch(reqwest::Url),
     Mcp(mcp::McpTool),
@@ -326,6 +344,12 @@ impl PreparedCall {
     }
     fn item(&self, status: ItemStatus) -> Item {
         match &self.action {
+            Action::SubmitPlan(args) => Item::PlanProposal {
+                id: self.id.clone(),
+                plan: args.plan.clone(),
+                answer: None,
+                status,
+            },
             Action::UpdatePlan(args) => Item::Plan {
                 id: self.id.clone(),
                 explanation: args.explanation.clone(),
@@ -427,6 +451,59 @@ pub struct Tools {
 }
 
 impl Tools {
+    /// Plan mode uses exactly the executor's existing read-only shell whitelist.
+    pub fn allowed_in_plan_mode(&self, name: &str, raw_arguments: &str) -> bool {
+        match self.find(name) {
+            Some(Tool::Read | Tool::WebFetch | Tool::AskUser | Tool::SubmitPlan) => true,
+            Some(Tool::Shell) => serde_json::from_str::<Value>(raw_arguments)
+                .ok()
+                .and_then(|args| {
+                    args["command"]
+                        .as_str()
+                        .map(|command| self.executor.is_readonly_shell(command))
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
+    pub fn blocked_in_plan_mode(&self, name: &str, id: String, raw_arguments: &str) -> ToolOutput {
+        let arguments = serde_json::from_str(raw_arguments).unwrap_or(Value::Null);
+        let text = format!(
+            "Plan mode: {name} is not allowed. Use read-only tools to investigate, ask_user to clarify requirements, and submit_plan when the complete plan is ready. Do not implement changes until the user approves or leaves Plan mode."
+        );
+        let mut output = tool_error(
+            self.find(name)
+                .or_else(|| Tool::from_name(name))
+                .expect("known tool"),
+            id,
+            &arguments,
+            text,
+            ToolOutcome::Declined,
+            self.executor.cwd(),
+        );
+        if let Item::McpToolCall {
+            server,
+            tool,
+            result,
+            ..
+        } = &mut output.item
+        {
+            if let Some(mcp) = self.mcp.iter().find(|tool| tool.name == name) {
+                *server = mcp.server().into();
+                *tool = mcp.tool.clone();
+            }
+            *result = output.text.clone();
+        }
+        match &mut output.item {
+            Item::Plan { status, .. }
+            | Item::FileChange { status, .. }
+            | Item::CommandExecution { status, .. }
+            | Item::McpToolCall { status, .. } => *status = ItemStatus::Blocked,
+            _ => unreachable!("only mutating tools are blocked in plan mode"),
+        }
+        output
+    }
     /// Explicit user input bypasses the model's permission gate, but uses the
     /// same executor, capture limits and process-group cleanup as shell tools.
     pub async fn user_shell(
@@ -634,6 +711,13 @@ impl Tools {
         cancel: &CancellationToken,
     ) -> Result<Action, String> {
         match tool {
+            Tool::SubmitPlan => {
+                let args: SubmitPlanArgs = parse(arguments)?;
+                if args.plan.trim().is_empty() {
+                    return Err("submit_plan requires a non-empty Markdown plan".into());
+                }
+                Ok(Action::SubmitPlan(args))
+            }
             Tool::UpdatePlan => {
                 let args: UpdatePlanArgs = parse(arguments)?;
                 if args.plan.iter().any(|step| step.step.trim().is_empty()) {
@@ -861,7 +945,7 @@ impl Tools {
                     },
                 }
             }
-            Action::AskUser(_) => call.failed_output(
+            Action::AskUser(_) | Action::SubmitPlan(_) => call.failed_output(
                 "User input must be handled by the session".into(),
                 ToolOutcome::Failed,
             ),
@@ -1148,6 +1232,12 @@ fn tool_error(
     cwd: &std::path::Path,
 ) -> ToolOutput {
     let item = match tool {
+        Tool::SubmitPlan => Item::PlanProposal {
+            id,
+            plan: arguments["plan"].as_str().unwrap_or_default().into(),
+            answer: None,
+            status: ItemStatus::Failed,
+        },
         Tool::UpdatePlan => Item::Plan {
             id,
             explanation: Some(text.clone()),

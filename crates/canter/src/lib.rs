@@ -206,6 +206,7 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
         .map_err(|error| error.to_string())?;
     let yolo = args.yolo.then_some(PermissionMode::AllowAll);
     let update = |model| SessionUpdateParams {
+        plan_mode: None,
         name: None,
         model,
         reasoning_effort: None,

@@ -36,7 +36,14 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         };
         let mut state = shared.state.lock().await;
         // An input accepted just as the model stopped still belongs to this turn.
-        if result.is_ok() && !cancel.is_cancelled() && !state.steers.is_empty() {
+        if result.is_ok()
+            && !cancel.is_cancelled()
+            && !state.steers.is_empty()
+            && !state
+                .active
+                .as_ref()
+                .is_some_and(|active| active.plan_handoff)
+        {
             continue;
         }
         let mut completed = turn;
@@ -294,6 +301,16 @@ async fn conversation(
                 return Ok(());
             }
             execute(shared, turn_id, call, cancel).await?;
+            if shared
+                .state
+                .lock()
+                .await
+                .active
+                .as_ref()
+                .is_some_and(|active| active.plan_handoff)
+            {
+                return Ok(());
+            }
         }
         compacted = false;
     }
@@ -524,7 +541,19 @@ async fn execute(
     call: ToolCall,
     cancel: &CancellationToken,
 ) -> Result<(), CoreError> {
-    let Some(tool) = shared.tools.find(&call.name) else {
+    let plan_mode = shared
+        .state
+        .lock()
+        .await
+        .journal
+        .snapshot
+        .settings
+        .plan_mode;
+    let Some(tool) = shared
+        .tools
+        .find(&call.name)
+        .or_else(|| (plan_mode && call.name == "update_plan").then_some(Tool::UpdatePlan))
+    else {
         let mut state = shared.state.lock().await;
         state
             .tool_result(&call, "Unknown tool".into(), false)
@@ -544,7 +573,15 @@ async fn execute(
         .active
         .as_ref()
         .is_some_and(|active| active.turn.review.is_some());
-    let prepared = if review && matches!(tool, Tool::Write | Tool::Edit) {
+    let prepared = if plan_mode
+        && !shared
+            .tools
+            .allowed_in_plan_mode(&call.name, &call.arguments)
+    {
+        Err(shared
+            .tools
+            .blocked_in_plan_mode(&call.name, id("tool"), &call.arguments))
+    } else if review && matches!(tool, Tool::Write | Tool::Edit) {
         Err(ToolOutput {
             text: "review is read-only".into(),
             item: Item::FileChange {
@@ -579,6 +616,9 @@ async fn execute(
         Ok(prepared) if prepared.tool() == Tool::AskUser => {
             ask_user(shared, turn_id, &prepared, cancel).await?
         }
+        Ok(prepared) if prepared.tool() == Tool::SubmitPlan => {
+            crate::plan_mode::submit(shared, turn_id, &prepared, cancel).await?
+        }
         Ok(prepared) => {
             let permission = permission(shared, turn_id, &prepared, cancel).await?;
             match permission {
@@ -607,7 +647,24 @@ async fn execute(
                         cancel.cancel();
                     }
                     let mut output = prepared.declined_output(feedback.as_deref());
-                    if review {
+                    if shared
+                        .state
+                        .lock()
+                        .await
+                        .journal
+                        .snapshot
+                        .settings
+                        .plan_mode
+                        && !shared
+                            .tools
+                            .allowed_in_plan_mode(&call.name, &call.arguments)
+                    {
+                        output = shared.tools.blocked_in_plan_mode(
+                            &call.name,
+                            output.item.id().unwrap().into(),
+                            &call.arguments,
+                        );
+                    } else if review {
                         output.text = "review is read-only".into();
                     }
                     output
@@ -690,7 +747,21 @@ async fn permission<'a>(
                 item: call.started_item(),
             }])
             .await?;
-        let permission = if state
+        let review_denied = state
+            .active
+            .as_ref()
+            .is_some_and(|active| active.turn.review.is_some())
+            && matches!(
+                state.gate.evaluate_review(call),
+                PermissionCheck::Deny { .. }
+            );
+        let permission = if review_denied {
+            state.gate.evaluate_review(call)
+        } else if state.journal.snapshot.settings.plan_mode {
+            state
+                .gate
+                .evaluate_plan(call, state.journal.snapshot.settings.approval_policy)
+        } else if state
             .active
             .as_ref()
             .is_some_and(|active| active.turn.review.is_some())
@@ -744,10 +815,21 @@ async fn permission<'a>(
     let ApprovalResolution::Answered { decision, feedback } = resolution else {
         return Err(CoreError::internal());
     };
-    shared
-        .state
-        .lock()
-        .await
+    let mut state = shared.state.lock().await;
+    if state.journal.snapshot.settings.plan_mode
+        && matches!(
+            state
+                .gate
+                .evaluate_plan(call, state.journal.snapshot.settings.approval_policy),
+            PermissionCheck::Deny { .. }
+        )
+    {
+        return Ok(Some(PermissionCheck::Deny {
+            cancel_turn: false,
+            feedback: None,
+        }));
+    }
+    state
         .gate
         .resolve(call, decision, feedback)
         .map(Some)
