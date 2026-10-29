@@ -6,7 +6,11 @@ use canter::{ChatArgs, Command, Context, USAGE};
 #[tokio::main]
 async fn main() -> ExitCode {
     let result = match canter::parse(std::env::args_os().skip(1)) {
-        Ok(Command::Serve { replace }) => canter_server::serve(replace, canter::VERSION)
+        Ok(Command::Serve {
+            replace: true,
+            foreground: false,
+        }) => replace().await,
+        Ok(Command::Serve { replace, .. }) => canter_server::serve(replace, canter::VERSION)
             .await
             .map_err(|error| error.to_string()),
         Ok(Command::Chat(args)) => chat(args).await,
@@ -36,6 +40,21 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+async fn replace() -> Result<(), String> {
+    let home = canter_server::state_directory().map_err(|error| error.to_string())?;
+    let executable = std::env::current_exe()
+        .map_err(|_| "cannot find the canter executable's own path".to_owned())?;
+    let connection = canter_server::replace_server(&home, &executable)
+        .await
+        .map_err(|error| error.to_string())?;
+    println!(
+        "canter server ready · {} · pid {}",
+        canter::VERSION,
+        connection.registration.pid
+    );
+    Ok(())
 }
 
 async fn chat(args: ChatArgs) -> Result<(), String> {

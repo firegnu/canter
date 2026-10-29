@@ -1217,7 +1217,8 @@ async fn a_ready_line_is_printed_once_clients_can_connect_and_again_after_replac
         1,
         "{log}"
     );
-    let replacement = Fixture::spawn_args(fixture.root.path(), &["serve", "--replace"]);
+    let replacement =
+        Fixture::spawn_args(fixture.root.path(), &["serve", "--replace", "--foreground"]);
     let mut previous = std::mem::replace(&mut fixture.child, replacement);
     assert!(
         tokio::time::timeout(Duration::from_secs(15), previous.wait())
@@ -1409,8 +1410,8 @@ async fn exit_signal_closes_active_work(signal: nix::sys::signal::Signal, replac
             matches!(event.payload, EventPayload::RequestOpened { .. })
         })
         .await;
-    let mut successor =
-        replace.then(|| Fixture::spawn_args(fixture.root.path(), &["serve", "--replace"]));
+    let mut successor = replace
+        .then(|| Fixture::spawn_args(fixture.root.path(), &["serve", "--replace", "--foreground"]));
     if replace {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {

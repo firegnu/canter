@@ -5,7 +5,7 @@ mod discovery;
 mod http;
 mod lifecycle;
 
-pub use discovery::{Connection, discover, ensure_server};
+pub use discovery::{Connection, discover, ensure_server, replace_server};
 pub use lifecycle::{Registration, UPGRADE_GRACE};
 
 use std::{

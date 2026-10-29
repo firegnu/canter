@@ -405,7 +405,8 @@ async fn stdio_and_http_tools_reach_model_in_fixed_order_and_return_results() {
     assert_eq!(status["data"][1]["tools"][0]["name"], "mcp__remote__echo");
     let old = OwnedPid::read(&temp.path().join("pid"));
     let old_child = OwnedPid::read(&temp.path().join("child-pid"));
-    let replacement = Fixture::spawn_args(fixture.root.path(), &["serve", "--replace"]);
+    let replacement =
+        Fixture::spawn_args(fixture.root.path(), &["serve", "--replace", "--foreground"]);
     let mut previous = std::mem::replace(&mut fixture.child, replacement);
     assert!(
         tokio::time::timeout(Duration::from_secs(15), previous.wait())
