@@ -21,7 +21,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 跟着改的：第一期改文件用「整文件写 + 按文字替换」；Codex 的 apply_patch 是给 GPT 用的，等接 OpenAI 时再搬（用户 10-24 选定）。
 7. **名字和仓库**：`canter`（马的「慢跑」步法），仓库 `github.com/firegnu/canter`，公开，Apache-2.0。用户：「开源，repo就放在github上」。
 8. **协议：结构照 Codex，传输和类型 canter 自己定（报告 §5.7 的 C）**。2026-10-24 在 canter 仓库定的，用户：「好，就用 C，改 DESIGN」。
-   - LSP（P2-134，10-29 主控确认）：新增 `diagnostics` 项目、`languageServer.updated` 状态事件、可选快照 `languageServers` 和 `lsp` 能力标识；查询诊断/服务器及按会话单个订阅停止/重试。沿用会话→轮→项目和 `item.started/completed`，LSP 字段与端点是 canter 扩展，不是 Codex v2 原有接口。具体字段、兼容和模型交付见下文「LSP 诊断交付和协议」。
+   - LSP（P2-134，10-29 主控确认）：新增 `diagnostics` 项目、`languageServer.updated` 状态事件、可选快照 `languageServers` 和 `lsp` 能力标识；查询诊断/服务器及按会话单个订阅停止/重试。沿用会话→轮→项目和 `item.started/completed`，LSP 字段与端点是 canter 扩展，不是 Codex v2 原有接口。P2-135 给 diagnostics 项目补可选 `errorCount/warningCount/delivery`（`inline/late`），旧存盘缺省。具体字段、兼容和模型交付见下文「LSP 诊断交付和协议」。
    - 目标续跑（P2-109，10-29 主控和用户确认）：参考 Codex `rust-v0.163.0` 的 ThreadGoal 和目标更新通知，快照增加可选 `goal`，`session.goal.updated {goal}` 保存并广播完整状态（清除为 null）。字段为 `id/objective/status/budgetUsd/cost/createdAt/updatedAt`，`cost` 沿用 `{usd, unknown}`；状态 `active/paused/complete/blocked/budgetLimited`。`GET/POST/DELETE /v1/sessions/{id}/goal` 查询、设置、清除，`POST .../goal/pause` 和 `.../goal/resume` 暂停、继续；信息接口 features 增加 `goals`。旧客户端忽略新增字段和事件，旧会话没有目标。与 Codex 不同：预算按美元，只有用户能建目标，模型仅有 `get_goal` 和 `update_goal {status: complete|blocked}`；续跑轮提问有五分钟超时。
    - 命令规则（P2-108，10-29 主控确认）：批准决定增加字符串 `acceptWithExecpolicyAmendment`；请求增加可选 `proposedExecpolicyAmendment`（词前缀数组的列表），回答增加可选 `execpolicyAmendment`，服务端校验它与提议完全相同。沿用 Codex `rust-v0.163.0` 的命名与提议→确认结构；canter 保留原来的字符串决定枚举，把 amendment 放在回答顶层，并用二维数组支持组合命令一次写多条。请求另带可选 `sessionPrefixes`，明确本会话放行范围。所有新增字段可省略，旧客户端滤掉未知决定，旧会话仍能打开。
    - 加目录（P2-118，10-29 主控确认）：公开会话设置和创建参数新增可选 `additionalDirectories` 字符串数组，旧存盘缺省为空；PATCH 新增可选 `addDirectories`，由服务端追加、规范化、去重，省略或空数组不改变目录，不提供移除。完整列表随 `session.updated` 存盘和广播。沿用 Codex app-server v2 的会话设置和更新结构；Codex 的 `sandboxPolicy` 在 `type: workspaceWrite` 下带 `writableRoots`，canter 的目录同时用于模型环境、文件引用和批准判断，因而单列这两个字段，不引入沙箱策略或把它们称为沙箱可写根。多客户端并发追加在服务端串行处理，不由客户端读出整表再覆盖。`GET /v1/info.features` 增加 `addDirectories`，终端使用新参数或命令前检查支持情况，避免旧服务端忽略字段后误报成功；旧客户端忽略新字段，照常使用。
@@ -143,6 +143,8 @@ LSP 默认关闭；`config.json` 的 `lsp.enabled` 开启即授权配置中的�
 已交付历史只追加；晚到通知用私有 `diagnostics_notice` 记录身份，承载一条 `Message::User`，不进入用户原话集合；压缩拼稿标 `Tool diagnostics`，快速结果仍归工具信息。回退丢掉被回退修改的待发结果，重启不恢复待发队列。回退、撤回、压缩后清空已交付条目的基线，保留防止同批次重发的记录；下一份新报告重新按首次报告完整列出条目（仍受交付预算限制）。
 
 补第 8 条：沿用 Codex app-server v2 会话→轮→项目结构，以下为 canter 的扩展。新增 `diagnostics` 项目（`id/sourceItemId?/status/files/totalCount/shownCount/omittedCount/resolvedCount?`），状态 `pending/available/unavailable/timedOut`；文件带批次、文件路径、服务器订阅 id、来源、采集时间、可选版本、时效、不完整原因和诊断列表，位置保留零起始 UTF-16。pending 项目不回写，晚到另建项目。新增 `languageServer.updated` 和可选快照 `languageServers`；记录 `id/name/root/state/reason?/rssBytes?/sharedReferences/updatedAt`，只发状态变化，RSS 查询返回最新采样，采样本身不存盘。`GET /v1/sessions/{id}/languageServers`、`GET .../diagnostics` 查询；`POST .../languageServers/{serverId}/stop` 和 `.../retry` 按本会话单个服务器/项目订阅操作，id 不透明，停止不影响其它会话。info 能力标识 `lsp`。旧客户端跳过新事件/项目，旧存盘缺字段默认空；运行态恢复为待重连，不沿用 PID。共享键和环境不落盘，不改系统提示词或工具说明。
+
+补字段（P2-135，2026-10-29 主控决定）：`diagnostics` 项目加三个可选字段 `errorCount`、`warningCount`（`totalCount` 里的错误数和警告数，取自发给模型的同一份计数；状态项目没有）和 `delivery`（`inline` 随改文件的工具结果到达，`late` 在之后的模型请求前到达，未知值解码为 `unknown`）。原因：之后的报告只列新增和变化的条目，终端靠列出的条目数不出错误、警告各几个；快到和晚到原来都带 `sourceItemId`，分不清。只加可选字段，已有字段和含义、发给模型的文字不变；P2-135 之前的存盘没有这三个字段，终端只写总数（`LSP: 3 errors or warnings`），并按位置判断快到：紧跟在它的改文件项目后面的一个 pending/unavailable 状态项目，或几个不同文件的结果项目。
 
 ## 和报告不同的地方
 

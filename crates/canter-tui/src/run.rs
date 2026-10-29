@@ -77,6 +77,10 @@ mod steer_tests;
 #[path = "run_goal_tests.rs"]
 mod goal_tests;
 
+#[cfg(test)]
+#[path = "run_lsp_tests.rs"]
+mod lsp_tests;
+
 /// A connection to the server.
 pub struct Connected {
     pub client: Client,
@@ -1028,6 +1032,10 @@ fn leave_tab<B: FrameSync>(backend: &mut B, tab: &mut TabTitle) {
 
 /// What the background tasks tell the screen.
 enum Message {
+    /// `/lsp`: the servers, or `None` when the server has no `lsp` feature.
+    LanguageServers(Result<Option<Vec<canter_protocol::LanguageServer>>, String>),
+    /// What a stop or retry from `/lsp` returned.
+    LanguageServerChanged(Result<Vec<canter_protocol::LanguageServer>, String>),
     Goal {
         response: canter_protocol::GoalResponse,
         show: bool,
@@ -1544,6 +1552,12 @@ impl<C: Connector> Chat<C> {
                 }
                 app.warning(&format!("Could not change the goal: {error}"));
             }
+            Message::LanguageServers(Ok(Some(servers))) => app.show_language_servers(servers),
+            Message::LanguageServers(Ok(None)) => app.language_servers_unsupported(),
+            Message::LanguageServers(Err(error)) => {
+                app.warning(&format!("Could not list language servers: {error}"))
+            }
+            Message::LanguageServerChanged(result) => app.language_server_result(result),
             Message::ShellSent => app.shell_sent(),
             Message::ShellFailed { error, draft } => app.shell_failed(&error, draft),
             Message::Btw { id, event } => {
@@ -1619,6 +1633,7 @@ impl<C: Connector> Chat<C> {
         let client = self.client.clone();
         let session = self.session.clone();
         let sender = self.sender.clone();
+        let lsp_retry = matches!(action, Action::LanguageServerRetry(_));
         match action {
             Action::Goal(command) => {
                 let starting = matches!(
@@ -1648,6 +1663,35 @@ impl<C: Connector> Chat<C> {
                         },
                     };
                     let _ = sender.send(message);
+                });
+            }
+            Action::LanguageServers => {
+                tokio::spawn(async move {
+                    let result = async {
+                        let info = client.info().await?;
+                        if !info
+                            .features
+                            .unwrap_or_default()
+                            .iter()
+                            .any(|feature| feature == "lsp")
+                        {
+                            return Ok(None);
+                        }
+                        Ok(Some(client.language_servers(&session).await?.data))
+                    }
+                    .await
+                    .map_err(|error: ClientError| error.to_string());
+                    let _ = sender.send(Message::LanguageServers(result));
+                });
+            }
+            Action::LanguageServerStop(server) | Action::LanguageServerRetry(server) => {
+                tokio::spawn(async move {
+                    let result = client
+                        .language_server_control(&session, &server, lsp_retry)
+                        .await
+                        .map(|list| list.data)
+                        .map_err(|error| error.to_string());
+                    let _ = sender.send(Message::LanguageServerChanged(result));
                 });
             }
             Action::Export(to) => app.export(to, crate::now_ms()),

@@ -134,6 +134,8 @@ pub(crate) struct Report {
     title: Vec<Span<'static>>,
     body: Vec<Part>,
     notes: Vec<Vec<Span<'static>>>,
+    /// The keys on the last row: [`KEYS`] unless [`Report::keys`] says otherwise.
+    keys: &'static str,
     /// The first body row shown.
     top: usize,
     /// The largest `top`, for the room the last frame had.
@@ -148,10 +150,17 @@ impl Report {
             title,
             body,
             notes,
+            keys: KEYS,
             top: 0,
             last_top: 0,
             laid_out: None,
         }
+    }
+
+    /// Another last row than `Esc close`, such as `/lsp`'s.
+    pub fn keys(mut self, keys: &'static str) -> Self {
+        self.keys = keys;
+        self
     }
 
     pub fn up(&mut self) {
@@ -169,7 +178,7 @@ impl Report {
         let mut rows = vec![cut(self.title.clone()), Line::default()];
         let mut tail = vec![Line::default()];
         tail.extend(self.notes.iter().map(|note| cut(note.clone())));
-        tail.push(cut(vec![Span::styled(KEYS, theme::secondary())]));
+        tail.push(cut(vec![Span::styled(self.keys, theme::secondary())]));
         let room = max.saturating_sub(rows.len() + tail.len());
         if room == 0 {
             return Vec::new();

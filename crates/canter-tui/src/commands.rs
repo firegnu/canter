@@ -82,6 +82,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         },
     },
     Command {
+        name: "lsp",
+        about: "Show language servers",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::LanguageServers)),
+    },
+    Command {
         name: "mcp",
         about: "Show MCP connections and tools",
         takes_args: false,

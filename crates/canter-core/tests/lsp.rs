@@ -228,6 +228,7 @@ async fn quick_diagnostics_are_in_the_file_tool_result() {
         .unwrap();
     let output = tool.to_owned();
     assert_eq!(server.arrivals.lock().unwrap().len(), 2);
+    let snapshot = session.snapshot().await;
     session.close().await.unwrap();
     service.shutdown().await;
     server.stop().await;
@@ -238,6 +239,18 @@ async fn quick_diagnostics_are_in_the_file_tool_result() {
     );
     assert!(output.contains("First report for this file: pre-existing problems may be included."));
     assert!(output.contains("1 error, 0 warnings."));
+    // P2-135: the public item carries the counts and that it came with the tool result.
+    let items = serde_json::to_value(&snapshot.session.turns[0].items).unwrap();
+    let diagnostics: Vec<&Value> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["type"] == "diagnostics")
+        .collect();
+    assert_eq!(diagnostics.len(), 1, "{items}");
+    assert_eq!(diagnostics[0]["errorCount"], 1);
+    assert_eq!(diagnostics[0]["warningCount"], 0);
+    assert_eq!(diagnostics[0]["delivery"], "inline");
 }
 
 #[tokio::test]
@@ -260,9 +273,32 @@ async fn late_diagnostics_wait_for_a_real_request_and_preserve_the_sent_prefix()
     finished(&mut events).await;
     let requests = server.requests.lock().unwrap().clone();
     let history = store.model_history::<Value>("lsp-test").unwrap();
+    let snapshot = session.snapshot().await;
     session.close().await.unwrap();
     service.shutdown().await;
     server.stop().await;
+    // P2-135: the pending status came with the tool result, the errors later.
+    let items: Vec<Value> = snapshot
+        .session
+        .turns
+        .iter()
+        .flat_map(|turn| {
+            serde_json::to_value(&turn.items)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .clone()
+        })
+        .filter(|item| item["type"] == "diagnostics")
+        .collect();
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert_eq!(items[0]["status"], "pending");
+    assert_eq!(items[0]["delivery"], "inline");
+    assert!(items[0].get("errorCount").is_none());
+    assert_eq!(items[1]["status"], "available");
+    assert_eq!(items[1]["delivery"], "late");
+    assert_eq!(items[1]["errorCount"], 1);
+    assert_eq!(items[1]["warningCount"], 0);
     let messages = requests[2]["messages"].as_array().unwrap();
     assert_eq!(
         &messages[..before["messages"].as_array().unwrap().len()],

@@ -132,6 +132,12 @@ impl Body {
             {
                 continue;
             }
+            if matches!(item, Item::Diagnostics { .. }) {
+                if let Some(line) = crate::lsp::text(&turn.items, index, cwd) {
+                    self.block("Assistant", &line);
+                }
+                continue;
+            }
             let feedback = item
                 .id()
                 .and_then(|id| snapshot.approval_feedback.get(id))
@@ -942,5 +948,42 @@ _Failed: model unreachable_
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
         let error = write(&dir.path().join("missing/out.md"), "x").unwrap_err();
         assert!(error.starts_with("cannot create"), "{error}");
+    }
+
+    /// P2-135: the diagnostics line goes with its file change, a late result
+    /// is its own line.
+    #[test]
+    fn diagnostics_are_exported_as_their_lines() {
+        let item = |value: serde_json::Value| -> Item { serde_json::from_value(value).unwrap() };
+        let file = serde_json::json!([{ "batchId": 1, "path": "src/a.rs", "serverId": "lsp-1",
+            "source": "push", "freshness": "current", "incomplete": false, "diagnostics": [] }]);
+        let first = turn(
+            "t1",
+            "fix it",
+            vec![
+                item(
+                    serde_json::json!({ "type": "fileChange", "id": "f1", "status": "completed",
+                    "changes": [{ "path": "/work/proj/src/a.rs",
+                        "kind": { "type": "update", "movePath": null }, "diff": "-a\n+b\n" }] }),
+                ),
+                item(
+                    serde_json::json!({ "type": "diagnostics", "id": "d1", "sourceItemId": "f1",
+                    "status": "available", "files": file, "totalCount": 2, "shownCount": 0,
+                    "omittedCount": 0, "errorCount": 2, "warningCount": 0, "delivery": "inline" }),
+                ),
+                answer("a1", "Edited."),
+                item(
+                    serde_json::json!({ "type": "diagnostics", "id": "d2", "sourceItemId": "f1",
+                    "status": "available", "files": file, "totalCount": 0, "shownCount": 0,
+                    "omittedCount": 0, "errorCount": 0, "warningCount": 0, "delivery": "late" }),
+                ),
+            ],
+        );
+        let text = markdown(&snapshot(None, vec![first]), "now").unwrap();
+        assert!(text.contains("\nLSP: 2 errors\n"), "{text}");
+        assert!(
+            text.contains("\nLSP update: src/a.rs · no errors or warnings\n"),
+            "{text}"
+        );
     }
 }

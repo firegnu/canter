@@ -349,6 +349,16 @@ pub enum Item {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         resolved_count: Option<u32>,
+        /// Errors and warnings in `totalCount`; missing in items saved before P2-135.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        error_count: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        warning_count: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        delivery: Option<crate::DiagnosticDelivery>,
     },
     ModelRetry {
         id: String,
