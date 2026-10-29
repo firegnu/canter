@@ -31,7 +31,8 @@
    交循环/客户端处理。请求包含完整参数，write/edit 另加顶层 `diff`；文件路径解析后
    与模型提供的不同时另带 `resolvedPath`，客户端应显示这个实际目标。shell 保留完整命令。
    先由循环/服务端核对待处理请求归属、重复回答，再把回答交给
-   `gate.resolve(&call, decision, feedback)`。它返回 `Execute(permit)` 或 `Deny { cancel_turn, feedback }`；
+   `gate.resolve(&call, decision, feedback)`。服务端用 `resolve_with_prefixes` 另传请求里已展示的会话前缀，
+   不在回答时扩大授权范围。返回 `Execute(permit)`、`Deny { cancel_turn, feedback }` 或带原因的 `Forbidden`；
    未知回答返回 `invalid_decision` 错误，符合协议 README。
    服务端先校验 decision 在可用选项内、feedback 只随 DeclineWithFeedback 提供且非空白。
    拒绝时用 `call.declined_output(feedback.as_deref())` 得到 `Declined` 项目和模型文字，循环另根据
@@ -138,16 +139,53 @@ shell 回收后管道最多再读取 2000 ms；取消和原始超时在此期间
 
 | 模式 | read | write / edit | shell |
 | --- | --- | --- | --- |
-| alwaysAsk / Unknown | 执行 | 询问 | 白名单只读命令执行，其余询问 |
-| askForExecution | 执行 | 执行 | 白名单只读命令执行，其余询问 |
-| allowAll | 执行 | 执行 | 执行 |
+| alwaysAsk / Unknown | 执行 | 询问 | 按命令规则、会话前缀和只读白名单判断 |
+| askForExecution | 执行 | 执行 | 按命令规则、会话前缀和只读白名单判断 |
+| allowAll | 执行 | 执行 | 禁止规则仍拒绝，其余执行；规则文件坏了仍询问 |
 
-Accept 仅允许当前调用；AcceptForSession 记住本会话的这个工具；Decline 拒绝；
+Accept 仅允许当前调用；AcceptForSession 对 shell 只记住批准框展示的词前缀，其他工具沿用原范围；Decline 拒绝；
 DeclineWithFeedback 拒绝并将原样说明交回模型，结果为 `Tool call declined. The user says: <说明>`；
 需要批准时按 Accept、AcceptForSession、Decline、DeclineWithFeedback、Cancel 的顺序提供选项。
 Cancel 拒绝并向调用方返回 `cancel_turn: true`，gate 本身不取消一轮、不发事件。
 风险档来自内置 Tool 定义，不接受模型自报的风险档。
-对 shell 的会话授权等于放行这个会话的所有命令；改回 alwaysAsk 后已有授权仍有效。
+shell 会话前缀在改回 alwaysAsk 后仍有效，重开会话不恢复。命中 prompt、前缀过宽、不能确定语法或
+触及受保护路径时不提供会话/永久前缀选项。永久批准使用 AcceptWithExecpolicyAmendment，列在会话批准后。
+
+### 全局命令规则
+
+服务端把自己的状态目录（默认 `~/.canter`，支持 `CANTER_HOME`）下的 `rules.json` 传给
+`PermissionGate::with_rules_file`；核心嵌入方用 `CoreOptions.command_rules_path` 指定。
+不读取模型参数或客户端环境来决定规则文件，不改含凭证的 config.json。
+
+```json
+{"rules":[
+  {"pattern":["cargo","test"],"decision":"allow"},
+  {"pattern":["git","status"],"decision":"prompt"},
+  {"pattern":["cargo","publish"],"decision":"forbidden"}
+]}
+```
+
+按解码后的词前缀匹配，`cargo test` 不匹配 `cargo testx`，路径程序必须按完整词匹配。
+冲突取 forbidden > prompt > allow；空数组、空词、未知结果或非法 JSON 都使整个文件无效。
+每次判断重新读，不存在表示没有规则；读不了或写坏了时三种模式都只提供单次批准，
+每次连续故障在会话内提示一次，修复后下一次判断恢复。Forbidden 不弹框，模型收到规则拒绝原因。
+Prompt 在询问模式下优先于只读白名单和会话授权；allowAll 只忽略 allow/prompt，不忽略禁止。
+
+组合命令逐段判断，支持 `&&`、`||`、`;`、`|`、换行、`&`、`|&`；所有段都被规则、会话前缀
+或原只读白名单放行才直接执行。复用原来的目录流转和路径检查。变量、命令替换、重定向等不能
+完整识别时，allow 和会话授权不适用；已识别的字面前缀仍检查禁止，简单变量之后的独立段也检查。
+不解释嵌套替换或控制流，这仍是批准判断而非沙箱。
+
+一键永久放行显示每段实际要保存的词数组，只为尚需批准的段提出建议；程序和能确定的子命令
+组成前缀，无子命令的已知程序只取程序名，前置选项或未知子命令结构不猜。
+解释器、包装命令、裸 git、npm/pnpm/yarn run 等不建议；完整清单见 P2-108 完成记录。
+服务端先验证回答与提议相同，再 `save_rules`：进程内串行读取、去重追加、0600 临时文件原子替换。
+保存失败保留批准请求，不执行命令或覆盖坏文件；成功后在对话里提示路径，本次执行。
+永久放行不覆盖 prompt/forbidden；允许后执行前仍重新检查禁止规则。
+手工编辑与保存之间没有跨进程文件锁；不要同时手改与点击保存。
+
+规则只用于模型 shell（包括后台）。计划/审查先执行原有只读限制，再对允许的 shell 检查规则；
+用户 `!` 命令、MCP、web_fetch、文件工具批准和目录边界保持原样。不提供查看/删除规则的界面。
 
 审查轮使用 `gate.evaluate_review(&call)`：只放行 read 和同一白名单中的 shell，
 write/edit 及其他 shell 直接拒绝；不看权限模式或已有授权，不开批准请求。

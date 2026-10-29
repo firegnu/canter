@@ -6,6 +6,9 @@ use std::collections::HashSet;
 pub enum PermissionCheck<'a> {
     Execute(ExecutionPermit<'a>),
     Ask(ApprovalRequest),
+    Forbidden {
+        reason: String,
+    },
     Deny {
         cancel_turn: bool,
         feedback: Option<String>,
@@ -37,10 +40,78 @@ impl PartialEq for ExecutionPermit<'_> {
 #[derive(Default)]
 pub struct PermissionGate {
     grants: HashSet<String>,
+    shell_grants: Vec<Vec<String>>,
+    rules_file: Option<std::path::PathBuf>,
+    rules_warning: std::sync::Mutex<(bool, Option<String>)>,
     additional_directories: Vec<std::path::PathBuf>,
 }
 
 impl PermissionGate {
+    /// Call only after validating the answer against the pending proposal.
+    pub fn save_rules(&self, prefixes: &[Vec<String>]) -> std::io::Result<std::path::PathBuf> {
+        let path = self
+            .rules_file
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("command rules are not configured"))?;
+        crate::rules::append(path, prefixes)?;
+        Ok(path.clone())
+    }
+    pub fn take_rules_warning(&self) -> Option<String> {
+        self.rules_warning.lock().unwrap().1.take()
+    }
+
+    fn read_rules(&self) -> Result<crate::rules::Rules, ()> {
+        let result = self
+            .rules_file
+            .as_deref()
+            .map(crate::rules::Rules::read)
+            .transpose();
+        let mut warning = self.rules_warning.lock().unwrap();
+        match result {
+            Ok(rules) => {
+                warning.0 = false;
+                Ok(rules.unwrap_or_default())
+            }
+            Err(_) => {
+                if !warning.0 {
+                    warning.1 = Some(format!(
+                        "Could not read command rules at {}; model shell commands require one-time approval until the file is fixed.",
+                        self.rules_file.as_ref().unwrap().display()
+                    ));
+                    warning.0 = true;
+                }
+                Err(())
+            }
+        }
+    }
+
+    fn ask<'a>(&self, call: &'a PreparedCall, session: bool) -> PermissionCheck<'a> {
+        let mut decisions = vec![ApprovalDecision::Accept];
+        if session {
+            decisions.push(ApprovalDecision::AcceptForSession);
+        }
+        decisions.extend([
+            ApprovalDecision::Decline,
+            ApprovalDecision::DeclineWithFeedback,
+            ApprovalDecision::Cancel,
+        ]);
+        PermissionCheck::Ask(ApprovalRequest {
+            proposed_execpolicy_amendment: None,
+            session_prefixes: None,
+            item_id: call.id.clone(),
+            tool: match &call.action {
+                Action::Mcp(tool) => tool.name.clone(),
+                _ => call.tool.name().into(),
+            },
+            arguments: call.arguments.clone(),
+            available_decisions: decisions,
+        })
+    }
+    /// The server's global rules file; never inferred from a model's arguments.
+    pub fn with_rules_file(mut self, path: std::path::PathBuf) -> Self {
+        self.rules_file = Some(path);
+        self
+    }
     /// Canonical roots from the session settings; changing roots keeps existing grants.
     pub fn set_additional_directories(&mut self, directories: &[String]) {
         self.additional_directories = directories.iter().map(Into::into).collect();
@@ -115,10 +186,59 @@ impl PermissionGate {
         decision: ApprovalDecision,
         feedback: Option<String>,
     ) -> Result<PermissionCheck<'a>, &'static str> {
+        self.resolve_with_prefixes(call, decision, feedback, None)
+    }
+
+    /// Session prefixes are those shown in the pending request, not newly inferred scopes.
+    pub fn resolve_with_prefixes<'a>(
+        &mut self,
+        call: &'a PreparedCall,
+        decision: ApprovalDecision,
+        feedback: Option<String>,
+        approved_prefixes: Option<&[Vec<String>]>,
+    ) -> Result<PermissionCheck<'a>, &'static str> {
+        if call.tool == Tool::Shell
+            && matches!(
+                decision,
+                ApprovalDecision::Accept | ApprovalDecision::AcceptWithExecpolicyAmendment
+            )
+            && let forbidden @ PermissionCheck::Forbidden { .. } =
+                self.evaluate(call, PermissionMode::AlwaysAsk)
+        {
+            return Ok(forbidden);
+        }
         match decision {
-            ApprovalDecision::Accept => Ok(PermissionCheck::Execute(ExecutionPermit { call })),
+            ApprovalDecision::Accept | ApprovalDecision::AcceptWithExecpolicyAmendment => {
+                Ok(PermissionCheck::Execute(ExecutionPermit { call }))
+            }
             ApprovalDecision::AcceptForSession => {
-                self.grants.insert(call.permission_key());
+                if call.tool == Tool::Shell {
+                    let request = match self.evaluate(call, PermissionMode::AlwaysAsk) {
+                        PermissionCheck::Ask(request) => request,
+                        PermissionCheck::Execute(permit) => {
+                            if let Some(prefixes) = approved_prefixes {
+                                self.shell_grants.extend_from_slice(prefixes);
+                            }
+                            return Ok(PermissionCheck::Execute(permit));
+                        }
+                        forbidden @ PermissionCheck::Forbidden { .. } => return Ok(forbidden),
+                        _ => {
+                            return Err(
+                                "invalid_decision: command no longer permits a session grant",
+                            );
+                        }
+                    };
+                    let proposed = request
+                        .session_prefixes
+                        .ok_or("invalid_decision: command prefix is not known")?;
+                    let prefixes = approved_prefixes.unwrap_or(&proposed);
+                    if prefixes.iter().any(|prefix| !proposed.contains(prefix)) {
+                        return Err("invalid_decision: command rule proposal changed");
+                    }
+                    self.shell_grants.extend_from_slice(prefixes);
+                } else {
+                    self.grants.insert(call.permission_key());
+                }
                 Ok(PermissionCheck::Execute(ExecutionPermit { call }))
             }
             ApprovalDecision::Decline => Ok(PermissionCheck::Deny {
@@ -142,6 +262,75 @@ impl PermissionGate {
         call: &'a PreparedCall,
         mode: PermissionMode,
     ) -> PermissionCheck<'a> {
+        if let Action::Shell(args) = &call.action {
+            let Ok(rules) = self.read_rules() else {
+                return self.ask(call, false);
+            };
+            let parsed = crate::readonly::scan_commands(&args.command, None, true);
+            let commands = match &parsed {
+                Ok(commands) | Err(commands) => commands,
+            };
+            if commands.iter().any(|command| {
+                rules.decision(&command.words) == Some(crate::rules::Decision::Forbidden)
+            }) {
+                return PermissionCheck::Forbidden {
+                    reason: "Command forbidden by rules.json".into(),
+                };
+            }
+            if mode == PermissionMode::AllowAll {
+                return PermissionCheck::Execute(ExecutionPermit { call });
+            }
+            if commands.iter().any(|command| {
+                rules.decision(&command.words) == Some(crate::rules::Decision::Prompt)
+            }) {
+                return self.ask(call, false);
+            }
+            let allowed = |words: &[String]| {
+                rules.decision(words) == Some(crate::rules::Decision::Allow)
+                    || self
+                        .shell_grants
+                        .iter()
+                        .any(|prefix| words.starts_with(prefix))
+            };
+            if call.executor.is_readonly_shell(&args.command)
+                || parsed.is_ok() && call.executor.is_allowed_shell(&args.command, &allowed)
+            {
+                return PermissionCheck::Execute(ExecutionPermit { call });
+            }
+            let mut request = match self.ask(call, false) {
+                PermissionCheck::Ask(request) => request,
+                _ => unreachable!(),
+            };
+            if parsed.is_ok() {
+                let needed = std::cell::RefCell::new(Vec::new());
+                let suggestible = call.executor.is_allowed_shell(&args.command, &|words| {
+                    if !allowed(words) {
+                        let Some(prefix) = crate::rules::suggested_prefix(words) else {
+                            return false;
+                        };
+                        let mut needed = needed.borrow_mut();
+                        if !needed.contains(&prefix) {
+                            needed.push(prefix);
+                        }
+                    }
+                    true
+                });
+                let prefixes = needed.into_inner();
+                if suggestible && !prefixes.is_empty() {
+                    request
+                        .available_decisions
+                        .insert(1, ApprovalDecision::AcceptForSession);
+                    request.session_prefixes = Some(prefixes.clone());
+                    if self.rules_file.is_some() {
+                        request
+                            .available_decisions
+                            .insert(2, ApprovalDecision::AcceptWithExecpolicyAmendment);
+                        request.proposed_execpolicy_amendment = Some(prefixes);
+                    }
+                }
+            }
+            return PermissionCheck::Ask(request);
+        }
         if call.tool == Tool::UpdatePlan || self.grants.contains(&call.permission_key()) {
             return PermissionCheck::Execute(ExecutionPermit { call });
         }
@@ -152,24 +341,8 @@ impl PermissionGate {
             }
             PermissionMode::AllowAll => false,
         };
-        let readonly_shell = ask
-            && matches!(&call.action, Action::Shell(args) if call.executor.is_readonly_shell(&args.command));
-        if ask && !readonly_shell {
-            PermissionCheck::Ask(ApprovalRequest {
-                item_id: call.id.clone(),
-                tool: match &call.action {
-                    Action::Mcp(tool) => tool.name.clone(),
-                    _ => call.tool.name().into(),
-                },
-                arguments: call.arguments.clone(),
-                available_decisions: vec![
-                    ApprovalDecision::Accept,
-                    ApprovalDecision::AcceptForSession,
-                    ApprovalDecision::Decline,
-                    ApprovalDecision::DeclineWithFeedback,
-                    ApprovalDecision::Cancel,
-                ],
-            })
+        if ask {
+            self.ask(call, true)
         } else {
             PermissionCheck::Execute(ExecutionPermit { call })
         }

@@ -4,6 +4,7 @@
       "enum": [
         "accept",
         "acceptForSession",
+        "acceptWithExecpolicyAmendment",
         "decline",
         "declineWithFeedback",
         "cancel",
@@ -24,6 +25,30 @@
         },
         "itemId": {
           "type": "string"
+        },
+        "proposedExecpolicyAmendment": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "sessionPrefixes": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "tool": {
           "type": "string"
@@ -2462,6 +2487,18 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "execpolicyAmendment": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": [
+            "array",
+            "null"
           ]
         },
         "feedback": {

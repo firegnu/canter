@@ -358,6 +358,9 @@ pub struct SessionInterruptResponse {
 pub struct RequestResolveParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub execpolicy_amendment: Option<Vec<Vec<String>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub plan: Option<crate::PlanAnswer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

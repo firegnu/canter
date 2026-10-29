@@ -6,4 +6,4 @@ export type ApprovalRequest = { itemId: string, tool: string,
 /**
  * Full tool arguments, including a command or the proposed file changes.
  */
-arguments: JsonValue, availableDecisions: Array<ApprovalDecision>, };
+arguments: JsonValue, availableDecisions: Array<ApprovalDecision>, proposedExecpolicyAmendment?: Array<Array<string>>, sessionPrefixes?: Array<Array<string>>, };

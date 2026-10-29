@@ -984,3 +984,53 @@ fn decline_feedback_shows_under_the_card_live_and_from_a_snapshot() {
         assert!(!shown.contains("[31m"));
     }
 }
+
+#[test]
+fn command_prefix_choices_show_the_exact_scopes_before_accepting() {
+    let mut screen = Screen::new(100, 30);
+    screen.start_turn("t1");
+    screen.event(json!({"type":"request.opened","request":{
+        "id":"prefixes","turnId":"t1","createdAt":NOW,
+        "kind":{"type":"approval","itemId":"cmd","tool":"shell",
+            "arguments":{"command":"pwd && cargo test && git commit -m done"},
+            "availableDecisions":["accept","acceptForSession","acceptWithExecpolicyAmendment","decline","declineWithFeedback","cancel"],
+            "sessionPrefixes":[["cargo","test"],["git","commit"]],
+            "proposedExecpolicyAmendment":[["cargo","test"],["git","commit"]]}
+    }}));
+    screen.draw();
+    screen.read_the_box();
+    let text = screen.screen();
+    assert!(
+        text.contains("Always allow commands starting with"),
+        "{text}"
+    );
+    assert!(text.contains(r#"["cargo","test"]"#), "{text}");
+    assert!(text.contains(r#"["git","commit"]"#), "{text}");
+    assert!(!text.contains("All later commands"));
+    assert_eq!(
+        screen.key(KeyCode::Char('3')),
+        Some(Action::Resolve {
+            request_id: "prefixes".into(),
+            decision: ApprovalDecision::AcceptWithExecpolicyAmendment,
+            feedback: None,
+        })
+    );
+}
+
+#[test]
+fn session_prefix_resolution_does_not_describe_a_whole_tool_grant() {
+    let mut screen = Screen::new(100, 30);
+    screen.start_turn("t1");
+    screen.event(json!({"type":"request.opened","request":{
+        "id":"prefixes","turnId":"t1","createdAt":NOW,
+        "kind":{"type":"approval","itemId":"cmd","tool":"shell",
+            "arguments":{"command":"cargo test"},"availableDecisions":["accept","acceptForSession","decline"],
+            "sessionPrefixes":[["cargo","test"]]}
+    }}));
+    screen.event(json!({"type":"request.resolved","requestId":"prefixes",
+        "resolution":{"type":"answered","decision":"acceptForSession"},"clientName":"terminal"}));
+    screen.draw();
+    let text = screen.screen();
+    assert!(text.contains("command prefixes for this session"), "{text}");
+    assert!(!text.contains("don't ask again for this tool"), "{text}");
+}

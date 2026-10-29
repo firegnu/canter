@@ -37,18 +37,27 @@ pub(crate) fn options(approval: &ApprovalRequest) -> Vec<ApprovalDecision> {
     [
         ApprovalDecision::Accept,
         ApprovalDecision::AcceptForSession,
+        ApprovalDecision::AcceptWithExecpolicyAmendment,
         ApprovalDecision::Decline,
         ApprovalDecision::DeclineWithFeedback,
         ApprovalDecision::Cancel,
     ]
     .into_iter()
-    .filter(|decision| approval.available_decisions.contains(decision))
+    .filter(|decision| {
+        approval.available_decisions.contains(decision)
+            && (*decision != ApprovalDecision::AcceptWithExecpolicyAmendment
+                || approval
+                    .proposed_execpolicy_amendment
+                    .as_ref()
+                    .is_some_and(|prefixes| !prefixes.is_empty()))
+    })
     .collect()
 }
 
 pub(crate) fn decision_label(decision: ApprovalDecision, tool: &str) -> &'static str {
     match decision {
         ApprovalDecision::Accept => "Allow once",
+        ApprovalDecision::AcceptWithExecpolicyAmendment => "Always allow commands starting with:",
         ApprovalDecision::AcceptForSession if tool == "web_fetch" => {
             "Allow for this session (this host and port)"
         }
@@ -153,11 +162,14 @@ pub(crate) fn layout(
         }
     } else {
         for (index, decision) in options.iter().enumerate() {
-            let text = format!(
-                "{}. {}",
-                index + 1,
+            let label = if *decision == ApprovalDecision::AcceptForSession
+                && approval.session_prefixes.is_some()
+            {
+                "Allow these prefixes for this session:"
+            } else {
                 decision_label(*decision, &approval.tool)
-            );
+            };
+            let text = format!("{}. {}", index + 1, label);
             let line = if index == selected {
                 Line::from(vec![
                     Span::styled("› ", theme::accent().bold()),
@@ -172,7 +184,23 @@ pub(crate) fn layout(
                 line.patch_style(theme::secondary())
             });
             // What it grants, readable before choosing it (also with its number key).
-            if *decision == ApprovalDecision::AcceptForSession {
+            let prefixes = match decision {
+                ApprovalDecision::AcceptForSession => approval.session_prefixes.as_ref(),
+                ApprovalDecision::AcceptWithExecpolicyAmendment => {
+                    approval.proposed_execpolicy_amendment.as_ref()
+                }
+                _ => None,
+            };
+            if let Some(prefixes) = prefixes {
+                for prefix in prefixes {
+                    let text = serde_json::to_string(prefix).expect("command words");
+                    let note = LogicalLine::new(
+                        vec![Span::raw("     ")],
+                        vec![Span::styled(visible(&text), theme::warning())],
+                    );
+                    tail.extend(wrap(&note, inner));
+                }
+            } else if *decision == ApprovalDecision::AcceptForSession {
                 let note = LogicalLine::new(
                     vec![Span::raw("     ")],
                     vec![Span::styled(session_note(approval), theme::warning())],

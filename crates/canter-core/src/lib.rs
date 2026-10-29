@@ -32,6 +32,8 @@ pub struct RuntimeContext {
 
 #[derive(Clone, Debug)]
 pub struct CoreOptions {
+    /// Global server-owned command rules; embedders may leave this disabled.
+    pub command_rules_path: Option<PathBuf>,
     pub auto_wake_limit: u32,
     pub plan_enabled: bool,
     pub context_window: u64,
@@ -49,6 +51,7 @@ pub struct CoreOptions {
 impl Default for CoreOptions {
     fn default() -> Self {
         Self {
+            command_rules_path: None,
             auto_wake_limit: 10,
             plan_enabled: true,
             context_window: 1_048_576,

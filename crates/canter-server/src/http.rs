@@ -51,6 +51,7 @@ impl App {
                 .map_err(|_| ApiError::internal())?
                 .map_err(|error| ApiError::new(ErrorCode::InvalidRequest, &error.to_string()))?;
         let mut options = self.options.clone();
+        options.command_rules_path = Some(self.home.join("rules.json"));
         if let Some(enabled) = enabled {
             options.plan_enabled = enabled;
         }
