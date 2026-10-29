@@ -40,6 +40,117 @@ const WAIT: Duration = Duration::from_secs(20);
 const WRITE_ENV: &str = r#"printf '%s' "$CANTER_TEST_ENV" > env.txt"#;
 
 #[tokio::test]
+async fn new_handoff_and_plan_inherit_directories_and_skip_deleted_ones() {
+    for action in ["new", "handoff", "plan"] {
+        for deleted in [false, true] {
+            let plan = "# Change\n\nImplement and verify the change.";
+            let proposal = format!(
+                "data: {}\n\ndata: [DONE]\n\n",
+                json!({"choices":[{"index":0,"delta":{"tool_calls":[{
+                    "index":0,"id":"proposal","type":"function","function":{
+                        "name":"submit_plan","arguments":json!({"plan":plan}).to_string()
+                    }
+                }]},"finish_reason":"tool_calls"}]})
+            );
+            let replies = if action == "plan" {
+                vec![proposal, text_reply("Implementation ready.")]
+            } else {
+                vec![
+                    text_reply("Original answer."),
+                    text_reply("Continue the work."),
+                ]
+            };
+            let mut world = World::new(replies).await;
+            for dir in ["service-a", "removed", "service-b"] {
+                fs::create_dir(world.path(dir)).unwrap();
+            }
+            world.start_server().await;
+            let terminal = world
+                .open(
+                    &[
+                        "--add-dir",
+                        "../service-a",
+                        "--add-dir",
+                        "../removed",
+                        "--add-dir",
+                        "../service-b",
+                    ],
+                    "canter-tui inherited-directories",
+                )
+                .await;
+            terminal.wait_for("Added directory:").await;
+            terminal.wait_idle().await;
+            let source = world.only_session().await;
+            let original = world
+                .snapshot(&source)
+                .await
+                .settings
+                .additional_directories;
+            assert_eq!(original.len(), 3);
+            if deleted {
+                fs::remove_dir(world.path("removed")).unwrap();
+            }
+            if action == "plan" {
+                terminal.type_line("/plan").await;
+                terminal
+                    .wait_until("Plan status", |t| {
+                        t.info().contains(" · Plan (then Always ask) ·")
+                    })
+                    .await;
+                terminal.type_line("Plan this change.").await;
+                terminal.wait_for("Implement this plan?").await;
+                read_the_box().await;
+                terminal.press(KeyCode::Char('2')).await;
+                terminal.wait_for("Implementation ready.").await;
+            } else {
+                terminal.type_line("Original task.").await;
+                terminal.wait_for("Original answer.").await;
+                terminal.wait_idle().await;
+                terminal.type_line(&format!("/{action}")).await;
+                if action == "handoff" {
+                    terminal
+                        .wait_for("Edit the note and press Enter to send.")
+                        .await;
+                } else {
+                    terminal
+                        .wait_until("new session", |t| !t.screen().contains("Original task."))
+                        .await;
+                }
+            }
+            if deleted {
+                terminal.wait_for("Skipped inherited directory").await;
+                terminal
+                    .wait_until("deleted directory and its rejection reason", |t| {
+                        let text = t.screen().split_whitespace().collect::<Vec<_>>().join(" ");
+                        text.contains("/removed\": No such file or directory")
+                    })
+                    .await;
+            }
+            if action == "handoff" {
+                terminal
+                    .press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
+                    .await;
+                terminal.frames_later(2).await;
+            }
+            terminal.wait_idle().await;
+            let target = terminal.quit().await;
+            let created = world.snapshot(&target).await;
+            world.stop_server(Signal::SIGTERM).await;
+            assert_ne!(target, source);
+            let expected = if deleted {
+                vec![original[0].clone(), original[2].clone()]
+            } else {
+                original
+            };
+            assert_eq!(
+                created.settings.additional_directories, expected,
+                "{action}, deleted={deleted}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn add_dir_cli_slash_resume_and_continue_share_persisted_directories() {
     let mut world = World::new(Vec::new()).await;
     for dir in [
