@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -71,6 +71,7 @@ enum State {
 }
 
 struct Entry {
+    rss: AtomicU64,
     generation: u64,
     workspace: Mutex<std::sync::Weak<super::sync::Workspace>>,
     key: Key,
@@ -392,6 +393,71 @@ pub struct LspService {
     limits: Limits,
 }
 impl LspService {
+    pub fn enabled(&self) -> bool {
+        !self.servers.is_empty()
+    }
+    pub(super) fn selection_info(
+        &self,
+        file: &Path,
+        context: &FileContext,
+    ) -> Result<(String, PathBuf), LspError> {
+        let (key, _) = self.selection(file, context)?;
+        Ok((key.id, key.root))
+    }
+    pub(super) fn describe(
+        &self,
+        name: &str,
+        root: &Path,
+        context: &FileContext,
+    ) -> (
+        canter_protocol::LanguageServerState,
+        Option<String>,
+        Option<u64>,
+        u32,
+    ) {
+        use canter_protocol::LanguageServerState as Status;
+        let pool = self.pool.lock().unwrap();
+        let matches = |key: &Key| {
+            key.id == name && key.root == root && key.environment == context.environment
+        };
+        if let Some(entry) = pool.entries.iter().find(|e| matches(&e.key)) {
+            let reason = entry.reason.lock().unwrap().clone();
+            let (state, message) = if let Some(reason) = reason {
+                (Status::Stopped, Some(reason.message))
+            } else {
+                match &*entry.state.borrow() {
+                    State::Starting => (Status::Starting, None),
+                    State::Ready(connection, _) if !connection.closed.is_cancelled() => {
+                        (Status::Running, None)
+                    }
+                    State::Failed(e) => (Status::Unavailable, Some(e.message.clone())),
+                    _ => (Status::Unavailable, Some("LSP server exited".into())),
+                }
+            };
+            let references = entry
+                .workspace
+                .lock()
+                .unwrap()
+                .upgrade()
+                .map_or(entry.users.load(Ordering::Relaxed) as u32, |w| {
+                    w.subscribers()
+                });
+            let rss = entry.rss.load(Ordering::Relaxed);
+            return (state, message, (rss != 0).then_some(rss), references);
+        }
+        if let Some((_, error)) = pool.blocked.iter().find(|(k, _)| matches(k)) {
+            return (Status::Stopped, Some(error.message.clone()), None, 0);
+        }
+        if let Some(failure) = pool.failures.iter().find(|f| matches(&f.key)) {
+            return (
+                Status::Unavailable,
+                Some(failure.error.message.clone()),
+                None,
+                0,
+            );
+        }
+        (Status::Reconnecting, None, None, 0)
+    }
     pub fn new(config: LspConfig) -> Result<Arc<Self>, LspError> {
         Self::with_limits(config, Limits::default())
     }
@@ -494,6 +560,9 @@ impl LspService {
                             .collect();
                         let pids: Vec<_> = running.iter().map(|(_, pid)| *pid).collect();
                         if let Ok(memory) = super::memory::sample(&pids).await {
+                            for (entry, pid) in &running {
+                                entry.rss.store(memory[pid], Ordering::Relaxed);
+                            }
                             over.retain(|pid, _| pids.contains(pid));
                             let mut total =
                                 memory.values().copied().fold(0_u64, u64::saturating_add);
@@ -634,6 +703,7 @@ impl LspService {
                     }
                     let (state, _) = watch::channel(State::Starting);
                     let entry = Arc::new(Entry {
+                        rss: AtomicU64::new(0),
                         generation: {
                             static NEXT: std::sync::atomic::AtomicU64 =
                                 std::sync::atomic::AtomicU64::new(1);

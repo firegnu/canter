@@ -346,6 +346,9 @@ impl Workspace {
         let documents = self.documents.lock().await;
         for (path, doc) in documents.iter() {
             let batch = DiagnosticBatch {
+                root: self.instance.root.clone(),
+                received_at: tokio::time::Instant::now(),
+                collected_at: 0,
                 id: 0,
                 path: path.clone(),
                 server_id: self.instance.server_id.clone(),

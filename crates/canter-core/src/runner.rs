@@ -111,6 +111,8 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                     .retract(&completed.id)
                     .ok_or_else(CoreError::internal)?;
                 let removed = state.history.split_off(messages);
+                state.lsp_delivery.notices.retain(|index| *index < messages);
+                state.lsp_delivery.reset_baseline();
                 state.tool_images.clear();
                 state.user_messages.truncate(users);
                 state.invoked_skills.truncate(skills);
@@ -243,6 +245,7 @@ async fn conversation(
             return Ok(());
         }
         shared.sync_background().await?;
+        crate::lsp::before_request(shared, turn_id).await?;
         let (request, summary) = {
             let mut state = shared.state.lock().await;
             state.consume_steering(turn_id).await?;
@@ -937,6 +940,7 @@ async fn execute(
             }
         }
     };
+    let diagnostic_items = crate::lsp::inline(shared, turn_id, &mut output).await;
     shared.sync_background().await?;
     let imported = if output.images.is_empty() {
         None
@@ -981,6 +985,12 @@ async fn execute(
             item: output.item,
         }])
         .await?;
+    if !diagnostic_items.is_empty() {
+        state
+            .journal
+            .append(crate::lsp::item_events(turn_id, diagnostic_items))
+            .await?;
+    }
     Ok(())
 }
 async fn permission<'a>(

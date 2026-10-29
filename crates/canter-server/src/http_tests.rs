@@ -1146,3 +1146,46 @@ async fn btw_disconnect_keeps_received_usage_and_never_blocks_the_main_turn() {
     assert!((ledger.report.last_turn_cost.unwrap().usd - 0.00003048).abs() < 1e-10);
     test.finish().await;
 }
+
+#[tokio::test]
+async fn lsp_routes_are_advertised_and_disabled_sessions_remain_empty() {
+    let test = BtwTest::new().await;
+    let id = test.create().await;
+    let info: InfoResponse = test
+        .client
+        .get("http://localhost/v1/info")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(info.features.unwrap().contains(&"lsp".into()));
+    for endpoint in ["languageServers", "diagnostics"] {
+        let reply = test
+            .client
+            .get(format!("{}/{}", test.url(&id), endpoint))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(reply.status(), StatusCode::OK);
+        assert_eq!(
+            reply.json::<serde_json::Value>().await.unwrap(),
+            json!({"data":[]})
+        );
+    }
+    for action in ["stop", "retry"] {
+        let reply = test
+            .client
+            .post(format!(
+                "{}/languageServers/missing/{action}",
+                test.url(&id)
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(reply.status(), StatusCode::BAD_REQUEST);
+        assert!(reply.text().await.unwrap().contains("LSP is disabled"));
+    }
+    test.finish().await;
+}

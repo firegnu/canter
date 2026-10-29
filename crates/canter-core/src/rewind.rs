@@ -502,8 +502,11 @@ impl Session {
             })
             .await?;
         state.journal.append(vec![rewind.event()]).await?;
+        let retained = state.journal.snapshot.turns.clone();
+        state.lsp_delivery.rewind(&retained);
         if let Some((messages, users, skills)) = state.rewind.apply(&rewind) {
             let removed = state.history.split_off(messages);
+            state.lsp_delivery.notices.retain(|index| *index < messages);
             state.user_messages.truncate(users);
             state.invoked_skills.truncate(skills);
             state.measured_context = None;

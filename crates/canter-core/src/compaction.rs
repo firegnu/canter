@@ -132,6 +132,8 @@ pub(crate) async fn compact(
                 })
                 .await?;
             state.history = messages;
+            state.lsp_delivery.notices.clear();
+            state.lsp_delivery.reset_baseline();
             state.rewind.clear_boundaries();
             state.summary_index = state.history.len().checked_sub(1);
             state.user_messages = user_inputs;
@@ -176,7 +178,16 @@ async fn summarize(
     turn_id: &str,
     cancel: &CancellationToken,
 ) -> Result<(String, Vec<Message>, usize), CoreError> {
-    let (prefix, history, summary_index, user_messages, model, plan, skill_notices) = {
+    let (
+        prefix,
+        history,
+        summary_index,
+        user_messages,
+        model,
+        plan,
+        skill_notices,
+        diagnostic_notices,
+    ) = {
         let state = shared.state.lock().await;
         (
             state.prefix.clone(),
@@ -191,6 +202,7 @@ async fn summarize(
                 .filter(|_| state.journal.snapshot.settings.plan_enabled != Some(false))
                 .map(<[_]>::to_vec),
             crate::skill_invocation::latest(&state.invoked_skills),
+            state.lsp_delivery.notices.clone(),
         )
     };
     let output_limit = shared.options.max_output_tokens.min(8192);
@@ -213,7 +225,9 @@ async fn summarize(
                 } else {
                     text
                 };
-                let source = if crate::background::notice_id(message).is_some() {
+                let source = if diagnostic_notices.contains(&index) {
+                    "Tool diagnostics"
+                } else if crate::background::notice_id(message).is_some() {
                     "Background event"
                 } else {
                     "User"

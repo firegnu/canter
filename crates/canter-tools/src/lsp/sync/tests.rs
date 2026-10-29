@@ -775,3 +775,46 @@ async fn plan_and_review_pause_synchronization_and_resume_reconciles() {
     assert_eq!(batch.version, Some(2));
     service.shutdown().await;
 }
+
+#[tokio::test]
+async fn stopping_one_session_subscription_preserves_a_shared_server_and_retry_resynchronizes() {
+    let (dir, service, context) = setup("sync");
+    let a = service.session(context.clone(), vec![]);
+    let b = service.session(context, vec![]);
+    let path = dir.path().join("main.fake");
+    std::fs::write(&path, "bad").unwrap();
+    a.changed(&path).wait(Duration::from_secs(5)).await.unwrap();
+    b.changed(&path).wait(Duration::from_secs(5)).await.unwrap();
+    let id = a.language_servers()[0].id.clone();
+    assert_eq!(a.language_servers()[0].shared_references, 2);
+    a.stop_server(&id).await.unwrap();
+    assert!(a.diagnostics().await.is_empty());
+    assert_eq!(
+        b.language_servers()[0].state,
+        canter_protocol::LanguageServerState::Running
+    );
+    assert_eq!(b.language_servers()[0].shared_references, 1);
+    assert!(a.changed(&path).wait(Duration::from_secs(1)).await.is_err());
+    a.retry_server(&id).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if !a.diagnostics().await.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(a.language_servers()[0].id, id);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("starts"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    a.close().await;
+    b.close().await;
+    service.shutdown().await;
+}

@@ -369,7 +369,7 @@ pub(crate) fn item(
             status,
             ..
         } => crate::plan::card(plan, explanation.as_deref(), *status, width),
-        Item::Unknown => Vec::new(),
+        Item::Diagnostics { .. } | Item::Unknown => Vec::new(),
     };
     if let Some(feedback) = feedback
         && matches!(

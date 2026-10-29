@@ -131,6 +131,17 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
         EventPayload::TurnRetracted { turn_id } => {
             snapshot.turns.retain(|turn| turn.id != *turn_id);
         }
+        EventPayload::LanguageServerUpdated { server } => {
+            if let Some(old) = snapshot
+                .language_servers
+                .iter_mut()
+                .find(|s| s.id == server.id)
+            {
+                *old = server.clone();
+            } else {
+                snapshot.language_servers.push(server.clone());
+            }
+        }
         EventPayload::BackgroundCommandUpdated { command } => {
             if let Some(existing) = snapshot
                 .background_commands

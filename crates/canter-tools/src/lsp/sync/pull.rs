@@ -106,6 +106,9 @@ impl Workspace {
                         .filter(|id| id.len() <= 4096)
                         .map(str::to_owned);
                     let batch = DiagnosticBatch {
+                        root: instance.root.clone(),
+                        received_at: tokio::time::Instant::now(),
+                        collected_at: 0,
                         id: 0,
                         path,
                         server_id: instance.server_id.clone(),

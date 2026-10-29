@@ -378,6 +378,7 @@ impl Body {
             Item::Plan { .. }
             | Item::Reasoning { .. }
             | Item::AgentMessage { .. }
+            | Item::Diagnostics { .. }
             | Item::Unknown => {}
         }
     }

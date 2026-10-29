@@ -43,6 +43,7 @@ pub(crate) struct Shared {
     pub lifetime: CancellationToken,
 }
 pub(crate) struct State {
+    pub lsp_delivery: crate::lsp::Delivery,
     pub goal_running: bool,
     pub goal_deadline: Option<tokio::time::Instant>,
     pub goal_summary: Option<(String, bool)>,
@@ -89,6 +90,7 @@ pub(crate) struct Active {
 impl State {
     fn new(journal: Journal) -> Self {
         Self {
+            lsp_delivery: Default::default(),
             goal_running: false,
             goal_deadline: None,
             goal_summary: None,
@@ -447,6 +449,9 @@ impl Session {
         )
         .await?;
         let mut state = State::new(Journal::new(store, writer));
+        if let Some(lsp) = tools.lsp() {
+            lsp.restore_server_ids(&state.journal.snapshot.language_servers);
+        }
         crate::usage::Ledger::replay(&events, &options.prices)
             .fill_costs(&mut state.journal.snapshot);
         let restored = crate::context::restore(entries.clone(), &mut state.rewind);
@@ -454,11 +459,29 @@ impl Session {
         state.invoked_skills = restored.invoked_skills;
         state.prefix_segments = restored.segments;
         state.history = restored.history;
+        state.lsp_delivery.notices = restored.diagnostic_notices;
         state.plan_mode_notices = restored.plan_mode_notices;
         state.tool_images = restored.tool_images;
         state.user_messages = restored.users;
         state.summary_index = restored.summary_index;
         state.background_events.all = restored.background_cards;
+        let recovered = state
+            .journal
+            .snapshot
+            .language_servers
+            .iter()
+            .cloned()
+            .map(|mut server| {
+                if server.state != LanguageServerState::Stopped {
+                    server.state = LanguageServerState::Reconnecting;
+                    server.reason = Some("LSP server is not running after session restore".into());
+                }
+                server.rss_bytes = None;
+                server.shared_references = 0;
+                server.updated_at = now();
+                EventPayload::LanguageServerUpdated { server }
+            })
+            .collect::<Vec<_>>();
         state.requeue_background_cards();
         for entry in &entries {
             let recovery = match entry {
@@ -477,7 +500,31 @@ impl Session {
                 state.journal.append(vec![event]).await?;
             }
         }
+        if !recovered.is_empty() {
+            state.journal.append(recovered).await?;
+        }
         state.initialize_prefix(home, canter_home, &tools).await?;
+        if let Some(lsp) = tools.lsp() {
+            let cwd = std::path::Path::new(&state.journal.snapshot.settings.cwd);
+            let files = state
+                .journal
+                .snapshot
+                .turns
+                .iter()
+                .flat_map(|turn| &turn.items)
+                .filter_map(|item| match item {
+                    Item::FileChange {
+                        changes,
+                        status: ItemStatus::Completed,
+                        ..
+                    } => Some(changes),
+                    _ => None,
+                })
+                .flatten()
+                .map(|change| cwd.join(&change.path))
+                .collect::<Vec<_>>();
+            lsp.restore_subscriptions(&state.journal.snapshot.language_servers, &files);
+        }
         if state.journal.snapshot.settings.plan_enabled != Some(options.plan_enabled) {
             let mut settings = state.journal.snapshot.settings.clone();
             settings.plan_enabled = Some(options.plan_enabled);
@@ -649,6 +696,7 @@ impl Session {
             lifetime: lifetime.clone(),
         });
         crate::background::watch(&shared);
+        crate::lsp::watch(&shared);
         Self {
             shared,
             _lifetime: Arc::new(Lifetime(lifetime)),

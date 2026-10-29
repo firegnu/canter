@@ -21,6 +21,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 跟着改的：第一期改文件用「整文件写 + 按文字替换」；Codex 的 apply_patch 是给 GPT 用的，等接 OpenAI 时再搬（用户 10-24 选定）。
 7. **名字和仓库**：`canter`（马的「慢跑」步法），仓库 `github.com/firegnu/canter`，公开，Apache-2.0。用户：「开源，repo就放在github上」。
 8. **协议：结构照 Codex，传输和类型 canter 自己定（报告 §5.7 的 C）**。2026-10-24 在 canter 仓库定的，用户：「好，就用 C，改 DESIGN」。
+   - LSP（P2-134，10-29 主控确认）：新增 `diagnostics` 项目、`languageServer.updated` 状态事件、可选快照 `languageServers` 和 `lsp` 能力标识；查询诊断/服务器及按会话单个订阅停止/重试。沿用会话→轮→项目和 `item.started/completed`，LSP 字段与端点是 canter 扩展，不是 Codex v2 原有接口。具体字段、兼容和模型交付见下文「LSP 诊断交付和协议」。
    - 目标续跑（P2-109，10-29 主控和用户确认）：参考 Codex `rust-v0.163.0` 的 ThreadGoal 和目标更新通知，快照增加可选 `goal`，`session.goal.updated {goal}` 保存并广播完整状态（清除为 null）。字段为 `id/objective/status/budgetUsd/cost/createdAt/updatedAt`，`cost` 沿用 `{usd, unknown}`；状态 `active/paused/complete/blocked/budgetLimited`。`GET/POST/DELETE /v1/sessions/{id}/goal` 查询、设置、清除，`POST .../goal/pause` 和 `.../goal/resume` 暂停、继续；信息接口 features 增加 `goals`。旧客户端忽略新增字段和事件，旧会话没有目标。与 Codex 不同：预算按美元，只有用户能建目标，模型仅有 `get_goal` 和 `update_goal {status: complete|blocked}`；续跑轮提问有五分钟超时。
    - 命令规则（P2-108，10-29 主控确认）：批准决定增加字符串 `acceptWithExecpolicyAmendment`；请求增加可选 `proposedExecpolicyAmendment`（词前缀数组的列表），回答增加可选 `execpolicyAmendment`，服务端校验它与提议完全相同。沿用 Codex `rust-v0.163.0` 的命名与提议→确认结构；canter 保留原来的字符串决定枚举，把 amendment 放在回答顶层，并用二维数组支持组合命令一次写多条。请求另带可选 `sessionPrefixes`，明确本会话放行范围。所有新增字段可省略，旧客户端滤掉未知决定，旧会话仍能打开。
    - 加目录（P2-118，10-29 主控确认）：公开会话设置和创建参数新增可选 `additionalDirectories` 字符串数组，旧存盘缺省为空；PATCH 新增可选 `addDirectories`，由服务端追加、规范化、去重，省略或空数组不改变目录，不提供移除。完整列表随 `session.updated` 存盘和广播。沿用 Codex app-server v2 的会话设置和更新结构；Codex 的 `sandboxPolicy` 在 `type: workspaceWrite` 下带 `writableRoots`，canter 的目录同时用于模型环境、文件引用和批准判断，因而单列这两个字段，不引入沙箱策略或把它们称为沙箱可写根。多客户端并发追加在服务端串行处理，不由客户端读出整表再覆盖。`GET /v1/info.features` 增加 `addDirectories`，终端使用新参数或命令前检查支持情况，避免旧服务端忽略字段后误报成功；旧客户端忽略新字段，照常使用。
@@ -117,6 +118,31 @@ LSP 默认关闭；`config.json` 的 `lsp.enabled` 开启即授权配置中的�
 会话持有 `LspSession`，成功修改返回 `ChangeTicket`，等待时长由调用方决定；另提供之后诊断批次的订阅。取消等待不取消实例启动，会话负责持有订阅和释放资源。实例内按文件串行同步、版本全局递增，并记录实例代数与磁盘摘要；旧版本、旧代数或磁盘摘要不匹配的结果丢弃，无版本推送明确标记版本未确认。支持 push 和声明了诊断能力的文档 pull，文件再变取消旧 pull，不在本件向模型或客户端协议交付。
 
 实例最多打开 64 个文件，按最近使用回收。每会话诊断缓存和待交付队列各限 1 MiB，单文件诊断限 256 KiB，均为内部常量，不新增用户配置；超限报告不完整。传输帧沿用 16 MiB 上限，发出超限消息仅拒绝该条，保持连接；stderr 继续排空而不存储。错误和降级原因使用英文。不升级已有依赖，允许下载 notify 及新增的传递依赖。
+
+## LSP 诊断交付和协议（P2-134，2026-10-29 主控确认）
+
+成功 write/edit 从落盘起最多等 500 ms（包括启动）；诊断失败不改变文件修改成功。快结果附在尚未提交的工具结果末尾；晚结果按会话合并，在下一次本来发生的模型请求前追加，不叫醒、不插入流式输出。修改票据最多保留 60 秒，文件再改即失效，超期批次只更新缓存。先改动文件、再同项目关注文件，各组错误先于警告，不给 info/hint。首次包含既存问题，之后只给新增、变化和已解决数量；只把实际展示条目计作已交付。最多 20 条、8 KiB UTF-8（包括说明和计数），单条最多 1 KiB，截断用 `[truncated]`。空表、超时、未安装不表示检查通过；无版本或不完整结果不能证明问题解决。
+
+没有服务器支持、在同步范围外或本轮不同步（`Unsupported`），以及用户停掉的订阅（`Stopped`），不附诊断文字、不建 diagnostics 项目，表现和 LSP 关着一样；配置了服务器但没安装、启动失败或出错仍报告 unavailable（10-29 用户确认返工决定）。
+
+用户看过英文后选「按你的精简版」。最终模板：快速块头 `[LSP diagnostics]`；晚到块头 `[LSP diagnostics update] (arrived after the file change)`。文件头 `{path} ({server}). First report for this file: pre-existing problems may be included.`，之后改为 `{path} ({server}). Only new or changed diagnostics are listed.`。诊断行 `{path}:{line}:{column}: {error|warning} [{code}] {message}`（行列从 1 起，无 code 省方括号）。计数 `{N} error(s), {M} warning(s).`，按数量用单复数；选中未展示时加 `; {K} not shown`，多文件末尾再加总数，单文件不重复。已解决数量已知才写 `Resolved since last report: {N}.`。不写收集时间，current 不另写新鲜度。
+
+每块结尾固定：`These are partial, asynchronous diagnostics. Run the checks required by the project; these diagnostics do not replace them.`。状态原文：
+
+- 等待：`The file change succeeded. Diagnostics are still pending after 500 ms.`
+- 快速不可用：`The file change succeeded. Diagnostics are unavailable: {reason}.`
+- 晚到不可用：`Diagnostics are unavailable for {path}: {reason}.`
+- 到期：`The 60-second diagnostic delivery window has expired. No current result is being delivered for this change.`
+- 当前完整空表：`This source reported no errors or warnings for this document version. This is not a project check result.`
+- 无版本：`Freshness: version unconfirmed. These results may be out of date; they cannot confirm that earlier problems are resolved.`
+- 无版本空表：`This source returned an empty diagnostic list without a confirmed document version. Earlier problems are not confirmed resolved.`
+- 不完整：`Diagnostic coverage is incomplete: {reason}. Counts include only the available results.`
+- 可能过期：`Diagnostics may be stale: {reason}. No current result is being delivered for this file.`
+- 删除：`The file was deleted. Its previous diagnostics are no longer applicable; this is not a project check result.`
+
+已交付历史只追加；晚到通知用私有 `diagnostics_notice` 记录身份，承载一条 `Message::User`，不进入用户原话集合；压缩拼稿标 `Tool diagnostics`，快速结果仍归工具信息。回退丢掉被回退修改的待发结果，重启不恢复待发队列。回退、撤回、压缩后清空已交付条目的基线，保留防止同批次重发的记录；下一份新报告重新按首次报告完整列出条目（仍受交付预算限制）。
+
+补第 8 条：沿用 Codex app-server v2 会话→轮→项目结构，以下为 canter 的扩展。新增 `diagnostics` 项目（`id/sourceItemId?/status/files/totalCount/shownCount/omittedCount/resolvedCount?`），状态 `pending/available/unavailable/timedOut`；文件带批次、文件路径、服务器订阅 id、来源、采集时间、可选版本、时效、不完整原因和诊断列表，位置保留零起始 UTF-16。pending 项目不回写，晚到另建项目。新增 `languageServer.updated` 和可选快照 `languageServers`；记录 `id/name/root/state/reason?/rssBytes?/sharedReferences/updatedAt`，只发状态变化，RSS 查询返回最新采样，采样本身不存盘。`GET /v1/sessions/{id}/languageServers`、`GET .../diagnostics` 查询；`POST .../languageServers/{serverId}/stop` 和 `.../retry` 按本会话单个服务器/项目订阅操作，id 不透明，停止不影响其它会话。info 能力标识 `lsp`。旧客户端跳过新事件/项目，旧存盘缺字段默认空；运行态恢复为待重连，不沿用 PID。共享键和环境不落盘，不改系统提示词或工具说明。
 
 ## 和报告不同的地方
 

@@ -493,6 +493,174 @@
       ],
       "type": "string"
     },
+    "Diagnostic": {
+      "properties": {
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "range": {
+          "$ref": "#/$defs/DiagnosticRange"
+        },
+        "severity": {
+          "$ref": "#/$defs/DiagnosticSeverity"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "severity",
+        "range",
+        "message"
+      ],
+      "type": "object"
+    },
+    "DiagnosticFile": {
+      "properties": {
+        "batchId": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "collectedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          },
+          "type": "array"
+        },
+        "documentVersion": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "freshness": {
+          "$ref": "#/$defs/DiagnosticFreshness"
+        },
+        "incomplete": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "serverId": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "batchId",
+        "path",
+        "serverId",
+        "source",
+        "freshness",
+        "incomplete",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    "DiagnosticFreshness": {
+      "enum": [
+        "current",
+        "versionUnconfirmed",
+        "deleted",
+        "stale",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "DiagnosticListResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/DiagnosticFile"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
+    "DiagnosticPosition": {
+      "description": "LSP positions: zero-based lines and UTF-16 code units.",
+      "properties": {
+        "character": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "line": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "line",
+        "character"
+      ],
+      "type": "object"
+    },
+    "DiagnosticRange": {
+      "properties": {
+        "end": {
+          "$ref": "#/$defs/DiagnosticPosition"
+        },
+        "start": {
+          "$ref": "#/$defs/DiagnosticPosition"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "DiagnosticSeverity": {
+      "enum": [
+        "error",
+        "warning",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "DiagnosticStatus": {
+      "enum": [
+        "pending",
+        "available",
+        "unavailable",
+        "timedOut",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "ErrorCode": {
       "enum": [
         "invalid_request",
@@ -542,6 +710,22 @@
     },
     "Event": {
       "oneOf": [
+        {
+          "properties": {
+            "server": {
+              "$ref": "#/$defs/LanguageServer"
+            },
+            "type": {
+              "const": "languageServer.updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "server"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "goal": {
@@ -964,6 +1148,22 @@
     },
     "EventPayload": {
       "oneOf": [
+        {
+          "properties": {
+            "server": {
+              "$ref": "#/$defs/LanguageServer"
+            },
+            "type": {
+              "const": "languageServer.updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "server"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "goal": {
@@ -1521,6 +1721,65 @@
     },
     "Item": {
       "oneOf": [
+        {
+          "properties": {
+            "files": {
+              "items": {
+                "$ref": "#/$defs/DiagnosticFile"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "omittedCount": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "resolvedCount": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "shownCount": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sourceItemId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/$defs/DiagnosticStatus"
+            },
+            "totalCount": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "diagnostics",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "status",
+            "files",
+            "totalCount",
+            "shownCount",
+            "omittedCount"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "attempt": {
@@ -2152,6 +2411,80 @@
         "completed",
         "failed",
         "declined",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "LanguageServer": {
+      "properties": {
+        "id": {
+          "description": "Opaque ID for one session's subscription, independent of process generations.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "type": "string"
+        },
+        "rssBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sharedReferences": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/LanguageServerState"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "root",
+        "state",
+        "sharedReferences",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "LanguageServerListResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/LanguageServer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
+    "LanguageServerState": {
+      "enum": [
+        "starting",
+        "running",
+        "stopped",
+        "unavailable",
+        "reconnecting",
         "unknown"
       ],
       "type": "string"
@@ -3294,6 +3627,12 @@
         },
         "id": {
           "type": "string"
+        },
+        "languageServers": {
+          "items": {
+            "$ref": "#/$defs/LanguageServer"
+          },
+          "type": "array"
         },
         "lastEventSeq": {
           "format": "uint64",

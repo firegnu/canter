@@ -315,3 +315,21 @@ fn close_reasons_replay_and_legacy_events_and_snapshots_remain_readable() {
         }
     }
 }
+
+#[test]
+fn lsp_items_and_states_round_trip_without_changing_legacy_sessions() {
+    let item = json!({"type":"diagnostics","id":"d1","sourceItemId":"write1","status":"pending","files":[],"totalCount":0,"shownCount":0,"omittedCount":0});
+    let parsed: Item = serde_json::from_value(item.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), item);
+    let update = json!({"type":"languageServer.updated","seq":1,"sessionId":"s","timestamp":10,"server":{"id":"lsp-1","name":"fake","root":"/project","state":"running","sharedReferences":1,"updatedAt":10}});
+    let event: Event = serde_json::from_value(update.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&event).unwrap(), update);
+    let snapshot = apply_event(&SessionSnapshot::empty("s"), &event).unwrap();
+    assert_eq!(
+        serde_json::to_value(snapshot).unwrap()["languageServers"][0]["id"],
+        "lsp-1"
+    );
+    let old = serde_json::to_value(SessionSnapshot::empty("old")).unwrap();
+    assert!(old.get("languageServers").is_none());
+    assert!(serde_json::from_value::<SessionSnapshot>(old).is_ok());
+}
