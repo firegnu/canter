@@ -32,7 +32,7 @@ fn skill_commands_share_completion_and_builtin_names_win() {
     assert!(
         shown.contains("/example")
             && shown.contains("Inspect this project")
-            && shown.contains("技能"),
+            && shown.contains("skill · Inspect this project"),
         "{shown}"
     );
     assert!(shown.contains("/exit") && shown.contains("/export"));
@@ -80,7 +80,7 @@ fn skill_commands_share_completion_and_builtin_names_win() {
         }
         screen.draw();
         let shown = screen.text();
-        assert_eq!(shown.matches("用了技能 `example`").count(), 1, "{shown}");
+        assert_eq!(shown.matches("Used skill `example`").count(), 1, "{shown}");
         assert!(shown.contains("Please inspect."));
     }
 }

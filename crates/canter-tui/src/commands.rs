@@ -528,7 +528,7 @@ pub(crate) fn matching(typed: &str, skills: &[Skill]) -> Vec<Completion> {
                 .filter(|skill| skill.name.starts_with(typed) && find(&skill.name).is_none())
                 .map(|skill| Completion {
                     name: skill.name.clone(),
-                    about: format!("技能 · {}", clean(&skill.description)),
+                    about: format!("skill · {}", clean(&skill.description)),
                 }),
         )
         .collect()
