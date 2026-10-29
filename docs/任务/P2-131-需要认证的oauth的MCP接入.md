@@ -81,3 +81,16 @@
 - 踩过的坑：auth 所需 oauth2 不在本机缓存，离线编译明确失败后等待并取得主控许可才下载。令牌除工具结果外还可能被服务回显在工具说明和 schema，测试发现后补上脱敏；原有 SSE 大小限制在包装 HTTP 客户端时需继续转发，已保留并跑过原 MCP 回归。
 - 主控审查后：登录提示统一为「Login required: run `canter mcp login <name>`」，重启提示改为「Takes effect in new sessions after canter serve --replace」，同步断言、DESIGN 第 8 条、README 和任务要求，复查本分支新增代码没有其他用户可见中文，前台运行的 9 项相关测试及 `git diff --check` 均通过。
 - 10-29 续期审查后：仅 AuthRequired、InsufficientScope、Auth(AuthorizationRequired / TokenRefreshRejected) 标为需要登录，启动时也按此分类，临时续期、网络及存储错误不再误报登录；两条新增测试均先复现 RED 再修到 GREEN，本机假授权服务器首次续期返回 503 时当次工具调用失败但仍连接，第二次续期和工具调用成功，MCP 初始化次数始终为 1、服务端 PID 未变，未加重连，启动凭证读取失败也保持普通初始化错误；同步 DESIGN 和 README，前台完成的 7 项 OAuth 测试、1 项普通 HTTP 503 回归、`cargo clippy --offline --all-targets -- -D warnings` 及 `git diff --check` 均通过。
+
+## 主控审查
+
+2026-10-29，canter/main。
+- 看了 diff：配置命令只改 `mcp_servers`、独立锁和 0600 原子替换；令牌按服务存 `mcp-auth/`（目录 0700、文件 0600、绑定 URL）；回调只听本机、核 state、PKCE；出错一律固定文字，令牌在工具结果、说明、schema、`/v1/mcp` 里脱敏。「不要做」的一件没做。
+- 依赖：主控允许编译时从 crates.io 下载 rmcp `auth` 带来的 18 个包，rmcp 仍 3.7.0，没升级已有依赖。
+- 主控交回改了两处：
+  1. `/mcp` 的「需要登录」和命令行「改完要重启」两句是中文（主控任务文件写错），改成英文 `Login required: run \`canter mcp login <name>\`` 等（`938b2c5`）。
+  2. 用户 10-29 指出、主控核 rmcp 源码后定为必须改：续期碰上断网会一直标「要登录」直到重启。改成只有 `AuthRequired`、`InsufficientScope`、`AuthorizationRequired`、`TokenRefreshRejected` 才标，临时错误下次调用再试；测试证明第一次续期 503 后连接还在、第二次续期后工具照常（`96face8`）。交叉审查的建议改 1 是同一个问题，改法相同。
+  3. `96face8` 的 `cargo fmt --check` 没过，交回格式化（`e5aec41`）。
+- 交叉审查（canter/review-mcplogin，审到 `938b2c5`）：可以合并，没有必须改；建议改 2 条（第 1 条即上面第 2 处，已修；第 2 条 OAuth 端点不核 https）、可以不改 4 条，记进 HANDOFF。修复是审查后提交的，主控看了修复的 diff，和审查员给的改法一致，不再请审查员复核。
+- 重跑（`96face8`）：`cargo nextest run --all-targets` 1016 条全过；`cargo test --doc --workspace`、`cargo clippy --all-targets -- -D warnings`、`git diff --check` 通过；`e5aec41` 后 `cargo fmt --check` 通过。
+结果：返工 2 次

@@ -88,6 +88,13 @@
 
 ## 已知没修的问题
 
+- MCP OAuth（P2-131 交叉审查建议改和可以不改，10-29 按「只有必须改挡合并」不改）：
+  - OAuth 的授权、令牌、注册三个端点不核对是不是 https，授权网址交给 `open` 前也不核协议；用了自己的 reqwest 客户端，丢了 rmcp 对内网地址的过滤。只在服务配置错了或有恶意时有影响。
+  - 某一个工具权限不够（`InsufficientScope`）也会让整个服务标「要登录」。
+  - 同一个服务同时跑两次 `canter mcp login`，第二次没有提示地等到第一次结束（最多 5 分钟）。
+  - 登录成功页 `Content-Length` 少算一个字节，浏览器里少显示一个句号。
+  - 发现授权服务器只按 well-known 路径推，不先读 401 里的 `resource_metadata`，也不跟随重定向；GitLab 上能不能用没验证过。用户真连 GitLab 若报「cannot discover MCP authorization server」或「OAuth dynamic client registration failed」，先查这两处。
+  - `config.json` 是符号链接时，`mcp add/remove` 会把链接换成普通文件（内容不丢）。
 - 看图片（P2-130，10-29 用户试用时看到）：
   - MCP 工具卡片的结果里显示了给模型看的那句 `Image "…" is attached in the next user message after this tool-result batch.`；卡片下面已有图片那一行，这句只该给模型。
   - 工具图片在压缩、回退、撤回、重开上只做了代码自查，没有专门的测试（主控审查建议）。
