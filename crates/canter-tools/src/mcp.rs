@@ -445,8 +445,10 @@ async fn connect(
                         needs_login: server.needs_login.clone(),
                         use_oauth,
                     },
-                    Err(_) => {
-                        server.needs_login.store(true, Ordering::Relaxed);
+                    Err(error) => {
+                        server
+                            .needs_login
+                            .store(oauth::requires_login(&error), Ordering::Relaxed);
                         return Err("MCP OAuth initialization failed");
                     }
                 };

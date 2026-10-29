@@ -80,3 +80,4 @@
 - 没做的事：按任务范围，没有真实 GitLab 或真实模型调用（0 次），没有访问用户 `~/.canter` 或其他 agent 配置；没有配置热加载、MCP 资源/模板、按需加载或 get 命令。真实 GitLab 由用户安装后自行登录验证。
 - 踩过的坑：auth 所需 oauth2 不在本机缓存，离线编译明确失败后等待并取得主控许可才下载。令牌除工具结果外还可能被服务回显在工具说明和 schema，测试发现后补上脱敏；原有 SSE 大小限制在包装 HTTP 客户端时需继续转发，已保留并跑过原 MCP 回归。
 - 主控审查后：登录提示统一为「Login required: run `canter mcp login <name>`」，重启提示改为「Takes effect in new sessions after canter serve --replace」，同步断言、DESIGN 第 8 条、README 和任务要求，复查本分支新增代码没有其他用户可见中文，前台运行的 9 项相关测试及 `git diff --check` 均通过。
+- 10-29 续期审查后：仅 AuthRequired、InsufficientScope、Auth(AuthorizationRequired / TokenRefreshRejected) 标为需要登录，启动时也按此分类，临时续期、网络及存储错误不再误报登录；两条新增测试均先复现 RED 再修到 GREEN，本机假授权服务器首次续期返回 503 时当次工具调用失败但仍连接，第二次续期和工具调用成功，MCP 初始化次数始终为 1、服务端 PID 未变，未加重连，启动凭证读取失败也保持普通初始化错误；同步 DESIGN 和 README，前台完成的 7 项 OAuth 测试、1 项普通 HTTP 503 回归、`cargo clippy --offline --all-targets -- -D warnings` 及 `git diff --check` 均通过。

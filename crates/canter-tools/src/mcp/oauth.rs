@@ -34,6 +34,13 @@ fn store_error() -> AuthError {
     AuthError::CredentialStoreError("cannot read or write MCP credentials".into())
 }
 
+pub(super) fn requires_login(error: &AuthError) -> bool {
+    matches!(
+        error,
+        AuthError::AuthorizationRequired | AuthError::TokenRefreshRejected(_)
+    )
+}
+
 impl Store {
     pub(super) fn new(
         home: &Path,

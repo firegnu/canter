@@ -32,10 +32,11 @@ pub(super) struct Client {
 impl Client {
     fn observe<T>(&self, result: Result<T, Error>) -> Result<T, Error> {
         if self.use_oauth
-            && matches!(
-                &result,
-                Err(Error::AuthRequired(_) | Error::InsufficientScope(_) | Error::Auth(_))
-            )
+            && result.as_ref().is_err_and(|error| match error {
+                Error::AuthRequired(_) | Error::InsufficientScope(_) => true,
+                Error::Auth(error) => super::oauth::requires_login(error),
+                _ => false,
+            })
         {
             self.needs_login.store(true, Ordering::Relaxed);
         }

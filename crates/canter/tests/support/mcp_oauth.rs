@@ -22,6 +22,9 @@ struct AuthState {
     exchanges: usize,
     refreshes: usize,
     reject_refresh: bool,
+    fail_next_refresh: bool,
+    initializations: usize,
+    calls: usize,
     no_registration: bool,
     echo_metadata: bool,
     seen: Vec<String>,
@@ -110,6 +113,9 @@ async fn token(
         assert_eq!(body["grant_type"], "refresh_token");
         assert_eq!(body["refresh_token"], REFRESH);
         state.refreshes += 1;
+        if std::mem::take(&mut state.fail_next_refresh) {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
         if state.reject_refresh {
             (
                 StatusCode::BAD_REQUEST,
@@ -147,6 +153,7 @@ async fn rpc(
     }
     let result = match request["method"].as_str().unwrap() {
         "initialize" => {
+            state.lock().unwrap().initializations += 1;
             json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}})
         }
         "tools/list" => {
@@ -157,6 +164,7 @@ async fn rpc(
             }
         }
         "tools/call" => {
+            state.lock().unwrap().calls += 1;
             json!({"content":[{"type":"text","text":format!("{ACCESS} {REFRESH} {RENEWED}")}]})
         }
         _ => json!({}),
@@ -518,4 +526,99 @@ async fn oauth_refreshes_during_a_running_connection_and_reports_later_rejection
     assert_private(&serde_json::to_string(&events).unwrap());
     fixture.stop().await;
     assert_private_files(&home.join("sessions"));
+}
+
+#[tokio::test]
+async fn oauth_transient_refresh_failure_keeps_connection_and_retries_on_next_call() {
+    let auth = AuthServer::start().await;
+    let call = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"oauth-call","type":"function","function":{"name":"mcp__remote__echo","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})
+    );
+    let mut fixture = Fixture::start_with_mcp(
+        vec![call.clone(), text_reply(), call, text_reply()],
+        "fake-model",
+        None,
+        json!({}),
+        json!({"remote":auth.config()}),
+    )
+    .await;
+    stop_daemon(&mut fixture).await;
+    let home = fixture.root.path().join("state");
+    assert!(login(&home, &auth, false).await.status.success());
+    fixture.child = Fixture::spawn(fixture.root.path());
+    fixture.ready().await;
+    let pid = fixture.child.id();
+    assert_eq!(auth.state.lock().unwrap().initializations, 1);
+    expire(&home);
+    auth.state.lock().unwrap().fail_next_refresh = true;
+    let created: SessionCreateResponse = fixture.request(Method::POST,"/v1/sessions",json!({"cwd":fixture.root.path().join("work"),"model":"fake-model","env":{},"approvalPolicy":"allowAll","clientName":"test"})).await.json().await.unwrap();
+    fixture.input(&created.session.id).await;
+    let events = fixture
+        .events_until(&created.session.id, created.event_seq, |e| {
+            matches!(e.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    assert!(events.iter().any(|event| matches!(
+        event.payload,
+        EventPayload::ItemCompleted {
+            item: canter_protocol::Item::McpToolCall {
+                status: canter_protocol::ItemStatus::Failed,
+                ..
+            },
+            ..
+        }
+    )));
+    assert_eq!(auth.state.lock().unwrap().refreshes, 1);
+    assert_eq!(auth.state.lock().unwrap().calls, 0);
+    let report = status(&fixture).await;
+    assert_eq!(report["data"][0]["error"], Value::Null);
+    assert_eq!(report["data"][0]["connected"], true);
+
+    fixture.input(&created.session.id).await;
+    let events = fixture
+        .events_until(&created.session.id, events.last().unwrap().seq, |e| {
+            matches!(e.payload, EventPayload::TurnCompleted { .. })
+        })
+        .await;
+    assert!(events.iter().any(|event| matches!(
+        event.payload,
+        EventPayload::ItemCompleted {
+            item: canter_protocol::Item::McpToolCall {
+                status: canter_protocol::ItemStatus::Completed,
+                ..
+            },
+            ..
+        }
+    )));
+    assert_eq!(auth.state.lock().unwrap().refreshes, 2);
+    assert_eq!(auth.state.lock().unwrap().calls, 1);
+    assert_eq!(auth.state.lock().unwrap().initializations, 1);
+    assert_eq!(fixture.child.id(), pid);
+    assert_eq!(status(&fixture).await["data"][0]["connected"], true);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn oauth_startup_credential_store_error_is_not_login_required() {
+    let auth = AuthServer::start().await;
+    let mut fixture = Fixture::start_with_mcp(
+        vec![text_reply()],
+        "fake-model",
+        None,
+        json!({}),
+        json!({"remote":auth.config()}),
+    )
+    .await;
+    stop_daemon(&mut fixture).await;
+    let home = fixture.root.path().join("state");
+    fs::create_dir_all(home.join("mcp-auth")).unwrap();
+    fs::write(token_file(&home), "{incomplete").unwrap();
+    fixture.child = Fixture::spawn(fixture.root.path());
+    fixture.ready().await;
+    let report = status(&fixture).await;
+    assert_eq!(report["data"][0]["connected"], false);
+    assert_eq!(report["data"][0]["error"], "MCP OAuth initialization failed");
+    assert_eq!(auth.state.lock().unwrap().refreshes, 0);
+    fixture.stop().await;
 }
