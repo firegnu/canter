@@ -109,6 +109,7 @@ pub enum Open {
     /// A new session in `cwd`; `first` is sent as its first message. An empty
     /// model means the server's default.
     New {
+        additional_directories: Vec<String>,
         cwd: String,
         model: String,
         approval_policy: PermissionMode,
@@ -374,6 +375,7 @@ where
     // Every way out of here, a title written over the session list included,
     // goes through the clearing below.
     let mut none_to_continue = false;
+    let mut directory_notices = Vec::new();
     let opened: Result<Option<(SessionSnapshot, EventStream)>, RunError> = async {
         let open = match open {
             Open::Continue { cwd, update } => {
@@ -387,6 +389,7 @@ where
                     None => {
                         none_to_continue = true;
                         Open::New {
+                            additional_directories: update.add_directories,
                             cwd,
                             model: update.model.unwrap_or_default(),
                             approval_policy: update
@@ -399,14 +402,20 @@ where
             }
             open => open,
         };
-        let opened = match open {
+        let opened: Result<SessionSnapshot, RunError> = match open {
             Open::New {
+                additional_directories,
                 cwd,
                 model,
                 approval_policy,
                 first,
             } => {
+                let requested_directories = additional_directories.len();
+                if requested_directories > 0 {
+                    require_add_directories(&client).await?;
+                }
                 let params = SessionCreateParams {
+                    additional_directories,
                     cwd,
                     env: env.clone(),
                     model,
@@ -416,11 +425,13 @@ where
                     name: first.as_deref().map(session_title),
                     client_name: client_name.clone(),
                 };
-                client
-                    .create_session(&params)
-                    .await
-                    .map(|created| created.session)
-                    .map_err(RunError::from)
+                let created = client.create_session(&params).await?;
+                directory_notices.extend(directory_messages(
+                    requested_directories,
+                    &[],
+                    &created.session.settings.additional_directories,
+                ));
+                Ok(created.session)
             }
             Open::Resume { id, cwd, update } => {
                 let id = match id {
@@ -436,7 +447,12 @@ where
                     }
                 };
                 match id {
-                    Some(id) => resume(&client, &id, &env, &update).await,
+                    Some(id) => {
+                        let snapshot =
+                            resume(&client, &id, &env, &SessionUpdateParams::default()).await?;
+                        directory_notices.extend(update_settings(&client, &id, &update).await?);
+                        Ok(snapshot)
+                    }
                     None => return Ok(None),
                 }
             }
@@ -476,6 +492,9 @@ where
     }
     if none_to_continue {
         app.warning("No session in this directory yet; started a new one");
+    }
+    for notice in directory_notices {
+        app.information(&notice);
     }
     let mut ui = Ui::with_terminal(terminal, app);
     let connector = Arc::new(connector);
@@ -742,6 +761,74 @@ async fn resume(
     Ok(snapshot)
 }
 
+async fn require_add_directories(client: &Client) -> Result<(), ClientError> {
+    if client
+        .info()
+        .await?
+        .features
+        .unwrap_or_default()
+        .iter()
+        .any(|feature| feature == "addDirectories")
+    {
+        Ok(())
+    } else {
+        Err(ClientError::Protocol(
+            "This server does not support /add-dir; run canter serve --replace and retry".into(),
+        ))
+    }
+}
+
+fn directory_messages(requested: usize, previous: &[String], current: &[String]) -> Vec<String> {
+    if requested == 0 {
+        return Vec::new();
+    }
+    let mut messages: Vec<_> = current
+        .iter()
+        .filter(|dir| !previous.contains(dir))
+        .map(|dir| format!("Added directory: {dir}"))
+        .collect();
+    if messages.len() < requested {
+        messages.push("Some requested directories are already covered by the working or additional directories; they were not added again.".into());
+    }
+    messages
+}
+
+async fn update_settings(
+    client: &Client,
+    session: &str,
+    params: &SessionUpdateParams,
+) -> Result<Vec<String>, ClientError> {
+    if *params == SessionUpdateParams::default() {
+        return Ok(Vec::new());
+    }
+    let previous = if params.add_directories.is_empty() {
+        Vec::new()
+    } else {
+        require_add_directories(client).await?;
+        client
+            .read_session(session)
+            .await?
+            .session
+            .settings
+            .additional_directories
+    };
+    client.update(session, params).await?;
+    if params.add_directories.is_empty() {
+        return Ok(Vec::new());
+    }
+    let current = client
+        .read_session(session)
+        .await?
+        .session
+        .settings
+        .additional_directories;
+    Ok(directory_messages(
+        params.add_directories.len(),
+        &previous,
+        &current,
+    ))
+}
+
 /// Shows the session list, distinguishing dismissal from terminal shutdown.
 /// Meanwhile the tab shows `tab`'s directory, idle.
 async fn pick<B>(
@@ -918,6 +1005,7 @@ enum Message {
     },
     NameFailed(String),
     Warning(String),
+    Information(String),
     /// `/diff` collected the changes.
     Diff(crate::uncommitted::Changes),
     AnswerFailed {
@@ -1131,6 +1219,7 @@ impl<C: Connector> Chat<C> {
             ""
         };
         let params = SessionCreateParams {
+            additional_directories: Vec::new(),
             cwd: settings.cwd.clone(),
             env: self.env.clone(),
             model: settings.model.clone(),
@@ -1188,6 +1277,7 @@ impl<C: Connector> Chat<C> {
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let settings = &ui.app().snapshot().settings;
         let mut params = SessionCreateParams {
+            additional_directories: Vec::new(),
             cwd: settings.cwd.clone(),
             env: self.env.clone(),
             model: settings.model.clone(),
@@ -1394,6 +1484,7 @@ impl<C: Connector> Chat<C> {
                 app.warning(&format!("Could not name the session: {error}"))
             }
             Message::Warning(message) => app.warning(&message),
+            Message::Information(message) => app.information(&message),
             Message::Diff(changes) => app.show_diff(changes),
             Message::AnswerFailed { request_id, error } => app.answer_failed(&request_id, &error),
             Message::AnswerLate => app.answer_late(),
@@ -1660,10 +1751,17 @@ impl<C: Connector> Chat<C> {
             }
             Action::Update(params) => {
                 tokio::spawn(async move {
-                    if let Err(error) = client.update(&session, &params).await {
-                        let _ = sender.send(Message::Warning(format!(
-                            "Could not change the session: {error}"
-                        )));
+                    match update_settings(&client, &session, &params).await {
+                        Ok(notices) => {
+                            for notice in notices {
+                                let _ = sender.send(Message::Information(notice));
+                            }
+                        }
+                        Err(error) => {
+                            let _ = sender.send(Message::Warning(format!(
+                                "Could not change the session: {error}"
+                            )));
+                        }
                     }
                 });
             }

@@ -41,6 +41,9 @@ pub(crate) enum HistoryEntry {
     PlanModeNotice {
         message: Message,
     },
+    DirectoriesNotice {
+        message: Message,
+    },
     BackgroundNotice {
         message: Message,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -103,7 +106,8 @@ pub(crate) fn restore(
     let mut background_cards = BTreeMap::new();
     for entry in entries {
         match entry {
-            HistoryEntry::PlanModeNotice { message } => plan_mode_notices.push(message),
+            HistoryEntry::PlanModeNotice { message }
+            | HistoryEntry::DirectoriesNotice { message } => plan_mode_notices.push(message),
             HistoryEntry::BackgroundNotice {
                 message,
                 event_id,
@@ -454,6 +458,7 @@ mod tests {
             Arc::new(canter_store::Store::new(temp.path().join("state")).unwrap()),
             "context".into(),
             SessionSettings {
+                additional_directories: Vec::new(),
                 plan_mode: false,
                 pre_plan_approval_policy: None,
                 plan_enabled: None,

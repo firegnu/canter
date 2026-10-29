@@ -3,7 +3,12 @@ import type { PermissionMode } from "./PermissionMode";
 import type { ReasoningEffort } from "./ReasoningEffort";
 
 /**
- * PATCH /v1/sessions/{id}. Omitted/null fields retain their current values.
+ * PATCH /v1/sessions/{id}. Omitted/null scalar fields retain their current values.
+ * Omitted/empty addDirectories appends nothing.
  * The resulting complete public settings are emitted in session.updated.
  */
-export type SessionUpdateParams = { planMode?: boolean | null, name?: string | null, model?: string | null, reasoningEffort?: ReasoningEffort | null, approvalPolicy?: PermissionMode | null, };
+export type SessionUpdateParams = {
+/**
+ * Append directories; never replaces or removes existing directories.
+ */
+addDirectories?: Array<string>, planMode?: boolean | null, name?: string | null, model?: string | null, reasoningEffort?: ReasoningEffort | null, approvalPolicy?: PermissionMode | null, };

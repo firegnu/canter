@@ -97,6 +97,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                     ])
                     .await?;
                 state.restate_background_notices(removed).await?;
+                state.restate_directories().await?;
                 return Ok(event_seq);
             }
             state.cancel_requests().await?;

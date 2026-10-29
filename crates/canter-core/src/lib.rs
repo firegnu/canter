@@ -3,6 +3,7 @@ mod background;
 mod btw;
 mod compaction;
 mod context;
+mod directories;
 mod images;
 mod journal;
 mod plan_mode;

@@ -4,6 +4,171 @@ use std::{collections::BTreeMap, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
+async fn file_changes_outside_the_working_directory_require_approval() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("main");
+    std::fs::create_dir(&cwd).unwrap();
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(cwd, BTreeMap::new(), vec![]).unwrap(),
+    ));
+    let gate = PermissionGate::default();
+    let cancel = CancellationToken::new();
+    for (path, ask) in [("new.txt", false), ("../outside.txt", true)] {
+        let args = serde_json::json!({"path":path,"content":"new"}).to_string();
+        let call = tools
+            .prepare(Tool::Write, "write", &args, &cancel)
+            .await
+            .unwrap();
+        assert_eq!(
+            matches!(
+                gate.evaluate(&call, PermissionMode::AskForExecution),
+                PermissionCheck::Ask(_)
+            ),
+            ask,
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn directory_boundary_resolves_paths_and_keeps_modes_and_tool_grants() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    for dir in ["main", "service", "outside"] {
+        std::fs::create_dir(root.join(dir)).unwrap();
+        std::fs::write(root.join(dir).join("file"), "old").unwrap();
+    }
+    std::os::unix::fs::symlink(root.join("outside"), root.join("main/link")).unwrap();
+    std::os::unix::fs::symlink(root.join("service"), root.join("main/service-link")).unwrap();
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(root.join("main"), BTreeMap::new(), vec![]).unwrap(),
+    ));
+    let mut gate = PermissionGate::default();
+    gate.set_additional_directories(&[root.join("service").display().to_string()]);
+    let cancel = CancellationToken::new();
+    for (path, outside) in [
+        ("file", false),
+        ("../service/file", false),
+        ("service-link/file", false),
+        ("../outside/file", true),
+        ("../main/../outside/file", true),
+        ("link/file", true),
+        ("link/../outside/file", true),
+    ] {
+        for tool in [Tool::Write, Tool::Edit] {
+            let args = match tool {
+                Tool::Write => serde_json::json!({"path":path,"content":"new"}),
+                _ => serde_json::json!({"path":path,"edits":[{"oldText":"old","newText":"new"}]}),
+            }
+            .to_string();
+            let call = tools.prepare(tool, "change", &args, &cancel).await.unwrap();
+            for (mode, ask) in [
+                (PermissionMode::AskForExecution, outside),
+                (PermissionMode::AlwaysAsk, true),
+                (PermissionMode::AllowAll, false),
+            ] {
+                assert_eq!(
+                    matches!(gate.evaluate(&call, mode), PermissionCheck::Ask(_)),
+                    ask,
+                    "{tool:?} {path} {mode:?}"
+                );
+            }
+            assert!(matches!(
+                gate.evaluate_plan(&call, PermissionMode::AllowAll),
+                PermissionCheck::Deny { .. }
+            ));
+            assert!(matches!(
+                gate.evaluate_review(&call),
+                PermissionCheck::Deny { .. }
+            ));
+        }
+        let read = tools
+            .prepare(
+                Tool::Read,
+                "read",
+                &serde_json::json!({"path":path}).to_string(),
+                &cancel,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            gate.evaluate(&read, PermissionMode::AskForExecution),
+            PermissionCheck::Execute(_)
+        ));
+    }
+    for (path, outside) in [
+        ("new/child/file", false),
+        ("../service/new/child/file", false),
+        ("link/new/child/file", true),
+    ] {
+        let call = tools
+            .prepare(
+                Tool::Write,
+                "new",
+                &serde_json::json!({"path":path,"content":"new"}).to_string(),
+                &cancel,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            matches!(
+                gate.evaluate(&call, PermissionMode::AskForExecution),
+                PermissionCheck::Ask(_)
+            ),
+            outside,
+            "{path}"
+        );
+    }
+    let call = tools
+        .prepare(
+            Tool::Write,
+            "grant",
+            r#"{"path":"../outside/new","content":"new"}"#,
+            &cancel,
+        )
+        .await
+        .unwrap();
+    gate.resolve(&call, ApprovalDecision::AcceptForSession, None)
+        .unwrap();
+    let another = tools
+        .prepare(
+            Tool::Write,
+            "later",
+            r#"{"path":"../elsewhere","content":"new"}"#,
+            &cancel,
+        )
+        .await
+        .unwrap();
+    for mode in [PermissionMode::AskForExecution, PermissionMode::AlwaysAsk] {
+        assert!(matches!(
+            gate.evaluate(&another, mode),
+            PermissionCheck::Execute(_)
+        ));
+    }
+    let edit = tools
+        .prepare(
+            Tool::Edit,
+            "edit",
+            r#"{"path":"../outside/file","edits":[{"oldText":"old","newText":"new"}]}"#,
+            &cancel,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        gate.evaluate(&edit, PermissionMode::AskForExecution),
+        PermissionCheck::Ask(_)
+    ));
+    assert!(matches!(
+        gate.evaluate_plan(&another, PermissionMode::AllowAll),
+        PermissionCheck::Deny { .. }
+    ));
+    assert!(matches!(
+        gate.evaluate_review(&another),
+        PermissionCheck::Deny { .. }
+    ));
+}
+
+#[tokio::test]
 async fn readonly_shell_allowlist_applies_in_all_asking_modes() {
     let dir = tempfile::tempdir().unwrap();
     let tools = Tools::new(Arc::new(

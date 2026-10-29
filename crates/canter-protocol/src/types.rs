@@ -62,6 +62,9 @@ impl ReasoningEffort {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSettings {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
+    pub additional_directories: Vec<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     #[ts(optional = nullable)]
     pub plan_mode: bool,
@@ -125,6 +128,7 @@ impl SessionSnapshot {
         Self {
             id: id.into(),
             settings: SessionSettings {
+                additional_directories: Vec::new(),
                 plan_mode: false,
                 pre_plan_approval_policy: None,
                 plan_enabled: None,

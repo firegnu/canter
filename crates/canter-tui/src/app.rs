@@ -1646,10 +1646,15 @@ impl App {
             return;
         }
         let root = &self.snapshot.settings.cwd;
+        let additional_directories = &self.snapshot.settings.additional_directories;
         match &mut self.mentions.scan {
-            Some(scan) if scan.root == *root => scan.poll(),
+            Some(scan)
+                if scan.root == *root && scan.additional_directories == *additional_directories =>
+            {
+                scan.poll()
+            }
             scan => {
-                *scan = Some(mention::Scan::start(root));
+                *scan = Some(mention::Scan::start(root, additional_directories));
                 self.mentions.matches = None;
             }
         }
@@ -3162,6 +3167,14 @@ impl App {
     /// A line for the conversation, e.g. the server's version differs.
     pub fn warning(&mut self, message: &str) {
         self.notice(cells::notice("! ", message, theme::warning()));
+    }
+
+    pub(crate) fn information(&mut self, message: &str) {
+        self.notice(cells::notice(
+            "· ",
+            message,
+            ratatui::style::Style::default(),
+        ));
     }
 
     /// Puts `line` after everything finished so far, before what is still

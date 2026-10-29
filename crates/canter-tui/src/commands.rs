@@ -203,6 +203,24 @@ pub(crate) const COMMANDS: &[Command] = &[
             Ok(None)
         },
     },
+    Command {
+        name: "add-dir",
+        about: "Add a directory to this session",
+        takes_args: true,
+        run: |_, args| {
+            if args.is_empty() {
+                return Err("Usage: /add-dir <path>".into());
+            }
+            let path = args
+                .strip_prefix('"')
+                .and_then(|path| path.strip_suffix('"'))
+                .unwrap_or(args);
+            Ok(Some(Action::Update(SessionUpdateParams {
+                add_directories: vec![path.to_owned()],
+                ..Default::default()
+            })))
+        },
+    },
 ];
 
 /// `/skills`: global and project skills, each a section; every skill's

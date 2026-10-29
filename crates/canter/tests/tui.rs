@@ -39,6 +39,108 @@ const WAIT: Duration = Duration::from_secs(20);
 /// What the shell tool writes when it runs with a session's environment.
 const WRITE_ENV: &str = r#"printf '%s' "$CANTER_TEST_ENV" > env.txt"#;
 
+#[tokio::test]
+async fn add_dir_cli_slash_resume_and_continue_share_persisted_directories() {
+    let mut world = World::new(Vec::new()).await;
+    for dir in [
+        "service",
+        "from-resume",
+        "from-continue",
+        "home/shared",
+        "elsewhere",
+    ] {
+        fs::create_dir(world.path(dir)).unwrap();
+    }
+    fs::write(world.path("home/shared/visible-extra.rs"), "").unwrap();
+    fs::write(world.path("ordinary-file"), "file").unwrap();
+    world.start_server().await;
+    let a = world
+        .open(
+            &[
+                "--add-dir",
+                "../service",
+                "--add-dir",
+                "../service/.",
+                "--add-dir",
+                ".",
+            ],
+            "canter-tui a",
+        )
+        .await;
+    a.wait_for("Added directory:").await;
+    a.wait_for("already covered").await;
+    let id = world.only_session().await;
+    assert_eq!(
+        world
+            .snapshot(&id)
+            .await
+            .settings
+            .additional_directories
+            .len(),
+        1
+    );
+    let b = Terminal::start(
+        &["--resume", &id, "--add-dir", "../from-resume"],
+        world.context("canter-tui b", &world.path("elsewhere")),
+    )
+    .await;
+    b.wait_for("Added directory:").await;
+    a.type_line("/add-dir ~/shared").await;
+    a.wait_for("/home/shared").await;
+    for c in "@visible-extra".chars() {
+        b.press(KeyCode::Char(c)).await;
+    }
+    b.wait_for("visible-extra.rs").await;
+    b.press(KeyCode::Esc).await;
+    b.press_with(KeyCode::Char('u'), KeyModifiers::CONTROL)
+        .await;
+    a.type_line("/add-dir ~/shared").await;
+    a.wait_for("already covered").await;
+    for (path, reason) in [
+        ("../ordinary-file", "not a directory"),
+        ("../missing", "No such file or directory"),
+    ] {
+        a.type_line(&format!("/add-dir {path}")).await;
+        a.wait_for(reason).await;
+    }
+    assert_eq!(
+        world
+            .snapshot(&id)
+            .await
+            .settings
+            .additional_directories
+            .len(),
+        3
+    );
+    assert_eq!(a.quit().await, id);
+    assert_eq!(b.quit().await, id);
+    let c = world
+        .open(&["-c", "--add-dir", "../from-continue"], "canter-tui c")
+        .await;
+    c.wait_for("Added directory:").await;
+    assert_eq!(c.quit().await, id);
+    let expected = world.snapshot(&id).await.settings.additional_directories;
+    assert_eq!(expected.len(), 4);
+    world.stop_server(Signal::SIGTERM).await;
+    world.start_server().await;
+    let d = world.open(&["-c"], "canter-tui d").await;
+    d.wait_idle().await;
+    d.type_line("/resume").await;
+    d.wait_for("Which session to resume?").await;
+    d.press(KeyCode::Enter).await;
+    d.wait_until("resumed session", |d| {
+        !d.screen().contains("Which session to resume?")
+    })
+    .await;
+    assert_eq!(
+        world.snapshot(&id).await.settings.additional_directories,
+        expected
+    );
+    assert_eq!(d.quit().await, id);
+    assert!(world.requests.lock().unwrap().is_empty());
+    world.stop_server(Signal::SIGTERM).await;
+}
+
 #[path = "support/statusline.rs"]
 mod statusline;
 

@@ -43,6 +43,7 @@ pub(crate) struct Shared {
     pub lifetime: CancellationToken,
 }
 pub(crate) struct State {
+    directory_home: Option<std::path::PathBuf>,
     pub background_events: crate::background::PendingEvents,
     pub journal: Journal,
     pub prefix: Vec<Message>,
@@ -80,6 +81,7 @@ pub(crate) struct Active {
 impl State {
     fn new(journal: Journal) -> Self {
         Self {
+            directory_home: None,
             background_events: Default::default(),
             journal,
             prefix: Vec::new(),
@@ -110,6 +112,9 @@ impl State {
         canter_home: Option<std::path::PathBuf>,
         tools: &Tools,
     ) -> Result<(), CoreError> {
+        self.directory_home = home.clone();
+        self.gate
+            .set_additional_directories(&self.journal.snapshot.settings.additional_directories);
         self.tool_definitions = canter_tools::Tool::ALL
             .into_iter()
             .filter(|tool| tools.find(tool.name()).is_some())
@@ -132,13 +137,29 @@ impl State {
                     }),
             )
             .collect();
-        let (segments, warnings, skills) = crate::context::prefix(
+        let (mut segments, warnings, skills) = crate::context::prefix(
             self.journal.snapshot.settings.cwd.clone(),
             home,
             canter_home,
             self.tool_definitions.clone(),
         )
         .await?;
+        if !self
+            .journal
+            .snapshot
+            .settings
+            .additional_directories
+            .is_empty()
+            && let Some(environment) = segments
+                .iter_mut()
+                .find(|segment| segment.kind == crate::prompt::SegmentKind::Environment)
+        {
+            environment.text.push_str(&format!(
+                "\nAdditional directories: {}\n",
+                serde_json::to_string(&self.journal.snapshot.settings.additional_directories)
+                    .expect("directory list")
+            ));
+        }
         let (prefix, sections) = crate::prompt::chat_completions(&segments);
         self.skills = skills;
         self.prefix_sections = sections;
@@ -521,6 +542,13 @@ impl Session {
             runtime,
             options.web_fetch_timeout,
             options.plan_enabled,
+        )
+        .await?;
+        settings.additional_directories = crate::directories::append(
+            settings.cwd.clone(),
+            home.clone(),
+            Vec::new(),
+            settings.additional_directories,
         )
         .await?;
         settings.plan_enabled = Some(options.plan_enabled);
@@ -970,6 +998,15 @@ impl Session {
             ));
         }
         let mut settings = state.journal.snapshot.settings.clone();
+        settings.additional_directories = crate::directories::append(
+            settings.cwd.clone(),
+            state.directory_home.clone(),
+            settings.additional_directories,
+            params.add_directories,
+        )
+        .await?;
+        let directories_changed = settings.additional_directories
+            != state.journal.snapshot.settings.additional_directories;
         if let Some(plan_mode) = params.plan_mode {
             state.set_plan_mode(&mut settings, plan_mode).await?;
         }
@@ -994,6 +1031,16 @@ impl Session {
             .journal
             .append(vec![EventPayload::SessionUpdated { settings }])
             .await?;
+        if directories_changed {
+            let directories = state
+                .journal
+                .snapshot
+                .settings
+                .additional_directories
+                .clone();
+            state.gate.set_additional_directories(&directories);
+            state.restate_directories().await?;
+        }
         Ok(SessionUpdateResponse {
             event_seq: events[0].seq,
         })

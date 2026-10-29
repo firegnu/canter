@@ -66,8 +66,12 @@ pub(crate) struct Entry {
 }
 
 impl Entry {
-    fn new(root: &Path, entry: &ignore::DirEntry) -> Option<Self> {
-        let path = entry.path().strip_prefix(root).ok()?.to_str()?;
+    fn new(root: &Path, entry: &ignore::DirEntry, absolute: bool) -> Option<Self> {
+        let relative = entry.path().strip_prefix(root).ok()?;
+        if relative.as_os_str().is_empty() {
+            return None;
+        }
+        let path = if absolute { entry.path() } else { relative }.to_str()?;
         // Such a name could not be written in the input box as it is.
         if path.is_empty() || path.contains(|c: char| c == '"' || c.is_control()) {
             return None;
@@ -197,6 +201,7 @@ struct Found {
 /// Dropping it stops the walk.
 pub(crate) struct Scan {
     pub root: String,
+    pub additional_directories: Vec<String>,
     pub entries: Vec<Entry>,
     /// The walk stopped at [`LIMIT`].
     pub truncated: bool,
@@ -205,13 +210,23 @@ pub(crate) struct Scan {
 }
 
 impl Scan {
-    pub fn start(root: &str) -> Self {
+    pub fn start(root: &str, additional_directories: &[String]) -> Self {
         let found = Arc::new(Mutex::new(Found::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let (into, stopped, dir) = (found.clone(), stop.clone(), root.to_owned());
-        std::thread::spawn(move || walk(Path::new(&dir), &into, &stopped));
+        let extra = additional_directories.to_vec();
+        std::thread::spawn(move || {
+            walk(Path::new(&dir), false, &into, &stopped);
+            for dir in extra {
+                if stopped.load(Ordering::Relaxed) {
+                    break;
+                }
+                walk(Path::new(&dir), true, &into, &stopped);
+            }
+        });
         Self {
             root: root.to_owned(),
+            additional_directories: additional_directories.to_vec(),
             entries: Vec::new(),
             truncated: false,
             found,
@@ -236,7 +251,7 @@ impl Drop for Scan {
 /// Walks `root` by `.gitignore`, `.git/info/exclude` and the global git
 /// ignore file (inside a git repository; outside one, by none of them),
 /// in name order, handing what it finds to `found` in batches.
-fn walk(root: &Path, found: &Mutex<Found>, stop: &AtomicBool) {
+fn walk(root: &Path, absolute: bool, found: &Mutex<Found>, stop: &AtomicBool) {
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .ignore(false)
@@ -257,7 +272,7 @@ fn walk(root: &Path, found: &Mutex<Found>, stop: &AtomicBool) {
     let hand = |batch: &mut Vec<Entry>, truncated: bool| {
         let mut found = found.lock().unwrap_or_else(PoisonError::into_inner);
         found.entries.append(batch);
-        found.truncated = truncated;
+        found.truncated |= truncated;
     };
     let mut batch = Vec::new();
     let mut count = 0;
@@ -265,7 +280,10 @@ fn walk(root: &Path, found: &Mutex<Found>, stop: &AtomicBool) {
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        let Some(entry) = entry.ok().and_then(|entry| Entry::new(root, &entry)) else {
+        let Some(entry) = entry
+            .ok()
+            .and_then(|entry| Entry::new(root, &entry, absolute))
+        else {
             continue;
         };
         if count == LIMIT {

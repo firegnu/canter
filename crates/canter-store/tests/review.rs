@@ -10,6 +10,7 @@ fn create(store: &Store, id: &str) -> SessionWriter {
         .create(
             id,
             SessionSettings {
+                additional_directories: Vec::new(),
                 plan_mode: false,
                 pre_plan_approval_policy: None,
                 plan_enabled: None,

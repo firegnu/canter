@@ -505,6 +505,7 @@ impl Session {
             state.user_messages.truncate(users);
             state.measured_context = None;
             state.restate_plan_mode().await?;
+            state.restate_directories().await?;
             state.restate_background_notices(removed).await?;
         }
         Ok(SessionRewindResponse {
