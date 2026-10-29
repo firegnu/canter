@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-29 第二十六次装 main `4f38b0b`（`canter --version` 显示 `canter 0.1.0 · 4f38b0b`；代码同 P2-118 合并后，之后只改了文档。比上一版多 P2-118：`canter --add-dir <路径>`（可写几次，配合 `-c` / `--resume`）和 `/add-dir <路径>` 给会话加目录，跟着会话存盘；写进系统提示词，中途加的往后追加一条说明；`@` 能选到这些目录里的文件；「只问执行」下改工作目录和加的目录以外的文件要批准）。服务端要用户自己 `canter serve --replace`。
+- 退回上一版 `058a564`：`cp -p ~/.canter/canter-058a564 ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版打开加过目录的会话不坏（忽略 `additionalDirectories`，目录说明记录按不认识的跳过），只是没有目录边界和 `@` 里的那些目录。
 - 10-28 第二十五次装 main `058a564`（`canter --version` 显示 `canter 0.1.0 · 058a564`；比上一版多 P2-120：一轮出错停下（重试用完、或认证这类不重试的错误）时，最近一次写出内容的半截回答和思考留给模型，说「继续」能接着写，Esc 没变；P2-121：重试那一行不再带 `retried N times`，最后的错误照旧写次数）。服务端要用户自己 `canter serve --replace`。
 - 退回上一版 `157db9f`：`cp -p ~/.canter/canter-157db9f ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-28 第二十四次装 main `157db9f`（`canter --version` 显示 `canter 0.1.0 · 157db9f`；比上一版多 P2-110：模型请求出错（限流、5xx、过载、网络、超时）最多重试 10 次，0.5 秒起翻倍、最长 32 秒，`Retry-After` 最多等 60 秒；回复到一半断了丢掉半截整段重发；等重试时对话里有一行 `Retrying in …`；`config.json` 写 `"model_max_retries": N`（0～100）可改，0 不重试，改了要重启服务端；按 Esc 打断的行为没变）。服务端要用户自己 `canter serve --replace`。
