@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-29 第三十二次装 main `74fecde`（`canter --version` 显示 `canter 0.1.0 · 74fecde`；比上一版多 P2-130：`read` 读到 JPEG / PNG / GIF / WebP 把图交给模型，MCP 返回的图片、内嵌文字资源、只有 `structuredContent` 的结果也交给模型，工具卡片一行写图片名、格式、大小；P2-137：点名用技能的四处界面文字改成英文）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
+- 退回上一版 `33ede43`：`cp -p ~/.canter/canter-33ede43 ~/.cargo/bin/canter`，再 `canter serve --replace`。读过图片的会话旧版能不能照常打开没测过（模型历史多了 `ToolImages`，`fileRead` / `mcpToolCall` 多了可选 `contentItems`）。
 - 10-29 第三十一次装 main `33ede43`（`canter --version` 显示 `canter 0.1.0 · 33ede43`；比上一版多 P2-127：技能说明改用 YAML 解析，多行、单引号的说明读对；P2-129：输入框 `/技能名 [要说的话]` 点名用技能，补全里和内置命令一起列，服务端读全文发给模型，对话里一行「用了技能」，压缩后补回）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
 - 退回上一版 `50446e4`：`cp -p ~/.canter/canter-50446e4 ~/.cargo/bin/canter`，再 `canter serve --replace`。点过技能的会话旧版能不能照常打开没测过（`UserInput` 多了 `skill`，私有历史多了可省略的 `skill_input` 和 `skill_notice`）。
 - 10-29 第三十次装 main `50446e4`（`canter --version` 显示 `canter 0.1.0 · 50446e4`；比上一版多 P2-108：`~/.canter/rules.json` 按命令前缀放行 / 要问 / 禁止，批准框一键「以后这个前缀都不问」，shell 的「本会话都放行」只放行这个前缀；P2-109：`/goal` 目标续跑和美元预算，所有会话多了 `get_goal`、`update_goal` 两个工具，缓存冷一次）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。同时照 P2-108「装的时候」写入 `~/.canter/rules.json`（0600）17 条放行规则（cargo 常用 6 条、`git add` / `commit` / `worktree add` / `rev-parse` / `ls-remote` / `push`、`npm install`、`pnpm install`、`lsof`、`ps`、`sleep`）。
