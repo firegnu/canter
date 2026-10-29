@@ -35,6 +35,7 @@ mod images;
 mod input;
 mod input_history;
 mod links;
+mod lsp;
 mod markdown;
 mod mention;
 mod notify;

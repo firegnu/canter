@@ -22,6 +22,16 @@ pub enum DiagnosticFreshness {
     #[serde(other)]
     Unknown,
 }
+/// Whether a diagnostics item came with the file change's tool result
+/// (`inline`) or arrived later, before another model request (`late`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum DiagnosticDelivery {
+    Inline,
+    Late,
+    #[serde(other)]
+    Unknown,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum DiagnosticSeverity {

@@ -440,6 +440,10 @@ later results create another item in the currently active turn. Idle arrivals up
 Status is `pending/available/unavailable/timedOut`, independent of the successful file-change status.
 `totalCount` counts errors and warnings available from the involved sources; `shownCount` and
 `omittedCount` count entries selected for this delivery. Missing `resolvedCount` means unknown.
+Optional `errorCount` and `warningCount` (P2-135) split `totalCount`, from the same counts the model
+receives; status items omit them. Optional `delivery` is `inline` when the item came with the
+file-change tool result and `late` when it arrived before a later model request; unknown values
+decode as `unknown`. Items saved before P2-135 have none of the three.
 
 Files carry `batchId/path/serverId/source/collectedAt?/documentVersion?/freshness/incomplete/reason?/diagnostics`.
 `collectedAt` is Unix milliseconds; `freshness` is `current/versionUnconfirmed/deleted/stale`.

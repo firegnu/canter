@@ -98,6 +98,38 @@ impl Client {
         };
         decode(self.http.post(endpoint).send().await?).await
     }
+    pub async fn language_servers(
+        &self,
+        session: &str,
+    ) -> Result<canter_protocol::LanguageServerListResponse, ClientError> {
+        decode(
+            self.http
+                .get(url(routes::LANGUAGE_SERVERS, &[session]))
+                .send()
+                .await?,
+        )
+        .await
+    }
+    /// Stops (`retry: false`) or retries this session's subscription `server`.
+    pub async fn language_server_control(
+        &self,
+        session: &str,
+        server: &str,
+        retry: bool,
+    ) -> Result<canter_protocol::LanguageServerListResponse, ClientError> {
+        let route = if retry {
+            routes::LANGUAGE_SERVER_RETRY
+        } else {
+            routes::LANGUAGE_SERVER_STOP
+        };
+        decode(
+            self.http
+                .post(url(route, &[session, server]))
+                .send()
+                .await?,
+        )
+        .await
+    }
     pub async fn shell_background(
         &self,
         session: &str,

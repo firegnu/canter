@@ -96,6 +96,11 @@ pub enum Action {
     BackgroundList,
     BackgroundOutput(u64),
     BackgroundStop(Option<u64>),
+    /// `/lsp`: the language servers of this session.
+    LanguageServers,
+    /// Stop this session's subscription to the language server with this id.
+    LanguageServerStop(String),
+    LanguageServerRetry(String),
     SendImages {
         text: String,
         input: Vec<UserInput>,
@@ -221,6 +226,10 @@ enum Kind {
     End,
     /// A queued message: queued messages in a row are one block.
     Queued,
+    /// Diagnostics that came with a file change: right under its card.
+    Attached,
+    /// Diagnostics that arrived later: those in a row are one block.
+    LspUpdate,
     /// The welcome header.
     Welcome,
 }
@@ -248,7 +257,10 @@ fn push_part(
     };
     let blank = Row::is_blank;
     let gap = tail.is_some_and(|before| {
-        !before.blank && !blank(first) && (before.kind != kind || kind == Kind::Item)
+        !before.blank
+            && !blank(first)
+            && kind != Kind::Attached
+            && (before.kind != kind || kind == Kind::Item)
     });
     *tail = Some(Tail {
         kind,
@@ -570,6 +582,8 @@ pub struct App {
     /// `/context`, `/files`, `/mcp` or `/skills`, open above the input box.
     report: Option<crate::report::Report>,
     background_view: Option<u64>,
+    /// `/lsp`, and the report it was open as: open while that is open.
+    lsp: Option<(u64, crate::lsp::View)>,
     /// Output tokens a second, for the `tps` item and the status command.
     tps: Tps,
     home: Option<String>,
@@ -891,6 +905,7 @@ impl App {
             theme_missing: None,
             report: None,
             background_view: None,
+            lsp: None,
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::messages(),
@@ -1003,6 +1018,13 @@ impl App {
             line.event(event);
         }
         self.restore_retracted();
+        if let EventPayload::LanguageServerUpdated { server } = &event.payload
+            && self.lsp_open()
+            && let Some((_, view)) = self.lsp.as_mut()
+        {
+            view.update(server);
+            self.report = Some(view.report(self.home.as_deref()));
+        }
         match &event.payload {
             EventPayload::BackgroundCommandUpdated { .. } => {
                 self.history = History::default();
@@ -1912,6 +1934,13 @@ impl App {
     /// scroll the rows that do not fit; Enter, Esc, Ctrl+C or Ctrl+D
     /// closes it.
     fn report_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
+        if seen
+            && !send_guarded
+            && key.modifiers.is_empty()
+            && let Some(action) = self.lsp_key(key.code)
+        {
+            return action;
+        }
         let report = self.report.as_mut()?;
         if seen
             && !send_guarded
@@ -2235,6 +2264,83 @@ impl App {
         self.background_list = Some(self.choosers);
     }
 
+    /// `/lsp`: the language servers, above the input box.
+    pub(crate) fn show_language_servers(&mut self, servers: Vec<canter_protocol::LanguageServer>) {
+        let view = crate::lsp::View::new(servers);
+        self.open_report(view.report(self.home.as_deref()));
+        self.lsp = Some((self.choosers, view));
+    }
+
+    /// `/lsp` on a server without the `lsp` feature.
+    pub(crate) fn language_servers_unsupported(&mut self) {
+        self.open_report(crate::lsp::unsupported());
+    }
+
+    /// What a stop or retry returned, into `/lsp` while it is open.
+    pub(crate) fn language_server_result(
+        &mut self,
+        result: Result<Vec<canter_protocol::LanguageServer>, String>,
+    ) {
+        let open = self.lsp_open();
+        match (self.lsp.as_mut(), result) {
+            (Some((_, view)), result) if open => {
+                match result {
+                    Ok(servers) => view.replace(servers),
+                    Err(error) => view.error = Some(error),
+                }
+                self.report = Some(view.report(self.home.as_deref()));
+            }
+            (_, Err(error)) => {
+                self.warning(&format!("Could not change the language server: {error}"))
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether `/lsp` is open above the input box.
+    fn lsp_open(&self) -> bool {
+        self.report.is_some()
+            && self
+                .lsp
+                .as_ref()
+                .is_some_and(|(at, _)| *at == self.choosers)
+    }
+
+    /// Keys `/lsp` takes: Up, Down and Enter in the list; s, r and
+    /// Backspace with a server's details. `None` for the others.
+    fn lsp_key(&mut self, code: KeyCode) -> Option<Option<Action>> {
+        if !self.lsp_open() {
+            return None;
+        }
+        let (_, view) = self.lsp.as_mut()?;
+        let last = view.servers.len().checked_sub(1)?;
+        let id = view.current()?.id.clone();
+        let action = match (view.detail, code) {
+            (false, KeyCode::Up) => {
+                view.selected = view.selected.saturating_sub(1);
+                None
+            }
+            (false, KeyCode::Down) => {
+                view.selected = (view.selected + 1).min(last);
+                None
+            }
+            (false, KeyCode::Enter) => {
+                view.detail = true;
+                view.error = None;
+                None
+            }
+            (true, KeyCode::Backspace) => {
+                view.detail = false;
+                None
+            }
+            (true, KeyCode::Char('s')) => Some(Action::LanguageServerStop(id)),
+            (true, KeyCode::Char('r')) => Some(Action::LanguageServerRetry(id)),
+            _ => return None,
+        };
+        self.report = Some(view.report(self.home.as_deref()));
+        Some(action)
+    }
+
     /// Whether the `/ps` list or a command's log is open above the input box.
     fn background_open(&self) -> bool {
         self.choosing() && self.background_list == Some(self.choosers)
@@ -2317,6 +2423,17 @@ impl App {
                 }
                 _ => None,
             })
+    }
+
+    /// The item at `index` in `turn`: [`App::render_item`], or a diagnostics
+    /// line, which depends on the items before it.
+    fn render_at(&self, turn: &Turn, index: usize, done: bool, width: u16) -> Vec<Row> {
+        let item = &turn.items[index];
+        if matches!(item, Item::Diagnostics { .. }) {
+            let cwd = &self.snapshot.settings.cwd;
+            return crate::lsp::rows(&turn.items, index, self.details, cwd, width);
+        }
+        self.render_item(item, done, width)
     }
 
     fn render_item(&self, item: &Item, done: bool, width: u16) -> Vec<Row> {
@@ -3462,6 +3579,13 @@ impl App {
             .and_then(|turn| turn.items.get(at.item))
         {
             Some(Item::FileRead { .. }) => Kind::Read,
+            Some(Item::Diagnostics { .. }) => {
+                if crate::lsp::inline(&self.snapshot.turns[at.turn].items, at.item) {
+                    Kind::Attached
+                } else {
+                    Kind::LspUpdate
+                }
+            }
             Some(_) => Kind::Item,
             None => Kind::End,
         }
@@ -3487,7 +3611,7 @@ impl App {
                 // Already shown as the turn's prompt, or hidden by configuration.
                 Vec::new()
             } else {
-                self.render_item(item, true, width)
+                self.render_at(turn, at.item, true, width)
             };
             let next = Place {
                 item: at.item + 1,
@@ -4614,7 +4738,7 @@ impl App {
                 let new = if !done && item.id().is_some_and(|id| waiting.contains(&id)) {
                     cells::waiting(item, self.details, cwd, width)
                 } else {
-                    self.render_item(item, done, width)
+                    self.render_at(turn, index, done, width)
                 };
                 let part = (Part::At(at), self.kind(at));
                 push_part(&mut rows, &mut parts, &mut tail, part, new);

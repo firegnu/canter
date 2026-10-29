@@ -85,6 +85,8 @@ struct FileReport {
     sources: Vec<DiagnosticBatch>,
     shown: Vec<Value>,
     total: u32,
+    /// Errors among `total`; the rest are warnings.
+    errors: u32,
     omitted: u32,
     resolved: Option<u32>,
 }
@@ -217,6 +219,7 @@ impl Delivery {
                 batch: group.batch,
                 sources: group.sources,
                 total: group.diagnostics.len() as u32,
+                errors: errors(&group.diagnostics),
                 omitted: (group.selected.len() - group.shown.len()) as u32,
                 resolved: group.resolved.map(|n| n as u32),
                 shown: group.shown,
@@ -227,6 +230,7 @@ impl Delivery {
                 batch: group.batch,
                 sources: group.sources,
                 total: group.diagnostics.len() as u32,
+                errors: errors(&group.diagnostics),
                 omitted: group.selected.len() as u32,
                 resolved: None,
                 shown: vec![],
@@ -374,6 +378,7 @@ pub(crate) async fn inline(
                 shared.tools.lsp().unwrap(),
                 &cwd,
                 Some(&pending.item_id),
+                DiagnosticDelivery::Inline,
             );
             report.text
         }
@@ -398,6 +403,7 @@ pub(crate) async fn inline(
                 },
                 &ticket.path,
                 &error.message,
+                DiagnosticDelivery::Inline,
             ));
             format!("[LSP diagnostics]\n{status}\n{REMINDER}")
         }
@@ -529,7 +535,13 @@ pub(crate) async fn before_request(shared: &Shared, turn_id: &str) -> Result<(),
         }
         status_text.push_str(&text);
         status_text.push('\n');
-        status_items.push(status_item(&item, status, &path, &text));
+        status_items.push(status_item(
+            &item,
+            status,
+            &path,
+            &text,
+            DiagnosticDelivery::Late,
+        ));
     }
     let text = if eligible.is_empty() {
         format!("[LSP diagnostics update] (arrived after the file change)\n{status_text}{REMINDER}")
@@ -540,7 +552,7 @@ pub(crate) async fn before_request(shared: &Shared, turn_id: &str) -> Result<(),
             true,
             MAX_BYTES - status_text.len(),
         );
-        let mut items = report_items(&report, lsp, &cwd, None);
+        let mut items = report_items(&report, lsp, &cwd, None, DiagnosticDelivery::Late);
         for (item, file) in items.iter_mut().zip(&report.files) {
             if let Item::Diagnostics { source_item_id, .. } = item {
                 *source_item_id = state
@@ -602,6 +614,9 @@ pub(crate) fn item_events(turn_id: &str, items: Vec<Item>) -> Vec<EventPayload> 
         })
         .collect()
 }
+fn errors(diagnostics: &[Value]) -> u32 {
+    diagnostics.iter().filter(|d| d["severity"] == 1).count() as u32
+}
 fn diagnostic(value: &Value) -> Diagnostic {
     let position = |v: &Value| DiagnosticPosition {
         line: v["line"].as_u64().unwrap_or(0) as u32,
@@ -655,6 +670,7 @@ fn report_items(
     lsp: &canter_tools::lsp::LspSession,
     cwd: &str,
     source: Option<&str>,
+    delivery: DiagnosticDelivery,
 ) -> Vec<Item> {
     report
         .files
@@ -689,11 +705,20 @@ fn report_items(
                 shown_count: f.shown.len() as u32,
                 omitted_count: f.omitted,
                 resolved_count: f.resolved,
+                error_count: Some(f.errors),
+                warning_count: Some(f.total - f.errors),
+                delivery: Some(delivery),
             }
         })
         .collect()
 }
-fn status_item(source: &str, status: DiagnosticStatus, path: &Path, reason: &str) -> Item {
+fn status_item(
+    source: &str,
+    status: DiagnosticStatus,
+    path: &Path,
+    reason: &str,
+    delivery: DiagnosticDelivery,
+) -> Item {
     Item::Diagnostics {
         id: crate::session::id("diagnostics"),
         source_item_id: Some(source.into()),
@@ -714,6 +739,9 @@ fn status_item(source: &str, status: DiagnosticStatus, path: &Path, reason: &str
         shown_count: 0,
         omitted_count: 0,
         resolved_count: None,
+        error_count: None,
+        warning_count: None,
+        delivery: Some(delivery),
     }
 }
 

@@ -321,6 +321,13 @@ fn lsp_items_and_states_round_trip_without_changing_legacy_sessions() {
     let item = json!({"type":"diagnostics","id":"d1","sourceItemId":"write1","status":"pending","files":[],"totalCount":0,"shownCount":0,"omittedCount":0});
     let parsed: Item = serde_json::from_value(item.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), item);
+    // P2-135: optional counts and delivery round trip; old items stay without them.
+    let counted = json!({"type":"diagnostics","id":"d2","sourceItemId":"write1","status":"available","files":[],"totalCount":3,"shownCount":1,"omittedCount":0,"errorCount":2,"warningCount":1,"delivery":"late"});
+    let parsed: Item = serde_json::from_value(counted.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), counted);
+    let future = json!({"type":"diagnostics","id":"d3","status":"available","files":[],"totalCount":0,"shownCount":0,"omittedCount":0,"delivery":"someday"});
+    let parsed: Item = serde_json::from_value(future).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap()["delivery"], "unknown");
     let update = json!({"type":"languageServer.updated","seq":1,"sessionId":"s","timestamp":10,"server":{"id":"lsp-1","name":"fake","root":"/project","state":"running","sharedReferences":1,"updatedAt":10}});
     let event: Event = serde_json::from_value(update.clone()).unwrap();
     assert_eq!(serde_json::to_value(&event).unwrap(), update);

@@ -524,6 +524,15 @@
       ],
       "type": "object"
     },
+    "DiagnosticDelivery": {
+      "description": "Whether a diagnostics item came with the file change's tool result\n(`inline`) or arrived later, before another model request (`late`).",
+      "enum": [
+        "inline",
+        "late",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "DiagnosticFile": {
       "properties": {
         "batchId": {
@@ -1723,6 +1732,25 @@
       "oneOf": [
         {
           "properties": {
+            "delivery": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DiagnosticDelivery"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "errorCount": {
+              "description": "Errors and warnings in `totalCount`; missing in items saved before P2-135.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "files": {
               "items": {
                 "$ref": "#/$defs/DiagnosticFile"
@@ -1767,6 +1795,14 @@
             "type": {
               "const": "diagnostics",
               "type": "string"
+            },
+            "warningCount": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             }
           },
           "required": [
