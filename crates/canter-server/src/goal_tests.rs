@@ -313,7 +313,13 @@ async fn goal_budget_at_ninety_percent_summarizes_once_without_running_tools() {
             ),
             9,
         ),
-        charged(reply("Finished investigation; implementation remains."), 1),
+        charged(
+            call(
+                "write",
+                json!({"path":"summary-must-not-start","content":"new work"}),
+            ),
+            1,
+        ),
     ]);
     fixture
         .client
@@ -331,9 +337,16 @@ async fn goal_budget_at_ninety_percent_summarizes_once_without_running_tools() {
         .await;
     assert_eq!(snapshot["goal"]["cost"]["usd"], 10.0);
     assert!(!fixture.root.path().join("project/must-not-start").exists());
+    assert!(
+        !fixture
+            .root
+            .path()
+            .join("project/summary-must-not-start")
+            .exists()
+    );
     let requests = fixture.requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 2);
-    assert!(requests[1].get("tools").is_none());
+    assert_eq!(requests[1]["tools"], requests[0]["tools"]);
     assert!(
         requests[1]["messages"]
             .to_string()
@@ -798,7 +811,16 @@ async fn goal_automatic_compaction_cost_triggers_the_single_final_summary() {
         if interrupted {
             compressed["choices"][0]["finish_reason"] = Value::Null;
         }
-        fixture.respond(vec![compressed, charged(reply("budget summary"), 1)]);
+        fixture.respond(vec![
+            compressed,
+            charged(
+                call(
+                    "write",
+                    json!({"path":"summary-must-not-start","content":"new work"}),
+                ),
+                1,
+            ),
+        ]);
         fixture.set(&url, json!({"objective":format!("Full long objective: {}", "details ".repeat(6000)),"budgetUsd":10})).await;
         let done = fixture
             .until(&url, |s| {
@@ -808,7 +830,15 @@ async fn goal_automatic_compaction_cost_triggers_the_single_final_summary() {
         assert_eq!(done["goal"]["cost"]["usd"], 10.0);
         let requests = fixture.requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 3);
-        assert!(requests[1].get("tools").is_none());
+        // The intervening request is compaction; retain the conversation's tools.
+        assert_eq!(requests[2]["tools"], requests[0]["tools"]);
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join("project/summary-must-not-start")
+                .exists()
+        );
         assert!(
             requests[1]["messages"]
                 .to_string()

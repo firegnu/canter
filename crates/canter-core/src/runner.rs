@@ -228,7 +228,6 @@ async fn conversation(
             let summary = state.summary_request().await?;
             let mut request = context::request(&state, shared.options.max_output_tokens);
             if summary {
-                request.tools.clear();
                 request.options.max_retries = Some(0);
             }
             (request, summary)
