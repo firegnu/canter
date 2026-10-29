@@ -34,10 +34,10 @@
 
 ## 要做的
 
-1. **命令行改配置**：`canter mcp add <名字> [--env K=V]... -- <命令> [参数...]` 加本机程序的服务；`canter mcp add <名字> --url <网址> [--header K=V]...` 加远程服务；`canter mcp list` 列出（不显示环境变量和请求头的值）；`canter mcp remove <名字>`。写法照 Codex，细节你定、写进完成记录。改的是 canter 自己的 `config.json`（保持 0600，保留别的字段和格式能保留的部分），名字重复、写法不对时报错不写。改完提示「`canter serve --replace` 后新开的会话生效」（照现在改配置的规矩，不做热加载）。
+1. **命令行改配置**：`canter mcp add <名字> [--env K=V]... -- <命令> [参数...]` 加本机程序的服务；`canter mcp add <名字> --url <网址> [--header K=V]...` 加远程服务；`canter mcp list` 列出（不显示环境变量和请求头的值）；`canter mcp remove <名字>`。写法照 Codex，细节你定、写进完成记录。改的是 canter 自己的 `config.json`（保持 0600，保留别的字段和格式能保留的部分），名字重复、写法不对时报错不写。改完提示「Takes effect in new sessions after canter serve --replace」（照现在改配置的规矩，不做热加载）。
 2. **OAuth 登录**：`canter mcp login <名字>` 对远程服务走标准 MCP 授权：发现授权服务器、动态注册客户端（服务器不支持时报清楚原因）、PKCE、在浏览器里打开授权页、本机临时端口接回调、换到令牌。用 `rmcp` 自带的 `auth`，不自己从头写。`canter mcp logout <名字>` 删掉令牌。登录在命令行里做（服务端在后台，没法替你开浏览器）。
 3. **令牌**：存在 canter 状态目录里（0600），不进 `config.json`、日志、事件、会话存盘和公开接口；服务端连这个服务时带上，过期自动续，续不了时这个服务标「要登录」、照常不连，别的服务不受影响。
-4. **`/mcp` 和 `GET /v1/mcp`**：要登录的服务显示「需要登录：运行 `canter mcp login <名字>`」。
+4. **`/mcp` 和 `GET /v1/mcp`**：要登录的服务显示「Login required: run `canter mcp login <name>`」。
 5. **文档**：DESIGN 第 15 条和第 8 条补上命令、令牌存哪、和 Codex 不同的地方；`canter --help` 和 `crates/canter-server/README.md` 跟着改。
 
 碰到要拿主意的事（命令写法、令牌文件放哪、要不要 `get`、回调端口），停下来问主控。
@@ -79,3 +79,4 @@
 - 参考：确认 `/tmp/p2-104-src/codex` 为 `rust-v0.163.0`，只读其 CLI 和 `rmcp-client/src/oauth/credential_store.rs`；使用本机 rmcp 已发布 API，没有搬源码。只在任务分支提交，不合并、不推送、不安装或替换用户服务端。
 - 没做的事：按任务范围，没有真实 GitLab 或真实模型调用（0 次），没有访问用户 `~/.canter` 或其他 agent 配置；没有配置热加载、MCP 资源/模板、按需加载或 get 命令。真实 GitLab 由用户安装后自行登录验证。
 - 踩过的坑：auth 所需 oauth2 不在本机缓存，离线编译明确失败后等待并取得主控许可才下载。令牌除工具结果外还可能被服务回显在工具说明和 schema，测试发现后补上脱敏；原有 SSE 大小限制在包装 HTTP 客户端时需继续转发，已保留并跑过原 MCP 回归。
+- 主控审查后：登录提示统一为「Login required: run `canter mcp login <name>`」，重启提示改为「Takes effect in new sessions after canter serve --replace」，同步断言、DESIGN 第 8 条、README 和任务要求，复查本分支新增代码没有其他用户可见中文，前台运行的 9 项相关测试及 `git diff --check` 均通过。

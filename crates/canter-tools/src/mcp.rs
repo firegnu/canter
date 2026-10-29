@@ -288,7 +288,7 @@ impl Registry {
                     error: (!connected).then(|| {
                         if server.needs_login.load(Ordering::Relaxed) {
                             format!(
-                                "需要登录：运行 `canter mcp login {}`",
+                                "Login required: run `canter mcp login {}`",
                                 server.public(&server.name)
                             )
                         } else {

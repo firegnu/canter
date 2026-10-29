@@ -279,7 +279,7 @@ canter mcp logout gitlab
 包含 access/refresh token、收到令牌的时间、客户端 ID、issuer 和可能的客户端密钥。
 服务端连接与后续请求自动刷新临近过期的令牌，刷新结果原子保存；没有新的 refresh token
 时保留原值。续期失败或服务要求授权时，只有该服务断开，`/mcp` 和 `GET /v1/mcp` 提示
-「需要登录：运行 `canter mcp login <名字>`」。重新登录后按上述命令替换服务端，再开会话。
+「Login required: run `canter mcp login <name>`」。重新登录后按上述命令替换服务端，再开会话。
 logout 删除本地凭证；已建立连接的后续请求不再携带 OAuth 令牌，不撤销已发出的请求或远端授权。
 remove 只删配置，清除账号用 logout。令牌和客户端密钥不进入日志、事件或会话文件；
 工具结果、工具说明和参数 schema 中回显的已知令牌会脱敏，OAuth 令牌不受八字节门槛限制。

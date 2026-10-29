@@ -370,7 +370,7 @@ fn mcp_shows_the_login_command_for_an_unauthorized_service() {
     let mut screen = Screen::new(90, 24, "/work", None);
     screen.enter("/mcp");
     let report = serde_json::from_value(json!({"data":[{
-        "name":"gitlab","connected":false,"error":"需要登录：运行 `canter mcp login gitlab`","tools":[],"warnings":[]
+        "name":"gitlab","connected":false,"error":"Login required: run `canter mcp login gitlab`","tools":[],"warnings":[]
     }]})).unwrap();
     screen.ui.app_mut().show_mcp(&report);
     screen.draw();
@@ -378,7 +378,7 @@ fn mcp_shows_the_login_command_for_an_unauthorized_service() {
         screen
             .rows()
             .iter()
-            .any(|line| line.contains("需要登录：运行 `canter mcp login gitlab`"))
+            .any(|line| line.contains("Login required: run `canter mcp login gitlab`"))
     );
 }
 

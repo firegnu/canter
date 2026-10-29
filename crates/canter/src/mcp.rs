@@ -9,7 +9,7 @@ use std::{
     path::Path,
 };
 
-const RESTART: &str = "canter serve --replace 后新开的会话生效\n";
+const RESTART: &str = "Takes effect in new sessions after canter serve --replace\n";
 
 #[derive(PartialEq, Eq)]
 pub enum Command {

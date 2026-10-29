@@ -320,7 +320,7 @@ async fn oauth_runtime_refreshes_redacts_and_logout_stops_authentication() {
     let initial = status(&fixture).await;
     assert_eq!(
         initial["data"][0]["error"],
-        "需要登录：运行 `canter mcp login remote`"
+        "Login required: run `canter mcp login remote`"
     );
     stop_daemon(&mut fixture).await;
     let home = fixture.root.path().join("state");
@@ -365,7 +365,7 @@ async fn oauth_runtime_refreshes_redacts_and_logout_stops_authentication() {
         .await;
     assert_eq!(
         status(&fixture).await["data"][0]["error"],
-        "需要登录：运行 `canter mcp login remote`"
+        "Login required: run `canter mcp login remote`"
     );
     assert!(
         auth.state
@@ -449,7 +449,7 @@ async fn oauth_failed_refresh_only_disconnects_that_service() {
     assert_eq!(report["data"][1]["connected"], false);
     assert_eq!(
         report["data"][1]["error"],
-        "需要登录：运行 `canter mcp login remote`"
+        "Login required: run `canter mcp login remote`"
     );
     assert_private(&report.to_string());
     assert_eq!(auth.state.lock().unwrap().refreshes, 1);
@@ -513,7 +513,7 @@ async fn oauth_refreshes_during_a_running_connection_and_reports_later_rejection
         .await;
     assert_eq!(
         status(&fixture).await["data"][0]["error"],
-        "需要登录：运行 `canter mcp login remote`"
+        "Login required: run `canter mcp login remote`"
     );
     assert_private(&serde_json::to_string(&events).unwrap());
     fixture.stop().await;

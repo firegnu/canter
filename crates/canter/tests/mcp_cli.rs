@@ -29,6 +29,10 @@ fn mcp_commands_preserve_config_and_hide_values() {
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
+    assert_eq!(
+        String::from_utf8_lossy(&result.stdout),
+        "Takes effect in new sessions after canter serve --replace\n"
+    );
     let config = fs::read_to_string(root.path().join("config.json")).unwrap();
     assert!(config.contains("\"model\" : \"keep formatting\""));
     assert!(config.contains("\"unknown\": { \"nested\": 1 }"));
