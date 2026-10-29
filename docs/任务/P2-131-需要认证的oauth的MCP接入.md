@@ -1,8 +1,8 @@
 # 任务：MCP 命令行添加和 OAuth 登录
 
 2026-10-29，用户在看板上新建；主控补全。
-2026-10-29，canter/main 交给 <派的时候按读表补：名字、哪家、模型 / 强度>。
-路由：<派的时候补>
+2026-10-29，canter/main 交给 canter/dev-mcplogin（Codex，gpt-6-astra / xhigh）；交叉审查交 Claude Code（opus[1m] / xhigh）。
+路由：碰要害 / 交叉审查要 / 影响面：碰要害（路由：重（置信 0.98）、要、碰要害）
 类型：功能变更
 依据：现在加 MCP 服务要手改 `~/.canter/config.json` 的 `mcp_servers`；要在浏览器里登录（OAuth）的远程 MCP 服务（比如 GitLab 官方的 MCP）canter 接不了。本件照 Codex、Claude Code 加两样：`canter mcp add / list / remove` 用命令改配置；`canter mcp login <名字>` 走标准 OAuth 登录、存令牌、过期自动续。
 提示：围绕已确认的使用目标完成变更，优先沿用现有机制。
