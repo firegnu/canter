@@ -1,0 +1,34 @@
+# Tips shown under the status line while the model works, a new one each turn.
+# One tip a line, plain English text; lines starting with # and blank lines
+# are skipped. Each /command and Ctrl+, Alt+ or Shift+ key a tip names must
+# be in the help box (src/help.rs, src/commands.rs); a test checks.
+Press ? in the empty input box to see every shortcut and command.
+Press Ctrl+O to show or fold thinking, long output and long diffs.
+Press Ctrl+F to find text in the conversation.
+Press Tab while the model works to steer this turn; Enter queues instead.
+Press Shift+Tab to cycle the permission mode, Plan included.
+Press Esc to interrupt; before any output, it takes your message back.
+Type @ to mention a file in your message.
+When idle, start a message with ! to run a shell command directly.
+Press Ctrl+B to move a running foreground command to the background.
+Press Ctrl+V to attach the image on the clipboard.
+Press Ctrl+G to write your message in $VISUAL or $EDITOR.
+Press ↑ in the empty input box for messages sent in this directory.
+Drag to select text; letting go copies it.
+Click a link, or a path in a card title, to open it.
+Use /rewind to go back in the conversation, the files, or both.
+Use /goal to set a goal the model keeps working on, with --budget USD.
+Use /btw to ask one question without adding it to the conversation.
+Use /handoff to draft a handoff note and go on in a new session.
+Use /review to review uncommitted changes or a pull request.
+Use /diff to see uncommitted git changes.
+Use /context to see what fills the context and how much.
+Use /compact to summarize the conversation and free up context.
+Use /copy to copy the last answer; /copy 2 copies its second code block.
+Use /export to save or copy the conversation as Markdown.
+Use /think to change how hard the model thinks.
+Use /statusline to choose what the status line shows.
+Use /theme to choose the colours of code.
+Use /add-dir to add another directory to this session.
+Type /<skill> to use a skill; /skills lists them.
+Use /ps to see background commands, and /stop to stop them all.

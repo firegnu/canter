@@ -483,6 +483,7 @@ where
         .with_welcome(version.clone())
         .with_status_line(status_line.clone(), env.clone())
         .with_git_diff()
+        .with_tips(&env)
         .with_input_history(&env);
     match client.list_models().await {
         Ok(models) => app.set_models(&models),
@@ -1506,6 +1507,7 @@ impl<C: Connector> Chat<C> {
             .with_status_line(self.status_line.clone(), self.env.clone())
             .with_git_diff()
             .with_bar_from(ui.app())
+            .with_tips_from(ui.app())
             .with_steering_from(ui.app())
             .with_input_history_from(ui.app_mut());
         *ui.app_mut() = app;

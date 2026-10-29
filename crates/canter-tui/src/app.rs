@@ -632,6 +632,8 @@ pub struct App {
     errors_shown: HashSet<String>,
     /// Unix ms when the current turn started.
     working_since: Option<i64>,
+    /// The tip under the status line while working; `None` when off.
+    tips: Option<crate::tips::Tips>,
     /// How the last turn ended, for the terminal tab: `Done` or `Failed`
     /// until a key is pressed here. An interrupted turn leaves none.
     turn_mark: Option<crate::tab_title::TabState>,
@@ -741,6 +743,20 @@ impl App {
     pub fn with_input_history_from(mut self, before: &mut App) -> Self {
         self.input_history = std::mem::take(&mut before.input_history);
         self.input_history.stop_browsing();
+        self
+    }
+
+    /// Shows a tip under the status line while working, unless `tui.json`
+    /// under `env`'s home says `"tips": false`.
+    pub fn with_tips(mut self, env: &std::collections::BTreeMap<String, String>) -> Self {
+        self.tips = crate::tips::Tips::load(env);
+        self
+    }
+
+    /// Goes on with the tips of the screen this one replaces, so none comes
+    /// again before the others.
+    pub(crate) fn with_tips_from(mut self, before: &App) -> Self {
+        self.tips = before.tips.clone();
         self
     }
 
@@ -907,6 +923,7 @@ impl App {
             completed: HashSet::new(),
             errors_shown: HashSet::new(),
             working_since: working.then_some(now_ms),
+            tips: None,
             turn_mark: None,
             notifications: Vec::new(),
             reconnecting: None,
@@ -1020,8 +1037,11 @@ impl App {
                 self.active_btw = None;
                 self.chooser = None;
             }
-            EventPayload::TurnStarted { .. } => {
+            EventPayload::TurnStarted { turn, .. } => {
                 self.working_since = Some(event.timestamp);
+                if let Some(tips) = &mut self.tips {
+                    tips.start(&turn.id);
+                }
                 self.turn_mark = None;
             }
             EventPayload::TurnCompleted { turn } => {
@@ -3707,6 +3727,21 @@ impl App {
         let total = history.len() + live.len() - lead;
         let room = usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height()))
             .saturating_sub(list.len() + plan.len());
+        // Only under the status line of a turn that started here, with the
+        // bare input box below; it goes first when rows run short.
+        let tip = match (&self.tips, &self.drawing.turn) {
+            (Some(tips), Some(turn))
+                if self.snapshot.status == SessionStatus::Working
+                    && matches!(bottom, Bottom::Input { .. })
+                    && list.is_empty()
+                    && self.search.is_none()
+                    && room > 2 =>
+            {
+                tips.line(turn, width)
+            }
+            _ => None,
+        };
+        let room = room - usize::from(tip.is_some());
         // While the button is down the view stays where it is.
         let held = self
             .mouse
@@ -3748,14 +3783,20 @@ impl App {
         self.drawing.input = draft_shown.then(|| DrawnInput {
             width,
             text: self.input.text().to_owned(),
-            // Under the conversation: the hint, status line, plan, list
+            // Under the conversation: the hint, status line, tip, plan, list
             // and the box's top border.
-            top: area + usize::from(hint.is_some()) + 1 + plan.len() + list.len() + 1,
+            top: area
+                + usize::from(hint.is_some())
+                + 1
+                + usize::from(tip.is_some())
+                + plan.len()
+                + list.len()
+                + 1,
             rows: input_rows,
         });
-        // Under the conversation: the hint and the status line; the list
-        // starts with its title.
-        let background_top = area + usize::from(hint.is_some()) + 1;
+        // Under the conversation: the hint, the status line and the tip; the
+        // list starts with its title.
+        let background_top = area + usize::from(hint.is_some()) + 1 + usize::from(tip.is_some());
         self.drawing.background = DrawnBackground {
             row: background_row.then_some(background_top),
             open: background_open,
@@ -3893,6 +3934,7 @@ impl App {
                     self.status_line(now_ms, width, steer)
                 }
             },
+            tip,
             list,
             bottom,
             info,
@@ -5024,6 +5066,8 @@ pub(crate) struct View {
     /// there is new output below.
     hint: Option<Line<'static>>,
     status: Line<'static>,
+    /// A tip under the status line while working.
+    tip: Option<Line<'static>>,
     /// The command list or a choice, right above the input box.
     list: Vec<Line<'static>>,
     bottom: Bottom,
@@ -5054,11 +5098,12 @@ impl Bottom {
 }
 
 impl View {
-    /// Rows under the conversation: the hint, the status line, the list, the
-    /// box and the info rows.
+    /// Rows under the conversation: the hint, the status line, the tip,
+    /// the list, the box and the info rows.
     fn below(&self) -> u16 {
         u16::from(self.hint.is_some())
             + 1
+            + u16::from(self.tip.is_some())
             + self.plan.len() as u16
             + self.list.len() as u16
             + self.bottom.height()
@@ -5083,6 +5128,9 @@ impl View {
             frame.render_widget(Paragraph::new(hint), row(1));
         }
         frame.render_widget(Paragraph::new(self.status), row(1));
+        if let Some(tip) = self.tip {
+            frame.render_widget(Paragraph::new(tip), row(1));
+        }
         let plan_height = self.plan.len() as u16;
         frame.render_widget(Paragraph::new(self.plan), row(plan_height));
         frame.render_widget(Paragraph::new(self.list), row(list));
