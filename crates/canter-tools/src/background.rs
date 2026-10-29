@@ -171,6 +171,7 @@ struct State {
 
 /// Owned by Tools for the whole session, independent of a turn or client.
 pub struct BackgroundCommands {
+    pub(crate) lsp: Option<crate::lsp::LspSession>,
     state: Arc<Mutex<State>>,
     shutdown: CancellationToken,
     changed: watch::Sender<u64>,
@@ -178,6 +179,7 @@ pub struct BackgroundCommands {
 impl Default for BackgroundCommands {
     fn default() -> Self {
         Self {
+            lsp: None,
             state: Default::default(),
             shutdown: CancellationToken::new(),
             changed: watch::channel(0).0,
@@ -363,6 +365,7 @@ impl BackgroundCommands {
             state.reserved += 1;
         }
         let control = Control {
+            lsp: self.lsp.clone(),
             state: self.state.clone(),
             shutdown: self.shutdown.clone(),
             changed: self.changed.clone(),
@@ -425,6 +428,7 @@ fn read_output(
 }
 
 pub(crate) struct Control {
+    lsp: Option<crate::lsp::LspSession>,
     source: canter_protocol::ExecCommandSource,
     state: Arc<Mutex<State>>,
     pub shutdown: CancellationToken,
@@ -440,6 +444,11 @@ pub(crate) struct Control {
     reserved: bool,
 }
 impl Control {
+    pub async fn reconcile(&self) {
+        if let Some(lsp) = &self.lsp {
+            lsp.reconcile().await;
+        }
+    }
     pub fn started(&mut self) {
         if self.reserved {
             self.detach(&mut Tail::default())

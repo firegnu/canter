@@ -1,10 +1,12 @@
-//! Server-owned LSP lifecycle. No tools, document synchronization or protocol events.
+//! Server-owned LSP lifecycle, file synchronization and bounded diagnostics.
 mod config;
 pub use config::{LspConfig, ServerConfig};
 mod memory;
 mod service;
+mod sync;
 mod transport;
 pub use service::{FileContext, Instance, LspService, Round};
+pub use sync::{ChangeTicket, DiagnosticBatch, DiagnosticSubscription, Freshness, LspSession};
 #[cfg(test)]
 mod test_support;
 

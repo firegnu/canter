@@ -20,6 +20,15 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         let (turn, cancel, manual_compaction, user_shell) = {
             let state = shared.state.lock().await;
             let active = state.active.as_ref().expect("active turn");
+            if let Some(lsp) = shared.tools.lsp() {
+                lsp.set_round(if state.journal.snapshot.settings.plan_mode {
+                    canter_tools::lsp::Round::Plan
+                } else if active.turn.review.is_some() {
+                    canter_tools::lsp::Round::Review
+                } else {
+                    canter_tools::lsp::Round::Modify
+                });
+            }
             (
                 active.turn.clone(),
                 active.cancel.clone(),
@@ -177,6 +186,13 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         }
         .await;
         state.active = None;
+        if let Some(lsp) = shared.tools.lsp() {
+            lsp.set_round(if state.journal.snapshot.settings.plan_mode {
+                canter_tools::lsp::Round::Plan
+            } else {
+                canter_tools::lsp::Round::Modify
+            });
+        }
         state.goal_summary = None;
         let _ = done.send(Some(finish.clone()));
         if finish.is_err() || cancel.is_cancelled() || state.closing {
@@ -742,13 +758,23 @@ async fn execute(
             .await?;
         return Ok(());
     };
-    let review = shared
-        .state
-        .lock()
-        .await
-        .active
-        .as_ref()
-        .is_some_and(|active| active.turn.review.is_some());
+    let review = {
+        let state = shared.state.lock().await;
+        let review = state
+            .active
+            .as_ref()
+            .is_some_and(|active| active.turn.review.is_some());
+        if let Some(lsp) = shared.tools.lsp() {
+            lsp.set_round(if state.journal.snapshot.settings.plan_mode {
+                canter_tools::lsp::Round::Plan
+            } else if review {
+                canter_tools::lsp::Round::Review
+            } else {
+                canter_tools::lsp::Round::Modify
+            });
+        }
+        review
+    };
     let prepared = if plan_mode
         && !shared
             .tools
@@ -759,6 +785,7 @@ async fn execute(
             .blocked_in_plan_mode(&call.name, id("tool"), &call.arguments))
     } else if review && matches!(tool, Tool::Write | Tool::Edit) {
         Err(ToolOutput {
+            change_ticket: None,
             images: Vec::new(),
             text: "review is read-only".into(),
             item: Item::FileChange {
@@ -814,6 +841,7 @@ async fn execute(
                         _ => unreachable!("prepared tool item"),
                     }
                     ToolOutput {
+                        change_ticket: None,
                         images: Vec::new(),
                         text: "Interrupted; not run".into(),
                         item,
@@ -1169,6 +1197,7 @@ async fn ask_user(
     };
     let answered = answer.is_some() || timed_out;
     Ok(ToolOutput {
+        change_ticket: None,
         images: Vec::new(),
         text,
         item: Item::UserInput {

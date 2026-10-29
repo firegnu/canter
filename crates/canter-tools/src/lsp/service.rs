@@ -21,6 +21,7 @@ pub enum Round {
 }
 
 /// Client environment remains private, in memory, and is never formatted or serialized.
+#[derive(Clone)]
 pub struct FileContext {
     pub cwd: PathBuf,
     pub additional_directories: Vec<PathBuf>,
@@ -70,6 +71,8 @@ enum State {
 }
 
 struct Entry {
+    generation: u64,
+    workspace: Mutex<std::sync::Weak<super::sync::Workspace>>,
     key: Key,
     state: watch::Sender<State>,
     stop: CancellationToken,
@@ -155,7 +158,7 @@ impl Entry {
                 "processId":std::process::id(), "clientInfo":{"name":"canter","version":env!("CARGO_PKG_VERSION")},
                 "rootUri":uri.as_str(), "workspaceFolders":[{"uri":uri.as_str(),"name":self.key.id}],
                 "initializationOptions":self.key.config.initialization_options,
-                "capabilities":{"workspace":{"configuration":true,"applyEdit":false},"general":{"positionEncodings":["utf-16"]}}
+                "capabilities":{"workspace":{"configuration":true,"applyEdit":false,"diagnostics":{"refreshSupport":true},"didChangeWatchedFiles":{"dynamicRegistration":true,"relativePatternSupport":true}},"textDocument":{"publishDiagnostics":{"versionSupport":true},"synchronization":{"didSave":true},"diagnostic":{"dynamicRegistration":false,"relatedDocumentSupport":false}},"general":{"positionEncodings":["utf-16"]}}
             }), limits.initialize, &self.stop).await;
             let initialized = match initialize {
                 Ok(value) if value["capabilities"].is_object() => value["capabilities"].clone(),
@@ -248,6 +251,31 @@ impl Drop for Activity {
     }
 }
 impl Instance {
+    pub fn generation(&self) -> u64 {
+        self.lease.0.generation
+    }
+    pub(super) fn workspace(&self) -> Arc<super::sync::Workspace> {
+        let mut slot = self.lease.0.workspace.lock().unwrap();
+        if let Some(workspace) = slot.upgrade() {
+            return workspace;
+        }
+        let workspace = super::sync::Workspace::new(self.clone());
+        *slot = Arc::downgrade(&workspace);
+        workspace
+    }
+    pub(super) fn events(&self) -> Arc<super::transport::ServerEvents> {
+        self.connection.events.clone()
+    }
+    pub(super) fn closed(&self) -> CancellationToken {
+        self.connection.closed.clone()
+    }
+    pub(super) fn config(&self) -> &ServerConfig {
+        &self.lease.0.key.config
+    }
+    pub(super) async fn invalidate(&self, reason: &str) {
+        self.lease.0.stop(LspError::new(ErrorKind::Stopped, reason));
+        self.lease.0.done.cancelled().await;
+    }
     pub fn is_running(&self) -> bool {
         !self.lease.0.stop.is_cancelled() && !self.connection.closed.is_cancelled()
     }
@@ -606,6 +634,12 @@ impl LspService {
                     }
                     let (state, _) = watch::channel(State::Starting);
                     let entry = Arc::new(Entry {
+                        generation: {
+                            static NEXT: std::sync::atomic::AtomicU64 =
+                                std::sync::atomic::AtomicU64::new(1);
+                            NEXT.fetch_add(1, Ordering::Relaxed)
+                        },
+                        workspace: Mutex::default(),
                         key,
                         state,
                         stop: self.stop.child_token(),

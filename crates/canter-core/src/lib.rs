@@ -27,6 +27,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 #[derive(Default)]
 pub struct RuntimeContext {
+    pub lsp: Option<std::sync::Arc<canter_tools::lsp::LspService>>,
     pub environment: BTreeMap<String, String>,
     pub protected_paths: Vec<PathBuf>,
     pub mcp_tools: Vec<mcp::McpTool>,

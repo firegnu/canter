@@ -86,6 +86,7 @@ type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, LspError>>>>
 type Outgoing = (Value, Option<oneshot::Sender<Result<(), LspError>>>);
 
 pub(super) struct Connection {
+    pub events: Arc<ServerEvents>,
     pub pid: u32,
     tx: mpsc::Sender<Outgoing>,
     pending: Pending,
@@ -151,6 +152,7 @@ impl Connection {
         let stop = CancellationToken::new();
         let closed = CancellationToken::new();
         let connection = Arc::new(Self {
+            events: Arc::default(),
             pid,
             tx: tx.clone(),
             pending: pending.clone(),
@@ -160,14 +162,21 @@ impl Connection {
         });
         let settings = settings.clone();
         let pending_reader = pending.clone();
+        let root = root.to_owned();
+        let events = connection.events.clone();
         tokio::spawn(async move {
             let mut writer = tokio::spawn(async move {
                 let mut stdin = stdin;
                 while let Some((message, ack)) = rx.recv().await {
-                    let body = serde_json::to_vec(&message).map_err(|_| protocol())?;
-                    if body.len() > MAX_FRAME {
-                        return Err(protocol());
-                    }
+                    let body = match encode(&message) {
+                        Ok(body) => body,
+                        Err(error) => {
+                            if let Some(ack) = ack {
+                                let _ = ack.send(Err(error));
+                            }
+                            continue;
+                        }
+                    };
                     let write = async {
                         stdin
                             .write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes())
@@ -231,12 +240,30 @@ impl Connection {
                                         json!({"jsonrpc":"2.0","id":id,"error":{"code":-32602,"message":"Invalid configuration request"}})
                                     }
                                 }
+                            } else if method == "workspace/diagnostic/refresh" {
+                                events.push(message.clone());
+                                json!({"jsonrpc":"2.0","id":id,"result":null})
+                            } else if method == "client/registerCapability" {
+                                if super::sync::registration::validate(&message, &root) {
+                                    events.push(message.clone());
+                                    json!({"jsonrpc":"2.0","id":id,"result":null})
+                                } else {
+                                    events.push(
+                                        json!({"method":"client/registerCapability","params":{}}),
+                                    );
+                                    json!({"jsonrpc":"2.0","id":id,"error":{"code":-32602,"message":"LSP watch registration exceeds the supported scope or limits"}})
+                                }
+                            } else if method == "client/unregisterCapability" {
+                                events.push(message.clone());
+                                json!({"jsonrpc":"2.0","id":id,"result":null})
                             } else {
                                 json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"This client does not support this server request"}})
                             };
                             tx.send((response, None)).await.map_err(|_| unavailable())?;
                         }
-                        // Notifications (including logs/diagnostics) are not stored by this lifecycle layer.
+                        if method == "textDocument/publishDiagnostics" {
+                            events.push(message);
+                        }
                     } else if let Some(id) = message["id"].as_u64() {
                         let result = if let Some(error) = message.get("error") {
                             let code = error["code"].as_i64().ok_or_else(protocol)?;
@@ -290,6 +317,7 @@ impl Connection {
     }
 
     async fn send(&self, value: Value) -> Result<(), LspError> {
+        encode(&value)?;
         let (ack, received) = oneshot::channel();
         tokio::select! {
             biased;
@@ -349,6 +377,13 @@ impl Connection {
         self.closed.cancelled().await;
     }
 }
+fn encode(value: &Value) -> Result<Vec<u8>, LspError> {
+    let bytes = serde_json::to_vec(value).map_err(|_| protocol())?;
+    if bytes.len() > MAX_FRAME {
+        return Err(LspError::new(ErrorKind::Protocol, "LSP message too large"));
+    }
+    Ok(bytes)
+}
 impl Drop for Connection {
     fn drop(&mut self) {
         self.stop.cancel();
@@ -373,6 +408,38 @@ impl Drop for RequestGuard {
 mod tests {
     use super::*;
     use crate::lsp::test_support::*;
+    #[tokio::test]
+    async fn oversized_outgoing_message_does_not_kill_the_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let connection = Connection::spawn(
+            &executable(),
+            &[],
+            dir.path(),
+            &environment(dir.path(), ""),
+            &Value::Null,
+        )
+        .await
+        .unwrap();
+        let error = connection
+            .notify(
+                "textDocument/didOpen",
+                json!({"text":"x".repeat(MAX_FRAME)}),
+            )
+            .await
+            .unwrap_err();
+        let echo = connection
+            .request(
+                "fixture/echo",
+                json!({}),
+                Duration::from_secs(5),
+                &CancellationToken::new(),
+            )
+            .await;
+        connection.shutdown(Duration::from_secs(2)).await;
+        assert_eq!(error.kind, ErrorKind::Protocol);
+        assert_eq!(echo.unwrap(), "你好");
+        assert!(gone(connection.pid));
+    }
     #[tokio::test]
     async fn argv_stdio_handshake_reverse_requests_and_orderly_shutdown() {
         let dir = tempfile::tempdir().unwrap();
@@ -502,5 +569,52 @@ mod tests {
             "你好"
         );
         connection.shutdown(Duration::from_secs(2)).await;
+    }
+}
+
+/// Bounded server notifications, including those sent before initialize returns.
+#[derive(Default)]
+pub(super) struct ServerEvents {
+    state: Mutex<EventQueue>,
+    changed: tokio::sync::Notify,
+}
+#[derive(Default)]
+struct EventQueue {
+    events: std::collections::VecDeque<(Value, usize)>,
+    bytes: usize,
+    overflowed: bool,
+}
+impl ServerEvents {
+    fn push(&self, value: Value) {
+        let bytes = serde_json::to_vec(&value).map_or(usize::MAX, |v| v.len());
+        let mut state = self.state.lock().unwrap();
+        if bytes > 1024 * 1024 || state.bytes.saturating_add(bytes) > 1024 * 1024 {
+            state.overflowed = true;
+        } else {
+            state.bytes += bytes;
+            state.events.push_back((value, bytes));
+        }
+        drop(state);
+        self.changed.notify_one();
+    }
+    pub async fn next(&self) -> Result<Value, LspError> {
+        loop {
+            let ready = self.changed.notified();
+            {
+                let mut state = self.state.lock().unwrap();
+                if state.overflowed {
+                    state.overflowed = false;
+                    return Err(LspError::new(
+                        ErrorKind::ResourceLimited,
+                        "LSP notification buffer exceeded; diagnostics are incomplete",
+                    ));
+                }
+                if let Some((value, bytes)) = state.events.pop_front() {
+                    state.bytes -= bytes;
+                    return Ok(value);
+                }
+            }
+            ready.await;
+        }
     }
 }

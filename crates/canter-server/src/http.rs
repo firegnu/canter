@@ -72,6 +72,7 @@ impl App {
 
     fn runtime(&self, environment: std::collections::BTreeMap<String, String>) -> RuntimeContext {
         RuntimeContext {
+            lsp: Some(self.lsp.clone()),
             environment,
             mcp_tools: self.mcp.snapshot(),
             protected_paths: vec![self.home.clone(), self.home.join("config.json")],
