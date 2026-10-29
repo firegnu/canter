@@ -6,6 +6,7 @@
 六个工具的 `description` 用 P2-57 方案 §4 的原文：只属于单个工具的规矩写在这里，
 跨工具的选择（看文件用 read 不用 cat）放在系统提示词固定段；参数的 JSON Schema 不变。
 原文存在 `tests/data/descriptions/*.txt`，`tests/descriptions.rs` 逐字核对。
+P2-130 在 read 的说明中补充了看图能力、图片格式和 8 MiB 上限。
 
 ## 第 4 件接入
 
@@ -43,7 +44,8 @@
    再检查，符号链接改了指向会拒绝执行。准备好的 call 本身不能传给 execute 绕过闸门。
    回调是 `FnMut(&str) + Send`，shell 的 stdout/stderr 文字块按收到的顺序合流，
    调用方可转成 `item.delta`；回调须快速返回，不要阻塞运行时。
-   `ToolOutput.text` 给模型，`ToolOutput.item` 给客户端最终项目。
+   `ToolOutput.text` 给模型，`ToolOutput.item` 给客户端最终项目；`ToolOutput.images` 是已校验的图片原始字节。
+   核心把图片存入会话目录后才填写项目的可选 `contentItems` 并发布，工具层不自行保存会话图片。
    `ToolOutcome::{Completed, Failed, Cancelled, TimedOut, Declined}` 供循环区分结果。
    协议没有 cancelled/timedOut 项目状态，这两种最终 `Item.status` 都是 `Failed`，
    一轮是否 interrupted 由循环根据取消信号和 outcome 决定。
@@ -64,7 +66,7 @@
 
 | 工具 | 参数 | 结果 |
 | --- | --- | --- |
-| read | `path`, 可选 `startLine`（默认 1）、`lineCount`（默认 2000） | 带行号的 UTF-8 文本，`fileRead` |
+| read | `path`, 可选 `startLine`（默认 1）、`lineCount`（默认 2000） | 带行号的 UTF-8 文本或 JPEG/PNG/GIF/WebP 图片，`fileRead` |
 | write | `path`, `content` | 整文件写，创建父目录；`fileChange` 和 unified diff |
 | edit | `path`, `edits: [{oldText, newText}]` | 一次替换多处；`fileChange` 和 unified diff |
 | shell | `command`, 可选 `timeoutMs`、`background`（默认 false） | 前台结果或后台编号、状态、初始输出；`commandExecution` |
@@ -99,8 +101,17 @@ diff 在 `spawn_blocking` 中计算，匹配算法限时 200 ms，超时可生�
 
 read 每次最多 2000 行、64 KiB 带行号的内容，续读提示另计；不切开一行。
 达到限制时提示下一次 `startLine`。单行本身过长时提示用 shell 分字节查看。
-含 NUL 或读取范围不是 UTF-8 时返回二进制/编码错误。
+在同一个经执行器批准和检查的打开文件上，先按内容识别 JPEG/PNG/GIF/WebP；图片不受行参数影响，
+原样读取至多 8 MiB，超限返回 `image exceeds the 8 MiB limit`，不交图。其它文件含 NUL 或读取范围不是 UTF-8 时返回二进制/编码错误。
 起始行超过 EOF 时说明总行数，空文件按 0 行处理。
+
+图片走 P2-5 的 `Store::save_image`（会话副本 0600），模型结果为
+`Image "<name>" is attached in the next user message after this tool-result batch.`。
+核心保存待附图记录，等整批工具结果齐全后追加一条 user 图片消息，内部标为工具来源；
+压缩不将其当作用户原话，沿用同一近期消息保留预算。恢复、回退和撤回沿用模型历史的轮边界。
+每张估 1024 token、请求图片 base64 40 MiB 预算、不收图模型和丢失副本的文字占位均复用 P2-5。
+客户端 `contentItems` 只含 `{type: localImage, path, name, mimeType, sizeBytes}`，path 为会话副本文件名，
+无图片时省略；终端每张图片一行名字、格式、大小，导出写 `[Image: 名字]`，不内联图片字节。
 
 shell 使用 `/bin/sh -c`，非登录、非交互，stdin 关闭；先 `env_clear` 再装入会话环境。
 `background=true` 等 1 秒或命令先结束后返回，不使用 timeoutMs；会话最多同时 8 条。
@@ -284,7 +295,13 @@ Debug/Serialize。`snapshot()` 为会话复制排序后的工具定义和调用�
 不可伪造的单次 permit，会话授权改用完整工具名字，MCP 与内置工具没有共用授权。
 审查轮的 MCP 调用由同一闸门直接拒绝；不使用 MCP 的 readOnlyHint 等声明。
 调用取消、超时、协议错误与远端 `isError` 都返回失败项目；模型和客户端输出使用既有
-有界头尾缓冲，非文字只留占位行。连接的关闭和原进程组清理由 registry 负责。
+有界头尾缓冲。image 内容块用锁定的 base64 库解码，先检查编码长度，再检查原始字节的 8 MiB 上限和文件签名；
+不信任 mimeType 声明，显示名用 `服务名-工具名-image-序号.格式`（序号从 1 起，含无效图片）。
+图片与 read 共用上述存盘和模型管线，错误图片只给原因。同一结果的文字和内嵌文字资源按原顺序保留；
+没有非空文字时，把 structuredContent 转为 JSON 文字补在末尾（含显式 null），不与已有文字重复。
+文字沿用配置值脱敏及输出上限；图片说明若被头尾截断，另补到模型结果末尾，保证能找到随后的图片。
+音频、二进制资源和资源链接仍为 `[MCP non-text content omitted]`，不读取资源 URI。
+连接的关闭和原进程组清理由 registry 负责。
 
 ## 网页抓取
 

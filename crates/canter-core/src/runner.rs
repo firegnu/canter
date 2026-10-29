@@ -102,6 +102,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                     .retract(&completed.id)
                     .ok_or_else(CoreError::internal)?;
                 let removed = state.history.split_off(messages);
+                state.tool_images.clear();
                 state.user_messages.truncate(users);
                 state.invoked_skills.truncate(skills);
                 state.measured_context = None;
@@ -758,6 +759,7 @@ async fn execute(
             .blocked_in_plan_mode(&call.name, id("tool"), &call.arguments))
     } else if review && matches!(tool, Tool::Write | Tool::Edit) {
         Err(ToolOutput {
+            images: Vec::new(),
             text: "review is read-only".into(),
             item: Item::FileChange {
                 id: id("tool"),
@@ -772,7 +774,7 @@ async fn execute(
             .prepare_named(&call.name, id("tool"), &call.arguments, cancel)
             .await
     };
-    let output = match prepared {
+    let mut output = match prepared {
         Err(mut output) => {
             if review && matches!(tool, Tool::Mcp | Tool::WebFetch) {
                 output.text = "review is read-only".into();
@@ -812,6 +814,7 @@ async fn execute(
                         _ => unreachable!("prepared tool item"),
                     }
                     ToolOutput {
+                        images: Vec::new(),
                         text: "Interrupted; not run".into(),
                         item,
                         outcome: ToolOutcome::Cancelled,
@@ -907,7 +910,36 @@ async fn execute(
         }
     };
     shared.sync_background().await?;
+    let imported = if output.images.is_empty() {
+        None
+    } else {
+        let (store, session) = {
+            let state = shared.state.lock().await;
+            (
+                state.journal.store.clone(),
+                state.journal.snapshot.id.clone(),
+            )
+        };
+        Some(crate::images::import_tool(store, session, std::mem::take(&mut output.images)).await?)
+    };
     let mut state = shared.state.lock().await;
+    if let Some((items, content, saved)) = imported {
+        match &mut output.item {
+            Item::FileRead { content_items, .. } | Item::McpToolCall { content_items, .. } => {
+                *content_items = items
+            }
+            _ => unreachable!("only read and MCP return images"),
+        }
+        state
+            .journal
+            .record(context::HistoryEntry::ToolImages {
+                content: content.clone(),
+            })
+            .await?;
+        // The durable pending record now owns the copies, even if a later append fails.
+        saved.keep();
+        state.tool_images.extend(content);
+    }
     if output.outcome == ToolOutcome::Cancelled {
         cancel.cancel();
     }
@@ -1137,6 +1169,7 @@ async fn ask_user(
     };
     let answered = answer.is_some() || timed_out;
     Ok(ToolOutput {
+        images: Vec::new(),
         text,
         item: Item::UserInput {
             id: question.item_id,

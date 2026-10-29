@@ -9,6 +9,13 @@ canter 把提示作为项目持久保存，另外提供次数和等待秒数，�
 
 只有公开协议类型、事件归并和类型导出；没有网络服务或 agent 循环。
 
+工具图片（P2-130）：`fileRead`、`mcpToolCall` 的可选 `contentItems` 是图片引用数组，
+每项为 `{type: localImage, path, name, mimeType, sizeBytes}`，path 只存会话副本文件名；
+无图片省略，旧存盘缺省为空，旧客户端忽略。保留原来的 `content` / `result` 文字字段。
+参考 Codex `rust-v0.163.0` 的 `DynamicToolCall.contentItems` 和 localImage；canter 用本地引用和
+显示元数据替代内联 imageUrl，不改变原有 MCP result 字符串类型。项目仍走 item.started/completed，
+快照、重放、多客户端和导出共用同一项目，终端不绘制图片。
+
 后台命令：快照可选 `backgroundCommands`（旧数据默认空）；`backgroundCommand.updated`
 事件更新其中按 id 对应的状态，`itemId` 关联原 `commandExecution` 卡片。工具调用完成后进程可以仍运行。
 后台 shell 的 `item.completed` 使用 `status: completed`、`exitCode: null` 表示调用返回；进程状态及退出码以 `backgroundCommands` 为准，终端和导出按 itemId 叠加。启动失败仍使用失败态，不产生后台状态或完成通知。

@@ -408,6 +408,9 @@ pub enum Item {
         tool: String,
         arguments: serde_json::Value,
         result: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[ts(optional = nullable)]
+        content_items: Vec<ToolContentItem>,
         status: ItemStatus,
     },
     CommandExecution {
@@ -433,6 +436,9 @@ pub enum Item {
         path: String,
         start_line: u32,
         content: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[ts(optional = nullable)]
+        content_items: Vec<ToolContentItem>,
         status: ItemStatus,
     },
     ContextCompaction {
@@ -446,6 +452,22 @@ pub enum Item {
         #[ts(optional)]
         answer: Option<UserInputAnswer>,
         status: ItemStatus,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+/// Tool attachments refer to durable copies in the owning session directory.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ToolContentItem {
+    #[serde(rename_all = "camelCase")]
+    LocalImage {
+        path: String,
+        name: String,
+        mime_type: String,
+        #[ts(type = "number")]
+        size_bytes: u64,
     },
     #[serde(other)]
     Unknown,

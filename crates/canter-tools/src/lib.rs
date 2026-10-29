@@ -204,7 +204,7 @@ impl Tool {
         }
         ToolDefinition {
             name: self.name(),
-            description: r#"Read a UTF-8 text file. Each returned line starts with its 1-based line number and ": " (for example "12: fn main() {"); that prefix is not part of the file. One call returns at most 2000 lines and 64 KiB; when more remains, the result ends with the startLine to continue from. Use startLine and lineCount to read part of a large file. Relative paths start from the session's working directory. Binary and non-UTF-8 files are rejected, and canter's state directory is always refused. Read a file before editing it, and when you need several files, read them in parallel in one reply."#,
+            description: r#"Read a UTF-8 text file. Each returned line starts with its 1-based line number and ": " (for example "12: fn main() {"); that prefix is not part of the file. One call returns at most 2000 lines and 64 KiB; when more remains, the result ends with the startLine to continue from. Use startLine and lineCount to read part of a large file. Relative paths start from the session's working directory. JPEG, PNG, GIF and WebP images up to 8 MiB are attached for you to see; startLine and lineCount do not apply to images. Other binary and non-UTF-8 files are rejected, and canter's state directory is always refused. Read a file before editing it, and when you need several files, read them in parallel in one reply."#,
             parameters: json!({"type":"object", "properties": {
                 "path":{"type":"string", "minLength":1},
                 "startLine":{"type":"integer", "minimum":1, "maximum":u32::MAX, "default":1},
@@ -229,6 +229,37 @@ pub struct ToolOutput {
     pub text: String,
     pub item: Item,
     pub outcome: ToolOutcome,
+    pub images: Vec<ToolImage>,
+}
+
+/// Validated raw bytes; the core saves these before publishing references.
+#[derive(Debug)]
+pub struct ToolImage {
+    pub bytes: Vec<u8>,
+    pub mime_type: &'static str,
+    pub name: String,
+}
+
+impl ToolImage {
+    pub fn new(bytes: Vec<u8>, name: String) -> Result<Self, &'static str> {
+        if bytes.len() as u64 > canter_protocol::MAX_IMAGE_BYTES {
+            return Err("image exceeds the 8 MiB limit");
+        }
+        let mime_type = canter_protocol::image_mime_type(&bytes)
+            .ok_or("image must be JPEG, PNG, GIF or WebP")?;
+        Ok(Self {
+            bytes,
+            mime_type,
+            name,
+        })
+    }
+
+    pub fn explanation(&self) -> String {
+        format!(
+            "Image \"{}\" is attached in the next user message after this tool-result batch.",
+            self.name
+        )
+    }
 }
 
 #[derive(Deserialize)]
@@ -377,6 +408,7 @@ impl PreparedCall {
     }
     pub fn declined_output(&self, feedback: Option<&str>) -> ToolOutput {
         ToolOutput {
+            images: Vec::new(),
             text: feedback.map_or_else(
                 || "Tool call declined.".into(),
                 |text| format!("Tool call declined. The user says: {text}"),
@@ -387,6 +419,7 @@ impl PreparedCall {
     }
     fn failed_output(&self, text: String, outcome: ToolOutcome) -> ToolOutput {
         ToolOutput {
+            images: Vec::new(),
             text,
             item: self.item(ItemStatus::Failed),
             outcome,
@@ -428,6 +461,7 @@ impl PreparedCall {
                 status,
             },
             Action::Mcp(tool) => Item::McpToolCall {
+                content_items: Vec::new(),
                 id: self.id.clone(),
                 server: tool.server().into(),
                 tool: tool.tool.clone(),
@@ -442,6 +476,7 @@ impl PreparedCall {
                 status,
             },
             Action::Read(read) => Item::FileRead {
+                content_items: Vec::new(),
                 id: self.id.clone(),
                 path: read.path.clone(),
                 start_line: read.start_line,
@@ -1036,6 +1071,7 @@ impl Tools {
                     *result = text.clone();
                 }
                 ToolOutput {
+                    images: Vec::new(),
                     text,
                     item,
                     outcome,
@@ -1063,12 +1099,14 @@ impl Tools {
                     *result = text.clone();
                 }
                 ToolOutput {
+                    images: Vec::new(),
                     text,
                     item,
                     outcome,
                 }
             }
             Action::UpdatePlan(_) => ToolOutput {
+                images: Vec::new(),
                 text: "Plan updated".into(),
                 item: call.item(ItemStatus::Completed),
                 outcome: ToolOutcome::Completed,
@@ -1077,6 +1115,7 @@ impl Tools {
                 let (text, result, outcome) =
                     web_fetch::run(url, self.web_fetch_timeout, cancel).await;
                 ToolOutput {
+                    images: Vec::new(),
                     text,
                     outcome,
                     item: Item::WebFetch {
@@ -1093,11 +1132,13 @@ impl Tools {
                 }
             }
             Action::Mcp(tool) => {
-                let (text, result, outcome) = tool.call(&call.arguments, cancel).await;
+                let (text, result, outcome, images) = tool.call(&call.arguments, cancel).await;
                 ToolOutput {
+                    images,
                     text,
                     outcome,
                     item: Item::McpToolCall {
+                        content_items: Vec::new(),
                         id: call.id.clone(),
                         server: tool.server().into(),
                         tool: tool.tool.clone(),
@@ -1122,8 +1163,10 @@ impl Tools {
                     result = self.read(read, call.resolved_path.as_deref().unwrap_or_else(|| read.path.as_ref()), cancel) => result,
                 };
                 match result {
-                    Ok(text) => ToolOutput {
+                    Ok((text, images)) => ToolOutput {
+                        images,
                         item: Item::FileRead {
+                            content_items: Vec::new(),
                             id: call.id.clone(),
                             path: read.path.clone(),
                             start_line: read.start_line,
@@ -1163,6 +1206,7 @@ impl Tools {
                     .await
                 {
                     Ok(()) => ToolOutput {
+                        images: Vec::new(),
                         text: summary.clone(),
                         item: Item::FileChange {
                             id: call.id.clone(),
@@ -1201,8 +1245,39 @@ impl Tools {
         args: &ReadArgs,
         path: &std::path::Path,
         cancel: &CancellationToken,
-    ) -> std::io::Result<String> {
+    ) -> std::io::Result<(String, Vec<ToolImage>)> {
         let mut reader = BufReader::new(self.executor.open_file(path, cancel).await?);
+        // Inspect the same opened file that will be read, preserving executor checks.
+        // The initial read can be short (e.g. an executor backed by a pipe).
+        let mut header = Vec::with_capacity(12);
+        while header.len() < 12 {
+            executor::check_cancel(cancel)?;
+            let buffer = reader.fill_buf().await?;
+            if buffer.is_empty() {
+                break;
+            }
+            let length = buffer.len().min(12 - header.len());
+            header.extend_from_slice(&buffer[..length]);
+            reader.consume(length);
+        }
+        let image = canter_protocol::image_mime_type(&header).is_some();
+        let mut reader = BufReader::new(std::io::Cursor::new(header).chain(reader));
+        if image {
+            let mut bytes = Vec::new();
+            reader
+                .take(canter_protocol::MAX_IMAGE_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .await?;
+            executor::check_cancel(cancel)?;
+            let name = std::path::Path::new(&args.path)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let image = ToolImage::new(bytes, name)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+            return Ok((image.explanation(), vec![image]));
+        }
         let mut text = String::new();
         let mut line_number = 1u64;
         let end = u64::from(args.start_line) + u64::from(args.line_count.min(MAX_READ_LINES));
@@ -1236,7 +1311,7 @@ impl Tools {
                 if !skip {
                     if text.len() + line.len() + length + 16 > MAX_READ_BYTES {
                         text.push_str(&format!("\nByte limit reached: read with startLine={line_number}. If this line alone exceeds {MAX_READ_BYTES} bytes, use shell to inspect byte ranges."));
-                        return Ok(text);
+                        return Ok((text, Vec::new()));
                     }
                     line.extend_from_slice(&buffer[..length]);
                 }
@@ -1266,7 +1341,7 @@ impl Tools {
                 line_number - 1
             );
         }
-        Ok(text)
+        Ok((text, Vec::new()))
     }
 }
 
@@ -1433,6 +1508,7 @@ fn tool_error(
             status: ItemStatus::Failed,
         },
         Tool::Mcp => Item::McpToolCall {
+            content_items: Vec::new(),
             id,
             server: String::new(),
             tool: String::new(),
@@ -1447,6 +1523,7 @@ fn tool_error(
             status: ItemStatus::Failed,
         },
         Tool::Read => Item::FileRead {
+            content_items: Vec::new(),
             id,
             path: arguments["path"].as_str().unwrap_or_default().into(),
             start_line: arguments["startLine"]
@@ -1481,6 +1558,7 @@ fn tool_error(
         },
     };
     ToolOutput {
+        images: Vec::new(),
         item,
         text,
         outcome,

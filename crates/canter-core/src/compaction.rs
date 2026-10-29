@@ -119,10 +119,12 @@ pub(crate) async fn compact(
                     summary: summary.clone(),
                     messages: messages.clone(),
                     user_messages: user_messages.clone(),
-                    user_inputs: if user_inputs
-                        .iter()
-                        .any(|message| matches!(message, Message::UserParts { .. }))
-                    {
+                    user_inputs: if user_inputs.iter().any(|message| {
+                        matches!(
+                            message,
+                            Message::UserParts { .. } | Message::ToolImages { .. }
+                        )
+                    }) {
                         user_inputs.clone()
                     } else {
                         Vec::new()
@@ -218,8 +220,12 @@ async fn summarize(
                 };
                 transcript.push_str(&format!("\n{source}: {text}\n"));
             }
-            Message::UserParts { content } => {
-                transcript.push_str("\nUser: ");
+            Message::UserParts { content } | Message::ToolImages { content } => {
+                transcript.push_str(if matches!(message, Message::ToolImages { .. }) {
+                    "\nTool images: "
+                } else {
+                    "\nUser: "
+                });
                 for part in content {
                     match part {
                         UserContent::Text { text } => transcript.push_str(text),

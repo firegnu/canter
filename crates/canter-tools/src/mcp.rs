@@ -458,7 +458,7 @@ impl McpTool {
         &self,
         args: &Value,
         cancel: &CancellationToken,
-    ) -> (String, String, crate::ToolOutcome) {
+    ) -> (String, String, crate::ToolOutcome, Vec<crate::ToolImage>) {
         use crate::{
             MAX_CLIENT_OUTPUT_BYTES, MAX_MODEL_OUTPUT_BYTES, ToolOutcome, output::BoundedText,
         };
@@ -468,6 +468,7 @@ impl McpTool {
                 "MCP service disconnected".into(),
                 "MCP service disconnected".into(),
                 ToolOutcome::Failed,
+                Vec::new(),
             );
         };
         let params = CallToolRequestParams::new(self.tool.clone())
@@ -483,10 +484,13 @@ impl McpTool {
             }
         };
         match result {
-            Err((error, outcome)) => (error.into(), error.into(), outcome),
+            Err((error, outcome)) => (error.into(), error.into(), outcome, Vec::new()),
             Ok(result) => {
                 let mut model = BoundedText::new(MAX_MODEL_OUTPUT_BYTES);
                 let mut client = BoundedText::new(MAX_CLIENT_OUTPUT_BYTES);
+                let mut images = Vec::new();
+                let mut image_number = 0;
+                let mut has_text = false;
                 if result.is_error == Some(true) {
                     model.push(b"MCP tool error: ");
                     client.push(b"MCP tool error: ");
@@ -496,10 +500,42 @@ impl McpTool {
                         model.push(b"\n");
                         client.push(b"\n");
                     }
-                    let text = content
-                        .as_text()
-                        .map(|text| self.server.public(&text.text))
-                        .unwrap_or_else(|| "[MCP non-text content omitted]".into());
+                    let text = match content {
+                        rmcp::model::ContentBlock::Text(text) => {
+                            has_text |= !text.text.trim().is_empty();
+                            self.server.public(&text.text)
+                        }
+                        rmcp::model::ContentBlock::Resource(resource) => match &resource.resource {
+                            rmcp::model::ResourceContents::TextResourceContents {
+                                text, ..
+                            } => {
+                                has_text |= !text.trim().is_empty();
+                                self.server.public(text)
+                            }
+                            _ => "[MCP non-text content omitted]".into(),
+                        },
+                        rmcp::model::ContentBlock::Image(image) => {
+                            image_number += 1;
+                            match self.image(&image.data, image_number) {
+                                Ok(image) => {
+                                    let text = image.explanation();
+                                    images.push(image);
+                                    text
+                                }
+                                Err(error) => format!("[MCP image omitted: {error}]"),
+                            }
+                        }
+                        _ => "[MCP non-text content omitted]".into(),
+                    };
+                    model.push(text.as_bytes());
+                    client.push(text.as_bytes());
+                }
+                if !has_text && let Some(structured) = &result.structured_content {
+                    if !result.content.is_empty() {
+                        model.push(b"\n");
+                        client.push(b"\n");
+                    }
+                    let text = self.server.public(&structured.to_string());
                     model.push(text.as_bytes());
                     client.push(text.as_bytes());
                 }
@@ -508,9 +544,35 @@ impl McpTool {
                 } else {
                     ToolOutcome::Completed
                 };
-                (model.render(false), client.render(true), outcome)
+                let mut model = model.render(false);
+                // Head/tail truncation must not hide how to find an attached image.
+                for image in &images {
+                    let explanation = image.explanation();
+                    if !model.contains(&explanation) {
+                        model.push('\n');
+                        model.push_str(&explanation);
+                    }
+                }
+                (model, client.render(true), outcome, images)
             }
         }
+    }
+
+    fn image(&self, data: &str, number: usize) -> Result<crate::ToolImage, &'static str> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        // Reject before allocating the decoded image; check exact bytes afterwards.
+        if data.len() as u64 > canter_protocol::MAX_IMAGE_BYTES.div_ceil(3) * 4 {
+            return Err("image exceeds the 8 MiB limit");
+        }
+        let bytes = STANDARD.decode(data).map_err(|_| "invalid image base64")?;
+        let mut image = crate::ToolImage::new(bytes, String::new())?;
+        image.name = format!(
+            "{}-{}-image-{number}.{}",
+            self.server.name,
+            self.tool,
+            image.mime_type.strip_prefix("image/").unwrap()
+        );
+        Ok(image)
     }
 }
 

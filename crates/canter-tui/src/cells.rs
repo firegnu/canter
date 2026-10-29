@@ -5,7 +5,8 @@
 use std::ops::Range;
 
 use canter_protocol::{
-    FileUpdateChange, Item, ItemStatus, PatchChangeKind, Turn, TurnStatus, UserInput,
+    FileUpdateChange, Item, ItemStatus, PatchChangeKind, ToolContentItem, Turn, TurnStatus,
+    UserInput,
 };
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -280,15 +281,20 @@ pub(crate) fn item(
             arguments,
             status,
             result,
+            content_items,
             ..
-        } => mcp_call(
-            &format!("{server}/{tool}"),
-            arguments,
-            *status,
-            result,
-            details,
-            width,
-        ),
+        } => {
+            let mut rows = mcp_call(
+                &format!("{server}/{tool}"),
+                arguments,
+                *status,
+                result,
+                details,
+                width,
+            );
+            rows.extend(tool_images(content_items, "Image ", width));
+            rows
+        }
         Item::CommandExecution {
             command,
             source,
@@ -317,8 +323,16 @@ pub(crate) fn item(
             start_line,
             content,
             status,
+            content_items,
             ..
-        } => vec![file_read(path, *start_line, content, *status, cwd, width)],
+        } => {
+            let rows = tool_images(content_items, "Read ", width);
+            if rows.is_empty() {
+                vec![file_read(path, *start_line, content, *status, cwd, width)]
+            } else {
+                rows
+            }
+        }
         Item::ContextCompaction { summary, .. } => vec![Row::text_from(
             Line::from(Span::styled(
                 compaction_line(summary, finished),
@@ -748,6 +762,43 @@ fn tail(text: &str, width: usize) -> &str {
         }
     }
     text
+}
+
+fn tool_images(items: &[ToolContentItem], verb: &str, width: u16) -> Vec<Row> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let ToolContentItem::LocalImage {
+                name,
+                mime_type,
+                size_bytes,
+                ..
+            } = item
+            else {
+                return None;
+            };
+            let format = mime_type
+                .strip_prefix("image/")
+                .unwrap_or(mime_type)
+                .to_uppercase();
+            let mut spans = vec![
+                Span::raw("  "),
+                Span::styled("◇ ", theme::secondary()),
+                Span::styled(verb.to_owned(), Style::new().bold()),
+                Span::raw(visible(name)),
+                Span::styled(
+                    format!(
+                        "  {} · {}",
+                        visible(&format),
+                        format_size(*size_bytes as usize)
+                    ),
+                    theme::secondary(),
+                ),
+            ];
+            fit_path_spans(&mut spans, &[3], usize::from(width));
+            Some(cut_row(spans, Vec::new(), width))
+        })
+        .collect()
 }
 
 fn file_read(

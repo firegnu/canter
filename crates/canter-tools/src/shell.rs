@@ -154,6 +154,7 @@ async fn run_command(
         return background_output(executor, id, args, source, control.output(!yielded), start);
     }
     ToolOutput {
+        images: Vec::new(),
         text: if source == ExecCommandSource::UserShell
             && exit_code.is_some()
             && matches!(outcome, ToolOutcome::Completed | ToolOutcome::Failed)
@@ -188,6 +189,7 @@ fn failed_start(
     message: String,
 ) -> ToolOutput {
     ToolOutput {
+        images: Vec::new(),
         text: message.clone(),
         outcome: ToolOutcome::Failed,
         item: Item::CommandExecution {
@@ -212,6 +214,7 @@ fn background_output(
     start: Instant,
 ) -> ToolOutput {
     ToolOutput {
+        images: Vec::new(),
         text: background::render(&output),
         outcome: ToolOutcome::Completed,
         item: Item::CommandExecution {

@@ -22,6 +22,8 @@ use tokio::{
 mod mcp;
 #[path = "support/plan.rs"]
 mod plan;
+#[path = "support/tool_images.rs"]
+mod tool_images;
 
 const KEY: &str = "test-only-canter-key";
 const ENV_VALUE: &str = "test-only-client-environment";

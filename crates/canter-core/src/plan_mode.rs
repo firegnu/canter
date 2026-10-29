@@ -186,6 +186,7 @@ fn output(
     text: String,
 ) -> ToolOutput {
     ToolOutput {
+        images: Vec::new(),
         item: Item::PlanProposal {
             id,
             plan,

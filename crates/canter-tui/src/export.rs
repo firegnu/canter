@@ -280,9 +280,14 @@ impl Body {
                 start_line,
                 content,
                 status,
+                content_items,
                 ..
             } => {
-                let lines = content.lines().count();
+                let lines = if content_items.is_empty() {
+                    content.lines().count()
+                } else {
+                    0
+                };
                 let range = match lines {
                     0 => String::new(),
                     _ => format!(
@@ -295,7 +300,15 @@ impl Body {
                     code_span(&display_path(path, cwd)),
                     outcome(*status, feedback)
                 );
-                self.block(assistant, &tool(&summary, content, ""));
+                let images = tool_image_placeholders(content_items);
+                self.block(
+                    assistant,
+                    &tool(
+                        &summary,
+                        if images.is_empty() { content } else { &images },
+                        "",
+                    ),
+                );
             }
             Item::WebFetch {
                 url,
@@ -318,6 +331,7 @@ impl Body {
                 arguments,
                 result,
                 status,
+                content_items,
                 ..
             } => {
                 let call = one_line(&format!("{server}/{name} {arguments}"), LINE_CHARS);
@@ -327,6 +341,10 @@ impl Body {
                     outcome(*status, feedback)
                 );
                 self.block(assistant, &tool(&summary, result, ""));
+                let images = tool_image_placeholders(content_items);
+                if !images.is_empty() {
+                    self.block(assistant, &images);
+                }
             }
             Item::UserInput {
                 question, answer, ..
@@ -377,6 +395,19 @@ impl Body {
 }
 
 /// What the user sent: the text in full, images as placeholders.
+fn tool_image_placeholders(items: &[canter_protocol::ToolContentItem]) -> String {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            canter_protocol::ToolContentItem::LocalImage { name, .. } => {
+                Some(format!("[Image: {}]", sanitize(name)))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn user_text(content: &[UserInput]) -> String {
     let parts: Vec<String> = content
         .iter()

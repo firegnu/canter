@@ -11,6 +11,7 @@ struct McpState {
     cancelled: Vec<Value>,
     fail_next_call: bool,
     slow_listing: bool,
+    result: Option<Value>,
 }
 
 struct HttpMcp {
@@ -135,13 +136,17 @@ async fn rpc(
             if fail {
                 return (StatusCode::SERVICE_UNAVAILABLE, "test-only-http-mcp-key").into_response();
             }
-            match request["params"]["name"].as_str().unwrap() {
+            if let Some(result) = state.lock().unwrap().result.clone() {
+                result
+            } else {
+                match request["params"]["name"].as_str().unwrap() {
                 "pending" => { std::future::pending::<()>().await; unreachable!() }
                 "content" => json!({"content":[{"type":"text","text":format!("HEAD{}TAIL","界".repeat(20_000))},{"type":"image","data":"aGVsbG8=","mimeType":"image/png"},{"type":"text","text":"end"}]}),
                 "error" => json!({"isError":true,"content":[{"type":"text","text":"operation failed test-only-http-mcp-key"}]}),
                 "rpc_error" => return Json(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32603,"message":"test-only-http-mcp-key"}})).into_response(),
                 "bearer" => json!({"content":[{"type":"text","text":headers["authorization"].to_str().unwrap().strip_prefix("Bearer ").unwrap()}]}),
                 _ => json!({"content":[{"type":"text","text":"http result"}]}),
+            }
             }
         }
         _ => json!({}),
@@ -151,6 +156,97 @@ async fn rpc(
         Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result})),
     )
         .into_response()
+}
+
+#[tokio::test]
+async fn mcp_images_and_text_reach_the_model_together() {
+    let http = HttpMcp::start(&["screenshot"]).await;
+    http.state.lock().unwrap().result = Some(json!({"content":[
+        {"type":"text","text":"Screenshot captured"},
+        {"type":"image","mimeType":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}
+    ]}));
+    let mut fixture = Fixture::start_with_mcp(
+        vec![
+            call(&["mcp__remote__screenshot"]),
+            text_reply(),
+            call(&["mcp__remote__screenshot"]),
+            text_reply(),
+        ],
+        "deepseek-flash",
+        None,
+        json!({}),
+        json!({"remote":http.config()}),
+    )
+    .await;
+    let created: SessionCreateResponse = fixture.request(Method::POST,"/v1/sessions",json!({
+        "cwd":fixture.root.path().join("work"),"env":{},"model":"deepseek-flash","approvalPolicy":"allowAll","clientName":"test"
+    })).await.json().await.unwrap();
+    fixture.input(&created.session.id).await;
+    let events = complete(&fixture, &created.session.id, created.event_seq).await;
+    // Valid base64 for a PNG signature followed by zero bytes, over 8 MiB.
+    http.state.lock().unwrap().result = Some(
+        json!({"content":[{"type":"image","mimeType":"image/png","data":format!("iVBORw0KGgoA{}", "AAAA".repeat(8 * 1024 * 1024 / 3))}]}),
+    );
+    fixture.input(&created.session.id).await;
+    complete(&fixture, &created.session.id, events.last().unwrap().seq).await;
+    fixture.stop().await;
+    let requests = &fixture.script.lock().unwrap().requests;
+    let messages = requests[1]["messages"].as_array().unwrap();
+    let index = messages.iter().position(|m| m["role"] == "tool").unwrap();
+    assert_eq!(
+        messages[index]["content"],
+        "Screenshot captured\nImage \"remote-screenshot-image-1.png\" is attached in the next user message after this tool-result batch."
+    );
+    assert_eq!(messages[index + 1]["role"], "user");
+    assert!(messages[index + 1]["content"].as_array().unwrap().iter().any(|part| part["image_url"]["url"] == "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="));
+    let after = requests[3]["messages"].as_array().unwrap();
+    assert_eq!(after.last().unwrap()["role"], "tool");
+    assert_eq!(
+        after.last().unwrap()["content"],
+        "[MCP image omitted: image exceeds the 8 MiB limit]"
+    );
+}
+
+#[tokio::test]
+async fn mcp_text_resources_and_structured_results_reach_the_model_as_text() {
+    let http = HttpMcp::start(&["result"]).await;
+    let mut fixture = Fixture::start_with_mcp(
+        vec![
+            call(&["mcp__remote__result"]),
+            text_reply(),
+            call(&["mcp__remote__result"]),
+            text_reply(),
+        ],
+        "fake-model",
+        None,
+        json!({}),
+        json!({"remote":http.config()}),
+    )
+    .await;
+    let created = create(&fixture, "allowAll").await;
+    let cases = [
+        (
+            json!({"content":[{"type":"resource","resource":{"uri":"fixture://text","text":"embedded text"}}],"structuredContent":{"duplicate":true}}),
+            "embedded text",
+        ),
+        (
+            json!({"structuredContent":{"answer":42}}),
+            "{\"answer\":42}",
+        ),
+    ];
+    let mut after = created.event_seq;
+    let mut actual = Vec::new();
+    for (result, expected) in cases {
+        http.state.lock().unwrap().result = Some(result);
+        fixture.input(&created.session.id).await;
+        let events = complete(&fixture, &created.session.id, after).await;
+        after = events.last().unwrap().seq;
+        actual.push((tool_results(&fixture).last().unwrap().clone(), expected));
+    }
+    fixture.stop().await;
+    for (actual, expected) in actual {
+        assert_eq!(actual, expected);
+    }
 }
 
 async fn start(http: &HttpMcp, replies: Vec<String>) -> Fixture {
@@ -545,7 +641,9 @@ async fn content_limits_placeholders_and_errors_do_not_expose_keys() {
     let results = tool_results(&fixture);
     assert!(results[0].starts_with("HEAD"));
     assert!(results[0].contains("[truncated "));
-    assert!(results[0].contains("TAIL\n[MCP non-text content omitted]\nend"));
+    assert!(
+        results[0].contains("TAIL\n[MCP image omitted: image must be JPEG, PNG, GIF or WebP]\nend")
+    );
     assert!(results[0].len() < 33_000);
     assert_eq!(results[1], "MCP tool error: operation failed [redacted]");
     assert!(results[2].contains("failed"));

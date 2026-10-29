@@ -16,6 +16,10 @@ pub enum Message {
     UserParts {
         content: Vec<UserContent>,
     },
+    /// Tool-origin attachments, sent as a user message after the complete batch.
+    ToolImages {
+        content: Vec<UserContent>,
+    },
     Assistant {
         content: Vec<AssistantContent>,
     },
