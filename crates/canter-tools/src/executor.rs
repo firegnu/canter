@@ -10,10 +10,6 @@ use tokio_util::sync::CancellationToken;
 
 pub type FileReader = Box<dyn AsyncRead + Unpin + Send>;
 
-// On macOS pipe creation and FD_CLOEXEC are separate operations. Keep every
-// local shell's pipe creation and fork/exec in one process-wide critical section.
-static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 pub struct CommandHandle {
     pub stdout: FileReader,
     pub stderr: FileReader,
@@ -218,7 +214,6 @@ impl Executor for LocalExecutor {
 
     async fn spawn(&self, command: &str, cancel: &CancellationToken) -> io::Result<CommandHandle> {
         use std::process::Stdio;
-        let _spawn = SPAWN_LOCK.lock().unwrap();
         check_cancel(cancel)?;
         let mut launch = tokio::process::Command::new("/bin/sh");
         launch
@@ -231,15 +226,7 @@ impl Executor for LocalExecutor {
             .stderr(Stdio::piped())
             .process_group(0)
             .kill_on_drop(true);
-        let guardian = crate::guardian::attach(&mut launch)?;
-        let child = launch.spawn()?;
-        drop(launch);
-        let group = child.id().map(|id| nix::unistd::Pid::from_raw(id as i32));
-        let mut process = LocalProcess {
-            child,
-            group,
-            guardian,
-        };
+        let mut process = crate::process::spawn(launch, Some(cancel))?;
         let stdout = process
             .child
             .stdout
@@ -332,51 +319,4 @@ fn check_protected(path: &Path, protected_paths: &[PathBuf]) -> io::Result<()> {
         }
     }
     Ok(())
-}
-
-struct LocalProcess {
-    child: tokio::process::Child,
-    group: Option<nix::unistd::Pid>,
-    guardian: std::io::PipeWriter,
-}
-
-impl LocalProcess {
-    fn kill_group(&mut self) -> io::Result<()> {
-        if let Some(group) = self.group {
-            match nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL) {
-                Ok(()) | Err(nix::errno::Errno::ESRCH) => {
-                    self.group = None;
-                    // Disarm only after the original group has been cleaned up.
-                    let _ = std::io::Write::write_all(&mut self.guardian, b"\n");
-                }
-                Err(error) => return Err(io::Error::from_raw_os_error(error as i32)),
-            }
-        }
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl CommandProcess for LocalProcess {
-    async fn wait(&mut self) -> io::Result<std::process::ExitStatus> {
-        self.child.wait().await
-    }
-    async fn kill(&mut self) -> io::Result<()> {
-        self.kill_group()
-    }
-    async fn terminate(&mut self) -> io::Result<()> {
-        if let Some(group) = self.group {
-            match nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGTERM) {
-                Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
-                Err(error) => return Err(io::Error::from_raw_os_error(error as i32)),
-            }
-        }
-        Ok(())
-    }
-}
-
-impl Drop for LocalProcess {
-    fn drop(&mut self) {
-        let _ = self.kill_group();
-    }
 }

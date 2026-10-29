@@ -284,6 +284,56 @@ cd 目标存在时会额外检查解析后的路径，
 参考 pi 的精确文字替换、oh-my-pi 的风险分档，以及 Codex `rust-v0.163.0`
 的进程组清理、UTF-8 头尾截断和受限 shell 语法逐段判断思路，独立实现，未复制源码。
 
+## LSP 生命周期（P2-132）
+
+`lsp::LspService` 是服务端持有的共享实例池；本件只提供配置、启动、双向 stdio、关闭和资源管理。
+内置 `src/lsp/servers.json` 当前为空，具体语言后续接入。没有新增模型工具、文件监视、文件同步、
+诊断收集或客户端事件；write/edit 的实际调用点由 P2-133 接入。
+
+`config.json` 默认 `lsp.enabled: false`，关闭时没有 LSP 进程或采样任务。用户开启即授权运行配置中的
+服务器及其构建脚本/分析辅助进程，改配置需 `canter serve --replace`。配置示意（需换成已安装程序）：
+
+```json
+{"lsp":{"enabled":true,"servers":{"example":{
+  "command":"my-language-server","args":["--stdio"],
+  "extensions":{"example":"example"},"root_markers":["project.marker"],
+  "initialization_options":{},"settings":{"example":{"diagnostics":true}}
+}}}}
+```
+
+服务器 id 为字母、数字、连字符或下划线。用户覆盖按字段整体替换，省略字段继承内置值；空数组、
+空对象、JSON null 都按显式值处理，不递归合并 settings。不读取仓库的 LSP 启动配置，不自动安装程序，
+拒绝 npx/pnpx/bunx 等临时安装入口。用会话完整环境直接传 argv，以会话 PATH 查找，保留符号链接
+启动名（兼容按 argv[0] 分派的程序）；不使用服务端的 PATH。环境、settings、原始服务器错误和 stderr
+不进入日志/事件；错误只含英文原因和服务器 id，JSON-RPC 错误保留数字代码。
+
+`for_file(file, FileContext, cancel)` 在开启且普通修改轮时按扩展名选择服务器，返回可保留的 `Instance`。
+Plan/Review 返回 None。重叠扩展名按服务器 id 排序选择第一项。根目录由文件实际路径向上找最近的根标记，
+止于最具体的会话 cwd/新增目录边界及物理 `.git` 边界；无标记或实际路径越界返回 Unsupported。
+不合并不同 worktree，不解析各语言的 workspace 结构（后续语言适配处理）。
+共用要求同根、同服务器配置和同完整环境；并发首次取得只启动一次。再次取得时检查可执行文件的路径和
+文件标识/大小/修改时间，变化就关闭旧实例。没有加载仓库环境文件；文件监视和环境文件失效由后续任务处理。
+
+保留 `Instance` 即保留订阅；最后一个订阅释放即清理。`request`/`notify` 仅供后续真实文档同步或诊断使用，
+活动结束后更新空闲计时；取得实例、`is_running`/`error` 查询和 RSS 采样不续命。请求最多 30 秒，支持取消；
+`retry` 仅清除该文件对应实例的退避/熔断，不启动进程、不停止健康的共享实例。公开状态接口和 `/lsp` 后续接入。
+
+最多两个实例，满时先回收最久未使用的空闲实例，都忙则报 ResourceLimited。空闲十分钟回收。
+每五秒直接调用 `/bin/ps` 采样原进程组及后代树 RSS（去掉同一 PID 的重复计数）；连续两次超过单实例
+4 GiB 或总计 8 GiB 时，先停空闲实例，再停超限/最久未使用实例，并锁住该键直到显式 retry。
+RSS 是软阈值，采样之间可能超过且共享页可能重复计数；采样失败不会伪造内存读数，下一周期再采。
+initialize 最多三十秒，启动失败（含未安装）退避六十秒；崩溃后仅由后续真实取得触发重启，五分钟内最多
+自动重启两次，再失败就等待 retry 或重启服务端。
+
+传输独立于 shell background 和 rmcp，支持 Content-Length 字节帧、乱序请求 id、取消和反向请求。
+`workspace/configuration` 按请求顺序返回 settings 整体/分节值；未知节返回 null。`workspace/applyEdit`、
+执行命令和其它未支持请求返回 -32601，不执行服务器要求的操作。初始化只声明已实现能力，后续同步/诊断
+能力由 P2-133 补齐。每帧最多 16 MiB、头部最多 8 KiB；stderr 排空但不保存。
+
+shell 和 LSP 共用 `process` 内部启动锁、进程组和 guardian 所有权；既有 Executor trait 不变。
+正常停止有界等待 shutdown → exit，超过三秒杀原进程组并 reap；服务端停止/替换在释放锁前等全部实例退出。
+强杀服务端由 guardian 清理原组，自行脱离原进程组的后代仍在既有看护边界之外。
+
 ## MCP 工具
 
 `mcp::Registry` 用固定版本的官方 rmcp 客户端维护进程/HTTP 连接；配置和运行句柄没有

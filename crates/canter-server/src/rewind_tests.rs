@@ -161,6 +161,7 @@ async fn check_rewind(
     let store = Arc::new(Store::new(root.path().join("state/sessions")).unwrap());
     let app = Arc::new(App {
         mcp: Default::default(),
+        lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
         home: root.path().join("state"),
         store: store.clone(),
         model: model.clone(),
@@ -459,6 +460,7 @@ async fn check_rewind(
     // A fresh server registry and newly opened store exercise durable recovery.
     let app = Arc::new(App {
         mcp: Default::default(),
+        lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
         home: root.path().join("state"),
         store: Arc::new(Store::new(root.path().join("state/sessions")).unwrap()),
         model: model.clone(),

@@ -36,6 +36,7 @@ pub(crate) struct App {
     pub models: Vec<String>,
     pub options: CoreOptions,
     pub mcp: canter_core::mcp::Registry,
+    pub lsp: Arc<canter_tools::lsp::LspService>,
     pub sessions: Mutex<HashMap<String, Session>>,
     pub registry_changed: Notify,
     pub draining: RwLock<bool>,

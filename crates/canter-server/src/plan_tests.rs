@@ -72,6 +72,7 @@ impl Fixture {
         });
         let app = Arc::new(App {
             mcp: Default::default(),
+            lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
             home: root.path().join("state"),
             store: Arc::new(Store::new(root.path().join("state/sessions")).unwrap()),
             model: Arc::new(ChatCompletions::new(&base_url, ApiKey::new("test-key")).unwrap()),

@@ -334,6 +334,7 @@ dependencies = [
  "canter-model",
  "canter-protocol",
  "canter-store",
+ "canter-tools",
  "chrono",
  "futures-util",
  "nix",
