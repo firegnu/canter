@@ -1,1 +1,26 @@
-{}
+{
+  "rust-analyzer": {
+    "command": "rust-analyzer",
+    "args": [],
+    "extensions": { "rs": "rust" },
+    "root_markers": ["Cargo.lock"],
+    "initialization_options": { "checkOnSave": false },
+    "settings": { "rust-analyzer": { "checkOnSave": false } }
+  },
+  "pyright": {
+    "command": "pyright-langserver",
+    "args": ["--stdio"],
+    "extensions": { "py": "python", "pyi": "python" },
+    "root_markers": ["pyproject.toml", "pyrightconfig.json"],
+    "settings": { "python": { "analysis": { "diagnosticMode": "openFilesOnly" } } }
+  },
+  "typescript": {
+    "command": "node_modules/.bin/tsc",
+    "args": ["--lsp", "--stdio"],
+    "extensions": {
+      "ts": "typescript", "mts": "typescript", "cts": "typescript", "tsx": "typescriptreact",
+      "js": "javascript", "mjs": "javascript", "cjs": "javascript", "jsx": "javascriptreact"
+    },
+    "root_markers": ["tsconfig.json", "jsconfig.json", "package.json"]
+  }
+}

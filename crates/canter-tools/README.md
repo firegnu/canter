@@ -288,7 +288,7 @@ cd 目标存在时会额外检查解析后的路径，
 
 `lsp::LspService` 是服务端持有的共享实例池，提供配置、启动、双向 stdio、关闭和资源管理。
 P2-133 接入成功 write/edit、回退及 shell 完成，添加文件监视和诊断收集；P2-134 在核心层交给模型并提供公开协议。
-内置 `src/lsp/servers.json` 当前为空，具体语言后续接入，没有新增模型工具。
+内置 `src/lsp/servers.json` 有 Rust、Python、TS/JS 三种（P2-136，见下文「第一批语言」），没有新增模型工具。
 
 `config.json` 默认 `lsp.enabled: false`，关闭时没有 LSP 进程或采样任务。用户开启即授权运行配置中的
 服务器及其构建脚本/分析辅助进程，改配置需 `canter serve --replace`。配置示意（需换成已安装程序）：
@@ -310,7 +310,7 @@ P2-133 接入成功 write/edit、回退及 shell 完成，添加文件监视和�
 `for_file(file, FileContext, cancel)` 在开启且普通修改轮时按扩展名选择服务器，返回可保留的 `Instance`。
 Plan/Review 返回 None。重叠扩展名按服务器 id 排序选择第一项。根目录由文件实际路径向上找最近的根标记，
 止于最具体的会话 cwd/新增目录边界及物理 `.git` 边界；无标记或实际路径越界返回 Unsupported。
-不合并不同 worktree，不解析各语言的 workspace 结构（后续语言适配处理）。
+不合并不同 worktree，不解析各语言的 workspace 结构；Rust 用 `Cargo.lock` 当根标记，让 workspace 的子 crate 归到同一个根。
 共用要求同根、同服务器配置和同完整环境；并发首次取得只启动一次。再次取得时检查可执行文件的路径和
 文件标识/大小/修改时间，变化就关闭旧实例。项目配置或工具链文件变化会重建实例；不加载其中的启动命令。
 
@@ -364,6 +364,31 @@ push 与 pull provider；空表替换该来源的诊断。`Freshness::VersionUnc
 不随进程代数改变。停止只取消本会话的启动等待并释放工作区，其它会话仍可使用共享实例；重试沿既有修改路径
 重新同步。状态查询不算 LSP 活动；实例池保留最新 RSS 样本供查询，不为采样写事件。关闭的服务不挂到 Tools，
 保持原有模型工具输出逐字不变。
+
+### 第一批语言（P2-136）
+
+打开：在 `~/.canter/config.json` 写 `{"lsp":{"enabled":true}}`，再 `canter serve --replace`。关着时内置表不生效，不起任何进程。
+
+| id | 要装什么 | 扩展名 | 项目根标记 |
+|---|---|---|---|
+| `rust-analyzer` | `rust-analyzer` 在会话 PATH 上（`rustup component add rust-analyzer`） | `rs` | `Cargo.lock` |
+| `pyright` | `pyright-langserver` 在会话 PATH 上（`npm i -g pyright` 或 `pip install pyright`） | `py`、`pyi` | `pyproject.toml`、`pyrightconfig.json` |
+| `typescript` | 项目自己装 TypeScript 7（`npm i -D typescript@7`），用 `node_modules/.bin/tsc --lsp --stdio`，node 在会话 PATH 上 | `ts`、`mts`、`cts`、`tsx`、`js`、`mjs`、`cjs`、`jsx` | `tsconfig.json`、`jsconfig.json`、`package.json` |
+
+- Rust 默认关 `checkOnSave`（不在每次改文件后跑 cargo check）；构建脚本、过程宏仍可能运行 cargo 和项目代码。还没有 `Cargo.lock` 的新项目找不到根，跑一次 cargo 后才有诊断。
+- Python 只分析打开的文件（`python.analysis.diagnosticMode=openFilesOnly`），其余照项目自己的 pyright 配置。
+- TS/JS 运行的是项目 `node_modules` 里的程序。没装 TS 7（没装或 TS 5、6）的项目算不可用，canter 不安装、不用 `npx`；`node_modules` 在上层目录、子目录另有 `tsconfig.json` 时也找不到。TS 5、6 的项目可以自己装 `typescript-language-server`，按下面的办法加一项。
+
+改配置：按 id 覆盖，只写要改的字段，例如打开 Rust 的保存检查：
+
+```json
+{"lsp":{"enabled":true,"servers":{"rust-analyzer":{
+  "initialization_options":{"checkOnSave":true},
+  "settings":{"rust-analyzer":{"checkOnSave":true}}
+}}}}
+```
+
+加一种语言：在 `lsp.servers` 里加新 id，写全 `command`、`args`、`extensions`、`root_markers`，按需写 `initialization_options`、`settings`（服务器发 `workspace/configuration` 时按配置段回）；`command` 写相对路径时按项目根找。想随 canter 发布，就加进 `src/lsp/servers.json`，在 `lsp::config` 的测试里补一条。根目录规则、虚拟环境这类配置写不出来的，要在 LSP 模块里加适配。
 
 ## MCP 工具
 
