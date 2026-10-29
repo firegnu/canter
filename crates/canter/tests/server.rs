@@ -1207,6 +1207,37 @@ async fn a_second_server_cannot_replace_the_lock_owner() {
 }
 
 #[tokio::test]
+async fn a_ready_line_is_printed_once_clients_can_connect_and_again_after_replace() {
+    let mut fixture = Fixture::start(vec![]).await;
+    let ready = |pid: u32| format!("canter server ready · {} · pid {pid}", canter::VERSION);
+    let log = fs::read_to_string(fixture.root.path().join("server.log")).unwrap();
+    let first = ready(fixture.child.id().unwrap());
+    assert_eq!(
+        log.lines().filter(|line| *line == first).count(),
+        1,
+        "{log}"
+    );
+    let replacement = Fixture::spawn_args(fixture.root.path(), &["serve", "--replace"]);
+    let mut previous = std::mem::replace(&mut fixture.child, replacement);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(15), previous.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+    fixture.ready().await;
+    let log = fs::read_to_string(fixture.root.path().join("server.log")).unwrap();
+    let second = ready(fixture.child.id().unwrap());
+    assert_eq!(
+        log.lines().filter(|line| *line == second).count(),
+        1,
+        "{log}"
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
 async fn restart_requires_resume_and_keeps_the_first_resumed_environment() {
     let mut fixture = Fixture::start(vec![text_reply(), tool_reply(), text_reply()]).await;
     let created = fixture.create().await;
