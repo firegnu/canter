@@ -127,6 +127,22 @@ impl State {
         tools: &Tools,
     ) -> Result<(), CoreError> {
         self.directory_home = home.clone();
+        if let Some(lsp) = tools.lsp() {
+            lsp.configure(
+                self.journal
+                    .snapshot
+                    .settings
+                    .additional_directories
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect(),
+                if self.journal.snapshot.settings.plan_mode {
+                    canter_tools::lsp::Round::Plan
+                } else {
+                    canter_tools::lsp::Round::Modify
+                },
+            );
+        }
         self.gate
             .set_additional_directories(&self.journal.snapshot.settings.additional_directories);
         self.tool_definitions = canter_tools::Tool::ALL
@@ -1151,6 +1167,29 @@ impl Session {
             state.gate.set_additional_directories(&directories);
             state.restate_directories().await?;
         }
+        if let Some(lsp) = self.shared.tools.lsp() {
+            lsp.configure(
+                state
+                    .journal
+                    .snapshot
+                    .settings
+                    .additional_directories
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect(),
+                if state.journal.snapshot.settings.plan_mode {
+                    canter_tools::lsp::Round::Plan
+                } else if state
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.turn.review.is_some())
+                {
+                    canter_tools::lsp::Round::Review
+                } else {
+                    canter_tools::lsp::Round::Modify
+                },
+            );
+        }
         Ok(SessionUpdateResponse {
             event_seq: events[0].seq,
         })
@@ -1244,6 +1283,9 @@ impl Session {
             stopped = stopped.and(wait_done(done).await.map(|_| ()));
         }
         self.shared.tools.background().stop_all().await;
+        if let Some(lsp) = self.shared.tools.lsp() {
+            lsp.close().await;
+        }
         if !self.shared.state.lock().await.journal.failed {
             self.shared.sync_background().await?;
         }
@@ -1290,13 +1332,28 @@ async fn executor(
     web_fetch_timeout: std::time::Duration,
     plan_enabled: bool,
 ) -> Result<Tools, CoreError> {
+    let lsp = runtime.lsp.as_ref().map(|service| {
+        service.session(
+            canter_tools::lsp::FileContext {
+                cwd: cwd.clone().into(),
+                additional_directories: Vec::new(),
+                environment: runtime.environment.clone(),
+                round: canter_tools::lsp::Round::Modify,
+            },
+            runtime.protected_paths.clone(),
+        )
+    });
     tokio::task::spawn_blocking(move || {
         LocalExecutor::new(cwd.into(), runtime.environment, runtime.protected_paths)
             .map(|executor| {
-                Tools::new(Arc::new(executor))
+                let tools = Tools::new(Arc::new(executor))
                     .with_plan_enabled(plan_enabled)
                     .with_mcp(runtime.mcp_tools)
-                    .with_web_fetch_timeout(web_fetch_timeout)
+                    .with_web_fetch_timeout(web_fetch_timeout);
+                match lsp {
+                    Some(lsp) => tools.with_lsp(lsp),
+                    None => tools,
+                }
             })
             .map_err(|_| CoreError::new(ErrorCode::InvalidRequest, "invalid execution context"))
     })

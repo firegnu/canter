@@ -284,11 +284,11 @@ cd 目标存在时会额外检查解析后的路径，
 参考 pi 的精确文字替换、oh-my-pi 的风险分档，以及 Codex `rust-v0.163.0`
 的进程组清理、UTF-8 头尾截断和受限 shell 语法逐段判断思路，独立实现，未复制源码。
 
-## LSP 生命周期（P2-132）
+## LSP 生命周期、文件同步与诊断（P2-132 / P2-133）
 
-`lsp::LspService` 是服务端持有的共享实例池；本件只提供配置、启动、双向 stdio、关闭和资源管理。
-内置 `src/lsp/servers.json` 当前为空，具体语言后续接入。没有新增模型工具、文件监视、文件同步、
-诊断收集或客户端事件；write/edit 的实际调用点由 P2-133 接入。
+`lsp::LspService` 是服务端持有的共享实例池，提供配置、启动、双向 stdio、关闭和资源管理。
+P2-133 接入成功 write/edit、回退及 shell 完成，添加文件监视和诊断收集；尚不向模型或客户端交付。
+内置 `src/lsp/servers.json` 当前为空，具体语言后续接入，没有新增模型工具。
 
 `config.json` 默认 `lsp.enabled: false`，关闭时没有 LSP 进程或采样任务。用户开启即授权运行配置中的
 服务器及其构建脚本/分析辅助进程，改配置需 `canter serve --replace`。配置示意（需换成已安装程序）：
@@ -312,7 +312,7 @@ Plan/Review 返回 None。重叠扩展名按服务器 id 排序选择第一项�
 止于最具体的会话 cwd/新增目录边界及物理 `.git` 边界；无标记或实际路径越界返回 Unsupported。
 不合并不同 worktree，不解析各语言的 workspace 结构（后续语言适配处理）。
 共用要求同根、同服务器配置和同完整环境；并发首次取得只启动一次。再次取得时检查可执行文件的路径和
-文件标识/大小/修改时间，变化就关闭旧实例。没有加载仓库环境文件；文件监视和环境文件失效由后续任务处理。
+文件标识/大小/修改时间，变化就关闭旧实例。项目配置或工具链文件变化会重建实例；不加载其中的启动命令。
 
 保留 `Instance` 即保留订阅；最后一个订阅释放即清理。`request`/`notify` 仅供后续真实文档同步或诊断使用，
 活动结束后更新空闲计时；取得实例、`is_running`/`error` 查询和 RSS 采样不续命。请求最多 30 秒，支持取消；
@@ -327,12 +327,31 @@ initialize 最多三十秒，启动失败（含未安装）退避六十秒；崩
 
 传输独立于 shell background 和 rmcp，支持 Content-Length 字节帧、乱序请求 id、取消和反向请求。
 `workspace/configuration` 按请求顺序返回 settings 整体/分节值；未知节返回 null。`workspace/applyEdit`、
-执行命令和其它未支持请求返回 -32601，不执行服务器要求的操作。初始化只声明已实现能力，后续同步/诊断
-能力由 P2-133 补齐。每帧最多 16 MiB、头部最多 8 KiB；stderr 排空但不保存。
+执行命令和其它未支持请求返回 -32601，不执行服务器要求的操作。支持作用域内的动态文件监视注册和
+诊断 refresh。每帧最多 16 MiB、头部最多 8 KiB；发出超限帧只拒绝该条，stderr 排空但不保存。
 
 shell 和 LSP 共用 `process` 内部启动锁、进程组和 guardian 所有权；既有 Executor trait 不变。
 正常停止有界等待 shutdown → exit，超过三秒杀原进程组并 reap；服务端停止/替换在释放锁前等全部实例退出。
 强杀服务端由 guardian 清理原组，自行脱离原进程组的后代仍在既有看护边界之外。
+
+会话通过 `service.session(context, protected_paths)` 创建 `LspSession` 并由 `Tools::with_lsp` 持有。
+只有成功文件修改才调用 `changed(path)`；返回的 `ChangeTicket::wait(Duration)` 允许调用方决定等待预算。
+write/edit 的票据放在内部 `ToolOutput.change_ticket`，等待超时或丢弃票据不取消实例启动。
+`session.subscribe().recv()` 接收后续批次，`session.diagnostics().await` 读取当前缓存；两者和票据等待均在
+交付前重新核对实例代数、文档版本和磁盘摘要。`DiagnosticBatch.id` 可供 P2-134 去重，`source` 区分整表
+push 与 pull provider；空表替换该来源的诊断。`Freshness::VersionUnconfirmed` 表示无版本推送，即使空表也
+不能解释成已修好；`Stale`、`incomplete` 和英文 `reason` 表达覆盖丢失或超限。没有在本层写死工具等待时长。
+
+使用 notify 8.2.1 原生监视，约 200 ms 合并一批，不监视 `.git`、`target`、`node_modules`、虚拟环境及
+受保护目录，不遍历符号链接；文件读取逐级使用目录描述符和 O_NOFOLLOW。shell 完成仅核对已打开文件及
+已知配置，不扫描整个仓库；纯 shell 会话不启动服务器。文件删除/改名关闭旧 URI 并清掉其诊断，配置变化或
+监视失败标可能过期并重建。监视初始化失败会重新建立一次，仍失败则返回明确错误，之后修改可再试。
+
+每实例最多打开 64 个文件，按最近同步使用回收；每会话诊断缓存和订阅队列各 1 MiB，单文件诊断 256 KiB，
+按序列化字节加元数据计费，超限显式标记不完整。关注文件最多 1,024 个且路径元数据不超过 1 MiB；监视最多
+4,096 个目录/配置，初次建立最多检查 100,000 个目录项，事件队列限 1 MiB / 4,096 个路径，均为内部上限。
+只拉取声明 diagnosticProvider 的已打开文档，支持 full/unchanged、resultId、refresh；修改时取消旧请求，
+不做工作区全量 pull。会话 close 释放订阅，Plan/Review 暂停主动同步，恢复普通修改轮后有界核对。
 
 ## MCP 工具
 

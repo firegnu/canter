@@ -150,10 +150,12 @@ async fn run_command(
         ),
     };
     control.finish(exit_code);
+    control.reconcile().await;
     if control.background_id.is_some() {
         return background_output(executor, id, args, source, control.output(!yielded), start);
     }
     ToolOutput {
+        change_ticket: None,
         images: Vec::new(),
         text: if source == ExecCommandSource::UserShell
             && exit_code.is_some()
@@ -189,6 +191,7 @@ fn failed_start(
     message: String,
 ) -> ToolOutput {
     ToolOutput {
+        change_ticket: None,
         images: Vec::new(),
         text: message.clone(),
         outcome: ToolOutcome::Failed,
@@ -214,6 +217,7 @@ fn background_output(
     start: Instant,
 ) -> ToolOutput {
     ToolOutput {
+        change_ticket: None,
         images: Vec::new(),
         text: background::render(&output),
         outcome: ToolOutcome::Completed,

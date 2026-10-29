@@ -228,6 +228,8 @@ pub enum ToolOutcome {
 
 #[derive(Debug)]
 pub struct ToolOutput {
+    /// Internal only; P2-134 chooses when/how to deliver this modification's diagnostics.
+    pub change_ticket: Option<Box<lsp::ChangeTicket>>,
     pub text: String,
     pub item: Item,
     pub outcome: ToolOutcome,
@@ -410,6 +412,7 @@ impl PreparedCall {
     }
     pub fn declined_output(&self, feedback: Option<&str>) -> ToolOutput {
         ToolOutput {
+            change_ticket: None,
             images: Vec::new(),
             text: feedback.map_or_else(
                 || "Tool call declined.".into(),
@@ -421,6 +424,7 @@ impl PreparedCall {
     }
     fn failed_output(&self, text: String, outcome: ToolOutcome) -> ToolOutput {
         ToolOutput {
+            change_ticket: None,
             images: Vec::new(),
             text,
             item: self.item(ItemStatus::Failed),
@@ -545,6 +549,7 @@ impl PreparedCall {
 }
 
 pub struct Tools {
+    lsp: Option<lsp::LspSession>,
     background: BackgroundCommands,
     plan_enabled: bool,
     executor: Arc<dyn Executor>,
@@ -553,6 +558,14 @@ pub struct Tools {
 }
 
 impl Tools {
+    pub fn with_lsp(mut self, session: lsp::LspSession) -> Self {
+        self.background.lsp = Some(session.clone());
+        self.lsp = Some(session);
+        self
+    }
+    pub fn lsp(&self) -> Option<&lsp::LspSession> {
+        self.lsp.as_ref()
+    }
     pub fn background(&self) -> &BackgroundCommands {
         &self.background
     }
@@ -656,7 +669,7 @@ impl Tools {
                 "file target changed since checkpoint",
             ));
         }
-        if let Some(content) = content {
+        let result = if let Some(content) = content {
             let original = match self.executor.open_file(path, &cancel).await {
                 Ok(mut file) => {
                     let mut bytes = Vec::new();
@@ -675,10 +688,17 @@ impl Tools {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 Err(error) => Err(error),
             }
+        };
+        if result.is_ok()
+            && let Some(lsp) = &self.lsp
+        {
+            lsp.changed(&resolved);
         }
+        result
     }
     pub fn new(executor: Arc<dyn Executor>) -> Self {
         Self {
+            lsp: None,
             background: BackgroundCommands::default(),
             plan_enabled: true,
             executor,
@@ -1073,6 +1093,7 @@ impl Tools {
                     *result = text.clone();
                 }
                 ToolOutput {
+                    change_ticket: None,
                     images: Vec::new(),
                     text,
                     item,
@@ -1101,6 +1122,7 @@ impl Tools {
                     *result = text.clone();
                 }
                 ToolOutput {
+                    change_ticket: None,
                     images: Vec::new(),
                     text,
                     item,
@@ -1108,6 +1130,7 @@ impl Tools {
                 }
             }
             Action::UpdatePlan(_) => ToolOutput {
+                change_ticket: None,
                 images: Vec::new(),
                 text: "Plan updated".into(),
                 item: call.item(ItemStatus::Completed),
@@ -1117,6 +1140,7 @@ impl Tools {
                 let (text, result, outcome) =
                     web_fetch::run(url, self.web_fetch_timeout, cancel).await;
                 ToolOutput {
+                    change_ticket: None,
                     images: Vec::new(),
                     text,
                     outcome,
@@ -1137,6 +1161,7 @@ impl Tools {
                 let (text, result, outcome, images) = tool.call(&call.arguments, cancel).await;
                 ToolOutput {
                     images,
+                    change_ticket: None,
                     text,
                     outcome,
                     item: Item::McpToolCall {
@@ -1167,6 +1192,7 @@ impl Tools {
                 match result {
                     Ok((text, images)) => ToolOutput {
                         images,
+                        change_ticket: None,
                         item: Item::FileRead {
                             content_items: Vec::new(),
                             id: call.id.clone(),
@@ -1208,6 +1234,15 @@ impl Tools {
                     .await
                 {
                     Ok(()) => ToolOutput {
+                        change_ticket: self.lsp.as_ref().map(|lsp| {
+                            Box::new(
+                                lsp.changed(
+                                    call.resolved_path
+                                        .as_deref()
+                                        .unwrap_or_else(|| path.as_ref()),
+                                ),
+                            )
+                        }),
                         images: Vec::new(),
                         text: summary.clone(),
                         item: Item::FileChange {
@@ -1560,6 +1595,7 @@ fn tool_error(
         },
     };
     ToolOutput {
+        change_ticket: None,
         images: Vec::new(),
         item,
         text,
