@@ -9,6 +9,8 @@ use canter_protocol::{PermissionMode, SessionUpdateParams};
 use canter_tui::client::Client;
 use canter_tui::{CLIENT_NAME, Connected, Connector, Launch, Open};
 
+pub mod mcp;
+
 #[cfg(test)]
 mod version;
 
@@ -27,6 +29,12 @@ Usage:
   canter serve               run the server in the foreground
   canter serve --replace     replace it in the background and exit when ready
   canter usage               show daily token usage and cost by model
+  canter mcp add <name> [--env K=V]... -- <command> [args...]
+  canter mcp add <name> --url <url> [--header K=V]...
+  canter mcp list            list configured MCP services (values hidden)
+  canter mcp remove <name>   remove an MCP service
+  canter mcp login <name>    authorize a remote MCP service in the browser
+  canter mcp logout <name>   delete its local OAuth credentials
 
 Options:
   -m, --model <model>  use this model (default: the server's config)
@@ -40,6 +48,7 @@ Options:
 pub enum Command {
     Serve { replace: bool, foreground: bool },
     Usage,
+    Mcp(mcp::Command),
     Chat(ChatArgs),
     Help,
     Version,
@@ -67,6 +76,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 .map_err(|arg| format!("argument is not UTF-8: {}", arg.to_string_lossy()))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if args.first().map(String::as_str) == Some("mcp") {
+        return mcp::parse(&args[1..]).map(Command::Mcp);
+    }
     if args.first().map(String::as_str) == Some("usage") {
         return if args.len() == 1 {
             Ok(Command::Usage)

@@ -20,6 +20,8 @@ use tokio::{
 
 #[path = "support/mcp.rs"]
 mod mcp;
+#[path = "support/mcp_oauth.rs"]
+mod mcp_oauth;
 #[path = "support/plan.rs"]
 mod plan;
 #[path = "support/tool_images.rs"]

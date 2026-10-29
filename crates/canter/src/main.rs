@@ -14,6 +14,12 @@ async fn main() -> ExitCode {
             .await
             .map_err(|error| error.to_string()),
         Ok(Command::Chat(args)) => chat(args).await,
+        Ok(Command::Mcp(command)) => match canter_server::state_directory() {
+            Ok(home) => canter::mcp::run(command, &home)
+                .await
+                .map(|output| print!("{output}")),
+            Err(error) => Err(error.to_string()),
+        },
         Ok(Command::Usage) => match Context::current() {
             Ok(context) => canter::usage(context)
                 .await
