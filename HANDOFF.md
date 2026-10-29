@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-29 第三十五次装 main `16c8e96`（`canter --version` 显示 `canter 0.1.0 · 16c8e96`；比上一版多 P2-133～P2-136：LSP 文件同步、诊断交给模型、终端显示和 `/lsp`、内置 Rust / Python / TS/JS。`lsp.enabled` 仍默认关，关着时用户看不到变化，只多了 `/lsp` 命令（关着时提示怎么打开）；P2-145 只改测试）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
+- 退回上一版 `b317678`：`cp -p ~/.canter/canter-b317678 ~/.cargo/bin/canter`，再 `canter serve --replace`。关着 LSP 时存盘格式没变；开过 LSP 的会话里有诊断记录，旧版能不能照常打开没测过。
 - 10-29 第三十四次装 main `b317678`（`canter --version` 显示 `canter 0.1.0 · b317678`；比上一版多 P2-132：LSP 起停、通信、实例管理和资源上限，`lsp.enabled` 默认关、内置服务器表为空，用户看不到变化；P2-138：模型干活时状态行下面一行灰色 `Tip: …`，`tui.json` 写 `"tips": false` 关掉）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
 - 退回上一版 `6bce203`：`cp -p ~/.canter/canter-6bce203 ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变；旧版不认 `config.json` 的 `lsp` 段（没写就没事）。
 - 10-29 第三十三次装 main `6bce203`（`canter --version` 显示 `canter 0.1.0 · 6bce203`；比上一版多 P2-131：`canter mcp add / list / remove` 改 `config.json` 的 `mcp_servers`，`canter mcp login / logout <名字>` 对远程 MCP 走 OAuth，令牌存 `~/.canter/mcp-auth/`（0700 / 0600），过期自动续，要重新授权时 `/mcp` 显示 `Login required: run \`canter mcp login <name>\``）。服务端改了：用户 `canter serve --replace`；`mcp add` / `login` 之后也要再 `canter serve --replace` 才生效。
