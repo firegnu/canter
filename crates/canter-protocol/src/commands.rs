@@ -47,6 +47,10 @@ pub mod routes {
     pub const SHELL_COMMAND: &str = "/v1/sessions/{id}/shellCommand";
     pub const SHELL_BACKGROUND: &str = "/v1/sessions/{id}/shellBackground";
     pub const BACKGROUND_COMMANDS: &str = "/v1/sessions/{id}/backgroundCommands";
+    pub const LANGUAGE_SERVERS: &str = "/v1/sessions/{id}/languageServers";
+    pub const LANGUAGE_SERVER_STOP: &str = "/v1/sessions/{id}/languageServers/{serverId}/stop";
+    pub const LANGUAGE_SERVER_RETRY: &str = "/v1/sessions/{id}/languageServers/{serverId}/retry";
+    pub const DIAGNOSTICS: &str = "/v1/sessions/{id}/diagnostics";
     pub const BACKGROUND_OUTPUT: &str = "/v1/sessions/{id}/backgroundCommands/{commandId}";
     pub const BACKGROUND_STOP: &str = "/v1/sessions/{id}/backgroundCommands/{commandId}/stop";
     pub const BACKGROUND_STOP_ALL: &str = "/v1/sessions/{id}/backgroundCommands/stop";

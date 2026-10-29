@@ -13,6 +13,8 @@ pub fn export_protocol(directory: &Path) -> Result<(), Box<dyn std::error::Error
         ($($ty:ty),+ $(,)?) => {$(export_type::<$ty>(&mut schemas, &config)?;)+};
     }
     export!(
+        LanguageServerListResponse,
+        DiagnosticListResponse,
         Event,
         GoalSetParams,
         GoalResponse,

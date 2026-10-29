@@ -243,6 +243,7 @@ async fn conversation(
             return Ok(());
         }
         shared.sync_background().await?;
+        crate::lsp::before_request(shared, turn_id).await?;
         let (request, summary) = {
             let mut state = shared.state.lock().await;
             state.consume_steering(turn_id).await?;
@@ -937,6 +938,7 @@ async fn execute(
             }
         }
     };
+    let diagnostic_items = crate::lsp::inline(shared, turn_id, &mut output).await;
     shared.sync_background().await?;
     let imported = if output.images.is_empty() {
         None
@@ -981,6 +983,12 @@ async fn execute(
             item: output.item,
         }])
         .await?;
+    if !diagnostic_items.is_empty() {
+        state
+            .journal
+            .append(crate::lsp::item_events(turn_id, diagnostic_items))
+            .await?;
+    }
     Ok(())
 }
 async fn permission<'a>(

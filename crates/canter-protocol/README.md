@@ -417,3 +417,37 @@ alreadyResolved。clearContext 正常结束原轮，由作答客户端按普通�
 原轮结束前通过 InputRemoved/interrupted 撤掉未消费的插话和排队，作答客户端等待
 TurnCompleted 后将撤回内容放到新会话草稿。Plan 中不带 planMode 的 approvalPolicy
 更新同时更新 prePlanApprovalPolicy，保持计划模式；下一次批准的默认权限跟随它。
+
+## LSP diagnostics (P2-134)
+
+The `lsp` info feature advertises these canter extensions to the session → turn → item structure:
+
+- `GET /v1/sessions/{id}/languageServers` returns `{data: LanguageServer[]}`.
+- `GET /v1/sessions/{id}/diagnostics` returns `{data: DiagnosticFile[]}` from the current bounded cache, revalidated against the documents. Reading it does not consume model delivery.
+- `POST /v1/sessions/{id}/languageServers/{serverId}/stop` and `.../retry` return the server list. `serverId` is an opaque session subscription ID for one configured server and project root. Stop releases this session's subscription; other sessions keep their shared process. Retry reattaches and synchronizes, without restarting a healthy shared server.
+
+`LanguageServer` carries `id/name/root/state/reason?/rssBytes?/sharedReferences/updatedAt`.
+States are `starting/running/stopped/unavailable/reconnecting`; unknown values decode as `Unknown`.
+The `languageServer.updated {server}` event updates the optional `languageServers` snapshot field.
+Only state, reason or subscriber-count changes generate events. RSS queries use the latest sample;
+sampling alone never appends a permanent event. On session restore, previous running state becomes
+`reconnecting`, without retaining a PID, memory reading or pending diagnostic delivery.
+
+`diagnostics` items use `item.started/completed`. Fields are
+`id/sourceItemId?/status/files/totalCount/shownCount/omittedCount/resolvedCount?`.
+`sourceItemId` refers to the file-change tool item. A completed `pending` item is immutable;
+later results create another item in the currently active turn. Idle arrivals update the cache only.
+Status is `pending/available/unavailable/timedOut`, independent of the successful file-change status.
+`totalCount` counts errors and warnings available from the involved sources; `shownCount` and
+`omittedCount` count entries selected for this delivery. Missing `resolvedCount` means unknown.
+
+Files carry `batchId/path/serverId/source/collectedAt?/documentVersion?/freshness/incomplete/reason?/diagnostics`.
+`collectedAt` is Unix milliseconds; `freshness` is `current/versionUnconfirmed/deleted/stale`.
+Pending/unavailable status records use batch ID 0 and omit collection time and document version.
+Each diagnostic includes `severity/range/source?/code?/message`; ranges retain LSP zero-based
+UTF-16 positions, and numeric diagnostic codes are represented as strings. Only errors and warnings
+are delivered to the model; text rendering uses one-based positions and the approved English template
+in DESIGN. Model delivery is bounded by 20 entries, 8 KiB per block and 1 KiB per entry.
+
+Old snapshots default to an empty server list, and old clients skip the new item/event kinds.
+No protocol version bump or changes to existing file-change payloads are required.

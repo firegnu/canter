@@ -559,6 +559,9 @@ pub struct Tools {
 
 impl Tools {
     pub fn with_lsp(mut self, session: lsp::LspSession) -> Self {
+        if !session.enabled() {
+            return self;
+        }
         self.background.lsp = Some(session.clone());
         self.lsp = Some(session);
         self
@@ -1240,7 +1243,8 @@ impl Tools {
                                     call.resolved_path
                                         .as_deref()
                                         .unwrap_or_else(|| path.as_ref()),
-                                ),
+                                )
+                                .with_content(content),
                             )
                         }),
                         images: Vec::new(),

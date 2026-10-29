@@ -49,11 +49,14 @@ fn main() {
             } else { result(id.unwrap(), r#"{"capabilities":{"textDocumentSync":2},"serverInfo":{"name":"fake"}}"#); }
         } else if body.contains("\"method\":\"textDocument/didOpen\"") || body.contains("\"method\":\"textDocument/didChange\"") {
             if mode.contains("sync") {
+                if mode.contains("late") { while !std::path::Path::new(&format!("{directory}/release-diagnostics")).exists() { std::thread::sleep(Duration::from_millis(5)); } }
+                if mode.contains("edge") { std::thread::sleep(Duration::from_millis(500)); }
                 let uri = scalar(&body, "uri");
                 let version = scalar(&body, "version");
-                let diagnostics = if body.contains("bad") { r#"[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}},"severity":1,"message":"fixture error"}]"# } else { "[]" };
+                let custom = std::fs::read_to_string(format!("{directory}/diagnostics.json")).ok();
+                let diagnostics = if body.contains("bad") { custom.as_deref().unwrap_or(r#"[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}},"severity":1,"message":"fixture error"}]"#) } else { "[]" };
                 diagnostic_results.insert(uri.into(), diagnostics.into());
-                if !mode.contains("pull") {
+                if !mode.contains("pull") || mode.contains("both") {
                     let version = if mode.contains("unversioned") { String::new() } else { format!("\"version\":{version},") };
                     send(&format!(r#"{{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{{"uri":{uri},{version}"diagnostics":{diagnostics}}}}}"#));
                 }

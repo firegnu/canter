@@ -93,6 +93,9 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSnapshot {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
+    pub language_servers: Vec<crate::LanguageServer>,
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -129,6 +132,7 @@ impl SessionSnapshot {
     /// Empty replay state. The first durable event supplies public settings.
     pub fn empty(id: impl Into<String>) -> Self {
         Self {
+            language_servers: Vec::new(),
             id: id.into(),
             goal: None,
             settings: SessionSettings {
@@ -332,6 +336,20 @@ pub struct PlanStep {
     rename_all_fields = "camelCase"
 )]
 pub enum Item {
+    Diagnostics {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        source_item_id: Option<String>,
+        status: crate::DiagnosticStatus,
+        files: Vec<crate::DiagnosticFile>,
+        total_count: u32,
+        shown_count: u32,
+        omitted_count: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        resolved_count: Option<u32>,
+    },
     ModelRetry {
         id: String,
         error: ErrorInfo,
@@ -533,6 +551,7 @@ impl Item {
     }
     pub fn id(&self) -> Option<&str> {
         match self {
+            Self::Diagnostics { id, .. } => Some(id),
             Self::ModelRetry { id, .. } => Some(id),
             Self::BackgroundCommandAction { id, .. } | Self::BackgroundEvent { id, .. } => Some(id),
             Self::UserMessage { id, .. }

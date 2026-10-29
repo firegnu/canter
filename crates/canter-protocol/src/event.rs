@@ -23,6 +23,8 @@ pub struct Event {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum EventPayload {
+    #[serde(rename = "languageServer.updated")]
+    LanguageServerUpdated { server: crate::LanguageServer },
     #[serde(rename = "session.goal.updated")]
     SessionGoalUpdated { goal: Option<crate::SessionGoal> },
     #[serde(rename = "backgroundCommand.updated")]

@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     hash::{Hash, Hasher},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, Weak,
@@ -14,6 +15,7 @@ use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
 mod files;
 use files::read_text;
+mod control;
 mod delivery;
 mod pull;
 pub(super) mod registration;
@@ -36,6 +38,9 @@ pub enum Freshness {
 }
 #[derive(Clone, Debug)]
 pub struct DiagnosticBatch {
+    pub root: PathBuf,
+    pub received_at: tokio::time::Instant,
+    pub collected_at: i64,
     pub id: u64,
     pub path: PathBuf,
     pub server_id: String,
@@ -51,7 +56,11 @@ pub struct DiagnosticBatch {
 }
 #[derive(Clone)]
 pub struct LspSession(Arc<SessionInner>);
+#[derive(Clone)]
 pub struct ChangeTicket {
+    pub path: PathBuf,
+    pub changed_at: tokio::time::Instant,
+    expected_digest: Option<(u64, FileStamp)>,
     receiver: watch::Receiver<Option<Result<DiagnosticBatch, LspError>>>,
     session: Weak<SessionInner>,
 }
@@ -71,6 +80,8 @@ struct SessionInner {
 }
 #[derive(Default)]
 struct SessionState {
+    restored_ids: BTreeMap<(String, PathBuf), String>,
+    subscriptions: Vec<control::Subscription>,
     delivery: delivery::Delivery,
     workspaces: BTreeMap<u64, Arc<Workspace>>,
     interests: BTreeSet<PathBuf>,
@@ -144,13 +155,17 @@ impl LspService {
                     }
                     let context = session.context.lock().unwrap().clone();
                     let service = session.service.clone();
+                    let subscription = session.subscription(&path);
                     drop(session);
-                    let result = service.for_file(&path, &context, &stop).await;
+                    let result = match subscription {
+                        Ok(token) => service.for_file(&path, &context, &token).await,
+                        Err(error) => Err(error),
+                    };
                     let Some(session) = weak.upgrade() else {
                         break;
                     };
                     let result = match result {
-                        Ok(Some(instance)) => {
+                        Ok(Some(instance)) if session.allowed(&path) => {
                             let workspace = instance.workspace();
                             workspace.attach(&session);
                             match workspace.watch().await {
@@ -161,7 +176,7 @@ impl LspService {
                                 }
                             }
                         }
-                        Ok(None) => Err(LspError::new(
+                        Ok(_) => Err(LspError::new(
                             ErrorKind::Unsupported,
                             "LSP is disabled for this modification",
                         )),
@@ -199,6 +214,7 @@ impl LspSession {
         }
     }
     pub fn changed(&self, path: &Path) -> ChangeTicket {
+        let changed_at = tokio::time::Instant::now();
         let (reply, receiver) = watch::channel(None);
         let path = canonical(&self.0.context.lock().unwrap().cwd.join(path));
         if self.0.stop.is_cancelled() || !self.0.allowed(&path) {
@@ -207,6 +223,19 @@ impl LspSession {
                 "File is outside LSP synchronization scope",
             ))));
             return ChangeTicket {
+                path,
+                changed_at,
+                expected_digest: None,
+                receiver,
+                session: Arc::downgrade(&self.0),
+            };
+        }
+        if let Err(error) = self.0.subscription(&path) {
+            reply.send_replace(Some(Err(error)));
+            return ChangeTicket {
+                path,
+                changed_at,
+                expected_digest: None,
                 receiver,
                 session: Arc::downgrade(&self.0),
             };
@@ -218,6 +247,9 @@ impl LspSession {
                 "LSP session file limit exceeded; diagnostics are incomplete",
             ))));
             return ChangeTicket {
+                path,
+                changed_at,
+                expected_digest: None,
                 receiver,
                 session: Arc::downgrade(&self.0),
             };
@@ -229,10 +261,13 @@ impl LspSession {
             ))));
         }
         state.delivery.clear_file(&path);
-        state.pending.insert(path);
+        state.pending.insert(path.clone());
         drop(state);
         self.0.changed.notify_one();
         ChangeTicket {
+            path,
+            changed_at,
+            expected_digest: None,
             receiver,
             session: Arc::downgrade(&self.0),
         }
@@ -251,6 +286,31 @@ impl LspSession {
     }
 }
 impl ChangeTicket {
+    pub fn failure(&self) -> Option<LspError> {
+        self.receiver
+            .borrow()
+            .as_ref()
+            .and_then(|result| result.as_ref().err())
+            .cloned()
+    }
+    pub fn with_content(mut self, content: &str) -> Self {
+        self.expected_digest = std::fs::metadata(&self.path)
+            .ok()
+            .map(|metadata| (digest(content), file_stamp(&metadata)));
+        self
+    }
+    pub async fn is_current(&self) -> bool {
+        match self.expected_digest {
+            Some((expected, stamp)) => {
+                read_text(&self.path)
+                    .await
+                    .is_ok_and(|text| digest(&text) == expected)
+                    && std::fs::metadata(&self.path)
+                        .is_ok_and(|metadata| file_stamp(&metadata) == stamp)
+            }
+            None => false,
+        }
+    }
     pub async fn wait(&self, timeout: Duration) -> Result<DiagnosticBatch, LspError> {
         let mut receiver = self.receiver.clone();
         tokio::time::timeout(timeout, async {
@@ -260,6 +320,7 @@ impl ChangeTicket {
                     let batch = result?;
                     if let Some(session) = self.session.upgrade()
                         && session.current(&batch).await
+                        && (self.expected_digest.is_none() || self.is_current().await)
                     {
                         return Ok(batch);
                     }
@@ -283,10 +344,28 @@ impl ChangeTicket {
         })
     }
 }
+type FileStamp = (u64, u64, i64, i64, u64);
+fn file_stamp(metadata: &std::fs::Metadata) -> FileStamp {
+    (
+        metadata.dev(),
+        metadata.ino(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.len(),
+    )
+}
 impl SessionInner {
     fn allowed(&self, path: &Path) -> bool {
         let context = self.context.lock().unwrap();
         context.round == Round::Modify
+            && !self.state.lock().unwrap().subscriptions.iter().any(|s| {
+                s.stopped
+                    && path.starts_with(&s.root)
+                    && self
+                        .service
+                        .selection_info(path, &context)
+                        .is_ok_and(|(name, root)| name == s.name && root == s.root)
+            })
             && std::iter::once(&context.cwd)
                 .chain(&context.additional_directories)
                 .any(|root| {
@@ -310,16 +389,34 @@ impl SessionInner {
             && !self.protected.iter().any(|p| path.starts_with(p))
     }
     fn fail(&self, path: &Path, error: LspError) {
-        if let Some(reply) = self.state.lock().unwrap().tickets.remove(path) {
+        let mut state = self.state.lock().unwrap();
+        for subscription in &mut state.subscriptions {
+            if path == subscription.file {
+                subscription.error = Some(error.message.clone());
+            }
+        }
+        if let Some(reply) = state.tickets.remove(path) {
             reply.send_replace(Some(Err(error)));
         }
     }
     fn deliver(&self, mut batch: DiagnosticBatch) {
         let mut state = self.state.lock().unwrap();
+        if state
+            .subscriptions
+            .iter()
+            .any(|s| s.stopped && s.name == batch.server_id && s.root == batch.root)
+        {
+            return;
+        }
         if !state.interests.contains(&batch.path) {
             return;
         }
         batch.id = NEXT_BATCH.fetch_add(1, Ordering::Relaxed);
+        batch.received_at = tokio::time::Instant::now();
+        batch.collected_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
         let batch = state.delivery.insert(batch);
         if let Some(reply) = state.tickets.remove(&batch.path) {
             reply.send_replace(Some(Ok(batch)));
@@ -356,6 +453,21 @@ impl Drop for Workspace {
     }
 }
 impl Workspace {
+    pub(super) fn subscribers(&self) -> u32 {
+        self.sessions
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .filter(|s| {
+                s.state
+                    .lock()
+                    .unwrap()
+                    .workspaces
+                    .contains_key(&self.instance.generation())
+            })
+            .count() as u32
+    }
     pub(super) fn new(instance: Instance) -> Arc<Self> {
         let workspace = Arc::new(Self {
             instance,
@@ -456,6 +568,9 @@ impl Workspace {
                     )
                     .await?;
                 let batch = DiagnosticBatch {
+                    root: self.instance.root.clone(),
+                    received_at: tokio::time::Instant::now(),
+                    collected_at: 0,
                     id: 0,
                     path: path.into(),
                     server_id: self.instance.server_id.clone(),
@@ -534,6 +649,9 @@ impl Workspace {
                         .await?;
                 }
                 let batch = DiagnosticBatch {
+                    root: self.instance.root.clone(),
+                    received_at: tokio::time::Instant::now(),
+                    collected_at: 0,
                     id: 0,
                     path: oldest,
                     server_id: self.instance.server_id.clone(),
@@ -638,6 +756,9 @@ impl Workspace {
             return;
         };
         let batch = DiagnosticBatch {
+            root: self.instance.root.clone(),
+            received_at: tokio::time::Instant::now(),
+            collected_at: 0,
             id: 0,
             path,
             server_id: self.instance.server_id.clone(),

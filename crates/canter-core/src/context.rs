@@ -65,6 +65,9 @@ pub(crate) enum HistoryEntry {
         #[serde(default)]
         visible: bool,
     },
+    DiagnosticsNotice {
+        message: Message,
+    },
     CompactionRequest {
         messages: Vec<Message>,
     },
@@ -96,6 +99,7 @@ pub(crate) fn known(message: Message) -> Option<Message> {
 }
 
 pub(crate) struct Restored {
+    pub diagnostic_notices: std::collections::BTreeSet<usize>,
     pub invoked_skills: Vec<crate::skill_invocation::Invocation>,
     pub background_cards: BTreeMap<String, canter_protocol::Item>,
     pub prefix: Vec<Message>,
@@ -120,8 +124,13 @@ pub(crate) fn restore(
     let mut plan_mode_notices = Vec::new();
     let mut tool_images = Vec::new();
     let mut background_cards = BTreeMap::new();
+    let mut diagnostic_notices = std::collections::BTreeSet::new();
     for entry in entries {
         match entry {
+            HistoryEntry::DiagnosticsNotice { message } => {
+                diagnostic_notices.insert(history.len());
+                history.push(message);
+            }
             HistoryEntry::ToolImages { content } => tool_images.extend(content),
             HistoryEntry::PlanModeNotice { message }
             | HistoryEntry::SkillNotice { message }
@@ -152,6 +161,7 @@ pub(crate) fn restore(
                 if let Some((messages, user_count, skills)) = rewind.apply(&entry) {
                     tool_images.clear();
                     history.truncate(messages);
+                    diagnostic_notices.retain(|index| *index < messages);
                     users.truncate(user_count);
                     invoked_skills.truncate(skills);
                 }
@@ -160,6 +170,7 @@ pub(crate) fn restore(
                 if let Some((messages, user_count, skills)) = rewind.retract(&turn_id) {
                     tool_images.clear();
                     history.truncate(messages);
+                    diagnostic_notices.retain(|index| *index < messages);
                     users.truncate(user_count);
                     invoked_skills.truncate(skills);
                 }
@@ -198,6 +209,7 @@ pub(crate) fn restore(
                 rewind.clear_boundaries();
                 tool_images.clear();
                 history = messages.into_iter().filter_map(known).collect();
+                diagnostic_notices.clear();
                 summary_index = history.len().checked_sub(1);
                 users = if user_inputs.is_empty() {
                     user_messages
@@ -215,6 +227,7 @@ pub(crate) fn restore(
         flush_plan_mode_notices(&mut history, &mut plan_mode_notices);
     }
     Restored {
+        diagnostic_notices,
         invoked_skills,
         background_cards,
         prefix,

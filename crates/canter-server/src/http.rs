@@ -148,6 +148,10 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::SHELL_COMMAND, post(shell_command))
         .route(routes::SHELL_BACKGROUND, post(shell_background))
         .route(routes::BACKGROUND_COMMANDS, get(background_commands))
+        .route(routes::LANGUAGE_SERVERS, get(language_servers))
+        .route(routes::DIAGNOSTICS, get(diagnostics))
+        .route(routes::LANGUAGE_SERVER_STOP, post(language_server_stop))
+        .route(routes::LANGUAGE_SERVER_RETRY, post(language_server_retry))
         .route(routes::BACKGROUND_OUTPUT, get(background_output))
         .route(routes::BACKGROUND_STOP, post(background_stop))
         .route(routes::BACKGROUND_STOP_ALL, post(background_stop_all))
@@ -274,6 +278,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
             "review".into(),
             "addDirectories".into(),
             "goals".into(),
+            "lsp".into(),
         ]),
         server_version: crate::VERSION.into(),
         protocol_version: PROTOCOL_VERSION,
@@ -600,6 +605,40 @@ async fn background_commands(
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<BackgroundCommandListResponse>, ApiError> {
     Ok(Json(app.session(&id).await?.background_commands().await?))
+}
+async fn language_servers(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<LanguageServerListResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.language_servers().await?))
+}
+async fn diagnostics(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<DiagnosticListResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.diagnostics().await))
+}
+async fn language_server_stop(
+    State(app): State<Arc<App>>,
+    ApiPath((id, server_id)): ApiPath<(String, String)>,
+) -> Result<Json<LanguageServerListResponse>, ApiError> {
+    Ok(Json(
+        app.session(&id)
+            .await?
+            .stop_language_server(server_id)
+            .await?,
+    ))
+}
+async fn language_server_retry(
+    State(app): State<Arc<App>>,
+    ApiPath((id, server_id)): ApiPath<(String, String)>,
+) -> Result<Json<LanguageServerListResponse>, ApiError> {
+    Ok(Json(
+        app.session(&id)
+            .await?
+            .retry_language_server(server_id)
+            .await?,
+    ))
 }
 async fn background_output(
     State(app): State<Arc<App>>,

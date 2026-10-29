@@ -7,6 +7,7 @@ mod directories;
 mod goal;
 mod images;
 mod journal;
+mod lsp;
 mod plan_mode;
 mod prompt;
 mod response;
