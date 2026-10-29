@@ -111,6 +111,8 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                     .retract(&completed.id)
                     .ok_or_else(CoreError::internal)?;
                 let removed = state.history.split_off(messages);
+                state.lsp_delivery.notices.retain(|index| *index < messages);
+                state.lsp_delivery.reset_baseline();
                 state.tool_images.clear();
                 state.user_messages.truncate(users);
                 state.invoked_skills.truncate(skills);

@@ -133,6 +133,7 @@ pub(crate) async fn compact(
                 .await?;
             state.history = messages;
             state.lsp_delivery.notices.clear();
+            state.lsp_delivery.reset_baseline();
             state.rewind.clear_boundaries();
             state.summary_index = state.history.len().checked_sub(1);
             state.user_messages = user_inputs;

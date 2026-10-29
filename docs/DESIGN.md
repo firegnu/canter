@@ -123,6 +123,8 @@ LSP 默认关闭；`config.json` 的 `lsp.enabled` 开启即授权配置中的�
 
 成功 write/edit 从落盘起最多等 500 ms（包括启动）；诊断失败不改变文件修改成功。快结果附在尚未提交的工具结果末尾；晚结果按会话合并，在下一次本来发生的模型请求前追加，不叫醒、不插入流式输出。修改票据最多保留 60 秒，文件再改即失效，超期批次只更新缓存。先改动文件、再同项目关注文件，各组错误先于警告，不给 info/hint。首次包含既存问题，之后只给新增、变化和已解决数量；只把实际展示条目计作已交付。最多 20 条、8 KiB UTF-8（包括说明和计数），单条最多 1 KiB，截断用 `[truncated]`。空表、超时、未安装不表示检查通过；无版本或不完整结果不能证明问题解决。
 
+没有服务器支持、在同步范围外或本轮不同步（`Unsupported`），以及用户停掉的订阅（`Stopped`），不附诊断文字、不建 diagnostics 项目，表现和 LSP 关着一样；配置了服务器但没安装、启动失败或出错仍报告 unavailable（10-29 用户确认返工决定）。
+
 用户看过英文后选「按你的精简版」。最终模板：快速块头 `[LSP diagnostics]`；晚到块头 `[LSP diagnostics update] (arrived after the file change)`。文件头 `{path} ({server}). First report for this file: pre-existing problems may be included.`，之后改为 `{path} ({server}). Only new or changed diagnostics are listed.`。诊断行 `{path}:{line}:{column}: {error|warning} [{code}] {message}`（行列从 1 起，无 code 省方括号）。计数 `{N} error(s), {M} warning(s).`，按数量用单复数；选中未展示时加 `; {K} not shown`，多文件末尾再加总数，单文件不重复。已解决数量已知才写 `Resolved since last report: {N}.`。不写收集时间，current 不另写新鲜度。
 
 每块结尾固定：`These are partial, asynchronous diagnostics. Run the checks required by the project; these diagnostics do not replace them.`。状态原文：
@@ -138,7 +140,7 @@ LSP 默认关闭；`config.json` 的 `lsp.enabled` 开启即授权配置中的�
 - 可能过期：`Diagnostics may be stale: {reason}. No current result is being delivered for this file.`
 - 删除：`The file was deleted. Its previous diagnostics are no longer applicable; this is not a project check result.`
 
-已交付历史只追加；晚到通知用私有 `diagnostics_notice` 记录身份，承载一条 `Message::User`，不进入用户原话集合；压缩拼稿标 `Tool diagnostics`，快速结果仍归工具信息。回退丢掉被回退修改的待发结果，重启不恢复待发队列。
+已交付历史只追加；晚到通知用私有 `diagnostics_notice` 记录身份，承载一条 `Message::User`，不进入用户原话集合；压缩拼稿标 `Tool diagnostics`，快速结果仍归工具信息。回退丢掉被回退修改的待发结果，重启不恢复待发队列。回退、撤回、压缩后清空已交付条目的基线，保留防止同批次重发的记录；下一份新报告重新按首次报告完整列出条目（仍受交付预算限制）。
 
 补第 8 条：沿用 Codex app-server v2 会话→轮→项目结构，以下为 canter 的扩展。新增 `diagnostics` 项目（`id/sourceItemId?/status/files/totalCount/shownCount/omittedCount/resolvedCount?`），状态 `pending/available/unavailable/timedOut`；文件带批次、文件路径、服务器订阅 id、来源、采集时间、可选版本、时效、不完整原因和诊断列表，位置保留零起始 UTF-16。pending 项目不回写，晚到另建项目。新增 `languageServer.updated` 和可选快照 `languageServers`；记录 `id/name/root/state/reason?/rssBytes?/sharedReferences/updatedAt`，只发状态变化，RSS 查询返回最新采样，采样本身不存盘。`GET /v1/sessions/{id}/languageServers`、`GET .../diagnostics` 查询；`POST .../languageServers/{serverId}/stop` 和 `.../retry` 按本会话单个服务器/项目订阅操作，id 不透明，停止不影响其它会话。info 能力标识 `lsp`。旧客户端跳过新事件/项目，旧存盘缺字段默认空；运行态恢复为待重连，不沿用 PID。共享键和环境不落盘，不改系统提示词或工具说明。
 

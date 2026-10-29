@@ -83,8 +83,11 @@ fn reply(delta: Value, reason: &str) -> Reply {
     ))
 }
 fn write(text: &str) -> Reply {
+    write_to("main.fake", text)
+}
+fn write_to(path: &str, text: &str) -> Reply {
     reply(
-        json!({"tool_calls":[{"index":0,"id":"write-file","function":{"name":"write","arguments":json!({"path":"main.fake","content":text}).to_string()}}]}),
+        json!({"tool_calls":[{"index":0,"id":"write-file","function":{"name":"write","arguments":json!({"path":path,"content":text}).to_string()}}]}),
         "tool_calls",
     )
 }
@@ -428,6 +431,63 @@ async fn disabled_lsp_requests_match_the_original_path_byte_for_byte() {
     server.stop().await;
 }
 #[tokio::test]
+async fn unsupported_files_and_stopped_subscriptions_preserve_plain_tool_results() {
+    for (file, stopped) in [("notes.md", false), ("main.fake", true)] {
+        let root = tempfile::tempdir().unwrap();
+        let replies = || {
+            vec![
+                write_to(file, "bad"),
+                done(),
+                write_to(file, "good"),
+                done(),
+            ]
+        };
+        let baseline = Server::start(replies()).await;
+        let (session, service, _) =
+            create_attached(root.path(), &baseline, false, "sync", false).await;
+        let mut events = session.subscribe(0).await.unwrap();
+        for _ in 0..2 {
+            session.input(input()).await.unwrap();
+            finished(&mut events).await;
+        }
+        let expected = tool_text(&baseline.requests.lock().unwrap()[3]);
+        session.close().await.unwrap();
+        service.shutdown().await;
+        baseline.stop().await;
+        std::fs::remove_file(root.path().join(file)).unwrap();
+
+        let server = Server::start(replies()).await;
+        let (session, service, _) = create(root.path(), &server, true, "sync").await;
+        let mut events = session.subscribe(0).await.unwrap();
+        session.input(input()).await.unwrap();
+        finished(&mut events).await;
+        if stopped {
+            let id = session.language_servers().await.unwrap().data[0].id.clone();
+            session.stop_language_server(id).await.unwrap();
+        }
+        session.input(input()).await.unwrap();
+        finished(&mut events).await;
+        let output = tool_text(&server.requests.lock().unwrap()[3]);
+        let snapshot = session.snapshot().await;
+        session.close().await.unwrap();
+        service.shutdown().await;
+        server.stop().await;
+        assert_eq!(output, expected, "{file}");
+        assert!(
+            !snapshot
+                .session
+                .turns
+                .last()
+                .unwrap()
+                .items
+                .iter()
+                .any(|item| matches!(item, Item::Diagnostics { .. })),
+            "{file}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn reopening_keeps_delivered_history_but_drops_undelivered_diagnostics() {
     let root = tempfile::tempdir().unwrap();
     let server = Server::start(vec![write("bad"), done(), done()]).await;
@@ -495,6 +555,160 @@ async fn compaction_labels_late_diagnostics_as_tools_and_does_not_replay_them() 
     assert!(!compact["user_messages"].to_string().contains("LSP"));
     assert!(!requests[4].to_string().contains("[LSP diagnostics update]"));
 }
+#[tokio::test]
+async fn retracting_a_late_notice_keeps_later_user_words_labeled_as_user() {
+    let root = tempfile::tempdir().unwrap();
+    let mut hanging = Reply::sse("");
+    hanging.hang = true;
+    let server = Server::start(vec![write("bad"), done(), hanging, done(), done()]).await;
+    let (session, service, _) = create(root.path(), &server, true, "late_sync").await;
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input()).await.unwrap();
+    finished(&mut events).await;
+    release(root.path());
+    diagnostics_ready(&session).await;
+    let turn_id = session.input(input()).await.unwrap().turn_id.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while server.requests.lock().unwrap().len() < 3 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        server.requests.lock().unwrap()[2]
+            .to_string()
+            .contains("[LSP diagnostics update]")
+    );
+    let response = session
+        .interrupt(SessionInterruptParams {
+            turn_id,
+            retract: Some(true),
+        })
+        .await
+        .unwrap();
+    assert_eq!(response.retracted, Some(true));
+    session
+        .shell_command(SessionShellCommandParams {
+            command: "echo hi".into(),
+            timeout_ms: None,
+        })
+        .await
+        .unwrap();
+    finished(&mut events).await;
+    let mut message = input();
+    message.input = vec![UserInput::Text {
+        text: "RETRACT user words".into(),
+    }];
+    session.input(message).await.unwrap();
+    finished(&mut events).await;
+    session.compact().await.unwrap();
+    finished(&mut events).await;
+    let summary_request = server.requests.lock().unwrap()[4].to_string();
+    session.close().await.unwrap();
+    service.shutdown().await;
+    server.stop().await;
+    assert!(
+        summary_request.contains("User: RETRACT user words"),
+        "{summary_request}"
+    );
+    assert!(!summary_request.contains("Tool diagnostics: RETRACT user words"));
+}
+
+#[tokio::test]
+async fn history_changes_restart_reports_without_replaying_old_batches() {
+    for action in ["rewind", "retract", "compact"] {
+        let root = tempfile::tempdir().unwrap();
+        let mut replies = vec![write("bad"), done()];
+        if action == "retract" {
+            let mut hanging = Reply::sse("");
+            hanging.hang = true;
+            replies.push(hanging);
+        } else if action == "compact" {
+            replies.push(done());
+        }
+        replies.extend([done(), write("bad"), done()]);
+        let server = Server::start(replies).await;
+        let (session, service, _) = create(root.path(), &server, true, "sync").await;
+        let mut events = session.subscribe(0).await.unwrap();
+        session.input(input()).await.unwrap();
+        finished(&mut events).await;
+        assert!(
+            tool_text(&server.requests.lock().unwrap()[1])
+                .contains("main.fake:1:1: error fixture error")
+        );
+        match action {
+            "rewind" => {
+                let mut params = SessionRewindParams {
+                    before_turn_id: session.snapshot().await.session.turns[0].id.clone(),
+                    rewind_files: true,
+                    rewind_conversation: true,
+                    confirmed_external_changes: vec![],
+                    last_event_seq: None,
+                };
+                params.last_event_seq = Some(
+                    session
+                        .rewind_preview(params.clone())
+                        .await
+                        .unwrap()
+                        .last_event_seq,
+                );
+                session.rewind(params).await.unwrap();
+                assert!(!root.path().join("main.fake").exists());
+            }
+            "retract" => {
+                let turn_id = session.input(input()).await.unwrap().turn_id.unwrap();
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while server.requests.lock().unwrap().len() < 3 {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                let response = session
+                    .interrupt(SessionInterruptParams {
+                        turn_id,
+                        retract: Some(true),
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(response.retracted, Some(true));
+            }
+            "compact" => {
+                session.compact().await.unwrap();
+                finished(&mut events).await;
+            }
+            _ => unreachable!(),
+        }
+        // Clearing the baseline must not replay the already delivered batch.
+        session.input(input()).await.unwrap();
+        finished(&mut events).await;
+        let request = server.requests.lock().unwrap().last().unwrap().to_string();
+        assert!(
+            !request.contains("[LSP diagnostics update]"),
+            "{action}: {request}"
+        );
+        session.input(input()).await.unwrap();
+        finished(&mut events).await;
+        let output = tool_text(server.requests.lock().unwrap().last().unwrap());
+        session.close().await.unwrap();
+        service.shutdown().await;
+        server.stop().await;
+        assert!(
+            output.contains("main.fake:1:1: error fixture error"),
+            "{action}: {output}"
+        );
+        assert!(
+            output.contains("First report for this file: pre-existing problems may be included."),
+            "{action}: {output}"
+        );
+        assert!(
+            !output.contains("Only new or changed diagnostics are listed."),
+            "{action}: {output}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn rewind_discards_the_removed_changes_pending_diagnostics() {
     let root = tempfile::tempdir().unwrap();

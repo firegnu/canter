@@ -1,6 +1,6 @@
 use crate::session::Shared;
 use canter_protocol::*;
-use canter_tools::lsp::{DiagnosticBatch, Freshness};
+use canter_tools::lsp::{DiagnosticBatch, ErrorKind, Freshness};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -377,6 +377,9 @@ pub(crate) async fn inline(
             );
             report.text
         }
+        Err(error) if matches!(error.kind, ErrorKind::Unsupported | ErrorKind::Stopped) => {
+            return Vec::new();
+        }
         Err(error) => {
             let status = if error.kind == canter_tools::lsp::ErrorKind::Timeout {
                 "The file change succeeded. Diagnostics are still pending after 500 ms.".into()
@@ -436,7 +439,12 @@ pub(crate) async fn before_request(shared: &Shared, turn_id: &str) -> Result<(),
         }
         if let Some(error) = p.ticket.failure() {
             discarded.insert(path.clone());
-            if !p.reported && error.kind != canter_tools::lsp::ErrorKind::Cancelled {
+            if !p.reported
+                && !matches!(
+                    error.kind,
+                    ErrorKind::Cancelled | ErrorKind::Unsupported | ErrorKind::Stopped
+                )
+            {
                 statuses.push((
                     p.item_id.clone(),
                     path.clone(),
@@ -710,7 +718,11 @@ fn status_item(source: &str, status: DiagnosticStatus, path: &Path, reason: &str
 }
 
 impl Delivery {
+    pub(crate) fn reset_baseline(&mut self) {
+        self.seen.clear();
+    }
     pub fn rewind(&mut self, turns: &[canter_protocol::Turn]) {
+        self.reset_baseline();
         self.expired
             .retain(|(turn, _, _)| turns.iter().any(|t| t.id == *turn));
         self.pending.retain(|_, pending| {
