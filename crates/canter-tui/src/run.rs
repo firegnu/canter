@@ -778,6 +778,46 @@ async fn require_add_directories(client: &Client) -> Result<(), ClientError> {
     }
 }
 
+/// Revalidate inherited roots on the server before any initial input runs.
+/// Directory rejection happens before the session is stored, so retrying it
+/// cannot leave an extra session or send the initial input twice.
+async fn create_with_inherited_directories(
+    client: &Client,
+    params: &mut SessionCreateParams,
+    notices: &mut Vec<String>,
+) -> Result<canter_protocol::SessionCreateResponse, ClientError> {
+    if !params.additional_directories.is_empty()
+        && !client
+            .info()
+            .await?
+            .features
+            .unwrap_or_default()
+            .iter()
+            .any(|feature| feature == "addDirectories")
+    {
+        params.additional_directories.clear();
+    }
+    loop {
+        let response = client.create_session(params).await;
+        if let Err(ClientError::Server {
+            code: ErrorCode::InvalidRequest,
+            message,
+            ..
+        }) = &response
+            && let Some(index) = params.additional_directories.iter().position(|directory| {
+                message.starts_with(&format!("Cannot add directory {directory:?}: "))
+            })
+        {
+            // Match the server's directory-specific rejection only; unrelated
+            // creation errors must retain their existing handling.
+            params.additional_directories.remove(index);
+            notices.push(format!("Skipped inherited directory: {message}"));
+            continue;
+        }
+        return response;
+    }
+}
+
 fn directory_messages(requested: usize, previous: &[String], current: &[String]) -> Vec<String> {
     if requested == 0 {
         return Vec::new();
@@ -1218,8 +1258,8 @@ impl<C: Connector> Chat<C> {
         } else {
             ""
         };
-        let params = SessionCreateParams {
-            additional_directories: Vec::new(),
+        let mut params = SessionCreateParams {
+            additional_directories: settings.additional_directories.clone(),
             cwd: settings.cwd.clone(),
             env: self.env.clone(),
             model: settings.model.clone(),
@@ -1234,7 +1274,14 @@ impl<C: Connector> Chat<C> {
             client_name: self.client_name.clone(),
         };
         let failed = "Could not start the plan in a new session";
-        let receiver = match self.client.create_session(&params).await {
+        let mut notices = Vec::new();
+        let receiver = match create_with_inherited_directories(
+            &self.client,
+            &mut params,
+            &mut notices,
+        )
+        .await
+        {
             Ok(created) => self.show(ui, created.session, failed).await,
             Err(error) => {
                 ui.app_mut().warning(&format!(
@@ -1243,6 +1290,9 @@ impl<C: Connector> Chat<C> {
                 None
             }
         };
+        for notice in notices {
+            ui.app_mut().warning(&notice);
+        }
         ui.app_mut()
             .restore_plan_draft(draft, inputs, missing_images);
         receiver
@@ -1277,7 +1327,7 @@ impl<C: Connector> Chat<C> {
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let settings = &ui.app().snapshot().settings;
         let mut params = SessionCreateParams {
-            additional_directories: Vec::new(),
+            additional_directories: settings.additional_directories.clone(),
             cwd: settings.cwd.clone(),
             env: self.env.clone(),
             model: settings.model.clone(),
@@ -1290,14 +1340,17 @@ impl<C: Connector> Chat<C> {
             client_name: self.client_name.clone(),
         };
         let failed = "Could not start a new session";
-        let mut response = self.client.create_session(&params).await;
+        let mut notices = Vec::new();
+        let mut response =
+            create_with_inherited_directories(&self.client, &mut params, &mut notices).await;
         let mut previous_model = None;
         if handoff.is_none()
             && matches!(&response, Err(ClientError::Server { code: ErrorCode::InvalidRequest, message, .. })
             if message == "model is not in the configured model list")
         {
             previous_model = Some(std::mem::take(&mut params.model));
-            response = self.client.create_session(&params).await;
+            response =
+                create_with_inherited_directories(&self.client, &mut params, &mut notices).await;
         }
         match response {
             Ok(created) => {
@@ -1313,6 +1366,9 @@ impl<C: Connector> Chat<C> {
                     ui.app_mut().handoff_draft(&source, &note);
                 }
                 if let Some(notice) = notice {
+                    ui.app_mut().warning(&notice);
+                }
+                for notice in notices {
                     ui.app_mut().warning(&notice);
                 }
                 Some(receiver)
