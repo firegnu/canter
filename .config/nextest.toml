@@ -1,6 +1,0 @@
-# These end-to-end tests measure the production 500 ms diagnostic window and
-# compile/start real local fixture processes. Keep that measured interval free
-# of competing test processes; the rest of the suite still runs in parallel.
-[[profile.default.overrides]]
-filter = 'package(canter-core) & binary(lsp)'
-threads-required = "num-cpus"

@@ -54,6 +54,10 @@ pub struct CoreOptions {
     pub request_time: fn() -> i64,
     /// Total time for one web_fetch (30 seconds); replaceable so tests need not wait.
     pub web_fetch_timeout: std::time::Duration,
+    /// Wait after a file change for language-server diagnostics (500 ms); replaceable for tests.
+    pub lsp_inline_wait: std::time::Duration,
+    /// How long a file change's diagnostics stay deliverable (60 seconds); replaceable so tests need not wait.
+    pub lsp_delivery_window: std::time::Duration,
 }
 impl Default for CoreOptions {
     fn default() -> Self {
@@ -70,6 +74,8 @@ impl Default for CoreOptions {
             prices: usage::builtin_prices(),
             request_time: journal::now,
             web_fetch_timeout: std::time::Duration::from_secs(30),
+            lsp_inline_wait: std::time::Duration::from_millis(500),
+            lsp_delivery_window: std::time::Duration::from_secs(60),
         }
     }
 }
