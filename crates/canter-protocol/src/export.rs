@@ -14,6 +14,8 @@ pub fn export_protocol(directory: &Path) -> Result<(), Box<dyn std::error::Error
     }
     export!(
         Event,
+        GoalSetParams,
+        GoalResponse,
         EventPayload,
         ErrorResponse,
         SessionSnapshot,

@@ -94,6 +94,9 @@ fn is_false(value: &bool) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct SessionSnapshot {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub goal: Option<SessionGoal>,
     pub settings: SessionSettings,
     pub status: SessionStatus,
     /// Why the session is closed; absent for open sessions and legacy data.
@@ -127,6 +130,7 @@ impl SessionSnapshot {
     pub fn empty(id: impl Into<String>) -> Self {
         Self {
             id: id.into(),
+            goal: None,
             settings: SessionSettings {
                 additional_directories: Vec::new(),
                 plan_mode: false,
@@ -180,6 +184,32 @@ impl SessionSnapshot {
                 _ => None,
             })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionGoal {
+    pub id: String,
+    pub objective: String,
+    pub status: GoalStatus,
+    pub budget_usd: f64,
+    pub cost: UsageCost,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number")]
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum GoalStatus {
+    Active,
+    Paused,
+    Complete,
+    Blocked,
+    BudgetLimited,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

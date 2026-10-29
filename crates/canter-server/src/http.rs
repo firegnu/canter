@@ -134,6 +134,9 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::SESSION_USAGE, get(session_usage))
         .route(routes::SESSIONS, post(create).get(list))
         .route(routes::SESSION, get(read).patch(update).delete(close))
+        .route(routes::GOAL, get(goal).post(set_goal).delete(clear_goal))
+        .route(routes::GOAL_PAUSE, post(pause_goal))
+        .route(routes::GOAL_RESUME, post(resume_goal))
         .route(routes::SKILLS, get(skills))
         .route(routes::CONTEXT, get(context))
         .route(routes::BTW, post(btw))
@@ -155,6 +158,48 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .fallback(|| async { ApiError::invalid() })
         .method_not_allowed_fallback(|| async { ApiError::invalid() })
         .with_state(app)
+}
+
+async fn goal(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<GoalResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.goal().await))
+}
+
+async fn set_goal(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+    params: Result<Json<GoalSetParams>, JsonRejection>,
+) -> Result<Json<GoalResponse>, ApiError> {
+    let draining = app.draining.read().await;
+    if *draining {
+        return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
+    }
+    Ok(Json(app.session(&id).await?.set_goal(body(params)?).await?))
+}
+
+async fn clear_goal(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<GoalResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.control_goal("clear").await?))
+}
+async fn pause_goal(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<GoalResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.control_goal("pause").await?))
+}
+async fn resume_goal(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<GoalResponse>, ApiError> {
+    let draining = app.draining.read().await;
+    if *draining {
+        return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
+    }
+    Ok(Json(app.session(&id).await?.control_goal("resume").await?))
 }
 
 pub(crate) struct ApiError(ErrorResponse);
@@ -223,7 +268,11 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(|_| ApiError::internal())?
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
-        features: Some(vec!["review".into(), "addDirectories".into()]),
+        features: Some(vec![
+            "review".into(),
+            "addDirectories".into(),
+            "goals".into(),
+        ]),
         server_version: crate::VERSION.into(),
         protocol_version: PROTOCOL_VERSION,
         sessions,

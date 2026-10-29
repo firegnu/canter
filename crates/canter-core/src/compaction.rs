@@ -135,6 +135,7 @@ pub(crate) async fn compact(
             state.user_messages = user_inputs;
             state.measured_context = None;
             state.restate_plan_mode().await?;
+            state.restate_goal().await?;
             state.restate_directories().await?;
             for message in notices {
                 state.background_notice(message).await?;
@@ -192,7 +193,7 @@ async fn summarize(
     let mut transcript = String::new();
     let mut images = Vec::new();
     for (index, message) in history.iter().enumerate() {
-        if crate::plan_mode::is_notice(message) {
+        if crate::plan_mode::is_notice(message) || crate::goal::is_notice(message) {
             continue;
         }
         match message {
@@ -271,6 +272,7 @@ async fn summarize(
             messages: prefix.clone(),
             tools: Vec::new(),
             options: RequestOptions {
+                max_retries: None,
                 thinking: Some(false),
                 reasoning_effort: None,
                 max_output_tokens: Some(output_limit),
@@ -334,6 +336,7 @@ async fn summarize(
                 .await?;
             let prepared = crate::images::prepare(shared, request.clone()).await?;
             let started_at = (shared.options.request_time)();
+            let goal_id = shared.state.lock().await.charge_goal();
             let mut stream = shared.model.stream(prepared, cancel.clone());
             let mut response = crate::response::Response::default();
             let mut output_started = false;
@@ -363,7 +366,16 @@ async fn summarize(
                         response.apply(&event);
                     }
                     Some(Ok(ModelEvent::Usage(usage))) => {
-                        runner::record_usage(shared, usage, None, &model, started_at, true).await?
+                        runner::record_usage(
+                            shared,
+                            usage,
+                            None,
+                            &model,
+                            started_at,
+                            true,
+                            goal_id.as_deref(),
+                        )
+                        .await?
                     }
                     Some(Ok(ModelEvent::Finished(FinishReason::Stop))) => {
                         response.apply(&ModelEvent::Finished(FinishReason::Stop));
@@ -391,6 +403,9 @@ async fn summarize(
                         max_retries,
                         delay,
                     })) => {
+                        if shared.state.lock().await.goal_summary.is_some() {
+                            break;
+                        }
                         response = crate::response::Response::default();
                         runner::record_retry(shared, turn_id, &error, attempt, max_retries, delay)
                             .await?;
@@ -427,6 +442,12 @@ async fn summarize(
                     }
                     _ => break,
                 }
+            }
+            if shared.state.lock().await.goal_summary.is_some() {
+                return Err(CoreError::new(
+                    ErrorCode::Conflict,
+                    "goal budget reached during compaction",
+                ));
             }
             if continuation {
                 confirmed_summary.push_str(&response.text());

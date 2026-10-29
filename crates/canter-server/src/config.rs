@@ -20,6 +20,8 @@ pub(crate) struct Config {
     auto_compact_tokens: Option<u64>,
     #[serde(default = "default_auto_wake_limit")]
     auto_wake_limit: u32,
+    #[serde(default = "default_goal_budget_usd")]
+    goal_budget_usd: f64,
     #[serde(default = "default_model_max_retries")]
     model_max_retries: u32,
     api_key: String,
@@ -95,6 +97,11 @@ impl Config {
                 "model_max_retries must be between 0 and 100".into(),
             ));
         }
+        if !config.goal_budget_usd.is_finite() || config.goal_budget_usd < 0.0 {
+            return Err(ServerError(
+                "goal_budget_usd must be a finite non-negative dollar amount".into(),
+            ));
+        }
         if !config.models.contains(&config.model) {
             config.models.insert(0, config.model.clone());
         }
@@ -128,6 +135,7 @@ impl Config {
         prices.extend(self.prices.clone());
         CoreOptions {
             auto_wake_limit: self.auto_wake_limit,
+            goal_budget_usd: self.goal_budget_usd,
             prices,
             context_window: self.context_window,
             auto_compact_tokens: self.auto_compact_tokens,
@@ -143,6 +151,9 @@ fn default_models() -> Vec<String> {
 fn default_auto_wake_limit() -> u32 {
     10
 }
+fn default_goal_budget_usd() -> f64 {
+    5.0
+}
 fn default_model_max_retries() -> u32 {
     canter_model::RetryPolicy::default().max_retries
 }
@@ -155,6 +166,24 @@ fn default_image_models() -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn goal_budget_defaults_to_five_and_accepts_zero_but_not_negative_or_text() {
+        assert_eq!(load(json!({})).ok().unwrap().options().goal_budget_usd, 5.0);
+        for amount in [0.0, 3.5] {
+            assert_eq!(
+                load(json!({"goal_budget_usd":amount}))
+                    .ok()
+                    .unwrap()
+                    .options()
+                    .goal_budget_usd,
+                amount
+            );
+        }
+        for amount in [json!(-1), json!("5"), serde_json::Value::Null] {
+            assert!(load(json!({"goal_budget_usd":amount})).is_err());
+        }
+    }
 
     #[test]
     fn remote_mcp_http_is_rejected_without_echoing_credentials() {

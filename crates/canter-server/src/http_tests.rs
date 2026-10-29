@@ -12,6 +12,9 @@ mod user_shell;
 #[path = "plan_tests.rs"]
 mod plan;
 
+#[path = "goal_tests.rs"]
+mod goal;
+
 // A failed model task is a real Core close-error path, without modifying Core or the store.
 struct PanicOnce {
     panicked: AtomicBool,

@@ -27,14 +27,33 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                 active.user_shell.clone(),
             )
         };
-        let result = if let Some(params) = user_shell {
+        let mut result = if let Some(params) = user_shell {
             crate::user_shell::run(&shared, &turn.id, &params, &cancel).await
         } else if manual_compaction {
             compaction::compact(&shared, &turn.id, &cancel).await
         } else {
             conversation(&shared, &turn.id, &cancel, &mut auto_compaction_failed).await
         };
+        if !cancel.is_cancelled()
+            && shared
+                .state
+                .lock()
+                .await
+                .goal_summary
+                .as_ref()
+                .is_some_and(|(_, sent)| !sent)
+        {
+            result = conversation(&shared, &turn.id, &cancel, &mut auto_compaction_failed).await;
+        }
         let mut state = shared.state.lock().await;
+        if state.goal_summary.is_some() {
+            // A final summary cannot re-enter goal work. Preserve late user
+            // steering as normal input for a separate, uncharged turn.
+            let steers = std::mem::take(&mut state.steers);
+            for input in steers.into_iter().rev() {
+                state.queue.push_front(input);
+            }
+        }
         // An input accepted just as the model stopped still belongs to this turn.
         if result.is_ok()
             && !cancel.is_cancelled()
@@ -66,6 +85,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                 additional_details: None,
             })
         };
+        let failed = completed.status == TurnStatus::Failed;
         let finish = async {
             if state.active.as_ref().is_some_and(|active| active.retracted) {
                 state.discard_queue(InputRemovalReason::Interrupted).await?;
@@ -97,6 +117,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                     ])
                     .await?;
                 state.restate_background_notices(removed).await?;
+                state.restate_goal().await?;
                 state.restate_directories().await?;
                 return Ok(event_seq);
             }
@@ -154,12 +175,21 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         }
         .await;
         state.active = None;
+        state.goal_summary = None;
         let _ = done.send(Some(finish.clone()));
         if finish.is_err() || cancel.is_cancelled() || state.closing {
             state.background_events.interrupt();
             break;
         }
         let Some(input) = state.queue.pop_front() else {
+            if failed {
+                // Keep the saved goal, but do not turn a provider/configuration
+                // failure into an unlimited sequence of failed goal turns.
+                state.goal_running = false;
+                state.goal_deadline = None;
+            } else {
+                state.schedule_goal();
+            }
             state.background_events.turn_finished();
             break;
         };
@@ -191,11 +221,17 @@ async fn conversation(
             return Ok(());
         }
         shared.sync_background().await?;
-        let request = {
+        let (request, summary) = {
             let mut state = shared.state.lock().await;
             state.consume_steering(turn_id).await?;
             state.background_cards(turn_id).await?;
-            context::request(&state, shared.options.max_output_tokens)
+            let summary = state.summary_request().await?;
+            let mut request = context::request(&state, shared.options.max_output_tokens);
+            if summary {
+                request.tools.clear();
+                request.options.max_retries = Some(0);
+            }
+            (request, summary)
         };
         let estimated = context::request_tokens(&request);
         let occupancy =
@@ -209,11 +245,16 @@ async fn conversation(
                 });
         let fits = occupancy.saturating_add(u64::from(shared.options.max_output_tokens))
             <= shared.options.context_window;
-        if occupancy > compaction::input_limit(shared) && !compacted && !*auto_compaction_failed {
+        if !summary
+            && occupancy > compaction::input_limit(shared)
+            && !compacted
+            && !*auto_compaction_failed
+        {
             compacted = true;
             match compaction::compact(shared, turn_id, cancel).await {
                 Ok(()) => continue,
                 Err(_) if cancel.is_cancelled() => return Ok(()),
+                Err(_) if shared.state.lock().await.goal_summary.is_some() => continue,
                 Err(error) if !fits => {
                     return Err(CoreError::new(
                         ErrorCode::InvalidRequest,
@@ -264,6 +305,20 @@ async fn conversation(
             .collect();
         if cancel.is_cancelled() {
             return Ok(());
+        }
+        if summary {
+            shared
+                .state
+                .lock()
+                .await
+                .complete_missing_tools("Not run: final goal summary does not execute tools")
+                .await?;
+            return error.map_or(Ok(()), |error| {
+                Err(CoreError::new(ErrorCode::Internal, &error.to_string()))
+            });
+        }
+        if shared.state.lock().await.goal_summary.is_some() {
+            continue;
         }
         let interrupted_with_content =
             error.as_ref().is_some_and(|error| error.is_retryable()) && !content.is_empty();
@@ -320,6 +375,9 @@ async fn conversation(
             if cancel.is_cancelled() {
                 return Ok(());
             }
+            if shared.state.lock().await.goal_summary.is_some() {
+                break;
+            }
             execute(shared, turn_id, call, cancel).await?;
             if shared
                 .state
@@ -353,6 +411,7 @@ async fn model_response(
     let request = crate::images::prepare(shared, request).await?;
     let model = request.model.clone();
     let mut started_at = (shared.options.request_time)();
+    let mut goal_id = shared.state.lock().await.charge_goal();
     let mut stream = shared.model.stream(request, cancel.clone());
     let mut response = crate::response::Response::default();
     let mut last_nonempty_response = crate::response::Response::default();
@@ -374,10 +433,12 @@ async fn model_response(
                         last_nonempty_response = std::mem::take(&mut response);
                     }
                     if let Some(usage) = usage.take() {
-                        record_usage(shared, usage, None, &model, started_at, true).await?;
+                        record_usage(shared, usage, None, &model, started_at, true, goal_id.as_deref()).await?;
                     }
+                    if shared.state.lock().await.goal_summary.is_some() { break; }
                     record_retry(shared, turn_id, &error, attempt, max_retries, delay).await?;
                     started_at = (shared.options.request_time)();
+                    goal_id = shared.state.lock().await.charge_goal();
                 }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),
                 Some(Ok(ModelEvent::Finished(finish))) => {
@@ -457,6 +518,7 @@ async fn model_response(
             &model,
             started_at,
             true,
+            goal_id.as_deref(),
         )
         .await?;
     }
@@ -524,6 +586,7 @@ pub(crate) async fn record_usage(
     model: &str,
     started_at: i64,
     in_turn: bool,
+    goal_id: Option<&str>,
 ) -> Result<(), CoreError> {
     let mut state = shared.state.lock().await;
     let last = TokenUsageBreakdown {
@@ -612,14 +675,20 @@ pub(crate) async fn record_usage(
             ..token_usage.clone()
         });
     }
-    state
-        .journal
-        .append(vec![if in_turn {
-            EventPayload::SessionUsage { token_usage }
-        } else {
-            EventPayload::SessionBtwUsage { token_usage }
-        }])
-        .await?;
+    let mut payloads = vec![if in_turn {
+        EventPayload::SessionUsage { token_usage }
+    } else {
+        EventPayload::SessionBtwUsage { token_usage }
+    }];
+    if let Some(mut goal) = state.journal.snapshot.goal.clone()
+        && goal_id == Some(goal.id.as_str())
+    {
+        goal.cost.add(&charge);
+        goal.updated_at = crate::journal::now();
+        payloads.push(EventPayload::SessionGoalUpdated { goal: Some(goal) });
+    }
+    state.journal.append(payloads).await?;
+    state.limit_goal().await?;
     Ok(())
 }
 fn add_usage(total: &mut TokenUsageBreakdown, last: &TokenUsageBreakdown) {
@@ -640,6 +709,9 @@ async fn execute(
     call: ToolCall,
     cancel: &CancellationToken,
 ) -> Result<(), CoreError> {
+    if crate::goal::execute(shared, &call).await? {
+        return Ok(());
+    }
     let plan_mode = shared
         .state
         .lock()
@@ -777,6 +849,13 @@ async fn execute(
                     output
                 }
                 Some(PermissionCheck::Ask(_)) => unreachable!("approval resolved"),
+                Some(PermissionCheck::Execute(_))
+                    if shared.state.lock().await.goal_summary.is_some() =>
+                {
+                    let mut output = prepared.declined_output(None);
+                    output.text = "Not run: the goal budget requires a final summary".into();
+                    output
+                }
                 Some(PermissionCheck::Execute(permit)) => {
                     let checkpoint = shared
                         .state
@@ -979,7 +1058,7 @@ async fn ask_user(
     cancel: &CancellationToken,
 ) -> Result<ToolOutput, CoreError> {
     let question = call.user_input_request().expect("user input call");
-    let mut receiver = {
+    let (mut receiver, request_id, timeout) = {
         let mut state = shared.state.lock().await;
         let request = PendingRequest {
             id: id("question"),
@@ -1004,8 +1083,12 @@ async fn ask_user(
                 },
             ])
             .await?;
-        state.requests.insert(request.id, sender);
-        receiver
+        let timeout = state
+            .active
+            .as_ref()
+            .is_some_and(|active| active.goal_continuation);
+        state.requests.insert(request.id.clone(), sender);
+        (receiver, request.id, timeout)
     };
     let resolution = tokio::select! {
         biased;
@@ -1019,9 +1102,25 @@ async fn ask_user(
             }
         },
         resolution = &mut receiver => Some(resolution.map_err(|_| CoreError::internal())?),
+        _ = tokio::time::sleep(shared.options.goal_question_timeout), if timeout => {
+            let mut state = shared.state.lock().await;
+            // Resolve under the same lock as a real user answer; late replies cannot win twice.
+            if let Ok(resolution) = receiver.try_recv() { Some(resolution) }
+            else {
+                let events = state.journal.append(vec![
+                    EventPayload::RequestResolved { request_id: request_id.clone(), resolution: ApprovalResolution::Cancelled, client_name: None },
+                    EventPayload::SessionStatus { status: SessionStatus::Working, close_reason: None },
+                ]).await?;
+                state.requests.remove(&request_id);
+                state.resolved.insert(request_id, events[0].seq);
+                Some(ApprovalResolution::Cancelled)
+            }
+        },
     };
+    let timed_out = matches!(resolution, Some(ApprovalResolution::Cancelled));
     let answer = match resolution {
         Some(ApprovalResolution::UserInput { answer }) => Some(answer),
+        Some(ApprovalResolution::Cancelled) => None,
         None => None,
         _ => return Err(CoreError::internal()),
     };
@@ -1029,9 +1128,10 @@ async fn ask_user(
         Some(answer) => {
             serde_json::json!({ "question": question.question, "answer": answer }).to_string()
         }
+        None if timed_out => "The user is unavailable: no answer arrived within five minutes. Make a reasonable decision and continue the goal within the existing instructions and approval rules. In your response, state which decisions you made on the user's behalf. This is a timeout notice, not a user answer or approval.".into(),
         None => "Interrupted; no user answer".into(),
     };
-    let answered = answer.is_some();
+    let answered = answer.is_some() || timed_out;
     Ok(ToolOutput {
         text,
         item: Item::UserInput {

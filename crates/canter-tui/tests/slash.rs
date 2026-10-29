@@ -4,7 +4,7 @@
 //! which cycles the permission modes `/mode` sets.
 
 use canter_protocol::{Event, PermissionMode, SessionSnapshot, SessionUpdateParams};
-use canter_tui::{ANSWER_GUARD_MS, Action, App, Ui};
+use canter_tui::{ANSWER_GUARD_MS, Action, App, GoalCommand, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -15,6 +15,53 @@ const NOW: i64 = 0;
 const SESSION: &str = "s1";
 const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
+
+#[test]
+fn goal_command_dispatches_and_goal_state_is_visible() {
+    let mut screen = Screen::new();
+    assert!(
+        matches!(screen.enter("/goal --budget 3.5 Finish this task"), Some(Action::Goal(GoalCommand::Set(params))) if params.objective == "Finish this task" && params.budget_usd == Some(3.5))
+    );
+    screen.event(json!({"type":"session.goal.updated","goal":{"id":"g1","objective":"Finish this task","status":"active","budgetUsd":5.0,"cost":{"usd":1.2,"unknown":false},"createdAt":0,"updatedAt":0}}));
+    screen.draw();
+    assert!(
+        screen.text().contains("goal $1.20/$5.00"),
+        "{}",
+        screen.text()
+    );
+    assert_eq!(screen.enter("/goal"), Some(Action::Goal(GoalCommand::Read)));
+    for (action, command) in [
+        ("pause", GoalCommand::Pause),
+        ("resume", GoalCommand::Resume),
+        ("clear", GoalCommand::Clear),
+    ] {
+        assert_eq!(
+            screen.enter(&format!("/goal {action}")),
+            Some(Action::Goal(command))
+        );
+    }
+    for command in [
+        "/goal --budget -1 task",
+        "/goal --budget NaN task",
+        "/goal --budget 1",
+        "/goal --budget",
+    ] {
+        assert!(screen.enter(command).is_none());
+    }
+}
+
+#[test]
+fn goal_escape_between_turns_still_pauses() {
+    let mut screen = Screen::new();
+    screen.event(json!({"type":"session.goal.updated","goal":{"id":"g1","objective":"Continue","status":"active","budgetUsd":5.0,"cost":{"usd":0.0,"unknown":false},"createdAt":0,"updatedAt":0}}));
+    screen.start_turn("t1");
+    screen.draw();
+    screen.event(json!({"type":"turn.completed","turn":turn_json("t1", "completed")}));
+    assert_eq!(
+        screen.key(KeyCode::Esc),
+        Some(Action::Goal(GoalCommand::Pause))
+    );
+}
 
 #[test]
 fn add_dir_sends_the_path_to_the_server_and_requires_an_argument() {

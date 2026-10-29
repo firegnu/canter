@@ -165,8 +165,14 @@ impl ChatCompletions {
 impl Model for ChatCompletions {
     fn stream(&self, request: Request, cancellation: CancellationToken) -> ModelStream<'_> {
         let body = wire::request_body(&request);
-        self.retry
-            .stream(cancellation, move || self.attempt(body.clone()))
+        let mut retry = self.retry.clone();
+        if let Some(limit) = request.options.max_retries {
+            retry.max_retries = retry.max_retries.min(limit);
+        }
+        Box::pin(async_stream::stream! {
+            let mut stream = retry.stream(cancellation, move || self.attempt(body.clone()));
+            while let Some(event) = stream.next().await { yield event; }
+        })
     }
 }
 

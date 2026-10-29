@@ -73,6 +73,10 @@ mod editor_tests;
 #[path = "run_steer_tests.rs"]
 mod steer_tests;
 
+#[cfg(test)]
+#[path = "run_goal_tests.rs"]
+mod goal_tests;
+
 /// A connection to the server.
 pub struct Connected {
     pub client: Client,
@@ -1019,6 +1023,15 @@ fn leave_tab<B: FrameSync>(backend: &mut B, tab: &mut TabTitle) {
 
 /// What the background tasks tell the screen.
 enum Message {
+    Goal {
+        response: canter_protocol::GoalResponse,
+        show: bool,
+        starting: bool,
+    },
+    GoalFailed {
+        error: String,
+        starting: bool,
+    },
     ShellSent,
     ShellFailed {
         error: String,
@@ -1500,6 +1513,24 @@ impl<C: Connector> Chat<C> {
     fn message<B: Backend>(&mut self, ui: &mut Ui<B>, message: Message) -> bool {
         let app = ui.app_mut();
         match message {
+            Message::Goal {
+                response,
+                show,
+                starting,
+            } => {
+                if starting && app.goal_sent() {
+                    self.act(app, Action::Goal(crate::GoalCommand::Pause));
+                }
+                if show {
+                    app.show_goal(response.goal.as_ref());
+                }
+            }
+            Message::GoalFailed { error, starting } => {
+                if starting {
+                    app.goal_sent();
+                }
+                app.warning(&format!("Could not change the goal: {error}"));
+            }
             Message::ShellSent => app.shell_sent(),
             Message::ShellFailed { error, draft } => app.shell_failed(&error, draft),
             Message::Btw { id, event } => {
@@ -1575,6 +1606,36 @@ impl<C: Connector> Chat<C> {
         let session = self.session.clone();
         let sender = self.sender.clone();
         match action {
+            Action::Goal(command) => {
+                let starting = matches!(
+                    command,
+                    crate::GoalCommand::Set(_) | crate::GoalCommand::Resume
+                );
+                if starting {
+                    app.goal_sending();
+                }
+                tokio::spawn(async move {
+                    let result = async {
+                        let info = client.info().await?;
+                        if !info.features.unwrap_or_default().iter().any(|feature| feature == "goals") {
+                            return Err(ClientError::Protocol("This server does not support /goal; run canter serve --replace and retry".into()));
+                        }
+                        client.goal(&session, &command).await
+                    }.await;
+                    let message = match result {
+                        Ok(response) => Message::Goal {
+                            response,
+                            show: command == crate::GoalCommand::Read,
+                            starting,
+                        },
+                        Err(error) => Message::GoalFailed {
+                            error: error.to_string(),
+                            starting,
+                        },
+                    };
+                    let _ = sender.send(message);
+                });
+            }
             Action::Export(to) => app.export(to, crate::now_ms()),
             Action::Diff => {
                 let cwd = app.snapshot().settings.cwd.clone();
@@ -1781,6 +1842,11 @@ impl<C: Connector> Chat<C> {
                 });
             }
             Action::Interrupt { turn_id } => {
+                let pause_goal = app
+                    .snapshot()
+                    .goal
+                    .as_ref()
+                    .is_some_and(|goal| goal.status == canter_protocol::GoalStatus::Active);
                 let retract = app
                     .snapshot()
                     .turns
@@ -1800,6 +1866,17 @@ impl<C: Connector> Chat<C> {
                             code: ErrorCode::TurnMismatch,
                             ..
                         }) => {
+                            if pause_goal
+                                && let Err(error) =
+                                    client.goal(&session, &crate::GoalCommand::Pause).await
+                            {
+                                let _ = sender.send(Message::InterruptFailed {
+                                    turn_id,
+                                    connection_error: matches!(error, ClientError::Http(_)),
+                                    message: error.to_string(),
+                                });
+                                return;
+                            }
                             let _ = sender.send(Message::Interrupted {
                                 turn_id,
                                 stopped: false,

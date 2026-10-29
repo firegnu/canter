@@ -80,6 +80,7 @@ pub const ANSWER_GUARD_MS: i64 = 300;
 /// What the caller should do after a key press.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
+    Goal(crate::GoalCommand),
     RewindList,
     RewindMode(String),
     RewindPreview(canter_protocol::SessionRewindParams),
@@ -538,6 +539,8 @@ impl Shown {
 }
 
 pub struct App {
+    goal_starting: bool,
+    pause_goal_when_started: bool,
     snapshot: SessionSnapshot,
     status_line: Option<crate::statusline::StatusLine>,
     /// The status command from `config.json` and the environment it runs
@@ -902,6 +905,8 @@ impl App {
             notifications: Vec::new(),
             reconnecting: None,
             interrupting: None,
+            goal_starting: false,
+            pause_goal_when_started: false,
             answered: HashSet::new(),
             approval: ApprovalCursor::default(),
             approval_page: 1,
@@ -2110,6 +2115,19 @@ impl App {
     /// `/context`: opens above the input box.
     pub fn show_context(&mut self, report: &canter_protocol::ContextResponse) {
         self.open_report(crate::context::popup(report, self.home.as_deref()));
+    }
+
+    pub fn show_goal(&mut self, goal: Option<&canter_protocol::SessionGoal>) {
+        self.open_report(crate::goal::popup(goal));
+    }
+
+    pub(crate) fn goal_sending(&mut self) {
+        self.goal_starting = true;
+    }
+
+    pub(crate) fn goal_sent(&mut self) -> bool {
+        self.goal_starting = false;
+        std::mem::take(&mut self.pause_goal_when_started)
     }
 
     /// `/diff`: opens above the input box.
@@ -4339,17 +4357,28 @@ impl App {
         })
     }
 
-    /// Esc stops the turn the frame showed in progress, if it still is; when
-    /// the frame showed nothing in progress it does nothing.
+    /// Esc stops the visible turn, or pauses an active goal between turns.
     fn interrupt_seen(&mut self, turn: Option<String>) -> Option<Action> {
-        let turn_id = turn?;
+        if self.goal_starting {
+            self.pause_goal_when_started = true;
+            return None;
+        }
+        let pause_goal = self
+            .snapshot
+            .goal
+            .as_ref()
+            .filter(|goal| goal.status == canter_protocol::GoalStatus::Active)
+            .map(|_| Action::Goal(crate::GoalCommand::Pause));
+        let Some(turn_id) = turn else {
+            return pause_goal;
+        };
         let working = self
             .snapshot
             .turns
             .iter()
             .any(|turn| turn.id == turn_id && turn.status == TurnStatus::InProgress);
         if !working {
-            return None;
+            return pause_goal;
         }
         self.interrupt(turn_id)
     }
@@ -4763,11 +4792,25 @@ impl App {
     /// its own when the window is too narrow. Also whether the first row shows
     /// all of the permission mode.
     fn info_rows(&mut self, width: u16, now_ms: i64) -> ([Line<'static>; 2], bool) {
-        if let Some(rows) = self.status_line.as_mut().and_then(|line| line.rows(width)) {
+        let goal_prefix = self
+            .snapshot
+            .goal
+            .as_ref()
+            .map(|goal| format!(" {} ·", crate::goal::bar(goal)))
+            .unwrap_or_default();
+        if let Some(mut rows) = self.status_line.as_mut().and_then(|line| line.rows(width)) {
+            if !goal_prefix.is_empty() {
+                rows[0].spans.insert(0, Span::raw(goal_prefix));
+                rows[0].spans = truncate(std::mem::take(&mut rows[0].spans), usize::from(width));
+            }
             return (rows, false);
         }
         // Permission shortcuts only require the mode itself to be fully visible.
         let ([mut first, second], through_mode) = self.bar.draw(&self.bar_values(now_ms));
+        let through_mode = through_mode.map(|through| format!("{goal_prefix}{through}"));
+        if !goal_prefix.is_empty() {
+            first.insert(0, Span::raw(goal_prefix));
+        }
         if self.status_line.as_ref().is_some_and(|line| line.failed) {
             let error = " statusline error";
             first = truncate(first, usize::from(width).saturating_sub(error.len()));

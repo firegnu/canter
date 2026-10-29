@@ -221,6 +221,12 @@ pub(crate) const COMMANDS: &[Command] = &[
             })))
         },
     },
+    Command {
+        name: "goal",
+        about: "Set or view a goal; pause, resume, clear, or --budget USD",
+        takes_args: true,
+        run: |_, args| crate::goal::parse(args).map(|command| Some(Action::Goal(command))),
+    },
 ];
 
 /// `/skills`: global and project skills, each a section; every skill's

@@ -158,6 +158,7 @@ async fn answer(
             return Ok(());
         }
         let mut started_at = (shared.options.request_time)();
+        let mut goal_id = shared.state.lock().await.charge_goal();
         let mut stream = shared.model.stream(request.clone(), cancel.clone());
         let mut response = crate::response::Response::default();
         let mut usage = None;
@@ -204,10 +205,22 @@ async fn answer(
                         ),
                     });
                     if let Some(usage) = usage.take() {
-                        runner::record_usage(shared, usage, None, &model, started_at, false)
-                            .await?;
+                        runner::record_usage(
+                            shared,
+                            usage,
+                            None,
+                            &model,
+                            started_at,
+                            false,
+                            goal_id.as_deref(),
+                        )
+                        .await?;
+                    }
+                    if shared.state.lock().await.goal_summary.is_some() {
+                        break Ok(false);
                     }
                     started_at = (shared.options.request_time)();
+                    goal_id = shared.state.lock().await.charge_goal();
                 }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),
                 Some(Ok(ModelEvent::Finished(_))) => break Ok(false),
@@ -230,9 +243,18 @@ async fn answer(
             }
         };
         if let Some(usage) = usage {
-            runner::record_usage(shared, usage, None, &model, started_at, false).await?;
+            runner::record_usage(
+                shared,
+                usage,
+                None,
+                &model,
+                started_at,
+                false,
+                goal_id.as_deref(),
+            )
+            .await?;
         }
-        if !result? {
+        if !result? || shared.state.lock().await.goal_summary.is_some() {
             return Ok(());
         }
         let content = response.completed();

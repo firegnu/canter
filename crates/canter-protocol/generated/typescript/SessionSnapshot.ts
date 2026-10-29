@@ -4,12 +4,13 @@ import type { ErrorInfo } from "./ErrorInfo";
 import type { PendingRequest } from "./PendingRequest";
 import type { QueuedInput } from "./QueuedInput";
 import type { SessionCloseReason } from "./SessionCloseReason";
+import type { SessionGoal } from "./SessionGoal";
 import type { SessionSettings } from "./SessionSettings";
 import type { SessionStatus } from "./SessionStatus";
 import type { TokenUsage } from "./TokenUsage";
 import type { Turn } from "./Turn";
 
-export type SessionSnapshot = { id: string, settings: SessionSettings, status: SessionStatus,
+export type SessionSnapshot = { id: string, goal?: SessionGoal, settings: SessionSettings, status: SessionStatus,
 /**
  * Why the session is closed; absent for open sessions and legacy data.
  */

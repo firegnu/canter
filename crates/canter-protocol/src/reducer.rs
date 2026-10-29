@@ -159,6 +159,7 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
             snapshot.turns.push(record.clone());
         }
         EventPayload::SessionUpdated { settings } => snapshot.settings = settings.clone(),
+        EventPayload::SessionGoalUpdated { goal } => snapshot.goal = goal.clone(),
         EventPayload::SessionStatus {
             status,
             close_reason,

@@ -85,6 +85,8 @@ pub struct Request {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestOptions {
+    /// Per-request retry ceiling; final budget summaries must not retry.
+    pub max_retries: Option<u32>,
     /// None leaves the provider's default unchanged.
     pub thinking: Option<bool>,
     pub reasoning_effort: Option<String>,

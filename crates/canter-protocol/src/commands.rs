@@ -10,6 +10,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use ts_rs::TS;
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalSetParams {
+    pub objective: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub budget_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalResponse {
+    pub goal: Option<crate::SessionGoal>,
+    #[ts(type = "number")]
+    pub event_seq: u64,
+}
+
 pub mod routes {
     pub const INFO: &str = "/v1/info";
     pub const MODELS: &str = "/v1/models";
@@ -17,6 +34,9 @@ pub mod routes {
     pub const SESSION_USAGE: &str = "/v1/sessions/{id}/usage";
     pub const SESSIONS: &str = "/v1/sessions";
     pub const SESSION: &str = "/v1/sessions/{id}";
+    pub const GOAL: &str = "/v1/sessions/{id}/goal";
+    pub const GOAL_PAUSE: &str = "/v1/sessions/{id}/goal/pause";
+    pub const GOAL_RESUME: &str = "/v1/sessions/{id}/goal/resume";
     pub const SKILLS: &str = "/v1/sessions/{id}/skills";
     pub const MCP: &str = "/v1/mcp";
     pub const CONTEXT: &str = "/v1/sessions/{id}/context";
