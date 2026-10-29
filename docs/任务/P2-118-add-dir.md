@@ -86,3 +86,10 @@
 - 最终检查：所有命令均在前台等到结束，使用本任务独立 `CARGO_TARGET_DIR`。`cargo nextest run --all-targets` 最终 948 / 948 通过、0 跳过；`cargo test --doc --workspace` 通过（1 项编译失败示例）；`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。
 - 没做的事：没有沙箱、移除目录或按命令授权规则；状态栏 git、`/diff`、`/review` 仍只看 cwd。没有改用户配置、安装或切换可执行文件，也没有操作用户正在使用的服务端。只在本任务分支提交，交主控审查、合并和推送。
 - 踩过的坑：协议注释也是生成产物的一部分，修改 PATCH 的文档注释后漏重新导出，首轮全套检查被生成文件一致性测试拦下；重新导出后全套通过。测试夹具要使用现有 edit 的 `edits` 数组，TUI 补全后要按既有帧机制重绘再发送；已修正夹具，没有放宽断言或缩短超时。
+
+## 主控审查
+
+- 2026-10-29 canter/main 审 `657cacc`：改动范围对（状态栏、`/diff`、`/review` 没动，没读加进来的目录里的 `AGENTS.md`）；边界在 `permission.rs` 的 `outside_directories`，复用受保护路径同一套解析，解析不出一律问，执行前再解析比对。重跑 `cargo nextest run --all-targets` 948/948 通过，和完成记录一致。
+- 交叉审查（canter/review-adddir-1，Claude Code）：可以合并，必须改 0、建议改 2、可以不改 5，见 `P2-118-交叉审查.md`。
+- 建议改 1（`/new`、`/handoff`、计划「清空上下文实施」开的新会话不带加进来的目录）是产品取舍，交用户定；建议改 2（会话中途发 `role: system` 的目录说明，没真调 DeepSeek 验证）要真调模型，用户在场时再定。都不挡合并，记进 HANDOFF。
+- 结果：一次过
