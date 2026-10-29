@@ -146,6 +146,7 @@ async fn run_case(
         let created = server
             .client
             .create_session(&SessionCreateParams {
+                additional_directories: Vec::new(),
                 cwd: cwd.display().to_string(),
                 env: environment(root)?,
                 model: "deepseek-flash".into(),

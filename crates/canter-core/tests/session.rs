@@ -51,6 +51,255 @@ fn assert_request_extension(previous: &Request, next: &Request) {
     );
 }
 
+#[tokio::test]
+async fn added_directories_are_normalized_persisted_and_appended_to_model_context() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["home", "main", "first", "second", "home/third", "state"] {
+        std::fs::create_dir_all(temp.path().join(name)).unwrap();
+    }
+    std::fs::write(
+        temp.path().join("second/AGENTS.md"),
+        "EXTRA_INSTRUCTIONS_MUST_NOT_LOAD",
+    )
+    .unwrap();
+    let runtime = || RuntimeContext {
+        environment: [
+            (
+                "HOME".into(),
+                temp.path().join("home").display().to_string(),
+            ),
+            (
+                "CANTER_HOME".into(),
+                temp.path().join("state").display().to_string(),
+            ),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let store = Arc::new(Store::new(temp.path().join("state/sessions")).unwrap());
+    let model = ScriptModel::new(vec![vec![ModelEvent::Finished(FinishReason::Stop)]; 3]);
+    let mut config = settings(&temp.path().join("main"));
+    config.additional_directories = vec!["../first".into()];
+    let (session, created) = Session::create(
+        store.clone(),
+        "dirs".into(),
+        config,
+        runtime(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let first = temp
+        .path()
+        .join("first")
+        .canonicalize()
+        .unwrap()
+        .display()
+        .to_string();
+    assert_eq!(
+        created.session.settings.additional_directories,
+        vec![first.clone()]
+    );
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("before adding")).await.unwrap();
+    finished(&mut events).await;
+    session
+        .update(SessionUpdateParams {
+            add_directories: vec![
+                "../second".into(),
+                "~/third".into(),
+                "../second/.".into(),
+                ".".into(),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let snapshot = session.snapshot().await.session;
+    assert_eq!(snapshot.settings.additional_directories.len(), 3);
+    for invalid in ["../absent", "../second/AGENTS.md"] {
+        let error = session
+            .update(SessionUpdateParams {
+                add_directories: vec![invalid.into()],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert!(error.message.contains(invalid));
+    }
+    assert_eq!(
+        session
+            .snapshot()
+            .await
+            .session
+            .settings
+            .additional_directories,
+        snapshot.settings.additional_directories
+    );
+    session.input(input("after adding")).await.unwrap();
+    finished(&mut events).await;
+    {
+        let requests = model.requests.lock().unwrap();
+        assert_request_extension(&requests[0], &requests[1]);
+        assert!(
+            matches!(&requests[0].messages[0], Message::System { text } if text.contains(&first))
+        );
+        let text = serde_json::to_string(&requests[1]).unwrap();
+        assert!(text.contains(&snapshot.settings.additional_directories[1]));
+        assert!(!text.contains("EXTRA_INSTRUCTIONS_MUST_NOT_LOAD"));
+    }
+    session.close().await.unwrap();
+    drop(events);
+    drop(session);
+    let (reopened, response) = Session::open(
+        store,
+        "dirs".into(),
+        runtime(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        response.session.settings.additional_directories,
+        snapshot.settings.additional_directories
+    );
+    let mut events = reopened.subscribe(response.event_seq).await.unwrap();
+    reopened.input(input("reopened")).await.unwrap();
+    finished(&mut events).await;
+    let requests = model.requests.lock().unwrap();
+    assert!(
+        matches!(&requests[2].messages[0], Message::System { text } if snapshot.settings.additional_directories.iter().all(|dir| text.contains(dir)))
+    );
+}
+
+#[tokio::test]
+async fn session_directory_updates_reach_the_file_permission_gate() {
+    let temp = tempfile::tempdir().unwrap();
+    for dir in ["main", "first", "second", "outside", "home", "state"] {
+        std::fs::create_dir(temp.path().join(dir)).unwrap();
+    }
+    let runtime = || RuntimeContext {
+        environment: [
+            (
+                "HOME".into(),
+                temp.path().join("home").display().to_string(),
+            ),
+            (
+                "CANTER_HOME".into(),
+                temp.path().join("state").display().to_string(),
+            ),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let calls = |paths: &[&str]| {
+        let mut events: Vec<_> = paths
+            .iter()
+            .enumerate()
+            .map(|(i, path)| {
+                call(
+                    &format!("write-{i}"),
+                    "write",
+                    &serde_json::json!({"path":path,"content":"written"}).to_string(),
+                )
+            })
+            .collect();
+        events.push(ModelEvent::Finished(FinishReason::ToolCalls));
+        events
+    };
+    let model = ScriptModel::new(vec![
+        calls(&["../first/file", "../second/file", "../outside/file"]),
+        vec![ModelEvent::Finished(FinishReason::Stop)],
+        calls(&["../second/after-reopen"]),
+        vec![ModelEvent::Finished(FinishReason::Stop)],
+    ]);
+    let store = Arc::new(Store::new(temp.path().join("state/sessions")).unwrap());
+    let mut config = settings(&temp.path().join("main"));
+    config.approval_policy = PermissionMode::AskForExecution;
+    config.additional_directories = vec!["../first".into()];
+    let (session, _) = Session::create(
+        store.clone(),
+        "dirs-gate".into(),
+        config,
+        runtime(),
+        model.clone(),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    session
+        .update(SessionUpdateParams {
+            add_directories: vec!["../second".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("write files")).await.unwrap();
+    let event = until(&mut events, |event| {
+        matches!(event, EventPayload::RequestOpened { .. })
+    })
+    .await;
+    let EventPayload::RequestOpened { request } = event.payload else {
+        unreachable!()
+    };
+    let RequestKind::Approval(ref approval) = request.kind else {
+        unreachable!()
+    };
+    assert_eq!(approval.arguments["path"], "../outside/file");
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("first/file")).unwrap(),
+        "written"
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("second/file")).unwrap(),
+        "written"
+    );
+    assert!(!temp.path().join("outside/file").exists());
+    session
+        .resolve(
+            &request.id,
+            RequestResolveParams {
+                decision: Some(ApprovalDecision::Accept),
+                answer: None,
+                feedback: None,
+                plan: None,
+                client_name: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
+    finished(&mut events).await;
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("outside/file")).unwrap(),
+        "written"
+    );
+    session.close().await.unwrap();
+    drop(events);
+    drop(session);
+    let (session, response) = Session::open(
+        store,
+        "dirs-gate".into(),
+        runtime(),
+        model,
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(response.event_seq).await.unwrap();
+    session.input(input("write after reopen")).await.unwrap();
+    let events = finished(&mut events).await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::RequestOpened { .. }))
+    );
+    assert!(temp.path().join("second/after-reopen").exists());
+}
+
 struct InterruptedModel {
     scripts: Mutex<VecDeque<Vec<Result<ModelEvent, canter_model::ModelError>>>>,
     requests: Mutex<Vec<Request>>,
@@ -1306,6 +1555,7 @@ fn input(text: &str) -> SessionInputParams {
 }
 fn settings(cwd: &std::path::Path) -> SessionSettings {
     SessionSettings {
+        additional_directories: Vec::new(),
         plan_mode: false,
         pre_plan_approval_policy: None,
         plan_enabled: None,

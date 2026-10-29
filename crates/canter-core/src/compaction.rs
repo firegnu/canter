@@ -135,6 +135,7 @@ pub(crate) async fn compact(
             state.user_messages = user_inputs;
             state.measured_context = None;
             state.restate_plan_mode().await?;
+            state.restate_directories().await?;
             for message in notices {
                 state.background_notice(message).await?;
             }

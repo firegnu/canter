@@ -218,6 +218,52 @@ fn ranked() -> tempfile::TempDir {
     dir
 }
 
+#[test]
+fn added_repository_is_scanned_after_settings_change_with_unambiguous_paths() {
+    let temp = tempfile::Builder::new()
+        .prefix("dirs-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let main = root.join("main");
+    let service = root.join("service");
+    for dir in [&main, &service] {
+        write(dir, ".git/HEAD", "ref: refs/heads/main\n");
+        write(dir, ".gitignore", "ignored.txt\n");
+        write(dir, "shared.rs", "");
+        write(dir, "ignored.txt", "");
+    }
+    let mut screen = Screen::new(&main);
+    screen.type_text("@shared");
+    screen.draw_until("cwd shared.rs", |screen| {
+        screen.paths().iter().any(|path| path == "shared.rs")
+    });
+    screen.event(json!({"type":"session.updated","settings":{
+        "cwd":main,"additionalDirectories":[service],"name":null,"model":"test-model","approvalPolicy":"alwaysAsk"
+    }}));
+    screen.draw_until("both repositories", |screen| screen.paths().len() == 2);
+    assert_eq!(
+        screen.paths(),
+        vec![
+            "shared.rs".to_owned(),
+            service.join("shared.rs").display().to_string()
+        ]
+    );
+    screen.key(KeyCode::Down);
+    screen.key(KeyCode::Tab);
+    screen.draw();
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        Some(canter_tui::Action::Send(format!(
+            "@{} ",
+            service.join("shared.rs").display()
+        )))
+    );
+    screen.type_text("@ignored");
+    screen.draw();
+    assert!(screen.paths().is_empty());
+}
+
 /// `@` alone lists the files and directories under the session's directory,
 /// without what `.gitignore`, `.git/info/exclude` or the global ignore
 /// file ignores and without `.git`.

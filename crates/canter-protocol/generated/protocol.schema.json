@@ -2653,6 +2653,12 @@
     "SessionCreateParams": {
       "description": "POST /v1/sessions. Do not log this body: env may contain credentials.",
       "properties": {
+        "additionalDirectories": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "approvalPolicy": {
           "$ref": "#/$defs/PermissionMode"
         },
@@ -2961,6 +2967,12 @@
     "SessionSettings": {
       "description": "Public settings. Environment variables never belong here.",
       "properties": {
+        "additionalDirectories": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "approvalPolicy": {
           "$ref": "#/$defs/PermissionMode"
         },
@@ -3196,8 +3208,15 @@
       "type": "object"
     },
     "SessionUpdateParams": {
-      "description": "PATCH /v1/sessions/{id}. Omitted/null fields retain their current values.\nThe resulting complete public settings are emitted in session.updated.",
+      "description": "PATCH /v1/sessions/{id}. Omitted/null scalar fields retain their current values.\nOmitted/empty addDirectories appends nothing.\nThe resulting complete public settings are emitted in session.updated.",
       "properties": {
+        "addDirectories": {
+          "description": "Append directories; never replaces or removes existing directories.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "approvalPolicy": {
           "anyOf": [
             {

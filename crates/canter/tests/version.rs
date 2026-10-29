@@ -64,3 +64,16 @@ fn canter_version_prints_the_line_and_starts_no_server() {
 fn help_lists_version() {
     assert!(canter::USAGE.contains("-V, --version"), "{}", canter::USAGE);
 }
+
+#[test]
+fn add_dir_parses_repeated_paths_with_new_continue_and_resume() {
+    for prefix in [vec![], vec!["-c"], vec!["--resume", "session-id"]] {
+        let args = prefix
+            .into_iter()
+            .chain(["--add-dir", "../service", "--add-dir", "~/another repo"])
+            .map(OsString::from);
+        assert!(matches!(canter::parse(args), Ok(Command::Chat(_))));
+    }
+    assert!(canter::parse([OsString::from("--add-dir")]).is_err());
+    assert!(canter::USAGE.contains("--add-dir <path>"));
+}

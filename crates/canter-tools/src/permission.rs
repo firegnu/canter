@@ -37,9 +37,32 @@ impl PartialEq for ExecutionPermit<'_> {
 #[derive(Default)]
 pub struct PermissionGate {
     grants: HashSet<String>,
+    additional_directories: Vec<std::path::PathBuf>,
 }
 
 impl PermissionGate {
+    /// Canonical roots from the session settings; changing roots keeps existing grants.
+    pub fn set_additional_directories(&mut self, directories: &[String]) {
+        self.additional_directories = directories.iter().map(Into::into).collect();
+    }
+
+    fn outside_directories(&self, call: &PreparedCall) -> bool {
+        if !matches!(call.tool, Tool::Write | Tool::Edit) {
+            return false;
+        }
+        let Some(path) = &call.resolved_path else {
+            return true;
+        };
+        !call
+            .executor
+            .cwd()
+            .canonicalize()
+            .is_ok_and(|cwd| path.starts_with(cwd))
+            && !self
+                .additional_directories
+                .iter()
+                .any(|root| path.starts_with(root))
+    }
     /// Planning restrictions precede grants and ordinary permission decisions.
     pub fn evaluate_plan<'a>(
         &self,
@@ -124,7 +147,9 @@ impl PermissionGate {
         }
         let ask = match mode {
             PermissionMode::AlwaysAsk | PermissionMode::Unknown => call.tool.risk() != Risk::Read,
-            PermissionMode::AskForExecution => call.tool.risk() == Risk::Execute,
+            PermissionMode::AskForExecution => {
+                call.tool.risk() == Risk::Execute || self.outside_directories(call)
+            }
             PermissionMode::AllowAll => false,
         };
         let readonly_shell = ask

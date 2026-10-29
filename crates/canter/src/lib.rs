@@ -29,6 +29,7 @@ Usage:
 
 Options:
   -m, --model <model>  use this model (default: the server's config)
+  --add-dir <path>      add a directory to the session (repeatable)
   --yolo               use permission mode Allow all (never ask)
   -V, --version        show the version and commit
   -h, --help           show this help
@@ -45,6 +46,7 @@ pub enum Command {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ChatArgs {
+    pub additional_directories: Vec<String>,
     /// Sent as the new session's first message.
     pub first: Option<String>,
     pub yolo: bool,
@@ -90,6 +92,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             "-m" | "--model" => chat.model = Some(args.next().ok_or("-m needs a model name")?),
             "--resume" => chat.resume = Some(args.next_if(|next| !next.starts_with('-'))),
             "-c" | "--continue" => chat.continue_latest = true,
+            "--add-dir" => chat.additional_directories.push(
+                args.next_if(|next| !next.starts_with('-'))
+                    .ok_or("--add-dir needs a path")?,
+            ),
             option if option.starts_with('-') && option.len() > 1 => {
                 return Err(format!("unknown option: {option}"));
             }
@@ -206,6 +212,7 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
         .map_err(|error| error.to_string())?;
     let yolo = args.yolo.then_some(PermissionMode::AllowAll);
     let update = |model| SessionUpdateParams {
+        add_directories: args.additional_directories.clone(),
         plan_mode: None,
         name: None,
         model,
@@ -223,6 +230,7 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
             update: update(args.model),
         },
         None => Open::New {
+            additional_directories: args.additional_directories,
             cwd,
             model: args.model.unwrap_or_default(),
             approval_policy: yolo.unwrap_or(PermissionMode::AlwaysAsk),

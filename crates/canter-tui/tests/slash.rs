@@ -17,6 +17,17 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 #[test]
+fn add_dir_sends_the_path_to_the_server_and_requires_an_argument() {
+    let mut screen = Screen::new();
+    assert!(
+        matches!(screen.enter("/add-dir ../another repo"), Some(Action::Update(params)) if params.add_directories == ["../another repo"])
+    );
+    assert!(screen.enter("/add-dir").is_none());
+    screen.draw();
+    assert!(screen.text().contains("/add-dir <path>"));
+}
+
+#[test]
 fn plan_command_and_four_position_mode_cycle() {
     let mut screen = Screen::new();
     assert!(

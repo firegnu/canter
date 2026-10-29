@@ -379,6 +379,15 @@ acceptForSession 的授权范围为该网址的规范化主机名及有效端口
 只参考 Codex `rust-v0.163.0` 的 `thread/revert.beforeTurnId`，没有复制代码。
 与 Codex 的差异：canter 也恢复自己的 write/edit 文件，提供预览和外部修改确认，日志只追加。
 
+加目录（P2-118）：会话设置和创建参数的可选 `additionalDirectories` 保存额外目录，缺省为空。
+PATCH 的可选 `addDirectories` 仅追加，省略或空数组保留原列表；服务端按会话 cwd / HOME
+解析相对路径和 `~/`，要求目录存在，规范化符号链接后去掉 cwd 和已有目录覆盖的项。
+一批路径全部有效才更新，完整列表随 `session.updated` 持久化并同步给所有客户端。
+`GET /v1/info.features` 增加 `addDirectories`，新终端加目录前检查它；旧客户端忽略新字段。
+目录用于模型上下文、`@` 引用和 askForExecution 的文件修改批准边界；与 Codex v2 的
+`sandboxPolicy` 中 `type: workspaceWrite` 的 `writableRoots` 不同，不引入沙箱，也不改变 shell 批准规则。
+acceptForSession 沿用按工具名放行 write/edit。详见 DESIGN 第 8 条。
+
 计划模式（P2-103）：PATCH 的可选 `planMode` 独立于 `approvalPolicy`，会话设置同时保存
 `prePlanApprovalPolicy`；缺少 planMode 按 false，false 序列化时省略。`planApproval` 请求带
 `itemId/plan/approvalPolicy`，以 `RequestResolveParams.plan` 的

@@ -245,6 +245,9 @@ pub struct SessionListResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(optional_fields = nullable)]
 pub struct SessionCreateParams {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
+    pub additional_directories: Vec<String>,
     pub cwd: String,
     pub env: BTreeMap<String, String>,
     pub model: String,
@@ -377,12 +380,17 @@ pub struct RequestResolveResponse {
     pub already_resolved: bool,
 }
 
-/// PATCH /v1/sessions/{id}. Omitted/null fields retain their current values.
+/// PATCH /v1/sessions/{id}. Omitted/null scalar fields retain their current values.
+/// Omitted/empty addDirectories appends nothing.
 /// The resulting complete public settings are emitted in session.updated.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(optional_fields = nullable)]
 pub struct SessionUpdateParams {
+    /// Append directories; never replaces or removes existing directories.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
+    pub add_directories: Vec<String>,
     pub plan_mode: Option<bool>,
     pub name: Option<String>,
     pub model: Option<String>,
