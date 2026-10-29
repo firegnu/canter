@@ -1830,6 +1830,12 @@
         {
           "properties": {
             "arguments": true,
+            "contentItems": {
+              "items": {
+                "$ref": "#/$defs/ToolContentItem"
+              },
+              "type": "array"
+            },
             "id": {
               "type": "string"
             },
@@ -1942,6 +1948,12 @@
           "properties": {
             "content": {
               "type": "string"
+            },
+            "contentItems": {
+              "items": {
+                "$ref": "#/$defs/ToolContentItem"
+              },
+              "type": "array"
             },
             "id": {
               "type": "string"
@@ -3633,6 +3645,53 @@
         "totalTokens"
       ],
       "type": "object"
+    },
+    "ToolContentItem": {
+      "description": "Tool attachments refer to durable copies in the owning session directory.",
+      "oneOf": [
+        {
+          "properties": {
+            "mimeType": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "sizeBytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "localImage",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "name",
+            "mimeType",
+            "sizeBytes"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Turn": {
       "properties": {

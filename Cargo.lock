@@ -344,6 +344,7 @@ name = "canter-tools"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "canter-protocol",
  "encoding_rs",
  "htmd",

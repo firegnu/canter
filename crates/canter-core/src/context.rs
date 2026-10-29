@@ -39,6 +39,10 @@ pub(crate) enum HistoryEntry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         skill_input: Option<crate::skill_invocation::Invocation>,
     },
+    /// Durable attachments waiting for every tool result in the batch.
+    ToolImages {
+        content: Vec<canter_model::UserContent>,
+    },
     /// A hidden mode notice is queued until the current tool batch is complete.
     PlanModeNotice {
         message: Message,
@@ -100,6 +104,7 @@ pub(crate) struct Restored {
     pub users: Vec<Message>,
     pub summary_index: Option<usize>,
     pub plan_mode_notices: Vec<Message>,
+    pub tool_images: Vec<canter_model::UserContent>,
 }
 
 pub(crate) fn restore(
@@ -113,9 +118,11 @@ pub(crate) fn restore(
     let mut users = Vec::new();
     let mut summary_index = None;
     let mut plan_mode_notices = Vec::new();
+    let mut tool_images = Vec::new();
     let mut background_cards = BTreeMap::new();
     for entry in entries {
         match entry {
+            HistoryEntry::ToolImages { content } => tool_images.extend(content),
             HistoryEntry::PlanModeNotice { message }
             | HistoryEntry::SkillNotice { message }
             | HistoryEntry::GoalNotice { message }
@@ -143,6 +150,7 @@ pub(crate) fn restore(
             }
             HistoryEntry::Rewind { rewind: entry } => {
                 if let Some((messages, user_count, skills)) = rewind.apply(&entry) {
+                    tool_images.clear();
                     history.truncate(messages);
                     users.truncate(user_count);
                     invoked_skills.truncate(skills);
@@ -150,6 +158,7 @@ pub(crate) fn restore(
             }
             HistoryEntry::Retract { turn_id, .. } => {
                 if let Some((messages, user_count, skills)) = rewind.retract(&turn_id) {
+                    tool_images.clear();
                     history.truncate(messages);
                     users.truncate(user_count);
                     invoked_skills.truncate(skills);
@@ -187,6 +196,7 @@ pub(crate) fn restore(
                 ..
             } => {
                 rewind.clear_boundaries();
+                tool_images.clear();
                 history = messages.into_iter().filter_map(known).collect();
                 summary_index = history.len().checked_sub(1);
                 users = if user_inputs.is_empty() {
@@ -201,6 +211,7 @@ pub(crate) fn restore(
             HistoryEntry::CompactionRequest { .. } => {}
             HistoryEntry::Unknown => {}
         }
+        flush_tool_images(&mut history, &mut users, &mut tool_images);
         flush_plan_mode_notices(&mut history, &mut plan_mode_notices);
     }
     Restored {
@@ -212,6 +223,27 @@ pub(crate) fn restore(
         users,
         summary_index,
         plan_mode_notices,
+        tool_images,
+    }
+}
+
+pub(crate) fn flush_tool_images(
+    history: &mut Vec<Message>,
+    retained: &mut Vec<Message>,
+    pending: &mut Vec<canter_model::UserContent>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    // Use the same batch boundary as other deferred notices, but put attachments first.
+    let mut messages = vec![Message::ToolImages {
+        content: pending.clone(),
+    }];
+    flush_plan_mode_notices(history, &mut messages);
+    if messages.is_empty() {
+        retained.push(Message::ToolImages {
+            content: std::mem::take(pending),
+        });
     }
 }
 
@@ -245,7 +277,7 @@ pub(crate) fn request_tokens(request: &canter_model::Request) -> u64 {
 }
 
 pub(crate) fn message_tokens(message: &Message) -> u64 {
-    if let Message::UserParts { content } = message {
+    if let Message::UserParts { content } | Message::ToolImages { content } = message {
         return 8 + content
             .iter()
             .map(|part| match part {
@@ -403,14 +435,18 @@ impl crate::Session {
             messages.tokens += tokens;
             match message {
                 Message::User { .. } => messages.user += tokens,
-                Message::UserParts { content } => {
+                Message::UserParts { content } | Message::ToolImages { content } => {
                     let images = content
                         .iter()
                         .filter(|part| matches!(part, UserContent::Image { .. }))
                         .count() as u64
                         * 1024;
                     messages.images += images;
-                    messages.user += tokens - images;
+                    if matches!(message, Message::ToolImages { .. }) {
+                        messages.tool_results += tokens - images;
+                    } else {
+                        messages.user += tokens - images;
+                    }
                 }
                 Message::ToolResult { .. } => messages.tool_results += tokens,
                 _ => messages.assistant += tokens,

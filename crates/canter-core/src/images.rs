@@ -7,7 +7,9 @@ use std::{
 };
 
 use canter_model::{Message, Request, UserContent};
-use canter_protocol::{ErrorCode, EventPayload, MAX_IMAGE_BYTES, UserInput, image_mime_type};
+use canter_protocol::{
+    ErrorCode, EventPayload, MAX_IMAGE_BYTES, ToolContentItem, UserInput, image_mime_type,
+};
 use canter_store::Store;
 
 use crate::{CoreError, session::Shared};
@@ -126,6 +128,48 @@ pub(crate) async fn import(
     .map_err(|_| CoreError::internal())?
 }
 
+pub(crate) async fn import_tool(
+    store: Arc<Store>,
+    session: String,
+    images: Vec<canter_tools::ToolImage>,
+) -> Result<(Vec<ToolContentItem>, Vec<UserContent>, ImportedImages), CoreError> {
+    tokio::task::spawn_blocking(move || {
+        let mut saved = ImportedImages::default();
+        let mut items = Vec::new();
+        let mut content = Vec::new();
+        for image in images {
+            let path = store.save_image(
+                &session,
+                &image.bytes,
+                image.mime_type.strip_prefix("image/").unwrap(),
+            )?;
+            let filename = path
+                .file_name()
+                .expect("saved image filename")
+                .to_string_lossy()
+                .into_owned();
+            saved.0.push(path);
+            content.push(UserContent::Text {
+                text: format!("[Tool image: {}]", image.name),
+            });
+            content.push(UserContent::Image {
+                path: filename.clone(),
+                name: image.name.clone(),
+                data_url: String::new(),
+            });
+            items.push(ToolContentItem::LocalImage {
+                path: filename,
+                name: image.name,
+                mime_type: image.mime_type.into(),
+                size_bytes: image.bytes.len() as u64,
+            });
+        }
+        Ok((items, content, saved))
+    })
+    .await
+    .map_err(|_| CoreError::internal())?
+}
+
 pub(crate) fn message(input: &[UserInput]) -> Message {
     if !input
         .iter()
@@ -182,11 +226,12 @@ pub(crate) async fn prepare_request(
     shared: &Shared,
     mut request: Request,
 ) -> Result<(Request, Vec<String>), CoreError> {
-    if !request
-        .messages
-        .iter()
-        .any(|message| matches!(message, Message::UserParts { .. }))
-    {
+    if !request.messages.iter().any(|message| {
+        matches!(
+            message,
+            Message::UserParts { .. } | Message::ToolImages { .. }
+        )
+    }) {
         return Ok((request, Vec::new()));
     }
     let accepts_images = shared.options.image_models.contains(&request.model);
@@ -203,7 +248,7 @@ pub(crate) async fn prepare_request(
         let mut warnings = Vec::new();
         const IMAGE_BUDGET: usize = 40 * 1024 * 1024;
         for message in request.messages.iter_mut().rev() {
-            if let Message::UserParts { content } = message {
+            if let Message::UserParts { content } | Message::ToolImages { content } = message {
                 for part in content.iter_mut().rev() {
                     if let UserContent::Image {
                         path,

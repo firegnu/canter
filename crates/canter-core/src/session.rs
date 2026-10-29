@@ -59,6 +59,8 @@ pub(crate) struct State {
     pub summary_index: Option<usize>,
     pub history: Vec<Message>,
     pub plan_mode_notices: Vec<Message>,
+    pub tool_images: Vec<canter_model::UserContent>,
+    /// Recent user inputs and tool-origin attachments, sharing the retention budget.
     pub user_messages: Vec<Message>,
     pub gate: PermissionGate,
     pub active: Option<Active>,
@@ -103,6 +105,7 @@ impl State {
             summary_index: None,
             history: Vec::new(),
             plan_mode_notices: Vec::new(),
+            tool_images: Vec::new(),
             user_messages: Vec::new(),
             gate: PermissionGate::default(),
             active: None,
@@ -206,6 +209,11 @@ impl State {
             })
             .await?;
         self.history.push(message);
+        crate::context::flush_tool_images(
+            &mut self.history,
+            &mut self.user_messages,
+            &mut self.tool_images,
+        );
         crate::context::flush_plan_mode_notices(&mut self.history, &mut self.plan_mode_notices);
         Ok(())
     }
@@ -431,6 +439,7 @@ impl Session {
         state.prefix_segments = restored.segments;
         state.history = restored.history;
         state.plan_mode_notices = restored.plan_mode_notices;
+        state.tool_images = restored.tool_images;
         state.user_messages = restored.users;
         state.summary_index = restored.summary_index;
         state.background_events.all = restored.background_cards;

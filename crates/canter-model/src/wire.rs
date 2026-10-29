@@ -76,7 +76,7 @@ fn message(message: &Message) -> Option<Value> {
     Some(match message {
         Message::System { text } => json!({"role": "system", "content": text}),
         Message::User { text } => json!({"role": "user", "content": text}),
-        Message::UserParts { content } => {
+        Message::UserParts { content } | Message::ToolImages { content } => {
             json!({"role": "user", "content": content.iter().map(|part| match part {
             UserContent::Text { text } => json!({"type": "text", "text": text}),
             UserContent::Image { data_url, .. } => json!({"type": "image_url", "image_url": {"url": data_url}}),
