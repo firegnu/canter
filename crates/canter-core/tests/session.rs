@@ -263,6 +263,7 @@ async fn session_directory_updates_reach_the_file_permission_gate() {
         .resolve(
             &request.id,
             RequestResolveParams {
+                execpolicy_amendment: None,
                 decision: Some(ApprovalDecision::Accept),
                 answer: None,
                 feedback: None,
@@ -729,6 +730,7 @@ async fn request_prefix_is_frozen_until_reopening_and_only_compaction_replaces_h
         .resolve(
             &request.id,
             RequestResolveParams {
+                execpolicy_amendment: None,
                 plan: None,
                 feedback: None,
                 decision: Some(ApprovalDecision::Decline),
@@ -1122,6 +1124,7 @@ async fn two_clients_resolve_once_and_steering_precedes_the_next_model_request()
     assert_eq!(steer.turn_id, first.turn_id);
     assert!(queued.turn_id.is_none());
     let params = RequestResolveParams {
+        execpolicy_amendment: None,
         plan: None,
         feedback: None,
         decision: Some(ApprovalDecision::Accept),
@@ -1133,6 +1136,7 @@ async fn two_clients_resolve_once_and_steering_precedes_the_next_model_request()
         session.resolve(
             &request.id,
             RequestResolveParams {
+                execpolicy_amendment: None,
                 plan: None,
                 client_name: "client-b".into(),
                 ..params
@@ -1924,5 +1928,309 @@ async fn rewind_large_outputs_keeps_small_originals_and_confirms_unknown_changes
         "original"
     );
     assert!(!temp.path().join("new.txt").exists());
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn permanent_command_approval_writes_rules_and_runs_this_and_the_next_call() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("rules.json");
+    let model = ScriptModel::new(vec![
+        vec![
+            ModelEvent::ToolCall(ToolCall {
+                id: "first".into(),
+                name: "shell".into(),
+                arguments: r#"{"command":"touch first"}"#.into(),
+            }),
+            ModelEvent::Finished(FinishReason::ToolCalls),
+        ],
+        vec![
+            ModelEvent::ToolCall(ToolCall {
+                id: "second".into(),
+                name: "shell".into(),
+                arguments: r#"{"command":"touch second"}"#.into(),
+            }),
+            ModelEvent::Finished(FinishReason::ToolCalls),
+        ],
+        vec![ModelEvent::Finished(FinishReason::Stop)],
+    ]);
+    let mut config = settings(temp.path());
+    config.approval_policy = PermissionMode::AlwaysAsk;
+    let (session, _) = Session::create(
+        Arc::new(Store::new(temp.path().join("sessions")).unwrap()),
+        "rules".into(),
+        config,
+        RuntimeContext {
+            environment: [("HOME".into(), temp.path().display().to_string())].into(),
+            ..Default::default()
+        },
+        model,
+        CoreOptions {
+            command_rules_path: Some(file.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("create the markers")).await.unwrap();
+    let opened = until(&mut events, |event| {
+        matches!(event, EventPayload::RequestOpened { .. })
+    })
+    .await;
+    let EventPayload::RequestOpened { request } = opened.payload else {
+        panic!()
+    };
+    let RequestKind::Approval(approval) = &request.kind else {
+        panic!()
+    };
+    assert_eq!(
+        approval.proposed_execpolicy_amendment,
+        Some(vec![vec!["touch".into()]])
+    );
+    let params = RequestResolveParams {
+        execpolicy_amendment: approval.proposed_execpolicy_amendment.clone(),
+        decision: Some(ApprovalDecision::AcceptWithExecpolicyAmendment),
+        plan: None,
+        feedback: None,
+        answer: None,
+        client_name: "terminal".into(),
+    };
+    session.resolve(&request.id, params).await.unwrap();
+    let mut saved_notice = false;
+    let next = until(&mut events, |event| {
+        matches!(
+            event,
+            EventPayload::TurnCompleted { .. }
+                | EventPayload::RequestOpened { .. }
+                | EventPayload::Warning { .. }
+        )
+    })
+    .await;
+    let terminal = if let EventPayload::Warning { message } = &next.payload {
+        saved_notice = message.contains(&file.display().to_string());
+        until(&mut events, |event| {
+            matches!(
+                event,
+                EventPayload::TurnCompleted { .. } | EventPayload::RequestOpened { .. }
+            )
+        })
+        .await
+    } else {
+        next
+    };
+    session.close().await.unwrap();
+    assert!(
+        matches!(terminal.payload, EventPayload::TurnCompleted { .. }),
+        "next matching command must not ask again"
+    );
+    assert!(temp.path().join("first").exists());
+    assert!(temp.path().join("second").exists());
+    assert!(saved_notice, "conversation must name the saved rules file");
+    let rules: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(
+        rules,
+        serde_json::json!({"rules":[{"pattern":["touch"],"decision":"allow"}]})
+    );
+    assert_eq!(
+        std::fs::metadata(file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[tokio::test]
+async fn broken_rules_warn_once_and_recovered_forbidden_rules_apply_to_pending_approvals() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("rules.json");
+    std::fs::write(&file, "invalid").unwrap();
+    let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+    let model = ScriptModel::new(vec![
+        vec![
+            call("first", "shell", r#"{"command":"pwd"}"#),
+            ModelEvent::Finished(FinishReason::ToolCalls),
+        ],
+        vec![
+            call("second", "shell", r#"{"command":"pwd"}"#),
+            ModelEvent::Finished(FinishReason::ToolCalls),
+        ],
+        vec![ModelEvent::Finished(FinishReason::Stop)],
+    ]);
+    let (session, _) = Session::create(
+        store.clone(),
+        "broken".into(),
+        settings(temp.path()),
+        RuntimeContext::default(),
+        model.clone(),
+        CoreOptions {
+            command_rules_path: Some(file.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("check directory")).await.unwrap();
+    for index in 0..2 {
+        let event = until(&mut events, |event| {
+            matches!(event, EventPayload::RequestOpened { .. })
+        })
+        .await;
+        let EventPayload::RequestOpened { request } = event.payload else {
+            panic!()
+        };
+        let RequestKind::Approval(approval) = &request.kind else {
+            panic!()
+        };
+        assert!(
+            !approval
+                .available_decisions
+                .contains(&ApprovalDecision::AcceptForSession)
+        );
+        assert!(
+            !approval
+                .available_decisions
+                .contains(&ApprovalDecision::AcceptWithExecpolicyAmendment)
+        );
+        if index == 1 {
+            std::fs::write(
+                &file,
+                r#"{"rules":[{"pattern":["pwd"],"decision":"forbidden"}]}"#,
+            )
+            .unwrap();
+        }
+        // An old client supplies only the original fields.
+        let answer = serde_json::from_value(
+            serde_json::json!({"decision":"accept","clientName":"old-terminal"}),
+        )
+        .unwrap();
+        session.resolve(&request.id, answer).await.unwrap();
+    }
+    finished(&mut events).await;
+    session.close().await.unwrap();
+    let warnings: Vec<_> = store.events_after("broken", 0).unwrap().into_iter().filter(|event| matches!(&event.payload, EventPayload::Warning {message} if message.contains("command rules"))).collect();
+    assert_eq!(warnings.len(), 1);
+    assert!(model.requests.lock().unwrap().last().unwrap().messages.iter().any(|message| matches!(message, Message::ToolResult {tool_call_id,text,..} if tool_call_id == "second" && text.contains("forbidden"))));
+}
+
+#[tokio::test]
+async fn rules_apply_to_readonly_plan_and_review_shell_but_never_to_user_shell() {
+    for (plan, review) in [(false, false), (true, false), (false, true)] {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("rules.json");
+        std::fs::write(&file, r#"{"rules":[{"pattern":["pwd"],"decision":"forbidden"},{"pattern":["touch"],"decision":"forbidden"}]}"#).unwrap();
+        let model = ScriptModel::new(vec![
+            vec![
+                call("denied", "shell", r#"{"command":"pwd","background":true}"#),
+                ModelEvent::Finished(FinishReason::ToolCalls),
+            ],
+            vec![ModelEvent::Finished(FinishReason::Stop)],
+        ]);
+        let mut config = settings(temp.path());
+        config.plan_mode = plan;
+        let (session, _) = Session::create(
+            Arc::new(Store::new(temp.path().join("sessions")).unwrap()),
+            "restricted".into(),
+            config,
+            RuntimeContext::default(),
+            model.clone(),
+            CoreOptions {
+                command_rules_path: Some(file),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let mut events = session.subscribe(0).await.unwrap();
+        let mut params = input("inspect");
+        params.review = review.then(|| "review current work".into());
+        session.input(params).await.unwrap();
+        let seen = finished(&mut events).await;
+        assert!(
+            !seen
+                .iter()
+                .any(|event| matches!(event.payload, EventPayload::RequestOpened { .. }))
+        );
+        assert!(model.requests.lock().unwrap().last().unwrap().messages.iter().any(|message| matches!(message, Message::ToolResult {text,..} if text.contains("forbidden"))), "plan={plan} review={review}");
+        session
+            .shell_command(SessionShellCommandParams {
+                command: "touch user-marker".into(),
+                timeout_ms: None,
+            })
+            .await
+            .unwrap();
+        finished(&mut events).await;
+        assert!(temp.path().join("user-marker").exists());
+        session.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn failed_rule_save_leaves_the_request_pending_and_single_approval_still_works() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("rules.json");
+    let model = ScriptModel::new(vec![
+        vec![
+            call("first", "shell", r#"{"command":"touch marker"}"#),
+            ModelEvent::Finished(FinishReason::ToolCalls),
+        ],
+        vec![ModelEvent::Finished(FinishReason::Stop)],
+    ]);
+    let mut config = settings(temp.path());
+    config.approval_policy = PermissionMode::AskForExecution;
+    let (session, _) = Session::create(
+        Arc::new(Store::new(temp.path().join("sessions")).unwrap()),
+        "save-failure".into(),
+        config,
+        RuntimeContext::default(),
+        model,
+        CoreOptions {
+            command_rules_path: Some(file.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("create marker")).await.unwrap();
+    let event = until(&mut events, |event| {
+        matches!(event, EventPayload::RequestOpened { .. })
+    })
+    .await;
+    let EventPayload::RequestOpened { request } = event.payload else {
+        panic!()
+    };
+    let mut params: RequestResolveParams = serde_json::from_value(
+        serde_json::json!({"decision":"acceptWithExecpolicyAmendment","clientName":"terminal"}),
+    )
+    .unwrap();
+    assert_eq!(
+        session
+            .resolve(&request.id, params.clone())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidDecision
+    );
+    params.execpolicy_amendment = Some(vec![vec!["touch".into()]]);
+    std::fs::create_dir(&file).unwrap();
+    assert_eq!(
+        session.resolve(&request.id, params).await.unwrap_err().code,
+        ErrorCode::InvalidRequest
+    );
+    assert_eq!(session.snapshot().await.session.pending_requests.len(), 1);
+    assert!(!temp.path().join("marker").exists());
+    session
+        .resolve(
+            &request.id,
+            serde_json::from_value(
+                serde_json::json!({"decision":"accept","clientName":"terminal"}),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    finished(&mut events).await;
+    assert!(temp.path().join("marker").exists());
     session.close().await.unwrap();
 }

@@ -7,6 +7,7 @@ pub use output::MAX_CLIENT_OUTPUT_BYTES;
 mod background;
 mod permission;
 mod readonly;
+mod rules;
 mod shell;
 pub use background::{BackgroundCommands, MAX_BACKGROUND_COMMANDS, MAX_BACKGROUND_OUTPUT_BYTES};
 mod web_fetch;

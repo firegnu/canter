@@ -209,6 +209,8 @@ async fn readonly_shell_allowlist_applies_in_all_asking_modes() {
                 "grep needle file || cat fallback",
                 "cat file | head -n 5; wc -l file",
                 "cat a\" b\"' c'",
+                "ls &",
+                "ls |& cat",
             ][..],
             false,
         ),
@@ -249,7 +251,6 @@ async fn readonly_shell_allowlist_applies_in_all_asking_modes() {
                 "cat file < in",
                 "cat file 2>&1",
                 "cat <<EOF\ntext\nEOF",
-                "ls &",
                 "(ls)",
                 "{ ls; }",
                 "cat $(pwd)/file",
@@ -269,7 +270,6 @@ async fn readonly_shell_allowlist_applies_in_all_asking_modes() {
                 "ls ;; cat file",
                 "cat 'unterminated",
                 "cat file\\",
-                "ls |& cat",
                 "cd \"$SOMEWHERE\" && cat file",
             ][..],
             true,
@@ -393,11 +393,13 @@ async fn readonly_shell_still_asks_for_literal_protected_paths() {
         )
         .await
         .unwrap();
-    gate.resolve(&call, ApprovalDecision::AcceptForSession, None)
-        .unwrap();
+    assert!(
+        gate.resolve(&call, ApprovalDecision::AcceptForSession, None)
+            .is_err()
+    );
     assert!(matches!(
         gate.evaluate(&call, PermissionMode::AlwaysAsk),
-        PermissionCheck::Execute(_)
+        PermissionCheck::Ask(_)
     ));
 }
 
@@ -521,16 +523,16 @@ async fn permission_modes_use_tool_risk_and_unknown_means_always_ask() {
                     assert_eq!(request.item_id, "item");
                     assert_eq!(request.tool, tool.name());
                     assert_eq!(request.arguments, *call.approval_arguments());
-                    assert_eq!(
-                        request.available_decisions,
-                        vec![
-                            ApprovalDecision::Accept,
-                            ApprovalDecision::AcceptForSession,
-                            ApprovalDecision::Decline,
-                            ApprovalDecision::DeclineWithFeedback,
-                            ApprovalDecision::Cancel
-                        ]
-                    );
+                    let mut expected = vec![
+                        ApprovalDecision::Accept,
+                        ApprovalDecision::Decline,
+                        ApprovalDecision::DeclineWithFeedback,
+                        ApprovalDecision::Cancel,
+                    ];
+                    if tool != Tool::Shell {
+                        expected.insert(1, ApprovalDecision::AcceptForSession);
+                    }
+                    assert_eq!(request.available_decisions, expected);
                     if tool == Tool::Write || tool == Tool::Edit {
                         assert!(
                             request.arguments["diff"]
@@ -555,19 +557,14 @@ async fn approval_answers_and_grants_are_scoped_to_one_session_and_one_tool() {
     ));
     let cancel = CancellationToken::new();
     let shell = tools
-        .prepare(
-            Tool::Shell,
-            "s1",
-            r#"{"command":"printf first > first"}"#,
-            &cancel,
-        )
+        .prepare(Tool::Shell, "s1", r#"{"command":"cargo test"}"#, &cancel)
         .await
         .unwrap();
     let another_shell = tools
         .prepare(
             Tool::Shell,
             "s2",
-            r#"{"command":"printf different > different"}"#,
+            r#"{"command":"cargo test --release"}"#,
             &cancel,
         )
         .await

@@ -2175,10 +2175,11 @@ async fn the_later_answer_to_an_approval_closes_and_names_the_first() {
     for terminal in [&a, &b] {
         terminal.wait_for("Run this command?").await;
     }
-    // A allows (option 1), B declines (key 3), at the same moment.
+    // This command has expansions/redirection, so only one-time approval is offered.
+    // A allows (option 1), B declines (key 2), at the same moment.
     read_the_box().await;
     a.press(KeyCode::Enter).await;
-    b.press(KeyCode::Char('3')).await;
+    b.press(KeyCode::Char('2')).await;
     for terminal in [&a, &b] {
         terminal
             .wait_until("the box to close", |t| {
@@ -3404,4 +3405,60 @@ async fn plan_approval_implements_in_place_or_starts_the_plan_in_a_fresh_session
         }
         world.stop_server(Signal::SIGTERM).await;
     }
+}
+
+#[tokio::test]
+async fn shell_prefix_approval_saves_exact_compound_prefixes_and_other_commands_still_ask() {
+    let mut world = World::new(vec![
+        shell_reply("touch first && mkdir first-dir"),
+        shell_reply("touch second && mkdir second-dir"),
+        shell_reply("cp first copied"),
+        text_reply("Prefix rules checked."),
+    ])
+    .await;
+    world.start_server().await;
+    let terminal = world.open(&[], "canter-tui rules").await;
+    terminal.type_line("Create markers").await;
+    terminal
+        .wait_for("Always allow commands starting with:")
+        .await;
+    terminal.wait_for(r#"["touch"]"#).await;
+    terminal.wait_for(r#"["mkdir"]"#).await;
+    read_the_box().await;
+    terminal.press(KeyCode::Char('3')).await;
+    terminal.wait_for("cp first copied").await;
+    terminal.wait_for("Run this command?").await;
+    let rules: Value =
+        serde_json::from_slice(&fs::read(world.path("state/rules.json")).unwrap()).unwrap();
+    assert_eq!(
+        rules,
+        json!({"rules":[{"pattern":["touch"],"decision":"allow"},{"pattern":["mkdir"],"decision":"allow"}]})
+    );
+    assert_eq!(
+        fs::metadata(world.path("state/rules.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    for path in [
+        "work/first",
+        "work/first-dir",
+        "work/second",
+        "work/second-dir",
+    ] {
+        assert!(world.path(path).exists(), "{path}");
+    }
+    assert!(
+        !world.path("home/.canter/rules.json").exists(),
+        "server CANTER_HOME determines the global file"
+    );
+    read_the_box().await;
+    terminal.press(KeyCode::Char('4')).await;
+    terminal.wait_for("Prefix rules checked.").await;
+    terminal.wait_idle().await;
+    assert!(!world.path("work/copied").exists());
+    terminal.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
 }

@@ -12,11 +12,32 @@ pub(crate) fn is_readonly(
     environment: &BTreeMap<String, String>,
     protected: &[PathBuf],
 ) -> bool {
+    check(command, cwd, environment, protected, false, &|_| false)
+}
+
+pub(crate) fn is_allowed(
+    command: &str,
+    cwd: &Path,
+    environment: &BTreeMap<String, String>,
+    protected: &[PathBuf],
+    allowed_prefix: &dyn Fn(&[String]) -> bool,
+) -> bool {
+    check(command, cwd, environment, protected, true, allowed_prefix)
+}
+
+fn check(
+    command: &str,
+    cwd: &Path,
+    environment: &BTreeMap<String, String>,
+    protected: &[PathBuf],
+    extended: bool,
+    allowed_prefix: &dyn Fn(&[String]) -> bool,
+) -> bool {
     let home = environment.get("HOME").map(Path::new);
     let has_cdpath = environment
         .get("CDPATH")
         .is_some_and(|value| !value.is_empty());
-    let Some(commands) = parse_commands(command, home) else {
+    let Ok(commands) = scan_commands(command, home, extended) else {
         return false;
     };
     // Retain both success and failure locations: `cd dir; cat file` may read in
@@ -48,7 +69,7 @@ pub(crate) fn is_readonly(
                         return false;
                     };
                     if target.is_empty()
-                        || target.starts_with('-')
+                        || target.starts_with(['-', '~'])
                         || !allowed(target)
                         || has_cdpath && !Path::new(target).is_absolute()
                     {
@@ -62,13 +83,20 @@ pub(crate) fn is_readonly(
                     if !path_allowed(target_str, &cwd, home, protected, false) {
                         return false;
                     }
-                    if pipeline.len() == 1 {
+                    if pipeline.len() == 1 && command.next != Some(Separator::Background) {
                         new_cwd = target;
                     }
-                } else if !readonly_command(&command.words, &allowed, &recursive_allowed)
-                    || command.words[0] == "git" && !git::configuration_is_safe(&cwd, environment)
-                {
-                    return false;
+                } else {
+                    let readonly = readonly_command(&command.words, &allowed, &recursive_allowed)
+                        && (command.words[0] != "git"
+                            || git::configuration_is_safe(&cwd, environment));
+                    // Preserve path checks (including recursive search roots) before explicit grants.
+                    let path_safe = command.words.iter().all(|word| allowed(word))
+                        && (!readonly_command(&command.words, &|_| true, &|_| true)
+                            || readonly_command(&command.words, &allowed, &recursive_allowed));
+                    if !(readonly || path_safe && allowed_prefix(&command.words)) {
+                        return false;
+                    }
                 }
             }
             // A pipeline runs cd in a subshell; it cannot change the following cwd.
@@ -587,7 +615,8 @@ impl Options {
     }
 }
 
-// No expansions, comments, redirects, newlines, control flow or implicit execution.
+// No expansions, comments, redirects, control flow or implicit execution.
+// The policy mode additionally splits newlines, background lists and stderr pipes.
 // Quotes and escapes are decoded before checking names, options and literal paths.
 #[derive(Clone, Copy, PartialEq)]
 enum Separator {
@@ -595,10 +624,11 @@ enum Separator {
     Or,
     Sequence,
     Pipe,
+    Background,
 }
 
-struct Command {
-    words: Vec<String>,
+pub(crate) struct Command {
+    pub(crate) words: Vec<String>,
     next: Option<Separator>,
 }
 
@@ -620,16 +650,109 @@ fn push_word(
     Some(())
 }
 
-fn parse_commands(source: &str, home: Option<&Path>) -> Option<Vec<Command>> {
+/// On unknown syntax retain only completed literal words, for best-effort deny matching.
+/// The partial result must never be used to allow a command.
+pub(crate) fn scan_commands(
+    source: &str,
+    home: Option<&Path>,
+    extended: bool,
+) -> Result<Vec<Command>, Vec<Command>> {
     let mut commands = Vec::new();
     let mut words = Vec::new();
+    if scan_into(source, home, extended, &mut commands, &mut words).is_some() {
+        if commands.iter().any(|command| {
+            command.words[0].is_empty()
+                || command.words[0].contains('=')
+                || matches!(
+                    command.words[0].as_str(),
+                    "if" | "then"
+                        | "else"
+                        | "elif"
+                        | "fi"
+                        | "for"
+                        | "while"
+                        | "until"
+                        | "do"
+                        | "done"
+                        | "case"
+                        | "esac"
+                        | "in"
+                        | "!"
+                        | "select"
+                        | "function"
+                )
+        }) {
+            Err(commands)
+        } else {
+            Ok(commands)
+        }
+    } else {
+        if !words.is_empty() {
+            commands.push(Command { words, next: None });
+        }
+        // Recover later literal segments after a simple variable, without trying
+        // to interpret nested substitutions, groups or their command bodies.
+        if extended && let Some(parts) = literal_segments(source) {
+            for part in parts {
+                let parsed = scan_commands(part, home, false);
+                commands.extend(match parsed {
+                    Ok(commands) | Err(commands) => commands,
+                });
+            }
+        }
+        Err(commands)
+    }
+}
+
+fn literal_segments(source: &str) -> Option<Vec<&str>> {
+    if source.contains(['(', ')', '{', '}', '`']) {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, ch) in source.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            if ch == delimiter {
+                quote = None;
+            }
+        } else if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+        } else if matches!(ch, '&' | '|' | ';' | '\n') {
+            parts.push(&source[start..offset]);
+            start = offset + ch.len_utf8();
+        }
+    }
+    if quote.is_some() || escaped {
+        return None;
+    }
+    parts.push(&source[start..]);
+    Some(parts)
+}
+
+fn scan_into(
+    source: &str,
+    home: Option<&Path>,
+    extended: bool,
+    commands: &mut Vec<Command>,
+    words: &mut Vec<String>,
+) -> Option<()> {
     let mut word = String::new();
     let mut started = false;
     let mut tilde = false;
     let mut quote = None;
     let mut chars = source.chars().peekable();
     while let Some(ch) = chars.next() {
-        if matches!(ch, '\n' | '\r' | '\0' | '$' | '`') {
+        if matches!(ch, '\r' | '\0' | '$' | '`') || ch == '\n' && (!extended || quote.is_some()) {
             return None;
         }
         if quote == Some('\'') {
@@ -662,43 +785,59 @@ fn parse_commands(source: &str, home: Option<&Path>) -> Option<Vec<Command>> {
                 }
                 ' ' | '\t' => {
                     if started {
-                        push_word(&mut words, &mut word, &mut tilde, home)?;
+                        push_word(words, &mut word, &mut tilde, home)?;
                         started = false;
                     }
                 }
-                '&' | '|' | ';' => {
+                '&' | '|' | ';' | '\n' => {
                     if started {
-                        push_word(&mut words, &mut word, &mut tilde, home)?;
+                        push_word(words, &mut word, &mut tilde, home)?;
                         started = false;
                     }
                     if words.is_empty() {
+                        if extended && ch == '\n' {
+                            continue;
+                        }
                         return None;
                     }
                     let separator = if ch == '&' {
-                        if chars.next() != Some('&') {
+                        if chars.peek() == Some(&'&') {
+                            chars.next();
+                            Separator::And
+                        } else if extended {
+                            Separator::Background
+                        } else {
                             return None;
                         }
-                        Separator::And
                     } else if ch == '|' && chars.peek() == Some(&'|') {
                         chars.next();
                         Separator::Or
                     } else if ch == '|' {
+                        if extended && chars.peek() == Some(&'&') {
+                            chars.next();
+                        }
                         Separator::Pipe
                     } else {
                         Separator::Sequence
                     };
                     commands.push(Command {
-                        words: std::mem::take(&mut words),
+                        words: std::mem::take(words),
                         next: Some(separator),
                     });
                 }
-                '<' | '>' | '(' | ')' | '{' | '}' | '*' | '?' | '[' | ']' | '#' => return None,
+                '<' | '>' | '(' | ')' | '{' | '}' | '#' => {
+                    if started {
+                        push_word(words, &mut word, &mut tilde, home)?;
+                    }
+                    return None;
+                }
+                '*' | '?' | '[' | ']' => return None,
                 _ => {
                     if !started
                         && ch == '~'
-                        && chars
-                            .peek()
-                            .is_none_or(|ch| matches!(ch, '/' | ' ' | '\t' | '&' | '|' | ';'))
+                        && chars.peek().is_none_or(|ch| {
+                            matches!(ch, '/' | ' ' | '\t' | '\n' | '&' | '|' | ';')
+                        })
                     {
                         tilde = true;
                     }
@@ -712,11 +851,24 @@ fn parse_commands(source: &str, home: Option<&Path>) -> Option<Vec<Command>> {
         return None;
     }
     if started {
-        push_word(&mut words, &mut word, &mut tilde, home)?;
+        push_word(words, &mut word, &mut tilde, home)?;
     }
     if words.is_empty() {
+        if extended
+            && commands.last().is_some_and(|command| {
+                matches!(
+                    command.next,
+                    Some(Separator::Sequence | Separator::Background)
+                )
+            })
+        {
+            return Some(());
+        }
         return None;
     }
-    commands.push(Command { words, next: None });
-    Some(commands)
+    commands.push(Command {
+        words: std::mem::take(words),
+        next: None,
+    });
+    Some(())
 }

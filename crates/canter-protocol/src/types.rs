@@ -535,6 +535,7 @@ pub enum PatchChangeKind {
 pub enum ApprovalDecision {
     Accept,
     AcceptForSession,
+    AcceptWithExecpolicyAmendment,
     Decline,
     DeclineWithFeedback,
     Cancel,
@@ -598,6 +599,12 @@ pub struct ApprovalRequest {
     /// Full tool arguments, including a command or the proposed file changes.
     pub arguments: serde_json::Value,
     pub available_decisions: Vec<ApprovalDecision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub proposed_execpolicy_amendment: Option<Vec<Vec<String>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session_prefixes: Option<Vec<Vec<String>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

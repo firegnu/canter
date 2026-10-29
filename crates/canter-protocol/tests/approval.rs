@@ -113,6 +113,8 @@ fn resolving_an_already_processed_approval_is_idempotent() {
         turn_id: "t1".into(),
         created_at: 10,
         kind: RequestKind::Approval(ApprovalRequest {
+            proposed_execpolicy_amendment: None,
+            session_prefixes: None,
             item_id: "i1".into(),
             tool: "shell".into(),
             arguments: json!({"command": "pwd"}),
@@ -158,4 +160,20 @@ fn resolving_an_already_processed_approval_is_idempotent() {
     expected.last_event_seq = 2;
     expected.updated_at = 30;
     assert_eq!(apply_event(&resolved, &late_answer).unwrap(), expected);
+}
+
+#[test]
+fn command_rule_proposals_and_answers_round_trip_and_legacy_fields_stay_optional() {
+    let request = json!({"itemId":"i1", "tool":"shell", "arguments":{"command":"cargo test && git commit -m done"},
+        "availableDecisions":["accept","acceptForSession","acceptWithExecpolicyAmendment","decline"],
+        "proposedExecpolicyAmendment":[["cargo","test"],["git","commit"]],
+        "sessionPrefixes":[["cargo","test"],["git","commit"]]});
+    let decoded: ApprovalRequest = serde_json::from_value(request.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), request);
+    let answer = json!({"decision":"acceptWithExecpolicyAmendment", "execpolicyAmendment":[["cargo","test"],["git","commit"]], "clientName":"terminal"});
+    let decoded: RequestResolveParams = serde_json::from_value(answer.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), answer);
+    let legacy = json!({"itemId":"i1", "tool":"shell", "arguments":{"command":"cargo test"}, "availableDecisions":["accept","acceptForSession","decline"]});
+    let decoded: ApprovalRequest = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), legacy);
 }

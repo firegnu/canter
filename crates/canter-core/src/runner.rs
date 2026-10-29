@@ -771,6 +771,11 @@ async fn execute(
                     }
                     output
                 }
+                Some(PermissionCheck::Forbidden { reason }) => {
+                    let mut output = prepared.declined_output(None);
+                    output.text = reason;
+                    output
+                }
                 Some(PermissionCheck::Ask(_)) => unreachable!("approval resolved"),
                 Some(PermissionCheck::Execute(permit)) => {
                     let checkpoint = shared
@@ -841,7 +846,7 @@ async fn permission<'a>(
     call: &'a PreparedCall,
     cancel: &CancellationToken,
 ) -> Result<Option<PermissionCheck<'a>>, CoreError> {
-    let mut receiver = {
+    let (mut receiver, session_prefixes) = {
         let mut state = shared.state.lock().await;
         state
             .journal
@@ -875,8 +880,31 @@ async fn permission<'a>(
                 .gate
                 .evaluate(call, state.journal.snapshot.settings.approval_policy)
         };
+        // First enforce the hard plan/review restriction, then command policy.
+        let restricted = state.journal.snapshot.settings.plan_mode
+            || state
+                .active
+                .as_ref()
+                .is_some_and(|active| active.turn.review.is_some());
+        let permission = if restricted
+            && call.tool() == Tool::Shell
+            && matches!(permission, PermissionCheck::Execute(_))
+        {
+            state
+                .gate
+                .evaluate(call, state.journal.snapshot.settings.approval_policy)
+        } else {
+            permission
+        };
+        if let Some(message) = state.gate.take_rules_warning() {
+            state
+                .journal
+                .append(vec![EventPayload::Warning { message }])
+                .await?;
+        }
         match permission {
             PermissionCheck::Ask(approval) => {
+                let session_prefixes = approval.session_prefixes.clone();
                 let request = PendingRequest {
                     id: id("approval"),
                     turn_id: turn_id.into(),
@@ -897,7 +925,7 @@ async fn permission<'a>(
                     ])
                     .await?;
                 state.requests.insert(request.id, sender);
-                receiver
+                (receiver, session_prefixes)
             }
             permission => return Ok(Some(permission)),
         }
@@ -932,11 +960,17 @@ async fn permission<'a>(
             feedback: None,
         }));
     }
-    state
+    let permission = state
         .gate
-        .resolve(call, decision, feedback)
-        .map(Some)
-        .map_err(|_| CoreError::new(ErrorCode::InvalidDecision, "invalid approval decision"))
+        .resolve_with_prefixes(call, decision, feedback, session_prefixes.as_deref())
+        .map_err(|_| CoreError::new(ErrorCode::InvalidDecision, "invalid approval decision"))?;
+    if let Some(message) = state.gate.take_rules_warning() {
+        state
+            .journal
+            .append(vec![EventPayload::Warning { message }])
+            .await?;
+    }
+    Ok(Some(permission))
 }
 async fn ask_user(
     shared: &Shared,

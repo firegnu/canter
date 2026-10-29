@@ -94,7 +94,13 @@ reason 为 `steered`（插话消费）、`merged`（合并消费）、`interrupt
 批准和提问先到先得：后到的回答由服务端返回 `alreadyResolved: true` 和原处理事件序号，
 不再产生一个处理事件。取消、超时的 `clientName` 可为空。
 权限模式为 `alwaysAsk`、`askForExecution`、`allowAll`；批准回答为
-`accept`、`acceptForSession`、`decline`、`declineWithFeedback`、`cancel`。
+`accept`、`acceptForSession`、`acceptWithExecpolicyAmendment`、`decline`、`declineWithFeedback`、`cancel`。
+shell 请求可带 `sessionPrefixes` 和 `proposedExecpolicyAmendment`，均为词前缀数组的列表，
+客户端应逐条原样显示。永久批准回答带 `execpolicyAmendment`，必须与提议完全相同且决定为
+`acceptWithExecpolicyAmendment`；缺失、不匹配或随其他决定发送均为 `invalid_decision`。
+其他工具不带这些字段，旧客户端忽略新字段并滤掉未知决定；新客户端连旧服务端不显示永久选项。
+保存失败请求仍等待；成功发通常的 request.resolved，并用 warning 事件提示保存路径。
+比 Codex v2 多一层前缀数组以一次保存组合命令的多条规则，保留 canter 的字符串决定而非改成带内容对象。
 
 `declineWithFeedback` 必须附带非空白的 `feedback` 字符串，其它 decision 不得带 feedback；
 选项不在请求的 `availableDecisions` 内也返回 `invalid_decision`，请求保持等待。

@@ -90,6 +90,7 @@ async fn drive(server: &Server, root: &Path, session: &str, after: u64, text: &s
                             session,
                             &request.id,
                             &RequestResolveParams {
+                                execpolicy_amendment: None,
                                 plan: None,
                                 decision: Some(ApprovalDecision::Accept),
                                 feedback: None,

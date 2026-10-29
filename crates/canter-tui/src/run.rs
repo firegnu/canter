@@ -1207,6 +1207,7 @@ impl<C: Connector> Chat<C> {
         answer: canter_protocol::PlanAnswer,
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let params = RequestResolveParams {
+            execpolicy_amendment: None,
             plan: Some(answer.clone()),
             decision: None,
             feedback: None,
@@ -1743,7 +1744,24 @@ impl<C: Connector> Chat<C> {
                     }
                     _ => unreachable!(),
                 };
+                let execpolicy_amendment = if decision
+                    == Some(canter_protocol::ApprovalDecision::AcceptWithExecpolicyAmendment)
+                {
+                    app.snapshot()
+                        .pending_requests
+                        .iter()
+                        .find(|request| request.id == request_id)
+                        .and_then(|request| match &request.kind {
+                            canter_protocol::RequestKind::Approval(approval) => {
+                                approval.proposed_execpolicy_amendment.clone()
+                            }
+                            _ => None,
+                        })
+                } else {
+                    None
+                };
                 let params = RequestResolveParams {
+                    execpolicy_amendment,
                     plan: None,
                     feedback,
                     decision,

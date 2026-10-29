@@ -37,6 +37,10 @@ pub trait Executor: Send + Sync {
     fn is_readonly_shell(&self, _command: &str) -> bool {
         false
     }
+    /// Check every segment with the whitelist's cwd and protected-path handling.
+    fn is_allowed_shell(&self, command: &str, _allowed_prefix: &dyn Fn(&[String]) -> bool) -> bool {
+        self.is_readonly_shell(command)
+    }
     async fn resolve_path(&self, path: &Path, cancel: &CancellationToken) -> io::Result<PathBuf>;
     async fn open_file(&self, path: &Path, cancel: &CancellationToken) -> io::Result<FileReader>;
     /// Replace a file only if its bytes still match the approved snapshot (None means absent).
@@ -106,6 +110,16 @@ pub(crate) fn check_cancel(cancel: &CancellationToken) -> io::Result<()> {
 impl Executor for LocalExecutor {
     fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    fn is_allowed_shell(&self, command: &str, allowed_prefix: &dyn Fn(&[String]) -> bool) -> bool {
+        crate::readonly::is_allowed(
+            command,
+            &self.cwd,
+            &self.environment,
+            &self.shell_protected_paths,
+            allowed_prefix,
+        )
     }
 
     fn is_readonly_shell(&self, command: &str) -> bool {

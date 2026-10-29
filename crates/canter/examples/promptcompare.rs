@@ -413,7 +413,7 @@ async fn drive_turn(
                         };
                         let deny = (scenario == 4 && approval.tool == "shell") || (scenario == 6 && !declined && matches!(approval.tool.as_str(), "edit" | "write" | "shell"));
                         if deny { declined = true; }
-                        server.client.resolve(session, &request.id, &RequestResolveParams { plan: None, feedback: None, decision: Some(if deny { ApprovalDecision::Decline } else { ApprovalDecision::Accept }), answer: None, client_name: "p2-72".into() }).await?;
+                        server.client.resolve(session, &request.id, &RequestResolveParams { execpolicy_amendment: None, plan: None, feedback: None, decision: Some(if deny { ApprovalDecision::Decline } else { ApprovalDecision::Accept }), answer: None, client_name: "p2-72".into() }).await?;
                     },
                     _ => {},
                 }

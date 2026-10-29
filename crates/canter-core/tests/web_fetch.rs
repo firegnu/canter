@@ -370,6 +370,7 @@ async fn approve(session: &Session, request: &PendingRequest) {
         .resolve(
             &request.id,
             RequestResolveParams {
+                execpolicy_amendment: None,
                 plan: None,
                 feedback: None,
                 decision: Some(ApprovalDecision::AcceptForSession),

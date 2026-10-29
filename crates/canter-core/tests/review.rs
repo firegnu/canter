@@ -207,6 +207,7 @@ async fn review_turn_is_readonly_even_with_session_grants_and_restores_permissio
                                 .resolve(
                                     &request.id,
                                     RequestResolveParams {
+                                        execpolicy_amendment: None,
                                         plan: None,
                                         feedback: None,
                                         decision: Some(ApprovalDecision::AcceptForSession),
@@ -289,6 +290,7 @@ async fn review_turn_is_readonly_even_with_session_grants_and_restores_permissio
                             .resolve(
                                 &request.id,
                                 RequestResolveParams {
+                                    execpolicy_amendment: None,
                                     plan: None,
                                     feedback: None,
                                     decision: Some(ApprovalDecision::Accept),
@@ -531,6 +533,7 @@ async fn interrupted_review_restores_the_next_inputs_original_permissions() {
         .resolve(
             &request.id,
             RequestResolveParams {
+                execpolicy_amendment: None,
                 plan: None,
                 feedback: None,
                 decision: Some(ApprovalDecision::Accept),
@@ -1266,6 +1269,7 @@ async fn cancel_approval_keeps_the_declined_result_and_stops_the_turn() {
         .resolve(
             &request.id,
             RequestResolveParams {
+                execpolicy_amendment: None,
                 plan: None,
                 feedback: None,
                 decision: Some(ApprovalDecision::Cancel),

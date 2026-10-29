@@ -943,7 +943,9 @@ impl App {
                         return None;
                     }
                     match &request.kind {
-                        RequestKind::Approval(approval) => Some(approval.tool.clone()),
+                        RequestKind::Approval(approval) => {
+                            Some((approval.tool.clone(), approval.session_prefixes.is_some()))
+                        }
                         _ => None,
                     }
                 })
@@ -1076,9 +1078,9 @@ impl App {
                 client_name,
             } => {
                 self.answered.remove(request_id);
-                if let Some(tool) = open_request
+                if let Some((tool, prefixes)) = open_request
                     && let Some(notice) =
-                        self.resolution_notice(resolution, client_name.as_deref(), &tool)
+                        self.resolution_notice(resolution, client_name.as_deref(), &tool, prefixes)
                 {
                     self.notice(notice);
                 }
@@ -4367,20 +4369,29 @@ impl App {
         resolution: &ApprovalResolution,
         client: Option<&str>,
         tool: &str,
+        prefixes: bool,
     ) -> Option<LogicalLine> {
         let dim = theme::secondary();
         match resolution {
             ApprovalResolution::Answered { decision, .. } => {
-                let label = approval::decision_label(*decision, tool);
+                let label = match decision {
+                    ApprovalDecision::AcceptForSession if prefixes => {
+                        "Allow command prefixes for this session"
+                    }
+                    ApprovalDecision::AcceptWithExecpolicyAmendment => {
+                        "Allow and save command prefixes"
+                    }
+                    _ => approval::decision_label(*decision, tool),
+                };
                 let text = match client {
                     Some(name) if name == self.client_name => format!("You chose: {label}"),
                     Some(name) => format!("{name} answered: {label}"),
                     None => format!("Answered: {label}"),
                 };
                 let (mark, style) = match decision {
-                    ApprovalDecision::Accept | ApprovalDecision::AcceptForSession => {
-                        ("✓ ", theme::success())
-                    }
+                    ApprovalDecision::Accept
+                    | ApprovalDecision::AcceptForSession
+                    | ApprovalDecision::AcceptWithExecpolicyAmendment => ("✓ ", theme::success()),
                     _ => ("✗ ", theme::failure()),
                 };
                 Some(cells::notice(mark, &text, style))

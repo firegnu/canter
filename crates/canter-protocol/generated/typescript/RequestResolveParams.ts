@@ -6,4 +6,4 @@ import type { UserInputAnswer } from "./UserInputAnswer";
 /**
  * POST /v1/sessions/{id}/requests/{rid}.
  */
-export type RequestResolveParams = { plan?: PlanAnswer, decision?: ApprovalDecision, feedback?: string, answer?: UserInputAnswer, clientName: string, };
+export type RequestResolveParams = { execpolicyAmendment?: Array<Array<string>>, plan?: PlanAnswer, decision?: ApprovalDecision, feedback?: string, answer?: UserInputAnswer, clientName: string, };

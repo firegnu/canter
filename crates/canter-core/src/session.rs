@@ -572,7 +572,15 @@ impl Session {
         Ok((Self::from_state(state, tools, model, options), response))
     }
 
-    fn from_state(state: State, tools: Tools, model: Arc<dyn Model>, options: CoreOptions) -> Self {
+    fn from_state(
+        mut state: State,
+        tools: Tools,
+        model: Arc<dyn Model>,
+        options: CoreOptions,
+    ) -> Self {
+        if let Some(path) = &options.command_rules_path {
+            state.gate = std::mem::take(&mut state.gate).with_rules_file(path.clone());
+        }
         tools
             .background()
             .restore(&state.journal.snapshot.background_commands);
@@ -836,6 +844,32 @@ impl Session {
             .iter()
             .find(|request| request.id == request_id)
             .ok_or_else(|| CoreError::new(ErrorCode::RequestNotFound, "request not found"))?;
+        let amendment = if params.decision == Some(ApprovalDecision::AcceptWithExecpolicyAmendment)
+        {
+            let RequestKind::Approval(approval) = &request.kind else {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidDecision,
+                    "invalid command rule answer",
+                ));
+            };
+            if params.execpolicy_amendment.is_none()
+                || params.execpolicy_amendment != approval.proposed_execpolicy_amendment
+            {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidDecision,
+                    "answer must match the proposed command prefixes",
+                ));
+            }
+            params.execpolicy_amendment.clone()
+        } else {
+            if params.execpolicy_amendment.is_some() {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidDecision,
+                    "command prefixes require an amendment decision",
+                ));
+            }
+            None
+        };
         let valid_feedback = if params.decision == Some(ApprovalDecision::DeclineWithFeedback) {
             params
                 .feedback
@@ -943,20 +977,33 @@ impl Session {
                     .plan_handoff = true;
             }
         }
-        let events = state
-            .journal
-            .append(vec![
-                EventPayload::RequestResolved {
-                    request_id: request_id.into(),
-                    resolution: resolution.clone(),
-                    client_name: Some(params.client_name),
-                },
-                EventPayload::SessionStatus {
-                    status: SessionStatus::Working,
-                    close_reason: None,
-                },
-            ])
-            .await?;
+        let saved_rules = if let Some(prefixes) = amendment {
+            Some(state.gate.save_rules(&prefixes).map_err(|_| {
+                CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "Could not save command rules; the command is still awaiting approval.",
+                )
+            })?)
+        } else {
+            None
+        };
+        let mut payloads = vec![
+            EventPayload::RequestResolved {
+                request_id: request_id.into(),
+                resolution: resolution.clone(),
+                client_name: Some(params.client_name),
+            },
+            EventPayload::SessionStatus {
+                status: SessionStatus::Working,
+                close_reason: None,
+            },
+        ];
+        if let Some(path) = saved_rules {
+            payloads.push(EventPayload::Warning {
+                message: format!("Saved command allow rules to {}.", path.display()),
+            });
+        }
+        let events = state.journal.append(payloads).await?;
         state.resolved.insert(request_id.into(), events[0].seq);
         if let Some(sender) = state.requests.remove(request_id) {
             let _ = sender.send(resolution);
