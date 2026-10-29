@@ -10,7 +10,6 @@ use std::{
 };
 
 pub(crate) const REMINDER: &str = "These are partial, asynchronous diagnostics. Run the checks required by the project; these diagnostics do not replace them.";
-const INLINE: Duration = Duration::from_millis(500);
 const MAX_BYTES: usize = 8 * 1024;
 const MAX_LINE: usize = 1024;
 type Source = (PathBuf, String);
@@ -91,9 +90,9 @@ struct FileReport {
     resolved: Option<u32>,
 }
 impl Delivery {
-    fn expire(&mut self) {
+    fn expire(&mut self, window: Duration) {
         self.pending.retain(|path, p| {
-            if p.ticket.changed_at.elapsed() <= Duration::from_secs(60) {
+            if p.ticket.changed_at.elapsed() <= window {
                 return true;
             }
             if !p.reported && self.expired.len() < 1024 {
@@ -355,14 +354,19 @@ pub(crate) async fn inline(
     };
     let mut items = Vec::new();
     let text = match ticket
-        .wait(INLINE.saturating_sub(ticket.changed_at.elapsed()))
+        .wait(
+            shared
+                .options
+                .lsp_inline_wait
+                .saturating_sub(ticket.changed_at.elapsed()),
+        )
         .await
     {
         Ok(batch) => {
             pending.root = Some(batch.root.clone());
             pending.reported = true;
             let mut batches = tokio::time::timeout_at(
-                ticket.changed_at + INLINE,
+                ticket.changed_at + shared.options.lsp_inline_wait,
                 shared.tools.lsp().unwrap().diagnostics(),
             )
             .await
@@ -429,7 +433,9 @@ pub(crate) async fn before_request(shared: &Shared, turn_id: &str) -> Result<(),
     let cached = lsp.diagnostics().await;
     let (mut pending, expired) = {
         let mut state = shared.state.lock().await;
-        state.lsp_delivery.expire();
+        state
+            .lsp_delivery
+            .expire(shared.options.lsp_delivery_window);
         (
             std::mem::take(&mut state.lsp_delivery.pending),
             std::mem::take(&mut state.lsp_delivery.expired),
@@ -464,7 +470,7 @@ pub(crate) async fn before_request(shared: &Shared, turn_id: &str) -> Result<(),
             }
             continue;
         }
-        if p.ticket.changed_at.elapsed() > Duration::from_secs(60) {
+        if p.ticket.changed_at.elapsed() > shared.options.lsp_delivery_window {
             discarded.insert(path.clone());
             if !p.reported {
                 statuses.push((p.item_id.clone(),path.clone(),DiagnosticStatus::TimedOut,"The 60-second diagnostic delivery window has expired. No current result is being delivered for this change.".into()));
@@ -490,7 +496,7 @@ pub(crate) async fn before_request(shared: &Shared, turn_id: &str) -> Result<(),
     let mut retained = BTreeMap::new();
     for (path, p) in pending {
         if !discarded.contains(&path)
-            && p.ticket.changed_at.elapsed() <= Duration::from_secs(60)
+            && p.ticket.changed_at.elapsed() <= shared.options.lsp_delivery_window
             && p.ticket.is_current().await
         {
             retained.insert(path, p);
@@ -778,7 +784,12 @@ pub(crate) fn watch(shared: &std::sync::Arc<Shared>) {
             if shared.state.lock().await.closing {
                 break;
             }
-            shared.state.lock().await.lsp_delivery.expire();
+            shared
+                .state
+                .lock()
+                .await
+                .lsp_delivery
+                .expire(shared.options.lsp_delivery_window);
             if sync_states(&shared).await.is_err() {
                 break;
             }

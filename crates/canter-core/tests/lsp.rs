@@ -118,13 +118,21 @@ async fn finished(events: &mut canter_core::Subscription) {
     .await
     .unwrap();
 }
+/// Quick diagnostics get a generous wait so a busy machine cannot push them past the window;
+/// the 500 ms boundary itself is tested with the production options.
+fn options() -> CoreOptions {
+    CoreOptions {
+        lsp_inline_wait: Duration::from_secs(5),
+        ..CoreOptions::default()
+    }
+}
 async fn create(
     root: &Path,
     server: &Server,
     enabled: bool,
     mode: &str,
 ) -> (Session, WarmService, Arc<Store>) {
-    create_attached(root, server, enabled, mode, true).await
+    create_attached(root, server, enabled, mode, true, options()).await
 }
 async fn create_attached(
     root: &Path,
@@ -132,6 +140,7 @@ async fn create_attached(
     enabled: bool,
     mode: &str,
     attached: bool,
+    options: CoreOptions,
 ) -> (Session, WarmService, Arc<Store>) {
     std::fs::write(root.join("project.marker"), "").unwrap();
     let service = LspService::new(serde_json::from_value::<LspConfig>(json!({"enabled":enabled,"servers":{"fake":{"command":executable(),"extensions":{"fake":"fake"},"root_markers":["project.marker"]}}})).unwrap()).unwrap();
@@ -178,7 +187,7 @@ async fn create_attached(
         },
         runtime,
         Arc::new(ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap()),
-        CoreOptions::default(),
+        options,
     )
     .await
     .unwrap();
@@ -446,7 +455,8 @@ async fn subscription_stop_and_retry_are_visible_without_waking_the_model() {
 async fn disabled_lsp_requests_match_the_original_path_byte_for_byte() {
     let root = tempfile::tempdir().unwrap();
     let baseline = Server::start(vec![write("bad"), done()]).await;
-    let (session, service, _) = create_attached(root.path(), &baseline, false, "sync", false).await;
+    let (session, service, _) =
+        create_attached(root.path(), &baseline, false, "sync", false, options()).await;
     let mut events = session.subscribe(0).await.unwrap();
     session.input(input()).await.unwrap();
     finished(&mut events).await;
@@ -480,7 +490,7 @@ async fn unsupported_files_and_stopped_subscriptions_preserve_plain_tool_results
         };
         let baseline = Server::start(replies()).await;
         let (session, service, _) =
-            create_attached(root.path(), &baseline, false, "sync", false).await;
+            create_attached(root.path(), &baseline, false, "sync", false, options()).await;
         let mut events = session.subscribe(0).await.unwrap();
         for _ in 0..2 {
             session.input(input()).await.unwrap();
@@ -541,7 +551,7 @@ async fn reopening_keeps_delivered_history_but_drops_undelivered_diagnostics() {
         "lsp-test".into(),
         runtime(root.path(), Some(service.clone()), "late_sync"),
         Arc::new(ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap()),
-        CoreOptions::default(),
+        options(),
     )
     .await
     .unwrap();
@@ -800,13 +810,18 @@ async fn unversioned_empty_lists_do_not_claim_issues_are_resolved() {
 async fn expired_delivery_is_not_revived_by_a_later_model_request() {
     let root = tempfile::tempdir().unwrap();
     let server = Server::start(vec![write("bad"), done(), done()]).await;
-    let (session, service, _) = create(root.path(), &server, true, "late_sync").await;
+    let window = CoreOptions {
+        lsp_delivery_window: Duration::from_secs(2),
+        ..CoreOptions::default()
+    };
+    let (session, service, _) =
+        create_attached(root.path(), &server, true, "late_sync", true, window).await;
     let mut events = session.subscribe(0).await.unwrap();
     session.input(input()).await.unwrap();
     finished(&mut events).await;
     release(root.path());
     diagnostics_ready(&session).await;
-    tokio::time::sleep(Duration::from_secs(61)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(server.requests.lock().unwrap().len(), 2);
     session.input(input()).await.unwrap();
     finished(&mut events).await;
@@ -830,7 +845,15 @@ async fn expired_delivery_is_not_revived_by_a_later_model_request() {
 async fn diagnostics_at_the_500ms_boundary_are_delivered_once() {
     let root = tempfile::tempdir().unwrap();
     let server = Server::start(vec![write("bad"), done(), done()]).await;
-    let (session, service, _) = create(root.path(), &server, true, "edge_sync").await;
+    let (session, service, _) = create_attached(
+        root.path(),
+        &server,
+        true,
+        "edge_sync",
+        true,
+        CoreOptions::default(),
+    )
+    .await;
     let mut events = session.subscribe(0).await.unwrap();
     session.input(input()).await.unwrap();
     finished(&mut events).await;
@@ -911,7 +934,7 @@ async fn a_stopped_subscription_remains_stopped_on_reopen_and_can_be_retried() {
         "lsp-test".into(),
         runtime(root.path(), Some(service.clone()), "sync"),
         Arc::new(ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap()),
-        CoreOptions::default(),
+        options(),
     )
     .await
     .unwrap();
@@ -1012,7 +1035,15 @@ async fn late_diagnostics_do_not_enter_history_during_a_stream() {
 async fn server_initialization_is_inside_the_file_tools_wait_budget() {
     let root = tempfile::tempdir().unwrap();
     let server = Server::start(vec![write("bad"), done()]).await;
-    let (session, service, _) = create(root.path(), &server, true, "hang_init").await;
+    let (session, service, _) = create_attached(
+        root.path(),
+        &server,
+        true,
+        "hang_init",
+        true,
+        CoreOptions::default(),
+    )
+    .await;
     let mut events = session.subscribe(0).await.unwrap();
     session.input(input()).await.unwrap();
     finished(&mut events).await;
