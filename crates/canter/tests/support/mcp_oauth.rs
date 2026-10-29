@@ -618,7 +618,10 @@ async fn oauth_startup_credential_store_error_is_not_login_required() {
     fixture.ready().await;
     let report = status(&fixture).await;
     assert_eq!(report["data"][0]["connected"], false);
-    assert_eq!(report["data"][0]["error"], "MCP OAuth initialization failed");
+    assert_eq!(
+        report["data"][0]["error"],
+        "MCP OAuth initialization failed"
+    );
     assert_eq!(auth.state.lock().unwrap().refreshes, 0);
     fixture.stop().await;
 }
