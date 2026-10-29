@@ -25,7 +25,7 @@ canter 是用户自己做的 coding agent：Rust 写，一台机器一个常驻�
 - **不按名字批量杀进程**：不要用 `pkill -f canter` 这类命令。停自己起的进程（包括测试里起的服务端）用记下的 PID。
 - **测试不依赖用户状态**：用隔离的 HOME 和 canter 自己的状态目录、临时端口和临时 socket，不碰用户真实的会话和配置。
 - **不做绕过测试**（用户 10-26：「尤其是是在涉及到fetch的时候，不能像之前那种测试绕过（我不允许）」）：开发和审查都不专门构造输入去绕过、骗过安全检查（比如造网页去骗过 `web_fetch` 的预检、造网址去越过放行范围），网页抓取尤其不行。怀疑检查有漏洞，读代码指出来，修法用不依赖检查完美的办法（比如单独的大栈线程、退回原文），交主控定。为验收写的普通回归测试（超限的页面回原文、进程不崩）照常写。
-- **验证**：小改跑直接相关测试；跨模块改动和合并前跑 `cargo nextest run --all-targets`、`cargo test --doc --workspace`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`（全套用 cargo-nextest 并行跑，用户 10-26 定；文档示例测试 nextest 不跑，另跑 `--doc`）。保留有价值的测试，不靠删测试、放宽断言或缩短超时来通过。
+- **验证**：开发（包括返工）只跑和这件活直接相关的测试，加 `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check`，不跑全套。全套只在合并前由主控跑一次：`cargo nextest run --all-targets`、`cargo test --doc --workspace`（用 cargo-nextest 并行跑，用户 10-26 定；文档示例测试 nextest 不跑，另跑 `--doc`）。用户 10-29：「这个全套测试太浪费时间了」，同意主控建议「开发只跑相关测试，合并前由主控跑一次全套」。保留有价值的测试，不靠删测试、放宽断言或缩短超时来通过。
 - **独立编译目录**：命令前加 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/<子目录>`，主仓库用 `main`，任务 worktree 用分支名。同一个仓库的两份代码（比如审查时另拷一份）不共用一个编译目录。清 worktree 时一并删掉它的子目录。
 - **安装和部署**：还没定，定了写进 DESIGN。切换用户 PATH 上的程序、装成系统服务、重启常驻服务端，都在用户在场时做。
 
