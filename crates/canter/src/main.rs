@@ -6,7 +6,7 @@ use canter::{ChatArgs, Command, Context, USAGE};
 #[tokio::main]
 async fn main() -> ExitCode {
     let result = match canter::parse(std::env::args_os().skip(1)) {
-        Ok(Command::Serve { replace }) => canter_server::serve(replace)
+        Ok(Command::Serve { replace }) => canter_server::serve(replace, canter::VERSION)
             .await
             .map_err(|error| error.to_string()),
         Ok(Command::Chat(args)) => chat(args).await,

@@ -10,6 +10,7 @@ pub use lifecycle::{Registration, UPGRADE_GRACE};
 
 use std::{
     future::IntoFuture,
+    io::Write,
     path::PathBuf,
     sync::{
         Arc,
@@ -51,7 +52,9 @@ fn new_id() -> String {
     )
 }
 
-pub async fn serve(replace: bool) -> Result<(), ServerError> {
+/// Runs the server until it is asked to exit. `version` is the line
+/// `canter --version` prints; it is shown once the server accepts clients.
+pub async fn serve(replace: bool, version: &str) -> Result<(), ServerError> {
     let home = state_directory()?;
     let (lease, config, store) = tokio::task::spawn_blocking(move || {
         let lease = lifecycle::Lease::acquire(home, replace)?;
@@ -111,6 +114,13 @@ pub async fn serve(replace: bool) -> Result<(), ServerError> {
     })
     .await
     .map_err(|_| ServerError("registration failed".into()))??;
+    // The socket is listening and its registration is published: clients can connect.
+    // A closed log must not take the daemon down after it became reachable.
+    let _ = writeln!(
+        std::io::stdout(),
+        "canter server ready · {version} · pid {}",
+        std::process::id()
+    );
     let shutdown = app.clone();
     let home = lease.home.clone();
     let registration = lease.registration.clone();
