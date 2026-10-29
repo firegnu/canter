@@ -57,7 +57,7 @@ pub(crate) fn attach(command: &mut tokio::process::Command) -> io::Result<io::Pi
                     libc::_exit(1);
                 }
                 libc::close(2);
-                // LocalExecutor serializes pipe creation and spawn. All other
+                // The shared process launcher serializes pipe creation and spawn. All other
                 // descriptors (including the spawn error pipe and ownership
                 // writers) are CLOEXEC; no scan up to RLIMIT_NOFILE is needed.
                 libc::execv(c"/bin/sh".as_ptr(), argv.as_ptr());

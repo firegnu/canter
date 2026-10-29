@@ -99,6 +99,7 @@ impl Fixture {
             models: vec!["fake".into()],
             options,
             mcp: Default::default(),
+            lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
             sessions: Default::default(),
             registry_changed: Default::default(),
             draining: Default::default(),

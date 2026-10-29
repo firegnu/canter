@@ -29,6 +29,8 @@ pub(crate) struct Config {
     prices: canter_core::usage::PriceBook,
     #[serde(default)]
     pub mcp_servers: std::collections::BTreeMap<String, canter_core::mcp::ServerConfig>,
+    #[serde(default)]
+    pub lsp: canter_tools::lsp::LspConfig,
 }
 
 impl Config {
@@ -115,6 +117,10 @@ impl Config {
                 .validate()
                 .map_err(|message| ServerError(message.into()))?;
         }
+        config
+            .lsp
+            .resolve()
+            .map_err(|message| ServerError(message.into()))?;
         Ok(config)
     }
 
@@ -166,6 +172,14 @@ fn default_image_models() -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn enabled_lsp_requires_a_complete_server_configuration() {
+        let error = load(json!({"lsp":{"enabled":true,"servers":{"fake":{"args":["--stdio"]}}}}))
+            .err()
+            .expect("an enabled LSP server needs a command and file/root mappings");
+        assert!(error.to_string().contains("LSP"));
+    }
 
     #[test]
     fn goal_budget_defaults_to_five_and_accepts_zero_but_not_negative_or_text() {

@@ -54,6 +54,7 @@ async fn failed_close_can_be_resumed_through_http() {
     });
     let app = Arc::new(App {
         mcp: Default::default(),
+        lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
         home,
         store: Arc::new(store),
         model: model.clone(),
@@ -219,6 +220,7 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
     let store = Arc::new(Store::new(root.path().join("state/sessions")).unwrap());
     let app = Arc::new(App {
         mcp: Default::default(),
+        lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
         home: root.path().join("state"),
         store,
         model: model.clone(),
@@ -742,6 +744,7 @@ impl BtwTest {
         let model = Arc::new(BtwModel(Default::default()));
         let app = Arc::new(App {
             mcp: Default::default(),
+            lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
             home: root.path().join("state"),
             store: Arc::new(Store::new(root.path().join("state/sessions")).unwrap()),
             model: model.clone(),

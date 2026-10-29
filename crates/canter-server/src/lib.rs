@@ -4,6 +4,8 @@ mod config;
 mod discovery;
 mod http;
 mod lifecycle;
+#[cfg(test)]
+mod lsp_tests;
 
 pub use discovery::{Connection, discover, ensure_server, replace_server};
 pub use lifecycle::{Registration, UPGRADE_GRACE};
@@ -55,6 +57,17 @@ fn new_id() -> String {
 /// Runs the server until it is asked to exit. `version` is the line
 /// `canter --version` prints; it is shown once the server accepts clients.
 pub async fn serve(replace: bool, version: &str) -> Result<(), ServerError> {
+    serve_with_lsp(replace, version, canter_tools::lsp::LspService::new).await
+}
+
+async fn serve_with_lsp(
+    replace: bool,
+    version: &str,
+    make_lsp: impl FnOnce(
+        canter_tools::lsp::LspConfig,
+    )
+        -> Result<Arc<canter_tools::lsp::LspService>, canter_tools::lsp::LspError>,
+) -> Result<(), ServerError> {
     let home = state_directory()?;
     let (lease, config, store) = tokio::task::spawn_blocking(move || {
         let lease = lifecycle::Lease::acquire(home, replace)?;
@@ -74,6 +87,7 @@ pub async fn serve(replace: bool, version: &str) -> Result<(), ServerError> {
         .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
     let model = config.model_client()?;
     let options = config.options();
+    let lsp = make_lsp(config.lsp).map_err(|error| ServerError(error.to_string()))?;
     let startup_stop = CancellationToken::new();
     let connecting = canter_core::mcp::Registry::connect(
         config.mcp_servers,
@@ -86,11 +100,13 @@ pub async fn serve(replace: bool, version: &str) -> Result<(), ServerError> {
         _ = async { tokio::select! { _ = terminate.recv() => {}, _ = interrupt.recv() => {}, _ = hangup.recv() => {} } } => {
             startup_stop.cancel();
             connecting.await.shutdown().await;
+            lsp.shutdown().await;
             return Ok(());
         }
     };
     let app = Arc::new(http::App {
         mcp,
+        lsp,
         home: lease.home.clone(),
         store: Arc::new(store),
         model,
@@ -172,6 +188,7 @@ pub async fn serve(replace: bool, version: &str) -> Result<(), ServerError> {
             }
         })).await;
         shutdown.mcp.shutdown().await;
+        shutdown.lsp.shutdown().await;
         shutdown.stopped.cancel();
     }).into_future();
     tokio::pin!(server);
