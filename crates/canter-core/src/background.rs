@@ -475,7 +475,7 @@ pub(crate) fn watch(shared: &Arc<Shared>) {
                         mode: InputMode::Queue,
                         client_name: "background".into(),
                     };
-                    match shared.start(&mut state, params, None).await {
+                    match shared.start(&mut state, params, None, Vec::new()).await {
                         Ok((_, done)) => {
                             state.active.as_mut().unwrap().auto_wake = true;
                             state.background_events.count += 1;

@@ -62,6 +62,11 @@ input 为空，没有 userMessage，clientName 为 background。每批可以有�
 事件序号和时间在 JSON / TypeScript 中都是 number；网页调用方使用 JS 安全整数范围。
 
 空闲时 input 开新轮，忙时默认 `queue`，也可 `steer`。
+点名用技能（P2-129）：`UserInput` 新增 `{ "type": "skill", "name": "example" }`，
+用户后面的话仍用独立的 `Text`。参考 Codex `rust-v0.163.0` 的 Skill 输入，canter 不接收客户端路径，
+由服务端查当前会话固定的技能列表并读取全文；不存在或不可读时返回 invalid_request，不开轮。
+公开事件只含名字与用户文字，旧客户端按 Unknown 跳过 skill；全文与所属轮保存在私有模型历史，
+压缩只补回仍有效的同名最近一次点用快照，回退、撤回同步移除，不在压缩时重新读文件。
 `UserInput` 支持 `{ "type": "text", "text": "这是什么" }` 和
 `{ "type": "localImage", "path": "/tmp/screenshot.png", "name": "screenshot.png" }`。
 图片沿用 Codex v2 的 localImage/path，`name` 是 canter 可选的显示文件名；不提供 detail 或网址输入。

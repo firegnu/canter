@@ -21,6 +21,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ),
             ("Shift+Enter / Ctrl+J", "New line"),
             ("/", "Commands, typed first"),
+            ("/技能名", "用技能"),
             (
                 "!command",
                 "Run a shell command directly, while the session is idle",

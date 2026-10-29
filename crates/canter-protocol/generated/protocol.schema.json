@@ -3817,6 +3817,22 @@
       "oneOf": [
         {
           "properties": {
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "const": "skill",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "text": {
               "type": "string"
             },

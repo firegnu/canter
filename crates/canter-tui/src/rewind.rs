@@ -10,7 +10,8 @@ pub(crate) fn text(input: &[UserInput]) -> String {
     input
         .iter()
         .filter_map(|part| match part {
-            UserInput::Text { text } => Some(text.as_str()),
+            UserInput::Skill { name } => Some(format!("/{name}")),
+            UserInput::Text { text } => Some(text.clone()),
             _ => None,
         })
         .collect::<Vec<_>>()

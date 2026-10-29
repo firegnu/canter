@@ -280,6 +280,9 @@ pub struct QueuedInput {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum UserInput {
+    Skill {
+        name: String,
+    },
     Text {
         text: String,
     },

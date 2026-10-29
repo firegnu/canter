@@ -266,6 +266,7 @@ impl InputBox {
             }
             for part in input {
                 match part {
+                    Part::Input(UserInput::Skill { name }) => self.insert(&format!("/{name} ")),
                     Part::Input(UserInput::Text { text }) => self.insert(&text),
                     Part::Input(UserInput::LocalImage { path, name }) => {
                         let name = name.unwrap_or_else(|| {

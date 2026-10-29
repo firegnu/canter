@@ -50,6 +50,7 @@ impl Session {
                     client_name: "userShell".into(),
                 },
                 None,
+                Vec::new(),
             )
             .await?;
         state

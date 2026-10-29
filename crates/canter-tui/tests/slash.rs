@@ -17,6 +17,75 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 #[test]
+fn skill_commands_share_completion_and_builtin_names_win() {
+    let mut screen = Screen::new();
+    let skills = serde_json::from_value(json!([
+        {"name":"example","description":"Inspect this project","path":"/unused/SKILL.md","source":"project","modelInvocation":false},
+        {"name":"help","description":"COLLIDING_SKILL","path":"/unused/help/SKILL.md","source":"project","modelInvocation":true}
+    ])).unwrap();
+    screen.ui.app_mut().show_skills(skills);
+    screen.draw();
+    screen.key(KeyCode::Esc);
+    screen.type_text("/ex");
+    screen.draw();
+    let shown = screen.text();
+    assert!(
+        shown.contains("/example")
+            && shown.contains("Inspect this project")
+            && shown.contains("技能"),
+        "{shown}"
+    );
+    assert!(shown.contains("/exit") && shown.contains("/export"));
+    screen.key(KeyCode::Down);
+    screen.key(KeyCode::Down);
+    screen.key(KeyCode::Tab);
+    screen.draw();
+    screen.type_text("Please inspect.");
+    screen.draw();
+    let action = screen.key(KeyCode::Enter);
+    assert!(
+        matches!(action, Some(Action::SendInput { input, .. }) if serde_json::to_value(&input).unwrap() == json!([{"type":"skill","name":"example"},{"type":"text","text":"Please inspect."}]))
+    );
+    assert!(
+        matches!(screen.enter("/example"), Some(Action::SendInput { input, .. }) if serde_json::to_value(&input).unwrap() == json!([{"type":"skill","name":"example"}]))
+    );
+    screen
+        .ui
+        .app_mut()
+        .send_failed("Cannot read skill example: file missing");
+    screen.draw();
+    assert!(
+        screen
+            .text()
+            .contains("Cannot read skill example: file missing")
+    );
+    assert_eq!(screen.enter("/help"), None);
+    screen.draw();
+    assert!(screen.text().contains("Help"));
+    assert!(!screen.text().contains("COLLIDING_SKILL"));
+    screen.key(KeyCode::Esc);
+    let mut turn = turn_json("skill-turn", "completed");
+    turn["input"] =
+        json!([{"type":"skill","name":"example"},{"type":"text","text":"Please inspect."}]);
+    turn["items"] = json!([{"type":"userMessage","id":"skill-message","content":turn["input"]}]);
+    screen.event(json!({"type":"turn.started","turn":turn}));
+    for reopen in [false, true] {
+        if reopen {
+            let snapshot = screen.ui.app().snapshot().clone();
+            screen.ui = Ui::new(
+                TestBackend::new(WIDTH, HEIGHT),
+                App::new(snapshot, None, NOW),
+            )
+            .unwrap();
+        }
+        screen.draw();
+        let shown = screen.text();
+        assert_eq!(shown.matches("用了技能 `example`").count(), 1, "{shown}");
+        assert!(shown.contains("Please inspect."));
+    }
+}
+
+#[test]
 fn goal_command_dispatches_and_goal_state_is_visible() {
     let mut screen = Screen::new();
     assert!(

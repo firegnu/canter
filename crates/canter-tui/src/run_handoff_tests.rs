@@ -88,6 +88,9 @@ async fn clear_context_plan_resolves_then_starts_a_new_session_with_selected_per
             next(requests)
                 .await
                 .json(json!({"data":[],"nextCursor":null}));
+            let skills = next(requests).await;
+            assert_eq!(skills.path, "/v1/sessions/implementation/skills");
+            skills.json(json!({"data":[]}));
         }
     );
     assert!(receiver.is_some());
@@ -188,6 +191,9 @@ async fn esc_twice_returns_to_the_original_session_and_shows_its_conversation() 
             next(requests)
                 .await
                 .json(json!({"data":[],"nextCursor":null}));
+            let skills = next(requests).await;
+            assert_eq!(skills.path, "/v1/sessions/original/skills");
+            skills.json(json!({"data":[]}));
         }
     );
     assert!(receiver.is_some());

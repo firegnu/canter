@@ -187,6 +187,7 @@ impl Shared {
                     client_name: "goal".into(),
                 },
                 None,
+                Vec::new(),
             )
             .await?;
         state.active.as_mut().unwrap().goal_continuation = true;

@@ -52,6 +52,8 @@ pub(crate) struct State {
     pub prefix: Vec<Message>,
     pub prefix_segments: Option<Vec<crate::prompt::Segment>>,
     pub skills: Vec<Skill>,
+    pub invoked_skills: Vec<crate::skill_invocation::Invocation>,
+    pub queued_skills: HashMap<String, Vec<crate::skill_invocation::Snapshot>>,
     pub tool_definitions: Vec<canter_model::ToolDefinition>,
     pub prefix_sections: Vec<ContextSection>,
     pub summary_index: Option<usize>,
@@ -94,6 +96,8 @@ impl State {
             prefix: Vec::new(),
             prefix_segments: None,
             skills: Vec::new(),
+            invoked_skills: Vec::new(),
+            queued_skills: HashMap::new(),
             tool_definitions: Vec::new(),
             prefix_sections: Vec::new(),
             summary_index: None,
@@ -198,6 +202,7 @@ impl State {
             .record(HistoryEntry::Message {
                 message: message.clone(),
                 user_input: false,
+                skill_input: None,
             })
             .await?;
         self.history.push(message);
@@ -240,15 +245,28 @@ impl State {
         })
         .await
     }
-    async fn user_input(&mut self, input: &[UserInput]) -> Result<(), CoreError> {
-        let message = crate::images::message(input);
+    async fn user_input(
+        &mut self,
+        input: &[UserInput],
+        turn_id: &str,
+        skills: Vec<crate::skill_invocation::Snapshot>,
+    ) -> Result<(), CoreError> {
+        let message = crate::skill_invocation::message(input, &skills, true);
+        let user_message = crate::skill_invocation::message(input, &skills, false);
+        let skill_input = (!skills.is_empty()).then(|| crate::skill_invocation::Invocation {
+            turn_id: turn_id.into(),
+            skills,
+            user_message: user_message.clone(),
+        });
         self.journal
             .record(HistoryEntry::Message {
                 message: message.clone(),
                 user_input: true,
+                skill_input: skill_input.clone(),
             })
             .await?;
-        self.user_messages.push(message.clone());
+        self.user_messages.push(user_message);
+        self.invoked_skills.extend(skill_input);
         self.history.push(message);
         Ok(())
     }
@@ -295,6 +313,7 @@ impl State {
         }
         self.queue.clear();
         self.steers.clear();
+        self.queued_skills.clear();
         Ok(())
     }
     pub async fn consume_steering(&mut self, turn_id: &str) -> Result<(), CoreError> {
@@ -304,7 +323,8 @@ impl State {
         }
         let mut payloads = Vec::new();
         for input in &inputs {
-            self.user_input(&input.input).await?;
+            let skills = self.queued_skills.remove(&input.id).unwrap_or_default();
+            self.user_input(&input.input, turn_id, skills).await?;
             payloads.push(EventPayload::ItemCompleted {
                 turn_id: turn_id.into(),
                 item: Item::UserMessage {
@@ -407,6 +427,7 @@ impl Session {
             .fill_costs(&mut state.journal.snapshot);
         let restored = crate::context::restore(entries.clone(), &mut state.rewind);
         state.prefix = restored.prefix;
+        state.invoked_skills = restored.invoked_skills;
         state.prefix_segments = restored.segments;
         state.history = restored.history;
         state.plan_mode_notices = restored.plan_mode_notices;
@@ -634,7 +655,7 @@ impl Session {
         {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
-                "input must contain supported text or images",
+                "input must contain supported text, images or skills",
             ));
         }
         let loaded = if params
@@ -684,6 +705,7 @@ impl Session {
         } else {
             None
         };
+        let skills = crate::skill_invocation::load(&params.input, &state.skills).await?;
         state.background_events.user_input();
         if state
             .journal
@@ -722,9 +744,11 @@ impl Session {
                     .expect("active turn")
                     .manual_compaction
             {
+                state.queued_skills.insert(input.id.clone(), skills);
                 state.steers.push(input);
                 state.active.as_ref().map(|active| active.turn.id.clone())
             } else {
+                state.queued_skills.insert(input.id.clone(), skills);
                 state.queue.push_back(input);
                 None
             };
@@ -736,7 +760,7 @@ impl Session {
                 turn_id,
             });
         }
-        let (response, done) = self.shared.start(&mut state, params, None).await?;
+        let (response, done) = self.shared.start(&mut state, params, None, skills).await?;
         if let Some(imported) = imported {
             imported.keep();
         }
@@ -1148,6 +1172,7 @@ impl Session {
                     client_name: "compact".into(),
                 },
                 None,
+                Vec::new(),
             )
             .await?;
         state
@@ -1299,6 +1324,7 @@ impl Shared {
         state: &mut State,
         params: SessionInputParams,
         input_id: Option<String>,
+        skills: Vec<crate::skill_invocation::Snapshot>,
     ) -> Result<(SessionInputResponse, Done), CoreError> {
         let turn = Turn {
             review: params.review,
@@ -1323,9 +1349,10 @@ impl Shared {
             turn.id.clone(),
             state.history.len(),
             state.user_messages.len(),
+            state.invoked_skills.len(),
         );
         if !params.input.is_empty() {
-            state.user_input(&params.input).await?;
+            state.user_input(&params.input, &turn.id, skills).await?;
         }
         let mut payloads = vec![
             EventPayload::TurnStarted {

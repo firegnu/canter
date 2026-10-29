@@ -36,9 +36,14 @@ pub(crate) enum HistoryEntry {
         message: Message,
         #[serde(default)]
         user_input: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        skill_input: Option<crate::skill_invocation::Invocation>,
     },
     /// A hidden mode notice is queued until the current tool batch is complete.
     PlanModeNotice {
+        message: Message,
+    },
+    SkillNotice {
         message: Message,
     },
     GoalNotice {
@@ -87,6 +92,7 @@ pub(crate) fn known(message: Message) -> Option<Message> {
 }
 
 pub(crate) struct Restored {
+    pub invoked_skills: Vec<crate::skill_invocation::Invocation>,
     pub background_cards: BTreeMap<String, canter_protocol::Item>,
     pub prefix: Vec<Message>,
     pub segments: Option<Vec<Segment>>,
@@ -101,6 +107,7 @@ pub(crate) fn restore(
     rewind: &mut crate::rewind::Checkpoints,
 ) -> Restored {
     let mut prefix = Vec::new();
+    let mut invoked_skills = Vec::new();
     let mut segments = None;
     let mut history = Vec::new();
     let mut users = Vec::new();
@@ -110,6 +117,7 @@ pub(crate) fn restore(
     for entry in entries {
         match entry {
             HistoryEntry::PlanModeNotice { message }
+            | HistoryEntry::SkillNotice { message }
             | HistoryEntry::GoalNotice { message }
             | HistoryEntry::DirectoriesNotice { message } => plan_mode_notices.push(message),
             HistoryEntry::BackgroundNotice {
@@ -131,18 +139,20 @@ pub(crate) fn restore(
                 plan_mode_notices.push(message);
             }
             HistoryEntry::TurnBoundary { turn_id } => {
-                rewind.boundary(turn_id, history.len(), users.len())
+                rewind.boundary(turn_id, history.len(), users.len(), invoked_skills.len())
             }
             HistoryEntry::Rewind { rewind: entry } => {
-                if let Some((messages, user_count)) = rewind.apply(&entry) {
+                if let Some((messages, user_count, skills)) = rewind.apply(&entry) {
                     history.truncate(messages);
                     users.truncate(user_count);
+                    invoked_skills.truncate(skills);
                 }
             }
             HistoryEntry::Retract { turn_id, .. } => {
-                if let Some((messages, user_count)) = rewind.retract(&turn_id) {
+                if let Some((messages, user_count, skills)) = rewind.retract(&turn_id) {
                     history.truncate(messages);
                     users.truncate(user_count);
+                    invoked_skills.truncate(skills);
                 }
             }
             HistoryEntry::FileCheckpoint { checkpoint } => rewind.record_file(checkpoint),
@@ -157,11 +167,17 @@ pub(crate) fn restore(
             HistoryEntry::Message {
                 message,
                 user_input,
+                skill_input,
             } => {
                 if user_input && matches!(message, Message::User { .. } | Message::UserParts { .. })
                 {
-                    users.push(message.clone());
+                    users.push(
+                        skill_input
+                            .as_ref()
+                            .map_or_else(|| message.clone(), |input| input.user_message.clone()),
+                    );
                 }
+                invoked_skills.extend(skill_input);
                 history.extend(known(message));
             }
             HistoryEntry::Compaction {
@@ -188,6 +204,7 @@ pub(crate) fn restore(
         flush_plan_mode_notices(&mut history, &mut plan_mode_notices);
     }
     Restored {
+        invoked_skills,
         background_cards,
         prefix,
         segments,

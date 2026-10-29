@@ -270,7 +270,7 @@ async fn send_input(
         .iter()
         .filter_map(|part| match part {
             UserInput::Text { text } => Some(text.as_str()),
-            UserInput::LocalImage { .. } | UserInput::Unknown => None,
+            UserInput::Skill { .. } | UserInput::LocalImage { .. } | UserInput::Unknown => None,
         })
         .collect();
     let reply = format!(
