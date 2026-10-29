@@ -92,15 +92,48 @@ async fn server_running(home: &Path) -> Result<bool, ServerError> {
 /// Find a compatible daemon, or detach `executable serve` and wait up to 15 seconds for readiness.
 /// `home` must be an absolute canter-only state directory. Never upgrades automatically.
 pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection, ServerError> {
+    start_server(home, executable, false).await
+}
+
+/// Replace any current daemon in the background and return once its successor is ready.
+pub async fn replace_server(home: &Path, executable: &Path) -> Result<Connection, ServerError> {
+    start_server(home, executable, true).await
+}
+
+async fn start_server(
+    home: &Path,
+    executable: &Path,
+    replace: bool,
+) -> Result<Connection, ServerError> {
     if !home.is_absolute() {
         return Err(ServerError(
             "the state directory must be an absolute path".into(),
         ));
     }
-    if let Some(connection) = discover(home).await? {
-        return Ok(connection);
-    }
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let previous_instance = if replace {
+        let directory = home.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            if lifecycle::server_running(&directory)? {
+                lifecycle::read_registration(&directory)
+            } else {
+                Ok(None)
+            }
+        })
+        .await
+        .map_err(|_| ServerError("failed to read the server registration".into()))??
+        .map(|registration| registration.instance)
+    } else {
+        if let Some(connection) = discover(home).await? {
+            return Ok(connection);
+        }
+        None
+    };
+    let deadline = tokio::time::Instant::now()
+        + if replace {
+            lifecycle::UPGRADE_GRACE + Duration::from_secs(30)
+        } else {
+            Duration::from_secs(15)
+        };
     let directory = home.to_path_buf();
     let (startup, log) = tokio::task::spawn_blocking(move || {
         lifecycle::private_dir(&directory)?;
@@ -126,12 +159,15 @@ pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection,
         }
     }
     // Another client may have started the daemon while this caller waited for the startup lock.
-    if let Some(connection) = discover(home).await? {
+    if !replace && let Some(connection) = discover(home).await? {
         return Ok(connection);
     }
     let mut command = Command::new(executable);
+    command.arg("serve");
+    if replace {
+        command.args(["--replace", "--foreground"]);
+    }
     command
-        .arg("serve")
         .env_clear()
         .env("CANTER_HOME", home)
         .current_dir(home)
@@ -140,7 +176,8 @@ pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection,
             log.try_clone()
                 .map_err(|_| ServerError("cannot open the server log".into()))?,
         )
-        .stderr(log);
+        .stderr(log)
+        .kill_on_drop(replace);
     // setsid is the only pre-exec operation; it detaches the daemon from the client's terminal.
     unsafe {
         command.pre_exec(|| {
@@ -153,10 +190,17 @@ pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection,
         .spawn()
         .map_err(|_| ServerError("cannot start canter serve".into()))?;
     loop {
-        if let Some(connection) = discover(home).await? {
-            tokio::spawn(async move {
-                let _ = child.wait().await;
-            });
+        if let Some(connection) = discover(home).await?
+            && previous_instance.as_ref() != Some(&connection.registration.instance)
+        {
+            if replace {
+                // This short-lived command is exiting; init reaps the daemon eventually.
+                std::mem::forget(child);
+            } else {
+                tokio::spawn(async move {
+                    let _ = child.wait().await;
+                });
+            }
             return Ok(connection);
         }
         if child
@@ -170,16 +214,30 @@ pub async fn ensure_server(home: &Path, executable: &Path) -> Result<Connection,
                 let message = tokio::task::spawn_blocking(move || startup_error(&directory))
                     .await
                     .map_err(|_| ServerError("cannot read the startup error".into()))?;
-                return Err(ServerError(message));
+                return Err(ServerError(if replace {
+                    format!("{message}; check {}", home.join("server.log").display())
+                } else {
+                    message
+                }));
             }
         }
         if tokio::time::Instant::now() >= deadline {
-            tokio::spawn(async move {
+            if replace {
+                let _ = child.kill().await;
                 let _ = child.wait().await;
-            });
-            return Err(ServerError(
-                "timed out waiting for the server to start; check server.log".into(),
-            ));
+            } else {
+                tokio::spawn(async move {
+                    let _ = child.wait().await;
+                });
+            }
+            return Err(ServerError(if replace {
+                format!(
+                    "timed out waiting for the server to start; check {}",
+                    home.join("server.log").display()
+                )
+            } else {
+                "timed out waiting for the server to start; check server.log".into()
+            }));
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

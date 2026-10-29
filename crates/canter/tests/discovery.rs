@@ -112,6 +112,103 @@ impl Drop for Daemon {
 }
 
 #[tokio::test]
+async fn replace_detaches_a_ready_server_with_and_without_an_existing_server() {
+    if isolated("replace_detaches_a_ready_server_with_and_without_an_existing_server").await {
+        return;
+    }
+    configure();
+    let binary = env!("CARGO_BIN_EXE_canter");
+    let initial = ensure_server(&home(), std::path::Path::new(binary))
+        .await
+        .unwrap();
+    let previous = Daemon::new(&initial);
+    let output = tokio::time::timeout(
+        Duration::from_secs(20),
+        Command::new(binary)
+            .args(["serve", "--replace"])
+            .env_clear()
+            .env("HOME", std::env::var_os("HOME").unwrap())
+            .env("CANTER_HOME", home())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("replace must return the terminal after starting the new server")
+    .unwrap();
+    let replacement = canter_server::discover(&home())
+        .await
+        .unwrap()
+        .expect("the replacement server remains running after the command exits");
+    let daemon = Daemon::new(&replacement);
+    assert!(output.status.success(), "{output:?}");
+    assert_ne!(
+        replacement.registration.instance,
+        initial.registration.instance
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(&format!(
+            "canter server ready · {} · pid {}",
+            canter::VERSION,
+            replacement.registration.pid
+        )),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        replacement
+            .client
+            .get("http://localhost/v1/info")
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    std::mem::forget(previous);
+    daemon.stop().await;
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(20),
+        Command::new(binary)
+            .args(["serve", "--replace"])
+            .env_clear()
+            .env("HOME", std::env::var_os("HOME").unwrap())
+            .env("CANTER_HOME", home())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("replace without an old server must also exit")
+    .unwrap();
+    let started = canter_server::discover(&home())
+        .await
+        .unwrap()
+        .expect("replace without an old server starts a server");
+    let daemon = Daemon::new(&started);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(&format!(
+            "canter server ready · {} · pid {}",
+            canter::VERSION,
+            started.registration.pid
+        )),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        started
+            .client
+            .get("http://localhost/v1/info")
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
 async fn discovery_recovers_from_a_reused_pid() {
     if isolated("discovery_recovers_from_a_reused_pid").await {
         return;

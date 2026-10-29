@@ -24,8 +24,9 @@ Usage:
                               resume a session; without an id, pick from a list
   canter [options] -c, --continue
                               resume the latest session in the current directory
-  canter serve [--replace]    run the server in the foreground
-  canter usage                show daily token usage and cost by model
+  canter serve               run the server in the foreground
+  canter serve --replace     replace it in the background and exit when ready
+  canter usage               show daily token usage and cost by model
 
 Options:
   -m, --model <model>  use this model (default: the server's config)
@@ -37,7 +38,7 @@ Options:
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
-    Serve { replace: bool },
+    Serve { replace: bool, foreground: bool },
     Usage,
     Chat(ChatArgs),
     Help,
@@ -75,8 +76,20 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
     }
     if args.first().map(String::as_str) == Some("serve") {
         return match &args[1..] {
-            [] => Ok(Command::Serve { replace: false }),
-            [replace] if replace == "--replace" => Ok(Command::Serve { replace: true }),
+            [] => Ok(Command::Serve {
+                replace: false,
+                foreground: true,
+            }),
+            [replace] if replace == "--replace" => Ok(Command::Serve {
+                replace: true,
+                foreground: false,
+            }),
+            [replace, foreground] if replace == "--replace" && foreground == "--foreground" => {
+                Ok(Command::Serve {
+                    replace: true,
+                    foreground: true,
+                })
+            }
             _ => Err("serve only accepts --replace".into()),
         };
     }
