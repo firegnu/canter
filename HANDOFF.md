@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-29 第三十次装 main `50446e4`（`canter --version` 显示 `canter 0.1.0 · 50446e4`；比上一版多 P2-108：`~/.canter/rules.json` 按命令前缀放行 / 要问 / 禁止，批准框一键「以后这个前缀都不问」，shell 的「本会话都放行」只放行这个前缀；P2-109：`/goal` 目标续跑和美元预算，所有会话多了 `get_goal`、`update_goal` 两个工具，缓存冷一次）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。同时照 P2-108「装的时候」写入 `~/.canter/rules.json`（0600）17 条放行规则（cargo 常用 6 条、`git add` / `commit` / `worktree add` / `rev-parse` / `ls-remote` / `push`、`npm install`、`pnpm install`、`lsof`、`ps`、`sleep`）。
+- 退回上一版 `97e503a`：`cp -p ~/.canter/canter-97e503a ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版不读 `rules.json`；设过 `/goal` 的会话旧版能不能照常打开没测过（新事件 `session.goal.updated`、快照可选 `goal`）。
 - 10-29 第二十九次装 main `97e503a`（`canter --version` 显示 `canter 0.1.0 · 97e503a`；比上一版多 P2-125：`canter serve --replace` 在后台换上新服务端（日志写 `~/.canter/server.log`），打出 `canter server ready · <版本> · pid <pid>` 后退出；不带 `--replace` 的 `canter serve` 照旧前台跑）。升级只要 `canter serve --replace`，不再占着窗口。
 - 退回上一版 `f99462a`：`cp -p ~/.canter/canter-f99462a ~/.cargo/bin/canter`，再 `canter serve --replace`（旧版的 `--replace` 留在前台）。存盘格式没变。
 - 10-29 第二十八次装 main `f99462a`（`canter --version` 显示 `canter 0.1.0 · f99462a`；比上一版多 P2-124：`canter serve` / `--replace` 能接客户端后打一行 `canter server ready · <版本> · pid <pid>`，自动起的写进 `~/.canter/server.log`）。服务端要用户自己 `canter serve --replace`。
