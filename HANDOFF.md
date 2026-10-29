@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-29 第三十三次装 main `6bce203`（`canter --version` 显示 `canter 0.1.0 · 6bce203`；比上一版多 P2-131：`canter mcp add / list / remove` 改 `config.json` 的 `mcp_servers`，`canter mcp login / logout <名字>` 对远程 MCP 走 OAuth，令牌存 `~/.canter/mcp-auth/`（0700 / 0600），过期自动续，要重新授权时 `/mcp` 显示 `Login required: run \`canter mcp login <name>\``）。服务端改了：用户 `canter serve --replace`；`mcp add` / `login` 之后也要再 `canter serve --replace` 才生效。
+- 退回上一版 `74fecde`：`cp -p ~/.canter/canter-74fecde ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版不读 `mcp-auth/`，登录过的服务在旧版里当成不带令牌的 HTTP 服务；`config.json` 格式没变。
 - 10-29 第三十二次装 main `74fecde`（`canter --version` 显示 `canter 0.1.0 · 74fecde`；比上一版多 P2-130：`read` 读到 JPEG / PNG / GIF / WebP 把图交给模型，MCP 返回的图片、内嵌文字资源、只有 `structuredContent` 的结果也交给模型，工具卡片一行写图片名、格式、大小；P2-137：点名用技能的四处界面文字改成英文）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
 - 退回上一版 `33ede43`：`cp -p ~/.canter/canter-33ede43 ~/.cargo/bin/canter`，再 `canter serve --replace`。读过图片的会话旧版能不能照常打开没测过（模型历史多了 `ToolImages`，`fileRead` / `mcpToolCall` 多了可选 `contentItems`）。
 - 10-29 第三十一次装 main `33ede43`（`canter --version` 显示 `canter 0.1.0 · 33ede43`；比上一版多 P2-127：技能说明改用 YAML 解析，多行、单引号的说明读对；P2-129：输入框 `/技能名 [要说的话]` 点名用技能，补全里和内置命令一起列，服务端读全文发给模型，对话里一行「用了技能」，压缩后补回）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
