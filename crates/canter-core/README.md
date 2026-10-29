@@ -126,8 +126,9 @@ globalInstructions、skills、projectInstructions、environment。路径保留�
 技能从会话环境 `HOME` 下的 `.agents/skills/<目录>/SKILL.md` 和同一项目根目录下的
 `.agents/skills/<目录>/SKILL.md` 发现；未提供 HOME 时只查项目，不读取服务端进程的 HOME。
 跟随技能目录的符号链接，按 `name` 去重（项目优先）并排序。只读取开头两个 `---`
-之间的头部，使用本机样例的单行普通文本或双引号文本解析 `name`、`description`，
-忽略其他元数据。缺少头部、名字或简介，以及读取或 UTF-8 错误，都跳过并沿用 warning；
+之间的 YAML 头部，解析 `name`、`description`、`disable-model-invocation`，忽略其他元数据。
+说明支持普通文本、单/双引号和多行写法；放进提示词时，换行和连续空白合成一个空格，每个技能仍占一行。
+缺少头部、名字或简介，YAML 写坏、开关不是布尔值，以及读取或 UTF-8 错误，都跳过并沿用 warning；
 技能根目录不存在不警告。`disable-model-invocation: true` 的技能仍列在 `skills()` 中，
 但不进入系统提示词。没有可供模型使用的技能时不加技能段落。全文只在模型需要时由现有
 read 工具读取，权限与受保护路径规则不变。完整技能列表只驻内存，提供给模型的简介和路径随 skills 段存盘。
