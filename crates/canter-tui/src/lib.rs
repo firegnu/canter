@@ -58,6 +58,7 @@ mod tab_title;
 mod text;
 pub mod theme;
 mod theme_picker;
+mod tips;
 mod tui_json;
 pub mod uncommitted;
 pub mod usage;

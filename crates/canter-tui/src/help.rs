@@ -11,7 +11,7 @@ use crate::theme;
 
 /// The shortcuts the box shows: each section's title, then each key (or keys
 /// that do the same) with what it does.
-const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
+pub(crate) const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     (
         "Input",
         &[
