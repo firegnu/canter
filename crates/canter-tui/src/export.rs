@@ -412,7 +412,7 @@ fn user_text(content: &[UserInput]) -> String {
     let parts: Vec<String> = content
         .iter()
         .filter_map(|part| match part {
-            UserInput::Skill { name } => Some(format!("用了技能 `{}`", sanitize(name))),
+            UserInput::Skill { name } => Some(format!("Used skill `{}`", sanitize(name))),
             UserInput::Text { text } => Some(sanitize(text).trim_end().to_owned()),
             UserInput::LocalImage { path, name } => {
                 let name = name.clone().or_else(|| {
