@@ -152,7 +152,7 @@ pub(crate) fn message(input: &[UserInput]) -> Message {
                     name: name.clone().unwrap_or_default(),
                     data_url: String::new(),
                 }),
-                UserInput::Unknown => None,
+                UserInput::Skill { .. } | UserInput::Unknown => None,
             })
             .collect(),
     }

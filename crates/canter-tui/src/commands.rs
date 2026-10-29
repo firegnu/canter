@@ -5,7 +5,7 @@
 //! A first word (after any leading blanks) that starts with `/` and has no
 //! other `/` in it is a command; one like `/tmp/a.txt` is a message.
 
-use canter_protocol::{PermissionMode, ReasoningEffort, SessionUpdateParams};
+use canter_protocol::{PermissionMode, ReasoningEffort, SessionUpdateParams, Skill};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
@@ -508,11 +508,29 @@ pub(crate) fn typing(text: &str) -> Option<&str> {
     (!name.contains(|c: char| c == '/' || c.is_whitespace())).then_some(name)
 }
 
-/// The commands whose name starts with `typed`.
-pub(crate) fn matching(typed: &str) -> Vec<&'static Command> {
+pub(crate) struct Completion {
+    pub name: String,
+    pub about: String,
+}
+
+/// Builtins first, then session skills; a builtin owns its name.
+pub(crate) fn matching(typed: &str, skills: &[Skill]) -> Vec<Completion> {
     COMMANDS
         .iter()
         .filter(|command| command.name.starts_with(typed))
+        .map(|command| Completion {
+            name: command.name.into(),
+            about: command.about.into(),
+        })
+        .chain(
+            skills
+                .iter()
+                .filter(|skill| skill.name.starts_with(typed) && find(&skill.name).is_none())
+                .map(|skill| Completion {
+                    name: skill.name.clone(),
+                    about: format!("技能 · {}", clean(&skill.description)),
+                }),
+        )
         .collect()
 }
 

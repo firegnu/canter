@@ -135,6 +135,7 @@ pub(crate) async fn compact(
             state.user_messages = user_inputs;
             state.measured_context = None;
             state.restate_plan_mode().await?;
+            state.restate_skills().await?;
             state.restate_goal().await?;
             state.restate_directories().await?;
             for message in notices {
@@ -173,7 +174,7 @@ async fn summarize(
     turn_id: &str,
     cancel: &CancellationToken,
 ) -> Result<(String, Vec<Message>, usize), CoreError> {
-    let (prefix, history, summary_index, user_messages, model, plan) = {
+    let (prefix, history, summary_index, user_messages, model, plan, skill_notices) = {
         let state = shared.state.lock().await;
         (
             state.prefix.clone(),
@@ -187,13 +188,17 @@ async fn summarize(
                 .current_plan()
                 .filter(|_| state.journal.snapshot.settings.plan_enabled != Some(false))
                 .map(<[_]>::to_vec),
+            crate::skill_invocation::latest(&state.invoked_skills),
         )
     };
     let output_limit = shared.options.max_output_tokens.min(8192);
     let mut transcript = String::new();
     let mut images = Vec::new();
     for (index, message) in history.iter().enumerate() {
-        if crate::plan_mode::is_notice(message) || crate::goal::is_notice(message) {
+        if crate::plan_mode::is_notice(message)
+            || crate::goal::is_notice(message)
+            || skill_notices.contains(message)
+        {
             continue;
         }
         match message {

@@ -488,6 +488,10 @@ where
         Ok(models) => app.set_models(&models),
         Err(error) => app.warning(&format!("Could not read image capabilities: {error}")),
     }
+    match client.list_skills(&session).await {
+        Ok(skills) => app.set_skills(skills),
+        Err(error) => app.warning(&format!("Could not load skill commands: {error}")),
+    }
     if let Some(warning) = &connected.warning {
         app.warning(warning);
     }
@@ -1051,6 +1055,7 @@ enum Message {
     },
     ImageSendFailed(String),
     Models(Vec<canter_protocol::Model>),
+    Skills(Vec<canter_protocol::Skill>),
     Server(Box<Event>),
     SendFailed {
         error: String,
@@ -1507,6 +1512,12 @@ impl<C: Connector> Chat<C> {
         if let Ok(models) = self.client.list_models().await {
             ui.app_mut().set_models(&models);
         }
+        match self.client.list_skills(&self.session).await {
+            Ok(skills) => ui.app_mut().set_skills(skills),
+            Err(error) => ui
+                .app_mut()
+                .warning(&format!("Could not load skill commands: {error}")),
+        }
         Some(messages)
     }
 
@@ -1561,6 +1572,7 @@ impl<C: Connector> Chat<C> {
             }
             Message::ImageSendFailed(error) => app.image_send_failed(&error),
             Message::Models(models) => app.set_models(&models),
+            Message::Skills(skills) => app.set_skills(skills),
             Message::Server(event) => {
                 if let canter_protocol::EventPayload::TurnRetracted { turn_id } = &event.payload {
                     self.naming.retracted(turn_id, app.snapshot(), &self.client);
@@ -1735,11 +1747,14 @@ impl<C: Connector> Chat<C> {
                     let _ = sender.send(message);
                 });
             }
-            action @ (Action::Send(_) | Action::SendImages { .. } | Action::Steer { .. }) => {
+            action @ (Action::Send(_)
+            | Action::SendInput { .. }
+            | Action::SendImages { .. }
+            | Action::Steer { .. }) => {
                 let steer = matches!(&action, Action::Steer { .. });
                 let has_images = match &action {
                     Action::SendImages { .. } => true,
-                    Action::Steer { input, .. } => input
+                    Action::SendInput { input, .. } | Action::Steer { input, .. } => input
                         .iter()
                         .any(|part| matches!(part, UserInput::LocalImage { .. })),
                     _ => false,
@@ -1751,9 +1766,9 @@ impl<C: Connector> Chat<C> {
                 };
                 let (text, input) = match action {
                     Action::Send(text) => (text.clone(), vec![UserInput::Text { text }]),
-                    Action::SendImages { text, input } | Action::Steer { text, input } => {
-                        (text, input)
-                    }
+                    Action::SendInput { text, input }
+                    | Action::SendImages { text, input }
+                    | Action::Steer { text, input } => (text, input),
                     _ => unreachable!(),
                 };
                 let title = session_title(&text);
@@ -1975,6 +1990,9 @@ async fn pump<C: Connector>(
                 Ok((connected, stream)) => {
                     if let Ok(models) = connected.client.list_models().await {
                         let _ = sender.send(Message::Models(models));
+                    }
+                    if let Ok(skills) = connected.client.list_skills(&session).await {
+                        let _ = sender.send(Message::Skills(skills));
                     }
                     server.clone_from(&connected.server);
                     if sender.send(Message::Reconnected(connected)).is_err() {

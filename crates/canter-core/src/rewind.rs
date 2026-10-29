@@ -47,6 +47,7 @@ struct Boundary {
     turn_id: String,
     messages: usize,
     users: usize,
+    skills: usize,
     changes: usize,
 }
 
@@ -56,21 +57,22 @@ pub(crate) struct Checkpoints {
     changes: Vec<FileChange>,
 }
 impl Checkpoints {
-    pub fn boundary(&mut self, turn_id: String, messages: usize, users: usize) {
+    pub fn boundary(&mut self, turn_id: String, messages: usize, users: usize, skills: usize) {
         self.boundaries.push(Boundary {
             turn_id,
             messages,
             users,
+            skills,
             changes: self.changes.len(),
         });
     }
     pub fn clear_boundaries(&mut self) {
         self.boundaries.clear();
     }
-    pub fn retract(&mut self, turn_id: &str) -> Option<(usize, usize)> {
+    pub fn retract(&mut self, turn_id: &str) -> Option<(usize, usize, usize)> {
         let index = self.boundaries.iter().position(|b| b.turn_id == turn_id)?;
         let boundary = &self.boundaries[index];
-        let lengths = (boundary.messages, boundary.users);
+        let lengths = (boundary.messages, boundary.users, boundary.skills);
         self.boundaries.truncate(index);
         Some(lengths)
     }
@@ -82,7 +84,7 @@ impl Checkpoints {
             change.inactive = true;
         }
     }
-    pub fn apply(&mut self, rewind: &Rewind) -> Option<(usize, usize)> {
+    pub fn apply(&mut self, rewind: &Rewind) -> Option<(usize, usize, usize)> {
         let index = self
             .boundaries
             .iter()
@@ -95,7 +97,7 @@ impl Checkpoints {
         }
         if rewind.conversation {
             self.boundaries.truncate(index);
-            Some((boundary.messages, boundary.users))
+            Some((boundary.messages, boundary.users, boundary.skills))
         } else {
             None
         }
@@ -500,9 +502,10 @@ impl Session {
             })
             .await?;
         state.journal.append(vec![rewind.event()]).await?;
-        if let Some((messages, users)) = state.rewind.apply(&rewind) {
+        if let Some((messages, users, skills)) = state.rewind.apply(&rewind) {
             let removed = state.history.split_off(messages);
             state.user_messages.truncate(users);
+            state.invoked_skills.truncate(skills);
             state.measured_context = None;
             state.restate_plan_mode().await?;
             state.restate_goal().await?;

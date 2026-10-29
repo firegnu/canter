@@ -87,6 +87,10 @@ pub enum Action {
     Rewind(canter_protocol::SessionRewindParams),
     /// Send this text to the session.
     Send(String),
+    SendInput {
+        text: String,
+        input: Vec<UserInput>,
+    },
     ShellCommand(String),
     ShellBackground(String),
     BackgroundList,
@@ -588,6 +592,7 @@ pub struct App {
     sending_shell: bool,
     shell_wait: bool,
     image_models: Vec<String>,
+    skills: Vec<canter_protocol::Skill>,
     clipboard: crate::images::Clipboard,
     /// Where copies go: the clipboard, and the terminal in tmux or over SSH.
     copier: Copier,
@@ -879,6 +884,7 @@ impl App {
             sending_shell: false,
             shell_wait: false,
             image_models: vec!["deepseek-flash".into()],
+            skills: Vec::new(),
             clipboard: crate::images::Clipboard::default(),
             copier: Copier::default(),
             export_copy: None,
@@ -1271,7 +1277,7 @@ impl App {
                 KeyCode::Up => Some((selected.saturating_sub(1), false)),
                 KeyCode::Down => Some(((selected + 1).min(last), false)),
                 KeyCode::Tab => {
-                    self.complete(matches[selected]);
+                    self.complete(&matches[selected].name);
                     return None;
                 }
                 // The permission mode changes only from the bare input box.
@@ -1470,8 +1476,12 @@ impl App {
             && commands::typing(self.input.text())
                 .and_then(commands::find)
                 .is_none()
+            && !self
+                .skills
+                .iter()
+                .any(|skill| commands::typing(self.input.text()) == Some(skill.name.as_str()))
         {
-            self.complete(matches[selected]);
+            self.complete(&matches[selected].name);
             return None;
         }
         let typed = commands::parse(self.input.text()).map(|(name, args)| {
@@ -1480,6 +1490,9 @@ impl App {
         });
         match typed {
             Some((Ok(command), args)) => self.run_command(command, &args),
+            Some((Err(name), _)) if self.skills.iter().any(|skill| skill.name == name) => {
+                self.send(false)
+            }
             Some((Err(name), _)) => {
                 self.scroll.top = None;
                 self.warning(&format!("Unknown command: /{name}"));
@@ -1504,7 +1517,9 @@ impl App {
         let text = self.input.text();
         !text.trim().is_empty()
             && !text.trim_start().starts_with('!')
-            && commands::parse(text).is_none()
+            && commands::parse(text).is_none_or(|(name, _)| {
+                commands::find(name).is_none() && self.skills.iter().any(|skill| skill.name == name)
+            })
     }
 
     /// Sends the message in the input box: queued, or with `steer` into the
@@ -1520,7 +1535,25 @@ impl App {
         // Sending follows the latest output again.
         self.scroll.top = None;
         self.handoff_back = None;
-        let input = self.input.parts();
+        let mut input = self.input.parts();
+        let skill = input
+            .first()
+            .and_then(|part| match part {
+                UserInput::Text { text } => commands::parse(text),
+                _ => None,
+            })
+            .filter(|(name, _)| {
+                commands::find(name).is_none()
+                    && self.skills.iter().any(|skill| skill.name == *name)
+            })
+            .map(|(name, args)| (name.to_owned(), args.to_owned()));
+        let uses_skill = skill.is_some();
+        if let Some((name, args)) = skill {
+            input[0] = UserInput::Skill { name };
+            if !args.is_empty() {
+                input.insert(1, UserInput::Text { text: args });
+            }
+        }
         if input
             .iter()
             .any(|part| matches!(part, UserInput::LocalImage { .. }))
@@ -1542,16 +1575,18 @@ impl App {
         let text = self.input.take();
         Some(if steer {
             Action::Steer { text, input }
+        } else if uses_skill {
+            Action::SendInput { text, input }
         } else {
             Action::Send(text)
         })
     }
 
     /// Puts `/name ` in the input box; the list closes, and Enter runs it.
-    fn complete(&mut self, command: &Command) {
+    fn complete(&mut self, name: &str) {
         self.completions += 1;
         self.input.clear();
-        self.input.insert(&format!("/{} ", command.name));
+        self.input.insert(&format!("/{name} "));
     }
 
     /// Runs `command`; the input box is emptied unless it fails. Text after
@@ -1582,7 +1617,7 @@ impl App {
     /// The commands listed above the input box for what is typed, and the
     /// one selected. None while the input cannot be a command, nothing
     /// matches, or Esc closed the list.
-    fn command_list(&self) -> Option<(Vec<&'static Command>, usize)> {
+    fn command_list(&self) -> Option<(Vec<commands::Completion>, usize)> {
         if self.input_history.showing(&self.input) {
             return None;
         }
@@ -1592,7 +1627,7 @@ impl App {
         if same && self.commands.closed {
             return None;
         }
-        let matches = commands::matching(typed);
+        let matches = commands::matching(typed, &self.skills);
         let last = matches.len().checked_sub(1)?;
         let selected = if same { self.commands.selected } else { 0 };
         Some((matches, selected.min(last)))
@@ -1907,6 +1942,11 @@ impl App {
     /// `/skills`: opens above the input box.
     pub fn show_skills(&mut self, skills: Vec<canter_protocol::Skill>) {
         self.open_report(commands::skills(&skills));
+        self.set_skills(skills);
+    }
+
+    pub fn set_skills(&mut self, skills: Vec<canter_protocol::Skill>) {
+        self.skills = skills;
     }
 
     pub fn show_usage(&mut self, report: &canter_protocol::UsageResponse) {
@@ -3914,7 +3954,7 @@ impl App {
         let entries: Vec<(&str, &str)> = names
             .iter()
             .zip(&matches)
-            .map(|(name, command)| (name.as_str(), command.about))
+            .map(|(name, command)| (name.as_str(), command.about.as_str()))
             .collect();
         commands::list_rows(&entries, selected, width, max)
     }
@@ -5241,6 +5281,7 @@ fn first_line(input: &[UserInput]) -> String {
     let text = input
         .iter()
         .find_map(|part| match part {
+            UserInput::Skill { name } => Some(format!("/{name}")),
             UserInput::Text { text } => Some(sanitize(text)),
             UserInput::LocalImage { name, .. } => Some(format!(
                 "[Image {}]",

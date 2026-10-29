@@ -97,12 +97,13 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                         event_seq,
                     })
                     .await?;
-                let (messages, users) = state
+                let (messages, users, skills) = state
                     .rewind
                     .retract(&completed.id)
                     .ok_or_else(CoreError::internal)?;
                 let removed = state.history.split_off(messages);
                 state.user_messages.truncate(users);
+                state.invoked_skills.truncate(skills);
                 state.measured_context = None;
                 state
                     .journal
@@ -199,7 +200,11 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             mode: InputMode::Queue,
             client_name: input.client_name,
         };
-        match shared.start(&mut state, params, Some(input.id)).await {
+        let skills = state.queued_skills.remove(&input.id).unwrap_or_default();
+        match shared
+            .start(&mut state, params, Some(input.id), skills)
+            .await
+        {
             Ok((_, next)) => {
                 done = next;
                 auto_compaction_failed = false;
