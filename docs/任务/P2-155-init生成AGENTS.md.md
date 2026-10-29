@@ -1,4 +1,4 @@
-# 任务：/init 生成 AGENTS.md
+# 任务：第二期-18 - /init 生成 AGENTS.md
 
 依据：照 Claude Code、Codex 的 `/init`：读一遍仓库，写出构建、测试命令和项目约定。新仓库开工省事，AGENTS.md 写得好，长任务和 eval 的成绩也会更好。
 执行：派出

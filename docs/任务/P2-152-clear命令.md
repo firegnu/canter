@@ -1,4 +1,4 @@
-# 任务：clear 命令（照 Claude Code 的 /clear）
+# 任务：第二期-17 - clear 命令（照 Claude Code 的 /clear）
 
 依据：10-29 用户要 Claude Code 的 `/clear` 进第二期。
 执行：派出

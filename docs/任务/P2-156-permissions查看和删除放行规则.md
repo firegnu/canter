@@ -1,4 +1,4 @@
-# 任务：/permissions 查看和删除放行规则
+# 任务：第二期-19 - /permissions 查看和删除放行规则
 
 依据：照 Claude Code 的 `/permissions`。「以后都放行」点多了 `rules.json`（P2-108）越积越多，点错一条现在只能手改文件。
 执行：派出
