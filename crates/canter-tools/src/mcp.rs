@@ -2,6 +2,9 @@ use std::{collections::BTreeMap, net::IpAddr};
 
 use serde::Deserialize;
 
+mod http;
+pub mod oauth;
+
 // Deliberately neither Debug nor Serialize: these values can contain credentials.
 #[derive(Deserialize)]
 #[serde(tag = "transport", rename_all = "snake_case", deny_unknown_fields)]
@@ -118,7 +121,10 @@ use serde_json::Value;
 use std::{
     collections::HashSet,
     process::Stdio,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{sync::Notify, task::JoinHandle};
@@ -141,7 +147,8 @@ pub struct Registry {
 struct Server {
     name: String,
     state: Mutex<ServerState>,
-    secrets: Vec<String>,
+    secrets: Arc<Mutex<Vec<String>>>,
+    needs_login: Arc<AtomicBool>,
     call_timeout: Duration,
 }
 #[derive(Default)]
@@ -166,7 +173,11 @@ impl Drop for Registry {
     }
 }
 impl Registry {
-    pub async fn connect(config: BTreeMap<String, ServerConfig>, stop: CancellationToken) -> Self {
+    pub async fn connect(
+        config: BTreeMap<String, ServerConfig>,
+        home: std::path::PathBuf,
+        stop: CancellationToken,
+    ) -> Self {
         let mut registry = Self {
             servers: Vec::new(),
             stop,
@@ -191,13 +202,15 @@ impl Registry {
             secrets.dedup();
             let server = Arc::new(Server {
                 name,
-                secrets,
+                secrets: Arc::new(Mutex::new(secrets)),
+                needs_login: Default::default(),
                 call_timeout: config.tool_timeout(),
                 state: Mutex::new(ServerState::default()),
             });
             registry.servers.push(server.clone());
             let stop = registry.stop.clone();
-            connecting.spawn(async move { connect(server, config, stop).await });
+            let home = home.to_owned();
+            connecting.spawn(async move { connect(server, config, &home, stop).await });
         }
         while let Some(result) = connecting.join_next().await {
             if let Ok(Some(task)) = result {
@@ -213,10 +226,11 @@ impl Registry {
         let mut tools = Vec::new();
         for server in &self.servers {
             let state = server.state.lock().unwrap();
-            if state
-                .peer
-                .as_ref()
-                .is_none_or(|peer| peer.is_transport_closed())
+            if server.needs_login.load(Ordering::Relaxed)
+                || state
+                    .peer
+                    .as_ref()
+                    .is_none_or(|peer| peer.is_transport_closed())
             {
                 continue;
             }
@@ -226,8 +240,9 @@ impl Registry {
                     tools.push(McpTool {
                         name,
                         tool: tool.name.to_string(),
-                        description: tool.description.as_deref().unwrap_or_default().into(),
-                        parameters: Value::Object((*tool.input_schema).clone()),
+                        description: server.public(tool.description.as_deref().unwrap_or_default()),
+                        parameters: server
+                            .public_value(Value::Object((*tool.input_schema).clone())),
                         server: server.clone(),
                     });
                 } else {
@@ -248,18 +263,19 @@ impl Registry {
             .iter()
             .map(|server| {
                 let state = server.state.lock().unwrap();
-                let connected = state
-                    .peer
-                    .as_ref()
-                    .is_some_and(|p| !p.is_transport_closed());
+                let connected = !server.needs_login.load(Ordering::Relaxed)
+                    && state
+                        .peer
+                        .as_ref()
+                        .is_some_and(|p| !p.is_transport_closed());
                 let mut warnings = state.warnings.clone();
                 let mut tools = Vec::new();
                 for tool in &state.tools {
                     let name = format!("mcp__{}__{}", server.name, tool.name);
                     if valid_name(&name) && (!connected || names.insert(name.clone())) {
                         tools.push(McpToolInfo {
-                            name,
-                            tool: tool.name.to_string(),
+                            name: server.public(&name),
+                            tool: server.public(&tool.name),
                         });
                     } else {
                         warnings.push("Skipped an invalid or duplicate tool name".into());
@@ -269,7 +285,16 @@ impl Registry {
                 McpServerStatus {
                     name: server.public(&server.name),
                     connected,
-                    error: (!connected).then(|| state.error.unwrap_or("connection closed").into()),
+                    error: (!connected).then(|| {
+                        if server.needs_login.load(Ordering::Relaxed) {
+                            format!(
+                                "需要登录：运行 `canter mcp login {}`",
+                                server.public(&server.name)
+                            )
+                        } else {
+                            state.error.unwrap_or("connection closed").into()
+                        }
+                    }),
                     tools,
                     warnings,
                 }
@@ -291,10 +316,27 @@ fn valid_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 impl Server {
+    fn public_value(&self, value: Value) -> Value {
+        match value {
+            Value::String(text) => Value::String(self.public(&text)),
+            Value::Array(values) => {
+                Value::Array(values.into_iter().map(|v| self.public_value(v)).collect())
+            }
+            Value::Object(values) => Value::Object(
+                values
+                    .into_iter()
+                    .map(|(k, v)| (self.public(&k), self.public_value(v)))
+                    .collect(),
+            ),
+            value => value,
+        }
+    }
     fn public(&self, text: &str) -> String {
         let mut text = text.to_owned();
-        for secret in &self.secrets {
+        for secret in self.secrets.lock().unwrap().iter() {
             text = text.replace(secret, "[redacted]");
+            let escaped = serde_json::to_string(secret).unwrap();
+            text = text.replace(&escaped[1..escaped.len() - 1], "[redacted]");
         }
         text
     }
@@ -314,6 +356,8 @@ impl Server {
         tools.retain(|tool| {
             let valid = !self.name.is_empty()
                 && !tool.name.is_empty()
+                && self.public(&self.name) == self.name
+                && self.public(&tool.name) == tool.name
                 && valid_name(&format!("mcp__{}__{}", self.name, tool.name))
                 && names.insert(tool.name.to_string());
             if !valid {
@@ -339,6 +383,7 @@ impl ClientHandler for Handler {
 async fn connect(
     server: Arc<Server>,
     config: ServerConfig,
+    home: &std::path::Path,
     stop: CancellationToken,
 ) -> Option<JoinHandle<()>> {
     let changed = Arc::new(Notify::new());
@@ -373,6 +418,9 @@ async fn connect(
                     .map_err(|_| "MCP initialization failed")
             }
             ServerConfig::Http { url, headers, .. } => {
+                let use_oauth = !headers
+                    .keys()
+                    .any(|name| name.eq_ignore_ascii_case("authorization"));
                 let headers = headers
                     .into_iter()
                     .map(|(name, value)| {
@@ -390,6 +438,18 @@ async fn connect(
                     .connect_timeout(startup_timeout)
                     .build()
                     .map_err(|_| "could not create MCP HTTP client")?;
+                let store = oauth::Store::new(home, &server.name, &url, server.secrets.clone());
+                let client = match oauth::authorized_client(store, client, use_oauth).await {
+                    Ok(inner) => http::Client {
+                        inner,
+                        needs_login: server.needs_login.clone(),
+                        use_oauth,
+                    },
+                    Err(_) => {
+                        server.needs_login.store(true, Ordering::Relaxed);
+                        return Err("MCP OAuth initialization failed");
+                    }
+                };
                 let config = StreamableHttpClientTransportConfig::with_uri(url)
                     .custom_headers(headers)
                     .reinit_on_expired_session(false);
@@ -462,7 +522,11 @@ impl McpTool {
         use crate::{
             MAX_CLIENT_OUTPUT_BYTES, MAX_MODEL_OUTPUT_BYTES, ToolOutcome, output::BoundedText,
         };
-        let peer = self.server.state.lock().unwrap().peer.clone();
+        let peer = if self.server.needs_login.load(Ordering::Relaxed) {
+            None
+        } else {
+            self.server.state.lock().unwrap().peer.clone()
+        };
         let Some(peer) = peer.filter(|peer| !peer.is_transport_closed()) else {
             return (
                 "MCP service disconnected".into(),

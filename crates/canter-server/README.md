@@ -14,6 +14,8 @@
 ```text
 <CANTER_HOME>/
   config.json            模型配置；只从此文件读取 key
+  config.lock            MCP 配置命令的写锁
+  mcp-auth/              MCP OAuth 凭证（0600）及每个服务的续期/登录/退出锁
   server.lock            整个服务期持有的文件锁；不删除锁文件
   server.json            pid、version、protocolVersion、socketPath、instance
   server.sock            HTTP + SSE
@@ -212,6 +214,20 @@ SIGINT（Ctrl-C）、SIGTERM、SIGHUP 共用退出路径，直接 await 所有�
 
 ## MCP
 
+可直接用命令配置（不需要服务端运行）：
+
+```sh
+canter mcp add local --env MODE=production -- /absolute/path/to/mcp-server --flag
+canter mcp add remote --url https://mcp.example.com/mcp --header 'X-API-Key=your-key'
+canter mcp list
+canter mcp remove local
+```
+
+只操作 canter 自己的 `config.json`；不存在时创建。名字重复、参数写错时不写入。
+`list` 只列名字和传输类型，不显示环境变量、请求头、命令参数或网址中的值。
+写入通过 `config.lock` 串行，用 0600 临时文件原子替换；保留 MCP 字段外的原文。
+改完运行 `canter serve --replace`，新开的会话生效。
+
 `config.json` 的可选 `mcp_servers` 按名字登记服务，省略时不增加工具。例如（命令和地址由用户提供）：
 
 ```json
@@ -237,11 +253,36 @@ stdio 直接执行命令，不经 shell；`args`、`env` 可省略。子进程�
 不继承 `CANTER_HOME` 或其它变量，再用配置里的 `env` 增加或覆盖。
 客户端后台启动的服务端环境基本为空；`command` 写绝对路径，需要的 `PATH`、`HOME` 写进 `env`。
 HTTP 使用 Streamable HTTP，`headers` 可省略；仅 localhost / 回环 IP 允许 HTTP，其余必须
-HTTPS，不走代理，不跟随重定向，不做 OAuth。配置修改在服务端下次启动时生效。
+HTTPS，不走代理，不跟随重定向。配置修改在服务端下次启动时生效。
 环境变量和请求头只保存在私有配置与运行内存中；配置解析、连接及协议错误不回显配置，
 子进程 stderr 不转发到日志。脱敏候选跳过上述 8 个基础环境变量的配置值；其它 `env` 和
 全部请求头的配置值及其按空白切开的每一段，长度至少 8 字节时，在工具文字结果中替换为
 `[redacted]`；短值不替换。
+
+需要 OAuth 的远程服务，用下面的命令在浏览器里授权：
+
+```sh
+canter mcp add gitlab --url https://your-gitlab.example/api/v4/mcp
+canter mcp login gitlab
+canter serve --replace
+canter mcp logout gitlab
+```
+
+地址由服务提供方给出。login/logout 都不需要 canter 服务端运行。login 复用 rmcp 3.7.0
+的发现、动态客户端注册和 PKCE；回调只监听 `127.0.0.1`，先由系统分配临时端口再注册，
+不占用固定端口。浏览器打不开时可手动打开命令打印的网址；等待授权最多五分钟。
+授权服务器不支持动态注册时明确报错。配置已有 Authorization 请求头时需先移除它再登录，
+避免静态令牌与 OAuth 混用；没有 OAuth 凭证的服务保持原连接方式。
+
+凭证不写入 `config.json`，只保存在状态目录的
+`mcp-auth/<服务名 UTF-8 十六进制>.json`（目录 0700、文件 0600），绑定 MCP URL，
+包含 access/refresh token、收到令牌的时间、客户端 ID、issuer 和可能的客户端密钥。
+服务端连接与后续请求自动刷新临近过期的令牌，刷新结果原子保存；没有新的 refresh token
+时保留原值。续期失败或服务要求授权时，只有该服务断开，`/mcp` 和 `GET /v1/mcp` 提示
+「需要登录：运行 `canter mcp login <名字>`」。重新登录后按上述命令替换服务端，再开会话。
+logout 删除本地凭证；已建立连接的后续请求不再携带 OAuth 令牌，不撤销已发出的请求或远端授权。
+remove 只删配置，清除账号用 logout。令牌和客户端密钥不进入日志、事件或会话文件；
+工具结果、工具说明和参数 schema 中回显的已知令牌会脱敏，OAuth 令牌不受八字节门槛限制。
 
 启动时并发连接；首次连接（握手和工具列表合计）默认限 10 秒，后续每次列表更新同样限时，
 工具调用默认限 120 秒。每个服务可选配 `startup_timeout_sec`（连接和列表）、`tool_timeout_sec`
@@ -249,7 +290,7 @@ HTTPS，不走代理，不跟随重定向，不做 OAuth。配置修改在服务
 首次运行 `npx` 下载依赖可能超过 10 秒连接期限，可先完成安装再启动服务端，或给它配大一点的 `startup_timeout_sec`。
 单个服务失败不阻止 canter 或其它 MCP 服务启动。断开的进程和 MCP 会话不自动重建；
 HTTP SSE 流的断线恢复仍由 SDK 的传输层处理，MCP 会话过期自动重建已关闭。
-单次工具调用失败只返回工具错误；连接实际结束时才标为断开。
+普通工具调用失败只返回工具错误；连接实际结束或 OAuth 认证失败时标为断开。
 HTTP 远端中途挂掉时，`/mcp` 仍可能显示已连接，以调用结果为准。
 正常退出、启动期间退出和 `serve --replace` 都等待 MCP 连接关闭，清理所起进程的原进程组；
 与 shell 相同，自行脱离该进程组的后代不在进程组清理范围内。

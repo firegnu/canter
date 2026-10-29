@@ -75,7 +75,11 @@ pub async fn serve(replace: bool, version: &str) -> Result<(), ServerError> {
     let model = config.model_client()?;
     let options = config.options();
     let startup_stop = CancellationToken::new();
-    let connecting = canter_core::mcp::Registry::connect(config.mcp_servers, startup_stop.clone());
+    let connecting = canter_core::mcp::Registry::connect(
+        config.mcp_servers,
+        lease.home.clone(),
+        startup_stop.clone(),
+    );
     tokio::pin!(connecting);
     let mcp = tokio::select! {
         registry = &mut connecting => registry,

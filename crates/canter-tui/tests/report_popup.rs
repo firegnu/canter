@@ -366,6 +366,23 @@ fn mcp_shows_each_service_with_its_tools_laid_out_in_rows() {
 }
 
 #[test]
+fn mcp_shows_the_login_command_for_an_unauthorized_service() {
+    let mut screen = Screen::new(90, 24, "/work", None);
+    screen.enter("/mcp");
+    let report = serde_json::from_value(json!({"data":[{
+        "name":"gitlab","connected":false,"error":"需要登录：运行 `canter mcp login gitlab`","tools":[],"warnings":[]
+    }]})).unwrap();
+    screen.ui.app_mut().show_mcp(&report);
+    screen.draw();
+    assert!(
+        screen
+            .rows()
+            .iter()
+            .any(|line| line.contains("需要登录：运行 `canter mcp login gitlab`"))
+    );
+}
+
+#[test]
 fn skills_shows_global_and_project_sections_with_descriptions_cut_at_two_rows() {
     let mut screen = Screen::new(60, 30, "/work", None);
     assert_eq!(screen.enter("/skills"), Some(Action::ListSkills));
