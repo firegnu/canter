@@ -24,3 +24,8 @@ Referenced file ../canter-worktrees/p2-135-lsp-tui/crates/canter-core/tests/lsp.
 Read ../../../../../private/tmp/claude-501/-Users-firegnu-Developer-personal-projs-canter/518c94fa-5126-46d6-b42f-c7e9fe0e9c0d/scratchpad/p2-135-checks.txt (12 lines)
 Skills restored (corral-dispatch)
      (ctrl+b to run in background)
+
+## 主控记下的（10-29）
+
+- 10-29 主控为长程任务又过了一遍；用户：「整体退回也排到第三期，压缩好几次以后会不会走样这个要排到第二期。」并进本件：长任务会压缩不止一次，摘要的摘要可能越压越偏。本件要专门看连续压缩两三次以后，任务、细节、待办还在不在。
+- 要看的东西参考 P2-81「压缩后不丢东西」那一节：用户中途定的规矩、试过失败的办法、改过哪些文件和为什么、后台命令的编号和在等什么。
