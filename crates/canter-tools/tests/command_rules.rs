@@ -1,7 +1,144 @@
 use canter_protocol::{ApprovalDecision, PermissionMode};
-use canter_tools::{LocalExecutor, PermissionCheck, PermissionGate, Tool, Tools};
+use canter_tools::{Executor, LocalExecutor, PermissionCheck, PermissionGate, Tool, Tools};
 use std::{collections::BTreeMap, sync::Arc};
 use tokio_util::sync::CancellationToken;
+
+#[tokio::test]
+async fn cd_home_before_newline_preserves_path_checks_and_unresolved_tilde_asks() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let cwd = home.join("repo");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let executor = Arc::new(
+        LocalExecutor::new(
+            cwd,
+            BTreeMap::from([("HOME".into(), home.to_string_lossy().into_owned())]),
+            vec![home.join("private")],
+        )
+        .unwrap(),
+    );
+    assert!(executor.is_allowed_shell("cd ~\npwd", &|_| false));
+    let tools = Tools::new(executor.clone());
+    let gate = PermissionGate::default();
+    let cancel = CancellationToken::new();
+    for command in ["cd ~\ncat private/config.json", "cd '~' && pwd"] {
+        assert!(!executor.is_allowed_shell(command, &|_| false), "{command}");
+        let call = tools
+            .prepare(
+                Tool::Shell,
+                "home",
+                &serde_json::json!({"command":command}).to_string(),
+                &cancel,
+            )
+            .await
+            .unwrap();
+        for mode in [PermissionMode::AlwaysAsk, PermissionMode::AskForExecution] {
+            let PermissionCheck::Ask(request) = gate.evaluate(&call, mode) else {
+                panic!("{command}: {mode:?}")
+            };
+            assert!(request.session_prefixes.is_none());
+            assert!(request.proposed_execpolicy_amendment.is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn proposals_exclude_command_wrappers_and_keep_relative_programs_session_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("rules.json");
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(temp.path().into(), BTreeMap::new(), vec![]).unwrap(),
+    ));
+    let gate = PermissionGate::default().with_rules_file(file.clone());
+    let cancel = CancellationToken::new();
+    let cases = [
+        ("uv run script.py", "uv run", false, false),
+        ("npm exec tsc", "npm exec", false, false),
+        ("pnpm exec tsc", "pnpm exec", false, false),
+        ("yarn exec tsc", "yarn exec", false, false),
+        ("pnpm dlx prettier", "pnpm dlx", false, false),
+        ("yarn dlx prettier", "yarn dlx", false, false),
+        ("rustup run stable cargo test", "rustup run", false, false),
+        ("docker run alpine", "docker run", false, false),
+        ("docker exec worker ls", "docker exec", false, false),
+        ("kubectl exec pod -- ls", "kubectl exec", false, false),
+        ("find --help", "find", false, false),
+        ("sed --help", "sed", false, false),
+        ("/usr/bin/find", "/usr/bin/find", false, false),
+        ("/usr/bin/sed", "/usr/bin/sed", false, false),
+        ("./build.sh", "./build.sh", true, false),
+        ("../build.sh", "../build.sh", true, false),
+        ("scripts/build.sh", "scripts/build.sh", true, false),
+        ("/opt/bin/build.sh", "/opt/bin/build.sh", true, true),
+        ("cargo test", "cargo test", true, true),
+    ];
+    for (command, prefix, session, permanent) in cases {
+        let prefixes = vec![prefix.split_whitespace().map(String::from).collect()];
+        let call = tools
+            .prepare(
+                Tool::Shell,
+                "proposal",
+                &serde_json::json!({"command":command}).to_string(),
+                &cancel,
+            )
+            .await
+            .unwrap();
+        let PermissionCheck::Ask(request) = gate.evaluate(&call, PermissionMode::AlwaysAsk) else {
+            panic!("{command}")
+        };
+        assert_eq!(
+            request.session_prefixes,
+            session.then(|| prefixes.clone()),
+            "{command}"
+        );
+        assert_eq!(
+            request.proposed_execpolicy_amendment,
+            permanent.then(|| prefixes.clone()),
+            "{command}"
+        );
+        for (decision, expected) in [
+            (ApprovalDecision::AcceptForSession, session),
+            (ApprovalDecision::AcceptWithExecpolicyAmendment, permanent),
+        ] {
+            assert_eq!(
+                request.available_decisions.contains(&decision),
+                expected,
+                "{command}"
+            );
+        }
+        if !permanent {
+            assert!(gate.save_rules(&prefixes).is_err(), "{command}");
+            assert!(!file.exists());
+        }
+    }
+    // Suggestion restrictions do not change the user's own file rules.
+    for (command, prefix, _, _) in cases {
+        std::fs::write(
+            &file,
+            serde_json::json!({"rules":[{
+                "pattern":prefix.split_whitespace().collect::<Vec<_>>(), "decision":"allow"
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        let call = tools
+            .prepare(
+                Tool::Shell,
+                "manual-rule",
+                &serde_json::json!({"command":command}).to_string(),
+                &cancel,
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                gate.evaluate(&call, PermissionMode::AlwaysAsk),
+                PermissionCheck::Execute(_)
+            ),
+            "{command}"
+        );
+    }
+}
 
 #[tokio::test]
 async fn session_approval_only_grants_the_command_prefix() {

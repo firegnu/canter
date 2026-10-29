@@ -321,7 +321,11 @@ impl PermissionGate {
                         .available_decisions
                         .insert(1, ApprovalDecision::AcceptForSession);
                     request.session_prefixes = Some(prefixes.clone());
-                    if self.rules_file.is_some() {
+                    if self.rules_file.is_some()
+                        && prefixes
+                            .iter()
+                            .all(|prefix| crate::rules::can_persist_prefix(prefix))
+                    {
                         request
                             .available_decisions
                             .insert(2, ApprovalDecision::AcceptWithExecpolicyAmendment);

@@ -69,7 +69,7 @@ fn check(
                         return false;
                     };
                     if target.is_empty()
-                        || target.starts_with('-')
+                        || target.starts_with(['-', '~'])
                         || !allowed(target)
                         || has_cdpath && !Path::new(target).is_absolute()
                     {
@@ -835,9 +835,9 @@ fn scan_into(
                 _ => {
                     if !started
                         && ch == '~'
-                        && chars
-                            .peek()
-                            .is_none_or(|ch| matches!(ch, '/' | ' ' | '\t' | '&' | '|' | ';'))
+                        && chars.peek().is_none_or(|ch| {
+                            matches!(ch, '/' | ' ' | '\t' | '\n' | '&' | '|' | ';')
+                        })
                     {
                         tilde = true;
                     }

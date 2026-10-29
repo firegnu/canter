@@ -112,6 +112,8 @@ pub(crate) fn suggested_prefix(words: &[String]) -> Option<Vec<String>> {
             | "timeout"
             | "time"
             | "rm"
+            | "find"
+            | "sed"
     ) || program.strip_prefix("python").is_some_and(|tail| {
         !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit() || c == '.')
     }) {
@@ -136,7 +138,14 @@ pub(crate) fn suggested_prefix(words: &[String]) -> Option<Vec<String>> {
         let subcommand = words.get(1)?;
         if subcommand.is_empty()
             || subcommand.starts_with(['-', '+'])
-            || matches!(program, "npm" | "pnpm" | "yarn") && subcommand == "run"
+            || matches!(
+                (program, subcommand.as_str()),
+                ("npm" | "pnpm" | "yarn", "run" | "exec")
+                    | ("pnpm" | "yarn", "dlx")
+                    | ("uv" | "rustup", "run")
+                    | ("docker", "run" | "exec")
+                    | ("kubectl", "exec")
+            )
         {
             return None;
         }
@@ -162,8 +171,6 @@ pub(crate) fn suggested_prefix(words: &[String]) -> Option<Vec<String>> {
                 | "tail"
                 | "wc"
                 | "ls"
-                | "find"
-                | "sed"
                 | "sort"
                 | "uniq"
                 | "pwd"
@@ -176,6 +183,14 @@ pub(crate) fn suggested_prefix(words: &[String]) -> Option<Vec<String>> {
     None
 }
 
+pub(crate) fn can_persist_prefix(prefix: &[String]) -> bool {
+    let Some(program) = prefix.first() else {
+        return false;
+    };
+    (Path::new(program).is_absolute() || !program.contains('/'))
+        && suggested_prefix(prefix).as_deref() == Some(prefix)
+}
+
 // One server process owns the global file. Serialize read/append/replace across sessions.
 static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -185,7 +200,7 @@ pub(crate) fn append(path: &Path, prefixes: &[Vec<String>]) -> io::Result<()> {
     let mut rules = Rules::read(path)?;
     if prefixes.is_empty()
         || prefixes.iter().any(|prefix| {
-            suggested_prefix(prefix).as_ref() != Some(prefix)
+            !can_persist_prefix(prefix)
                 || matches!(
                     rules.decision(prefix),
                     Some(Decision::Prompt | Decision::Forbidden)
