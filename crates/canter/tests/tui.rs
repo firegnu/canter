@@ -1172,7 +1172,9 @@ async fn ask_user_second_option_returns_to_the_model_and_continues() {
                 "submit_plan",
                 "shell_output",
                 "shell_stop",
-                "monitor"
+                "monitor",
+                "get_goal",
+                "update_goal"
             ]
         );
     }

@@ -4,6 +4,7 @@ mod btw;
 mod compaction;
 mod context;
 mod directories;
+mod goal;
 mod images;
 mod journal;
 mod plan_mode;
@@ -35,6 +36,9 @@ pub struct CoreOptions {
     /// Global server-owned command rules; embedders may leave this disabled.
     pub command_rules_path: Option<PathBuf>,
     pub auto_wake_limit: u32,
+    pub goal_budget_usd: f64,
+    /// Goal continuation questions wait five minutes; injectable for local replay tests.
+    pub goal_question_timeout: std::time::Duration,
     pub plan_enabled: bool,
     pub context_window: u64,
     pub max_output_tokens: u32,
@@ -53,6 +57,8 @@ impl Default for CoreOptions {
         Self {
             command_rules_path: None,
             auto_wake_limit: 10,
+            goal_budget_usd: 5.0,
+            goal_question_timeout: std::time::Duration::from_secs(300),
             plan_enabled: true,
             context_window: 1_048_576,
             max_output_tokens: 65_536,

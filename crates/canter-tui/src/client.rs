@@ -46,6 +46,22 @@ pub struct Client {
 }
 
 impl Client {
+    pub async fn goal(
+        &self,
+        session: &str,
+        command: &crate::GoalCommand,
+    ) -> Result<canter_protocol::GoalResponse, ClientError> {
+        use crate::GoalCommand;
+        let endpoint = url(routes::GOAL, &[session]);
+        let request = match command {
+            GoalCommand::Read => self.http.get(endpoint),
+            GoalCommand::Set(params) => self.http.post(endpoint).json(params),
+            GoalCommand::Clear => self.http.delete(endpoint),
+            GoalCommand::Pause => self.http.post(url(routes::GOAL_PAUSE, &[session])),
+            GoalCommand::Resume => self.http.post(url(routes::GOAL_RESUME, &[session])),
+        };
+        decode(request.send().await?).await
+    }
     pub async fn background_commands(
         &self,
         session: &str,

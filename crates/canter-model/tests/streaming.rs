@@ -350,6 +350,7 @@ async fn streams_content_tools_and_usage_and_replays_reasoning() {
             parameters: json!({"type":"object","properties":{"path":{"type":"string"}}}),
         }],
         options: RequestOptions {
+            max_retries: None,
             thinking: Some(true),
             reasoning_effort: None,
             max_output_tokens: Some(128),

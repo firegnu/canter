@@ -2,6 +2,53 @@ use canter_protocol::{Event, EventPayload, Item, SessionSnapshot, SessionStatus,
 use serde_json::json;
 
 #[test]
+fn goals_are_optional_in_old_sessions_and_unknown_to_legacy_clients() {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type")]
+    enum LegacyEvent {
+        #[serde(rename = "session.status")]
+        Status { status: String },
+        #[serde(other)]
+        Unknown,
+    }
+    #[derive(serde::Deserialize)]
+    struct LegacySnapshot {
+        id: String,
+        turns: Vec<serde_json::Value>,
+    }
+    let mut value = serde_json::to_value(SessionSnapshot::empty("s1")).unwrap();
+    assert!(value.get("goal").is_none());
+    assert!(
+        serde_json::from_value::<SessionSnapshot>(value.clone())
+            .unwrap()
+            .goal
+            .is_none()
+    );
+    let goal = json!({"id":"g1","objective":"Task","status":"active","budgetUsd":5.0,"cost":{"usd":1.2,"unknown":false},"createdAt":1,"updatedAt":2});
+    value["goal"] = goal.clone();
+    let legacy: LegacySnapshot = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(legacy.id, "s1");
+    assert!(legacy.turns.is_empty());
+    let new: SessionSnapshot = serde_json::from_value(value).unwrap();
+    assert_eq!(new.goal.unwrap().cost.usd, 1.2);
+    let update =
+        json!({"seq":1,"sessionId":"s1","timestamp":2,"type":"session.goal.updated","goal":goal});
+    assert!(matches!(
+        serde_json::from_value::<LegacyEvent>(update.clone()).unwrap(),
+        LegacyEvent::Unknown
+    ));
+    let current = apply_event(
+        &SessionSnapshot::empty("s1"),
+        &serde_json::from_value(update).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(current.goal.unwrap().objective, "Task");
+    assert!(
+        matches!(serde_json::from_value::<LegacyEvent>(json!({"type":"session.status","status":"idle"})).unwrap(), LegacyEvent::Status { status } if status == "idle")
+    );
+}
+
+#[test]
 fn retry_items_are_skipped_by_legacy_readers_and_missing_status_stays_normal() {
     #[derive(serde::Deserialize)]
     #[serde(tag = "type", rename_all = "camelCase")]

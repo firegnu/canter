@@ -14,7 +14,7 @@ pub(crate) struct PendingEvents {
     cards: Vec<Item>,
     deadline: Option<Instant>,
     wake_pending: bool,
-    changed: Arc<tokio::sync::Notify>,
+    pub(crate) changed: Arc<tokio::sync::Notify>,
     output_due: Option<Instant>,
     // Match count and wake eligibility; Esc suppresses the observed batch,
     // while later matching lines can make the command eligible again.
@@ -396,6 +396,7 @@ pub(crate) fn watch(shared: &Arc<Shared>) {
                 };
                 let state = shared.state.lock().await;
                 let deadline = [
+                    state.goal_deadline,
                     state.background_events.deadline,
                     state.background_events.output_due,
                 ]
@@ -425,6 +426,16 @@ pub(crate) fn watch(shared: &Arc<Shared>) {
             }
             tokio::task::yield_now().await;
             let mut state = shared.state.lock().await;
+            match shared.next_goal(&mut state).await {
+                Ok(Some(done)) => {
+                    let shared = shared.clone();
+                    tokio::spawn(async move {
+                        crate::runner::run(shared, done).await;
+                    });
+                }
+                Ok(None) => {}
+                Err(_) => break,
+            }
             if state
                 .background_events
                 .deadline

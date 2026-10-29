@@ -43,6 +43,9 @@ pub(crate) struct Shared {
     pub lifetime: CancellationToken,
 }
 pub(crate) struct State {
+    pub goal_running: bool,
+    pub goal_deadline: Option<tokio::time::Instant>,
+    pub goal_summary: Option<(String, bool)>,
     directory_home: Option<std::path::PathBuf>,
     pub background_events: crate::background::PendingEvents,
     pub journal: Journal,
@@ -68,6 +71,7 @@ pub(crate) struct State {
     plan_tool_calls: u8,
 }
 pub(crate) struct Active {
+    pub goal_continuation: bool,
     pub auto_wake: bool,
     pub plan_handoff: bool,
     pub turn: Turn,
@@ -81,6 +85,9 @@ pub(crate) struct Active {
 impl State {
     fn new(journal: Journal) -> Self {
         Self {
+            goal_running: false,
+            goal_deadline: None,
+            goal_summary: None,
             directory_home: None,
             background_events: Default::default(),
             journal,
@@ -126,6 +133,7 @@ impl State {
                     parameters: def.parameters,
                 }
             })
+            .chain(crate::goal::definitions())
             .chain(
                 tools
                     .mcp_tools()
@@ -441,6 +449,7 @@ impl Session {
             .complete_missing_tools("No result: the server stopped and this turn was interrupted")
             .await?;
         state.recover_background().await?;
+        state.restate_goal().await?;
         state.cancel_requests().await?;
         let unfinished = state
             .journal
@@ -676,6 +685,16 @@ impl Session {
             None
         };
         state.background_events.user_input();
+        if state
+            .journal
+            .snapshot
+            .goal
+            .as_ref()
+            .is_some_and(|g| g.status == GoalStatus::Active)
+        {
+            state.goal_running = true;
+            state.goal_deadline = None;
+        }
         if state.active.is_some() {
             let input = QueuedInput {
                 review: params.review.clone(),
@@ -793,12 +812,23 @@ impl Session {
                 && !active.manual_compaction
                 && active.user_shell.is_none()
                 && !active.auto_wake
+                && !active.goal_continuation
                 && !active.model_started
             {
                 active.retracted = true;
             }
             active.cancel.cancel();
             let result = (active.done.clone(), active.retracted);
+            if state
+                .journal
+                .snapshot
+                .goal
+                .as_ref()
+                .is_some_and(|g| g.status == GoalStatus::Active)
+            {
+                state.goal_status(GoalStatus::Paused).await?;
+            }
+            state.goal_summary = None;
             state.background_events.interrupt();
             result
         };
@@ -1319,6 +1349,7 @@ impl Shared {
         let events = state.journal.append(payloads).await?;
         let (done, receiver) = watch::channel(None);
         state.active = Some(Active {
+            goal_continuation: false,
             auto_wake: false,
             plan_handoff: false,
             turn: turn.clone(),

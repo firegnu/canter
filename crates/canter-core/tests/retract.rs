@@ -383,7 +383,9 @@ async fn automatic_compaction_can_retract_until_output_but_manual_compaction_can
             &server,
             temp.path(),
             CoreOptions {
-                context_window: 24000,
+                // Leave room for the fixed goal tools even in the short manual setup.
+                // The long input below still exceeds the automatic compaction threshold.
+                context_window: 28000,
                 max_output_tokens: 1024,
                 ..CoreOptions::default()
             },
@@ -395,7 +397,13 @@ async fn automatic_compaction_can_retract_until_output_but_manual_compaction_can
             .unwrap();
         let turn = if mode == "manual" {
             session.input(input("previous conversation")).await.unwrap();
-            answer(&server.request().await.1);
+            let (request, chunks) = server.request().await;
+            assert!(
+                !request["messages"]
+                    .to_string()
+                    .contains("Summarize the conversation in <transcript> below.")
+            );
+            answer(&chunks);
             idle(&mut events).await;
             session.compact().await.unwrap().turn_id.unwrap()
         } else {

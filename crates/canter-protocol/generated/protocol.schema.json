@@ -544,6 +544,28 @@
       "oneOf": [
         {
           "properties": {
+            "goal": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionGoal"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "session.goal.updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "command": {
               "$ref": "#/$defs/BackgroundCommand"
             },
@@ -942,6 +964,28 @@
     },
     "EventPayload": {
       "oneOf": [
+        {
+          "properties": {
+            "goal": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionGoal"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "session.goal.updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "command": {
@@ -1367,6 +1411,58 @@
         "diff"
       ],
       "type": "object"
+    },
+    "GoalResponse": {
+      "properties": {
+        "eventSeq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionGoal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "eventSeq"
+      ],
+      "type": "object"
+    },
+    "GoalSetParams": {
+      "properties": {
+        "budgetUsd": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "objective": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "objective"
+      ],
+      "type": "object"
+    },
+    "GoalStatus": {
+      "enum": [
+        "active",
+        "paused",
+        "complete",
+        "blocked",
+        "budgetLimited",
+        "unknown"
+      ],
+      "type": "string"
     },
     "InfoParams": {
       "type": "object"
@@ -2766,6 +2862,44 @@
       ],
       "type": "object"
     },
+    "SessionGoal": {
+      "properties": {
+        "budgetUsd": {
+          "format": "double",
+          "type": "number"
+        },
+        "cost": {
+          "$ref": "#/$defs/UsageCost"
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/GoalStatus"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "objective",
+        "status",
+        "budgetUsd",
+        "cost",
+        "createdAt",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
     "SessionHandoffParams": {
       "description": "Generate a private handoff note from an idle session's current context.",
       "properties": {
@@ -3130,6 +3264,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/ErrorInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionGoal"
             },
             {
               "type": "null"

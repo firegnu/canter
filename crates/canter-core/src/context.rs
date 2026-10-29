@@ -41,6 +41,9 @@ pub(crate) enum HistoryEntry {
     PlanModeNotice {
         message: Message,
     },
+    GoalNotice {
+        message: Message,
+    },
     DirectoriesNotice {
         message: Message,
     },
@@ -107,6 +110,7 @@ pub(crate) fn restore(
     for entry in entries {
         match entry {
             HistoryEntry::PlanModeNotice { message }
+            | HistoryEntry::GoalNotice { message }
             | HistoryEntry::DirectoriesNotice { message } => plan_mode_notices.push(message),
             HistoryEntry::BackgroundNotice {
                 message,
@@ -355,6 +359,7 @@ pub(crate) fn request(
         messages: state.prefix.iter().chain(&state.history).cloned().collect(),
         tools: state.tool_definitions.clone(),
         options: RequestOptions {
+            max_retries: None,
             thinking: Some(effort != canter_protocol::ReasoningEffort::None),
             reasoning_effort: (effort != canter_protocol::ReasoningEffort::None)
                 .then(|| effort.as_str().to_owned()),
