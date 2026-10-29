@@ -5,6 +5,7 @@ use std::{
     io::{self, BufRead, BufReader},
     path::{Path, PathBuf},
 };
+use yaml_rust2::{Yaml, YamlLoader};
 
 pub(crate) fn discover(
     home: Option<PathBuf>,
@@ -70,9 +71,7 @@ fn read_header(path: &Path, source: SkillSource) -> io::Result<Skill> {
     if line.trim_end() != "---" {
         return Err(invalid("missing opening --- front matter delimiter"));
     }
-    let mut name = None;
-    let mut description = None;
-    let mut model_invocation = true;
+    let mut header = String::new();
     loop {
         line.clear();
         if reader.read_line(&mut line)? == 0 {
@@ -81,47 +80,38 @@ fn read_header(path: &Path, source: SkillSource) -> io::Result<Skill> {
         if line.trim_end() == "---" {
             break;
         }
-        // Only top-level fields matter; nested metadata is ignored.
-        if line.starts_with(char::is_whitespace) {
-            continue;
-        }
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        match key {
-            "name" => name = Some(scalar(value)?),
-            "description" => description = Some(scalar(value)?),
-            "disable-model-invocation" => match value.trim() {
-                "true" => model_invocation = false,
-                "false" => model_invocation = true,
-                _ => return Err(invalid("disable-model-invocation must be true or false")),
-            },
-            _ => {}
-        }
+        header.push_str(&line);
     }
+    let documents = YamlLoader::load_from_str(&header)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let [header] = documents.as_slice() else {
+        return Err(invalid("front matter must contain one YAML mapping"));
+    };
+    let name = scalar(&header["name"])?;
+    if name.contains(['\n', '\r']) {
+        return Err(invalid("name must be single-line text"));
+    }
+    let description = scalar(&header["description"])?;
+    let model_invocation = match &header["disable-model-invocation"] {
+        Yaml::BadValue => true,
+        Yaml::Boolean(disabled) => !disabled,
+        _ => return Err(invalid("disable-model-invocation must be true or false")),
+    };
     Ok(Skill {
-        name: name.ok_or_else(|| invalid("missing name"))?,
-        description: description.ok_or_else(|| invalid("missing description"))?,
+        name,
+        description,
         path: path.to_string_lossy().into_owned(),
         source,
         model_invocation,
     })
 }
 
-// The installed skills use single-line plain or double-quoted text.
-fn scalar(value: &str) -> io::Result<String> {
-    let value = value.trim();
-    let text: String = if value.starts_with('"') {
-        serde_json::from_str(value).map_err(|_| invalid("invalid double-quoted text"))?
-    } else {
-        value.to_owned()
-    };
-    if text.trim().is_empty() || text.contains(['\n', '\r']) {
-        return Err(invalid(
-            "name and description must be nonempty single-line text",
-        ));
-    }
-    Ok(text)
+fn scalar(value: &Yaml) -> io::Result<String> {
+    value
+        .as_str()
+        .filter(|text| !text.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| invalid("name and description must be nonempty text"))
 }
 
 pub(crate) fn append_prompt(text: &mut String, skills: &[Skill]) {
@@ -136,7 +126,73 @@ pub(crate) fn append_prompt(text: &mut String, skills: &[Skill]) {
     for skill in available {
         text.push_str(&format!(
             "- {}: {} (SKILL.md: {})\n",
-            skill.name, skill.description, skill.path
+            skill.name,
+            skill
+                .description
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            skill.path
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn yaml_descriptions_reach_prompt_on_one_line() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("SKILL.md");
+        for (yaml, expected, prompt_description) in [
+            (
+                ">\n  Read files\n  carefully\n",
+                "Read files carefully\n",
+                "Read files carefully",
+            ),
+            (
+                "|\n  Read files\n  carefully\n",
+                "Read files\ncarefully\n",
+                "Read files carefully",
+            ),
+            (
+                ">-\n  Read files\n  carefully\n",
+                "Read files carefully",
+                "Read files carefully",
+            ),
+            (
+                "|+\n  Read files\n    carefully\n\n",
+                "Read files\n  carefully\n\n",
+                "Read files carefully",
+            ),
+            (
+                "'Read user''s files'\n",
+                "Read user's files",
+                "Read user's files",
+            ),
+            ("\"Read files\"\n", "Read files", "Read files"),
+            ("Read files\n", "Read files", "Read files"),
+        ] {
+            fs::write(
+                &path,
+                format!(
+                    "---\nname: example\ndescription: {yaml}---\nBody stays out of the prompt."
+                ),
+            )
+            .unwrap();
+            let skill = read_header(&path, SkillSource::Project).unwrap();
+            assert_eq!(skill.description, expected, "description: {yaml}");
+            let mut prompt = String::new();
+            append_prompt(&mut prompt, &[skill]);
+            assert_eq!(prompt.lines().count(), 2, "description: {yaml}");
+            assert_eq!(
+                prompt.lines().nth(1).unwrap(),
+                format!(
+                    "- example: {prompt_description} (SKILL.md: {})",
+                    path.display()
+                )
+            );
+        }
     }
 }
