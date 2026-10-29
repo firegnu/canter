@@ -123,4 +123,54 @@ mod tests {
         assert_eq!(servers["fake"].initialization_options, Value::Null);
         assert_eq!(servers["fake"].extensions["rs"], "rust");
     }
+
+    #[test]
+    fn builtin_languages_apply_only_when_lsp_is_enabled() {
+        assert!(LspConfig::default().resolve().unwrap().is_empty());
+        let servers = LspConfig {
+            enabled: true,
+            ..Default::default()
+        }
+        .resolve()
+        .unwrap();
+        assert_eq!(
+            servers.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["pyright", "rust-analyzer", "typescript"]
+        );
+        let rust = &servers["rust-analyzer"];
+        assert_eq!(rust.extensions["rs"], "rust");
+        assert_eq!(rust.root_markers, ["Cargo.lock"]);
+        assert_eq!(rust.initialization_options["checkOnSave"], false);
+        assert_eq!(rust.settings["rust-analyzer"]["checkOnSave"], false);
+        let python = &servers["pyright"];
+        assert_eq!(
+            (python.command.as_str(), python.args.as_slice()),
+            ("pyright-langserver", ["--stdio".to_string()].as_slice())
+        );
+        assert_eq!(python.extensions["py"], "python");
+        assert_eq!(python.extensions["pyi"], "python");
+        assert_eq!(
+            python.root_markers,
+            ["pyproject.toml", "pyrightconfig.json"]
+        );
+        let typescript = &servers["typescript"];
+        assert_eq!(typescript.command, "node_modules/.bin/tsc");
+        assert_eq!(typescript.args, ["--lsp", "--stdio"]);
+        for (extension, language) in [
+            ("ts", "typescript"),
+            ("mts", "typescript"),
+            ("cts", "typescript"),
+            ("tsx", "typescriptreact"),
+            ("js", "javascript"),
+            ("mjs", "javascript"),
+            ("cjs", "javascript"),
+            ("jsx", "javascriptreact"),
+        ] {
+            assert_eq!(typescript.extensions[extension], language);
+        }
+        assert_eq!(
+            typescript.root_markers,
+            ["tsconfig.json", "jsconfig.json", "package.json"]
+        );
+    }
 }

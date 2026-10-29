@@ -859,6 +859,87 @@ mod tests {
             round: Round::Modify,
         }
     }
+    fn builtins() -> BTreeMap<String, ServerConfig> {
+        LspConfig {
+            enabled: true,
+            ..Default::default()
+        }
+        .resolve()
+        .unwrap()
+    }
+    #[test]
+    fn builtin_rust_root_is_the_cargo_workspace_not_the_member_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("crates/app/src");
+        std::fs::create_dir_all(&source).unwrap();
+        for file in [
+            "Cargo.toml",
+            "Cargo.lock",
+            "crates/app/Cargo.toml",
+            "crates/app/src/main.rs",
+        ] {
+            std::fs::write(dir.path().join(file), "").unwrap();
+        }
+        let context = FileContext {
+            cwd: dir.path().into(),
+            additional_directories: vec![],
+            environment: environment(dir.path(), ""),
+            round: Round::Modify,
+        };
+        let root = project_root(
+            &source.join("main.rs"),
+            &context,
+            &builtins()["rust-analyzer"].root_markers,
+        )
+        .unwrap();
+        assert_eq!(root, std::fs::canonicalize(dir.path()).unwrap());
+    }
+    #[tokio::test]
+    async fn builtin_typescript_runs_the_projects_own_compiler_or_is_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tsconfig.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("main.ts"), "").unwrap();
+        let context = FileContext {
+            cwd: dir.path().into(),
+            additional_directories: vec![],
+            environment: environment(dir.path(), ""),
+            round: Round::Modify,
+        };
+        let config = LspConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let file = dir.path().join("main.ts");
+        let service = LspService::new(config.clone()).unwrap();
+        let missing = service
+            .for_file(&file, &context, &CancellationToken::new())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(missing.kind, ErrorKind::Unavailable);
+        service.shutdown().await;
+
+        let bin = dir.path().join("node_modules/.bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(crate::lsp::test_support::executable(), bin.join("tsc"))
+            .unwrap();
+        let service = LspService::new(config).unwrap();
+        let instance = service
+            .for_file(&file, &context, &CancellationToken::new())
+            .await
+            .unwrap()
+            .unwrap();
+        service.shutdown().await;
+        let log =
+            std::fs::read_to_string(dir.path().join(format!("{}.log", instance.pid))).unwrap();
+        assert!(
+            log.lines()
+                .next()
+                .unwrap()
+                .contains("node_modules/.bin/tsc"),
+            "{log}"
+        );
+    }
     #[tokio::test]
     async fn path_lookup_preserves_symlink_launcher_argv_zero() {
         let dir = tempfile::tempdir().unwrap();
