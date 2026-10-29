@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-29 第二十八次装 main `f99462a`（`canter --version` 显示 `canter 0.1.0 · f99462a`；比上一版多 P2-124：`canter serve` / `--replace` 能接客户端后打一行 `canter server ready · <版本> · pid <pid>`，自动起的写进 `~/.canter/server.log`）。服务端要用户自己 `canter serve --replace`。
+- 退回上一版 `fd2ec78`：`cp -p ~/.canter/canter-fd2ec78 ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-29 第二十七次装 main `fd2ec78`（`canter --version` 显示 `canter 0.1.0 · fd2ec78`；比上一版多 P2-122：`/new`、`/handoff`、计划批准选「清空上下文实施」开的新会话带上原会话加的目录，目录被删了提示一句、照样开）。服务端要用户自己 `canter serve --replace`。
 - 退回上一版 `4f38b0b`：`cp -p ~/.canter/canter-4f38b0b ~/.cargo/bin/canter`，再 `canter serve --replace`。只改了终端，存盘格式没变。
 - 10-29 第二十六次装 main `4f38b0b`（`canter --version` 显示 `canter 0.1.0 · 4f38b0b`；代码同 P2-118 合并后，之后只改了文档。比上一版多 P2-118：`canter --add-dir <路径>`（可写几次，配合 `-c` / `--resume`）和 `/add-dir <路径>` 给会话加目录，跟着会话存盘；写进系统提示词，中途加的往后追加一条说明；`@` 能选到这些目录里的文件；「只问执行」下改工作目录和加的目录以外的文件要批准）。服务端要用户自己 `canter serve --replace`。
