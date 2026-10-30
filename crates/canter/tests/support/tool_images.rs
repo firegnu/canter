@@ -30,7 +30,8 @@ async fn create(fixture: &Fixture) -> SessionCreateResponse {
             Method::POST,
             "/v1/sessions",
             json!({
-                "cwd":fixture.root.path().join("work"),"env":{},"model":"deepseek-flash",
+                "cwd":fixture.root.path().join("work"),
+                "env":{"HOME":fixture.root.path().join("home")},"model":"deepseek-flash",
                 "approvalPolicy":"allowAll","clientName":"test"
             }),
         )
