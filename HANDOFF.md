@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-30 第三十九次装 main `6114a33`（`canter --version` 显示 `canter 0.1.0 · 6114a33`；比上一版多 P2-163～P2-166 沙箱：模型的 shell 命令套 macOS Seatbelt 墙，只能写工作目录、新增目录、会话临时目录和 `~/Library/Caches/canter`，读不了 `~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.canter`，`.git` 配置和 hooks、真实 `~/.cargo`、`~/.npm` 只读；Allow all 联网、另两档断网；询问执行档墙内命令免问，联网和写墙外由模型申请、单条批准；read / write / edit 守同一条边界；状态栏 `Sandbox on/off`、`/sandbox`、`!`/MCP/`web_fetch` 卡片标 `not sandboxed`。`config.json` 没写 `sandbox`，即缺省开）。shell 工具说明和提示词变了，已在用的会话缓存冷一次。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
+- 退回上一版 `62d1b5a`：`cp -p ~/.canter/canter-62d1b5a ~/.cargo/bin/canter`，再 `canter serve --replace`。只想关沙箱不退版本：`config.json` 写 `"sandbox": false` 再 `canter serve --replace`。存盘多了可选的 `sandboxEnabled` 设置和带 `sandboxRequest` 的 shell 调用，旧版能不能照常续聊没测过。
 - 10-30 第三十八次装 main `62d1b5a`（`canter --version` 显示 `canter 0.1.0 · 62d1b5a`；比上一版多 P2-162：配了 MCP 时工具列表换成 `mcp_search`、`mcp_call`，固定前缀多一份工具名加简介的清单，`config.json` 的 `mcp_tool_search` 默认 true、false 退回全量）。配了 MCP 的会话工具列表和提示词变了，缓存冷一次；没配 MCP 的请求不变。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
 - 退回上一版 `e33b425`：`cp -p ~/.canter/canter-e33b425 ~/.cargo/bin/canter`，再 `canter serve --replace`。用按需方式调过 MCP 的会话，旧版重开时历史里是 `mcp_search`、`mcp_call` 调用，工具列表里没有这两个，能不能照常续聊没测过；搜索卡片旧版按不认识的项目跳过。
 - 10-30 第三十七次装 main `e33b425`（`canter --version` 显示 `canter 0.1.0 · e33b425`；比上一版多 P2-152：`/clear`（同 `/new`）；P2-155：`/init` 发固定提示词让模型写或改进 AGENTS.md；P2-141：往上翻、那条 prompt 滚出屏幕时对话区顶上一行灰字 `› …`，单击跳回；P2-156：`/permissions` 查看和删除 `rules.json` 的规则，服务端新增 `GET /v1/commandRules`、`POST /v1/commandRules/delete`；P2-161：内置危险命令检查，删根、根下一级、家目录、工作目录及上级、删整层通配、目标认不清的 `rm`/`rmdir`，「全部允许」下拒绝并让用户用 `!` 跑，另外两档一定弹框、放行规则免不掉）。工具列表和提示词没变，缓存不冷。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
