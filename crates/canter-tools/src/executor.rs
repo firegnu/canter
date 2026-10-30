@@ -29,6 +29,10 @@ pub trait CommandProcess: Send {
 #[async_trait]
 pub trait Executor: Send + Sync {
     fn cwd(&self) -> &Path;
+    /// Run the shared command checks without executing shell or resolving symlinks.
+    fn dangerous_shell_reason(&self, command: &str, additional: &[PathBuf]) -> Option<String> {
+        crate::dangerous::check(command, self.cwd(), &BTreeMap::new(), additional)
+    }
     /// Opt in only when the command and the executor's private paths have been checked.
     fn is_readonly_shell(&self, _command: &str) -> bool {
         false
@@ -106,6 +110,10 @@ pub(crate) fn check_cancel(cancel: &CancellationToken) -> io::Result<()> {
 impl Executor for LocalExecutor {
     fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    fn dangerous_shell_reason(&self, command: &str, additional: &[PathBuf]) -> Option<String> {
+        crate::dangerous::check(command, &self.cwd, &self.environment, additional)
     }
 
     fn is_allowed_shell(&self, command: &str, allowed_prefix: &dyn Fn(&[String]) -> bool) -> bool {

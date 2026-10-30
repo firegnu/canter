@@ -24,3 +24,5 @@ rmcp = { version = "=3.7.0", default-features = false, features = ["auth", "clie
 futures-util.workspace = true
 sse-stream = "=0.2.6"
 notify = "=8.2.1"
+tree-sitter = "=0.25.10"
+tree-sitter-bash = "=0.25.1"
