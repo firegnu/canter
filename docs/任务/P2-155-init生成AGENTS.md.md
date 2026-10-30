@@ -53,3 +53,12 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：命令表新增无参数 `/init`，说明为 `Create or improve AGENTS.md for this project`，命令列表、`/help` 和 `?` 共用该表。通过 `include_str!` 编译时加载 `crates/canter-tui/assets/init_prompt.md`，返回普通 `Action::Send`，沿用现有发送、排队及用户消息显示。提示词要求先读仓库，在会话工作目录创建贡献者指南；已有 AGENTS.md 时保留用户内容，只补缺项和更新过时内容，不整份重写。
+- 验证了什么：新增一条 `init_sends_the_prompt_as_an_ordinary_message`，先确认旧实现因 `/init` 返回 `None` 而失败，再验证空闲和工作中都与粘贴同一提示词产生相同的普通发送动作、带参数拒绝且保留输入、命令列表有名称和说明。更新现有帮助测试的命令清单，覆盖 `?` 和 `/help`。`cargo nextest run -p canter-tui` 最终 557 条全部通过；`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。测试使用临时 HOME、CANTER_HOME，编译目录为规定的 `.target/p2-155-init`，命令均在前台等到结束。
+- 拿主意的地方：没有新增设计决定。只参考 Codex `rust-v0.163.0` 的 `codex-rs/tui/assets/prompt_for_init_command.md`（本机只读克隆 `/tmp/r49-src/codex/`）的内容结构，英文提示词自行重写，没有搬原文，因此未改 NOTICE。
+- 没做的事：没有改服务端、协议、权限和 AGENTS.md 读取规则；没有调用真实模型（0 次），实际生成效果留给用户装版后试；没有合并 main、推送或安装。
+- 踩过的坑：新增命令后，现有命令列表和帮助测试的固定窗口高度少一行，导致末尾命令被截断；三个相关测试窗口各增加一行，保留全部断言后通过。首次格式检查要求展开命令处理闭包，按 rustfmt 调整后通过。
+- 要主控决定的事：没有。

@@ -82,6 +82,16 @@ pub(crate) const COMMANDS: &[Command] = &[
         },
     },
     Command {
+        name: "init",
+        about: "Create or improve AGENTS.md for this project",
+        takes_args: false,
+        run: |_, _| {
+            Ok(Some(Action::Send(
+                include_str!("../assets/init_prompt.md").into(),
+            )))
+        },
+    },
+    Command {
         name: "lsp",
         about: "Show language servers",
         takes_args: false,
