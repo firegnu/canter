@@ -82,3 +82,10 @@
 - 参考：只读参考 `/tmp/p2-104-src/codex` 的 `rust-v0.163.0`，`codex-rs/app-server-protocol/src/protocol/v2/model.rs` 的 `ModelListResponse.data` 和 `permissions.rs` 的 `ExecPolicyAmendment` 词数组结构，未复制上游代码。沿用 canter 自己的规则格式、HTTP 错误结构、报告弹框与按已显示帧处理按键的机制。
 - 没做的事：未加规则新增/修改界面、会话临时授权管理、项目级规则或通配；未改前缀判断、冲突优先级、只读白名单、建议前缀或 `append` 行为。真模型接口调用 0 次；未跑工作区全套、未安装或重启服务、未合并 main、未推送。全套与交叉审查留给主控合并前执行。
 - 踩过的坑：已有斜杠列表和帮助测试记死 30 个命令及恰好容纳列表的窗口高度；新增命令后先后暴露列表预期与帮助窗口少一行。已把完整预期更新为 31 项，对应测试窗口增加一行，保留逐条检查和全部原有断言，重跑相关 100 项全部通过。
+
+## 主控审查
+
+2026-10-30，canter/main。开发先停下问接口，主控定 `GET /v1/commandRules`、`POST /v1/commandRules/delete`（不用 DELETE 带请求体，理由写进 DESIGN 第 8 条）。看了 diff：删除按整条内容比对、和 `append` 共用写锁和原子写（0600）、坏文件不覆盖、缺文件不创建；规则类型挪到协议后变体顺序和 `deny_unknown_fields` 保留，判断逻辑没动。
+交叉审查（canter/review-permissions-1，Claude Code opus[1m] xhigh）：可以合并，必须改 0、建议改 1（软链接的 `rules.json` 删一次变普通文件，`append` 原来就有，本件不许改 `append`）、可以不改 3，都记进 HANDOFF。
+合并前主控跑全套：`cargo nextest run --all-targets` 1138 个全过，`cargo test --doc --workspace` 过。
+结果：一次过
