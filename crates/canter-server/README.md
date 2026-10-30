@@ -76,6 +76,14 @@
 AppKit，只读取剪贴板已有的 PNG 表示，不转换格式。临时截图文件在本终端退出／换会话时清理。
 非本机 `http://` 地址被拒绝，本机仅接受 localhost 或 loopback IP；模型客户端禁用代理和跳转。
 模型、key、窗口在服务端启动时读取，修改后需显式重启。
+`sandbox` 是可选布尔开关，默认 `true`，只在服务端启动时读取。模型 shell 默认在 macOS
+Seatbelt 中运行，`false` 恢复原执行行为；改动后重启服务端生效。`--yolo` 仅选择
+Allow all，不关闭沙箱。用户 `!` 不套墙；本件没有改变文件工具、MCP 或网页工具。
+缓存使用会话 HOME 下的 `Library/Caches/canter/{cargo,npm}`，不自动清理；不复制原
+`~/.cargo` 的配置、credentials 或 bin。Cargo 仍从 cwd 逐级向上查找 `.cargo/config(.toml)`，
+所以项目位于 HOME 内时仍可能读到原 `~/.cargo/config.toml`；按 CARGO_HOME 查找的配置和
+凭证则改到专用缓存。继承 PATH 中的原 `~/.cargo/bin` 仍可用；私有仓库认证和镜像需安装后确认。
+
 `plan_enabled` 是可选布尔开关，默认 `true`；设为 `false` 不向模型提供 `update_plan`，
 终端也不显示清单，压缩不附清单。改开关后，新建会话马上生效；服务端已经加载的会话
 保持原工具列表，要等服务端重启后恢复会话才会重新读取。退出终端再进入、或另一个终端

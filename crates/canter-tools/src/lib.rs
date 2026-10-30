@@ -11,6 +11,7 @@ mod dangerous;
 mod permission;
 mod readonly;
 pub mod rules;
+mod sandbox;
 mod shell;
 pub use background::{BackgroundCommands, MAX_BACKGROUND_COMMANDS, MAX_BACKGROUND_OUTPUT_BYTES};
 mod web_fetch;
@@ -625,6 +626,14 @@ pub struct Tools {
 }
 
 impl Tools {
+    pub fn configure_shell(&self, mode: canter_protocol::PermissionMode, directories: &[String]) {
+        self.executor.configure_shell(mode, directories);
+    }
+
+    pub fn close_shell(&self) {
+        self.executor.close_shell();
+    }
+
     pub fn with_lsp(mut self, session: lsp::LspSession) -> Self {
         if !session.enabled() {
             return self;

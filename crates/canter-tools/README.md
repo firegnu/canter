@@ -154,6 +154,27 @@ shell 回收后管道最多再读取 2000 ms；取消和原始超时在此期间
 `set -m`、`setsid` 等移到其他进程组或会话的进程不在清理范围内，可能继续运行。
 第一期只清理原进程组，不提供操作系统级的后代进程收容；第二期的执行器/沙箱再处理这一边界。
 
+## 模型命令沙箱（P2-163）
+
+服务端按启动时的 `sandbox` 开关为执行器调用 `with_sandbox(true)`，模型前台、后台和
+Ctrl+B 转后台命令均通过 `/usr/bin/sandbox-exec` 启动；用户 `!` 使用独立的
+`spawn_user`，保留原环境。直接嵌入工具库时，`LocalExecutor::new` 仍不自行开启沙箱。
+`configure_shell` 更新之后启动的命令使用的权限模式和新增目录；已启动进程及其后代
+始终保留原规则。关闭会话先停命令，再通过 `close_shell` 删除会话临时目录。
+
+可写 cwd、新增目录、独占 TMPDIR 和 `~/Library/Caches/canter/{cargo,npm}`；后两种
+缓存由所有会话共用，不自动清理。`CARGO_HOME`、`npm_config_cache` 指向缓存，
+`TMPPREFIX` 指向 TMPDIR 下的 zsh 前缀；不复制用户 cargo 配置、凭证或 bin。
+真实 `.cargo` / `.npm` 只读，canter 状态目录及 `.ssh` / `.aws` / `.gnupg` 不可读写。
+Git 实际元数据目录可写，但 config、hooks 和 worktree、子模块元数据指针保持只读；
+新建仓库的保护正则只套在 cwd 和新增目录，并显式排除临时目录和缓存，即使缓存位于 cwd
+内也可检出依赖。子模块元数据递归保护，敏感目录和直接元数据名称匹配 ASCII 大小写。
+禁止创建硬链接。
+只有 allowAll 放开 IP 网络和 mDNSResponder socket，另外两档仍断网；其他 Unix socket
+只放行可写范围且排除状态目录。启动失败不退回墙外，仅在输出出现拒绝特征时附沙箱范围
+说明，不改变退出码或自动重跑。
+文件工具、MCP、网页工具不由本件套墙；进程组看护和清理边界保持原样。
+
 ## 权限与执行器边界
 
 | 模式 | read | write / edit | shell |

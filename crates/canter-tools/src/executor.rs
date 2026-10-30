@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     io,
     path::{Path, PathBuf},
+    sync::{Mutex, RwLock},
 };
 
 use async_trait::async_trait;
@@ -11,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 pub type FileReader = Box<dyn AsyncRead + Unpin + Send>;
 
 pub struct CommandHandle {
+    pub sandboxed: bool,
     pub stdout: FileReader,
     pub stderr: FileReader,
     pub process: Box<dyn CommandProcess>,
@@ -29,6 +31,8 @@ pub trait CommandProcess: Send {
 #[async_trait]
 pub trait Executor: Send + Sync {
     fn cwd(&self) -> &Path;
+    fn configure_shell(&self, _mode: canter_protocol::PermissionMode, _directories: &[String]) {}
+    fn close_shell(&self) {}
     /// Run the shared command checks without executing shell or resolving symlinks.
     fn dangerous_shell_reason(&self, command: &str, additional: &[PathBuf]) -> Option<String> {
         crate::dangerous::check(command, self.cwd(), &BTreeMap::new(), additional)
@@ -53,6 +57,14 @@ pub trait Executor: Send + Sync {
         cancel: &CancellationToken,
     ) -> io::Result<()>;
     async fn spawn(&self, command: &str, cancel: &CancellationToken) -> io::Result<CommandHandle>;
+    /// Only explicit user input uses this path; model tools always call spawn.
+    async fn spawn_user(
+        &self,
+        command: &str,
+        cancel: &CancellationToken,
+    ) -> io::Result<CommandHandle> {
+        self.spawn(command, cancel).await
+    }
 }
 
 /// One instance per session. The environment is private and never implements Debug.
@@ -61,9 +73,21 @@ pub struct LocalExecutor {
     environment: BTreeMap<String, String>,
     protected_paths: Vec<PathBuf>,
     shell_protected_paths: Vec<PathBuf>,
+    sandbox: Option<Mutex<Result<crate::sandbox::Sandbox, String>>>,
+    shell_scope: RwLock<crate::sandbox::Scope>,
 }
 
 impl LocalExecutor {
+    pub fn with_sandbox(mut self, enabled: bool) -> Self {
+        self.sandbox = enabled.then(|| {
+            Mutex::new(
+                crate::sandbox::Sandbox::new(&self.environment, &self.shell_protected_paths)
+                    .map_err(|error| error.to_string()),
+            )
+        });
+        self
+    }
+
     pub fn new(
         cwd: PathBuf,
         environment: BTreeMap<String, String>,
@@ -90,11 +114,71 @@ impl LocalExecutor {
             environment,
             protected_paths,
             shell_protected_paths,
+            sandbox: None,
+            shell_scope: RwLock::default(),
         })
     }
 
     fn resolve(&self, path: &Path) -> PathBuf {
         self.cwd.join(path)
+    }
+
+    fn launch(
+        &self,
+        command: &str,
+        cancel: &CancellationToken,
+        sandboxed: bool,
+    ) -> io::Result<CommandHandle> {
+        use std::process::Stdio;
+        check_cancel(cancel)?;
+        let mut launch = if let Some(sandbox) = self.sandbox.as_ref().filter(|_| sandboxed) {
+            let sandbox = sandbox.lock().unwrap();
+            let sandbox = sandbox
+                .as_ref()
+                .map_err(|error| io::Error::other(format!("Could not start sandbox: {error}")))?;
+            sandbox
+                .command(
+                    &self.cwd,
+                    &self.environment,
+                    &self.shell_scope.read().unwrap(),
+                )
+                .map_err(|error| io::Error::other(format!("Could not start sandbox: {error}")))?
+        } else {
+            let mut launch = tokio::process::Command::new("/bin/sh");
+            launch.env_clear().envs(&self.environment);
+            launch
+        };
+        launch
+            .args(["-c", command])
+            .current_dir(&self.cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .kill_on_drop(true);
+        let mut process = crate::process::spawn(launch, Some(cancel)).map_err(|error| {
+            if sandboxed {
+                io::Error::other(format!("Could not start sandbox: {error}"))
+            } else {
+                error
+            }
+        })?;
+        let stdout = process
+            .child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("missing stdout pipe"))?;
+        let stderr = process
+            .child
+            .stderr
+            .take()
+            .ok_or_else(|| io::Error::other("missing stderr pipe"))?;
+        Ok(CommandHandle {
+            sandboxed,
+            stdout: Box::new(stdout),
+            stderr: Box::new(stderr),
+            process: Box::new(process),
+        })
     }
 }
 
@@ -110,6 +194,21 @@ pub(crate) fn check_cancel(cancel: &CancellationToken) -> io::Result<()> {
 impl Executor for LocalExecutor {
     fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    fn configure_shell(&self, mode: canter_protocol::PermissionMode, directories: &[String]) {
+        *self.shell_scope.write().unwrap() = crate::sandbox::Scope {
+            network: mode == canter_protocol::PermissionMode::AllowAll,
+            additional_directories: directories.iter().map(PathBuf::from).collect(),
+        };
+    }
+
+    fn close_shell(&self) {
+        if let Some(sandbox) = &self.sandbox
+            && let Ok(sandbox) = sandbox.lock().unwrap().as_mut()
+        {
+            sandbox.close();
+        }
     }
 
     fn dangerous_shell_reason(&self, command: &str, additional: &[PathBuf]) -> Option<String> {
@@ -221,42 +320,22 @@ impl Executor for LocalExecutor {
     }
 
     async fn spawn(&self, command: &str, cancel: &CancellationToken) -> io::Result<CommandHandle> {
-        use std::process::Stdio;
-        check_cancel(cancel)?;
-        let mut launch = tokio::process::Command::new("/bin/sh");
-        launch
-            .args(["-c", command])
-            .current_dir(&self.cwd)
-            .env_clear()
-            .envs(&self.environment)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .kill_on_drop(true);
-        let mut process = crate::process::spawn(launch, Some(cancel))?;
-        let stdout = process
-            .child
-            .stdout
-            .take()
-            .ok_or_else(|| io::Error::other("missing stdout pipe"))?;
-        let stderr = process
-            .child
-            .stderr
-            .take()
-            .ok_or_else(|| io::Error::other("missing stderr pipe"))?;
-        Ok(CommandHandle {
-            stdout: Box::new(stdout),
-            stderr: Box::new(stderr),
-            process: Box::new(process),
-        })
+        self.launch(command, cancel, self.sandbox.is_some())
+    }
+
+    async fn spawn_user(
+        &self,
+        command: &str,
+        cancel: &CancellationToken,
+    ) -> io::Result<CommandHandle> {
+        self.launch(command, cancel, false)
     }
 }
 
 // Resolve each existing prefix before processing `..`; unlike lexical normalization,
 // this preserves the meaning of a parent segment following a symlink. Missing tails
 // are allowed for write, but dangling symlinks are never replaced by ordinary files.
-fn resolve_target(path: &Path, protected_paths: &[PathBuf]) -> io::Result<PathBuf> {
+pub(crate) fn resolve_target(path: &Path, protected_paths: &[PathBuf]) -> io::Result<PathBuf> {
     use std::path::Component;
     let mut resolved = PathBuf::new();
     for component in path.components() {
@@ -287,7 +366,7 @@ fn resolve_target(path: &Path, protected_paths: &[PathBuf]) -> io::Result<PathBu
     Ok(resolved)
 }
 
-fn prepare_protected_paths(mut pending: Vec<PathBuf>) -> io::Result<Vec<PathBuf>> {
+pub(crate) fn prepare_protected_paths(mut pending: Vec<PathBuf>) -> io::Result<Vec<PathBuf>> {
     let mut protected = Vec::new();
     while let Some(path) = pending.pop() {
         let path = match (path.parent(), path.file_name()) {

@@ -210,7 +210,8 @@ impl Fixture {
                 Method::POST,
                 "/v1/sessions",
                 json!({
-                    "cwd":self.root.path().join("work"), "env":{"CANTER_TEST_ENV":ENV_VALUE},
+                    "cwd":self.root.path().join("work"),
+                    "env":{"HOME":self.root.path().join("home"),"CANTER_TEST_ENV":ENV_VALUE},
                     "model":"fake-model", "approvalPolicy":"alwaysAsk", "clientName":"terminal-a"
                 }),
             )
@@ -1314,7 +1315,7 @@ async fn restart_requires_resume_and_keeps_the_first_resumed_environment() {
             .request(
                 Method::POST,
                 &format!("{path}/resume"),
-                json!({"env":{"CANTER_TEST_ENV":value}}),
+                json!({"env":{"HOME":fixture.root.path().join("home"),"CANTER_TEST_ENV":value}}),
             )
             .await;
         assert_eq!(response.status(), 200);

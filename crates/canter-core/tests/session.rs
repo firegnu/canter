@@ -51,6 +51,99 @@ fn assert_request_extension(previous: &Request, next: &Request) {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp() {
+    for enabled in [true, false] {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        for name in ["home", "project", "extra", "state"] {
+            std::fs::create_dir(temp.path().join(name)).unwrap();
+        }
+        let command = serde_json::json!({"command":"printf '%s' \"$TMPDIR\" > temp-path; printf written > ../extra/result"}).to_string();
+        let model = ScriptModel::new(vec![
+            vec![
+                call("first", "shell", &command),
+                ModelEvent::Finished(FinishReason::ToolCalls),
+            ],
+            vec![ModelEvent::Finished(FinishReason::Stop)],
+            vec![
+                call("second", "shell", &command),
+                ModelEvent::Finished(FinishReason::ToolCalls),
+            ],
+            vec![ModelEvent::Finished(FinishReason::Stop)],
+        ]);
+        let store = Arc::new(Store::new(temp.path().join("state/sessions")).unwrap());
+        let runtime = RuntimeContext {
+            environment: BTreeMap::from([
+                (
+                    "HOME".into(),
+                    temp.path().join("home").display().to_string(),
+                ),
+                (
+                    "CANTER_HOME".into(),
+                    temp.path().join("state").display().to_string(),
+                ),
+                ("PATH".into(), "/usr/bin:/bin".into()),
+            ]),
+            protected_paths: vec![temp.path().join("state")],
+            ..Default::default()
+        };
+        let (session, _) = Session::create(
+            store,
+            "sandbox".into(),
+            settings(&temp.path().join("project")),
+            runtime,
+            model.clone(),
+            CoreOptions {
+                sandbox: enabled,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let mut events = session.subscribe(0).await.unwrap();
+        session.input(input("before adding")).await.unwrap();
+        finished(&mut events).await;
+        assert_eq!(temp.path().join("extra/result").exists(), !enabled);
+        if enabled {
+            assert!(model.requests.lock().unwrap()[1].messages.iter().any(|message| matches!(message, Message::ToolResult { text, .. } if text.contains("sandbox") && text.contains("!"))));
+        }
+        session
+            .update(SessionUpdateParams {
+                add_directories: vec!["../extra".into()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        session.input(input("after adding")).await.unwrap();
+        finished(&mut events).await;
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("extra/result")).unwrap(),
+            "written"
+        );
+        session
+            .shell_command(SessionShellCommandParams {
+                command: "printf user > ../user".into(),
+                timeout_ms: None,
+            })
+            .await
+            .unwrap();
+        finished(&mut events).await;
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("user")).unwrap(),
+            "user"
+        );
+        let temporary = std::fs::read_to_string(temp.path().join("project/temp-path")).unwrap();
+        if enabled {
+            assert!(std::path::Path::new(&temporary).is_dir());
+        }
+        session.close().await.unwrap();
+        if enabled {
+            assert!(!std::path::Path::new(&temporary).exists());
+        }
+    }
+}
+
 #[tokio::test]
 async fn added_directories_are_normalized_persisted_and_appended_to_model_context() {
     let temp = tempfile::tempdir().unwrap();

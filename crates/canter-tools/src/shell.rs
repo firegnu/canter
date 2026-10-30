@@ -108,6 +108,7 @@ async fn run_command(
     let result = capture(
         executor,
         args,
+        source,
         cancel,
         abandoned,
         control,
@@ -238,6 +239,7 @@ fn background_output(
 async fn capture(
     executor: &dyn Executor,
     args: &ShellArgs,
+    source: ExecCommandSource,
     cancel: &CancellationToken,
     abandoned: &CancellationToken,
     control: &mut Control,
@@ -245,7 +247,11 @@ async fn capture(
     on_output: &mut (dyn FnMut(&str) + Send),
     on_background: &mut (dyn FnMut(canter_protocol::BackgroundCommandOutput) + Send),
 ) -> io::Result<(std::process::ExitStatus, Option<ToolOutcome>)> {
-    let mut handle = executor.spawn(&args.command, cancel).await?;
+    let mut handle = if source == ExecCommandSource::UserShell {
+        executor.spawn_user(&args.command, cancel).await?
+    } else {
+        executor.spawn(&args.command, cancel).await?
+    };
     control.started();
     let mut stdout = [0; 8192];
     let mut stderr = [0; 8192];
@@ -253,6 +259,8 @@ async fn capture(
     let mut stderr_done = false;
     let mut stdout_decoder = Decoder::default();
     let mut stderr_decoder = Decoder::default();
+    let mut denial_tails = [String::new(), String::new()];
+    let mut reported_denial = false;
     let mut status = None;
     let mut interruption = None;
     let mut cancellation_seen = false;
@@ -325,12 +333,14 @@ async fn capture(
                 let count = result?;
                 stdout_done = count == 0;
                 let chunk = stdout_decoder.push(&stdout[..count], stdout_done);
+                if handle.sandboxed && !reported_denial { reported_denial = mentions_denial(&mut denial_tails[0], &chunk); }
                 if control.background_id.is_some() { control.push(&chunk); } else { output.push(&chunk, on_output); }
             }
             result = handle.stderr.read(&mut stderr), if !stderr_done => {
                 let count = result?;
                 stderr_done = count == 0;
                 let chunk = stderr_decoder.push(&stderr[..count], stderr_done);
+                if handle.sandboxed && !reported_denial { reported_denial = mentions_denial(&mut denial_tails[1], &chunk); }
                 if control.background_id.is_some() { control.push(&chunk); } else { output.push(&chunk, on_output); }
             }
         }
@@ -344,9 +354,37 @@ async fn capture(
             output.push(&notice, on_output);
         }
     }
+    if handle.sandboxed && interruption.is_none() && reported_denial {
+        let notice = "\nThe sandbox blocks access outside the permitted paths and network scope. If the user needs that access, they can run it themselves with !.\n";
+        if control.background_id.is_some() {
+            control.push(notice);
+        } else {
+            output.model.push(notice.as_bytes());
+        }
+    }
     status
         .map(|status| (status, interruption))
         .ok_or_else(|| io::Error::other("command has no exit status"))
+}
+
+fn mentions_denial(tail: &mut String, chunk: &str) -> bool {
+    tail.push_str(chunk);
+    tail.make_ascii_lowercase();
+    let found = [
+        "operation not permitted",
+        "permission denied",
+        "sandbox-exec:",
+    ]
+    .iter()
+    .any(|message| tail.contains(message));
+    // Retain enough to recognize an error split across pipe reads, before the
+    // ordinary output limits discard it. stdout and stderr stay separate.
+    let mut start = tail.len().saturating_sub(64);
+    while !tail.is_char_boundary(start) {
+        start += 1;
+    }
+    tail.drain(..start);
+    found
 }
 
 #[derive(Default)]
