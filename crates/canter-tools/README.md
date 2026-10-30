@@ -27,7 +27,7 @@ P2-130 在 read 的说明中补充了看图能力、图片格式和 8 MiB 上限
 4. `call.started_item()` 提供 `InProgress` 项目，供循环发送 item.started。
    `ask_user` 属于 `Risk::Interaction`：用 `call.user_input_request()` 取问题，交会话循环
    开待处理请求并等回答，所有权限模式都一样，不交给 gate，也不调用执行器。
-   以下 gate/execute 步骤用于读写文件、shell、web_fetch 和 MCP 工具。
+   以下 gate/execute 步骤用于读写文件、shell、web_fetch、web_search 和 MCP 工具。
    调 `gate.evaluate(&call, mode)`。`Execute(permit)` 可执行，`Ask(ApprovalRequest)`
    交循环/客户端处理。请求包含完整参数，write/edit 另加顶层 `diff`；文件路径解析后
    与模型提供的不同时另带 `resolvedPath`，客户端应显示这个实际目标。shell 保留完整命令。
@@ -75,10 +75,18 @@ P2-130 在 read 的说明中补充了看图能力、图片格式和 8 MiB 上限
 | monitor | `id`、可选正则 `pattern` | 监视新输出；省略 pattern 取消，再设则替换；`backgroundCommandAction` |
 | ask_user | `question`, `options: [{label, description}]`（2–4 个，标签不重复，内容非空） | 会话循环等待选项或自写文字；模型结果 `{question, answer}`，客户端项目 `userInput` |
 | web_fetch | `url`（HTTP(S)，不含用户名/密码） | HTML 转 Markdown，文字和 JSON 原样；有界文字结果，客户端项目 `webFetch` |
+| web_search | `query`（1～128 个 Unicode 字符，非全空白）、`count`（默认 10，1～20） | 可选搜索后端；统一标题、网址、日期、summary；客户端项目 `webSearch` |
 | update_plan | 可选 `explanation`，`plan: [{step, status}]` | 整份替换清单，回 `Plan updated`；客户端项目 `plan` |
 | submit_plan | `plan`（完整 Markdown） | 计划模式中等待用户批准；客户端项目 `planProposal` |
 
-`Tool::ALL` 固定按 read/write/edit/shell/ask_user/web_fetch/update_plan/submit_plan/shell_output/shell_stop/monitor 排列，保证会话每次请求的工具前缀稳定。
+`Tool::ALL` 固定按 read/write/edit/shell/ask_user/web_fetch/web_search/update_plan/submit_plan/shell_output/shell_stop/monitor 排列；会话用 `Tools::find` 滤掉未配置的 web_search 和关闭的 update_plan，保证会话每次请求的工具前缀稳定。
+
+`web_search::SearchProvider` 是搜索后端接口，返回统一 `WebSearchResult`，错误必须不含凭证。
+`WebSearch` 负责 30 秒总超时、取消和统一输出；DeepSeek 适配在 `web_search/deepseek.rs`，
+用独立 no_proxy 客户端发送 query/count，禁用跳转和自动重试，响应限制 5 MiB。
+模型输出按现有 32 KiB 头尾截断，客户端的 1 MiB 文字预算均分给结果及字段，各自头尾截断。
+搜索算执行，session grant 按工具名放行所有查询；审查轮拒绝，计划模式复用普通批准。
+增加一家后端只需实现这个接口并在服务端配置层选用，工具定义、格式化、批准、协议、终端不变。
 `Tools::with_plan_enabled(false)` 关闭待办；会话通过 `Tools::find` 过滤工具定义和调用，
 在创建或打开时冻结。`update_plan` 属于交互风险，但 gate 始终直接发 permit，审查轮也一样，
 不会调用执行器。步骤状态为 `pending` / `in_progress` / `completed`，至多一个进行中，
@@ -467,6 +475,6 @@ GET 接口或暴露内部服务内容。需要逐个把关时使用询问模式�
 
 `submit_plan {plan: Markdown}` 始终在内置列表中，交互由核心等待用户批准。
 计划模式使用 `PermissionGate::evaluate_plan`，限制先于权限档和会话授权；
-read/ask_user/submit_plan 允许，shell 复用现有只读白名单，web_fetch 复用原审批。
+read/ask_user/submit_plan 允许，shell 复用现有只读白名单，web_fetch/web_search 复用原审批。
 write/edit、非白名单 shell、所有 MCP、update_plan 返回 blocked，不生成审批。
 核心在准备前也拦一次，避免为禁止的改动读文件或生成 diff。

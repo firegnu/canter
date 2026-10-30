@@ -147,7 +147,7 @@ impl PermissionGate {
             | Tool::ShellOutput
             | Tool::ShellStop
             | Tool::Monitor => PermissionCheck::Execute(ExecutionPermit { call }),
-            Tool::WebFetch => self.evaluate(call, mode),
+            Tool::WebFetch | Tool::WebSearch => self.evaluate(call, mode),
             Tool::Shell if matches!(&call.action, Action::Shell(args) if call.executor.is_readonly_shell(&args.command)) => {
                 PermissionCheck::Execute(ExecutionPermit { call })
             }
@@ -172,6 +172,7 @@ impl PermissionGate {
             | Tool::AskUser
             | Tool::Mcp
             | Tool::WebFetch
+            | Tool::WebSearch
             | Tool::SubmitPlan => PermissionCheck::Deny {
                 cancel_turn: false,
                 feedback: None,

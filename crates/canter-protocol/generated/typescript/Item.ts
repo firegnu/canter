@@ -11,6 +11,7 @@ import type { PlanStep } from "./PlanStep";
 import type { ToolContentItem } from "./ToolContentItem";
 import type { UserInput } from "./UserInput";
 import type { UserInputAnswer } from "./UserInputAnswer";
+import type { WebSearchResult } from "./WebSearchResult";
 import type { JsonValue } from "./serde_json/JsonValue";
 
 export type Item = { "type": "diagnostics", id: string, sourceItemId?: string, status: DiagnosticStatus, files: Array<DiagnosticFile>, totalCount: number, shownCount: number, omittedCount: number, resolvedCount?: number,
@@ -22,4 +23,4 @@ errorCount?: number, warningCount?: number, delivery?: DiagnosticDelivery, } | {
  * Thinking time from `item.started` up to its latest delta, filled by
  * the reducer; absent means unknown. Not in Codex.
  */
-durationMs?: number, } | { "type": "webFetch", id: string, url: string, resolvedUrl?: string, result: string, status: ItemStatus, } | { "type": "mcpToolCall", id: string, server: string, tool: string, arguments: JsonValue, result: string, contentItems?: Array<ToolContentItem>, status: ItemStatus, } | { "type": "commandExecution", id: string, source?: ExecCommandSource, command: string, cwd: string, status: ItemStatus, aggregatedOutput: string, exitCode: number | null, durationMs: number | null, } | { "type": "fileChange", id: string, changes: Array<FileUpdateChange>, status: ItemStatus, } | { "type": "fileRead", id: string, path: string, startLine: number, content: string, contentItems?: Array<ToolContentItem>, status: ItemStatus, } | { "type": "contextCompaction", id: string, summary: string, } | { "type": "userInput", id: string, question: string, answer?: UserInputAnswer, status: ItemStatus, } | { "type": "unknown" };
+durationMs?: number, } | { "type": "webSearch", id: string, query: string, results: Array<WebSearchResult>, status: ItemStatus, error?: string, } | { "type": "webFetch", id: string, url: string, resolvedUrl?: string, result: string, status: ItemStatus, } | { "type": "mcpToolCall", id: string, server: string, tool: string, arguments: JsonValue, result: string, contentItems?: Array<ToolContentItem>, status: ItemStatus, } | { "type": "commandExecution", id: string, source?: ExecCommandSource, command: string, cwd: string, status: ItemStatus, aggregatedOutput: string, exitCode: number | null, durationMs: number | null, } | { "type": "fileChange", id: string, changes: Array<FileUpdateChange>, status: ItemStatus, } | { "type": "fileRead", id: string, path: string, startLine: number, content: string, contentItems?: Array<ToolContentItem>, status: ItemStatus, } | { "type": "contextCompaction", id: string, summary: string, } | { "type": "userInput", id: string, question: string, answer?: UserInputAnswer, status: ItemStatus, } | { "type": "unknown" };

@@ -329,6 +329,17 @@ pub struct PlanStep {
     pub status: PlanStepStatus,
 }
 
+/// A search result shared by all search providers. Dates are RFC 3339 when known.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct WebSearchResult {
+    pub title: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub date: Option<String>,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(
     tag = "type",
@@ -420,6 +431,16 @@ pub enum Item {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional, type = "number")]
         duration_ms: Option<u64>,
+    },
+    /// Provider-independent search results; only search is supported, so there is no action.
+    WebSearch {
+        id: String,
+        query: String,
+        results: Vec<WebSearchResult>,
+        status: ItemStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        error: Option<String>,
     },
     WebFetch {
         id: String,
@@ -571,6 +592,7 @@ impl Item {
             | Self::Reasoning { id, .. }
             | Self::McpToolCall { id, .. }
             | Self::WebFetch { id, .. }
+            | Self::WebSearch { id, .. }
             | Self::CommandExecution { id, .. }
             | Self::FileChange { id, .. }
             | Self::FileRead { id, .. }

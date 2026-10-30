@@ -4652,6 +4652,7 @@ impl App {
             | Item::Plan { status, .. }
             | Item::McpToolCall { status, .. }
             | Item::WebFetch { status, .. }
+            | Item::WebSearch { status, .. }
             | Item::CommandExecution { status, .. }
             | Item::FileChange { status, .. }
             | Item::FileRead { status, .. } => Some(*status),
@@ -4890,6 +4891,7 @@ impl App {
             Item::FileChange { .. } => ("Editing", None),
             Item::McpToolCall { .. } => ("Calling", None),
             Item::WebFetch { .. } => ("Fetching", None),
+            Item::WebSearch { .. } => ("Searching", None),
             Item::ContextCompaction { .. } => ("Compacting context", None),
             _ => return None,
         })

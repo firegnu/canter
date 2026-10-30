@@ -316,6 +316,34 @@ impl Body {
                     ),
                 );
             }
+            Item::WebSearch {
+                query,
+                results,
+                status,
+                error,
+                ..
+            } => {
+                let summary = format!(
+                    "Searched {} · {} results · {}",
+                    code_span(&one_line(query, LINE_CHARS)),
+                    results.len(),
+                    outcome(*status, feedback)
+                );
+                let details = error.clone().unwrap_or_else(|| {
+                    results
+                        .iter()
+                        .map(|result| {
+                            format!(
+                                "{}\n{}",
+                                one_line(&result.title, LINE_CHARS),
+                                one_line(&result.url, LINE_CHARS)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                });
+                self.block(assistant, &tool(&summary, &details, ""));
+            }
             Item::WebFetch {
                 url,
                 resolved_url,

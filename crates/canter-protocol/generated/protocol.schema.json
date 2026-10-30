@@ -2089,6 +2089,44 @@
           "type": "object"
         },
         {
+          "description": "Provider-independent search results; only search is supported, so there is no action.",
+          "properties": {
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "results": {
+              "items": {
+                "$ref": "#/$defs/WebSearchResult"
+              },
+              "type": "array"
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "type": {
+              "const": "webSearch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "query",
+            "results",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "id": {
               "type": "string"
@@ -4399,6 +4437,32 @@
         "itemId",
         "question",
         "options"
+      ],
+      "type": "object"
+    },
+    "WebSearchResult": {
+      "description": "A search result shared by all search providers. Dates are RFC 3339 when known.",
+      "properties": {
+        "date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "url",
+        "summary"
       ],
       "type": "object"
     }

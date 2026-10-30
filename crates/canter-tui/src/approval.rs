@@ -100,6 +100,10 @@ pub(crate) fn layout(
         });
     let cwd = &snapshot.settings.cwd;
     let (title, body) = match approval.tool.as_str() {
+        "web_search" => (
+            "Search the web?".to_owned(),
+            json_body(&approval.arguments, inner),
+        ),
         "web_fetch" => (
             "Fetch this URL?".to_owned(),
             json_body(&approval.arguments, inner),
@@ -280,6 +284,7 @@ pub(crate) fn layout(
 /// switching the mode back to 「每次问」 later does not take it back.
 fn session_note(approval: &ApprovalRequest) -> String {
     let what = match approval.tool.as_str() {
+        "web_search" => "All later searches in this session won't ask".to_owned(),
         "web_fetch" => {
             let authority = approval.arguments["resolvedUrl"]
                 .as_str()
