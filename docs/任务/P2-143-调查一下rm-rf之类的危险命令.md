@@ -52,3 +52,16 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」：做了什么、查证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：读了 DESIGN、HANDOFF、P2-104 沙箱报告和 canter 权限相关源码（`permission.rs`、`rules.rs`、`readonly.rs`、`executor.rs`，以及 `runner.rs` 的权限入口、`user_shell.rs`）；读了 Codex `rust-v0.163.0`、opencode `v2.1.3`、pi（`f09d01b`）、omp（`338d2ce`）的源码和 Claude Code 官方文档两页（permissions、permission-modes）。报告写在 `docs/调研/P2-143-危险命令调研.md`，回答四个问题：别家对照表和逐家依据；canter 的判断顺序、三种模式表、各道防线、禁止规则认不出的十种写法和其它漏洞；六类危险命令；方案 A（内置窄清单）、B（加强用户规则）、C（全交给沙箱）和推荐的 A + C。
+- 查证了什么：报告里每处源码引用都回到文件按行号核对过，改正了几处差一两行的；文档地址都用 WebFetch 打开过（Claude Code 两页、cargo 发布、npm 撤销、git reset、git clean），内容对得上。HANDOFF「命令规则（P2-108）」里禁止规则认不出的四种写法读代码核对属实，另补六种（带路径的程序、子命令前的全局选项、选项换顺序、控制结构里的命令、括号和 `${…}` 之后的整段、变量做命令名；脚本内部另列）；并指出「总是问、只问执行下照旧问」在有更短的放行规则或会话前缀时不成立（例：禁止 `git push --force` + 放行 `git push`，`git push -f` 三档都直接跑）。
+- 拿主意的地方：Codex 用 `/tmp/p2-104-src/codex`（有 `.git`，标签对得上）代替没有 `.git` 的 `/tmp/r49-src/codex`；opencode 按 `v2.1.3` 重新克隆到 `/tmp/p2-143-src/opencode`；pi、omp 是没有标签的浅克隆，按提交号记版本。没有读用户真实的 `~/.canter/rules.json`，「已装的 `git push` 放行规则放过 force push」按 HANDOFF 和 P2-108 任务文件的记录推演，报告里写明了。推荐 A（窄版）+ C、建议单开一件、「全部允许」下命中倾向直接拒绝；清单宽窄、拒绝还是弹框、用户放行能否盖过内置等列在报告 §4.5 给用户定。
+- 没做的事：没改代码、配置和规则文件；没运行任何危险命令，没跑 canter 测试；没调模型接口（0 次）。没看 Codex 的 `auto_review`（guardian）具体审什么；opencode 文档和代码对 `external_directory`、`.env` 默认值说法不一致，没查清（报告标未知）；Claude Code 只用了官方文档，没看本机程序。
+- 踩过的坑：`/tmp/r49-src` 下的 codex、opencode 都没有 `.git`，确认不了版本，换用 P2-104 的克隆和重新克隆。zsh 下 `grep --include=*.rs` 不加引号会被当成文件通配直接报错，改成加引号。WebFetch 读 Claude Code 的 permission-modes 长页面只读到前 10 万字，要用 offset 再读后半页。
+
+## 主控审查
+
+2026-10-30，canter/main。报告回答了四个问题，事实、推测、未知分开标了。抽查引用：canter `permission.rs` 261–300（先查禁止、「全部允许」在 281–283 提前返回、再查要问和放行）、Codex `rust-v0.163.0` 的 `is_dangerous_command.rs` 49–81（拆进 `bash -lc` 里的字面命令再判）和 `exec_policy.rs` 793–806（危险命令在 `never` 下拒绝、其余档弹框）、HANDOFF 第 19 行（10-29 装的 `git push` 放行规则），都对得上。报告里没有本机路径。没改代码和配置，没跑危险命令，没调模型。用户的 `rules.json` 没读，「`git push` 放行规则盖住 `git push --force`」是按记录和代码推出来的，报告写明了。§4.5 七个问题交用户定。
+结果：一次过
