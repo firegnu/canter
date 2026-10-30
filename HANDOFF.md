@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-30 第三十七次装 main `e33b425`（`canter --version` 显示 `canter 0.1.0 · e33b425`；比上一版多 P2-152：`/clear`（同 `/new`）；P2-155：`/init` 发固定提示词让模型写或改进 AGENTS.md；P2-141：往上翻、那条 prompt 滚出屏幕时对话区顶上一行灰字 `› …`，单击跳回；P2-156：`/permissions` 查看和删除 `rules.json` 的规则，服务端新增 `GET /v1/commandRules`、`POST /v1/commandRules/delete`；P2-161：内置危险命令检查，删根、根下一级、家目录、工作目录及上级、删整层通配、目标认不清的 `rm`/`rmdir`，「全部允许」下拒绝并让用户用 `!` 跑，另外两档一定弹框、放行规则免不掉）。工具列表和提示词没变，缓存不冷。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
+- 退回上一版 `0cf6308`：`cp -p ~/.canter/canter-0cf6308 ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-30 第三十六次装 main `0cf6308`（`canter --version` 显示 `canter 0.1.0 · 0cf6308`；比上一版多 P2-106：`config.json` 的 `base_url` 是 `https://api.deepseek.com` 时模型多一个 `web_search` 工具，用同一个 key 调 DeepSeek 搜索接口（每 1000 次成功搜索 0.75 美元），默认 10 条最多 20 条，批准和 `web_fetch` 一样；已在用的会话重开时工具列表多一项、缓存冷一次）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
 - 退回上一版 `16c8e96`：`cp -p ~/.canter/canter-16c8e96 ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版打开搜过网页的会话：搜索项目按不认识的跳过（协议兼容测试查过），模型历史里的 `web_search` 调用旧版能不能照常续聊没测过。
 - 10-29 第三十五次装 main `16c8e96`（`canter --version` 显示 `canter 0.1.0 · 16c8e96`；比上一版多 P2-133～P2-136：LSP 文件同步、诊断交给模型、终端显示和 `/lsp`、内置 Rust / Python / TS/JS。`lsp.enabled` 仍默认关，关着时用户看不到变化，只多了 `/lsp` 命令（关着时提示怎么打开）；P2-145 只改测试）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
