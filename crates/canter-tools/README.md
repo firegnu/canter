@@ -166,9 +166,11 @@ Ctrl+B 转后台命令均通过 `/usr/bin/sandbox-exec` 启动；用户 `!` 使�
 缓存由所有会话共用，不自动清理。`CARGO_HOME`、`npm_config_cache` 指向缓存，
 `TMPPREFIX` 指向 TMPDIR 下的 zsh 前缀；不复制用户 cargo 配置、凭证或 bin。
 真实 `.cargo` / `.npm` 只读，canter 状态目录及 `.ssh` / `.aws` / `.gnupg` 不可读写。
-Git 实际元数据目录可写，但 config、hooks 和 worktree 元数据指针保持只读。
-只有 allowAll 放开 IP 网络，另外两档仍断网；Unix socket 只放行可写范围且排除状态目录。
-启动失败不退回墙外，失败输出附沙箱范围说明，不改变退出码或自动重跑。
+Git 实际元数据目录可写，但 config、hooks 和 worktree、子模块元数据指针保持只读；
+新建仓库的保护正则只套在 cwd 和新增目录，临时目录和缓存可检出依赖。禁止创建硬链接。
+只有 allowAll 放开 IP 网络和 mDNSResponder socket，另外两档仍断网；其他 Unix socket
+只放行可写范围且排除状态目录。启动失败不退回墙外，仅在输出出现拒绝特征时附沙箱范围
+说明，不改变退出码或自动重跑。
 文件工具、MCP、网页工具不由本件套墙；进程组看护和清理边界保持原样。
 
 ## 权限与执行器边界

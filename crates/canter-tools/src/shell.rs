@@ -354,12 +354,7 @@ async fn capture(
             output.push(&notice, on_output);
         }
     }
-    if handle.sandboxed
-        && interruption.is_none()
-        && (reported_denial || status.is_some_and(|status| !status.success()))
-    {
-        // A subprocess need not print EPERM. Explain the boundary on every sandboxed
-        // failure without claiming that an arbitrary nonzero exit proves a denial.
+    if handle.sandboxed && interruption.is_none() && reported_denial {
         let notice = "\nThe sandbox blocks access outside the permitted paths and network scope. If the user needs that access, they can run it themselves with !.\n";
         if control.background_id.is_some() {
             control.push(notice);

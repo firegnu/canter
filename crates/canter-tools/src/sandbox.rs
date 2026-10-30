@@ -87,14 +87,9 @@ impl Sandbox {
             .ok_or_else(|| io::Error::other("sandbox session has closed"))?
             .path()
             .canonicalize()?;
-        let mut writable = vec![
-            cwd.canonicalize()?,
-            temporary.clone(),
-            self.cargo.clone(),
-            self.npm.clone(),
-        ];
+        let mut project_roots = vec![cwd.canonicalize()?];
         for directory in &scope.additional_directories {
-            writable.push(directory.canonicalize()?);
+            project_roots.push(directory.canonicalize()?);
         }
         let mut git_directories = Vec::new();
         for root in
@@ -106,7 +101,7 @@ impl Sandbox {
         git_directories.dedup();
         let mut parameters = Parameters::default();
         let mut profile = String::from(
-            "(version 1)\n(deny default)\n\
+            "(version 1)\n(deny default)\n(deny file-link)\n\
          (allow process-exec process-fork)\n\
          (allow signal (target same-sandbox))\n\
          (allow process-info* (target same-sandbox))\n\
@@ -114,9 +109,13 @@ impl Sandbox {
          (allow mach-lookup (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n\
          (allow file-read*)\n\
          (allow system-socket (socket-domain AF_UNIX))\n\
-         (allow file-write-data (literal \"/dev/null\"))\n",
+         (allow file-write-data (literal \"/dev/null\") (literal \"/dev/stdout\")\n\
+           (literal \"/dev/stderr\") (regex #\"^/dev/fd/[0-9]+$\"))\n",
         );
-        for path in &writable {
+        for path in project_roots
+            .iter()
+            .chain([&temporary, &self.cargo, &self.npm])
+        {
             let parameter = parameters.path(path)?;
             profile.push_str(&format!("(allow file-write* (subpath {parameter}))\n"));
             profile.push_str(&format!(
@@ -126,6 +125,9 @@ impl Sandbox {
                 "(allow network-outbound (remote unix-socket (subpath {parameter})))\n"
             ));
         }
+        let protected_names = ["config", "config.worktree", "hooks", "commondir", "gitdir"]
+            .map(git_name_pattern)
+            .join("|");
         for directory in &git_directories {
             profile.push_str(&format!(
                 "(allow file-write* (subpath {}))\n",
@@ -144,26 +146,34 @@ impl Sandbox {
                 }
             }
             let parameter = parameters.path(directory)?;
-            profile.push_str(&format!(
-                "(deny file-write* (require-all (subpath {parameter}) (regex #\"/worktrees/[^/]+/(config(\\.worktree)?|hooks|commondir|gitdir)(/|$)\")))\n"
-            ));
-            protect_ancestors(&mut profile, &mut parameters, &directory.join("worktrees"))?;
+            for (container, depth) in [("worktrees", "[^/]+"), ("modules", ".+")] {
+                profile.push_str(&format!(
+                    "(deny file-write* (require-all (subpath {parameter}) (regex #\"/{}/{depth}/({protected_names})(/|$)\")))\n",
+                    git_name_pattern(container)
+                ));
+                protect_ancestors(&mut profile, &mut parameters, &directory.join(container))?;
+            }
         }
-        // Also protect metadata of repositories created inside a writable root.
-        profile.push_str(
-            r#"
-(deny file-write* (regex #"(^|/)\.git/(config(\.worktree)?|hooks|commondir|gitdir)(/|$)"))
-(deny file-write-data file-write-unlink (regex #"(^|/)\.git$"))
-"#,
-        );
+        // Protect new project repositories, without blocking dependency checkouts
+        // in the private temporary directory or disposable download caches.
+        let dot_git = git_name_pattern(".git");
+        for root in &project_roots {
+            let parameter = parameters.path(root)?;
+            profile.push_str(&format!(
+                "(deny file-write* (require-all (subpath {parameter}) (regex #\"(^|/){dot_git}/({protected_names})(/|$)\")))\n\
+                 (deny file-write-data file-write-unlink (require-all (subpath {parameter}) (regex #\"(^|/){dot_git}$\")))\n"
+            ));
+        }
         if scope.network {
             profile.push_str(
                 r#"
 (allow network-outbound (remote ip "*:*"))
+(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))
 (allow network-inbound network-bind (local ip "*:*"))
 (allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))
 (allow mach-lookup
   (global-name "com.apple.bsd.dirhelper")
+  (global-name "com.apple.dnssd.service")
   (global-name "com.apple.system.opendirectoryd.membership")
   (global-name "com.apple.SecurityServer")
   (global-name "com.apple.securityd.xpc")
@@ -216,6 +226,16 @@ impl Sandbox {
             .env_remove("NPM_CONFIG_CACHE");
         Ok(command)
     }
+}
+
+// Match both ASCII cases of the fixed Git metadata names used above.
+fn git_name_pattern(name: &str) -> String {
+    name.chars()
+        .map(|character| match character {
+            '.' => "\\.".to_owned(),
+            _ => format!("[{character}{}]", character.to_ascii_uppercase()),
+        })
+        .collect()
 }
 
 fn git_protected_paths(directory: &Path) -> io::Result<Vec<PathBuf>> {

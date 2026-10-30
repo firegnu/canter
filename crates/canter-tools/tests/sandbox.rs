@@ -180,6 +180,229 @@ fn code(output: &ToolOutput) -> Option<i32> {
     }
 }
 
+// Invoked by the socket regression inside Seatbelt; never sends a DNS query.
+#[test]
+#[ignore = "connector invoked inside Seatbelt by sandbox_mdns_socket_follows_network_permission"]
+fn mdns_connect_only() -> std::io::Result<()> {
+    drop(std::os::unix::net::UnixStream::connect(
+        "/private/var/run/mDNSResponder",
+    )?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sandbox_mdns_socket_follows_network_permission() {
+    use canter_protocol::PermissionMode;
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    let executable = std::env::current_exe().unwrap();
+    let command = format!(
+        "{} --ignored --exact mdns_connect_only --nocapture",
+        shell_quote(&executable.to_string_lossy())
+    );
+    for mode in [
+        PermissionMode::AllowAll,
+        PermissionMode::AlwaysAsk,
+        PermissionMode::AskForExecution,
+    ] {
+        tools.configure_shell(mode, &[]);
+        let output = run(&tools, &command).await;
+        assert_eq!(
+            code(&output) == Some(0),
+            mode == PermissionMode::AllowAll,
+            "{mode:?}: {}",
+            output.text
+        );
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[tokio::test]
+async fn sandbox_clones_local_repository_into_temporary_directory() {
+    let source = Fixture::new();
+    source.git(&["init", "-q"]);
+    std::fs::write(source.cwd.join("tracked"), "local source").unwrap();
+    source.git(&["add", "tracked"]);
+    source.git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "initial",
+    ]);
+    let fixture = Fixture::new();
+    let output = run(
+        &fixture.tools(true),
+        &format!(
+            "git clone -q {} \"$TMPDIR/clone\" && cat \"$TMPDIR/clone/tracked\"",
+            shell_quote(&source.cwd.to_string_lossy())
+        ),
+    )
+    .await;
+    assert_eq!(code(&output), Some(0), "{}", output.text);
+    assert!(output.text.contains("local source"));
+}
+
+#[tokio::test]
+async fn sandbox_builds_local_cargo_git_dependency_in_cache() {
+    let source = Fixture::new();
+    source.git(&["init", "-q"]);
+    std::fs::write(
+        source.cwd.join("Cargo.toml"),
+        "[package]\nname = 'local_dep'\nversion = '0.1.0'\nedition = '2021'\n[lib]\npath = 'lib.rs'\n",
+    )
+    .unwrap();
+    std::fs::write(source.cwd.join("lib.rs"), "pub fn answer() -> u32 { 42 }\n").unwrap();
+    source.git(&["add", "Cargo.toml", "lib.rs"]);
+    source.git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "initial",
+    ]);
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.cwd.join("Cargo.toml"),
+        format!(
+            "[package]\nname = 'local_app'\nversion = '0.1.0'\nedition = '2021'\n[lib]\npath = 'lib.rs'\n[dependencies]\nlocal_dep = {{ git = 'file://{}' }}\n",
+            source.cwd.canonicalize().unwrap().display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.cwd.join("lib.rs"),
+        "#[test] fn dependency_works() { assert_eq!(local_dep::answer(), 42); }\n",
+    )
+    .unwrap();
+    // Locate the installed toolchain read-only before entering the isolated HOME.
+    // Direct binaries avoid asking rustup to configure/download a toolchain there.
+    let sysroot = std::process::Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()
+        .unwrap();
+    assert!(sysroot.status.success());
+    let bin = PathBuf::from(String::from_utf8(sysroot.stdout).unwrap().trim()).join("bin");
+    let tools = fixture.tools(true);
+    // No IP network: the only dependency comes from the local file:// repository.
+    tools.configure_shell(canter_protocol::PermissionMode::AlwaysAsk, &[]);
+    let output = run(
+        &tools,
+        &format!(
+            "RUSTC={} {} test --lib",
+            shell_quote(&bin.join("rustc").to_string_lossy()),
+            shell_quote(&bin.join("cargo").to_string_lossy())
+        ),
+    )
+    .await;
+    assert_eq!(code(&output), Some(0), "{}", output.text);
+    assert!(output.text.contains("1 passed"), "{}", output.text);
+    assert!(
+        fixture
+            .home
+            .join("Library/Caches/canter/cargo/git/checkouts")
+            .is_dir()
+    );
+}
+
+#[tokio::test]
+async fn sandbox_protects_submodule_metadata_and_allows_submodule_commits() {
+    let source = Fixture::new();
+    source.git(&["init", "-q"]);
+    std::fs::write(source.cwd.join("tracked"), "initial").unwrap();
+    source.git(&["add", "tracked"]);
+    source.git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "initial",
+    ]);
+    let fixture = Fixture::new();
+    fixture.git(&["init", "-q"]);
+    fixture.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        source.cwd.to_str().unwrap(),
+        "nested/child",
+    ]);
+    let parent = fixture.tools(true);
+    for name in [
+        "config",
+        "config.worktree",
+        "hooks/pre-commit",
+        "commondir",
+        "gitdir",
+    ] {
+        let path = fixture.cwd.join(".git/modules/nested/child").join(name);
+        let original = std::fs::read(&path).ok();
+        let output = run(
+            &parent,
+            &format!("printf changed > .git/modules/nested/child/{name}"),
+        )
+        .await;
+        assert_ne!(code(&output), Some(0), "{name}: {}", output.text);
+        assert_eq!(std::fs::read(&path).ok(), original, "{name}");
+    }
+    let child = fixture.tools_at(&fixture.cwd.join("nested/child"), true);
+    let output = run(
+        &child,
+        "printf changed >> tracked && git add tracked && git -c user.name=Test -c user.email=test@example.invalid commit -qm child",
+    )
+    .await;
+    assert_eq!(code(&output), Some(0), "{}", output.text);
+    assert!(
+        !output.text.contains("Operation not permitted"),
+        "{}",
+        output.text
+    );
+}
+
+#[tokio::test]
+async fn sandbox_does_not_annotate_ordinary_nonzero_exits() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    for command in [
+        "exit 1",
+        "printf value | grep missing",
+        "printf 'test failed\\n' >&2; exit 101",
+    ] {
+        let output = run(&tools, command).await;
+        assert_ne!(code(&output), Some(0), "{}", output.text);
+        assert!(
+            !output.text.contains("The sandbox blocks"),
+            "{}",
+            output.text
+        );
+    }
+}
+
+#[tokio::test]
+async fn sandbox_allows_writes_to_standard_output_devices() {
+    let fixture = Fixture::new();
+    let output = run(
+        &fixture.tools(true),
+        "printf stdout > /dev/stdout && printf stderr > /dev/stderr && printf fd > /dev/fd/1",
+    )
+    .await;
+    assert_eq!(code(&output), Some(0), "{}", output.text);
+    for expected in ["stdout", "stderr", "fd"] {
+        assert!(output.text.contains(expected), "{}", output.text);
+    }
+}
+
 #[tokio::test]
 async fn sandbox_allows_project_writes_but_rejects_outside_writes() {
     let fixture = Fixture::new();
