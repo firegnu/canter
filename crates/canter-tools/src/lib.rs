@@ -946,7 +946,15 @@ impl Tools {
             result = async {
                 let resolved = if tool != Tool::Shell {
                     match arguments["path"].as_str() {
-                        Some(path) => { validate_path(path)?; Some(self.executor.resolve_path(path.as_ref(), cancel).await.map_err(|e| e.to_string())?) },
+                        Some(path) => {
+                            validate_path(path)?;
+                            let resolved = if matches!(tool, Tool::Write | Tool::Edit) {
+                                self.executor.resolve_write_path(path.as_ref(), cancel).await
+                            } else {
+                                self.executor.resolve_path(path.as_ref(), cancel).await
+                            };
+                            Some(resolved.map_err(|e| e.to_string())?)
+                        },
                         None => None,
                     }
                 } else { None };
@@ -1240,13 +1248,12 @@ impl Tools {
             );
         }
         if let Some(expected) = &call.resolved_path {
-            let current = self
-                .executor
-                .resolve_path(
-                    call.arguments["path"].as_str().unwrap_or_default().as_ref(),
-                    cancel,
-                )
-                .await;
+            let path = call.arguments["path"].as_str().unwrap_or_default().as_ref();
+            let current = if matches!(call.tool, Tool::Write | Tool::Edit) {
+                self.executor.resolve_write_path(path, cancel).await
+            } else {
+                self.executor.resolve_path(path, cancel).await
+            };
             let error = match current {
                 Ok(path) if &path == expected => None,
                 Ok(_) => Some("file target changed since preparation; prepare a new call".into()),

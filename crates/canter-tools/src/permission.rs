@@ -203,6 +203,18 @@ impl PermissionGate {
         feedback: Option<String>,
         approved_prefixes: Option<&[Vec<String>]>,
     ) -> Result<PermissionCheck<'a>, &'static str> {
+        if call.executor.sandbox_enabled()
+            && self.outside_directories(call)
+            && matches!(
+                decision,
+                ApprovalDecision::AcceptForSession
+                    | ApprovalDecision::AcceptWithExecpolicyAmendment
+            )
+        {
+            return Err(
+                "invalid_decision: sandbox file changes outside directories require one-time approval",
+            );
+        }
         if matches!(&call.action, Action::Shell(args) if args.sandbox_request.is_some())
             && matches!(
                 decision,
@@ -392,6 +404,13 @@ impl PermissionGate {
                 }
             }
             return PermissionCheck::Ask(request);
+        }
+        if call.executor.sandbox_enabled() && self.outside_directories(call) {
+            return if mode == PermissionMode::AllowAll {
+                PermissionCheck::Forbidden { reason: "Blocked: writing outside the working directory and added directories needs approval, and Allow all mode never asks. If the user really wants it, they can add the directory with /add-dir or make the change themselves.".into() }
+            } else {
+                self.ask(call, false)
+            };
         }
         if call.tool == Tool::UpdatePlan || self.grants.contains(&call.permission_key()) {
             return PermissionCheck::Execute(ExecutionPermit { call });
