@@ -1262,6 +1262,16 @@ async fn no_mcp_request_matches_pre_search_bytes() {
         let mut fixture =
             Fixture::start_with_mcp(vec![text_reply()], "fake-model", None, json!({}), servers)
                 .await;
+        // This MCP baseline predates the sandbox; P2-164 covers sandbox-on requests
+        // in sandbox_model_request_exposes_scope_only_when_enabled.
+        let path = fixture.root.path().join("state/config.json");
+        let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        config["sandbox"] = json!(false);
+        fs::write(path, config.to_string()).unwrap();
+        fixture.child.kill().await.unwrap();
+        fixture.child.wait().await.unwrap();
+        fixture.child = Fixture::spawn(fixture.root.path());
+        fixture.ready().await;
         let created = create(&fixture, "alwaysAsk").await;
         fixture.input(&created.session.id).await;
         complete(&fixture, &created.session.id, created.event_seq).await;
