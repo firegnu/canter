@@ -267,6 +267,73 @@ async fn sandbox_write_request_opens_only_that_call_and_allow_all_refuses_it() {
 }
 
 #[tokio::test]
+async fn sandbox_write_request_does_not_allow_connecting_to_an_outside_unix_socket() {
+    use canter_protocol::{ApprovalDecision, PermissionMode};
+    use canter_tools::{PermissionCheck, PermissionGate};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let fixture = Fixture::new();
+    let outside = fixture.root.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    let socket = outside.join("test.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let tools = fixture.tools(true);
+    tools.configure_shell(PermissionMode::AskForExecution, &[]);
+    let cancel = CancellationToken::new();
+    let command = format!(
+        "printf approved > ../outside/result && /usr/bin/curl --noproxy '*' --max-time 2 --unix-socket {} -fsS http://localhost/",
+        shell_quote(socket.to_str().unwrap())
+    );
+    let call = tools
+        .prepare(
+            Tool::Shell,
+            "write-without-socket",
+            &serde_json::json!({
+                "command": command,
+                "sandboxRequest": {"writePaths": ["../outside"]},
+                "justification": "Write the requested output directory."
+            })
+            .to_string(),
+            &cancel,
+        )
+        .await
+        .unwrap();
+    let mut gate = PermissionGate::default();
+    assert!(matches!(
+        gate.evaluate(&call, PermissionMode::AskForExecution),
+        PermissionCheck::Ask(_)
+    ));
+    let PermissionCheck::Execute(permit) =
+        gate.resolve(&call, ApprovalDecision::Accept, None).unwrap()
+    else {
+        panic!("approved write request")
+    };
+    let service = async {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0; 1024];
+        assert!(stream.read(&mut request).await.unwrap() > 0);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nlocal")
+            .await
+            .unwrap();
+    };
+    let mut on_output = |_: &str| {};
+    let (output, served) = tokio::join!(tools.execute(permit, &cancel, &mut on_output), async {
+        tokio::time::timeout(std::time::Duration::from_secs(4), service).await
+    });
+    assert_eq!(
+        std::fs::read_to_string(outside.join("result")).unwrap(),
+        "approved"
+    );
+    assert!(
+        served.is_err(),
+        "a write request must not allow Unix socket connections: {}",
+        output.text
+    );
+    assert_ne!(code(&output), Some(0), "{}", output.text);
+}
+
+#[tokio::test]
 async fn sandbox_requests_cannot_unlock_private_paths_or_git_configuration() {
     use canter_protocol::{ApprovalDecision, PermissionMode};
     use canter_tools::{PermissionCheck, PermissionGate};

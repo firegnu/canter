@@ -167,11 +167,10 @@ impl Sandbox {
          (allow file-write-data (literal \"/dev/null\") (literal \"/dev/stdout\")\n\
            (literal \"/dev/stderr\") (regex #\"^/dev/fd/[0-9]+$\"))\n",
         );
-        for path in project_roots.iter().chain(&scope.write_paths).chain([
-            &temporary,
-            &self.cargo,
-            &self.npm,
-        ]) {
+        for path in project_roots
+            .iter()
+            .chain([&temporary, &self.cargo, &self.npm])
+        {
             let parameter = parameters.path(path)?;
             profile.push_str(&format!("(allow file-write* (subpath {parameter}))\n"));
             profile.push_str(&format!(
@@ -179,6 +178,12 @@ impl Sandbox {
             ));
             profile.push_str(&format!(
                 "(allow network-outbound (remote unix-socket (subpath {parameter})))\n"
+            ));
+        }
+        for path in &scope.write_paths {
+            profile.push_str(&format!(
+                "(allow file-write* (subpath {}))\n",
+                parameters.path(path)?
             ));
         }
         let protected_names = ["config", "config.worktree", "hooks", "commondir", "gitdir"]
