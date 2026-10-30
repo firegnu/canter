@@ -424,12 +424,16 @@ fn ctrl_o_keeps_the_top_item_in_place() {
     for _ in 0..5 {
         screen.wheel(MouseEventKind::ScrollUp);
     }
-    let top = screen.conversation()[0].clone();
+    // The prompt, scrolled out of view, shows on the top row, above the
+    // conversation.
+    let conversation = screen.conversation();
+    assert_eq!(conversation[0], "› do it");
+    let top = conversation[1].clone();
     assert!(top.starts_with("  line "), "{top:?}");
     for _ in 0..2 {
         assert_eq!(screen.ctrl_o(), None);
         let conversation = screen.conversation();
-        assert_eq!(conversation[0], top, "{conversation:#?}");
+        assert_eq!(conversation[1], top, "{conversation:#?}");
     }
 
     // Scrolled back into the command's output: the command stays on top.
@@ -438,18 +442,21 @@ fn ctrl_o_keeps_the_top_item_in_place() {
     }
     screen.wheel(MouseEventKind::ScrollDown);
     let conversation = screen.conversation();
-    assert!(conversation[0].starts_with("    ┃"), "{conversation:#?}");
+    assert_eq!(conversation[0], "› do it");
+    assert!(conversation[1].starts_with("    ┃"), "{conversation:#?}");
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
+    assert_eq!(conversation[0], "› do it");
     assert!(
-        conversation[0].starts_with("  ● Run cargo test"),
+        conversation[1].starts_with("  ● Run cargo test"),
         "{conversation:#?}"
     );
-    assert_eq!(conversation[1], "    ┃ out 1");
+    assert_eq!(conversation[2], "    ┃ out 1");
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
+    assert_eq!(conversation[0], "› do it");
     assert!(
-        conversation[0].starts_with("  ● Run cargo test"),
+        conversation[1].starts_with("  ● Run cargo test"),
         "{conversation:#?}"
     );
 }

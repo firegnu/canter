@@ -463,15 +463,17 @@ fn dragging_to_the_bottom_edge_scrolls_and_extends_the_selection() {
     screen.draw();
     screen.now += 50;
     screen.draw();
+    // Three rows on; the prompt, scrolled out of view, takes the top row.
+    assert_eq!(screen.lines()[0], "› show many lines");
     assert_eq!(
         screen.lines()[bottom as usize].trim(),
-        "line 14",
+        "line 13",
         "three rows on:\n{}",
         screen.text()
     );
     screen.release((20, bottom));
     let copied = screen.clipboard();
-    let expected: Vec<String> = (3..=14).map(|n| format!("line {n}")).collect();
+    let expected: Vec<String> = (3..=13).map(|n| format!("line {n}")).collect();
     assert_eq!(copied, expected.join("\n"));
 }
 
@@ -509,7 +511,9 @@ fn the_highlight_stays_on_the_same_text_when_scrolled() {
         "{}",
         screen.text()
     );
-    assert_eq!(after[0].0 + 3, before[0].0, "three rows up");
+    // Three rows up; the prompt, scrolled out of view, takes the top row.
+    assert_eq!(screen.lines()[0], "› show many lines");
+    assert_eq!(after[0].0 + 3, before[0].0 + 1, "three rows up");
 }
 
 /// A double click selects a word (paths and flags count as one), a triple

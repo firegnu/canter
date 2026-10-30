@@ -306,6 +306,11 @@ struct Scroll {
     /// From the last layout: the hint shows, on the row right under the
     /// conversation.
     hint: bool,
+    /// From the last layout: the prompt the rows in view answer shows on
+    /// the top row, and the conversation starts on the row under it.
+    sticky: bool,
+    /// That prompt was clicked: it stays hidden until the view scrolls.
+    sticky_hidden: bool,
     /// From the last layout: rows per page, the furthest top row and the
     /// conversation rows on screen.
     page: usize,
@@ -317,6 +322,18 @@ struct Scroll {
 }
 
 impl Scroll {
+    /// `area` conversation rows on screen, of `total`.
+    fn lay_out(&mut self, area: usize, total: usize) {
+        self.area = area;
+        self.page = area.max(1);
+        self.max_top = total.saturating_sub(area);
+    }
+
+    /// The conversation row at the top of the view.
+    fn shown_top(&self) -> usize {
+        self.top.map_or(self.max_top, |top| top.min(self.max_top))
+    }
+
     /// Holds the view where it is when `row` is in it, else puts `row` in
     /// the middle, as far as the last frame allows.
     fn reveal(&mut self, row: usize) {
@@ -521,6 +538,17 @@ struct Shown {
     input: Option<DrawnInput>,
     /// `▸ N background commands` and the `/ps` list, for a click on them.
     background: DrawnBackground,
+    /// The prompt on the top row, for a click on it.
+    sticky: Option<DrawnSticky>,
+}
+
+/// The prompt a frame showed on the top row, above the conversation.
+#[derive(Debug, Clone, PartialEq)]
+struct DrawnSticky {
+    /// The first conversation row on screen and the screen's width.
+    view: (usize, u16),
+    /// The prompt's first row: a click puts it at the top of the view.
+    row: usize,
 }
 
 /// `▸ N background commands` and the `/ps` list as a frame drew them.
@@ -2515,7 +2543,8 @@ impl App {
     /// conversation text: dragging highlights it and letting go copies it; a
     /// double click takes a word, a triple click a row. A click on a link
     /// opens it once the double click time is over. A click on the hint under
-    /// the conversation goes to the bottom. A click on the draft in the input
+    /// the conversation goes to the bottom; one on the prompt above it puts the
+    /// view on that prompt. A click on the draft in the input
     /// box puts the cursor there. A click on `▸ N background commands` or
     /// on a command in the `/ps` list returns what to do, as `/ps` and
     /// Enter do. Other mouse events do nothing.
@@ -2580,12 +2609,21 @@ impl App {
         // The hint under the conversation goes to the bottom and follows
         // again. A press right after it is not a double click: the
         // conversation is under it now.
-        if self.scroll.hint && usize::from(cell.1) == self.scroll.area {
+        let above = usize::from(self.scroll.sticky);
+        if self.scroll.hint && usize::from(cell.1) == above + self.scroll.area {
             self.scroll.top = None;
             self.mouse.press = None;
             return;
         }
-        if usize::from(cell.1) >= self.scroll.area {
+        // The prompt above the conversation puts the view on it, and hides
+        // until the view scrolls.
+        if let Some(row) = self.sticky_at(cell, frame) {
+            self.scroll.top = Some(row);
+            self.scroll.sticky_hidden = true;
+            self.mouse.press = None;
+            return;
+        }
+        if !(above..above + self.scroll.area).contains(&usize::from(cell.1)) {
             return;
         }
         let unit = match clicks {
@@ -2670,9 +2708,10 @@ impl App {
             return;
         }
         let y = usize::from(y);
-        let rows = if y == 0 {
+        let above = usize::from(self.scroll.sticky);
+        let rows = if y <= above {
             -1
-        } else if y + 1 >= self.scroll.area {
+        } else if y + 1 >= above + self.scroll.area {
             1
         } else {
             return;
@@ -2767,6 +2806,17 @@ impl App {
             .map(|(_, _, target)| (target.clone(), drawn.view))
     }
 
+    /// The first row of the prompt drawn above the conversation at `cell` on
+    /// frame `frame`. None when the view has moved since, or the width.
+    fn sticky_at(&self, (_, y): (u16, u16), frame: u64) -> Option<usize> {
+        if y != 0 || frame > self.latest_frame {
+            return None;
+        }
+        let (_, shown) = self.shown.iter().rev().find(|(since, _)| *since <= frame)?;
+        let drawn = shown.sticky.as_ref()?;
+        (drawn.view == (self.scroll.shown_top(), self.width)).then_some(drawn.row)
+    }
+
     /// The draft's row drawn at `cell` on frame `frame` and the column in
     /// it; below the last row shown, in the box, past that row's end. None
     /// while searching or a choice is open, and when that frame drew no
@@ -2790,7 +2840,8 @@ impl App {
 
     /// What `unit` takes at `cell` on screen, as places in the conversation.
     /// Below the conversation is the end of its last row in view, past the
-    /// last row the end of that row.
+    /// last row the end of that row; on the prompt above it, the start of
+    /// its top row.
     fn points(&mut self, unit: Unit, (x, y): (u16, u16)) -> Option<(Point, Point)> {
         let (live, lead, starts) = self.laid_out(self.width);
         let rows = Rows {
@@ -2802,10 +2853,10 @@ impl App {
         let top = self.scroll.top.unwrap_or(self.scroll.max_top);
         let area = self.scroll.area;
         let (y, x) = (usize::from(y), usize::from(x));
-        let at = if y >= area {
-            (top + area.saturating_sub(1), usize::MAX)
-        } else {
-            (top + y, x)
+        let at = match y.checked_sub(usize::from(self.scroll.sticky)) {
+            None => (top, 0),
+            Some(y) if y >= area => (top + area.saturating_sub(1), usize::MAX),
+            Some(y) => (top + y, x),
         };
         let at = if at.0 > last { (last, usize::MAX) } else { at };
         let (start, end) = rows.unit_at(unit, at);
@@ -2931,8 +2982,10 @@ impl App {
 
     /// Moves the view `rows` up (negative) or down, as far as the last frame
     /// allows. [`App::view`] follows the latest output again once the view
-    /// reaches the bottom.
+    /// reaches the bottom. A prompt clicked above the conversation may show
+    /// again.
     fn scroll_by(&mut self, rows: isize) {
+        self.scroll.sticky_hidden = false;
         let top = self.scroll.top.unwrap_or(self.scroll.max_top);
         self.scroll.top = Some(top.saturating_add_signed(rows).min(self.scroll.max_top));
     }
@@ -3779,6 +3832,7 @@ impl App {
             }),
             input: None,
             background: DrawnBackground::default(),
+            sticky: None,
         };
         let (bottom, input_rows) = match approval {
             Some((request, laid)) => {
@@ -3879,6 +3933,7 @@ impl App {
         }
         if self.scroll.top.is_none() {
             self.scroll.unseen = false;
+            self.scroll.sticky_hidden = false;
         }
         // Scrolled back, or held with new output below: the hint shows.
         let back = self.scroll.top.is_some_and(|top| top + room < total);
@@ -3900,8 +3955,9 @@ impl App {
             ])
         });
         self.scroll.hint = hint.is_some();
+        // The rows above the hint: the conversation, and the prompt row on
+        // top of it when that shows.
         let area = room.saturating_sub(usize::from(hint.is_some()));
-        self.scroll.area = area;
         let draft_shown =
             matches!(bottom, Bottom::Input { .. }) && self.search.is_none() && !self.choosing();
         self.drawing.input = draft_shown.then(|| DrawnInput {
@@ -3929,21 +3985,55 @@ impl App {
                 self.background_choices(list.len().saturating_sub(1)),
             ),
         };
-        self.scroll.page = area.max(1);
-        self.scroll.max_top = total.saturating_sub(area);
-        if reveal && let Some(current) = current {
-            self.scroll.reveal(hits[current].anchor.row);
-        }
-        let top = self
-            .scroll
-            .top
-            .map_or(self.scroll.max_top, |top| top.min(self.scroll.max_top));
         let starts = starts(&self.history, live_parts, lead);
         let rows = Rows {
             history,
             live: &live,
             lead,
         };
+        self.scroll.lay_out(area, total);
+        let revealed = current
+            .filter(|_| reveal)
+            .map(|current| hits[current].anchor.row);
+        if let Some(row) = revealed {
+            self.scroll.reveal(row);
+        }
+        let mut top = self.scroll.shown_top();
+        // Scrolled back past the prompt the rows in view answer: it shows on
+        // the top row, when that leaves the conversation two rows. Not while
+        // a press only holds the view at the bottom.
+        let back = self.scroll.top.is_some_and(|top| top + room < total);
+        let mut sticky = None;
+        if back && !self.scroll.sticky_hidden && area > 2 {
+            sticky = sticky_prompt(&self.snapshot.turns, &rows, &starts, top);
+            if sticky.is_some() {
+                self.scroll.lay_out(area - 1, total);
+                // A match found on the row the prompt row took is brought
+                // into view again.
+                if let Some(row) = revealed.filter(|row| *row >= top + area - 1) {
+                    self.scroll.reveal(row);
+                }
+                top = self.scroll.shown_top();
+                sticky = sticky_prompt(&self.snapshot.turns, &rows, &starts, top);
+                if sticky.is_none() {
+                    self.scroll.lay_out(area, total);
+                    top = self.scroll.shown_top();
+                }
+            }
+        }
+        self.scroll.sticky = sticky.is_some();
+        let sticky_rows = usize::from(sticky.is_some());
+        let area = area - sticky_rows;
+        let sticky = sticky.map(|(row, text)| {
+            self.drawing.sticky = Some(DrawnSticky {
+                view: (top, width),
+                row,
+            });
+            Line::from(truncate(
+                vec![Span::styled(format!("› {text}"), theme::secondary())],
+                usize::from(width),
+            ))
+        });
         let selected = self
             .mouse
             .selection
@@ -3979,9 +4069,9 @@ impl App {
             .enumerate()
             .filter(|_| !searching)
             .flat_map(|(y, row)| {
-                row.links
-                    .iter()
-                    .map(move |(columns, target)| (y, columns.clone(), target.clone()))
+                row.links.iter().map(move |(columns, target)| {
+                    (sticky_rows + y, columns.clone(), target.clone())
+                })
             })
             .collect();
         self.links_drawing = DrawnLinks {
@@ -4043,6 +4133,7 @@ impl App {
         let (info, mode_in_full) = self.info_rows(width, now_ms);
         let view = View {
             plan,
+            sticky,
             conversation,
             hint,
             status: match self.copier.note() {
@@ -5186,7 +5277,11 @@ fn after_plan(settings: &canter_protocol::SessionSettings) -> PermissionMode {
 /// The screen's content, laid out for one frame.
 pub(crate) struct View {
     plan: Vec<Line<'static>>,
-    /// The conversation rows in view, from the top of the screen.
+    /// While scrolled back past it: the prompt the rows in view answer, on
+    /// the top row.
+    sticky: Option<Line<'static>>,
+    /// The conversation rows in view, from the top of the screen or the
+    /// row under the prompt.
     conversation: Vec<Line<'static>>,
     /// While scrolled back: goes to the bottom when clicked, and says when
     /// there is new output below.
@@ -5248,7 +5343,11 @@ impl View {
             y += height;
             rect
         };
-        let conversation = row(area.height.saturating_sub(below));
+        let above = u16::from(self.sticky.is_some());
+        if let Some(sticky) = self.sticky {
+            frame.render_widget(Paragraph::new(sticky), row(1));
+        }
+        let conversation = row(area.height.saturating_sub(below + above));
         frame.render_widget(Paragraph::new(self.conversation), conversation);
         if let Some(hint) = self.hint {
             frame.render_widget(Paragraph::new(hint), row(1));
@@ -5318,6 +5417,90 @@ fn starts(history: &History, live: Vec<(usize, Part)>, lead: usize) -> Vec<(usiz
         .chain(live)
         .map(|(start, part)| (start.saturating_sub(lead), part))
         .collect()
+}
+
+/// The message the user sent that conversation row `top` comes after, when
+/// none of it shows from `top` down: its first row, and the first line of
+/// its text for the row above the conversation.
+fn sticky_prompt(
+    turns: &[Turn],
+    rows: &Rows,
+    starts: &[(usize, Part)],
+    top: usize,
+) -> Option<(usize, String)> {
+    let (index, text) = starts
+        .iter()
+        .enumerate()
+        .rev()
+        .skip_while(|(_, (start, _))| *start > top)
+        .find_map(|(index, (_, part))| Some((index, sent_line(turns, part)?)))?;
+    let end = starts.get(index + 1).map_or(rows.len(), |(next, _)| *next);
+    // Not the blank rows around it; the rows of its background are its own.
+    let drawn: Vec<usize> = (starts[index].0..end)
+        .filter(|&row| {
+            rows.get(row)
+                .is_some_and(|row| !row.is_blank() || row.fill.is_some())
+        })
+        .collect();
+    let (first, last) = (*drawn.first()?, *drawn.last()?);
+    (last < top).then_some((first, text))
+}
+
+/// The first line of the message the user sent that `part` shows: a
+/// turn's prompt, a review's title or a message sent into a turn. `None`
+/// for any other part.
+fn sent_line(turns: &[Turn], part: &Part) -> Option<String> {
+    let Part::At(at) = part else {
+        return None;
+    };
+    let turn = turns.get(at.turn)?;
+    if !at.prompt {
+        return match &turn.review {
+            Some(title) => first_text_line(title),
+            None => first_sent_line(&turn.input),
+        };
+    }
+    match turn.items.get(at.item)? {
+        Item::UserMessage { content, .. } => first_sent_line(content),
+        _ => None,
+    }
+}
+
+/// The first line with text of what the user sent, as the conversation
+/// shows it; the line naming the skill it uses only when nothing else has
+/// text.
+fn first_sent_line(input: &[UserInput]) -> Option<String> {
+    let mut image_number = 0;
+    let mut skill = None;
+    for part in input {
+        let text = match part {
+            UserInput::Skill { name } => {
+                skill.get_or_insert_with(|| format!("Used skill `{name}`"));
+                continue;
+            }
+            UserInput::Text { text } => text.clone(),
+            UserInput::LocalImage { name, .. } => {
+                image_number += 1;
+                format!(
+                    "[Image #{image_number} {}]",
+                    name.as_deref().unwrap_or("image")
+                )
+            }
+            UserInput::Unknown => continue,
+        };
+        if let Some(line) = first_text_line(&text) {
+            return Some(line);
+        }
+    }
+    skill.as_deref().and_then(first_text_line)
+}
+
+fn first_text_line(text: &str) -> Option<String> {
+    sanitize(text)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
 }
 
 /// The rows of part `index` of `starts`, up to where the next one starts.
