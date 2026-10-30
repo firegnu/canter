@@ -190,3 +190,12 @@
 - 压缩没压成功的显示（P2-62）：终端按核心写进摘要的那句固定的话（`Compaction did not finish; the original context is kept.`）原样比对，核心改了措辞，失败会显示成「Context compacted」。彻底的改法是给压缩项加状态字段（协议改动）。
 - stdin 被重定向时（`canter < /dev/null`、`… | canter`），macOS 上 canter 启动就卡在 crossterm 查询键盘增强，空屏、CPU 100%，只能从外面杀（P2-60 第二轮复核建议改 2，main 原来就有）。另外 P2-60 的读键盘线程对 `/dev/tty` 调 `poll()` 在 macOS 上得 POLLNVAL，会当成挂断（建议改 1），现在被前一条挡着碰不到。改法：stdin 不是终端时直接报错退出，或跳过查询并让读线程在 POLLNVAL 时退回原读法；走后一种要改两处，P2-87 起 `Input::recv` 也调 `terminal_input_open` 查挂断，`/dev/tty` 上第一次就会当成输入结束（可在 POLLNVAL 或 poll 报错时设 `self.tty = None`、只等通道）。卡住时 CPU 100% 可能就是下一条 crossterm 的空转循环（没核实）。
 - crossterm 0.29.0 终端挂断时读线程会在 `try_read` 的 EOF/EIO 循环里空转、不返回（P2-87 查到）：canter 另外每 50 ms 查一次挂断、走原来的退出清理，空转的读线程只活到进程退出（约 150–200 ms）。启动时查询键盘增强正好碰上挂断时主线程会卡住，窗口只有一次终端往返，没修。
+- 沙箱（P2-163，10-30 合并，没装；交叉审查建议改、可以不改，按「只有必须改挡合并」不改，四件做完统一试用时碰到再说）：
+  - 加过的目录被删掉以后，这个会话里每条模型命令都报 `Could not start sandbox: No such file or directory`，不说是哪个目录（审查第 7 条）。改法：不存在的新增目录跳过，或在错误里写出路径。
+  - 只挡 `~/.ssh`、`~/.aws`、`~/.gnupg` 和状态目录，别处的凭证可读，「全部允许」下能联网带出：`~/.cargo/credentials.toml`、`~/.npmrc`、`~/.netrc`、`~/.config/gh/hosts.yml`、`~/.docker/config.json`、`~/.git-credentials` 等（第 10 条）。
+  - 兼容面没放：`ipc-posix-sem`（Python multiprocessing）、`pseudo-tty`、`user-preference-read` 和 cfprefsd、`com.apple.TrustEvaluationAgent`；Go、pip/uv、pnpm 的缓存在墙外（第 11 条）。HTTPS push 失败先查后两项。
+  - 共用的 `.git` 可写，模型能动其他分支引用和兄弟 worktree 的 HEAD、index（第 12 条，允许提交的代价）。
+  - 共享缓存所有会话都能写：一个会话写进 `~/Library/Caches/canter/cargo/config.toml` 的设置会影响之后墙里所有 cargo。
+  - `/usr/bin/git` 是 xcrun 转发程序，缓存过期时在墙里写不了 `xcrun_db`，多打一行拒写报错，提交照常成功；不为它放开写（放开等于能改墙外 git 实际运行的程序）。
+  - 子模块到两三百个时规则可能超过命令行长度上限，命令失败关闭（第二次复核第 2 条）；改法是给上级目录的拒绝行去重。
+  - cwd 是家目录、`/`、`/Users` 时整个目录可写（用户 10-30 选 B，维持现状）。
