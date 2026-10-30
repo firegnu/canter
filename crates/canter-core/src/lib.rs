@@ -36,6 +36,8 @@ pub struct RuntimeContext {
 
 #[derive(Clone, Debug)]
 pub struct CoreOptions {
+    /// Embedded callers opt in explicitly; the server's config.json defaults to true.
+    pub sandbox: bool,
     /// Global server-owned command rules; embedders may leave this disabled.
     pub command_rules_path: Option<PathBuf>,
     pub auto_wake_limit: u32,
@@ -65,6 +67,7 @@ pub struct CoreOptions {
 impl Default for CoreOptions {
     fn default() -> Self {
         Self {
+            sandbox: false,
             command_rules_path: None,
             auto_wake_limit: 10,
             goal_budget_usd: 5.0,

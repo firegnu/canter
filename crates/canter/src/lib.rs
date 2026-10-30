@@ -39,7 +39,7 @@ Usage:
 Options:
   -m, --model <model>  use this model (default: the server's config)
   --add-dir <path>      add a directory to the session (repeatable)
-  --yolo               use permission mode Allow all (never ask)
+  --yolo               use permission mode Allow all (never ask); commands still run in the sandbox
   -V, --version        show the version and commit
   -h, --help           show this help
 ";

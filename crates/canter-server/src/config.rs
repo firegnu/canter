@@ -9,6 +9,8 @@ use crate::ServerError;
 // No Debug/Serialize: errors must not echo credentials or config contents.
 #[derive(Deserialize)]
 pub(crate) struct Config {
+    #[serde(default = "default_sandbox")]
+    sandbox: bool,
     base_url: String,
     pub model: String,
     #[serde(default = "default_models")]
@@ -154,6 +156,7 @@ impl Config {
                 ))
             });
         CoreOptions {
+            sandbox: self.sandbox,
             web_search,
             auto_wake_limit: self.auto_wake_limit,
             goal_budget_usd: self.goal_budget_usd,
@@ -164,6 +167,10 @@ impl Config {
             ..CoreOptions::default()
         }
     }
+}
+
+fn default_sandbox() -> bool {
+    true
 }
 
 fn default_models() -> Vec<String> {
@@ -187,6 +194,14 @@ fn default_image_models() -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn sandbox_defaults_on_and_accepts_an_explicit_false() {
+        assert!(load(json!({})).unwrap().options().sandbox);
+        assert!(load(json!({"sandbox":true})).unwrap().options().sandbox);
+        assert!(!load(json!({"sandbox":false})).unwrap().options().sandbox);
+        assert!(load(json!({"sandbox":"false"})).is_err());
+    }
 
     #[test]
     fn enabled_lsp_requires_a_complete_server_configuration() {

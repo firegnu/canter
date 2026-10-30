@@ -129,6 +129,10 @@ impl State {
         tools: &Tools,
     ) -> Result<(), CoreError> {
         self.directory_home = home.clone();
+        tools.configure_shell(
+            self.journal.snapshot.settings.approval_policy,
+            &self.journal.snapshot.settings.additional_directories,
+        );
         if let Some(lsp) = tools.lsp() {
             lsp.configure(
                 self.journal
@@ -462,15 +466,7 @@ impl Session {
             .get("HOME")
             .map(std::path::PathBuf::from);
         let canter_home = crate::context::canter_home(&runtime.environment);
-        let tools = executor(
-            writer.snapshot().settings.cwd.clone(),
-            runtime,
-            options.web_fetch_timeout,
-            options.plan_enabled,
-            options.mcp_tool_search,
-            options.web_search.clone(),
-        )
-        .await?;
+        let tools = executor(writer.snapshot().settings.cwd.clone(), runtime, &options).await?;
         let mut state = State::new(Journal::new(store, writer));
         if let Some(lsp) = tools.lsp() {
             lsp.restore_server_ids(&state.journal.snapshot.language_servers);
@@ -664,15 +660,7 @@ impl Session {
             .get("HOME")
             .map(std::path::PathBuf::from);
         let canter_home = crate::context::canter_home(&runtime.environment);
-        let tools = executor(
-            cwd,
-            runtime,
-            options.web_fetch_timeout,
-            options.plan_enabled,
-            options.mcp_tool_search,
-            options.web_search.clone(),
-        )
-        .await?;
+        let tools = executor(cwd, runtime, &options).await?;
         settings.additional_directories = crate::directories::append(
             settings.cwd.clone(),
             home.clone(),
@@ -1123,6 +1111,10 @@ impl Session {
                 .journal
                 .append(vec![EventPayload::SessionUpdated { settings }])
                 .await?;
+            self.shared.tools.configure_shell(
+                state.journal.snapshot.settings.approval_policy,
+                &state.journal.snapshot.settings.additional_directories,
+            );
             if answer.decision == PlanDecision::ClearContext {
                 state
                     .active
@@ -1232,6 +1224,10 @@ impl Session {
             .journal
             .append(vec![EventPayload::SessionUpdated { settings }])
             .await?;
+        self.shared.tools.configure_shell(
+            state.journal.snapshot.settings.approval_policy,
+            &state.journal.snapshot.settings.additional_directories,
+        );
         if directories_changed {
             let directories = state
                 .journal
@@ -1358,6 +1354,7 @@ impl Session {
             stopped = stopped.and(wait_done(done).await.map(|_| ()));
         }
         self.shared.tools.background().stop_all().await;
+        self.shared.tools.close_shell();
         if let Some(lsp) = self.shared.tools.lsp() {
             lsp.close().await;
         }
@@ -1404,11 +1401,9 @@ pub(crate) async fn owned<T: Send + 'static>(
 async fn executor(
     cwd: String,
     runtime: RuntimeContext,
-    web_fetch_timeout: std::time::Duration,
-    plan_enabled: bool,
-    mcp_tool_search: bool,
-    web_search: Option<canter_tools::web_search::WebSearch>,
+    options: &CoreOptions,
 ) -> Result<Tools, CoreError> {
+    let options = options.clone();
     let lsp = runtime.lsp.as_ref().map(|service| {
         service.session(
             canter_tools::lsp::FileContext {
@@ -1423,12 +1418,12 @@ async fn executor(
     tokio::task::spawn_blocking(move || {
         LocalExecutor::new(cwd.into(), runtime.environment, runtime.protected_paths)
             .map(|executor| {
-                let tools = Tools::new(Arc::new(executor))
-                    .with_plan_enabled(plan_enabled)
-                    .with_web_search(web_search)
+                let tools = Tools::new(Arc::new(executor.with_sandbox(options.sandbox)))
+                    .with_plan_enabled(options.plan_enabled)
+                    .with_web_search(options.web_search)
                     .with_mcp(runtime.mcp_tools)
-                    .with_mcp_tool_search(mcp_tool_search)
-                    .with_web_fetch_timeout(web_fetch_timeout);
+                    .with_mcp_tool_search(options.mcp_tool_search)
+                    .with_web_fetch_timeout(options.web_fetch_timeout);
                 match lsp {
                     Some(lsp) => tools.with_lsp(lsp),
                     None => tools,
