@@ -8,10 +8,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Scope {
     pub network: bool,
+    pub approval_allowed: bool,
     pub additional_directories: Vec<PathBuf>,
+    pub write_paths: Vec<PathBuf>,
 }
 
 pub(crate) struct Sandbox {
@@ -75,6 +77,59 @@ impl Sandbox {
         self.temporary.take();
     }
 
+    pub fn check_request(
+        &self,
+        cwd: &Path,
+        scope: &Scope,
+        request: &canter_protocol::SandboxRequest,
+    ) -> io::Result<()> {
+        for path in &request.write_paths {
+            let path = Path::new(path);
+            if !path.is_absolute() || crate::executor::resolve_target(path, &[])? != path {
+                return Err(io::Error::other(
+                    "sandbox request path changed since preparation",
+                ));
+            }
+            for protected in self.unreadable.iter().chain(&self.readonly) {
+                let protected = crate::executor::prepare_protected_paths(vec![protected.clone()])?;
+                if protected
+                    .iter()
+                    .any(|protected| overlaps_private(path, protected))
+                {
+                    return Err(io::Error::other(format!(
+                        "Blocked: sandbox request includes protected path {}",
+                        path.display()
+                    )));
+                }
+            }
+            let mut protected = Vec::new();
+            for root in std::iter::once(cwd)
+                .chain(scope.additional_directories.iter().map(PathBuf::as_path))
+                .chain(std::iter::once(path))
+            {
+                let existing = root
+                    .ancestors()
+                    .find(|ancestor| ancestor.exists())
+                    .ok_or_else(|| io::Error::other("sandbox path has no existing ancestor"))?;
+                for directory in git_metadata(existing)? {
+                    protected.extend(git_protected_paths(&directory)?);
+                }
+            }
+            let protected = crate::executor::prepare_protected_paths(protected)?;
+            if protected
+                .iter()
+                .any(|protected| within_private(path, protected))
+                || is_git_protected(path)
+            {
+                return Err(io::Error::other(format!(
+                    "Blocked: sandbox request cannot unlock Git configuration or hooks: {}",
+                    path.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub fn command(
         &self,
         cwd: &Path,
@@ -125,6 +180,12 @@ impl Sandbox {
                 "(allow network-outbound (remote unix-socket (subpath {parameter})))\n"
             ));
         }
+        for path in &scope.write_paths {
+            profile.push_str(&format!(
+                "(allow file-write* (subpath {}))\n",
+                parameters.path(path)?
+            ));
+        }
         let protected_names = ["config", "config.worktree", "hooks", "commondir", "gitdir"]
             .map(case_insensitive_name)
             .join("|");
@@ -134,7 +195,15 @@ impl Sandbox {
                 parameters.path(directory)?
             ));
         }
-        for directory in &git_directories {
+        let mut protected_git_directories = git_directories.clone();
+        for path in &scope.write_paths {
+            if let Some(existing) = path.ancestors().find(|ancestor| ancestor.exists()) {
+                protected_git_directories.extend(git_metadata(existing)?);
+            }
+        }
+        protected_git_directories.sort();
+        protected_git_directories.dedup();
+        for directory in &protected_git_directories {
             for path in git_protected_paths(directory)? {
                 // Include real targets when metadata uses links.
                 for path in crate::executor::prepare_protected_paths(vec![path])? {
@@ -165,7 +234,7 @@ impl Sandbox {
                 parameters.path(directory)?
             ));
         }
-        for root in &project_roots {
+        for root in project_roots.iter().chain(&scope.write_paths) {
             let parameter = parameters.path(root)?;
             profile.push_str(&format!(
                 "(deny file-write* (require-all (subpath {parameter}) (regex #\"(^|/){dot_git}/({protected_names})(/|$)\"){exclusions}))\n\
@@ -235,6 +304,41 @@ impl Sandbox {
             .env_remove("NPM_CONFIG_CACHE");
         Ok(command)
     }
+}
+
+fn within_private(path: &Path, protected: &Path) -> bool {
+    if path.starts_with(protected) {
+        return true;
+    }
+    match (protected.parent(), protected.file_name()) {
+        (Some(parent), Some(name)) => path
+            .strip_prefix(parent)
+            .ok()
+            .and_then(|suffix| suffix.components().next())
+            .is_some_and(|component| component.as_os_str().eq_ignore_ascii_case(name)),
+        _ => false,
+    }
+}
+
+fn overlaps_private(path: &Path, protected: &Path) -> bool {
+    within_private(path, protected) || protected.starts_with(path)
+}
+
+fn is_git_protected(path: &Path) -> bool {
+    let mut in_git = false;
+    for component in path.components() {
+        let name = component.as_os_str();
+        if name.eq_ignore_ascii_case(".git") {
+            in_git = true;
+        } else if in_git
+            && ["config", "config.worktree", "hooks", "gitdir", "commondir"]
+                .iter()
+                .any(|protected| name.eq_ignore_ascii_case(protected))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 // Match both ASCII cases, escaping punctuation in configured directory names.

@@ -3,4 +3,4 @@ import type { ApprovalRequest } from "./ApprovalRequest";
 import type { PlanApprovalRequest } from "./PlanApprovalRequest";
 import type { UserInputRequest } from "./UserInputRequest";
 
-export type RequestKind = { "type": "planApproval" } & PlanApprovalRequest | { "type": "approval" } & ApprovalRequest | { "type": "userInput" } & UserInputRequest | { "type": "unknown" };
+export type RequestKind = { "type": "planApproval" } & PlanApprovalRequest | { "type": "approval" } & ApprovalRequest | { "type": "sandboxApproval" } & ApprovalRequest | { "type": "userInput" } & UserInputRequest | { "type": "unknown" };

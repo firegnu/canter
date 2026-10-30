@@ -1,5 +1,13 @@
 # canter-protocol
 
+Shell sandbox approvals use `request.opened` with `kind.type: "sandboxApproval"` (P2-164).
+The payload has the existing `ApprovalRequest` shape; `arguments.sandboxRequest` contains
+`network` and canonical `writePaths`, and `arguments.justification` contains the reason.
+Only one-time decisions are offered. Ordinary approvals keep `type: "approval"` unchanged.
+Older clients decode the new type as Unknown and cannot show it as an ordinary command
+approval; use an updated client to answer it. This differs from Codex's command approval
+extensions because ignoring optional fields must never hide an expanded sandbox scope.
+
 模型重试（P2-110）：新增 `modelRetry { id, error, willRetry, attempt, maxRetries, delaySeconds }`，
 复用项目开始/完成事件。`error` 和 `willRetry` 对齐 Codex `rust-v0.163.0` 的 ErrorNotification；
 canter 把提示作为项目持久保存，另外提供次数和等待秒数，支持快照、重放和导出。

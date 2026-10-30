@@ -81,7 +81,7 @@ impl Notification {
                 kind: Kind::ApprovalRequested,
                 text: "Implement this plan?".into(),
             }),
-            RequestKind::Approval(approval) => {
+            RequestKind::Approval(approval) | RequestKind::SandboxApproval(approval) => {
                 let item = snapshot
                     .turns
                     .iter()

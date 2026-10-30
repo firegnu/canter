@@ -53,6 +53,216 @@ fn assert_request_extension(previous: &Request, next: &Request) {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+async fn sandbox_model_request_exposes_scope_only_when_enabled() {
+    for enabled in [false, true] {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        for name in ["home", "project", "state"] {
+            std::fs::create_dir(temp.path().join(name)).unwrap();
+        }
+        let model = ScriptModel::new(vec![vec![ModelEvent::Finished(FinishReason::Stop)]]);
+        let (session, _) = Session::create(
+            Arc::new(Store::new(temp.path().join("state/sessions")).unwrap()),
+            "sandbox-definition".into(),
+            settings(&temp.path().join("project")),
+            RuntimeContext {
+                environment: BTreeMap::from([
+                    (
+                        "HOME".into(),
+                        temp.path().join("home").display().to_string(),
+                    ),
+                    (
+                        "CANTER_HOME".into(),
+                        temp.path().join("state").display().to_string(),
+                    ),
+                ]),
+                protected_paths: vec![temp.path().join("state")],
+                ..Default::default()
+            },
+            model.clone(),
+            CoreOptions {
+                sandbox: enabled,
+                request_time: || 0,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let mut events = session.subscribe(0).await.unwrap();
+        session
+            .input(input("Describe the workspace."))
+            .await
+            .unwrap();
+        finished(&mut events).await;
+        let mut request = model.requests.lock().unwrap()[0].clone();
+        let shell = request
+            .tools
+            .iter()
+            .find(|tool| tool.name == "shell")
+            .unwrap();
+        assert_eq!(
+            shell.parameters["properties"]
+                .get("sandboxRequest")
+                .is_some(),
+            enabled
+        );
+        assert_eq!(
+            shell.parameters["properties"]
+                .get("justification")
+                .is_some(),
+            enabled
+        );
+        assert_eq!(
+            shell.description.contains("Commands run in a sandbox:"),
+            enabled
+        );
+        if !enabled {
+            for message in &mut request.messages {
+                if let Message::System { text } = message {
+                    *text = text
+                        .lines()
+                        .map(|line| {
+                            if line.starts_with("Session opened:") {
+                                "Session opened: <date>"
+                            } else if line.starts_with("Platform:") {
+                                "Platform: <platform>"
+                            } else {
+                                line
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                }
+            }
+            let serialized = serde_json::to_string(&request)
+                .unwrap()
+                .replace(&temp.path().display().to_string(), "/fixture");
+            assert_eq!(
+                serialized.as_bytes(),
+                include_bytes!("sandbox-disabled-request.json")
+            );
+        }
+        session.close().await.unwrap();
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn sandbox_session_uses_one_explicit_approval_and_preserves_decline_feedback() {
+    for mode in [PermissionMode::AlwaysAsk, PermissionMode::AskForExecution] {
+        for decision in [
+            ApprovalDecision::Accept,
+            ApprovalDecision::DeclineWithFeedback,
+        ] {
+            let temp = tempfile::tempdir_in("/tmp").unwrap();
+            for name in ["home", "project", "state", "outside"] {
+                std::fs::create_dir(temp.path().join(name)).unwrap();
+            }
+            let arguments = serde_json::json!({"command":"printf approved > ../outside/result",
+                "sandboxRequest":{"writePaths":["../outside/result"]}, "justification":"Write the requested output."}).to_string();
+            let model = ScriptModel::new(vec![
+                vec![
+                    call("requested", "shell", &arguments),
+                    ModelEvent::Finished(FinishReason::ToolCalls),
+                ],
+                vec![ModelEvent::Finished(FinishReason::Stop)],
+            ]);
+            let mut config = settings(&temp.path().join("project"));
+            config.approval_policy = mode;
+            let (session, _) = Session::create(
+                Arc::new(Store::new(temp.path().join("state/sessions")).unwrap()),
+                "sandbox-approval".into(),
+                config,
+                RuntimeContext {
+                    environment: BTreeMap::from([
+                        (
+                            "HOME".into(),
+                            temp.path().join("home").display().to_string(),
+                        ),
+                        (
+                            "CANTER_HOME".into(),
+                            temp.path().join("state").display().to_string(),
+                        ),
+                        ("PATH".into(), "/usr/bin:/bin".into()),
+                    ]),
+                    protected_paths: vec![temp.path().join("state")],
+                    ..Default::default()
+                },
+                model.clone(),
+                CoreOptions {
+                    sandbox: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let mut events = session.subscribe(0).await.unwrap();
+            session.input(input("Write the output.")).await.unwrap();
+            let event = until(&mut events, |payload| {
+                matches!(payload, EventPayload::RequestOpened { .. })
+            })
+            .await;
+            let EventPayload::RequestOpened { request } = event.payload else {
+                panic!("approval event")
+            };
+            let RequestKind::SandboxApproval(approval) = &request.kind else {
+                panic!("scope must not appear as an ordinary approval")
+            };
+            assert_eq!(
+                approval.arguments["justification"],
+                "Write the requested output."
+            );
+            assert_eq!(
+                approval.arguments["sandboxRequest"]["writePaths"],
+                serde_json::json!([temp.path().canonicalize().unwrap().join("outside/result")])
+            );
+            assert!(!temp.path().join("outside/result").exists());
+            let answer = |decision, feedback| RequestResolveParams {
+                decision: Some(decision),
+                feedback,
+                execpolicy_amendment: None,
+                plan: None,
+                answer: None,
+                client_name: "test-terminal".into(),
+            };
+            let invalid = session
+                .resolve(
+                    &request.id,
+                    answer(ApprovalDecision::AcceptForSession, None),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(invalid.code, ErrorCode::InvalidDecision);
+            let feedback = (decision == ApprovalDecision::DeclineWithFeedback)
+                .then(|| "Keep the output inside the project.".to_owned());
+            session
+                .resolve(&request.id, answer(decision, feedback.clone()))
+                .await
+                .unwrap();
+            let rest = finished(&mut events).await;
+            assert!(
+                !rest
+                    .iter()
+                    .any(|event| matches!(event.payload, EventPayload::RequestOpened { .. }))
+            );
+            assert_eq!(
+                temp.path().join("outside/result").exists(),
+                decision == ApprovalDecision::Accept
+            );
+            if let Some(feedback) = feedback {
+                assert!(model.requests.lock().unwrap()[1].messages.iter().any(|message| matches!(message, Message::ToolResult { text, .. } if text.contains(&feedback))));
+                let snapshot = session.snapshot().await;
+                assert_eq!(
+                    snapshot.session.approval_feedback.get(&approval.item_id),
+                    Some(&feedback)
+                );
+            }
+            session.close().await.unwrap();
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp() {
     for enabled in [true, false] {
         let temp = tempfile::tempdir_in("/tmp").unwrap();

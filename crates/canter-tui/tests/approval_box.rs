@@ -16,6 +16,42 @@ const NOW: i64 = 0;
 const SESSION: &str = "s1";
 
 #[test]
+fn sandbox_approval_shows_network_paths_reason_and_only_once_choices() {
+    let mut screen = Screen::new(110, 26);
+    screen.start_turn("t1");
+    screen.event(json!({"type":"request.opened","request":{
+        "id":"sandbox","turnId":"t1","createdAt":NOW,
+        "kind":{"type":"sandboxApproval","itemId":"i1","tool":"shell",
+            "arguments":{"command":"build", "sandboxRequest":{"network":true,"writePaths":["/tmp/requested-output"]}, "justification":"Download dependencies and write output."},
+            "availableDecisions":["accept","decline","declineWithFeedback","cancel"]}
+    }}));
+    screen.draw();
+    screen.read_the_box();
+    let text = screen.screen();
+    assert!(
+        text.contains("Network access for this command (any host, including local network)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Write access for this command: /tmp/requested-output"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Reason: Download dependencies and write output."),
+        "{text}"
+    );
+    assert!(!text.contains("Allow for this session"));
+    assert!(!text.contains("Always allow"));
+    assert!(matches!(
+        screen.key(KeyCode::Char('1')),
+        Some(Action::Resolve {
+            decision: ApprovalDecision::Accept,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn plan_approval_modes_choices_feedback_and_full_markdown_scroll() {
     for choice in ['1', '2', '3'] {
         let mut screen = Screen::new(90, 26);

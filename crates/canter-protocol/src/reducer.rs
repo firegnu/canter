@@ -333,7 +333,8 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
                     .pending_requests
                     .iter()
                     .find(|r| r.id == *request_id)
-                && let RequestKind::Approval(approval) = &request.kind
+                && let RequestKind::Approval(approval) | RequestKind::SandboxApproval(approval) =
+                    &request.kind
             {
                 snapshot
                     .approval_feedback

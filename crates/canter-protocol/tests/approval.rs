@@ -2,6 +2,29 @@ use canter_protocol::*;
 use serde_json::json;
 
 #[test]
+fn sandbox_approval_round_trips_but_legacy_clients_see_an_unknown_request() {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type", rename_all = "camelCase")]
+    enum LegacyRequestKind {
+        Approval(ApprovalRequest),
+        #[serde(other)]
+        Unknown,
+    }
+    let request = json!({"type":"sandboxApproval", "itemId":"i1", "tool":"shell",
+        "arguments":{"command":"build", "sandboxRequest":{"network":true,"writePaths":["/tmp/output"]}, "justification":"Download dependencies and write output."},
+        "availableDecisions":["accept","decline","declineWithFeedback","cancel"]});
+    match serde_json::from_value::<LegacyRequestKind>(request.clone()).unwrap() {
+        LegacyRequestKind::Unknown => {}
+        LegacyRequestKind::Approval(approval) => panic!(
+            "legacy client must not display {} as ordinary approval",
+            approval.tool
+        ),
+    }
+    let decoded: RequestKind = serde_json::from_value(request.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), request);
+}
+
+#[test]
 fn decline_feedback_round_trips_without_losing_the_users_words() {
     let params = json!({
         "decision": "declineWithFeedback", "feedback": "  改用只读命令\n不要写文件  ",

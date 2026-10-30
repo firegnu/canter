@@ -13,6 +13,7 @@ pub type FileReader = Box<dyn AsyncRead + Unpin + Send>;
 
 pub struct CommandHandle {
     pub sandboxed: bool,
+    pub sandbox_approval_allowed: bool,
     pub stdout: FileReader,
     pub stderr: FileReader,
     pub process: Box<dyn CommandProcess>,
@@ -31,6 +32,22 @@ pub trait CommandProcess: Send {
 #[async_trait]
 pub trait Executor: Send + Sync {
     fn cwd(&self) -> &Path;
+    fn sandbox_enabled(&self) -> bool {
+        false
+    }
+    fn normalize_sandbox_request(
+        &self,
+        _request: &mut canter_protocol::SandboxRequest,
+    ) -> io::Result<()> {
+        Err(io::Error::other(
+            "sandbox requests are not supported by this executor",
+        ))
+    }
+    fn check_sandbox_request(&self, _request: &canter_protocol::SandboxRequest) -> io::Result<()> {
+        Err(io::Error::other(
+            "sandbox requests are not supported by this executor",
+        ))
+    }
     fn configure_shell(&self, _mode: canter_protocol::PermissionMode, _directories: &[String]) {}
     fn close_shell(&self) {}
     /// Run the shared command checks without executing shell or resolving symlinks.
@@ -57,6 +74,16 @@ pub trait Executor: Send + Sync {
         cancel: &CancellationToken,
     ) -> io::Result<()>;
     async fn spawn(&self, command: &str, cancel: &CancellationToken) -> io::Result<CommandHandle>;
+    async fn spawn_with_sandbox_request(
+        &self,
+        _command: &str,
+        _request: &canter_protocol::SandboxRequest,
+        _cancel: &CancellationToken,
+    ) -> io::Result<CommandHandle> {
+        Err(io::Error::other(
+            "sandbox requests are not supported by this executor",
+        ))
+    }
     /// Only explicit user input uses this path; model tools always call spawn.
     async fn spawn_user(
         &self,
@@ -128,20 +155,25 @@ impl LocalExecutor {
         command: &str,
         cancel: &CancellationToken,
         sandboxed: bool,
+        request: Option<&canter_protocol::SandboxRequest>,
     ) -> io::Result<CommandHandle> {
         use std::process::Stdio;
         check_cancel(cancel)?;
+        let mut sandbox_approval_allowed = false;
         let mut launch = if let Some(sandbox) = self.sandbox.as_ref().filter(|_| sandboxed) {
             let sandbox = sandbox.lock().unwrap();
             let sandbox = sandbox
                 .as_ref()
                 .map_err(|error| io::Error::other(format!("Could not start sandbox: {error}")))?;
+            let mut scope = self.shell_scope.read().unwrap().clone();
+            sandbox_approval_allowed = scope.approval_allowed;
+            if let Some(request) = request {
+                sandbox.check_request(&self.cwd, &scope, request)?;
+                scope.network |= request.network;
+                scope.write_paths = request.write_paths.iter().map(PathBuf::from).collect();
+            }
             sandbox
-                .command(
-                    &self.cwd,
-                    &self.environment,
-                    &self.shell_scope.read().unwrap(),
-                )
+                .command(&self.cwd, &self.environment, &scope)
                 .map_err(|error| io::Error::other(format!("Could not start sandbox: {error}")))?
         } else {
             let mut launch = tokio::process::Command::new("/bin/sh");
@@ -175,6 +207,7 @@ impl LocalExecutor {
             .ok_or_else(|| io::Error::other("missing stderr pipe"))?;
         Ok(CommandHandle {
             sandboxed,
+            sandbox_approval_allowed,
             stdout: Box::new(stdout),
             stderr: Box::new(stderr),
             process: Box::new(process),
@@ -196,10 +229,59 @@ impl Executor for LocalExecutor {
         &self.cwd
     }
 
+    fn sandbox_enabled(&self) -> bool {
+        self.sandbox.is_some()
+    }
+
+    fn normalize_sandbox_request(
+        &self,
+        request: &mut canter_protocol::SandboxRequest,
+    ) -> io::Result<()> {
+        for path in &mut request.write_paths {
+            if path.is_empty() || path.contains('\0') {
+                return Err(io::Error::other(
+                    "writePaths must contain nonempty paths without NUL bytes",
+                ));
+            }
+            let expanded = if path == "~" || path.starts_with("~/") {
+                PathBuf::from(
+                    self.environment
+                        .get("HOME")
+                        .ok_or_else(|| io::Error::other("session HOME is not set"))?,
+                )
+                .join(path.strip_prefix("~/").unwrap_or(""))
+            } else {
+                self.cwd.join(&*path)
+            };
+            *path = resolve_target(&expanded, &[])?
+                .to_str()
+                .ok_or_else(|| io::Error::other("sandbox path is not UTF-8"))?
+                .to_owned();
+        }
+        request.write_paths.sort();
+        request.write_paths.dedup();
+        Ok(())
+    }
+
+    fn check_sandbox_request(&self, request: &canter_protocol::SandboxRequest) -> io::Result<()> {
+        let sandbox = self
+            .sandbox
+            .as_ref()
+            .ok_or_else(|| io::Error::other("sandbox is disabled"))?
+            .lock()
+            .unwrap();
+        sandbox
+            .as_ref()
+            .map_err(|error| io::Error::other(error.clone()))?
+            .check_request(&self.cwd, &self.shell_scope.read().unwrap(), request)
+    }
+
     fn configure_shell(&self, mode: canter_protocol::PermissionMode, directories: &[String]) {
         *self.shell_scope.write().unwrap() = crate::sandbox::Scope {
             network: mode == canter_protocol::PermissionMode::AllowAll,
+            approval_allowed: mode != canter_protocol::PermissionMode::AllowAll,
             additional_directories: directories.iter().map(PathBuf::from).collect(),
+            write_paths: Vec::new(),
         };
     }
 
@@ -320,7 +402,21 @@ impl Executor for LocalExecutor {
     }
 
     async fn spawn(&self, command: &str, cancel: &CancellationToken) -> io::Result<CommandHandle> {
-        self.launch(command, cancel, self.sandbox.is_some())
+        self.launch(command, cancel, self.sandbox.is_some(), None)
+    }
+
+    async fn spawn_with_sandbox_request(
+        &self,
+        command: &str,
+        request: &canter_protocol::SandboxRequest,
+        cancel: &CancellationToken,
+    ) -> io::Result<CommandHandle> {
+        if !self.sandbox_enabled() {
+            return Err(io::Error::other(
+                "sandbox requests require an enabled sandbox",
+            ));
+        }
+        self.launch(command, cancel, true, Some(request))
     }
 
     async fn spawn_user(
@@ -328,7 +424,7 @@ impl Executor for LocalExecutor {
         command: &str,
         cancel: &CancellationToken,
     ) -> io::Result<CommandHandle> {
-        self.launch(command, cancel, false)
+        self.launch(command, cancel, false, None)
     }
 }
 

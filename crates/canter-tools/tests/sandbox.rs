@@ -91,6 +91,555 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn sandbox_ask_for_execution_runs_ordinary_foreground_and_background_without_approval() {
+    use canter_protocol::PermissionMode;
+    use canter_tools::{PermissionCheck, PermissionGate};
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    tools.configure_shell(PermissionMode::AskForExecution, &[]);
+    for background in [false, true] {
+        let call = tools
+            .prepare(
+                Tool::Shell,
+                "inside",
+                &serde_json::json!({
+                    "command": "printf inside > inside.txt", "background": background
+                })
+                .to_string(),
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            PermissionGate::default().evaluate(&call, PermissionMode::AskForExecution),
+            PermissionCheck::Execute(_)
+        ));
+        assert!(matches!(
+            PermissionGate::default().evaluate(&call, PermissionMode::AlwaysAsk),
+            PermissionCheck::Ask(_)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn sandbox_network_request_needs_once_approval_and_does_not_carry_over() {
+    use canter_protocol::{ApprovalDecision, PermissionMode};
+    use canter_tools::{PermissionCheck, PermissionGate};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    tools.configure_shell(PermissionMode::AskForExecution, &[]);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let command = format!("/usr/bin/curl --noproxy '*' --max-time 2 -fsS http://{address}/");
+    let cancel = CancellationToken::new();
+    let call = tools
+        .prepare(
+            Tool::Shell,
+            "network",
+            &serde_json::json!({
+                "command": command, "sandboxRequest": {"network": true},
+                "justification": "Read the local test server."
+            })
+            .to_string(),
+            &cancel,
+        )
+        .await
+        .unwrap();
+    let mut gate = PermissionGate::default();
+    for mode in [PermissionMode::AlwaysAsk, PermissionMode::AskForExecution] {
+        let PermissionCheck::Ask(request) = gate.evaluate(&call, mode) else {
+            panic!("network needs approval")
+        };
+        assert!(
+            !request
+                .available_decisions
+                .contains(&ApprovalDecision::AcceptForSession)
+        );
+        assert!(
+            !request
+                .available_decisions
+                .contains(&ApprovalDecision::AcceptWithExecpolicyAmendment)
+        );
+    }
+    assert!(matches!(
+        gate.resolve(&call, ApprovalDecision::Decline, None)
+            .unwrap(),
+        PermissionCheck::Deny { .. }
+    ));
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    );
+    let PermissionCheck::Execute(permit) =
+        gate.resolve(&call, ApprovalDecision::Accept, None).unwrap()
+    else {
+        panic!("approved")
+    };
+    let service = async {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0; 1024];
+        assert!(stream.read(&mut request).await.unwrap() > 0);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nlocal")
+            .await
+            .unwrap();
+    };
+    let mut on_output = |_: &str| {};
+    let (output, served) = tokio::join!(tools.execute(permit, &cancel, &mut on_output), async {
+        tokio::time::timeout(std::time::Duration::from_secs(4), service).await
+    });
+    assert_eq!(code(&output), Some(0), "{}", output.text);
+    served.unwrap();
+    assert!(output.text.contains("local"));
+    let next = run(&tools, &command).await;
+    assert_ne!(code(&next), Some(0), "{}", next.text);
+}
+
+#[tokio::test]
+async fn sandbox_write_request_opens_only_that_call_and_allow_all_refuses_it() {
+    use canter_protocol::{ApprovalDecision, PermissionMode};
+    use canter_tools::{PermissionCheck, PermissionGate};
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    tools.configure_shell(PermissionMode::AskForExecution, &[]);
+    let outside = fixture.root.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    let target = outside.join("new");
+    let command = format!(
+        "mkdir -p {} && printf approved > {}/result",
+        shell_quote(target.to_str().unwrap()),
+        shell_quote(target.to_str().unwrap())
+    );
+    let cancel = CancellationToken::new();
+    let call = tools
+        .prepare(
+            Tool::Shell,
+            "write-request",
+            &serde_json::json!({
+                "command": command, "sandboxRequest": {"writePaths": ["../outside/new"]},
+                "justification": "Write the requested test output."
+            })
+            .to_string(),
+            &cancel,
+        )
+        .await
+        .unwrap();
+    let mut gate = PermissionGate::default();
+    assert!(matches!(
+        gate.evaluate(&call, PermissionMode::AskForExecution),
+        PermissionCheck::Ask(_)
+    ));
+    let PermissionCheck::Execute(permit) =
+        gate.resolve(&call, ApprovalDecision::Accept, None).unwrap()
+    else {
+        panic!("approved")
+    };
+    let output = tools.execute(permit, &cancel, &mut |_| {}).await;
+    assert_eq!(code(&output), Some(0), "{}", output.text);
+    assert_eq!(
+        std::fs::read_to_string(target.join("result")).unwrap(),
+        "approved"
+    );
+    let next = run(
+        &tools,
+        &format!(
+            "printf changed > {}/result",
+            shell_quote(target.to_str().unwrap())
+        ),
+    )
+    .await;
+    assert_ne!(code(&next), Some(0), "{}", next.text);
+    assert!(next.text.contains("The sandbox blocked access outside the permitted paths or network scope. If the command really needs it, retry it with a sandbox request and a justification, or ask the user to run it with !."), "{}", next.text);
+    assert_eq!(
+        std::fs::read_to_string(target.join("result")).unwrap(),
+        "approved"
+    );
+    let PermissionCheck::Forbidden { reason } = gate.evaluate(&call, PermissionMode::AllowAll)
+    else {
+        panic!("allowAll cannot grant write scope")
+    };
+    assert_eq!(
+        reason,
+        "Blocked: writing outside the sandbox needs approval, and Allow all mode never asks. If the user really wants it, they can run it themselves with !."
+    );
+}
+
+#[tokio::test]
+async fn sandbox_write_request_does_not_allow_connecting_to_an_outside_unix_socket() {
+    use canter_protocol::{ApprovalDecision, PermissionMode};
+    use canter_tools::{PermissionCheck, PermissionGate};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let fixture = Fixture::new();
+    let outside = fixture.root.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    let socket = outside.join("test.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let tools = fixture.tools(true);
+    tools.configure_shell(PermissionMode::AskForExecution, &[]);
+    let cancel = CancellationToken::new();
+    let command = format!(
+        "printf approved > ../outside/result && /usr/bin/curl --noproxy '*' --max-time 2 --unix-socket {} -fsS http://localhost/",
+        shell_quote(socket.to_str().unwrap())
+    );
+    let call = tools
+        .prepare(
+            Tool::Shell,
+            "write-without-socket",
+            &serde_json::json!({
+                "command": command,
+                "sandboxRequest": {"writePaths": ["../outside"]},
+                "justification": "Write the requested output directory."
+            })
+            .to_string(),
+            &cancel,
+        )
+        .await
+        .unwrap();
+    let mut gate = PermissionGate::default();
+    assert!(matches!(
+        gate.evaluate(&call, PermissionMode::AskForExecution),
+        PermissionCheck::Ask(_)
+    ));
+    let PermissionCheck::Execute(permit) =
+        gate.resolve(&call, ApprovalDecision::Accept, None).unwrap()
+    else {
+        panic!("approved write request")
+    };
+    let service = async {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0; 1024];
+        assert!(stream.read(&mut request).await.unwrap() > 0);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nlocal")
+            .await
+            .unwrap();
+    };
+    let mut on_output = |_: &str| {};
+    let (output, served) = tokio::join!(tools.execute(permit, &cancel, &mut on_output), async {
+        tokio::time::timeout(std::time::Duration::from_secs(4), service).await
+    });
+    assert_eq!(
+        std::fs::read_to_string(outside.join("result")).unwrap(),
+        "approved"
+    );
+    assert!(
+        served.is_err(),
+        "a write request must not allow Unix socket connections: {}",
+        output.text
+    );
+    assert_ne!(code(&output), Some(0), "{}", output.text);
+}
+
+#[tokio::test]
+async fn sandbox_requests_cannot_unlock_private_paths_or_git_configuration() {
+    use canter_protocol::{ApprovalDecision, PermissionMode};
+    use canter_tools::{PermissionCheck, PermissionGate};
+    let fixture = Fixture::new();
+    fixture.git(&["init", "-q"]);
+    for name in [".ssh", ".aws", ".gnupg", ".canter"] {
+        std::fs::create_dir(fixture.home.join(name)).unwrap();
+    }
+    let tools = fixture.tools(true);
+    let paths = [
+        fixture.home.join(".ssh"),
+        fixture.home.join(".aws/new"),
+        fixture.home.join(".gnupg"),
+        fixture.home.join(".canter"),
+        fixture.home.clone(),
+        fixture.state.clone(),
+        fixture.root.path().to_owned(),
+        fixture.cwd.join(".git/config"),
+        fixture.cwd.join(".git/hooks/new-hook"),
+    ];
+    for path in paths {
+        let call = tools
+            .prepare(
+                Tool::Shell,
+                "protected",
+                &serde_json::json!({
+                    "command": "printf harmless", "sandboxRequest": {"writePaths": [path]},
+                    "justification": "Write test output."
+                })
+                .to_string(),
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let mut gate = PermissionGate::default();
+        for mode in [
+            PermissionMode::AlwaysAsk,
+            PermissionMode::AskForExecution,
+            PermissionMode::AllowAll,
+        ] {
+            assert!(
+                matches!(
+                    gate.evaluate(&call, mode),
+                    PermissionCheck::Forbidden { .. }
+                ),
+                "{path:?}"
+            );
+        }
+        assert!(
+            matches!(
+                gate.resolve(&call, ApprovalDecision::Accept, None).unwrap(),
+                PermissionCheck::Forbidden { .. }
+            ),
+            "{path:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn sandbox_requests_keep_rules_dangerous_commands_and_readonly_restrictions() {
+    use canter_protocol::{ApprovalDecision, PermissionMode};
+    use canter_tools::{PermissionCheck, PermissionGate};
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    let cancel = CancellationToken::new();
+    let rules = fixture.state.join("rules.json");
+    let mut gate = PermissionGate::default().with_rules_file(rules.clone());
+    let ordinary = tools
+        .prepare(
+            Tool::Shell,
+            "ordinary",
+            r#"{"command":"touch result"}"#,
+            &cancel,
+        )
+        .await
+        .unwrap();
+    let PermissionCheck::Ask(_) = gate.evaluate(&ordinary, PermissionMode::AlwaysAsk) else {
+        panic!("ordinary proposal")
+    };
+    gate.resolve(&ordinary, ApprovalDecision::AcceptForSession, None)
+        .unwrap();
+    let request = tools.prepare(Tool::Shell, "request", r#"{"command":"touch result","sandboxRequest":{"network":true},"justification":"Use network for this command."}"#, &cancel).await.unwrap();
+    for decision in ["allow", "prompt", "forbidden"] {
+        std::fs::write(
+            &rules,
+            serde_json::json!({"rules":[{"pattern":["touch"],"decision":decision}]}).to_string(),
+        )
+        .unwrap();
+        let check = gate.evaluate(&request, PermissionMode::AskForExecution);
+        if decision == "forbidden" {
+            assert!(matches!(check, PermissionCheck::Forbidden { .. }));
+        } else {
+            let PermissionCheck::Ask(approval) = check else {
+                panic!("rules and grants cannot skip a request")
+            };
+            assert!(approval.session_prefixes.is_none());
+            assert!(approval.proposed_execpolicy_amendment.is_none());
+            assert!(
+                gate.resolve(&request, ApprovalDecision::AcceptForSession, None)
+                    .is_err()
+            );
+            assert!(
+                gate.resolve(
+                    &request,
+                    ApprovalDecision::AcceptWithExecpolicyAmendment,
+                    None
+                )
+                .is_err()
+            );
+        }
+        let ordinary_check = gate.evaluate(&ordinary, PermissionMode::AskForExecution);
+        assert!(match decision {
+            "allow" => matches!(ordinary_check, PermissionCheck::Execute(_)),
+            "prompt" => matches!(ordinary_check, PermissionCheck::Ask(_)),
+            _ => matches!(ordinary_check, PermissionCheck::Forbidden { .. }),
+        });
+    }
+    std::fs::write(&rules, r#"{"rules":[]}"#).unwrap();
+    assert!(matches!(
+        gate.evaluate(&request, PermissionMode::AllowAll),
+        PermissionCheck::Execute(_)
+    ));
+    assert!(matches!(
+        gate.evaluate_plan(&request, PermissionMode::AskForExecution),
+        PermissionCheck::Deny { .. }
+    ));
+    assert!(matches!(
+        gate.evaluate_review(&request),
+        PermissionCheck::Deny { .. }
+    ));
+    // Only inspect this deletion command's permission; it is never executed.
+    for extra in [
+        serde_json::json!({}),
+        serde_json::json!({"sandboxRequest":{"network":true},"justification":"Test the approval decision."}),
+    ] {
+        let mut arguments = serde_json::json!({"command":"rmdir ."});
+        arguments
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let dangerous = tools
+            .prepare(Tool::Shell, "dangerous", &arguments.to_string(), &cancel)
+            .await
+            .unwrap();
+        let PermissionCheck::Ask(approval) =
+            gate.evaluate(&dangerous, PermissionMode::AskForExecution)
+        else {
+            panic!("critical deletion still asks")
+        };
+        assert_eq!(
+            approval.available_decisions,
+            vec![
+                ApprovalDecision::Accept,
+                ApprovalDecision::Decline,
+                ApprovalDecision::DeclineWithFeedback,
+                ApprovalDecision::Cancel
+            ]
+        );
+        assert!(matches!(
+            gate.evaluate(&dangerous, PermissionMode::AllowAll),
+            PermissionCheck::Forbidden { .. }
+        ));
+    }
+    let readonly = tools.prepare(Tool::Shell, "readonly", r#"{"command":"pwd","sandboxRequest":{"network":true},"justification":"Use network for this command."}"#, &cancel).await.unwrap();
+    assert!(matches!(
+        gate.evaluate(&readonly, PermissionMode::AskForExecution),
+        PermissionCheck::Ask(_)
+    ));
+    assert!(matches!(
+        gate.evaluate(&readonly, PermissionMode::AlwaysAsk),
+        PermissionCheck::Ask(_)
+    ));
+}
+
+#[tokio::test]
+async fn sandbox_request_paths_are_canonical_and_disabled_modes_stay_unchanged() {
+    use canter_protocol::PermissionMode;
+    use canter_tools::{PermissionCheck, PermissionGate};
+    let fixture = Fixture::new();
+    let outside = fixture.root.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, fixture.cwd.join("output-link")).unwrap();
+    let tools = fixture.tools(true);
+    let call = tools.prepare(Tool::Shell, "normalized", r#"{"command":"printf test","sandboxRequest":{"writePaths":["output-link/sub/../new/file"]},"justification":"Write test output."}"#, &CancellationToken::new()).await.unwrap();
+    let PermissionCheck::Ask(approval) =
+        PermissionGate::default().evaluate(&call, PermissionMode::AskForExecution)
+    else {
+        panic!("approval")
+    };
+    assert_eq!(
+        approval.arguments["sandboxRequest"]["writePaths"],
+        serde_json::json!([outside.canonicalize().unwrap().join("new/file")])
+    );
+    let disabled = fixture.tools(false);
+    let call = disabled
+        .prepare(
+            Tool::Shell,
+            "ordinary",
+            r#"{"command":"touch result"}"#,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let gate = PermissionGate::default();
+    assert!(matches!(
+        gate.evaluate(&call, PermissionMode::AlwaysAsk),
+        PermissionCheck::Ask(_)
+    ));
+    assert!(matches!(
+        gate.evaluate(&call, PermissionMode::AskForExecution),
+        PermissionCheck::Ask(_)
+    ));
+    assert!(matches!(
+        gate.evaluate(&call, PermissionMode::AllowAll),
+        PermissionCheck::Execute(_)
+    ));
+    assert!(disabled.prepare(Tool::Shell, "unsupported", r#"{"command":"pwd","sandboxRequest":{"network":true},"justification":"Use network."}"#, &CancellationToken::new()).await.is_err());
+    assert!(
+        disabled
+            .prepare(
+                Tool::Shell,
+                "disabled-field",
+                r#"{"command":"pwd","justification":null}"#,
+                &CancellationToken::new()
+            )
+            .await
+            .is_err(),
+        "disabled sandbox must keep rejecting the new parameter even when null"
+    );
+}
+
+#[tokio::test]
+async fn sandbox_approved_background_and_promoted_children_keep_the_request_until_exit() {
+    use canter_protocol::{ApprovalDecision, PermissionMode};
+    use canter_tools::{PermissionCheck, PermissionGate};
+    use std::time::Duration;
+    for promote in [false, true] {
+        let fixture = Fixture::new();
+        std::fs::create_dir(fixture.root.path().join("outside")).unwrap();
+        let tools = fixture.tools(true);
+        tools.configure_shell(PermissionMode::AskForExecution, &[]);
+        let cancel = CancellationToken::new();
+        let call = tools.prepare(Tool::Shell, "approved-background", &serde_json::json!({
+            "command":"printf ready; while [ ! -e release ]; do sleep 0.01; done; /bin/sh -c 'printf approved > ../outside/result'",
+            "background":!promote, "sandboxRequest":{"writePaths":["../outside/result"]}, "justification":"Write output when the job finishes."
+        }).to_string(), &cancel).await.unwrap();
+        let mut gate = PermissionGate::default();
+        assert!(matches!(
+            gate.evaluate(&call, PermissionMode::AskForExecution),
+            PermissionCheck::Ask(_)
+        ));
+        let PermissionCheck::Execute(permit) =
+            gate.resolve(&call, ApprovalDecision::Accept, None).unwrap()
+        else {
+            panic!("approved")
+        };
+        let ready = tokio::sync::Notify::new();
+        let mut on_output = |_: &str| ready.notify_one();
+        let execute = tools.execute(permit, &cancel, &mut on_output);
+        let promotion = async {
+            if promote {
+                ready.notified().await;
+                assert_eq!(
+                    tools
+                        .background()
+                        .promote("approved-background")
+                        .await
+                        .unwrap(),
+                    Some(1)
+                );
+            }
+        };
+        let (initial, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(execute, promotion)
+        })
+        .await
+        .unwrap();
+        assert!(
+            initial.text.contains("Background command 1: running"),
+            "{}",
+            initial.text
+        );
+        // Reconfiguring future commands must not remove the approved child's scope.
+        tools.configure_shell(PermissionMode::AskForExecution, &[]);
+        let next = run(&tools, "printf unapproved > ../outside/result").await;
+        assert_ne!(code(&next), Some(0), "{}", next.text);
+        assert!(!fixture.root.path().join("outside/result").exists());
+        std::fs::write(fixture.cwd.join("release"), "").unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while tools.background().list()[0].running {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let output = tools.background().output(1, false).unwrap();
+        assert_eq!(output.command.exit_code, Some(0), "{output:?}");
+        assert_eq!(
+            std::fs::read_to_string(fixture.root.path().join("outside/result")).unwrap(),
+            "approved"
+        );
+        tools.background().stop_all().await;
+    }
+}
+
+#[tokio::test]
 async fn sandbox_git_commits_in_repositories_and_worktrees_but_locks_config_and_hooks() {
     let fixture = Fixture::new();
     fixture.git(&["init", "-q"]);

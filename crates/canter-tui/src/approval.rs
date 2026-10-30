@@ -349,6 +349,37 @@ fn shell_body(
         ),
         width,
     ));
+    if let Some(request) = approval.arguments.get("sandboxRequest") {
+        let mut scope = Vec::new();
+        if request["network"].as_bool() == Some(true) {
+            scope.push(
+                "Network access for this command (any host, including local network)".to_owned(),
+            );
+        }
+        if let Some(paths) = request["writePaths"]
+            .as_array()
+            .filter(|paths| !paths.is_empty())
+        {
+            scope.push(format!(
+                "Write access for this command: {}",
+                paths
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(visible)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if let Some(reason) = approval.arguments["justification"].as_str() {
+            scope.push(format!("Reason: {}", visible(reason)));
+        }
+        for line in scope {
+            rows.extend(wrap(
+                &LogicalLine::new(Vec::new(), vec![Span::raw(line)]),
+                width,
+            ));
+        }
+    }
     rows
 }
 

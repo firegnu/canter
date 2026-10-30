@@ -203,6 +203,15 @@ impl PermissionGate {
         feedback: Option<String>,
         approved_prefixes: Option<&[Vec<String>]>,
     ) -> Result<PermissionCheck<'a>, &'static str> {
+        if matches!(&call.action, Action::Shell(args) if args.sandbox_request.is_some())
+            && matches!(
+                decision,
+                ApprovalDecision::AcceptForSession
+                    | ApprovalDecision::AcceptWithExecpolicyAmendment
+            )
+        {
+            return Err("invalid_decision: sandbox requests require one-time approval");
+        }
         if call.tool == Tool::Shell
             && matches!(
                 decision,
@@ -292,19 +301,33 @@ impl PermissionGate {
                     reason: "Command forbidden by rules.json".into(),
                 };
             }
-            if let Some(reason) = call
+            let dangerous = call
                 .executor
-                .dangerous_shell_reason(&args.command, &self.additional_directories)
+                .dangerous_shell_reason(&args.command, &self.additional_directories);
+            if let Some(reason) = &dangerous
+                && mode == PermissionMode::AllowAll
             {
-                return if mode == PermissionMode::AllowAll {
-                    PermissionCheck::Forbidden {
-                        reason: format!(
-                            "Blocked: {reason}. canter refuses this in allowAll mode. If the user really wants it, they can run it themselves with !."
-                        ),
-                    }
-                } else {
-                    self.ask(call, false)
+                return PermissionCheck::Forbidden {
+                    reason: format!(
+                        "Blocked: {reason}. canter refuses this in allowAll mode. If the user really wants it, they can run it themselves with !."
+                    ),
                 };
+            }
+            if let Some(request) = &args.sandbox_request {
+                if let Err(error) = call.executor.check_sandbox_request(request) {
+                    return PermissionCheck::Forbidden {
+                        reason: error.to_string(),
+                    };
+                }
+                if mode == PermissionMode::AllowAll && !request.write_paths.is_empty() {
+                    return PermissionCheck::Forbidden { reason: "Blocked: writing outside the sandbox needs approval, and Allow all mode never asks. If the user really wants it, they can run it themselves with !.".into() };
+                }
+                if mode != PermissionMode::AllowAll {
+                    return self.ask(call, false);
+                }
+            }
+            if dangerous.is_some() {
+                return self.ask(call, false);
             }
             let Ok(rules) = rules else {
                 return self.ask(call, false);
@@ -316,6 +339,9 @@ impl PermissionGate {
                 rules.decision(&command.words) == Some(crate::rules::Decision::Prompt)
             }) {
                 return self.ask(call, false);
+            }
+            if mode == PermissionMode::AskForExecution && call.executor.sandbox_enabled() {
+                return PermissionCheck::Execute(ExecutionPermit { call });
             }
             let allowed = |words: &[String]| {
                 rules.decision(words) == Some(crate::rules::Decision::Allow)

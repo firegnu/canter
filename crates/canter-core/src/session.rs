@@ -155,7 +155,7 @@ impl State {
             .into_iter()
             .filter(|tool| tools.find(tool.name()).is_some())
             .map(|tool| {
-                let def = tool.definition();
+                let def = tools.definition(tool);
                 canter_model::ToolDefinition {
                     name: def.name.into(),
                     description: def.description.into(),
@@ -1055,7 +1055,11 @@ impl Session {
             ApprovalResolution::Plan { answer }
         } else {
             match (&request.kind, params.decision, &params.answer) {
-                (RequestKind::Approval(approval), Some(decision), None) => {
+                (
+                    RequestKind::Approval(approval) | RequestKind::SandboxApproval(approval),
+                    Some(decision),
+                    None,
+                ) => {
                     if decision == ApprovalDecision::Unknown
                         || !approval.available_decisions.contains(&decision)
                     {

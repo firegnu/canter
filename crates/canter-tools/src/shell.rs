@@ -21,6 +21,10 @@ pub(crate) struct ShellArgs {
     pub timeout_ms: u64,
     #[serde(default)]
     pub background: bool,
+    #[serde(default)]
+    pub sandbox_request: Option<canter_protocol::SandboxRequest>,
+    #[serde(default)]
+    pub justification: Option<String>,
 }
 fn default_timeout() -> u64 {
     DEFAULT_SHELL_TIMEOUT_MS
@@ -249,6 +253,10 @@ async fn capture(
 ) -> io::Result<(std::process::ExitStatus, Option<ToolOutcome>)> {
     let mut handle = if source == ExecCommandSource::UserShell {
         executor.spawn_user(&args.command, cancel).await?
+    } else if let Some(request) = &args.sandbox_request {
+        executor
+            .spawn_with_sandbox_request(&args.command, request, cancel)
+            .await?
     } else {
         executor.spawn(&args.command, cancel).await?
     };
@@ -355,7 +363,11 @@ async fn capture(
         }
     }
     if handle.sandboxed && interruption.is_none() && reported_denial {
-        let notice = "\nThe sandbox blocks access outside the permitted paths and network scope. If the user needs that access, they can run it themselves with !.\n";
+        let notice = if handle.sandbox_approval_allowed {
+            "\nThe sandbox blocked access outside the permitted paths or network scope. If the command really needs it, retry it with a sandbox request and a justification, or ask the user to run it with !.\n"
+        } else {
+            "\nThe sandbox blocks access outside the permitted paths and network scope. If the user needs that access, they can run it themselves with !.\n"
+        };
         if control.background_id.is_some() {
             control.push(notice);
         } else {
