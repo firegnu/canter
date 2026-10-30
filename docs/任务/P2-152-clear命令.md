@@ -47,3 +47,11 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：在 `crates/canter-tui/src/commands.rs` 的 `COMMANDS` 里加了 `/clear`，说明 `Start a new session (same as /new)`，`takes_args: false`，动作是 `Action::NewSession`，和 `/new` 完全一样；`/new` 本身没动。命令列表、`/help` 和 `?` 帮助弹框都从 `COMMANDS` 生成，自动列出。
+- 验证了什么：`slash.rs` 新加一条 `clear_does_what_new_does`（`/clear` 与 `/new` 返回同一个动作，命令列表里 `/clear` 和它的说明都在）；把 `clear` 加进已有的「不带参数的命令拒绝多余文字」测试；两份测试里的命令表（`slash.rs`、`help_popup.rs`）补上 `/clear`，`slash.rs` 的表同时补齐了之前漏掉的 `/ps`、`/stop`、`/theme`、`/add-dir`、`/goal`。跑了 `cargo nextest run -p canter-tui`（556 全过）、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check`，都干净。
+- 拿主意的地方：`/clear` 放在 `/new` 后面（而不是按字母排到最前），让它和同一个行为的命令挨着；命令表顺序本来就是内置命令按字母、后加的命令追加在后面，这次算跟着相关命令走。`slash.rs` 的命令表原来只覆盖屏幕上放得下的前 23 条（后面加命令时没更新），这次顺手补成全部 29 条，并把两个整表测试的屏幕高度从 `HEIGHT + 5` 加到 `HEIGHT + 11`，让 29 条都放得下。
+- 没做的事：没改 `/new`、开新会话逻辑、服务端和协议；没加别的别名；没动 README 和文档里的命令清单（任务限定只动 `crates/canter-tui/`）。
+- 踩过的坑：只把列表测试的屏幕加高还不够，`up_down_tab_and_enter_work_on_the_list` 也用 `above_box(COMMANDS.len())`，屏幕不加高时多出来的行会取到对话区，跟着一起改了。

@@ -318,7 +318,7 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 23] = [
+const COMMANDS: [(&str, &str); 29] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
@@ -332,6 +332,7 @@ const COMMANDS: [(&str, &str); 23] = [
     ("/mode", "Change the permission mode"),
     ("/model", "Change the model"),
     ("/new", "Start a new session"),
+    ("/clear", "Start a new session (same as /new)"),
     ("/plan", "Enter or leave read-only Plan mode"),
     ("/resume", "Switch to another session"),
     ("/skills", "List this session's skills"),
@@ -348,6 +349,14 @@ const COMMANDS: [(&str, &str); 23] = [
     ),
     ("/rewind", "Rewind conversation, files, or both"),
     ("/statusline", "Choose and order what the status line shows"),
+    ("/ps", "List background commands and inspect or stop one"),
+    ("/stop", "Stop all background commands in this session"),
+    ("/theme", "Choose the code colour theme"),
+    ("/add-dir", "Add a directory to this session"),
+    (
+        "/goal",
+        "Set or view a goal; pause, resume, clear, or --budget USD",
+    ),
 ];
 
 struct Screen {
@@ -636,8 +645,8 @@ fn skills_empty_screen_explains_both_directories() {
 /// narrows the list; deleting the `/` closes it.
 #[test]
 fn a_slash_lists_the_commands_above_the_input_box() {
-    // Leave room for the command list, including /plan.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 5);
+    // Leave room for the whole command list.
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 11);
     screen.type_text("/");
     screen.draw();
     let list = screen.above_box(COMMANDS.len());
@@ -672,7 +681,7 @@ fn a_slash_lists_the_commands_above_the_input_box() {
 #[test]
 fn up_down_tab_and_enter_work_on_the_list() {
     // The whole list, as above.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 5);
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 11);
     screen.type_text("/");
     screen.draw();
     assert_eq!(screen.key(KeyCode::Down), None);
@@ -766,6 +775,26 @@ fn each_command_asks_for_its_action() {
         assert!(screen.input().contains("Type a message"), "{text}");
         assert!(screen.no_list(), "{text}");
     }
+}
+
+/// `/clear` is `/new` under another name: the same action, and the list
+/// says so.
+#[test]
+fn clear_does_what_new_does() {
+    let mut new = Screen::new();
+    let mut clear = Screen::new();
+    let action = clear.enter("/clear");
+    assert_eq!(action, new.enter("/new"), "/clear is /new's other name");
+    assert_eq!(action, Some(Action::NewSession));
+
+    let mut screen = Screen::new();
+    screen.type_text("/cle");
+    screen.draw();
+    let shown = screen.text();
+    assert!(
+        shown.contains("/clear") && shown.contains("Start a new session (same as /new)"),
+        "{shown}"
+    );
 }
 
 #[test]
@@ -1043,7 +1072,7 @@ fn a_command_after_leading_blanks_is_still_a_command() {
 #[test]
 fn text_after_a_command_without_arguments_is_refused() {
     for name in [
-        "compact", "context", "files", "exit", "help", "new", "resume",
+        "compact", "context", "files", "exit", "help", "new", "clear", "resume",
     ] {
         let mut screen = Screen::new();
         assert_eq!(screen.enter(&format!("/{name} now")), None, "/{name}");
