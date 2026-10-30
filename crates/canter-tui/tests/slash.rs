@@ -17,6 +17,20 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 #[test]
+fn permissions_is_listed_and_takes_no_arguments() {
+    let mut screen = Screen::new();
+    screen.type_text("/permissions");
+    screen.draw();
+    assert!(screen.text().contains("View and delete command rules"));
+    assert!(screen.key(KeyCode::Enter).is_some());
+
+    let mut screen = Screen::new();
+    assert_eq!(screen.enter("/permissions extra"), None);
+    screen.draw();
+    assert!(screen.text().contains("/permissions takes no arguments"));
+}
+
+#[test]
 fn init_sends_the_prompt_as_an_ordinary_message() {
     let prompt = include_str!("../assets/init_prompt.md");
     for working in [false, true] {
@@ -352,7 +366,7 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 30] = [
+const COMMANDS: [(&str, &str); 31] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
@@ -368,6 +382,7 @@ const COMMANDS: [(&str, &str); 30] = [
     ("/model", "Change the model"),
     ("/new", "Start a new session"),
     ("/clear", "Start a new session (same as /new)"),
+    ("/permissions", "View and delete command rules"),
     ("/plan", "Enter or leave read-only Plan mode"),
     ("/resume", "Switch to another session"),
     ("/skills", "List this session's skills"),
@@ -681,7 +696,7 @@ fn skills_empty_screen_explains_both_directories() {
 #[test]
 fn a_slash_lists_the_commands_above_the_input_box() {
     // Leave room for the whole command list.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 12);
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 13);
     screen.type_text("/");
     screen.draw();
     let list = screen.above_box(COMMANDS.len());
@@ -716,7 +731,7 @@ fn a_slash_lists_the_commands_above_the_input_box() {
 #[test]
 fn up_down_tab_and_enter_work_on_the_list() {
     // The whole list, as above.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 12);
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 13);
     screen.type_text("/");
     screen.draw();
     assert_eq!(screen.key(KeyCode::Down), None);
@@ -875,7 +890,7 @@ fn usage_displays_models_total_last_turn_and_unknown_costs() {
 #[test]
 fn help_shows_the_commands_in_a_box() {
     // The shortcut sections come first: tall enough for the whole box.
-    let mut screen = Screen::sized(WIDTH, 101);
+    let mut screen = Screen::sized(WIDTH, 102);
     assert_eq!(screen.enter("/help"), None);
     screen.draw();
     let shown = screen.text();

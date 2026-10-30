@@ -96,6 +96,8 @@ pub enum Action {
     BackgroundList,
     BackgroundOutput(u64),
     BackgroundStop(Option<u64>),
+    CommandRules,
+    DeleteCommandRule(canter_protocol::CommandRule),
     /// `/lsp`: the language servers of this session.
     LanguageServers,
     /// Stop this session's subscription to the language server with this id.
@@ -612,6 +614,7 @@ pub struct App {
     background_view: Option<u64>,
     /// `/lsp`, and the report it was open as: open while that is open.
     lsp: Option<(u64, crate::lsp::View)>,
+    permissions: Option<(u64, crate::permissions::View)>,
     /// Output tokens a second, for the `tps` item and the status command.
     tps: Tps,
     home: Option<String>,
@@ -934,6 +937,7 @@ impl App {
             report: None,
             background_view: None,
             lsp: None,
+            permissions: None,
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::messages(),
@@ -1962,6 +1966,9 @@ impl App {
     /// scroll the rows that do not fit; Enter, Esc, Ctrl+C or Ctrl+D
     /// closes it.
     fn report_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
+        if let Some(action) = self.permissions_key(key, seen, send_guarded) {
+            return action;
+        }
         if seen
             && !send_guarded
             && key.modifiers.is_empty()
@@ -2227,6 +2234,65 @@ impl App {
     /// `/mcp`: opens above the input box.
     pub fn show_mcp(&mut self, report: &canter_protocol::McpListResponse) {
         self.open_report(crate::commands::mcp(report));
+    }
+
+    /// `/permissions`: only the server reads or changes the rules file.
+    pub fn show_command_rules(
+        &mut self,
+        result: Result<canter_protocol::CommandRuleListResponse, String>,
+    ) {
+        match result {
+            Ok(list) => {
+                let view = crate::permissions::View::new(list);
+                self.open_report(view.report());
+                self.permissions = Some((self.choosers, view));
+            }
+            Err(error) => self.open_report(crate::permissions::error(&error)),
+        }
+    }
+
+    fn permissions_key(
+        &mut self,
+        key: KeyEvent,
+        seen: bool,
+        send_guarded: bool,
+    ) -> Option<Option<Action>> {
+        let (at, view) = self.permissions.as_mut()?;
+        if *at != self.choosers {
+            return None;
+        }
+        if key.code == KeyCode::Esc && view.confirming {
+            view.confirming = false;
+        } else if !seen || send_guarded || key.kind != KeyEventKind::Press {
+            return Some(None);
+        } else if !key.modifiers.is_empty() {
+            return None;
+        } else {
+            match key.code {
+                KeyCode::Up if !view.confirming => view.selected = view.selected.saturating_sub(1),
+                KeyCode::Down if !view.confirming => {
+                    view.selected = (view.selected + 1).min(view.list.data.len().saturating_sub(1))
+                }
+                KeyCode::Enter if view.confirming => {
+                    let rule = view.list.data.get(view.selected)?.clone();
+                    self.report = None;
+                    self.permissions = None;
+                    return Some(Some(Action::DeleteCommandRule(rule)));
+                }
+                KeyCode::Enter | KeyCode::Delete => {
+                    if view.list.data.is_empty() {
+                        return Some(None);
+                    }
+                    view.confirming = true;
+                }
+                _ => return None,
+            }
+        }
+        // Keys queued for the list cannot confirm a dialog that has not been drawn.
+        self.choosers += 1;
+        *at = self.choosers;
+        self.report = Some(view.report());
+        Some(None)
     }
 
     /// `/context`: opens above the input box.

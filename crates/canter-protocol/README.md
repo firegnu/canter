@@ -46,6 +46,8 @@ input 为空，没有 userMessage，clientName 为 background。每批可以有�
 | --- | --- | --- |
 | GET INFO | InfoParams | InfoResponse |
 | GET MODELS | ModelListParams | ModelListResponse |
+| GET COMMAND_RULES | 无参数 | CommandRuleListResponse |
+| POST COMMAND_RULE_DELETE | CommandRule | CommandRuleDeleteResponse |
 | GET USAGE | 无参数 | UsageResponse |
 | GET SESSION_USAGE | 无参数，SessionPath | UsageResponse |
 | POST SESSIONS | SessionCreateParams | SessionCreateResponse |
@@ -67,6 +69,14 @@ input 为空，没有 userMessage，clientName 为 background。每批可以有�
 该命令对应的事件，取快照时与快照的 `lastEventSeq` 一致。`info` 和列表
 没有全局序号，各个 `SessionSummary` 自带 `lastEventSeq`；SSE 每帧自带 `seq`。
 事件序号和时间在 JSON / TypeScript 中都是 number；网页调用方使用 JS 安全整数范围。
+
+命令规则管理（P2-156）：`GET /v1/commandRules` 返回 `{path, data:[{pattern, decision}]}`，
+path 是服务端规则文件路径，pattern 是完整词前缀数组，decision 为 `allow` / `prompt` / `forbidden`。
+`POST /v1/commandRules/delete` 接收 `{pattern, decision}`，返回 `{removed, message}`；
+removed 是完全相同规则的删除条数，重复的一起删，不存在返回 0 和说明、仍成功。
+删除与批准框永久放行共用写锁和原子替换（0600），坏文件返回错误且不覆盖。
+列表沿用 Codex v2 的 data 结构，这两个全局接口是 canter 扩展；不改协议版本或旧接口。
+按主控决定，按内容删除使用 POST，与停止后台命令一致，避免 DELETE 请求体的未定义语义及代理兼容问题。
 
 空闲时 input 开新轮，忙时默认 `queue`，也可 `steer`。
 点名用技能（P2-129）：`UserInput` 新增 `{ "type": "skill", "name": "example" }`，

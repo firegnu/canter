@@ -137,6 +137,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::NewSession)),
     },
     Command {
+        name: "permissions",
+        about: "View and delete command rules",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::CommandRules)),
+    },
+    Command {
         name: "plan",
         about: "Enter or leave read-only Plan mode",
         takes_args: false,

@@ -70,3 +70,15 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-10-30，canter/dev-permissions。
+
+- 做了什么：新增全局规则列表和按内容删除接口，返回服务端文件路径、完整词前缀和 decision；删除同时移除完全相同的重复规则，不存在时成功返回 0 和说明。规则类型从 tools 提到 protocol，保持原有 JSON 格式、严格解析和决策顺序；删除与 `append` 共用原写锁及提取出的原子写入函数，保留 0600，坏文件不覆盖，缺文件不创建。终端 `/permissions` 按 Allow / Ask / Deny 分组，↑↓ 选择，Enter/Delete 打开确认，Enter 才发删除请求，Esc 取消确认或关闭；确认框未画出来的旧按键和重复 Enter 不会触发删除。删完重新取列表并提示规则内容，显示文件位置、空列表添加方式和错误说明；长列表保持选中项可见。命令列表、`?` 帮助、DESIGN 和协议 README 已同步，JSON Schema、TypeScript 已重新生成。
+- 验证了什么：先跑失败测试，列表和删除分别因新端点不存在而返回 400（期望 200），命令入口因缺少说明失败，确认交互因 Enter 直接关闭弹框失败；实现后均通过。所有命令前台跑完，Cargo 均使用任务专属编译目录。最终相关回归 152 项通过：协议包 32 项、工具 `command_rules` 11 项、服务端专项 5 项和核心永久放行/坏规则/权限边界/保存失败 4 项、终端 100 项。服务端覆盖正常/缺失/坏文件列表、按完整内容删除及重复删除、已不存在、坏文件拒绝且保留原文、并发永久放行写入不丢规则、权限 0600 和下一次判断立即变化、旧会话请求兼容；终端覆盖分组、确认/取消、无规则/坏文件、HTTP 客户端按确认内容 POST 后重取列表、命令和帮助，并回归批准框、报告弹框及回放。测试只用临时目录、隔离的 HOME/CANTER_HOME 参数和临时 Unix socket、本地假服务端，没有读取用户真实规则。
+- 验证命令（各条前都加 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-156-permissions`）：`cargo nextest run -p canter-protocol`；`cargo nextest run -p canter-tools --test command_rules`；`cargo nextest run -p canter-server -p canter-core --lib --test session -E 'test(command_rules_) | test(permanent_command_approval) | test(broken_rules_) | test(rules_apply_) | test(failed_rule_save)'`；`cargo nextest run -p canter-tui --test permissions --test slash --test help_popup --test report_popup --test approval_box --test replay`。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 全部通过。
+- 拿主意的地方：接口先请主控决定，主控确认 `GET /v1/commandRules` 返回 `{path, data:[{pattern, decision}]}`，删除改为 `POST /v1/commandRules/delete`，请求 `{pattern, decision}`，返回 `{removed, message}`。采用 POST 的理由：HTTP 未定义 DELETE 请求体的语义，未来网页客户端经过代理可能被丢，且现有按内容操作（如后台命令停止）也用 POST。决定和理由已写入 DESIGN 第 8 条；没有剩余待主控决定的问题。
+- 参考：只读参考 `/tmp/p2-104-src/codex` 的 `rust-v0.163.0`，`codex-rs/app-server-protocol/src/protocol/v2/model.rs` 的 `ModelListResponse.data` 和 `permissions.rs` 的 `ExecPolicyAmendment` 词数组结构，未复制上游代码。沿用 canter 自己的规则格式、HTTP 错误结构、报告弹框与按已显示帧处理按键的机制。
+- 没做的事：未加规则新增/修改界面、会话临时授权管理、项目级规则或通配；未改前缀判断、冲突优先级、只读白名单、建议前缀或 `append` 行为。真模型接口调用 0 次；未跑工作区全套、未安装或重启服务、未合并 main、未推送。全套与交叉审查留给主控合并前执行。
+- 踩过的坑：已有斜杠列表和帮助测试记死 30 个命令及恰好容纳列表的窗口高度；新增命令后先后暴露列表预期与帮助窗口少一行。已把完整预期更新为 31 项，对应测试窗口增加一行，保留逐条检查和全部原有断言，重跑相关 100 项全部通过。

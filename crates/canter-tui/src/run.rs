@@ -661,6 +661,32 @@ where
                         .app_mut()
                         .warning(&format!("Could not read MCP status: {error}")),
                 },
+                Some(Action::CommandRules) => {
+                    let result = chat
+                        .client
+                        .command_rules()
+                        .await
+                        .map_err(|error| error.to_string());
+                    ui.app_mut().show_command_rules(result);
+                }
+                Some(Action::DeleteCommandRule(rule)) => {
+                    match chat.client.delete_command_rule(&rule).await {
+                        Ok(result) => {
+                            ui.app_mut().information(&format!(
+                                "{} {}",
+                                crate::permissions::description(&rule),
+                                result.message
+                            ));
+                            let list = chat
+                                .client
+                                .command_rules()
+                                .await
+                                .map_err(|error| error.to_string());
+                            ui.app_mut().show_command_rules(list);
+                        }
+                        Err(error) => ui.app_mut().show_command_rules(Err(error.to_string())),
+                    }
+                }
                 Some(Action::Context) => match chat.client.context(&chat.session).await {
                     Ok(report) => ui.app_mut().show_context(&report),
                     Err(error) => ui
@@ -1994,6 +2020,8 @@ impl<C: Connector> Chat<C> {
             | Action::ShellBackground(_)
             | Action::Context
             | Action::Mcp
+            | Action::CommandRules
+            | Action::DeleteCommandRule(_)
             | Action::Files
             | Action::ListSkills
             | Action::ExternalEditor

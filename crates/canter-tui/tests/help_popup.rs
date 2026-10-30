@@ -12,7 +12,7 @@ const SESSION: &str = "s1";
 const NOW: i64 = 0;
 
 /// Every command, in the command list's order, with its line.
-const COMMANDS: [(&str, &str); 30] = [
+const COMMANDS: [(&str, &str); 31] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
@@ -28,6 +28,7 @@ const COMMANDS: [(&str, &str); 30] = [
     ("/model", "Change the model"),
     ("/new", "Start a new session"),
     ("/clear", "Start a new session (same as /new)"),
+    ("/permissions", "View and delete command rules"),
     ("/plan", "Enter or leave read-only Plan mode"),
     ("/resume", "Switch to another session"),
     ("/skills", "List this session's skills"),

@@ -39,6 +39,7 @@ mod lsp;
 mod markdown;
 mod mention;
 mod notify;
+mod permissions;
 mod picker;
 mod plan;
 mod plan_mode;
