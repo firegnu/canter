@@ -243,4 +243,10 @@ P2-161 内置关键路径删除判断，只管模型 shell（前台、后台）�
 - 用户 `!`（含 `!cmd &`）不套沙箱，界面标明；MCP、`web_fetch` 第一版在沙箱外，各自批准照旧，界面写明。
 - 沙箱关闭时一切照沙箱之前的行为。
 
+P2-164（10-30 主控确认）：模型 shell 仅在沙箱开启时增加可选 `sandboxRequest: { network, writePaths }` 和 `justification`，字段风格与 `timeoutMs` 一致。`network` 缺省 false，`writePaths` 缺省空数组；带申请必须给非空理由。路径相对 cwd，支持会话 HOME 的 `~`，按 P2-118 的真实路径办法处理符号链接、`..` 和不存在的尾部；批准框展示规范化后的路径。申请只给这条命令及其后代，后台和 Ctrl+B 转后台保持到退出，不加入会话目录或命令前缀授权；批准后启动前重新校验路径和硬边界。原缓存只读、Git 配置和元数据指针保护不因申请而解除。
+
+判断顺序保留计划／审查限制、forbidden 和 P2-161，之后检查申请硬边界及 allowAll 的拒写规则；需询问的结果合并成一个单次批准框。allow、会话前缀、只读白名单不能免除申请批准，拒绝和附言沿用原反馈。普通墙内命令在 askForExecution 下免问，prompt、危险命令和坏规则文件仍沿用原处理。被挡提示沿用 P2-163 的输出特征识别，询问档追加用户确认的申请重试文字，不自动重跑。
+
+协议新增 `RequestKind` 的 `sandboxApproval` 类型，载荷沿用 `ApprovalRequest`，`arguments` 带规范化后的 `sandboxRequest` 和原 `justification`；仅提供 accept / decline / declineWithFeedback / cancel。旧客户端按已有 Unknown 分支忽略新类型，不会显示为普通命令批准，需新版客户端回答；只加服务端 features 无法约束旧客户端，因此不采用。Codex app-server v2 使用命令批准请求并可携带额外权限，shell 使用 `sandbox_permissions` / `additional_permissions` / `justification`；canter 使用自己 HTTP + SSE 的独立请求类型以防旧客户端漏显范围，且只扩展指定网络／写路径，永不提供整条命令脱离沙箱或永久越界授权。没有移植 Codex 实现。
+
 这不是资源配额或回滚：看护进程、超时、进程组清理照旧。以后再做：按域名代理、精简传给命令的环境变量、MCP 隔离、文件工具移进受限进程、Linux 和 Windows 的实现。

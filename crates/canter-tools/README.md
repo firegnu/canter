@@ -154,7 +154,7 @@ shell 回收后管道最多再读取 2000 ms；取消和原始超时在此期间
 `set -m`、`setsid` 等移到其他进程组或会话的进程不在清理范围内，可能继续运行。
 第一期只清理原进程组，不提供操作系统级的后代进程收容；第二期的执行器/沙箱再处理这一边界。
 
-## 模型命令沙箱（P2-163）
+## 模型命令沙箱（P2-163、P2-164）
 
 服务端按启动时的 `sandbox` 开关为执行器调用 `with_sandbox(true)`，模型前台、后台和
 Ctrl+B 转后台命令均通过 `/usr/bin/sandbox-exec` 启动；用户 `!` 使用独立的
@@ -170,17 +170,25 @@ Git 实际元数据目录可写，但 config、hooks 和 worktree、子模块元
 新建仓库的保护正则只套在 cwd 和新增目录，并显式排除临时目录和缓存，即使缓存位于 cwd
 内也可检出依赖。子模块元数据递归保护，敏感目录和直接元数据名称匹配 ASCII 大小写。
 禁止创建硬链接。
-只有 allowAll 放开 IP 网络和 mDNSResponder socket，另外两档仍断网；其他 Unix socket
+allowAll 放开 IP 网络和 mDNSResponder socket，另外两档默认断网；其他 Unix socket
 只放行可写范围且排除状态目录。启动失败不退回墙外，仅在输出出现拒绝特征时附沙箱范围
 说明，不改变退出码或自动重跑。
 文件工具、MCP、网页工具不由本件套墙；进程组看护和清理边界保持原样。
+
+沙箱开启时 `askForExecution` 普通命令免问，forbidden、prompt、关键路径删除、
+坏规则文件和计划／审查限制仍保留。shell 可带 `sandboxRequest: {network, writePaths}`
+及非空 `justification`；询问档强制单次批准，规则和会话授权不能免问。
+批准只扩展该命令及其后代直到退出，其他命令仍用原范围。writePaths 可指定文件或目录，
+按真实路径规范化，启动前再次校验；敏感目录及其上级、Git 配置和 hooks、原缓存不可解锁。
+allowAll 联网申请无需批准，写路径申请直接拒绝。工具定义使用会话的 `Tools::definition`，
+沙箱关闭时保留原说明和参数；底层 `Tool::definition` 仍返回原定义。
 
 ## 权限与执行器边界
 
 | 模式 | read | write / edit | shell |
 | --- | --- | --- | --- |
 | alwaysAsk / Unknown | 执行 | 询问 | 按命令规则、会话前缀和只读白名单判断 |
-| askForExecution | 执行 | 执行 | 按命令规则、会话前缀和只读白名单判断 |
+| askForExecution | 执行 | 执行 | 沙箱开时普通命令免问；关闭时按命令规则、会话前缀和只读白名单判断 |
 | allowAll | 执行 | 执行 | 禁止规则仍拒绝，其余执行；规则文件坏了仍询问 |
 
 Accept 仅允许当前调用；AcceptForSession 对 shell 只记住批准框展示的词前缀，其他工具沿用原范围；Decline 拒绝；

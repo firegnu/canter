@@ -1900,7 +1900,8 @@ impl<C: Connector> Chat<C> {
                         .iter()
                         .find(|request| request.id == request_id)
                         .and_then(|request| match &request.kind {
-                            canter_protocol::RequestKind::Approval(approval) => {
+                            canter_protocol::RequestKind::Approval(approval)
+                            | canter_protocol::RequestKind::SandboxApproval(approval) => {
                                 approval.proposed_execpolicy_amendment.clone()
                             }
                             _ => None,

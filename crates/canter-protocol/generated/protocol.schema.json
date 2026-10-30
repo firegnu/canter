@@ -3034,6 +3034,19 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/ApprovalRequest",
+          "properties": {
+            "type": {
+              "const": "sandboxApproval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "$ref": "#/$defs/UserInputRequest",
           "properties": {
             "type": {
@@ -3238,6 +3251,24 @@
         "input",
         "fileCount"
       ],
+      "type": "object"
+    },
+    "SandboxRequest": {
+      "additionalProperties": false,
+      "description": "Extra scope for one model command; it never disables the sandbox.",
+      "properties": {
+        "network": {
+          "default": false,
+          "type": "boolean"
+        },
+        "writePaths": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
       "type": "object"
     },
     "SessionBtwParams": {

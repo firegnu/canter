@@ -1018,7 +1018,8 @@ impl App {
                         return None;
                     }
                     match &request.kind {
-                        RequestKind::Approval(approval) => {
+                        RequestKind::Approval(approval)
+                        | RequestKind::SandboxApproval(approval) => {
                             Some((approval.tool.clone(), approval.session_prefixes.is_some()))
                         }
                         _ => None,
@@ -3271,6 +3272,7 @@ impl App {
                     request.kind,
                     RequestKind::UserInput(_)
                         | RequestKind::Approval(_)
+                        | RequestKind::SandboxApproval(_)
                         | RequestKind::PlanApproval(_)
                 )
         }) && let Some(custom) = &mut self.approval.custom
@@ -3833,21 +3835,23 @@ impl App {
                     width,
                     box_height,
                 ),
-                RequestKind::Approval(approval) => approval::layout(
-                    &self.snapshot,
-                    request,
-                    approval,
-                    home,
-                    selected,
-                    self.approval
-                        .custom
-                        .as_deref()
-                        .filter(|_| self.approval.request == request.id),
-                    scroll,
-                    taken,
-                    width,
-                    box_height,
-                ),
+                RequestKind::Approval(approval) | RequestKind::SandboxApproval(approval) => {
+                    approval::layout(
+                        &self.snapshot,
+                        request,
+                        approval,
+                        home,
+                        selected,
+                        self.approval
+                            .custom
+                            .as_deref()
+                            .filter(|_| self.approval.request == request.id),
+                        scroll,
+                        taken,
+                        width,
+                        box_height,
+                    )
+                }
                 RequestKind::UserInput(question) => crate::question::layout(
                     question,
                     selected,
@@ -4399,7 +4403,7 @@ impl App {
                 .pending_requests
                 .iter()
                 .find_map(|request| match &request.kind {
-                    RequestKind::Approval(approval)
+                    RequestKind::Approval(approval) | RequestKind::SandboxApproval(approval)
                         if request.id == request_id && !self.answered.contains(&request.id) =>
                     {
                         Some(approval::options(approval))
@@ -4837,7 +4841,9 @@ impl App {
             .iter()
             .filter_map(|request| match &request.kind {
                 RequestKind::PlanApproval(plan) => Some(plan.item_id.as_str()),
-                RequestKind::Approval(approval) => Some(approval.item_id.as_str()),
+                RequestKind::Approval(approval) | RequestKind::SandboxApproval(approval) => {
+                    Some(approval.item_id.as_str())
+                }
                 RequestKind::UserInput(question) => Some(question.item_id.as_str()),
                 RequestKind::Unknown => None,
             })

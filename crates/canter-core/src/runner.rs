@@ -1076,7 +1076,13 @@ async fn permission<'a>(
                     id: id("approval"),
                     turn_id: turn_id.into(),
                     created_at: crate::journal::now(),
-                    kind: RequestKind::Approval(approval),
+                    kind: if approval.arguments.get("sandboxRequest").is_some()
+                        && approval.tool == "shell"
+                    {
+                        RequestKind::SandboxApproval(approval)
+                    } else {
+                        RequestKind::Approval(approval)
+                    },
                 };
                 let (sender, receiver) = tokio::sync::oneshot::channel();
                 state

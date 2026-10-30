@@ -671,6 +671,7 @@ pub struct PendingRequest {
 pub enum RequestKind {
     PlanApproval(PlanApprovalRequest),
     Approval(ApprovalRequest),
+    SandboxApproval(ApprovalRequest),
     UserInput(UserInputRequest),
     #[serde(other)]
     Unknown,
@@ -718,6 +719,16 @@ pub struct ApprovalRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub session_prefixes: Option<Vec<Vec<String>>>,
+}
+
+/// Extra scope for one model command; it never disables the sandbox.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxRequest {
+    #[serde(default)]
+    pub network: bool,
+    #[serde(default)]
+    pub write_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
