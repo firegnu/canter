@@ -126,7 +126,7 @@ impl Sandbox {
             ));
         }
         let protected_names = ["config", "config.worktree", "hooks", "commondir", "gitdir"]
-            .map(git_name_pattern)
+            .map(case_insensitive_name)
             .join("|");
         for directory in &git_directories {
             profile.push_str(&format!(
@@ -139,8 +139,9 @@ impl Sandbox {
                 // Include real targets when metadata uses links.
                 for path in crate::executor::prepare_protected_paths(vec![path])? {
                     profile.push_str(&format!(
-                        "(deny file-write* (subpath {}))\n",
-                        parameters.path(&path)?
+                        "(deny file-write* (subpath {}) {})\n",
+                        parameters.path(&path)?,
+                        parameters.case_insensitive_subpath(&path)?
                     ));
                     protect_ancestors(&mut profile, &mut parameters, &path)?;
                 }
@@ -149,19 +150,26 @@ impl Sandbox {
             for (container, depth) in [("worktrees", "[^/]+"), ("modules", ".+")] {
                 profile.push_str(&format!(
                     "(deny file-write* (require-all (subpath {parameter}) (regex #\"/{}/{depth}/({protected_names})(/|$)\")))\n",
-                    git_name_pattern(container)
+                    case_insensitive_name(container)
                 ));
                 protect_ancestors(&mut profile, &mut parameters, &directory.join(container))?;
             }
         }
         // Protect new project repositories, without blocking dependency checkouts
         // in the private temporary directory or disposable download caches.
-        let dot_git = git_name_pattern(".git");
+        let dot_git = case_insensitive_name(".git");
+        let mut exclusions = String::new();
+        for directory in [&temporary, &self.cargo, &self.npm] {
+            exclusions.push_str(&format!(
+                " (require-not (subpath {}))",
+                parameters.path(directory)?
+            ));
+        }
         for root in &project_roots {
             let parameter = parameters.path(root)?;
             profile.push_str(&format!(
-                "(deny file-write* (require-all (subpath {parameter}) (regex #\"(^|/){dot_git}/({protected_names})(/|$)\")))\n\
-                 (deny file-write-data file-write-unlink (require-all (subpath {parameter}) (regex #\"(^|/){dot_git}$\")))\n"
+                "(deny file-write* (require-all (subpath {parameter}) (regex #\"(^|/){dot_git}/({protected_names})(/|$)\"){exclusions}))\n\
+                 (deny file-write-data file-write-unlink (require-all (subpath {parameter}) (regex #\"(^|/){dot_git}$\"){exclusions}))\n"
             ));
         }
         if scope.network {
@@ -187,14 +195,15 @@ impl Sandbox {
         }
         for path in &self.unreadable {
             let parameter = parameters.path(path)?;
+            let insensitive = parameters.case_insensitive_subpath(path)?;
             profile.push_str(&format!(
-                "(deny file-read* file-write* (subpath {parameter}))\n"
+                "(deny file-read* file-write* (subpath {parameter}) {insensitive})\n"
             ));
             profile.push_str(&format!(
-                "(deny network-outbound (remote unix-socket (subpath {parameter})))\n"
+                "(deny network-outbound (remote unix-socket (subpath {parameter})) (remote unix-socket {insensitive}))\n"
             ));
             profile.push_str(&format!(
-                "(deny network-bind (local unix-socket (subpath {parameter})))\n"
+                "(deny network-bind (local unix-socket (subpath {parameter})) (local unix-socket {insensitive}))\n"
             ));
             protect_ancestors(&mut profile, &mut parameters, path)?;
         }
@@ -210,9 +219,9 @@ impl Sandbox {
         profile.push_str("(deny system-fcntl (fcntl-command 80 110))\n");
         let mut command = tokio::process::Command::new("/usr/bin/sandbox-exec");
         command.args(["-p", &profile]);
-        for (path, key) in &parameters.0 {
+        for (value, key) in &parameters.0 {
             let mut parameter = std::ffi::OsString::from(format!("{key}="));
-            parameter.push(path);
+            parameter.push(value);
             command.arg("-D").arg(parameter);
         }
         command
@@ -228,12 +237,19 @@ impl Sandbox {
     }
 }
 
-// Match both ASCII cases of the fixed Git metadata names used above.
-fn git_name_pattern(name: &str) -> String {
+// Match both ASCII cases, escaping punctuation in configured directory names.
+fn case_insensitive_name(name: &str) -> String {
     name.chars()
         .map(|character| match character {
-            '.' => "\\.".to_owned(),
-            _ => format!("[{character}{}]", character.to_ascii_uppercase()),
+            'a'..='z' | 'A'..='Z' => format!(
+                "[{}{}]",
+                character.to_ascii_lowercase(),
+                character.to_ascii_uppercase()
+            ),
+            '.' | '+' | '*' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$' | '|' | '\\' => {
+                format!("\\{character}")
+            }
+            _ => character.to_string(),
         })
         .collect()
 }
@@ -252,13 +268,39 @@ fn git_protected_paths(directory: &Path) -> io::Result<Vec<PathBuf>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    Ok(directories
+    let mut pending: Vec<_> = directories
+        .iter()
+        .map(|path| path.join("modules"))
+        .collect();
+    let mut protected: Vec<_> = directories
         .into_iter()
         .flat_map(|directory| {
             ["config", "config.worktree", "hooks", "commondir", "gitdir"]
                 .map(|name| directory.join(name))
         })
-        .collect())
+        .collect();
+    while let Some(container) = pending.pop() {
+        let entries = match std::fs::read_dir(&container) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let path = entry.path();
+            if path.join("HEAD").try_exists()? {
+                // A submodule's object database is not another name container.
+                // Recurse only through its own worktrees/modules metadata.
+                protected.extend(git_protected_paths(&path)?);
+            } else {
+                pending.push(path);
+            }
+        }
+    }
+    Ok(protected)
 }
 
 fn git_metadata(root: &Path) -> io::Result<Vec<PathBuf>> {
@@ -306,7 +348,7 @@ fn protect_ancestors(
 }
 
 #[derive(Default)]
-struct Parameters(BTreeMap<PathBuf, String>);
+struct Parameters(BTreeMap<String, String>);
 
 impl Parameters {
     fn path(&mut self, path: &Path) -> io::Result<String> {
@@ -318,10 +360,63 @@ impl Parameters {
                 "sandbox path must be absolute and shorter than 1024 bytes",
             ));
         }
-        let next = format!("PATH_{}", self.0.len());
-        let key = self.0.entry(path.into()).or_insert(next);
-        // Paths are separate argv values, never interpolated into SBPL strings or
-        // combined into a regex that can exceed Seatbelt's 1025-byte literal limit.
-        Ok(format!("(param \"{key}\")"))
+        // Paths are separate argv values, never interpolated into SBPL literals
+        // that can exceed Seatbelt's 1025-byte limit.
+        Ok(self.value(text))
+    }
+
+    fn value(&mut self, value: &str) -> String {
+        let next = format!("VALUE_{}", self.0.len());
+        let key = self.0.entry(value.into()).or_insert(next);
+        format!("(param \"{key}\")")
+    }
+
+    fn case_insensitive_subpath(&mut self, path: &Path) -> io::Result<String> {
+        let Some(parent) = path.parent() else {
+            return Ok(format!("(subpath {})", self.path(path)?));
+        };
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| io::Error::other("sandbox path has no UTF-8 filename"))?;
+        let separator = if parent == Path::new("/") { "" } else { "/" };
+        let suffix = self.value(&format!("{separator}{}(/|$)", case_insensitive_name(name)));
+        // Anchor at the actual parent so only its direct child name is folded.
+        // Both pieces use argv parameters, including names with punctuation.
+        let parent = self.path(parent)?;
+        Ok(format!(
+            "(regex (string-append \"^\" (regex-quote {parent}) {suffix}))"
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_protected_paths_include_nested_submodule_metadata() {
+        let temporary = tempfile::tempdir_in("/tmp").unwrap();
+        let git = temporary.path().join(".git");
+        let child = git.join("modules/nested/child");
+        let grandchild = child.join("modules/deeper/grandchild");
+        let worktree = child.join("worktrees/linked");
+        let worktree_child = worktree.join("modules/linked-child");
+        let directories = [&git, &child, &grandchild, &worktree, &worktree_child];
+        for directory in directories {
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(directory.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        }
+        let protected = git_protected_paths(&git).unwrap();
+        for directory in directories {
+            for name in ["config", "config.worktree", "hooks", "commondir", "gitdir"] {
+                let path = directory.join(name);
+                assert!(
+                    protected.contains(&path),
+                    "{} was not protected",
+                    path.display()
+                );
+            }
+        }
     }
 }

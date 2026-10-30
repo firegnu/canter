@@ -250,6 +250,15 @@ async fn sandbox_clones_local_repository_into_temporary_directory() {
 
 #[tokio::test]
 async fn sandbox_builds_local_cargo_git_dependency_in_cache() {
+    check_local_cargo_git_dependency(false).await;
+}
+
+#[tokio::test]
+async fn sandbox_builds_local_cargo_git_dependency_when_cwd_is_home() {
+    check_local_cargo_git_dependency(true).await;
+}
+
+async fn check_local_cargo_git_dependency(home_is_cwd: bool) {
     let source = Fixture::new();
     source.git(&["init", "-q"]);
     std::fs::write(
@@ -269,8 +278,13 @@ async fn sandbox_builds_local_cargo_git_dependency_in_cache() {
         "initial",
     ]);
     let fixture = Fixture::new();
+    let cwd = if home_is_cwd {
+        &fixture.home
+    } else {
+        &fixture.cwd
+    };
     std::fs::write(
-        fixture.cwd.join("Cargo.toml"),
+        cwd.join("Cargo.toml"),
         format!(
             "[package]\nname = 'local_app'\nversion = '0.1.0'\nedition = '2021'\n[lib]\npath = 'lib.rs'\n[dependencies]\nlocal_dep = {{ git = 'file://{}' }}\n",
             source.cwd.canonicalize().unwrap().display()
@@ -278,7 +292,7 @@ async fn sandbox_builds_local_cargo_git_dependency_in_cache() {
     )
     .unwrap();
     std::fs::write(
-        fixture.cwd.join("lib.rs"),
+        cwd.join("lib.rs"),
         "#[test] fn dependency_works() { assert_eq!(local_dep::answer(), 42); }\n",
     )
     .unwrap();
@@ -290,7 +304,7 @@ async fn sandbox_builds_local_cargo_git_dependency_in_cache() {
         .unwrap();
     assert!(sysroot.status.success());
     let bin = PathBuf::from(String::from_utf8(sysroot.stdout).unwrap().trim()).join("bin");
-    let tools = fixture.tools(true);
+    let tools = fixture.tools_at(cwd, true);
     // No IP network: the only dependency comes from the local file:// repository.
     tools.configure_shell(canter_protocol::PermissionMode::AlwaysAsk, &[]);
     let output = run(
@@ -339,6 +353,7 @@ async fn sandbox_protects_submodule_metadata_and_allows_submodule_commits() {
         "nested/child",
     ]);
     let parent = fixture.tools(true);
+    let child = fixture.tools_at(&fixture.cwd.join("nested/child"), true);
     for name in [
         "config",
         "config.worktree",
@@ -348,15 +363,16 @@ async fn sandbox_protects_submodule_metadata_and_allows_submodule_commits() {
     ] {
         let path = fixture.cwd.join(".git/modules/nested/child").join(name);
         let original = std::fs::read(&path).ok();
-        let output = run(
-            &parent,
-            &format!("printf changed > .git/modules/nested/child/{name}"),
-        )
-        .await;
-        assert_ne!(code(&output), Some(0), "{name}: {}", output.text);
-        assert_eq!(std::fs::read(&path).ok(), original, "{name}");
+        for tools in [&parent, &child] {
+            let output = run(
+                tools,
+                &format!("printf changed > {}", shell_quote(&path.to_string_lossy())),
+            )
+            .await;
+            assert_ne!(code(&output), Some(0), "{name}: {}", output.text);
+            assert_eq!(std::fs::read(&path).ok(), original, "{name}");
+        }
     }
-    let child = fixture.tools_at(&fixture.cwd.join("nested/child"), true);
     let output = run(
         &child,
         "printf changed >> tracked && git add tracked && git -c user.name=Test -c user.email=test@example.invalid commit -qm child",

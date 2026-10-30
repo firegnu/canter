@@ -167,7 +167,9 @@ Ctrl+B 转后台命令均通过 `/usr/bin/sandbox-exec` 启动；用户 `!` 使�
 `TMPPREFIX` 指向 TMPDIR 下的 zsh 前缀；不复制用户 cargo 配置、凭证或 bin。
 真实 `.cargo` / `.npm` 只读，canter 状态目录及 `.ssh` / `.aws` / `.gnupg` 不可读写。
 Git 实际元数据目录可写，但 config、hooks 和 worktree、子模块元数据指针保持只读；
-新建仓库的保护正则只套在 cwd 和新增目录，临时目录和缓存可检出依赖。禁止创建硬链接。
+新建仓库的保护正则只套在 cwd 和新增目录，并显式排除临时目录和缓存，即使缓存位于 cwd
+内也可检出依赖。子模块元数据递归保护，敏感目录和直接元数据名称匹配 ASCII 大小写。
+禁止创建硬链接。
 只有 allowAll 放开 IP 网络和 mDNSResponder socket，另外两档仍断网；其他 Unix socket
 只放行可写范围且排除状态目录。启动失败不退回墙外，仅在输出出现拒绝特征时附沙箱范围
 说明，不改变退出码或自动重跑。
