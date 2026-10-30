@@ -668,8 +668,6 @@ pub(crate) fn list_rows(
         .collect()
 }
 
-/// `/mcp`: each service with whether it is connected, then its tools'
-/// short names filling rows, and its warnings.
 /// `/sandbox`: what the server says this session's model commands may touch
 /// now, paths under `home` as `~`; when it is off, how to turn it on.
 pub(crate) fn sandbox(
@@ -724,6 +722,8 @@ pub(crate) fn sandbox(
     )
 }
 
+/// `/mcp`: each service with whether it is connected, then its tools'
+/// short names filling rows, and its warnings.
 pub(crate) fn mcp(report: &canter_protocol::McpListResponse) -> Report {
     let plural =
         |count: usize, word: &str| format!("{count} {word}{}", if count == 1 { "" } else { "s" });
