@@ -71,6 +71,23 @@ impl Fixture {
             String::from_utf8_lossy(&result.stderr)
         );
     }
+
+    fn git_command(&self) -> String {
+        // Resolve outside Seatbelt: /usr/bin/git may refresh xcrun's system cache.
+        let result = std::process::Command::new("/usr/bin/xcrun")
+            .args(["--find", "git"])
+            .env_clear()
+            .env("HOME", &self.home)
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        shell_quote(String::from_utf8(result.stdout).unwrap().trim())
+    }
 }
 
 #[tokio::test]
@@ -78,8 +95,11 @@ async fn sandbox_git_commits_in_repositories_and_worktrees_but_locks_config_and_
     let fixture = Fixture::new();
     fixture.git(&["init", "-q"]);
     let tools = fixture.tools(true);
-    let commit = "printf content > tracked; git add tracked && git -c user.name=Test -c user.email=test@example.invalid commit -qm initial";
-    let first = run(&tools, commit).await;
+    let git = fixture.git_command();
+    let commit = format!(
+        "printf content > tracked; {git} add tracked && {git} -c user.name=Test -c user.email=test@example.invalid commit -qm initial"
+    );
+    let first = run(&tools, &commit).await;
     assert_eq!(code(&first), Some(0), "{}", first.text);
     for path in [".git/config", ".git/hooks/pre-commit"] {
         let write = run(&tools, &format!("printf changed > {path}")).await;
@@ -100,7 +120,7 @@ async fn sandbox_git_commits_in_repositories_and_worktrees_but_locks_config_and_
         "[user]\nname = Linked\n"
     );
     let linked = fixture.tools_at(&fixture.root.path().join("linked"), true);
-    let output = run(&linked, "printf more >> tracked; git add tracked && git -c user.name=Test -c user.email=test@example.invalid commit -qm linked").await;
+    let output = run(&linked, &format!("printf more >> tracked; {git} add tracked && {git} -c user.name=Test -c user.email=test@example.invalid commit -qm linked")).await;
     assert_eq!(code(&output), Some(0), "{}", output.text);
     assert!(
         !output.text.contains("Operation not permitted"),
@@ -373,9 +393,10 @@ async fn sandbox_protects_submodule_metadata_and_allows_submodule_commits() {
             assert_eq!(std::fs::read(&path).ok(), original, "{name}");
         }
     }
+    let git = fixture.git_command();
     let output = run(
         &child,
-        "printf changed >> tracked && git add tracked && git -c user.name=Test -c user.email=test@example.invalid commit -qm child",
+        &format!("printf changed >> tracked && {git} add tracked && {git} -c user.name=Test -c user.email=test@example.invalid commit -qm child"),
     )
     .await;
     assert_eq!(code(&output), Some(0), "{}", output.text);
