@@ -55,3 +55,8 @@
 - 拿主意的地方：`/clear` 放在 `/new` 后面（而不是按字母排到最前），让它和同一个行为的命令挨着；命令表顺序本来就是内置命令按字母、后加的命令追加在后面，这次算跟着相关命令走。`slash.rs` 的命令表原来只覆盖屏幕上放得下的前 23 条（后面加命令时没更新），这次顺手补成全部 29 条，并把两个整表测试的屏幕高度从 `HEIGHT + 5` 加到 `HEIGHT + 11`，让 29 条都放得下。
 - 没做的事：没改 `/new`、开新会话逻辑、服务端和协议；没加别的别名；没动 README 和文档里的命令清单（任务限定只动 `crates/canter-tui/`）。
 - 踩过的坑：只把列表测试的屏幕加高还不够，`up_down_tab_and_enter_work_on_the_list` 也用 `above_box(COMMANDS.len())`，屏幕不加高时多出来的行会取到对话区，跟着一起改了。
+
+## 主控审查
+
+2026-10-30，canter/main。看了 diff：命令表在 `/new` 后面加了 `clear`，动作是 `Action::NewSession`，不带参数；`/new` 和开新会话的逻辑没动，没碰服务端和协议。测试补了 `clear_does_what_new_does`，`slash.rs` 的整表顺带补齐了之前漏的 6 条命令（同意，测试更完整，不是放宽）。合并前主控跑全套：`cargo nextest run --all-targets` 1117 个全过，`cargo test --doc --workspace` 过。
+结果：一次过
