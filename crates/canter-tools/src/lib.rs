@@ -7,6 +7,7 @@ mod output;
 mod process;
 pub use output::MAX_CLIENT_OUTPUT_BYTES;
 mod background;
+mod dangerous;
 mod permission;
 mod readonly;
 pub mod rules;

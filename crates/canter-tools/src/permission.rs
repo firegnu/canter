@@ -208,6 +208,15 @@ impl PermissionGate {
         {
             return Ok(forbidden);
         }
+        if decision == ApprovalDecision::AcceptWithExecpolicyAmendment
+            && let Action::Shell(args) = &call.action
+            && call
+                .executor
+                .dangerous_shell_reason(&args.command, &self.additional_directories)
+                .is_some()
+        {
+            return Err("invalid_decision: dangerous commands require one-time approval");
+        }
         match decision {
             ApprovalDecision::Accept | ApprovalDecision::AcceptWithExecpolicyAmendment => {
                 Ok(PermissionCheck::Execute(ExecutionPermit { call }))
@@ -264,20 +273,37 @@ impl PermissionGate {
         mode: PermissionMode,
     ) -> PermissionCheck<'a> {
         if let Action::Shell(args) = &call.action {
-            let Ok(rules) = self.read_rules() else {
-                return self.ask(call, false);
-            };
+            let rules = self.read_rules();
             let parsed = crate::readonly::scan_commands(&args.command, None, true);
             let commands = match &parsed {
                 Ok(commands) | Err(commands) => commands,
             };
             if commands.iter().any(|command| {
-                rules.decision(&command.words) == Some(crate::rules::Decision::Forbidden)
+                rules.as_ref().is_ok_and(|rules| {
+                    rules.decision(&command.words) == Some(crate::rules::Decision::Forbidden)
+                })
             }) {
                 return PermissionCheck::Forbidden {
                     reason: "Command forbidden by rules.json".into(),
                 };
             }
+            if let Some(reason) = call
+                .executor
+                .dangerous_shell_reason(&args.command, &self.additional_directories)
+            {
+                return if mode == PermissionMode::AllowAll {
+                    PermissionCheck::Forbidden {
+                        reason: format!(
+                            "Blocked: {reason}. canter refuses this in allowAll mode. If the user really wants it, they can run it themselves with !."
+                        ),
+                    }
+                } else {
+                    self.ask(call, false)
+                };
+            }
+            let Ok(rules) = rules else {
+                return self.ask(call, false);
+            };
             if mode == PermissionMode::AllowAll {
                 return PermissionCheck::Execute(ExecutionPermit { call });
             }
