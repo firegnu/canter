@@ -311,8 +311,10 @@ fn the_wheel_scrolls_back_and_new_output_does_not_pull_the_view_down() {
     let area = usize::from(HEIGHT) - BELOW;
     screen.wheel(MouseEventKind::ScrollUp);
     screen.draw();
+    // The prompt, scrolled out of view, shows on the top row.
+    assert_eq!(screen.lines()[0], "› show many lines");
     assert_eq!(
-        screen.lines()[0],
+        screen.lines()[1],
         format!("  line {}", 40 - area + 1 - 3),
         "one wheel step scrolls three rows"
     );
@@ -356,7 +358,9 @@ fn page_up_then_sending_a_message_follows_again() {
     let area = usize::from(HEIGHT) - BELOW;
     assert_eq!(screen.key(KeyCode::PageUp), None);
     screen.draw();
-    assert_eq!(screen.lines()[0], format!("  line {}", 40 - 2 * area + 1));
+    // The prompt, scrolled out of view, shows on the top row.
+    assert_eq!(screen.lines()[0], "› show many lines");
+    assert_eq!(screen.lines()[1], format!("  line {}", 40 - 2 * area + 1));
     assert_eq!(screen.above_status(), JUMP);
 
     screen.say("t1", "m41", "line 41");
