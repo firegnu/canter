@@ -29,6 +29,8 @@ pub struct GoalResponse {
 
 pub mod routes {
     pub const INFO: &str = "/v1/info";
+    pub const COMMAND_RULES: &str = "/v1/commandRules";
+    pub const COMMAND_RULE_DELETE: &str = "/v1/commandRules/delete";
     pub const MODELS: &str = "/v1/models";
     pub const USAGE: &str = "/v1/usage";
     pub const SESSION_USAGE: &str = "/v1/sessions/{id}/usage";
@@ -70,6 +72,39 @@ pub struct SessionPath {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct BackgroundCommandListResponse {
     pub data: Vec<crate::BackgroundCommand>,
+}
+
+/// A decision in the server's command rules file. Unknown values are invalid.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema, TS,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum CommandRuleDecision {
+    Allow,
+    Prompt,
+    Forbidden,
+}
+
+/// Identifies a command rule by its complete word prefix and decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct CommandRule {
+    pub pattern: Vec<String>,
+    pub decision: CommandRuleDecision,
+}
+
+/// Global command rules, read from the server's file at `path`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct CommandRuleListResponse {
+    pub path: String,
+    pub data: Vec<CommandRule>,
+}
+
+/// Result of deleting every exact match. Zero means the rule no longer exists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct CommandRuleDeleteResponse {
+    pub removed: usize,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

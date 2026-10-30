@@ -140,6 +140,8 @@ pub(crate) struct Report {
     top: usize,
     /// The largest `top`, for the room the last frame had.
     last_top: usize,
+    /// Keep a selectable body's current row visible, including after a resize.
+    focus: Option<usize>,
     /// The body laid out for a width, so a long one is not laid out every frame.
     laid_out: Option<(usize, Vec<Line<'static>>)>,
 }
@@ -153,6 +155,7 @@ impl Report {
             keys: KEYS,
             top: 0,
             last_top: 0,
+            focus: None,
             laid_out: None,
         }
     }
@@ -165,6 +168,11 @@ impl Report {
 
     pub fn up(&mut self) {
         self.top = self.top.saturating_sub(1);
+    }
+
+    pub fn focus(mut self, row: Option<usize>) -> Self {
+        self.focus = row;
+        self
     }
 
     pub fn down(&mut self) {
@@ -195,6 +203,18 @@ impl Report {
             Some(over) => over + 1,
         };
         self.top = self.top.min(self.last_top);
+        if let Some(focus) = self.focus {
+            let visible = if total > room && room >= 3 {
+                room - 2
+            } else {
+                room
+            };
+            self.top = self
+                .top
+                .max((focus + 1).saturating_sub(visible))
+                .min(focus)
+                .min(self.last_top);
+        }
         let first = self.top;
         let shown = if total <= room || room < 3 {
             room

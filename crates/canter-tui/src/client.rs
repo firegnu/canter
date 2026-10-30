@@ -199,6 +199,32 @@ impl Client {
         decode(self.http.get(url(routes::MCP, &[])).send().await?).await
     }
 
+    pub async fn command_rules(
+        &self,
+    ) -> Result<canter_protocol::CommandRuleListResponse, ClientError> {
+        decode(
+            self.http
+                .get(url(routes::COMMAND_RULES, &[]))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn delete_command_rule(
+        &self,
+        rule: &canter_protocol::CommandRule,
+    ) -> Result<canter_protocol::CommandRuleDeleteResponse, ClientError> {
+        decode(
+            self.http
+                .post(url(routes::COMMAND_RULE_DELETE, &[]))
+                .json(rule)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
     pub async fn context(
         &self,
         session: &str,

@@ -344,6 +344,72 @@
         }
       ]
     },
+    "CommandRule": {
+      "additionalProperties": false,
+      "description": "Identifies a command rule by its complete word prefix and decision.",
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/CommandRuleDecision"
+        },
+        "pattern": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "pattern",
+        "decision"
+      ],
+      "type": "object"
+    },
+    "CommandRuleDecision": {
+      "description": "A decision in the server's command rules file. Unknown values are invalid.",
+      "enum": [
+        "allow",
+        "prompt",
+        "forbidden"
+      ],
+      "type": "string"
+    },
+    "CommandRuleDeleteResponse": {
+      "description": "Result of deleting every exact match. Zero means the rule no longer exists.",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "removed": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "removed",
+        "message"
+      ],
+      "type": "object"
+    },
+    "CommandRuleListResponse": {
+      "description": "Global command rules, read from the server's file at `path`.",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/CommandRule"
+          },
+          "type": "array"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "data"
+      ],
+      "type": "object"
+    },
     "ContextMessages": {
       "properties": {
         "assistant": {

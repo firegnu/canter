@@ -2,19 +2,11 @@
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::Path};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum Decision {
-    Allow,
-    Prompt,
-    Forbidden,
-}
+pub(crate) use canter_protocol::{CommandRule as Rule, CommandRuleDecision as Decision};
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Rule {
-    pub pattern: Vec<String>,
-    pub decision: Decision,
+/// Reads the global file; a missing file has no rules, a broken file is an error.
+pub fn list(path: &Path) -> io::Result<Vec<canter_protocol::CommandRule>> {
+    Ok(Rules::read(path)?.rules)
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -195,7 +187,6 @@ pub(crate) fn can_persist_prefix(prefix: &[String]) -> bool {
 static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub(crate) fn append(path: &Path, prefixes: &[Vec<String>]) -> io::Result<()> {
-    use std::{io::Write, os::unix::fs::PermissionsExt};
     let _lock = WRITE_LOCK.lock().unwrap();
     let mut rules = Rules::read(path)?;
     if prefixes.is_empty()
@@ -224,13 +215,32 @@ pub(crate) fn append(path: &Path, prefixes: &[Vec<String>]) -> io::Result<()> {
             });
         }
     }
+    write(path, &rules)
+}
+
+/// Removes every exact match while holding the same lock as permanent approvals.
+/// A missing rule is a no-op; an unreadable or invalid file is never replaced.
+pub fn delete(path: &Path, rule: &canter_protocol::CommandRule) -> io::Result<usize> {
+    let _lock = WRITE_LOCK.lock().unwrap();
+    let mut rules = Rules::read(path)?;
+    let before = rules.rules.len();
+    rules.rules.retain(|candidate| candidate != rule);
+    let removed = before - rules.rules.len();
+    if removed > 0 {
+        write(path, &rules)?;
+    }
+    Ok(removed)
+}
+
+fn write(path: &Path, rules: &Rules) -> io::Result<()> {
+    use std::{io::Write, os::unix::fs::PermissionsExt};
     let mut file = tempfile::NamedTempFile::new_in(
         path.parent()
             .ok_or_else(|| io::Error::other("missing rules directory"))?,
     )?;
     file.as_file()
         .set_permissions(fs::Permissions::from_mode(0o600))?;
-    serde_json::to_writer_pretty(&mut file, &rules).map_err(io::Error::other)?;
+    serde_json::to_writer_pretty(&mut file, rules).map_err(io::Error::other)?;
     file.write_all(b"\n")?;
     file.persist(path).map_err(|error| error.error)?;
     Ok(())

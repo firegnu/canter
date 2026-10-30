@@ -31,6 +31,8 @@ pub fn export_protocol(directory: &Path) -> Result<(), Box<dyn std::error::Error
         UsageResponse,
         ContextResponse,
         McpListResponse,
+        CommandRuleListResponse,
+        CommandRuleDeleteResponse,
         SkillListParams,
         SkillListResponse,
         SessionCreateParams,
