@@ -645,3 +645,14 @@ fn the_output_bar_is_red_when_the_card_failed() {
         assert!(cell.modifier.contains(Modifier::DIM), "the note stays grey");
     }
 }
+
+#[test]
+fn mcp_search_card_shows_query_and_tool_names() {
+    let mut screen = Screen::new(24);
+    screen.completed(json!({"type":"mcpToolSearch","id":"search","query":"issue","tools":["mcp__github__search_issues","mcp__gitlab__issues"],"status":"completed"}));
+    let text = screen.conversation().join("\n");
+    assert!(text.contains("Searched MCP tools \"issue\""), "{text}");
+    assert!(text.contains("2 found"), "{text}");
+    assert!(text.contains("mcp__github__search_issues"), "{text}");
+    assert!(text.contains("mcp__gitlab__issues"), "{text}");
+}

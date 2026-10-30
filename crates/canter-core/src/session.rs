@@ -160,9 +160,23 @@ impl State {
             })
             .chain(crate::goal::definitions())
             .chain(
+                canter_tools::Tool::MCP
+                    .into_iter()
+                    .filter(|tool| tools.find(tool.name()).is_some())
+                    .map(|tool| {
+                        let def = tool.definition();
+                        canter_model::ToolDefinition {
+                            name: def.name.into(),
+                            description: def.description.into(),
+                            parameters: def.parameters,
+                        }
+                    }),
+            )
+            .chain(
                 tools
                     .mcp_tools()
                     .iter()
+                    .filter(|_| tools.find("mcp_search").is_none())
                     .map(|tool| canter_model::ToolDefinition {
                         name: tool.name.clone(),
                         description: tool.description.clone(),
@@ -192,6 +206,13 @@ impl State {
                 serde_json::to_string(&self.journal.snapshot.settings.additional_directories)
                     .expect("directory list")
             ));
+        }
+        if let Some(catalog) = tools.mcp_catalog() {
+            segments.push(crate::prompt::Segment {
+                kind: crate::prompt::SegmentKind::McpCatalog,
+                path: None,
+                text: catalog,
+            });
         }
         let (prefix, sections) = crate::prompt::chat_completions(&segments);
         self.skills = skills;
@@ -446,6 +467,7 @@ impl Session {
             runtime,
             options.web_fetch_timeout,
             options.plan_enabled,
+            options.mcp_tool_search,
             options.web_search.clone(),
         )
         .await?;
@@ -567,6 +589,7 @@ impl Session {
                     Item::PlanProposal { status, .. }
                     | Item::Plan { status, .. }
                     | Item::McpToolCall { status, .. }
+                    | Item::McpToolSearch { status, .. }
                     | Item::WebFetch { status, .. }
                     | Item::WebSearch { status, .. }
                     | Item::CommandExecution { status, .. }
@@ -646,6 +669,7 @@ impl Session {
             runtime,
             options.web_fetch_timeout,
             options.plan_enabled,
+            options.mcp_tool_search,
             options.web_search.clone(),
         )
         .await?;
@@ -1382,6 +1406,7 @@ async fn executor(
     runtime: RuntimeContext,
     web_fetch_timeout: std::time::Duration,
     plan_enabled: bool,
+    mcp_tool_search: bool,
     web_search: Option<canter_tools::web_search::WebSearch>,
 ) -> Result<Tools, CoreError> {
     let lsp = runtime.lsp.as_ref().map(|service| {
@@ -1402,6 +1427,7 @@ async fn executor(
                     .with_plan_enabled(plan_enabled)
                     .with_web_search(web_search)
                     .with_mcp(runtime.mcp_tools)
+                    .with_mcp_tool_search(mcp_tool_search)
                     .with_web_fetch_timeout(web_fetch_timeout);
                 match lsp {
                     Some(lsp) => tools.with_lsp(lsp),

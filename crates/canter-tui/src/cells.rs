@@ -262,6 +262,41 @@ pub(crate) fn item(
             }
             rows
         }
+        Item::McpToolSearch {
+            query,
+            tools,
+            status,
+            ..
+        } => {
+            let (bullet, mut right) = status_marks(*status);
+            if *status == ItemStatus::Completed {
+                right = vec![Span::styled(
+                    format!("{} found", tools.len()),
+                    theme::secondary(),
+                )];
+            }
+            let mut rows = vec![title(
+                bullet,
+                if *status == ItemStatus::InProgress {
+                    "Searching MCP tools "
+                } else {
+                    "Searched MCP tools "
+                },
+                vec![Span::raw(format!("\"{}\"", first_line(query)))],
+                right,
+                None,
+                width,
+            )];
+            rows.extend(output_rows(
+                &tools.join("\n"),
+                Fold::Details,
+                theme::secondary(),
+                bar(false),
+                width,
+            ));
+            rows
+        }
+
         Item::WebSearch {
             query,
             results,

@@ -2228,6 +2228,37 @@
         },
         {
           "properties": {
+            "id": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "tools": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "mcpToolSearch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "query",
+            "tools",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "arguments": true,
             "contentItems": {
               "items": {

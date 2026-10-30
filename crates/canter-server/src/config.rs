@@ -34,13 +34,15 @@ pub(crate) struct Config {
 }
 
 impl Config {
-    /// Only this switch is refreshed at session open; credentials and model
+    /// Only these switches are refreshed at session open; credentials and model
     /// settings keep their existing server-start lifetime.
-    pub fn plan_enabled(home: &Path) -> Result<Option<bool>, ServerError> {
+    pub fn session_switches(home: &Path) -> Result<Option<(bool, bool)>, ServerError> {
         #[derive(Deserialize)]
-        struct PlanConfig {
+        struct SessionSwitches {
             #[serde(default = "enabled")]
             plan_enabled: bool,
+            #[serde(default = "enabled")]
+            mcp_tool_search: bool,
         }
         fn enabled() -> bool {
             true
@@ -50,9 +52,9 @@ impl Config {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(ServerError("cannot read config.json".into())),
         };
-        let config: PlanConfig = serde_json::from_reader(file)
+        let config: SessionSwitches = serde_json::from_reader(file)
             .map_err(|_| ServerError("config.json is not valid".into()))?;
-        Ok(Some(config.plan_enabled))
+        Ok(Some((config.plan_enabled, config.mcp_tool_search)))
     }
 
     pub fn load(home: &Path) -> Result<Self, ServerError> {

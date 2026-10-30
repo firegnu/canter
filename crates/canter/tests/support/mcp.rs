@@ -259,6 +259,12 @@ async fn start(http: &HttpMcp, replies: Vec<String>) -> Fixture {
     )
     .await
 }
+fn set_search(fixture: &Fixture, enabled: bool) {
+    let path = fixture.root.path().join("state/config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    config["mcp_tool_search"] = json!(enabled);
+    fs::write(path, config.to_string()).unwrap();
+}
 async fn create(fixture: &Fixture, mode: &str) -> SessionCreateResponse {
     fixture.request(Method::POST,"/v1/sessions",json!({"cwd":fixture.root.path().join("work"),"env":{},"model":"fake-model","approvalPolicy":mode,"clientName":"test"})).await.json().await.unwrap()
 }
@@ -283,13 +289,19 @@ fn call(names: &[&str]) -> String {
     call_with_arguments(names, "{\"text\":\"hello\"}")
 }
 fn call_with_arguments(names: &[&str], arguments: &str) -> String {
+    model_calls(names, arguments, true)
+}
+fn model_calls(names: &[&str], arguments: &str, search: bool) -> String {
     let calls: Vec<_> = names
         .iter()
         .enumerate()
         .map(|(index, name)| {
             json!({
                 "index":index,"id":format!("call-{index}"),"type":"function",
-                "function":{"name":name,"arguments":arguments}
+"function": if search && name.starts_with("mcp__") {
+                    json!({"name":"mcp_call","arguments":serde_json::from_str::<Value>(arguments)
+                        .map(|args| json!({"name":name,"arguments":args}).to_string()).unwrap_or_else(|_| arguments.into())})
+                } else { json!({"name":name,"arguments":arguments}) }
             })
         })
         .collect();
@@ -435,10 +447,11 @@ async fn stdio_and_http_tools_reach_model_in_fixed_order_and_return_results() {
         String::from_utf8_lossy(&output.stderr)
     );
     let http = HttpMcp::start(&["echo"]).await;
-    let mut fixture = Fixture::start_with_mcp(vec![call(&["mcp__local__echo","mcp__remote__echo"]),text_reply()], "fake-model",None,json!({}),json!({
+    let mut fixture = Fixture::start_with_mcp(vec![model_calls(&["mcp__local__echo","mcp__remote__echo"], r#"{"text":"hello"}"#, false),text_reply()], "fake-model",None,json!({}),json!({
         "remote":http.config(),
         "local":{"transport":"stdio","command":executable,"args":["--fixture"],"env":{"PID_FILE":temp.path().join("pid"),"CHILD_PID_FILE":temp.path().join("child-pid"),"MCP_TEST_KEY":"test-only-stdio-mcp-key"}}
     })).await;
+    set_search(&fixture, false);
     let created = fixture.request(Method::POST,"/v1/sessions",json!({"cwd":fixture.root.path().join("work"),"env":{},"model":"fake-model","approvalPolicy":"allowAll","clientName":"test"})).await.json::<SessionCreateResponse>().await.unwrap();
     fixture.input(&created.session.id).await;
     fixture
@@ -529,7 +542,13 @@ async fn stdio_and_http_tools_reach_model_in_fixed_order_and_return_results() {
 #[tokio::test]
 async fn permissions_grant_only_one_tool_and_review_never_asks() {
     use canter_protocol::RequestKind;
-    for mode in ["alwaysAsk", "askForExecution", "allowAll"] {
+    for (search, mode) in [true, false]
+        .into_iter()
+        .flat_map(|search| ["alwaysAsk", "askForExecution", "allowAll"].map(|mode| (search, mode)))
+    {
+        let call = |names: &[&str]| model_calls(names, r#"{"text":"hello"}"#, search);
+        let call_with_arguments =
+            |names: &[&str], arguments: &str| model_calls(names, arguments, search);
         let http = HttpMcp::start(&["echo", "other"]).await;
         let names = [
             "mcp__remote__echo",
@@ -551,6 +570,7 @@ async fn permissions_grant_only_one_tool_and_review_never_asks() {
             ],
         )
         .await;
+        set_search(&fixture, search);
         let created = create(&fixture, mode).await;
         let id = &created.session.id;
         fixture.input(id).await;
@@ -662,7 +682,19 @@ async fn content_limits_placeholders_and_errors_do_not_expose_keys() {
 #[tokio::test]
 async fn notifications_only_change_tools_after_session_is_reopened() {
     let http = HttpMcp::start(&["zeta", "echo"]).await;
-    let mut fixture = start(&http, vec![text_reply(), text_reply(), text_reply()]).await;
+    let search = || call_with_arguments(&["mcp_search"], r#"{"query":"zeta new"}"#);
+    let mut fixture = start(
+        &http,
+        vec![
+            search(),
+            text_reply(),
+            search(),
+            text_reply(),
+            search(),
+            text_reply(),
+        ],
+    )
+    .await;
     let created = create(&fixture, "allowAll").await;
     let id = &created.session.id;
     fixture.input(id).await;
@@ -712,10 +744,40 @@ async fn notifications_only_change_tools_after_session_is_reopened() {
     complete(&fixture, id, reopened["eventSeq"].as_u64().unwrap()).await;
     {
         let script = fixture.script.lock().unwrap();
-        assert_eq!(script.requests[0]["tools"], script.requests[1]["tools"]);
-        assert!(script.requests[0]["tools"].to_string().contains("__zeta"));
-        assert!(script.requests[2]["tools"].to_string().contains("__new"));
-        assert!(!script.requests[2]["tools"].to_string().contains("__zeta"));
+        assert_eq!(script.requests[0]["tools"], script.requests[2]["tools"]);
+        assert_eq!(script.requests[0]["tools"], script.requests[4]["tools"]);
+        assert_eq!(
+            script.requests[0]["messages"][0],
+            script.requests[2]["messages"][0]
+        );
+        assert!(
+            script.requests[0]["messages"][0]
+                .to_string()
+                .contains("__zeta")
+        );
+        assert!(
+            script.requests[4]["messages"][0]
+                .to_string()
+                .contains("__new")
+        );
+        assert!(
+            !script.requests[4]["messages"][0]
+                .to_string()
+                .contains("__zeta")
+        );
+        for index in [1, 3] {
+            let result = script.requests[index]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .rev()
+                .find(|m| m["role"] == "tool")
+                .unwrap()["content"]
+                .as_str()
+                .unwrap();
+            assert!(result.contains("__zeta"));
+            assert!(!result.contains("__new"));
+        }
     }
     fixture.stop().await;
 }
@@ -825,7 +887,7 @@ async fn one_http_503_keeps_connection_and_tools_for_new_sessions() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|tool| tool["function"]["name"] == "mcp__remote__echo")
+            .any(|tool| tool["function"]["name"] == "mcp_call")
     );
     drop(script);
     assert_eq!(tool_results(&fixture), ["http result"]);
@@ -1031,7 +1093,7 @@ async fn colliding_qualified_names_are_skipped_and_reported() {
             .as_array()
             .unwrap()
             .len(),
-        14 // Thirteen built-ins (including get_goal/update_goal) and one non-colliding MCP tool.
+        15 // Thirteen built-ins plus the two MCP wrappers.
     );
     assert!(
         fs::read_to_string(fixture.root.path().join("server.log"))
@@ -1095,7 +1157,10 @@ async fn plan_mode_blocks_all_mcp_tools_even_readonly_hints_without_approval() {
         let mut fixture = start(
             &http,
             vec![
-                call(&["mcp__remote__echo", "mcp__second__content"]),
+                call_with_arguments(
+                    &["mcp__remote__echo", "mcp__second__content"],
+                    r#"{"text":"hello","arguments":{"nested":true}}"#,
+                ),
                 text_reply(),
             ],
         )
@@ -1134,6 +1199,19 @@ async fn plan_mode_blocks_all_mcp_tools_even_readonly_hints_without_approval() {
             })
             .collect();
         assert_eq!(blocked, [("remote", "echo"), ("second", "content")]);
+        for event in &events {
+            if let EventPayload::ItemCompleted {
+                item: canter_protocol::Item::McpToolCall { arguments, .. },
+                ..
+            } = &event.payload
+            {
+                assert_eq!(
+                    arguments,
+                    &json!({"text":"hello","arguments":{"nested":true}})
+                );
+            }
+        }
+
         assert!(http.state.lock().unwrap().calls.is_empty());
         assert!(
             tool_results(&fixture)
@@ -1152,4 +1230,349 @@ async fn plan_mode_blocks_all_mcp_tools_even_readonly_hints_without_approval() {
         }
         fixture.stop().await;
     }
+}
+
+// Recorded before P2-162. Normalize only the temporary cwd and host/date values;
+// all remaining HTTP request bytes, including tools and messages, are compared.
+fn stable_request(fixture: &Fixture, request: &str) -> String {
+    let request = request.replace(&fixture.root.path().display().to_string(), "<TEMP>");
+    let parsed: Value = serde_json::from_str(&request).unwrap();
+    let prompt = parsed["messages"][0]["content"].as_str().unwrap();
+    let mut result = request.clone();
+    for (prefix, replacement) in [
+        ("Platform: ", "Platform: <HOST>"),
+        ("Session opened: ", "Session opened: <DATE>"),
+    ] {
+        let line = prompt
+            .lines()
+            .find(|line| line.starts_with(prefix))
+            .unwrap();
+        let encoded = serde_json::to_string(line).unwrap();
+        result = result.replace(&encoded[1..encoded.len() - 1], replacement);
+    }
+    result
+}
+
+#[tokio::test]
+async fn no_mcp_request_matches_pre_search_bytes() {
+    for servers in [
+        json!({}),
+        json!({"failed":{"transport":"stdio","command":"/nonexistent/canter-mcp-fixture"}}),
+    ] {
+        let mut fixture =
+            Fixture::start_with_mcp(vec![text_reply()], "fake-model", None, json!({}), servers)
+                .await;
+        let created = create(&fixture, "alwaysAsk").await;
+        fixture.input(&created.session.id).await;
+        complete(&fixture, &created.session.id, created.event_seq).await;
+        fixture.stop().await;
+        let script = fixture.script.lock().unwrap();
+        let actual = stable_request(&fixture, &script.raw_requests[0]);
+        assert_eq!(
+            actual.as_bytes(),
+            fs::read("tests/fixtures/no_mcp_request.json").unwrap()
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_search_starts_with_only_wrappers_and_a_brief_catalog() {
+    let http = HttpMcp::start(&["issue"]).await;
+    http.state.lock().unwrap().tools[0]["description"] =
+        json!("Find project issues\nFull details only appear after searching.");
+    let mut fixture = start(
+        &http,
+        vec![
+            call_with_arguments(&["mcp_search"], r#"{"query":"issue"}"#),
+            text_reply(),
+        ],
+    )
+    .await;
+    let created = create(&fixture, "alwaysAsk").await;
+    fixture.input(&created.session.id).await;
+    let events = complete(&fixture, &created.session.id, created.event_seq).await;
+    fixture.stop().await;
+    let script = fixture.script.lock().unwrap();
+    let first = &script.requests[0];
+    let names: Vec<_> = first["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["function"]["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"mcp_search"));
+    assert!(names.contains(&"mcp_call"));
+    assert!(!names.iter().any(|n| n.starts_with("mcp__")));
+    let prompt = first["messages"][0]["content"].as_str().unwrap();
+    assert!(prompt.contains("mcp__remote__issue: Find project issues"));
+    assert!(!prompt.contains("Full details only"));
+    assert!(prompt.contains("MCP tools."));
+    assert!(prompt.contains("MCP tool results, and documents"));
+    assert_eq!(first["tools"], script.requests[1]["tools"]);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.payload, EventPayload::RequestOpened { .. }))
+    );
+    let result = script.requests[1]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "tool")
+        .unwrap()["content"]
+        .as_str()
+        .unwrap();
+    assert!(result.contains("Full details only"));
+    assert!(result.contains("mcp__remote__issue"));
+    assert!(result.contains("properties"));
+}
+
+#[tokio::test]
+async fn mcp_call_rejects_invalid_arguments_before_approval_with_the_full_schema() {
+    let http = HttpMcp::start(&["issue"]).await;
+    let schema = json!({"type":"object","properties":{"ticket":{"$ref":"#/$defs/ticket"}},"required":["ticket"],"additionalProperties":false,"$defs":{"ticket":{"type":"object","properties":{"id":{"type":"integer","minimum":1},"state":{"enum":["open","closed"]}},"required":["id","state"],"additionalProperties":false}}});
+    http.state.lock().unwrap().tools[0]["inputSchema"] = schema.clone();
+    let mut fixture = start(&http, vec![call_with_arguments(&["mcp_call"], &json!({"name":"mcp__remote__issue","arguments":{"ticket":{"id":0,"state":"invalid"}}}).to_string()), text_reply()]).await;
+    let created = create(&fixture, "alwaysAsk").await;
+    fixture.input(&created.session.id).await;
+    let events = complete(&fixture, &created.session.id, created.event_seq).await;
+    fixture.stop().await;
+    assert!(http.state.lock().unwrap().calls.is_empty());
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.payload, EventPayload::RequestOpened { .. }))
+    );
+    let results = tool_results(&fixture);
+    assert!(
+        results[0].contains("Invalid MCP arguments"),
+        "{}",
+        results[0]
+    );
+    assert!(results[0].contains(&schema.to_string()), "{}", results[0]);
+    let item = events
+        .iter()
+        .find_map(|e| match &e.payload {
+            EventPayload::ItemCompleted { item, .. } => {
+                let value = serde_json::to_value(item).unwrap();
+                (value["type"] == "mcpToolCall").then_some(value)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(item["server"], "remote");
+    assert_eq!(item["tool"], "issue");
+    assert_eq!(
+        item["arguments"],
+        json!({"ticket":{"id":0,"state":"invalid"}})
+    );
+    assert_eq!(item["result"], results[0]);
+}
+
+#[tokio::test]
+async fn mcp_search_matches_full_names_keywords_limits_and_empty_results_in_readonly_rounds() {
+    let http = HttpMcp::start(&[
+        "issue", "alpha", "beta", "gamma", "delta", "epsilon", "other",
+    ])
+    .await;
+    {
+        let mut state = http.state.lock().unwrap();
+        for tool in &mut state.tools {
+            if tool["name"] != "other" {
+                tool["description"] =
+                    json!("Project tickets and issues\nFull searchable details: milestone");
+            }
+        }
+        state.tools[0]["description"] =
+            json!(format!("{}\nFull description: milestone", "界".repeat(180)));
+    }
+    let queries = [
+        "mcp__remote__other, mcp__remote__issue",
+        "ISSUE",
+        "milestone",
+        "no-such-capability",
+        "mcp__remote__missing",
+    ];
+    let replies = queries
+        .iter()
+        .flat_map(|query| {
+            [
+                call_with_arguments(&["mcp_search"], &json!({"query":query}).to_string()),
+                text_reply(),
+            ]
+        })
+        .collect();
+    let mut fixture = start(&http, replies).await;
+    let created = create(&fixture, "alwaysAsk").await;
+    let id = &created.session.id;
+    assert_eq!(
+        fixture
+            .request(
+                Method::PATCH,
+                &format!("/v1/sessions/{id}"),
+                json!({"planMode":true})
+            )
+            .await
+            .status(),
+        200
+    );
+    let mut after = created.event_seq;
+    for index in 0..queries.len() {
+        if index == 1 {
+            assert_eq!(
+                fixture
+                    .request(
+                        Method::PATCH,
+                        &format!("/v1/sessions/{id}"),
+                        json!({"planMode":false})
+                    )
+                    .await
+                    .status(),
+                200
+            );
+        }
+        let input = if index > 0 {
+            json!({"input":[{"type":"text","text":"review"}],"review":"Search catalog","clientName":"test"})
+        } else {
+            json!({"input":[{"type":"text","text":"search"}],"clientName":"test"})
+        };
+        assert_eq!(
+            fixture
+                .request(Method::POST, &format!("/v1/sessions/{id}/input"), input)
+                .await
+                .status(),
+            200
+        );
+        let events = complete(&fixture, id, after).await;
+        after = events.last().unwrap().seq;
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.payload, EventPayload::RequestOpened { .. }))
+        );
+        assert!(events.iter().any(|e| matches!(
+            &e.payload,
+            EventPayload::ItemCompleted {
+                item: canter_protocol::Item::McpToolSearch {
+                    status: canter_protocol::ItemStatus::Completed,
+                    ..
+                },
+                ..
+            }
+        )));
+    }
+    fixture.stop().await;
+    assert!(http.state.lock().unwrap().calls.is_empty());
+    let results = tool_results(&fixture);
+    let exact: Value = serde_json::from_str(&results[0]).unwrap();
+    assert_eq!(
+        exact
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["mcp__remote__other", "mcp__remote__issue"]
+    );
+    assert_eq!(
+        exact[1]["description"],
+        format!("{}\nFull description: milestone", "界".repeat(180))
+    );
+    let keyword: Value = serde_json::from_str(&results[1]).unwrap();
+    assert_eq!(keyword.as_array().unwrap().len(), 5);
+    assert_eq!(keyword[0]["name"], "mcp__remote__issue");
+    assert_eq!(keyword[1]["name"], "mcp__second__issue");
+    let description: Value = serde_json::from_str(&results[2]).unwrap();
+    assert_eq!(description.as_array().unwrap().len(), 5);
+    assert_eq!(description[0]["name"], "mcp__remote__alpha");
+    for result in &results[3..] {
+        assert!(result.contains("No MCP tools found") && result.contains("catalog"));
+    }
+    let script = fixture.script.lock().unwrap();
+    let prompt = script.requests[0]["messages"][0]["content"]
+        .as_str()
+        .unwrap();
+    assert!(prompt.contains(&format!("mcp__remote__issue: {}…\n", "界".repeat(160))));
+    assert!(!prompt.contains("Full description"));
+    for request in &script.requests {
+        assert_eq!(request["tools"], script.requests[0]["tools"]);
+        assert_eq!(request["messages"][0], script.requests[0]["messages"][0]);
+    }
+}
+
+#[tokio::test]
+async fn mcp_call_unknown_name_and_non_object_do_not_request_approval() {
+    let http = HttpMcp::start(&["echo"]).await;
+    let mut fixture = start(
+        &http,
+        vec![
+            call_with_arguments(
+                &["mcp_call"],
+                r#"{"name":"mcp__remote__missing","arguments":{}}"#,
+            ),
+            call_with_arguments(
+                &["mcp_call"],
+                r#"{"name":"mcp__remote__echo","arguments":[]}"#,
+            ),
+            text_reply(),
+        ],
+    )
+    .await;
+    let created = create(&fixture, "alwaysAsk").await;
+    fixture.input(&created.session.id).await;
+    let events = complete(&fixture, &created.session.id, created.event_seq).await;
+    fixture.stop().await;
+    assert!(http.state.lock().unwrap().calls.is_empty());
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.payload, EventPayload::RequestOpened { .. }))
+    );
+    let results = tool_results(&fixture);
+    assert!(results[0].contains("Unknown MCP tool") && results[0].contains("mcp_search"));
+    assert!(results[1].contains("JSON object") && results[1].contains("JSON Schema"));
+}
+
+#[tokio::test]
+async fn mcp_search_switch_is_refreshed_only_when_opening_a_session() {
+    let http = HttpMcp::start(&["echo"]).await;
+    let mut fixture = start(&http, vec![text_reply(), text_reply(), text_reply()]).await;
+    let created = create(&fixture, "allowAll").await;
+    let id = &created.session.id;
+    fixture.input(id).await;
+    let events = complete(&fixture, id, created.event_seq).await;
+    set_search(&fixture, false);
+    fixture.input(id).await;
+    complete(&fixture, id, events.last().unwrap().seq).await;
+    assert_eq!(
+        fixture
+            .request(Method::DELETE, &format!("/v1/sessions/{id}"), json!({}))
+            .await
+            .status(),
+        200
+    );
+    let reopened: SessionCreateResponse = fixture
+        .request(
+            Method::POST,
+            &format!("/v1/sessions/{id}/resume"),
+            json!({"env":{}}),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    fixture.input(id).await;
+    complete(&fixture, id, reopened.event_seq).await;
+    fixture.stop().await;
+    let script = fixture.script.lock().unwrap();
+    assert_eq!(script.requests[0]["tools"], script.requests[1]["tools"]);
+    assert_eq!(
+        script.requests[0]["messages"][0],
+        script.requests[1]["messages"][0]
+    );
+    let reopened = &script.requests[2];
+    assert!(reopened["tools"].to_string().contains("mcp__remote__echo"));
+    assert!(!reopened["tools"].to_string().contains("mcp_search"));
+    assert!(!reopened["messages"][0].to_string().contains("mcp_tools"));
+    assert!(!reopened["messages"][0].to_string().contains("mcp_call"));
 }

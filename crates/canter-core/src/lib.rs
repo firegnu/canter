@@ -43,6 +43,7 @@ pub struct CoreOptions {
     /// Goal continuation questions wait five minutes; injectable for local replay tests.
     pub goal_question_timeout: std::time::Duration,
     pub plan_enabled: bool,
+    pub mcp_tool_search: bool,
     pub context_window: u64,
     pub max_output_tokens: u32,
     /// Compact automatically past this many context tokens instead of the
@@ -69,6 +70,7 @@ impl Default for CoreOptions {
             goal_budget_usd: 5.0,
             goal_question_timeout: std::time::Duration::from_secs(300),
             plan_enabled: true,
+            mcp_tool_search: true,
             context_window: 1_048_576,
             max_output_tokens: 65_536,
             auto_compact_tokens: None,

@@ -372,3 +372,28 @@ fn lsp_items_and_states_round_trip_without_changing_legacy_sessions() {
     assert!(old.get("languageServers").is_none());
     assert!(serde_json::from_value::<SessionSnapshot>(old).is_ok());
 }
+
+#[test]
+fn mcp_search_round_trips_and_legacy_clients_skip_the_item() {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type", rename_all = "camelCase")]
+    enum LegacyItem {
+        AgentMessage {
+            text: String,
+        },
+        #[serde(other)]
+        Unknown,
+    }
+    let item = json!({"type":"mcpToolSearch","id":"search-1","query":"issue",
+        "tools":["mcp__gitlab__issues"],"status":"completed"});
+    let parsed: Item = serde_json::from_value(item.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), item);
+    assert_eq!(parsed.id(), Some("search-1"));
+    assert!(matches!(
+        serde_json::from_value::<LegacyItem>(item).unwrap(),
+        LegacyItem::Unknown
+    ));
+    assert!(
+        matches!(serde_json::from_value::<LegacyItem>(json!({"type":"agentMessage","text":"continued"})).unwrap(), LegacyItem::AgentMessage { text } if text == "continued")
+    );
+}

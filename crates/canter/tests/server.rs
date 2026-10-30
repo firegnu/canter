@@ -41,6 +41,7 @@ struct Fixture {
 struct ModelScript {
     replies: VecDeque<String>,
     requests: Vec<Value>,
+    raw_requests: Vec<String>,
 }
 
 impl Fixture {
@@ -97,6 +98,7 @@ impl Fixture {
         let script = Arc::new(Mutex::new(ModelScript {
             replies: replies.into(),
             requests: Vec::new(),
+            raw_requests: Vec::new(),
         }));
         let app = Router::new()
             .route("/chat/completions", post(fake_model))
@@ -594,10 +596,11 @@ impl Drop for Fixture {
 
 async fn fake_model(
     State(script): State<Arc<Mutex<ModelScript>>>,
-    Json(body): Json<Value>,
+    body: String,
 ) -> impl axum::response::IntoResponse {
     let mut script = script.lock().unwrap();
-    script.requests.push(body);
+    script.requests.push(serde_json::from_str(&body).unwrap());
+    script.raw_requests.push(body);
     let reply = script
         .replies
         .pop_front()

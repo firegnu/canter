@@ -47,14 +47,15 @@ impl App {
     async fn session_options(&self) -> Result<CoreOptions, ApiError> {
         let home = self.home.clone();
         let enabled =
-            tokio::task::spawn_blocking(move || crate::config::Config::plan_enabled(&home))
+            tokio::task::spawn_blocking(move || crate::config::Config::session_switches(&home))
                 .await
                 .map_err(|_| ApiError::internal())?
                 .map_err(|error| ApiError::new(ErrorCode::InvalidRequest, &error.to_string()))?;
         let mut options = self.options.clone();
         options.command_rules_path = Some(self.home.join("rules.json"));
-        if let Some(enabled) = enabled {
-            options.plan_enabled = enabled;
+        if let Some((plan_enabled, mcp_tool_search)) = enabled {
+            options.plan_enabled = plan_enabled;
+            options.mcp_tool_search = mcp_tool_search;
         }
         Ok(options)
     }

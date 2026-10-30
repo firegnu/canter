@@ -806,7 +806,12 @@ async fn execute(
     };
     let mut output = match prepared {
         Err(mut output) => {
-            if review && matches!(tool, Tool::Mcp | Tool::WebFetch | Tool::WebSearch) {
+            if review
+                && matches!(
+                    tool,
+                    Tool::Mcp | Tool::McpCall | Tool::WebFetch | Tool::WebSearch
+                )
+            {
                 output.text = "review is read-only".into();
                 output.outcome = ToolOutcome::Declined;
                 match &mut output.item {
@@ -843,7 +848,8 @@ async fn execute(
                         Item::BackgroundCommandAction { status, .. } => {
                             *status = ItemStatus::Failed
                         }
-                        Item::Plan { status, .. }
+                        Item::McpToolSearch { status, .. }
+                        | Item::Plan { status, .. }
                         | Item::McpToolCall { status, .. }
                         | Item::WebFetch { status, .. }
                         | Item::FileRead { status, .. }

@@ -451,6 +451,12 @@ pub enum Item {
         result: String,
         status: ItemStatus,
     },
+    McpToolSearch {
+        id: String,
+        query: String,
+        tools: Vec<String>,
+        status: ItemStatus,
+    },
     McpToolCall {
         id: String,
         server: String,
@@ -591,6 +597,7 @@ impl Item {
             | Self::AgentMessage { id, .. }
             | Self::Reasoning { id, .. }
             | Self::McpToolCall { id, .. }
+            | Self::McpToolSearch { id, .. }
             | Self::WebFetch { id, .. }
             | Self::WebSearch { id, .. }
             | Self::CommandExecution { id, .. }

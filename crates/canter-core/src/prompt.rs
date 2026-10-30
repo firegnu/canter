@@ -17,6 +17,7 @@ pub(crate) enum SegmentKind {
     Skills,
     ProjectInstructions,
     Environment,
+    McpCatalog,
     #[serde(other)]
     Unknown,
 }
@@ -28,13 +29,14 @@ pub(crate) enum Stability {
 }
 
 // Stability belongs to the kind; it is never duplicated in stored segments.
-pub(crate) const SEGMENT_ORDER: [(SegmentKind, Stability); 6] = [
+pub(crate) const SEGMENT_ORDER: [(SegmentKind, Stability); 7] = [
     (SegmentKind::Core, Stability::AcrossSessions),
     (SegmentKind::ModelFamily, Stability::AcrossSessions),
     (SegmentKind::GlobalInstructions, Stability::AcrossSessions),
     (SegmentKind::Skills, Stability::Session),
     (SegmentKind::ProjectInstructions, Stability::Session),
     (SegmentKind::Environment, Stability::Session),
+    (SegmentKind::McpCatalog, Stability::Session),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,7 +51,7 @@ pub(crate) struct Segment {
 pub(crate) fn core(tools: &[ToolDefinition]) -> String {
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
     let has = |name: &str| names.contains(&name);
-    let has_mcp = names.iter().any(|name| name.starts_with("mcp__"));
+    let has_mcp = has("mcp_call") || names.iter().any(|name| name.starts_with("mcp__"));
     let approval = join_present([
         ("file changes", has("write") || has("edit")),
         ("commands that aren't read-only", has("shell")),
@@ -233,6 +235,7 @@ pub(crate) fn chat_completions(segments: &[Segment]) -> (Vec<Message>, Vec<Conte
                 Some("project_instructions"),
             ),
             SegmentKind::Environment => (ContextSectionKind::Environment, Some("environment")),
+            SegmentKind::McpCatalog => (ContextSectionKind::System, Some("mcp_tools")),
             SegmentKind::Unknown => continue,
         };
         if !text.is_empty() {

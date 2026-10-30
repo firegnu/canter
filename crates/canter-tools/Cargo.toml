@@ -10,6 +10,7 @@ base64 = "=0.23.1"
 canter-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+jsonschema = { version = "=0.60.2", default-features = false, features = ["idna"] }
 tokio = { workspace = true, features = ["fs"] }
 tokio-util.workspace = true
 async-trait.workspace = true
