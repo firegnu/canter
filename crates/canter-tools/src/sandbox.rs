@@ -77,6 +77,14 @@ impl Sandbox {
         self.temporary.take();
     }
 
+    pub(crate) fn unreadable_paths(&self) -> &[PathBuf] {
+        &self.unreadable
+    }
+
+    pub(crate) fn readonly_paths(&self) -> &[PathBuf] {
+        &self.readonly
+    }
+
     pub fn check_request(
         &self,
         cwd: &Path,
@@ -102,20 +110,11 @@ impl Sandbox {
                     )));
                 }
             }
-            let mut protected = Vec::new();
-            for root in std::iter::once(cwd)
-                .chain(scope.additional_directories.iter().map(PathBuf::as_path))
-                .chain(std::iter::once(path))
-            {
-                let existing = root
-                    .ancestors()
-                    .find(|ancestor| ancestor.exists())
-                    .ok_or_else(|| io::Error::other("sandbox path has no existing ancestor"))?;
-                for directory in git_metadata(existing)? {
-                    protected.extend(git_protected_paths(&directory)?);
-                }
-            }
-            let protected = crate::executor::prepare_protected_paths(protected)?;
+            let protected = git_protected_roots(
+                std::iter::once(cwd)
+                    .chain(scope.additional_directories.iter().map(PathBuf::as_path))
+                    .chain(std::iter::once(path)),
+            )?;
             if protected
                 .iter()
                 .any(|protected| within_private(path, protected))
@@ -306,7 +305,7 @@ impl Sandbox {
     }
 }
 
-fn within_private(path: &Path, protected: &Path) -> bool {
+pub(crate) fn within_private(path: &Path, protected: &Path) -> bool {
     if path.starts_with(protected) {
         return true;
     }
@@ -324,7 +323,7 @@ fn overlaps_private(path: &Path, protected: &Path) -> bool {
     within_private(path, protected) || protected.starts_with(path)
 }
 
-fn is_git_protected(path: &Path) -> bool {
+pub(crate) fn is_git_protected(path: &Path) -> bool {
     let mut in_git = false;
     for component in path.components() {
         let name = component.as_os_str();
@@ -339,6 +338,22 @@ fn is_git_protected(path: &Path) -> bool {
         }
     }
     false
+}
+
+pub(crate) fn git_protected_roots<'a>(
+    roots: impl Iterator<Item = &'a Path>,
+) -> io::Result<Vec<PathBuf>> {
+    let mut protected = Vec::new();
+    for root in roots {
+        let existing = root
+            .ancestors()
+            .find(|ancestor| ancestor.exists())
+            .ok_or_else(|| io::Error::other("sandbox path has no existing ancestor"))?;
+        for directory in git_metadata(existing)? {
+            protected.extend(git_protected_paths(&directory)?);
+        }
+    }
+    crate::executor::prepare_protected_paths(protected)
 }
 
 // Match both ASCII cases, escaping punctuation in configured directory names.

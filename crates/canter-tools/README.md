@@ -174,7 +174,7 @@ allowAll 放开 IP 网络和 mDNSResponder socket，另外两档默认断网；�
 只放行 cwd、新增目录、独占临时目录和缓存，排除状态目录；writePaths 申请不增加
 Unix socket 绑定或连接权限。启动失败不退回墙外，仅在输出出现拒绝特征时附沙箱范围
 说明，不改变退出码或自动重跑。
-文件工具、MCP、网页工具不由本件套墙；进程组看护和清理边界保持原样。
+文件工具仍在服务端检查路径（见下节），MCP、网页工具不套墙；进程组看护和清理边界保持原样。
 
 沙箱开启时 `askForExecution` 普通命令免问，forbidden、prompt、关键路径删除、
 坏规则文件和计划／审查限制仍保留。shell 可带 `sandboxRequest: {network, writePaths}`
@@ -184,13 +184,28 @@ Unix socket 绑定或连接权限。启动失败不退回墙外，仅在输出�
 allowAll 联网申请无需批准，写路径申请直接拒绝。工具定义使用会话的 `Tools::definition`，
 沙箱关闭时保留原说明和参数；底层 `Tool::definition` 仍返回原定义。
 
+## 文件工具沙箱边界（P2-165）
+
+沙箱开启时，read/write/edit 共用沙箱的敏感路径名单，不能读写凭证目录和 canter
+状态目录。write/edit 的 `resolve_write_path` 在读取原文、准备 diff 前拒绝 Git config、
+config.worktree、hooks、元数据指针（含 worktree、子模块）和原 `.cargo` / `.npm`；
+read 仍可读这些只读路径以及范围外的普通文件。执行时重新解析、核对目标并检查硬边界，
+批准不能解除这些限制；原受保护路径、计划模式和审查轮的限制先于新检查。
+
+写范围沿用 P2-118：按真实路径比较 cwd 和新增目录，新文件解析最近存在的父目录。
+allowAll 写范围外直接拒绝；alwaysAsk / askForExecution 只提供单次批准，已有工具会话
+授权也不能免问，回答 AcceptForSession 会被拒绝。范围内沿用原规矩；沙箱关闭时保留
+原行为，包括目录外的工具会话授权，不改变模型请求、工具参数或说明。
+
 ## 权限与执行器边界
 
 | 模式 | read | write / edit | shell |
 | --- | --- | --- | --- |
 | alwaysAsk / Unknown | 执行 | 询问 | 按命令规则、会话前缀和只读白名单判断 |
-| askForExecution | 执行 | 执行 | 沙箱开时普通命令免问；关闭时按命令规则、会话前缀和只读白名单判断 |
-| allowAll | 执行 | 执行 | 禁止规则仍拒绝，其余执行；规则文件坏了仍询问 |
+| askForExecution | 执行 | cwd 和新增目录内执行，外部询问 | 沙箱开时普通命令免问；关闭时按命令规则、会话前缀和只读白名单判断 |
+| allowAll | 执行 | 沙箱开时范围外拒绝，其余执行 | 禁止规则仍拒绝，其余执行；规则文件坏了仍询问 |
+
+表中执行和询问均以通过受保护路径、沙箱硬边界及计划／审查限制为前提。
 
 Accept 仅允许当前调用；AcceptForSession 对 shell 只记住批准框展示的词前缀，其他工具沿用原范围；Decline 拒绝；
 DeclineWithFeedback 拒绝并将原样说明交回模型，结果为 `Tool call declined. The user says: <说明>`；
@@ -311,7 +326,7 @@ cd 目标存在时会额外检查解析后的路径，
 程序内部的其他隐式读取仍可能读到受保护文件。不要把白名单理解为“绝不会写文件或读取秘密”；read/write/edit 的原有
 路径保护不变。合并时应把这些限制同步到 DESIGN。
 
-`Executor` 是可替换的异步 trait：`cwd`、`resolve_path`、`open_file`、`write_file`、`spawn`。
+`Executor` 是可替换的异步 trait：`cwd`、`resolve_path`、`resolve_write_path`、`open_file`、`write_file`、`spawn`。
 另有同步的 `is_readonly_shell` 判断，默认返回 false（仍询问）；本机执行器使用已有的
 会话 cwd、环境、受保护路径实现，不需要核心或服务端再传数据，也不在判断时启动子进程。
 读文件返回 `FileReader`（异步字节流）；启动命令返回 `CommandHandle`（stdout、stderr、

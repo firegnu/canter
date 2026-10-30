@@ -295,7 +295,11 @@ async fn plan_reminders_require_an_enabled_unfinished_plan() {
     );
     assert_eq!(
         fixture
-            .request(Method::POST, &format!("{path}/resume"), json!({"env":{}}))
+            .request(
+                Method::POST,
+                &format!("{path}/resume"),
+                json!({"env":{"HOME":fixture.root.path().join("home")}}),
+            )
             .await
             .status(),
         200

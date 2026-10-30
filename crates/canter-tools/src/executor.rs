@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     io,
     path::{Path, PathBuf},
-    sync::{Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use async_trait::async_trait;
@@ -63,6 +63,14 @@ pub trait Executor: Send + Sync {
         self.is_readonly_shell(command)
     }
     async fn resolve_path(&self, path: &Path, cancel: &CancellationToken) -> io::Result<PathBuf>;
+    /// Validate a file change before reading its original bytes for a diff.
+    async fn resolve_write_path(
+        &self,
+        path: &Path,
+        cancel: &CancellationToken,
+    ) -> io::Result<PathBuf> {
+        self.resolve_path(path, cancel).await
+    }
     async fn open_file(&self, path: &Path, cancel: &CancellationToken) -> io::Result<FileReader>;
     /// Replace a file only if its bytes still match the approved snapshot (None means absent).
     /// Cancellation before commit leaves the original file intact; await this future to completion.
@@ -100,17 +108,17 @@ pub struct LocalExecutor {
     environment: BTreeMap<String, String>,
     protected_paths: Vec<PathBuf>,
     shell_protected_paths: Vec<PathBuf>,
-    sandbox: Option<Mutex<Result<crate::sandbox::Sandbox, String>>>,
+    sandbox: Option<Arc<Mutex<Result<crate::sandbox::Sandbox, String>>>>,
     shell_scope: RwLock<crate::sandbox::Scope>,
 }
 
 impl LocalExecutor {
     pub fn with_sandbox(mut self, enabled: bool) -> Self {
         self.sandbox = enabled.then(|| {
-            Mutex::new(
+            Arc::new(Mutex::new(
                 crate::sandbox::Sandbox::new(&self.environment, &self.shell_protected_paths)
                     .map_err(|error| error.to_string()),
-            )
+            ))
         });
         self
     }
@@ -320,9 +328,20 @@ impl Executor for LocalExecutor {
         check_cancel(cancel)?;
         let path = self.resolve(path);
         let protected_paths = self.protected_paths.clone();
+        let sandbox = self.sandbox.clone();
         let resolved = tokio::task::spawn_blocking(move || {
             let resolved = resolve_target(&path, &protected_paths)?;
             check_protected(&resolved, &protected_paths)?;
+            if let Some(sandbox) = sandbox {
+                return resolve_sandbox_read(
+                    sandbox
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map_err(|error| io::Error::other(error.clone()))?,
+                    &path,
+                );
+            }
             Ok::<_, io::Error>(resolved)
         })
         .await
@@ -338,6 +357,36 @@ impl Executor for LocalExecutor {
         Ok(Box::new(file))
     }
 
+    async fn resolve_write_path(
+        &self,
+        path: &Path,
+        cancel: &CancellationToken,
+    ) -> io::Result<PathBuf> {
+        let resolved = self.resolve_path(path, cancel).await?;
+        let Some(sandbox) = self.sandbox.clone() else {
+            return Ok(resolved);
+        };
+        let path = self.resolve(path);
+        let cwd = self.cwd.clone();
+        let scope = self.shell_scope.read().unwrap().clone();
+        let resolved = tokio::task::spawn_blocking(move || {
+            resolve_sandbox_write(
+                sandbox
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map_err(|error| io::Error::other(error.clone()))?,
+                &cwd,
+                &scope,
+                &path,
+            )
+        })
+        .await
+        .map_err(io::Error::other)??;
+        check_cancel(cancel)?;
+        Ok(resolved)
+    }
+
     async fn write_file(
         &self,
         path: &Path,
@@ -345,11 +394,14 @@ impl Executor for LocalExecutor {
         content: &[u8],
         cancel: &CancellationToken,
     ) -> io::Result<()> {
-        let path = self.resolve_path(path, cancel).await?;
+        let path = self.resolve_write_path(path, cancel).await?;
         let original = original.map(ToOwned::to_owned);
         let content = content.to_vec();
         let cancel = cancel.clone();
         let protected_paths = self.protected_paths.clone();
+        let sandbox = self.sandbox.clone();
+        let cwd = self.cwd.clone();
+        let scope = self.shell_scope.read().unwrap().clone();
         // Do not select away from this worker: it must finish before the caller observes completion.
         tokio::task::spawn_blocking(move || {
             use std::io::Write;
@@ -357,6 +409,20 @@ impl Executor for LocalExecutor {
             check_cancel(&cancel)?;
             let path = resolve_target(&path, &protected_paths)?;
             check_protected(&path, &protected_paths)?;
+            let path = if let Some(sandbox) = sandbox {
+                resolve_sandbox_write(
+                    sandbox
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map_err(|error| io::Error::other(error.clone()))?,
+                    &cwd,
+                    &scope,
+                    &path,
+                )?
+            } else {
+                path
+            };
             let current = match std::fs::read(&path) {
                 Ok(bytes) => Some(bytes),
                 Err(e) if e.kind() == io::ErrorKind::NotFound => None,
@@ -428,10 +494,74 @@ impl Executor for LocalExecutor {
     }
 }
 
+fn resolve_sandbox_read(sandbox: &crate::sandbox::Sandbox, path: &Path) -> io::Result<PathBuf> {
+    let unreadable = prepare_protected_paths(sandbox.unreadable_paths().to_vec())?;
+    let check = |path: &Path| {
+        if unreadable
+            .iter()
+            .any(|protected| crate::sandbox::within_private(path, protected))
+        {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "This path is protected by the sandbox: credential directories such as ~/.ssh can't be read or changed. If the user really needs it, they can do it themselves.",
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    let resolved = resolve_target_checked(path, check)?;
+    check(&resolved)?;
+    Ok(resolved)
+}
+
+fn resolve_sandbox_write(
+    sandbox: &crate::sandbox::Sandbox,
+    cwd: &Path,
+    scope: &crate::sandbox::Scope,
+    path: &Path,
+) -> io::Result<PathBuf> {
+    let resolved = resolve_sandbox_read(sandbox, path)?;
+    let mut readonly = prepare_protected_paths(sandbox.readonly_paths().to_vec())?;
+    readonly.extend(crate::sandbox::git_protected_roots(
+        std::iter::once(cwd)
+            .chain(scope.additional_directories.iter().map(PathBuf::as_path))
+            .chain(resolved.parent()),
+    )?);
+    let check = |path: &Path| {
+        if readonly
+            .iter()
+            .any(|protected| crate::sandbox::within_private(path, protected))
+            || crate::sandbox::is_git_protected(path)
+            || path
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case(".git"))
+        {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Blocked: the sandbox protects this path (Git config and hooks, or the real Cargo and npm directories). If the user really wants this change, they can make it themselves.",
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    // Check the requested spelling too, including Git metadata pointers.
+    // Only the final .git component is a file target; parent .git directories are writable.
+    check(path)?;
+    check(&resolved)?;
+    Ok(resolved)
+}
+
 // Resolve each existing prefix before processing `..`; unlike lexical normalization,
 // this preserves the meaning of a parent segment following a symlink. Missing tails
 // are allowed for write, but dangling symlinks are never replaced by ordinary files.
 pub(crate) fn resolve_target(path: &Path, protected_paths: &[PathBuf]) -> io::Result<PathBuf> {
+    resolve_target_checked(path, |path| check_protected(path, protected_paths))
+}
+
+fn resolve_target_checked(
+    path: &Path,
+    check: impl Fn(&Path) -> io::Result<()>,
+) -> io::Result<PathBuf> {
     use std::path::Component;
     let mut resolved = PathBuf::new();
     for component in path.components() {
@@ -443,7 +573,7 @@ pub(crate) fn resolve_target(path: &Path, protected_paths: &[PathBuf]) -> io::Re
             component => {
                 resolved.push(component.as_os_str());
                 // Check link names before following them, including protected dangling links.
-                check_protected(&resolved, protected_paths)?;
+                check(&resolved)?;
                 match std::fs::canonicalize(&resolved) {
                     Ok(path) => resolved = path,
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {
