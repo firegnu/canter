@@ -22,6 +22,9 @@ pub(crate) struct Sandbox {
     npm: PathBuf,
     unreadable: Vec<PathBuf>,
     readonly: Vec<PathBuf>,
+    /// The paths above as `/sandbox` lists them: given spellings, no nested entries.
+    listed_unreadable: Vec<PathBuf>,
+    listed_readonly: Vec<PathBuf>,
 }
 
 impl Sandbox {
@@ -44,6 +47,16 @@ impl Sandbox {
                 return Err(io::Error::other("sandbox requires an absolute CANTER_HOME"));
             }
             unreadable.push(state);
+        }
+        let mut listed_unreadable: Vec<PathBuf> = Vec::new();
+        for path in unreadable[protected.len()..].iter().chain(protected) {
+            if !listed_unreadable
+                .iter()
+                .any(|listed| path.starts_with(listed))
+            {
+                listed_unreadable.retain(|listed| !listed.starts_with(path));
+                listed_unreadable.push(path.clone());
+            }
         }
         let unreadable = crate::executor::prepare_protected_paths(unreadable)?;
         let readonly =
@@ -70,11 +83,28 @@ impl Sandbox {
             npm: npm.canonicalize()?,
             unreadable,
             readonly,
+            listed_unreadable,
+            listed_readonly: vec![home.join(".cargo"), home.join(".npm")],
         })
     }
 
     pub fn close(&mut self) {
         self.temporary.take();
+    }
+
+    /// For `/sandbox`: the private temporary directory and caches every command
+    /// may write, then the read-only and the unreadable paths.
+    pub(crate) fn listing(&self) -> (Vec<PathBuf>, &[PathBuf], &[PathBuf]) {
+        let mut writable: Vec<PathBuf> = self
+            .temporary
+            .iter()
+            .map(|temporary| {
+                let path = temporary.path();
+                path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+            })
+            .collect();
+        writable.extend([self.cargo.clone(), self.npm.clone()]);
+        (writable, &self.listed_readonly, &self.listed_unreadable)
     }
 
     pub(crate) fn unreadable_paths(&self) -> &[PathBuf] {

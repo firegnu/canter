@@ -182,6 +182,7 @@ async fn create_attached(
             approval_policy: PermissionMode::AllowAll,
             additional_directories: vec![],
             plan_enabled: None,
+            sandbox_enabled: None,
             plan_mode: false,
             pre_plan_approval_policy: None,
         },

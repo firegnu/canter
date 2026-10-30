@@ -145,6 +145,8 @@ pub enum Action {
     ListSkills,
     Usage,
     Context,
+    /// `/sandbox`: read what the sandbox allows from the server.
+    Sandbox,
     Mcp,
     Btw {
         id: usize,
@@ -870,6 +872,12 @@ impl App {
         }
     }
 
+    /// Whether the server says this session's model commands are sandboxed;
+    /// only then do cards for what runs outside it say so.
+    fn sandbox_on(&self) -> bool {
+        self.snapshot.settings.sandbox_enabled == Some(true)
+    }
+
     fn status_line_input(&self, now_ms: i64) -> serde_json::Value {
         let settings = &self.snapshot.settings;
         let usage = self.snapshot.token_usage.as_ref();
@@ -890,6 +898,8 @@ impl App {
             },
             "approvalPolicy": settings.approval_policy,
             "planMode": settings.plan_mode,
+            // null when the server does not say.
+            "sandbox": settings.sandbox_enabled,
             "status": self.snapshot.status,
             "context": {
                 "usedTokens": usage.map(|usage| usage.context_tokens),
@@ -2301,6 +2311,10 @@ impl App {
         self.open_report(crate::context::popup(report, self.home.as_deref()));
     }
 
+    pub fn show_sandbox(&mut self, report: &canter_protocol::SessionSandboxResponse) {
+        self.open_report(crate::commands::sandbox(report, self.home.as_deref()));
+    }
+
     pub fn show_goal(&mut self, goal: Option<&canter_protocol::SessionGoal>) {
         self.open_report(crate::goal::popup(goal));
     }
@@ -2573,6 +2587,7 @@ impl App {
             item.id()
                 .and_then(|id| self.snapshot.approval_feedback.get(id))
                 .map(String::as_str),
+            self.sandbox_on(),
         );
         if let Some(background) = background {
             let text = if background.running {
@@ -4901,7 +4916,7 @@ impl App {
                 }
                 let done = self.item_done(turn, index);
                 let new = if !done && item.id().is_some_and(|id| waiting.contains(&id)) {
-                    cells::waiting(item, self.details, cwd, width)
+                    cells::waiting(item, self.details, cwd, width, self.sandbox_on())
                 } else {
                     self.render_at(turn, index, done, width)
                 };
@@ -5178,13 +5193,31 @@ impl App {
             return (rows, false);
         }
         // Permission shortcuts only require the mode itself to be fully visible.
-        let ([mut first, second], through_mode) = self.bar.draw(&self.bar_values(now_ms));
+        let (mut rows, through_mode, mut sandbox_at) = self.bar.draw(&self.bar_values(now_ms));
         let through_mode = through_mode.map(|through| format!("{goal_prefix}{through}"));
         if !goal_prefix.is_empty() {
-            first.insert(0, Span::raw(goal_prefix));
+            rows[0].insert(0, Span::raw(goal_prefix));
+            if let Some((0, range)) = &mut sandbox_at {
+                *range = range.start + 1..range.end + 1;
+            }
         }
-        if self.status_line.as_ref().is_some_and(|line| line.failed) {
-            let error = " statusline error";
+        let error = " statusline error";
+        let failed = self.status_line.as_ref().is_some_and(|line| line.failed);
+        // The sandbox state shows in full or not at all: a cut `Sandbox o…`
+        // would not say which.
+        if let Some((row, range)) = sandbox_at {
+            let room = if row == 0 && failed {
+                usize::from(width).saturating_sub(error.len())
+            } else {
+                usize::from(width)
+            };
+            let spans = &rows[row];
+            if spans_width(spans) > room && spans_width(&spans[..range.end]) >= room {
+                rows[row].drain(range);
+            }
+        }
+        let [mut first, second] = rows;
+        if failed {
             first = truncate(first, usize::from(width).saturating_sub(error.len()));
             first.push(Span::styled(error, theme::failure()));
         }
@@ -5224,11 +5257,17 @@ impl App {
                 BarItem::Thinking,
             ),
             bar::Item::Permission => {
-                if settings.plan_mode {
-                    return Some(plan_mode_spans(after_plan(settings)));
+                let mut spans = if settings.plan_mode {
+                    plan_mode_spans(after_plan(settings))
+                } else {
+                    let (mode, style) = mode_label(settings.approval_policy);
+                    vec![Span::styled(mode, style)]
+                };
+                // Servers that do not say leave it out: never shown as on.
+                if let Some(enabled) = settings.sandbox_enabled {
+                    spans.extend(bar::sandbox(enabled));
                 }
-                let (mode, style) = mode_label(settings.approval_policy);
-                Some(vec![Span::styled(mode, style)])
+                Some(spans)
             }
             bar::Item::Cost => usage
                 .and_then(|usage| usage.cost.as_ref())

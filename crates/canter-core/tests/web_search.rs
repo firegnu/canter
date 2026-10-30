@@ -179,6 +179,7 @@ async fn create(
             plan_mode: plan,
             pre_plan_approval_policy: None,
             plan_enabled: None,
+            sandbox_enabled: None,
             cwd: root.path().to_string_lossy().into(),
             name: None,
             model: "fake".into(),

@@ -456,6 +456,7 @@ mod creation_tests {
                 plan_mode: false,
                 pre_plan_approval_policy: None,
                 plan_enabled: None,
+                sandbox_enabled: None,
                 cwd: "/work".into(),
                 name: None,
                 model: "fake".into(),

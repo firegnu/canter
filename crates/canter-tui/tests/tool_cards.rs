@@ -656,3 +656,72 @@ fn mcp_search_card_shows_query_and_tool_names() {
     assert!(text.contains("mcp__github__search_issues"), "{text}");
     assert!(text.contains("mcp__gitlab__issues"), "{text}");
 }
+
+/// With the sandbox on, what runs outside it says so on the right in grey:
+/// the user's `!` commands (also one still running, as `!cmd &` is), MCP
+/// tools and web_fetch; never the model's own commands, and nothing at all
+/// when the sandbox is off or the server does not say.
+#[test]
+fn cards_outside_the_sandbox_say_so_only_while_it_is_on() {
+    for sandbox in [Some(true), Some(false), None] {
+        let mut screen = Screen::new(30);
+        let mut settings = json!({
+            "cwd": "/work", "name": null, "model": "test-model", "approvalPolicy": "alwaysAsk",
+        });
+        if let Some(enabled) = sandbox {
+            settings["sandboxEnabled"] = json!(enabled);
+        }
+        screen.event(json!({ "type": "session.updated", "settings": settings }));
+        screen.command("model", "cargo test", "ok", 0);
+        screen.completed(json!({
+            "type": "commandExecution", "id": "user", "command": "git push", "cwd": "/work",
+            "source": "userShell", "status": "completed", "aggregatedOutput": "done",
+            "exitCode": 0, "durationMs": 1200,
+        }));
+        screen.event(json!({ "type": "item.started", "turnId": "t1", "item": {
+            "type": "commandExecution", "id": "background", "command": "sleep 60", "cwd": "/work",
+            "source": "userShell", "status": "inProgress", "aggregatedOutput": "",
+        }}));
+        screen.mcp("mcp", json!({}), "found", "completed");
+        screen.fetch("fetch", "https://example.com/", "page", "completed");
+        let rows = screen.conversation();
+        let card = |start: &str| {
+            rows.iter()
+                .find(|row| row.contains(start))
+                .unwrap_or_else(|| panic!("{start:?} in {rows:#?}"))
+                .clone()
+        };
+        let marked = [
+            "! git push",
+            "! sleep 60",
+            "Call github/search_issues",
+            "Fetch https://example.com/",
+        ];
+        if sandbox == Some(true) {
+            for start in marked {
+                assert!(
+                    card(start).ends_with("not sandboxed"),
+                    "{start:?}: {rows:#?}"
+                );
+            }
+            assert!(card("! git push").ends_with("exit 0 · 1.2s · not sandboxed"));
+            assert!(card("! sleep 60").ends_with("running · not sandboxed"));
+            assert!(card("Fetch https://example.com/").ends_with("4 B · not sandboxed"));
+            assert!(!card("Run cargo test").contains("sandboxed"));
+            // Grey like the rest of the status on the right.
+            let buffer = screen.draw();
+            let y = rows
+                .iter()
+                .position(|row| row.contains("! git push"))
+                .unwrap() as u16;
+            let x = (card("! git push").width() - "not sandboxed".len()) as u16;
+            let cell = &buffer[(x, y)];
+            assert!(cell.modifier.contains(Modifier::DIM), "{cell:?}");
+        } else {
+            assert!(
+                rows.iter().all(|row| !row.contains("sandboxed")),
+                "{rows:#?}"
+            );
+        }
+    }
+}

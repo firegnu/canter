@@ -491,3 +491,110 @@ async fn files_git_status_names_the_upstream_and_how_far_ahead() {
             .contains(Modifier::DIM)
     );
 }
+
+/// `/sandbox` from a server that reports the sandbox: the rows exactly as
+/// the user chose them, paths under home as `~`, Network as the current
+/// mode has it; Esc closes. When it is off, one sentence on turning it on;
+/// an older server says nothing, so the command says to upgrade it instead.
+#[test]
+fn sandbox_lists_what_it_allows_or_how_to_turn_it_on() {
+    use canter_protocol::SessionSandboxResponse;
+
+    let sandboxed = |enabled: Option<bool>| {
+        let mut screen = Screen::new(120, 30, "/Users/me/project", Some("/Users/me"));
+        let mut settings = json!({
+            "cwd": "/Users/me/project", "name": null, "model": "test-model",
+            "approvalPolicy": "askForExecution",
+        });
+        if let Some(enabled) = enabled {
+            settings["sandboxEnabled"] = json!(enabled);
+        }
+        screen.event(json!({ "type": "session.updated", "settings": settings }));
+        screen.draw();
+        screen
+    };
+
+    let mut screen = sandboxed(Some(true));
+    assert_eq!(screen.enter("/sandbox"), Some(Action::Sandbox));
+    let mut report = SessionSandboxResponse {
+        enabled: true,
+        writable: [
+            "/Users/me/project",
+            "/Users/me/extra",
+            "/private/tmp/canter-shell-abc",
+            "/Users/me/Library/Caches/canter/cargo",
+            "/Users/me/Library/Caches/canter/npm",
+        ]
+        .map(String::from)
+        .into(),
+        read_only: ["/Users/me/.cargo", "/Users/me/.npm"]
+            .map(String::from)
+            .into(),
+        no_access: [
+            "/Users/me/.ssh",
+            "/Users/me/.aws",
+            "/Users/me/.gnupg",
+            "/Users/me/.canter",
+        ]
+        .map(String::from)
+        .into(),
+        network: false,
+    };
+    screen.ui.app_mut().show_sandbox(&report);
+    screen.draw();
+    assert_eq!(
+        screen.popup(" Sandbox on"),
+        [
+            " Sandbox on",
+            "",
+            " Writable: ~/project, ~/extra, /private/tmp/canter-shell-abc, ~/Library/Caches/canter/cargo, ~/Library/Caches/canter/npm",
+            " Read-only: .git config and hooks, ~/.cargo, ~/.npm",
+            " No access: ~/.ssh, ~/.aws, ~/.gnupg, ~/.canter",
+            " Network: off unless approved for one command",
+            " Not sandboxed: ! commands, MCP tools, web_fetch",
+            "",
+            " Esc close",
+        ]
+    );
+    assert_eq!(screen.style(" Sandbox on").1, Modifier::BOLD);
+    screen.key(KeyCode::Esc);
+    assert!(screen.popup(" Sandbox on").is_empty());
+    // After switching to Allow all the server reports the network open.
+    report.network = true;
+    screen.ui.app_mut().show_sandbox(&report);
+    screen.draw();
+    assert!(
+        screen
+            .popup(" Sandbox on")
+            .contains(&" Network: on (Allow all)".to_owned())
+    );
+
+    let mut screen = sandboxed(Some(false));
+    assert_eq!(screen.enter("/sandbox"), Some(Action::Sandbox));
+    screen
+        .ui
+        .app_mut()
+        .show_sandbox(&SessionSandboxResponse::default());
+    screen.draw();
+    assert_eq!(
+        screen.popup(" Sandbox off."),
+        [
+            " Sandbox off.",
+            "",
+            " Set \"sandbox\": true in config.json (or remove the line), then run canter serve --replace.",
+            "",
+            " Esc close",
+        ]
+    );
+
+    let mut screen = sandboxed(None);
+    assert_eq!(screen.enter("/sandbox"), None);
+    let rows = screen.rows();
+    assert!(
+        rows.iter().any(|row| row.contains(
+            "This server does not support /sandbox; run canter serve --replace and retry"
+        )),
+        "{rows:#?}"
+    );
+    assert!(rows.iter().all(|row| !row.contains("Sandbox")), "{rows:#?}");
+}

@@ -525,7 +525,7 @@ async fn config_command_gets_only_public_json_and_terminal_environment() {
         json!({
             "version":"0.1.0 · test", "sessionId":"s1", "sessionName":"task",
             "cwd":home,"gitBranch":null,"model":"test-model","reasoningEffort":"high",
-            "approvalPolicy":"askForExecution","planMode":false,"status":"working",
+            "approvalPolicy":"askForExecution","planMode":false,"sandbox":null,"status":"working",
             "context":{"usedTokens":85000,"windowTokens":200000,"percent":43,
                 "autoCompactTokens":100000,"autoCompactPercentLeft":15},
             "cost":{"usd":0.31,"unknown":false},"cache":{"totalPercent":92,"lastPercent":99},
@@ -659,4 +659,31 @@ async fn outside_a_git_repository_no_lines_are_counted() {
         crate::git::changed_lines(dir.path().to_str().unwrap()).await,
         None
     );
+}
+
+#[tokio::test]
+async fn config_command_gets_the_sandbox_switch_the_server_reports() {
+    for (enabled, expected) in [(Some(true), json!(true)), (Some(false), json!(false))] {
+        let mut screen = Screen::new("cat > input.json\nprintf configured");
+        let home = screen.root.path().to_str().unwrap().to_owned();
+        fs::write(
+            screen.root.path().join("config.json"),
+            json!({"statusLine":"sh ./status.sh"}).to_string(),
+        )
+        .unwrap();
+        let env = BTreeMap::from([
+            ("HOME".into(), home.clone()),
+            ("CANTER_HOME".into(), home.clone()),
+        ]);
+        let mut snapshot = screen.ui.app().snapshot().clone();
+        snapshot.settings.sandbox_enabled = enabled;
+        *screen.ui.app_mut() =
+            App::new(snapshot, Some(home), 0).with_status_line(super::load(&env), env);
+        assert_eq!(screen.wait_for("configured").await, ["configured", ""]);
+        let input = fs::read_to_string(screen.root.path().join("input.json")).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&input).unwrap()["sandbox"],
+            expected
+        );
+    }
 }

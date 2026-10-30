@@ -366,7 +366,7 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 31] = [
+const COMMANDS: [(&str, &str); 32] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
@@ -385,6 +385,7 @@ const COMMANDS: [(&str, &str); 31] = [
     ("/permissions", "View and delete command rules"),
     ("/plan", "Enter or leave read-only Plan mode"),
     ("/resume", "Switch to another session"),
+    ("/sandbox", "Show what the sandbox allows"),
     ("/skills", "List this session's skills"),
     ("/think", "Change thinking effort (none, low, high, max)"),
     ("/usage", "Show this session's token usage and cost"),
@@ -696,7 +697,7 @@ fn skills_empty_screen_explains_both_directories() {
 #[test]
 fn a_slash_lists_the_commands_above_the_input_box() {
     // Leave room for the whole command list.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 13);
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 14);
     screen.type_text("/");
     screen.draw();
     let list = screen.above_box(COMMANDS.len());
@@ -731,7 +732,7 @@ fn a_slash_lists_the_commands_above_the_input_box() {
 #[test]
 fn up_down_tab_and_enter_work_on_the_list() {
     // The whole list, as above.
-    let mut screen = Screen::sized(WIDTH, HEIGHT + 13);
+    let mut screen = Screen::sized(WIDTH, HEIGHT + 14);
     screen.type_text("/");
     screen.draw();
     assert_eq!(screen.key(KeyCode::Down), None);
@@ -890,7 +891,7 @@ fn usage_displays_models_total_last_turn_and_unknown_costs() {
 #[test]
 fn help_shows_the_commands_in_a_box() {
     // The shortcut sections come first: tall enough for the whole box.
-    let mut screen = Screen::sized(WIDTH, 102);
+    let mut screen = Screen::sized(WIDTH, 103);
     assert_eq!(screen.enter("/help"), None);
     screen.draw();
     let shown = screen.text();

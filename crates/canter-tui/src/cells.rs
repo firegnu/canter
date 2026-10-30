@@ -143,7 +143,8 @@ pub(crate) fn agent_message(text: &str, width: u16) -> Vec<LogicalLine> {
 
 /// Rows for an item; `finished` picks its final form over the in-progress one.
 /// With `details` (Ctrl+O), nothing is folded: whole thinking, all output, all
-/// of a diff.
+/// of a diff. With `sandbox` (the sandbox is on), cards for what runs outside
+/// it say so.
 pub(crate) fn item(
     item: &Item,
     finished: bool,
@@ -151,6 +152,7 @@ pub(crate) fn item(
     cwd: &str,
     width: u16,
     feedback: Option<&str>,
+    sandbox: bool,
 ) -> Vec<Row> {
     let mut rows = match item {
         Item::ModelRetry { .. } => {
@@ -200,7 +202,7 @@ pub(crate) fn item(
             &serde_json::Value::Null,
             *status,
             result,
-            details,
+            (details, false),
             width,
         ),
         Item::PlanProposal {
@@ -314,7 +316,7 @@ pub(crate) fn item(
             resolved_url.as_deref().unwrap_or(url),
             result,
             *status,
-            details,
+            (details, sandbox),
             width,
         ),
         Item::McpToolCall {
@@ -331,7 +333,7 @@ pub(crate) fn item(
                 arguments,
                 *status,
                 result,
-                details,
+                (details, sandbox),
                 width,
             );
             rows.extend(tool_images(content_items, "Image ", width));
@@ -351,7 +353,7 @@ pub(crate) fn item(
             *exit_code,
             *duration_ms,
             aggregated_output,
-            details,
+            (details, sandbox),
             width,
         ),
         Item::FileChange {
@@ -938,7 +940,13 @@ fn clip(links: Vec<(Range<usize>, Target)>, end: usize) -> Vec<(Range<usize>, Ta
 
 /// An item waiting for an approval: only its title row, marked 「等你批准」.
 /// The approval box below shows the whole command or diff.
-pub(crate) fn waiting(item: &Item, details: bool, cwd: &str, width: u16) -> Vec<Row> {
+pub(crate) fn waiting(
+    item: &Item,
+    details: bool,
+    cwd: &str,
+    width: u16,
+    sandbox: bool,
+) -> Vec<Row> {
     let mark = || vec![Span::styled("Waiting for approval", theme::warning())];
     match item {
         Item::CommandExecution { command, .. } => command_title(
@@ -959,7 +967,7 @@ pub(crate) fn waiting(item: &Item, details: bool, cwd: &str, width: u16) -> Vec<
                 card_row(right_aligned(header, mark(), usize::from(width)), links)
             })
             .collect(),
-        _ => self::item(item, false, details, cwd, width, None),
+        _ => self::item(item, false, details, cwd, width, None, sandbox),
     }
 }
 
@@ -1136,7 +1144,7 @@ fn command_card(
     exit_code: Option<i32>,
     duration_ms: Option<u64>,
     output: &str,
-    details: bool,
+    (details, sandbox): (bool, bool),
     width: u16,
 ) -> Vec<Row> {
     let (command, source) = command;
@@ -1165,6 +1173,9 @@ fn command_card(
         && !matches!(status, ItemStatus::InProgress | ItemStatus::Declined)
         && exit_code.map_or(status == ItemStatus::Failed, |code| code != 0);
     let user = source == canter_protocol::ExecCommandSource::UserShell;
+    if user && sandbox {
+        not_sandboxed(&mut right);
+    }
     let mut rows = command_title(command, user, bullet, right, details, width);
     let (fold, style) = if details {
         (Fold::Details, if failed { Style::new() } else { dim })
@@ -1177,6 +1188,15 @@ fn command_card(
     };
     rows.extend(output_rows(output, fold, style, bar(failed), width));
     rows
+}
+
+/// Grey `not sandboxed` after a card's status: it ran outside the sandbox that is on.
+fn not_sandboxed(right: &mut Vec<Span<'static>>) {
+    let dim = theme::secondary();
+    if !right.is_empty() {
+        right.push(Span::styled(" · ", dim));
+    }
+    right.push(Span::styled("not sandboxed", dim));
 }
 
 /// The bar before a card's output: red when the card failed, else grey.
@@ -1207,10 +1227,13 @@ fn mcp_call(
     arguments: &serde_json::Value,
     status: ItemStatus,
     result: &str,
-    details: bool,
+    (details, sandbox): (bool, bool),
     width: u16,
 ) -> Vec<Row> {
-    let (bullet, right) = status_marks(status);
+    let (bullet, mut right) = status_marks(status);
+    if sandbox {
+        not_sandboxed(&mut right);
+    }
     let mut object = vec![Span::raw(first_line(name))];
     let empty = arguments.is_null() || arguments.as_object().is_some_and(|args| args.is_empty());
     if !empty {
@@ -1238,7 +1261,13 @@ fn mcp_call(
 /// `● Fetch <url>` and the size fetched. The page is for the model, so it
 /// shows only with details; a one-line note (a redirect to another host,
 /// content left out) shows as it is, and a failure's reason in red.
-fn web_fetch(url: &str, result: &str, status: ItemStatus, details: bool, width: u16) -> Vec<Row> {
+fn web_fetch(
+    url: &str,
+    result: &str,
+    status: ItemStatus,
+    (details, sandbox): (bool, bool),
+    width: u16,
+) -> Vec<Row> {
     let dim = theme::secondary();
     let (bullet, mut right) = status_marks(status);
     let one_line = !result.trim_end().contains('\n');
@@ -1254,6 +1283,9 @@ fn web_fetch(url: &str, result: &str, status: ItemStatus, details: bool, width: 
         } else if page {
             right = vec![Span::styled(format_size(result.len()), dim)];
         }
+    }
+    if sandbox {
+        not_sandboxed(&mut right);
     }
     let mut rows = vec![title(
         bullet,

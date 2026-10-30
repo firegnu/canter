@@ -630,6 +630,14 @@ impl Tools {
         self.executor.configure_shell(mode, directories);
     }
 
+    pub fn sandbox_enabled(&self) -> bool {
+        self.executor.sandbox_enabled()
+    }
+
+    pub fn sandbox_scope(&self) -> canter_protocol::SessionSandboxResponse {
+        self.executor.sandbox_scope()
+    }
+
     pub fn definition(&self, tool: Tool) -> ToolDefinition {
         let mut definition = tool.definition();
         if tool == Tool::Shell && self.executor.sandbox_enabled() {

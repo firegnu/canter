@@ -15,6 +15,7 @@ fn an_incomplete_last_line_is_discarded_before_further_appends() {
                 plan_mode: false,
                 pre_plan_approval_policy: None,
                 plan_enabled: None,
+                sandbox_enabled: None,
                 cwd: temp.path().to_string_lossy().into(),
                 name: Some("intact".into()),
                 model: "fake".into(),

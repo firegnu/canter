@@ -11,6 +11,7 @@ fn settings() -> SessionSettings {
         plan_mode: false,
         pre_plan_approval_policy: None,
         plan_enabled: None,
+        sandbox_enabled: None,
         cwd: "/isolated/workspace".into(),
         name: Some("demo".into()),
         model: "fake-model".into(),

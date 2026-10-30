@@ -354,6 +354,113 @@ async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp()
     }
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn sandbox_status_follows_the_executor_directories_and_permission_mode() {
+    for enabled in [true, false] {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        for name in ["home", "project", "extra", "state"] {
+            std::fs::create_dir(root.join(name)).unwrap();
+        }
+        let store = Arc::new(Store::new(root.join("state/sessions")).unwrap());
+        let runtime = || RuntimeContext {
+            environment: BTreeMap::from([
+                ("HOME".into(), root.join("home").display().to_string()),
+                (
+                    "CANTER_HOME".into(),
+                    root.join("state").display().to_string(),
+                ),
+            ]),
+            protected_paths: vec![root.join("state"), root.join("state/config.json")],
+            ..Default::default()
+        };
+        let options = |sandbox| CoreOptions {
+            sandbox,
+            ..Default::default()
+        };
+        let mut start = settings(&root.join("project"));
+        start.approval_policy = PermissionMode::AskForExecution;
+        let (session, created) = Session::create(
+            store.clone(),
+            "status".into(),
+            start,
+            runtime(),
+            ScriptModel::new(Vec::new()),
+            options(enabled),
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.session.settings.sandbox_enabled, Some(enabled));
+        let text = |path: &str| root.join(path).display().to_string();
+        let scope = session.sandbox().await;
+        if !enabled {
+            assert_eq!(scope, SessionSandboxResponse::default());
+        } else {
+            assert!(scope.enabled);
+            assert!(!scope.network);
+            assert_eq!(scope.writable[0], text("project"));
+            assert_eq!(scope.writable.len(), 4, "{scope:?}");
+            assert!(scope.writable[1].contains("/canter-shell-"));
+            assert_eq!(
+                &scope.writable[2..],
+                [
+                    text("home/Library/Caches/canter/cargo"),
+                    text("home/Library/Caches/canter/npm")
+                ]
+            );
+            assert_eq!(scope.read_only, [text("home/.cargo"), text("home/.npm")]);
+            assert_eq!(
+                scope.no_access,
+                [
+                    text("home/.ssh"),
+                    text("home/.aws"),
+                    text("home/.gnupg"),
+                    text("home/.canter"),
+                    text("state"),
+                ]
+            );
+        }
+        session
+            .update(SessionUpdateParams {
+                add_directories: vec!["../extra".into()],
+                approval_policy: Some(PermissionMode::AllowAll),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let scope = session.sandbox().await;
+        assert_eq!(scope.enabled, enabled);
+        assert_eq!(scope.network, enabled);
+        if enabled {
+            assert_eq!(&scope.writable[..2], [text("project"), text("extra")]);
+            assert_eq!(scope.writable.len(), 5);
+        }
+        session
+            .update(SessionUpdateParams {
+                approval_policy: Some(PermissionMode::AlwaysAsk),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!session.sandbox().await.network);
+        session.close().await.unwrap();
+        drop(session);
+        // A server started with the other setting reports it on reopen.
+        let (reopened, read) = Session::open(
+            store,
+            "status".into(),
+            runtime(),
+            ScriptModel::new(Vec::new()),
+            options(!enabled),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read.session.settings.sandbox_enabled, Some(!enabled));
+        assert_eq!(reopened.sandbox().await.enabled, !enabled);
+    }
+}
+
 #[tokio::test]
 async fn added_directories_are_normalized_persisted_and_appended_to_model_context() {
     let temp = tempfile::tempdir().unwrap();
@@ -1866,6 +1973,7 @@ fn settings(cwd: &std::path::Path) -> SessionSettings {
         plan_mode: false,
         pre_plan_approval_policy: None,
         plan_enabled: None,
+        sandbox_enabled: None,
         cwd: cwd.to_string_lossy().into(),
         name: None,
         model: "fake".into(),

@@ -544,9 +544,14 @@ impl Session {
                 .collect::<Vec<_>>();
             lsp.restore_subscriptions(&state.journal.snapshot.language_servers, &files);
         }
-        if state.journal.snapshot.settings.plan_enabled != Some(options.plan_enabled) {
+        // Both switches come from this server and executor, not from the saved session.
+        let sandbox_enabled = Some(tools.sandbox_enabled());
+        if state.journal.snapshot.settings.plan_enabled != Some(options.plan_enabled)
+            || state.journal.snapshot.settings.sandbox_enabled != sandbox_enabled
+        {
             let mut settings = state.journal.snapshot.settings.clone();
             settings.plan_enabled = Some(options.plan_enabled);
+            settings.sandbox_enabled = sandbox_enabled;
             state
                 .journal
                 .append(vec![EventPayload::SessionUpdated { settings }])
@@ -668,6 +673,7 @@ impl Session {
             settings.additional_directories,
         )
         .await?;
+        settings.sandbox_enabled = Some(tools.sandbox_enabled());
         settings.plan_enabled = Some(options.plan_enabled);
         let owned_store = store.clone();
         let writer = tokio::task::spawn_blocking(move || owned_store.create(&id, settings, now()))
@@ -890,6 +896,13 @@ impl Session {
         SkillListResponse {
             data: self.shared.state.lock().await.skills.clone(),
         }
+    }
+
+    /// What model commands may touch now, worked out on each call and never stored.
+    /// The session lock orders it after settings updates, which reconfigure the shell.
+    pub async fn sandbox(&self) -> canter_protocol::SessionSandboxResponse {
+        let _state = self.shared.state.lock().await;
+        self.shared.tools.sandbox_scope()
     }
 
     pub async fn snapshot(&self) -> SessionReadResponse {

@@ -222,6 +222,26 @@ input、interrupt、批准回答、compact、PATCH、DELETE 返回 `session_not_
 其余前缀段（含标签和段间空行）按追加前后的估算差分计入，保持总和一致。排队输入、尚未产生的工具结果和
 输出预留不计入；实际下一次请求还可能因新输入、工具执行或压缩而变化。
 
+### 沙箱状态（P2-166）
+
+`settings.sandboxEnabled` 是可选布尔值，报告这个会话的模型命令是否套沙箱：服务端
+打开或新建会话时按实际执行器写入，和存盘不同就追加 `session.updated`，因此
+`canter serve --replace` 换了配置后，重开会话即可看到新值。旧服务端没有这个字段，
+客户端不显示沙箱状态，不能当作开启。
+
+`GET /v1/sessions/{id}/sandbox` 每次按当前状态现算，不进事件和存盘；未打开时返回
+`session_not_resumed`。返回 `{ enabled, writable, readOnly, noAccess, network }`：
+
+- `enabled` 为 false 时其余字段为空数组和 false。
+- `writable`：cwd、新增目录、会话独占临时目录、Cargo 和 npm 的专用缓存，均为绝对路径；
+  单条命令批准的 `writePaths` 和 Git 元数据目录不列。
+- `readOnly`：原 `~/.cargo`、`~/.npm`；Git config 和 hooks 不按路径列出。
+- `noAccess`：凭证目录、canter 状态目录和服务端保护路径，已在列出目录内的路径不重复。
+- `network`：当前权限档下命令是否不经单次批准即可联网（只有 `allowAll` 为 true），
+  切换权限档后再次查询即变。
+
+沙箱起不来时 `enabled` 仍为 true（命令照样失败、不在墙外跑），只列 cwd 和新增目录。
+
 ### 顺口问
 
 `POST /v1/sessions/{id}/btw { "question": "问题原文" }` 不开轮、不排队，

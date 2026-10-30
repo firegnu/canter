@@ -238,6 +238,19 @@ impl Client {
         .await
     }
 
+    pub async fn sandbox(
+        &self,
+        session: &str,
+    ) -> Result<canter_protocol::SessionSandboxResponse, ClientError> {
+        decode(
+            self.http
+                .get(url(routes::SANDBOX, &[session]))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
     pub async fn usage(
         &self,
         session: Option<&str>,
