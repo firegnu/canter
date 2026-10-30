@@ -227,7 +227,7 @@ MCP 调用沿用 prepare → permission → execute 和取消令牌；审查轮�
 支持 rewind 的版本，不能靠降级恢复对话一致性或恢复已删除的文件。
 
 计划模式由会话 `planMode` 控制并持久化。工具准备前、准备后和普通批准返回时检查限制，
-write/edit、非白名单 shell、全部 MCP、update_plan 直接 blocked；web_fetch 沿用原批准。
+write/edit、非白名单 shell、全部 MCP、update_plan 直接 blocked；web_fetch/web_search 沿用原批准。
 submit_plan 始终提供，在 Plan 中通过普通待答请求等待三种决定。批准实施切换所选权限；
 清空上下文批准结束原轮，客户端沿用新建会话接口发送完整方案。模式提示以私有
 `plan_mode_notice` 记录立即落盘，在当前工具批次结果收齐后追加到模型历史；恢复按同一规则

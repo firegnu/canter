@@ -365,6 +365,17 @@ null）、`tools: [{ name, tool }]` 和 `warnings`。`name` 是给模型的完�
 专属增量事件。批准仍是 `ApprovalRequest`，tool 用完整 MCP 工具名，arguments 是调用参数；
 客户端可从对应项目显示原始服务名/工具名。旧客户端按 Unknown 忽略新项目，其它字段含义不变。
 
+## 搜网页（P2-106）
+
+`webSearch {id, query, results, status, error?}` 沿用 item.started / item.completed，
+结果为 `{title, url, date?, summary}`；date 未知时省略，error 只在出错时提供。
+取消和超时用 failed，轮是否 interrupted 沿用现有机制。旧客户端按 Unknown 跳过。
+参考 Codex app-server v2 `rust-v0.163.0` 的 webSearch、id/query；不带 action，
+因为这里只搜索，打开页面由 web_fetch 执行。canter 增加既有 ItemStatus 和可选 error，
+results 为统一的固定字段，区别于参考源码里可空的任意 JSON 结果，详见 DESIGN 第 8 条。
+批准仍为 `ApprovalRequest {tool: "web_search", arguments: {query, count?}, ...}`，
+acceptForSession 放行本会话的所有搜索查询。
+
 ## 网页抓取（P2-13）
 
 新增 `Item::WebFetch`，序列化为 `webFetch`，字段为 `id`、完整 `url`、有界文字 `result`、

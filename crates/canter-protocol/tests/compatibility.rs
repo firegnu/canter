@@ -2,6 +2,38 @@ use canter_protocol::{Event, EventPayload, Item, SessionSnapshot, SessionStatus,
 use serde_json::json;
 
 #[test]
+fn web_search_results_round_trip_and_legacy_clients_skip_the_item() {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type")]
+    enum LegacyItem {
+        #[serde(rename = "agentMessage")]
+        Message { text: String },
+        #[serde(other)]
+        Unknown,
+    }
+    let item = json!({"type":"webSearch","id":"search-1","query":"Rust docs",
+        "results":[{"title":"Rust","url":"https://www.rust-lang.org/","summary":"Language docs","date":"2026-10-01T00:00:00Z"},
+            {"title":"Book","url":"https://doc.rust-lang.org/book/","summary":"Learn Rust"}],
+        "status":"completed"});
+    let parsed: Item = serde_json::from_value(item.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), item);
+    assert_eq!(parsed.id(), Some("search-1"));
+    assert!(matches!(
+        serde_json::from_value::<LegacyItem>(item).unwrap(),
+        LegacyItem::Unknown
+    ));
+    let message: LegacyItem =
+        serde_json::from_value(json!({"type":"agentMessage","id":"next","text":"continued"}))
+            .unwrap();
+    assert!(matches!(message, LegacyItem::Message { text } if text == "continued"));
+    let failed = json!({"type":"webSearch","id":"search-2","query":"Rust docs","results":[],"status":"failed","error":"web_search timed out"});
+    assert_eq!(
+        serde_json::to_value(serde_json::from_value::<Item>(failed.clone()).unwrap()).unwrap(),
+        failed
+    );
+}
+
+#[test]
 fn goals_are_optional_in_old_sessions_and_unknown_to_legacy_clients() {
     #[derive(serde::Deserialize)]
     #[serde(tag = "type")]

@@ -54,12 +54,14 @@ pub(crate) fn core(tools: &[ToolDefinition]) -> String {
         ("file changes", has("write") || has("edit")),
         ("commands that aren't read-only", has("shell")),
         ("web fetches", has("web_fetch")),
+        ("web searches", has("web_search")),
         ("MCP tools", has_mcp),
     ]);
     let data = join_present([
         ("file contents", has("read")),
         ("command output", has("shell")),
         ("web pages", has("web_fetch")),
+        ("search results", has("web_search")),
         ("MCP tool results", has_mcp),
     ]);
     let mut lines: Vec<String> = Vec::new();
@@ -308,6 +310,7 @@ mod tests {
     fn builtin_tools() -> Vec<ToolDefinition> {
         canter_tools::Tool::ALL
             .into_iter()
+            .filter(|tool| *tool != canter_tools::Tool::WebSearch)
             .map(|tool| {
                 let definition = tool.definition();
                 ToolDefinition {
@@ -324,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn core_matches_the_plan_for_the_current_deepseek_tools() {
+    fn core_without_web_search_matches_the_original_prompt() {
         let actual = core(&builtin_tools());
         let expected = include_str!("../tests/data/core_deepseek.txt");
         if actual != expected {

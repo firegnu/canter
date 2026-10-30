@@ -245,6 +245,39 @@ fn mcp_command_dispatches_instead_of_sending_a_message() {
 }
 
 #[test]
+fn web_search_approval_shows_query_session_scope_and_escape_interrupts() {
+    let mut screen = Screen::new();
+    screen.start_turn("t1");
+    screen.event(json!({"type":"item.started","turnId":"t1","item":{
+        "type":"webSearch","id":"search","query":"Rust docs","results":[],"status":"inProgress"
+    }}));
+    screen.draw();
+    assert!(screen.text().contains("Search Rust docs"));
+    assert!(screen.text().contains("Searching"));
+    assert_eq!(
+        screen.key(KeyCode::Esc),
+        Some(Action::Interrupt {
+            turn_id: "t1".into()
+        })
+    );
+    screen.event(json!({"type":"request.opened","request":{
+        "id":"search-approval","turnId":"t1","createdAt":NOW,"kind":{"type":"approval","itemId":"search","tool":"web_search","arguments":{"query":"Rust docs"},"availableDecisions":["accept","acceptForSession","decline","cancel"]}
+    }}));
+    screen.event(json!({"type":"session.status","status":"waiting_approval"}));
+    screen.draw();
+    let text = screen.text();
+    assert!(
+        text.contains("Search the web?") && text.contains("Rust docs"),
+        "{text}"
+    );
+    assert!(
+        text.contains("All later searches in this session won't ask"),
+        "{text}"
+    );
+    assert!(!text.contains("this host and port"));
+}
+
+#[test]
 fn web_fetch_displays_the_resolved_url_and_specific_grant_authority() {
     let mut screen = Screen::new();
     screen.start_turn("t1");

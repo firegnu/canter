@@ -139,7 +139,20 @@ impl Config {
     pub fn options(&self) -> CoreOptions {
         let mut prices = canter_core::usage::builtin_prices();
         prices.extend(self.prices.clone());
+        let official = reqwest::Url::parse("https://api.deepseek.com").expect("official base URL");
+        let web_search = (reqwest::Url::parse(&self.base_url).ok().as_ref() == Some(&official))
+            .then(|| {
+                canter_tools::web_search::WebSearch::new(Arc::new(
+                    canter_tools::web_search::deepseek::DeepSeek::new(
+                        self.api_key.clone(),
+                        official
+                            .join("/v1/tools/search")
+                            .expect("official search URL"),
+                    ),
+                ))
+            });
         CoreOptions {
+            web_search,
             auto_wake_limit: self.auto_wake_limit,
             goal_budget_usd: self.goal_budget_usd,
             prices,
@@ -228,6 +241,20 @@ mod tests {
             .extend(extra.as_object().unwrap().clone());
         fs::write(root.path().join("config.json"), config.to_string()).unwrap();
         Config::load(root.path())
+    }
+
+    #[test]
+    fn web_search_is_only_configured_for_the_official_deepseek_base_url() {
+        for (base_url, enabled) in [
+            ("https://api.deepseek.com", true),
+            ("https://api.deepseek.com/", true),
+            ("https://example.com", false),
+            ("http://127.0.0.1:12345", false),
+        ] {
+            let options = load(json!({"base_url":base_url})).unwrap().options();
+            assert_eq!(options.web_search.is_some(), enabled, "{base_url}");
+            assert!(!format!("{options:?}").contains("model-test-key"));
+        }
     }
 
     #[test]

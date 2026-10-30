@@ -287,6 +287,47 @@ fn failed_web_fetch_shows_its_reason_in_red() {
     }
 }
 
+#[test]
+fn web_search_card_shows_query_count_and_expanded_titles_and_urls() {
+    let mut screen = Screen::new(35);
+    screen.completed(json!({"type":"webSearch","id":"s1","query":"Rust docs","status":"completed","results":[
+        {"title":"Rust book","url":"https://doc.rust-lang.org/book/","summary":"Model-only summary"},
+        {"title":"Reference","url":"https://doc.rust-lang.org/reference/","summary":"Language details"}
+    ]}));
+    let rows = screen.conversation();
+    let rows = card(&rows, "  ● Search Rust docs");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].ends_with("2 results"), "{rows:?}");
+    assert_eq!(screen.ctrl_o(), None);
+    let text = screen.conversation().join("\n");
+    for part in [
+        "Rust book",
+        "Reference",
+        "https://doc.rust-lang.org/book/",
+        "https://doc.rust-lang.org/reference/",
+    ] {
+        assert!(text.contains(part), "{text}");
+    }
+    assert!(!text.contains("Model-only summary"));
+}
+
+#[test]
+fn web_search_empty_and_failed_cards_show_english_status_and_error() {
+    let mut screen = Screen::new(35);
+    screen.completed(json!({"type":"webSearch","id":"empty","query":"No matches","status":"completed","results":[]}));
+    assert!(screen.conversation().join("\n").contains("0 results"));
+    let reason = "web_search has insufficient balance (402); top up the account";
+    screen.completed(json!({"type":"webSearch","id":"failed","query":"Paid search","status":"failed","results":[],"error":reason}));
+    let text = screen.conversation().join("\n");
+    assert!(
+        text.contains("Search Paid search") && text.contains("failed") && text.contains(reason),
+        "{text}"
+    );
+    for cell in letters(&cells_of(screen.draw(), reason)) {
+        assert_eq!(cell.fg, Color::Red);
+    }
+}
+
 /// A failed command keeps its last 10 lines, in the default colour; one that
 /// worked keeps 3, grey. The line for the rest says `· Ctrl+O`, as does a
 /// folded diff's.

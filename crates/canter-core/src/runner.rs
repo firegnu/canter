@@ -806,7 +806,7 @@ async fn execute(
     };
     let mut output = match prepared {
         Err(mut output) => {
-            if review && matches!(tool, Tool::Mcp | Tool::WebFetch) {
+            if review && matches!(tool, Tool::Mcp | Tool::WebFetch | Tool::WebSearch) {
                 output.text = "review is read-only".into();
                 output.outcome = ToolOutcome::Declined;
                 match &mut output.item {
@@ -814,6 +814,10 @@ async fn execute(
                     Item::WebFetch { status, result, .. } => {
                         *status = ItemStatus::Declined;
                         *result = output.text.clone();
+                    }
+                    Item::WebSearch { status, error, .. } => {
+                        *status = ItemStatus::Declined;
+                        *error = Some(output.text.clone());
                     }
                     _ => {}
                 }
@@ -832,6 +836,10 @@ async fn execute(
                 None => {
                     let mut item = prepared.started_item();
                     match &mut item {
+                        Item::WebSearch { status, error, .. } => {
+                            *status = ItemStatus::Failed;
+                            *error = Some("Interrupted; not run".into());
+                        }
                         Item::BackgroundCommandAction { status, .. } => {
                             *status = ItemStatus::Failed
                         }

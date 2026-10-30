@@ -446,6 +446,7 @@ impl Session {
             runtime,
             options.web_fetch_timeout,
             options.plan_enabled,
+            options.web_search.clone(),
         )
         .await?;
         let mut state = State::new(Journal::new(store, writer));
@@ -567,6 +568,7 @@ impl Session {
                     | Item::Plan { status, .. }
                     | Item::McpToolCall { status, .. }
                     | Item::WebFetch { status, .. }
+                    | Item::WebSearch { status, .. }
                     | Item::CommandExecution { status, .. }
                     | Item::FileChange { status, .. }
                     | Item::FileRead { status, .. }
@@ -644,6 +646,7 @@ impl Session {
             runtime,
             options.web_fetch_timeout,
             options.plan_enabled,
+            options.web_search.clone(),
         )
         .await?;
         settings.additional_directories = crate::directories::append(
@@ -1379,6 +1382,7 @@ async fn executor(
     runtime: RuntimeContext,
     web_fetch_timeout: std::time::Duration,
     plan_enabled: bool,
+    web_search: Option<canter_tools::web_search::WebSearch>,
 ) -> Result<Tools, CoreError> {
     let lsp = runtime.lsp.as_ref().map(|service| {
         service.session(
@@ -1396,6 +1400,7 @@ async fn executor(
             .map(|executor| {
                 let tools = Tools::new(Arc::new(executor))
                     .with_plan_enabled(plan_enabled)
+                    .with_web_search(web_search)
                     .with_mcp(runtime.mcp_tools)
                     .with_web_fetch_timeout(web_fetch_timeout);
                 match lsp {

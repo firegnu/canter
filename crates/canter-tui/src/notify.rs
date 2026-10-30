@@ -121,6 +121,13 @@ impl Notification {
                         let url = text("resolvedUrl").or(text("url")).unwrap_or_default();
                         format!("Approval requested: {}", cut(&clean(url), SHORT_CHARS))
                     }
+                    ("web_search", _) => {
+                        let query = text("query").unwrap_or_default();
+                        format!(
+                            "Approval requested: search {}",
+                            cut(&clean(query), SHORT_CHARS)
+                        )
+                    }
                     (_, Some(Item::McpToolCall { server, .. })) => {
                         format!("Approval requested by {}", clean(server))
                     }
@@ -634,6 +641,11 @@ mod tests {
             ),
         );
         assert_eq!(fetch.text, "Approval requested: https://docs.rs/ratatui");
+        let search = requested(
+            json!([]),
+            approval("web_search", "s1", json!({"query":"Rust docs"})),
+        );
+        assert_eq!(search.text, "Approval requested: search Rust docs");
         let mcp = requested(
             json!([{ "type": "mcpToolCall", "id": "m1", "server": "git\x1bhub", "tool": "search",
                      "arguments": {}, "result": "", "status": "inProgress" }]),

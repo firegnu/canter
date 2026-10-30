@@ -262,6 +262,13 @@ pub(crate) fn item(
             }
             rows
         }
+        Item::WebSearch {
+            query,
+            results,
+            status,
+            error,
+            ..
+        } => web_search(query, results, *status, error.as_deref(), details, width),
         Item::WebFetch {
             url,
             resolved_url,
@@ -384,6 +391,9 @@ pub(crate) fn item(
                 status: ItemStatus::Declined,
                 ..
             } | Item::WebFetch {
+                status: ItemStatus::Declined,
+                ..
+            } | Item::WebSearch {
                 status: ItemStatus::Declined,
                 ..
             } | Item::McpToolCall {
@@ -1229,6 +1239,67 @@ fn web_fetch(url: &str, result: &str, status: ItemStatus, details: bool, width: 
     let failed = status == ItemStatus::Failed;
     let style = if failed { theme::failure() } else { dim };
     rows.extend(output_rows(result, fold, style, bar(failed), width));
+    rows
+}
+
+fn web_search(
+    query: &str,
+    results: &[canter_protocol::WebSearchResult],
+    status: ItemStatus,
+    error: Option<&str>,
+    details: bool,
+    width: u16,
+) -> Vec<Row> {
+    let (bullet, mut right) = status_marks(status);
+    if status == ItemStatus::Completed {
+        right = vec![Span::styled(
+            format!(
+                "{} result{}",
+                results.len(),
+                if results.len() == 1 { "" } else { "s" }
+            ),
+            theme::secondary(),
+        )];
+    }
+    let mut rows = vec![title(
+        bullet,
+        "Search ",
+        vec![Span::raw(first_line(query))],
+        right,
+        None,
+        width,
+    )];
+    if let Some(error) = error {
+        rows.extend(output_rows(
+            error,
+            Fold::Details,
+            theme::failure(),
+            bar(true),
+            width,
+        ));
+    }
+    if details {
+        let text = results
+            .iter()
+            .enumerate()
+            .map(|(i, result)| {
+                format!(
+                    "{}. {}\n{}",
+                    i + 1,
+                    visible(&result.title),
+                    visible(&result.url)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        rows.extend(output_rows(
+            &text,
+            Fold::Details,
+            theme::secondary(),
+            bar(false),
+            width,
+        ));
+    }
     rows
 }
 
