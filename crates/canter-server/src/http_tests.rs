@@ -1192,3 +1192,96 @@ async fn lsp_routes_are_advertised_and_disabled_sessions_remain_empty() {
     }
     test.finish().await;
 }
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn sandbox_route_reports_the_session_switch_and_current_scope() {
+    for enabled in [true, false] {
+        let root = tempfile::Builder::new()
+            .prefix("canter-sandbox-status-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        for name in ["project", "home", "state"] {
+            std::fs::create_dir_all(root_path.join(name)).unwrap();
+        }
+        let app = Arc::new(App {
+            mcp: Default::default(),
+            lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
+            home: root_path.join("state"),
+            store: Arc::new(Store::new(root_path.join("state/sessions")).unwrap()),
+            model: Arc::new(PanicOnce {
+                panicked: AtomicBool::new(true),
+                reached: Notify::new(),
+            }),
+            default_model: "fake".into(),
+            models: vec!["fake".into()],
+            options: CoreOptions {
+                sandbox: enabled,
+                ..Default::default()
+            },
+            sessions: Default::default(),
+            registry_changed: Default::default(),
+            draining: Default::default(),
+            stopped: CancellationToken::new(),
+        });
+        let socket = root_path.join("server.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let stop = CancellationToken::new();
+        let shutdown = stop.clone();
+        let server = tokio::spawn({
+            let app = app.clone();
+            async move {
+                axum::serve(listener, router(app))
+                    .with_graceful_shutdown(shutdown.cancelled_owned())
+                    .await
+                    .unwrap();
+            }
+        });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .unix_socket(socket)
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let created: SessionCreateResponse = client
+            .post("http://localhost/v1/sessions")
+            .json(&json!({"cwd":root_path.join("project"),"env":{"HOME":root_path.join("home"),"CANTER_HOME":root_path.join("state")},"model":"fake","approvalPolicy":"allowAll","clientName":"test"}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(created.session.settings.sandbox_enabled, Some(enabled));
+        let url = format!(
+            "http://localhost/v1/sessions/{}/sandbox",
+            created.session.id
+        );
+        let scope: serde_json::Value = client.get(&url).send().await.unwrap().json().await.unwrap();
+        assert_eq!(scope["enabled"], enabled, "{scope}");
+        assert_eq!(scope["network"], enabled, "{scope}");
+        if enabled {
+            assert_eq!(scope["writable"][0], json!(root_path.join("project")));
+            assert_eq!(scope["readOnly"][0], json!(root_path.join("home/.cargo")));
+            // The server's own state directory is listed once, not with its files.
+            let no_access = scope["noAccess"].as_array().unwrap();
+            assert!(
+                no_access.contains(&json!(root_path.join("state"))),
+                "{scope}"
+            );
+            assert!(!no_access.contains(&json!(root_path.join("state/config.json"))));
+        }
+        let missing = client
+            .get("http://localhost/v1/sessions/missing/sandbox")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        for session in app.sessions.lock().await.values() {
+            session.close().await.unwrap();
+        }
+        stop.cancel();
+        server.await.unwrap();
+    }
+}

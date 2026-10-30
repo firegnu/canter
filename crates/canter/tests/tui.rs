@@ -2014,7 +2014,7 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
         .wait_until("the info rows", |terminal| {
             terminal
                 .info()
-                .starts_with("fake-model · think high · Always ask · /tmp/canter-tui-")
+                .starts_with("fake-model · think high · Always ask · Sandbox on · /tmp/canter-tui-")
         })
         .await;
     assert!(terminal.screen().contains("somewhere/else/deep"));
@@ -2566,7 +2566,7 @@ async fn slash_new_opens_a_new_session_in_this_terminal() {
         .await;
     assert!(
         a.info()
-            .starts_with("deepseek-v4-pro · think max · Allow all · /tmp/canter-tui-"),
+            .starts_with("deepseek-v4-pro · think max · Allow all · Sandbox on · /tmp/canter-tui-"),
         "{}",
         a.screen()
     );

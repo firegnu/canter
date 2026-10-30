@@ -37,6 +37,11 @@ Environment 是会话打开时固定的目录、仓库根、系统/架构和本�
 - `/skills`：第一行 `Skills  N · global X · project Y`，按 Global（`~/.agents/skills`）、Project（`.agents/skills`）分节，
   没有的节不写。名字用强调色，不给模型用的在同一行灰色写 `not for model`；描述另起一行，灰色，最多两行，超出用 `…` 截。
   没技能时写原来那四行说明：两个目录放在哪、放好后重新打开会话。
+- `/sandbox`（P2-166）：只看不改，内容向服务端现取（`GET /v1/sessions/{id}/sandbox`），家目录写成 `~`。开着时标题 `Sandbox on`，下面
+  `Writable:`（cwd、新增目录、会话临时目录、两个缓存）、`Read-only: .git config and hooks, ...`、`No access:`、
+  `Network:`（「全部允许」是 `on (Allow all)`，另两档 `off unless approved for one command`，切权限档后重开即变）、
+  `Not sandboxed: ! commands, MCP tools, web_fetch` 各一行，长了折行。关着时标题 `Sandbox off.`，下面一句怎么打开。
+  服务端没报沙箱状态（旧版）时不弹框，对话里写 `This server does not support /sandbox; run canter serve --replace and retry`。
 
 ## 批准框
 
@@ -129,7 +134,8 @@ Esc 照旧打断本轮，300 毫秒的按键保护照旧。拒绝说明随工具
   拿不到值的项（还没有花费、不在 git 仓库里、还没有 TPS、会话没名字等）在状态栏里不出现，选择框里右边空着。
   项之间隔 ` · `；branch 紧跟在 directory 后面时只隔一个空格（`~/src/canter (main)`）。
 - **颜色**（终端的 16 色，`NO_COLOR` 时全部暗色、不上色）：模型青色，思考档位品红，花费黄色，目录蓝色，分支绿色；
-  权限 `Allow all` 红色，另外两种暗色；diff 的 `+` 数绿色、`-` 数红色，括号和逗号暗色；
+  权限 `Allow all` 红色，另外两种暗色；服务端报了沙箱状态时，权限后面接 ` · Sandbox on`（暗色）或 ` · Sandbox off`（红色），
+  旧服务端不显示；放不下完整的 `Sandbox on/off` 时整个不显示，不截半截，Shift+Tab 照旧只看权限档是否完整；计划模式下接在 `Plan (then …)` 后面；diff 的 `+` 数绿色、`-` 数红色，括号和逗号暗色；
   context 已用的格 `█` 和百分比按离满还剩多少变色（剩 50% 及以上绿、20% 到 50% 黄、不到 20% 红），
   空格 `░` 和 `120k/400k`、括号暗色（不上色时照样能从 `█`/`░` 看出用了多少）；
   `cache` 的字暗色、百分比青色；`tok/s` 的数字青色；版本、会话名暗色；项之间的 ` · ` 暗色。
@@ -215,6 +221,7 @@ JSON 字段如下，拿不到的值为 `null`；上下文和缓存百分比与�
 | `cwd` / `gitBranch` | 会话绝对目录 / git 分支；分离 HEAD 时为短提交号 |
 | `model` / `reasoningEffort` | 当前模型 / 思考档位（`none`、`low`、`high`、`max`） |
 | `approvalPolicy` | `alwaysAsk`、`askForExecution` 或 `allowAll` |
+| `sandbox` | 这个会话的模型命令是否在沙箱里；旧服务端为 `null` |
 | `status` | `starting`、`idle`、`working`、`waiting_approval`、`error` 或 `closed` |
 | `context.usedTokens` / `windowTokens` / `percent` | 上下文已用 token / 窗口 token / 使用百分比 |
 | `context.autoCompactTokens` / `autoCompactPercentLeft` | 自动压缩线（服务端给的）/ 离压缩线还剩的百分比（向下取整，超过为 0）；旧服务端为 `null` |
@@ -517,6 +524,8 @@ Enter 在命令名没打完时只补全、不执行，打完整了才执行。Es
 - **Ctrl+O** 展开时 shell 显示整条命令（不限 5 行）和全部输出，
   MCP 显示全部结果，网页抓取显示抓回来的内容；一项最多 500 行，再多头尾各留 250 行，
   中间一行灰色 `… N lines not shown`。
+- **沙箱外**（P2-166）：沙箱开着时，用户 `!` 命令（含 `!cmd &`）、MCP、网页抓取卡片右边状态后面接灰色 ` · not sandboxed`
+  （没有状态时只写 `not sandboxed`）；模型自己的命令不标。沙箱关着或旧服务端不标。
 
 ## 计划和待办
 

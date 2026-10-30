@@ -533,6 +533,7 @@ mod tests {
                 plan_mode: false,
                 pre_plan_approval_policy: None,
                 plan_enabled: None,
+                sandbox_enabled: None,
                 cwd: temp.path().to_string_lossy().into_owned(),
                 name: None,
                 model: "deepseek-flash".into(),

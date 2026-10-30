@@ -114,6 +114,26 @@ impl Default for Bar {
 /// has nothing to say, and it is left out.
 pub(crate) type Values = [Option<Vec<Span<'static>>>; 12];
 
+const SANDBOX_ON: &str = "Sandbox on";
+const SANDBOX_OFF: &str = "Sandbox off";
+
+/// What the permission item adds after the mode when the server says whether
+/// the sandbox is on: ` · Sandbox on`, or `Sandbox off` in red as `Allow all`.
+pub(crate) fn sandbox(enabled: bool) -> [Span<'static>; 2] {
+    [
+        Span::styled(" · ", theme::secondary()),
+        if enabled {
+            Span::styled(SANDBOX_ON, theme::secondary())
+        } else {
+            Span::styled(SANDBOX_OFF, theme::failure())
+        },
+    ]
+}
+
+/// Where [`Bar::draw`] put the spans [`sandbox`] made: the row, and the span
+/// range in it.
+pub(crate) type SandboxAt = Option<(usize, std::ops::Range<usize>)>;
+
 impl Bar {
     /// The items shown on each row, in order.
     fn rows(&self) -> [Vec<Item>; 2] {
@@ -136,10 +156,11 @@ impl Bar {
     /// The two rows, not cut to any width: after a space, the items with a
     /// value between ` · `, a branch right after the directory after a
     /// space. Also the first row's text up to the end of the permission
-    /// mode, when it is there.
-    pub fn draw(&self, values: &Values) -> ([Vec<Span<'static>>; 2], Option<String>) {
+    /// mode, when it is there, and where the sandbox state after it went.
+    pub fn draw(&self, values: &Values) -> ([Vec<Span<'static>>; 2], Option<String>, SandboxAt) {
         let dim = theme::secondary();
         let mut through_mode = None;
+        let mut sandbox_at = None;
         let mut rows = [Vec::new(), Vec::new()];
         for (index, (spans, items)) in rows.iter_mut().zip(self.rows()).enumerate() {
             let mut before = None;
@@ -153,14 +174,29 @@ impl Bar {
                     Some(_) => " · ",
                 };
                 spans.push(Span::styled(gap, dim));
-                spans.extend(value.iter().cloned());
+                // The mode alone decides whether its shortcuts show.
+                let sandbox = item == Item::Permission
+                    && value.len() > 2
+                    && value.last().is_some_and(|span| {
+                        [SANDBOX_ON, SANDBOX_OFF].contains(&span.content.as_ref())
+                    });
+                let mode = if sandbox {
+                    value.len() - 2
+                } else {
+                    value.len()
+                };
+                spans.extend(value[..mode].iter().cloned());
                 if index == 0 && item == Item::Permission {
                     through_mode = Some(spans.iter().map(|span| span.content.as_ref()).collect());
+                }
+                if sandbox {
+                    sandbox_at = Some((index, spans.len()..spans.len() + 2));
+                    spans.extend(value[mode..].iter().cloned());
                 }
                 before = Some(item);
             }
         }
-        (rows, through_mode)
+        (rows, through_mode, sandbox_at)
     }
 
     /// Reads what [`Bar::to_json`] wrote. Entries it does not know (such as

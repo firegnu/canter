@@ -30,6 +30,7 @@ pub fn export_protocol(directory: &Path) -> Result<(), Box<dyn std::error::Error
         ModelListResponse,
         UsageResponse,
         ContextResponse,
+        SessionSandboxResponse,
         McpListResponse,
         CommandRuleListResponse,
         CommandRuleDeleteResponse,

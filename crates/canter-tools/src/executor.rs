@@ -48,6 +48,10 @@ pub trait Executor: Send + Sync {
             "sandbox requests are not supported by this executor",
         ))
     }
+    /// What model commands may touch now; disabled unless this executor sandboxes them.
+    fn sandbox_scope(&self) -> canter_protocol::SessionSandboxResponse {
+        canter_protocol::SessionSandboxResponse::default()
+    }
     fn configure_shell(&self, _mode: canter_protocol::PermissionMode, _directories: &[String]) {}
     fn close_shell(&self) {}
     /// Run the shared command checks without executing shell or resolving symlinks.
@@ -291,6 +295,31 @@ impl Executor for LocalExecutor {
             additional_directories: directories.iter().map(PathBuf::from).collect(),
             write_paths: Vec::new(),
         };
+    }
+
+    fn sandbox_scope(&self) -> canter_protocol::SessionSandboxResponse {
+        let Some(sandbox) = &self.sandbox else {
+            return canter_protocol::SessionSandboxResponse::default();
+        };
+        let text = |path: &PathBuf| path.to_string_lossy().into_owned();
+        let scope = self.shell_scope.read().unwrap();
+        let mut response = canter_protocol::SessionSandboxResponse {
+            enabled: true,
+            writable: std::iter::once(&self.cwd)
+                .chain(&scope.additional_directories)
+                .map(text)
+                .collect(),
+            network: scope.network,
+            ..Default::default()
+        };
+        // A sandbox that could not start still blocks every command; only its paths are unknown.
+        if let Ok(sandbox) = sandbox.lock().unwrap().as_ref() {
+            let (writable, readonly, unreadable) = sandbox.listing();
+            response.writable.extend(writable.iter().map(text));
+            response.read_only = readonly.iter().map(text).collect();
+            response.no_access = unreadable.iter().map(text).collect();
+        }
+        response
     }
 
     fn close_shell(&self) {

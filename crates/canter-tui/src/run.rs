@@ -693,6 +693,10 @@ where
                         .app_mut()
                         .warning(&format!("Could not read context: {error}")),
                 },
+                Some(Action::Sandbox) => match chat.client.sandbox(&chat.session).await {
+                    Ok(report) => ui.app_mut().show_sandbox(&report),
+                    Err(error) => ui.app_mut().warning(&error.to_string()),
+                },
                 Some(Action::Files) => ui.app_mut().show_files().await,
                 Some(Action::ExternalEditor) => {
                     let temp = std::env::temp_dir();
@@ -2020,6 +2024,7 @@ impl<C: Connector> Chat<C> {
             | Action::BackgroundStop(_)
             | Action::ShellBackground(_)
             | Action::Context
+            | Action::Sandbox
             | Action::Mcp
             | Action::CommandRules
             | Action::DeleteCommandRule(_)

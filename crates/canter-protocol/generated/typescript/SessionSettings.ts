@@ -13,4 +13,9 @@ prePlanApprovalPolicy?: PermissionMode,
 /**
  * Effective tool switch, frozen when the server opens this session.
  */
-planEnabled?: boolean, cwd: string, name: string | null, model: string, reasoningEffort?: ReasoningEffort, approvalPolicy: PermissionMode, };
+planEnabled?: boolean,
+/**
+ * Whether this session's model commands run in the sandbox, as the server
+ * opened it; absent from servers that do not report it.
+ */
+sandboxEnabled?: boolean, cwd: string, name: string | null, model: string, reasoningEffort?: ReasoningEffort, approvalPolicy: PermissionMode, };

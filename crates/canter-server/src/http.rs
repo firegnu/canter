@@ -144,6 +144,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::GOAL_RESUME, post(resume_goal))
         .route(routes::SKILLS, get(skills))
         .route(routes::CONTEXT, get(context))
+        .route(routes::SANDBOX, get(sandbox))
         .route(routes::BTW, post(btw))
         .route(routes::HANDOFF, post(handoff))
         .route(routes::RESUME, post(resume))
@@ -435,6 +436,13 @@ async fn context(
     Ok(Json(app.session(&id).await?.context().await))
 }
 
+async fn sandbox(
+    State(app): State<Arc<App>>,
+    ApiPath(SessionPath { id }): ApiPath<SessionPath>,
+) -> Result<Json<SessionSandboxResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.sandbox().await))
+}
+
 async fn skills(
     State(app): State<Arc<App>>,
     ApiPath(id): ApiPath<String>,
@@ -572,6 +580,7 @@ async fn create(
             plan_mode: false,
             pre_plan_approval_policy: None,
             plan_enabled: None,
+            sandbox_enabled: None,
             cwd: params.cwd,
             name: params.name,
             model: if params.model.is_empty() {

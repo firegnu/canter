@@ -76,6 +76,11 @@ pub struct SessionSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub plan_enabled: Option<bool>,
+    /// Whether this session's model commands run in the sandbox, as the server
+    /// opened it; absent from servers that do not report it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sandbox_enabled: Option<bool>,
     #[serde(default)]
     pub cwd: String,
     pub name: Option<String>,
@@ -140,6 +145,7 @@ impl SessionSnapshot {
                 plan_mode: false,
                 pre_plan_approval_policy: None,
                 plan_enabled: None,
+                sandbox_enabled: None,
                 cwd: String::new(),
                 name: None,
                 model: String::new(),
@@ -886,6 +892,27 @@ pub struct TokenUsageBreakdown {
 pub struct ErrorInfo {
     pub message: String,
     pub additional_details: Option<String>,
+}
+
+/// GET /v1/sessions/{id}/sandbox: what this session's model commands may touch
+/// now, worked out on each request. Only `enabled` is meaningful when false.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSandboxResponse {
+    pub enabled: bool,
+    /// cwd, added directories, the session's private temporary directory and caches.
+    #[serde(default)]
+    pub writable: Vec<String>,
+    /// Readable but never writable, besides Git config and hooks.
+    #[serde(default)]
+    pub read_only: Vec<String>,
+    /// Neither readable nor writable.
+    #[serde(default)]
+    pub no_access: Vec<String>,
+    /// Whether commands reach the network without a one-command approval,
+    /// under the current permission mode.
+    #[serde(default)]
+    pub network: bool,
 }
 
 /// Read-only estimate of the currently loaded context, using the compaction heuristic.

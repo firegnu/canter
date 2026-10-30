@@ -564,3 +564,93 @@ fn plan_names_the_mode_it_leaves_for() {
     assert_eq!(screen.bar()[0], " deepseek-flash · think high · Allow all");
     assert_eq!(screen.style_of(0, "Allow all"), colour(Color::Red));
 }
+
+/// `session.updated` with `sandboxEnabled`, as a server that reports it sends.
+fn sandbox_settings(dir: &Path, policy: &str, plan: bool, sandbox: bool) -> Value {
+    let mut settings = json!({
+        "cwd": dir.to_str().unwrap(), "name": null, "model": "deepseek-flash",
+        "approvalPolicy": policy, "planMode": plan, "sandboxEnabled": sandbox,
+    });
+    if plan {
+        settings["prePlanApprovalPolicy"] = json!(policy);
+    }
+    json!({ "type": "session.updated", "settings": settings })
+}
+
+#[test]
+fn the_sandbox_state_follows_the_mode_red_when_off_and_absent_from_older_servers() {
+    let (home, dir) = repo();
+    let mut screen = Screen::new(&dir, home.path(), PermissionMode::AskForExecution);
+    // An older server does not say: nothing, never `Sandbox on`.
+    assert_eq!(
+        screen.bar()[0],
+        " deepseek-flash · think high · Ask for execution"
+    );
+    let grey = (Some(Color::Reset), true);
+    screen.event(sandbox_settings(&dir, "askForExecution", false, true));
+    assert_eq!(
+        screen.bar()[0],
+        " deepseek-flash · think high · Ask for execution · Sandbox on"
+    );
+    assert_eq!(screen.style_of(0, "Sandbox on"), grey);
+    screen.event(sandbox_settings(&dir, "allowAll", false, false));
+    assert_eq!(
+        screen.bar()[0],
+        " deepseek-flash · think high · Allow all · Sandbox off"
+    );
+    assert_eq!(screen.style_of(0, "Sandbox off"), (Some(Color::Red), false));
+    screen.event(sandbox_settings(&dir, "alwaysAsk", true, true));
+    assert_eq!(
+        screen.bar()[0],
+        " deepseek-flash · think high · Plan (then Always ask) · Sandbox on"
+    );
+    // Cost still comes after it.
+    screen.event(sandbox_settings(&dir, "alwaysAsk", false, true));
+    screen.event(json!({
+        "type": "session.usage",
+        "tokenUsage": {
+            "total": {"inputTokens": 1, "cachedInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0, "totalTokens": 1},
+            "last": {"inputTokens": 1, "cachedInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0, "totalTokens": 1},
+            "contextTokens": 1, "modelContextWindow": null,
+            "cost": {"usd": 0.31, "unknown": false},
+        },
+    }));
+    assert_eq!(
+        screen.bar()[0],
+        " deepseek-flash · think high · Always ask · Sandbox on · $0.31"
+    );
+}
+
+#[test]
+fn a_narrow_window_leaves_the_sandbox_state_out_rather_than_cut_it() {
+    use canter_protocol::SessionUpdateParams;
+    use canter_tui::Action;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (home, dir) = repo();
+    let mut screen = Screen::new(&dir, home.path(), PermissionMode::AskForExecution);
+    screen.event(sandbox_settings(&dir, "askForExecution", false, true));
+    let full = " deepseek-flash · think high · Ask for execution · Sandbox on";
+    screen.resize(full.width() as u16);
+    assert_eq!(screen.bar()[0], full);
+    for width in [full.width() as u16 - 1, 50] {
+        screen.resize(width);
+        assert_eq!(
+            screen.bar()[0],
+            " deepseek-flash · think high · Ask for execution",
+            "width {width}"
+        );
+    }
+    // The mode is still all there, so Shift+Tab still switches it.
+    screen.ui.draw(NOW).unwrap();
+    assert_eq!(
+        screen
+            .ui
+            .app_mut()
+            .handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT), NOW),
+        Some(Action::Update(SessionUpdateParams {
+            approval_policy: Some(PermissionMode::AllowAll),
+            ..Default::default()
+        }))
+    );
+}

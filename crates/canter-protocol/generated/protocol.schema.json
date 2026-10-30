@@ -3682,6 +3682,47 @@
       ],
       "type": "object"
     },
+    "SessionSandboxResponse": {
+      "description": "GET /v1/sessions/{id}/sandbox: what this session's model commands may touch\nnow, worked out on each request. Only `enabled` is meaningful when false.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "network": {
+          "default": false,
+          "description": "Whether commands reach the network without a one-command approval,\nunder the current permission mode.",
+          "type": "boolean"
+        },
+        "noAccess": {
+          "default": [],
+          "description": "Neither readable nor writable.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "readOnly": {
+          "default": [],
+          "description": "Readable but never writable, besides Git config and hooks.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "writable": {
+          "default": [],
+          "description": "cwd, added directories, the session's private temporary directory and caches.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "type": "object"
+    },
     "SessionSettings": {
       "description": "Public settings. Environment variables never belong here.",
       "properties": {
@@ -3731,6 +3772,13 @@
         "reasoningEffort": {
           "$ref": "#/$defs/ReasoningEffort",
           "default": "high"
+        },
+        "sandboxEnabled": {
+          "description": "Whether this session's model commands run in the sandbox, as the server\nopened it; absent from servers that do not report it.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [

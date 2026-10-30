@@ -160,6 +160,19 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::PickSession)),
     },
     Command {
+        name: "sandbox",
+        about: "Show what the sandbox allows",
+        takes_args: false,
+        run: |app, _| match app.snapshot().settings.sandbox_enabled {
+            // An older server says nothing, which must not read as off.
+            None => Err(
+                "This server does not support /sandbox; run canter serve --replace and retry"
+                    .into(),
+            ),
+            Some(_) => Ok(Some(Action::Sandbox)),
+        },
+    },
+    Command {
         name: "skills",
         about: "List this session's skills",
         takes_args: false,
@@ -653,6 +666,60 @@ pub(crate) fn list_rows(
             Line::from(truncate(spans, usize::from(width)))
         })
         .collect()
+}
+
+/// `/sandbox`: what the server says this session's model commands may touch
+/// now, paths under `home` as `~`; when it is off, how to turn it on.
+pub(crate) fn sandbox(
+    report: &canter_protocol::SessionSandboxResponse,
+    home: Option<&str>,
+) -> Report {
+    let line = |text: String| Part::Wrap {
+        indent: 1,
+        text: clean(&text),
+        style: Style::new(),
+        rows: usize::MAX,
+    };
+    if !report.enabled {
+        return Report::new(
+            vec![Span::styled(" Sandbox off.", Style::new().bold())],
+            vec![line(
+                "Set \"sandbox\": true in config.json (or remove the line), then run canter serve --replace."
+                    .into(),
+            )],
+            Vec::new(),
+        );
+    }
+    let paths = |paths: &[String]| {
+        paths
+            .iter()
+            .map(|path| crate::approval::shorten_home(path, home))
+            .collect::<Vec<_>>()
+    };
+    let mut read_only = vec![".git config and hooks".to_owned()];
+    read_only.extend(paths(&report.read_only));
+    let body = vec![
+        line(format!("Writable: {}", paths(&report.writable).join(", "))),
+        line(format!("Read-only: {}", read_only.join(", "))),
+        line(format!(
+            "No access: {}",
+            paths(&report.no_access).join(", ")
+        )),
+        line(
+            if report.network {
+                "Network: on (Allow all)"
+            } else {
+                "Network: off unless approved for one command"
+            }
+            .into(),
+        ),
+        line("Not sandboxed: ! commands, MCP tools, web_fetch".into()),
+    ];
+    Report::new(
+        vec![Span::styled(" Sandbox on", Style::new().bold())],
+        body,
+        Vec::new(),
+    )
 }
 
 /// `/mcp`: each service with whether it is connected, then its tools'
