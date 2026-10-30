@@ -230,6 +230,7 @@ impl Guard<'_> {
                 .zip(&words[index + 1..])
                 .map(|(raw, word)| Argument {
                     raw: (*raw).into(),
+                    glob: word.glob,
                     paths: locations
                         .iter()
                         .map(|state| self.path(word, state.cwd.as_deref()))
@@ -338,20 +339,7 @@ impl Guard<'_> {
                 cwd?.join(path)
             }
         };
-        let path = normalize(&path);
-        Some(if word.glob {
-            // A glob's normalized literal prefix is the deepest directory we know.
-            path.components()
-                .take_while(|component| {
-                    !component
-                        .as_os_str()
-                        .to_string_lossy()
-                        .contains(['*', '?', '['])
-                })
-                .collect()
-        } else {
-            path
-        })
+        Some(normalize(&path))
     }
 }
 

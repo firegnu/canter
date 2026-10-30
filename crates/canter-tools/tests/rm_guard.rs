@@ -127,7 +127,9 @@ async fn critical_removal_spellings_are_recognized_in_every_shell_segment() {
 
 impl Fixture {
     fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
+        // Keep critical roots outside /tmp so the /tmp cleanup cases below
+        // cannot also match the separate ancestor-of-a-critical-path rule.
+        let temp = tempfile::tempdir_in("/var/tmp").unwrap();
         let home = temp.path().join("home");
         let cwd = home.join("work/repo");
         let additional = temp.path().join("extra/project");
@@ -284,6 +286,74 @@ async fn ordinary_project_removals_keep_existing_permission_behavior() {
                 matches!(gate.evaluate(&call, mode), PermissionCheck::Execute(_)),
                 "{command}: {mode:?}"
             );
+        }
+    }
+}
+
+#[tokio::test]
+async fn selective_globs_keep_existing_permission_behavior() {
+    let fixture = Fixture::new();
+    let gate = fixture.gate();
+    for rules in [
+        r#"{"rules":[]}"#,
+        r#"{"rules":[{"pattern":["rm"],"decision":"allow"}]}"#,
+    ] {
+        std::fs::write(&fixture.rules, rules).unwrap();
+        for command in [
+            "rm -f *.log",
+            "rm -f ./*.log",
+            "rm -f *.o",
+            "rm -rf *.egg-info",
+            "rm -rf dist build *.egg-info",
+            "rm -rf build-*",
+            "rm -rf /tmp/foo-*",
+            "rm -f /tmp/*.log",
+        ] {
+            for background in [false, true] {
+                let call = fixture.call(command, background).await;
+                assert!(
+                    matches!(
+                        gate.evaluate(&call, PermissionMode::AllowAll),
+                        PermissionCheck::Execute(_)
+                    ),
+                    "{command}, background={background}, rules={rules}"
+                );
+                // Main already asks about globs even with a hand-written allow rule.
+                assert_single_approval(&gate, &call);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn whole_layer_globs_and_possible_critical_children_still_require_approval() {
+    let fixture = Fixture::new();
+    let gate = fixture.gate();
+    for command in [
+        "rm -rf *",
+        "rm -rf ./*",
+        "rm -rf .*",
+        "rm -rf **",
+        "rm -rf ~/*",
+        "rm -rf /*",
+        "rm -rf /usr/*",
+        "rm -rf ../*",
+        "cd / && rm -rf *",
+        "rm -rf /U*",
+        "rm -rf ../re*",
+    ] {
+        for background in [false, true] {
+            let call = fixture.call(command, background).await;
+            let PermissionCheck::Forbidden { reason } =
+                gate.evaluate(&call, PermissionMode::AllowAll)
+            else {
+                panic!("not blocked: {command}, background={background}");
+            };
+            assert!(
+                reason.starts_with("Blocked: rm/rmdir on a critical path ("),
+                "{reason}"
+            );
+            assert_single_approval(&gate, &call);
         }
     }
 }

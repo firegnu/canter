@@ -24,8 +24,9 @@ struct Command {
 struct Argument {
     raw: String,
     value: Option<String>,
-    // Normalized literal paths (or prefixes before a glob), for every possible
-    // cwd. None means an expansion or location cannot be determined.
+    glob: bool,
+    // Complete normalized paths, preserving globs, for every possible cwd.
+    // None means an expansion or location cannot be determined.
     paths: Option<Vec<PathBuf>>,
 }
 
