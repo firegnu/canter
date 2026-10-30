@@ -121,6 +121,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::NewSession)),
     },
     Command {
+        name: "clear",
+        about: "Start a new session (same as /new)",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::NewSession)),
+    },
+    Command {
         name: "plan",
         about: "Enter or leave read-only Plan mode",
         takes_args: false,
