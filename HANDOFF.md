@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-30 第三十六次装 main `0cf6308`（`canter --version` 显示 `canter 0.1.0 · 0cf6308`；比上一版多 P2-106：`config.json` 的 `base_url` 是 `https://api.deepseek.com` 时模型多一个 `web_search` 工具，用同一个 key 调 DeepSeek 搜索接口（每 1000 次成功搜索 0.75 美元），默认 10 条最多 20 条，批准和 `web_fetch` 一样；已在用的会话重开时工具列表多一项、缓存冷一次）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
+- 退回上一版 `16c8e96`：`cp -p ~/.canter/canter-16c8e96 ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版打开搜过网页的会话：搜索项目按不认识的跳过（协议兼容测试查过），模型历史里的 `web_search` 调用旧版能不能照常续聊没测过。
 - 10-29 第三十五次装 main `16c8e96`（`canter --version` 显示 `canter 0.1.0 · 16c8e96`；比上一版多 P2-133～P2-136：LSP 文件同步、诊断交给模型、终端显示和 `/lsp`、内置 Rust / Python / TS/JS。`lsp.enabled` 仍默认关，关着时用户看不到变化，只多了 `/lsp` 命令（关着时提示怎么打开）；P2-145 只改测试）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
 - 退回上一版 `b317678`：`cp -p ~/.canter/canter-b317678 ~/.cargo/bin/canter`，再 `canter serve --replace`。关着 LSP 时存盘格式没变；开过 LSP 的会话里有诊断记录，旧版能不能照常打开没测过。
 - 10-29 第三十四次装 main `b317678`（`canter --version` 显示 `canter 0.1.0 · b317678`；比上一版多 P2-132：LSP 起停、通信、实例管理和资源上限，`lsp.enabled` 默认关、内置服务器表为空，用户看不到变化；P2-138：模型干活时状态行下面一行灰色 `Tip: …`，`tui.json` 写 `"tips": false` 关掉）。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
