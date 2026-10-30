@@ -144,6 +144,10 @@
 - /permissions（P2-156 交叉审查，10-30 不改）：
   - 建议改：`rules.json` 是软链接时，`/permissions` 删一次也会把链接换成普通文件（和「以后都放行」同一个写法，见下面「命令规则」那条）；改法是写之前发现是链接就报错，或解析到目标再替换目标，会同时改到 `append`，要另开一件。
   - 可以不改：列表还没画出来时按 Esc 被吞掉，要再按一次；删除失败时提示写 `Could not read command rules`，没说是删；新终端连旧服务端时 `/permissions` 报 404，没用 `/v1/info` 的 features 提前提示。
+- MCP 工具按需加载（P2-162 交叉审查，10-30 主控按「只有必须改挡合并」不改，等用户试用）：
+  - 试用时留意：MCP 服务给的参数格式本身编不过（外部 `$ref`、不认识的 `$schema`）时，按需模式下这个工具永远调不了，只能关 `mcp_tool_search`；改法是区分「格式编不过」和「参数不对」，前者只查参数是对象就照常批准、调用。模型照清单里的全名直接调（不经 `mcp_call`）时只拿到 `Unknown tool`，没提示改用 `mcp_call`。
+  - 清单简介取说明第一行，第一行为空（Python `"""` 换行写法）时简介是空的；`THIRD-PARTY-NOTICES.md` 没补 jsonschema 及带进来的约 30 个包；`crates/canter-server/README.md`、`crates/canter-tools/README.md` 没写 `mcp_tool_search` 和两个工具。
+  - 可以不改：提示词那句放在「Asking the user」下；清单里服务说明的 `<`、`>` 没转义；搜索结果和报错里的 schema 不截断；每次调用重编 schema；切换开关后重开用过另一种方式的会话和老会话同样可能对不上，开关关掉时请求不变只有结构断言、没有字节锁。
 - 删关键路径的 rm（P2-161，10-30 主控按「只有必须改挡合并」不改）：
   - 只管 A 定的关键路径本身：家目录下的文件夹（`~/Documents`、`~/Desktop`）、工作目录旁边的兄弟项目（`rm -rf ../ranch`）不算，「全部允许」下照旧直接删。主控建议过改成「工作目录和加进来的目录以外的 rm 都拦（临时目录除外）」，用户 10-30：「暂时这样」。
   - 交叉审查建议改：`bash -c "rm -rf $DIR"` 这种双引号里带变量的脚本、`bash -o pipefail -c '…'` 里的 rm 不查；`rm -rf target/{debug,release}` 这种花括号展开一律算认不清，「全部允许」下被拒。
