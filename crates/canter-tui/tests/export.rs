@@ -296,3 +296,28 @@ fn an_empty_session_has_nothing_to_export() {
     screen.wait_for("Export failed: nothing to export yet");
     assert!(files(screen.dir.path()).is_empty());
 }
+
+#[test]
+fn mcp_search_card_survives_snapshot_reload_and_export() {
+    let mut screen = Screen::with_turn(Ok(()));
+    let mut turn = json!({"id":"t2","items":[],"status":"inProgress","error":null,"input":[],"clientName":"test","usage":null});
+    screen.event(json!({"type":"turn.started","turn":turn}));
+    screen.event(json!({"type":"item.completed","turnId":"t2","item":{
+        "type":"mcpToolSearch","id":"search","query":"issue","tools":["mcp__github__issues"],"status":"completed"
+    }}));
+    turn["status"] = json!("completed");
+    screen.event(json!({"type":"turn.completed","turn":turn}));
+    screen.draw();
+    assert!(screen.text().contains("Searched MCP tools \"issue\""));
+    assert!(screen.text().contains("mcp__github__issues"));
+    let stored = serde_json::to_value(screen.ui.app().snapshot()).unwrap();
+    let restored: SessionSnapshot = serde_json::from_value(stored).unwrap();
+    let mut other = Ui::new(TestBackend::new(80, 24), App::new(restored, None, NOW)).unwrap();
+    other.draw(NOW).unwrap();
+    assert_eq!(other.backend().buffer(), screen.ui.backend().buffer());
+    screen.export(Export::File(Some("mcp.md".into())));
+    screen.wait_for("mcp.md");
+    let text = std::fs::read_to_string(screen.path("mcp.md")).unwrap();
+    assert!(text.contains("Searched MCP tools `issue` · 1 found"));
+    assert!(text.contains("mcp__github__issues"));
+}

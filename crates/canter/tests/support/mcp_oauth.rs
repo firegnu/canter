@@ -315,7 +315,7 @@ async fn oauth_runtime_refreshes_redacts_and_logout_stops_authentication() {
     let auth = AuthServer::start().await;
     let call = format!(
         "data: {}\n\ndata: [DONE]\n\n",
-        json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"oauth-call","type":"function","function":{"name":"mcp__remote__echo","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})
+        json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"oauth-call","type":"function","function":{"name":"mcp_call","arguments":json!({"name":"mcp__remote__echo","arguments":{}}).to_string()}}]},"finish_reason":"tool_calls"}]})
     );
     let mut fixture = Fixture::start_with_mcp(
         vec![call.clone(), text_reply(), call, text_reply()],
@@ -470,7 +470,7 @@ async fn oauth_refreshes_during_a_running_connection_and_reports_later_rejection
     let auth = AuthServer::start().await;
     let call = format!(
         "data: {}\n\ndata: [DONE]\n\n",
-        json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"oauth-call","type":"function","function":{"name":"mcp__remote__echo","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})
+        json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"oauth-call","type":"function","function":{"name":"mcp_call","arguments":json!({"name":"mcp__remote__echo","arguments":{}}).to_string()}}]},"finish_reason":"tool_calls"}]})
     );
     let mut fixture = Fixture::start_with_mcp(
         vec![call.clone(), text_reply(), call, text_reply()],
@@ -533,7 +533,7 @@ async fn oauth_transient_refresh_failure_keeps_connection_and_retries_on_next_ca
     let auth = AuthServer::start().await;
     let call = format!(
         "data: {}\n\ndata: [DONE]\n\n",
-        json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"oauth-call","type":"function","function":{"name":"mcp__remote__echo","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})
+        json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"oauth-call","type":"function","function":{"name":"mcp_call","arguments":json!({"name":"mcp__remote__echo","arguments":{}}).to_string()}}]},"finish_reason":"tool_calls"}]})
     );
     let mut fixture = Fixture::start_with_mcp(
         vec![call.clone(), text_reply(), call, text_reply()],

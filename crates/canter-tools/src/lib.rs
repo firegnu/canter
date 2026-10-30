@@ -56,6 +56,8 @@ pub enum Tool {
     UpdatePlan,
     SubmitPlan,
     Mcp,
+    McpSearch,
+    McpCall,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,8 +91,13 @@ impl Tool {
         Self::Monitor,
     ];
 
+    pub const MCP: [Self; 2] = [Self::McpSearch, Self::McpCall];
+
     pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|tool| tool.name() == name)
+        Self::ALL
+            .into_iter()
+            .chain(Self::MCP)
+            .find(|tool| tool.name() == name)
     }
 
     pub fn name(self) -> &'static str {
@@ -108,19 +115,42 @@ impl Tool {
             Self::UpdatePlan => "update_plan",
             Self::SubmitPlan => "submit_plan",
             Self::Mcp => "mcp",
+            Self::McpSearch => "mcp_search",
+            Self::McpCall => "mcp_call",
         }
     }
 
     pub fn risk(self) -> Risk {
         match self {
-            Self::Read | Self::ShellOutput | Self::ShellStop | Self::Monitor => Risk::Read,
+            Self::Read | Self::ShellOutput | Self::ShellStop | Self::Monitor | Self::McpSearch => {
+                Risk::Read
+            }
             Self::Write | Self::Edit => Risk::Write,
-            Self::Shell | Self::Mcp | Self::WebFetch | Self::WebSearch => Risk::Execute,
+            Self::Shell | Self::Mcp | Self::McpCall | Self::WebFetch | Self::WebSearch => {
+                Risk::Execute
+            }
             Self::AskUser | Self::UpdatePlan | Self::SubmitPlan => Risk::Interaction,
         }
     }
 
     pub fn definition(self) -> ToolDefinition {
+        if self == Self::McpSearch {
+            return ToolDefinition {
+                name: self.name(),
+                description: "Find MCP tools in the session catalog. Query with one or more full tool names separated by spaces or commas, or keywords in names and descriptions (up to 5 matches). Returns full descriptions and JSON Schemas; use mcp_call to invoke a tool. No approval needed; available in Plan mode and review rounds.",
+                parameters: json!({"type":"object","properties":{"query":{"type":"string","minLength":1}},"required":["query"],"additionalProperties":false}),
+                risk: self.risk(),
+            };
+        }
+        if self == Self::McpCall {
+            return ToolDefinition {
+                name: self.name(),
+                description: "Call an MCP tool by its full name from the session catalog, passing its arguments as an object. First use mcp_search to read its description and JSON Schema. Invalid arguments return the error and schema without calling the tool. Uses the target tool's approval rules; unavailable in Plan mode and review rounds.",
+                parameters: json!({"type":"object","properties":{"name":{"type":"string"},"arguments":{"type":"object"}},"required":["name","arguments"],"additionalProperties":false}),
+                risk: self.risk(),
+            };
+        }
+
         if self == Self::WebSearch {
             return ToolDefinition {
                 name: self.name(),
@@ -394,6 +424,11 @@ enum Action {
     WebFetch(reqwest::Url),
     WebSearch(web_search::Args),
     Mcp(mcp::McpTool),
+    McpSearch {
+        query: String,
+        tools: Vec<String>,
+        text: String,
+    },
     AskUser(AskUserArgs),
     Read(ReadArgs),
     Change {
@@ -490,6 +525,12 @@ impl PreparedCall {
                 result: String::new(),
                 status,
             },
+            Action::McpSearch { query, .. } => Item::McpToolSearch {
+                id: self.id.clone(),
+                query: query.clone(),
+                tools: Vec::new(),
+                status,
+            },
             Action::Mcp(tool) => Item::McpToolCall {
                 content_items: Vec::new(),
                 id: self.id.clone(),
@@ -578,6 +619,7 @@ pub struct Tools {
     plan_enabled: bool,
     executor: Arc<dyn Executor>,
     mcp: Vec<mcp::McpTool>,
+    mcp_tool_search: bool,
     web_fetch_timeout: std::time::Duration,
     web_search: Option<web_search::WebSearch>,
 }
@@ -608,7 +650,8 @@ impl Tools {
                 | Tool::SubmitPlan
                 | Tool::ShellOutput
                 | Tool::ShellStop
-                | Tool::Monitor,
+                | Tool::Monitor
+                | Tool::McpSearch,
             ) => true,
             Some(Tool::Shell) => serde_json::from_str::<Value>(raw_arguments)
                 .ok()
@@ -623,7 +666,12 @@ impl Tools {
     }
 
     pub fn blocked_in_plan_mode(&self, name: &str, id: String, raw_arguments: &str) -> ToolOutput {
-        let arguments = serde_json::from_str(raw_arguments).unwrap_or(Value::Null);
+        let parsed: Value = serde_json::from_str(raw_arguments).unwrap_or(Value::Null);
+        let target = if name == "mcp_call" {
+            parsed["name"].as_str().unwrap_or_default()
+        } else {
+            name
+        };
         let text = format!(
             "Plan mode: {name} is not allowed. Use read-only tools to investigate, ask_user to clarify requirements, and submit_plan when the complete plan is ready. Do not implement changes until the user approves or leaves Plan mode."
         );
@@ -632,7 +680,7 @@ impl Tools {
                 .or_else(|| Tool::from_name(name))
                 .expect("known tool"),
             id,
-            &arguments,
+            &parsed,
             text,
             ToolOutcome::Declined,
             self.executor.cwd(),
@@ -644,7 +692,7 @@ impl Tools {
             ..
         } = &mut output.item
         {
-            if let Some(mcp) = self.mcp.iter().find(|tool| tool.name == name) {
+            if let Some(mcp) = self.mcp.iter().find(|tool| tool.name == target) {
                 *server = mcp.server().into();
                 *tool = mcp.tool.clone();
             }
@@ -732,6 +780,7 @@ impl Tools {
             plan_enabled: true,
             executor,
             mcp: Vec::new(),
+            mcp_tool_search: true,
             web_fetch_timeout: web_fetch::DEFAULT_TIMEOUT,
             web_search: None,
         }
@@ -751,6 +800,13 @@ impl Tools {
         self.web_search = search;
         self
     }
+    pub fn with_mcp_tool_search(mut self, enabled: bool) -> Self {
+        self.mcp_tool_search = enabled;
+        self
+    }
+    pub fn mcp_catalog(&self) -> Option<String> {
+        (self.mcp_tool_search && !self.mcp.is_empty()).then(|| mcp::search::catalog(&self.mcp))
+    }
     pub fn mcp_tools(&self) -> &[mcp::McpTool] {
         &self.mcp
     }
@@ -759,6 +815,12 @@ impl Tools {
         self
     }
     pub fn find(&self, name: &str) -> Option<Tool> {
+        if matches!(name, "mcp_search" | "mcp_call")
+            && (!self.mcp_tool_search || self.mcp.is_empty())
+        {
+            return None;
+        }
+
         if name == "web_search" && self.web_search.is_none() {
             return None;
         }
@@ -766,9 +828,7 @@ impl Tools {
             return None;
         }
         Tool::from_name(name).or_else(|| {
-            self.mcp
-                .iter()
-                .any(|tool| tool.name == name)
+            (!self.mcp_tool_search && self.mcp.iter().any(|tool| tool.name == name))
                 .then_some(Tool::Mcp)
         })
     }
@@ -779,32 +839,58 @@ impl Tools {
         raw_arguments: &str,
         cancel: &CancellationToken,
     ) -> Result<PreparedCall, ToolOutput> {
-        if let Some(tool) = Tool::from_name(name) {
+        if let Some(tool) = Tool::from_name(name).filter(|tool| *tool != Tool::McpCall) {
             return self.prepare(tool, id, raw_arguments, cancel).await;
         }
-        let tool = self
-            .mcp
-            .iter()
-            .find(|tool| tool.name == name)
-            .expect("known tool")
-            .clone();
-        let arguments = serde_json::from_str::<Value>(raw_arguments)
-            .ok()
-            .filter(Value::is_object);
+        let wrapper = name == "mcp_call";
+        let parsed = serde_json::from_str::<Value>(raw_arguments).unwrap_or(Value::Null);
+        let target = if wrapper {
+            parsed["name"].as_str().unwrap_or_default()
+        } else {
+            name
+        };
+        let arguments = if wrapper {
+            parsed["arguments"].clone()
+        } else if !parsed.is_object() {
+            Value::Null
+        } else {
+            parsed.clone()
+        };
+        let Some(tool) = self.mcp.iter().find(|tool| tool.name == target).cloned() else {
+            return Err(tool_error(
+                Tool::McpCall,
+                id,
+                &parsed,
+                "Unknown MCP tool. Use mcp_search to find a full tool name in the session catalog."
+                    .into(),
+                ToolOutcome::Failed,
+                self.executor.cwd(),
+            ));
+        };
+        // Normalize only here: permission keys, approval arguments, cards, and
+        // execution all use the same prepared target as a direct MCP call.
         let prepared = PreparedCall {
             executor: self.executor.clone(),
             tool: Tool::Mcp,
             id,
             raw_arguments: raw_arguments.into(),
-            arguments: arguments.clone().unwrap_or(Value::Null),
+            arguments: arguments.clone(),
             resolved_path: None,
-            action: Action::Mcp(tool),
+            action: Action::Mcp(tool.clone()),
         };
-        if arguments.is_none() {
-            return Err(prepared.failed_output(
-                "MCP arguments must be a JSON object".into(),
-                ToolOutcome::Failed,
-            ));
+        let error = if wrapper {
+            tool.validate_arguments(&arguments).err()
+        } else if !arguments.is_object() {
+            Some("MCP arguments must be a JSON object".into())
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            let mut output = prepared.failed_output(error.clone(), ToolOutcome::Failed);
+            if wrapper && let Item::McpToolCall { result, .. } = &mut output.item {
+                *result = error;
+            }
+            return Err(output);
         }
         Ok(prepared)
     }
@@ -955,7 +1041,20 @@ impl Tools {
                 }
                 web_search::prepare(arguments).map(Action::WebSearch)
             }
-            Tool::Mcp => Err("prepare an MCP tool by its qualified name".into()),
+            Tool::McpSearch => {
+                let query = arguments["query"]
+                    .as_str()
+                    .filter(|q| !q.trim().is_empty())
+                    .ok_or("query must be a non-empty string")?;
+                let found = mcp::search::search(&self.mcp, query);
+                Ok(Action::McpSearch {
+                    query: query.into(),
+                    tools: found.iter().map(|tool| tool.name.clone()).collect(),
+                    text: mcp::search::result(&found),
+                })
+            }
+            Tool::Mcp | Tool::McpCall => Err("prepare an MCP tool by its qualified name".into()),
+
             Tool::AskUser => {
                 let args: AskUserArgs = parse(arguments)?;
                 if args.question.trim().is_empty()
@@ -1225,6 +1324,18 @@ impl Tools {
                     },
                 }
             }
+            Action::McpSearch { query, tools, text } => ToolOutput {
+                change_ticket: None,
+                images: Vec::new(),
+                text: text.clone(),
+                outcome: ToolOutcome::Completed,
+                item: Item::McpToolSearch {
+                    id: call.id.clone(),
+                    query: query.clone(),
+                    tools: tools.clone(),
+                    status: ItemStatus::Completed,
+                },
+            },
             Action::Mcp(tool) => {
                 let (text, result, outcome, images) = tool.call(&call.arguments, cancel).await;
                 ToolOutput {
@@ -1620,13 +1731,31 @@ fn tool_error(
             result: text.clone(),
             status: ItemStatus::Failed,
         },
-        Tool::Mcp => Item::McpToolCall {
+        Tool::McpSearch => Item::McpToolSearch {
+            id,
+            query: arguments["query"].as_str().unwrap_or_default().into(),
+            tools: Vec::new(),
+            status: ItemStatus::Failed,
+        },
+        Tool::Mcp | Tool::McpCall => Item::McpToolCall {
             content_items: Vec::new(),
             id,
             server: String::new(),
-            tool: String::new(),
-            arguments: arguments.clone(),
-            result: String::new(),
+            tool: if tool == Tool::McpCall {
+                arguments["name"].as_str().unwrap_or_default().into()
+            } else {
+                String::new()
+            },
+            arguments: if tool == Tool::McpCall {
+                arguments["arguments"].clone()
+            } else {
+                arguments.clone()
+            },
+            result: if tool == Tool::McpCall {
+                text.clone()
+            } else {
+                String::new()
+            },
             status: ItemStatus::Failed,
         },
         Tool::AskUser => Item::UserInput {

@@ -316,6 +316,24 @@ impl Body {
                     ),
                 );
             }
+            Item::McpToolSearch {
+                query,
+                tools,
+                status,
+                ..
+            } => {
+                let summary = format!(
+                    "Searched MCP tools {} · {}",
+                    code_span(&one_line(query, LINE_CHARS)),
+                    if *status == ItemStatus::Completed {
+                        format!("{} found", tools.len())
+                    } else {
+                        outcome(*status, feedback).to_string()
+                    }
+                );
+                self.block(assistant, &tool(&summary, &tools.join("\n"), ""));
+            }
+
             Item::WebSearch {
                 query,
                 results,

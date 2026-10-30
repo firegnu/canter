@@ -1,3 +1,4 @@
+pub(crate) mod search;
 use std::{collections::BTreeMap, net::IpAddr};
 
 use serde::Deserialize;
@@ -513,6 +514,40 @@ async fn connect(
 }
 
 impl McpTool {
+    pub(crate) fn validate_arguments(&self, arguments: &Value) -> Result<(), String> {
+        let schema = || format!("\nJSON Schema: {}", self.parameters);
+        if !arguments.is_object() {
+            return Err(format!(
+                "Invalid MCP arguments: expected a JSON object.{}",
+                schema()
+            ));
+        }
+        // MCP schemas are data, not permission to read files or fetch references.
+        let validator = jsonschema::options()
+            .offline()
+            .build(&self.parameters)
+            .map_err(|error| {
+                format!(
+                    "Cannot validate MCP arguments: invalid or unresolved JSON Schema: {error}{}",
+                    schema()
+                )
+            })?;
+        let errors: Vec<_> = validator
+            .iter_errors(arguments)
+            .take(10)
+            .map(|error| format!("{}: {error}", error.instance_path()))
+            .collect();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Invalid MCP arguments: {}{}",
+                errors.join("; "),
+                schema()
+            ))
+        }
+    }
+
     pub fn server(&self) -> &str {
         &self.server.name
     }
