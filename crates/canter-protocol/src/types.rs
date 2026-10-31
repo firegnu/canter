@@ -62,6 +62,9 @@ impl ReasoningEffort {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSettings {
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
+    pub non_interactive: bool,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     #[ts(optional = nullable)]
     pub tags: std::collections::BTreeMap<String, String>,
@@ -94,7 +97,7 @@ pub struct SessionSettings {
     pub approval_policy: PermissionMode,
 }
 
-fn is_false(value: &bool) -> bool {
+pub(crate) fn is_false(value: &bool) -> bool {
     !value
 }
 
@@ -144,6 +147,7 @@ impl SessionSnapshot {
             id: id.into(),
             goal: None,
             settings: SessionSettings {
+                non_interactive: false,
                 tags: Default::default(),
                 additional_directories: Vec::new(),
                 plan_mode: false,

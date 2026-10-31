@@ -504,3 +504,19 @@ in DESIGN. Model delivery is bounded by 20 entries, 8 KiB per block and 1 KiB pe
 
 Old snapshots default to an empty server list, and old clients skip the new item/event kinds.
 No protocol version bump or changes to existing file-change payloads are required.
+
+## Non-interactive sessions (P2-30)
+
+The `nonInteractive` info feature advertises the optional boolean of the same name
+in session creation, public settings and PATCH. Missing creation/settings fields
+mean false; missing PATCH fields preserve the current value. Switching requires an
+idle session. While enabled, input is accepted only while idle, approval requests
+are declined and user questions answered immediately by the server. Existing
+`request.opened/resolved` events identify these resolutions with
+`clientName: "non-interactive"`; no client answer is required. Goals retain their
+state and budget accounting, but goals and background notifications do not start
+new turns automatically. The terminal client disables the setting on resume.
+
+`canter exec` checks the feature before sending session requests, preserves the
+server's sandbox setting, and exposes the JSONL result and exit-code contract
+documented in `docs/DESIGN.md` under P2-30.

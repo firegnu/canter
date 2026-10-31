@@ -493,6 +493,7 @@ async fn run_scenario(
     let created = server
         .client
         .create_session(&SessionCreateParams {
+            non_interactive: false,
             tags: Default::default(),
             additional_directories: Vec::new(),
             cwd: cwd.display().to_string(),

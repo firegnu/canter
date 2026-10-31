@@ -282,6 +282,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
         features: Some(vec![
+            "nonInteractive".into(),
             "review".into(),
             "addDirectories".into(),
             "tags".into(),
@@ -628,6 +629,7 @@ async fn create(
         let mut sessions = app.sessions.lock().await;
         let id = crate::new_id();
         let settings = SessionSettings {
+            non_interactive: params.non_interactive,
             tags: params.tags,
             additional_directories: params.additional_directories,
             plan_mode: false,

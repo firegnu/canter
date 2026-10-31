@@ -4048,6 +4048,9 @@
             "null"
           ]
         },
+        "nonInteractive": {
+          "type": "boolean"
+        },
         "reasoningEffort": {
           "anyOf": [
             {
@@ -4430,6 +4433,9 @@
             "null"
           ]
         },
+        "nonInteractive": {
+          "type": "boolean"
+        },
         "planEnabled": {
           "description": "Effective tool switch, frozen when the server opens this session.",
           "type": [
@@ -4706,6 +4712,12 @@
         "name": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "nonInteractive": {
+          "type": [
+            "boolean",
             "null"
           ]
         },

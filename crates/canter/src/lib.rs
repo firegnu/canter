@@ -1,5 +1,5 @@
-//! The `canter` command. `canter serve` runs the server; everything else opens
-//! the terminal client, starting a server in the background when none runs.
+//! The `canter` command. Interactive and non-interactive clients share the
+//! server, starting it in the background when none runs.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -9,6 +9,7 @@ use canter_protocol::{PermissionMode, SessionUpdateParams};
 use canter_tui::client::Client;
 use canter_tui::{CLIENT_NAME, Connected, Connector, Launch, Open};
 
+pub mod exec;
 pub mod mcp;
 pub mod stats;
 
@@ -30,6 +31,11 @@ Usage:
   canter serve               run the server in the foreground
   canter serve --replace     replace it in the background and exit when ready
   canter usage               show daily token usage and cost by model
+  canter exec [options] [prompt]  run one turn without interaction
+  canter exec --resume <id> [prompt]
+  canter exec --last [prompt]    continue this directory's latest session
+                              omit prompt or use - to read stdin;
+                              --json prints events and a final result as JSONL
   canter stats [--all] [--json]  list recent sessions (all with --all)
   canter stats <number|id> [--json|--html]
   canter stats --last [--json|--html]  inspect the latest session
@@ -43,6 +49,7 @@ Usage:
 Options:
   -m, --model <model>  use this model (default: the server's config)
   --add-dir <path>      add a directory to the session (repeatable)
+  -r, --resume [id]     resume a session; without an id, pick from a list
   --tag <key=value>     label a new session (repeatable; last value wins)
   --yolo               use permission mode Allow all (never ask); commands still run in the sandbox
   -V, --version        show the version and commit
@@ -54,6 +61,7 @@ pub enum Command {
     Serve { replace: bool, foreground: bool },
     Usage,
     Stats(stats::Args),
+    Exec(exec::Args),
     Mcp(mcp::Command),
     Chat(ChatArgs),
     Help,
@@ -85,6 +93,12 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         .collect::<Result<Vec<_>, _>>()?;
     if args.first().map(String::as_str) == Some("mcp") {
         return mcp::parse(&args[1..]).map(Command::Mcp);
+    }
+    if args.first().map(String::as_str) == Some("exec") {
+        if matches!(args.get(1).map(String::as_str), Some("-h" | "--help")) {
+            return Ok(Command::Help);
+        }
+        return exec::parse(&args[1..]).map(Command::Exec);
     }
     if args.first().map(String::as_str) == Some("stats") {
         return stats::parse(&args[1..]).map(Command::Stats);
@@ -133,7 +147,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 chat.tags.insert(key.into(), value.into());
             }
             "-m" | "--model" => chat.model = Some(args.next().ok_or("-m needs a model name")?),
-            "--resume" => chat.resume = Some(args.next_if(|next| !next.starts_with('-'))),
+            "-r" | "--resume" => chat.resume = Some(args.next_if(|next| !next.starts_with('-'))),
             "-c" | "--continue" => chat.continue_latest = true,
             "--add-dir" => chat.additional_directories.push(
                 args.next_if(|next| !next.starts_with('-'))
@@ -258,6 +272,7 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
         .map_err(|error| error.to_string())?;
     let yolo = args.yolo.then_some(PermissionMode::AllowAll);
     let update = |model| SessionUpdateParams {
+        non_interactive: None,
         add_directories: args.additional_directories.clone(),
         plan_mode: None,
         name: None,

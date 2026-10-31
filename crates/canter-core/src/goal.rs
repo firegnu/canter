@@ -110,6 +110,10 @@ impl State {
     }
 
     pub(crate) fn schedule_goal(&mut self) {
+        if self.journal.snapshot.settings.non_interactive {
+            self.goal_deadline = None;
+            return;
+        }
         if (self.goal_running
             && self
                 .journal
@@ -196,6 +200,10 @@ impl Shared {
     }
 
     pub(crate) async fn next_goal(&self, state: &mut State) -> Result<Option<Done>, CoreError> {
+        if state.journal.snapshot.settings.non_interactive {
+            state.goal_deadline = None;
+            return Ok(None);
+        }
         if state.goal_deadline.is_none_or(|at| at > Instant::now()) {
             return Ok(None);
         }

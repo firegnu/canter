@@ -316,7 +316,8 @@ impl Shared {
     }
     async fn sync_background_inner(&self, collect_output: bool) -> Result<(), CoreError> {
         let mut state = self.state.lock().await;
-        let can_wake = state.active.is_none()
+        let can_wake = !state.journal.snapshot.settings.non_interactive
+            && state.active.is_none()
             && state.queue.is_empty()
             && state.requests.is_empty()
             && !state.background_events.draining
@@ -452,6 +453,7 @@ pub(crate) fn watch(shared: &Arc<Shared>) {
                 }
                 state.background_events.deadline = None;
                 if state.active.is_none()
+                    && !state.journal.snapshot.settings.non_interactive
                     && state.queue.is_empty()
                     && state.requests.is_empty()
                     && !state.background_events.draining

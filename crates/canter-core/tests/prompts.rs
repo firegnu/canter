@@ -15,6 +15,7 @@ impl Model for NoRequests {
 
 fn settings(cwd: &Path) -> SessionSettings {
     SessionSettings {
+        non_interactive: false,
         tags: Default::default(),
         additional_directories: Vec::new(),
         plan_mode: false,

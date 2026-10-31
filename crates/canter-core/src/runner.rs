@@ -1137,6 +1137,22 @@ async fn permission<'a>(
                         RequestKind::Approval(approval)
                     },
                 };
+                if state.journal.snapshot.settings.non_interactive {
+                    let feedback = "No one is available to approve this action. Do not perform it without approval.".to_owned();
+                    state
+                        .resolve_without_user(
+                            request,
+                            ApprovalResolution::Answered {
+                                decision: ApprovalDecision::DeclineWithFeedback,
+                                feedback: Some(feedback.clone()),
+                            },
+                        )
+                        .await?;
+                    return Ok(Some(PermissionCheck::Deny {
+                        cancel_turn: false,
+                        feedback: Some(feedback),
+                    }));
+                }
                 let (sender, receiver) = tokio::sync::oneshot::channel();
                 state
                     .journal
@@ -1213,6 +1229,39 @@ async fn ask_user(
             created_at: crate::journal::now(),
             kind: RequestKind::UserInput(question.clone()),
         };
+        if state.journal.snapshot.settings.non_interactive {
+            let answer = UserInputAnswer::Text {
+                text: "No one is available. Use your own judgment and continue.".into(),
+            };
+            state
+                .journal
+                .append(vec![EventPayload::ItemStarted {
+                    turn_id: turn_id.into(),
+                    item: call.started_item(),
+                }])
+                .await?;
+            state
+                .resolve_without_user(
+                    request,
+                    ApprovalResolution::UserInput {
+                        answer: answer.clone(),
+                    },
+                )
+                .await?;
+            return Ok(ToolOutput {
+                output_size: Default::default(),
+                change_ticket: None,
+                images: Vec::new(),
+                text: serde_json::json!({"question":question.question,"answer":answer}).to_string(),
+                item: Item::UserInput {
+                    id: question.item_id,
+                    question: question.question,
+                    answer: Some(answer),
+                    status: ItemStatus::Completed,
+                },
+                outcome: ToolOutcome::Completed,
+            });
+        }
         let (sender, receiver) = tokio::sync::oneshot::channel();
         state
             .journal

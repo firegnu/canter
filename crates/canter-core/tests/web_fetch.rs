@@ -163,6 +163,7 @@ async fn create_with(
         store,
         "fetch".into(),
         SessionSettings {
+            non_interactive: false,
             tags: Default::default(),
             additional_directories: Vec::new(),
             plan_mode: false,

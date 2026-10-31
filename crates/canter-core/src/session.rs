@@ -88,6 +88,26 @@ pub(crate) struct Active {
     pub done: watch::Receiver<Option<Result<u64, CoreError>>>,
 }
 impl State {
+    pub(crate) async fn resolve_without_user(
+        &mut self,
+        request: PendingRequest,
+        resolution: ApprovalResolution,
+    ) -> Result<(), CoreError> {
+        let request_id = request.id.clone();
+        let events = self
+            .journal
+            .append(vec![
+                EventPayload::RequestOpened { request },
+                EventPayload::RequestResolved {
+                    request_id: request_id.clone(),
+                    resolution,
+                    client_name: Some("non-interactive".into()),
+                },
+            ])
+            .await?;
+        self.resolved.insert(request_id, events[1].seq);
+        Ok(())
+    }
     fn new(journal: Journal) -> Self {
         Self {
             lsp_delivery: Default::default(),
@@ -795,6 +815,12 @@ impl Session {
         };
         let mut state = self.shared.state.lock().await;
         state.available()?;
+        if state.journal.snapshot.settings.non_interactive && state.active.is_some() {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "non-interactive sessions accept input only while idle",
+            ));
+        }
         if state
             .active
             .as_ref()
@@ -1230,6 +1256,15 @@ impl Session {
             ));
         }
         let mut settings = state.journal.snapshot.settings.clone();
+        if let Some(non_interactive) = params.non_interactive {
+            if state.active.is_some() || !state.queue.is_empty() || !state.requests.is_empty() {
+                return Err(CoreError::new(
+                    ErrorCode::Conflict,
+                    "cannot change interaction mode while a turn is active",
+                ));
+            }
+            settings.non_interactive = non_interactive;
+        }
         settings.additional_directories = crate::directories::append(
             settings.cwd.clone(),
             state.directory_home.clone(),

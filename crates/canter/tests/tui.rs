@@ -40,6 +40,62 @@ const WAIT: Duration = Duration::from_secs(20);
 const WRITE_ENV: &str = r#"printf '%s' "$CANTER_TEST_ENV" > env.txt"#;
 
 #[tokio::test]
+async fn interactive_resume_of_exec_restores_approval_and_question_dialogs() {
+    let mut world = World::new(vec![
+        text_reply("Exec done."),
+        shell_reply(WRITE_ENV),
+        ask_reply(),
+        text_reply("Interactive done."),
+    ])
+    .await;
+    world.start_server().await;
+    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_canter"))
+        .args(["exec", "Initial task"])
+        .env_clear()
+        .env("HOME", world.path("home"))
+        .env("CANTER_HOME", world.path("state"))
+        .current_dir(world.path("work"))
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let id = world.only_session().await;
+    let client = Client::new(&world.path("state/server.sock")).unwrap();
+    client
+        .update(
+            &id,
+            &canter_protocol::SessionUpdateParams {
+                approval_policy: Some(PermissionMode::AlwaysAsk),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    world.stop_server(Signal::SIGTERM).await;
+    world.start_server().await;
+    let terminal = world.open(&["-r", &id], "interactive-resume").await;
+    terminal.wait_idle().await;
+    assert!(!world.snapshot(&id).await.settings.non_interactive);
+    terminal
+        .type_line("Continue with a command and a question.")
+        .await;
+    terminal.wait_for("Run this command?").await;
+    assert!(!world.path("work/env.txt").exists());
+    read_the_box().await;
+    terminal.press(KeyCode::Enter).await;
+    terminal.wait_for("Which storage should we use?").await;
+    read_the_box().await;
+    terminal.press(KeyCode::Char('2')).await;
+    terminal.wait_for("Interactive done.").await;
+    terminal.wait_idle().await;
+    terminal.quit().await;
+    assert!(world.path("work/env.txt").exists());
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
 async fn new_handoff_and_plan_inherit_directories_and_skip_deleted_ones() {
     for action in ["new", "handoff", "plan"] {
         for deleted in [false, true] {

@@ -635,6 +635,7 @@ mod tests {
     fn snapshot(name: Option<&str>, turns: Vec<Turn>) -> SessionSnapshot {
         let mut snapshot = SessionSnapshot::empty("4f2a-id");
         snapshot.settings = SessionSettings {
+            non_interactive: false,
             tags: Default::default(),
             additional_directories: Vec::new(),
             plan_mode: false,

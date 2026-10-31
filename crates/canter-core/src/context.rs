@@ -561,6 +561,7 @@ mod tests {
             Arc::new(canter_store::Store::new(temp.path().join("state")).unwrap()),
             "context".into(),
             SessionSettings {
+                non_interactive: false,
                 tags: Default::default(),
                 additional_directories: Vec::new(),
                 plan_mode: false,

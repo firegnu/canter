@@ -1,5 +1,43 @@
 use super::*;
 
+#[tokio::test]
+async fn non_interactive_background_completion_does_not_start_a_turn() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("allowAll").await;
+    fixture
+        .client
+        .patch(&url)
+        .json(&json!({"nonInteractive":true}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fixture.say(&url, "wake-background").await;
+    fixture.release("release-wake");
+    fixture
+        .until(&url, |s| !s.background_commands[0].running)
+        .await;
+    fixture.no_extra_turn(&url, 1).await;
+    fixture
+        .client
+        .patch(&url)
+        .json(&json!({"nonInteractive":false}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fixture
+        .say(&url, "Inspect the saved completion notice.")
+        .await;
+    std::fs::remove_file(fixture.root.path().join("project/release-wake")).unwrap();
+    fixture.say(&url, "wake-background").await;
+    fixture.release("release-wake");
+    fixture.turns(&url, 4).await;
+    fixture.close().await;
+}
+
 impl Fixture {
     fn release(&self, name: &str) {
         std::fs::write(self.root.path().join("project").join(name), "").unwrap();

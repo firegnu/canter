@@ -545,6 +545,7 @@ mod creation_tests {
             let temp = tempfile::tempdir().unwrap();
             let store = Store::new(temp.path()).unwrap();
             let settings = SessionSettings {
+                non_interactive: false,
                 tags: Default::default(),
                 additional_directories: Vec::new(),
                 plan_mode: false,

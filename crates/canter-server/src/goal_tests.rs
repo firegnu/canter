@@ -14,6 +14,67 @@ struct Fixture {
     servers: Vec<tokio::task::JoinHandle<()>>,
 }
 
+#[tokio::test]
+async fn non_interactive_goal_runs_one_turn_and_keeps_budget_then_interactive_continues() {
+    let fixture = Fixture::new(
+        json!({"prices":{"fake":{"peak":{"cache_hit":0,"cache_miss":0,"output":1000000}}}}),
+    )
+    .await;
+    let url = fixture.create().await;
+    fixture
+        .client
+        .patch(&url)
+        .json(&json!({"nonInteractive":true}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fixture
+        .set(
+            &url,
+            json!({"objective":"Finish both steps","budgetUsd":10}),
+        )
+        .await;
+    let queued = fixture.client.post(format!("{url}/input")).json(&json!({"input":[{"type":"text","text":"A competing turn"}],"clientName":"other-client"})).send().await.unwrap();
+    assert_eq!(
+        queued.status(),
+        StatusCode::CONFLICT,
+        "non-interactive input must not queue another turn"
+    );
+    fixture.respond(vec![charged(reply("First step."), 1)]);
+    fixture
+        .until(&url, |s| s["turns"][0]["status"] == "completed")
+        .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let snapshot = fixture.snapshot(&url).await;
+    assert_eq!(snapshot["turns"].as_array().unwrap().len(), 1);
+    assert_eq!(snapshot["goal"]["status"], "active");
+    assert_eq!(snapshot["goal"]["cost"]["usd"], 1.0);
+    fixture
+        .client
+        .patch(&url)
+        .json(&json!({"nonInteractive":false}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fixture.respond(vec![
+        reply("Second step."),
+        call("update_goal", json!({"status":"complete"})),
+        reply("Done."),
+    ]);
+    fixture.input(&url, "Continue interactively.").await;
+    let snapshot = fixture
+        .until(&url, |s| {
+            s["goal"]["status"] == "complete" && s["status"] == "idle"
+        })
+        .await;
+    assert_eq!(snapshot["turns"].as_array().unwrap().len(), 3);
+    fixture.close().await;
+}
+
 fn reply(text: &str) -> Value {
     json!({"choices":[{"index":0,"delta":{"content":text},"finish_reason":"stop"}]})
 }
