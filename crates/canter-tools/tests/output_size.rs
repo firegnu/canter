@@ -91,3 +91,27 @@ async fn truncated_read_does_not_read_extra_bytes_when_original_size_is_unavaila
     assert_eq!(read_counts[0], read_counts[1]);
     assert_eq!(outputs[0], outputs[1]);
 }
+
+#[tokio::test]
+async fn compaction_references_large_files_without_reading_the_discarded_suffix() {
+    let bytes = Arc::new(AtomicUsize::new(0));
+    let tools = Tools::new(Arc::new(StreamingExecutor {
+        bytes: bytes.clone(),
+        stats: Arc::new(AtomicUsize::new(0)),
+    }));
+    let cancel = CancellationToken::new();
+    let call = tools
+        .prepare(Tool::Read, "restore", r#"{"path":"large.txt"}"#, &cancel)
+        .await
+        .unwrap();
+    let content = tools
+        .read_for_compaction(common::allow(&call), &cancel)
+        .await
+        .unwrap();
+    // None is the reference-only result; one extra byte proves it exceeds the cap.
+    assert_eq!(content, None);
+    assert_eq!(
+        bytes.load(Ordering::Relaxed),
+        canter_tools::MAX_READ_BYTES + 1
+    );
+}

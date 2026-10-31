@@ -378,7 +378,7 @@ async fn current_file_rules_hide_forbidden_paths_and_only_reference_prompt_paths
 }
 
 #[tokio::test]
-async fn excludes_deleted_unreadable_nontext_and_system_instruction_files() {
+async fn excludes_deleted_unreadable_detected_nontext_and_system_instruction_files() {
     let fixture = Fixture::new(vec![
         calls(&[
             ("read", json!({"path":"keep.txt"})),
@@ -409,9 +409,10 @@ async fn excludes_deleted_unreadable_nontext_and_system_instruction_files() {
     std::fs::create_dir(fixture.root.path().join("project/directory.txt")).unwrap();
     fixture.write("binary.txt", [vec![b'x'; 70_000], vec![0, 0xff]].concat());
     fixture.write("image.txt", b"GIF89aabcdef");
+    // The binary suffix is beyond the bounded read. Only its name is restored.
     assert_eq!(
         fixture.compact().await["restoredFiles"],
-        json!([{"path":"keep.txt","lines":1}])
+        json!([{"path":"binary.txt"}, {"path":"keep.txt","lines":1}])
     );
     fixture.close().await;
 }

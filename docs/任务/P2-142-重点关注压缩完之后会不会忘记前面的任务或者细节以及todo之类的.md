@@ -108,3 +108,10 @@ Skills restored (corral-dispatch)
 - 主控决定（10-31）：保留 5 个、单个 5,000 token、合计 50,000 token 三个上限。合计上限目前不可达仍保留，不造超限测试、不为测试另开小预算，只测 5 个接近单文件上限的文件都能带回。token 按最终发给模型的内容估算，包含自动重读说明和行号。已按此实现和验证，没有其它待主控决定的事。
 - 没做的事：未改摘要提示词、九个小节、压缩线或触发时机；未带回 shell、MCP、网页输出；未跑全套或真实模型试跑；未合并、推送、安装或重启用户服务。
 - 踩过的坑：直接复用普通 read 会受 2,000 行分页限制，空行较多的小文件仍会被截断，改为复用执行许可和文件执行器、单独做有界文本捕获与完整 UTF-8 校验，保持普通 read 不变。假模型只回 `[DONE]` 会触发既有断流重试并消费下一份响应，失败测试改用明确的不可重试 HTTP 错误。遥测的文件信号使用规范化绝对路径，修正了最初按相对路径写的测试预期；nextest 中没有独立 rewind 测试二进制，改为在相关二进制里按测试名筛选。
+
+## 返工
+
+- 10-31 用户选定：只处理交叉审查「建议改第 2 条」。`read_for_compaction` 最多读取 `MAX_READ_BYTES + 1` 字节，超过 `MAX_READ_BYTES` 后立即返回只引用名字的结果，不再扫描余下内容。选择现有的 64 KiB 边界，多读 1 字节用于确认超限；复用文件工具现有上限，不把核心层的 token 估算引入工具层。最终消息的单文件 5,000 token 判断照旧。是否二进制只检查已经读到的部分，DESIGN 同步记录了这一变化。
+- 测试先红后绿：新增 `compaction_references_large_files_without_reading_the_discarded_suffix`，复用已有计数读取器。旧实现继续扫描丢弃部分，触发「读取超过 80,000 字节」断言；新实现返回仅引用结果，读取字节数严格为 65,537。没有使用耗时阈值或实际创建 GiB 文件。现有集成测试保留「70,000 字节文本之后才出现二进制」的输入，按用户确认的新行为改为断言仅带回该文件名，已读部分发现的图片仍排除。
+- 验证范围：`cargo test -p canter-tools --test output_size compaction_references_large_files_without_reading_the_discarded_suffix -- --exact`（1 条）、`cargo nextest run -p canter-core --test restore_files`（12 条）、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 全部通过。所有 Cargo 命令使用本 worktree 的独立编译目录，所有命令前台等待结束；未跑其它测试、未调用真实模型。
+- 审查其它条未改，普通 read 未改；没有新的待主控决定事项。未合并或推送。

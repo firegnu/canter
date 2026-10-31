@@ -1697,9 +1697,9 @@ impl Tools {
         Ok((text, Vec::new(), output_size))
     }
 
-    /// Re-read a whole text file for compaction without read's paging limits.
-    /// None means valid text larger than the bounded capture. Still validate the
-    /// remainder so a binary file with a text prefix is never restored by name.
+    /// Re-read text for compaction without read's paging limits.
+    /// None means the file exceeds MAX_READ_BYTES; only the bounded prefix is
+    /// checked for binary data, and the remainder is not read.
     pub async fn read_for_compaction(
         &self,
         permit: ExecutionPermit<'_>,
@@ -1723,10 +1723,14 @@ impl Tools {
                 "file target changed since permission check",
             ));
         }
-        let mut reader = self.executor.open_file(&path, cancel).await?;
+        let mut reader = self
+            .executor
+            .open_file(&path, cancel)
+            .await?
+            .take(MAX_READ_BYTES as u64 + 1);
         let invalid =
             || std::io::Error::new(std::io::ErrorKind::InvalidData, "not a UTF-8 text file");
-        let mut content = Some(String::new());
+        let mut content = String::new();
         let mut header = Vec::new();
         let mut buffer = [0; 8196];
         let mut pending = 0;
@@ -1752,32 +1756,27 @@ impl Tools {
                 ),
                 Err(_) => return Err(invalid()),
             };
-            if let Some(saved) = &mut content {
-                if saved.len() + text.len() <= MAX_READ_BYTES {
-                    saved.push_str(text);
-                } else {
-                    content = None;
-                }
+            if content.len() + bytes.len() > MAX_READ_BYTES {
+                return Ok(None);
             }
+            content.push_str(text);
             let length = bytes.len();
             buffer.copy_within(length - remaining..length, 0);
             pending = remaining;
         }
-        Ok(content.map(|content| {
-            let mut text = String::new();
-            let mut lines = 0;
-            for line in content.split_inclusive('\n') {
-                lines += 1;
-                text.push_str(&format!("{lines}: {line}"));
-                if !line.ends_with('\n') {
-                    text.push('\n');
-                }
+        let mut text = String::new();
+        let mut lines = 0;
+        for line in content.split_inclusive('\n') {
+            lines += 1;
+            text.push_str(&format!("{lines}: {line}"));
+            if !line.ends_with('\n') {
+                text.push('\n');
             }
-            if lines == 0 {
-                text.push_str("startLine=1 is beyond end of file (0 lines).");
-            }
-            (text, lines)
-        }))
+        }
+        if lines == 0 {
+            text.push_str("startLine=1 is beyond end of file (0 lines).");
+        }
+        Ok(Some((text, lines)))
     }
 }
 
