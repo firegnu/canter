@@ -4048,9 +4048,6 @@
             "null"
           ]
         },
-        "nonInteractive": {
-          "type": "boolean"
-        },
         "reasoningEffort": {
           "anyOf": [
             {
@@ -4147,6 +4144,17 @@
     "SessionInputParams": {
       "description": "POST /v1/sessions/{id}/input. Idle starts a turn; mode applies when busy.",
       "properties": {
+        "approvalPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override permissions for this turn only; never changes session settings."
+        },
         "clientName": {
           "type": "string"
         },
@@ -4159,6 +4167,10 @@
         "mode": {
           "$ref": "#/$defs/InputMode",
           "default": "queue"
+        },
+        "nonInteractive": {
+          "description": "No client will answer requests in this turn. Accepted only while idle.",
+          "type": "boolean"
         },
         "review": {
           "description": "Present for a read-only review turn; the single-line display title.",
@@ -4432,9 +4444,6 @@
             "string",
             "null"
           ]
-        },
-        "nonInteractive": {
-          "type": "boolean"
         },
         "planEnabled": {
           "description": "Effective tool switch, frozen when the server opens this session.",
@@ -4712,12 +4721,6 @@
         "name": {
           "type": [
             "string",
-            "null"
-          ]
-        },
-        "nonInteractive": {
-          "type": [
-            "boolean",
             "null"
           ]
         },

@@ -561,7 +561,6 @@ mod tests {
             Arc::new(canter_store::Store::new(temp.path().join("state")).unwrap()),
             "context".into(),
             SessionSettings {
-                non_interactive: false,
                 tags: Default::default(),
                 additional_directories: Vec::new(),
                 plan_mode: false,
@@ -586,6 +585,8 @@ mod tests {
         let mut events = session.subscribe(0).await.unwrap();
         session
             .input(SessionInputParams {
+                non_interactive: false,
+                approval_policy: None,
                 review: None,
                 input: vec![
                     UserInput::Text {

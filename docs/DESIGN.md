@@ -219,15 +219,17 @@ LSP 默认关闭；`config.json` 的 `lsp.enabled` 开启即授权配置中的�
 
 主控决定：服务端 `sandbox: false` 时不拒绝 exec，沿用用户配置；仍按原权限判断，需要批准的 shell 自动拒绝（已有只读白名单、规则判断不变）。stderr 提示一次沙箱关闭、需批准的命令会被拒、可显式使用 `--yolo`。默认开沙箱时，工作区文件读写、墙内命令照旧免问；扩权、联网、MCP、web_fetch、文件规则、计划等需要批准的请求一律拒绝，不等待客户端，告诉模型无人批准；硬禁止和危险命令检查保留。ask_user 自动得到英文说明 `No one is available. Use your own judgment and continue.`，不代表批准。
 
-协议沿用第 8 条 Codex v2 风格的会话设置：创建参数和 SessionSettings 增加 `nonInteractive`（缺省 false），PATCH 增加可选 `nonInteractive`，省略不改变。设置存盘、随 session.updated 广播；切换仅限空闲会话，避免改变正在运行的轮。exec 在创建或续跑前开启；交互界面恢复空闲的非交互会话时关闭，之后批准、提问和自动续跑沿用原行为。`GET /v1/info.features` 增加 `nonInteractive`；exec 在任何创建、恢复、更新、输入请求前检查，不支持时提示 `canter serve --replace` 并退出。
+10-31 交叉审查后用户决定：非交互改为这次输入 / 这一轮的属性，移除会话创建、SessionSettings 和 PATCH 的 `nonInteractive`；已存盘的旧设置字段读到时忽略。原设计把设置留在会话上，导致已经打开的终端之后也自动回答问题、永久改变权限档，并在 PATCH 与输入之间存在竞态。现在 `SessionInputParams` 同时携带 `nonInteractive`（缺省 false）和可选 `approvalPolicy`（省略沿用会话档位）；服务端在接受输入的同一把锁内建立该轮的临时状态。exec 两种权限档只管这一轮，新会话的存盘档位用普通默认 alwaysAsk，续跑不改原档位。临时权限也用于沙箱执行配置与该轮遥测。任何客户端打开会话都无需改设置，运行中的轮仍可查看、打断；之后的普通输入按会话原档位弹批准和提问框。
 
-主控决定：nonInteractive 期间不因目标或后台事件自动开启下一轮；目标状态与预算记账保留，预算限制及同轮收尾仍照 P2-109。该模式只在空闲时接受输入，忙时返回 conflict，不排队开启额外轮。后台进程生命周期沿用原设计，完成消息留给后续输入；交互恢复后按原机制继续。与 Codex rust-v0.163.0 的 exec 在客户端处理服务端请求不同，canter 在服务端按会话处理，因此 CLI 断线也不会留下等批准或提问的请求。
+协议沿用第 8 条 Codex v2 风格的输入参数，canter 将无人处理请求的语义放在服务端。`GET /v1/info.features` 用 `nonInteractiveInput` 标识这套按轮能力，与先前按会话的 `nonInteractive` 区分；exec 在任何创建、恢复、更新、输入请求前检查，不支持时提示 `canter serve --replace` 并退出。
+
+主控决定：nonInteractive 这一轮结束后不因目标或后台事件自动开启下一轮，运行时暂停自动开轮，等下一条普通输入再恢复原机制；打开会话本身不会开轮。目标状态与预算记账保留，预算限制及同轮收尾仍照 P2-109。带非交互或临时权限档的输入只在空闲时接受，忙时返回 conflict；非交互轮运行时也不接受排队 / 插入输入，避免把另一客户端的输入混入无人处理的轮。后台进程生命周期沿用原设计，完成消息留给后续输入。与 Codex rust-v0.163.0 的 exec 在客户端处理服务端请求不同，canter 在服务端按轮处理，因此 CLI 断线也不会留下等批准或提问的请求。
 
 自动处理沿用 request.opened / request.resolved，在同一次服务端锁内立即写入，不注册待答通道。普通/沙箱批准用 answered + declineWithFeedback，计划批准用 cancelled；`clientName: "non-interactive"` 标明自动处理。提问用 userInput + text 回答。事件及工具结果照常存盘，旧客户端按既有类型读取。
 
-默认 stdout 仅输出这一轮最后一条完整 agentMessage；工具、自动拒绝、重试、警告和错误简要写 stderr。`--json` 的 stdout 为 JSONL：第一条 `{"type":"exec.started","sessionId":"…"}`；随后原样输出本轮开始以来的公开 SSE Event（既有 type、seq、sessionId、timestamp 及载荷）；最后一条 `{"type":"exec.completed","sessionId":"…","turnId":"…","outcome":"completed|failed|interrupted|budgetLimited|approvalDenied|error","exitCode":0,"usage":<TokenUsageBreakdown 或 null>,"cost":<UsageCost 或 null>,"error":<英文原因或 null>}`。启动前失败时两个 ID 可为 null，仍输出 exec.completed；金额未知沿用 unknown，不猜价格。这些事件名和字段今后只加不改；与 Codex 的独立 ThreadEvent 简化格式不同，canter 复用公开事件并增加稳定的 exec 结局行。
+默认 stdout 仅输出这一轮最后一条完整 agentMessage；工具、自动拒绝、重试、警告和错误简要写 stderr。读取 stdin 前先在 stderr 打一行 `Reading additional input from stdin...`，使未关闭的管道等待可见。`--json` 的 stdout 为 JSONL：第一条 `{"type":"exec.started","sessionId":"…"}`；随后原样输出本轮开始以来的公开 SSE Event（既有 type、seq、sessionId、timestamp 及载荷）；最后一条 `{"type":"exec.completed","sessionId":"…","turnId":"…","outcome":"completed|failed|interrupted|budgetLimited|approvalDenied|error","exitCode":0,"usage":<TokenUsageBreakdown 或 null>,"cost":<UsageCost 或 null>,"error":<英文原因或 null>}`。启动前失败时两个 ID 可为 null，仍输出 exec.completed；金额未知沿用 unknown，不猜价格。这些事件名和字段今后只加不改；与 Codex 的独立 ThreadEvent 简化格式不同，canter 复用公开事件并增加稳定的 exec 结局行。
 
-退出码：0 正常完成；1 客户端、参数、连接或协议错误；2 模型/轮最终失败；3 有批准被自动拒绝（即使模型随后正常结束）；4 本轮触及目标预算上限；130 被打断（含 Ctrl+C）。同时发生时按 130、2、4、3、0 判定，客户端错误为 1。非 0 都在 stderr 写原因。Ctrl+C 向服务端打断本轮并等其确认结束才退出；不将仍在运行的轮当作已中断成功。
+退出码：0 正常完成；1 客户端、参数、连接或协议错误；2 模型/轮最终失败；3 有批准被自动拒绝（即使模型随后正常结束）；4 本轮触及目标预算上限；130 被打断（含 Ctrl+C / SIGINT、SIGTERM、SIGHUP，统一按中断处理）。同时发生时按 130、2、4、3、0 判定，客户端错误为 1。非 0 都在 stderr 写原因。上述三个信号均向服务端打断本轮并等其确认结束才退出；不将仍在运行的轮当作已中断成功。
 
 ## 遥测记录（P2-169）
 

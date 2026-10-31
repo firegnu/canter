@@ -379,6 +379,8 @@ async fn drive_turn(
         .send_input(
             session,
             &SessionInputParams {
+                non_interactive: false,
+                approval_policy: None,
                 input: vec![UserInput::Text { text }],
                 mode: InputMode::Queue,
                 client_name: "p2-72".into(),
@@ -493,7 +495,6 @@ async fn run_scenario(
     let created = server
         .client
         .create_session(&SessionCreateParams {
-            non_interactive: false,
             tags: Default::default(),
             additional_directories: Vec::new(),
             cwd: cwd.display().to_string(),

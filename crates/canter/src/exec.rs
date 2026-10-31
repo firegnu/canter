@@ -123,6 +123,7 @@ async fn run_inner(
 ) -> Result<u8, String> {
     let mut prompt = args.first.filter(|text| text != "-").unwrap_or_default();
     if prompt.is_empty() || !std::io::stdin().is_terminal() {
+        eprintln!("Reading additional input from stdin...");
         let mut input = String::new();
         std::io::stdin()
             .read_to_string(&mut input)
@@ -138,6 +139,18 @@ async fn run_inner(
     }
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
         .map_err(|error| error.to_string())?;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|error| error.to_string())?;
+    let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        .map_err(|error| error.to_string())?;
+    let signal = async move {
+        tokio::select! {
+            _ = interrupt.recv() => {},
+            _ = terminate.recv() => {},
+            _ = hangup.recv() => {},
+        }
+    };
+    tokio::pin!(signal);
     let connection = canter_server::ensure_server(&context.state_dir, &context.executable)
         .await
         .map_err(|error| error.to_string())?;
@@ -152,7 +165,7 @@ async fn run_inner(
         .features
         .unwrap_or_default()
         .iter()
-        .any(|feature| feature == "nonInteractive")
+        .any(|feature| feature == "nonInteractiveInput")
     {
         return Err(
             "This server does not support exec; run canter serve --replace and retry".into(),
@@ -191,9 +204,7 @@ async fn run_inner(
             .update(
                 &id,
                 &SessionUpdateParams {
-                    non_interactive: Some(true),
                     model: args.model,
-                    approval_policy: Some(policy),
                     add_directories: args.additional_directories,
                     ..Default::default()
                 },
@@ -208,14 +219,13 @@ async fn run_inner(
     } else {
         client
             .create_session(&SessionCreateParams {
-                non_interactive: true,
                 tags: args.tags,
                 additional_directories: args.additional_directories,
                 cwd,
                 env: context.env,
                 model: args.model.unwrap_or_default(),
                 reasoning_effort: None,
-                approval_policy: policy,
+                approval_policy: PermissionMode::AlwaysAsk,
                 input: None,
                 name: None,
                 client_name: "canter-exec".into(),
@@ -238,13 +248,15 @@ async fn run_inner(
         .map_err(|error| error.to_string())?;
     tokio::select! {
         biased;
-        _ = interrupt.recv() => return output.finish(130,"interrupted",Some("Interrupted before starting the turn."),None),
+        _ = &mut signal => return output.finish(130,"interrupted",Some("Interrupted before starting the turn."),None),
         _ = std::future::ready(()) => {},
     }
     let started = client
         .send_input(
             id,
             &SessionInputParams {
+                non_interactive: true,
+                approval_policy: Some(policy),
                 review: None,
                 input: vec![UserInput::Text { text: prompt }],
                 mode: InputMode::Queue,
@@ -261,7 +273,7 @@ async fn run_inner(
     loop {
         let event = tokio::select! {
             biased;
-            _ = interrupt.recv(), if !interrupted => {
+            _ = &mut signal, if !interrupted => {
                 interrupted = true;
                 let turn_id = output.turn_id.as_deref().ok_or("server did not start a turn")?;
                 match client.interrupt(id,turn_id,false).await {

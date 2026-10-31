@@ -7,7 +7,7 @@ import type { ReasoningEffort } from "./ReasoningEffort";
  * Omitted/empty addDirectories appends nothing.
  * The resulting complete public settings are emitted in session.updated.
  */
-export type SessionUpdateParams = { nonInteractive?: boolean,
+export type SessionUpdateParams = {
 /**
  * Append directories; never replaces or removes existing directories.
  */

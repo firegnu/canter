@@ -328,9 +328,6 @@ pub struct SessionListResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(optional_fields = nullable)]
 pub struct SessionCreateParams {
-    #[serde(default, skip_serializing_if = "crate::types::is_false")]
-    #[ts(optional = nullable)]
-    pub non_interactive: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[ts(optional = nullable)]
     pub tags: BTreeMap<String, String>,
@@ -384,6 +381,14 @@ pub enum InputMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInputParams {
+    /// No client will answer requests in this turn. Accepted only while idle.
+    #[serde(default, skip_serializing_if = "crate::types::is_false")]
+    #[ts(optional = nullable)]
+    pub non_interactive: bool,
+    /// Override permissions for this turn only; never changes session settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approval_policy: Option<PermissionMode>,
     /// Present for a read-only review turn; the single-line display title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -479,9 +484,6 @@ pub struct RequestResolveResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(optional_fields = nullable)]
 pub struct SessionUpdateParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub non_interactive: Option<bool>,
     /// Append directories; never replaces or removes existing directories.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional = nullable)]

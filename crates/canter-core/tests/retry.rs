@@ -52,7 +52,6 @@ async fn create(root: &std::path::Path, store: Arc<Store>, model: Arc<ChatComple
         store,
         "retry".into(),
         SessionSettings {
-            non_interactive: false,
             tags: Default::default(),
             additional_directories: Vec::new(),
             cwd: root.to_string_lossy().into(),
@@ -75,6 +74,8 @@ async fn create(root: &std::path::Path, store: Arc<Store>, model: Arc<ChatComple
 }
 fn input() -> SessionInputParams {
     SessionInputParams {
+        non_interactive: false,
+        approval_policy: None,
         input: vec![UserInput::Text {
             text: "continue".into(),
         }],

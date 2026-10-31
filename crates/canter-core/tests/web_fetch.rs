@@ -163,7 +163,6 @@ async fn create_with(
         store,
         "fetch".into(),
         SessionSettings {
-            non_interactive: false,
             tags: Default::default(),
             additional_directories: Vec::new(),
             plan_mode: false,
@@ -205,6 +204,8 @@ async fn create_with(
 }
 fn input(review: bool) -> SessionInputParams {
     SessionInputParams {
+        non_interactive: false,
+        approval_policy: None,
         input: vec![UserInput::Text {
             text: "fetch fixtures".into(),
         }],

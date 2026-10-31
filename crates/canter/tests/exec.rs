@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
 };
 
@@ -159,6 +159,36 @@ impl Drop for World {
 }
 
 #[tokio::test]
+async fn exec_announces_stdin_before_waiting_for_eof() {
+    let world = World::new(vec![reply("Read task.")], true).await;
+    let mut child = World::command(world.root.path())
+        .args(["exec", "Task argument"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut line = String::new();
+    tokio::time::timeout(WAIT, stderr.read_line(&mut line))
+        .await
+        .expect("stdin notice must precede EOF")
+        .unwrap();
+    assert_eq!(line, "Reading additional input from stdin...\n");
+    assert!(world.requests.lock().unwrap().is_empty());
+    stdin.write_all(b"Piped context").await.unwrap();
+    drop(stdin);
+    let output = tokio::time::timeout(WAIT, child.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Read task.\n");
+    world.stop().await;
+}
+
+#[tokio::test]
 async fn exec_reads_stdin_and_appends_piped_context() {
     for (args, expected) in [
         (vec!["exec"], "Task from stdin"),
@@ -241,12 +271,18 @@ async fn exec_runs_one_turn_prints_final_answer_and_keeps_the_session() {
     assert_eq!(sessions.len(), 1);
     let snapshot = client.read_session(&sessions[0].id).await.unwrap().session;
     assert_eq!(snapshot.turns.len(), 1);
-    assert_eq!(snapshot.settings.tags["task"], "example");
-    assert_eq!(snapshot.settings.additional_directories.len(), 1);
     assert_eq!(
         snapshot.settings.approval_policy,
-        canter_protocol::PermissionMode::AskForExecution
+        canter_protocol::PermissionMode::AlwaysAsk
     );
+    assert!(
+        serde_json::to_value(&snapshot.settings)
+            .unwrap()
+            .get("nonInteractive")
+            .is_none()
+    );
+    assert_eq!(snapshot.settings.tags["task"], "example");
+    assert_eq!(snapshot.settings.additional_directories.len(), 1);
     let stats = world.cli(&["stats", &snapshot.id, "--json"], "").await;
     assert!(stats.status.success());
     assert_eq!(world.requests.lock().unwrap().len(), 3);
@@ -351,6 +387,12 @@ async fn exec_json_outputs_events_and_a_final_usage_cost_and_session_record() {
             .any(|event| event["type"] == "item.completed"
                 && event["item"]["text"] == "JSON result.")
     );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["type"] == "telemetry.modelRequest"
+                && event["settings"]["approvalPolicy"] == "askForExecution")
+    );
     let result = events.last().unwrap();
     assert_eq!(result["type"], "exec.completed");
     assert_eq!(result["outcome"], "completed");
@@ -411,7 +453,7 @@ async fn exec_resumes_by_id_and_last_only_in_the_current_directory() {
 
 #[tokio::test]
 async fn exec_rejects_old_servers_before_any_session_request() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     let root = tempfile::Builder::new()
         .prefix("canter-exec-old-")
         .tempdir_in("/tmp")
@@ -421,8 +463,17 @@ async fn exec_rejects_old_servers_before_any_session_request() {
     }
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = calls.clone();
-    let router = Router::new().route("/v1/info", axum::routing::get(|| async {
-        Json(json!({"serverVersion":canter_server::VERSION,"protocolVersion":1,"sessions":[]}))
+    let old_feature = Arc::new(AtomicBool::new(false));
+    let advertised = old_feature.clone();
+    let router = Router::new().route("/v1/info", axum::routing::get(move || {
+        let advertised = advertised.clone();
+        async move {
+            let mut info = json!({"serverVersion":canter_server::VERSION,"protocolVersion":1,"sessions":[]});
+            if advertised.load(Ordering::SeqCst) {
+                info["features"] = json!(["nonInteractive"]);
+            }
+            Json(info)
+        }
     })).fallback(move || { observed.fetch_add(1,Ordering::SeqCst); async { axum::http::StatusCode::NOT_FOUND } });
     let socket = root.path().join("old.sock");
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
@@ -443,21 +494,24 @@ async fn exec_rejects_old_servers_before_any_session_request() {
     let server = tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    for args in [
-        vec!["exec", "--json", "Task"],
-        vec!["exec", "--resume", "s1", "Task"],
-        vec!["exec", "--last", "Task"],
-    ] {
-        let output = World::command(root.path())
-            .args(args)
-            .output()
-            .await
-            .unwrap();
-        assert_eq!(output.status.code(), Some(1));
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("canter serve --replace"),
-            "{output:?}"
-        );
+    for advertise_old_setting in [false, true] {
+        old_feature.store(advertise_old_setting, Ordering::SeqCst);
+        for args in [
+            vec!["exec", "--json", "Task"],
+            vec!["exec", "--resume", "s1", "Task"],
+            vec!["exec", "--last", "Task"],
+        ] {
+            let output = World::command(root.path())
+                .args(args)
+                .output()
+                .await
+                .unwrap();
+            assert_eq!(output.status.code(), Some(1));
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("canter serve --replace"),
+                "{output:?}"
+            );
+        }
     }
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     server.abort();
@@ -575,6 +629,10 @@ async fn exec_reports_final_model_failure_with_a_distinct_exit_code() {
 async fn exec_reports_goal_budget_limit_after_the_same_turn_summary() {
     let world = World::configured(
         vec![
+            call(
+                "shell",
+                json!({"command":"touch ready; while [ ! -e release ]; do /bin/sleep 0.05; done"}),
+            ),
             reply("Initial step."),
             reply("Reached limit."),
             reply("Budget summary."),
@@ -584,8 +642,16 @@ async fn exec_reports_goal_budget_limit_after_the_same_turn_summary() {
     )
     .await;
     let client = world.client().await;
-    let params = serde_json::from_value(json!({"nonInteractive":true,"cwd":world.root.path().join("project"),"env":{},"model":"fake","approvalPolicy":"askForExecution","clientName":"test"})).unwrap();
+    let params = serde_json::from_value(json!({"cwd":world.root.path().join("project"),"env":{"HOME":world.root.path().join("home"),"PATH":"/usr/bin:/bin"},"model":"fake","approvalPolicy":"alwaysAsk","clientName":"test"})).unwrap();
     let id = client.create_session(&params).await.unwrap().session.id;
+    client.send_input(&id, &serde_json::from_value(json!({"nonInteractive":true,"approvalPolicy":"askForExecution","input":[{"type":"text","text":"Initial step"}],"clientName":"test"})).unwrap()).await.unwrap();
+    tokio::time::timeout(WAIT, async {
+        while !world.root.path().join("project/ready").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
     client
         .goal(
             &id,
@@ -595,6 +661,7 @@ async fn exec_reports_goal_budget_limit_after_the_same_turn_summary() {
         )
         .await
         .unwrap();
+    fs::write(world.root.path().join("project/release"), "").unwrap();
     tokio::time::timeout(WAIT, async {
         loop {
             if client.read_session(&id).await.unwrap().session.status
@@ -626,16 +693,27 @@ async fn exec_reports_goal_budget_limit_after_the_same_turn_summary() {
         snapshot.goal.unwrap().status,
         canter_protocol::GoalStatus::BudgetLimited
     );
-    assert_eq!(world.requests.lock().unwrap().len(), 3);
+    assert_eq!(world.requests.lock().unwrap().len(), 4);
     world.stop().await;
 }
 
 #[tokio::test]
 async fn exec_ctrl_c_waits_for_the_turn_and_command_to_stop() {
-    use nix::{
-        sys::signal::{Signal, kill},
-        unistd::Pid,
-    };
+    assert_signal_stops_turn(nix::sys::signal::Signal::SIGINT).await;
+}
+
+#[tokio::test]
+async fn exec_termination_signals_wait_for_the_turn_and_command_to_stop() {
+    for signal in [
+        nix::sys::signal::Signal::SIGTERM,
+        nix::sys::signal::Signal::SIGHUP,
+    ] {
+        assert_signal_stops_turn(signal).await;
+    }
+}
+
+async fn assert_signal_stops_turn(signal: nix::sys::signal::Signal) {
+    use nix::{sys::signal::kill, unistd::Pid};
     let world = World::new(
         vec![call(
             "shell",
@@ -650,22 +728,20 @@ async fn exec_ctrl_c_waits_for_the_turn_and_command_to_stop() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    tokio::time::timeout(WAIT, async {
+    let command_pid = tokio::time::timeout(WAIT, async {
         loop {
-            if world.root.path().join("project/command.pid").exists() {
-                break;
+            if let Some(pid) = fs::read_to_string(world.root.path().join("project/command.pid"))
+                .ok()
+                .and_then(|text| text.trim().parse::<i32>().ok())
+            {
+                break pid;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
     .unwrap();
-    let command_pid: i32 = fs::read_to_string(world.root.path().join("project/command.pid"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    kill(Pid::from_raw(child.id().unwrap() as i32), Signal::SIGINT).unwrap();
+    kill(Pid::from_raw(child.id().unwrap() as i32), signal).unwrap();
     let output = tokio::time::timeout(WAIT, child.wait_with_output())
         .await
         .unwrap()

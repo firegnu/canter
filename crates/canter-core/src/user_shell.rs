@@ -44,6 +44,8 @@ impl Session {
             .start(
                 &mut state,
                 SessionInputParams {
+                    non_interactive: false,
+                    approval_policy: None,
                     review: None,
                     input: Vec::new(),
                     mode: InputMode::Queue,

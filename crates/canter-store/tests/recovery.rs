@@ -7,7 +7,6 @@ use serde_json::json;
 
 fn settings() -> SessionSettings {
     SessionSettings {
-        non_interactive: false,
         tags: Default::default(),
         additional_directories: Vec::new(),
         plan_mode: false,

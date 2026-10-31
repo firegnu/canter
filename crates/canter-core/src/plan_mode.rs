@@ -122,7 +122,7 @@ pub(crate) async fn submit(
                 approval_policy: policy,
             }),
         };
-        if state.journal.snapshot.settings.non_interactive {
+        if state.non_interactive() {
             state
                 .journal
                 .append(vec![EventPayload::ItemStarted {

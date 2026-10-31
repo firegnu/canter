@@ -429,7 +429,6 @@ where
                     require_add_directories(&client).await?;
                 }
                 let params = SessionCreateParams {
-                    non_interactive: false,
                     tags,
                     additional_directories,
                     cwd,
@@ -814,12 +813,8 @@ async fn resume(
         Err(error) => return Err(error.into()),
     };
     // The change arrives as a session.updated event after the snapshot.
-    let mut update = update.clone();
-    if snapshot.settings.non_interactive {
-        update.non_interactive = Some(false);
-    }
-    if update != SessionUpdateParams::default() {
-        client.update(id, &update).await?;
+    if *update != SessionUpdateParams::default() {
+        client.update(id, update).await?;
     }
     Ok(snapshot)
 }
@@ -1358,7 +1353,6 @@ impl<C: Connector> Chat<C> {
             ""
         };
         let mut params = SessionCreateParams {
-            non_interactive: false,
             tags: settings.tags.clone(),
             additional_directories: settings.additional_directories.clone(),
             cwd: settings.cwd.clone(),
@@ -1428,7 +1422,6 @@ impl<C: Connector> Chat<C> {
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let settings = &ui.app().snapshot().settings;
         let mut params = SessionCreateParams {
-            non_interactive: false,
             tags: settings.tags.clone(),
             additional_directories: settings.additional_directories.clone(),
             cwd: settings.cwd.clone(),
@@ -1894,6 +1887,8 @@ impl<C: Connector> Chat<C> {
                 };
                 let title = session_title(&text);
                 let params = SessionInputParams {
+                    non_interactive: false,
+                    approval_policy: None,
                     review: None,
                     input,
                     mode: if steer {

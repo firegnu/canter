@@ -140,7 +140,6 @@ async fn pending_call(
         store,
         "feedback".into(),
         SessionSettings {
-            non_interactive: false,
             tags: Default::default(),
             additional_directories: Vec::new(),
             plan_mode: false,

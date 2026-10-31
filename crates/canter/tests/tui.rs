@@ -40,7 +40,120 @@ const WAIT: Duration = Duration::from_secs(20);
 const WRITE_ENV: &str = r#"printf '%s' "$CANTER_TEST_ENV" > env.txt"#;
 
 #[tokio::test]
-async fn interactive_resume_of_exec_restores_approval_and_question_dialogs() {
+async fn open_terminal_keeps_questions_and_permissions_after_exec_resume() {
+    for yolo in [false, true] {
+        let mut world = World::new(vec![
+            text_reply("Initial answer."),
+            ask_reply(),
+            text_reply("Exec done."),
+            ask_reply(),
+            shell_reply(WRITE_ENV),
+            text_reply("Interactive done."),
+        ])
+        .await;
+        world.start_server().await;
+        let terminal = world.open(&[], "already-open").await;
+        terminal.type_line("Initial task").await;
+        terminal.wait_for("Initial answer.").await;
+        terminal.wait_idle().await;
+        let id = world.only_session().await;
+        assert_eq!(
+            world.snapshot(&id).await.settings.approval_policy,
+            PermissionMode::AlwaysAsk
+        );
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_canter"));
+        command.args(["exec", "--resume", &id, "Exec task"]);
+        if yolo {
+            command.arg("--yolo");
+        }
+        let output = tokio::time::timeout(
+            WAIT,
+            command
+                .env_clear()
+                .env("HOME", world.path("home"))
+                .env("CANTER_HOME", world.path("state"))
+                .current_dir(world.path("work"))
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        terminal.wait_for("Exec done.").await;
+        terminal.wait_idle().await;
+        read_the_box().await;
+        terminal.type_line("Ask me and run a command.").await;
+        terminal.wait_for("─ Ask user").await;
+        read_the_box().await;
+        terminal.press(KeyCode::Char('2')).await;
+        terminal.wait_for("Run this command?").await;
+        assert!(!world.path("work/env.txt").exists());
+        read_the_box().await;
+        terminal.press(KeyCode::Enter).await;
+        terminal.wait_for("Interactive done.").await;
+        terminal.wait_idle().await;
+        assert_eq!(
+            world.snapshot(&id).await.settings.approval_policy,
+            PermissionMode::AlwaysAsk
+        );
+        terminal.quit().await;
+        world.stop_server(Signal::SIGTERM).await;
+    }
+}
+
+#[tokio::test]
+async fn terminal_can_open_and_interrupt_a_running_exec_turn() {
+    let mut world = World::new(vec![shell_reply(
+        "echo $$ > command.pid; exec /bin/sleep 30",
+    )])
+    .await;
+    world.start_server().await;
+    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_canter"))
+        .args(["exec", "Long task"])
+        .env_clear()
+        .env("HOME", world.path("home"))
+        .env("CANTER_HOME", world.path("state"))
+        .current_dir(world.path("work"))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let pid = tokio::time::timeout(WAIT, async {
+        loop {
+            if let Some(pid) = fs::read_to_string(world.path("work/command.pid"))
+                .ok()
+                .and_then(|text| text.trim().parse::<i32>().ok())
+            {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let id = world.only_session().await;
+    let terminal = world.open(&["-r", &id], "watch-exec").await;
+    terminal.wait_for("command.pid").await;
+    terminal.press(KeyCode::Esc).await;
+    terminal.wait_for("Turn interrupted").await;
+    terminal.wait_idle().await;
+    let output = tokio::time::timeout(WAIT, child.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(130), "{output:?}");
+    assert_eq!(world.snapshot(&id).await.status, SessionStatus::Idle);
+    assert_eq!(kill(Pid::from_raw(pid), None), Err(Errno::ESRCH));
+    terminal.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn interactive_resume_ignores_legacy_non_interactive_settings() {
     let mut world = World::new(vec![
         text_reply("Exec done."),
         shell_reply(WRITE_ENV),
@@ -74,10 +187,29 @@ async fn interactive_resume_of_exec_restores_approval_and_question_dialogs() {
         .await
         .unwrap();
     world.stop_server(Signal::SIGTERM).await;
+    // Data from the first P2-30 implementation must not retain interaction mode.
+    let path = world.path(&format!("state/sessions/{id}/events.jsonl"));
+    let legacy: String = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let mut event: Value = serde_json::from_str(line).unwrap();
+            if let Some(settings) = event.get_mut("settings") {
+                settings["nonInteractive"] = json!(true);
+            }
+            serde_json::to_string(&event).unwrap() + "\n"
+        })
+        .collect();
+    fs::write(path, legacy).unwrap();
     world.start_server().await;
     let terminal = world.open(&["-r", &id], "interactive-resume").await;
     terminal.wait_idle().await;
-    assert!(!world.snapshot(&id).await.settings.non_interactive);
+    assert!(
+        serde_json::to_value(world.snapshot(&id).await.settings)
+            .unwrap()
+            .get("nonInteractive")
+            .is_none()
+    );
     terminal
         .type_line("Continue with a command and a question.")
         .await;

@@ -16,7 +16,6 @@ fn a_second_writer_cannot_lock_the_same_session() {
         .create(
             "locked",
             SessionSettings {
-                non_interactive: false,
                 tags: Default::default(),
                 additional_directories: Vec::new(),
                 plan_mode: false,

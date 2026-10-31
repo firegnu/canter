@@ -50,6 +50,8 @@ async fn turn(session: &Session) {
         .unwrap();
     session
         .input(SessionInputParams {
+            non_interactive: false,
+            approval_policy: None,
             input: vec![UserInput::Text {
                 text: "continue".into(),
             }],

@@ -175,7 +175,6 @@ async fn create(
         store,
         "search".into(),
         SessionSettings {
-            non_interactive: false,
             tags: Default::default(),
             additional_directories: Vec::new(),
             plan_mode: plan,
@@ -216,6 +215,8 @@ async fn create(
 }
 fn input(review: bool) -> SessionInputParams {
     SessionInputParams {
+        non_interactive: false,
+        approval_policy: None,
         input: vec![UserInput::Text {
             text: "search fixtures".into(),
         }],

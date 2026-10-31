@@ -43,6 +43,8 @@ pub(crate) struct Shared {
     pub lifetime: CancellationToken,
 }
 pub(crate) struct State {
+    /// A non-interactive turn leaves automation paused until the next input.
+    pub automatic_turns_paused: bool,
     pub lsp_delivery: crate::lsp::Delivery,
     pub goal_running: bool,
     pub goal_deadline: Option<tokio::time::Instant>,
@@ -76,6 +78,8 @@ pub(crate) struct State {
     plan_tool_calls: u8,
 }
 pub(crate) struct Active {
+    pub non_interactive: bool,
+    pub approval_policy: Option<PermissionMode>,
     pub goal_continuation: bool,
     pub auto_wake: bool,
     pub plan_handoff: bool,
@@ -88,6 +92,19 @@ pub(crate) struct Active {
     pub done: watch::Receiver<Option<Result<u64, CoreError>>>,
 }
 impl State {
+    pub(crate) fn non_interactive(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|active| active.non_interactive)
+    }
+
+    pub(crate) fn approval_policy(&self) -> PermissionMode {
+        self.active
+            .as_ref()
+            .and_then(|active| active.approval_policy)
+            .unwrap_or(self.journal.snapshot.settings.approval_policy)
+    }
+
     pub(crate) async fn resolve_without_user(
         &mut self,
         request: PendingRequest,
@@ -110,6 +127,7 @@ impl State {
     }
     fn new(journal: Journal) -> Self {
         Self {
+            automatic_turns_paused: false,
             lsp_delivery: Default::default(),
             goal_running: false,
             goal_deadline: None,
@@ -783,6 +801,7 @@ impl Session {
         mut params: SessionInputParams,
     ) -> Result<SessionInputResponse, CoreError> {
         if params.mode == InputMode::Unknown
+            || params.approval_policy == Some(PermissionMode::Unknown)
             || params.input.is_empty()
             || params
                 .input
@@ -815,10 +834,14 @@ impl Session {
         };
         let mut state = self.shared.state.lock().await;
         state.available()?;
-        if state.journal.snapshot.settings.non_interactive && state.active.is_some() {
+        if state.active.is_some()
+            && (state.non_interactive()
+                || params.non_interactive
+                || params.approval_policy.is_some())
+        {
             return Err(CoreError::new(
                 ErrorCode::Conflict,
-                "non-interactive sessions accept input only while idle",
+                "input with turn-scoped settings requires an idle session",
             ));
         }
         if state
@@ -1177,7 +1200,7 @@ impl Session {
                 .append(vec![EventPayload::SessionUpdated { settings }])
                 .await?;
             self.shared.tools.configure_shell(
-                state.journal.snapshot.settings.approval_policy,
+                state.approval_policy(),
                 &state.journal.snapshot.settings.additional_directories,
             );
             if answer.decision == PlanDecision::ClearContext {
@@ -1256,15 +1279,6 @@ impl Session {
             ));
         }
         let mut settings = state.journal.snapshot.settings.clone();
-        if let Some(non_interactive) = params.non_interactive {
-            if state.active.is_some() || !state.queue.is_empty() || !state.requests.is_empty() {
-                return Err(CoreError::new(
-                    ErrorCode::Conflict,
-                    "cannot change interaction mode while a turn is active",
-                ));
-            }
-            settings.non_interactive = non_interactive;
-        }
         settings.additional_directories = crate::directories::append(
             settings.cwd.clone(),
             state.directory_home.clone(),
@@ -1299,7 +1313,7 @@ impl Session {
             .append(vec![EventPayload::SessionUpdated { settings }])
             .await?;
         self.shared.tools.configure_shell(
-            state.journal.snapshot.settings.approval_policy,
+            state.approval_policy(),
             &state.journal.snapshot.settings.additional_directories,
         );
         if directories_changed {
@@ -1359,6 +1373,8 @@ impl Session {
             .start(
                 &mut state,
                 SessionInputParams {
+                    non_interactive: false,
+                    approval_policy: None,
                     review: None,
                     input: Vec::new(),
                     mode: InputMode::Queue,
@@ -1591,6 +1607,8 @@ impl Shared {
         let events = state.journal.append(payloads).await?;
         let (done, receiver) = watch::channel(None);
         state.active = Some(Active {
+            non_interactive: params.non_interactive,
+            approval_policy: params.approval_policy,
             goal_continuation: false,
             auto_wake: false,
             plan_handoff: false,
@@ -1602,6 +1620,11 @@ impl Shared {
             cancel: self.lifetime.child_token(),
             done: receiver,
         });
+        state.automatic_turns_paused = params.non_interactive;
+        self.tools.configure_shell(
+            state.approval_policy(),
+            &state.journal.snapshot.settings.additional_directories,
+        );
         Ok((
             SessionInputResponse {
                 event_seq: events[0].seq,

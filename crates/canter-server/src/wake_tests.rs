@@ -6,28 +6,19 @@ async fn non_interactive_background_completion_does_not_start_a_turn() {
     let url = fixture.create("allowAll").await;
     fixture
         .client
-        .patch(&url)
-        .json(&json!({"nonInteractive":true}))
+        .post(format!("{url}/input"))
+        .json(&json!({"nonInteractive":true,"input":[{"type":"text","text":"wake-background"}],"clientName":"exec"}))
         .send()
         .await
         .unwrap()
         .error_for_status()
         .unwrap();
-    fixture.say(&url, "wake-background").await;
+    fixture.turns(&url, 1).await;
     fixture.release("release-wake");
     fixture
         .until(&url, |s| !s.background_commands[0].running)
         .await;
     fixture.no_extra_turn(&url, 1).await;
-    fixture
-        .client
-        .patch(&url)
-        .json(&json!({"nonInteractive":false}))
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap();
     fixture
         .say(&url, "Inspect the saved completion notice.")
         .await;

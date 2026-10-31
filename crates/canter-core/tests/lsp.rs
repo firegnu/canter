@@ -96,6 +96,8 @@ fn done() -> Reply {
 }
 fn input() -> SessionInputParams {
     SessionInputParams {
+        non_interactive: false,
+        approval_policy: None,
         input: vec![UserInput::Text {
             text: "modify".into(),
         }],
@@ -175,7 +177,6 @@ async fn create_attached(
             "baseline".into()
         },
         SessionSettings {
-            non_interactive: false,
             tags: Default::default(),
             cwd: root.display().to_string(),
             name: None,
