@@ -31,6 +31,7 @@ pub mod routes {
     pub const INFO: &str = "/v1/info";
     pub const COMMAND_RULES: &str = "/v1/commandRules";
     pub const COMMAND_RULE_DELETE: &str = "/v1/commandRules/delete";
+    pub const FILE_RULE_DELETE: &str = "/v1/fileRules/delete";
     pub const MODELS: &str = "/v1/models";
     pub const USAGE: &str = "/v1/usage";
     pub const SESSION_USAGE: &str = "/v1/sessions/{id}/usage";
@@ -94,11 +95,31 @@ pub struct CommandRule {
     pub decision: CommandRuleDecision,
 }
 
+/// File rules never grant access; unknown decisions are invalid.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema, TS,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum FileRuleDecision {
+    Prompt,
+    Forbidden,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct FileRule {
+    pub pattern: String,
+    pub decision: FileRuleDecision,
+}
+
 /// Global command rules, read from the server's file at `path`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct CommandRuleListResponse {
     pub path: String,
     pub data: Vec<CommandRule>,
+    #[serde(default, rename = "fileRules", skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
+    pub file_rules: Vec<FileRule>,
 }
 
 /// Result of deleting every exact match. Zero means the rule no longer exists.

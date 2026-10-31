@@ -461,7 +461,7 @@ async fn sandbox_requests_keep_rules_dangerous_commands_and_readonly_restriction
         PermissionCheck::Deny { .. }
     ));
     assert!(matches!(
-        gate.evaluate_review(&request),
+        gate.evaluate_review(&request, PermissionMode::AlwaysAsk),
         PermissionCheck::Deny { .. }
     ));
     // Only inspect this deletion command's permission; it is never executed.

@@ -168,7 +168,7 @@ async fn search_approval_grants_all_queries_but_review_stays_read_only_and_plan_
             PermissionCheck::Execute(_)
         ));
         assert!(matches!(
-            gate.evaluate_review(&next),
+            gate.evaluate_review(&next, PermissionMode::AlwaysAsk),
             PermissionCheck::Deny {
                 cancel_turn: false,
                 ..

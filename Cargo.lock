@@ -408,6 +408,7 @@ dependencies = [
  "canter-protocol",
  "encoding_rs",
  "futures-util",
+ "globset",
  "htmd",
  "jsonschema",
  "nix",

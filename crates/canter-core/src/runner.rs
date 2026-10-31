@@ -1027,11 +1027,15 @@ async fn permission<'a>(
             .as_ref()
             .is_some_and(|active| active.turn.review.is_some())
             && matches!(
-                state.gate.evaluate_review(call),
+                state
+                    .gate
+                    .evaluate_review(call, state.journal.snapshot.settings.approval_policy),
                 PermissionCheck::Deny { .. }
             );
         let permission = if review_denied {
-            state.gate.evaluate_review(call)
+            state
+                .gate
+                .evaluate_review(call, state.journal.snapshot.settings.approval_policy)
         } else if state.journal.snapshot.settings.plan_mode {
             state
                 .gate
@@ -1041,7 +1045,9 @@ async fn permission<'a>(
             .as_ref()
             .is_some_and(|active| active.turn.review.is_some())
         {
-            state.gate.evaluate_review(call)
+            state
+                .gate
+                .evaluate_review(call, state.journal.snapshot.settings.approval_policy)
         } else {
             state
                 .gate

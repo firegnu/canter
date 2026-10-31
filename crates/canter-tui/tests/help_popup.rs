@@ -28,7 +28,7 @@ const COMMANDS: [(&str, &str); 32] = [
     ("/model", "Change the model"),
     ("/new", "Start a new session"),
     ("/clear", "Start a new session (same as /new)"),
-    ("/permissions", "View and delete command rules"),
+    ("/permissions", "View and delete command and file rules"),
     ("/plan", "Enter or leave read-only Plan mode"),
     ("/resume", "Switch to another session"),
     ("/sandbox", "Show what the sandbox allows"),

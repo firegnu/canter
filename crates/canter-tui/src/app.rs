@@ -98,6 +98,7 @@ pub enum Action {
     BackgroundStop(Option<u64>),
     CommandRules,
     DeleteCommandRule(canter_protocol::CommandRule),
+    DeleteFileRule(canter_protocol::FileRule),
     /// `/lsp`: the language servers of this session.
     LanguageServers,
     /// Stop this session's subscription to the language server with this id.
@@ -2282,16 +2283,16 @@ impl App {
             match key.code {
                 KeyCode::Up if !view.confirming => view.selected = view.selected.saturating_sub(1),
                 KeyCode::Down if !view.confirming => {
-                    view.selected = (view.selected + 1).min(view.list.data.len().saturating_sub(1))
+                    view.selected = (view.selected + 1).min(view.len().saturating_sub(1))
                 }
                 KeyCode::Enter if view.confirming => {
-                    let rule = view.list.data.get(view.selected)?.clone();
+                    let action = view.delete_action()?;
                     self.report = None;
                     self.permissions = None;
-                    return Some(Some(Action::DeleteCommandRule(rule)));
+                    return Some(Some(action));
                 }
                 KeyCode::Enter | KeyCode::Delete => {
-                    if view.list.data.is_empty() {
+                    if view.len() == 0 {
                         return Some(None);
                     }
                     view.confirming = true;

@@ -43,6 +43,7 @@ pub struct PermissionGate {
     shell_grants: Vec<Vec<String>>,
     rules_file: Option<std::path::PathBuf>,
     rules_warning: std::sync::Mutex<(bool, Option<String>)>,
+    file_rules_warning: std::sync::Mutex<(bool, Option<String>)>,
     additional_directories: Vec<std::path::PathBuf>,
 }
 
@@ -57,25 +58,52 @@ impl PermissionGate {
         Ok(path.clone())
     }
     pub fn take_rules_warning(&self) -> Option<String> {
-        self.rules_warning.lock().unwrap().1.take()
+        self.rules_warning
+            .lock()
+            .unwrap()
+            .1
+            .take()
+            .or_else(|| self.file_rules_warning.lock().unwrap().1.take())
     }
 
-    fn read_rules(&self) -> Result<crate::rules::Rules, ()> {
+    fn read_rules<T>(
+        &self,
+        file_tools: bool,
+        check: impl FnOnce(crate::rules::Rules) -> std::io::Result<T>,
+    ) -> Result<T, ()> {
         let result = self
             .rules_file
             .as_deref()
-            .map(crate::rules::Rules::read)
-            .transpose();
-        let mut warning = self.rules_warning.lock().unwrap();
+            .map(|path| {
+                if file_tools {
+                    crate::rules::Rules::read_for_file_tools(path)
+                } else {
+                    crate::rules::Rules::read(path)
+                }
+            })
+            .transpose()
+            .and_then(|rules| check(rules.unwrap_or_default()));
+        let mut warning = if file_tools {
+            &self.file_rules_warning
+        } else {
+            &self.rules_warning
+        }
+        .lock()
+        .unwrap();
         match result {
             Ok(rules) => {
                 warning.0 = false;
-                Ok(rules.unwrap_or_default())
+                Ok(rules)
             }
-            Err(_) => {
+            Err(error) => {
                 if !warning.0 {
+                    let fallback = if file_tools {
+                        "File tools require one-time approval in asking modes and are blocked in Allow all until the rules can be evaluated."
+                    } else {
+                        "Model shell commands require one-time approval until the file is fixed."
+                    };
                     warning.1 = Some(format!(
-                        "Could not read command rules at {}; model shell commands require one-time approval until the file is fixed.",
+                        "Could not read or evaluate rules at {}: {error}. {fallback}",
                         self.rules_file.as_ref().unwrap().display()
                     ));
                     warning.0 = true;
@@ -134,6 +162,33 @@ impl PermissionGate {
                 .iter()
                 .any(|root| path.starts_with(root))
     }
+
+    fn file_rules<'a>(
+        &self,
+        call: &'a PreparedCall,
+        mode: PermissionMode,
+    ) -> Option<PermissionCheck<'a>> {
+        if !matches!(call.tool, Tool::Read | Tool::Write | Tool::Edit) {
+            return None;
+        }
+        let path = call.resolved_path.as_deref()?;
+        let requested = std::path::Path::new(call.arguments["path"].as_str()?);
+        let decision = self.read_rules(true, |rules| {
+            rules.file_decision(requested, path, call.executor.cwd(), call.executor.home())
+        });
+        match decision {
+            Ok(Some(canter_protocol::FileRuleDecision::Forbidden)) => Some(PermissionCheck::Forbidden {
+                reason: "File blocked by the user's rules.json. Do not try another way to access this file.".into(),
+            }),
+            Err(()) if mode == PermissionMode::AllowAll => Some(PermissionCheck::Forbidden {
+                reason: "File access blocked because the user's rules.json could not be read or evaluated. Do not try another way to access this file; the user must fix the rules first.".into(),
+            }),
+            Err(()) | Ok(Some(canter_protocol::FileRuleDecision::Prompt)) if mode != PermissionMode::AllowAll => {
+                Some(self.ask(call, false))
+            }
+            _ => None,
+        }
+    }
     /// Planning restrictions precede grants and ordinary permission decisions.
     pub fn evaluate_plan<'a>(
         &self,
@@ -141,8 +196,8 @@ impl PermissionGate {
         mode: PermissionMode,
     ) -> PermissionCheck<'a> {
         match call.tool {
-            Tool::Read
-            | Tool::AskUser
+            Tool::Read => self.evaluate(call, mode),
+            Tool::AskUser
             | Tool::SubmitPlan
             | Tool::ShellOutput
             | Tool::ShellStop
@@ -159,10 +214,14 @@ impl PermissionGate {
         }
     }
     /// Review restrictions precede both permission mode and session grants.
-    pub fn evaluate_review<'a>(&self, call: &'a PreparedCall) -> PermissionCheck<'a> {
+    pub fn evaluate_review<'a>(
+        &self,
+        call: &'a PreparedCall,
+        mode: PermissionMode,
+    ) -> PermissionCheck<'a> {
         match call.tool {
-            Tool::Read
-            | Tool::UpdatePlan
+            Tool::Read => self.evaluate(call, mode),
+            Tool::UpdatePlan
             | Tool::ShellOutput
             | Tool::ShellStop
             | Tool::Monitor
@@ -203,6 +262,20 @@ impl PermissionGate {
         feedback: Option<String>,
         approved_prefixes: Option<&[Vec<String>]>,
     ) -> Result<PermissionCheck<'a>, &'static str> {
+        if matches!(
+            decision,
+            ApprovalDecision::Accept
+                | ApprovalDecision::AcceptForSession
+                | ApprovalDecision::AcceptWithExecpolicyAmendment
+        ) && let Some(check) = self.file_rules(call, PermissionMode::AlwaysAsk)
+        {
+            if matches!(check, PermissionCheck::Forbidden { .. }) {
+                return Ok(check);
+            }
+            if decision != ApprovalDecision::Accept {
+                return Err("invalid_decision: file rules require one-time approval");
+            }
+        }
         if call.executor.sandbox_enabled()
             && self.outside_directories(call)
             && matches!(
@@ -298,8 +371,11 @@ impl PermissionGate {
         call: &'a PreparedCall,
         mode: PermissionMode,
     ) -> PermissionCheck<'a> {
+        if let Some(check) = self.file_rules(call, mode) {
+            return check;
+        }
         if let Action::Shell(args) = &call.action {
-            let rules = self.read_rules();
+            let rules = self.read_rules(false, Ok);
             let parsed = crate::readonly::scan_commands(&args.command, None, true);
             let commands = match &parsed {
                 Ok(commands) | Err(commands) => commands,

@@ -1,4 +1,6 @@
-use canter_protocol::{CommandRule, CommandRuleDecision, CommandRuleListResponse};
+use canter_protocol::{
+    CommandRule, CommandRuleDecision, CommandRuleListResponse, FileRule, FileRuleDecision,
+};
 use ratatui::{style::Style, text::Span};
 
 use crate::{
@@ -28,9 +30,18 @@ pub(crate) fn description(rule: &CommandRule) -> String {
     )
 }
 
+pub(crate) fn file_description(rule: &FileRule) -> String {
+    let label = match rule.decision {
+        FileRuleDecision::Prompt => "Ask",
+        FileRuleDecision::Forbidden => "Deny",
+    };
+    format!("\"{}\" ({label})", clean(&rule.pattern))
+}
+
 impl View {
     pub fn new(mut list: CommandRuleListResponse) -> Self {
         list.data.sort_by_key(|rule| rule.decision);
+        list.file_rules.sort_by_key(|rule| rule.decision);
         Self {
             list,
             selected: 0,
@@ -38,15 +49,40 @@ impl View {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.list.data.len() + self.list.file_rules.len()
+    }
+
+    pub fn delete_action(&self) -> Option<crate::Action> {
+        if let Some(rule) = self.list.data.get(self.selected) {
+            Some(crate::Action::DeleteCommandRule(rule.clone()))
+        } else {
+            self.list
+                .file_rules
+                .get(self.selected.checked_sub(self.list.data.len())?)
+                .cloned()
+                .map(crate::Action::DeleteFileRule)
+        }
+    }
+
     pub fn report(&self) -> Report {
         if self.confirming
-            && let Some(rule) = self.list.data.get(self.selected)
+            && let Some(action) = self.delete_action()
         {
+            let description = match action {
+                crate::Action::DeleteCommandRule(rule) => {
+                    format!("Delete rule {}?", description(&rule))
+                }
+                crate::Action::DeleteFileRule(rule) => {
+                    format!("Delete file rule {}?", file_description(&rule))
+                }
+                _ => unreachable!(),
+            };
             return Report::new(
                 vec![Span::styled(" Permissions", Style::new().bold())],
                 vec![Part::Wrap {
                     indent: 1,
-                    text: format!("Delete rule {}?", description(rule)),
+                    text: description,
                     style: Style::default(),
                     rows: usize::MAX,
                 }],
@@ -97,6 +133,34 @@ impl View {
                 }
             }
         }
+        body.push(Part::Line(vec![Span::styled(
+            " File rules",
+            Style::new().bold(),
+        )]));
+        if self.list.file_rules.is_empty() {
+            body.push(Part::Wrap {
+                indent: 1,
+                text: "No file rules. Add file patterns under fileRules in rules.json.".into(),
+                style: theme::secondary(),
+                rows: usize::MAX,
+            });
+        } else {
+            for (index, rule) in self.list.file_rules.iter().enumerate() {
+                let selected = self.list.data.len() + index == self.selected;
+                if selected {
+                    selected_row = Some(body.len());
+                }
+                let (marker, style) = if selected {
+                    (" › ", theme::accent().bold())
+                } else {
+                    ("   ", Style::default())
+                };
+                body.push(Part::Line(vec![Span::styled(
+                    format!("{marker}{}", file_description(rule)),
+                    style,
+                )]));
+            }
+        }
         Report::new(
             vec![Span::styled(" Permissions", Style::new().bold())],
             body,
@@ -111,7 +175,7 @@ impl View {
                 )],
             ],
         )
-        .keys(if self.list.data.is_empty() {
+        .keys(if self.len() == 0 {
             " Esc close"
         } else {
             " ↑↓ select · Enter/Delete delete · Esc close"
@@ -125,7 +189,7 @@ pub(crate) fn error(error: &str) -> Report {
         vec![Span::styled(" Permissions", Style::new().bold())],
         vec![Part::Wrap {
             indent: 1,
-            text: format!("Could not read command rules: {}", clean(error)),
+            text: format!("Could not read rules: {}", clean(error)),
             style: theme::failure(),
             rows: usize::MAX,
         }],

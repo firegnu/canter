@@ -230,7 +230,7 @@ async fn sandbox_outside_changes_require_once_approval_even_with_a_session_grant
                     PermissionCheck::Deny { .. }
                 ));
                 assert!(matches!(
-                    gate.evaluate_review(&call),
+                    gate.evaluate_review(&call, PermissionMode::AlwaysAsk),
                     PermissionCheck::Deny { .. }
                 ));
                 match gate.evaluate(&call, mode) {

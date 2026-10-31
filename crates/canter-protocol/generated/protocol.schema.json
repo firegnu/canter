@@ -400,6 +400,12 @@
           },
           "type": "array"
         },
+        "fileRules": {
+          "items": {
+            "$ref": "#/$defs/FileRule"
+          },
+          "type": "array"
+        },
         "path": {
           "type": "string"
         }
@@ -1665,6 +1671,30 @@
         "agent",
         "userShell",
         "unknown"
+      ],
+      "type": "string"
+    },
+    "FileRule": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/FileRuleDecision"
+        },
+        "pattern": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern",
+        "decision"
+      ],
+      "type": "object"
+    },
+    "FileRuleDecision": {
+      "description": "File rules never grant access; unknown decisions are invalid.",
+      "enum": [
+        "prompt",
+        "forbidden"
       ],
       "type": "string"
     },

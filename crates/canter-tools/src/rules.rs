@@ -1,47 +1,76 @@
-//! Global command-prefix rules. The server supplies the path; no process HOME is read here.
+//! Global command and file rules. Paths and HOME come from the server/session.
+use canter_protocol::{FileRule, FileRuleDecision};
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::Path};
 
 pub(crate) use canter_protocol::{CommandRule as Rule, CommandRuleDecision as Decision};
 
 /// Reads the global file; a missing file has no rules, a broken file is an error.
-pub fn list(path: &Path) -> io::Result<Vec<canter_protocol::CommandRule>> {
-    Ok(Rules::read(path)?.rules)
+pub fn list(path: &Path) -> io::Result<canter_protocol::CommandRuleListResponse> {
+    let rules = Rules::read(path)?;
+    Ok(canter_protocol::CommandRuleListResponse {
+        path: path.to_string_lossy().into_owned(),
+        data: rules.rules,
+        file_rules: rules.file_rules,
+    })
 }
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Rules {
+    #[serde(default)]
     pub rules: Vec<Rule>,
+    #[serde(default, rename = "fileRules", skip_serializing_if = "Vec::is_empty")]
+    pub file_rules: Vec<FileRule>,
 }
 
 impl Rules {
     pub fn read(path: &Path) -> io::Result<Self> {
-        let bytes = match fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                // A dangling link is a broken rules file, not an absent one.
-                if fs::symlink_metadata(path).is_ok() {
-                    return Err(error);
-                }
-                return Ok(Self::default());
-            }
-            Err(error) => return Err(error),
+        let Some(bytes) = read_bytes(path)? else {
+            return Ok(Self::default());
         };
-        let rules: Self = serde_json::from_slice(&bytes).map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidData, "invalid command rules JSON")
+        Self::parse(&bytes)
+    }
+
+    pub fn read_for_file_tools(path: &Path) -> io::Result<Self> {
+        let Some(bytes) = read_bytes(path)? else {
+            return Ok(Self::default());
+        };
+        // A readable command-only file cannot opt file tools into restrictions,
+        // even if its JSON is unfinished. Also recognize decoded JSON field names.
+        if !bytes
+            .windows(b"fileRules".len())
+            .any(|part| part == b"fileRules")
+            && !serde_json::from_slice::<serde_json::Value>(&bytes)
+                .is_ok_and(|value| value.get("fileRules").is_some())
+        {
+            return Ok(Self::default());
+        }
+        Self::parse(&bytes)
+    }
+
+    fn parse(bytes: &[u8]) -> io::Result<Self> {
+        let rules: Self = serde_json::from_slice(bytes).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid command rules JSON: {error}"),
+            )
         })?;
-        if rules.rules.iter().any(|rule| {
-            rule.pattern.is_empty()
+        for (index, rule) in rules.rules.iter().enumerate() {
+            if rule.pattern.is_empty()
                 || rule
                     .pattern
                     .iter()
                     .any(|word| word.is_empty() || word.contains('\0'))
-        }) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "empty or invalid command prefix",
-            ));
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("rules[{index}]: empty or invalid command prefix"),
+                ));
+            }
+        }
+        for (index, rule) in rules.file_rules.iter().enumerate() {
+            file_glob(&rule.pattern).map_err(|error| file_rule_error(index, rule, error))?;
         }
         Ok(rules)
     }
@@ -53,6 +82,114 @@ impl Rules {
             .map(|rule| rule.decision)
             .max()
     }
+
+    pub fn file_decision(
+        &self,
+        requested: &Path,
+        path: &Path,
+        cwd: &Path,
+        home: Option<&Path>,
+    ) -> io::Result<Option<FileRuleDecision>> {
+        let mut decision = None;
+        for (index, rule) in self.file_rules.iter().enumerate() {
+            if file_matches(&rule.pattern, requested, path, cwd, home)
+                .map_err(|error| file_rule_error(index, rule, error))?
+            {
+                decision = decision.max(Some(rule.decision));
+            }
+        }
+        Ok(decision)
+    }
+}
+
+fn file_rule_error(index: usize, rule: &FileRule, error: io::Error) -> io::Error {
+    io::Error::new(
+        error.kind(),
+        format!("fileRules[{index}] pattern {:?}: {error}", rule.pattern),
+    )
+}
+
+fn read_bytes(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            // A dangling link is a broken rules file, not an absent one.
+            if fs::symlink_metadata(path).is_ok() {
+                return Err(error);
+            }
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn file_glob(pattern: &str) -> io::Result<globset::GlobMatcher> {
+    let tail = pattern
+        .find(['*', '?', '[', '{', '\\'])
+        .map(|at| &pattern[at..])
+        .unwrap_or_default();
+    let error = if pattern.is_empty() {
+        Some("file pattern must not be empty")
+    } else if pattern.contains('\0') {
+        Some("file pattern must not contain NUL bytes")
+    } else if pattern.ends_with('/') {
+        Some("file pattern must not end with '/'")
+    } else if tail.split('/').any(|part| matches!(part, "." | "..")) {
+        Some("file glob must not contain '.' or '..' path components")
+    } else {
+        None
+    };
+    if let Some(error) = error {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, error));
+    }
+    globset::GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .backslash_escape(true)
+        .build()
+        .map(|glob| glob.compile_matcher())
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid file glob: {error}"),
+            )
+        })
+}
+
+fn file_matches(
+    pattern: &str,
+    requested: &Path,
+    path: &Path,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> io::Result<bool> {
+    if !pattern.contains('/') {
+        let glob = file_glob(pattern)?;
+        return Ok([requested, path]
+            .iter()
+            .any(|path| path.file_name().is_some_and(|name| glob.is_match(name))));
+    }
+    let (base, pattern) = match pattern.strip_prefix("~/") {
+        Some(pattern) => (
+            home.filter(|path| path.is_absolute())
+                .ok_or_else(|| io::Error::other("file rules require an absolute session HOME"))?,
+            pattern,
+        ),
+        None => (cwd, pattern),
+    };
+    // Resolve the literal prefix exactly as file tools do, including symlinks and
+    // nonexistent new files. Only the remaining glob is compared as a pattern.
+    let split = pattern
+        .find(['*', '?', '[', '{', '\\'])
+        .map(|at| pattern[..at].rfind('/').map_or(0, |slash| slash + 1))
+        .unwrap_or(pattern.len());
+    let root = crate::executor::resolve_target(&base.join(&pattern[..split]), &[])?;
+    if split == pattern.len() {
+        return Ok(path.starts_with(root));
+    }
+    let glob = file_glob(&pattern[split..])?;
+    Ok(path
+        .strip_prefix(root)
+        .is_ok_and(|relative| glob.is_match(relative)))
 }
 
 // Reference only: Codex rust-v0.163.0 core/src/exec_policy.rs,
@@ -226,6 +363,19 @@ pub fn delete(path: &Path, rule: &canter_protocol::CommandRule) -> io::Result<us
     let before = rules.rules.len();
     rules.rules.retain(|candidate| candidate != rule);
     let removed = before - rules.rules.len();
+    if removed > 0 {
+        write(path, &rules)?;
+    }
+    Ok(removed)
+}
+
+/// File deletions share the command writer's lock and preserve command rules.
+pub fn delete_file(path: &Path, rule: &FileRule) -> io::Result<usize> {
+    let _lock = WRITE_LOCK.lock().unwrap();
+    let mut rules = Rules::read(path)?;
+    let before = rules.file_rules.len();
+    rules.file_rules.retain(|candidate| candidate != rule);
+    let removed = before - rules.file_rules.len();
     if removed > 0 {
         write(path, &rules)?;
     }
