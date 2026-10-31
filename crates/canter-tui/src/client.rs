@@ -276,6 +276,49 @@ impl Client {
         decode(self.http.get(endpoint).send().await?).await
     }
 
+    async fn require_stats(&self) -> Result<(), ClientError> {
+        if self
+            .info()
+            .await?
+            .features
+            .unwrap_or_default()
+            .iter()
+            .any(|feature| feature == "stats")
+        {
+            Ok(())
+        } else {
+            Err(ClientError::Protocol(
+                "this server does not support stats; run canter serve --replace".into(),
+            ))
+        }
+    }
+
+    pub async fn stats_list(
+        &self,
+        all: bool,
+    ) -> Result<canter_protocol::StatsListResponse, ClientError> {
+        self.require_stats().await?;
+        let mut endpoint = url(routes::STATS, &[]);
+        endpoint
+            .query_pairs_mut()
+            .append_pair("all", if all { "true" } else { "false" });
+        decode(self.http.get(endpoint).send().await?).await
+    }
+
+    pub async fn stats(
+        &self,
+        session: &str,
+    ) -> Result<canter_protocol::StatsResponse, ClientError> {
+        self.require_stats().await?;
+        decode(
+            self.http
+                .get(url(routes::SESSION_STATS, &[session]))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
     /// GET /v1/sessions/{id}/skills: the session's fixed skill list.
     pub async fn list_skills(
         &self,

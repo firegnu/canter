@@ -192,6 +192,31 @@ impl Store {
         Ok(entries)
     }
 
+    /// Read optional private telemetry without a writer lock or repairing the file.
+    /// Bound the read to its initial size; ignore damaged and uncommitted lines.
+    pub fn private_telemetry(&self, id: &str) -> Result<Vec<ModelRequestTelemetry>, StoreError> {
+        use std::io::Read;
+        let file = match File::open(self.session_dir(id)?.join("private-telemetry.jsonl")) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let length = file.metadata()?.len();
+        let mut reader = BufReader::new(file.take(length));
+        let mut line = Vec::new();
+        let mut records = Vec::new();
+        loop {
+            line.clear();
+            if reader.read_until(b'\n', &mut line)? == 0 || line.last() != Some(&b'\n') {
+                break;
+            }
+            if let Ok(record) = serde_json::from_slice(&line) {
+                records.push(record);
+            }
+        }
+        Ok(records)
+    }
+
     fn session_dir(&self, id: &str) -> Result<PathBuf, StoreError> {
         if id.is_empty()
             || id.len() > 128

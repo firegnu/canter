@@ -54,6 +54,7 @@ mod search;
 mod select;
 mod shimmer;
 mod short_path;
+pub mod stats;
 mod statusline;
 mod steer;
 mod tab_title;

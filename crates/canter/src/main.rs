@@ -26,6 +26,10 @@ async fn main() -> ExitCode {
                 .map(|report| print!("{report}")),
             Err(error) => Err(error),
         },
+        Ok(Command::Stats(args)) => match Context::current() {
+            Ok(context) => canter::stats::run(args, context).await,
+            Err(error) => Err(error),
+        },
         Ok(Command::Help) => {
             print!("{USAGE}");
             Ok(())

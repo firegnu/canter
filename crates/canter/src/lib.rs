@@ -10,6 +10,7 @@ use canter_tui::client::Client;
 use canter_tui::{CLIENT_NAME, Connected, Connector, Launch, Open};
 
 pub mod mcp;
+pub mod stats;
 
 #[cfg(test)]
 mod version;
@@ -29,6 +30,9 @@ Usage:
   canter serve               run the server in the foreground
   canter serve --replace     replace it in the background and exit when ready
   canter usage               show daily token usage and cost by model
+  canter stats [--all] [--json]  list recent sessions (all with --all)
+  canter stats <number|id> [--json|--html]
+  canter stats --last [--json|--html]  inspect the latest session
   canter mcp add <name> [--env K=V]... -- <command> [args...]
   canter mcp add <name> --url <url> [--header K=V]...
   canter mcp list            list configured MCP services (values hidden)
@@ -49,6 +53,7 @@ Options:
 pub enum Command {
     Serve { replace: bool, foreground: bool },
     Usage,
+    Stats(stats::Args),
     Mcp(mcp::Command),
     Chat(ChatArgs),
     Help,
@@ -80,6 +85,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         .collect::<Result<Vec<_>, _>>()?;
     if args.first().map(String::as_str) == Some("mcp") {
         return mcp::parse(&args[1..]).map(Command::Mcp);
+    }
+    if args.first().map(String::as_str) == Some("stats") {
+        return stats::parse(&args[1..]).map(Command::Stats);
     }
     if args.first().map(String::as_str) == Some("usage") {
         return if args.len() == 1 {

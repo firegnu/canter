@@ -34,6 +34,8 @@ pub mod routes {
     pub const FILE_RULE_DELETE: &str = "/v1/fileRules/delete";
     pub const MODELS: &str = "/v1/models";
     pub const USAGE: &str = "/v1/usage";
+    pub const STATS: &str = "/v1/stats";
+    pub const SESSION_STATS: &str = "/v1/sessions/{id}/stats";
     pub const SESSION_USAGE: &str = "/v1/sessions/{id}/usage";
     pub const SESSIONS: &str = "/v1/sessions";
     pub const SESSION: &str = "/v1/sessions/{id}";
