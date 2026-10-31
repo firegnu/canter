@@ -5,7 +5,7 @@ use serde_json::json;
 use std::{collections::BTreeMap, fs, path::Path, process::Stdio};
 use tokio::process::{Child, Command};
 
-fn fixture_executable() -> PathBuf {
+pub(super) fn fixture_executable() -> PathBuf {
     static FIXTURE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
     FIXTURE
         .get_or_init(|| {

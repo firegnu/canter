@@ -104,7 +104,8 @@ pub(crate) async fn run(
     let mut on_output = |text: &str| {
         let _ = sender.send(text.to_owned());
     };
-    let execute = shared
+    let runtime = shared.runtime();
+    let execute = runtime
         .tools
         .user_shell(item_id.clone(), params, cancel, &mut on_output);
     tokio::pin!(execute);
@@ -139,6 +140,7 @@ pub(crate) async fn run(
         unreachable!("shell result");
     };
     let text = if shared
+        .runtime()
         .tools
         .background()
         .list()

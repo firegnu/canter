@@ -140,6 +140,7 @@ impl Fixture {
                 .unwrap();
         });
         let app = Arc::new(App {
+            reload: None,
             mcp: Default::default(),
             lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
             home: root.path().join("state"),

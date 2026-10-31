@@ -234,7 +234,11 @@ pub(crate) async fn prepare_request(
     }) {
         return Ok((request, Vec::new()));
     }
-    let accepts_images = shared.options.image_models.contains(&request.model);
+    let accepts_images = shared
+        .runtime()
+        .options
+        .image_models
+        .contains(&request.model);
     let (store, session) = {
         let state = shared.state.lock().await;
         (

@@ -6,7 +6,7 @@ use std::{
 };
 
 // Configs can contain credentials. Never derive Debug or include values in errors.
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, PartialEq, Deserialize)]
 pub struct LspConfig {
     #[serde(default)]
     pub enabled: bool,

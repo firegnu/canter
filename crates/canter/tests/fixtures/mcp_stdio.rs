@@ -42,6 +42,13 @@ fn main() {
         } else if line.contains("\"tools/list\"") {
             r#"{"tools":[{"name":"echo","description":"stdio echo","inputSchema":{"type":"object","properties":{"text":{"type":"string"}}}}]}"#
         } else if line.contains("\"tools/call\"") {
+            if let Ok(path) = std::env::var("CALL_STARTED_FILE") {
+                std::fs::write(path, "started").unwrap();
+                let release = std::env::var("CALL_RELEASE_FILE").unwrap();
+                while !std::path::Path::new(&release).exists() {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
             if std::env::var_os("RETURN_HOME_PATH").is_some() {
                 r#"{"content":[{"type":"text","text":"/mcp/test-home/project/file.txt"}]}"#
             } else {

@@ -377,6 +377,7 @@ dependencies = [
  "canter-store",
  "canter-tools",
  "chrono",
+ "eventsource-stream",
  "futures-util",
  "nix",
  "reqwest",

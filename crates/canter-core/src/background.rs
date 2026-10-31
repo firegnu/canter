@@ -322,9 +322,9 @@ impl Shared {
             && state.requests.is_empty()
             && !state.background_events.draining
             && state.available().is_ok()
-            && state.background_events.count < self.options.auto_wake_limit
+            && state.background_events.count < self.next_options().auto_wake_limit
             && self.input_waiters.load(std::sync::atomic::Ordering::SeqCst) == 0;
-        for (id, count, allowed) in self.tools.background().matching_commands() {
+        for (id, count, allowed) in self.runtime().tools.background().matching_commands() {
             let pending = state
                 .background_events
                 .output_wakes
@@ -355,7 +355,7 @@ impl Shared {
                 .output_due
                 .is_some_and(|due| due <= Instant::now())
         {
-            for (id, text, allowed) in self.tools.background().take_matches() {
+            for (id, text, allowed) in self.runtime().tools.background().take_matches() {
                 let wake = allowed
                     && state
                         .background_events
@@ -369,7 +369,7 @@ impl Shared {
             state.background_events.output_due = None;
             state.background_events.output_wakes.clear();
         }
-        for command in self.tools.background().list() {
+        for command in self.runtime().tools.background().list() {
             if !state
                 .journal
                 .snapshot
@@ -377,7 +377,7 @@ impl Shared {
                 .iter()
                 .any(|old| old == &command)
             {
-                let wake = self.tools.background().wakes_on_exit(command.id);
+                let wake = self.runtime().tools.background().wakes_on_exit(command.id);
                 state.background_update(command, false, wake).await?;
             }
         }
@@ -386,7 +386,7 @@ impl Shared {
 }
 
 pub(crate) fn watch(shared: &Arc<Shared>) {
-    let mut changes = shared.tools.background().subscribe();
+    let mut changes = shared.runtime().tools.background().subscribe();
     let lifetime = shared.lifetime.clone();
     let shared: Weak<Shared> = Arc::downgrade(shared);
     tokio::spawn(async move {
@@ -461,9 +461,9 @@ pub(crate) fn watch(shared: &Arc<Shared>) {
                     && !state.background_events.cards.is_empty()
                     && state.available().is_ok()
                 {
-                    if state.background_events.count >= shared.options.auto_wake_limit {
+                    if state.background_events.count >= shared.next_options().auto_wake_limit {
                         if state
-                            .report_wake_limit(shared.options.auto_wake_limit)
+                            .report_wake_limit(shared.next_options().auto_wake_limit)
                             .await
                             .is_err()
                         {
@@ -486,9 +486,11 @@ pub(crate) fn watch(shared: &Arc<Shared>) {
                             let turn_id = state.active.as_ref().unwrap().turn.id.clone();
                             let setup = async {
                                 state.background_cards(&turn_id).await?;
-                                if state.background_events.count == shared.options.auto_wake_limit {
+                                if state.background_events.count
+                                    == shared.runtime().options.auto_wake_limit
+                                {
                                     state
-                                        .report_wake_limit(shared.options.auto_wake_limit)
+                                        .report_wake_limit(shared.runtime().options.auto_wake_limit)
                                         .await?;
                                 }
                                 Ok::<_, CoreError>(())
@@ -534,7 +536,7 @@ impl Session {
         })
     }
     pub async fn background_output(&self, id: u64) -> Result<BackgroundCommandOutput, CoreError> {
-        match self.shared.tools.background().output(id, false) {
+        match self.shared.runtime().tools.background().output(id, false) {
             Ok(output) => Ok(output),
             Err(_) => {
                 let state = self.shared.state.lock().await;
@@ -565,13 +567,14 @@ impl Session {
             if let Some(id) = id {
                 session
                     .shared
+                    .runtime()
                     .tools
                     .background()
                     .stop(id)
                     .await
                     .map_err(|message| CoreError::new(ErrorCode::InvalidRequest, &message))?;
             } else {
-                session.shared.tools.background().stop_all().await;
+                session.shared.runtime().tools.background().stop_all().await;
             }
             session.background_commands().await
         })
@@ -585,6 +588,7 @@ impl Session {
         owned(async move {
             let command_id = session
                 .shared
+                .runtime()
                 .tools
                 .background()
                 .promote(&params.item_id)

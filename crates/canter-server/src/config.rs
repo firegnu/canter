@@ -7,8 +7,15 @@ use serde::Deserialize;
 use crate::ServerError;
 
 // No Debug/Serialize: errors must not echo credentials or config contents.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub(crate) struct Config {
+    // The exact validated save, used to detect edits made during server startup.
+    #[serde(skip)]
+    pub contents: Vec<u8>,
+    #[serde(default = "default_enabled")]
+    plan_enabled: bool,
+    #[serde(default = "default_enabled")]
+    mcp_tool_search: bool,
     #[serde(default = "default_telemetry")]
     telemetry: bool,
     #[serde(default = "default_sandbox")]
@@ -63,13 +70,22 @@ impl Config {
 
     pub fn load(home: &Path) -> Result<Self, ServerError> {
         let path = home.join("config.json");
-        let file = fs::File::open(path).map_err(|_| {
+        let mut file = fs::File::open(path).map_err(|_| {
             ServerError("cannot read config.json; configure a model and API key first".into())
         })?;
         file.set_permissions(fs::Permissions::from_mode(0o600))
             .map_err(|_| ServerError("cannot set config.json permissions to 0600".into()))?;
-        let mut config: Self = serde_json::from_reader(file)
-            .map_err(|_| ServerError("config.json is not valid".into()))?;
+        let mut contents = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut contents)
+            .map_err(|_| ServerError("cannot read config.json".into()))?;
+        let mut config: Self = serde_json::from_slice(&contents).map_err(|error| {
+            ServerError(format!(
+                "config.json is not valid at line {} column {}",
+                error.line(),
+                error.column()
+            ))
+        })?;
+        config.contents = contents;
         let url = reqwest::Url::parse(&config.base_url)
             .map_err(|_| ServerError("invalid base_url".into()))?;
         let local = url.host_str().is_some_and(|host| {
@@ -158,6 +174,8 @@ impl Config {
                 ))
             });
         CoreOptions {
+            plan_enabled: self.plan_enabled,
+            mcp_tool_search: self.mcp_tool_search,
             sandbox: self.sandbox,
             web_search,
             auto_wake_limit: self.auto_wake_limit,
@@ -170,6 +188,10 @@ impl Config {
             ..CoreOptions::default()
         }
     }
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 fn default_telemetry() -> bool {
@@ -336,7 +358,12 @@ mod tests {
         );
         for bad in [json!(-1), json!(1.5), json!("400000")] {
             let error = load(json!({ "auto_compact_tokens": bad })).err().unwrap();
-            assert_eq!(error.to_string(), "config.json is not valid", "{bad}");
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("config.json is not valid at line 1 column "),
+                "{bad}"
+            );
         }
     }
 }

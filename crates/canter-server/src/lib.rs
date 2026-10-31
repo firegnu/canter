@@ -6,6 +6,9 @@ mod http;
 mod lifecycle;
 #[cfg(test)]
 mod lsp_tests;
+mod reload;
+#[cfg(test)]
+mod reload_tests;
 
 pub use discovery::{Connection, discover, ensure_server, replace_server};
 pub use lifecycle::{Registration, UPGRADE_GRACE};
@@ -87,15 +90,17 @@ async fn serve_with_lsp(
         .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
     let model = config.model_client()?;
     let options = config.options();
-    let lsp = make_lsp(config.lsp).map_err(|error| ServerError(error.to_string()))?;
+    let lsp = make_lsp(config.lsp.clone()).map_err(|error| ServerError(error.to_string()))?;
     let startup_stop = CancellationToken::new();
-    let connecting = canter_core::mcp::Registry::connect(
-        config.mcp_servers,
+    let connecting = reload::LiveConfig::connect(
         lease.home.clone(),
+        config.clone(),
+        model.clone(),
+        lsp.clone(),
         startup_stop.clone(),
     );
     tokio::pin!(connecting);
-    let mcp = tokio::select! {
+    let reload = tokio::select! {
         registry = &mut connecting => registry,
         _ = async { tokio::select! { _ = terminate.recv() => {}, _ = interrupt.recv() => {}, _ = hangup.recv() => {} } } => {
             startup_stop.cancel();
@@ -105,7 +110,8 @@ async fn serve_with_lsp(
         }
     };
     let app = Arc::new(http::App {
-        mcp,
+        reload: Some(reload.clone()),
+        mcp: Default::default(),
         lsp,
         home: lease.home.clone(),
         store: Arc::new(store),
@@ -142,6 +148,7 @@ async fn serve_with_lsp(
         std::process::id()
     );
     let shutdown = app.clone();
+    let watcher = reload.watch(Arc::downgrade(&app));
     let home = lease.home.clone();
     let registration = lease.registration.clone();
     let stopped = app.stopped.clone();
@@ -161,6 +168,7 @@ async fn serve_with_lsp(
         };
         tokio::pin!(exit);
         let replacing = tokio::select! { _ = &mut exit => false, _ = upgrade => true };
+        if let Some(reload) = &shutdown.reload { reload.stop_reloading(); }
         *shutdown.draining.write().await = true;
         let sessions: Vec<_> = shutdown.sessions.lock().await.values().cloned().collect();
         for session in &sessions { session.drain().await; }
@@ -187,8 +195,7 @@ async fn serve_with_lsp(
                 let _ = session.close_for_shutdown().await;
             }
         })).await;
-        shutdown.mcp.shutdown().await;
-        shutdown.lsp.shutdown().await;
+        if let Some(reload) = &shutdown.reload { reload.shutdown().await; }
         shutdown.stopped.cancel();
     }).into_future();
     tokio::pin!(server);
@@ -201,6 +208,8 @@ async fn serve_with_lsp(
             }
         }
     }
+    reload.shutdown().await;
+    let _ = watcher.await;
     drop(lease);
     if close_failed.load(Ordering::Relaxed) {
         Err(ServerError(

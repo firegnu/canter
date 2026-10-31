@@ -23,3 +23,6 @@ async-stream.workspace = true
 futures-util.workspace = true
 nix.workspace = true
 chrono.workspace = true
+
+[dev-dependencies]
+eventsource-stream.workspace = true

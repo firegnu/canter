@@ -1,0 +1,800 @@
+use super::*;
+use canter_protocol::{
+    ContextResponse, Event, EventPayload, SessionCreateResponse, SessionReadResponse, SessionStatus,
+};
+use eventsource_stream::Eventsource;
+use futures_util::StreamExt;
+use serde_json::{Value, json};
+use std::{fs, process::Stdio};
+use tokio::sync::{mpsc, oneshot};
+
+#[tokio::test]
+async fn server_process() {
+    if std::env::var_os("CANTER_RELOAD_TEST").is_some() {
+        serve(false, "reload-test").await.unwrap();
+    }
+}
+
+struct Request {
+    body: Value,
+    reply: oneshot::Sender<String>,
+}
+impl Request {
+    fn stop(self) {
+        let chunk =
+            json!({"choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"stop"}]});
+        self.reply
+            .send(format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+            .unwrap();
+    }
+    fn tool(self, name: &str, arguments: Value) {
+        let chunk = json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-test","type":"function","function":{"name":name,"arguments":arguments.to_string()}}]},"finish_reason":"tool_calls"}]});
+        self.reply
+            .send(format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+            .unwrap();
+    }
+    fn tools(&self) -> Vec<&str> {
+        self.body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect()
+    }
+}
+struct Fixture {
+    root: tempfile::TempDir,
+    config: Value,
+    child: tokio::process::Child,
+    client: reqwest::Client,
+    requests: mpsc::UnboundedReceiver<Request>,
+    model: tokio::task::JoinHandle<()>,
+}
+impl Fixture {
+    async fn new(extra: Value) -> Self {
+        let root = tempfile::Builder::new()
+            .prefix("canter-reload-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let home = root.path().join("home");
+        let state = root.path().join("state");
+        fs::create_dir(&home).unwrap();
+        fs::create_dir(&state).unwrap();
+        let endpoint = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = endpoint.local_addr().unwrap();
+        let (requests, receiver) = mpsc::unbounded_channel();
+        let router = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+                let requests = requests.clone();
+                async move {
+                    let (reply, response) = oneshot::channel();
+                    let _ = requests.send(Request { body, reply });
+                    (
+                        [("content-type", "text/event-stream")],
+                        response.await.unwrap_or_default(),
+                    )
+                }
+            }),
+        );
+        let model = tokio::spawn(async move {
+            axum::serve(endpoint, router).await.unwrap();
+        });
+        let mut config = json!({"base_url":format!("http://{address}"),"model":"fake","models":["fake"],"api_key":"test-only-key","context_window":1048576,"sandbox":false});
+        config
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        fs::write(state.join("config.json"), config.to_string()).unwrap();
+        let log = fs::File::create(root.path().join("server.log")).unwrap();
+        let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "reload_tests::server_process", "--nocapture"])
+            .env_clear()
+            .env("HOME", &home)
+            .env("CANTER_HOME", &state)
+            .env("CANTER_RELOAD_TEST", "1")
+            .stdin(Stdio::null())
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let connection = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                assert!(
+                    child.try_wait().unwrap().is_none(),
+                    "{}",
+                    fs::read_to_string(root.path().join("server.log")).unwrap()
+                );
+                if let Ok(Some(connection)) = discover(&state).await {
+                    break connection;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .unix_socket(connection.registration.socket_path)
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap();
+        Self {
+            root,
+            config,
+            child,
+            client,
+            requests: receiver,
+            model,
+        }
+    }
+    fn path(&self) -> PathBuf {
+        self.root.path().join("state/config.json")
+    }
+    fn save(&self) {
+        fs::write(self.path(), self.config.to_string()).unwrap();
+    }
+    async fn create(&self) -> String {
+        self.create_with_env(json!({})).await
+    }
+    async fn create_with_env(&self, extra: Value) -> String {
+        let mut environment = json!({"HOME":self.root.path().join("home"),"CANTER_HOME":self.root.path().join("state")});
+        environment
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let created: SessionCreateResponse = self.client.post("http://localhost/v1/sessions")
+            .json(&json!({"cwd":self.root.path(),"env":environment,"model":"","approvalPolicy":"allowAll","clientName":"test"}))
+            .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+        format!("http://localhost/v1/sessions/{}", created.session.id)
+    }
+    async fn input(&self, url: &str) {
+        self.client
+            .post(format!("{url}/input"))
+            .json(&json!({"input":[{"type":"text","text":"hello"}],"clientName":"test"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    }
+    async fn request(&mut self) -> Request {
+        tokio::time::timeout(Duration::from_secs(5), self.requests.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+    async fn context(&self, url: &str) -> ContextResponse {
+        self.client
+            .get(format!("{url}/context"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+    async fn snapshot(&self, url: &str) -> SessionReadResponse {
+        self.client
+            .get(url)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+    async fn idle(&self, url: &str) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while self.snapshot(url).await.session.status != SessionStatus::Idle {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            self.snapshot(url)
+                .await
+                .session
+                .turns
+                .last()
+                .unwrap()
+                .status,
+            canter_protocol::TurnStatus::Completed
+        );
+    }
+    async fn applied(&mut self, marker: &str) {
+        self.config["models"] = json!(["fake", marker]);
+        self.save();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let models: canter_protocol::ModelListResponse = self
+                    .client
+                    .get("http://localhost/v1/models")
+                    .send()
+                    .await
+                    .unwrap()
+                    .json()
+                    .await
+                    .unwrap();
+                if models.data.iter().any(|model| model.id == marker) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    async fn warnings(&self, url: &str) -> Warnings {
+        let after = self.snapshot(url).await.event_seq;
+        let response = self
+            .client
+            .get(format!(
+                "http://localhost/v1/events?session={}&after={after}",
+                url.rsplit('/').next().unwrap()
+            ))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            let mut stream = response.bytes_stream().eventsource();
+            while let Some(Ok(event)) = stream.next().await {
+                let event: Event = serde_json::from_str(&event.data).unwrap();
+                if let EventPayload::Warning { message } = event.payload {
+                    let _ = sender.send(message);
+                }
+            }
+        });
+        Warnings { receiver, task }
+    }
+    async fn shutdown(mut self) {
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(self.child.id().unwrap() as i32),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .unwrap();
+        let status = tokio::time::timeout(Duration::from_secs(10), self.child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        self.model.abort();
+        assert!(
+            status.success(),
+            "{}",
+            fs::read_to_string(self.root.path().join("server.log")).unwrap()
+        );
+    }
+}
+struct Warnings {
+    receiver: mpsc::UnboundedReceiver<String>,
+    task: tokio::task::JoinHandle<()>,
+}
+impl Warnings {
+    async fn next(&mut self) -> String {
+        tokio::time::timeout(Duration::from_secs(5), self.receiver.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+}
+impl Drop for Warnings {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+#[tokio::test]
+async fn existing_sessions_keep_the_running_turn_config_and_reload_before_the_next_turn() {
+    let mut fixture = Fixture::new(json!({})).await;
+    let url = fixture.create().await;
+    fixture.input(&url).await;
+    let first = fixture.request().await;
+    fixture.config["context_window"] = json!(524288);
+    fixture.applied("next").await;
+    assert_eq!(fixture.context(&url).await.model_context_window, 1048576);
+    first.stop();
+    fixture.idle(&url).await;
+    fixture.input(&url).await;
+    let next = fixture.request().await;
+    let context = fixture.context(&url).await;
+    next.stop();
+    fixture.shutdown().await;
+    assert_eq!(context.model_context_window, 524288);
+}
+
+#[tokio::test]
+async fn invalid_json_keeps_the_old_config_reports_location_and_recovers_over_sse() {
+    let mut fixture = Fixture::new(json!({})).await;
+    let url = fixture.create().await;
+    let mut warnings = fixture.warnings(&url).await;
+    fixture.input(&url).await;
+    let running = fixture.request().await;
+    fs::write(
+        fixture.path(),
+        "{\n\"api_key\":\"test-only-secret-do-not-report\",\n\"context_window\":",
+    )
+    .unwrap();
+    let error = warnings.next().await;
+    assert!(
+        error.contains("config.json") && error.contains("line 3") && error.contains("column"),
+        "{error}"
+    );
+    assert!(!error.contains("test-only-secret-do-not-report"));
+    assert_eq!(fixture.context(&url).await.model_context_window, 1048576);
+    assert_eq!(
+        fixture.snapshot(&url).await.session.status,
+        SessionStatus::Working
+    );
+    running.stop();
+    fixture.idle(&url).await;
+    fixture.input(&url).await;
+    fixture.request().await.stop();
+    fixture.idle(&url).await;
+    fixture.config["context_window"] = json!(524288);
+    fixture.applied("fixed").await;
+    assert!(warnings.next().await.contains("recovered"));
+    fixture.input(&url).await;
+    fixture.request().await.stop();
+    fixture.idle(&url).await;
+    assert_eq!(fixture.context(&url).await.model_context_window, 524288);
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn missing_or_renamed_config_keeps_the_previous_settings_and_recovers() {
+    let mut fixture = Fixture::new(json!({})).await;
+    let url = fixture.create().await;
+    let mut warnings = fixture.warnings(&url).await;
+    let backup = fixture.path().with_extension("saved");
+    fs::rename(fixture.path(), &backup).unwrap();
+    assert!(warnings.next().await.contains("cannot read config.json"));
+    fixture.input(&url).await;
+    fixture.request().await.stop();
+    fixture.idle(&url).await;
+    assert_eq!(fixture.context(&url).await.model_context_window, 1048576);
+    fs::rename(&backup, fixture.path()).unwrap();
+    assert!(warnings.next().await.contains("recovered"));
+    fs::remove_file(fixture.path()).unwrap();
+    assert!(warnings.next().await.contains("cannot read config.json"));
+    fixture.config["context_window"] = json!(524288);
+    fixture.save();
+    assert!(warnings.next().await.contains("recovered"));
+    fixture.input(&url).await;
+    fixture.request().await.stop();
+    fixture.idle(&url).await;
+    assert_eq!(fixture.context(&url).await.model_context_window, 524288);
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn rapid_saves_publish_only_the_last_value() {
+    let mut fixture = Fixture::new(json!({})).await;
+    let url = fixture.create().await;
+    let mut warnings = fixture.warnings(&url).await;
+    // Watch the public model list throughout the burst, including between saves.
+    let client = fixture.client.clone();
+    let finished = CancellationToken::new();
+    let stop = finished.clone();
+    let observer = tokio::spawn(async move {
+        let mut seen = Vec::new();
+        while !stop.is_cancelled() {
+            let models: canter_protocol::ModelListResponse = client
+                .get("http://localhost/v1/models")
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            seen.extend(models.data.into_iter().map(|model| model.id));
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        seen
+    });
+    for n in 1..=3 {
+        fixture.config["context_window"] = json!(200000 + n);
+        fixture.config["models"] = json!(["fake", format!("intermediate-{n}")]);
+        fixture.save();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    fs::write(fixture.path(), "{").unwrap();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    fixture.config["context_window"] = json!(524288);
+    fixture.applied("final").await;
+    finished.cancel();
+    let seen = observer.await.unwrap();
+    assert!(
+        seen.iter().all(|model| !model.starts_with("intermediate-")),
+        "{seen:?}"
+    );
+    assert!(warnings.receiver.try_recv().is_err());
+    fixture.input(&url).await;
+    fixture.request().await.stop();
+    fixture.idle(&url).await;
+    assert_eq!(fixture.context(&url).await.model_context_window, 524288);
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn simultaneous_sessions_change_configuration_at_their_own_turn_boundaries() {
+    let mut fixture = Fixture::new(json!({})).await;
+    let a = fixture.create().await;
+    let b = fixture.create().await;
+    fixture.input(&a).await;
+    let a_old = fixture.request().await;
+    fixture.input(&b).await;
+    let b_old = fixture.request().await;
+    fixture.config["context_window"] = json!(524288);
+    fixture.config["plan_enabled"] = json!(false);
+    fixture.applied("parallel").await;
+    assert_eq!(fixture.context(&a).await.model_context_window, 1048576);
+    assert_eq!(fixture.context(&b).await.model_context_window, 1048576);
+    assert_eq!(
+        fixture.snapshot(&a).await.session.settings.plan_enabled,
+        Some(true)
+    );
+    a_old.stop();
+    fixture.idle(&a).await;
+    fixture.input(&a).await;
+    let a_new = fixture.request().await;
+    assert_eq!(fixture.context(&a).await.model_context_window, 524288);
+    assert_eq!(fixture.context(&b).await.model_context_window, 1048576);
+    assert_eq!(
+        fixture.snapshot(&a).await.session.settings.plan_enabled,
+        Some(false)
+    );
+    assert!(!a_new.tools().contains(&"update_plan"));
+    // The to-do list switch does not disable Plan-mode proposal approval.
+    assert!(a_new.tools().contains(&"submit_plan"));
+    b_old.stop();
+    fixture.idle(&b).await;
+    fixture.input(&b).await;
+    fixture.request().await.stop();
+    a_new.stop();
+    fixture.idle(&a).await;
+    fixture.idle(&b).await;
+    assert_eq!(fixture.context(&b).await.model_context_window, 524288);
+    fixture.shutdown().await;
+}
+
+fn mcp_executable() -> PathBuf {
+    static EXECUTABLE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    EXECUTABLE
+        .get_or_init(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let result = std::process::Command::new("rustc")
+                .args([
+                    "--edition=2024",
+                    concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../canter/tests/fixtures/mcp_stdio.rs"
+                    ),
+                    "-o",
+                ])
+                .arg(dir.path().join("mcp-fixture"))
+                .status()
+                .unwrap();
+            assert!(result.success());
+            dir
+        })
+        .path()
+        .join("mcp-fixture")
+}
+async fn until(mut condition: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !condition() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+fn gone(pid: u32) -> bool {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None)
+        == Err(nix::errno::Errno::ESRCH)
+}
+
+#[tokio::test]
+async fn mcp_removal_keeps_an_in_flight_call_alive_then_the_next_turn_sees_the_added_service() {
+    let directory = tempfile::tempdir().unwrap();
+    let old_pid = directory.path().join("old.pid");
+    let new_pid = directory.path().join("new.pid");
+    let started = directory.path().join("started");
+    let release = directory.path().join("release");
+    let executable = mcp_executable();
+    let mut fixture = Fixture::new(json!({"mcp_tool_search":false,"mcp_servers":{
+        "old":{"transport":"stdio","command":executable,"args":["--fixture"],"env":{"PID_FILE":old_pid,"CALL_STARTED_FILE":started,"CALL_RELEASE_FILE":release}}
+    }})).await;
+    let url = fixture.create().await;
+    let pid: u32 = fs::read_to_string(&old_pid).unwrap().parse().unwrap();
+    fixture.input(&url).await;
+    let request = fixture.request().await;
+    assert!(request.tools().contains(&"mcp__old__echo"));
+    request.tool("mcp__old__echo", json!({"text":"keep running"}));
+    until(|| started.exists()).await;
+    fixture.config["mcp_servers"] = json!({"new":{"transport":"stdio","command":executable,"args":["--fixture"],"env":{"PID_FILE":new_pid}}});
+    fixture.applied("mcp-new").await;
+    assert!(!gone(pid), "old MCP must remain alive throughout its turn");
+    fs::write(&release, "continue").unwrap();
+    let same_turn = fixture.request().await;
+    assert!(same_turn.tools().contains(&"mcp__old__echo"));
+    assert!(
+        same_turn.body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message["role"] == "tool"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("stdio result")))
+    );
+    assert!(!gone(pid));
+    same_turn.stop();
+    fixture.idle(&url).await;
+    until(|| gone(pid)).await;
+    fixture.input(&url).await;
+    let next = fixture.request().await;
+    assert!(!next.tools().contains(&"mcp__old__echo"));
+    assert!(next.tools().contains(&"mcp__new__echo"));
+    let new: u32 = fs::read_to_string(&new_pid).unwrap().parse().unwrap();
+    next.stop();
+    fixture.idle(&url).await;
+    fixture.shutdown().await;
+    until(|| gone(new)).await;
+}
+
+#[tokio::test]
+async fn adding_mcp_does_not_wait_for_other_sessions_running_with_the_previous_catalog() {
+    let mut fixture = Fixture::new(json!({"mcp_tool_search":false})).await;
+    let a = fixture.create().await;
+    let b = fixture.create().await;
+    fixture.input(&a).await;
+    let running = fixture.request().await;
+    fixture.config["mcp_servers"] =
+        json!({"added":{"transport":"stdio","command":mcp_executable(),"args":["--fixture"]}});
+    fixture.applied("added").await;
+    tokio::time::timeout(Duration::from_secs(5), fixture.input(&b)).await.expect("a new MCP service must be usable by the next turn while another session is still running");
+    let next = fixture.request().await;
+    assert!(next.tools().contains(&"mcp__added__echo"));
+    assert_eq!(
+        fixture.snapshot(&a).await.session.status,
+        SessionStatus::Working
+    );
+    next.stop();
+    running.stop();
+    fixture.idle(&a).await;
+    fixture.idle(&b).await;
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn changed_mcp_waits_for_its_old_turn_without_restarting_unchanged_services() {
+    let directory = tempfile::tempdir().unwrap();
+    let old_pid = directory.path().join("old.pid");
+    let new_pid = directory.path().join("new.pid");
+    let keep_pid = directory.path().join("keep.pid");
+    let config = |path: &std::path::Path| json!({"transport":"stdio","command":mcp_executable(),"args":["--fixture"],"env":{"PID_FILE":path}});
+    let mut fixture = Fixture::new(json!({"mcp_tool_search":false,"mcp_servers":{"changed":config(&old_pid),"kept":config(&keep_pid)}})).await;
+    let a = fixture.create().await;
+    let b = fixture.create().await;
+    let old: u32 = fs::read_to_string(&old_pid).unwrap().parse().unwrap();
+    let kept: u32 = fs::read_to_string(&keep_pid).unwrap().parse().unwrap();
+    fixture.input(&a).await;
+    let running = fixture.request().await;
+    fixture.config["mcp_servers"]["changed"] = config(&new_pid);
+    fixture.applied("changed-service").await;
+    let client = fixture.client.clone();
+    let pending = tokio::spawn(async move {
+        client
+            .post(format!("{b}/input"))
+            .json(&json!({"input":[{"type":"text","text":"next"}],"clientName":"test"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!pending.is_finished());
+    assert!(!new_pid.exists());
+    assert!(!gone(old));
+    // Waiting for a replacement must not hold the server's session registry lock.
+    assert_eq!(
+        fixture.snapshot(&a).await.session.status,
+        SessionStatus::Working
+    );
+    running.stop();
+    tokio::time::timeout(Duration::from_secs(5), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    let next = fixture.request().await;
+    assert!(next.tools().contains(&"mcp__changed__echo"));
+    assert!(next.tools().contains(&"mcp__kept__echo"));
+    until(|| gone(old)).await;
+    assert_eq!(
+        fs::read_to_string(&keep_pid)
+            .unwrap()
+            .parse::<u32>()
+            .unwrap(),
+        kept
+    );
+    assert!(!gone(kept));
+    let new: u32 = fs::read_to_string(&new_pid).unwrap().parse().unwrap();
+    next.stop();
+    fixture.shutdown().await;
+    until(|| gone(new) && gone(kept)).await;
+}
+
+#[tokio::test]
+async fn lsp_configuration_keeps_the_old_process_until_turn_end_and_restarts_on_the_next_write() {
+    let config = json!({"enabled":true,"servers":{"fake":{"command":super::lsp_tests::fixture_executable(),"extensions":{"fake":"fake"},"root_markers":["project.marker"]}}});
+    let mut fixture = Fixture::new(json!({"lsp":config})).await;
+    fs::write(fixture.root.path().join("project.marker"), "").unwrap();
+    fs::write(fixture.root.path().join("main.fake"), "").unwrap();
+    let url = fixture
+        .create_with_env(json!({"LSP_TEST_DIR":fixture.root.path(),"LSP_TEST_MODE":"sync"}))
+        .await;
+    fixture.input(&url).await;
+    fixture
+        .request()
+        .await
+        .tool("write", json!({"path":"main.fake","content":"bad\n"}));
+    let running = fixture.request().await;
+    let starts = fixture.root.path().join("starts");
+    until(|| starts.exists()).await;
+    let old: u32 = fs::read_to_string(&starts).unwrap().trim().parse().unwrap();
+    fixture.config["lsp"] = json!({"enabled":false});
+    fixture.applied("lsp-off").await;
+    assert!(!gone(old));
+    running.stop();
+    fixture.idle(&url).await;
+    until(|| gone(old)).await;
+    fixture.input(&url).await;
+    fixture.request().await.tool(
+        "write",
+        json!({"path":"main.fake","content":"without lsp\n"}),
+    );
+    fixture.request().await.stop();
+    fixture.idle(&url).await;
+    assert_eq!(fs::read_to_string(&starts).unwrap().lines().count(), 1);
+    fixture.config["lsp"] = config;
+    fixture.applied("lsp-on").await;
+    fixture.input(&url).await;
+    fixture
+        .request()
+        .await
+        .tool("write", json!({"path":"main.fake","content":"bad again\n"}));
+    fixture.request().await.stop();
+    fixture.idle(&url).await;
+    until(|| fs::read_to_string(&starts).unwrap().lines().count() == 2).await;
+    let pids: Vec<u32> = fs::read_to_string(&starts)
+        .unwrap()
+        .lines()
+        .map(|pid| pid.parse().unwrap())
+        .collect();
+    assert_eq!(pids.len(), 2);
+    assert_ne!(pids[0], pids[1]);
+    fixture.shutdown().await;
+    until(|| gone(pids[1])).await;
+}
+
+#[tokio::test]
+async fn disabling_then_enabling_lsp_still_waits_for_the_original_turn() {
+    let config = json!({"enabled":true,"servers":{"fake":{"command":super::lsp_tests::fixture_executable(),"extensions":{"fake":"fake"},"root_markers":["project.marker"]}}});
+    let mut fixture = Fixture::new(json!({"lsp":config})).await;
+    fs::write(fixture.root.path().join("project.marker"), "").unwrap();
+    fs::write(fixture.root.path().join("main.fake"), "").unwrap();
+    let env = json!({"LSP_TEST_DIR":fixture.root.path(),"LSP_TEST_MODE":"sync"});
+    let a = fixture.create_with_env(env.clone()).await;
+    let b = fixture.create_with_env(env).await;
+    fixture.input(&a).await;
+    fixture
+        .request()
+        .await
+        .tool("write", json!({"path":"main.fake","content":"first\n"}));
+    let running = fixture.request().await;
+    let starts = fixture.root.path().join("starts");
+    until(|| starts.exists()).await;
+    let old: u32 = fs::read_to_string(&starts).unwrap().trim().parse().unwrap();
+    fixture.config["lsp"] = json!({"enabled":false});
+    fixture.applied("disabled").await;
+    fixture.config["lsp"] = config;
+    fixture.applied("enabled-again").await;
+    let client = fixture.client.clone();
+    let pending = tokio::spawn(async move {
+        client
+            .post(format!("{b}/input"))
+            .json(&json!({"input":[{"type":"text","text":"next"}],"clientName":"test"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!pending.is_finished());
+    assert!(!gone(old));
+    running.stop();
+    tokio::time::timeout(Duration::from_secs(5), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture.request().await.stop();
+    until(|| gone(old)).await;
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn waiting_for_services_does_not_lock_other_sessions_for_readers_or_close() {
+    use reqwest::Method;
+    for (method, suffix) in [
+        (Method::GET, "/usage"),
+        (Method::GET, "/events"),
+        (Method::POST, "/resume"),
+        (Method::DELETE, ""),
+    ] {
+        let mut fixture = Fixture::new(json!({})).await;
+        let a = fixture.create().await;
+        let b = fixture.create().await;
+        fixture.input(&a).await;
+        let running = fixture.request().await;
+        fixture.config["lsp"] = json!({"enabled":true});
+        fixture.applied("waiting").await;
+        let client = fixture.client.clone();
+        let input_url = b.clone();
+        let pending = tokio::spawn(async move {
+            client
+                .post(format!("{input_url}/input"))
+                .json(&json!({"input":[{"type":"text","text":"next"}],"clientName":"test"}))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!pending.is_finished());
+        let client = fixture.client.clone();
+        let reader = tokio::spawn(async move {
+            let url = if suffix == "/events" {
+                format!(
+                    "http://localhost/v1/events?session={}&after=0",
+                    b.rsplit('/').next().unwrap()
+                )
+            } else {
+                format!("{b}{suffix}")
+            };
+            client
+                .request(method, url)
+                .json(&json!({"env":{}}))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), fixture.snapshot(&a))
+                .await
+                .expect("another session's API must remain available")
+                .session
+                .status,
+            SessionStatus::Working
+        );
+        running.stop();
+        pending.await.unwrap();
+        reader.await.unwrap();
+        fixture.shutdown().await;
+    }
+}

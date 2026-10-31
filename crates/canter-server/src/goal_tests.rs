@@ -222,6 +222,7 @@ impl Fixture {
                 .unwrap();
         });
         let app = Arc::new(App {
+            reload: None,
             home: root.path().join("state"),
             store: Arc::new(Store::new(root.path().join("state/sessions")).unwrap()),
             model: Arc::new(model),

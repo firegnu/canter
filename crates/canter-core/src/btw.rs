@@ -95,7 +95,13 @@ Task for the new session:
                 "No conversation to hand off",
             ));
         }
-        let mut request = context::request(&state, self.shared.options.max_output_tokens);
+        let configuration_lease = if state.active.is_none() {
+            self.shared.configure(&mut state).await?
+        } else {
+            None
+        };
+        let shared = self.shared.frozen();
+        let mut request = context::request(&state, shared.runtime().options.max_output_tokens);
         // A tool group is indivisible: keep it only once every call has a result.
         if let Some(index) = request
             .messages
@@ -122,9 +128,9 @@ Task for the new session:
             cancel: cancel.clone(),
             done: done_receiver,
         });
-        let shared = self.shared.clone();
         let run_cancel = cancel.clone();
         tokio::spawn(async move {
+            let _configuration_lease = configuration_lease;
             let result = answer(&shared, request, handoff, &run_cancel, &sender).await;
             let mut state = shared.state.lock().await;
             state.btw = None;
@@ -161,9 +167,9 @@ async fn answer(
         if cancel.is_cancelled() {
             return Ok(());
         }
-        let mut started_at = (shared.options.request_time)();
+        let mut started_at = (shared.runtime().options.request_time)();
         let mut goal_id = shared.state.lock().await.charge_goal();
-        let (prepared, estimate) = if shared.options.telemetry {
+        let (prepared, estimate) = if shared.runtime().options.telemetry {
             context::measure(request.clone()).await?
         } else {
             (request.clone(), Default::default())
@@ -242,7 +248,7 @@ async fn answer(
                     if shared.state.lock().await.goal_summary.is_some() {
                         break Ok(false);
                     }
-                    started_at = (shared.options.request_time)();
+                    started_at = (shared.runtime().options.request_time)();
                     goal_id = shared.state.lock().await.charge_goal();
                 }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),

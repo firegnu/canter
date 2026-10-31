@@ -7,7 +7,7 @@ mod http;
 pub mod oauth;
 
 // Deliberately neither Debug nor Serialize: these values can contain credentials.
-#[derive(Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 #[serde(tag = "transport", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ServerConfig {
     Stdio {
@@ -221,11 +221,15 @@ impl Registry {
         registry
     }
 
-    /// Cloned once when opening a session. Connection state remains live, definitions do not.
+    /// Connection state remains live; callers decide when to refresh definitions.
     pub fn snapshot(&self) -> Vec<McpTool> {
+        Self::snapshot_all(&[self])
+    }
+
+    pub fn snapshot_all(registries: &[&Self]) -> Vec<McpTool> {
         let mut names = HashSet::new();
         let mut tools = Vec::new();
-        for server in &self.servers {
+        for server in registries.iter().flat_map(|registry| &registry.servers) {
             let state = server.state.lock().unwrap();
             if server.needs_login.load(Ordering::Relaxed)
                 || state
@@ -259,9 +263,14 @@ impl Registry {
     }
 
     pub fn status(&self) -> Vec<McpServerStatus> {
+        Self::status_all(&[self])
+    }
+
+    pub fn status_all(registries: &[&Self]) -> Vec<McpServerStatus> {
         let mut names = HashSet::new();
-        self.servers
+        registries
             .iter()
+            .flat_map(|registry| &registry.servers)
             .map(|server| {
                 let state = server.state.lock().unwrap();
                 let connected = !server.needs_login.load(Ordering::Relaxed)
