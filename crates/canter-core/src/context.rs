@@ -50,6 +50,9 @@ pub(crate) enum HistoryEntry {
     SkillNotice {
         message: Message,
     },
+    RestoredFileNotice {
+        message: Message,
+    },
     GoalNotice {
         message: Message,
     },
@@ -99,6 +102,7 @@ pub(crate) fn known(message: Message) -> Option<Message> {
 }
 
 pub(crate) struct Restored {
+    pub restored_file_notices: std::collections::BTreeSet<usize>,
     pub diagnostic_notices: std::collections::BTreeSet<usize>,
     pub invoked_skills: Vec<crate::skill_invocation::Invocation>,
     pub background_cards: BTreeMap<String, canter_protocol::Item>,
@@ -125,8 +129,13 @@ pub(crate) fn restore(
     let mut tool_images = Vec::new();
     let mut background_cards = BTreeMap::new();
     let mut diagnostic_notices = std::collections::BTreeSet::new();
+    let mut restored_file_notices = std::collections::BTreeSet::new();
     for entry in entries {
         match entry {
+            HistoryEntry::RestoredFileNotice { message } => {
+                restored_file_notices.insert(history.len());
+                history.push(message);
+            }
             HistoryEntry::DiagnosticsNotice { message } => {
                 diagnostic_notices.insert(history.len());
                 history.push(message);
@@ -162,6 +171,7 @@ pub(crate) fn restore(
                     tool_images.clear();
                     history.truncate(messages);
                     diagnostic_notices.retain(|index| *index < messages);
+                    restored_file_notices.retain(|index| *index < messages);
                     users.truncate(user_count);
                     invoked_skills.truncate(skills);
                 }
@@ -171,6 +181,7 @@ pub(crate) fn restore(
                     tool_images.clear();
                     history.truncate(messages);
                     diagnostic_notices.retain(|index| *index < messages);
+                    restored_file_notices.retain(|index| *index < messages);
                     users.truncate(user_count);
                     invoked_skills.truncate(skills);
                 }
@@ -210,6 +221,7 @@ pub(crate) fn restore(
                 tool_images.clear();
                 history = messages.into_iter().filter_map(known).collect();
                 diagnostic_notices.clear();
+                restored_file_notices.clear();
                 summary_index = history.len().checked_sub(1);
                 users = if user_inputs.is_empty() {
                     user_messages
@@ -227,6 +239,7 @@ pub(crate) fn restore(
         flush_plan_mode_notices(&mut history, &mut plan_mode_notices);
     }
     Restored {
+        restored_file_notices,
         diagnostic_notices,
         invoked_skills,
         background_cards,

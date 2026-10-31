@@ -509,6 +509,9 @@ pub enum Item {
     ContextCompaction {
         id: String,
         summary: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[ts(optional = nullable)]
+        restored_files: Vec<RestoredFile>,
     },
     UserInput {
         id: String,
@@ -520,6 +523,16 @@ pub enum Item {
     },
     #[serde(other)]
     Unknown,
+}
+
+/// A file automatically restored after compaction; absent lines means reference only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoredFile {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub lines: Option<u32>,
 }
 
 /// Tool attachments refer to durable copies in the owning session directory.

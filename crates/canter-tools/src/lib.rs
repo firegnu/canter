@@ -479,6 +479,10 @@ pub struct FileCheckpoint<'a> {
 }
 
 impl PreparedCall {
+    pub fn resolved_path(&self) -> Option<&std::path::Path> {
+        self.resolved_path.as_deref()
+    }
+
     pub fn started_item(&self) -> Item {
         self.item(ItemStatus::InProgress)
     }
@@ -1691,6 +1695,88 @@ impl Tools {
             );
         }
         Ok((text, Vec::new(), output_size))
+    }
+
+    /// Re-read text for compaction without read's paging limits.
+    /// None means the file exceeds MAX_READ_BYTES; only the bounded prefix is
+    /// checked for binary data, and the remainder is not read.
+    pub async fn read_for_compaction(
+        &self,
+        permit: ExecutionPermit<'_>,
+        cancel: &CancellationToken,
+    ) -> std::io::Result<Option<(String, u32)>> {
+        let call = permit.into_call();
+        if !Arc::ptr_eq(&call.executor, &self.executor) {
+            return Err(std::io::Error::other(
+                "call belongs to a different executor",
+            ));
+        }
+        let Action::Read(args) = &call.action else {
+            return Err(std::io::Error::other("compaction requires a read permit"));
+        };
+        let path = self
+            .executor
+            .resolve_path(args.path.as_ref(), cancel)
+            .await?;
+        if call.resolved_path.as_ref() != Some(&path) {
+            return Err(std::io::Error::other(
+                "file target changed since permission check",
+            ));
+        }
+        let mut reader = self
+            .executor
+            .open_file(&path, cancel)
+            .await?
+            .take(MAX_READ_BYTES as u64 + 1);
+        let invalid =
+            || std::io::Error::new(std::io::ErrorKind::InvalidData, "not a UTF-8 text file");
+        let mut content = String::new();
+        let mut header = Vec::new();
+        let mut buffer = [0; 8196];
+        let mut pending = 0;
+        loop {
+            executor::check_cancel(cancel)?;
+            let read = reader.read(&mut buffer[pending..]).await?;
+            if read == 0 {
+                if pending != 0 {
+                    return Err(invalid());
+                }
+                break;
+            }
+            let bytes = &buffer[..pending + read];
+            header.extend(bytes[pending..].iter().take(12 - header.len()));
+            if canter_protocol::image_mime_type(&header).is_some() || bytes.contains(&0) {
+                return Err(invalid());
+            }
+            let (text, remaining) = match std::str::from_utf8(bytes) {
+                Ok(text) => (text, 0),
+                Err(error) if error.error_len().is_none() => (
+                    std::str::from_utf8(&bytes[..error.valid_up_to()]).expect("valid prefix"),
+                    bytes.len() - error.valid_up_to(),
+                ),
+                Err(_) => return Err(invalid()),
+            };
+            if content.len() + bytes.len() > MAX_READ_BYTES {
+                return Ok(None);
+            }
+            content.push_str(text);
+            let length = bytes.len();
+            buffer.copy_within(length - remaining..length, 0);
+            pending = remaining;
+        }
+        let mut text = String::new();
+        let mut lines = 0;
+        for line in content.split_inclusive('\n') {
+            lines += 1;
+            text.push_str(&format!("{lines}: {line}"));
+            if !line.ends_with('\n') {
+                text.push('\n');
+            }
+        }
+        if lines == 0 {
+            text.push_str("startLine=1 is beyond end of file (0 lines).");
+        }
+        Ok(Some((text, lines)))
     }
 }
 

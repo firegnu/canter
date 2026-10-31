@@ -90,10 +90,16 @@ pub(crate) async fn compact(
             item: Item::ContextCompaction {
                 id: item_id.clone(),
                 summary: String::new(),
+                restored_files: Vec::new(),
             },
         }])
         .await?;
     let result = summarize(shared, turn_id, cancel, &mut before).await;
+    let files = if result.is_ok() && !cancel.is_cancelled() {
+        crate::restore_files::collect(shared, cancel).await
+    } else {
+        Vec::new()
+    };
     let mut state = shared.state.lock().await;
     if state.active.as_ref().is_some_and(|active| active.retracted) {
         if let Some((before, before_messages)) = before {
@@ -156,6 +162,7 @@ pub(crate) async fn compact(
                 })
                 .await?;
             state.history = messages;
+            state.restored_file_notices.clear();
             state.lsp_delivery.notices.clear();
             state.lsp_delivery.reset_baseline();
             state.rewind.clear_boundaries();
@@ -167,6 +174,7 @@ pub(crate) async fn compact(
             state.restate_skills().await?;
             state.restate_goal().await?;
             state.restate_directories().await?;
+            let restored_files = state.restate_files(files).await?;
             for message in notices {
                 state.background_notice(message).await?;
             }
@@ -196,6 +204,7 @@ pub(crate) async fn compact(
                     item: Item::ContextCompaction {
                         id: item_id,
                         summary,
+                        restored_files,
                     },
                 }])
                 .await?;
@@ -228,6 +237,7 @@ pub(crate) async fn compact(
                     item: Item::ContextCompaction {
                         id: item_id,
                         summary: COMPACTION_FAILED_SUMMARY.into(),
+                        restored_files: Vec::new(),
                     },
                 }])
                 .await?;
@@ -251,6 +261,7 @@ async fn summarize(
         plan,
         skill_notices,
         diagnostic_notices,
+        restored_file_notices,
     ) = {
         let state = shared.state.lock().await;
         // Measure the exact snapshot being summarized, including any notices
@@ -275,6 +286,7 @@ async fn summarize(
                 .map(<[_]>::to_vec),
             crate::skill_invocation::latest(&state.invoked_skills),
             state.lsp_delivery.notices.clone(),
+            state.restored_file_notices.clone(),
         )
     };
     let output_limit = shared.options.max_output_tokens.min(8192);
@@ -297,7 +309,9 @@ async fn summarize(
                 } else {
                     text
                 };
-                let source = if diagnostic_notices.contains(&index) {
+                let source = if restored_file_notices.contains(&index) {
+                    "Tool file restoration"
+                } else if diagnostic_notices.contains(&index) {
                     "Tool diagnostics"
                 } else if crate::background::notice_id(message).is_some() {
                     "Background event"

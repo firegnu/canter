@@ -377,13 +377,34 @@ pub(crate) fn item(
                 rows
             }
         }
-        Item::ContextCompaction { summary, .. } => vec![Row::text_from(
-            Line::from(Span::styled(
-                compaction_line(summary, finished),
-                theme::secondary(),
-            )),
-            2,
-        )],
+        Item::ContextCompaction {
+            summary,
+            restored_files,
+            ..
+        } => {
+            let mut rows = vec![Row::text_from(
+                Line::from(Span::styled(
+                    compaction_line(summary, finished),
+                    theme::secondary(),
+                )),
+                2,
+            )];
+            for file in restored_files {
+                let path = display_path(&file.path, cwd);
+                let text = match file.lines {
+                    Some(lines) => format!("  Read {path} ({lines} lines)"),
+                    None => format!("  Referenced file {path}"),
+                };
+                rows.push(Row::text_from(
+                    Line::from(truncate(
+                        vec![Span::styled(text, theme::secondary())],
+                        usize::from(width),
+                    )),
+                    2,
+                ));
+            }
+            rows
+        }
         Item::UserInput {
             question,
             answer,

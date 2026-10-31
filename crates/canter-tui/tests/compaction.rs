@@ -270,3 +270,22 @@ fn a_compaction_that_did_not_finish_says_so() {
         assert!(!text.contains("Compacting"), "{status}:\n{text}");
     }
 }
+
+#[test]
+fn completed_compaction_lists_restored_and_referenced_files_below_the_card() {
+    let mut screen = Screen::compacting();
+    let mut item = compaction("summary");
+    item["restoredFiles"] = json!([
+        {"path":"src/main.rs","lines":23},
+        {"path":"/other/large.rs"},
+        {"path":"empty.txt","lines":0}
+    ]);
+    screen.event(json!({"type":"item.completed","turnId":"t1","item":item}));
+    screen.end_turn("completed");
+    screen.draw_at(NOW);
+    let rows = screen.conversation();
+    let index = rows.iter().position(|row| row == COMPACTED).unwrap();
+    assert_eq!(rows[index + 1].trim(), "Read src/main.rs (23 lines)");
+    assert_eq!(rows[index + 2].trim(), "Referenced file /other/large.rs");
+    assert_eq!(rows[index + 3].trim(), "Read empty.txt (0 lines)");
+}
