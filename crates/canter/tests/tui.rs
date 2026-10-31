@@ -1922,9 +1922,9 @@ async fn thinking_none_low_and_compaction_preserve_their_wire_options() {
                 .iter()
                 .any(|message| message["reasoning_content"] == reasoning)
         );
-        assert_eq!(requests[3]["thinking"], json!({"type":"disabled"}));
-        assert!(requests[3].get("reasoning_effort").is_none());
-        assert_eq!(requests[3]["max_tokens"], 8192);
+        assert_eq!(requests[3]["thinking"], json!({"type":"enabled"}));
+        assert_eq!(requests[3]["reasoning_effort"], "max");
+        assert_eq!(requests[3]["max_tokens"], requests[2]["max_tokens"]);
         assert_eq!(requests[3]["tools"], requests[2]["tools"]);
         let previous = requests[2]["messages"].as_array().unwrap();
         let compact = requests[3]["messages"].as_array().unwrap();

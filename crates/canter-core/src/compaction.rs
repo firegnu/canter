@@ -309,17 +309,11 @@ async fn summarize(
         )
     };
     let output_limit = shared.options.max_output_tokens.min(8192);
-    prefix_request.options = RequestOptions {
-        max_retries: None,
-        thinking: Some(false),
-        reasoning_effort: None,
-        max_output_tokens: Some(output_limit),
-    };
     prefix_request.messages.push(Message::User {
         text: format!("{PREFIX_PROMPT}\n\n{SECTIONS}\n\n{RULES}\n\n{PREFIX_SOURCES}\n\nWrite the summary now with the headings above, and output only the summary."),
     });
     let mut prefix_request = (context::request_tokens(&prefix_request)
-        .saturating_add(u64::from(output_limit))
+        .saturating_add(u64::from(shared.options.max_output_tokens))
         <= shared.options.context_window)
         .then_some(prefix_request);
     let mut transcript = String::new();
