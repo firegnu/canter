@@ -144,14 +144,7 @@ async fn completion_during_turn(action: &str, interrupt: bool) {
                 .unwrap();
             fixture
                 .until(&url, |_| {
-                    fixture
-                        .requests
-                        .lock()
-                        .unwrap()
-                        .last()
-                        .unwrap()
-                        .get("tools")
-                        .is_none()
+                    is_compaction_request(fixture.requests.lock().unwrap().last().unwrap())
                 })
                 .await;
         }
@@ -708,14 +701,7 @@ async fn matching_event_during_compaction_survives_and_is_not_user_words() {
         .unwrap();
     fixture
         .until(&url, |_| {
-            fixture
-                .requests
-                .lock()
-                .unwrap()
-                .last()
-                .unwrap()
-                .get("tools")
-                .is_none()
+            is_compaction_request(fixture.requests.lock().unwrap().last().unwrap())
         })
         .await;
     fixture.release("release-match");
@@ -750,20 +736,38 @@ async fn matching_event_during_compaction_survives_and_is_not_user_words() {
         .unwrap();
     let compacted = fixture.idle(&url).await;
     let requests = fixture.requests.lock().unwrap().clone();
-    let transcript = requests.last().unwrap()["messages"]
-        .as_array()
-        .unwrap()
-        .last()
-        .unwrap()["content"]
-        .as_str()
-        .unwrap();
+    let messages = requests.last().unwrap()["messages"].as_array().unwrap();
+    let notices: Vec<_> = messages
+        .iter()
+        .filter(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("[Background command 1 output matched"))
+        })
+        .collect();
+    assert_eq!(notices.len(), 1);
     assert!(
-        transcript.contains("Background event: [Background command 1 output matched"),
-        "{transcript}"
+        notices[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("error during compact")
     );
-    assert!(
-        !transcript.contains("User: [Background command"),
-        "{transcript}"
+    let prompt = messages.last().unwrap()["content"].as_str().unwrap();
+    assert!(prompt.contains("background command/event notices"));
+    assert!(prompt.contains("not the user's own words"));
+    let history = fixture
+        .app
+        .store
+        .model_history::<serde_json::Value>(&compacted.session.id)
+        .unwrap();
+    let saved = history
+        .iter()
+        .rev()
+        .find(|entry| entry["type"] == "compaction")
+        .unwrap();
+    assert_eq!(
+        saved["user_messages"],
+        json!(["monitor-errors", "after compaction"])
     );
     fixture.reopen(&url, &compacted.session.id).await;
     assert_eq!(

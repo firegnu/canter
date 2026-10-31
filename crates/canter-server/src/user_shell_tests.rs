@@ -2,6 +2,17 @@ use super::*;
 use canter_model::{ApiKey, ChatCompletions};
 use std::sync::Mutex as SyncMutex;
 
+fn is_compaction_request(request: &serde_json::Value) -> bool {
+    request["messages"].as_array().is_some_and(|messages| {
+        messages.last().is_some_and(|message| {
+            message["role"] == "user"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|text| text.starts_with("Summarize the conversation "))
+        })
+    })
+}
+
 struct Fixture {
     root: tempfile::TempDir,
     app: Arc<App>,
@@ -65,7 +76,7 @@ impl Fixture {
                     use axum::response::IntoResponse;
                     let last = request["messages"].as_array().unwrap().last().unwrap();
                     let text = last["content"].as_str().unwrap_or_default();
-                    let compact = request.get("tools").is_none_or(|tools| tools.as_array().is_some_and(Vec::is_empty));
+                    let compact = is_compaction_request(&request);
                     let wake = text.starts_with("[Background command ") && text.contains("[Background event:");
                     let delayed_reply = text == "finish-later";
                     let wait = text == "wait" || (wake && pause_wake.load(Ordering::Relaxed)) || (compact && pause.load(Ordering::Relaxed));
@@ -1197,6 +1208,28 @@ async fn user_shell_rejects_work_approval_questions_and_compaction() {
             ErrorCode::Conflict
         );
         assert!(!fixture.root.path().join("project/should-not-run").exists());
+        if mode == "compact" {
+            assert!(is_compaction_request(
+                fixture.requests.lock().unwrap().last().unwrap()
+            ));
+            let after: SessionReadResponse = fixture
+                .client
+                .get(&url)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(after.session.status, SessionStatus::Working);
+            assert_eq!(after.session.turns.len(), snapshot.session.turns.len());
+            let turn = after.session.turns.last().unwrap();
+            assert_eq!(turn.id, snapshot.session.turns.last().unwrap().id);
+            assert_eq!(turn.status, TurnStatus::InProgress);
+            assert!(turn.items.iter().any(
+                |item| matches!(item, Item::ContextCompaction { summary, .. } if summary.is_empty())
+            ));
+        }
         fixture
             .client
             .post(format!("{url}/interrupt"))

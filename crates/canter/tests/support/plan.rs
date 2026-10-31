@@ -204,13 +204,24 @@ async fn plan_reminders_count_calls_across_turns_repeat_and_stay_out_of_ui_and_u
         .last()
         .unwrap()
         .clone();
-    let transcript = request["messages"].as_array().unwrap().last().unwrap()["content"]
-        .as_str()
-        .unwrap();
-    assert!(
-        transcript.contains(&format!("Tool result read-10: {plain}\n\n{REMINDER}")),
-        "reminders stay under tool results, not user speech"
-    );
+    let messages = request["messages"].as_array().unwrap();
+    for n in [10, 20] {
+        let result = messages
+            .iter()
+            .find(|message| message["tool_call_id"] == format!("read-{n}"))
+            .unwrap();
+        assert_eq!(
+            result["role"], "tool",
+            "reminders stay under tool results, not user speech"
+        );
+        assert_eq!(result["content"], format!("{plain}\n\n{REMINDER}"));
+    }
+    assert!(!messages.iter().any(|message| {
+        message["role"] == "user"
+            && message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains(REMINDER))
+    }));
     let history = fs::read_to_string(directory.join("model-history.jsonl")).unwrap();
     let compacted: Value = history
         .lines()

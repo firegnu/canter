@@ -11,6 +11,7 @@ struct Fixture {
     root: tempfile::TempDir,
     client: reqwest::Client,
     requests: Arc<SyncMutex<Vec<Value>>>,
+    reject_next_request: Arc<AtomicBool>,
     stop: CancellationToken,
     servers: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -26,9 +27,17 @@ impl Fixture {
         }
         let requests = Arc::new(SyncMutex::new(Vec::new()));
         let recorded = requests.clone();
+        let reject_next_request = Arc::new(AtomicBool::new(false));
+        let reject = reject_next_request.clone();
         let model_router = Router::new().route("/v1/chat/completions", post(move |Json(request): Json<Value>| {
             let recorded = recorded.clone();
+            let reject = reject.clone();
             async move {
+                use axum::response::IntoResponse;
+                if reject.swap(false, Ordering::Relaxed) {
+                    recorded.lock().unwrap().push(request);
+                    return (StatusCode::BAD_REQUEST, Json(json!({"error":{"code":"context_length_exceeded","message":"maximum context length exceeded"}}))).into_response();
+                }
                 let last = request["messages"].as_array().unwrap().last().unwrap();
                 let plan = if last["role"] == "user" { match last["content"].as_str() {
                     Some("initial") => Some(INITIAL),
@@ -49,7 +58,7 @@ impl Fixture {
                     json!({"choices":[{"index":0,"delta":{"content":"summary or answer"},"finish_reason":"stop"}]})
                 };
                 recorded.lock().unwrap().push(request);
-                ([("content-type", "text/event-stream")], format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+                ([("content-type", "text/event-stream")], format!("data: {chunk}\n\ndata: [DONE]\n\n")).into_response()
             }
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -103,6 +112,7 @@ impl Fixture {
             root,
             client,
             requests,
+            reject_next_request,
             stop,
             servers: vec![server, model_server],
         }
@@ -355,9 +365,37 @@ async fn repeated_compaction_strips_only_the_previous_summary_plan() {
     fixture.idle(&url).await;
     let user_text = "Keep this literal marker:\n\n[Current plan]\nuser words";
     fixture.say(&url, user_text).await;
+    let before = fixture.last_request();
+    // Inspect both the unchanged prefix and the transcript fallback's stripping.
+    fixture.reject_next_request.store(true, Ordering::Relaxed);
     fixture.post(&format!("{url}/compact"), json!({})).await;
     fixture.idle(&url).await;
+    {
+        let requests = fixture.requests.lock().unwrap();
+        let prefix = &requests[requests.len() - 2];
+        assert_eq!(prefix["tools"], before["tools"]);
+        let previous = before["messages"].as_array().unwrap();
+        let messages = prefix["messages"].as_array().unwrap();
+        assert_eq!(&messages[..previous.len()], previous);
+        assert!(
+            messages.iter().any(
+                |message| message["content"].as_str().is_some_and(|text| text
+                    .starts_with("[Context summary]\nsummary or answer")
+                    && text.contains("\n\n[Current plan]\n")
+                    && text.contains("Implement"))
+            )
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message["content"] == user_text)
+        );
+        let prompt = messages.last().unwrap()["content"].as_str().unwrap();
+        assert!(prompt.starts_with("Summarize the conversation above."));
+        assert!(prompt.contains("[Current plan] attachment is tool state"));
+    }
     let request = fixture.last_request();
+    assert!(request.get("tools").is_none());
     let transcript = request["messages"].as_array().unwrap().last().unwrap()["content"]
         .as_str()
         .unwrap();

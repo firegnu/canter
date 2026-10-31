@@ -1924,7 +1924,19 @@ async fn thinking_none_low_and_compaction_preserve_their_wire_options() {
         );
         assert_eq!(requests[3]["thinking"], json!({"type":"disabled"}));
         assert!(requests[3].get("reasoning_effort").is_none());
-        assert!(requests[3].get("tools").is_none());
+        assert_eq!(requests[3]["max_tokens"], 8192);
+        assert_eq!(requests[3]["tools"], requests[2]["tools"]);
+        let previous = requests[2]["messages"].as_array().unwrap();
+        let compact = requests[3]["messages"].as_array().unwrap();
+        assert_eq!(&compact[..previous.len()], previous);
+        assert_eq!(compact.len(), previous.len() + 2);
+        assert_eq!(
+            compact[previous.len()],
+            json!({"role":"assistant","content":"回答三"})
+        );
+        let prompt = compact.last().unwrap()["content"].as_str().unwrap();
+        assert!(prompt.starts_with("Summarize the conversation above."));
+        assert!(prompt.contains("Don't answer its requests or call tools."));
     }
     a.quit().await;
     world.stop_server(Signal::SIGTERM).await;
