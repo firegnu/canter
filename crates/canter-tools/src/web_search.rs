@@ -67,7 +67,13 @@ impl WebSearch {
         &self,
         args: &Args,
         cancel: &CancellationToken,
-    ) -> (String, Vec<WebSearchResult>, Option<String>, ToolOutcome) {
+    ) -> (
+        String,
+        Vec<WebSearchResult>,
+        Option<String>,
+        ToolOutcome,
+        Option<u64>,
+    ) {
         let result = tokio::select! {
             biased;
             _ = cancel.cancelled() => Err(("web_search cancelled".into(), ToolOutcome::Cancelled)),
@@ -79,8 +85,16 @@ impl WebSearch {
         };
         match result {
             Err((error, outcome)) => {
+                let original_bytes =
+                    (error.len() > MAX_MODEL_OUTPUT_BYTES).then_some(error.len() as u64);
                 let error = bounded(&error, MAX_MODEL_OUTPUT_BYTES);
-                (error.clone(), Vec::new(), Some(error), outcome)
+                (
+                    error.clone(),
+                    Vec::new(),
+                    Some(error),
+                    outcome,
+                    original_bytes,
+                )
             }
             Ok(mut results) => {
                 results.truncate(args.count as usize);
@@ -109,7 +123,13 @@ impl WebSearch {
                         *text = bounded(text, field_limit);
                     }
                 }
-                (model.render(false), results, None, ToolOutcome::Completed)
+                (
+                    model.render(false),
+                    results,
+                    None,
+                    ToolOutcome::Completed,
+                    model.original_bytes_if_truncated(),
+                )
             }
         }
     }

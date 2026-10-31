@@ -11,6 +11,9 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[path = "support/telemetry.rs"]
+mod telemetry;
+
 struct ScriptModel {
     scripts: Mutex<VecDeque<Vec<ModelEvent>>>,
     requests: Mutex<Vec<Request>>,
@@ -1969,6 +1972,7 @@ fn input(text: &str) -> SessionInputParams {
 }
 fn settings(cwd: &std::path::Path) -> SessionSettings {
     SessionSettings {
+        tags: Default::default(),
         additional_directories: Vec::new(),
         plan_mode: false,
         pre_plan_approval_policy: None,

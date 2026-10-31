@@ -125,8 +125,15 @@ Task for the new session:
         let shared = self.shared.clone();
         let run_cancel = cancel.clone();
         tokio::spawn(async move {
-            let result = answer(&shared, request, &run_cancel, &sender).await;
+            let result = answer(&shared, request, handoff, &run_cancel, &sender).await;
             let mut state = shared.state.lock().await;
+            // A failed or usage-free private request has no normal usage batch.
+            let result = state
+                .journal
+                .append(Vec::new())
+                .await
+                .map(|_| ())
+                .and(result);
             state.btw = None;
             // Provider errors belong only to the private answer. Close checks
             // journal failures separately, after this worker has finished.
@@ -147,6 +154,7 @@ Task for the new session:
 async fn answer(
     shared: &Shared,
     request: Request,
+    handoff: bool,
     cancel: &CancellationToken,
     sender: &mpsc::UnboundedSender<BtwEvent>,
 ) -> Result<(), CoreError> {
@@ -159,7 +167,21 @@ async fn answer(
         }
         let mut started_at = (shared.options.request_time)();
         let mut goal_id = shared.state.lock().await.charge_goal();
-        let mut stream = shared.model.stream(request.clone(), cancel.clone());
+        let (prepared, estimate) = if shared.options.telemetry {
+            context::measure(request.clone()).await?
+        } else {
+            (request.clone(), Default::default())
+        };
+        let mut stream = crate::telemetry::stream(
+            shared,
+            None,
+            if handoff { "handoff" } else { "btw" },
+            prepared,
+            estimate,
+            cancel,
+        )
+        .await;
+        let request_id = stream.request_id().map(str::to_owned);
         let mut response = crate::response::Response::default();
         let mut usage = None;
         let result = loop {
@@ -213,6 +235,7 @@ async fn answer(
                             started_at,
                             false,
                             goal_id.as_deref(),
+                            request_id.as_deref(),
                         )
                         .await?;
                     }
@@ -242,6 +265,7 @@ async fn answer(
                 }
             }
         };
+        drop(stream);
         if let Some(usage) = usage {
             runner::record_usage(
                 shared,
@@ -251,6 +275,7 @@ async fn answer(
                 started_at,
                 false,
                 goal_id.as_deref(),
+                request_id.as_deref(),
             )
             .await?;
         }

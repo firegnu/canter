@@ -555,7 +555,13 @@ impl McpTool {
         &self,
         args: &Value,
         cancel: &CancellationToken,
-    ) -> (String, String, crate::ToolOutcome, Vec<crate::ToolImage>) {
+    ) -> (
+        String,
+        String,
+        crate::ToolOutcome,
+        Vec<crate::ToolImage>,
+        Option<u64>,
+    ) {
         use crate::{
             MAX_CLIENT_OUTPUT_BYTES, MAX_MODEL_OUTPUT_BYTES, ToolOutcome, output::BoundedText,
         };
@@ -570,6 +576,7 @@ impl McpTool {
                 "MCP service disconnected".into(),
                 ToolOutcome::Failed,
                 Vec::new(),
+                None,
             );
         };
         let params = CallToolRequestParams::new(self.tool.clone())
@@ -585,7 +592,7 @@ impl McpTool {
             }
         };
         match result {
-            Err((error, outcome)) => (error.into(), error.into(), outcome, Vec::new()),
+            Err((error, outcome)) => (error.into(), error.into(), outcome, Vec::new(), None),
             Ok(result) => {
                 let mut model = BoundedText::new(MAX_MODEL_OUTPUT_BYTES);
                 let mut client = BoundedText::new(MAX_CLIENT_OUTPUT_BYTES);
@@ -645,6 +652,7 @@ impl McpTool {
                 } else {
                     ToolOutcome::Completed
                 };
+                let original_bytes = model.original_bytes_if_truncated();
                 let mut model = model.render(false);
                 // Head/tail truncation must not hide how to find an attached image.
                 for image in &images {
@@ -654,7 +662,7 @@ impl McpTool {
                         model.push_str(&explanation);
                     }
                 }
-                (model, client.render(true), outcome, images)
+                (model, client.render(true), outcome, images, original_bytes)
             }
         }
     }

@@ -71,7 +71,7 @@ pub(crate) async fn run(
     url: &Url,
     timeout: Duration,
     cancel: &CancellationToken,
-) -> (String, String, ToolOutcome) {
+) -> (String, String, ToolOutcome, Option<u64>) {
     let result = tokio::select! {
         biased;
         _ = cancel.cancelled() => Err(("web_fetch cancelled".into(), ToolOutcome::Cancelled)),
@@ -94,9 +94,10 @@ pub(crate) async fn run(
                 model.render(false),
                 client.render(true),
                 ToolOutcome::Completed,
+                model.original_bytes_if_truncated(),
             )
         }
-        Err((error, outcome)) => (error.clone(), error, outcome),
+        Err((error, outcome)) => (error.clone(), error, outcome, None),
     }
 }
 

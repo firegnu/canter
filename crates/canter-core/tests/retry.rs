@@ -52,6 +52,7 @@ async fn create(root: &std::path::Path, store: Arc<Store>, model: Arc<ChatComple
         store,
         "retry".into(),
         SessionSettings {
+            tags: Default::default(),
             additional_directories: Vec::new(),
             cwd: root.to_string_lossy().into(),
             name: None,
@@ -412,7 +413,17 @@ async fn compression_and_private_answers_share_retries_and_discard_partial_text(
             }
             assert!(retry);
             assert_eq!(text, "complete summary");
-            assert_eq!(store.events_after("retry", 0).unwrap(), before);
+            let after = store.events_after("retry", 0).unwrap();
+            assert_eq!(&after[..before.len()], &before);
+            assert_eq!(after.len(), before.len() + 1);
+            assert!(matches!(&after[before.len()].payload,
+                EventPayload::TelemetryModelRequest { record }
+                if record.purpose == operation && record.turn_id.is_none()));
+            assert!(
+                !serde_json::to_string(&after)
+                    .unwrap()
+                    .contains("complete summary")
+            );
         }
         let history =
             serde_json::to_string(&store.model_history::<Value>("retry").unwrap()).unwrap();

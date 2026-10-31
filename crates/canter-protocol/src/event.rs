@@ -23,6 +23,51 @@ pub struct Event {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum EventPayload {
+    #[serde(rename = "telemetry.compaction")]
+    TelemetryCompaction {
+        turn_id: String,
+        item_id: String,
+        estimated: bool,
+        #[ts(type = "number")]
+        before_tokens: u64,
+        #[ts(type = "number")]
+        after_tokens: u64,
+        before_messages: usize,
+        after_messages: usize,
+        removed_messages: usize,
+        succeeded: bool,
+    },
+    #[serde(rename = "telemetry.toolResult")]
+    TelemetryToolResult {
+        turn_id: String,
+        tool_call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        item_id: Option<String>,
+        estimated: bool,
+        #[ts(type = "number")]
+        result_tokens: u64,
+        truncated: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        original_tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        source_file_bytes: Option<u64>,
+    },
+    #[serde(rename = "telemetry.approval")]
+    TelemetryApproval {
+        turn_id: String,
+        request_id: String,
+        #[ts(type = "number")]
+        duration_ms: u64,
+        outcome: String,
+    },
+    #[serde(rename = "telemetry.modelRequest")]
+    TelemetryModelRequest {
+        #[serde(flatten)]
+        record: crate::ModelRequestTelemetry,
+    },
     #[serde(rename = "languageServer.updated")]
     LanguageServerUpdated { server: crate::LanguageServer },
     #[serde(rename = "session.goal.updated")]

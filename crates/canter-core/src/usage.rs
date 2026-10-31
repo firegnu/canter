@@ -84,6 +84,7 @@ pub fn request_charge(
     tokens: &TokenUsageBreakdown,
 ) -> RequestCharge {
     RequestCharge {
+        request_id: None,
         model: model.into(),
         started_at,
         cost_usd: prices

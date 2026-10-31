@@ -375,7 +375,13 @@ pub(crate) async fn execute(shared: &Shared, call: &ToolCall) -> Result<bool, Co
     };
     let success = result.is_ok();
     state
-        .tool_result(call, result.unwrap_or_else(|text| text), success)
+        .tool_result(
+            call,
+            result.unwrap_or_else(|text| text),
+            success,
+            Default::default(),
+            None,
+        )
         .await?;
     Ok(true)
 }

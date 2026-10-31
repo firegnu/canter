@@ -80,6 +80,11 @@ pub trait Executor: Send + Sync {
         self.resolve_path(path, cancel).await
     }
     async fn open_file(&self, path: &Path, cancel: &CancellationToken) -> io::Result<FileReader>;
+    /// Optional best-effort source size for a successfully opened, truncated read.
+    /// Stream-backed executors may not know it; never read extra content to find out.
+    async fn file_size(&self, _path: &Path, _cancel: &CancellationToken) -> Option<u64> {
+        None
+    }
     /// Replace a file only if its bytes still match the approved snapshot (None means absent).
     /// Cancellation before commit leaves the original file intact; await this future to completion.
     async fn write_file(
@@ -392,6 +397,14 @@ impl Executor for LocalExecutor {
         let file = tokio::fs::File::open(self.resolve_path(path, cancel).await?).await?;
         check_cancel(cancel)?;
         Ok(Box::new(file))
+    }
+
+    async fn file_size(&self, path: &Path, cancel: &CancellationToken) -> Option<u64> {
+        if cancel.is_cancelled() {
+            return None;
+        }
+        let metadata = tokio::fs::metadata(self.resolve(path)).await.ok()?;
+        metadata.is_file().then_some(metadata.len())
     }
 
     async fn resolve_write_path(

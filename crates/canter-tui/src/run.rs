@@ -117,6 +117,7 @@ pub enum Open {
     /// A new session in `cwd`; `first` is sent as its first message. An empty
     /// model means the server's default.
     New {
+        tags: std::collections::BTreeMap<String, String>,
         additional_directories: Vec<String>,
         cwd: String,
         model: String,
@@ -397,6 +398,7 @@ where
                     None => {
                         none_to_continue = true;
                         Open::New {
+                            tags: Default::default(),
                             additional_directories: update.add_directories,
                             cwd,
                             model: update.model.unwrap_or_default(),
@@ -412,6 +414,7 @@ where
         };
         let opened: Result<SessionSnapshot, RunError> = match open {
             Open::New {
+                tags,
                 additional_directories,
                 cwd,
                 model,
@@ -423,6 +426,7 @@ where
                     require_add_directories(&client).await?;
                 }
                 let params = SessionCreateParams {
+                    tags,
                     additional_directories,
                     cwd,
                     env: env.clone(),
@@ -1325,6 +1329,7 @@ impl<C: Connector> Chat<C> {
             ""
         };
         let mut params = SessionCreateParams {
+            tags: Default::default(),
             additional_directories: settings.additional_directories.clone(),
             cwd: settings.cwd.clone(),
             env: self.env.clone(),
@@ -1393,6 +1398,7 @@ impl<C: Connector> Chat<C> {
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let settings = &ui.app().snapshot().settings;
         let mut params = SessionCreateParams {
+            tags: Default::default(),
             additional_directories: settings.additional_directories.clone(),
             cwd: settings.cwd.clone(),
             env: self.env.clone(),

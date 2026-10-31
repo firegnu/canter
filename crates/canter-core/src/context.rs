@@ -283,10 +283,42 @@ pub(crate) fn estimate(text: &str) -> u64 {
 }
 
 pub(crate) fn request_tokens(request: &canter_model::Request) -> u64 {
+    measure_request(request).total()
+}
+
+/// Move the already-owned request; no telemetry-only copy of long histories.
+pub(crate) async fn measure(
+    request: canter_model::Request,
+) -> Result<(canter_model::Request, canter_protocol::ContextEstimate), CoreError> {
+    tokio::task::spawn_blocking(move || {
+        let estimate = measure_request(&request);
+        (request, estimate)
+    })
+    .await
+    .map_err(|_| CoreError::internal())
+}
+
+pub(crate) fn measure_request(request: &canter_model::Request) -> canter_protocol::ContextEstimate {
     // Byte heuristic including role/JSON/tool-definition overhead.
     // Provider-reported input usage, when available, is also used by the loop.
-    request.messages.iter().map(message_tokens).sum::<u64>()
-        + estimate(&serde_json::to_string(&request.tools).expect("tool definitions"))
+    let mut result = canter_protocol::ContextEstimate {
+        estimated: true,
+        tool_definition_tokens: estimate(
+            &serde_json::to_string(&request.tools).expect("tool definitions"),
+        ),
+        ..Default::default()
+    };
+    for message in &request.messages {
+        let target = match message {
+            Message::System { .. } => &mut result.system_tokens,
+            Message::ToolResult { .. } | Message::ToolImages { .. } => {
+                &mut result.tool_result_tokens
+            }
+            _ => &mut result.conversation_tokens,
+        };
+        *target += message_tokens(message);
+    }
+    result
 }
 
 pub(crate) fn message_tokens(message: &Message) -> u64 {
@@ -529,6 +561,7 @@ mod tests {
             Arc::new(canter_store::Store::new(temp.path().join("state")).unwrap()),
             "context".into(),
             SessionSettings {
+                tags: Default::default(),
                 additional_directories: Vec::new(),
                 plan_mode: false,
                 pre_plan_approval_policy: None,

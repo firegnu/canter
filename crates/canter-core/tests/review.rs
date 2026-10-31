@@ -90,6 +90,7 @@ async fn create(
         store.clone(),
         "s1".into(),
         SessionSettings {
+            tags: Default::default(),
             additional_directories: Vec::new(),
             plan_mode: false,
             pre_plan_approval_policy: None,
@@ -1075,6 +1076,7 @@ async fn unreadable_project_instructions_warn_and_do_not_block_the_model() {
             store.clone(),
             "s1".into(),
             SessionSettings {
+                tags: Default::default(),
                 additional_directories: Vec::new(),
                 plan_mode: false,
                 pre_plan_approval_policy: None,

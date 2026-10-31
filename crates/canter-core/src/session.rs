@@ -265,6 +265,8 @@ impl State {
         call: &ToolCall,
         mut text: String,
         succeeded: bool,
+        output_size: canter_tools::OutputSize,
+        item_id: Option<&str>,
     ) -> Result<(), CoreError> {
         if call.name == "update_plan" {
             if succeeded {
@@ -289,6 +291,27 @@ impl State {
             }
         } else {
             self.plan_tool_calls = 0;
+        }
+        if let Some(pending) = &self.journal.telemetry {
+            pending
+                .lock()
+                .expect("telemetry queue")
+                .push(EventPayload::TelemetryToolResult {
+                    turn_id: self
+                        .active
+                        .as_ref()
+                        .expect("tool belongs to turn")
+                        .turn
+                        .id
+                        .clone(),
+                    tool_call_id: call.id.clone(),
+                    item_id: item_id.map(Into::into),
+                    estimated: true,
+                    result_tokens: crate::context::estimate(&text),
+                    truncated: output_size.truncated,
+                    original_tokens: output_size.original_bytes.map(|bytes| bytes.div_ceil(3)),
+                    source_file_bytes: output_size.source_file_bytes,
+                });
         }
         self.message(Message::ToolResult {
             tool_call_id: call.id.clone(),
@@ -467,7 +490,7 @@ impl Session {
             .map(std::path::PathBuf::from);
         let canter_home = crate::context::canter_home(&runtime.environment);
         let tools = executor(writer.snapshot().settings.cwd.clone(), runtime, &options).await?;
-        let mut state = State::new(Journal::new(store, writer));
+        let mut state = State::new(Journal::new(store, writer, options.telemetry));
         if let Some(lsp) = tools.lsp() {
             lsp.restore_server_ids(&state.journal.snapshot.language_servers);
         }
@@ -679,7 +702,7 @@ impl Session {
         let writer = tokio::task::spawn_blocking(move || owned_store.create(&id, settings, now()))
             .await
             .map_err(|_| CoreError::internal())??;
-        let mut journal = Journal::new(store, writer);
+        let mut journal = Journal::new(store, writer, options.telemetry);
         journal
             .append(vec![EventPayload::SessionStatus {
                 status: SessionStatus::Idle,
@@ -1436,6 +1459,7 @@ async fn executor(
         LocalExecutor::new(cwd.into(), runtime.environment, runtime.protected_paths)
             .map(|executor| {
                 let tools = Tools::new(Arc::new(executor.with_sandbox(options.sandbox)))
+                    .with_telemetry(options.telemetry)
                     .with_plan_enabled(options.plan_enabled)
                     .with_web_search(options.web_search)
                     .with_mcp(runtime.mcp_tools)

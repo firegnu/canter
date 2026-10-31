@@ -62,6 +62,9 @@ impl ReasoningEffort {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSettings {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[ts(optional = nullable)]
+    pub tags: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional = nullable)]
     pub additional_directories: Vec<String>,
@@ -141,6 +144,7 @@ impl SessionSnapshot {
             id: id.into(),
             goal: None,
             settings: SessionSettings {
+                tags: Default::default(),
                 additional_directories: Vec::new(),
                 plan_mode: false,
                 pre_plan_approval_policy: None,
@@ -812,6 +816,9 @@ pub struct TokenUsage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestCharge {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub request_id: Option<String>,
     pub model: String,
     #[ts(type = "number")]
     pub started_at: i64,

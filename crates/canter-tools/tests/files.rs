@@ -676,12 +676,18 @@ async fn read_caps_lines_and_bytes_and_rejects_binary() {
         let result = tools.execute(allow(&call), &cancel, &mut |_| {}).await;
         match name {
             "lines" => {
+                assert!(result.output_size.truncated);
+                assert_eq!(result.output_size.source_file_bytes, Some(10_025));
+                assert_eq!(result.output_size.original_bytes, None);
                 assert_eq!(result.outcome, ToolOutcome::Completed);
                 assert!(result.text.contains("2000: line\n"));
                 assert!(!result.text.contains("2001: line"));
                 assert!(result.text.contains("startLine=2001"));
             }
             "bytes" => {
+                assert!(result.output_size.truncated);
+                assert_eq!(result.output_size.source_file_bytes, Some(150_100));
+                assert_eq!(result.output_size.original_bytes, None);
                 assert_eq!(result.outcome, ToolOutcome::Completed);
                 let (content, notice) = result.text.split_once("\nByte limit reached:").unwrap();
                 assert!(content.len() <= canter_tools::MAX_READ_BYTES);

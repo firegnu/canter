@@ -2,6 +2,22 @@ use canter_protocol::*;
 use serde_json::json;
 
 #[test]
+fn session_tags_survive_creation_and_public_settings_roundtrip() {
+    let tags = json!({"task":"P2-169", "dispatch":"example=1"});
+    let params: SessionCreateParams = serde_json::from_value(json!({
+        "cwd":"/work", "env":{}, "model":"fake", "approvalPolicy":"alwaysAsk",
+        "clientName":"test", "tags":tags
+    }))
+    .unwrap();
+    assert_eq!(serde_json::to_value(params).unwrap()["tags"], tags);
+    let settings: SessionSettings = serde_json::from_value(json!({
+        "cwd":"/work", "model":"fake", "approvalPolicy":"alwaysAsk", "tags":tags
+    }))
+    .unwrap();
+    assert_eq!(serde_json::to_value(settings).unwrap()["tags"], tags);
+}
+
+#[test]
 fn additional_directories_are_public_and_legacy_settings_default_to_empty() {
     let mut settings =
         json!({"cwd":"/work/main","name":null,"model":"fake","approvalPolicy":"askForExecution"});

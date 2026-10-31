@@ -11,6 +11,9 @@ pub(crate) struct BoundedText {
 }
 
 impl BoundedText {
+    pub fn original_bytes_if_truncated(&self) -> Option<u64> {
+        (self.total > self.limit as u64).then_some(self.total)
+    }
     pub fn new(limit: usize) -> Self {
         Self {
             head: Vec::new(),
