@@ -115,3 +115,11 @@ Skills restored (corral-dispatch)
 - 测试先红后绿：新增 `compaction_references_large_files_without_reading_the_discarded_suffix`，复用已有计数读取器。旧实现继续扫描丢弃部分，触发「读取超过 80,000 字节」断言；新实现返回仅引用结果，读取字节数严格为 65,537。没有使用耗时阈值或实际创建 GiB 文件。现有集成测试保留「70,000 字节文本之后才出现二进制」的输入，按用户确认的新行为改为断言仅带回该文件名，已读部分发现的图片仍排除。
 - 验证范围：`cargo test -p canter-tools --test output_size compaction_references_large_files_without_reading_the_discarded_suffix -- --exact`（1 条）、`cargo nextest run -p canter-core --test restore_files`（12 条）、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 全部通过。所有 Cargo 命令使用本 worktree 的独立编译目录，所有命令前台等待结束；未跑其它测试、未调用真实模型。
 - 审查其它条未改，普通 read 未改；没有新的待主控决定事项。未合并或推送。
+
+## 主控审查
+
+- 看了 `restore_files.rs`、`compaction.rs`、`context.rs`、`runner.rs`、`rewind.rs`、`session.rs`、`read_for_compaction`、协议和终端的 diff：选文件、文件规则（禁止不带、要问只给名字、不弹框）、存盘重放、卡片显示和任务文件一致，「不要做」一件没做。
+- 开发中主控定一条：三个上限保留，合计上限现在碰不到也不造测试。
+- 全套（`45f16bc`）：nextest 1282 通过、3 跳过，文档示例 1 通过（负载约 13，LSP 计时测试这次也过了）。
+- 交叉审查（Claude Code）：可以合并，必须改 0、建议改 2、可以不改 4。用户选改建议改第 2 条（大文件读完才判断是不是文本），返工 `daba814` 只读 64 KiB 多 1 字节，复核可以合并；第 1 条（压缩线很低时带回的文件让压缩后仍超线）记 HANDOFF。
+- 结果：返工 1 次
