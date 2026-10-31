@@ -133,7 +133,10 @@ async fn compaction_reuses_the_ordinary_wire_prefix_tools_and_history() {
                 "tool_calls",
             ),
             answer("File inspected."),
-            answer("Summary."),
+            reply(
+                json!({"reasoning_content":"Private summary reasoning.","content":"Summary."}),
+                "stop",
+            ),
         ],
         CoreOptions::default(),
     )
@@ -165,14 +168,69 @@ async fn compaction_reuses_the_ordinary_wire_prefix_tools_and_history() {
     assert!(prompt.contains("output only the summary"));
     assert_eq!(prompt.matches("\n## ").count(), 9);
     assert_eq!(ordinary["thinking"]["type"], "enabled");
-    assert_eq!(compact["thinking"]["type"], "disabled");
-    assert!(compact.get("reasoning_effort").is_none());
-    assert_eq!(compact["max_tokens"], 8192);
+    assert_eq!(compact["thinking"], ordinary["thinking"]);
+    assert_eq!(ordinary["reasoning_effort"], "high");
+    assert_eq!(compact["reasoning_effort"], ordinary["reasoning_effort"]);
+    assert_eq!(ordinary["max_tokens"], 65_536);
+    assert_eq!(compact["max_tokens"], ordinary["max_tokens"]);
+    assert_eq!(
+        fixture
+            .session
+            .snapshot()
+            .await
+            .session
+            .settings
+            .reasoning_effort,
+        ReasoningEffort::High
+    );
     let history = fixture.store.model_history::<Value>("cache").unwrap();
     assert!(
         history
             .iter()
             .any(|entry| entry["type"] == "compaction" && entry["summary"] == "Summary.")
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn compaction_preserves_none_thinking_and_the_ordinary_output_limit() {
+    let fixture = Fixture::new(
+        vec![answer("Earlier answer."), answer("Summary.")],
+        CoreOptions {
+            max_output_tokens: 16_384,
+            ..Default::default()
+        },
+    )
+    .await;
+    fixture
+        .session
+        .update(SessionUpdateParams {
+            reasoning_effort: Some(ReasoningEffort::None),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    fixture.send("Keep these words.").await;
+    fixture.compact().await;
+    let requests = fixture.server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let ordinary = &requests[0];
+    let compact = &requests[1];
+    assert_eq!(ordinary["thinking"]["type"], "disabled");
+    assert_eq!(compact["thinking"], ordinary["thinking"]);
+    assert!(ordinary.get("reasoning_effort").is_none());
+    assert!(compact.get("reasoning_effort").is_none());
+    assert_eq!(ordinary["max_tokens"], 16_384);
+    assert_eq!(compact["max_tokens"], ordinary["max_tokens"]);
+    assert_eq!(
+        fixture
+            .session
+            .snapshot()
+            .await
+            .session
+            .settings
+            .reasoning_effort,
+        ReasoningEffort::None
     );
     fixture.close().await;
 }
@@ -252,6 +310,9 @@ async fn provider_context_length_error_falls_back_to_the_whole_transcript() {
     );
     assert!(requests[1].get("tools").is_some());
     assert!(requests[2].get("tools").is_none());
+    assert_eq!(requests[2]["thinking"]["type"], "disabled");
+    assert!(requests[2].get("reasoning_effort").is_none());
+    assert_eq!(requests[2]["max_tokens"], 8192);
     let prompt = requests[2]["messages"].as_array().unwrap().last().unwrap()["content"]
         .as_str()
         .unwrap();

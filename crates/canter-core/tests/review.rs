@@ -1488,7 +1488,7 @@ async fn failed_automatic_compaction_waits_until_a_new_turn_or_manual_request() 
             .lock()
             .unwrap()
             .iter()
-            .filter(|request| request.options.thinking == Some(false))
+            .filter(|request| matches!(request.messages.last(), Some(Message::User { text }) if text.starts_with("Summarize the conversation")))
             .count(),
         2,
         "a new turn may retry compaction"
@@ -1504,7 +1504,7 @@ async fn failed_automatic_compaction_waits_until_a_new_turn_or_manual_request() 
             .lock()
             .unwrap()
             .iter()
-            .filter(|request| request.options.thinking == Some(false))
+            .filter(|request| matches!(request.messages.last(), Some(Message::User { text }) if text.starts_with("Summarize the conversation")))
             .count(),
         3,
         "manual compaction may retry"
@@ -1549,8 +1549,8 @@ async fn failed_automatic_compaction_continues_only_when_the_request_still_fits(
                 vec![Step::Error(ErrorKind::Server)]
             };
             let mut scripts = vec![vec![text(&old_reply), finish()], failed_summary];
-            if length {
-                // An incomplete prefix summary now falls back; fail that request too.
+            if length && fits {
+                // An incomplete prefix summary falls back; fail that request too.
                 scripts.push(vec![
                     text("incomplete summary"),
                     Step::Event(ModelEvent::Finished(FinishReason::Length)),
@@ -1587,6 +1587,8 @@ async fn failed_automatic_compaction_continues_only_when_the_request_still_fits(
                 );
                 let requests = model.requests.lock().unwrap();
                 assert_eq!(requests.len(), 3 + usize::from(length));
+                assert!(!requests[1].tools.is_empty());
+                assert_eq!(requests[1].options.max_output_tokens, Some(32_768));
                 let continued = requests.last().unwrap();
                 assert!(!continued.tools.is_empty());
                 assert!(continued.messages.iter().any(|message| matches!(message, Message::Assistant { content } if content == &vec![AssistantContent::Text { text: old_reply.clone() }])));
@@ -1599,10 +1601,11 @@ async fn failed_automatic_compaction_continues_only_when_the_request_still_fits(
                         .message
                         .contains("context window")
                 );
-                assert_eq!(
-                    model.requests.lock().unwrap().len(),
-                    2 + usize::from(length)
-                );
+                let requests = model.requests.lock().unwrap();
+                assert_eq!(requests.len(), 2);
+                assert!(requests[1].tools.is_empty());
+                assert_eq!(requests[1].options.thinking, Some(false));
+                assert_eq!(requests[1].options.max_output_tokens, Some(8192));
             }
             assert!(
                 !store
