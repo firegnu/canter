@@ -228,6 +228,180 @@ async fn missing_or_empty_file_rules_preserve_existing_file_permissions() {
 }
 
 #[tokio::test]
+async fn file_only_rules_are_valid_and_writers_add_the_command_rules_array() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join(".env"), "fake").unwrap();
+    let rules = root.path().join("rules.json");
+    let file_rules = json!([{"pattern":".env","decision":"prompt"}]);
+    std::fs::write(&rules, json!({"fileRules":file_rules}).to_string()).unwrap();
+    let gate = PermissionGate::default().with_rules_file(rules.clone());
+    let tools = tools(root.path());
+    let call = prepare(&tools, Tool::Read, ".env").await;
+    assert!(matches!(
+        gate.evaluate(&call, PermissionMode::AllowAll),
+        PermissionCheck::Execute(_)
+    ));
+    assert!(gate.take_rules_warning().is_none());
+    let listed = canter_tools::rules::list(&rules).unwrap();
+    assert!(listed.data.is_empty());
+    assert_eq!(serde_json::to_value(listed.file_rules).unwrap(), file_rules);
+    gate.save_rules(&[vec!["cargo".into(), "test".into()]])
+        .unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&rules).unwrap()).unwrap();
+    assert_eq!(saved["fileRules"], file_rules);
+    assert_eq!(
+        saved["rules"],
+        json!([{"pattern":["cargo","test"],"decision":"allow"}])
+    );
+}
+
+#[tokio::test]
+async fn broken_command_only_rules_preserve_file_permissions_in_all_modes() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join(".env"), "fake").unwrap();
+    let rules = root.path().join("rules.json");
+    let tools = tools(root.path());
+    let shell = tools
+        .prepare(
+            Tool::Shell,
+            "shell",
+            r#"{"command":"pwd"}"#,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    for contents in [
+        r#"{"rules":["#,
+        r#"{"rules":[{"pattern":[],"decision":"allow"}]}"#,
+        r#"{"rules":[{"pattern":["cargo"],"decision":"typo"}]}"#,
+    ] {
+        std::fs::write(&rules, contents).unwrap();
+        let gate = PermissionGate::default().with_rules_file(rules.clone());
+        assert!(matches!(
+            gate.evaluate(&shell, PermissionMode::AllowAll),
+            PermissionCheck::Ask(_)
+        ));
+        assert!(gate.take_rules_warning().is_some());
+        let unchanged = PermissionGate::default();
+        for tool in [Tool::Read, Tool::Write, Tool::Edit] {
+            let call = prepare(&tools, tool, ".env").await;
+            for mode in MODES {
+                assert_eq!(
+                    gate.evaluate(&call, mode),
+                    unchanged.evaluate(&call, mode),
+                    "{contents}: {tool:?} {mode:?}"
+                );
+                assert_eq!(
+                    gate.evaluate_plan(&call, mode),
+                    unchanged.evaluate_plan(&call, mode)
+                );
+                assert_eq!(
+                    gate.evaluate_review(&call, mode),
+                    unchanged.evaluate_review(&call, mode)
+                );
+            }
+        }
+        assert!(gate.take_rules_warning().is_none());
+        assert!(matches!(
+            gate.evaluate(&shell, PermissionMode::AllowAll),
+            PermissionCheck::Ask(_)
+        ));
+        assert!(
+            gate.take_rules_warning().is_none(),
+            "unaffected file tools must not reset the command warning"
+        );
+    }
+}
+
+#[tokio::test]
+async fn file_rule_errors_identify_the_rule_or_json_location() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("settings"), "fake").unwrap();
+    std::os::unix::fs::symlink("missing", root.path().join("broken")).unwrap();
+    let rules = root.path().join("rules.json");
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(root.path().into(), BTreeMap::new(), vec![]).unwrap(),
+    ));
+    let call = prepare(&tools, Tool::Read, "settings").await;
+    for (contents, details) in [
+        (r#"{"rules":[],"fileRules":["#, vec!["line", "column"]),
+        (
+            r#"{"rules":[],"fileRules":[{"pattern":"[","decision":"forbidden"}]}"#,
+            vec!["fileRules[0]", "\"[\"", "character class"],
+        ),
+        (
+            r#"{"rules":[{"pattern":[],"decision":"allow"}],"fileRules":[]}"#,
+            vec!["rules[0]", "empty or invalid command prefix"],
+        ),
+        (
+            r#"{"rules":[],"fileRules":[{"pattern":"~/secrets","decision":"forbidden"}]}"#,
+            vec!["fileRules[0]", "~/secrets", "HOME"],
+        ),
+        (
+            r#"{"rules":[],"fileRules":[{"pattern":"./broken","decision":"forbidden"}]}"#,
+            vec!["fileRules[0]", "./broken", "dangling symbolic link"],
+        ),
+    ] {
+        std::fs::write(&rules, contents).unwrap();
+        let gate = PermissionGate::default().with_rules_file(rules.clone());
+        assert!(matches!(
+            gate.evaluate(&call, PermissionMode::AllowAll),
+            PermissionCheck::Forbidden { .. }
+        ));
+        let warning = gate.take_rules_warning().unwrap();
+        for detail in details {
+            assert!(warning.contains(detail), "missing {detail:?}: {warning}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn unreadable_rules_still_block_automatic_file_access() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("settings"), "fake").unwrap();
+    let rules = root.path().join("rules.json");
+    let tools = tools(root.path());
+    for directory in [true, false] {
+        if directory {
+            std::fs::create_dir(&rules).unwrap();
+        } else {
+            std::os::unix::fs::symlink("missing-rules", &rules).unwrap();
+        }
+        let error = std::fs::read(&rules).unwrap_err().to_string();
+        let gate = PermissionGate::default().with_rules_file(rules.clone());
+        for tool in [Tool::Read, Tool::Write, Tool::Edit] {
+            let call = prepare(&tools, tool, "settings").await;
+            for mode in MODES {
+                let check = gate.evaluate(&call, mode);
+                if mode == PermissionMode::AllowAll {
+                    assert!(matches!(check, PermissionCheck::Forbidden { .. }));
+                } else {
+                    let PermissionCheck::Ask(request) = &check else {
+                        panic!("must ask");
+                    };
+                    assert!(
+                        !request
+                            .available_decisions
+                            .contains(&ApprovalDecision::AcceptForSession)
+                    );
+                }
+                if tool == Tool::Read {
+                    assert_eq!(gate.evaluate_plan(&call, mode), check);
+                    assert_eq!(gate.evaluate_review(&call, mode), check);
+                }
+            }
+        }
+        let warning = gate.take_rules_warning().unwrap();
+        assert!(warning.contains(&error), "{warning}");
+        if directory {
+            std::fs::remove_dir(&rules).unwrap();
+        } else {
+            std::fs::remove_file(&rules).unwrap();
+        }
+    }
+}
+
+#[tokio::test]
 async fn symlinks_to_ruled_files_match_names_and_resolved_paths() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("secrets/nested")).unwrap();
@@ -266,6 +440,86 @@ async fn symlinks_to_ruled_files_match_names_and_resolved_paths() {
                 "{pattern}"
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn ruled_symlink_name_blocks_access_to_an_alias_target() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("dev-settings"), "fake").unwrap();
+    std::os::unix::fs::symlink("dev-settings", root.path().join(".env")).unwrap();
+    let rules = root.path().join("rules.json");
+    std::fs::write(
+        &rules,
+        json!({"rules":[],"fileRules":[{"pattern":".env","decision":"forbidden"}]}).to_string(),
+    )
+    .unwrap();
+    let gate = PermissionGate::default().with_rules_file(rules);
+    let tools = tools(root.path());
+    for tool in [Tool::Read, Tool::Write, Tool::Edit] {
+        let call = prepare(&tools, tool, ".env").await;
+        assert!(
+            matches!(
+                gate.evaluate(&call, PermissionMode::AllowAll),
+                PermissionCheck::Forbidden { .. }
+            ),
+            "{tool:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn literal_path_rules_cover_descendants_but_name_rules_do_not() {
+    let root = tempfile::tempdir().unwrap();
+    for directory in ["secrets/nested", "secrets-near"] {
+        std::fs::create_dir_all(root.path().join(directory)).unwrap();
+        std::fs::write(root.path().join(directory).join("settings"), "fake").unwrap();
+    }
+    let rules = root.path().join("rules.json");
+    let gate = PermissionGate::default().with_rules_file(rules.clone());
+    let tools = tools(root.path());
+    for pattern in [
+        "./secrets".to_owned(),
+        "~/secrets".into(),
+        root.path().join("secrets").display().to_string(),
+    ] {
+        std::fs::write(
+            &rules,
+            json!({"fileRules":[{"pattern":pattern,"decision":"forbidden"}]}).to_string(),
+        )
+        .unwrap();
+        let directory = prepare(&tools, Tool::Read, "secrets").await;
+        assert!(matches!(
+            gate.evaluate(&directory, PermissionMode::AllowAll),
+            PermissionCheck::Forbidden { .. }
+        ));
+        for tool in [Tool::Read, Tool::Write, Tool::Edit] {
+            let child = prepare(&tools, tool, "secrets/nested/settings").await;
+            assert!(
+                matches!(
+                    gate.evaluate(&child, PermissionMode::AllowAll),
+                    PermissionCheck::Forbidden { .. }
+                ),
+                "{pattern}: {tool:?}"
+            );
+            let neighbor = prepare(&tools, tool, "secrets-near/settings").await;
+            assert!(matches!(
+                gate.evaluate(&neighbor, PermissionMode::AllowAll),
+                PermissionCheck::Execute(_)
+            ));
+        }
+    }
+    std::fs::write(
+        &rules,
+        json!({"fileRules":[{"pattern":"secrets","decision":"forbidden"}]}).to_string(),
+    )
+    .unwrap();
+    for tool in [Tool::Read, Tool::Write, Tool::Edit] {
+        let call = prepare(&tools, tool, "secrets/nested/settings").await;
+        assert!(matches!(
+            gate.evaluate(&call, PermissionMode::AllowAll),
+            PermissionCheck::Execute(_)
+        ));
     }
 }
 

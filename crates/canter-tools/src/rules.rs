@@ -18,6 +18,7 @@ pub fn list(path: &Path) -> io::Result<canter_protocol::CommandRuleListResponse>
 #[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Rules {
+    #[serde(default)]
     pub rules: Vec<Rule>,
     #[serde(default, rename = "fileRules", skip_serializing_if = "Vec::is_empty")]
     pub file_rules: Vec<FileRule>,
@@ -25,34 +26,51 @@ pub(crate) struct Rules {
 
 impl Rules {
     pub fn read(path: &Path) -> io::Result<Self> {
-        let bytes = match fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                // A dangling link is a broken rules file, not an absent one.
-                if fs::symlink_metadata(path).is_ok() {
-                    return Err(error);
-                }
-                return Ok(Self::default());
-            }
-            Err(error) => return Err(error),
+        let Some(bytes) = read_bytes(path)? else {
+            return Ok(Self::default());
         };
-        let rules: Self = serde_json::from_slice(&bytes).map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidData, "invalid command rules JSON")
+        Self::parse(&bytes)
+    }
+
+    pub fn read_for_file_tools(path: &Path) -> io::Result<Self> {
+        let Some(bytes) = read_bytes(path)? else {
+            return Ok(Self::default());
+        };
+        // A readable command-only file cannot opt file tools into restrictions,
+        // even if its JSON is unfinished. Also recognize decoded JSON field names.
+        if !bytes
+            .windows(b"fileRules".len())
+            .any(|part| part == b"fileRules")
+            && !serde_json::from_slice::<serde_json::Value>(&bytes)
+                .is_ok_and(|value| value.get("fileRules").is_some())
+        {
+            return Ok(Self::default());
+        }
+        Self::parse(&bytes)
+    }
+
+    fn parse(bytes: &[u8]) -> io::Result<Self> {
+        let rules: Self = serde_json::from_slice(bytes).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid command rules JSON: {error}"),
+            )
         })?;
-        if rules.rules.iter().any(|rule| {
-            rule.pattern.is_empty()
+        for (index, rule) in rules.rules.iter().enumerate() {
+            if rule.pattern.is_empty()
                 || rule
                     .pattern
                     .iter()
                     .any(|word| word.is_empty() || word.contains('\0'))
-        }) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "empty or invalid command prefix",
-            ));
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("rules[{index}]: empty or invalid command prefix"),
+                ));
+            }
         }
-        for rule in &rules.file_rules {
-            file_glob(&rule.pattern)?;
+        for (index, rule) in rules.file_rules.iter().enumerate() {
+            file_glob(&rule.pattern).map_err(|error| file_rule_error(index, rule, error))?;
         }
         Ok(rules)
     }
@@ -67,17 +85,41 @@ impl Rules {
 
     pub fn file_decision(
         &self,
+        requested: &Path,
         path: &Path,
         cwd: &Path,
         home: Option<&Path>,
     ) -> io::Result<Option<FileRuleDecision>> {
         let mut decision = None;
-        for rule in &self.file_rules {
-            if file_matches(&rule.pattern, path, cwd, home)? {
+        for (index, rule) in self.file_rules.iter().enumerate() {
+            if file_matches(&rule.pattern, requested, path, cwd, home)
+                .map_err(|error| file_rule_error(index, rule, error))?
+            {
                 decision = decision.max(Some(rule.decision));
             }
         }
         Ok(decision)
+    }
+}
+
+fn file_rule_error(index: usize, rule: &FileRule, error: io::Error) -> io::Error {
+    io::Error::new(
+        error.kind(),
+        format!("fileRules[{index}] pattern {:?}: {error}", rule.pattern),
+    )
+}
+
+fn read_bytes(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            // A dangling link is a broken rules file, not an absent one.
+            if fs::symlink_metadata(path).is_ok() {
+                return Err(error);
+            }
+            Ok(None)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -86,28 +128,45 @@ fn file_glob(pattern: &str) -> io::Result<globset::GlobMatcher> {
         .find(['*', '?', '[', '{', '\\'])
         .map(|at| &pattern[at..])
         .unwrap_or_default();
-    if pattern.is_empty()
-        || pattern.contains('\0')
-        || pattern.ends_with('/')
-        || tail.split('/').any(|part| matches!(part, "." | ".."))
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid file pattern",
-        ));
+    let error = if pattern.is_empty() {
+        Some("file pattern must not be empty")
+    } else if pattern.contains('\0') {
+        Some("file pattern must not contain NUL bytes")
+    } else if pattern.ends_with('/') {
+        Some("file pattern must not end with '/'")
+    } else if tail.split('/').any(|part| matches!(part, "." | "..")) {
+        Some("file glob must not contain '.' or '..' path components")
+    } else {
+        None
+    };
+    if let Some(error) = error {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, error));
     }
     globset::GlobBuilder::new(pattern)
         .literal_separator(true)
         .backslash_escape(true)
         .build()
         .map(|glob| glob.compile_matcher())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid file glob"))
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid file glob: {error}"),
+            )
+        })
 }
 
-fn file_matches(pattern: &str, path: &Path, cwd: &Path, home: Option<&Path>) -> io::Result<bool> {
+fn file_matches(
+    pattern: &str,
+    requested: &Path,
+    path: &Path,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> io::Result<bool> {
     if !pattern.contains('/') {
         let glob = file_glob(pattern)?;
-        return Ok(path.file_name().is_some_and(|name| glob.is_match(name)));
+        return Ok([requested, path]
+            .iter()
+            .any(|path| path.file_name().is_some_and(|name| glob.is_match(name))));
     }
     let (base, pattern) = match pattern.strip_prefix("~/") {
         Some(pattern) => (
@@ -125,7 +184,7 @@ fn file_matches(pattern: &str, path: &Path, cwd: &Path, home: Option<&Path>) -> 
         .unwrap_or(pattern.len());
     let root = crate::executor::resolve_target(&base.join(&pattern[..split]), &[])?;
     if split == pattern.len() {
-        return Ok(path == root);
+        return Ok(path.starts_with(root));
     }
     let glob = file_glob(&pattern[split..])?;
     Ok(path
