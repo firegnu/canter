@@ -1,4 +1,4 @@
-# 任务：第二期-17 - /init 生成 AGENTS.md
+# 任务：第二期-18 - /init 生成 AGENTS.md
 
 2026-10-30，canter/main 交给 canter/dev-init（Codex，gpt-6-astra / high）。
 路由：中 / 交叉审查不要 / 影响面：改行为（路由：常规（置信 0.79）、拿不准、拿不准；主控判：不碰要害，只加一条命令和一段提示词）
