@@ -110,3 +110,19 @@
 8. `canter-core tests/lsp.rs::retracting_a_late_notice_keeps_later_user_words_labeled_as_user`：旧断言在前缀请求里找 `User:` / `Tool diagnostics:` 转写标签。现在先检查前缀逐项不变、真实原话仍为 user 消息、已撤回的诊断通知没有回流、末尾提示区分内部来源；假服务端随后报上下文超长，继续用原有两条转写断言检查回退稿里的 `User: RETRACT user words`，且绝不是 `Tool diagnostics: RETRACT user words`。另检查压缩存盘保留该原话且未把诊断存为用户原话，未丢掉对诊断索引清理的原覆盖。
 
 验证：只运行上述 8 条（分组定位后联合复跑），最终 `cargo nextest run -p canter-core -p canter-server -p canter --no-fail-fast -E 'test(repeated_compaction_strips_only_the_previous_summary_plan) or test(context_report_is_read_only_and_describes_the_next_request) or test(user_shell_rejects_work_approval_questions_and_compaction) or test(completion_during_manual_compaction_wakes_after_turn_finishes) or test(matching_event_during_compaction_survives_and_is_not_user_words) or test(thinking_none_low_and_compaction_preserve_their_wire_options) or test(plan_reminders_count_calls_across_turns_repeat_and_stay_out_of_ui_and_user_words) or test(retracting_a_late_notice_keeps_later_user_words_labeled_as_user)'` 为 8 passed、432 skipped；没有跑全套或扩大测试范围。`CARGO_TARGET_DIR` 一直为本任务目录，`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。所有命令均在前台跑完；未删测试、放宽原行为断言或改超时，没有遗留诊断代码。真实模型调用仍为 0；无新增主控决策事项，不合并、不推送、不安装。
+
+## 返工 2
+
+2026-10-31，按 `P2-144-交叉审查.md` 的审查意见及用户选项返工。必须改第 1 条已在 `09e5fb1` 完成，本次复跑原 8 条；必须改第 2 条及用户选改的建议第 1、2、3 条落实如下，建议第 4 条按要求不改。
+
+1. 必须改第 2 条：`PREFIX_SOURCES` 的文件恢复来源补上 `[Referenced file after compaction: ...]`，与自动重读一样明确为内部上下文。来源测试加入真实形状的只给名字消息，检查它原样进入前缀、末尾说明覆盖该标记，保留压缩存盘中用户原话及最终消息的精确断言。
+2. 建议第 1 条：仅前缀请求遇到 `InvalidRequest` 时 `continue 'chunks`，退回完整拼稿；前缀已取走，拼稿再次遇到同类错误仍沿用原错误处理，不会循环回退。新增 `invalid_prefix_requests_fall_back_to_transcript`，分别用非上下文超长的 400 和 422 验证：前缀带工具、回退无工具且包含完整用户/助手原文、摘要正常存盘、没有 Warning/Error，最终遥测为成功的 `transcript`，两次尝试都记录为压缩请求。
+3. 建议第 2 条：来源说明补上轮中断、服务端停止两类通知，以及 `<user_shell_command>` 中命令是用户输入、结果是命令输出的区别。来源测试加入这三类原始消息，检查前缀保留和说明中的来源区分；保留原来的存盘原话隔离断言。
+4. 建议第 3 条：说明明确 `[Current plan]`、技能全文、目标说明和额外目录会自动补回，不要抄进摘要；来源测试检查这两项要求。保留原历史以维持前缀一致，不修改九节格式、公共规则或补回机制。以上行为先写入 DESIGN，再修改实现。
+
+- RED → GREEN：扩充来源测试后先因缺少 `[Referenced file after compaction:` 的来源说明而失败，补齐说明后通过。新增 InvalidRequest 测试先因普通 400 让压缩失败（期望 Completed）而失败，加入前缀专用回退后，400、422 两个分支都通过。
+- 验证范围：`cargo nextest run -p canter-core -p canter-server -p canter --no-fail-fast -E 'binary(compaction_cache) or test(repeated_compaction_strips_only_the_previous_summary_plan) or test(context_report_is_read_only_and_describes_the_next_request) or test(user_shell_rejects_work_approval_questions_and_compaction) or test(completion_during_manual_compaction_wakes_after_turn_finishes) or test(matching_event_during_compaction_survives_and_is_not_user_words) or test(thinking_none_low_and_compaction_preserve_their_wire_options) or test(plan_reminders_count_calls_across_turns_repeat_and_stay_out_of_ui_and_user_words) or test(retracting_a_late_notice_keeps_later_user_words_labeled_as_user)'`：15 passed、426 skipped（compaction_cache 7 条及上次 8 条一起通过）。只改了 compaction_cache 中的测试，没有扩跑其它测试。
+- 最终检查：`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 全部通过。所有 cargo 命令均使用本任务的 `CARGO_TARGET_DIR`，全部命令在前台执行完毕。
+- 拿主意的地方：按用户明确选择落实建议第 1、2、3 条；建议第 4 条不做。没有新增需要主控决定的事项。实际服务商缓存命中仍交主控安排试跑，思考档保持原样。
+- 没做的事：没有改普通请求、压缩触发线、九节格式、存储及恢复机制；未删测试、放宽断言。未跑全套、未调真实模型、未读改用户真实状态、未合并/推送/安装。
+- 踩过的坑：没有。

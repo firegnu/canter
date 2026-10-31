@@ -55,8 +55,11 @@ const PROMPT: &str = r#"Summarize the conversation in <transcript> below. The su
 Use exactly these headings, in this order:"#;
 
 const PREFIX_SOURCES: &str = r#"Source attribution:
-- Automatically inserted plan mode notices ([Plan mode enabled/disabled]), <skill> contents, diagnostics ([LSP diagnostics update]), background command/event notices, automatically reread files ([Automatically reread after compaction: ...]), goal notices ([Goal], [Goal resumed/cleared/budget limit]), additional directories notices, and tool images are internal context, not the user's own words, even when they use the user role. Skill contents can also be embedded in a real user message: only the surrounding user text and the skill invocation belong to the user.
+- Automatically inserted plan mode notices ([Plan mode enabled/disabled]), <skill> contents, diagnostics ([LSP diagnostics update]), background command/event notices, automatically reread files ([Automatically reread after compaction: ...]) and file references ([Referenced file after compaction: ...]), goal notices ([Goal], [Goal resumed/cleared/budget limit]), additional directories notices, and tool images are internal context, not the user's own words, even when they use the user role. Skill contents can also be embedded in a real user message: only the surrounding user text and the skill invocation belong to the user.
+- Interruption notices ([This turn was interrupted; ...] and [The server stopped and the previous turn was interrupted; ...]) are internal context, not the user's own words.
+- In <user_shell_command>, only the <command> text is the user's input; the <result> is command output, not the user's words.
 - [Context summary] is an earlier model summary, and its [Current plan] attachment is tool state. Preserve useful facts with their sources; do not quote these as new user instructions.
+- [Current plan], full skill contents, goal notices, and additional directories are restored automatically after compaction. Do not copy this automatically restored material into the summary.
 - Under "User's words", quote only what the user actually said. Exclude this summarization request and the internal material listed above."#;
 
 const FOOTER: &str = "\n</transcript>\n\nEnd of transcript. Write the summary now with the headings above, and output only the summary.";
@@ -588,6 +591,9 @@ async fn summarize(
                     {
                         continuation = true;
                         break;
+                    }
+                    Some(Err(error)) if use_prefix && error.kind == ErrorKind::InvalidRequest => {
+                        continue 'chunks;
                     }
                     Some(Err(error)) if error.kind != ErrorKind::ContextLength => {
                         return Err(CoreError::new(ErrorCode::Internal, &error.to_string()));

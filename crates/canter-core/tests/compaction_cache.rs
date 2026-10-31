@@ -268,6 +268,57 @@ async fn provider_context_length_error_falls_back_to_the_whole_transcript() {
 }
 
 #[tokio::test]
+async fn invalid_prefix_requests_fall_back_to_transcript() {
+    for status in [
+        axum::http::StatusCode::BAD_REQUEST,
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+    ] {
+        let rejected = Reply {
+            status,
+            body: json!({"error":{"code":"invalid_request","message":"unsupported request combination"}}).to_string(),
+            retry_after: None,
+            hang: false,
+        };
+        let fixture = Fixture::new(
+            vec![
+                answer("Earlier answer."),
+                rejected,
+                answer("Fallback summary."),
+            ],
+            CoreOptions::default(),
+        )
+        .await;
+        fixture.send("Keep these exact words.").await;
+        fixture.compact().await;
+        let requests = fixture.server.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 3, "{status}");
+        assert!(requests[1].get("tools").is_some());
+        assert!(requests[2].get("tools").is_none());
+        let prompt = requests[2]["messages"].as_array().unwrap().last().unwrap()["content"]
+            .as_str()
+            .unwrap();
+        assert!(prompt.contains("User: Keep these exact words.\n"));
+        assert!(prompt.contains("Assistant: Earlier answer.\n"));
+        assert!(!prompt.contains("\n<earlier_summary>\n"));
+        let history = fixture.store.model_history::<Value>("cache").unwrap();
+        assert!(
+            history
+                .iter()
+                .any(|entry| entry["type"] == "compaction"
+                    && entry["summary"] == "Fallback summary.")
+        );
+        let events = fixture.store.events_after("cache", 0).unwrap();
+        assert!(!events.iter().any(|event| matches!(
+            event.payload,
+            EventPayload::Warning { .. } | EventPayload::Error { .. }
+        )));
+        assert!(events.iter().any(|event| matches!(&event.payload, EventPayload::TelemetryCompaction { method: Some(method), succeeded: true, .. } if method == "transcript")));
+        assert_eq!(events.iter().filter(|event| matches!(&event.payload, EventPayload::TelemetryModelRequest { record } if record.purpose == RequestPurpose::Compaction)).count(), 2);
+        fixture.close().await;
+    }
+}
+
+#[tokio::test]
 async fn tool_calls_or_empty_summaries_fall_back_without_executing_tools() {
     let call = json!({"index":0,"id":"must-not-run","function":{"name":"write","arguments":r#"{"path":"must-not-exist.txt","content":"wrong"}"#}});
     for invalid in [
@@ -338,6 +389,22 @@ async fn internal_user_role_notices_are_identified_and_not_retained_as_user_word
             "restored_file_notice",
             "[Automatically reread after compaction: note.txt]\n1: File facts.",
         ),
+        (
+            "restored_file_notice",
+            "[Referenced file after compaction: large.txt]",
+        ),
+        (
+            "message",
+            "[This turn was interrupted; unfinished operations were not continued.]",
+        ),
+        (
+            "message",
+            "[The server stopped and the previous turn was interrupted; continue from the results so far.]",
+        ),
+        (
+            "message",
+            "<user_shell_command>\n<command>\nprintf diagnostic\n</command>\n<result>\ndiagnostic\n</result>\n</user_shell_command>",
+        ),
         ("goal_notice", "[Goal]\nGoal state."),
         (
             "directories_notice",
@@ -367,6 +434,10 @@ async fn internal_user_role_notices_are_identified_and_not_retained_as_user_word
         "diagnostics",
         "background",
         "reread",
+        "[Referenced file after compaction:",
+        "[This turn was interrupted;",
+        "[The server stopped and the previous turn was interrupted;",
+        "<user_shell_command>",
         "goal",
         "directories",
         "[Context summary]",
@@ -377,6 +448,10 @@ async fn internal_user_role_notices_are_identified_and_not_retained_as_user_word
     }
     assert!(prompt.contains("not the user's own words"));
     assert!(prompt.contains("even when they use the user role"));
+    assert!(prompt.contains("only the <command> text is the user's input"));
+    assert!(prompt.contains("the <result> is command output, not the user's words"));
+    assert!(prompt.contains("[Current plan], full skill contents, goal notices, and additional directories are restored automatically after compaction"));
+    assert!(prompt.contains("Do not copy this automatically restored material into the summary."));
     let history = fixture.store.model_history::<Value>("cache").unwrap();
     let compact = history
         .iter()
