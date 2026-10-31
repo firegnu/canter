@@ -2,6 +2,34 @@ use canter_protocol::*;
 use serde_json::json;
 
 #[test]
+fn telemetry_enums_accept_unknown_values_and_missing_new_fields() {
+    let request = json!({
+        "seq":1,"sessionId":"s","timestamp":1,"type":"telemetry.modelRequest",
+        "requestId":"r","purpose":"future","outcome":"future","startedAt":1,"durationMs":0,
+        "settings":{"model":"fake","approvalPolicy":"allowAll","planMode":false},
+        "context":{"estimated":true,"systemTokens":0,"toolDefinitionTokens":0,"conversationTokens":0,"toolResultTokens":0},"toolCallIds":[]
+    });
+    let approval = json!({"seq":1,"sessionId":"s","timestamp":1,"type":"telemetry.approval","turnId":"t","requestId":"a","durationMs":1,"outcome":"future"});
+    let compaction = json!({"seq":1,"sessionId":"s","timestamp":1,"type":"telemetry.compaction","turnId":"t","itemId":"c","estimated":true,"beforeTokens":2,"afterTokens":1,"beforeMessages":2,"afterMessages":1,"removedMessages":1,"succeeded":true,"trigger":"future"});
+    for (value, fields) in [
+        (request, vec!["purpose", "outcome"]),
+        (approval, vec!["outcome"]),
+        (compaction, vec!["trigger"]),
+    ] {
+        let event: Event = serde_json::from_value(value.clone()).unwrap();
+        let saved = serde_json::to_value(event).unwrap();
+        for field in &fields {
+            assert_eq!(saved[field], "unknown");
+        }
+        let mut old = value;
+        for field in fields {
+            old.as_object_mut().unwrap().remove(field);
+        }
+        assert!(serde_json::from_value::<Event>(old).is_ok());
+    }
+}
+
+#[test]
 fn request_settings_accept_the_same_legacy_effort_default_as_session_settings() {
     let settings: RequestSettings = serde_json::from_value(json!({
         "model":"legacy-model", "approvalPolicy":"alwaysAsk", "planMode":false

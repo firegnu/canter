@@ -552,6 +552,11 @@ async fn read_returns_numbered_requested_lines_and_a_final_item() {
     assert!(result.text.contains("2: 二\n3: three\n"), "{}", result.text);
     assert!(result.text.contains("startLine=4"), "{}", result.text);
     assert!(
+        !result.output_size.truncated,
+        "a requested line range is not a tool limit"
+    );
+    assert!(result.output_size.source_file_bytes.is_none());
+    assert!(
         matches!(result.item, Item::FileRead { id, path, start_line:2, status:ItemStatus::Completed, .. } if id == "r1" && path == "notes")
     );
 }

@@ -424,7 +424,15 @@ async fn compression_and_private_answers_share_retries_and_discard_partial_text(
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect();
             assert_eq!(records.len(), 1);
-            assert_eq!(records[0].purpose, operation);
+            assert_eq!(serde_json::to_value(&records[0]).unwrap()["retryCount"], 1);
+            assert_eq!(
+                records[0].purpose,
+                if operation == "btw" {
+                    RequestPurpose::Btw
+                } else {
+                    RequestPurpose::Handoff
+                }
+            );
             assert!(records[0].turn_id.is_none());
             assert!(!private.contains("complete summary"));
             assert!(

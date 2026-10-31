@@ -27,6 +27,12 @@ pub enum EventPayload {
     TelemetryCompaction {
         turn_id: String,
         item_id: String,
+        #[serde(default)]
+        #[ts(optional = nullable)]
+        trigger: crate::CompactionTrigger,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        trigger_occupancy_tokens: Option<u64>,
         estimated: bool,
         #[ts(type = "number")]
         before_tokens: u64,
@@ -61,7 +67,9 @@ pub enum EventPayload {
         request_id: String,
         #[ts(type = "number")]
         duration_ms: u64,
-        outcome: String,
+        #[serde(default)]
+        #[ts(optional = nullable)]
+        outcome: crate::ApprovalOutcome,
     },
     #[serde(rename = "telemetry.modelRequest")]
     TelemetryModelRequest {

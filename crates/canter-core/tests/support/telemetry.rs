@@ -1,6 +1,48 @@
 use super::*;
 
 #[tokio::test]
+async fn private_write_failure_does_not_break_later_turns_or_close() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+    let model = ScriptModel::new(vec![
+        vec![ModelEvent::Finished(FinishReason::Stop)],
+        vec![ModelEvent::Finished(FinishReason::Stop)],
+    ]);
+    let (session, _) = Session::create(
+        store.clone(),
+        "private-failure".into(),
+        settings(temp.path()),
+        RuntimeContext::default(),
+        model,
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let path = temp
+        .path()
+        .join("sessions/private-failure/private-telemetry.jsonl");
+    std::fs::create_dir(&path).unwrap();
+    let mut stream = session.btw("question".into()).await.unwrap();
+    while let Some(event) = stream.recv().await {
+        if matches!(event, BtwEvent::Completed) {
+            break;
+        }
+    }
+    let mut events = session
+        .subscribe(session.snapshot().await.event_seq)
+        .await
+        .unwrap();
+    session.input(input("continue")).await.unwrap();
+    finished(&mut events).await;
+    assert_eq!(
+        session.snapshot().await.session.turns[0].status,
+        TurnStatus::Completed
+    );
+    session.close().await.unwrap();
+    assert!(store.open("private-failure").is_ok());
+}
+
+#[tokio::test]
 async fn request_timing_measures_first_fragment_and_stream_completion() {
     struct TimedModel;
     impl Model for TimedModel {
@@ -349,7 +391,7 @@ async fn private_requests_are_recorded_without_saving_their_content() {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
         assert_eq!(records.len(), 2);
-        for purpose in ["btw", "handoff"] {
+        for purpose in [RequestPurpose::Btw, RequestPurpose::Handoff] {
             assert!(
                 records
                     .iter()
@@ -375,11 +417,19 @@ async fn manual_and_automatic_compaction_record_before_and_after() {
                 ModelEvent::Finished(FinishReason::Stop),
             ]
         };
-        let model = ScriptModel::new(vec![
-            reply("history ".repeat(15_000)),
-            reply("summary".into()),
-            reply("done".into()),
-        ]);
+        let mut first = reply("history ".repeat(15_000));
+        if automatic {
+            first.insert(
+                1,
+                ModelEvent::Usage(canter_model::Usage {
+                    input_tokens: 90_000,
+                    output_tokens: 1,
+                    total_tokens: 90_001,
+                    ..Default::default()
+                }),
+            );
+        }
+        let model = ScriptModel::new(vec![first, reply("summary".into()), reply("done".into())]);
         let (session, _) = Session::create(
             store.clone(),
             "compact".into(),
@@ -414,6 +464,17 @@ async fn manual_and_automatic_compaction_record_before_and_after() {
             .expect("compaction telemetry");
         assert_eq!(record["estimated"], true);
         assert_eq!(record["succeeded"], true);
+        assert_eq!(record["trigger"], if automatic { "auto" } else { "manual" });
+        if automatic {
+            assert!(record["triggerOccupancyTokens"].as_u64().unwrap() > 30_000);
+            assert!(
+                record["triggerOccupancyTokens"].as_u64().unwrap()
+                    > record["beforeTokens"].as_u64().unwrap(),
+                "the trigger must retain provider-corrected occupancy"
+            );
+        } else {
+            assert!(record.get("triggerOccupancyTokens").is_none());
+        }
         assert!(record["beforeTokens"].as_u64().unwrap() > record["afterTokens"].as_u64().unwrap());
         assert!(record["removedMessages"].as_u64().unwrap() > 0);
         assert!(

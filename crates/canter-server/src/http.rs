@@ -282,6 +282,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         features: Some(vec![
             "review".into(),
             "addDirectories".into(),
+            "tags".into(),
             "goals".into(),
             "lsp".into(),
         ]),

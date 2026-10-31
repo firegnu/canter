@@ -3,6 +3,50 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum RequestPurpose {
+    Conversation,
+    Compaction,
+    Btw,
+    Handoff,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelRequestOutcome {
+    Completed,
+    Failed,
+    Cancelled,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum CompactionTrigger {
+    Auto,
+    Manual,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ApprovalOutcome {
+    Approved,
+    Declined,
+    Cancelled,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
 /// Same byte heuristic as context compaction, including message overhead.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -45,7 +89,15 @@ pub struct ModelRequestTelemetry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub turn_id: Option<String>,
-    pub purpose: String,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub purpose: RequestPurpose,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub outcome: ModelRequestOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub retry_count: Option<u32>,
     #[ts(type = "number")]
     pub started_at: i64,
     #[ts(type = "number")]

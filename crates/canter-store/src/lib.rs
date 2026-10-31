@@ -3,7 +3,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 use canter_protocol::{
@@ -290,6 +290,22 @@ fn truncate_tail(file: &File, committed_bytes: u64) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Telemetry is append-only metadata: old records need not match this version's schema.
+fn private_committed_bytes(file: &File) -> io::Result<u64> {
+    let mut end = file.metadata()?.len();
+    let mut buffer = [0; 8192];
+    while end > 0 {
+        let length = end.min(buffer.len() as u64) as usize;
+        let start = end - length as u64;
+        file.read_exact_at(&mut buffer[..length], start)?;
+        if let Some(index) = buffer[..length].iter().rposition(|byte| *byte == b'\n') {
+            return Ok(start + index as u64 + 1);
+        }
+        end = start;
+    }
+    Ok(0)
+}
+
 fn replay(file: &File, id: &str) -> Result<(SessionSnapshot, u64), StoreError> {
     let mut snapshot = SessionSnapshot::empty(id);
     let committed_bytes = read_events(file, id, |event| {
@@ -374,7 +390,7 @@ impl SessionWriter {
                     .create(true)
                     .mode(0o600)
                     .open(self.session_dir.join("private-telemetry.jsonl"))?;
-                let committed = read_jsonl(&file, |_: ModelRequestTelemetry| Ok(()))?;
+                let committed = private_committed_bytes(&file)?;
                 truncate_tail(&file, committed)?;
                 self.private_telemetry = Some(file);
             }
@@ -392,7 +408,9 @@ impl SessionWriter {
             Ok(())
         })();
         if result.is_err() {
-            self.write_failed = true;
+            // Only this metadata batch is lost; reopen on the next attempt to
+            // repair a torn tail without poisoning the main session writer.
+            self.private_telemetry = None;
         }
         result
     }

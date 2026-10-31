@@ -9,7 +9,7 @@ use crate::ServerError;
 // No Debug/Serialize: errors must not echo credentials or config contents.
 #[derive(Deserialize)]
 pub(crate) struct Config {
-    #[serde(default = "default_sandbox")]
+    #[serde(default = "default_telemetry")]
     telemetry: bool,
     #[serde(default = "default_sandbox")]
     sandbox: bool,
@@ -170,6 +170,10 @@ impl Config {
             ..CoreOptions::default()
         }
     }
+}
+
+fn default_telemetry() -> bool {
+    true
 }
 
 fn default_sandbox() -> bool {

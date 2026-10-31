@@ -7,6 +7,56 @@ use std::{
     os::unix::fs::PermissionsExt,
 };
 
+fn record() -> ModelRequestTelemetry {
+    serde_json::from_value(json!({
+        "requestId":"private-request", "purpose":"btw", "startedAt":100, "durationMs":20,
+        "settings":{"model":"fake", "approvalPolicy":"allowAll", "planMode":false},
+        "context":{"estimated":true,"systemTokens":1,"toolDefinitionTokens":2,"conversationTokens":3,"toolResultTokens":0}, "toolCallIds":[]
+    })).unwrap()
+}
+
+#[test]
+fn private_telemetry_does_not_parse_old_lines_or_poison_the_writer() {
+    for corrupt in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::new(temp.path()).unwrap();
+        let mut writer = store
+            .create("s", SessionSnapshot::empty("s").settings, 1)
+            .unwrap();
+        let path = temp.path().join("s/private-telemetry.jsonl");
+        if corrupt {
+            fs::write(&path, b"\xfffuture-format\nincomplete").unwrap();
+            writer.append_private_telemetry(&[record()]).unwrap();
+            let bytes = fs::read(&path).unwrap();
+            assert!(bytes.starts_with(b"\xfffuture-format\n{"));
+            assert!(!bytes.windows(10).any(|part| part == b"incomplete"));
+        } else {
+            fs::create_dir(&path).unwrap();
+            assert!(writer.append_private_telemetry(&[record()]).is_err());
+            writer
+                .append(
+                    EventPayload::SessionStatus {
+                        status: SessionStatus::Idle,
+                        close_reason: None,
+                    },
+                    2,
+                )
+                .unwrap();
+            fs::remove_dir(&path).unwrap();
+            writer.append_private_telemetry(&[record()]).unwrap();
+        }
+        writer
+            .append(
+                EventPayload::SessionStatus {
+                    status: SessionStatus::Idle,
+                    close_reason: None,
+                },
+                3,
+            )
+            .unwrap();
+    }
+}
+
 #[test]
 fn private_telemetry_keeps_snapshots_order_and_events_unchanged_across_reopen() {
     let temp = tempfile::tempdir().unwrap();

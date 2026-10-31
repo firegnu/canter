@@ -92,7 +92,7 @@ impl Journal {
                                                 PlanDecision::Implement | PlanDecision::ClearContext,
                                             ..
                                         },
-                                } => "approved",
+                                } => ApprovalOutcome::Approved,
                                 ApprovalResolution::Answered {
                                     decision:
                                         ApprovalDecision::Decline
@@ -105,14 +105,14 @@ impl Journal {
                                             decision: PlanDecision::KeepPlanning,
                                             ..
                                         },
-                                } => "declined",
-                                _ => "cancelled",
+                                } => ApprovalOutcome::Declined,
+                                _ => ApprovalOutcome::Cancelled,
                             };
                             approvals.push(EventPayload::TelemetryApproval {
                                 turn_id,
                                 request_id: request_id.clone(),
                                 duration_ms: crate::telemetry::millis(start),
-                                outcome: outcome.into(),
+                                outcome,
                             });
                         }
                     }
@@ -189,7 +189,9 @@ impl Journal {
         .await
         .unwrap_or_else(|_| Err(CoreError::internal()));
         if result.is_err() {
-            self.failed = true;
+            eprintln!(
+                "Warning: private telemetry batch could not be saved; session remains available"
+            );
         }
         result
     }

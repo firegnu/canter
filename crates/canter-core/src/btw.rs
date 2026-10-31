@@ -1,5 +1,5 @@
 use canter_model::{AssistantContent, Message, ModelEvent, Request};
-use canter_protocol::{BtwEvent, ErrorCode};
+use canter_protocol::{BtwEvent, ErrorCode, RequestPurpose};
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
@@ -139,7 +139,7 @@ Task for the new session:
             // End the private stream before telemetry I/O, so a final answer
             // does not keep the client's "btw in progress" guard active.
             // Hold the state lock until the write finishes: new work and close
-            // cannot release the writer early. Close reports journal failures.
+            // cannot release the writer early. Private failures only drop metadata.
             let _ = state.journal.flush_private_telemetry().await;
             let _ = done.send(Some(Ok(state.journal.snapshot.last_event_seq)));
         });
@@ -171,7 +171,11 @@ async fn answer(
         let mut stream = crate::telemetry::stream(
             shared,
             None,
-            if handoff { "handoff" } else { "btw" },
+            if handoff {
+                RequestPurpose::Handoff
+            } else {
+                RequestPurpose::Btw
+            },
             prepared,
             estimate,
             cancel,

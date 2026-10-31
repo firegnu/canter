@@ -68,6 +68,8 @@ async fn new_handoff_and_plan_inherit_directories_and_skip_deleted_ones() {
             let terminal = world
                 .open(
                     &[
+                        "--tag",
+                        "task=inherit",
                         "--add-dir",
                         "../service-a",
                         "--add-dir",
@@ -137,6 +139,11 @@ async fn new_handoff_and_plan_inherit_directories_and_skip_deleted_ones() {
             let created = world.snapshot(&target).await;
             world.stop_server(Signal::SIGTERM).await;
             assert_ne!(target, source);
+            assert_eq!(
+                created.settings.tags.get("task").map(String::as_str),
+                Some("inherit"),
+                "{action}"
+            );
             let expected = if deleted {
                 vec![original[0].clone(), original[2].clone()]
             } else {
@@ -254,6 +261,8 @@ async fn add_dir_cli_slash_resume_and_continue_share_persisted_directories() {
 
 #[path = "support/statusline.rs"]
 mod statusline;
+#[path = "support/tags.rs"]
+mod tags;
 
 #[tokio::test]
 async fn review_feature_is_advertised_by_the_server() {
@@ -265,6 +274,13 @@ async fn review_feature_is_advertised_by_the_server() {
         .await
         .unwrap();
     world.stop_server(Signal::SIGTERM).await;
+    assert!(
+        info.features
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|feature| feature == "tags")
+    );
     assert!(
         info.features
             .unwrap()

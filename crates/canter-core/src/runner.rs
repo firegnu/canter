@@ -39,7 +39,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         let mut result = if let Some(params) = user_shell {
             crate::user_shell::run(&shared, &turn.id, &params, &cancel).await
         } else if manual_compaction {
-            compaction::compact(&shared, &turn.id, &cancel).await
+            compaction::compact(&shared, &turn.id, &cancel, CompactionTrigger::Manual, None).await
         } else {
             conversation(&shared, &turn.id, &cancel, &mut auto_compaction_failed).await
         };
@@ -276,7 +276,15 @@ async fn conversation(
             && !*auto_compaction_failed
         {
             compacted = true;
-            match compaction::compact(shared, turn_id, cancel).await {
+            match compaction::compact(
+                shared,
+                turn_id,
+                cancel,
+                CompactionTrigger::Auto,
+                Some(occupancy),
+            )
+            .await
+            {
                 Ok(()) => continue,
                 Err(_) if cancel.is_cancelled() => return Ok(()),
                 Err(_) if shared.state.lock().await.goal_summary.is_some() => continue,
@@ -356,7 +364,14 @@ async fn conversation(
                 .complete_missing_tools("No result: the model request did not finish")
                 .await?;
             if error.kind == ErrorKind::ContextLength && !compacted && !*auto_compaction_failed {
-                compaction::compact(shared, turn_id, cancel).await?;
+                compaction::compact(
+                    shared,
+                    turn_id,
+                    cancel,
+                    CompactionTrigger::Auto,
+                    Some(occupancy),
+                )
+                .await?;
                 compacted = true;
                 continue;
             }
@@ -442,7 +457,7 @@ async fn model_response(
     let mut stream = crate::telemetry::stream(
         shared,
         Some(turn_id),
-        "conversation",
+        RequestPurpose::Conversation,
         request,
         context,
         cancel,

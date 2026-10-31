@@ -8,7 +8,7 @@ use canter_model::{
     AssistantContent, ErrorKind, FinishReason, Message, ModelEvent, Request, RequestOptions,
     UserContent,
 };
-use canter_protocol::{ErrorCode, EventPayload, Item};
+use canter_protocol::{CompactionTrigger, ErrorCode, EventPayload, Item, RequestPurpose};
 use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
 
@@ -73,6 +73,8 @@ pub(crate) async fn compact(
     shared: &Shared,
     turn_id: &str,
     cancel: &CancellationToken,
+    trigger: CompactionTrigger,
+    trigger_occupancy_tokens: Option<u64>,
 ) -> Result<(), CoreError> {
     let item_id = id("compaction");
     let mut before = None;
@@ -101,6 +103,8 @@ pub(crate) async fn compact(
                 .push(crate::telemetry::Compaction {
                     turn_id: turn_id.into(),
                     item_id,
+                    trigger,
+                    trigger_occupancy_tokens,
                     before,
                     after,
                     before_messages,
@@ -173,6 +177,8 @@ pub(crate) async fn compact(
                     .push(crate::telemetry::Compaction {
                         turn_id: turn_id.into(),
                         item_id: item_id.clone(),
+                        trigger,
+                        trigger_occupancy_tokens,
                         before,
                         after,
                         before_messages,
@@ -203,6 +209,8 @@ pub(crate) async fn compact(
                     .push(crate::telemetry::Compaction {
                         turn_id: turn_id.into(),
                         item_id: item_id.clone(),
+                        trigger,
+                        trigger_occupancy_tokens,
                         before,
                         after,
                         before_messages,
@@ -432,7 +440,7 @@ async fn summarize(
             let mut stream = crate::telemetry::stream(
                 shared,
                 Some(turn_id),
-                "compaction",
+                RequestPurpose::Compaction,
                 prepared,
                 estimate,
                 cancel,

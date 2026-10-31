@@ -81,6 +81,6 @@ async fn private_completion_does_not_wait_for_the_telemetry_writer() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(records.len(), 1, "close must wait for the telemetry commit");
-    assert_eq!(records[0].purpose, "btw");
+    assert_eq!(records[0].purpose, RequestPurpose::Btw);
     assert!(!stored.contains("private answer"));
 }

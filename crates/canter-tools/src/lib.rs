@@ -1628,7 +1628,7 @@ impl Tools {
                 break;
             }
             if line_number >= end {
-                output_size.truncated = true;
+                output_size.truncated = args.line_count >= MAX_READ_LINES;
                 text.push_str(&format!(
                     "\nMore content: read with startLine={line_number}."
                 ));

@@ -634,7 +634,7 @@ async fn handoff_appends_instructions_without_changing_history_and_charges_sourc
         .unwrap();
         let record: ModelRequestTelemetry =
             serde_json::from_str(private.lines().last().unwrap()).unwrap();
-        assert_eq!(record.purpose, "handoff");
+        assert_eq!(record.purpose, RequestPurpose::Handoff);
         assert!(record.turn_id.is_none());
         assert_eq!(
             token_usage.request.as_ref().unwrap().request_id.as_deref(),
