@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-31 第四十一次装 main `9644c7f`（`canter --version` 显示 `canter 0.1.0 · 9644c7f`；比上一版多 P2-169：会话 `events.jsonl` 多 `telemetry.modelRequest` / `compaction` / `toolResult` / `approval` 四种记录，btw、handoff 的记在同目录 `private-telemetry.jsonl`；`config.json` 的 `telemetry` 默认 true，false 时新记录都不写，用量和花费照旧；`canter --tag key=value` 给会话打标签，派生会话继承）。发给模型的请求不变，缓存不冷。终端和服务端都改了：用户 `canter serve --replace` 后重开终端；没重启前新终端带 `--tag` 会报错提示重启。
+- 退回上一版 `f6b268a`：`cp -p ~/.canter/canter-f6b268a ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版读到 `telemetry.*` 事件按不认识的跳过（交叉审查确认），不读 `private-telemetry.jsonl`；带标签的会话旧版能不能照常打开没测过。
 - 10-31 第四十次装 main `f6b268a`（`canter --version` 显示 `canter 0.1.0 · f6b268a`；比上一版多 P2-167：`~/.canter/rules.json` 可选 `fileRules`，每条 `{"pattern": …, "decision": "forbidden" | "prompt"}`，管模型 read / write / edit，forbidden 三档都拒，prompt 询问档单次问、Allow all 放行；默认没有条目，行为不变；`/permissions` 多一组 File rules；`rules` 可省略。另外跳过了一项偶发失败的 LSP 测试）。工具列表和提示词没变，缓存不冷。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。用户 10-31 说暂不试用。
 - 退回上一版 `6114a33`：`cp -p ~/.canter/canter-6114a33 ~/.cargo/bin/canter`，再 `canter serve --replace`。`rules.json` 里加过 `fileRules` 的，退回前先删掉这一段：旧版会把整个文件当坏文件，模型 shell 每条都问，旧版文件工具也没有这层保护。
 - 10-30 第三十九次装 main `6114a33`（`canter --version` 显示 `canter 0.1.0 · 6114a33`；比上一版多 P2-163～P2-166 沙箱：模型的 shell 命令套 macOS Seatbelt 墙，只能写工作目录、新增目录、会话临时目录和 `~/Library/Caches/canter`，读不了 `~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.canter`，`.git` 配置和 hooks、真实 `~/.cargo`、`~/.npm` 只读；Allow all 联网、另两档断网；询问执行档墙内命令免问，联网和写墙外由模型申请、单条批准；read / write / edit 守同一条边界；状态栏 `Sandbox on/off`、`/sandbox`、`!`/MCP/`web_fetch` 卡片标 `not sandboxed`。`config.json` 没写 `sandbox`，即缺省开）。shell 工具说明和提示词变了，已在用的会话缓存冷一次。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
