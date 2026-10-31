@@ -127,17 +127,7 @@ Task for the new session:
         tokio::spawn(async move {
             let result = answer(&shared, request, handoff, &run_cancel, &sender).await;
             let mut state = shared.state.lock().await;
-            // A failed or usage-free private request has no normal usage batch.
-            let result = state
-                .journal
-                .append(Vec::new())
-                .await
-                .map(|_| ())
-                .and(result);
             state.btw = None;
-            // Provider errors belong only to the private answer. Close checks
-            // journal failures separately, after this worker has finished.
-            let _ = done.send(Some(Ok(state.journal.snapshot.last_event_seq)));
             let event = match result {
                 Err(error) => BtwEvent::Error {
                     message: error.message,
@@ -146,6 +136,12 @@ Task for the new session:
                 Ok(()) => BtwEvent::Completed,
             };
             let _ = sender.send(event);
+            // End the private stream before telemetry I/O, so a final answer
+            // does not keep the client's "btw in progress" guard active.
+            // Hold the state lock until the write finishes: new work and close
+            // cannot release the writer early. Close reports journal failures.
+            let _ = state.journal.flush_private_telemetry().await;
+            let _ = done.send(Some(Ok(state.journal.snapshot.last_event_seq)));
         });
         Ok(BtwStream { receiver, cancel })
     }

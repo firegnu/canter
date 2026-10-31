@@ -3658,12 +3658,12 @@
           "type": "boolean"
         },
         "reasoningEffort": {
-          "$ref": "#/$defs/ReasoningEffort"
+          "$ref": "#/$defs/ReasoningEffort",
+          "default": "high"
         }
       },
       "required": [
         "model",
-        "reasoningEffort",
         "approvalPolicy",
         "planMode"
       ],

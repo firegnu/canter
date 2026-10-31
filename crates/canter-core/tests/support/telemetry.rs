@@ -283,61 +283,82 @@ async fn settings_are_captured_again_after_a_session_update() {
 
 #[tokio::test]
 async fn private_requests_are_recorded_without_saving_their_content() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
-    let reply = || {
-        vec![
-            ModelEvent::TextDelta {
-                item_id: "a".into(),
-                delta: "private-result".into(),
+    for enabled in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+        let reply = || {
+            vec![
+                ModelEvent::TextDelta {
+                    item_id: "a".into(),
+                    delta: "private-result".into(),
+                },
+                ModelEvent::Finished(FinishReason::Stop),
+            ]
+        };
+        let model = ScriptModel::new(vec![
+            vec![ModelEvent::Finished(FinishReason::Stop)],
+            reply(),
+            reply(),
+        ]);
+        let (session, _) = Session::create(
+            store.clone(),
+            "private".into(),
+            settings(temp.path()),
+            RuntimeContext::default(),
+            model,
+            CoreOptions {
+                telemetry: enabled,
+                ..Default::default()
             },
-            ModelEvent::Finished(FinishReason::Stop),
-        ]
-    };
-    let model = ScriptModel::new(vec![
-        vec![ModelEvent::Finished(FinishReason::Stop)],
-        reply(),
-        reply(),
-    ]);
-    let (session, _) = Session::create(
-        store.clone(),
-        "private".into(),
-        settings(temp.path()),
-        RuntimeContext::default(),
-        model,
-        CoreOptions::default(),
-    )
-    .await
-    .unwrap();
-    let mut subscription = session.subscribe(0).await.unwrap();
-    session.input(input("context")).await.unwrap();
-    finished(&mut subscription).await;
-    let mut stream = session.btw("private-question".into()).await.unwrap();
-    while let Some(event) = stream.recv().await {
-        if matches!(event, BtwEvent::Completed) {
-            break;
+        )
+        .await
+        .unwrap();
+        let mut subscription = session.subscribe(0).await.unwrap();
+        session.input(input("context")).await.unwrap();
+        finished(&mut subscription).await;
+        let before = session.snapshot().await.session;
+        let before_list = store.list().unwrap();
+        let before_events = store.events_after("private", 0).unwrap();
+        let mut stream = session.btw("private-question".into()).await.unwrap();
+        while let Some(event) = stream.recv().await {
+            if matches!(event, BtwEvent::Completed) {
+                break;
+            }
         }
-    }
-    let mut stream = session.handoff(None).await.unwrap();
-    while let Some(event) = stream.recv().await {
-        if matches!(event, BtwEvent::Completed) {
-            break;
+        let mut stream = session.handoff(None).await.unwrap();
+        while let Some(event) = stream.recv().await {
+            if matches!(event, BtwEvent::Completed) {
+                break;
+            }
         }
+        assert_eq!(session.snapshot().await.session, before);
+        assert_eq!(store.list().unwrap(), before_list);
+        assert_eq!(store.events_after("private", 0).unwrap(), before_events);
+        let events = serde_json::to_value(store.events_after("private", 0).unwrap()).unwrap();
+        assert!(!events.to_string().contains("private-question"));
+        assert!(!events.to_string().contains("private-result"));
+        session.close().await.unwrap();
+        let path = temp.path().join("sessions/private/private-telemetry.jsonl");
+        if !enabled {
+            assert!(!path.exists());
+            continue;
+        }
+        let stored = std::fs::read_to_string(path).unwrap();
+        let records: Vec<ModelRequestTelemetry> = stored
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records.len(), 2);
+        for purpose in ["btw", "handoff"] {
+            assert!(
+                records
+                    .iter()
+                    .any(|record| record.purpose == purpose && record.turn_id.is_none())
+            );
+        }
+        assert!(!stored.contains("private-question"));
+        assert!(!stored.contains("private-result"));
     }
-    let events = serde_json::to_value(store.events_after("private", 0).unwrap()).unwrap();
-    for purpose in ["btw", "handoff"] {
-        assert!(
-            events
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|e| e["type"] == "telemetry.modelRequest"
-                    && e["purpose"] == purpose
-                    && e.get("turnId").is_none())
-        );
-    }
-    assert!(!events.to_string().contains("private-question"));
-    assert!(!events.to_string().contains("private-result"));
 }
 
 #[tokio::test]

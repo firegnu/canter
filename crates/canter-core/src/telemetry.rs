@@ -12,7 +12,13 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub(crate) type Pending = Arc<Mutex<Vec<EventPayload>>>;
+pub(crate) type Pending = Arc<Mutex<Records>>;
+
+#[derive(Default)]
+pub(crate) struct Records {
+    pub events: Vec<EventPayload>,
+    pub private_requests: Vec<ModelRequestTelemetry>,
+}
 
 pub(crate) struct Compaction {
     pub turn_id: String,
@@ -181,10 +187,14 @@ impl Drop for TrackedStream<'_> {
             if !self.ended {
                 record.duration_ms = millis(start);
             }
-            pending
-                .lock()
-                .expect("telemetry queue")
-                .push(EventPayload::TelemetryModelRequest { record });
+            let mut pending = pending.lock().expect("telemetry queue");
+            if record.turn_id.is_none() {
+                pending.private_requests.push(record);
+            } else {
+                pending
+                    .events
+                    .push(EventPayload::TelemetryModelRequest { record });
+            }
         }
     }
 }

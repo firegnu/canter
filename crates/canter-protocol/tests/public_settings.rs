@@ -2,6 +2,15 @@ use canter_protocol::*;
 use serde_json::json;
 
 #[test]
+fn request_settings_accept_the_same_legacy_effort_default_as_session_settings() {
+    let settings: RequestSettings = serde_json::from_value(json!({
+        "model":"legacy-model", "approvalPolicy":"alwaysAsk", "planMode":false
+    }))
+    .unwrap();
+    assert_eq!(settings.reasoning_effort, ReasoningEffort::High);
+}
+
+#[test]
 fn session_tags_survive_creation_and_public_settings_roundtrip() {
     let tags = json!({"task":"P2-169", "dispatch":"example=1"});
     let params: SessionCreateParams = serde_json::from_value(json!({

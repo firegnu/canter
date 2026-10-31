@@ -31,6 +31,8 @@ impl ContextEstimate {
 #[serde(rename_all = "camelCase")]
 pub struct RequestSettings {
     pub model: String,
+    #[serde(default)]
+    #[ts(optional = nullable)]
     pub reasoning_effort: ReasoningEffort,
     pub approval_policy: PermissionMode,
     pub plan_mode: bool,

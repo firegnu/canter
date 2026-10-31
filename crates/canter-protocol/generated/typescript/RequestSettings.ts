@@ -2,4 +2,4 @@
 import type { PermissionMode } from "./PermissionMode";
 import type { ReasoningEffort } from "./ReasoningEffort";
 
-export type RequestSettings = { model: string, reasoningEffort: ReasoningEffort, approvalPolicy: PermissionMode, planMode: boolean, };
+export type RequestSettings = { model: string, reasoningEffort?: ReasoningEffort, approvalPolicy: PermissionMode, planMode: boolean, };

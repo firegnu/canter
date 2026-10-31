@@ -413,12 +413,20 @@ async fn compression_and_private_answers_share_retries_and_discard_partial_text(
             }
             assert!(retry);
             assert_eq!(text, "complete summary");
+            session.snapshot().await; // Wait for the private metadata commit, without changing state.
             let after = store.events_after("retry", 0).unwrap();
-            assert_eq!(&after[..before.len()], &before);
-            assert_eq!(after.len(), before.len() + 1);
-            assert!(matches!(&after[before.len()].payload,
-                EventPayload::TelemetryModelRequest { record }
-                if record.purpose == operation && record.turn_id.is_none()));
+            assert_eq!(after, before);
+            let private =
+                std::fs::read_to_string(root.path().join("sessions/retry/private-telemetry.jsonl"))
+                    .unwrap();
+            let records: Vec<ModelRequestTelemetry> = private
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].purpose, operation);
+            assert!(records[0].turn_id.is_none());
+            assert!(!private.contains("complete summary"));
             assert!(
                 !serde_json::to_string(&after)
                     .unwrap()

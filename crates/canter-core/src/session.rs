@@ -293,10 +293,8 @@ impl State {
             self.plan_tool_calls = 0;
         }
         if let Some(pending) = &self.journal.telemetry {
-            pending
-                .lock()
-                .expect("telemetry queue")
-                .push(EventPayload::TelemetryToolResult {
+            pending.lock().expect("telemetry queue").events.push(
+                EventPayload::TelemetryToolResult {
                     turn_id: self
                         .active
                         .as_ref()
@@ -311,7 +309,8 @@ impl State {
                     truncated: output_size.truncated,
                     original_tokens: output_size.original_bytes.map(|bytes| bytes.div_ceil(3)),
                     source_file_bytes: output_size.source_file_bytes,
-                });
+                },
+            );
         }
         self.message(Message::ToolResult {
             tool_call_id: call.id.clone(),

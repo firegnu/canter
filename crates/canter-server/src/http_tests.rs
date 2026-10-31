@@ -619,13 +619,21 @@ async fn handoff_appends_instructions_without_changing_history_and_charges_sourc
             .store
             .events_after(&source, before.last_event_seq)
             .unwrap();
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 1);
         let EventPayload::SessionBtwUsage { token_usage } = &events[0].payload else {
             panic!("private usage");
         };
-        let EventPayload::TelemetryModelRequest { record } = &events[1].payload else {
-            panic!("private request telemetry");
-        };
+        let after = test.wait_status(&source, SessionStatus::Idle).await;
+        let private = std::fs::read_to_string(
+            test.root
+                .path()
+                .join("state/sessions")
+                .join(&source)
+                .join("private-telemetry.jsonl"),
+        )
+        .unwrap();
+        let record: ModelRequestTelemetry =
+            serde_json::from_str(private.lines().last().unwrap()).unwrap();
         assert_eq!(record.purpose, "handoff");
         assert!(record.turn_id.is_none());
         assert_eq!(
@@ -637,7 +645,7 @@ async fn handoff_appends_instructions_without_changing_history_and_charges_sourc
                 .unwrap()
                 .contains("private **btw answer**")
         );
-        let after = test.wait_status(&source, SessionStatus::Idle).await;
+        assert!(!private.contains("private **btw answer**"));
         assert_eq!(after.turns, before.turns);
         let before_usage = before.token_usage.unwrap();
         let after_usage = after.token_usage.unwrap();

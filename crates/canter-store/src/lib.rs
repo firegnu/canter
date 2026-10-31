@@ -7,8 +7,8 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 use canter_protocol::{
-    Event, EventPayload, ReduceError, SessionSettings, SessionSnapshot, SessionSummary,
-    apply_event_mut, validate_event,
+    Event, EventPayload, ModelRequestTelemetry, ReduceError, SessionSettings, SessionSnapshot,
+    SessionSummary, apply_event_mut, validate_event,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -88,6 +88,8 @@ impl Store {
         let mut writer = SessionWriter {
             file,
             model_history,
+            session_dir: destination.clone(),
+            private_telemetry: None,
             snapshot: SessionSnapshot::empty(id),
             write_failed: false,
         };
@@ -128,6 +130,8 @@ impl Store {
         Ok(SessionWriter {
             file,
             model_history,
+            session_dir: dir,
+            private_telemetry: None,
             snapshot,
             write_failed: false,
         })
@@ -342,11 +346,57 @@ fn read_jsonl<T: DeserializeOwned>(
 pub struct SessionWriter {
     file: File,
     model_history: File,
+    session_dir: PathBuf,
+    private_telemetry: Option<File>,
     snapshot: SessionSnapshot,
     write_failed: bool,
 }
 
 impl SessionWriter {
+    /// Private request metadata is durable but never advances the public event
+    /// cursor or session activity time. The events file lock also owns this file.
+    pub fn append_private_telemetry(
+        &mut self,
+        records: &[ModelRequestTelemetry],
+    ) -> Result<(), StoreError> {
+        if self.write_failed {
+            return Err(StoreError::WriteFailed);
+        }
+        if records.is_empty() {
+            return Ok(());
+        }
+        let result = (|| {
+            let opened = self.private_telemetry.is_none();
+            if self.private_telemetry.is_none() {
+                let file = OpenOptions::new()
+                    .read(true)
+                    .append(true)
+                    .create(true)
+                    .mode(0o600)
+                    .open(self.session_dir.join("private-telemetry.jsonl"))?;
+                let committed = read_jsonl(&file, |_: ModelRequestTelemetry| Ok(()))?;
+                truncate_tail(&file, committed)?;
+                self.private_telemetry = Some(file);
+            }
+            let mut lines = Vec::new();
+            for record in records {
+                serde_json::to_writer(&mut lines, record)?;
+                lines.push(b'\n');
+            }
+            let file = self.private_telemetry.as_mut().expect("opened above");
+            file.write_all(&lines)?;
+            file.sync_data()?;
+            if opened {
+                File::open(&self.session_dir)?.sync_all()?;
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            self.write_failed = true;
+        }
+        result
+    }
+
     /// Append one model-layer record, without producing a public event.
     pub fn append_model_history<T: Serialize>(&mut self, entry: &T) -> Result<(), StoreError> {
         if self.write_failed {

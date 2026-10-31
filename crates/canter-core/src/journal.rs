@@ -8,6 +8,10 @@ use std::{
 };
 use tokio::sync::{broadcast, watch};
 
+#[cfg(test)]
+#[path = "private_telemetry_tests.rs"]
+mod private_telemetry_tests;
+
 pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -117,7 +121,7 @@ impl Journal {
             }
             payloads.extend(approvals);
             payloads.extend(std::mem::take(
-                &mut *pending.lock().expect("telemetry queue"),
+                &mut pending.lock().expect("telemetry queue").events,
             ));
         }
         let compactions = std::mem::take(&mut self.compactions);
@@ -159,6 +163,37 @@ impl Journal {
             }
         }
     }
+    /// Private metadata never enters the public reducer, broadcaster or cursor.
+    pub async fn flush_private_telemetry(&mut self) -> Result<(), CoreError> {
+        if self.failed {
+            return Err(CoreError::internal());
+        }
+        let Some(pending) = &self.telemetry else {
+            return Ok(());
+        };
+        let records =
+            std::mem::take(&mut pending.lock().expect("telemetry queue").private_requests);
+        if records.is_empty() {
+            return Ok(());
+        }
+        let writer = self.writer.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            writer
+                .lock()
+                .map_err(|_| CoreError::internal())?
+                .as_mut()
+                .ok_or_else(CoreError::internal)?
+                .append_private_telemetry(&records)
+                .map_err(CoreError::from)
+        })
+        .await
+        .unwrap_or_else(|_| Err(CoreError::internal()));
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
     pub async fn record(&mut self, entry: HistoryEntry) -> Result<(), CoreError> {
         if self.failed {
             return Err(CoreError::internal());
