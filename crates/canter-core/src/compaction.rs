@@ -54,7 +54,16 @@ const PROMPT: &str = r#"Summarize the conversation in <transcript> below. The su
 
 Use exactly these headings, in this order:"#;
 
+const PREFIX_SOURCES: &str = r#"Source attribution:
+- Automatically inserted plan mode notices ([Plan mode enabled/disabled]), <skill> contents, diagnostics ([LSP diagnostics update]), background command/event notices, automatically reread files ([Automatically reread after compaction: ...]), goal notices ([Goal], [Goal resumed/cleared/budget limit]), additional directories notices, and tool images are internal context, not the user's own words, even when they use the user role. Skill contents can also be embedded in a real user message: only the surrounding user text and the skill invocation belong to the user.
+- [Context summary] is an earlier model summary, and its [Current plan] attachment is tool state. Preserve useful facts with their sources; do not quote these as new user instructions.
+- Under "User's words", quote only what the user actually said. Exclude this summarization request and the internal material listed above."#;
+
 const FOOTER: &str = "\n</transcript>\n\nEnd of transcript. Write the summary now with the headings above, and output only the summary.";
+
+const PREFIX_PROMPT: &str = r#"Summarize the conversation above. The summary will replace those turns in this session: afterwards you continue the work with the same instructions, the user's most recent messages, and this summary, and nothing else from before. A previous [Context summary], when present, covers earlier turns; merge it in, keeping its facts unless the later conversation supersedes them. Under "User's words", favor earlier messages: the most recent ones are kept word for word next to the summary.
+
+Use exactly these headings, in this order:"#;
 
 /// Past this context occupancy the conversation compacts automatically: the
 /// window minus the output limit and [`RESERVE`], or `auto_compact_tokens`
@@ -80,6 +89,7 @@ pub(crate) async fn compact(
 ) -> Result<(), CoreError> {
     let item_id = id("compaction");
     let mut before = None;
+    let mut method = "transcript";
     shared
         .state
         .lock()
@@ -94,7 +104,7 @@ pub(crate) async fn compact(
             },
         }])
         .await?;
-    let result = summarize(shared, turn_id, cancel, &mut before).await;
+    let result = summarize(shared, turn_id, cancel, &mut before, &mut method).await;
     let files = if result.is_ok() && !cancel.is_cancelled() {
         crate::restore_files::collect(shared, cancel).await
     } else {
@@ -112,6 +122,7 @@ pub(crate) async fn compact(
                     turn_id: turn_id.into(),
                     item_id,
                     trigger,
+                    method,
                     trigger_occupancy_tokens,
                     before,
                     after,
@@ -188,6 +199,7 @@ pub(crate) async fn compact(
                         turn_id: turn_id.into(),
                         item_id: item_id.clone(),
                         trigger,
+                        method,
                         trigger_occupancy_tokens,
                         before,
                         after,
@@ -221,6 +233,7 @@ pub(crate) async fn compact(
                         turn_id: turn_id.into(),
                         item_id: item_id.clone(),
                         trigger,
+                        method,
                         trigger_occupancy_tokens,
                         before,
                         after,
@@ -251,8 +264,10 @@ async fn summarize(
     turn_id: &str,
     cancel: &CancellationToken,
     before: &mut Option<(Request, usize)>,
+    method: &mut &'static str,
 ) -> Result<(String, Vec<Message>, usize), CoreError> {
     let (
+        mut prefix_request,
         prefix,
         history,
         summary_index,
@@ -273,6 +288,7 @@ async fn summarize(
             ));
         }
         (
+            context::request(&state, shared.options.max_output_tokens),
             state.prefix.clone(),
             state.history.clone(),
             state.summary_index,
@@ -290,6 +306,19 @@ async fn summarize(
         )
     };
     let output_limit = shared.options.max_output_tokens.min(8192);
+    prefix_request.options = RequestOptions {
+        max_retries: None,
+        thinking: Some(false),
+        reasoning_effort: None,
+        max_output_tokens: Some(output_limit),
+    };
+    prefix_request.messages.push(Message::User {
+        text: format!("{PREFIX_PROMPT}\n\n{SECTIONS}\n\n{RULES}\n\n{PREFIX_SOURCES}\n\nWrite the summary now with the headings above, and output only the summary."),
+    });
+    let mut prefix_request = (context::request_tokens(&prefix_request)
+        .saturating_add(u64::from(output_limit))
+        <= shared.options.context_window)
+        .then_some(prefix_request);
     let mut transcript = String::new();
     let mut images = Vec::new();
     for (index, message) in history.iter().enumerate() {
@@ -364,7 +393,7 @@ async fn summarize(
     let mut summary = String::new();
     // Summarize bounded chunks, folding each into the next; no old messages are
     // silently discarded just to make the summarization request fit.
-    loop {
+    'chunks: loop {
         if cancel.is_cancelled() {
             return Err(CoreError::new(
                 ErrorCode::Conflict,
@@ -378,7 +407,9 @@ async fn summarize(
             ));
         }
         header.push_str("<transcript>\n");
-        let mut request = Request {
+        let use_prefix = prefix_request.is_some();
+        *method = if use_prefix { "prefix" } else { "transcript" };
+        let mut request = prefix_request.take().unwrap_or_else(|| Request {
             model: model.clone(),
             messages: prefix.clone(),
             tools: Vec::new(),
@@ -388,49 +419,52 @@ async fn summarize(
                 reasoning_effort: None,
                 max_output_tokens: Some(output_limit),
             },
-        };
-        if !images.is_empty() {
-            request.messages.push(Message::UserParts {
-                content: images.clone(),
-            });
-        }
-        request.messages.push(Message::User {
-            text: format!("{header}{FOOTER}"),
         });
-        let budget = shared
-            .options
-            .context_window
-            .saturating_sub(u64::from(output_limit))
-            .saturating_sub(RESERVE)
-            .saturating_sub(context::request_tokens(&request));
-        if budget < 256 {
-            return Err(CoreError::new(
-                ErrorCode::InvalidRequest,
-                "system context leaves no room for compaction",
-            ));
-        }
-        // JSON escaping can double transcript size; iteratively fit the actual
-        // encoded request estimate rather than assuming the plain text length.
-        let mut end = remaining.len().min(budget.saturating_mul(3) as usize);
-        loop {
-            while !remaining.is_char_boundary(end) {
-                end -= 1;
+        let mut end = remaining.len();
+        if !use_prefix {
+            if !images.is_empty() {
+                request.messages.push(Message::UserParts {
+                    content: images.clone(),
+                });
             }
-            request.messages.pop();
             request.messages.push(Message::User {
-                text: format!("{header}{}{FOOTER}", &remaining[..end]),
+                text: format!("{header}{FOOTER}"),
             });
-            if context::request_tokens(&request) + u64::from(output_limit) + RESERVE
-                <= shared.options.context_window
-            {
-                break;
-            }
-            end /= 2;
-            if end == 0 {
+            let budget = shared
+                .options
+                .context_window
+                .saturating_sub(u64::from(output_limit))
+                .saturating_sub(RESERVE)
+                .saturating_sub(context::request_tokens(&request));
+            if budget < 256 {
                 return Err(CoreError::new(
                     ErrorCode::InvalidRequest,
-                    "compaction context does not fit",
+                    "system context leaves no room for compaction",
                 ));
+            }
+            // JSON escaping can double transcript size; iteratively fit the actual
+            // encoded request estimate rather than assuming the plain text length.
+            end = remaining.len().min(budget.saturating_mul(3) as usize);
+            loop {
+                while !remaining.is_char_boundary(end) {
+                    end -= 1;
+                }
+                request.messages.pop();
+                request.messages.push(Message::User {
+                    text: format!("{header}{}{FOOTER}", &remaining[..end]),
+                });
+                if context::request_tokens(&request) + u64::from(output_limit) + RESERVE
+                    <= shared.options.context_window
+                {
+                    break;
+                }
+                end /= 2;
+                if end == 0 {
+                    return Err(CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "compaction context does not fit",
+                    ));
+                }
             }
         }
         let request_len = request.messages.len();
@@ -583,6 +617,9 @@ async fn summarize(
                 continue;
             }
             if too_large {
+                if use_prefix {
+                    continue 'chunks;
+                }
                 confirmed_summary.clear();
                 request.messages.truncate(request_len);
 
@@ -606,6 +643,9 @@ async fn summarize(
             }
             let next_summary = format!("{confirmed_summary}{}", response.text());
             if !finished || next_summary.trim().is_empty() {
+                if use_prefix {
+                    continue 'chunks;
+                }
                 return Err(CoreError::new(
                     ErrorCode::Internal,
                     "model did not produce a complete compaction summary",

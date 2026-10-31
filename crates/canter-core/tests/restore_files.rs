@@ -520,16 +520,15 @@ async fn reopen_replays_the_exact_restored_context_and_next_compaction_labels_it
     }));
     fixture.compact().await;
     let messages = fixture.messages();
-    let transcript = messages
+    let restored = messages
         .iter()
         .filter_map(|m| m["content"].as_str())
-        .find(|s| s.contains("<transcript>"))
+        .find(|s| s.starts_with("[Automatically reread after compaction:"))
         .unwrap();
-    assert!(
-        transcript.contains("Tool file restoration: [Automatically reread after compaction:"),
-        "{transcript}"
-    );
-    assert!(!transcript.contains("User: [Automatically reread after compaction:"));
+    assert!(restored.contains("1: ORIGINAL_FILE_TEXT"));
+    let prompt = messages.last().unwrap()["content"].as_str().unwrap();
+    assert!(prompt.contains("automatically reread files ([Automatically reread after compaction:"));
+    assert!(prompt.contains("not the user's own words"));
     fixture.close().await;
 }
 

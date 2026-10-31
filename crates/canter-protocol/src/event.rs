@@ -30,6 +30,10 @@ pub enum EventPayload {
         #[serde(default)]
         #[ts(optional = nullable)]
         trigger: crate::CompactionTrigger,
+        /// Summary request shape: `prefix` or `transcript`; absent in older events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        method: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional, type = "number")]
         trigger_occupancy_tokens: Option<u64>,

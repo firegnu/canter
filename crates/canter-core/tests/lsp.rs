@@ -596,11 +596,15 @@ async fn compaction_labels_late_diagnostics_as_tools_and_does_not_replay_them() 
     session.close().await.unwrap();
     service.shutdown().await;
     server.stop().await;
-    assert!(
-        requests[3]
-            .to_string()
-            .contains("Tool diagnostics: [LSP diagnostics update]")
-    );
+    let messages = requests[3]["messages"].as_array().unwrap();
+    assert!(messages.iter().any(|m| {
+        m["content"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("[LSP diagnostics update]"))
+    }));
+    let prompt = messages.last().unwrap()["content"].as_str().unwrap();
+    assert!(prompt.contains("diagnostics ([LSP diagnostics update])"));
+    assert!(prompt.contains("not the user's own words"));
     let compact = history.iter().find(|e| e["type"] == "compaction").unwrap();
     assert!(!compact["user_messages"].to_string().contains("LSP"));
     assert!(!requests[4].to_string().contains("[LSP diagnostics update]"));

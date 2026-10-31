@@ -78,3 +78,20 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-10-31，canter/dev-compact-cache。
+
+- 做了什么：压缩复用 `context::request` 的模型、系统前缀、工具定义和完整历史，只在尾部加九节总结说明；思考仍关、输出上限仍为 `min(max_output_tokens, 8192)`。末尾说明区分计划模式、技能（含嵌在真实输入里的技能全文）、诊断、后台事件、带回文件、目标、目录、工具图片和旧摘要/清单的来源。完整请求加输出预留超窗、服务商报上下文超长、返回工具调用或没有完整摘要时，进入原拼稿分段折叠；工具不执行，废弃的摘要不混入回退请求。压缩后的存储、用户原话、计划/技能/目标/目录补回、文件恢复沿用原代码。
+- 遥测：`telemetry.compaction.method` 和 stats 的压缩记录增加可选字符串 `prefix` / `transcript`，记录最后采用的方式；旧记录缺省未知。`canter stats` 文本报告显示 method，JSON 同时提供字段；所有请求仍为 `purpose=compaction`，缓存用量照旧。已更新 DESIGN 和生成的协议产物，不改交互界面。
+- 验证：新增 `compaction_cache.rs` 六条本机假服务端测试，逐条 RED → GREEN。RED 分别是普通请求的工具定义丢失、超窗历史没有分段、上下文拒绝后仍切半而非从完整拼稿开始、工具调用使压缩失败、缺少内部来源说明、遥测缺少 method。压缩后历史和用户原话由新测试及既有回归检查，P2-142 文件恢复、重开、计划模式和技能补回继续使用原回归；这些保行为部分没有人为制造失败。旧测试中「工具定义为空」「历史带 User: 标签」的断言改为原消息加来源说明，失败场景明确让新增的回退请求也失败；未删除测试、放宽失败条件或缩短超时。
+- 最终通过的检查（均在本任务编译目录、前台执行完毕）：
+  - `cargo nextest run -p canter-core --no-fail-fast -E 'test(compact) or test(handoff) or test(telemetry) or test(summary) or test(compression) or binary(compaction_cache) or binary(restore_files) or binary(stats)'`：60 项通过。
+  - `cargo nextest run -p canter --test stats`：3 项通过，含真实 CLI 的 method 文本和 JSON 输出。
+  - `cargo nextest run -p canter-protocol -E 'test(exports_schema_and_typescript_and_matches_checked_in_artifacts) or test(telemetry_enums_accept_unknown_values_and_missing_new_fields)'`：2 项通过。
+  - `cargo nextest run -p canter-core --test telemetry_recording`：1 项通过，原有手动性能比较仍忽略。
+  - `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过；协议已用 `cargo run -p canter-protocol --bin export_protocol` 重新生成。
+- 拿主意的地方：按任务授权选择 method 字段名；新路径只以完整请求估算加原输出上限判断是否超窗，回退的 16384 余量、分段缩小和重试机制保留。参考了只读 `/tmp/codex-ro`（确认标签 `rust-v0.163.0`）的 `codex-rs/core/src/compact.rs::run_compact_task_inner_impl`，没有搬代码。核对本地 wire 编码不会因关闭思考删改历史 reasoning_content；真实缓存命中仍以主控安排的试跑为准。没有需要主控另定的事项。
+- 没做的事：真实模型调用 0 次；未读改用户真实状态，测试使用临时 HOME/状态目录和本机临时端口。未跑全套、未改思考档/普通请求/压缩线/九节规则、未合并/推送/安装；交叉审查、合并和用户试跑交主控。
+- 踩过的坑：长输出通过假服务端逐 7 字节回放时，在到达压缩之前就超时；改成从隔离存盘载入长历史后，再由假服务端观察压缩请求。窗口夹具最初没有同时调低普通输出上限，先被配置校验拒绝，修正后才取得功能缺失导致的有效 RED。已有测试用「无工具定义」识别压缩及断言转写格式，与新路径冲突；已改成校验新请求形状，并保留压缩后的恢复和失败行为断言。
