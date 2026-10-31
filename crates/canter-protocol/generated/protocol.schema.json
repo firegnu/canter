@@ -2987,6 +2987,12 @@
             "id": {
               "type": "string"
             },
+            "restoredFiles": {
+              "items": {
+                "$ref": "#/$defs/RestoredFile"
+              },
+              "type": "array"
+            },
             "summary": {
               "type": "string"
             },
@@ -3839,6 +3845,26 @@
         "model",
         "approvalPolicy",
         "planMode"
+      ],
+      "type": "object"
+    },
+    "RestoredFile": {
+      "description": "A file automatically restored after compaction; absent lines means reference only.",
+      "properties": {
+        "lines": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
       ],
       "type": "object"
     },

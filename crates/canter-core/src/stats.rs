@@ -111,7 +111,7 @@ pub fn report(
                 if let Item::ModelRetry { id, .. } = item {
                     retries.insert(id.clone());
                 }
-                if let Item::ContextCompaction { id, summary } = item {
+                if let Item::ContextCompaction { id, summary, .. } = item {
                     let completed = matches!(event.payload, EventPayload::ItemCompleted { .. });
                     compacting = !completed;
                     let row = compactions.entry(id.clone()).or_default();

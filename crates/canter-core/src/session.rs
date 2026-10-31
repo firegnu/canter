@@ -56,6 +56,8 @@ pub(crate) struct State {
     pub prefix_segments: Option<Vec<crate::prompt::Segment>>,
     pub skills: Vec<Skill>,
     pub invoked_skills: Vec<crate::skill_invocation::Invocation>,
+    pub used_files: Vec<(String, String)>,
+    pub restored_file_notices: std::collections::BTreeSet<usize>,
     pub queued_skills: HashMap<String, Vec<crate::skill_invocation::Snapshot>>,
     pub tool_definitions: Vec<canter_model::ToolDefinition>,
     pub prefix_sections: Vec<ContextSection>,
@@ -139,6 +141,8 @@ impl State {
             prefix_segments: None,
             skills: Vec::new(),
             invoked_skills: Vec::new(),
+            used_files: Vec::new(),
+            restored_file_notices: Default::default(),
             queued_skills: HashMap::new(),
             tool_definitions: Vec::new(),
             prefix_sections: Vec::new(),
@@ -536,6 +540,7 @@ impl Session {
         let restored = crate::context::restore(entries.clone(), &mut state.rewind);
         state.prefix = restored.prefix;
         state.invoked_skills = restored.invoked_skills;
+        state.restored_file_notices = restored.restored_file_notices;
         state.prefix_segments = restored.segments;
         state.history = restored.history;
         state.lsp_delivery.notices = restored.diagnostic_notices;

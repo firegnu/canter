@@ -112,6 +112,9 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                     .ok_or_else(CoreError::internal)?;
                 let removed = state.history.split_off(messages);
                 state.lsp_delivery.notices.retain(|index| *index < messages);
+                state
+                    .restored_file_notices
+                    .retain(|index| *index < messages);
                 state.lsp_delivery.reset_baseline();
                 state.tool_images.clear();
                 state.user_messages.truncate(users);
@@ -1035,6 +1038,26 @@ async fn execute(
     }
     if output.outcome == ToolOutcome::Cancelled {
         cancel.cancel();
+    }
+    if let Item::FileRead {
+        path,
+        content_items,
+        status: ItemStatus::Completed,
+        ..
+    } = &output.item
+        && content_items.is_empty()
+    {
+        state.used_files.push((turn_id.into(), path.clone()));
+    }
+    if let Item::FileChange {
+        changes,
+        status: ItemStatus::Completed,
+        ..
+    } = &output.item
+    {
+        for change in changes {
+            state.used_files.push((turn_id.into(), change.path.clone()));
+        }
     }
     state
         .tool_result(

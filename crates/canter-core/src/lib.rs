@@ -11,6 +11,7 @@ mod lsp;
 mod plan_mode;
 mod prompt;
 mod response;
+mod restore_files;
 mod rewind;
 mod runner;
 mod session;

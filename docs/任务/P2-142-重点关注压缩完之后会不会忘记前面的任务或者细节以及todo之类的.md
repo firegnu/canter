@@ -93,3 +93,18 @@ Skills restored (corral-dispatch)
 - 10-29 主控为长程任务又过了一遍；用户：「整体退回也排到第三期，压缩好几次以后会不会走样这个要排到第二期。」并进本件：长任务会压缩不止一次，摘要的摘要可能越压越偏。本件要专门看连续压缩两三次以后，任务、细节、待办还在不在。
 - 要看的东西参考 P2-81「压缩后不丢东西」那一节：用户中途定的规矩、试过失败的办法、改过哪些文件和为什么、后台命令的编号和在等什么。
 - 10-31 两次试跑（见上）回答了这一条：连续压缩 15 次没走样，本件改做带回文件。
+
+## 完成记录
+
+- 做了什么：成功的 read/write/edit 按所属轮累计文件使用顺序，压缩成功后取最近最多 5 个可带回文件，从磁盘重读当前内容。按真实路径去重，目录内显示相对路径、目录外显示绝对路径；回退或撤回掉的轮不参与选择，重开后使用记录从空开始。删除、读不了、非文本、图片及已经整份放进系统提示词的全局和项目 AGENTS.md 排除。复用工具的路径检查、执行许可和当前文件规则，forbidden 完全排除，prompt 即使在 Allow all 下也只给名字，不发批准请求。普通模型 read 的行为及权限判断未改。
+- 模型历史和界面：新增私有 restored_file_notice，保存原样内容及自动重读说明、路径、行范围；重开后原样重放，连续压缩将这些记录标作工具信息，不加入用户原话。读取先暂存，摘要或读取阶段被打断时不提交恢复内容。压缩项目新增可省略的 restoredFiles，终端在卡片下逐文件显示 Read / Referenced file，更新了协议生成物和 DESIGN 第 13 条的扩展说明。自动读取不产生 FileRead 卡片，遥测仍只统计模型自己发起的 read。
+- 验证：新增 12 条核心集成测试和 1 条界面测试；功能缺失的 RED 已分别确认在恢复字段/新内容、write/edit 与最近顺序、单文件上限、超过 2,000 行但仍在 token 预算内的全文、prompt 引用、指令排除、路径显示、回退、连续压缩来源及卡片显示的断言处失败，再实现至 GREEN。负向的失败/打断、撤回窗口和遥测用现有行为做回归，没有人为制造 RED。全部用本机假模型 HTTP 服务、隔离 HOME 和临时会话状态，真实模型调用 0 次。
+- 已通过的相关检查（均使用本 worktree 的独立 CARGO_TARGET_DIR，前台等待结束）：
+  - `cargo nextest run -p canter-core --test restore_files --test skill_invocation --test retract --test stats --test session --test review -E 'binary(restore_files) | binary(skill_invocation) | binary(retract) | binary(stats) | test(compact) | test(rewind)'`：46 条通过。
+  - `cargo nextest run -p canter-tools --test files --test file_rules --test sandbox_files`：40 条通过。
+  - `cargo nextest run -p canter-protocol --test export --test compatibility --test reducer`：17 条通过。
+  - `cargo test -p canter-tui --test compaction`：4 条通过。
+  - `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过；协议生成物已重新生成并通过一致性测试。
+- 主控决定（10-31）：保留 5 个、单个 5,000 token、合计 50,000 token 三个上限。合计上限目前不可达仍保留，不造超限测试、不为测试另开小预算，只测 5 个接近单文件上限的文件都能带回。token 按最终发给模型的内容估算，包含自动重读说明和行号。已按此实现和验证，没有其它待主控决定的事。
+- 没做的事：未改摘要提示词、九个小节、压缩线或触发时机；未带回 shell、MCP、网页输出；未跑全套或真实模型试跑；未合并、推送、安装或重启用户服务。
+- 踩过的坑：直接复用普通 read 会受 2,000 行分页限制，空行较多的小文件仍会被截断，改为复用执行许可和文件执行器、单独做有界文本捕获与完整 UTF-8 校验，保持普通 read 不变。假模型只回 `[DONE]` 会触发既有断流重试并消费下一份响应，失败测试改用明确的不可重试 HTTP 错误。遥测的文件信号使用规范化绝对路径，修正了最初按相对路径写的测试预期；nextest 中没有独立 rewind 测试二进制，改为在相关二进制里按测试名筛选。

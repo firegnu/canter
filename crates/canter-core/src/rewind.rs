@@ -507,6 +507,9 @@ impl Session {
         if let Some((messages, users, skills)) = state.rewind.apply(&rewind) {
             let removed = state.history.split_off(messages);
             state.lsp_delivery.notices.retain(|index| *index < messages);
+            state
+                .restored_file_notices
+                .retain(|index| *index < messages);
             state.user_messages.truncate(users);
             state.invoked_skills.truncate(skills);
             state.measured_context = None;
