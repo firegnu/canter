@@ -80,7 +80,7 @@ pub(crate) struct State {
     plan_tool_calls: u8,
 }
 pub(crate) struct Active {
-    pub _configuration_lease: Option<Arc<dyn Send + Sync>>,
+    pub configuration_lease: Option<Arc<dyn Send + Sync>>,
     pub non_interactive: bool,
     pub approval_policy: Option<PermissionMode>,
     pub goal_continuation: bool,
@@ -1694,7 +1694,7 @@ impl Shared {
         let events = state.journal.append(payloads).await?;
         let (done, receiver) = watch::channel(None);
         state.active = Some(Active {
-            _configuration_lease: configuration_lease,
+            configuration_lease,
             non_interactive: params.non_interactive,
             approval_policy: params.approval_policy,
             goal_continuation: false,

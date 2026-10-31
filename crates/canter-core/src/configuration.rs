@@ -7,10 +7,11 @@ use canter_tools::{LocalExecutor, Tools};
 use futures_util::future::BoxFuture;
 use std::sync::Arc;
 
-/// A server configuration acquired atomically at the beginning of a turn.
-/// The lease keeps services alive until that turn has finished.
+/// A server configuration snapshot with the services currently ready to use.
+/// A complete snapshot's lease keeps services alive throughout a turn's work.
 pub struct Configuration {
-    pub revision: u64,
+    /// None means some services are still starting; a turn must acquire them before work.
+    pub revision: Option<u64>,
     pub options: CoreOptions,
     pub model: Arc<dyn Model>,
     pub mcp_tools: Vec<canter_tools::mcp::McpTool>,
@@ -19,6 +20,9 @@ pub struct Configuration {
 }
 
 pub trait ConfigurationSource: Send + Sync {
+    /// Latest options and currently ready services, without waiting for a handover.
+    fn snapshot(&self) -> Configuration;
+    /// Wait for a complete snapshot, keeping its services leased to the caller.
     fn acquire(&self) -> BoxFuture<'_, Result<Configuration, CoreError>>;
     fn options(&self) -> CoreOptions;
 }
@@ -37,9 +41,13 @@ pub(crate) struct Runtime {
 impl Session {
     /// Attach immediately after creating or opening the session, using the
     /// revision that supplied its initial options, model and tools.
-    pub fn set_configuration_source(&self, source: Arc<dyn ConfigurationSource>, revision: u64) {
+    pub fn set_configuration_source(
+        &self,
+        source: Arc<dyn ConfigurationSource>,
+        revision: Option<u64>,
+    ) {
         if self.shared.configuration.set(source).is_ok() {
-            Arc::make_mut(&mut self.shared.runtime.write().unwrap()).revision = Some(revision);
+            Arc::make_mut(&mut self.shared.runtime.write().unwrap()).revision = revision;
         }
     }
 
@@ -89,10 +97,59 @@ impl Shared {
         let Some(source) = self.configuration.get() else {
             return Ok(None);
         };
-        let config = source.acquire().await?;
+        let config = source.snapshot();
+        let ready = config.revision.is_some();
+        let lease = self.apply_configuration(state, config).await?;
+        Ok(ready.then_some(lease))
+    }
+
+    pub(crate) async fn prepare_turn(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<(), CoreError> {
+        let Some(source) = self.configuration.get() else {
+            return Ok(());
+        };
+        if self
+            .state
+            .lock()
+            .await
+            .active
+            .as_ref()
+            .expect("active turn")
+            .configuration_lease
+            .is_some()
+        {
+            return Ok(());
+        }
+        // The active turn is already visible and cancellable. Never keep its
+        // state lock while another turn owns the service we are waiting for.
+        let config = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(()),
+            config = source.acquire() => config?,
+        };
+        let mut state = self.state.lock().await;
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        let lease = self.apply_configuration(&mut state, config).await?;
+        state
+            .active
+            .as_mut()
+            .expect("active turn")
+            .configuration_lease = Some(lease);
+        Ok(())
+    }
+
+    async fn apply_configuration(
+        &self,
+        state: &mut State,
+        config: Configuration,
+    ) -> Result<Arc<dyn Send + Sync>, CoreError> {
         let old = self.runtime();
-        if old.revision == Some(config.revision) {
-            return Ok(Some(config.lease));
+        if config.revision.is_some() && old.revision == config.revision {
+            return Ok(config.lease);
         }
         let mut context = old.context.clone();
         context.mcp_tools = config.mcp_tools;
@@ -201,13 +258,13 @@ impl Shared {
         }
         state.journal.telemetry_enabled = config.options.telemetry;
         *self.runtime.write().unwrap() = Arc::new(Runtime {
-            revision: Some(config.revision),
+            revision: config.revision,
             model: config.model,
             options: config.options,
             tools,
             context,
             retired_tools,
         });
-        Ok(Some(config.lease))
+        Ok(config.lease)
     }
 }

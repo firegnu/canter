@@ -151,15 +151,24 @@ impl LiveConfig {
         )
     }
 
-    pub async fn mcp_status(&self) -> Vec<canter_protocol::McpServerStatus> {
+    pub fn mcp_status(&self) -> Vec<canter_protocol::McpServerStatus> {
         let slots = self.current.read().unwrap().mcp.clone();
         let mut services = Vec::new();
-        for slot in slots.values() {
-            if let Ok(service) = slot.get(&self.stop).await {
+        let mut pending = Vec::new();
+        for (name, slot) in slots {
+            if let Some(service) = slot.ready.borrow().clone() {
                 services.push(service);
+            } else {
+                pending.push(canter_protocol::McpServerStatus {
+                    name,
+                    connected: false,
+                    error: Some("Starting; waiting for service handover or initialization".into()),
+                    tools: Vec::new(),
+                    warnings: Vec::new(),
+                });
             }
         }
-        Registry::status_all(
+        let mut status = Registry::status_all(
             &services
                 .iter()
                 .filter_map(|service| match &**service {
@@ -167,7 +176,10 @@ impl LiveConfig {
                     _ => None,
                 })
                 .collect::<Vec<_>>(),
-        )
+        );
+        status.extend(pending);
+        status.sort_by(|a, b| a.name.cmp(&b.name));
+        status
     }
 
     pub async fn warning(&self) -> Option<String> {
@@ -358,6 +370,46 @@ impl LiveConfig {
 }
 
 impl ConfigurationSource for LiveConfig {
+    fn snapshot(&self) -> Configuration {
+        // Pin the published slots while taking the ready subset. This snapshot
+        // is also used to open a session or answer privately during a handover.
+        let version = self.current.read().unwrap();
+        let lease = Arc::new(Lease {
+            _users: version
+                .mcp
+                .values()
+                .chain(std::iter::once(&version.lsp))
+                .map(|slot| slot.users.clone())
+                .collect(),
+        });
+        let services: Vec<_> = version
+            .mcp
+            .values()
+            .filter_map(|slot| slot.ready.borrow().clone())
+            .collect();
+        let lsp = version.lsp.ready.borrow().clone();
+        let ready = services.len() == version.mcp.len() && lsp.is_some();
+        Configuration {
+            revision: ready.then_some(version.revision),
+            options: version.options.clone(),
+            model: version.model.clone(),
+            mcp_tools: Registry::snapshot_all(
+                &services
+                    .iter()
+                    .filter_map(|service| match &**service {
+                        Service::Mcp(registry) => Some(registry),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            lsp: lsp.and_then(|service| match &*service {
+                Service::Lsp(lsp) => Some(lsp.clone()),
+                _ => None,
+            }),
+            lease,
+        }
+    }
+
     fn options(&self) -> CoreOptions {
         self.current.read().unwrap().options.clone()
     }
@@ -397,7 +449,7 @@ impl ConfigurationSource for LiveConfig {
                     continue;
                 }
                 return Ok(Configuration {
-                    revision: version.revision,
+                    revision: Some(version.revision),
                     options: version.options.clone(),
                     model: version.model.clone(),
                     mcp_tools,

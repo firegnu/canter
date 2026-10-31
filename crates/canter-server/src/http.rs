@@ -61,10 +61,10 @@ impl App {
     async fn configuration(&self) -> Result<canter_core::Configuration, ApiError> {
         if let Some(reload) = &self.reload {
             use canter_core::ConfigurationSource;
-            return reload.acquire().await.map_err(Into::into);
+            return Ok(reload.snapshot());
         }
         Ok(canter_core::Configuration {
-            revision: 0,
+            revision: Some(0),
             options: self.session_options().await?,
             model: self.model.clone(),
             mcp_tools: self.mcp.snapshot(),
@@ -73,7 +73,11 @@ impl App {
         })
     }
 
-    async fn configure_session(&self, session: &Session, revision: u64) -> Result<(), ApiError> {
+    async fn configure_session(
+        &self,
+        session: &Session,
+        revision: Option<u64>,
+    ) -> Result<(), ApiError> {
         if let Some(reload) = &self.reload {
             session.set_configuration_source(reload.clone(), revision);
             if let Some(message) = reload.warning().await {
@@ -608,11 +612,14 @@ async fn read(
     State(app): State<Arc<App>>,
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<SessionReadResponse>, ApiError> {
-    let session = app.sessions.lock().await.get(&id).cloned();
-    let response = if let Some(session) = session {
+    let sessions = app.sessions.lock().await;
+    let response = if let Some(session) = sessions.get(&id).cloned() {
+        drop(sessions);
         session.snapshot().await
     } else {
-        app.disk_snapshot(&id).await?
+        let response = app.disk_snapshot(&id).await?;
+        drop(sessions);
+        response
     };
     Ok(Json(response))
 }
@@ -1044,7 +1051,7 @@ async fn events(
 async fn mcp(State(app): State<Arc<App>>) -> Json<McpListResponse> {
     Json(McpListResponse {
         data: if let Some(reload) = &app.reload {
-            reload.mcp_status().await
+            reload.mcp_status()
         } else {
             app.mcp.status()
         },

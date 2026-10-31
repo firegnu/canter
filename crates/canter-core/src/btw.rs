@@ -95,11 +95,10 @@ Task for the new session:
                 "No conversation to hand off",
             ));
         }
-        let configuration_lease = if state.active.is_none() {
-            self.shared.configure(&mut state).await?
-        } else {
-            None
-        };
+        if state.active.is_none() {
+            // Private answers use the frozen model and options, not MCP/LSP services.
+            drop(self.shared.configure(&mut state).await?);
+        }
         let shared = self.shared.frozen();
         let mut request = context::request(&state, shared.runtime().options.max_output_tokens);
         // A tool group is indivisible: keep it only once every call has a result.
@@ -130,7 +129,6 @@ Task for the new session:
         });
         let run_cancel = cancel.clone();
         tokio::spawn(async move {
-            let _configuration_lease = configuration_lease;
             let result = answer(&shared, request, handoff, &run_cancel, &sender).await;
             let mut state = shared.state.lock().await;
             state.btw = None;

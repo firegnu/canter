@@ -312,6 +312,200 @@ async fn existing_sessions_keep_the_running_turn_config_and_reload_before_the_ne
 }
 
 #[tokio::test]
+async fn idle_btw_and_next_turn_do_not_deadlock_during_lsp_reload() {
+    let mut fixture = Fixture::new(json!({})).await;
+    let url = fixture.create().await;
+    let client = fixture.client.clone();
+    let btw_url = url.clone();
+    let btw = tokio::spawn(async move {
+        client
+            .post(format!("{btw_url}/btw"))
+            .json(&json!({"question":"private question"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+    });
+    let private = fixture.request().await;
+    fixture.config["lsp"] = json!({"enabled":true});
+    fixture.applied("btw-reload").await;
+    let client = fixture.client.clone();
+    let input_url = url.clone();
+    let input = tokio::spawn(async move {
+        client
+            .post(format!("{input_url}/input"))
+            .json(&json!({"input":[{"type":"text","text":"next"}],"clientName":"test"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    private.stop();
+    tokio::time::timeout(Duration::from_secs(3), input)
+        .await
+        .expect("the next turn must not deadlock with the private answer")
+        .unwrap();
+    fixture.request().await.stop();
+    fixture.idle(&url).await;
+    let answer = tokio::time::timeout(Duration::from_secs(3), btw)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(answer.contains("completed"), "{answer}");
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn waiting_turn_keeps_its_snapshot_interrupt_and_close_responsive() {
+    for close in [false, true] {
+        let mut fixture = Fixture::new(json!({})).await;
+        let a = fixture.create().await;
+        let b = fixture.create().await;
+        fixture.input(&a).await;
+        let running = fixture.request().await;
+        fixture.config["lsp"] = json!({"enabled":true});
+        fixture.applied("waiting-for-old-turn").await;
+        let client = fixture.client.clone();
+        let input_url = b.clone();
+        let pending = tokio::spawn(async move {
+            client
+                .post(format!("{input_url}/input"))
+                .json(&json!({"input":[{"type":"text","text":"next"}],"clientName":"test"}))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let snapshot = tokio::time::timeout(Duration::from_secs(2), fixture.snapshot(&b))
+            .await
+            .expect("the waiting session's snapshot must remain available");
+        assert_eq!(snapshot.session.status, SessionStatus::Working);
+        assert!(fixture.requests.try_recv().is_err());
+        let command = if close {
+            fixture.client.delete(&b).json(&json!({}))
+        } else {
+            fixture
+                .client
+                .post(format!("{b}/interrupt"))
+                .json(&json!({"turnId":snapshot.session.turns.last().unwrap().id}))
+        };
+        tokio::time::timeout(Duration::from_secs(2), command.send())
+            .await
+            .expect("Esc and close must cancel service waiting")
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), pending)
+            .await
+            .unwrap()
+            .unwrap();
+        let stopped = fixture.snapshot(&b).await;
+        assert_eq!(
+            stopped.session.turns.last().unwrap().status,
+            canter_protocol::TurnStatus::Interrupted
+        );
+        assert_eq!(
+            stopped.session.status,
+            if close {
+                SessionStatus::Closed
+            } else {
+                SessionStatus::Idle
+            }
+        );
+        assert_eq!(
+            fixture.snapshot(&a).await.session.status,
+            SessionStatus::Working
+        );
+        running.stop();
+        fixture.idle(&a).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), fixture.requests.recv())
+                .await
+                .is_err(),
+            "a cancelled waiting turn must not start after the service becomes ready"
+        );
+        fixture.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn opening_sessions_and_listing_mcp_do_not_wait_for_service_handover() {
+    let mut fixture = Fixture::new(json!({"mcp_tool_search":false,"mcp_servers":{
+        "local":{"transport":"stdio","command":mcp_executable(),"args":["--fixture"]}
+    }}))
+    .await;
+    let a = fixture.create().await;
+    let reopen = fixture.create().await;
+    fixture
+        .client
+        .delete(&reopen)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fixture.input(&a).await;
+    let running = fixture.request().await;
+    fixture.config["mcp_servers"]["local"]["env"] = json!({"RELOAD_MARKER":"changed"});
+    fixture.config["lsp"] = json!({"enabled":true});
+    fixture.applied("opening-during-handover").await;
+    let created = tokio::time::timeout(Duration::from_secs(2), fixture.create())
+        .await
+        .expect("creating a session must not wait for another session's old turn");
+    let resumed = tokio::time::timeout(Duration::from_secs(2), fixture.client.post(format!("{reopen}/resume"))
+        .json(&json!({"env":{"HOME":fixture.root.path().join("home"),"CANTER_HOME":fixture.root.path().join("state")}})).send()).await
+        .expect("opening a saved session must not wait for handover").unwrap().error_for_status().unwrap();
+    assert_eq!(
+        resumed
+            .json::<SessionReadResponse>()
+            .await
+            .unwrap()
+            .session
+            .status,
+        SessionStatus::Idle
+    );
+    let mcp = tokio::time::timeout(
+        Duration::from_secs(2),
+        fixture.client.get("http://localhost/v1/mcp").send(),
+    )
+    .await
+    .expect("MCP status must report pending services without waiting")
+    .unwrap()
+    .error_for_status()
+    .unwrap();
+    let mcp: canter_protocol::McpListResponse = mcp.json().await.unwrap();
+    assert_eq!(mcp.data.len(), 1);
+    assert_eq!(mcp.data[0].name, "local");
+    assert!(!mcp.data[0].connected);
+    assert!(mcp.data[0].error.as_ref().unwrap().contains("Starting"));
+    assert_eq!(
+        fixture.snapshot(&a).await.session.status,
+        SessionStatus::Working
+    );
+    fixture.input(&created).await;
+    assert!(fixture.requests.try_recv().is_err());
+    running.stop();
+    let first = fixture.request().await;
+    assert!(first.tools().contains(&"mcp__local__echo"));
+    first.stop();
+    fixture.idle(&created).await;
+    fixture.input(&reopen).await;
+    let first = fixture.request().await;
+    assert!(first.tools().contains(&"mcp__local__echo"));
+    first.stop();
+    fixture.idle(&reopen).await;
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn invalid_json_keeps_the_old_config_reports_location_and_recovers_over_sse() {
     let mut fixture = Fixture::new(json!({})).await;
     let url = fixture.create().await;
@@ -604,7 +798,10 @@ async fn changed_mcp_waits_for_its_old_turn_without_restarting_unchanged_service
             .unwrap();
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(!pending.is_finished());
+    assert!(
+        fixture.requests.try_recv().is_err(),
+        "no model work before handover"
+    );
     assert!(!new_pid.exists());
     assert!(!gone(old));
     // Waiting for a replacement must not hold the server's session registry lock.
@@ -722,7 +919,10 @@ async fn disabling_then_enabling_lsp_still_waits_for_the_original_turn() {
             .unwrap();
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(!pending.is_finished());
+    assert!(
+        fixture.requests.try_recv().is_err(),
+        "no model work before handover"
+    );
     assert!(!gone(old));
     running.stop();
     tokio::time::timeout(Duration::from_secs(5), pending)
@@ -763,7 +963,10 @@ async fn waiting_for_services_does_not_lock_other_sessions_for_readers_or_close(
                 .unwrap();
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(!pending.is_finished());
+        assert!(
+            fixture.requests.try_recv().is_err(),
+            "no model work before handover"
+        );
         let client = fixture.client.clone();
         let reader = tokio::spawn(async move {
             let url = if suffix == "/events" {
@@ -792,9 +995,12 @@ async fn waiting_for_services_does_not_lock_other_sessions_for_readers_or_close(
                 .status,
             SessionStatus::Working
         );
-        running.stop();
         pending.await.unwrap();
-        reader.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), reader)
+            .await
+            .expect("the waiting session's readers and close must also remain available")
+            .unwrap();
+        running.stop();
         fixture.shutdown().await;
     }
 }

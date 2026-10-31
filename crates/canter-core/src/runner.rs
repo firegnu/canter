@@ -17,6 +17,17 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
     // Late steering may re-enter conversation without starting a new turn.
     let mut auto_compaction_failed = false;
     loop {
+        let cancel = shared
+            .state
+            .lock()
+            .await
+            .active
+            .as_ref()
+            .expect("active turn")
+            .cancel
+            .clone();
+        let configuration = shared.prepare_turn(&cancel).await;
+        let ready = configuration.is_ok();
         let (turn, cancel, manual_compaction, user_shell) = {
             let state = shared.state.lock().await;
             let active = state.active.as_ref().expect("active turn");
@@ -36,14 +47,19 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                 active.user_shell.clone(),
             )
         };
-        let mut result = if let Some(params) = user_shell {
+        let mut result = if let Err(error) = configuration {
+            Err(error)
+        } else if cancel.is_cancelled() {
+            Ok(())
+        } else if let Some(params) = user_shell {
             crate::user_shell::run(&shared, &turn.id, &params, &cancel).await
         } else if manual_compaction {
             compaction::compact(&shared, &turn.id, &cancel, CompactionTrigger::Manual, None).await
         } else {
             conversation(&shared, &turn.id, &cancel, &mut auto_compaction_failed).await
         };
-        if !cancel.is_cancelled()
+        if ready
+            && !cancel.is_cancelled()
             && shared
                 .state
                 .lock()
