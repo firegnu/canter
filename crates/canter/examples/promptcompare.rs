@@ -379,6 +379,8 @@ async fn drive_turn(
         .send_input(
             session,
             &SessionInputParams {
+                non_interactive: false,
+                approval_policy: None,
                 input: vec![UserInput::Text { text }],
                 mode: InputMode::Queue,
                 client_name: "p2-72".into(),

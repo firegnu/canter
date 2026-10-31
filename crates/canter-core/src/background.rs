@@ -316,7 +316,8 @@ impl Shared {
     }
     async fn sync_background_inner(&self, collect_output: bool) -> Result<(), CoreError> {
         let mut state = self.state.lock().await;
-        let can_wake = state.active.is_none()
+        let can_wake = !state.automatic_turns_paused
+            && state.active.is_none()
             && state.queue.is_empty()
             && state.requests.is_empty()
             && !state.background_events.draining
@@ -452,6 +453,7 @@ pub(crate) fn watch(shared: &Arc<Shared>) {
                 }
                 state.background_events.deadline = None;
                 if state.active.is_none()
+                    && !state.automatic_turns_paused
                     && state.queue.is_empty()
                     && state.requests.is_empty()
                     && !state.background_events.draining
@@ -470,6 +472,8 @@ pub(crate) fn watch(shared: &Arc<Shared>) {
                         continue;
                     }
                     let params = SessionInputParams {
+                        non_interactive: false,
+                        approval_policy: None,
                         input: Vec::new(),
                         review: None,
                         mode: InputMode::Queue,

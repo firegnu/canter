@@ -111,7 +111,7 @@ pub(crate) async fn stream<'a>(
                 settings: RequestSettings {
                     model: request.model.clone(),
                     reasoning_effort: effort,
-                    approval_policy: settings.approval_policy,
+                    approval_policy: state.approval_policy(),
                     plan_mode: settings.plan_mode,
                 },
                 context,

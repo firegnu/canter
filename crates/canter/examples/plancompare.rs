@@ -40,6 +40,8 @@ async fn drive(server: &Server, root: &Path, session: &str, after: u64, text: &s
         .send_input(
             session,
             &SessionInputParams {
+                non_interactive: false,
+                approval_policy: None,
                 input: vec![UserInput::Text { text: text.into() }],
                 mode: InputMode::Queue,
                 client_name: "p2-34-plancompare".into(),

@@ -122,6 +122,20 @@ pub(crate) async fn submit(
                 approval_policy: policy,
             }),
         };
+        if state.non_interactive() {
+            state
+                .journal
+                .append(vec![EventPayload::ItemStarted {
+                    turn_id: turn_id.into(),
+                    item: call.started_item(),
+                }])
+                .await?;
+            state
+                .resolve_without_user(request, ApprovalResolution::Cancelled)
+                .await?;
+            return Ok(output(item_id, plan, None, ItemStatus::Declined,
+                "No one is available to approve this plan. Stay in Plan mode; do not implement the proposal.".into()));
+        }
         let (sender, receiver) = tokio::sync::oneshot::channel();
         state
             .journal

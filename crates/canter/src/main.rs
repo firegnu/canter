@@ -5,7 +5,8 @@ use canter::{ChatArgs, Command, Context, USAGE};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let result = match canter::parse(std::env::args_os().skip(1)) {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    let result = match canter::parse(arguments.clone()) {
         Ok(Command::Serve {
             replace: true,
             foreground: false,
@@ -14,6 +15,19 @@ async fn main() -> ExitCode {
             .await
             .map_err(|error| error.to_string()),
         Ok(Command::Chat(args)) => chat(args).await,
+        Ok(Command::Exec(args)) => {
+            let result = match Context::current() {
+                Ok(context) => canter::exec::run(args, context).await,
+                Err(error) => canter::exec::startup_error(args.json, &error),
+            };
+            return match result {
+                Ok(code) => ExitCode::from(code),
+                Err(error) => {
+                    eprintln!("canter: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         Ok(Command::Mcp(command)) => match canter_server::state_directory() {
             Ok(home) => canter::mcp::run(command, &home)
                 .await
@@ -39,6 +53,14 @@ async fn main() -> ExitCode {
             Ok(())
         }
         Err(message) => {
+            if arguments.first().is_some_and(|arg| arg == "exec") {
+                let json = arguments
+                    .iter()
+                    .take_while(|arg| *arg != "--")
+                    .any(|arg| arg == "--json");
+                let code = canter::exec::startup_error(json, &message).unwrap_or(1);
+                return ExitCode::from(code);
+            }
             eprintln!("canter: {message}\n\n{USAGE}");
             return ExitCode::FAILURE;
         }

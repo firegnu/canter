@@ -74,6 +74,8 @@ fn read_fixture(id: &str) -> Vec<Step> {
 }
 fn input(value: &str) -> SessionInputParams {
     SessionInputParams {
+        non_interactive: false,
+        approval_policy: None,
         review: None,
         input: vec![UserInput::Text { text: value.into() }],
         mode: InputMode::Queue,
@@ -613,6 +615,8 @@ async fn rejected_image_during_stopping_does_not_leave_a_copy() {
     let before = session.snapshot().await;
     let result = session
         .input(SessionInputParams {
+            non_interactive: false,
+            approval_policy: None,
             review: None,
             input: vec![UserInput::LocalImage {
                 path: path.to_string_lossy().into_owned(),
@@ -719,6 +723,8 @@ async fn rejected_images_are_removed_when_history_or_event_writes_fail() {
         let guard = FileLimit::small();
         let result = session
             .input(SessionInputParams {
+                non_interactive: false,
+                approval_policy: None,
                 review: None,
                 input: vec![UserInput::LocalImage {
                     path: source.to_string_lossy().into_owned(),
@@ -773,6 +779,8 @@ async fn image_requests_and_compaction_keep_the_newest_images_within_40_mib() {
     for batch in inputs.chunks(2) {
         session
             .input(SessionInputParams {
+                non_interactive: false,
+                approval_policy: None,
                 review: None,
                 input: batch.to_vec(),
                 ..input("")
@@ -846,6 +854,8 @@ async fn image_references_survive_moving_the_store_and_missing_copies_only_warn(
     let mut events = session.subscribe(0).await.unwrap();
     session
         .input(SessionInputParams {
+            non_interactive: false,
+            approval_policy: None,
             review: None,
             input: vec![UserInput::LocalImage {
                 path: source.to_string_lossy().into_owned(),
@@ -975,6 +985,8 @@ async fn manual_compaction_returns_at_start_and_steering_runs_in_a_separate_turn
         );
         let queued = session
             .input(SessionInputParams {
+                non_interactive: false,
+                approval_policy: None,
                 review: None,
                 mode: InputMode::Steer,
                 ..input("follow-up")
@@ -1439,6 +1451,8 @@ async fn failed_automatic_compaction_waits_until_a_new_turn_or_manual_request() 
     let mut seen = until(&mut events, |event| matches!(event, EventPayload::ItemDelta { delta: ItemDelta::AgentMessage { delta }, .. } if delta == "ready for steering")).await;
     let steered = session
         .input(SessionInputParams {
+            non_interactive: false,
+            approval_policy: None,
             review: None,
             mode: InputMode::Steer,
             ..input("continue in this turn")

@@ -282,6 +282,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
         features: Some(vec![
+            "nonInteractiveInput".into(),
             "review".into(),
             "addDirectories".into(),
             "tags".into(),
@@ -659,6 +660,8 @@ async fn create(
         if let Some(input) = params.input {
             session
                 .input(SessionInputParams {
+                    non_interactive: false,
+                    approval_policy: None,
                     review: None,
                     input,
                     mode: InputMode::Queue,

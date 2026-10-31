@@ -22,6 +22,8 @@ pub async fn prepare(
             pull_request(cwd, env, target).await?
         };
         Ok(SessionInputParams {
+            non_interactive: false,
+            approval_policy: None,
             review: Some(title),
             input: vec![UserInput::Text {
                 text: format!("{INSTRUCTIONS}\n\n{changes}"),

@@ -1887,6 +1887,8 @@ impl<C: Connector> Chat<C> {
                 };
                 let title = session_title(&text);
                 let params = SessionInputParams {
+                    non_interactive: false,
+                    approval_policy: None,
                     review: None,
                     input,
                     mode: if steer {

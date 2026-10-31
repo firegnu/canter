@@ -585,6 +585,8 @@ mod tests {
         let mut events = session.subscribe(0).await.unwrap();
         session
             .input(SessionInputParams {
+                non_interactive: false,
+                approval_policy: None,
                 review: None,
                 input: vec![
                     UserInput::Text {

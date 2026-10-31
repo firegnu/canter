@@ -96,6 +96,8 @@ fn done() -> Reply {
 }
 fn input() -> SessionInputParams {
     SessionInputParams {
+        non_interactive: false,
+        approval_policy: None,
         input: vec![UserInput::Text {
             text: "modify".into(),
         }],

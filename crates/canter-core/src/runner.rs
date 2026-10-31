@@ -188,6 +188,10 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         }
         .await;
         state.active = None;
+        shared.tools.configure_shell(
+            state.approval_policy(),
+            &state.journal.snapshot.settings.additional_directories,
+        );
         if let Some(lsp) = shared.tools.lsp() {
             lsp.set_round(if state.journal.snapshot.settings.plan_mode {
                 canter_tools::lsp::Round::Plan
@@ -214,6 +218,8 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             break;
         };
         let params = SessionInputParams {
+            non_interactive: false,
+            approval_policy: None,
             review: input.review,
             input: input.input,
             mode: InputMode::Queue,
@@ -1074,31 +1080,21 @@ async fn permission<'a>(
             .as_ref()
             .is_some_and(|active| active.turn.review.is_some())
             && matches!(
-                state
-                    .gate
-                    .evaluate_review(call, state.journal.snapshot.settings.approval_policy),
+                state.gate.evaluate_review(call, state.approval_policy()),
                 PermissionCheck::Deny { .. }
             );
         let permission = if review_denied {
-            state
-                .gate
-                .evaluate_review(call, state.journal.snapshot.settings.approval_policy)
+            state.gate.evaluate_review(call, state.approval_policy())
         } else if state.journal.snapshot.settings.plan_mode {
-            state
-                .gate
-                .evaluate_plan(call, state.journal.snapshot.settings.approval_policy)
+            state.gate.evaluate_plan(call, state.approval_policy())
         } else if state
             .active
             .as_ref()
             .is_some_and(|active| active.turn.review.is_some())
         {
-            state
-                .gate
-                .evaluate_review(call, state.journal.snapshot.settings.approval_policy)
+            state.gate.evaluate_review(call, state.approval_policy())
         } else {
-            state
-                .gate
-                .evaluate(call, state.journal.snapshot.settings.approval_policy)
+            state.gate.evaluate(call, state.approval_policy())
         };
         // First enforce the hard plan/review restriction, then command policy.
         let restricted = state.journal.snapshot.settings.plan_mode
@@ -1110,9 +1106,7 @@ async fn permission<'a>(
             && call.tool() == Tool::Shell
             && matches!(permission, PermissionCheck::Execute(_))
         {
-            state
-                .gate
-                .evaluate(call, state.journal.snapshot.settings.approval_policy)
+            state.gate.evaluate(call, state.approval_policy())
         } else {
             permission
         };
@@ -1137,6 +1131,22 @@ async fn permission<'a>(
                         RequestKind::Approval(approval)
                     },
                 };
+                if state.non_interactive() {
+                    let feedback = "No one is available to approve this action. Do not perform it without approval.".to_owned();
+                    state
+                        .resolve_without_user(
+                            request,
+                            ApprovalResolution::Answered {
+                                decision: ApprovalDecision::DeclineWithFeedback,
+                                feedback: Some(feedback.clone()),
+                            },
+                        )
+                        .await?;
+                    return Ok(Some(PermissionCheck::Deny {
+                        cancel_turn: false,
+                        feedback: Some(feedback),
+                    }));
+                }
                 let (sender, receiver) = tokio::sync::oneshot::channel();
                 state
                     .journal
@@ -1175,9 +1185,7 @@ async fn permission<'a>(
     let mut state = shared.state.lock().await;
     if state.journal.snapshot.settings.plan_mode
         && matches!(
-            state
-                .gate
-                .evaluate_plan(call, state.journal.snapshot.settings.approval_policy),
+            state.gate.evaluate_plan(call, state.approval_policy()),
             PermissionCheck::Deny { .. }
         )
     {
@@ -1213,6 +1221,39 @@ async fn ask_user(
             created_at: crate::journal::now(),
             kind: RequestKind::UserInput(question.clone()),
         };
+        if state.non_interactive() {
+            let answer = UserInputAnswer::Text {
+                text: "No one is available. Use your own judgment and continue.".into(),
+            };
+            state
+                .journal
+                .append(vec![EventPayload::ItemStarted {
+                    turn_id: turn_id.into(),
+                    item: call.started_item(),
+                }])
+                .await?;
+            state
+                .resolve_without_user(
+                    request,
+                    ApprovalResolution::UserInput {
+                        answer: answer.clone(),
+                    },
+                )
+                .await?;
+            return Ok(ToolOutput {
+                output_size: Default::default(),
+                change_ticket: None,
+                images: Vec::new(),
+                text: serde_json::json!({"question":question.question,"answer":answer}).to_string(),
+                item: Item::UserInput {
+                    id: question.item_id,
+                    question: question.question,
+                    answer: Some(answer),
+                    status: ItemStatus::Completed,
+                },
+                outcome: ToolOutcome::Completed,
+            });
+        }
         let (sender, receiver) = tokio::sync::oneshot::channel();
         state
             .journal

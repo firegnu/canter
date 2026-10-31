@@ -94,7 +94,7 @@ pub struct SessionSettings {
     pub approval_policy: PermissionMode,
 }
 
-fn is_false(value: &bool) -> bool {
+pub(crate) fn is_false(value: &bool) -> bool {
     !value
 }
 

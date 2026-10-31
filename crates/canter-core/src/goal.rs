@@ -110,6 +110,10 @@ impl State {
     }
 
     pub(crate) fn schedule_goal(&mut self) {
+        if self.automatic_turns_paused {
+            self.goal_deadline = None;
+            return;
+        }
         if (self.goal_running
             && self
                 .journal
@@ -181,6 +185,8 @@ impl Shared {
             .start(
                 state,
                 SessionInputParams {
+                    non_interactive: false,
+                    approval_policy: None,
                     input: Vec::new(),
                     review: None,
                     mode: InputMode::Queue,
@@ -196,6 +202,10 @@ impl Shared {
     }
 
     pub(crate) async fn next_goal(&self, state: &mut State) -> Result<Option<Done>, CoreError> {
+        if state.automatic_turns_paused {
+            state.goal_deadline = None;
+            return Ok(None);
+        }
         if state.goal_deadline.is_none_or(|at| at > Instant::now()) {
             return Ok(None);
         }

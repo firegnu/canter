@@ -14,6 +14,136 @@ struct Fixture {
     servers: Vec<tokio::task::JoinHandle<()>>,
 }
 
+#[tokio::test]
+async fn non_interactive_input_is_atomic_and_permissions_expire_with_the_turn() {
+    let fixture = Fixture::new(json!({"sandbox":false})).await;
+    let url = fixture.create().await;
+    fixture.client.post(format!("{url}/input"))
+        .json(&json!({"input":[{"type":"text","text":"Unattended task"}],"nonInteractive":true,"approvalPolicy":"askForExecution","clientName":"exec"}))
+        .send().await.unwrap().error_for_status().unwrap();
+    fixture.request_count(1).await;
+    // Another client's settings request cannot change the accepted turn's scope.
+    fixture
+        .client
+        .patch(&url)
+        .json(&json!({"nonInteractive":false,"approvalPolicy":"allowAll"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let question = call(
+        "ask_user",
+        json!({"question":"Which way?","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}),
+    );
+    fixture.respond(vec![
+        question.clone(),
+        call(
+            "shell",
+            json!({"command":"printf unattended > unattended.txt"}),
+        ),
+        reply("Unattended done."),
+    ]);
+    let snapshot = fixture.until(&url, |s| s["status"] == "idle").await;
+    assert!(snapshot["settings"].get("nonInteractive").is_none());
+    assert_eq!(snapshot["settings"]["approvalPolicy"], "allowAll");
+    assert!(!fixture.root.path().join("project/unattended.txt").exists());
+    {
+        let requests = fixture.requests.lock().unwrap();
+        assert!(
+            requests[1]["messages"]
+                .to_string()
+                .contains("No one is available.")
+        );
+        assert!(
+            requests[2]["messages"]
+                .to_string()
+                .contains("No one is available to approve")
+        );
+    }
+    fixture.respond(vec![
+        question,
+        call(
+            "shell",
+            json!({"command":"printf interactive > interactive.txt"}),
+        ),
+        reply("Interactive done."),
+    ]);
+    fixture.input(&url, "Ordinary next input").await;
+    let snapshot = fixture
+        .until(&url, |s| {
+            s["pendingRequests"]
+                .as_array()
+                .is_some_and(|r| !r.is_empty())
+        })
+        .await;
+    fixture
+        .resolve(
+            &url,
+            &snapshot["pendingRequests"][0],
+            json!({"answer":{"type":"text","text":"Choose A"},"clientName":"terminal"}),
+        )
+        .await;
+    fixture.until(&url, |s| s["status"] == "idle").await;
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.path().join("project/interactive.txt")).unwrap(),
+        "interactive"
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn non_interactive_goal_runs_one_turn_and_keeps_budget_then_interactive_continues() {
+    let fixture = Fixture::new(
+        json!({"prices":{"fake":{"peak":{"cache_hit":0,"cache_miss":0,"output":1000000}}}}),
+    )
+    .await;
+    let url = fixture.create().await;
+    fixture
+        .client
+        .post(format!("{url}/input"))
+        .json(&json!({"nonInteractive":true,"input":[{"type":"text","text":"First step"}],"clientName":"exec"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fixture
+        .set(
+            &url,
+            json!({"objective":"Finish both steps","budgetUsd":10}),
+        )
+        .await;
+    let queued = fixture.client.post(format!("{url}/input")).json(&json!({"input":[{"type":"text","text":"A competing turn"}],"clientName":"other-client"})).send().await.unwrap();
+    assert_eq!(
+        queued.status(),
+        StatusCode::CONFLICT,
+        "non-interactive input must not queue another turn"
+    );
+    fixture.respond(vec![charged(reply("First step."), 1)]);
+    fixture
+        .until(&url, |s| s["turns"][0]["status"] == "completed")
+        .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let snapshot = fixture.snapshot(&url).await;
+    assert_eq!(snapshot["turns"].as_array().unwrap().len(), 1);
+    assert_eq!(snapshot["goal"]["status"], "active");
+    assert_eq!(snapshot["goal"]["cost"]["usd"], 1.0);
+    fixture.respond(vec![
+        reply("Second step."),
+        call("update_goal", json!({"status":"complete"})),
+        reply("Done."),
+    ]);
+    fixture.input(&url, "Continue interactively.").await;
+    let snapshot = fixture
+        .until(&url, |s| {
+            s["goal"]["status"] == "complete" && s["status"] == "idle"
+        })
+        .await;
+    assert_eq!(snapshot["turns"].as_array().unwrap().len(), 3);
+    fixture.close().await;
+}
+
 fn reply(text: &str) -> Value {
     json!({"choices":[{"index":0,"delta":{"content":text},"finish_reason":"stop"}]})
 }
