@@ -98,10 +98,14 @@ pub fn report(
                 report.overview.tags.clone_from(&settings.tags);
             }
             EventPayload::TurnStarted { turn, .. } => {
+                compacting = false;
                 turns.insert(turn.id.clone());
                 turn_id = Some(turn.id.clone());
             }
-            EventPayload::TurnCompleted { .. } => turn_id = None,
+            EventPayload::TurnCompleted { .. } => {
+                compacting = false;
+                turn_id = None;
+            }
             EventPayload::ItemStarted { turn_id, item }
             | EventPayload::ItemCompleted { turn_id, item } => {
                 if let Item::ModelRetry { id, .. } = item {
@@ -267,6 +271,15 @@ pub fn report(
     report.overview.retry_count =
         private_retries.map(|n| n + main_retries.max(retries.len() as u64));
     report.compactions = compactions.into_values().collect();
+    for row in &mut report.compactions {
+        if row.succeeded.is_none()
+            && row.summary.as_deref().is_some_and(|summary| {
+                summary.is_empty() || summary == crate::compaction::COMPACTION_FAILED_SUMMARY
+            })
+        {
+            row.succeeded = Some(false);
+        }
+    }
     report.compactions.sort_by_key(|row| row.event_seq);
     let mut items: Vec<_> = items.into_values().collect();
     items.sort_by_key(|row| row.seq);

@@ -10,11 +10,13 @@ pub(super) fn fill(compactions: &mut [StatsCompaction], items: &[SavedItem], cwd
     let mut changed = BTreeSet::new();
     let mut before_plan = None;
     let mut cursor = 0;
-    for index in 0..compactions.len() {
-        let boundary = compactions[index].event_seq;
-        let next = compactions
-            .get(index + 1)
-            .map_or(u64::MAX, |row| row.event_seq);
+    let mut completed = compactions
+        .iter_mut()
+        .filter(|row| row.succeeded != Some(false) && row.summary.is_some())
+        .peekable();
+    while let Some(row) = completed.next() {
+        let boundary = row.event_seq;
+        let next = completed.peek().map_or(u64::MAX, |row| row.event_seq);
         while let Some(item) = items.get(cursor).filter(|item| item.seq < boundary) {
             match &item.item {
                 Item::FileRead {
@@ -42,10 +44,6 @@ pub(super) fn fill(compactions: &mut [StatsCompaction], items: &[SavedItem], cwd
         }
         let end = items.partition_point(|item| item.seq < next);
         let after = &items[cursor..end];
-        let row = &mut compactions[index];
-        if row.succeeded == Some(false) || row.summary.is_none() {
-            continue;
-        }
         row.signals.reread_files = Some(
             after
                 .iter()
@@ -123,7 +121,7 @@ fn mentioned(summary: &str, path: &str, cwd: &str) -> bool {
 }
 
 fn path_character(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '\\')
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '\\')
 }
 
 fn compare_plans(before: Option<Vec<PlanStep>>, after: Option<Vec<PlanStep>>) -> PlanSignal {

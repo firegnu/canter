@@ -165,6 +165,15 @@ pub struct StatsTool {
     pub average_result_tokens: Option<f64>,
     #[ts(type = "number | null")]
     pub max_result_tokens: Option<u64>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub unknown_status_count: usize,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub unknown_truncated_count: usize,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub unknown_result_size_count: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

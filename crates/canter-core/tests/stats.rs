@@ -192,7 +192,10 @@ fn old_and_disabled_telemetry_keep_observable_counts_and_unknown_measurements() 
         assert_eq!(report.requests[0].usage.as_ref().unwrap().total_tokens, 120);
         assert_eq!(report.tools[0].failure_count, Some(1));
         assert_eq!(report.tools[0].average_result_tokens, Some(3.0));
-        assert_eq!(report.tools[0].truncated_count, None);
+        assert_eq!(report.tools[0].truncated_count, Some(0));
+        assert_eq!(report.tools[0].unknown_status_count, 0);
+        assert_eq!(report.tools[0].unknown_truncated_count, 1);
+        assert_eq!(report.tools[0].unknown_result_size_count, 0);
         assert_eq!(report.compactions[0].before_tokens, None);
         assert_eq!(report.compactions[0].succeeded, None);
         assert_eq!(
@@ -202,7 +205,8 @@ fn old_and_disabled_telemetry_keep_observable_counts_and_unknown_measurements() 
         assert!(!report.overview.usage.as_ref().unwrap().total.cost.unknown);
         let json = serde_json::to_value(report).unwrap();
         assert!(json["requests"][0]["firstResponseMs"].is_null());
-        assert!(json["tools"][0]["truncatedCount"].is_null());
+        assert_eq!(json["tools"][0]["truncatedCount"], 0);
+        assert_eq!(json["tools"][0]["unknownTruncatedCount"], 1);
     }
 }
 
@@ -309,4 +313,203 @@ fn compaction_still_in_progress_does_not_report_zero_effects() {
     assert_eq!(pending.succeeded, None);
     assert_eq!(pending.signals.reread_files, None);
     assert_eq!(pending.signals.unmentioned_files, None);
+}
+
+#[test]
+fn chinese_summary_mentions_adjacent_paths_and_names_without_matching_ascii_suffixes() {
+    let mut saved = Saved::new();
+    saved.item(
+        json!({"type":"fileChange","id":"edit-cn","status":"completed","changes":[
+            {"path":"src/b.rs","kind":{"type":"add"},"diff":""},
+            {"path":"src/c.rs","kind":{"type":"add"},"diff":""},
+            {"path":"src/d.rs","kind":{"type":"add"},"diff":""},
+            {"path":"src/a.rs","kind":{"type":"add"},"diff":""}
+        ]}),
+    );
+    saved.item(json!({"type":"contextCompaction","id":"compact-cn",
+        "summary":"已修改src/b.rs和c.rs，另外 `src/d.rs` 也改了。还提到ba.rs。"}));
+    assert_eq!(
+        saved.report().compactions[0]
+            .signals
+            .unmentioned_files
+            .as_ref()
+            .unwrap(),
+        &["/work/src/a.rs"]
+    );
+}
+
+#[test]
+fn legacy_failed_compaction_cards_report_false_and_no_signals_without_telemetry() {
+    for summary in [
+        "",
+        "Compaction did not finish; the original context is kept.",
+    ] {
+        let mut saved = Saved::new();
+        saved.tool(
+            "read-before",
+            "read",
+            json!({"path":"src/b.rs"}),
+            "abc",
+            read_item("read-before", "src/b.rs", "completed"),
+        );
+        saved.item(
+            json!({"type":"fileChange","id":"edit-before","status":"completed","changes":[
+                {"path":"src/b.rs","kind":{"type":"add"},"diff":""}
+            ]}),
+        );
+        saved.item(json!({"type":"plan","id":"plan-before","status":"completed","plan":[{"step":"Build","status":"inProgress"}]}));
+        saved.item(json!({"type":"contextCompaction","id":"failed-compact","summary":summary}));
+        saved.tool(
+            "read-after",
+            "read",
+            json!({"path":"src/b.rs"}),
+            "abc",
+            read_item("read-after", "src/b.rs", "completed"),
+        );
+        saved.item(json!({"type":"plan","id":"plan-after","status":"completed","plan":[]}));
+        let report = saved.report();
+        assert_eq!(report.compactions[0].succeeded, Some(false), "{summary:?}");
+        assert_eq!(
+            report.compactions[0].signals,
+            canter_protocol::CompactionSignals::default()
+        );
+    }
+}
+
+#[test]
+fn unfinished_compaction_does_not_label_later_turns_as_compaction() {
+    for (complete_previous_turn, start_next_turn) in [(false, true), (true, false), (true, true)] {
+        let mut saved = Saved::new();
+        saved.event(json!({"type":"item.started","turnId":"t1","item":{
+            "type":"contextCompaction","id":"unfinished","summary":""
+        }}));
+        saved.event(usage_event(None, false));
+        let mut turn = saved.events[1]["turn"].clone();
+        if complete_previous_turn {
+            turn["status"] = json!("interrupted");
+            saved.event(json!({"type":"turn.completed","turn":turn}));
+        }
+        if start_next_turn {
+            turn["id"] = json!("t2");
+            turn["status"] = json!("inProgress");
+            saved.event(json!({"type":"turn.started","turn":turn}));
+        }
+        saved.event(usage_event(None, false));
+        let report = saved.report();
+        assert_eq!(
+            report.requests[0].purpose,
+            canter_protocol::RequestPurpose::Compaction
+        );
+        assert_eq!(
+            report.requests[1].purpose,
+            canter_protocol::RequestPurpose::Conversation
+        );
+        assert_eq!(
+            report.requests[1].turn_id.as_deref(),
+            start_next_turn.then_some("t2")
+        );
+    }
+}
+
+#[test]
+fn partial_tool_statistics_keep_known_values_and_count_unknown_calls() {
+    for known_calls in [0, 3] {
+        let mut saved = Saved::new();
+        for index in 0..known_calls {
+            let call_id = format!("c{index}");
+            let item_id = format!("i{index}");
+            saved.tool(
+                &call_id,
+                "read",
+                json!({"path":"a.rs"}),
+                "abc",
+                read_item(&item_id, "a.rs", "failed"),
+            );
+            saved.event(json!({"type":"telemetry.toolResult", "turnId":"t1","toolCallId":call_id,"itemId":item_id,
+                "estimated":true,"resultTokens":(index + 1) * 3,"truncated":true}));
+        }
+        saved.history.push(json!({"type":"message","message":{"type":"assistant","content":[
+            {"type":"tool_call","id":"unobserved","name":"read","arguments":"{\"path\":\"a.rs\"}"}
+        ]}}));
+        let report = saved.report();
+        let tool = &report.tools[0];
+        assert_eq!(tool.call_count, known_calls + 1);
+        assert_eq!(tool.failure_count, Some(known_calls));
+        assert_eq!(tool.truncated_count, Some(known_calls));
+        assert_eq!(tool.average_result_tokens, (known_calls > 0).then_some(6.0));
+        assert_eq!(tool.max_result_tokens, (known_calls > 0).then_some(9));
+        let json = serde_json::to_value(tool).unwrap();
+        assert_eq!(json["unknownStatusCount"], 1);
+        assert_eq!(json["unknownTruncatedCount"], 1);
+        assert_eq!(json["unknownResultSizeCount"], 1);
+    }
+}
+
+#[test]
+fn failed_and_unfinished_compactions_do_not_shorten_successful_observation_windows() {
+    for telemetry in [false, true] {
+        let mut saved = Saved::new();
+        saved.item(read_item("read-a-before", "a.rs", "completed"));
+        saved.item(read_item("read-b-before", "b.rs", "completed"));
+        saved.item(
+            json!({"type":"plan","id":"plan-before","status":"completed","plan":[
+                {"step":"Build","status":"inProgress"},{"step":"Test","status":"pending"}
+            ]}),
+        );
+        for (id, summary) in [
+            ("first", "Remember a.rs and b.rs"),
+            (
+                "failed",
+                if telemetry {
+                    "Kept the context"
+                } else {
+                    "Compaction did not finish; the original context is kept."
+                },
+            ),
+        ] {
+            saved.item(json!({"type":"contextCompaction","id":id,"summary":summary}));
+            if telemetry {
+                saved.event(json!({"type":"telemetry.compaction","turnId":"t1","itemId":id,
+                    "trigger":"manual","estimated":true,"beforeTokens":100,"afterTokens":50,
+                    "beforeMessages":4,"afterMessages":2,"removedMessages":if id == "first" { 3 } else { 0 },
+                    "succeeded":id == "first"}));
+            }
+        }
+        saved.event(json!({"type":"item.started","turnId":"t1","item":{
+            "type":"contextCompaction","id":"unfinished","summary":""
+        }}));
+        saved.item(read_item("read-a-after", "a.rs", "completed"));
+        saved.item(
+            json!({"type":"plan","id":"plan-after","status":"completed","plan":[
+                {"step":"Build","status":"completed"}
+            ]}),
+        );
+        saved.item(json!({"type":"contextCompaction","id":"next","summary":"Another summary"}));
+        if telemetry {
+            saved.event(
+                json!({"type":"telemetry.compaction","turnId":"t1","itemId":"next",
+                "trigger":"manual","estimated":true,"beforeTokens":100,"afterTokens":50,
+                "beforeMessages":4,"afterMessages":2,"removedMessages":3,"succeeded":true}),
+            );
+        }
+        saved.item(read_item("read-b-after-next", "b.rs", "completed"));
+        saved.item(json!({"type":"plan","id":"plan-after-next","status":"completed","plan":[]}));
+        let report = saved.report();
+        assert_eq!(report.compactions.len(), 4);
+        let first = &report.compactions[0].signals;
+        assert_eq!(first.reread_files.as_ref().unwrap(), &["/work/a.rs"]);
+        assert_eq!(first.plan.after.as_ref().unwrap()[0].step, "Build");
+        assert_eq!(first.plan.removed.as_ref().unwrap()[0].step, "Test");
+        assert_eq!(
+            first.plan.status_changed.as_ref().unwrap()[0].after,
+            canter_protocol::PlanStepStatus::Completed
+        );
+        for row in &report.compactions[1..3] {
+            assert_eq!(row.signals, canter_protocol::CompactionSignals::default());
+        }
+        assert_eq!(
+            report.compactions[3].signals.reread_files.as_ref().unwrap(),
+            &["/work/b.rs"]
+        );
+    }
 }

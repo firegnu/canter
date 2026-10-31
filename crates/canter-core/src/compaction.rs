@@ -13,6 +13,8 @@ use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) const RESERVE: u64 = 16_384;
+pub(crate) const COMPACTION_FAILED_SUMMARY: &str =
+    "Compaction did not finish; the original context is kept.";
 const KEEP_USER_TOKENS: u64 = 20_000;
 // Verbatim from docs/调研/P2-57-系统提示词方案.md §6.
 pub(crate) const SECTIONS: &str = "## Goal
@@ -225,7 +227,7 @@ pub(crate) async fn compact(
                     turn_id: turn_id.into(),
                     item: Item::ContextCompaction {
                         id: item_id,
-                        summary: "Compaction did not finish; the original context is kept.".into(),
+                        summary: COMPACTION_FAILED_SUMMARY.into(),
                     },
                 }])
                 .await?;

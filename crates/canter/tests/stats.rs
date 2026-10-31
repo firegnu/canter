@@ -246,3 +246,29 @@ async fn stats_cli_lists_selects_and_exports_offline_reports_and_rejects_old_ser
     stop.send(()).unwrap();
     old_server.await.unwrap();
 }
+
+#[test]
+fn partial_tool_statistics_show_known_values_and_unknown_counts_in_text_and_html() {
+    let mut report = canter_protocol::StatsResponse::default();
+    report.tools.push(
+        serde_json::from_value(json!({
+            "name":"read","callCount":5,"failureCount":3,"truncatedCount":2,
+            "averageResultTokens":6.0,"maxResultTokens":9,
+            "unknownStatusCount":1,"unknownTruncatedCount":2,"unknownResultSizeCount":3
+        }))
+        .unwrap(),
+    );
+    for output in [
+        canter_tui::stats::format_report(&report),
+        canter_tui::stats::html_report(&report),
+    ] {
+        for expected in [
+            "3 (+1 unknown)",
+            "2 (+2 unknown)",
+            "6.0 (+3 unknown)",
+            "9 (+3 unknown)",
+        ] {
+            assert!(output.contains(expected), "missing {expected}: {output}");
+        }
+    }
+}

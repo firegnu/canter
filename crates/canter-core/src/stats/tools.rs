@@ -193,24 +193,26 @@ pub(super) fn aggregate(calls: &[StatsToolCall]) -> Vec<StatsTool> {
     groups
         .into_iter()
         .map(|(name, calls)| {
-            let sizes: Option<Vec<u64>> = calls.iter().map(|c| c.result_tokens).collect();
+            let sizes: Vec<u64> = calls.iter().filter_map(|c| c.result_tokens).collect();
             StatsTool {
                 name: name.into(),
                 call_count: calls.len(),
-                failure_count: calls
+                failure_count: Some(
+                    calls
+                        .iter()
+                        .filter(|c| c.status == ItemStatus::Failed)
+                        .count(),
+                ),
+                truncated_count: Some(calls.iter().filter(|c| c.truncated == Some(true)).count()),
+                average_result_tokens: (!sizes.is_empty())
+                    .then(|| sizes.iter().map(|v| *v as f64).sum::<f64>() / sizes.len() as f64),
+                max_result_tokens: sizes.iter().copied().max(),
+                unknown_status_count: calls
                     .iter()
-                    .all(|c| !matches!(c.status, ItemStatus::Unknown | ItemStatus::InProgress))
-                    .then(|| {
-                        calls
-                            .iter()
-                            .filter(|c| c.status == ItemStatus::Failed)
-                            .count()
-                    }),
-                truncated_count: calls.iter().map(|c| c.truncated.map(usize::from)).sum(),
-                average_result_tokens: sizes.as_ref().map(|values| {
-                    values.iter().map(|v| *v as f64).sum::<f64>() / values.len() as f64
-                }),
-                max_result_tokens: sizes.and_then(|values| values.into_iter().max()),
+                    .filter(|c| matches!(c.status, ItemStatus::Unknown | ItemStatus::InProgress))
+                    .count(),
+                unknown_truncated_count: calls.iter().filter(|c| c.truncated.is_none()).count(),
+                unknown_result_size_count: calls.len() - sizes.len(),
             }
         })
         .collect()

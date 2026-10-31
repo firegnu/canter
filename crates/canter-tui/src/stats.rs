@@ -180,12 +180,22 @@ fn tool_cells(row: &StatsTool) -> Vec<String> {
     vec![
         row.name.clone(),
         row.call_count.to_string(),
-        known(row.failure_count),
-        known(row.truncated_count),
-        row.average_result_tokens
-            .map_or_else(|| "unknown".into(), |v| format!("{v:.1}")),
-        known(row.max_result_tokens),
+        with_unknown(known(row.failure_count), row.unknown_status_count),
+        with_unknown(known(row.truncated_count), row.unknown_truncated_count),
+        with_unknown(
+            row.average_result_tokens
+                .map_or_else(|| "unknown".into(), |v| format!("{v:.1}")),
+            row.unknown_result_size_count,
+        ),
+        with_unknown(known(row.max_result_tokens), row.unknown_result_size_count),
     ]
+}
+fn with_unknown(value: String, count: usize) -> String {
+    if count == 0 {
+        value
+    } else {
+        format!("{value} (+{count} unknown)")
+    }
 }
 fn files(label: &str, paths: &Option<Vec<String>>) -> String {
     match paths {

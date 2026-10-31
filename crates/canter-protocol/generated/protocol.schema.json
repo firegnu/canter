@@ -5329,6 +5329,24 @@
             "integer",
             "null"
           ]
+        },
+        "unknownResultSizeCount": {
+          "default": 0,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknownStatusCount": {
+          "default": 0,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknownTruncatedCount": {
+          "default": 0,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [
