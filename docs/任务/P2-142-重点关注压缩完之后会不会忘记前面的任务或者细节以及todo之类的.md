@@ -1,31 +1,95 @@
-# 任务：第二期-6 - 重点关注压缩完之后会不会忘记前面的任务或者细节以及todo之类的
+# 任务：第二期-6 - 压缩后自动带回最近读过的文件
 
-2026-10-29，用户在看板上新建。
+2026-10-31，canter/main 交给 canter/dev-restore（Codex，gpt-6-astra / xhigh）。
+路由：重 / 交叉审查要 / 影响面：碰要害（路由：重（置信 0.98）、要、碰要害）
+类型：功能变更
+提示：围绕已确认的使用目标完成变更，优先沿用现有机制。
+你是被委派的 agent：照本文件做，不要再开别的 agent。
+依据：第二期第 142 件。10-31 两次试跑表明压缩后不忘事，但摘要只记文件名，模型压缩后要自己重读文件。本件照 Claude Code：压缩完自动把最近读过或改过的文件带回来。不改压缩摘要本身。
+执行：派出
 
 ## 用户原话
 
+- 10-29 看板标题：「重点关注压缩完之后会不会忘记前面的任务或者细节以及todo之类的」，附了 Claude Code 压缩后重新读取的显示（见文末）。
+- 10-29：「整体退回也排到第三期，压缩好几次以后会不会走样这个要排到第二期。」
+- 10-31 看完两次试跑：「142这个我记得claude code压缩完也是会读取压缩前的文件」；主控说明 Claude Code 带回最近读过的文件（约 5 个、总共约 5 万 token、单个约 5 千 token，超大的只给文件名）后，用户：「写吧，照 Claude Code 的来」。
+
+## 试跑（10-31，主控记）
+
+- canter-test-rust，压缩线 150000：12 件全做完，压缩 1 次，没丢东西；`read` 调用 30 次。
+- canter-test-ts，压缩线 60000：12 件全做完，压缩 15 次。中途插的三句话（提交末行 `Task: N/12`、第 12 件的确认提示原文、README 加示例）都守住了，确认提示原文隔了 12 次压缩照样一字不差。每次压缩后重读 3～17 个文件，`read` 调用 158 次；没命中缓存的输入 81 万，是上一次的 4 倍多。
+- 结论：摘要守得住任务、细节、待办和用户中途的要求；缺的是文件内容，压缩后模型只能重读。
+
+## 先读
+
+- `docs/DESIGN.md`：第 13 条（事件和模型历史两份）、第 17 条（照顾缓存命中，压缩是例外）、计划和待办（P2-34）里压缩附清单那段、用户点名用技能（P2-129）里压缩后补回技能那段、文件规则（P2-167）、遥测查看（P2-170）的三个信号。
+- `crates/canter-core/src/compaction.rs` 的 `compact`：压缩成功后依次 `restate_plan_mode`、`restate_skills`、`restate_goal`、`restate_directories`。带回文件照这个路子加。
+- `crates/canter-core/src/skill_invocation.rs` 的 `restate_skills`：补回的内容怎么记进模型历史、存盘重开怎么重放。
+- 文件规则怎么判断：`crates/canter-tools/src/rules.rs`、`permission.rs`。
+- 参考 Claude Code 的行为：文末用户贴的显示。Claude Code 不开源，不用去找源码。
+
+## 在哪里干活
+
+- worktree：`../canter-worktrees/p2-142-restore-files`，分支 `p2-142-restore-files`（已从 main 建好）。
+- 编译目录：命令前加 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-142-restore-files`。
+
 ## 要做的
+
+1. **记下用过哪些文件**：会话里模型成功 `read`、`write`、`edit` 过的文本文件，记路径和最后一次用到的先后。跨压缩累计，被回退、撤回掉的那几轮里的使用不算。服务端重启、重开会话后可以从空开始记。
+2. **压缩成功后带回**（照 Claude Code）：
+   - 按最后一次用到的先后，取最近的 **5 个**文件，**从硬盘重新读现在的内容**，不用压缩前那份旧的。
+   - 单个文件超过 **5 千 token**（用现有的上下文估算口径），只给文件名，不带内容。
+   - 带内容的合计不超过 **5 万 token**。
+   - 不带：已经删掉或读不了的、图片和其他非文本、已经整份在系统提示词里的（全局和项目的 `AGENTS.md`）。
+   - 文件规则当下再判一次：规则禁止读的，连名字也不带；规则要问的，只给名字，不带内容（压缩时不弹框）。
+   - 带回的内容给模型时写清这是压缩后自动重读的哪个文件、第几行到第几行，格式和 `read` 工具给模型的结果一致，模型拿来就能接着 `edit`。
+   - 只在压缩成功时做；失败、被打断的压缩不带。
+3. **进模型历史，存盘重开一致**：照 `restate_skills` 的路子记进模型历史，重开会话、服务端重启后重放出同样的上下文。下一次再压缩时，上一次带回的内容不当成用户原话。
+4. **界面显示**（照 Claude Code）：压缩卡片下面列出带回了什么，每个文件一行。带了内容的写 `Read <path> (<N> lines)`，只给名字的写 `Referenced file <path>`。路径相对会话目录，在目录外的写绝对路径。协议给压缩项目加字段，旧终端忽略；和 Codex v2 不同的地方写进 DESIGN。
+5. **遥测**：P2-170 的「压缩后重读的文件」信号照旧只看模型自己的 `read`，自动带回的不算重读。这样改之前和改之后的试跑可以直接对比。
+
+终端上显示的文字都用英文。
 
 ## 怎么算做完
 
+- 用户原话：「照 Claude Code 的来」：压缩完把最近读过或改过的文件带回来，最多 5 个、合计 5 万 token、单个 5 千 token，超大的只给文件名；压缩卡片列出带回了哪些。
+- 验证只做这些：每条行为一条针对性测试（先写测试、确认因为功能缺失而失败），加上这些边角用例：
+  - 文件规则禁止的不带，要问的只给名字；
+  - 文件改过以后带回的是新内容，删掉的不带；
+  - 超过 5 个、超过单个和合计上限时怎么取舍；
+  - 回退、撤回掉的使用不算；
+  - 存盘重开后模型历史一致；
+  - 连续压缩两次，第二次不把第一次带回的内容当用户原话。
 
+  测试用本机假模型服务端和隔离的 HOME、临时状态目录。再跑直接相关的已有测试，加 `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check`。不跑全套。觉得不够，在回复里说，不要自己加。
 
-下面是claude code压缩之后的重新读取的显示：
+## 不要做
 
+- 不改压缩摘要的提示词和 9 个小节，不改压缩线和触发时机。
+- 不改模型自己用 `read` 的行为和权限判断；带回时不弹批准框。
+- 不带回 shell 命令的输出、MCP 结果、网页内容。
+- 测试不调真实模型接口；不读、不改用户真实的 `~/.canter` 和会话。
+- 不要按项目名或路径批量杀进程（`pkill -f canter` 这类）。停自己起的服务端用起的时候记下的 PID。
+- 碰到要拿主意的事，停下来，在回复里写清问题、可选办法和你的建议，然后结束这一轮，等主控回复再接着做；不要自己换别的办法。主控的决定写进完成记录。
+- 不合并到 main，不推送。只在 `p2-142-restore-files` 上提交。
 
-Bash(git branch p2-135-late-display p2-135-lsp-tui && git log --oneline -1 p2-135-late-display | cat)
-0eabaee fix(P2-135): 60 秒只限制等结果，已到的诊断留到下一次请求交给模型
+## 做完
 
-⏺ Bash(cd /Users/firegnu/Developer/personal_projs/canter-worktrees/p2-135-lsp-tui && export CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-135-lsp-tui; O=/private/tmp/claude-501/-Users-firegnu-Developer-personal-projs-canter/518c94fa-5126-46d6-b42f-c7e9fe0e9c0d/scratchpad/e2dbe79-suite.txt; { cargo nextest run --all-targets --no-fail-fast 2>&1 | grep -E "FAIL|Summary|Starting"; cargo test --doc --workspace 2>&1 | grep -E "^test result" | awk '{p+=$4; f+=$6} END {print "DOC passed",p,"failed",f}'; cargo clippy --all-targets -q -- -D warnings 2>&1 | tail -3 && echo CLIPPY_DONE; cargo fmt --check && echo FMT_OK; } > $O 2>&1; cat $O)
+在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 附：用户 10-29 贴的 Claude Code 压缩后显示
+
+```
 Read docs/任务/P2-136-LSP接第一批语言.md (60 lines)
 Referenced file ../canter-worktrees/p2-135-lsp-tui/docs/DESIGN.md
-Read ../../../../../private/tmp/claude-501/-Users-firegnu-Developer-personal-projs-canter/518c94fa-5126-46d6-b42f-c7e9fe0e9c0d/scratchpad/p2-135-checks2.txt (17 lines)
+Read ../../../../../private/tmp/claude-501/…/scratchpad/p2-135-checks2.txt (17 lines)
 Referenced file ../canter-worktrees/p2-135-lsp-tui/crates/canter-core/tests/lsp.rs
-Read ../../../../../private/tmp/claude-501/-Users-firegnu-Developer-personal-projs-canter/518c94fa-5126-46d6-b42f-c7e9fe0e9c0d/scratchpad/p2-135-checks.txt (12 lines)
+Read ../../../../../private/tmp/claude-501/…/scratchpad/p2-135-checks.txt (12 lines)
 Skills restored (corral-dispatch)
-     (ctrl+b to run in background)
+```
 
 ## 主控记下的（10-29）
 
 - 10-29 主控为长程任务又过了一遍；用户：「整体退回也排到第三期，压缩好几次以后会不会走样这个要排到第二期。」并进本件：长任务会压缩不止一次，摘要的摘要可能越压越偏。本件要专门看连续压缩两三次以后，任务、细节、待办还在不在。
 - 要看的东西参考 P2-81「压缩后不丢东西」那一节：用户中途定的规矩、试过失败的办法、改过哪些文件和为什么、后台命令的编号和在等什么。
+- 10-31 两次试跑（见上）回答了这一条：连续压缩 15 次没走样，本件改做带回文件。
