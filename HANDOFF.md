@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-31 第四十二次装 main `cd46f3a`（`canter --version` 显示 `canter 0.1.0 · cd46f3a`；比上一版多 P2-170：`canter stats` 列最近 20 个会话（`--all` 全部），`canter stats <编号|ID>` / `--last` 看一个会话，`--json` 出明细，`--html` 在 `~/.canter/stats/` 写离线网页并打开；服务端新增 `GET /v1/stats`、`GET /v1/sessions/{id}/stats`，只读）。发给模型的请求不变。服务端改了：用户 `canter serve --replace` 后才能用 `canter stats`（旧服务端会提示重启）。
+- 退回上一版 `9644c7f`：`cp -p ~/.canter/canter-9644c7f ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-31 第四十一次装 main `9644c7f`（`canter --version` 显示 `canter 0.1.0 · 9644c7f`；比上一版多 P2-169：会话 `events.jsonl` 多 `telemetry.modelRequest` / `compaction` / `toolResult` / `approval` 四种记录，btw、handoff 的记在同目录 `private-telemetry.jsonl`；`config.json` 的 `telemetry` 默认 true，false 时新记录都不写，用量和花费照旧；`canter --tag key=value` 给会话打标签，派生会话继承）。发给模型的请求不变，缓存不冷。终端和服务端都改了：用户 `canter serve --replace` 后重开终端；没重启前新终端带 `--tag` 会报错提示重启。
 - 退回上一版 `f6b268a`：`cp -p ~/.canter/canter-f6b268a ~/.cargo/bin/canter`，再 `canter serve --replace`。旧版读到 `telemetry.*` 事件按不认识的跳过（交叉审查确认），不读 `private-telemetry.jsonl`；带标签的会话旧版能不能照常打开没测过。
 - 10-31 第四十次装 main `f6b268a`（`canter --version` 显示 `canter 0.1.0 · f6b268a`；比上一版多 P2-167：`~/.canter/rules.json` 可选 `fileRules`，每条 `{"pattern": …, "decision": "forbidden" | "prompt"}`，管模型 read / write / edit，forbidden 三档都拒，prompt 询问档单次问、Allow all 放行；默认没有条目，行为不变；`/permissions` 多一组 File rules；`rules` 可省略。另外跳过了一项偶发失败的 LSP 测试）。工具列表和提示词没变，缓存不冷。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。用户 10-31 说暂不试用。
