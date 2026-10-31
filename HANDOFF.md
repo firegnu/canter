@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 10-31 第四十三次装 main `3d390b9`（`canter --version` 显示 `canter 0.1.0 · 3d390b9`；比上一版多 P2-30：`canter exec "<任务>"` 跑一轮就退出，任务也能从标准输入读；默认「只问执行」加沙箱，要批准的自动拒、`ask_user` 自动答「没人在」，只属于这一轮、不改会话设置和档位；`--yolo` 这一轮全部允许；`--json` 每事件一行；`--resume <ID>` / `--last` 续跑；退出码 0/1/2/3/4/130；另加交互 `canter -r`）。交互会话的请求和行为不变。服务端改了：用户 `canter serve --replace` 后才能用 `canter exec`（旧服务端会提示重启）。
+- 退回上一版 `cd46f3a`：`cp -p ~/.canter/canter-cd46f3a ~/.cargo/bin/canter`，再 `canter serve --replace`。exec 跑过的会话存盘格式和交互会话一样。
 - 10-31 第四十二次装 main `cd46f3a`（`canter --version` 显示 `canter 0.1.0 · cd46f3a`；比上一版多 P2-170：`canter stats` 列最近 20 个会话（`--all` 全部），`canter stats <编号|ID>` / `--last` 看一个会话，`--json` 出明细，`--html` 在 `~/.canter/stats/` 写离线网页并打开；服务端新增 `GET /v1/stats`、`GET /v1/sessions/{id}/stats`，只读）。发给模型的请求不变。服务端改了：用户 `canter serve --replace` 后才能用 `canter stats`（旧服务端会提示重启）。
 - 退回上一版 `9644c7f`：`cp -p ~/.canter/canter-9644c7f ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-31 第四十一次装 main `9644c7f`（`canter --version` 显示 `canter 0.1.0 · 9644c7f`；比上一版多 P2-169：会话 `events.jsonl` 多 `telemetry.modelRequest` / `compaction` / `toolResult` / `approval` 四种记录，btw、handoff 的记在同目录 `private-telemetry.jsonl`；`config.json` 的 `telemetry` 默认 true，false 时新记录都不写，用量和花费照旧；`canter --tag key=value` 给会话打标签，派生会话继承）。发给模型的请求不变，缓存不冷。终端和服务端都改了：用户 `canter serve --replace` 后重开终端；没重启前新终端带 `--tag` 会报错提示重启。
