@@ -1307,3 +1307,120 @@ async fn sandbox_route_reports_the_session_switch_and_current_scope() {
         server.await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn stats_http_reads_saved_work_without_loading_or_blocking_sessions() {
+    if std::env::var_os("CANTER_STATS_HTTP_ISOLATED").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "http::tests::stats_http_reads_saved_work_without_loading_or_blocking_sessions",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env("HOME", home.path())
+            .env("CANTER_HOME", home.path().join("state"))
+            .env("CANTER_STATS_HTTP_ISOLATED", "1")
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let test = BtwTest::new().await;
+    let id = test.create().await;
+    test.input(&id, "hello stats").await;
+    let before = test.wait_status(&id, SessionStatus::Idle).await;
+    let events = test.app.store.events_after(&id, 0).unwrap();
+    for index in 0..21 {
+        test.app
+            .store
+            .create(&format!("old-{index:02}"), before.settings.clone(), index)
+            .unwrap();
+    }
+    let registry = test.app.sessions.lock().await;
+    let response = test
+        .client
+        .get("http://localhost/v1/stats")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let list: StatsListResponse = response.json().await.unwrap();
+    assert_eq!(list.data.len(), 20);
+    assert_eq!(list.data[0].number, 1);
+    assert_eq!(list.data[0].session_id, id);
+    assert_eq!(list.data[0].first_message.as_deref(), Some("hello stats"));
+    let all: StatsListResponse = test
+        .client
+        .get("http://localhost/v1/stats?all=true")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(all.data.len(), 22);
+    let response = test
+        .client
+        .get(format!("{}/stats", test.url(&id)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let report: StatsResponse = response.json().await.unwrap();
+    assert_eq!(report.overview.request_count, 1);
+    assert_eq!(
+        report
+            .overview
+            .usage
+            .as_ref()
+            .unwrap()
+            .total
+            .cached_input_tokens,
+        80
+    );
+    assert_eq!(report.requests[0].purpose, RequestPurpose::Conversation);
+    let old: StatsResponse = test
+        .client
+        .get(format!("{}/stats", test.url("old-00")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(old.overview.turn_count, 0);
+    assert!(!registry.contains_key("old-00"));
+    drop(registry);
+    let info: InfoResponse = test
+        .client
+        .get("http://localhost/v1/info")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(info.features.unwrap().contains(&"stats".into()));
+    assert_eq!(test.wait_status(&id, SessionStatus::Idle).await, before);
+    assert_eq!(test.app.store.events_after(&id, 0).unwrap(), events);
+    let again: StatsListResponse = test
+        .client
+        .get("http://localhost/v1/stats")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(again, list);
+    test.finish().await;
+}

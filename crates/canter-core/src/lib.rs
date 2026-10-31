@@ -16,6 +16,7 @@ mod runner;
 mod session;
 mod skill_invocation;
 mod skills;
+pub mod stats;
 mod telemetry;
 pub mod usage;
 mod user_shell;

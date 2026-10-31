@@ -4,7 +4,9 @@
 //! of Codex app-server v2 at rust-v0.163.0; no upstream code is copied.
 
 mod event;
+mod stats;
 mod telemetry;
+pub use stats::*;
 pub use telemetry::*;
 mod lsp;
 mod types;

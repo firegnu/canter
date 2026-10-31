@@ -425,6 +425,35 @@
       ],
       "type": "object"
     },
+    "CompactionSignals": {
+      "properties": {
+        "plan": {
+          "$ref": "#/$defs/PlanSignal"
+        },
+        "rereadFiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "unmentionedFiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "plan"
+      ],
+      "type": "object"
+    },
     "CompactionTrigger": {
       "enum": [
         "auto",
@@ -3468,6 +3497,66 @@
       ],
       "type": "string"
     },
+    "PlanSignal": {
+      "properties": {
+        "after": {
+          "items": {
+            "$ref": "#/$defs/PlanStep"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "before": {
+          "items": {
+            "$ref": "#/$defs/PlanStep"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "removed": {
+          "items": {
+            "$ref": "#/$defs/PlanStep"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "statusChanged": {
+          "items": {
+            "$ref": "#/$defs/PlanStatusChange"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PlanStatusChange": {
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/PlanStepStatus"
+        },
+        "before": {
+          "$ref": "#/$defs/PlanStepStatus"
+        },
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "step",
+        "before",
+        "after"
+      ],
+      "type": "object"
+    },
     "PlanStep": {
       "properties": {
         "status": {
@@ -4736,6 +4825,601 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "StatsApproval": {
+      "properties": {
+        "durationMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/ApprovalOutcome"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "turnId",
+        "timestamp",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "StatsApprovals": {
+      "properties": {
+        "count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "data": {
+          "items": {
+            "$ref": "#/$defs/StatsApproval"
+          },
+          "type": "array"
+        },
+        "maxDurationMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "totalDurationMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "count",
+        "data"
+      ],
+      "type": "object"
+    },
+    "StatsCompaction": {
+      "properties": {
+        "afterMessages": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "afterTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "beforeMessages": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "beforeTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "estimated": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "eventSeq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "removedMessages": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signals": {
+          "$ref": "#/$defs/CompactionSignals"
+        },
+        "succeeded": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timestamp": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "trigger": {
+          "$ref": "#/$defs/CompactionTrigger"
+        },
+        "triggerOccupancyTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId",
+        "itemId",
+        "eventSeq",
+        "timestamp",
+        "trigger",
+        "signals"
+      ],
+      "type": "object"
+    },
+    "StatsListParams": {
+      "properties": {
+        "all": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "StatsListResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/StatsSession"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
+    "StatsOverview": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "recordedRetryCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requestCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retryCount": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "startedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "tags": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "turnCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "cwd",
+        "model",
+        "startedAt",
+        "updatedAt",
+        "tags",
+        "turnCount",
+        "requestCount",
+        "recordedRetryCount"
+      ],
+      "type": "object"
+    },
+    "StatsRequest": {
+      "properties": {
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contextTotalTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageCost"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "durationMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "eventSeq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "firstResponseMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/ModelRequestOutcome"
+        },
+        "purpose": {
+          "$ref": "#/$defs/RequestPurpose"
+        },
+        "requestId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retryCount": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "settings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "toolCallIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenUsageBreakdown"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "startedAt",
+        "purpose",
+        "outcome",
+        "toolCallIds"
+      ],
+      "type": "object"
+    },
+    "StatsResponse": {
+      "properties": {
+        "approvals": {
+          "$ref": "#/$defs/StatsApprovals"
+        },
+        "compactions": {
+          "items": {
+            "$ref": "#/$defs/StatsCompaction"
+          },
+          "type": "array"
+        },
+        "eventSeq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "overview": {
+          "$ref": "#/$defs/StatsOverview"
+        },
+        "requests": {
+          "items": {
+            "$ref": "#/$defs/StatsRequest"
+          },
+          "type": "array"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "toolCalls": {
+          "items": {
+            "$ref": "#/$defs/StatsToolCall"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/StatsTool"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sessionId",
+        "eventSeq",
+        "overview",
+        "requests",
+        "compactions",
+        "tools",
+        "toolCalls",
+        "approvals"
+      ],
+      "type": "object"
+    },
+    "StatsSession": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "firstMessage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "number": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "number",
+        "sessionId",
+        "updatedAt",
+        "cwd"
+      ],
+      "type": "object"
+    },
+    "StatsTool": {
+      "properties": {
+        "averageResultTokens": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "callCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failureCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxResultTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "truncatedCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "callCount"
+      ],
+      "type": "object"
+    },
+    "StatsToolCall": {
+      "properties": {
+        "estimated": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "eventSeq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "itemId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "originalTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "resultTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sourceFileBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/ItemStatus"
+        },
+        "timestamp": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "toolCallId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "truncated": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ],
+      "type": "object"
     },
     "TokenUsage": {
       "properties": {

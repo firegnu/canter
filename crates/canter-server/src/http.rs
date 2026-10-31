@@ -138,6 +138,8 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::MODELS, get(models))
         .route(routes::USAGE, get(usage))
         .route(routes::SESSION_USAGE, get(session_usage))
+        .route(routes::STATS, get(stats_list))
+        .route(routes::SESSION_STATS, get(session_stats))
         .route(routes::SESSIONS, post(create).get(list))
         .route(routes::SESSION, get(read).patch(update).delete(close))
         .route(routes::GOAL, get(goal).post(set_goal).delete(clear_goal))
@@ -283,6 +285,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
             "review".into(),
             "addDirectories".into(),
             "tags".into(),
+            "stats".into(),
             "goals".into(),
             "lsp".into(),
         ]),
@@ -418,6 +421,33 @@ async fn session_usage(
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<UsageResponse>, ApiError> {
     Ok(Json(ledger(&app, &id).await?.report))
+}
+
+async fn stats_list(
+    State(app): State<Arc<App>>,
+    params: Result<Query<StatsListParams>, QueryRejection>,
+) -> Result<Json<StatsListResponse>, ApiError> {
+    let Query(params) = params.map_err(|_| ApiError::invalid())?;
+    let store = app.store.clone();
+    let report = tokio::task::spawn_blocking(move || canter_core::stats::list(&store, params.all))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(CoreError::from)?;
+    Ok(Json(report))
+}
+
+async fn session_stats(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<StatsResponse>, ApiError> {
+    let store = app.store.clone();
+    let prices = app.options.prices.clone();
+    let report =
+        tokio::task::spawn_blocking(move || canter_core::stats::report(&store, &id, &prices))
+            .await
+            .map_err(|_| ApiError::internal())?
+            .map_err(CoreError::from)?;
+    Ok(Json(report))
 }
 
 async fn usage(State(app): State<Arc<App>>) -> Result<Json<UsageResponse>, ApiError> {
