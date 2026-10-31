@@ -36,10 +36,10 @@ impl Drop for Lifetime {
 }
 pub(crate) struct Shared {
     pub input_waiters: AtomicUsize,
-    pub state: Mutex<State>,
-    pub model: Arc<dyn Model>,
-    pub tools: Tools,
-    pub options: CoreOptions,
+    pub state: Arc<Mutex<State>>,
+    pub runtime: std::sync::RwLock<Arc<crate::configuration::Runtime>>,
+    pub configuration: std::sync::OnceLock<Arc<dyn crate::ConfigurationSource>>,
+    pub configuration_warnings: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>,
     pub lifetime: CancellationToken,
 }
 pub(crate) struct State {
@@ -80,6 +80,7 @@ pub(crate) struct State {
     plan_tool_calls: u8,
 }
 pub(crate) struct Active {
+    pub configuration_lease: Option<Arc<dyn Send + Sync>>,
     pub non_interactive: bool,
     pub approval_policy: Option<PermissionMode>,
     pub goal_continuation: bool,
@@ -193,43 +194,7 @@ impl State {
         }
         self.gate
             .set_additional_directories(&self.journal.snapshot.settings.additional_directories);
-        self.tool_definitions = canter_tools::Tool::ALL
-            .into_iter()
-            .filter(|tool| tools.find(tool.name()).is_some())
-            .map(|tool| {
-                let def = tools.definition(tool);
-                canter_model::ToolDefinition {
-                    name: def.name.into(),
-                    description: def.description.into(),
-                    parameters: def.parameters,
-                }
-            })
-            .chain(crate::goal::definitions())
-            .chain(
-                canter_tools::Tool::MCP
-                    .into_iter()
-                    .filter(|tool| tools.find(tool.name()).is_some())
-                    .map(|tool| {
-                        let def = tool.definition();
-                        canter_model::ToolDefinition {
-                            name: def.name.into(),
-                            description: def.description.into(),
-                            parameters: def.parameters,
-                        }
-                    }),
-            )
-            .chain(
-                tools
-                    .mcp_tools()
-                    .iter()
-                    .filter(|_| tools.find("mcp_search").is_none())
-                    .map(|tool| canter_model::ToolDefinition {
-                        name: tool.name.clone(),
-                        description: tool.description.clone(),
-                        parameters: tool.parameters.clone(),
-                    }),
-            )
-            .collect();
+        self.define_tools(tools);
         let (mut segments, warnings, skills) = crate::context::prefix(
             self.journal.snapshot.settings.cwd.clone(),
             home,
@@ -285,6 +250,79 @@ impl State {
         }
         Ok(())
     }
+    fn define_tools(&mut self, tools: &Tools) {
+        self.tool_definitions = canter_tools::Tool::ALL
+            .into_iter()
+            .filter(|tool| tools.find(tool.name()).is_some())
+            .map(|tool| {
+                let def = tools.definition(tool);
+                canter_model::ToolDefinition {
+                    name: def.name.into(),
+                    description: def.description.into(),
+                    parameters: def.parameters,
+                }
+            })
+            .chain(crate::goal::definitions())
+            .chain(
+                canter_tools::Tool::MCP
+                    .into_iter()
+                    .filter(|tool| tools.find(tool.name()).is_some())
+                    .map(|tool| {
+                        let def = tool.definition();
+                        canter_model::ToolDefinition {
+                            name: def.name.into(),
+                            description: def.description.into(),
+                            parameters: def.parameters,
+                        }
+                    }),
+            )
+            .chain(
+                tools
+                    .mcp_tools()
+                    .iter()
+                    .filter(|_| tools.find("mcp_search").is_none())
+                    .map(|tool| canter_model::ToolDefinition {
+                        name: tool.name.clone(),
+                        description: tool.description.clone(),
+                        parameters: tool.parameters.clone(),
+                    }),
+            )
+            .collect();
+    }
+
+    pub(crate) async fn refresh_tools(&mut self, tools: &Tools) -> Result<(), CoreError> {
+        self.define_tools(tools);
+        let mut segments = self.prefix_segments.clone().unwrap_or_default();
+        if let Some(core) = segments
+            .iter_mut()
+            .find(|segment| segment.kind == crate::prompt::SegmentKind::Core)
+        {
+            core.text = crate::prompt::core(&self.tool_definitions);
+        }
+        segments.retain(|segment| segment.kind != crate::prompt::SegmentKind::McpCatalog);
+        if let Some(text) = tools.mcp_catalog() {
+            segments.push(crate::prompt::Segment {
+                kind: crate::prompt::SegmentKind::McpCatalog,
+                path: None,
+                text,
+            });
+        }
+        let (prefix, sections) = crate::prompt::chat_completions(&segments);
+        if self.prefix != prefix {
+            self.journal
+                .record(HistoryEntry::Context {
+                    messages: prefix.clone(),
+                    segments: Some(segments.clone()),
+                })
+                .await?;
+            self.prefix = prefix;
+            self.prefix_segments = Some(segments);
+            self.prefix_sections = sections;
+            self.measured_context = None;
+        }
+        Ok(())
+    }
+
     pub async fn message(&mut self, message: Message) -> Result<(), CoreError> {
         self.journal
             .record(HistoryEntry::Message {
@@ -530,7 +568,12 @@ impl Session {
             .get("HOME")
             .map(std::path::PathBuf::from);
         let canter_home = crate::context::canter_home(&runtime.environment);
-        let tools = executor(writer.snapshot().settings.cwd.clone(), runtime, &options).await?;
+        let tools = executor(
+            writer.snapshot().settings.cwd.clone(),
+            runtime.clone(),
+            &options,
+        )
+        .await?;
         let mut state = State::new(Journal::new(store, writer, options.telemetry));
         if let Some(lsp) = tools.lsp() {
             lsp.restore_server_ids(&state.journal.snapshot.language_servers);
@@ -690,7 +733,10 @@ impl Session {
             session: state.journal.snapshot.clone(),
             event_seq: state.journal.snapshot.last_event_seq,
         };
-        Ok((Self::from_state(state, tools, model, options), response))
+        Ok((
+            Self::from_state(state, tools, model, options, runtime),
+            response,
+        ))
     }
 
     pub async fn create(
@@ -730,7 +776,7 @@ impl Session {
             .get("HOME")
             .map(std::path::PathBuf::from);
         let canter_home = crate::context::canter_home(&runtime.environment);
-        let tools = executor(cwd, runtime, &options).await?;
+        let tools = executor(cwd, runtime.clone(), &options).await?;
         settings.additional_directories = crate::directories::append(
             settings.cwd.clone(),
             home.clone(),
@@ -757,7 +803,10 @@ impl Session {
             session: state.journal.snapshot.clone(),
             event_seq: state.journal.snapshot.last_event_seq,
         };
-        Ok((Self::from_state(state, tools, model, options), response))
+        Ok((
+            Self::from_state(state, tools, model, options, runtime),
+            response,
+        ))
     }
 
     fn from_state(
@@ -765,6 +814,7 @@ impl Session {
         tools: Tools,
         model: Arc<dyn Model>,
         options: CoreOptions,
+        context: RuntimeContext,
     ) -> Self {
         if let Some(path) = &options.command_rules_path {
             state.gate = std::mem::take(&mut state.gate).with_rules_file(path.clone());
@@ -775,10 +825,17 @@ impl Session {
         let lifetime = CancellationToken::new();
         let shared = Arc::new(Shared {
             input_waiters: AtomicUsize::new(0),
-            state: Mutex::new(state),
-            model,
-            tools,
-            options,
+            state: Arc::new(Mutex::new(state)),
+            runtime: std::sync::RwLock::new(Arc::new(crate::configuration::Runtime {
+                revision: None,
+                model,
+                tools,
+                options,
+                context,
+                retired_tools: Vec::new(),
+            })),
+            configuration: Default::default(),
+            configuration_warnings: Default::default(),
             lifetime: lifetime.clone(),
         });
         crate::background::watch(&shared);
@@ -858,7 +915,8 @@ impl Session {
         }
         let imported = if let Some(loaded) = loaded {
             let model = &state.journal.snapshot.settings.model;
-            if !self.shared.options.image_models.contains(model) {
+            if state.active.is_some() && !self.shared.runtime().options.image_models.contains(model)
+            {
                 return Err(CoreError::new(
                     ErrorCode::InvalidRequest,
                     &format!("{model} does not accept images"),
@@ -978,7 +1036,7 @@ impl Session {
     /// The session lock orders it after settings updates, which reconfigure the shell.
     pub async fn sandbox(&self) -> canter_protocol::SessionSandboxResponse {
         let _state = self.shared.state.lock().await;
-        self.shared.tools.sandbox_scope()
+        self.shared.runtime().tools.sandbox_scope()
     }
 
     pub async fn snapshot(&self) -> SessionReadResponse {
@@ -987,6 +1045,11 @@ impl Session {
             session: state.journal.snapshot.clone(),
             event_seq: state.journal.snapshot.last_event_seq,
         }
+    }
+
+    /// Distinguish clones of this open session from a later reopen of the same id.
+    pub fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
     }
 
     pub async fn interrupt(
@@ -1204,7 +1267,7 @@ impl Session {
                 .journal
                 .append(vec![EventPayload::SessionUpdated { settings }])
                 .await?;
-            self.shared.tools.configure_shell(
+            self.shared.runtime().tools.configure_shell(
                 state.approval_policy(),
                 &state.journal.snapshot.settings.additional_directories,
             );
@@ -1317,7 +1380,7 @@ impl Session {
             .journal
             .append(vec![EventPayload::SessionUpdated { settings }])
             .await?;
-        self.shared.tools.configure_shell(
+        self.shared.runtime().tools.configure_shell(
             state.approval_policy(),
             &state.journal.snapshot.settings.additional_directories,
         );
@@ -1331,7 +1394,7 @@ impl Session {
             state.gate.set_additional_directories(&directories);
             state.restate_directories().await?;
         }
-        if let Some(lsp) = self.shared.tools.lsp() {
+        if let Some(lsp) = self.shared.runtime().tools.lsp() {
             lsp.configure(
                 state
                     .journal
@@ -1448,9 +1511,9 @@ impl Session {
         if let Some(done) = btw_done {
             stopped = stopped.and(wait_done(done).await.map(|_| ()));
         }
-        self.shared.tools.background().stop_all().await;
-        self.shared.tools.close_shell();
-        if let Some(lsp) = self.shared.tools.lsp() {
+        self.shared.runtime().tools.background().stop_all().await;
+        self.shared.runtime().tools.close_shell();
+        if let Some(lsp) = self.shared.runtime().tools.lsp() {
             lsp.close().await;
         }
         if !self.shared.state.lock().await.journal.failed {
@@ -1562,6 +1625,25 @@ impl Shared {
         input_id: Option<String>,
         skills: Vec<crate::skill_invocation::Snapshot>,
     ) -> Result<(SessionInputResponse, Done), CoreError> {
+        let configuration_lease = self.configure(state).await?;
+        if params
+            .input
+            .iter()
+            .any(|input| matches!(input, UserInput::LocalImage { .. }))
+            && !self
+                .runtime()
+                .options
+                .image_models
+                .contains(&state.journal.snapshot.settings.model)
+        {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                &format!(
+                    "{} does not accept images",
+                    state.journal.snapshot.settings.model
+                ),
+            ));
+        }
         let turn = Turn {
             review: params.review,
             id: id("turn"),
@@ -1612,6 +1694,7 @@ impl Shared {
         let events = state.journal.append(payloads).await?;
         let (done, receiver) = watch::channel(None);
         state.active = Some(Active {
+            configuration_lease,
             non_interactive: params.non_interactive,
             approval_policy: params.approval_policy,
             goal_continuation: false,
@@ -1626,7 +1709,7 @@ impl Shared {
             done: receiver,
         });
         state.automatic_turns_paused = params.non_interactive;
-        self.tools.configure_shell(
+        self.runtime().tools.configure_shell(
             state.approval_policy(),
             &state.journal.snapshot.settings.additional_directories,
         );

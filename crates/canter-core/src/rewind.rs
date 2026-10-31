@@ -450,6 +450,7 @@ impl Session {
                 Some(reason)
             } else {
                 self.shared
+                    .runtime()
                     .tools
                     .restore_file(Path::new(&file.preview.path), file.before.as_deref())
                     .await

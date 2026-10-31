@@ -295,7 +295,7 @@ async fn plan_reminders_require_an_enabled_unfinished_plan() {
     let config_path = fixture.root.path().join("state/config.json");
     let mut config: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
     config["plan_enabled"] = json!(false);
-    fs::write(config_path, config.to_string()).unwrap();
+    fixture.reload_config(config).await;
     let path = format!("/v1/sessions/{id}");
     assert_eq!(
         fixture

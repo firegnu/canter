@@ -24,6 +24,7 @@ pub(crate) struct Journal {
     pub compactions: Vec<crate::telemetry::Compaction>,
     approval_times: std::collections::HashMap<String, (String, std::time::Instant)>,
     pub telemetry: Option<crate::telemetry::Pending>,
+    pub telemetry_enabled: bool,
     writer: Arc<Mutex<Option<SessionWriter>>>,
     pub snapshot: SessionSnapshot,
     pub store: Arc<Store>,
@@ -39,6 +40,7 @@ impl Journal {
             compactions: Vec::new(),
             approval_times: Default::default(),
             telemetry: telemetry.then(Default::default),
+            telemetry_enabled: telemetry,
             writer: Arc::new(Mutex::new(Some(writer))),
             snapshot,
             store,
@@ -56,7 +58,7 @@ impl Journal {
         }
         if let Some(pending) = &self.telemetry {
             let mut approvals = Vec::new();
-            for payload in &payloads {
+            for payload in payloads.iter().filter(|_| self.telemetry_enabled) {
                 match payload {
                     EventPayload::RequestOpened { request }
                         if matches!(

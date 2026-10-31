@@ -83,7 +83,7 @@ pub(crate) async fn stream<'a>(
     context: ContextEstimate,
     cancel: &CancellationToken,
 ) -> TrackedStream<'a> {
-    let trace = if shared.options.telemetry {
+    let trace = if shared.runtime().options.telemetry {
         let state = shared.state.lock().await;
         let settings = &state.journal.snapshot.settings;
         let effort = match request.options.thinking {
@@ -107,7 +107,7 @@ pub(crate) async fn stream<'a>(
                 purpose,
                 outcome: ModelRequestOutcome::Unknown,
                 retry_count: Some(0),
-                started_at: (shared.options.request_time)(),
+                started_at: (shared.runtime().options.request_time)(),
                 duration_ms: 0,
                 first_response_ms: None,
                 settings: RequestSettings {
@@ -124,8 +124,14 @@ pub(crate) async fn stream<'a>(
     } else {
         None
     };
+    let model = shared.runtime().model.clone();
+    let cancel = cancel.clone();
     TrackedStream {
-        inner: shared.model.stream(request, cancel.clone()),
+        inner: Box::pin(async_stream::stream! {
+            use futures_util::StreamExt;
+            let mut stream = model.stream(request, cancel);
+            while let Some(event) = stream.next().await { yield event; }
+        }),
         trace,
         ended: false,
     }

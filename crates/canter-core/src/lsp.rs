@@ -356,6 +356,7 @@ pub(crate) async fn inline(
     let text = match ticket
         .wait(
             shared
+                .runtime()
                 .options
                 .lsp_inline_wait
                 .saturating_sub(ticket.changed_at.elapsed()),
@@ -366,8 +367,8 @@ pub(crate) async fn inline(
             pending.root = Some(batch.root.clone());
             pending.reported = true;
             let mut batches = tokio::time::timeout_at(
-                ticket.changed_at + shared.options.lsp_inline_wait,
-                shared.tools.lsp().unwrap().diagnostics(),
+                ticket.changed_at + shared.runtime().options.lsp_inline_wait,
+                shared.runtime().tools.lsp().unwrap().diagnostics(),
             )
             .await
             .unwrap_or_default();
@@ -379,7 +380,7 @@ pub(crate) async fn inline(
             let report = state.lsp_delivery.render(batches, &cwd, false);
             items = report_items(
                 &report,
-                shared.tools.lsp().unwrap(),
+                shared.runtime().tools.lsp().unwrap(),
                 &cwd,
                 Some(&pending.item_id),
                 DiagnosticDelivery::Inline,
@@ -427,7 +428,7 @@ pub(crate) async fn inline(
 }
 
 pub(crate) async fn before_request(shared: &Shared, turn_id: &str) -> Result<(), crate::CoreError> {
-    let Some(lsp) = shared.tools.lsp() else {
+    let Some(lsp) = shared.runtime().tools.lsp().cloned() else {
         return Ok(());
     };
     let cached = lsp.diagnostics().await;
@@ -435,7 +436,7 @@ pub(crate) async fn before_request(shared: &Shared, turn_id: &str) -> Result<(),
         let mut state = shared.state.lock().await;
         state
             .lsp_delivery
-            .expire(shared.options.lsp_delivery_window);
+            .expire(shared.runtime().options.lsp_delivery_window);
         (
             std::mem::take(&mut state.lsp_delivery.pending),
             std::mem::take(&mut state.lsp_delivery.expired),
@@ -470,7 +471,7 @@ pub(crate) async fn before_request(shared: &Shared, turn_id: &str) -> Result<(),
             }
             continue;
         }
-        if p.ticket.changed_at.elapsed() > shared.options.lsp_delivery_window {
+        if p.ticket.changed_at.elapsed() > shared.runtime().options.lsp_delivery_window {
             discarded.insert(path.clone());
             if !p.reported {
                 statuses.push((p.item_id.clone(),path.clone(),DiagnosticStatus::TimedOut,"The 60-second diagnostic delivery window has expired. No current result is being delivered for this change.".into()));
@@ -496,7 +497,7 @@ pub(crate) async fn before_request(shared: &Shared, turn_id: &str) -> Result<(),
     let mut retained = BTreeMap::new();
     for (path, p) in pending {
         if !discarded.contains(&path)
-            && p.ticket.changed_at.elapsed() <= shared.options.lsp_delivery_window
+            && p.ticket.changed_at.elapsed() <= shared.runtime().options.lsp_delivery_window
             && p.ticket.is_current().await
         {
             retained.insert(path, p);
@@ -558,7 +559,7 @@ pub(crate) async fn before_request(shared: &Shared, turn_id: &str) -> Result<(),
             true,
             MAX_BYTES - status_text.len(),
         );
-        let mut items = report_items(&report, lsp, &cwd, None, DiagnosticDelivery::Late);
+        let mut items = report_items(&report, &lsp, &cwd, None, DiagnosticDelivery::Late);
         for (item, file) in items.iter_mut().zip(&report.files) {
             if let Item::Diagnostics { source_item_id, .. } = item {
                 *source_item_id = state
@@ -768,9 +769,6 @@ impl Delivery {
 }
 
 pub(crate) fn watch(shared: &std::sync::Arc<Shared>) {
-    if shared.tools.lsp().is_none() {
-        return;
-    }
     let weak = std::sync::Arc::downgrade(shared);
     let stop = shared.lifetime.clone();
     tokio::spawn(async move {
@@ -789,7 +787,7 @@ pub(crate) fn watch(shared: &std::sync::Arc<Shared>) {
                 .lock()
                 .await
                 .lsp_delivery
-                .expire(shared.options.lsp_delivery_window);
+                .expire(shared.runtime().options.lsp_delivery_window);
             if sync_states(&shared).await.is_err() {
                 break;
             }
@@ -797,12 +795,13 @@ pub(crate) fn watch(shared: &std::sync::Arc<Shared>) {
     });
 }
 async fn sync_states(shared: &Shared) -> Result<Vec<LanguageServer>, crate::CoreError> {
+    let mut state = shared.state.lock().await;
     let live = shared
+        .runtime()
         .tools
         .lsp()
         .map(|lsp| lsp.language_servers())
         .unwrap_or_default();
-    let mut state = shared.state.lock().await;
     if state.closing {
         return Ok(state.journal.snapshot.language_servers.clone());
     }
@@ -843,7 +842,7 @@ impl crate::Session {
         })
     }
     pub async fn diagnostics(&self) -> DiagnosticListResponse {
-        let Some(lsp) = self.shared.tools.lsp() else {
+        let Some(lsp) = self.shared.runtime().tools.lsp().cloned() else {
             return DiagnosticListResponse { data: vec![] };
         };
         let batches = lsp.diagnostics().await;
@@ -868,7 +867,7 @@ impl crate::Session {
                             .filter(|d| matches!(d["severity"].as_u64(), Some(1 | 2)))
                             .cloned()
                             .collect::<Vec<_>>(),
-                        lsp,
+                        &lsp,
                         &cwd,
                     )
                 })
@@ -881,9 +880,15 @@ impl crate::Session {
     ) -> Result<LanguageServerListResponse, crate::CoreError> {
         let session = self.clone();
         crate::session::owned(async move {
-            let lsp = session.shared.tools.lsp().ok_or_else(|| {
-                crate::CoreError::new(ErrorCode::InvalidRequest, "LSP is disabled")
-            })?;
+            let lsp = session
+                .shared
+                .runtime()
+                .tools
+                .lsp()
+                .cloned()
+                .ok_or_else(|| {
+                    crate::CoreError::new(ErrorCode::InvalidRequest, "LSP is disabled")
+                })?;
             lsp.stop_server(&id)
                 .await
                 .map_err(|e| crate::CoreError::new(ErrorCode::InvalidRequest, &e.message))?;
@@ -897,9 +902,15 @@ impl crate::Session {
     ) -> Result<LanguageServerListResponse, crate::CoreError> {
         let session = self.clone();
         crate::session::owned(async move {
-            let lsp = session.shared.tools.lsp().ok_or_else(|| {
-                crate::CoreError::new(ErrorCode::InvalidRequest, "LSP is disabled")
-            })?;
+            let lsp = session
+                .shared
+                .runtime()
+                .tools
+                .lsp()
+                .cloned()
+                .ok_or_else(|| {
+                    crate::CoreError::new(ErrorCode::InvalidRequest, "LSP is disabled")
+                })?;
             lsp.retry_server(&id)
                 .await
                 .map_err(|e| crate::CoreError::new(ErrorCode::InvalidRequest, &e.message))?;

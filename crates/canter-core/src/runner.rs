@@ -17,10 +17,21 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
     // Late steering may re-enter conversation without starting a new turn.
     let mut auto_compaction_failed = false;
     loop {
+        let cancel = shared
+            .state
+            .lock()
+            .await
+            .active
+            .as_ref()
+            .expect("active turn")
+            .cancel
+            .clone();
+        let configuration = shared.prepare_turn(&cancel).await;
+        let ready = configuration.is_ok();
         let (turn, cancel, manual_compaction, user_shell) = {
             let state = shared.state.lock().await;
             let active = state.active.as_ref().expect("active turn");
-            if let Some(lsp) = shared.tools.lsp() {
+            if let Some(lsp) = shared.runtime().tools.lsp() {
                 lsp.set_round(if state.journal.snapshot.settings.plan_mode {
                     canter_tools::lsp::Round::Plan
                 } else if active.turn.review.is_some() {
@@ -36,14 +47,19 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                 active.user_shell.clone(),
             )
         };
-        let mut result = if let Some(params) = user_shell {
+        let mut result = if let Err(error) = configuration {
+            Err(error)
+        } else if cancel.is_cancelled() {
+            Ok(())
+        } else if let Some(params) = user_shell {
             crate::user_shell::run(&shared, &turn.id, &params, &cancel).await
         } else if manual_compaction {
             compaction::compact(&shared, &turn.id, &cancel, CompactionTrigger::Manual, None).await
         } else {
             conversation(&shared, &turn.id, &cancel, &mut auto_compaction_failed).await
         };
-        if !cancel.is_cancelled()
+        if ready
+            && !cancel.is_cancelled()
             && shared
                 .state
                 .lock()
@@ -191,11 +207,11 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         }
         .await;
         state.active = None;
-        shared.tools.configure_shell(
+        shared.runtime().tools.configure_shell(
             state.approval_policy(),
             &state.journal.snapshot.settings.additional_directories,
         );
-        if let Some(lsp) = shared.tools.lsp() {
+        if let Some(lsp) = shared.runtime().tools.lsp() {
             lsp.set_round(if state.journal.snapshot.settings.plan_mode {
                 canter_tools::lsp::Round::Plan
             } else {
@@ -260,7 +276,7 @@ async fn conversation(
             state.consume_steering(turn_id).await?;
             state.background_cards(turn_id).await?;
             let summary = state.summary_request().await?;
-            let mut request = context::request(&state, shared.options.max_output_tokens);
+            let mut request = context::request(&state, shared.runtime().options.max_output_tokens);
             if summary {
                 request.options.max_retries = Some(0);
             }
@@ -277,8 +293,8 @@ async fn conversation(
                 .map_or(estimated, |(actual, before)| {
                     estimated.max(actual.saturating_add(estimated.saturating_sub(before)))
                 });
-        let fits = occupancy.saturating_add(u64::from(shared.options.max_output_tokens))
-            <= shared.options.context_window;
+        let fits = occupancy.saturating_add(u64::from(shared.runtime().options.max_output_tokens))
+            <= shared.runtime().options.context_window;
         if !summary
             && occupancy > compaction::input_limit(shared)
             && !compacted
@@ -461,7 +477,7 @@ async fn model_response(
     let estimated = context.total();
     let request = crate::images::prepare(shared, request).await?;
     let model = request.model.clone();
-    let mut started_at = (shared.options.request_time)();
+    let mut started_at = (shared.runtime().options.request_time)();
     let mut goal_id = shared.state.lock().await.charge_goal();
     let mut stream = crate::telemetry::stream(
         shared,
@@ -497,7 +513,7 @@ async fn model_response(
                     }
                     if shared.state.lock().await.goal_summary.is_some() { break; }
                     record_retry(shared, turn_id, &error, attempt, max_retries, delay).await?;
-                    started_at = (shared.options.request_time)();
+                    started_at = (shared.runtime().options.request_time)();
                     goal_id = shared.state.lock().await.charge_goal();
                 }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),
@@ -680,7 +696,7 @@ pub(crate) async fn record_usage(
             .map_or(0, |usage| usage.context_tokens)
     };
     let mut request =
-        crate::usage::request_charge(&shared.options.prices, model, started_at, &last);
+        crate::usage::request_charge(&shared.runtime().options.prices, model, started_at, &last);
     request.request_id = request_id.map(Into::into);
     let charge = crate::usage::cost(&request);
     let mut cost = state
@@ -698,7 +714,7 @@ pub(crate) async fn record_usage(
         last: last.clone(),
         context_tokens,
         model_context_window: if in_turn {
-            Some(shared.options.context_window)
+            Some(shared.runtime().options.context_window)
         } else {
             state
                 .journal
@@ -787,6 +803,7 @@ async fn execute(
         .settings
         .plan_mode;
     let Some(tool) = shared
+        .runtime()
         .tools
         .find(&call.name)
         .or_else(|| (plan_mode && call.name == "update_plan").then_some(Tool::UpdatePlan))
@@ -815,7 +832,7 @@ async fn execute(
             .active
             .as_ref()
             .is_some_and(|active| active.turn.review.is_some());
-        if let Some(lsp) = shared.tools.lsp() {
+        if let Some(lsp) = shared.runtime().tools.lsp() {
             lsp.set_round(if state.journal.snapshot.settings.plan_mode {
                 canter_tools::lsp::Round::Plan
             } else if review {
@@ -828,10 +845,12 @@ async fn execute(
     };
     let prepared = if plan_mode
         && !shared
+            .runtime()
             .tools
             .allowed_in_plan_mode(&call.name, &call.arguments)
     {
         Err(shared
+            .runtime()
             .tools
             .blocked_in_plan_mode(&call.name, id("tool"), &call.arguments))
     } else if review && matches!(tool, Tool::Write | Tool::Edit) {
@@ -849,6 +868,7 @@ async fn execute(
         })
     } else {
         shared
+            .runtime()
             .tools
             .prepare_named(&call.name, id("tool"), &call.arguments, cancel)
             .await
@@ -932,10 +952,11 @@ async fn execute(
                         .settings
                         .plan_mode
                         && !shared
+                            .runtime()
                             .tools
                             .allowed_in_plan_mode(&call.name, &call.arguments)
                     {
-                        output = shared.tools.blocked_in_plan_mode(
+                        output = shared.runtime().tools.blocked_in_plan_mode(
                             &call.name,
                             output.item.id().unwrap().into(),
                             &call.arguments,
@@ -969,7 +990,8 @@ async fn execute(
                     let mut on_output = |text: &str| {
                         let _ = sender.send(text.to_owned());
                     };
-                    let execute = shared.tools.execute(permit, cancel, &mut on_output);
+                    let runtime = shared.runtime();
+                    let execute = runtime.tools.execute(permit, cancel, &mut on_output);
                     tokio::pin!(execute);
                     let mut pending = Vec::new();
                     let mut timer = tokio::time::interval(Duration::from_millis(20));
@@ -1313,7 +1335,7 @@ async fn ask_user(
             }
         },
         resolution = &mut receiver => Some(resolution.map_err(|_| CoreError::internal())?),
-        _ = tokio::time::sleep(shared.options.goal_question_timeout), if timeout => {
+        _ = tokio::time::sleep(shared.runtime().options.goal_question_timeout), if timeout => {
             let mut state = shared.state.lock().await;
             // Resolve under the same lock as a real user answer; late replies cannot win twice.
             if let Ok(resolution) = receiver.try_recv() { Some(resolution) }

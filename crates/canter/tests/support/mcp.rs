@@ -259,11 +259,11 @@ async fn start(http: &HttpMcp, replies: Vec<String>) -> Fixture {
     )
     .await
 }
-fn set_search(fixture: &Fixture, enabled: bool) {
+async fn set_search(fixture: &Fixture, enabled: bool) {
     let path = fixture.root.path().join("state/config.json");
     let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     config["mcp_tool_search"] = json!(enabled);
-    fs::write(path, config.to_string()).unwrap();
+    fixture.reload_config(config).await;
 }
 async fn create(fixture: &Fixture, mode: &str) -> SessionCreateResponse {
     fixture.request(Method::POST,"/v1/sessions",json!({"cwd":fixture.root.path().join("work"),"env":{},"model":"fake-model","approvalPolicy":mode,"clientName":"test"})).await.json().await.unwrap()
@@ -451,7 +451,7 @@ async fn stdio_and_http_tools_reach_model_in_fixed_order_and_return_results() {
         "remote":http.config(),
         "local":{"transport":"stdio","command":executable,"args":["--fixture"],"env":{"PID_FILE":temp.path().join("pid"),"CHILD_PID_FILE":temp.path().join("child-pid"),"MCP_TEST_KEY":"test-only-stdio-mcp-key"}}
     })).await;
-    set_search(&fixture, false);
+    set_search(&fixture, false).await;
     let created = fixture.request(Method::POST,"/v1/sessions",json!({"cwd":fixture.root.path().join("work"),"env":{},"model":"fake-model","approvalPolicy":"allowAll","clientName":"test"})).await.json::<SessionCreateResponse>().await.unwrap();
     fixture.input(&created.session.id).await;
     fixture
@@ -570,7 +570,7 @@ async fn permissions_grant_only_one_tool_and_review_never_asks() {
             ],
         )
         .await;
-        set_search(&fixture, search);
+        set_search(&fixture, search).await;
         let created = create(&fixture, mode).await;
         let id = &created.session.id;
         fixture.input(id).await;
@@ -1544,14 +1544,14 @@ async fn mcp_call_unknown_name_and_non_object_do_not_request_approval() {
 }
 
 #[tokio::test]
-async fn mcp_search_switch_is_refreshed_only_when_opening_a_session() {
+async fn mcp_search_switch_is_refreshed_for_the_next_turn_of_an_open_session() {
     let http = HttpMcp::start(&["echo"]).await;
     let mut fixture = start(&http, vec![text_reply(), text_reply(), text_reply()]).await;
     let created = create(&fixture, "allowAll").await;
     let id = &created.session.id;
     fixture.input(id).await;
     let events = complete(&fixture, id, created.event_seq).await;
-    set_search(&fixture, false);
+    set_search(&fixture, false).await;
     fixture.input(id).await;
     complete(&fixture, id, events.last().unwrap().seq).await;
     assert_eq!(
@@ -1575,11 +1575,12 @@ async fn mcp_search_switch_is_refreshed_only_when_opening_a_session() {
     complete(&fixture, id, reopened.event_seq).await;
     fixture.stop().await;
     let script = fixture.script.lock().unwrap();
-    assert_eq!(script.requests[0]["tools"], script.requests[1]["tools"]);
-    assert_eq!(
+    assert_ne!(script.requests[0]["tools"], script.requests[1]["tools"]);
+    assert_ne!(
         script.requests[0]["messages"][0],
         script.requests[1]["messages"][0]
     );
+    assert_eq!(script.requests[1]["tools"], script.requests[2]["tools"]);
     let reopened = &script.requests[2];
     assert!(reopened["tools"].to_string().contains("mcp__remote__echo"));
     assert!(!reopened["tools"].to_string().contains("mcp_search"));

@@ -480,7 +480,7 @@ impl crate::Session {
         use canter_model::UserContent;
         use canter_protocol::{ContextMessages, ContextResponse};
         let state = self.shared.state.lock().await;
-        let request = request(&state, self.shared.options.max_output_tokens);
+        let request = request(&state, self.shared.runtime().options.max_output_tokens);
         let mut messages = ContextMessages::default();
         let mut compaction_tokens = None;
         for (index, message) in state.history.iter().enumerate() {
@@ -527,10 +527,11 @@ impl crate::Session {
             estimated_tokens,
             free_tokens: self
                 .shared
+                .runtime()
                 .options
                 .context_window
                 .saturating_sub(estimated_tokens),
-            model_context_window: self.shared.options.context_window,
+            model_context_window: self.shared.runtime().options.context_window,
             context_tokens: state
                 .journal
                 .snapshot
@@ -637,13 +638,13 @@ mod tests {
             .unwrap();
             let before = {
                 let state = session.shared.state.lock().await;
-                request(&state, session.shared.options.max_output_tokens)
+                request(&state, session.shared.runtime().options.max_output_tokens)
             };
             let snapshot = session.snapshot().await;
             let report = session.context().await;
             let after = {
                 let state = session.shared.state.lock().await;
-                request(&state, session.shared.options.max_output_tokens)
+                request(&state, session.shared.runtime().options.max_output_tokens)
             };
             assert_eq!(before, after);
             assert_eq!(snapshot, session.snapshot().await);

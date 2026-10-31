@@ -2,6 +2,7 @@
 mod background;
 mod btw;
 mod compaction;
+mod configuration;
 mod context;
 mod directories;
 mod goal;
@@ -25,11 +26,12 @@ mod user_shell;
 pub use btw::BtwStream;
 use canter_protocol::ErrorCode;
 pub use canter_tools::mcp;
+pub use configuration::{Configuration, ConfigurationSource};
 pub use journal::Subscription;
 pub use session::Session;
 use std::{collections::BTreeMap, path::PathBuf};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct RuntimeContext {
     pub lsp: Option<std::sync::Arc<canter_tools::lsp::LspService>>,
     pub environment: BTreeMap<String, String>,
@@ -61,7 +63,7 @@ pub struct CoreOptions {
     pub request_time: fn() -> i64,
     /// Total time for one web_fetch (30 seconds); replaceable so tests need not wait.
     pub web_fetch_timeout: std::time::Duration,
-    /// Optional search service, fixed at session open; contains no public credentials.
+    /// Optional search service, fixed for the duration of a turn; contains no public credentials.
     pub web_search: Option<canter_tools::web_search::WebSearch>,
     /// Wait after a file change for language-server diagnostics (500 ms); replaceable for tests.
     pub lsp_inline_wait: std::time::Duration,

@@ -73,11 +73,13 @@ Use exactly these headings, in this order:"#;
 /// when it is lower.
 pub(crate) fn input_limit(shared: &Shared) -> u64 {
     let window = shared
+        .runtime()
         .options
         .context_window
-        .saturating_sub(u64::from(shared.options.max_output_tokens))
+        .saturating_sub(u64::from(shared.runtime().options.max_output_tokens))
         .saturating_sub(RESERVE);
     shared
+        .runtime()
         .options
         .auto_compact_tokens
         .map_or(window, |tokens| tokens.min(window))
@@ -116,7 +118,7 @@ pub(crate) async fn compact(
     let mut state = shared.state.lock().await;
     if state.active.as_ref().is_some_and(|active| active.retracted) {
         if let Some((before, before_messages)) = before {
-            let after = context::request(&state, shared.options.max_output_tokens);
+            let after = context::request(&state, shared.runtime().options.max_output_tokens);
             let after_messages = state.history.len();
             state
                 .journal
@@ -193,7 +195,7 @@ pub(crate) async fn compact(
                 state.background_notice(message).await?;
             }
             if let Some((before, before_messages)) = before {
-                let after = context::request(&state, shared.options.max_output_tokens);
+                let after = context::request(&state, shared.runtime().options.max_output_tokens);
                 let after_messages = state.history.len();
                 state
                     .journal
@@ -227,7 +229,7 @@ pub(crate) async fn compact(
         }
         result => {
             if let Some((before, before_messages)) = before {
-                let after = context::request(&state, shared.options.max_output_tokens);
+                let after = context::request(&state, shared.runtime().options.max_output_tokens);
                 let after_messages = state.history.len();
                 state
                     .journal
@@ -284,14 +286,14 @@ async fn summarize(
         let state = shared.state.lock().await;
         // Measure the exact snapshot being summarized, including any notices
         // delivered while the starting event was committed.
-        if shared.options.telemetry {
+        if shared.runtime().options.telemetry {
             *before = Some((
-                context::request(&state, shared.options.max_output_tokens),
+                context::request(&state, shared.runtime().options.max_output_tokens),
                 state.history.len(),
             ));
         }
         (
-            context::request(&state, shared.options.max_output_tokens),
+            context::request(&state, shared.runtime().options.max_output_tokens),
             state.prefix.clone(),
             state.history.clone(),
             state.summary_index,
@@ -308,13 +310,13 @@ async fn summarize(
             state.restored_file_notices.clone(),
         )
     };
-    let output_limit = shared.options.max_output_tokens.min(8192);
+    let output_limit = shared.runtime().options.max_output_tokens.min(8192);
     prefix_request.messages.push(Message::User {
         text: format!("{PREFIX_PROMPT}\n\n{SECTIONS}\n\n{RULES}\n\n{PREFIX_SOURCES}\n\nWrite the summary now with the headings above, and output only the summary."),
     });
     let mut prefix_request = (context::request_tokens(&prefix_request)
-        .saturating_add(u64::from(shared.options.max_output_tokens))
-        <= shared.options.context_window)
+        .saturating_add(u64::from(shared.runtime().options.max_output_tokens))
+        <= shared.runtime().options.context_window)
         .then_some(prefix_request);
     let mut transcript = String::new();
     let mut images = Vec::new();
@@ -428,6 +430,7 @@ async fn summarize(
                 text: format!("{header}{FOOTER}"),
             });
             let budget = shared
+                .runtime()
                 .options
                 .context_window
                 .saturating_sub(u64::from(output_limit))
@@ -451,7 +454,7 @@ async fn summarize(
                     text: format!("{header}{}{FOOTER}", &remaining[..end]),
                 });
                 if context::request_tokens(&request) + u64::from(output_limit) + RESERVE
-                    <= shared.options.context_window
+                    <= shared.runtime().options.context_window
                 {
                     break;
                 }
@@ -477,9 +480,9 @@ async fn summarize(
                 })
                 .await?;
             let prepared = crate::images::prepare(shared, request.clone()).await?;
-            let started_at = (shared.options.request_time)();
+            let started_at = (shared.runtime().options.request_time)();
             let goal_id = shared.state.lock().await.charge_goal();
-            let (prepared, estimate) = if shared.options.telemetry {
+            let (prepared, estimate) = if shared.runtime().options.telemetry {
                 context::measure(prepared).await?
             } else {
                 (prepared, Default::default())

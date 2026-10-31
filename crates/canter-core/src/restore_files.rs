@@ -59,6 +59,7 @@ pub(crate) async fn collect(
             break;
         }
         let Ok(call) = shared
+            .runtime()
             .tools
             .prepare(
                 Tool::Read,
@@ -96,10 +97,11 @@ pub(crate) async fn collect(
             .evaluate(&call, PermissionMode::AlwaysAsk);
         let content = match check {
             PermissionCheck::Execute(permit) => {
+                let runtime = shared.runtime();
                 let result = tokio::select! {
                     biased;
                     _ = cancel.cancelled() => break,
-                    result = shared.tools.read_for_compaction(permit, cancel) => result,
+                    result = runtime.tools.read_for_compaction(permit, cancel) => result,
                 };
                 let Ok(content) = result else {
                     continue;

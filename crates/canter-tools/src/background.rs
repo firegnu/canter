@@ -171,7 +171,7 @@ struct State {
 
 /// Owned by Tools for the whole session, independent of a turn or client.
 pub struct BackgroundCommands {
-    pub(crate) lsp: Option<crate::lsp::LspSession>,
+    pub(crate) lsp: Mutex<Option<crate::lsp::LspSession>>,
     state: Arc<Mutex<State>>,
     shutdown: CancellationToken,
     changed: watch::Sender<u64>,
@@ -179,7 +179,7 @@ pub struct BackgroundCommands {
 impl Default for BackgroundCommands {
     fn default() -> Self {
         Self {
-            lsp: None,
+            lsp: Mutex::new(None),
             state: Default::default(),
             shutdown: CancellationToken::new(),
             changed: watch::channel(0).0,
@@ -365,7 +365,7 @@ impl BackgroundCommands {
             state.reserved += 1;
         }
         let control = Control {
-            lsp: self.lsp.clone(),
+            lsp: self.lsp.lock().unwrap().clone(),
             state: self.state.clone(),
             shutdown: self.shutdown.clone(),
             changed: self.changed.clone(),

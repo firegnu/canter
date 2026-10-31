@@ -195,6 +195,41 @@ impl Fixture {
         .expect("server ready");
     }
 
+    async fn reload_config(&self, mut config: Value) {
+        static RELOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let marker = format!(
+            "reload-test-{}",
+            RELOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let models = config
+            .as_object_mut()
+            .unwrap()
+            .entry("models")
+            .or_insert_with(|| json!(["deepseek-flash", "deepseek-v4-pro"]));
+        models.as_array_mut().unwrap().push(json!(&marker));
+        fs::write(
+            self.root.path().join("state/config.json"),
+            config.to_string(),
+        )
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let models: canter_protocol::ModelListResponse = self
+                    .request(Method::GET, "/v1/models", json!({}))
+                    .await
+                    .json()
+                    .await
+                    .unwrap();
+                if models.data.iter().any(|model| model.id == marker) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
     async fn request(&self, method: Method, path: &str, body: Value) -> reqwest::Response {
         self.client
             .request(method, format!("http://localhost{path}"))

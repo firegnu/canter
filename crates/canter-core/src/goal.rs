@@ -295,7 +295,7 @@ impl Session {
         owned(async move {
             let budget = params
                 .budget_usd
-                .unwrap_or(session.shared.options.goal_budget_usd);
+                .unwrap_or(session.shared.next_options().goal_budget_usd);
             if params.objective.trim().is_empty() || !budget.is_finite() || budget < 0.0 {
                 return Err(CoreError::new(
                     ErrorCode::InvalidRequest,

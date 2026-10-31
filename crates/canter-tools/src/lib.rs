@@ -639,10 +639,11 @@ impl PreparedCall {
     }
 }
 
+#[derive(Clone)]
 pub struct Tools {
     telemetry: bool,
     lsp: Option<lsp::LspSession>,
-    background: BackgroundCommands,
+    background: Arc<BackgroundCommands>,
     plan_enabled: bool,
     executor: Arc<dyn Executor>,
     mcp: Vec<mcp::McpTool>,
@@ -688,11 +689,22 @@ impl Tools {
         self.executor.close_shell();
     }
 
+    pub fn with_executor(mut self, executor: Arc<dyn Executor>) -> Self {
+        self.executor = executor;
+        self
+    }
+
+    pub fn without_lsp(mut self) -> Self {
+        *self.background.lsp.lock().unwrap() = None;
+        self.lsp = None;
+        self
+    }
+
     pub fn with_lsp(mut self, session: lsp::LspSession) -> Self {
         if !session.enabled() {
             return self;
         }
-        self.background.lsp = Some(session.clone());
+        *self.background.lsp.lock().unwrap() = Some(session.clone());
         self.lsp = Some(session);
         self
     }
@@ -842,7 +854,7 @@ impl Tools {
         Self {
             telemetry: true,
             lsp: None,
-            background: BackgroundCommands::default(),
+            background: Arc::new(BackgroundCommands::default()),
             plan_enabled: true,
             executor,
             mcp: Vec::new(),

@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 mod tests;
 
 pub(crate) struct App {
+    pub reload: Option<Arc<crate::reload::LiveConfig>>,
     pub home: PathBuf,
     pub store: Arc<Store>,
     pub model: Arc<dyn Model>,
@@ -44,6 +45,48 @@ pub(crate) struct App {
 }
 
 impl App {
+    fn metadata(&self) -> (String, Vec<String>, CoreOptions) {
+        self.reload.as_ref().map_or_else(
+            || {
+                (
+                    self.default_model.clone(),
+                    self.models.clone(),
+                    self.options.clone(),
+                )
+            },
+            |reload| reload.metadata(),
+        )
+    }
+
+    async fn configuration(&self) -> Result<canter_core::Configuration, ApiError> {
+        if let Some(reload) = &self.reload {
+            use canter_core::ConfigurationSource;
+            return Ok(reload.snapshot());
+        }
+        Ok(canter_core::Configuration {
+            revision: Some(0),
+            options: self.session_options().await?,
+            model: self.model.clone(),
+            mcp_tools: self.mcp.snapshot(),
+            lsp: Some(self.lsp.clone()),
+            lease: Arc::new(()),
+        })
+    }
+
+    async fn configure_session(
+        &self,
+        session: &Session,
+        revision: Option<u64>,
+    ) -> Result<(), ApiError> {
+        if let Some(reload) = &self.reload {
+            session.set_configuration_source(reload.clone(), revision);
+            if let Some(message) = reload.warning().await {
+                session.configuration_warning(message).await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn session_options(&self) -> Result<CoreOptions, ApiError> {
         let home = self.home.clone();
         let enabled =
@@ -61,7 +104,7 @@ impl App {
     }
 
     fn validate_model(&self, model: &str) -> Result<(), ApiError> {
-        if self.models.iter().any(|available| available == model) {
+        if self.metadata().1.iter().any(|available| available == model) {
             Ok(())
         } else {
             Err(ApiError::new(
@@ -71,11 +114,15 @@ impl App {
         }
     }
 
-    fn runtime(&self, environment: std::collections::BTreeMap<String, String>) -> RuntimeContext {
+    fn runtime(
+        &self,
+        environment: std::collections::BTreeMap<String, String>,
+        config: &canter_core::Configuration,
+    ) -> RuntimeContext {
         RuntimeContext {
-            lsp: Some(self.lsp.clone()),
+            lsp: config.lsp.clone(),
             environment,
-            mcp_tools: self.mcp.snapshot(),
+            mcp_tools: config.mcp_tools.clone(),
             protected_paths: vec![self.home.clone(), self.home.join("config.json")],
         }
     }
@@ -103,7 +150,7 @@ impl App {
 
     async fn disk_snapshot(&self, id: &str) -> Result<SessionReadResponse, ApiError> {
         let store = self.store.clone();
-        let prices = self.options.prices.clone();
+        let prices = self.metadata().2.prices;
         let id = id.to_string();
         tokio::task::spawn_blocking(move || {
             let mut snapshot = SessionSnapshot::empty(&id);
@@ -367,16 +414,16 @@ async fn delete_file_rule(
 }
 
 async fn models(State(app): State<Arc<App>>) -> Json<ModelListResponse> {
+    let (default_model, models, options) = app.metadata();
     Json(ModelListResponse {
-        data: app
-            .models
+        data: models
             .iter()
             .map(|model| canter_protocol::Model {
                 id: model.clone(),
                 model: model.clone(),
                 display_name: model.clone(),
-                is_default: model == &app.default_model,
-                input_modalities: Some(if app.options.image_models.contains(model) {
+                is_default: model == &default_model,
+                input_modalities: Some(if options.image_models.contains(model) {
                     vec!["text".into(), "image".into()]
                 } else {
                     vec!["text".into()]
@@ -395,12 +442,16 @@ async fn list(state: State<Arc<App>>) -> Result<Json<SessionListResponse>, ApiEr
 
 async fn ledger(app: &App, id: &str) -> Result<canter_core::usage::Ledger, ApiError> {
     let sessions = app.sessions.lock().await;
-    let through = if let Some(session) = sessions.get(id) {
-        Some(session.snapshot().await.event_seq)
+    let (mut events, through) = if let Some(session) = sessions.get(id).cloned() {
+        drop(sessions);
+        let through = session.snapshot().await.event_seq;
+        (app.disk_events(id, 0).await?, Some(through))
     } else {
-        None
+        // An unopened session must stay unopened until the disk read completes.
+        let events = app.disk_events(id, 0).await?;
+        drop(sessions);
+        (events, None)
     };
-    let mut events = app.disk_events(id, 0).await?;
     if let Some(through) = through {
         events.retain(|event| event.seq <= through);
     }
@@ -410,10 +461,9 @@ async fn ledger(app: &App, id: &str) -> Result<canter_core::usage::Ledger, ApiEr
             "session not found",
         ));
     }
-    drop(sessions);
     Ok(canter_core::usage::Ledger::replay(
         &events,
-        &app.options.prices,
+        &app.metadata().2.prices,
     ))
 }
 
@@ -442,7 +492,7 @@ async fn session_stats(
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<StatsResponse>, ApiError> {
     let store = app.store.clone();
-    let prices = app.options.prices.clone();
+    let prices = app.metadata().2.prices;
     let report =
         tokio::task::spawn_blocking(move || canter_core::stats::report(&store, &id, &prices))
             .await
@@ -563,10 +613,13 @@ async fn read(
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<SessionReadResponse>, ApiError> {
     let sessions = app.sessions.lock().await;
-    let response = if let Some(session) = sessions.get(&id) {
+    let response = if let Some(session) = sessions.get(&id).cloned() {
+        drop(sessions);
         session.snapshot().await
     } else {
-        app.disk_snapshot(&id).await?
+        let response = app.disk_snapshot(&id).await?;
+        drop(sessions);
+        response
     };
     Ok(Json(response))
 }
@@ -582,18 +635,29 @@ async fn resume(
         if *draining {
             return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
         }
+        let existing = app.sessions.lock().await.get(&id).cloned();
+        if let Some(session) = existing {
+            let response = session.snapshot().await;
+            return Ok(Json(SessionResumeResponse {
+                session: response.session,
+                event_seq: response.event_seq,
+            }));
+        }
+        let config = app.configuration().await?;
         let mut sessions = app.sessions.lock().await;
-        let response = if let Some(session) = sessions.get(&id) {
+        let response = if let Some(session) = sessions.get(&id).cloned() {
+            drop(sessions);
             session.snapshot().await
         } else {
             let (session, response) = Session::open(
                 app.store.clone(),
                 id.clone(),
-                app.runtime(params.env),
-                app.model.clone(),
-                app.session_options().await?,
+                app.runtime(params.env, &config),
+                config.model.clone(),
+                config.options.clone(),
             )
             .await?;
+            app.configure_session(&session, config.revision).await?;
             sessions.insert(id, session);
             app.registry_changed.notify_waiters();
             response
@@ -626,6 +690,7 @@ async fn create(
         }) {
             return Err(ApiError::invalid());
         }
+        let config = app.configuration().await?;
         let mut sessions = app.sessions.lock().await;
         let id = crate::new_id();
         let settings = SessionSettings {
@@ -638,7 +703,7 @@ async fn create(
             cwd: params.cwd,
             name: params.name,
             model: if params.model.is_empty() {
-                app.default_model.clone()
+                app.metadata().0
             } else {
                 params.model
             },
@@ -650,13 +715,16 @@ async fn create(
             app.store.clone(),
             id.clone(),
             settings,
-            app.runtime(params.env),
-            app.model.clone(),
-            app.session_options().await?,
+            app.runtime(params.env, &config),
+            config.model.clone(),
+            config.options.clone(),
         )
         .await?;
+        app.configure_session(&session, config.revision).await?;
         sessions.insert(id, session.clone());
         app.registry_changed.notify_waiters();
+        drop(sessions);
+        drop(config);
         if let Some(input) = params.input {
             session
                 .input(SessionInputParams {
@@ -842,20 +910,19 @@ async fn close(
 ) -> Result<Json<SessionCloseResponse>, ApiError> {
     params.map_err(|_| ApiError::invalid())?;
     tokio::spawn(async move {
-        let mut sessions = app.sessions.lock().await;
-        let Some(session) = sessions.get(&id).cloned() else {
-            app.disk_snapshot(&id).await?;
-            return Err(ApiError::new(
-                ErrorCode::SessionNotResumed,
-                "resume the session first: POST /v1/sessions/{id}/resume with env again",
-            ));
-        };
+        let session = app.session(&id).await?;
         let response = session.close().await;
         if response.is_err() {
             // A final journal append can fail before Core releases its writer; a second close releases it.
             let _ = session.close().await;
         }
-        sessions.remove(&id);
+        let mut sessions = app.sessions.lock().await;
+        if sessions
+            .get(&id)
+            .is_some_and(|current| current.same_instance(&session))
+        {
+            sessions.remove(&id);
+        }
         app.registry_changed.notify_waiters();
         Ok(Json(response?))
     })
@@ -874,10 +941,12 @@ struct EventReader {
 impl EventReader {
     async fn new(app: Arc<App>, id: String, cursor: u64) -> Result<Self, ApiError> {
         let sessions = app.sessions.lock().await;
-        let (pending, subscription) = if let Some(session) = sessions.get(&id) {
+        let (pending, subscription) = if let Some(session) = sessions.get(&id).cloned() {
+            drop(sessions);
             (VecDeque::new(), Some(session.subscribe(cursor).await?))
         } else {
             let events = app.disk_events(&id, 0).await?;
+            drop(sessions);
             let last = events
                 .last()
                 .ok_or_else(|| ApiError::new(ErrorCode::SessionNotFound, "session not found"))?
@@ -893,7 +962,6 @@ impl EventReader {
                 None,
             )
         };
-        drop(sessions);
         Ok(Self {
             app,
             id,
@@ -917,12 +985,13 @@ impl EventReader {
             changed.as_mut().enable();
             // Keep the registry locked while reading an unopened session: resume cannot start a writer mid-read.
             let sessions = self.app.sessions.lock().await;
-            if let Some(session) = sessions.get(&self.id) {
+            if let Some(session) = sessions.get(&self.id).cloned() {
+                drop(sessions);
                 self.subscription = Some(session.subscribe(self.cursor).await?);
             } else {
                 self.pending = self.app.disk_events(&self.id, self.cursor).await?.into();
+                drop(sessions);
             }
-            drop(sessions);
             if self.subscription.is_none() && self.pending.is_empty() {
                 changed.await;
             }
@@ -981,7 +1050,11 @@ async fn events(
 
 async fn mcp(State(app): State<Arc<App>>) -> Json<McpListResponse> {
     Json(McpListResponse {
-        data: app.mcp.status(),
+        data: if let Some(reload) = &app.reload {
+            reload.mcp_status()
+        } else {
+            app.mcp.status()
+        },
     })
 }
 
