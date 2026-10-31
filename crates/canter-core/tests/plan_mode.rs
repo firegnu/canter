@@ -233,7 +233,7 @@ async fn permission_updates_in_plan_mode_set_the_resume_and_proposal_default_pol
 }
 
 #[tokio::test]
-async fn compacting_omits_mode_notices_and_restates_current_mode_after_replay() {
+async fn compacting_labels_mode_notices_and_restates_current_mode_after_replay() {
     for enabled in [false, true] {
         let model = ScriptModel::new(vec![
             done(),
@@ -269,10 +269,16 @@ async fn compacting_omits_mode_notices_and_restates_current_mode_after_replay() 
         .await;
         {
             let requests = model.requests.lock().unwrap();
-            let transcript = format!("{:?}", requests[1].messages);
-            assert!(transcript.contains("User: work"));
+            let messages = &requests[1].messages;
+            assert!(messages.iter().any(
+                |message| matches!(message, canter_model::Message::User { text } if text == "work")
+            ));
+            assert!(messages.iter().any(|message| matches!(message, canter_model::Message::User { text } if text.starts_with("[Plan mode"))));
+            let canter_model::Message::User { text: prompt } = messages.last().unwrap() else {
+                panic!("summary instructions");
+            };
             assert!(
-                !transcript.contains("[Plan mode"),
+                prompt.contains("plan mode notices") && prompt.contains("not the user's own words"),
                 "hidden mode notices are not user speech for compaction"
             );
         }

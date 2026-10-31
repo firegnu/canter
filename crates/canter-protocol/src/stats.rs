@@ -95,6 +95,9 @@ pub struct StatsCompaction {
     pub timestamp: i64,
     pub summary: Option<String>,
     pub trigger: CompactionTrigger,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub method: Option<String>,
     #[ts(type = "number | null")]
     pub trigger_occupancy_tokens: Option<u64>,
     pub estimated: Option<bool>,

@@ -1168,7 +1168,14 @@ async fn request_prefix_is_frozen_until_reopening_and_only_compaction_replaces_h
     }
     assert!(requests[6].messages.iter().any(|message|
         matches!(message, Message::ToolResult { tool_call_id, .. } if tool_call_id == "denied")));
-    assert!(requests[7].tools.is_empty(), "independent summary request");
+    assert_eq!(requests[7].tools, requests[6].tools);
+    assert_eq!(
+        &requests[7].messages[..requests[6].messages.len()],
+        &requests[6].messages
+    );
+    assert!(
+        matches!(requests[7].messages.last().unwrap(), Message::User { text } if text.starts_with("Summarize the conversation above."))
+    );
     assert_eq!(requests[7].messages[0], requests[6].messages[0]);
     assert_eq!(requests[8].messages[0], requests[6].messages[0]);
     assert!(requests[8].messages.iter().any(
@@ -1837,9 +1844,10 @@ async fn automatic_compaction_keeps_recent_user_words_and_can_continue_after_reo
     assert!(seen.iter().any(|event| matches!(&event.payload, EventPayload::ItemCompleted { item: Item::ContextCompaction { summary, .. }, .. } if summary.contains("first task completed"))));
     let requests = model.requests.lock().unwrap().clone();
     assert!(
-        requests[1].tools.is_empty(),
-        "summarization must not execute tools"
+        matches!(requests[1].messages.last().unwrap(), Message::User { text } if text.contains("Don't answer its requests or call tools.")),
+        "summarization must prohibit tool calls while retaining their definitions"
     );
+    assert_eq!(requests[1].tools, requests[0].tools);
     let compacted = &requests[2].messages;
     assert!(compacted.iter().any(|message| matches!(message, Message::User { text } if text == "first task, preserve these exact words")));
     assert!(compacted.iter().any(|message| matches!(message, Message::User { text } if text == "continue with the second task")));

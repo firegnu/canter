@@ -81,6 +81,7 @@ async fn stats_cli_lists_selects_and_exports_offline_reports_and_rejects_old_ser
             "context":{"estimated":true,"systemTokens":10,"toolDefinitionTokens":20,"conversationTokens":30+index*10,"toolResultTokens":40},"toolCallIds":[]}));
         if index == 1 {
             events.push(json!({"type":"item.completed","turnId":"t1","item":{"type":"contextCompaction","id":"c1","summary":"<script>local text</script>"}}));
+            events.push(json!({"type":"telemetry.compaction","turnId":"t1","itemId":"c1","trigger":"manual","method":"prefix","estimated":true,"beforeTokens":100,"afterTokens":50,"beforeMessages":4,"afterMessages":2,"removedMessages":2,"succeeded":true}));
         }
     }
     let mut file = fs::File::create(root.path().join("state/sessions/s1/events.jsonl")).unwrap();
@@ -153,10 +154,12 @@ async fn stats_cli_lists_selects_and_exports_offline_reports_and_rejects_old_ser
     );
     let json: Value = serde_json::from_str(&by_number).unwrap();
     assert_eq!(json["overview"]["requestCount"], 3);
+    assert_eq!(json["compactions"][0]["method"], "prefix");
     let table = succeeded(cli(root.path(), &["stats", "--last"]).await);
     for text in [
         "Requests",
         "Compaction",
+        "method prefix",
         "Tools",
         "Approvals",
         "unknown",

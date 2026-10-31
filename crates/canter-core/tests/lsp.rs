@@ -596,11 +596,15 @@ async fn compaction_labels_late_diagnostics_as_tools_and_does_not_replay_them() 
     session.close().await.unwrap();
     service.shutdown().await;
     server.stop().await;
-    assert!(
-        requests[3]
-            .to_string()
-            .contains("Tool diagnostics: [LSP diagnostics update]")
-    );
+    let messages = requests[3]["messages"].as_array().unwrap();
+    assert!(messages.iter().any(|m| {
+        m["content"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("[LSP diagnostics update]"))
+    }));
+    let prompt = messages.last().unwrap()["content"].as_str().unwrap();
+    assert!(prompt.contains("diagnostics ([LSP diagnostics update])"));
+    assert!(prompt.contains("not the user's own words"));
     let compact = history.iter().find(|e| e["type"] == "compaction").unwrap();
     assert!(!compact["user_messages"].to_string().contains("LSP"));
     assert!(!requests[4].to_string().contains("[LSP diagnostics update]"));
@@ -610,8 +614,22 @@ async fn retracting_a_late_notice_keeps_later_user_words_labeled_as_user() {
     let root = tempfile::tempdir().unwrap();
     let mut hanging = Reply::sse("");
     hanging.hang = true;
-    let server = Server::start(vec![write("bad"), done(), hanging, done(), done()]).await;
-    let (session, service, _) = create(root.path(), &server, true, "late_sync").await;
+    let rejected_prefix = Reply {
+        status: axum::http::StatusCode::BAD_REQUEST,
+        body: json!({"error":{"code":"context_length_exceeded","message":"maximum context length exceeded"}}).to_string(),
+        retry_after: None,
+        hang: false,
+    };
+    let server = Server::start(vec![
+        write("bad"),
+        done(),
+        hanging,
+        done(),
+        rejected_prefix,
+        done(),
+    ])
+    .await;
+    let (session, service, store) = create(root.path(), &server, true, "late_sync").await;
     let mut events = session.subscribe(0).await.unwrap();
     session.input(input()).await.unwrap();
     finished(&mut events).await;
@@ -654,7 +672,43 @@ async fn retracting_a_late_notice_keeps_later_user_words_labeled_as_user() {
     finished(&mut events).await;
     session.compact().await.unwrap();
     finished(&mut events).await;
-    let summary_request = server.requests.lock().unwrap()[4].to_string();
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 6);
+    let prefix = requests[4]["messages"].as_array().unwrap();
+    let previous = requests[3]["messages"].as_array().unwrap();
+    assert_eq!(&prefix[..previous.len()], previous);
+    assert_eq!(requests[4]["tools"], requests[3]["tools"]);
+    assert!(
+        prefix
+            .iter()
+            .any(|message| message == &json!({"role":"user","content":"RETRACT user words"}))
+    );
+    assert!(!prefix[..prefix.len() - 1].iter().any(|message| {
+        message["content"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("[LSP diagnostics update]"))
+    }));
+    let prompt = prefix.last().unwrap()["content"].as_str().unwrap();
+    assert!(prompt.starts_with("Summarize the conversation above."));
+    assert!(prompt.contains("not the user's own words"));
+    assert!(requests[5].get("tools").is_none());
+    let summary_request = requests[5].to_string();
+    let history = store.model_history::<Value>("lsp-test").unwrap();
+    let saved = history
+        .iter()
+        .find(|entry| entry["type"] == "compaction")
+        .unwrap();
+    assert!(
+        saved["user_messages"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("RETRACT user words"))
+    );
+    assert!(
+        !saved["user_messages"]
+            .to_string()
+            .contains("[LSP diagnostics update]")
+    );
     session.close().await.unwrap();
     service.shutdown().await;
     server.stop().await;

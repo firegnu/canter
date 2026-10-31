@@ -139,6 +139,7 @@ pub fn report(
                 turn_id,
                 item_id,
                 trigger,
+                method,
                 trigger_occupancy_tokens,
                 estimated,
                 before_tokens,
@@ -156,6 +157,7 @@ pub fn report(
                     row.timestamp = event.timestamp;
                 }
                 row.trigger = *trigger;
+                row.method.clone_from(method);
                 row.trigger_occupancy_tokens = *trigger_occupancy_tokens;
                 row.estimated = Some(*estimated);
                 row.before_tokens = Some(*before_tokens);

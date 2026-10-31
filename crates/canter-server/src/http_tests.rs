@@ -166,7 +166,7 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
     struct Replay(Mutex<Vec<Request>>);
     impl Model for Replay {
         fn stream(&self, request: Request, _: CancellationToken) -> ModelStream<'_> {
-            let compact = request.tools.is_empty();
+            let compact = matches!(request.messages.last(), Some(Message::User { text }) if text.starts_with("Summarize the conversation "));
             let needs_tools = matches!(request.messages.last(), Some(Message::User { text }) if text == "inspect");
             self.0.lock().unwrap().push(request);
             let events = if needs_tools {

@@ -2,4 +2,4 @@
 import type { CompactionSignals } from "./CompactionSignals";
 import type { CompactionTrigger } from "./CompactionTrigger";
 
-export type StatsCompaction = { turnId: string, itemId: string, eventSeq: number, timestamp: number, summary: string | null, trigger: CompactionTrigger, triggerOccupancyTokens: number | null, estimated: boolean | null, beforeTokens: number | null, afterTokens: number | null, beforeMessages: number | null, afterMessages: number | null, removedMessages: number | null, succeeded: boolean | null, signals: CompactionSignals, };
+export type StatsCompaction = { turnId: string, itemId: string, eventSeq: number, timestamp: number, summary: string | null, trigger: CompactionTrigger, method?: string, triggerOccupancyTokens: number | null, estimated: boolean | null, beforeTokens: number | null, afterTokens: number | null, beforeMessages: number | null, afterMessages: number | null, removedMessages: number | null, succeeded: boolean | null, signals: CompactionSignals, };

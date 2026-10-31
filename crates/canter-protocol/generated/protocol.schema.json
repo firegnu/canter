@@ -901,6 +901,13 @@
             "itemId": {
               "type": "string"
             },
+            "method": {
+              "description": "Summary request shape: `prefix` or `transcript`; absent in older events.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "removedMessages": {
               "format": "uint",
               "minimum": 0,
@@ -1566,6 +1573,13 @@
             },
             "itemId": {
               "type": "string"
+            },
+            "method": {
+              "description": "Summary request shape: `prefix` or `transcript`; absent in older events.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "removedMessages": {
               "format": "uint",
@@ -4982,6 +4996,12 @@
         },
         "itemId": {
           "type": "string"
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "removedMessages": {
           "format": "uint",

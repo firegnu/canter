@@ -1488,7 +1488,7 @@ async fn failed_automatic_compaction_waits_until_a_new_turn_or_manual_request() 
             .lock()
             .unwrap()
             .iter()
-            .filter(|request| request.tools.is_empty())
+            .filter(|request| request.options.thinking == Some(false))
             .count(),
         2,
         "a new turn may retry compaction"
@@ -1504,7 +1504,7 @@ async fn failed_automatic_compaction_waits_until_a_new_turn_or_manual_request() 
             .lock()
             .unwrap()
             .iter()
-            .filter(|request| request.tools.is_empty())
+            .filter(|request| request.options.thinking == Some(false))
             .count(),
         3,
         "manual compaction may retry"
@@ -1548,11 +1548,16 @@ async fn failed_automatic_compaction_continues_only_when_the_request_still_fits(
             } else {
                 vec![Step::Error(ErrorKind::Server)]
             };
-            let model = ScriptModel::new(vec![
-                vec![text(&old_reply), finish()],
-                failed_summary,
-                vec![text("continued"), finish()],
-            ]);
+            let mut scripts = vec![vec![text(&old_reply), finish()], failed_summary];
+            if length {
+                // An incomplete prefix summary now falls back; fail that request too.
+                scripts.push(vec![
+                    text("incomplete summary"),
+                    Step::Event(ModelEvent::Finished(FinishReason::Length)),
+                ]);
+            }
+            scripts.push(vec![text("continued"), finish()]);
+            let model = ScriptModel::new(scripts);
             let (_temp, store, session) = create(
                 model.clone(),
                 CoreOptions {
@@ -1581,9 +1586,10 @@ async fn failed_automatic_compaction_continues_only_when_the_request_still_fits(
                         .any(|event| matches!(event.payload, EventPayload::Warning { .. }))
                 );
                 let requests = model.requests.lock().unwrap();
-                assert_eq!(requests.len(), 3);
-                assert!(!requests[2].tools.is_empty());
-                assert!(requests[2].messages.iter().any(|message| matches!(message, Message::Assistant { content } if content == &vec![AssistantContent::Text { text: old_reply.clone() }])));
+                assert_eq!(requests.len(), 3 + usize::from(length));
+                let continued = requests.last().unwrap();
+                assert!(!continued.tools.is_empty());
+                assert!(continued.messages.iter().any(|message| matches!(message, Message::Assistant { content } if content == &vec![AssistantContent::Text { text: old_reply.clone() }])));
             } else {
                 assert_eq!(turn.status, TurnStatus::Failed);
                 assert!(
@@ -1593,7 +1599,10 @@ async fn failed_automatic_compaction_continues_only_when_the_request_still_fits(
                         .message
                         .contains("context window")
                 );
-                assert_eq!(model.requests.lock().unwrap().len(), 2);
+                assert_eq!(
+                    model.requests.lock().unwrap().len(),
+                    2 + usize::from(length)
+                );
             }
             assert!(
                 !store
@@ -1750,6 +1759,7 @@ async fn oversized_summary_request_retries_smaller_chunks_without_losing_transcr
     let old_reply = "old中文".repeat(256);
     let model = ScriptModel::new(vec![
         vec![text(&old_reply), finish()],
+        vec![Step::Error(ErrorKind::ContextLength)], // switch from prefix to transcript
         vec![Step::Error(ErrorKind::ContextLength)],
         vec![text("first half"), finish()],
         vec![text("complete summary"), finish()],
@@ -1767,7 +1777,7 @@ async fn oversized_summary_request_retries_smaller_chunks_without_losing_transcr
     );
     {
         let requests = model.requests.lock().unwrap();
-        assert_eq!(requests.len(), 4);
+        assert_eq!(requests.len(), 5);
         let transcript = |index: usize| {
             let Message::User { text } = requests[index].messages.last().unwrap() else {
                 unreachable!()
@@ -1780,18 +1790,18 @@ async fn oversized_summary_request_retries_smaller_chunks_without_losing_transcr
                 .0
                 .to_owned()
         };
-        assert!(transcript(2).len() < transcript(1).len());
+        assert!(transcript(3).len() < transcript(2).len());
         assert_eq!(
-            transcript(2) + &transcript(3),
+            transcript(3) + &transcript(4),
             format!("\nUser: seed\n\nAssistant: {old_reply}\n")
         );
         assert!(
-            matches!(requests[3].messages.last().unwrap(), Message::User { text } if text.contains("<earlier_summary>\nfirst half\n</earlier_summary>"))
+            matches!(requests[4].messages.last().unwrap(), Message::User { text } if text.contains("<earlier_summary>\nfirst half\n</earlier_summary>"))
         );
     }
     session.input(input("continue")).await.unwrap();
     finished(&mut events).await;
-    assert!(model.requests.lock().unwrap()[4].messages.iter().any(|message| matches!(message, Message::User { text } if text == "[Context summary]\ncomplete summary")));
+    assert!(model.requests.lock().unwrap()[5].messages.iter().any(|message| matches!(message, Message::User { text } if text == "[Context summary]\ncomplete summary")));
     session.close().await.unwrap();
 }
 

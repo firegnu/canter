@@ -224,10 +224,11 @@ fn plan_steps(steps: &[PlanStep]) -> String {
 fn compaction_lines(row: &StatsCompaction) -> Vec<String> {
     let mut lines = vec![
         format!(
-            "Compaction {} at {}: {}; trigger occupancy {}; before {} → after {}; removed messages {}; succeeded {}",
+            "Compaction {} at {}: {}; method {}; trigger occupancy {}; before {} → after {}; removed messages {}; succeeded {}",
             row.item_id,
             time(row.timestamp),
             label(&row.trigger),
+            row.method.as_deref().unwrap_or("unknown"),
             known(row.trigger_occupancy_tokens),
             known(row.before_tokens),
             known(row.after_tokens),

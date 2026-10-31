@@ -78,3 +78,62 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-10-31，canter/dev-compact-cache。
+
+- 做了什么：压缩复用 `context::request` 的模型、系统前缀、工具定义和完整历史，只在尾部加九节总结说明；思考仍关、输出上限仍为 `min(max_output_tokens, 8192)`。末尾说明区分计划模式、技能（含嵌在真实输入里的技能全文）、诊断、后台事件、带回文件、目标、目录、工具图片和旧摘要/清单的来源。完整请求加输出预留超窗、服务商报上下文超长、返回工具调用或没有完整摘要时，进入原拼稿分段折叠；工具不执行，废弃的摘要不混入回退请求。压缩后的存储、用户原话、计划/技能/目标/目录补回、文件恢复沿用原代码。
+- 遥测：`telemetry.compaction.method` 和 stats 的压缩记录增加可选字符串 `prefix` / `transcript`，记录最后采用的方式；旧记录缺省未知。`canter stats` 文本报告显示 method，JSON 同时提供字段；所有请求仍为 `purpose=compaction`，缓存用量照旧。已更新 DESIGN 和生成的协议产物，不改交互界面。
+- 验证：新增 `compaction_cache.rs` 六条本机假服务端测试，逐条 RED → GREEN。RED 分别是普通请求的工具定义丢失、超窗历史没有分段、上下文拒绝后仍切半而非从完整拼稿开始、工具调用使压缩失败、缺少内部来源说明、遥测缺少 method。压缩后历史和用户原话由新测试及既有回归检查，P2-142 文件恢复、重开、计划模式和技能补回继续使用原回归；这些保行为部分没有人为制造失败。旧测试中「工具定义为空」「历史带 User: 标签」的断言改为原消息加来源说明，失败场景明确让新增的回退请求也失败；未删除测试、放宽失败条件或缩短超时。
+- 最终通过的检查（均在本任务编译目录、前台执行完毕）：
+  - `cargo nextest run -p canter-core --no-fail-fast -E 'test(compact) or test(handoff) or test(telemetry) or test(summary) or test(compression) or binary(compaction_cache) or binary(restore_files) or binary(stats)'`：60 项通过。
+  - `cargo nextest run -p canter --test stats`：3 项通过，含真实 CLI 的 method 文本和 JSON 输出。
+  - `cargo nextest run -p canter-protocol -E 'test(exports_schema_and_typescript_and_matches_checked_in_artifacts) or test(telemetry_enums_accept_unknown_values_and_missing_new_fields)'`：2 项通过。
+  - `cargo nextest run -p canter-core --test telemetry_recording`：1 项通过，原有手动性能比较仍忽略。
+  - `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过；协议已用 `cargo run -p canter-protocol --bin export_protocol` 重新生成。
+- 拿主意的地方：按任务授权选择 method 字段名；新路径只以完整请求估算加原输出上限判断是否超窗，回退的 16384 余量、分段缩小和重试机制保留。参考了只读 `/tmp/codex-ro`（确认标签 `rust-v0.163.0`）的 `codex-rs/core/src/compact.rs::run_compact_task_inner_impl`，没有搬代码。核对本地 wire 编码不会因关闭思考删改历史 reasoning_content；真实缓存命中仍以主控安排的试跑为准。没有需要主控另定的事项。
+- 没做的事：真实模型调用 0 次；未读改用户真实状态，测试使用临时 HOME/状态目录和本机临时端口。未跑全套、未改思考档/普通请求/压缩线/九节规则、未合并/推送/安装；交叉审查、合并和用户试跑交主控。
+- 踩过的坑：长输出通过假服务端逐 7 字节回放时，在到达压缩之前就超时；改成从隔离存盘载入长历史后，再由假服务端观察压缩请求。窗口夹具最初没有同时调低普通输出上限，先被配置校验拒绝，修正后才取得功能缺失导致的有效 RED。已有测试用「无工具定义」识别压缩及断言转写格式，与新路径冲突；已改成校验新请求形状，并保留压缩后的恢复和失败行为断言。
+
+## 返工
+
+2026-10-31，按主控在 `55e5c06` 上发现的 8 个失败返工。先原样运行这 8 条，确认 8/8 都以主控报告的症状失败。逐条诊断后，均属于测试夹具或断言依赖旧请求形状；本次只改测试及本记录，没有修改生产代码。原验证按包和测试名筛选，漏了跨包调用压缩的测试及名字不含 compact 的 LSP 测试；以后从压缩调用点检查直接相关测试所在包，不能只靠名称筛选。
+
+1. `canter-server …plan::repeated_compaction_strips_only_the_previous_summary_plan`：旧断言把最后一条消息当作整份转写稿，新路径最后一条只有总结说明。前缀路径按要求保留上一份摘要及其清单；「只去掉上一份摘要的清单」仍是转写回退的规则。现在先校验前缀与普通请求的历史、工具一致，旧摘要清单和用户写的同名标记均原样保留、末尾说明清单是工具状态；再让假服务端返回一次上下文超长，校验回退请求。原来针对转写稿的全部断言保留：摘要正文、用户原话仍在，只有用户原话里的一个 `[Current plan]`，旧清单的 Implement 不出现。
+2. `canter-server …context_report_is_read_only_and_describes_the_next_request`：Replay 假模型用 `tools.is_empty()` 识别压缩，误回普通回答 `done`，导致摘要 token 估算为 24，而预期 `saved summary` 为 27。只将夹具识别改成末尾用户消息的总结提示；保留原来的 27、分项 token、只读和下一请求逐项相等断言。
+3. `canter-server …user_shell_rejects_work_approval_questions_and_compaction`：夹具用无 tools 识别压缩，未进入 pause 分支，立即回完摘要。临时诊断观测到：之前快照为 Working，但 shell 请求后，原 compact 轮已 Completed，新增 userShell 轮 InProgress；所以 200 是空闲后正常接受命令，并非压缩互斥失效。改用总结提示识别并真正暂停压缩，409/Conflict 和文件未执行断言原样保留；另检查拒绝后仍为 Working、轮数不变、同一压缩轮 InProgress 且摘要为空。临时诊断输出已删。
+4. `canter-server …wake::completion_during_manual_compaction_wakes_after_turn_finishes`：夹具与测试等待条件都用「无 tools」识别压缩，导致摘要未暂停、等待条件永远不成立。两处共用按末尾总结提示识别的测试函数；保留后台结束时不提前开轮、完成压缩后只唤醒一次、没有用户输入/用户卡片、Exit code 7 和通知不重复的原断言。
+5. `canter-server …wake::matching_event_during_compaction_survives_and_is_not_user_words`：先遇到与第 4 条相同的等待问题；后续断言也依赖 `Background event:` 转写标签。修正等待，改为检查原始后台通知恰好一条、正文包含匹配内容，末尾来源说明明确后台事件不是用户原话。新增对实际压缩存盘的精确断言：`user_messages` 只能是 `monitor-errors` 和 `after compaction`；保留暂停期间事件排队、压缩后唤醒、通知去重及重开重放的原检查。
+6. `canter tests/tui.rs::thinking_none_low_and_compaction_preserve_their_wire_options`：唯一冲突是旧的「压缩无 tools」断言。改为工具定义等于前次普通请求，并验证完整消息前缀、最后一次回答和新增总结指令；补压缩输出上限 8192 和禁止调用工具的指令检查。none/low、原始思考内容、普通输出上限、压缩关闭思考及不带 reasoning_effort 的原断言都保留。
+7. `canter tests/server …plan::plan_reminders_count_calls_across_turns_repeat_and_stay_out_of_ui_and_user_words`：旧断言寻找转写文本 `Tool result read-10: …`。改查真正的 tool 消息，read-10/read-20 都要求 role=tool、正文精确等于原输出加提醒；所有 user 消息都不能含提醒。跨轮计数、UI/导出不显示提醒、存盘 user_messages 精确等于两条真实输入的原断言保留。
+8. `canter-core tests/lsp.rs::retracting_a_late_notice_keeps_later_user_words_labeled_as_user`：旧断言在前缀请求里找 `User:` / `Tool diagnostics:` 转写标签。现在先检查前缀逐项不变、真实原话仍为 user 消息、已撤回的诊断通知没有回流、末尾提示区分内部来源；假服务端随后报上下文超长，继续用原有两条转写断言检查回退稿里的 `User: RETRACT user words`，且绝不是 `Tool diagnostics: RETRACT user words`。另检查压缩存盘保留该原话且未把诊断存为用户原话，未丢掉对诊断索引清理的原覆盖。
+
+验证：只运行上述 8 条（分组定位后联合复跑），最终 `cargo nextest run -p canter-core -p canter-server -p canter --no-fail-fast -E 'test(repeated_compaction_strips_only_the_previous_summary_plan) or test(context_report_is_read_only_and_describes_the_next_request) or test(user_shell_rejects_work_approval_questions_and_compaction) or test(completion_during_manual_compaction_wakes_after_turn_finishes) or test(matching_event_during_compaction_survives_and_is_not_user_words) or test(thinking_none_low_and_compaction_preserve_their_wire_options) or test(plan_reminders_count_calls_across_turns_repeat_and_stay_out_of_ui_and_user_words) or test(retracting_a_late_notice_keeps_later_user_words_labeled_as_user)'` 为 8 passed、432 skipped；没有跑全套或扩大测试范围。`CARGO_TARGET_DIR` 一直为本任务目录，`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。所有命令均在前台跑完；未删测试、放宽原行为断言或改超时，没有遗留诊断代码。真实模型调用仍为 0；无新增主控决策事项，不合并、不推送、不安装。
+
+## 返工 2
+
+2026-10-31，按 `P2-144-交叉审查.md` 的审查意见及用户选项返工。必须改第 1 条已在 `09e5fb1` 完成，本次复跑原 8 条；必须改第 2 条及用户选改的建议第 1、2、3 条落实如下，建议第 4 条按要求不改。
+
+1. 必须改第 2 条：`PREFIX_SOURCES` 的文件恢复来源补上 `[Referenced file after compaction: ...]`，与自动重读一样明确为内部上下文。来源测试加入真实形状的只给名字消息，检查它原样进入前缀、末尾说明覆盖该标记，保留压缩存盘中用户原话及最终消息的精确断言。
+2. 建议第 1 条：仅前缀请求遇到 `InvalidRequest` 时 `continue 'chunks`，退回完整拼稿；前缀已取走，拼稿再次遇到同类错误仍沿用原错误处理，不会循环回退。新增 `invalid_prefix_requests_fall_back_to_transcript`，分别用非上下文超长的 400 和 422 验证：前缀带工具、回退无工具且包含完整用户/助手原文、摘要正常存盘、没有 Warning/Error，最终遥测为成功的 `transcript`，两次尝试都记录为压缩请求。
+3. 建议第 2 条：来源说明补上轮中断、服务端停止两类通知，以及 `<user_shell_command>` 中命令是用户输入、结果是命令输出的区别。来源测试加入这三类原始消息，检查前缀保留和说明中的来源区分；保留原来的存盘原话隔离断言。
+4. 建议第 3 条：说明明确 `[Current plan]`、技能全文、目标说明和额外目录会自动补回，不要抄进摘要；来源测试检查这两项要求。保留原历史以维持前缀一致，不修改九节格式、公共规则或补回机制。以上行为先写入 DESIGN，再修改实现。
+
+- RED → GREEN：扩充来源测试后先因缺少 `[Referenced file after compaction:` 的来源说明而失败，补齐说明后通过。新增 InvalidRequest 测试先因普通 400 让压缩失败（期望 Completed）而失败，加入前缀专用回退后，400、422 两个分支都通过。
+- 验证范围：`cargo nextest run -p canter-core -p canter-server -p canter --no-fail-fast -E 'binary(compaction_cache) or test(repeated_compaction_strips_only_the_previous_summary_plan) or test(context_report_is_read_only_and_describes_the_next_request) or test(user_shell_rejects_work_approval_questions_and_compaction) or test(completion_during_manual_compaction_wakes_after_turn_finishes) or test(matching_event_during_compaction_survives_and_is_not_user_words) or test(thinking_none_low_and_compaction_preserve_their_wire_options) or test(plan_reminders_count_calls_across_turns_repeat_and_stay_out_of_ui_and_user_words) or test(retracting_a_late_notice_keeps_later_user_words_labeled_as_user)'`：15 passed、426 skipped（compaction_cache 7 条及上次 8 条一起通过）。只改了 compaction_cache 中的测试，没有扩跑其它测试。
+- 最终检查：`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 全部通过。所有 cargo 命令均使用本任务的 `CARGO_TARGET_DIR`，全部命令在前台执行完毕。
+- 拿主意的地方：按用户明确选择落实建议第 1、2、3 条；建议第 4 条不做。没有新增需要主控决定的事项。实际服务商缓存命中仍交主控安排试跑，思考档保持原样。
+- 没做的事：没有改普通请求、压缩触发线、九节格式、存储及恢复机制；未删测试、放宽断言。未跑全套、未调真实模型、未读改用户真实状态、未合并/推送/安装。
+- 踩过的坑：没有。
+
+## 返工 3
+
+2026-10-31，按交叉审查「复核」的必须改项返工。
+
+- 做了什么：修正 `restore_files.rs::failed_and_interrupted_compactions_do_not_restore_files` 的非中断分支脚本，让前缀请求和拼稿回退各收到一条普通 400，之后仍留一条 `answer()` 给后续 `send()`。新增请求检查：初次 send 的两次请求之后，压缩恰好发两次请求，前缀带 tools、第二次拼稿不带 tools。原有 Failed / Interrupted、没有 restoredFiles、后续 send 成功、旧文件内容保留且新内容及恢复提示不出现的断言全部保留，中断分支的响应序列不变。只改测试和本记录，没有生产代码或设计变更。
+- RED → GREEN：先运行 `cargo nextest run -p canter-core --test restore_files -E 'test(=failed_and_interrupted_compactions_do_not_restore_files)'`，复现原 628 行期望 Failed、实际 Completed。原因与审查一致：前缀 400 触发回退，原本留给后续 send 的 answer 被消耗为摘要。修正脚本后同一测试通过，两次 400 后确实失败，后续 send 仍成功。
+- 同类检索：在整个 `crates/canter-core` 用 `rg` 检索 `InvalidRequest`、`invalid_request`、`BAD_REQUEST`、`UNPROCESSABLE_ENTITY`、400、422，并交叉核对调到 compact / compaction / summary 的测试及其 `ModelError` / `ErrorKind` / HTTP 状态脚本。HTTP 400/422 的模型脚本只在 `restore_files.rs`、`lsp.rs`、`compaction_cache.rs`：本次修正的 restore_files 是唯一用普通 400 期望压缩失败的测试；lsp 的 400 是 `context_length_exceeded`，已有正常回退摘要；compaction_cache 的普通 400/422 本来就在测回退成功，其它 400 也明确是上下文超长，均无需修改。`review.rs` 的压缩失败脚本使用 Server、ContextLength 或不完整摘要，`retry.rs` 的压缩脚本使用不完整流重试；都没有本次普通 400 的问题。`session.rs`、`skill_invocation.rs` 中的 `ErrorCode::InvalidRequest` 是本地参数/技能校验，不是服务商压缩失败脚本。未发现其它同类漏配，不修改或扩跑这些文件。
+- 验证：`cargo nextest run -p canter-core --test restore_files --test compaction_cache --no-fail-fast`，19 passed、0 skipped（restore_files 全部 12 条，compaction_cache 全部 7 条）。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 全部通过。所有 cargo 命令使用本任务的 `CARGO_TARGET_DIR`，所有命令均在前台跑完。
+- 拿主意的地方及没做的事：按用户指定修法执行，无需主控新增决定。未删测试、放宽断言或改超时；未跑全套、未调用真实模型、未读改用户真实状态、未合并/推送/安装。
+- 踩过的坑：返工 2 新增错误回退时，漏核对 P2-142 用同类错误构造失败的脚本；本次按错误分类检索并逐项确认，不再仅靠测试名筛选。
