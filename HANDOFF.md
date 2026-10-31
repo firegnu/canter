@@ -152,6 +152,9 @@
   - 旧会话、关了遥测的会话没有截断和状态记录时，工具行的失败数、截断数给 0、终端显示 `0 (+N unknown)`；同一行平均值、最大值没有已知样本时给 null（显示 `unknown (+N unknown)`）。口径不一致，eval 只读 `truncatedCount` 会把旧会话当 0 次截断。改法：一个已知样本都没有时两个计数也给 null，显示不加后缀。
   - `canter stats` 列表先 `store.list()` 回放全部会话，再为第一句话把每个会话 events 读一遍；`--all` 加长会话会慢些（只读、不挡写入）。两次读之间会话被删，整个列表 404。
   - `--html` 报告在 `CANTER_HOME/stats/` 只增不删。
+  - `canter stats --help` 报 `unknown stats option: --help` 并打整份帮助，没有 stats 自己的用法；要看用法得 `canter --help`（10-31 试跑时看到）。
+  - 计划信号把改名当删除：模型给一步改了名（`12 interactive confirmation` → `12 interactive confirmation (fix TTY answer reading, then commit)`），`removed` 里报这一步被删，步骤其实还在（10-31 canter-test-ts 试跑第 15 次压缩）。按步骤文字对比就会这样，看信号时留意。
+- 自动压缩会超线（10-31 canter-test-ts 试跑，压缩线 60000）：一批工具结果一次进来多时，到 75948、72568 才压缩；判断在请求之间做。离窗口还远，暂不影响。
 - 遥测记录（P2-169 交叉审查可以不改，10-31 不改）：
   - 压缩时为了算前后大小，持着状态锁多复制一份完整历史；btw、压缩请求发出前在 blocking 线程上估算一遍。每次压缩或 btw 只一次，DESIGN「不为遥测再复制长历史」只对普通请求成立。
   - 带标签新建会话（含 `/new`、`/handoff`、Clear context 继承）多发一次 `GET /v1/info`，服务端要重放所有会话；只慢在建会话那一下。
