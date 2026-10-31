@@ -476,7 +476,7 @@ async fn protected_paths_and_readonly_modes_take_priority_and_warnings_recover()
         PermissionCheck::Deny { .. }
     ));
     assert!(matches!(
-        gate.evaluate_review(&write),
+        gate.evaluate_review(&write, PermissionMode::AlwaysAsk),
         PermissionCheck::Deny { .. }
     ));
     std::fs::remove_file(&file).unwrap();

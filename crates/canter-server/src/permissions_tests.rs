@@ -175,9 +175,11 @@ async fn command_rules_delete_matches_content_and_changes_next_permission_check(
     let allow = json!({"pattern":["cargo","test"],"decision":"allow"});
     let prompt = json!({"pattern":["cargo","test"],"decision":"prompt"});
     let keep = json!({"pattern":["cargo","publish"],"decision":"forbidden"});
+    let file_rule = json!({"pattern":".env","decision":"forbidden"});
     std::fs::write(
         &path,
-        json!({"rules":[allow, prompt, keep, allow]}).to_string(),
+        json!({"rules":[allow, prompt, keep, allow],"fileRules":[file_rule, file_rule]})
+            .to_string(),
     )
     .unwrap();
     let gate = PermissionGate::default().with_rules_file(path.clone());
@@ -256,6 +258,7 @@ async fn command_rules_delete_matches_content_and_changes_next_permission_check(
         listed["data"],
         json!([keep, {"pattern":["git","status"],"decision":"allow"}])
     );
+    assert_eq!(listed["fileRules"], json!([file_rule, file_rule]));
     assert_eq!(
         std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
@@ -279,6 +282,46 @@ async fn command_rules_delete_matches_content_and_changes_next_permission_check(
             .contains("no longer exists")
     );
     assert_eq!(std::fs::read(&path).unwrap(), before);
+    std::fs::write(test.root.path().join(".env"), "fake").unwrap();
+    let read = tools
+        .prepare(
+            Tool::Read,
+            "read",
+            r#"{"path":".env"}"#,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        gate.evaluate(&read, PermissionMode::AllowAll),
+        PermissionCheck::Forbidden { .. }
+    ));
+    for removed in [2, 0] {
+        let response = test
+            .client
+            .post("http://localhost/v1/fileRules/delete")
+            .json(&file_rule)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.json::<Value>().await.unwrap()["removed"], removed);
+    }
+    assert!(matches!(
+        gate.evaluate(&read, PermissionMode::AllowAll),
+        PermissionCheck::Execute(_)
+    ));
+    let after = test
+        .client
+        .get(RULES_URL)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(after["data"], listed["data"]);
+    assert!(after.get("fileRules").is_none());
     test.finish().await;
 }
 

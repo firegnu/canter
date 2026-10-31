@@ -134,6 +134,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::MCP, get(mcp))
         .route(routes::COMMAND_RULES, get(command_rules))
         .route(routes::COMMAND_RULE_DELETE, post(delete_command_rule))
+        .route(routes::FILE_RULE_DELETE, post(delete_file_rule))
         .route(routes::MODELS, get(models))
         .route(routes::USAGE, get(usage))
         .route(routes::SESSION_USAGE, get(session_usage))
@@ -301,17 +302,14 @@ async fn command_rules(
     .await
     .map_err(|_| ApiError::internal())?
     .map_err(|error| command_rules_error(&path, error))?;
-    Ok(Json(CommandRuleListResponse {
-        path: path.to_string_lossy().into_owned(),
-        data,
-    }))
+    Ok(Json(data))
 }
 
 fn command_rules_error(path: &std::path::Path, error: std::io::Error) -> ApiError {
     ApiError::new(
         ErrorCode::Internal,
         &format!(
-            "Could not read or update command rules at {}: {error}",
+            "Could not read or update rules at {}: {error}",
             path.display()
         ),
     )
@@ -336,6 +334,29 @@ async fn delete_command_rule(
             0 => "The command rule no longer exists.".into(),
             1 => "Deleted 1 command rule.".into(),
             count => format!("Deleted {count} matching command rules."),
+        },
+    }))
+}
+
+async fn delete_file_rule(
+    State(app): State<Arc<App>>,
+    params: Result<Json<FileRule>, JsonRejection>,
+) -> Result<Json<CommandRuleDeleteResponse>, ApiError> {
+    let rule = body(params)?;
+    let path = app.home.join("rules.json");
+    let removed = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || canter_tools::rules::delete_file(&path, &rule)
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
+    .map_err(|error| command_rules_error(&path, error))?;
+    Ok(Json(CommandRuleDeleteResponse {
+        removed,
+        message: match removed {
+            0 => "The file rule no longer exists.".into(),
+            1 => "Deleted 1 file rule.".into(),
+            count => format!("Deleted {count} matching file rules."),
         },
     }))
 }

@@ -32,6 +32,10 @@ pub trait CommandProcess: Send {
 #[async_trait]
 pub trait Executor: Send + Sync {
     fn cwd(&self) -> &Path;
+    /// Session HOME for user-supplied file rules; never the server process HOME.
+    fn home(&self) -> Option<&Path> {
+        None
+    }
     fn sandbox_enabled(&self) -> bool {
         false
     }
@@ -239,6 +243,10 @@ pub(crate) fn check_cancel(cancel: &CancellationToken) -> io::Result<()> {
 impl Executor for LocalExecutor {
     fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    fn home(&self) -> Option<&Path> {
+        self.environment.get("HOME").map(Path::new)
     }
 
     fn sandbox_enabled(&self) -> bool {

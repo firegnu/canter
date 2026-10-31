@@ -21,6 +21,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 跟着改的：第一期改文件用「整文件写 + 按文字替换」；Codex 的 apply_patch 是给 GPT 用的，等接 OpenAI 时再搬（用户 10-24 选定）。
 7. **名字和仓库**：`canter`（马的「慢跑」步法），仓库 `github.com/firegnu/canter`，公开，Apache-2.0。用户：「开源，repo就放在github上」。
 8. **协议：结构照 Codex，传输和类型 canter 自己定（报告 §5.7 的 C）**。2026-10-24 在 canter 仓库定的，用户：「好，就用 C，改 DESIGN」。
+   - 文件规则（P2-167）：`GET /v1/commandRules` 保留 `path/data`，增加可省略的 `fileRules:[{pattern, decision}]`（空时不发送）；文件模式为字符串，decision 仅 `prompt/forbidden`。新增 `POST /v1/fileRules/delete`，按完整模式字符串和 decision 删除重复项，返回沿用 `{removed, message}`；旧命令删除端点不变。旧客户端忽略新增字段，仍能管理命令规则；新客户端读旧服务端时文件列表缺省为空。这是 canter 的全局规则管理扩展，不改变会话协议或批准决定。
    - 命令规则管理（P2-156，10-30 主控确认）：新增全局 `GET /v1/commandRules`，返回 `{path, data:[{pattern, decision}]}`；`POST /v1/commandRules/delete` 接收 `{pattern, decision}`，返回 `{removed, message}`，removed 为删掉的条数，完全相同的重复规则一起删，已经不存在时为 0、仍成功。列表沿用 Codex app-server v2 的 `data` 结构，条目沿用已定 `rules.json` 的 `pattern/decision`；Codex 没有此文件管理接口，规则管理端点、文件路径和删除结果是 canter 扩展，用于服务端规则的查看和删除，不改变会话协议或旧客户端行为。删除使用 POST 而不是带请求体的 DELETE：HTTP 没有为 DELETE 请求体定义语义，以后网页客户端经过代理可能被丢；canter 现有按内容操作（如后台命令停止）也使用 POST。按完整词前缀数组和 decision 识别规则，不使用列表下标；删除与批准框永久放行共用写锁，原子替换、权限 0600，坏文件报错且不覆盖。
    - LSP（P2-134，10-29 主控确认）：新增 `diagnostics` 项目、`languageServer.updated` 状态事件、可选快照 `languageServers` 和 `lsp` 能力标识；查询诊断/服务器及按会话单个订阅停止/重试。沿用会话→轮→项目和 `item.started/completed`，LSP 字段与端点是 canter 扩展，不是 Codex v2 原有接口。P2-135 给 diagnostics 项目补可选 `errorCount/warningCount/delivery`（`inline/late`），旧存盘缺省。具体字段、兼容和模型交付见下文「LSP 诊断交付和协议」。
    - 目标续跑（P2-109，10-29 主控和用户确认）：参考 Codex `rust-v0.163.0` 的 ThreadGoal 和目标更新通知，快照增加可选 `goal`，`session.goal.updated {goal}` 保存并广播完整状态（清除为 null）。字段为 `id/objective/status/budgetUsd/cost/createdAt/updatedAt`，`cost` 沿用 `{usd, unknown}`；状态 `active/paused/complete/blocked/budgetLimited`。`GET/POST/DELETE /v1/sessions/{id}/goal` 查询、设置、清除，`POST .../goal/pause` 和 `.../goal/resume` 暂停、继续；信息接口 features 增加 `goals`。旧客户端忽略新增字段和事件，旧会话没有目标。与 Codex 不同：预算按美元，只有用户能建目标，模型仅有 `get_goal` 和 `update_goal {status: complete|blocked}`；续跑轮提问有五分钟超时。
@@ -227,6 +228,18 @@ P2-161 内置关键路径删除判断，只管模型 shell（前台、后台）�
 组合命令逐段判断，全部被规则、会话前缀或只读白名单放行才不问；一段禁止即拒绝，一段要问即询问。不能确定的变量、替换或语法不能靠 allow 或会话前缀免批准，已识别的字面命令前缀仍用于禁止判断。沿用只读解析机制，白名单本身不扩展。`cd ~` 后直接换行也按家目录计算后续路径；cd 目标以 `~` 开头但未展开时，算判断不了，不自动放行。
 
 批准框显示实际将保存的词前缀，选永久放行则一次保存所有需要批准的段，本次执行并提示文件路径；shell 会话授权也只记这些前缀。前缀取程序加能确定的子命令，无子命令取程序；前置选项等不能确定时不建议。带路径的程序按完整词匹配，不按文件名回退；相对路径程序只提供会话前缀，不提供永久项。过宽的解释器、包装命令等参考 Codex 的 BANNED_PREFIX_SUGGESTIONS，不提供永久或会话前缀放行，包括 uv run、npm/pnpm/yarn exec、pnpm/yarn dlx、rustup run、docker run/exec、kubectl exec，以及 find、sed，具体清单记在任务完成记录。这些自动建议限制不影响用户手写的文件规则。P2-156 增加终端 `/permissions`，不带参数，按 Allow / Ask / Deny 分组查看全局规则；↑↓ 选择，Enter 或 Delete 打开确认，Enter 确认删除，Esc 取消确认或关闭列表。显示服务端规则文件路径，并提示新增、修改去编辑该文件；空列表提示通过批准框永久放行或编辑文件添加，坏文件显示错误且不能删除。读写一律走服务端，按词前缀加 decision 删除（重复的一起删），删完刷新并提示，下一次权限判断立即生效。不在界面里新增、修改规则，不显示会话临时授权，不做项目级规则、通配或沙箱。
+
+## 按文件名的读写规则（P2-167，2026-10-31）
+
+`rules.json` 在命令 `rules` 旁增加可选 `fileRules`，例如 `{"rules":[],"fileRules":[{"pattern":".env","decision":"forbidden"},{"pattern":"./secrets/**","decision":"prompt"}]}`。命令 `rules` 数组仍为必填，可以为空；没有文件规则或列表为空就是关闭，没有内置清单。只管模型 read（含图片）、write、edit；shell、用户 `!`、MCP、web_fetch、环境变量和沙箱规则不变，不替换内容。
+
+模式区分大小写：无 `/`（`.env`、`.env.*`、`*.pem`）按解析后的文件名匹配任意目录；有 `/` 的相对会话 cwd，`./` 同样相对 cwd，`~/` 相对会话 HOME，`/` 开头是绝对路径。支持 globset 的 `*`、`?`、字符类、花括号备选和 `**`，其中 `*`、`?` 不跨目录，`**` 跨任意层目录；反斜线转义通配字符（JSON 里需再转义）。没有 gitignore 的注释、否定规则或隐式目录递归，目录内容用 `dir/**`，不接受末尾 `/`；通配部分后不接受 `.`、`..` 路径段。文件路径沿用工具现有规范化方式，符号链接按真实目标匹配；路径模式的固定前缀也解析符号链接，支持尚未创建的文件。无法解析规则所需路径（包括缺少 HOME）按坏规则文件处理。
+
+受保护路径和沙箱敏感路径仍先在工具准备阶段拒绝。文件规则冲突取 forbidden > prompt：forbidden 三档都拒绝，不弹框，告诉模型这是用户规则、不要换办法访问；prompt 在 alwaysAsk / askForExecution 单次批准，已有文件工具会话授权不能免、不提供本会话放行，allowAll 直接放行。计划模式和审查轮的 read 也走同一判断，write/edit 仍受原来的只读限制。文件规则不扩大沙箱写范围。
+
+与命令规则一样，每次判断重读整份文件，不存在表示无规则。读取、JSON 或任一段校验失败，整份规则视为不可用，不保存或覆盖：shell 保持原来的单次询问；read/write/edit 在询问档退回单次询问，在 allowAll 一律拒绝，防止坏文件抹掉禁止规则后自动访问。每次连续故障在会话内提示一次，修好后恢复。批准前重新检查文件规则，已变成 forbidden 的拒绝执行。
+
+`/permissions` 同时显示命令 Allow / Ask / Deny 和文件 File rules 分组，文件项标 Ask / Deny；选择、确认删除、刷新与命令相同。新增和修改只在 `rules.json` 手填，空列表明确提示可加入 `fileRules`。两类删除和永久命令放行共用写锁、原子替换、0600，保留另一类规则；空文件规则段不写出。退回本件之前的版本时，其 `deny_unknown_fields` 会把带 `fileRules` 的文件当坏文件：模型 shell 退回单次询问，旧 `/permissions` 报错、不覆盖；旧版文件工具没有这层保护，退回前须自行移除该字段并了解限制。
 
 ## 沙箱（P2-123，2026-10-30 用户定）
 

@@ -138,7 +138,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "permissions",
-        about: "View and delete command rules",
+        about: "View and delete command and file rules",
         takes_args: false,
         run: |_, _| Ok(Some(Action::CommandRules)),
     },

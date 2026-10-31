@@ -53,7 +53,7 @@ fn rules() -> CommandRuleListResponse {
         {"pattern":["cargo","publish"],"decision":"forbidden"},
         {"pattern":["cargo","test"],"decision":"allow"},
         {"pattern":["git","push"],"decision":"prompt"}
-    ]}))
+    ],"fileRules":[{"pattern":".env","decision":"forbidden"}]}))
     .unwrap()
 }
 
@@ -69,6 +69,8 @@ fn permissions_groups_rules_and_shows_the_server_file() {
         "git push",
         "Deny",
         "cargo publish",
+        "File rules",
+        "\".env\" (Deny)",
     ]
     .into_iter()
     .map(|word| text.find(word).unwrap())
@@ -114,9 +116,11 @@ fn permissions_empty_and_broken_files_do_not_offer_deletion() {
     screen.show(Ok(CommandRuleListResponse {
         path: "/server/state/rules.json".into(),
         data: vec![],
+        file_rules: vec![],
     }));
     let text = screen.text();
     assert!(text.contains("No command rules."));
+    assert!(text.contains("No file rules.") && text.contains("fileRules in rules.json"));
     assert!(text.contains("Always allow") && text.contains("edit the rules file"));
     assert!(text.contains("/server/state/rules.json"));
     assert_eq!(screen.key(KeyCode::Delete), None);
@@ -170,7 +174,7 @@ async fn permissions_client_deletes_the_confirmed_content_and_reloads_the_list()
         Json, Router,
         routing::{get, post},
     };
-    use canter_protocol::CommandRule;
+    use canter_protocol::{CommandRule, FileRule};
     use canter_tui::client::Client;
     use std::sync::{Arc, Mutex};
 
@@ -181,6 +185,7 @@ async fn permissions_client_deletes_the_confirmed_content_and_reloads_the_list()
     initial.data = vec![initial.data[1].clone()];
     let shared = Arc::new(Mutex::new(initial));
     let (listed, deleted) = (shared.clone(), shared.clone());
+    let file_deleted = shared.clone();
     let router = Router::new()
         .route(
             "/v1/commandRules",
@@ -200,6 +205,20 @@ async fn permissions_client_deletes_the_confirmed_content_and_reloads_the_list()
                     );
                     deleted.lock().unwrap().data.clear();
                     Json(json!({"removed":1,"message":"Deleted 1 command rule."}))
+                }
+            }),
+        )
+        .route(
+            "/v1/fileRules/delete",
+            post(move |Json(rule): Json<FileRule>| {
+                let deleted = file_deleted.clone();
+                async move {
+                    assert_eq!(
+                        serde_json::to_value(rule).unwrap(),
+                        json!({"pattern":".env","decision":"forbidden"})
+                    );
+                    deleted.lock().unwrap().file_rules.clear();
+                    Json(json!({"removed":1,"message":"Deleted 1 file rule."}))
                 }
             }),
         );
@@ -229,6 +248,15 @@ async fn permissions_client_deletes_the_confirmed_content_and_reloads_the_list()
     screen.show(Ok(client.command_rules().await.unwrap()));
     assert!(screen.text().contains("No command rules."));
     assert!(!screen.text().contains("cargo test"));
+    assert!(screen.text().contains("\".env\" (Deny)"));
+    assert_eq!(screen.key(KeyCode::Delete), None);
+    assert!(screen.text().contains("Delete file rule \".env\" (Deny)?"));
+    let Some(Action::DeleteFileRule(rule)) = screen.key(KeyCode::Enter) else {
+        panic!("confirmed file deletion")
+    };
+    assert_eq!(client.delete_file_rule(&rule).await.unwrap().removed, 1);
+    screen.show(Ok(client.command_rules().await.unwrap()));
+    assert!(screen.text().contains("No file rules."));
     stop.send(()).unwrap();
     server.await.unwrap();
 }

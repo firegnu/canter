@@ -385,7 +385,7 @@ async fn forbidden_rules_and_readonly_modes_still_take_priority() {
         ));
     }
     assert!(matches!(
-        gate.evaluate_review(&call),
+        gate.evaluate_review(&call, PermissionMode::AlwaysAsk),
         PermissionCheck::Deny { .. }
     ));
     assert!(matches!(

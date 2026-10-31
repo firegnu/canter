@@ -669,14 +669,22 @@ where
                         .map_err(|error| error.to_string());
                     ui.app_mut().show_command_rules(result);
                 }
-                Some(Action::DeleteCommandRule(rule)) => {
-                    match chat.client.delete_command_rule(&rule).await {
+                Some(action @ (Action::DeleteCommandRule(_) | Action::DeleteFileRule(_))) => {
+                    let (description, result) = match action {
+                        Action::DeleteCommandRule(rule) => (
+                            crate::permissions::description(&rule),
+                            chat.client.delete_command_rule(&rule).await,
+                        ),
+                        Action::DeleteFileRule(rule) => (
+                            crate::permissions::file_description(&rule),
+                            chat.client.delete_file_rule(&rule).await,
+                        ),
+                        _ => unreachable!(),
+                    };
+                    match result {
                         Ok(result) => {
-                            ui.app_mut().information(&format!(
-                                "{} {}",
-                                crate::permissions::description(&rule),
-                                result.message
-                            ));
+                            ui.app_mut()
+                                .information(&format!("{} {}", description, result.message));
                             let list = chat
                                 .client
                                 .command_rules()
@@ -2028,6 +2036,7 @@ impl<C: Connector> Chat<C> {
             | Action::Mcp
             | Action::CommandRules
             | Action::DeleteCommandRule(_)
+            | Action::DeleteFileRule(_)
             | Action::Files
             | Action::ListSkills
             | Action::ExternalEditor

@@ -225,6 +225,20 @@ impl Client {
         .await
     }
 
+    pub async fn delete_file_rule(
+        &self,
+        rule: &canter_protocol::FileRule,
+    ) -> Result<canter_protocol::CommandRuleDeleteResponse, ClientError> {
+        decode(
+            self.http
+                .post(url(routes::FILE_RULE_DELETE, &[]))
+                .json(rule)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
     pub async fn context(
         &self,
         session: &str,

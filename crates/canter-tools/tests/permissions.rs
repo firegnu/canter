@@ -78,7 +78,7 @@ async fn directory_boundary_resolves_paths_and_keeps_modes_and_tool_grants() {
                 PermissionCheck::Deny { .. }
             ));
             assert!(matches!(
-                gate.evaluate_review(&call),
+                gate.evaluate_review(&call, PermissionMode::AlwaysAsk),
                 PermissionCheck::Deny { .. }
             ));
         }
@@ -163,7 +163,7 @@ async fn directory_boundary_resolves_paths_and_keeps_modes_and_tool_grants() {
         PermissionCheck::Deny { .. }
     ));
     assert!(matches!(
-        gate.evaluate_review(&another),
+        gate.evaluate_review(&another, PermissionMode::AlwaysAsk),
         PermissionCheck::Deny { .. }
     ));
 }
