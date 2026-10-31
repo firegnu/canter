@@ -126,3 +126,14 @@
 - 拿主意的地方：按用户明确选择落实建议第 1、2、3 条；建议第 4 条不做。没有新增需要主控决定的事项。实际服务商缓存命中仍交主控安排试跑，思考档保持原样。
 - 没做的事：没有改普通请求、压缩触发线、九节格式、存储及恢复机制；未删测试、放宽断言。未跑全套、未调真实模型、未读改用户真实状态、未合并/推送/安装。
 - 踩过的坑：没有。
+
+## 返工 3
+
+2026-10-31，按交叉审查「复核」的必须改项返工。
+
+- 做了什么：修正 `restore_files.rs::failed_and_interrupted_compactions_do_not_restore_files` 的非中断分支脚本，让前缀请求和拼稿回退各收到一条普通 400，之后仍留一条 `answer()` 给后续 `send()`。新增请求检查：初次 send 的两次请求之后，压缩恰好发两次请求，前缀带 tools、第二次拼稿不带 tools。原有 Failed / Interrupted、没有 restoredFiles、后续 send 成功、旧文件内容保留且新内容及恢复提示不出现的断言全部保留，中断分支的响应序列不变。只改测试和本记录，没有生产代码或设计变更。
+- RED → GREEN：先运行 `cargo nextest run -p canter-core --test restore_files -E 'test(=failed_and_interrupted_compactions_do_not_restore_files)'`，复现原 628 行期望 Failed、实际 Completed。原因与审查一致：前缀 400 触发回退，原本留给后续 send 的 answer 被消耗为摘要。修正脚本后同一测试通过，两次 400 后确实失败，后续 send 仍成功。
+- 同类检索：在整个 `crates/canter-core` 用 `rg` 检索 `InvalidRequest`、`invalid_request`、`BAD_REQUEST`、`UNPROCESSABLE_ENTITY`、400、422，并交叉核对调到 compact / compaction / summary 的测试及其 `ModelError` / `ErrorKind` / HTTP 状态脚本。HTTP 400/422 的模型脚本只在 `restore_files.rs`、`lsp.rs`、`compaction_cache.rs`：本次修正的 restore_files 是唯一用普通 400 期望压缩失败的测试；lsp 的 400 是 `context_length_exceeded`，已有正常回退摘要；compaction_cache 的普通 400/422 本来就在测回退成功，其它 400 也明确是上下文超长，均无需修改。`review.rs` 的压缩失败脚本使用 Server、ContextLength 或不完整摘要，`retry.rs` 的压缩脚本使用不完整流重试；都没有本次普通 400 的问题。`session.rs`、`skill_invocation.rs` 中的 `ErrorCode::InvalidRequest` 是本地参数/技能校验，不是服务商压缩失败脚本。未发现其它同类漏配，不修改或扩跑这些文件。
+- 验证：`cargo nextest run -p canter-core --test restore_files --test compaction_cache --no-fail-fast`，19 passed、0 skipped（restore_files 全部 12 条，compaction_cache 全部 7 条）。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 全部通过。所有 cargo 命令使用本任务的 `CARGO_TARGET_DIR`，所有命令均在前台跑完。
+- 拿主意的地方及没做的事：按用户指定修法执行，无需主控新增决定。未删测试、放宽断言或改超时；未跑全套、未调用真实模型、未读改用户真实状态、未合并/推送/安装。
+- 踩过的坑：返工 2 新增错误回退时，漏核对 P2-142 用同类错误构造失败的脚本；本次按错误分类检索并逐项确认，不再仅靠测试名筛选。

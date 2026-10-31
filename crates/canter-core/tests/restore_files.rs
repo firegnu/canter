@@ -586,26 +586,32 @@ async fn retract_before_model_output_preserves_only_the_retained_file_uses() {
 #[tokio::test]
 async fn failed_and_interrupted_compactions_do_not_restore_files() {
     for interrupted in [false, true] {
-        let stop = if interrupted {
-            Reply {
-                hang: true,
-                ..Reply::sse("")
-            }
-        } else {
-            Reply {
-                status: axum::http::StatusCode::BAD_REQUEST,
-                ..Reply::sse(
-                    r#"{"error":{"message":"Fixture summary failure","type":"invalid_request_error"}}"#,
-                )
+        let stop = || {
+            if interrupted {
+                Reply {
+                    hang: true,
+                    ..Reply::sse("")
+                }
+            } else {
+                Reply {
+                    status: axum::http::StatusCode::BAD_REQUEST,
+                    ..Reply::sse(
+                        r#"{"error":{"message":"Fixture summary failure","type":"invalid_request_error"}}"#,
+                    )
+                }
             }
         };
-        let fixture = Fixture::new(vec![
+        let mut replies = vec![
             calls(&[("read", json!({"path":"note.txt"}))]),
             answer(),
-            stop,
-            answer(),
-        ])
-        .await;
+            stop(),
+        ];
+        if !interrupted {
+            // Fail both the prefix request and its transcript fallback.
+            replies.push(stop());
+        }
+        replies.push(answer());
+        let fixture = Fixture::new(replies).await;
         fixture.write("note.txt", "before\n");
         fixture.send().await;
         fixture.write("note.txt", "after\n");
@@ -633,6 +639,12 @@ async fn failed_and_interrupted_compactions_do_not_restore_files() {
                 TurnStatus::Failed
             }
         );
+        if !interrupted {
+            let requests = fixture.server.requests.lock().unwrap();
+            assert_eq!(requests.len(), 4);
+            assert!(requests[2].get("tools").is_some());
+            assert!(requests[3].get("tools").is_none());
+        }
         assert!(fixture.card().await.get("restoredFiles").is_none());
         fixture.send().await;
         let text = serde_json::to_string(&fixture.messages()).unwrap();
