@@ -5,7 +5,7 @@ import type { ReasoningEffort } from "./ReasoningEffort";
 /**
  * Public settings. Environment variables never belong here.
  */
-export type SessionSettings = { additionalDirectories?: Array<string>, planMode?: boolean,
+export type SessionSettings = { tags?: { [key in string]: string }, additionalDirectories?: Array<string>, planMode?: boolean,
 /**
  * Permission mode to restore when the user leaves planning without a selection.
  */

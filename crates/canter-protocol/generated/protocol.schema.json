@@ -12,6 +12,15 @@
       ],
       "type": "string"
     },
+    "ApprovalOutcome": {
+      "enum": [
+        "approved",
+        "declined",
+        "cancelled",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "ApprovalRequest": {
       "properties": {
         "arguments": {
@@ -416,6 +425,50 @@
       ],
       "type": "object"
     },
+    "CompactionTrigger": {
+      "enum": [
+        "auto",
+        "manual",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ContextEstimate": {
+      "description": "Same byte heuristic as context compaction, including message overhead.",
+      "properties": {
+        "conversationTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "estimated": {
+          "type": "boolean"
+        },
+        "systemTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "toolDefinitionTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "toolResultTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "estimated",
+        "systemTokens",
+        "toolDefinitionTokens",
+        "conversationTokens",
+        "toolResultTokens"
+      ],
+      "type": "object"
+    },
     "ContextMessages": {
       "properties": {
         "assistant": {
@@ -791,6 +844,234 @@
     },
     "Event": {
       "oneOf": [
+        {
+          "properties": {
+            "afterMessages": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "afterTokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "beforeMessages": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "beforeTokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "estimated": {
+              "type": "boolean"
+            },
+            "itemId": {
+              "type": "string"
+            },
+            "removedMessages": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "succeeded": {
+              "type": "boolean"
+            },
+            "trigger": {
+              "$ref": "#/$defs/CompactionTrigger",
+              "default": "unknown"
+            },
+            "triggerOccupancyTokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "telemetry.compaction",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turnId",
+            "itemId",
+            "estimated",
+            "beforeTokens",
+            "afterTokens",
+            "beforeMessages",
+            "afterMessages",
+            "removedMessages",
+            "succeeded"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "estimated": {
+              "type": "boolean"
+            },
+            "itemId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "originalTokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "resultTokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sourceFileBytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "toolCallId": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "telemetry.toolResult",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turnId",
+            "toolCallId",
+            "estimated",
+            "resultTokens",
+            "truncated"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "durationMs": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "outcome": {
+              "$ref": "#/$defs/ApprovalOutcome",
+              "default": "unknown"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "telemetry.approval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turnId",
+            "requestId",
+            "durationMs"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/ContextEstimate"
+            },
+            "durationMs": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "firstResponseMs": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "outcome": {
+              "$ref": "#/$defs/ModelRequestOutcome",
+              "default": "unknown"
+            },
+            "purpose": {
+              "$ref": "#/$defs/RequestPurpose",
+              "default": "unknown"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "retryCount": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "settings": {
+              "$ref": "#/$defs/RequestSettings"
+            },
+            "startedAt": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "toolCallIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "turnId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "telemetry.modelRequest",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "requestId",
+            "startedAt",
+            "durationMs",
+            "settings",
+            "context",
+            "toolCallIds"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "server": {
@@ -1229,6 +1510,234 @@
     },
     "EventPayload": {
       "oneOf": [
+        {
+          "properties": {
+            "afterMessages": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "afterTokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "beforeMessages": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "beforeTokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "estimated": {
+              "type": "boolean"
+            },
+            "itemId": {
+              "type": "string"
+            },
+            "removedMessages": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "succeeded": {
+              "type": "boolean"
+            },
+            "trigger": {
+              "$ref": "#/$defs/CompactionTrigger",
+              "default": "unknown"
+            },
+            "triggerOccupancyTokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "telemetry.compaction",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turnId",
+            "itemId",
+            "estimated",
+            "beforeTokens",
+            "afterTokens",
+            "beforeMessages",
+            "afterMessages",
+            "removedMessages",
+            "succeeded"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "estimated": {
+              "type": "boolean"
+            },
+            "itemId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "originalTokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "resultTokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sourceFileBytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "toolCallId": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "telemetry.toolResult",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turnId",
+            "toolCallId",
+            "estimated",
+            "resultTokens",
+            "truncated"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "durationMs": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "outcome": {
+              "$ref": "#/$defs/ApprovalOutcome",
+              "default": "unknown"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "telemetry.approval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turnId",
+            "requestId",
+            "durationMs"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/ContextEstimate"
+            },
+            "durationMs": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "firstResponseMs": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "outcome": {
+              "$ref": "#/$defs/ModelRequestOutcome",
+              "default": "unknown"
+            },
+            "purpose": {
+              "$ref": "#/$defs/RequestPurpose",
+              "default": "unknown"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "retryCount": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "settings": {
+              "$ref": "#/$defs/RequestSettings"
+            },
+            "startedAt": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "toolCallIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "turnId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "telemetry.modelRequest",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "requestId",
+            "startedAt",
+            "durationMs",
+            "settings",
+            "context",
+            "toolCallIds"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "server": {
@@ -2810,6 +3319,15 @@
       ],
       "type": "object"
     },
+    "ModelRequestOutcome": {
+      "enum": [
+        "completed",
+        "failed",
+        "cancelled",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "PatchChangeKind": {
       "oneOf": [
         {
@@ -3024,6 +3542,12 @@
         "model": {
           "type": "string"
         },
+        "requestId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "startedAt": {
           "format": "int64",
           "type": "integer"
@@ -3118,6 +3642,16 @@
       ],
       "type": "object"
     },
+    "RequestPurpose": {
+      "enum": [
+        "conversation",
+        "compaction",
+        "btw",
+        "handoff",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "RequestResolveParams": {
       "description": "POST /v1/sessions/{id}/requests/{rid}.",
       "properties": {
@@ -3193,6 +3727,29 @@
       "required": [
         "eventSeq",
         "alreadyResolved"
+      ],
+      "type": "object"
+    },
+    "RequestSettings": {
+      "properties": {
+        "approvalPolicy": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "model": {
+          "type": "string"
+        },
+        "planMode": {
+          "type": "boolean"
+        },
+        "reasoningEffort": {
+          "$ref": "#/$defs/ReasoningEffort",
+          "default": "high"
+        }
+      },
+      "required": [
+        "model",
+        "approvalPolicy",
+        "planMode"
       ],
       "type": "object"
     },
@@ -3411,6 +3968,12 @@
               "type": "null"
             }
           ]
+        },
+        "tags": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
         }
       },
       "required": [
@@ -3809,6 +4372,12 @@
             "boolean",
             "null"
           ]
+        },
+        "tags": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
         }
       },
       "required": [

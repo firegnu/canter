@@ -62,7 +62,7 @@ pub(crate) async fn run(
             &sender,
         )
         .await;
-        let _ = sender.send(Stream::Result(output));
+        let _ = sender.send(Stream::Result(Box::new(output)));
     });
     loop {
         match receiver
@@ -71,14 +71,14 @@ pub(crate) async fn run(
             .expect("shell worker returns a result")
         {
             Stream::Output(text) => on_output(&text),
-            Stream::Result(output) => return output,
+            Stream::Result(output) => return *output,
         }
     }
 }
 
 enum Stream {
     Output(String),
-    Result(ToolOutput),
+    Result(Box<ToolOutput>),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -100,14 +100,14 @@ async fn run_command(
     let mut yielded = false;
     let mut on_background = |output: canter_protocol::BackgroundCommandOutput| {
         yielded = true;
-        let _ = sender.send(Stream::Result(background_output(
+        let _ = sender.send(Stream::Result(Box::new(background_output(
             executor,
             id.clone(),
             args,
             source,
             output,
             start,
-        )));
+        ))));
     };
     let result = capture(
         executor,
@@ -160,6 +160,7 @@ async fn run_command(
         return background_output(executor, id, args, source, control.output(!yielded), start);
     }
     ToolOutput {
+        output_size: output.model.original_bytes_if_truncated().into(),
         change_ticket: None,
         images: Vec::new(),
         text: if source == ExecCommandSource::UserShell
@@ -196,6 +197,7 @@ fn failed_start(
     message: String,
 ) -> ToolOutput {
     ToolOutput {
+        output_size: Default::default(),
         change_ticket: None,
         images: Vec::new(),
         text: message.clone(),
@@ -222,6 +224,9 @@ fn background_output(
     start: Instant,
 ) -> ToolOutput {
     ToolOutput {
+        output_size: (output.skipped_bytes > 0)
+            .then_some(output.output.len() as u64 + output.skipped_bytes)
+            .into(),
         change_ticket: None,
         images: Vec::new(),
         text: background::render(&output),

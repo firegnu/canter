@@ -8,7 +8,7 @@ use canter_model::{
     AssistantContent, ErrorKind, FinishReason, Message, ModelEvent, Request, RequestOptions,
     UserContent,
 };
-use canter_protocol::{ErrorCode, EventPayload, Item};
+use canter_protocol::{CompactionTrigger, ErrorCode, EventPayload, Item, RequestPurpose};
 use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
 
@@ -73,8 +73,11 @@ pub(crate) async fn compact(
     shared: &Shared,
     turn_id: &str,
     cancel: &CancellationToken,
+    trigger: CompactionTrigger,
+    trigger_occupancy_tokens: Option<u64>,
 ) -> Result<(), CoreError> {
     let item_id = id("compaction");
+    let mut before = None;
     shared
         .state
         .lock()
@@ -88,9 +91,28 @@ pub(crate) async fn compact(
             },
         }])
         .await?;
-    let result = summarize(shared, turn_id, cancel).await;
+    let result = summarize(shared, turn_id, cancel, &mut before).await;
     let mut state = shared.state.lock().await;
     if state.active.as_ref().is_some_and(|active| active.retracted) {
+        if let Some((before, before_messages)) = before {
+            let after = context::request(&state, shared.options.max_output_tokens);
+            let after_messages = state.history.len();
+            state
+                .journal
+                .compactions
+                .push(crate::telemetry::Compaction {
+                    turn_id: turn_id.into(),
+                    item_id,
+                    trigger,
+                    trigger_occupancy_tokens,
+                    before,
+                    after,
+                    before_messages,
+                    after_messages,
+                    removed_messages: 0,
+                    succeeded: false,
+                });
+        }
         return Ok(());
     }
     match result {
@@ -136,6 +158,7 @@ pub(crate) async fn compact(
             state.lsp_delivery.reset_baseline();
             state.rewind.clear_boundaries();
             state.summary_index = state.history.len().checked_sub(1);
+            let retained_messages = user_inputs.len();
             state.user_messages = user_inputs;
             state.measured_context = None;
             state.restate_plan_mode().await?;
@@ -144,6 +167,25 @@ pub(crate) async fn compact(
             state.restate_directories().await?;
             for message in notices {
                 state.background_notice(message).await?;
+            }
+            if let Some((before, before_messages)) = before {
+                let after = context::request(&state, shared.options.max_output_tokens);
+                let after_messages = state.history.len();
+                state
+                    .journal
+                    .compactions
+                    .push(crate::telemetry::Compaction {
+                        turn_id: turn_id.into(),
+                        item_id: item_id.clone(),
+                        trigger,
+                        trigger_occupancy_tokens,
+                        before,
+                        after,
+                        before_messages,
+                        after_messages,
+                        removed_messages: history_len.saturating_sub(retained_messages),
+                        succeeded: true,
+                    });
             }
             state
                 .journal
@@ -158,6 +200,25 @@ pub(crate) async fn compact(
             Ok(())
         }
         result => {
+            if let Some((before, before_messages)) = before {
+                let after = context::request(&state, shared.options.max_output_tokens);
+                let after_messages = state.history.len();
+                state
+                    .journal
+                    .compactions
+                    .push(crate::telemetry::Compaction {
+                        turn_id: turn_id.into(),
+                        item_id: item_id.clone(),
+                        trigger,
+                        trigger_occupancy_tokens,
+                        before,
+                        after,
+                        before_messages,
+                        after_messages,
+                        removed_messages: 0,
+                        succeeded: false,
+                    });
+            }
             state
                 .journal
                 .append(vec![EventPayload::ItemCompleted {
@@ -177,6 +238,7 @@ async fn summarize(
     shared: &Shared,
     turn_id: &str,
     cancel: &CancellationToken,
+    before: &mut Option<(Request, usize)>,
 ) -> Result<(String, Vec<Message>, usize), CoreError> {
     let (
         prefix,
@@ -189,6 +251,14 @@ async fn summarize(
         diagnostic_notices,
     ) = {
         let state = shared.state.lock().await;
+        // Measure the exact snapshot being summarized, including any notices
+        // delivered while the starting event was committed.
+        if shared.options.telemetry {
+            *before = Some((
+                context::request(&state, shared.options.max_output_tokens),
+                state.history.len(),
+            ));
+        }
         (
             state.prefix.clone(),
             state.history.clone(),
@@ -362,7 +432,21 @@ async fn summarize(
             let prepared = crate::images::prepare(shared, request.clone()).await?;
             let started_at = (shared.options.request_time)();
             let goal_id = shared.state.lock().await.charge_goal();
-            let mut stream = shared.model.stream(prepared, cancel.clone());
+            let (prepared, estimate) = if shared.options.telemetry {
+                context::measure(prepared).await?
+            } else {
+                (prepared, Default::default())
+            };
+            let mut stream = crate::telemetry::stream(
+                shared,
+                Some(turn_id),
+                RequestPurpose::Compaction,
+                prepared,
+                estimate,
+                cancel,
+            )
+            .await;
+            let request_id = stream.request_id().map(str::to_owned);
             let mut response = crate::response::Response::default();
             let mut output_started = false;
             let mut finished = false;
@@ -399,6 +483,7 @@ async fn summarize(
                             started_at,
                             true,
                             goal_id.as_deref(),
+                            request_id.as_deref(),
                         )
                         .await?
                     }

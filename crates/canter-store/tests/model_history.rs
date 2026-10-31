@@ -23,6 +23,7 @@ fn private_typed_model_history_survives_reopen_and_a_torn_last_line() {
         .create(
             "s1",
             SessionSettings {
+                tags: Default::default(),
                 additional_directories: Vec::new(),
                 plan_mode: false,
                 pre_plan_approval_policy: None,

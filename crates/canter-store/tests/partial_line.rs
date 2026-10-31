@@ -11,6 +11,7 @@ fn an_incomplete_last_line_is_discarded_before_further_appends() {
         .create(
             "s1",
             SessionSettings {
+                tags: Default::default(),
                 additional_directories: Vec::new(),
                 plan_mode: false,
                 pre_plan_approval_policy: None,

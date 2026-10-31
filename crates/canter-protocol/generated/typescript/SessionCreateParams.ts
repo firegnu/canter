@@ -6,4 +6,4 @@ import type { UserInput } from "./UserInput";
 /**
  * POST /v1/sessions. Do not log this body: env may contain credentials.
  */
-export type SessionCreateParams = { additionalDirectories?: Array<string>, cwd: string, env: { [key in string]: string }, model: string, reasoningEffort?: ReasoningEffort | null, approvalPolicy: PermissionMode, input?: Array<UserInput> | null, name?: string | null, clientName: string, };
+export type SessionCreateParams = { tags?: { [key in string]: string }, additionalDirectories?: Array<string>, cwd: string, env: { [key in string]: string }, model: string, reasoningEffort?: ReasoningEffort | null, approvalPolicy: PermissionMode, input?: Array<UserInput> | null, name?: string | null, clientName: string, };

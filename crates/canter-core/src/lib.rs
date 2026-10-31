@@ -16,6 +16,7 @@ mod runner;
 mod session;
 mod skill_invocation;
 mod skills;
+mod telemetry;
 pub mod usage;
 mod user_shell;
 
@@ -36,6 +37,7 @@ pub struct RuntimeContext {
 
 #[derive(Clone, Debug)]
 pub struct CoreOptions {
+    pub telemetry: bool,
     /// Embedded callers opt in explicitly; the server's config.json defaults to true.
     pub sandbox: bool,
     /// Global server-owned command rules; embedders may leave this disabled.
@@ -67,6 +69,7 @@ pub struct CoreOptions {
 impl Default for CoreOptions {
     fn default() -> Self {
         Self {
+            telemetry: true,
             sandbox: false,
             command_rules_path: None,
             auto_wake_limit: 10,

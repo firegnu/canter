@@ -8,6 +8,10 @@ use std::{
 };
 use tokio::sync::{broadcast, watch};
 
+#[cfg(test)]
+#[path = "private_telemetry_tests.rs"]
+mod private_telemetry_tests;
+
 pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -17,6 +21,9 @@ pub(crate) fn now() -> i64 {
 }
 
 pub(crate) struct Journal {
+    pub compactions: Vec<crate::telemetry::Compaction>,
+    approval_times: std::collections::HashMap<String, (String, std::time::Instant)>,
+    pub telemetry: Option<crate::telemetry::Pending>,
     writer: Arc<Mutex<Option<SessionWriter>>>,
     pub snapshot: SessionSnapshot,
     pub store: Arc<Store>,
@@ -25,10 +32,13 @@ pub(crate) struct Journal {
     pub failed: bool,
 }
 impl Journal {
-    pub fn new(store: Arc<Store>, writer: SessionWriter) -> Self {
+    pub fn new(store: Arc<Store>, writer: SessionWriter, telemetry: bool) -> Self {
         let snapshot = writer.snapshot().clone();
         let committed = watch::channel(snapshot.last_event_seq).0;
         Self {
+            compactions: Vec::new(),
+            approval_times: Default::default(),
+            telemetry: telemetry.then(Default::default),
             writer: Arc::new(Mutex::new(Some(writer))),
             snapshot,
             store,
@@ -37,12 +47,94 @@ impl Journal {
             failed: false,
         }
     }
-    pub async fn append(&mut self, payloads: Vec<EventPayload>) -> Result<Vec<Event>, CoreError> {
+    pub async fn append(
+        &mut self,
+        mut payloads: Vec<EventPayload>,
+    ) -> Result<Vec<Event>, CoreError> {
         if self.failed {
             return Err(CoreError::internal());
         }
+        if let Some(pending) = &self.telemetry {
+            let mut approvals = Vec::new();
+            for payload in &payloads {
+                match payload {
+                    EventPayload::RequestOpened { request }
+                        if matches!(
+                            request.kind,
+                            RequestKind::Approval(_)
+                                | RequestKind::SandboxApproval(_)
+                                | RequestKind::PlanApproval(_)
+                        ) =>
+                    {
+                        self.approval_times.insert(
+                            request.id.clone(),
+                            (request.turn_id.clone(), std::time::Instant::now()),
+                        );
+                    }
+                    EventPayload::RequestResolved {
+                        request_id,
+                        resolution,
+                        ..
+                    } => {
+                        if let Some((turn_id, start)) = self.approval_times.remove(request_id) {
+                            let outcome = match resolution {
+                                ApprovalResolution::Answered {
+                                    decision:
+                                        ApprovalDecision::Accept
+                                        | ApprovalDecision::AcceptForSession
+                                        | ApprovalDecision::AcceptWithExecpolicyAmendment,
+                                    ..
+                                }
+                                | ApprovalResolution::Plan {
+                                    answer:
+                                        PlanAnswer {
+                                            decision:
+                                                PlanDecision::Implement | PlanDecision::ClearContext,
+                                            ..
+                                        },
+                                } => ApprovalOutcome::Approved,
+                                ApprovalResolution::Answered {
+                                    decision:
+                                        ApprovalDecision::Decline
+                                        | ApprovalDecision::DeclineWithFeedback,
+                                    ..
+                                }
+                                | ApprovalResolution::Plan {
+                                    answer:
+                                        PlanAnswer {
+                                            decision: PlanDecision::KeepPlanning,
+                                            ..
+                                        },
+                                } => ApprovalOutcome::Declined,
+                                _ => ApprovalOutcome::Cancelled,
+                            };
+                            approvals.push(EventPayload::TelemetryApproval {
+                                turn_id,
+                                request_id: request_id.clone(),
+                                duration_ms: crate::telemetry::millis(start),
+                                outcome,
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            payloads.extend(approvals);
+            payloads.extend(std::mem::take(
+                &mut pending.lock().expect("telemetry queue").events,
+            ));
+        }
+        let compactions = std::mem::take(&mut self.compactions);
+        if payloads.is_empty() && compactions.is_empty() {
+            return Ok(Vec::new());
+        }
         let writer = self.writer.clone();
         let result = tokio::task::spawn_blocking(move || {
+            payloads.extend(
+                compactions
+                    .into_iter()
+                    .map(crate::telemetry::Compaction::event),
+            );
             let mut guard = writer.lock().map_err(|_| CoreError::internal())?;
             let writer = guard.as_mut().ok_or_else(CoreError::internal)?;
             writer
@@ -71,6 +163,39 @@ impl Journal {
             }
         }
     }
+    /// Private metadata never enters the public reducer, broadcaster or cursor.
+    pub async fn flush_private_telemetry(&mut self) -> Result<(), CoreError> {
+        if self.failed {
+            return Err(CoreError::internal());
+        }
+        let Some(pending) = &self.telemetry else {
+            return Ok(());
+        };
+        let records =
+            std::mem::take(&mut pending.lock().expect("telemetry queue").private_requests);
+        if records.is_empty() {
+            return Ok(());
+        }
+        let writer = self.writer.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            writer
+                .lock()
+                .map_err(|_| CoreError::internal())?
+                .as_mut()
+                .ok_or_else(CoreError::internal)?
+                .append_private_telemetry(&records)
+                .map_err(CoreError::from)
+        })
+        .await
+        .unwrap_or_else(|_| Err(CoreError::internal()));
+        if result.is_err() {
+            eprintln!(
+                "Warning: private telemetry batch could not be saved; session remains available"
+            );
+        }
+        result
+    }
+
     pub async fn record(&mut self, entry: HistoryEntry) -> Result<(), CoreError> {
         if self.failed {
             return Err(CoreError::internal());

@@ -109,6 +109,7 @@ async fn create(
         store,
         "retract".into(),
         SessionSettings {
+            tags: Default::default(),
             additional_directories: Vec::new(),
             plan_mode: false,
             pre_plan_approval_policy: None,

@@ -52,6 +52,7 @@ async fn create(root: &std::path::Path, store: Arc<Store>, model: Arc<ChatComple
         store,
         "retry".into(),
         SessionSettings {
+            tags: Default::default(),
             additional_directories: Vec::new(),
             cwd: root.to_string_lossy().into(),
             name: None,
@@ -412,7 +413,33 @@ async fn compression_and_private_answers_share_retries_and_discard_partial_text(
             }
             assert!(retry);
             assert_eq!(text, "complete summary");
-            assert_eq!(store.events_after("retry", 0).unwrap(), before);
+            session.snapshot().await; // Wait for the private metadata commit, without changing state.
+            let after = store.events_after("retry", 0).unwrap();
+            assert_eq!(after, before);
+            let private =
+                std::fs::read_to_string(root.path().join("sessions/retry/private-telemetry.jsonl"))
+                    .unwrap();
+            let records: Vec<ModelRequestTelemetry> = private
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(records.len(), 1);
+            assert_eq!(serde_json::to_value(&records[0]).unwrap()["retryCount"], 1);
+            assert_eq!(
+                records[0].purpose,
+                if operation == "btw" {
+                    RequestPurpose::Btw
+                } else {
+                    RequestPurpose::Handoff
+                }
+            );
+            assert!(records[0].turn_id.is_none());
+            assert!(!private.contains("complete summary"));
+            assert!(
+                !serde_json::to_string(&after)
+                    .unwrap()
+                    .contains("complete summary")
+            );
         }
         let history =
             serde_json::to_string(&store.model_history::<Value>("retry").unwrap()).unwrap();

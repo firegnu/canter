@@ -39,7 +39,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         let mut result = if let Some(params) = user_shell {
             crate::user_shell::run(&shared, &turn.id, &params, &cancel).await
         } else if manual_compaction {
-            compaction::compact(&shared, &turn.id, &cancel).await
+            compaction::compact(&shared, &turn.id, &cancel, CompactionTrigger::Manual, None).await
         } else {
             conversation(&shared, &turn.id, &cancel, &mut auto_compaction_failed).await
         };
@@ -257,7 +257,8 @@ async fn conversation(
             }
             (request, summary)
         };
-        let estimated = context::request_tokens(&request);
+        let (request, context) = context::measure(request).await?;
+        let estimated = context.total();
         let occupancy =
             shared
                 .state
@@ -275,7 +276,15 @@ async fn conversation(
             && !*auto_compaction_failed
         {
             compacted = true;
-            match compaction::compact(shared, turn_id, cancel).await {
+            match compaction::compact(
+                shared,
+                turn_id,
+                cancel,
+                CompactionTrigger::Auto,
+                Some(occupancy),
+            )
+            .await
+            {
                 Ok(()) => continue,
                 Err(_) if cancel.is_cancelled() => return Ok(()),
                 Err(_) if shared.state.lock().await.goal_summary.is_some() => continue,
@@ -316,7 +325,8 @@ async fn conversation(
             .lock()
             .await
             .consume_background_notices(&request.messages);
-        let (content, reason, error) = model_response(shared, turn_id, request, cancel).await?;
+        let (content, reason, error) =
+            model_response(shared, turn_id, request, context, cancel).await?;
         let calls: Vec<_> = content
             .iter()
             .filter_map(|part| {
@@ -354,7 +364,14 @@ async fn conversation(
                 .complete_missing_tools("No result: the model request did not finish")
                 .await?;
             if error.kind == ErrorKind::ContextLength && !compacted && !*auto_compaction_failed {
-                compaction::compact(shared, turn_id, cancel).await?;
+                compaction::compact(
+                    shared,
+                    turn_id,
+                    cancel,
+                    CompactionTrigger::Auto,
+                    Some(occupancy),
+                )
+                .await?;
                 compacted = true;
                 continue;
             }
@@ -422,6 +439,7 @@ async fn model_response(
     shared: &Shared,
     turn_id: &str,
     request: Request,
+    context: ContextEstimate,
     cancel: &CancellationToken,
 ) -> Result<
     (
@@ -431,12 +449,21 @@ async fn model_response(
     ),
     CoreError,
 > {
-    let estimated = context::request_tokens(&request);
+    let estimated = context.total();
     let request = crate::images::prepare(shared, request).await?;
     let model = request.model.clone();
     let mut started_at = (shared.options.request_time)();
     let mut goal_id = shared.state.lock().await.charge_goal();
-    let mut stream = shared.model.stream(request, cancel.clone());
+    let mut stream = crate::telemetry::stream(
+        shared,
+        Some(turn_id),
+        RequestPurpose::Conversation,
+        request,
+        context,
+        cancel,
+    )
+    .await;
+    let request_id = stream.request_id().map(str::to_owned);
     let mut response = crate::response::Response::default();
     let mut last_nonempty_response = crate::response::Response::default();
     let mut pending = Vec::new();
@@ -457,7 +484,7 @@ async fn model_response(
                         last_nonempty_response = std::mem::take(&mut response);
                     }
                     if let Some(usage) = usage.take() {
-                        record_usage(shared, usage, None, &model, started_at, true, goal_id.as_deref()).await?;
+                        record_usage(shared, usage, None, &model, started_at, true, goal_id.as_deref(), request_id.as_deref()).await?;
                     }
                     if shared.state.lock().await.goal_summary.is_some() { break; }
                     record_retry(shared, turn_id, &error, attempt, max_retries, delay).await?;
@@ -502,6 +529,7 @@ async fn model_response(
             flush(shared, &mut pending).await?;
         }
     }
+    drop(stream);
     // Only completed items may drive continuation. Preserve partial history on
     // user interruption or a terminal error; cleanup repairs unexecuted tools.
     let content = response.completed();
@@ -543,6 +571,7 @@ async fn model_response(
             started_at,
             true,
             goal_id.as_deref(),
+            request_id.as_deref(),
         )
         .await?;
     }
@@ -603,6 +632,7 @@ pub(crate) async fn record_retry(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn record_usage(
     shared: &Shared,
     usage: Usage,
@@ -611,6 +641,7 @@ pub(crate) async fn record_usage(
     started_at: i64,
     in_turn: bool,
     goal_id: Option<&str>,
+    request_id: Option<&str>,
 ) -> Result<(), CoreError> {
     let mut state = shared.state.lock().await;
     let last = TokenUsageBreakdown {
@@ -639,7 +670,9 @@ pub(crate) async fn record_usage(
             .as_ref()
             .map_or(0, |usage| usage.context_tokens)
     };
-    let request = crate::usage::request_charge(&shared.options.prices, model, started_at, &last);
+    let mut request =
+        crate::usage::request_charge(&shared.options.prices, model, started_at, &last);
+    request.request_id = request_id.map(Into::into);
     let charge = crate::usage::cost(&request);
     let mut cost = state
         .journal
@@ -751,7 +784,13 @@ async fn execute(
     else {
         let mut state = shared.state.lock().await;
         state
-            .tool_result(&call, "Unknown tool".into(), false)
+            .tool_result(
+                &call,
+                "Unknown tool".into(),
+                false,
+                Default::default(),
+                None,
+            )
             .await?;
         state
             .journal
@@ -788,6 +827,7 @@ async fn execute(
             .blocked_in_plan_mode(&call.name, id("tool"), &call.arguments))
     } else if review && matches!(tool, Tool::Write | Tool::Edit) {
         Err(ToolOutput {
+            output_size: Default::default(),
             change_ticket: None,
             images: Vec::new(),
             text: "review is read-only".into(),
@@ -858,6 +898,7 @@ async fn execute(
                         _ => unreachable!("prepared tool item"),
                     }
                     ToolOutput {
+                        output_size: Default::default(),
                         change_ticket: None,
                         images: Vec::new(),
                         text: "Interrupted; not run".into(),
@@ -990,7 +1031,13 @@ async fn execute(
         cancel.cancel();
     }
     state
-        .tool_result(&call, output.text, output.outcome == ToolOutcome::Completed)
+        .tool_result(
+            &call,
+            output.text,
+            output.outcome == ToolOutcome::Completed,
+            output.output_size,
+            output.item.id(),
+        )
         .await?;
     state
         .journal
@@ -1233,6 +1280,7 @@ async fn ask_user(
     };
     let answered = answer.is_some() || timed_out;
     Ok(ToolOutput {
+        output_size: Default::default(),
         change_ticket: None,
         images: Vec::new(),
         text,

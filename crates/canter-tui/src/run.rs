@@ -117,6 +117,7 @@ pub enum Open {
     /// A new session in `cwd`; `first` is sent as its first message. An empty
     /// model means the server's default.
     New {
+        tags: std::collections::BTreeMap<String, String>,
         additional_directories: Vec<String>,
         cwd: String,
         model: String,
@@ -397,6 +398,7 @@ where
                     None => {
                         none_to_continue = true;
                         Open::New {
+                            tags: Default::default(),
                             additional_directories: update.add_directories,
                             cwd,
                             model: update.model.unwrap_or_default(),
@@ -412,17 +414,22 @@ where
         };
         let opened: Result<SessionSnapshot, RunError> = match open {
             Open::New {
+                tags,
                 additional_directories,
                 cwd,
                 model,
                 approval_policy,
                 first,
             } => {
+                if !tags.is_empty() {
+                    require_tags(&client).await?;
+                }
                 let requested_directories = additional_directories.len();
                 if requested_directories > 0 {
                     require_add_directories(&client).await?;
                 }
                 let params = SessionCreateParams {
+                    tags,
                     additional_directories,
                     cwd,
                     env: env.clone(),
@@ -829,6 +836,24 @@ async fn require_add_directories(client: &Client) -> Result<(), ClientError> {
     }
 }
 
+async fn require_tags(client: &Client) -> Result<(), ClientError> {
+    if client
+        .info()
+        .await?
+        .features
+        .unwrap_or_default()
+        .iter()
+        .any(|feature| feature == "tags")
+    {
+        Ok(())
+    } else {
+        Err(ClientError::Protocol(
+            "This server does not support session tags; run canter serve --replace and retry"
+                .into(),
+        ))
+    }
+}
+
 /// Revalidate inherited roots on the server before any initial input runs.
 /// Directory rejection happens before the session is stored, so retrying it
 /// cannot leave an extra session or send the initial input twice.
@@ -837,6 +862,9 @@ async fn create_with_inherited_directories(
     params: &mut SessionCreateParams,
     notices: &mut Vec<String>,
 ) -> Result<canter_protocol::SessionCreateResponse, ClientError> {
+    if !params.tags.is_empty() {
+        require_tags(client).await?;
+    }
     if !params.additional_directories.is_empty()
         && !client
             .info()
@@ -1325,6 +1353,7 @@ impl<C: Connector> Chat<C> {
             ""
         };
         let mut params = SessionCreateParams {
+            tags: settings.tags.clone(),
             additional_directories: settings.additional_directories.clone(),
             cwd: settings.cwd.clone(),
             env: self.env.clone(),
@@ -1393,6 +1422,7 @@ impl<C: Connector> Chat<C> {
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let settings = &ui.app().snapshot().settings;
         let mut params = SessionCreateParams {
+            tags: settings.tags.clone(),
             additional_directories: settings.additional_directories.clone(),
             cwd: settings.cwd.clone(),
             env: self.env.clone(),

@@ -1,5 +1,5 @@
 use canter_model::{AssistantContent, Message, ModelEvent, Request};
-use canter_protocol::{BtwEvent, ErrorCode};
+use canter_protocol::{BtwEvent, ErrorCode, RequestPurpose};
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
@@ -125,12 +125,9 @@ Task for the new session:
         let shared = self.shared.clone();
         let run_cancel = cancel.clone();
         tokio::spawn(async move {
-            let result = answer(&shared, request, &run_cancel, &sender).await;
+            let result = answer(&shared, request, handoff, &run_cancel, &sender).await;
             let mut state = shared.state.lock().await;
             state.btw = None;
-            // Provider errors belong only to the private answer. Close checks
-            // journal failures separately, after this worker has finished.
-            let _ = done.send(Some(Ok(state.journal.snapshot.last_event_seq)));
             let event = match result {
                 Err(error) => BtwEvent::Error {
                     message: error.message,
@@ -139,6 +136,12 @@ Task for the new session:
                 Ok(()) => BtwEvent::Completed,
             };
             let _ = sender.send(event);
+            // End the private stream before telemetry I/O, so a final answer
+            // does not keep the client's "btw in progress" guard active.
+            // Hold the state lock until the write finishes: new work and close
+            // cannot release the writer early. Private failures only drop metadata.
+            let _ = state.journal.flush_private_telemetry().await;
+            let _ = done.send(Some(Ok(state.journal.snapshot.last_event_seq)));
         });
         Ok(BtwStream { receiver, cancel })
     }
@@ -147,6 +150,7 @@ Task for the new session:
 async fn answer(
     shared: &Shared,
     request: Request,
+    handoff: bool,
     cancel: &CancellationToken,
     sender: &mpsc::UnboundedSender<BtwEvent>,
 ) -> Result<(), CoreError> {
@@ -159,7 +163,25 @@ async fn answer(
         }
         let mut started_at = (shared.options.request_time)();
         let mut goal_id = shared.state.lock().await.charge_goal();
-        let mut stream = shared.model.stream(request.clone(), cancel.clone());
+        let (prepared, estimate) = if shared.options.telemetry {
+            context::measure(request.clone()).await?
+        } else {
+            (request.clone(), Default::default())
+        };
+        let mut stream = crate::telemetry::stream(
+            shared,
+            None,
+            if handoff {
+                RequestPurpose::Handoff
+            } else {
+                RequestPurpose::Btw
+            },
+            prepared,
+            estimate,
+            cancel,
+        )
+        .await;
+        let request_id = stream.request_id().map(str::to_owned);
         let mut response = crate::response::Response::default();
         let mut usage = None;
         let result = loop {
@@ -213,6 +235,7 @@ async fn answer(
                             started_at,
                             false,
                             goal_id.as_deref(),
+                            request_id.as_deref(),
                         )
                         .await?;
                     }
@@ -242,6 +265,7 @@ async fn answer(
                 }
             }
         };
+        drop(stream);
         if let Some(usage) = usage {
             runner::record_usage(
                 shared,
@@ -251,6 +275,7 @@ async fn answer(
                 started_at,
                 false,
                 goal_id.as_deref(),
+                request_id.as_deref(),
             )
             .await?;
         }

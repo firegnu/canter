@@ -186,6 +186,7 @@ fn output(
     text: String,
 ) -> ToolOutput {
     ToolOutput {
+        output_size: Default::default(),
         change_ticket: None,
         images: Vec::new(),
         item: Item::PlanProposal {

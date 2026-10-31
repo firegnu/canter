@@ -251,7 +251,8 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
         .timeout(Duration::from_secs(5))
         .build()
         .unwrap();
-    let created: SessionCreateResponse = client.post("http://localhost/v1/sessions").json(&json!({"cwd":cwd,"env":{"HOME":home,"CANTER_HOME":root.path().join("state")},"model":"fake","approvalPolicy":"allowAll","clientName":"test"})).send().await.unwrap().json().await.unwrap();
+    let created: SessionCreateResponse = client.post("http://localhost/v1/sessions").json(&json!({"cwd":cwd,"env":{"HOME":home,"CANTER_HOME":root.path().join("state")},"model":"fake","approvalPolicy":"allowAll","clientName":"test","tags":{"task":"http-tag-fixture"}})).send().await.unwrap().json().await.unwrap();
+    assert_eq!(created.session.settings.tags["task"], "http-tag-fixture");
     let url = format!("http://localhost/v1/sessions/{}", created.session.id);
     let response = client.get(format!("{url}/context")).send().await.unwrap();
     assert_eq!(
@@ -619,11 +620,32 @@ async fn handoff_appends_instructions_without_changing_history_and_charges_sourc
             .events_after(&source, before.last_event_seq)
             .unwrap();
         assert_eq!(events.len(), 1);
-        assert!(matches!(
-            events[0].payload,
-            EventPayload::SessionBtwUsage { .. }
-        ));
+        let EventPayload::SessionBtwUsage { token_usage } = &events[0].payload else {
+            panic!("private usage");
+        };
         let after = test.wait_status(&source, SessionStatus::Idle).await;
+        let private = std::fs::read_to_string(
+            test.root
+                .path()
+                .join("state/sessions")
+                .join(&source)
+                .join("private-telemetry.jsonl"),
+        )
+        .unwrap();
+        let record: ModelRequestTelemetry =
+            serde_json::from_str(private.lines().last().unwrap()).unwrap();
+        assert_eq!(record.purpose, RequestPurpose::Handoff);
+        assert!(record.turn_id.is_none());
+        assert_eq!(
+            token_usage.request.as_ref().unwrap().request_id.as_deref(),
+            Some(record.request_id.as_str())
+        );
+        assert!(
+            !serde_json::to_string(&events)
+                .unwrap()
+                .contains("private **btw answer**")
+        );
+        assert!(!private.contains("private **btw answer**"));
         assert_eq!(after.turns, before.turns);
         let before_usage = before.token_usage.unwrap();
         let after_usage = after.token_usage.unwrap();

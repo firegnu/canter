@@ -175,6 +175,7 @@ async fn create(
         store,
         "search".into(),
         SessionSettings {
+            tags: Default::default(),
             additional_directories: Vec::new(),
             plan_mode: plan,
             pre_plan_approval_policy: None,

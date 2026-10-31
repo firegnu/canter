@@ -326,6 +326,9 @@ pub struct SessionListResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(optional_fields = nullable)]
 pub struct SessionCreateParams {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[ts(optional = nullable)]
+    pub tags: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional = nullable)]
     pub additional_directories: Vec<String>,

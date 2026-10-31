@@ -39,6 +39,7 @@ Usage:
 Options:
   -m, --model <model>  use this model (default: the server's config)
   --add-dir <path>      add a directory to the session (repeatable)
+  --tag <key=value>     label a new session (repeatable; last value wins)
   --yolo               use permission mode Allow all (never ask); commands still run in the sandbox
   -V, --version        show the version and commit
   -h, --help           show this help
@@ -56,6 +57,7 @@ pub enum Command {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ChatArgs {
+    pub tags: BTreeMap<String, String>,
     pub additional_directories: Vec<String>,
     /// Sent as the new session's first message.
     pub first: Option<String>,
@@ -114,6 +116,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
             "--yolo" => chat.yolo = true,
+            "--tag" => {
+                let tag = args.next().ok_or("--tag needs key=value")?;
+                let (key, value) = tag.split_once('=').ok_or("--tag needs key=value")?;
+                if key.trim().is_empty() {
+                    return Err("--tag needs a non-empty key".into());
+                }
+                chat.tags.insert(key.into(), value.into());
+            }
             "-m" | "--model" => chat.model = Some(args.next().ok_or("-m needs a model name")?),
             "--resume" => chat.resume = Some(args.next_if(|next| !next.starts_with('-'))),
             "-c" | "--continue" => chat.continue_latest = true,
@@ -129,6 +139,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
     }
     if chat.continue_latest && chat.resume.is_some() {
         return Err("use either --continue or --resume".into());
+    }
+    if !chat.tags.is_empty() && (chat.continue_latest || chat.resume.is_some()) {
+        return Err("--tag is only supported for new sessions".into());
     }
     let first = words.join(" ");
     if !first.trim().is_empty() {
@@ -255,6 +268,7 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
             update: update(args.model),
         },
         None => Open::New {
+            tags: args.tags,
             additional_directories: args.additional_directories,
             cwd,
             model: args.model.unwrap_or_default(),

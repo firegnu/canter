@@ -282,6 +282,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         features: Some(vec![
             "review".into(),
             "addDirectories".into(),
+            "tags".into(),
             "goals".into(),
             "lsp".into(),
         ]),
@@ -597,6 +598,7 @@ async fn create(
         let mut sessions = app.sessions.lock().await;
         let id = crate::new_id();
         let settings = SessionSettings {
+            tags: params.tags,
             additional_directories: params.additional_directories,
             plan_mode: false,
             pre_plan_approval_policy: None,

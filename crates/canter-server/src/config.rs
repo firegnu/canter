@@ -9,6 +9,8 @@ use crate::ServerError;
 // No Debug/Serialize: errors must not echo credentials or config contents.
 #[derive(Deserialize)]
 pub(crate) struct Config {
+    #[serde(default = "default_telemetry")]
+    telemetry: bool,
     #[serde(default = "default_sandbox")]
     sandbox: bool,
     base_url: String,
@@ -163,10 +165,15 @@ impl Config {
             prices,
             context_window: self.context_window,
             auto_compact_tokens: self.auto_compact_tokens,
+            telemetry: self.telemetry,
             image_models: self.image_models.clone(),
             ..CoreOptions::default()
         }
     }
+}
+
+fn default_telemetry() -> bool {
+    true
 }
 
 fn default_sandbox() -> bool {
@@ -258,6 +265,21 @@ mod tests {
             .extend(extra.as_object().unwrap().clone());
         fs::write(root.path().join("config.json"), config.to_string()).unwrap();
         Config::load(root.path())
+    }
+
+    #[test]
+    fn telemetry_requires_a_boolean() {
+        assert!(load(json!({})).unwrap().options().telemetry);
+        assert!(load(json!({"telemetry":true})).unwrap().options().telemetry);
+        assert!(
+            !load(json!({"telemetry":false}))
+                .unwrap()
+                .options()
+                .telemetry
+        );
+        for value in [json!("false"), json!(0), json!(null)] {
+            assert!(load(json!({"telemetry":value})).is_err());
+        }
     }
 
     #[test]

@@ -275,12 +275,31 @@ pub enum ToolOutcome {
 
 #[derive(Debug)]
 pub struct ToolOutput {
+    pub output_size: OutputSize,
     /// Internal only; P2-134 chooses when/how to deliver this modification's diagnostics.
     pub change_ticket: Option<Box<lsp::ChangeTicket>>,
     pub text: String,
     pub item: Item,
     pub outcome: ToolOutcome,
     pub images: Vec<ToolImage>,
+}
+
+/// Internal measurements only; never added to the text delivered to the model.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OutputSize {
+    pub truncated: bool,
+    pub original_bytes: Option<u64>,
+    pub source_file_bytes: Option<u64>,
+}
+
+impl From<Option<u64>> for OutputSize {
+    fn from(original_bytes: Option<u64>) -> Self {
+        Self {
+            truncated: original_bytes.is_some(),
+            original_bytes,
+            source_file_bytes: None,
+        }
+    }
 }
 
 /// Validated raw bytes; the core saves these before publishing references.
@@ -465,6 +484,7 @@ impl PreparedCall {
     }
     pub fn declined_output(&self, feedback: Option<&str>) -> ToolOutput {
         ToolOutput {
+            output_size: Default::default(),
             change_ticket: None,
             images: Vec::new(),
             text: feedback.map_or_else(
@@ -477,6 +497,7 @@ impl PreparedCall {
     }
     fn failed_output(&self, text: String, outcome: ToolOutcome) -> ToolOutput {
         ToolOutput {
+            output_size: Default::default(),
             change_ticket: None,
             images: Vec::new(),
             text,
@@ -615,6 +636,7 @@ impl PreparedCall {
 }
 
 pub struct Tools {
+    telemetry: bool,
     lsp: Option<lsp::LspSession>,
     background: BackgroundCommands,
     plan_enabled: bool,
@@ -626,6 +648,10 @@ pub struct Tools {
 }
 
 impl Tools {
+    pub fn with_telemetry(mut self, enabled: bool) -> Self {
+        self.telemetry = enabled;
+        self
+    }
     pub fn configure_shell(&self, mode: canter_protocol::PermissionMode, directories: &[String]) {
         self.executor.configure_shell(mode, directories);
     }
@@ -810,6 +836,7 @@ impl Tools {
     }
     pub fn new(executor: Arc<dyn Executor>) -> Self {
         Self {
+            telemetry: true,
             lsp: None,
             background: BackgroundCommands::default(),
             plan_enabled: true,
@@ -1302,6 +1329,7 @@ impl Tools {
                     *result = text.clone();
                 }
                 ToolOutput {
+                    output_size: Default::default(),
                     change_ticket: None,
                     images: Vec::new(),
                     text,
@@ -1318,9 +1346,15 @@ impl Tools {
                 } else {
                     self.background.output(*id, true)
                 };
-                let (text, outcome) = match result {
-                    Ok(output) => (background::render(&output), ToolOutcome::Completed),
-                    Err(error) => (error, ToolOutcome::Failed),
+                let (text, outcome, output_size) = match result {
+                    Ok(output) => (
+                        background::render(&output),
+                        ToolOutcome::Completed,
+                        (output.skipped_bytes > 0)
+                            .then_some(output.output.len() as u64 + output.skipped_bytes)
+                            .into(),
+                    ),
+                    Err(error) => (error, ToolOutcome::Failed, OutputSize::default()),
                 };
                 let mut item = call.item(if outcome == ToolOutcome::Completed {
                     ItemStatus::Completed
@@ -1331,6 +1365,7 @@ impl Tools {
                     *result = text.clone();
                 }
                 ToolOutput {
+                    output_size,
                     change_ticket: None,
                     images: Vec::new(),
                     text,
@@ -1339,6 +1374,7 @@ impl Tools {
                 }
             }
             Action::UpdatePlan(_) => ToolOutput {
+                output_size: Default::default(),
                 change_ticket: None,
                 images: Vec::new(),
                 text: "Plan updated".into(),
@@ -1346,13 +1382,14 @@ impl Tools {
                 outcome: ToolOutcome::Completed,
             },
             Action::WebSearch(args) => {
-                let (text, results, error, outcome) = self
+                let (text, results, error, outcome, original_bytes) = self
                     .web_search
                     .as_ref()
                     .expect("prepared search provider")
                     .run(args, cancel)
                     .await;
                 ToolOutput {
+                    output_size: original_bytes.into(),
                     change_ticket: None,
                     images: Vec::new(),
                     text,
@@ -1371,9 +1408,10 @@ impl Tools {
                 }
             }
             Action::WebFetch(url) => {
-                let (text, result, outcome) =
+                let (text, result, outcome, original_bytes) =
                     web_fetch::run(url, self.web_fetch_timeout, cancel).await;
                 ToolOutput {
+                    output_size: original_bytes.into(),
                     change_ticket: None,
                     images: Vec::new(),
                     text,
@@ -1392,6 +1430,7 @@ impl Tools {
                 }
             }
             Action::McpSearch { query, tools, text } => ToolOutput {
+                output_size: Default::default(),
                 change_ticket: None,
                 images: Vec::new(),
                 text: text.clone(),
@@ -1404,9 +1443,11 @@ impl Tools {
                 },
             },
             Action::Mcp(tool) => {
-                let (text, result, outcome, images) = tool.call(&call.arguments, cancel).await;
+                let (text, result, outcome, images, original_bytes) =
+                    tool.call(&call.arguments, cancel).await;
                 ToolOutput {
                     images,
+                    output_size: original_bytes.into(),
                     change_ticket: None,
                     text,
                     outcome,
@@ -1436,20 +1477,34 @@ impl Tools {
                     result = self.read(read, call.resolved_path.as_deref().unwrap_or_else(|| read.path.as_ref()), cancel) => result,
                 };
                 match result {
-                    Ok((text, images)) => ToolOutput {
-                        images,
-                        change_ticket: None,
-                        item: Item::FileRead {
-                            content_items: Vec::new(),
-                            id: call.id.clone(),
-                            path: read.path.clone(),
-                            start_line: read.start_line,
-                            content: text.clone(),
-                            status: ItemStatus::Completed,
-                        },
-                        text,
-                        outcome: ToolOutcome::Completed,
-                    },
+                    Ok((text, images, mut output_size)) => {
+                        if self.telemetry && output_size.truncated {
+                            output_size.source_file_bytes = self
+                                .executor
+                                .file_size(
+                                    call.resolved_path
+                                        .as_deref()
+                                        .unwrap_or_else(|| read.path.as_ref()),
+                                    cancel,
+                                )
+                                .await;
+                        }
+                        ToolOutput {
+                            images,
+                            output_size,
+                            change_ticket: None,
+                            item: Item::FileRead {
+                                content_items: Vec::new(),
+                                id: call.id.clone(),
+                                path: read.path.clone(),
+                                start_line: read.start_line,
+                                content: text.clone(),
+                                status: ItemStatus::Completed,
+                            },
+                            text,
+                            outcome: ToolOutcome::Completed,
+                        }
+                    }
                     Err(error) => call.failed_output(
                         error.to_string(),
                         if cancel.is_cancelled() {
@@ -1480,6 +1535,7 @@ impl Tools {
                     .await
                 {
                     Ok(()) => ToolOutput {
+                        output_size: Default::default(),
                         change_ticket: self.lsp.as_ref().map(|lsp| {
                             Box::new(
                                 lsp.changed(
@@ -1529,7 +1585,7 @@ impl Tools {
         args: &ReadArgs,
         path: &std::path::Path,
         cancel: &CancellationToken,
-    ) -> std::io::Result<(String, Vec<ToolImage>)> {
+    ) -> std::io::Result<(String, Vec<ToolImage>, OutputSize)> {
         let mut reader = BufReader::new(self.executor.open_file(path, cancel).await?);
         // Inspect the same opened file that will be read, preserving executor checks.
         // The initial read can be short (e.g. an executor backed by a pipe).
@@ -1560,10 +1616,11 @@ impl Tools {
                 .into_owned();
             let image = ToolImage::new(bytes, name)
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-            return Ok((image.explanation(), vec![image]));
+            return Ok((image.explanation(), vec![image], OutputSize::default()));
         }
         let mut text = String::new();
         let mut line_number = 1u64;
+        let mut output_size = OutputSize::default();
         let end = u64::from(args.start_line) + u64::from(args.line_count.min(MAX_READ_LINES));
         loop {
             executor::check_cancel(cancel)?;
@@ -1571,6 +1628,7 @@ impl Tools {
                 break;
             }
             if line_number >= end {
+                output_size.truncated = args.line_count >= MAX_READ_LINES;
                 text.push_str(&format!(
                     "\nMore content: read with startLine={line_number}."
                 ));
@@ -1595,7 +1653,14 @@ impl Tools {
                 if !skip {
                     if text.len() + line.len() + length + 16 > MAX_READ_BYTES {
                         text.push_str(&format!("\nByte limit reached: read with startLine={line_number}. If this line alone exceeds {MAX_READ_BYTES} bytes, use shell to inspect byte ranges."));
-                        return Ok((text, Vec::new()));
+                        return Ok((
+                            text,
+                            Vec::new(),
+                            OutputSize {
+                                truncated: true,
+                                ..Default::default()
+                            },
+                        ));
                     }
                     line.extend_from_slice(&buffer[..length]);
                 }
@@ -1625,7 +1690,7 @@ impl Tools {
                 line_number - 1
             );
         }
-        Ok((text, Vec::new()))
+        Ok((text, Vec::new(), output_size))
     }
 }
 
@@ -1867,6 +1932,7 @@ fn tool_error(
         },
     };
     ToolOutput {
+        output_size: Default::default(),
         change_ticket: None,
         images: Vec::new(),
         item,

@@ -175,6 +175,7 @@ async fn create_attached(
             "baseline".into()
         },
         SessionSettings {
+            tags: Default::default(),
             cwd: root.display().to_string(),
             name: None,
             model: "fake".into(),
