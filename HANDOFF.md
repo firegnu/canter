@@ -102,7 +102,7 @@
 
 ## 已知没修的问题
 
-- 偶发失败的测试（10-29，main 上也有，单独跑 3 次约挂 1 次）：canter-tools 的 `rss_limits_stop_busy_process_trees_and_require_explicit_retry`。内存上限设成 1 字节、每 300 ms 查一次，假服务器启动慢时还没起完就被停掉，`for_file` 拿不到实例（`service.rs` 第 1038 行）。用户说 LSP 的问题先不往下查。
+- 偶发失败的测试（10-29，main 上也有，单独跑 3 次约挂 1 次）：canter-tools 的 `rss_limits_stop_busy_process_trees_and_require_explicit_retry`。 10-31 用户：「我建议先关掉这个测试。不然之后会耽误时间」，已加 `#[ignore]`，全套不再跑；修好后去掉，单独跑用 `cargo nextest run -p canter-tools --run-ignored only rss_limits`。内存上限设成 1 字节、每 300 ms 查一次，假服务器启动慢时还没起完就被停掉，`for_file` 拿不到实例（`service.rs` 第 1038 行）。用户说 LSP 的问题先不往下查。
 - LSP 终端显示（P2-135 合并的是第一版，晚到显示的改动留在分支 `p2-135-late-display`，10-29 用户说先不修）：
   - 一轮里最后一次改文件的诊断晚到时，屏幕上那张卡片一直显示 `LSP: pending`，模型下一次请求前才拿到结果。
   - 改完文件等了 60 秒以上用户才说话，模型拿到的是「60 秒窗口过期」，而不是已经到了的诊断。
