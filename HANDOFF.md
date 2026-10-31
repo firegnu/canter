@@ -161,6 +161,7 @@
 - /permissions（P2-156 交叉审查，10-30 不改）：
   - 建议改：`rules.json` 是软链接时，`/permissions` 删一次也会把链接换成普通文件（和「以后都放行」同一个写法，见下面「命令规则」那条）；改法是写之前发现是链接就报错，或解析到目标再替换目标，会同时改到 `append`，要另开一件。
   - 可以不改：列表还没画出来时按 Esc 被吞掉，要再按一次；删除失败时提示写 `Could not read command rules`，没说是删；新终端连旧服务端时 `/permissions` 报 404，没用 `/v1/info` 的 features 提前提示。
+- `/context` 里出现两行 `System prompt`（10-31 用户看到）：第二行其实是 MCP 工具清单（`prompt.rs` 把 `SegmentKind::McpCatalog` 归成 `ContextSectionKind::System`），数字没错，只是标签错。改法：加一类 `McpTools`，终端显示 `MCP tools`。等哪件活顺路一起改。
 - MCP 工具按需加载（P2-162 交叉审查，10-30 主控按「只有必须改挡合并」不改，等用户试用）：
   - 试用时留意：MCP 服务给的参数格式本身编不过（外部 `$ref`、不认识的 `$schema`）时，按需模式下这个工具永远调不了，只能关 `mcp_tool_search`；改法是区分「格式编不过」和「参数不对」，前者只查参数是对象就照常批准、调用。模型照清单里的全名直接调（不经 `mcp_call`）时只拿到 `Unknown tool`，没提示改用 `mcp_call`。
   - 清单简介取说明第一行，第一行为空（Python `"""` 换行写法）时简介是空的；`THIRD-PARTY-NOTICES.md` 没补 jsonschema 及带进来的约 30 个包；`crates/canter-server/README.md`、`crates/canter-tools/README.md` 没写 `mcp_tool_search` 和两个工具。
