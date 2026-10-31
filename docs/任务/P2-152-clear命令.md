@@ -1,4 +1,4 @@
-# 任务：第二期-17 - clear 命令（照 Claude Code 的 /clear）
+# 任务：第二期-16 - clear 命令（照 Claude Code 的 /clear）
 
 2026-10-30，canter/main 交给 canter/dev-clear（pi，默认模型）。
 路由：低 / 交叉审查不要 / 影响面：改行为（路由：轻（置信 0.5）、不要、改行为）
