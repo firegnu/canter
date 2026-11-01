@@ -53,6 +53,9 @@ const RETRY: Duration = Duration::from_millis(500);
 /// Longest session name taken from a first message, in characters.
 const TITLE_CHARS: usize = 80;
 
+#[path = "run_trust.rs"]
+mod trust;
+
 #[cfg(test)]
 #[path = "run_retract_tests.rs"]
 mod retract_tests;
@@ -428,6 +431,9 @@ where
                 if requested_directories > 0 {
                     require_add_directories(&client).await?;
                 }
+                if !trust::confirm(&client, &cwd, &mut terminal, &mut input, &mut shutdown).await? {
+                    return Ok(None);
+                }
                 let params = SessionCreateParams {
                     tags,
                     additional_directories,
@@ -463,6 +469,12 @@ where
                 };
                 match id {
                     Some(id) => {
+                        let cwd = resume_cwd(&client, &id).await?;
+                        if !trust::confirm(&client, &cwd, &mut terminal, &mut input, &mut shutdown)
+                            .await?
+                        {
+                            return Ok(None);
+                        }
                         let snapshot =
                             resume(&client, &id, &env, &SessionUpdateParams::default()).await?;
                         directory_notices.extend(update_settings(&client, &id, &update).await?);
@@ -584,7 +596,10 @@ where
                     break;
                 }
                 Some(Action::NewSession) => {
-                    if let Some(receiver) = chat.new_session(&mut ui, None).await {
+                    let cwd = ui.app().snapshot().settings.cwd.clone();
+                    if trust::in_ui(&chat.client, &cwd, &mut ui, &mut input, &mut shutdown).await
+                        && let Some(receiver) = chat.new_session(&mut ui, None).await
+                    {
                         messages = receiver;
                     }
                 }
@@ -611,6 +626,15 @@ where
                     plan,
                     answer,
                 }) => {
+                    let cwd = ui.app().snapshot().settings.cwd.clone();
+                    if answer.decision == canter_protocol::PlanDecision::ClearContext
+                        && !trust::in_ui(&chat.client, &cwd, &mut ui, &mut input, &mut shutdown)
+                            .await
+                    {
+                        ui.app_mut()
+                            .answer_failed(&request_id, "Folder was not opened");
+                        continue;
+                    }
                     if let Some(receiver) =
                         chat.resolve_plan(&mut ui, &request_id, &plan, answer).await
                     {
@@ -768,10 +792,13 @@ where
         if quit {
             break Ok(());
         }
-        if let Some(note) = ui.app_mut().take_handoff()
-            && let Some(receiver) = chat.new_session(&mut ui, Some(note)).await
-        {
-            messages = receiver;
+        if let Some(note) = ui.app_mut().take_handoff() {
+            let cwd = ui.app().snapshot().settings.cwd.clone();
+            if trust::in_ui(&chat.client, &cwd, &mut ui, &mut input, &mut shutdown).await
+                && let Some(receiver) = chat.new_session(&mut ui, Some(note)).await
+            {
+                messages = receiver;
+            }
         }
     };
     chat.pump.abort();
@@ -817,6 +844,17 @@ async fn resume(
         client.update(id, update).await?;
     }
     Ok(snapshot)
+}
+
+async fn resume_cwd(client: &Client, id: &str) -> Result<String, RunError> {
+    match client.read_session(id).await {
+        Ok(response) => Ok(response.session.settings.cwd),
+        Err(ClientError::Server {
+            code: ErrorCode::SessionNotFound,
+            ..
+        }) => Err(RunError::NoSession(id.to_owned())),
+        Err(error) => Err(error.into()),
+    }
 }
 
 async fn require_add_directories(client: &Client) -> Result<(), ClientError> {
@@ -1508,6 +1546,10 @@ impl<C: Connector> Chat<C> {
             Pick::Exit => return Ok(ControlFlow::Break(())),
             _ => return Ok(ControlFlow::Continue(None)),
         };
+        let cwd = resume_cwd(&self.client, &id).await?;
+        if !trust::in_ui(&self.client, &cwd, ui, input, shutdown).await {
+            return Ok(ControlFlow::Continue(None));
+        }
         Ok(ControlFlow::Continue(
             self.open(ui, &id, "Could not resume the session").await,
         ))

@@ -56,6 +56,8 @@ pub struct DiagnosticBatch {
 }
 #[derive(Clone)]
 pub struct LspSession(Arc<SessionInner>);
+/// Server policy, evaluated before subscriptions, synchronization and diagnostics.
+pub type FileAccess = Arc<dyn Fn(&Path, &FileContext) -> bool + Send + Sync>;
 #[derive(Clone)]
 pub struct ChangeTicket {
     pub path: PathBuf,
@@ -70,6 +72,7 @@ impl std::fmt::Debug for ChangeTicket {
     }
 }
 struct SessionInner {
+    access: Option<FileAccess>,
     service: Arc<LspService>,
     context: Mutex<FileContext>,
     protected: Vec<PathBuf>,
@@ -116,7 +119,16 @@ impl Drop for SessionInner {
 }
 impl LspService {
     pub fn session(self: &Arc<Self>, context: FileContext, protected: Vec<PathBuf>) -> LspSession {
+        self.session_with_access(context, protected, None)
+    }
+    pub fn session_with_access(
+        self: &Arc<Self>,
+        context: FileContext,
+        protected: Vec<PathBuf>,
+        access: Option<FileAccess>,
+    ) -> LspSession {
         let session = Arc::new(SessionInner {
+            access,
             service: self.clone(),
             context: Mutex::new(context),
             protected: protected.into_iter().map(|p| canonical(&p)).collect(),
@@ -134,6 +146,13 @@ impl LspService {
                 };
                 let path = session.state.lock().unwrap().pending.pop_first();
                 if let Some(path) = path {
+                    if !session.allowed(&path) {
+                        session.fail(
+                            &path,
+                            LspError::new(ErrorKind::Unsupported, "LSP is disabled for this file"),
+                        );
+                        continue;
+                    }
                     let existing = session
                         .state
                         .lock()
@@ -358,6 +377,10 @@ impl SessionInner {
     fn allowed(&self, path: &Path) -> bool {
         let context = self.context.lock().unwrap();
         context.round == Round::Modify
+            && self
+                .access
+                .as_ref()
+                .is_none_or(|access| access(path, &context))
             && !self.state.lock().unwrap().subscriptions.iter().any(|s| {
                 s.stopped
                     && path.starts_with(&s.root)

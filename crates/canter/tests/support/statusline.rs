@@ -132,7 +132,7 @@ async fn terminal_signals_stop_statusline_descendants_without_panicking_on_lost_
         .unwrap();
         world.start_server().await;
 
-        let (mut reader, mut terminal) = spawn_terminal(&world, &[], true);
+        let (mut reader, mut terminal) = spawn_terminal(&world, &[], true).await;
         let worker = tokio::time::timeout(WAIT, async {
             loop {
                 if let Ok(text) = fs::read_to_string(world.path("work/worker.pid"))
@@ -198,7 +198,12 @@ async fn terminal_signals_stop_statusline_descendants_without_panicking_on_lost_
     }
 }
 
-fn spawn_terminal(world: &World, args: &[&str], controlling_tty: bool) -> (PtyReader, Child) {
+async fn spawn_terminal(world: &World, args: &[&str], controlling_tty: bool) -> (PtyReader, Child) {
+    Client::new(&world.path("state/server.sock"))
+        .unwrap()
+        .trust_folder(world.path("work").to_str().unwrap())
+        .await
+        .unwrap();
     let size = nix::pty::Winsize {
         ws_row: 24,
         ws_col: 100,
@@ -250,7 +255,7 @@ async fn picker_exit(startup: bool, signal: Option<Signal>, controlling_tty: boo
     let mut world = World::new(Vec::new()).await;
     world.start_server().await;
     let args = if startup { vec!["--resume"] } else { vec![] };
-    let (mut reader, mut terminal) = spawn_terminal(&world, &args, controlling_tty);
+    let (mut reader, mut terminal) = spawn_terminal(&world, &args, controlling_tty).await;
     if !startup {
         reader.wait_for("fake-model").await;
         reader.type_line("/resume");

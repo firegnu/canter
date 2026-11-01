@@ -22,6 +22,7 @@ fn a_second_writer_cannot_lock_the_same_session() {
                 pre_plan_approval_policy: None,
                 plan_enabled: None,
                 sandbox_enabled: None,
+                restricted_mode: None,
                 cwd: temp.path().to_string_lossy().into(),
                 name: None,
                 model: "fake".into(),

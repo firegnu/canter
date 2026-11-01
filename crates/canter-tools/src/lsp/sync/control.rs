@@ -91,6 +91,14 @@ impl LspSession {
     pub fn restore_subscriptions(&self, servers: &[LanguageServer], files: &[PathBuf]) {
         let context = self.0.context.lock().unwrap().clone();
         for path in files {
+            if self
+                .0
+                .access
+                .as_ref()
+                .is_some_and(|access| !access(path, &context))
+            {
+                continue;
+            }
             let Ok((name, root)) = self.0.service.selection_info(path, &context) else {
                 continue;
             };

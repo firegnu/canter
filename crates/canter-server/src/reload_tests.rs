@@ -138,6 +138,16 @@ impl Fixture {
     async fn create(&self) -> String {
         self.create_with_env(json!({})).await
     }
+    async fn trust(&self, directory: &std::path::Path) {
+        self.client
+            .post("http://localhost/v1/folderTrust")
+            .json(&json!({"cwd":directory}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    }
     async fn create_with_env(&self, extra: Value) -> String {
         let mut environment = json!({"HOME":self.root.path().join("home"),"CANTER_HOME":self.root.path().join("state")});
         environment
@@ -833,9 +843,278 @@ async fn changed_mcp_waits_for_its_old_turn_without_restarting_unchanged_service
 }
 
 #[tokio::test]
+async fn trusted_cwd_does_not_authorize_lsp_in_untrusted_added_directory() {
+    for in_git in [true, false] {
+        let config = json!({"enabled":true,"servers":{"fake":{"command":super::lsp_tests::fixture_executable(),"extensions":{"fake":"fake"},"root_markers":["project.marker"]}}});
+        let mut fixture = Fixture::new(json!({"lsp":config})).await;
+        let extra = tempfile::tempdir().unwrap();
+        fs::create_dir(extra.path().join("nested")).unwrap();
+        for directory in [fixture.root.path(), extra.path()] {
+            fs::write(directory.join("project.marker"), "").unwrap();
+            fs::write(directory.join("main.fake"), "").unwrap();
+            if directory == fixture.root.path() || in_git {
+                assert!(
+                    std::process::Command::new("/usr/bin/git")
+                        .args(["init", "--quiet"])
+                        .arg(directory)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+        }
+        fixture.trust(fixture.root.path()).await;
+        let url = fixture
+            .create_with_env(json!({"LSP_TEST_DIR":fixture.root.path(),"LSP_TEST_MODE":"sync"}))
+            .await;
+        fixture
+            .client
+            .patch(&url)
+            .json(&json!({"addDirectories":[extra.path()]}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        fixture.input(&url).await;
+        fixture
+            .request()
+            .await
+            .tool("write", json!({"path":"main.fake","content":"bad A\n"}));
+        let request = fixture.request().await;
+        let starts = fixture.root.path().join("starts");
+        until(|| starts.exists()).await;
+        request.tool(
+            "write",
+            json!({"path":extra.path().join("nested/main.fake"),"content":"bad B\n"}),
+        );
+        let request = fixture.request().await;
+        let extra_started = tokio::time::timeout(Duration::from_secs(1), async {
+            until(|| fs::read_to_string(&starts).unwrap().lines().count() > 1).await;
+        })
+        .await
+        .is_ok();
+        request.stop();
+        fixture.idle(&url).await;
+        // Check the positive path too: a previously trusted B needs no add-directory prompt.
+        fixture.trust(extra.path()).await;
+        fixture.input(&url).await;
+        fixture.request().await.tool(
+            "write",
+            json!({"path":extra.path().join("nested/main.fake"),"content":"trusted B\n"}),
+        );
+        let request = fixture.request().await;
+        until(|| fs::read_to_string(&starts).unwrap().lines().count() == 2).await;
+        request.stop();
+        fixture.idle(&url).await;
+        fixture.shutdown().await;
+        assert!(
+            !extra_started,
+            "trusting A must not authorize B's language server"
+        );
+    }
+}
+
+#[tokio::test]
+async fn folder_trust_outside_git_is_exact_and_restricted_open_leaves_no_record() {
+    let fixture = Fixture::new(json!({})).await;
+    let folder = fixture.root.path().join("folder");
+    let child = folder.join("child");
+    fs::create_dir_all(&child).unwrap();
+    let url = fixture.create().await;
+    assert_eq!(
+        fixture
+            .snapshot(&url)
+            .await
+            .session
+            .settings
+            .restricted_mode,
+        Some(true)
+    );
+    assert!(
+        !fixture
+            .root
+            .path()
+            .join("state/trusted_folders.json")
+            .exists()
+    );
+    fixture.trust(&folder).await;
+    for (directory, expected) in [
+        (&folder, true),
+        (&child, false),
+        (&fixture.root.path().to_path_buf(), false),
+    ] {
+        let url = reqwest::Url::parse_with_params(
+            "http://localhost/v1/folderTrust",
+            &[("cwd", directory.to_str().unwrap())],
+        )
+        .unwrap();
+        let response: Value = fixture
+            .client
+            .get(url)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(response["trusted"], expected);
+        assert_eq!(
+            response["path"],
+            directory.canonicalize().unwrap().to_str().unwrap()
+        );
+    }
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn folder_trust_is_shared_by_repository_subdirectories() {
+    let fixture = Fixture::new(json!({})).await;
+    let repo = fixture.root.path().join("repo");
+    fs::create_dir_all(repo.join("one/two")).unwrap();
+    assert!(
+        std::process::Command::new("/usr/bin/git")
+            .args(["init", "--quiet"])
+            .arg(&repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let trust = "http://localhost/v1/folderTrust";
+    let query = fixture
+        .client
+        .get(
+            reqwest::Url::parse_with_params(trust, &[("cwd", repo.join("one").to_str().unwrap())])
+                .unwrap(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(query.status(), reqwest::StatusCode::OK);
+    assert_eq!(query.json::<Value>().await.unwrap()["trusted"], false);
+    fixture
+        .client
+        .post(trust)
+        .json(&json!({"cwd":repo.join("one")}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let result: Value = fixture
+        .client
+        .get(
+            reqwest::Url::parse_with_params(
+                trust,
+                &[("cwd", repo.join("one/two").to_str().unwrap())],
+            )
+            .unwrap(),
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(result["trusted"], true);
+    assert_eq!(
+        result["path"],
+        repo.canonicalize().unwrap().to_str().unwrap()
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn untrusted_session_does_not_start_lsp_even_when_globally_enabled() {
+    let config = json!({"enabled":true,"servers":{"fake":{"command":super::lsp_tests::fixture_executable(),"extensions":{"fake":"fake"},"root_markers":["project.marker"]}}});
+    let mut fixture = Fixture::new(json!({"lsp":config})).await;
+    fs::write(fixture.root.path().join("project.marker"), "").unwrap();
+    fs::write(fixture.root.path().join("main.fake"), "").unwrap();
+    fs::write(
+        fixture.root.path().join("AGENTS.md"),
+        "untrusted instruction marker",
+    )
+    .unwrap();
+    let skill = fixture
+        .root
+        .path()
+        .join(".agents/skills/trust-check/SKILL.md");
+    fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    fs::write(
+        skill,
+        "---\nname: trust-check\ndescription: untrusted skill marker\n---\nUse this skill.",
+    )
+    .unwrap();
+    let url = fixture
+        .create_with_env(json!({"LSP_TEST_DIR":fixture.root.path(),"LSP_TEST_MODE":"sync"}))
+        .await;
+    fixture.input(&url).await;
+    let request = fixture.request().await;
+    let prompt = request.body["messages"].to_string();
+    assert!(prompt.contains("untrusted instruction marker"));
+    assert!(prompt.contains("untrusted skill marker"));
+    request.tool("write", json!({"path":"main.fake","content":"bad\n"}));
+    let running = fixture.request().await;
+    let started = tokio::time::timeout(Duration::from_secs(1), async {
+        until(|| fixture.root.path().join("starts").exists()).await;
+    })
+    .await
+    .is_ok();
+    running.stop();
+    fixture.idle(&url).await;
+    assert_eq!(
+        fixture
+            .snapshot(&url)
+            .await
+            .session
+            .settings
+            .restricted_mode,
+        Some(true)
+    );
+    assert!(
+        fixture
+            .snapshot(&url)
+            .await
+            .session
+            .language_servers
+            .is_empty()
+    );
+    fixture.config["lsp"] = json!({"enabled":false});
+    fixture.applied("restricted-off").await;
+    fixture.config["lsp"] = config;
+    fixture.applied("restricted-on").await;
+    fixture.input(&url).await;
+    fixture.request().await.tool(
+        "write",
+        json!({"path":"main.fake","content":"still restricted\n"}),
+    );
+    fixture.request().await.stop();
+    fixture.idle(&url).await;
+    assert!(
+        fixture
+            .snapshot(&url)
+            .await
+            .session
+            .language_servers
+            .is_empty()
+    );
+    assert!(!fixture.root.path().join("starts").exists());
+    fixture.shutdown().await;
+    assert!(
+        !started,
+        "untrusted sessions must not start a language server"
+    );
+}
+
+#[tokio::test]
 async fn lsp_configuration_keeps_the_old_process_until_turn_end_and_restarts_on_the_next_write() {
     let config = json!({"enabled":true,"servers":{"fake":{"command":super::lsp_tests::fixture_executable(),"extensions":{"fake":"fake"},"root_markers":["project.marker"]}}});
     let mut fixture = Fixture::new(json!({"lsp":config})).await;
+    fixture.trust(fixture.root.path()).await;
     fs::write(fixture.root.path().join("project.marker"), "").unwrap();
     fs::write(fixture.root.path().join("main.fake"), "").unwrap();
     let url = fixture
@@ -889,6 +1168,7 @@ async fn lsp_configuration_keeps_the_old_process_until_turn_end_and_restarts_on_
 async fn disabling_then_enabling_lsp_still_waits_for_the_original_turn() {
     let config = json!({"enabled":true,"servers":{"fake":{"command":super::lsp_tests::fixture_executable(),"extensions":{"fake":"fake"},"root_markers":["project.marker"]}}});
     let mut fixture = Fixture::new(json!({"lsp":config})).await;
+    fixture.trust(fixture.root.path()).await;
     fs::write(fixture.root.path().join("project.marker"), "").unwrap();
     fs::write(fixture.root.path().join("main.fake"), "").unwrap();
     let env = json!({"LSP_TEST_DIR":fixture.root.path(),"LSP_TEST_MODE":"sync"});

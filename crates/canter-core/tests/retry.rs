@@ -61,6 +61,7 @@ async fn create(root: &std::path::Path, store: Arc<Store>, model: Arc<ChatComple
             approval_policy: PermissionMode::AllowAll,
             plan_enabled: None,
             sandbox_enabled: None,
+            restricted_mode: None,
             plan_mode: false,
             pre_plan_approval_policy: None,
         },

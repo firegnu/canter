@@ -2269,6 +2269,34 @@
       ],
       "type": "object"
     },
+    "FolderTrustParams": {
+      "description": "GET query or POST body. POST records trust; restricted opens make no write.",
+      "properties": {
+        "cwd": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd"
+      ],
+      "type": "object"
+    },
+    "FolderTrustResponse": {
+      "properties": {
+        "path": {
+          "description": "Canonical repository root, or the folder itself outside a repository.",
+          "type": "string"
+        },
+        "trusted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "trusted"
+      ],
+      "type": "object"
+    },
     "GoalResponse": {
       "properties": {
         "eventSeq": {
@@ -4509,6 +4537,13 @@
         "reasoningEffort": {
           "$ref": "#/$defs/ReasoningEffort",
           "default": "high"
+        },
+        "restrictedMode": {
+          "description": "Effective folder restriction, determined by the server on open.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "sandboxEnabled": {
           "description": "Whether this session's model commands run in the sandbox, as the server\nopened it; absent from servers that do not report it.",

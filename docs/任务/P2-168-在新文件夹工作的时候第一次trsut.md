@@ -64,3 +64,15 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-11-01，canter/dev-trust 完成，提交在 `p2-168-trust`。
+
+- **做了什么**：服务端新增正向信任记录 `trusted_folders.json`（状态目录内，0600、加锁、临时文件原子替换），按规范化的最近 git 仓库根或非 Git 目录自身查找，不从以前的会话推断信任。新增协议查询/记录端点、`folderTrust` 能力和可选会话设置 `restrictedMode`，同步生成 JSON Schema / TypeScript。终端在新建、`-r` / `-c`、会话列表和 `/new` 等入口先查询并显示英文信任选择；受限不留记录，AGENTS.md、技能、全局 MCP / 放行规则 / 沙箱保留原行为。exec 不询问，受限时 stderr 提示一行。核心同时保护首次打开和配置热重载；受限会话不挂 LSP，已经打开的会话在记录信任并恢复后可以正常使用 LSP。DESIGN 第 8 条和「文件夹信任（P2-168）」已说明协议差异与未来项目配置、hooks 的约束。
+- **主控决定**：本轮提出额外目录的边界问题后，主控选择中间办法：加目录不弹框、不加询问流程；工作目录受限时整个会话不启 LSP；工作目录已信任时，对文件按其 git 仓库根判断，非 Git 文件按覆盖它的已添加目录本身判断。A 的信任不放行 B；B 已被单独信任才允许其文件启动 LSP。原因是 B 的构建脚本同样可能被运行，信任仍按用户确定的仓库范围，而加目录的额外交互不在本件范围。已经写入 DESIGN，并用 Git / 非 Git 两种 B（含子目录文件）验证了未信任拦截、记录信任后恢复。没有新的待主控决定事项。
+- **验证了什么**：先写并运行针对性测试，确认未信任目录会启动假 LSP、缺少信任查询端点、A 的信任会放行 B、终端没有信任框、exec 没有受限提示这五种目标失败，再分别实现到通过。补验同仓库子目录共用记录、非 Git 目录不继承父目录记录、受限不写记录、AGENTS.md / 技能仍进模型上下文、热重载不解除受限、保存会话重启后恢复仍询问、终端两个选项和已信任子目录免询问、exec 无交互完成及同一已打开会话的信任升级。所有模型请求均走本地假模型，语言服务器用已有 Rust fixture。
+- **回归与检查**：`canter-server` 的 `reload_tests` 19 项、HTTP 相关测试 82 项通过；`canter-core` LSP 22 项、prompts 3 项、session 串行复跑 36 项通过；`canter-tools --lib lsp::` 37 项通过、1 项既有忽略；`canter-protocol` 与 `canter-store` 共 48 项通过；`canter --test exec` 16 项、最终 `canter --test tui` 69 项通过。额外目录测试扩为 Git / 非 Git 后，4 项 trust 测试再次通过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。编译均使用指定的独立 `CARGO_TARGET_DIR`，运行测试时隔离 HOME / CANTER_HOME；测试服务和 PTY 子进程按各 fixture 持有的 PID 结束。未跑工作区全套测试。
+- **参考了哪里**：只读 `/tmp/codex-ro` 的 Codex `rust-v0.163.0`：`codex-rs/tui/src/onboarding/trust_directory.rs` 的目录范围说明和显式确认，`codex-rs/config/src/config_toml.rs` 的 `ProjectConfig.trust_level`、`config/src/project_trust.rs` 的路径查询及 `core/src/config/edit.rs` 的信任写入入口。Claude Code 官方仓库克隆在 `/tmp/p2-168-claude-code-reference`，提交 `80c6959d28c4c30ecd14fc1cdf172f19d9adad81`，参考 `CHANGELOG.md` 对仓库范围和嵌套仓库信任的说明；此克隆不含终端信任框实现，文字另核对官方仓库 [issue #9256](https://github.com/anthropics/claude-code/issues/9256) 所附 2.0.13 对话框（询问是否信任目录、明确继续或退出）。仅参考，没有复制实现。
+- **没做的事**：未实现 P2-159 项目级配置或 P2-153 hooks，未增加全局配置项、exec 参数、撤销/列出信任命令或加目录询问。未读改真实 `~/.canter`，未调真实模型，未启动其他 agent，未推送或合并到 main；交叉审查交回主控。
+- **踩过的坑**：假 LSP 是异步启动，写完文件立刻看进程记录会误判，改为让假模型轮保持打开并有界等待后再断言；reqwest 没启用 query builder，测试改用已有 URL 类型编码查询参数。恢复 LSP 订阅时一度复用了完整 `allowed` 检查，macOS 路径别名导致已停止订阅未恢复，既有重试测试抓到后改成仅检查信任，回归通过。旧 PTY 用例没有预设信任而停在新框，已在它们的隔离 fixture 中显式记信任。核心 session 并行回归有一次 `session already open` 存盘锁冲突，该用例单独重跑及整个文件串行复跑都通过，没有改动存盘锁实现。

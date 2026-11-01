@@ -1007,6 +1007,9 @@ impl App {
     /// `version` (such as `0.1.0 · 37489fe`) after `canter`.
     pub fn with_welcome(mut self, version: impl Into<String>) -> Self {
         self.welcome = Some(version.into());
+        if self.snapshot.settings.restricted_mode == Some(true) {
+            self.information("Restricted mode: LSP is disabled.");
+        }
         self
     }
 

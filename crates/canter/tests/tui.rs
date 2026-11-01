@@ -40,6 +40,71 @@ const WAIT: Duration = Duration::from_secs(20);
 const WRITE_ENV: &str = r#"printf '%s' "$CANTER_TEST_ENV" > env.txt"#;
 
 #[tokio::test]
+async fn folder_trust_prompt_restricts_then_trusts_on_resume_and_covers_subfolders() {
+    let mut world = World::new(vec![text_reply("Restricted still works.")]).await;
+    assert!(
+        std::process::Command::new("/usr/bin/git")
+            .args(["init", "--quiet"])
+            .arg(world.path("work"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    fs::create_dir(world.path("work/subfolder")).unwrap();
+    world.start_server().await;
+    let terminal =
+        Terminal::start_with_trust(&[], world.context("trust-test", &world.path("work")), false)
+            .await;
+    terminal.wait_for("Trust this folder?").await;
+    terminal.wait_for("Open restricted").await;
+    read_the_box().await;
+    let client = Client::new(&world.path("state/server.sock")).unwrap();
+    assert!(client.list_sessions().await.unwrap().is_empty());
+    terminal.press(KeyCode::Down).await;
+    terminal.press(KeyCode::Enter).await;
+    terminal.wait_for("Restricted mode: LSP is disabled.").await;
+    terminal.type_line("hello").await;
+    terminal.wait_for("Restricted still works.").await;
+    terminal.wait_idle().await;
+    let id = terminal.quit().await;
+    assert_eq!(
+        world.snapshot(&id).await.settings.restricted_mode,
+        Some(true)
+    );
+    assert!(!world.path("state/trusted_folders.json").exists());
+    // A saved session is not itself evidence of trust, even across server restarts.
+    world.stop_server(Signal::SIGTERM).await;
+    world.start_server().await;
+    let terminal = Terminal::start_with_trust(
+        &["-r", &id],
+        world.context("trust-resume", &world.path("work")),
+        false,
+    )
+    .await;
+    terminal.wait_for("Trust this folder?").await;
+    read_the_box().await;
+    terminal.press(KeyCode::Enter).await;
+    terminal.wait_for("Always ask").await;
+    terminal.wait_idle().await;
+    assert_eq!(
+        world.snapshot(&id).await.settings.restricted_mode,
+        Some(false)
+    );
+    terminal.quit().await;
+    let terminal = Terminal::start_with_trust(
+        &[],
+        world.context("trust-subfolder", &world.path("work/subfolder")),
+        false,
+    )
+    .await;
+    terminal.wait_for("Always ask").await;
+    terminal.wait_idle().await;
+    assert!(!terminal.screen().contains("Trust this folder?"));
+    terminal.quit().await;
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
 async fn open_terminal_keeps_questions_and_permissions_after_exec_resume() {
     for yolo in [false, true] {
         let mut world = World::new(vec![
@@ -519,12 +584,26 @@ async fn review_requires_the_running_servers_review_feature_before_sending() {
         let supported = features
             .as_ref()
             .is_some_and(|value| value == &json!(["review"]));
-        if let Some(features) = features {
-            info["features"] = features;
-        }
+        let mut features = features
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default();
+        features.push(json!("folderTrust"));
+        info["features"] = json!(features);
+        let saved = snapshot.clone();
         let received = Arc::new(Mutex::new(Vec::<Value>::new()));
         let requests = received.clone();
         let app = Router::new()
+            .route(
+                "/v1/folderTrust",
+                get(|| async { Json(json!({"path":"/fixture", "trusted":true})) }),
+            )
+            .route(
+                "/v1/sessions/s1",
+                get(move || {
+                    let snapshot = saved.clone();
+                    async move { Json(json!({"session":snapshot,"eventSeq":0})) }
+                }),
+            )
             .route(
                 "/v1/info",
                 get(move || {
@@ -800,10 +879,20 @@ struct Terminal {
 
 impl Terminal {
     async fn start(args: &[&str], context: Context) -> Self {
+        Self::start_with_trust(args, context, true).await
+    }
+
+    async fn start_with_trust(args: &[&str], context: Context, trusted: bool) -> Self {
+        let cwd = context.cwd.to_str().unwrap().to_owned();
         let Command::Chat(args) = canter::parse(args.iter().map(OsString::from)).unwrap() else {
             panic!("not a chat command");
         };
         let launch = canter::prepare(args, context).await.unwrap();
+        // Existing interaction tests start in a trusted fixture; trust tests
+        // exercise the actual first-open flow without this setup grant.
+        if trusted {
+            launch.connected.client.trust_folder(&cwd).await.unwrap();
+        }
         let (keys, input) = canter_tui::input();
         let frames = Frames::default();
         let terminal = ratatui::Terminal::new(Screen {

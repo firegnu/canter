@@ -158,17 +158,24 @@ async fn run_inner(
         eprintln!("{warning}");
     }
     let client = crate::connected(connection)?.client;
-    if !client
+    let features = client
         .info()
         .await
         .map_err(|error| error.to_string())?
         .features
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if !features
         .iter()
         .any(|feature| feature == "nonInteractiveInput")
     {
         return Err(
             "This server does not support exec; run canter serve --replace and retry".into(),
+        );
+    }
+    if !features.iter().any(|feature| feature == "folderTrust") {
+        return Err(
+            "This server does not support folder trust; run canter serve --replace and retry"
+                .into(),
         );
     }
     let cwd = context
@@ -235,6 +242,9 @@ async fn run_inner(
             .session
     };
     let id = &snapshot.id;
+    if snapshot.settings.restricted_mode == Some(true) {
+        eprintln!("Restricted mode: LSP is disabled.");
+    }
     if snapshot.settings.sandbox_enabled == Some(false) {
         eprintln!(
             "Sandbox is off. Commands requiring approval will be denied in default exec mode; use --yolo to allow them under the configured rules."

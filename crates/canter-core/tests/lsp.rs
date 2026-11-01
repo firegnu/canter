@@ -186,6 +186,7 @@ async fn create_attached(
             additional_directories: vec![],
             plan_enabled: None,
             sandbox_enabled: None,
+            restricted_mode: None,
             plan_mode: false,
             pre_plan_approval_policy: None,
         },

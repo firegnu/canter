@@ -16,6 +16,7 @@ fn create(store: &Store, id: &str) -> SessionWriter {
                 pre_plan_approval_policy: None,
                 plan_enabled: None,
                 sandbox_enabled: None,
+                restricted_mode: None,
                 cwd: "/work/project".into(),
                 name: Some(id.into()),
                 model: "fake".into(),
