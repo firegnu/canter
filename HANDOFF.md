@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 11-01 第四十七次装 main `212c0bf`（`canter --version` 显示 `canter 0.1.0 · 212c0bf`；代码同 P2-154 合并后，之后只改了文档。比上一版多 P2-154：服务端盯着 `~/.canter/config.json`，保存后校验、下一轮生效，正在跑的轮用旧配置跑完；MCP、LSP 逐服务等旧轮结束再交接；改坏了沿用旧配置，终端一行英文提示，改对后恢复）。用户自己 `cargo install`，要 `canter serve --replace` 一次换上新服务端；之后改 `config.json` 不用再重启。
+- 退回上一版 `d948540`：`cp -p ~/.canter/canter-d948540 ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-31 第四十六次装 main `d948540`（`canter --version` 显示 `canter 0.1.0 · d948540`；比上一版多 P2-171：压缩的前缀请求沿用会话的思考设置和普通输出上限，摘要只取正文）。同日第四十五次装 `eb6ffa4`（P2-144：压缩请求复用普通请求的前缀、末尾加总结说明，超窗、上下文太长、服务商拒收、回工具调用或空文字时退回拼稿；`canter stats` 记压缩走的哪条路），两次之间没留备份。11-01 长程试跑压缩请求命中缓存 96–98%（见 P2-144 任务文件）。服务端改了：用户 `canter serve --replace`。
 - 退回 P2-142 那一版 `3d70efb`：`cp -p ~/.canter/canter-3d70efb ~/.cargo/bin/canter`，再 `canter serve --replace`。
 - 10-31 第四十四次装 main `3d70efb`（`canter --version` 显示 `canter 0.1.0 · 3d70efb`；比上一版多 P2-142：压缩成功后自动把最近读过或改过的文件带回模型历史，最多 5 个、单个 5 千 token、大于 64 KiB 或超限只给名字；文件规则禁止的不带、要问的只给名字；压缩卡片下列 `Read <path> (N lines)` / `Referenced file <path>`；协议压缩项目加可省略的 `restoredFiles`）。只在压缩后多发带回的内容，平常请求不变。终端和服务端都改了：用户 `canter serve --replace` 后重开终端。
