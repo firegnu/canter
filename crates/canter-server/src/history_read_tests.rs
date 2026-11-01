@@ -186,35 +186,187 @@ async fn large_history_read_benchmark() {
     server.await.unwrap();
 }
 
+fn write_round(out: &mut impl Write, id: &str, seq: &mut u64, number: u64) -> u64 {
+    let mut bytes = 0;
+    let mut line = Vec::new();
+    let mut emit = |payload| {
+        *seq += 1;
+        line.clear();
+        serde_json::to_writer(
+            &mut line,
+            &Event {
+                session_id: id.into(),
+                seq: *seq,
+                timestamp: *seq as i64,
+                payload,
+            },
+        )
+        .unwrap();
+        line.push(b'\n');
+        out.write_all(&line).unwrap();
+        bytes += line.len() as u64;
+    };
+    let mut turn = Turn {
+        id: format!("t{number}"),
+        review: None,
+        items: vec![],
+        status: TurnStatus::InProgress,
+        input: vec![],
+        client_name: "benchmark".into(),
+        error: None,
+        usage: None,
+        started_at: None,
+        completed_at: None,
+        duration_ms: None,
+    };
+    emit(EventPayload::TurnStarted {
+        turn: turn.clone(),
+        input_id: None,
+    });
+    let text = "进度 \"结果\"：中文与换行\n下一行。\n";
+    let output = "stdout: \"结果\" ok\n下一行\n";
+    for item in 0..6 {
+        let message_id = format!("a{item}");
+        emit(EventPayload::ItemStarted {
+            turn_id: turn.id.clone(),
+            item: Item::AgentMessage {
+                id: message_id.clone(),
+                text: String::new(),
+                status: Some(ItemStatus::InProgress),
+            },
+        });
+        for _ in 0..40 {
+            emit(EventPayload::ItemDelta {
+                turn_id: turn.id.clone(),
+                item_id: message_id.clone(),
+                delta: ItemDelta::AgentMessage { delta: text.into() },
+            });
+        }
+        emit(EventPayload::ItemCompleted {
+            turn_id: turn.id.clone(),
+            item: Item::AgentMessage {
+                id: message_id,
+                text: text.repeat(40),
+                status: Some(ItemStatus::Completed),
+            },
+        });
+        let command_id = format!("c{item}");
+        let mut command = Item::CommandExecution {
+            id: command_id.clone(),
+            source: ExecCommandSource::Agent,
+            command: "printf '\"结果\"\\n'".into(),
+            cwd: "/benchmark".into(),
+            status: ItemStatus::InProgress,
+            aggregated_output: String::new(),
+            exit_code: None,
+            duration_ms: None,
+        };
+        emit(EventPayload::ItemStarted {
+            turn_id: turn.id.clone(),
+            item: command.clone(),
+        });
+        for _ in 0..10 {
+            emit(EventPayload::ItemDelta {
+                turn_id: turn.id.clone(),
+                item_id: command_id.clone(),
+                delta: ItemDelta::CommandExecution {
+                    delta: output.into(),
+                },
+            });
+        }
+        if let Item::CommandExecution {
+            status,
+            aggregated_output,
+            exit_code,
+            duration_ms,
+            ..
+        } = &mut command
+        {
+            *status = ItemStatus::Completed;
+            *aggregated_output = output.repeat(10);
+            *exit_code = Some(0);
+            *duration_ms = Some(1);
+        }
+        emit(EventPayload::ItemCompleted {
+            turn_id: turn.id.clone(),
+            item: command,
+        });
+    }
+    turn.status = TurnStatus::Completed;
+    emit(EventPayload::TurnCompleted { turn });
+    bytes
+}
+
 fn generate_history(store: &Store) -> u64 {
-    let payload = "x".repeat(900);
     let mut total = 0;
     let mut last = 0;
+    let mut rounds = 0;
     for index in 0..16 {
         let id = format!("s{index:02}");
-        let settings = SessionSnapshot::empty(&id).settings;
-        drop(store.create(&id, settings, 1).unwrap());
+        drop(
+            store
+                .create(&id, SessionSnapshot::empty(&id).settings, 1)
+                .unwrap(),
+        );
         let path = store.session_dir(&id).unwrap().join("events.jsonl");
         let mut size = fs::metadata(&path).unwrap().len();
         let mut out =
             std::io::BufWriter::new(fs::OpenOptions::new().append(true).open(&path).unwrap());
         let mut seq = 1;
+        let mut round = 0;
         while size < 50 * 1024 * 1024 {
-            seq += 1;
-            let line = format!(
-                "{{\"sessionId\":\"{id}\",\"seq\":{seq},\"timestamp\":{seq},\"type\":\"warning\",\"message\":\"{payload}\"}}\n"
-            );
-            out.write_all(line.as_bytes()).unwrap();
-            size += line.len() as u64;
+            round += 1;
+            size += write_round(&mut out, &id, &mut seq, round);
         }
         out.flush().unwrap();
         total += size;
         if index == 0 {
             last = seq;
+            rounds = round;
         }
     }
-    eprintln!("history_bytes={total}, long_session_events={last}");
+    eprintln!("history_bytes={total}, long_session_events={last}, turns_per_session={rounds}");
     last
+}
+
+fn append_round(store: &Store, id: &str, after: u64) -> u64 {
+    let mut out = std::io::BufWriter::new(
+        fs::OpenOptions::new()
+            .append(true)
+            .open(store.session_dir(id).unwrap().join("events.jsonl"))
+            .unwrap(),
+    );
+    let mut seq = after;
+    write_round(&mut out, id, &mut seq, after);
+    out.flush().unwrap();
+    seq
+}
+
+#[test]
+fn benchmark_rounds_replay_complete_text_and_commands() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::new(root.path()).unwrap();
+    drop(
+        store
+            .create("s1", SessionSnapshot::empty("s1").settings, 1)
+            .unwrap(),
+    );
+    let seq = append_round(&store, "s1", 1);
+    let last = append_round(&store, "s1", seq);
+    let writer = store.open("s1").unwrap();
+    let snapshot = writer.snapshot();
+    assert_eq!(snapshot.last_event_seq, last);
+    assert_eq!(snapshot.turns.len(), 2);
+    for turn in &snapshot.turns {
+        assert_eq!(turn.status, TurnStatus::Completed);
+        assert_eq!(turn.items.len(), 12);
+        assert!(
+            matches!(&turn.items[0], Item::AgentMessage { text, .. } if text.contains("中文") && text.matches('\n').count() == 80)
+        );
+        assert!(
+            matches!(&turn.items[1], Item::CommandExecution { aggregated_output, exit_code: Some(0), .. } if aggregated_output.matches('\n').count() == 20 && aggregated_output.contains('"'))
+        );
+    }
 }
 
 // A child test process runs the complete production startup and shutdown paths.
@@ -239,7 +391,8 @@ async fn large_history_startup_benchmark() {
         home.join("config.json"),
         serde_json::to_vec(&json!({
             "base_url":"http://127.0.0.1:1", "model":"fake-model", "api_key":"test-only",
-            "context_window":1048576
+            "context_window":1048576,
+            "mcp_servers":{"slow":{"transport":"stdio","command":"/bin/sleep","args":["30"]}}
         }))
         .unwrap(),
     )
@@ -260,7 +413,7 @@ async fn large_history_startup_benchmark() {
         "post_lock_unchanged_ms={:.3}",
         unchanged.as_secs_f64() * 1000.0
     );
-    append_warning(&source, "s00", last + 1);
+    let after_one = append_round(&source, "s00", last);
     let start = Instant::now();
     crate::startup::warm_summaries(&warmed);
     eprintln!(
@@ -269,10 +422,10 @@ async fn large_history_startup_benchmark() {
     );
     // Also account for the conservative case where every session changed.
     for index in 0..16 {
-        append_warning(
+        append_round(
             &source,
             &format!("s{index:02}"),
-            last + if index == 0 { 2 } else { 1 },
+            if index == 0 { after_one } else { last },
         );
     }
     let start = Instant::now();
@@ -314,8 +467,20 @@ async fn large_history_startup_benchmark() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
-    .await
-    .unwrap();
+    .await;
+    if registration.is_err() {
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(child.id().unwrap() as i32),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        panic!("startup with turn history and default-timeout MCP exceeded 15 seconds");
+    }
+    let registration = registration.unwrap();
     eprintln!(
         "production_startup_ms={:.3}",
         startup.elapsed().as_secs_f64() * 1000.0
@@ -357,27 +522,19 @@ async fn large_history_startup_benchmark() {
         "first request must fit discovery's deadline"
     );
     if !cfg!(debug_assertions) {
-        // Include the existing default MCP and discovery allowances; keep the
-        // ordinary startup's optional two-second probe-lock wait as well.
-        assert!(
-            prewarm.max(Duration::from_secs(2)) + unchanged + Duration::from_millis(12050)
-                < Duration::from_secs(15)
-        );
-        assert!(
-            prewarm.max(Duration::from_millis(85400)) + all_changed + Duration::from_millis(12050)
-                < Duration::from_secs(105)
-        );
-        assert!(
-            prewarm.max(Duration::from_secs(90)) + all_changed + Duration::from_millis(12050)
-                < Duration::from_secs(105)
-        );
+        let mcp = Duration::from_secs(10);
+        let discovery = Duration::from_millis(2050);
+        // Ordinary startup takes the lock first; its first replay overlaps MCP.
+        assert!(Duration::from_secs(2) + prewarm.max(mcp) + discovery < Duration::from_secs(15));
+        // A short replacement wait can leave part of the initial replay still
+        // running. That remainder and the refresh both overlap MCP after locking.
+        for lock_wait in [
+            Duration::ZERO,
+            Duration::from_millis(85400),
+            Duration::from_secs(90),
+        ] {
+            let history = prewarm.saturating_sub(lock_wait) + all_changed;
+            assert!(lock_wait + history.max(mcp) + discovery < Duration::from_secs(105));
+        }
     }
-}
-
-fn append_warning(store: &Store, id: &str, seq: u64) {
-    let mut out = fs::OpenOptions::new()
-        .append(true)
-        .open(store.session_dir(id).unwrap().join("events.jsonl"))
-        .unwrap();
-    writeln!(out, "{{\"sessionId\":\"{id}\",\"seq\":{seq},\"timestamp\":{seq},\"type\":\"warning\",\"message\":\"changed\"}}").unwrap();
 }

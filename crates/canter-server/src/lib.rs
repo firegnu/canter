@@ -74,7 +74,7 @@ async fn serve_with_lsp(
         -> Result<Arc<canter_tools::lsp::LspService>, canter_tools::lsp::LspError>,
 ) -> Result<(), ServerError> {
     let home = state_directory()?;
-    let (lease, config, store) = startup::initialize(home, replace).await?;
+    let (lease, config, summaries) = startup::initialize(home, replace).await?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
@@ -85,21 +85,30 @@ async fn serve_with_lsp(
     let options = config.options();
     let lsp = make_lsp(config.lsp.clone()).map_err(|error| ServerError(error.to_string()))?;
     let startup_stop = CancellationToken::new();
-    let connecting = reload::LiveConfig::connect(
+    let connecting = summaries.finish_with(reload::LiveConfig::connect(
         lease.home.clone(),
         config.clone(),
         model.clone(),
         lsp.clone(),
         startup_stop.clone(),
-    );
+    ));
     tokio::pin!(connecting);
-    let reload = tokio::select! {
+    let (reload, store) = tokio::select! {
         registry = &mut connecting => registry,
         _ = async { tokio::select! { _ = terminate.recv() => {}, _ = interrupt.recv() => {}, _ = hangup.recv() => {} } } => {
             startup_stop.cancel();
-            connecting.await.shutdown().await;
+            let (reload, _) = connecting.await;
+            reload.shutdown().await;
             lsp.shutdown().await;
             return Ok(());
+        }
+    };
+    let store = match store {
+        Ok(store) => store,
+        Err(error) => {
+            reload.shutdown().await;
+            lsp.shutdown().await;
+            return Err(error);
         }
     };
     let app = Arc::new(http::App {

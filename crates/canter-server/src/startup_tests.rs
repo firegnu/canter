@@ -12,6 +12,74 @@ fn write_config(home: &Path) {
     })).unwrap()).unwrap();
 }
 
+async fn rejects_without_reading_history(case: &str, expected: &str) {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    write_config(temp.path());
+    let old = Lease::acquire(temp.path().to_owned(), false).unwrap();
+    if case != "unpublished" {
+        old.publish().unwrap();
+    }
+    let upgrade = lifecycle::private_file(&temp.path().join("replace.lock")).unwrap();
+    if case == "upgrading" {
+        upgrade.try_lock().unwrap();
+    }
+    if case == "invalid-config" {
+        fs::write(temp.path().join("config.json"), b"invalid").unwrap();
+    }
+    let (release, wait) = std::sync::mpsc::channel::<()>();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let counted = reads.clone();
+    let mut starting = tokio::spawn(initialize_with(
+        temp.path().to_owned(),
+        case != "running",
+        move |home| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            let _ = wait.recv();
+            open_and_warm(home)
+        },
+    ));
+    let result = tokio::time::timeout(Duration::from_secs(1), &mut starting).await;
+    let immediate = result.is_ok();
+    drop(release); // Always unblock the old implementation before asserting.
+    let result = match result {
+        Ok(result) => result.unwrap(),
+        Err(_) => starting.await.unwrap(),
+    };
+    assert!(result.err().unwrap().to_string().contains(expected));
+    assert!(
+        immediate,
+        "a rejected startup must not wait for history replay"
+    );
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn running_daemon_is_rejected_without_waiting_for_warmup() {
+    rejects_without_reading_history("running", "a server is already running").await;
+}
+
+#[tokio::test]
+async fn competing_upgrade_is_rejected_without_waiting_for_warmup() {
+    rejects_without_reading_history("upgrading", "another upgrade is in progress").await;
+}
+
+#[tokio::test]
+async fn invalid_replacement_config_is_rejected_without_waiting_for_warmup() {
+    rejects_without_reading_history("invalid-config", "config.json is not valid").await;
+}
+
+#[tokio::test]
+async fn unpublished_daemon_is_rejected_without_waiting_for_warmup() {
+    rejects_without_reading_history("unpublished", "old server has not finished starting").await;
+}
+
 #[tokio::test]
 async fn replacement_warms_before_the_old_lock_is_released_and_refreshes_afterward() {
     use std::time::Duration;
@@ -50,7 +118,8 @@ async fn replacement_warms_before_the_old_lock_is_released_and_refreshes_afterwa
         .unwrap();
     drop(old);
     drop(release);
-    let (_lease, _, store) = starting.await.unwrap().unwrap();
+    let (_lease, _, summaries) = starting.await.unwrap().unwrap();
+    let store = summaries.finish().await.unwrap();
     assert!(
         overlapped,
         "warming must finish even while the daemon lock is held"
@@ -113,7 +182,8 @@ async fn initialization_skips_broken_and_empty_histories() {
         fs::create_dir(&dir).unwrap();
         fs::write(dir.join("events.jsonl"), bytes).unwrap();
     }
-    let (_lease, _, store) = initialize(temp.path().to_owned(), false).await.unwrap();
+    let (_lease, _, summaries) = initialize(temp.path().to_owned(), false).await.unwrap();
+    let store = summaries.finish().await.unwrap();
     assert_eq!(store.list().unwrap(), vec![writer.snapshot().summary()]);
 }
 
@@ -127,10 +197,48 @@ async fn initialized_store_keeps_the_resolved_home_like_the_lease() {
     let writer = source.create("s1", settings(), 1).unwrap();
     let alias = temp.path().join("alias");
     std::os::unix::fs::symlink(&home, &alias).unwrap();
-    let (_lease, _, store) = initialize(alias.clone(), false).await.unwrap();
+    let (_lease, _, summaries) = initialize(alias.clone(), false).await.unwrap();
+    let store = summaries.finish().await.unwrap();
     let other = temp.path().join("other");
     Store::new(other.join("sessions")).unwrap();
     fs::remove_file(&alias).unwrap();
     std::os::unix::fs::symlink(other, alias).unwrap();
     assert_eq!(store.list().unwrap(), vec![writer.snapshot().summary()]);
+}
+
+#[tokio::test]
+async fn connection_starts_while_history_is_blocked_and_readiness_waits_for_both() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().to_owned();
+    let source = Store::new(home.join("sessions")).unwrap();
+    let writer = source.create("s1", settings(), 1).unwrap();
+    let reading_home = home.clone();
+    let (release, wait) = std::sync::mpsc::channel::<()>();
+    let warming = tokio::task::spawn_blocking(move || {
+        let store = open_and_warm(&reading_home)?;
+        let _ = wait.recv();
+        Ok(store)
+    });
+    let summaries = Summaries {
+        home,
+        warming: Some(warming),
+    };
+    let (connected, ready) = tokio::sync::oneshot::channel();
+    let finishing = tokio::spawn(summaries.finish_with(async move {
+        connected.send(()).unwrap();
+        42
+    }));
+    let overlapped = tokio::time::timeout(std::time::Duration::from_secs(1), ready)
+        .await
+        .is_ok();
+    let premature = finishing.is_finished();
+    drop(release);
+    let (connected, store) = finishing.await.unwrap();
+    assert!(overlapped, "connection must run before history finishes");
+    assert!(!premature, "readiness must wait for history too");
+    assert_eq!(connected, 42);
+    assert_eq!(
+        store.unwrap().list().unwrap(),
+        vec![writer.snapshot().summary()]
+    );
 }

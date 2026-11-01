@@ -28,7 +28,7 @@ pub(crate) fn warm_summaries(store: &Store) {
 pub(crate) async fn initialize(
     home: PathBuf,
     replace: bool,
-) -> Result<(Lease, Config, Store), ServerError> {
+) -> Result<(Lease, Config, Summaries), ServerError> {
     initialize_with(home, replace, open_and_warm).await
 }
 
@@ -36,7 +36,7 @@ async fn initialize_with(
     home: PathBuf,
     replace: bool,
     warm: impl FnOnce(&Path) -> Result<Store, ServerError> + Send + 'static,
-) -> Result<(Lease, Config, Store), ServerError> {
+) -> Result<(Lease, Config, Summaries), ServerError> {
     // Resolve once for both parallel tasks, as the old post-lease Store did.
     // Retargeting a home symlink must not move the running server's storage.
     let home = tokio::task::spawn_blocking(move || {
@@ -45,27 +45,57 @@ async fn initialize_with(
     })
     .await
     .map_err(|_| ServerError("initialization failed".into()))??;
-    let reading_home = home.clone();
-    // Readers need no daemon lock. Overlap the full replay with replacement's
-    // bounded lock wait, rather than spending its remaining startup allowance.
-    // Join both tasks even on errors so no initialization work is left detached.
-    let (prepared, warmed) = tokio::join!(
-        tokio::task::spawn_blocking(move || {
-            let lease = Lease::acquire(home, replace)?;
-            let config = Config::load(&lease.home)?;
-            Ok::<_, ServerError>((lease, config))
-        }),
-        tokio::task::spawn_blocking(move || warm(&reading_home))
-    );
-    let (lease, config) = prepared.map_err(|_| ServerError("initialization failed".into()))??;
-    let store = warmed.map_err(|_| ServerError("initialization failed".into()))??;
     tokio::task::spawn_blocking(move || {
-        lifecycle::cleanup_creating(&lease.home.join("sessions"))?;
-        // The old daemon may have appended while we waited. Only changed files
-        // replay; this finishes before binding/publishing the new HTTP server.
-        warm_summaries(&store);
-        Ok((lease, config, store))
+        let mut warming = None;
+        let lease = if replace {
+            let reading_home = home.clone();
+            Lease::acquire_with_wait(home.clone(), true, || {
+                warming = Some(tokio::task::spawn_blocking(move || warm(&reading_home)));
+            })?
+        } else {
+            Lease::acquire(home.clone(), false)?
+        };
+        let config = Config::load(&lease.home)?;
+        Ok((lease, config, Summaries { home, warming }))
     })
     .await
     .map_err(|_| ServerError("initialization failed".into()))?
+}
+
+pub(crate) struct Summaries {
+    home: PathBuf,
+    warming: Option<tokio::task::JoinHandle<Result<Store, ServerError>>>,
+}
+
+impl Summaries {
+    async fn finish(self) -> Result<Store, ServerError> {
+        let warmed = match self.warming {
+            Some(task) => Some(
+                task.await
+                    .map_err(|_| ServerError("initialization failed".into()))??,
+            ),
+            None => None,
+        };
+        tokio::task::spawn_blocking(move || {
+            let store = match warmed {
+                Some(store) => store,
+                None => Store::new(self.home.join("sessions"))
+                    .map_err(|_| ServerError("cannot open the sessions directory".into()))?,
+            };
+            lifecycle::cleanup_creating(&self.home.join("sessions"))?;
+            // First replay for ordinary startup, or refresh changes made by the
+            // old daemon during replacement. Both overlap MCP initialization.
+            warm_summaries(&store);
+            Ok(store)
+        })
+        .await
+        .map_err(|_| ServerError("initialization failed".into()))?
+    }
+
+    pub(crate) async fn finish_with<T>(
+        self,
+        connecting: impl std::future::Future<Output = T>,
+    ) -> (T, Result<Store, ServerError>) {
+        tokio::join!(connecting, self.finish())
+    }
 }
