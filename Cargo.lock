@@ -382,6 +382,7 @@ dependencies = [
  "eventsource-stream",
  "futures-util",
  "nix",
+ "plist",
  "reqwest",
  "serde",
  "serde_json",

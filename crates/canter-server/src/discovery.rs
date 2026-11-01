@@ -193,6 +193,9 @@ async fn start_server(
         )
         .stderr(log)
         .kill_on_drop(replace);
+    if let Some(environment) = crate::service_environment() {
+        command.envs(environment);
+    }
     // setsid is the only pre-exec operation; it detaches the daemon from the client's terminal.
     unsafe {
         command.pre_exec(|| {

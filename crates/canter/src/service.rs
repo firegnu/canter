@@ -73,7 +73,7 @@ pub fn run(command: Command) -> Result<String, String> {
         )
     })?;
     Ok(format!(
-        "Installed the canter login service at {}. It starts once at the next login and does not restart after exit or a crash. Saved this terminal's PATH; run canter service install again after changing it. The running server is unchanged.\n",
+        "Installed the canter login service at {}. It starts once at the next login and does not restart after exit or a crash. Saved this terminal's PATH and HOME for every new server while this configuration is installed, including automatic starts and replacements. Run canter service install again to update them. The running server is unchanged.\n",
         path.display()
     ))
 }

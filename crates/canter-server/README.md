@@ -314,7 +314,7 @@ canter mcp remove local
 stdio 直接执行命令，不经 shell；`args`、`env` 可省略。子进程先清空环境，只从服务端复制
 已有的 `HOME`、`PATH`、`USER`、`LOGNAME`、`SHELL`、`TMPDIR`、`LANG`、`LC_ALL`，
 不继承 `CANTER_HOME` 或其它变量，再用配置里的 `env` 增加或覆盖。
-客户端后台启动的服务端环境基本为空；`command` 写绝对路径，需要的 `PATH`、`HOME` 写进 `env`。
+装有 `canter service install` 写入的 plist 时，每次新起的服务端（包括客户端自动启动、upgrade / rollback / `serve --replace`）都使用其中保存的 PATH 和 HOME；更新它们需重新 install，下次起服务端生效。未装服务时，客户端后台启动的服务端环境基本为空；`command` 写绝对路径，需要的 `PATH`、`HOME` 写进 `env`。plist 读不了或格式错误时有提示，并按未装服务处理。
 HTTP 使用 Streamable HTTP，`headers` 可省略；仅 localhost / 回环 IP 允许 HTTP，其余必须
 HTTPS，不走代理，不跟随重定向。配置修改在服务端下次启动时生效。
 环境变量和请求头只保存在私有配置与运行内存中；配置解析、连接及协议错误不回显配置，

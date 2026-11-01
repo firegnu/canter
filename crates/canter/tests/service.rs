@@ -31,6 +31,8 @@ fn service_install_updates_login_configuration_and_uninstall_preserves_state() {
     for path in ["/tools & scripts:/usr/bin", "/new/tools:/usr/bin"] {
         let message = run(&["service", "install"], path);
         assert!(message.contains("next login"), "{message}");
+        assert!(message.contains("every new server"), "{message}");
+        assert!(message.contains("PATH and HOME"), "{message}");
         assert!(message.contains(config.to_str().unwrap()));
         let parsed = Command::new("/usr/bin/plutil")
             .args(["-convert", "json", "-o", "-"])

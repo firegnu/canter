@@ -454,6 +454,76 @@ async fn monitor_matches_new_output_and_wakes_user_command() {
 }
 
 #[tokio::test]
+async fn running_turns_waits_for_background_commands_and_scheduled_model_wakes() {
+    for wakes_model in [true, false] {
+        let fixture = Fixture::new().await;
+        let url = fixture.create("allowAll").await;
+        let started = if wakes_model {
+            fixture.say(&url, "wake-background").await
+        } else {
+            fixture
+                .shell(&url, "while [ ! -e release-wake ]; do sleep 0.01; done &")
+                .await
+        };
+        assert!(started.session.background_commands[0].running);
+        assert_eq!(started.session.status, SessionStatus::Idle);
+        let session = fixture
+            .app
+            .opened_session(&started.session.id)
+            .await
+            .unwrap();
+        let report = running_turns(State(fixture.app.clone())).await.0;
+        if report.data.len() != 1 {
+            fixture.close().await;
+            panic!("running background command must block replacement: {report:?}");
+        }
+        assert!(report.data[0].activity.contains("background command"));
+        assert!(report.data[0].turn_id.is_none());
+        tokio::time::pause();
+        std::fs::write(fixture.root.path().join("project/release-wake"), "").unwrap();
+        loop {
+            if !session.background_commands().await.unwrap().data[0].running {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let waiting = running_turns(State(fixture.app.clone())).await.0;
+        if wakes_model {
+            assert_eq!(
+                waiting.data.len(),
+                1,
+                "the pending wake must also block replacement"
+            );
+            assert_eq!(
+                waiting.data[0].activity,
+                "Waiting for a background command to wake the model"
+            );
+        } else {
+            assert!(
+                waiting.data.is_empty(),
+                "finished user commands do not wake the model"
+            );
+        }
+        tokio::time::resume();
+        if wakes_model {
+            fixture
+                .until(&url, |session| {
+                    session.turns.len() == 2 && session.status == SessionStatus::Idle
+                })
+                .await;
+        }
+        assert!(
+            running_turns(State(fixture.app.clone()))
+                .await
+                .0
+                .data
+                .is_empty()
+        );
+        fixture.close().await;
+    }
+}
+
+#[tokio::test]
 async fn model_background_completion_wakes_idle_session_without_user_message() {
     let fixture = Fixture::new().await;
     let url = fixture.create("allowAll").await;

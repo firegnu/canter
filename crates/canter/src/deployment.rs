@@ -122,7 +122,7 @@ pub async fn run(command: Command) -> Result<(), String> {
             _ = interrupt.recv() => Err("Cancelled while waiting".into()),
             result = wait_for_turns(&home) => result,
         };
-        result.map_err(|error: String| format!("{error}. {new} is installed, but the server has not been replaced. To replace it later, run canter serve --replace."))?;
+        result.map_err(|error: String| format!("{error}. {new} is installed, but the server has not been replaced. To replace it later, run canter serve --replace (waits at most 60 seconds for running turns)."))?;
     }
     let connection = canter_server::replace_server(&home, &executable).await
         .map_err(|error| format!("{new} is installed, but server replacement failed: {error}. Run canter serve --replace to retry."))?;
@@ -135,42 +135,31 @@ pub async fn run(command: Command) -> Result<(), String> {
 
 async fn wait_for_turns(home: &Path) -> Result<(), String> {
     let mut previous = Vec::new();
+    let mut connection = connection_for_wait(home).await?;
     loop {
-        let Some(connection) = canter_server::discover(home)
-            .await
-            .map_err(|error| error.to_string())?
-        else {
+        let Some(active) = &connection else {
             return Ok(());
         };
-        let info: InfoResponse = connection
-            .client
-            .get("http://localhost/v1/info")
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await
-            .and_then(|response| response.error_for_status())
-            .map_err(|error| format!("cannot query the server: {error}"))?
-            .json()
-            .await
-            .map_err(|error| format!("cannot read server capabilities: {error}"))?;
-        if !info
-            .features
-            .as_ref()
-            .is_some_and(|features| features.iter().any(|feature| feature == "runningTurns"))
-        {
-            return Err("This server cannot report running turns. Rerun this command with --now to use the existing replacement grace period (at most 60 seconds)".into());
+        let result = async {
+            active
+                .client
+                .get("http://localhost/v1/runningTurns")
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<RunningTurnsResponse>()
+                .await
         }
-        let report: RunningTurnsResponse = connection
-            .client
-            .get("http://localhost/v1/runningTurns")
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await
-            .and_then(|response| response.error_for_status())
-            .map_err(|error| format!("cannot query running turns: {error}"))?
-            .json()
-            .await
-            .map_err(|error| format!("cannot read running turns: {error}"))?;
+        .await;
+        let report = match result {
+            Ok(report) => report,
+            Err(_) => {
+                connection = connection_for_wait(home).await?;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+        };
         if report.data.is_empty() {
             return Ok(());
         }
@@ -186,8 +175,36 @@ async fn wait_for_turns(home: &Path) -> Result<(), String> {
             }
             previous = report.data;
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
+}
+
+async fn connection_for_wait(home: &Path) -> Result<Option<canter_server::Connection>, String> {
+    let Some(connection) = canter_server::discover(home)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let info: InfoResponse = connection
+        .client
+        .get("http://localhost/v1/info")
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .and_then(|response| response.error_for_status())
+        .map_err(|error| format!("cannot query the server: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("cannot read server capabilities: {error}"))?;
+    if !info
+        .features
+        .as_ref()
+        .is_some_and(|features| features.iter().any(|feature| feature == "runningTurns"))
+    {
+        return Err("This server cannot report running turns".into());
+    }
+    Ok(Some(connection))
 }
 
 fn one_line(text: &str) -> String {

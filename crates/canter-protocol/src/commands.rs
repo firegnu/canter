@@ -344,7 +344,7 @@ pub struct SessionListResponse {
     pub data: Vec<SessionSummary>,
 }
 
-/// GET /v1/runningTurns. Live in-memory turns only, including pending requests.
+/// GET /v1/runningTurns. Live work, including scheduled automatic continuation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct RunningTurnsResponse {
     pub data: Vec<RunningTurn>,
@@ -355,7 +355,7 @@ pub struct RunningTurnsResponse {
 pub struct RunningTurn {
     pub id: String,
     pub name: Option<String>,
-    pub turn_id: String,
+    pub turn_id: Option<String>,
     pub activity: String,
 }
 

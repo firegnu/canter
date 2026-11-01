@@ -544,82 +544,8 @@ async fn list(state: State<Arc<App>>) -> Result<Json<SessionListResponse>, ApiEr
 async fn running_turns(State(app): State<Arc<App>>) -> Json<RunningTurnsResponse> {
     let mut data = Vec::new();
     for session in app.opened_sessions().await {
-        let snapshot = session.snapshot().await.session;
-        for turn in snapshot
-            .turns
-            .iter()
-            .filter(|turn| turn.status == TurnStatus::InProgress)
-        {
-            let activity = match snapshot
-                .pending_requests
-                .iter()
-                .find(|request| request.turn_id == turn.id)
-            {
-                Some(request) => match &request.kind {
-                    RequestKind::UserInput(_) => "Waiting for an answer".into(),
-                    RequestKind::Approval(approval) | RequestKind::SandboxApproval(approval) => {
-                        format!("Waiting for approval: {}", approval.tool)
-                    }
-                    RequestKind::PlanApproval(_) => "Waiting for plan approval".into(),
-                    RequestKind::Unknown => "Waiting for a response".into(),
-                },
-                None => {
-                    let work = turn
-                        .items
-                        .iter()
-                        .rev()
-                        .find_map(|item| match item {
-                            Item::CommandExecution {
-                                status: ItemStatus::InProgress,
-                                ..
-                            } => Some("Running a shell command"),
-                            Item::FileChange {
-                                status: ItemStatus::InProgress,
-                                ..
-                            } => Some("Changing files"),
-                            Item::FileRead {
-                                status: ItemStatus::InProgress,
-                                ..
-                            } => Some("Reading a file"),
-                            Item::WebSearch {
-                                status: ItemStatus::InProgress,
-                                ..
-                            } => Some("Searching the web"),
-                            Item::WebFetch {
-                                status: ItemStatus::InProgress,
-                                ..
-                            } => Some("Fetching a web page"),
-                            Item::McpToolCall {
-                                status: ItemStatus::InProgress,
-                                ..
-                            } => Some("Running an MCP tool"),
-                            _ => None,
-                        })
-                        .unwrap_or("Running a turn");
-                    let prompt = turn.input.iter().find_map(|input| match input {
-                        UserInput::Text { text } => Some(text),
-                        _ => None,
-                    });
-                    match prompt {
-                        Some(text) => format!(
-                            "{work}: {}",
-                            text.split_whitespace()
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                                .chars()
-                                .take(120)
-                                .collect::<String>()
-                        ),
-                        None => work.into(),
-                    }
-                }
-            };
-            data.push(RunningTurn {
-                id: snapshot.id.clone(),
-                name: snapshot.settings.name.clone(),
-                turn_id: turn.id.clone(),
-                activity,
-            });
+        if let Some(work) = session.running_work().await {
+            data.push(work);
         }
     }
     data.sort_by(|a, b| a.id.cmp(&b.id));

@@ -18,6 +18,7 @@ mod response;
 mod restore_files;
 mod rewind;
 mod runner;
+mod running;
 mod session;
 mod skill_invocation;
 mod skills;

@@ -2,6 +2,6 @@
 import type { RunningTurn } from "./RunningTurn";
 
 /**
- * GET /v1/runningTurns. Live in-memory turns only, including pending requests.
+ * GET /v1/runningTurns. Live work, including scheduled automatic continuation.
  */
 export type RunningTurnsResponse = { data: Array<RunningTurn>, };

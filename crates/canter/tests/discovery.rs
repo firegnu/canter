@@ -365,6 +365,68 @@ async fn background_daemon_does_not_inherit_client_environment() {
         !environment.contains("CANTER_TEST_SECRET="),
         "the daemon must not inherit the client environment"
     );
+    assert!(!environment.contains(" PATH="));
+    assert!(!environment.contains(" HOME="));
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn unreadable_or_broken_service_configuration_warns_and_uses_default_environment() {
+    if isolated("unreadable_or_broken_service_configuration_warns_and_uses_default_environment")
+        .await
+    {
+        return;
+    }
+    configure();
+    let path = PathBuf::from(std::env::var_os("HOME").unwrap())
+        .join("Library/LaunchAgents/com.canter.server.plist");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    for contents in [Some("not a plist"), Some("<plist><dict/></plist>"), None] {
+        if let Some(contents) = contents {
+            fs::write(&path, contents).unwrap();
+        } else {
+            fs::create_dir(&path).unwrap();
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_canter"))
+            .arg("usage")
+            .env_clear()
+            .env("HOME", std::env::var_os("HOME").unwrap())
+            .env("CANTER_HOME", home())
+            .env("PATH", "/terminal-only")
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let connection = canter_server::discover(&home()).await.unwrap().unwrap();
+        let daemon = Daemon::new(&connection);
+        let observation = Command::new("/bin/ps")
+            .args([
+                "eww",
+                "-p",
+                &connection.registration.pid.to_string(),
+                "-o",
+                "command=",
+            ])
+            .output()
+            .await
+            .unwrap();
+        daemon.stop().await;
+        let environment = String::from_utf8(observation.stdout).unwrap();
+        assert!(!environment.contains(" PATH="), "{environment}");
+        assert!(!environment.contains(" HOME="), "{environment}");
+        let warning = String::from_utf8(output.stderr).unwrap();
+        assert!(warning.contains("com.canter.server.plist"), "{warning}");
+        assert!(
+            warning.contains("using the default server environment"),
+            "{warning}"
+        );
+        if contents.is_some() {
+            fs::remove_file(&path).unwrap();
+        } else {
+            fs::remove_dir(&path).unwrap();
+        }
+    }
 }
 
 #[tokio::test]

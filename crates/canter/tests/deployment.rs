@@ -5,7 +5,7 @@ use std::{
     process::{Command, Output, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -138,6 +138,138 @@ fn upgrade_keeps_five_backups_and_rollback_can_switch_back_again() {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn service_environment_survives_every_start_and_path_based_mcp_connects() {
+    let test = Fixture::new();
+    let executable = test.root.path().join("bin/fake-mcp");
+    let compiled = Command::new("rustc")
+        .args(["--edition=2024", "tests/fixtures/mcp_stdio.rs", "-o"])
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert!(compiled.status.success(), "{compiled:?}");
+    let env_file = test.state.join("mcp-env");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(test.state.join("config.json")).unwrap()).unwrap();
+    config["mcp_servers"] = serde_json::json!({"local":{
+        "transport":"stdio", "command":"fake-mcp", "args":["--fixture"],
+        "env":{"ENV_FILE":env_file}
+    }});
+    fs::write(test.state.join("config.json"), config.to_string()).unwrap();
+    let installed = test
+        .command()
+        .args(["service", "install"])
+        .env(
+            "PATH",
+            format!("{}:/saved/tools", test.root.path().join("bin").display()),
+        )
+        .output()
+        .unwrap();
+    assert!(installed.status.success(), "{installed:?}");
+    // The saved HOME is deliberately different from the invoking terminal's HOME.
+    let saved_home = test.root.path().join("saved-home");
+    fs::create_dir(&saved_home).unwrap();
+    let plist_path = test
+        .root
+        .path()
+        .join("home/Library/LaunchAgents/com.canter.server.plist");
+    let mut plist: serde_json::Value = plist::from_file(&plist_path).unwrap();
+    plist["EnvironmentVariables"]["HOME"] = serde_json::json!(saved_home);
+    plist::to_file_xml(&plist_path, &plist).unwrap();
+
+    for args in [
+        vec!["usage"],
+        vec!["serve", "--replace"],
+        vec!["upgrade", test.repo.to_str().unwrap(), "--now"],
+        vec!["rollback", "--now"],
+    ] {
+        let _ = fs::remove_file(&env_file);
+        let output = test.run(&args);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        assert_service_mcp(&test, &env_file, &saved_home).await;
+    }
+
+    let connection = canter_server::discover(&test.state).await.unwrap().unwrap();
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(connection.registration.pid as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while test.state.join("server.json").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    fs::remove_file(&env_file).unwrap();
+    let mut foreground = tokio::process::Command::from(test.command());
+    let mut child = foreground
+        .arg("serve")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while canter_server::discover(&test.state)
+            .await
+            .unwrap()
+            .is_none()
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_service_mcp(&test, &env_file, &saved_home).await;
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(child.id().unwrap() as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    assert!(child.wait().await.unwrap().success());
+}
+
+#[cfg(target_os = "macos")]
+async fn assert_service_mcp(
+    test: &Fixture,
+    env_file: &std::path::Path,
+    saved_home: &std::path::Path,
+) {
+    let connection = canter_server::discover(&test.state).await.unwrap().unwrap();
+    let status: serde_json::Value = connection
+        .client
+        .get("http://localhost/v1/mcp")
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(env_file.exists(), "PATH-based MCP must start: {status}");
+    let environment = fs::read_to_string(env_file).unwrap();
+    assert!(
+        environment.lines().any(|line| line
+            == format!(
+                "PATH={}:/saved/tools",
+                test.root.path().join("bin").display()
+            )),
+        "{environment}"
+    );
+    assert!(
+        environment
+            .lines()
+            .any(|line| line == format!("HOME={}", saved_home.display())),
+        "{environment}"
+    );
+    assert!(!environment.contains("FIXTURE_ROOT="));
+    assert!(status.to_string().contains("mcp__local__echo"), "{status}");
+}
+
 #[test]
 fn rollback_chooses_latest_backup_and_saves_current_version() {
     let test = Fixture::new();
@@ -198,6 +330,8 @@ struct FakeServer {
     task: tokio::task::JoinHandle<()>,
     turns: Arc<Mutex<Vec<serde_json::Value>>>,
     queries: Arc<AtomicUsize>,
+    info_queries: Arc<AtomicUsize>,
+    fail_next: Arc<AtomicBool>,
 }
 
 impl FakeServer {
@@ -224,11 +358,16 @@ impl FakeServer {
         ]));
         let queries = Arc::new(AtomicUsize::new(0));
         let observed = queries.clone();
+        let info_queries = Arc::new(AtomicUsize::new(0));
+        let observed_info = info_queries.clone();
+        let fail_next = Arc::new(AtomicBool::new(false));
+        let failure = fail_next.clone();
         let current = turns.clone();
         let router = axum::Router::new()
             .route(
                 "/v1/info",
                 axum::routing::get(move || {
+                    observed_info.fetch_add(1, Ordering::SeqCst);
                     let info = info.clone();
                     async move { axum::Json(info) }
                 }),
@@ -238,7 +377,12 @@ impl FakeServer {
                 axum::routing::get(move || {
                     observed.fetch_add(1, Ordering::SeqCst);
                     let data = current.lock().unwrap().clone();
-                    async move { axum::Json(serde_json::json!({"data":data})) }
+                    let status = if failure.swap(false, Ordering::SeqCst) {
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        axum::http::StatusCode::OK
+                    };
+                    async move { (status, axum::Json(serde_json::json!({"data":data}))) }
                 }),
             );
         let task = tokio::spawn(async move {
@@ -250,17 +394,57 @@ impl FakeServer {
             task,
             turns,
             queries,
+            info_queries,
+            fail_next,
         }
     }
 
     async fn stop(&mut self) {
-        self.task.abort();
-        let _ = (&mut self.task).await;
+        // Unregister before releasing the lock, but finish already accepted probes.
+        // The unlinked socket cannot receive new connections; Drop closes the listener
+        // after the CLI finishes. Replacement shutdown itself has a separate real-daemon test.
         for name in ["server.json", "server.sock"] {
             let _ = fs::remove_file(self.state.join(name));
         }
         self.lock.take();
     }
+}
+
+#[tokio::test]
+async fn waiting_reuses_capabilities_polls_once_a_second_and_rediscovers_on_failure() {
+    let test = Fixture::new();
+    let mut server = FakeServer::new(&test, true).await;
+    let mut child = start_upgrade(&test, false);
+    until(|| server.queries.load(Ordering::SeqCst) > 0).await;
+    let count = server.queries.load(Ordering::SeqCst);
+    let info_count = server.info_queries.load(Ordering::SeqCst);
+    let started = std::time::Instant::now();
+    until(|| server.queries.load(Ordering::SeqCst) >= count + 2).await;
+    assert_eq!(
+        server.info_queries.load(Ordering::SeqCst),
+        info_count,
+        "healthy polling must not replay /v1/info"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(1800),
+        "poll approximately once a second"
+    );
+    server.fail_next.store(true, Ordering::SeqCst);
+    until(|| {
+        server.info_queries.load(Ordering::SeqCst) > info_count
+            || child.try_wait().unwrap().is_some()
+    })
+    .await;
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "a failed request should rediscover the still-running server"
+    );
+    until(|| !server.fail_next.load(Ordering::SeqCst)).await;
+    server.turns.lock().unwrap().clear();
+    until(|| test.state.join("replace.json").exists()).await;
+    server.stop().await;
+    let result = output(child).await;
+    assert!(result.status.success(), "{result:?}");
 }
 
 impl Drop for FakeServer {
@@ -359,7 +543,12 @@ async fn ctrl_c_keeps_installed_program_and_running_server() {
     let result = output(child).await;
     assert!(!result.status.success());
     let message = String::from_utf8(result.stderr).unwrap();
-    for text in ["installed", "not been replaced", "canter serve --replace"] {
+    for text in [
+        "installed",
+        "not been replaced",
+        "canter serve --replace",
+        "60 seconds",
+    ] {
         assert!(message.contains(text), "{message}");
     }
     assert!(!test.state.join("replace.json").exists());
@@ -401,7 +590,7 @@ async fn ctrl_c_keeps_installed_program_and_running_server() {
 }
 
 #[tokio::test]
-async fn legacy_server_requires_now_after_install_and_now_skips_the_query() {
+async fn legacy_server_explains_how_to_switch_without_reinstalling_and_now_skips_the_query() {
     let test = Fixture::new();
     let mut server = FakeServer::new(&test, false).await;
     let mut child = start_upgrade(&test, false);
@@ -416,12 +605,17 @@ async fn legacy_server_requires_now_after_install_and_now_skips_the_query() {
     let message = String::from_utf8(result.stderr).unwrap();
     for text in [
         "cannot report running turns",
-        "--now",
+        "canter serve --replace",
+        "60 seconds",
         "installed",
         "not been replaced",
     ] {
         assert!(message.contains(text), "{message}");
     }
+    assert!(
+        !message.contains("--now"),
+        "do not rerun an installation: {message}"
+    );
     let mut rollback = tokio::process::Command::from(test.command());
     let result = rollback
         .arg("rollback")
@@ -432,6 +626,10 @@ async fn legacy_server_requires_now_after_install_and_now_skips_the_query() {
     assert!(!result.status.success());
     assert!(
         String::from_utf8_lossy(&result.stderr).contains("cannot report running turns"),
+        "{result:?}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&result.stderr).contains("--now"),
         "{result:?}"
     );
     assert!(!test.state.join("replace.json").exists());

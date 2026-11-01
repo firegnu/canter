@@ -122,6 +122,73 @@ impl Harness {
 
 struct PausedModel(Option<canter_model::ToolCall>);
 
+struct GoalGapModel(Arc<Notify>);
+impl Model for GoalGapModel {
+    fn stream(&self, _: Request, _: CancellationToken) -> ModelStream<'_> {
+        let finish = self.0.clone();
+        Box::pin(async_stream::stream! {
+            finish.notified().await;
+            yield Ok(ModelEvent::Finished(FinishReason::Stop));
+        })
+    }
+}
+
+#[tokio::test]
+async fn running_turns_includes_scheduled_goal_between_turns_until_pause_or_clear() {
+    for action in ["pause", "clear"] {
+        let finish = Arc::new(Notify::new());
+        let test = Harness::with_model(Arc::new(GoalGapModel(finish.clone()))).await;
+        let url = test.create().await;
+        let id = url.rsplit('/').next().unwrap();
+        let session = test.app.opened_session(id).await.unwrap();
+        tokio::time::pause();
+        session
+            .set_goal(GoalSetParams {
+                objective: "Keep working".into(),
+                budget_usd: Some(0.0),
+            })
+            .await
+            .unwrap();
+        finish.notify_one();
+        // Keep the executor runnable so paused time cannot advance over the gap.
+        let gap = loop {
+            let snapshot = session.snapshot().await;
+            if snapshot
+                .session
+                .turns
+                .last()
+                .is_some_and(|turn| turn.status == TurnStatus::Completed)
+            {
+                break snapshot;
+            }
+            tokio::task::yield_now().await;
+        };
+        assert_eq!(
+            gap.session.goal.as_ref().unwrap().status,
+            GoalStatus::Active
+        );
+        let report = serde_json::to_value(running_turns(State(test.app.clone())).await.0).unwrap();
+        assert_eq!(
+            report["data"].as_array().unwrap().len(),
+            1,
+            "scheduled goal must still block deployment: {report}"
+        );
+        assert_eq!(report["data"][0]["activity"], "Continuing a goal");
+        assert!(report["data"][0]["turnId"].is_null());
+        assert_eq!(session.snapshot().await.event_seq, gap.event_seq);
+        session.control_goal(action).await.unwrap();
+        assert!(
+            running_turns(State(test.app.clone()))
+                .await
+                .0
+                .data
+                .is_empty()
+        );
+        tokio::time::resume();
+        test.stop().await;
+    }
+}
+
 #[tokio::test]
 async fn running_turns_reports_live_work_approval_and_answers_but_not_crashed_history() {
     for kind in ["work", "approval", "answer"] {
