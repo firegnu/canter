@@ -281,6 +281,7 @@ pub(crate) fn environment(
     os: &str,
     arch: &str,
     opened: DateTime<FixedOffset>,
+    scratch: Option<(&Path, bool)>,
 ) -> String {
     let platform = match os {
         "macos" => "macOS",
@@ -290,11 +291,20 @@ pub(crate) fn environment(
     let root = root
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "none".into());
-    format!(
+    let mut text = format!(
         "Working directory: {}\nGit repository root: {root}\nPlatform: {platform}, {arch}\nSession opened: {}. The current date may be later.",
         cwd.display(),
         opened.format("%Y-%m-%d (%A), local time zone UTC%:z")
-    )
+    );
+    if let Some((path, sandbox)) = scratch {
+        let privacy = if sandbox {
+            "is private to this session, needs no approval, and"
+        } else {
+            "is private to this session and"
+        };
+        text.push_str(&format!("\nScratch directory: {}. Put temporary files here (throwaway scripts, intermediate results, outputs that don't belong in the project) instead of the project or /tmp. It {privacy} is emptied when the session closes; copy anything worth keeping into the project or tell the user.", path.display()));
+    }
+    text
 }
 
 #[cfg(test)]
@@ -527,7 +537,7 @@ mod tests {
         ] {
             let opened = DateTime::parse_from_rfc3339(timestamp).unwrap();
             assert_eq!(
-                environment(Path::new("/repo/sub"), root, os, "aarch64", opened),
+                environment(Path::new("/repo/sub"), root, os, "aarch64", opened, None),
                 expected
             );
         }

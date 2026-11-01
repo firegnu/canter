@@ -217,7 +217,8 @@ impl Store {
         Ok(records)
     }
 
-    fn session_dir(&self, id: &str) -> Result<PathBuf, StoreError> {
+    /// The validated session storage path, also used to namespace session scratch space.
+    pub fn session_dir(&self, id: &str) -> Result<PathBuf, StoreError> {
         if id.is_empty()
             || id.len() > 128
             || !id

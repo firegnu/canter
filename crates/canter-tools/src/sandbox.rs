@@ -17,7 +17,7 @@ pub(crate) struct Scope {
 }
 
 pub(crate) struct Sandbox {
-    temporary: Option<tempfile::TempDir>,
+    scratch: std::sync::Arc<crate::ScratchDirectory>,
     cargo: PathBuf,
     npm: PathBuf,
     unreadable: Vec<PathBuf>,
@@ -28,7 +28,11 @@ pub(crate) struct Sandbox {
 }
 
 impl Sandbox {
-    pub fn new(environment: &BTreeMap<String, String>, protected: &[PathBuf]) -> io::Result<Self> {
+    pub fn new(
+        environment: &BTreeMap<String, String>,
+        protected: &[PathBuf],
+        scratch: std::sync::Arc<crate::ScratchDirectory>,
+    ) -> io::Result<Self> {
         if !cfg!(target_os = "macos") {
             return Err(io::Error::other("Seatbelt requires macOS"));
         }
@@ -71,14 +75,11 @@ impl Sandbox {
             crate::executor::resolve_target(path, &protected)?;
             std::fs::create_dir_all(path)?;
         }
-        // Only this private child is writable, never the system temporary root.
-        let temporary_root = crate::executor::resolve_target(Path::new("/tmp"), &protected)?;
-        let temporary = tempfile::Builder::new()
-            .prefix("canter-shell-")
-            .tempdir_in(temporary_root)?;
-        crate::executor::resolve_target(temporary.path(), &protected)?;
+        if let Some(path) = scratch.path() {
+            crate::executor::resolve_target(&path, &protected)?;
+        }
         Ok(Self {
-            temporary: Some(temporary),
+            scratch,
             cargo: cargo.canonicalize()?,
             npm: npm.canonicalize()?,
             unreadable,
@@ -88,21 +89,10 @@ impl Sandbox {
         })
     }
 
-    pub fn close(&mut self) {
-        self.temporary.take();
-    }
-
     /// For `/sandbox`: the private temporary directory and caches every command
     /// may write, then the read-only and the unreadable paths.
     pub(crate) fn listing(&self) -> (Vec<PathBuf>, &[PathBuf], &[PathBuf]) {
-        let mut writable: Vec<PathBuf> = self
-            .temporary
-            .iter()
-            .map(|temporary| {
-                let path = temporary.path();
-                path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-            })
-            .collect();
+        let mut writable: Vec<PathBuf> = self.scratch.path().into_iter().collect();
         writable.extend([self.cargo.clone(), self.npm.clone()]);
         (writable, &self.listed_readonly, &self.listed_unreadable)
     }
@@ -165,12 +155,14 @@ impl Sandbox {
         environment: &BTreeMap<String, String>,
         scope: &Scope,
     ) -> io::Result<tokio::process::Command> {
-        let temporary = self
-            .temporary
-            .as_ref()
-            .ok_or_else(|| io::Error::other("sandbox session has closed"))?
-            .path()
-            .canonicalize()?;
+        let temporary = self.scratch.path();
+        if let Some(path) = &temporary {
+            if path.canonicalize()? != *path {
+                return Err(io::Error::other("session scratch directory changed"));
+            }
+        } else if self.scratch.warning().is_none() {
+            return Err(io::Error::other("sandbox session has closed"));
+        }
         let mut project_roots = vec![cwd.canonicalize()?];
         for directory in &scope.additional_directories {
             project_roots.push(directory.canonicalize()?);
@@ -198,7 +190,8 @@ impl Sandbox {
         );
         for path in project_roots
             .iter()
-            .chain([&temporary, &self.cargo, &self.npm])
+            .chain(temporary.iter())
+            .chain([&self.cargo, &self.npm])
         {
             let parameter = parameters.path(path)?;
             profile.push_str(&format!("(allow file-write* (subpath {parameter}))\n"));
@@ -257,7 +250,7 @@ impl Sandbox {
         // in the private temporary directory or disposable download caches.
         let dot_git = case_insensitive_name(".git");
         let mut exclusions = String::new();
-        for directory in [&temporary, &self.cargo, &self.npm] {
+        for directory in temporary.iter().chain([&self.cargo, &self.npm]) {
             exclusions.push_str(&format!(
                 " (require-not (subpath {}))",
                 parameters.path(directory)?
@@ -326,8 +319,6 @@ impl Sandbox {
             .args(["--", "/bin/sh"])
             .env_clear()
             .envs(environment)
-            .env("TMPDIR", &temporary)
-            .env("TMPPREFIX", temporary.join("zsh"))
             .env("CARGO_HOME", &self.cargo)
             .env("npm_config_cache", &self.npm)
             .env_remove("NPM_CONFIG_CACHE");

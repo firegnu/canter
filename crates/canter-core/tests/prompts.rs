@@ -54,6 +54,93 @@ fn contexts(store: &Store) -> Vec<Value> {
 }
 
 #[tokio::test]
+async fn unavailable_scratch_warns_without_preventing_session_open() {
+    for sandbox in [false, true] {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let home = temp.path().join("home");
+        let project = temp.path().join("project");
+        let outside = temp.path().join("outside");
+        for path in [&home, &project, &outside] {
+            std::fs::create_dir(path).unwrap();
+        }
+        let store = Arc::new(Store::new(temp.path().join("state")).unwrap());
+        let options = CoreOptions {
+            sandbox,
+            ..Default::default()
+        };
+        let (session, _) = Session::create(
+            store.clone(),
+            "prompt".into(),
+            settings(&project),
+            runtime(&home),
+            Arc::new(NoRequests),
+            options.clone(),
+        )
+        .await
+        .unwrap();
+        let records = contexts(&store);
+        let environment = records.last().unwrap()["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|segment| segment["kind"] == "environment")
+            .unwrap()["text"]
+            .as_str()
+            .unwrap();
+        let scratch = environment
+            .lines()
+            .find_map(|line| line.strip_prefix("Scratch directory: "))
+            .unwrap()
+            .split_once(". Put temporary files")
+            .unwrap()
+            .0
+            .to_owned();
+        session.close().await.unwrap();
+        // An unsafe pre-existing path must remain untouched and disable scratch only.
+        std::fs::write(outside.join("keep"), "keep").unwrap();
+        std::os::unix::fs::symlink(&outside, &scratch).unwrap();
+        let before = store.events_after("prompt", 0).unwrap().last().unwrap().seq;
+        let (reopened, response) = Session::open(
+            store.clone(),
+            "prompt".into(),
+            runtime(&home),
+            Arc::new(NoRequests),
+            options,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response.session.status,
+            canter_protocol::SessionStatus::Idle
+        );
+        let mut notices = reopened.subscribe(response.event_seq).await.unwrap();
+        let notice = tokio::time::timeout(std::time::Duration::from_secs(1), notices.recv())
+            .await
+            .expect("the opening client must receive the scratch warning")
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(&notice.payload, canter_protocol::EventPayload::Warning { message } if message.starts_with("Scratch directory unavailable:"))
+        );
+        let events = store.events_after("prompt", before).unwrap();
+        assert!(events.iter().any(|event| matches!(&event.payload, canter_protocol::EventPayload::Warning { message } if message.starts_with("Scratch directory unavailable:") && message.contains("private directory"))));
+        assert!(
+            !contexts(&store).last().unwrap()["messages"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Scratch directory:")
+        );
+        assert!(!reopened.sandbox().await.writable.contains(&scratch));
+        assert_eq!(
+            std::fs::read_to_string(outside.join("keep")).unwrap(),
+            "keep"
+        );
+        reopened.close().await.unwrap();
+        std::fs::remove_file(&scratch).unwrap();
+    }
+}
+
+#[tokio::test]
 async fn prefix_renders_ordered_sections_and_allocates_the_whole_message() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("project&\"<>");

@@ -364,6 +364,7 @@ pub(crate) async fn prefix(
     home: Option<PathBuf>,
     canter_home: Option<PathBuf>,
     tools: Vec<ToolDefinition>,
+    scratch: Option<(PathBuf, bool)>,
 ) -> Result<(Vec<Segment>, Vec<String>, Vec<canter_protocol::Skill>), CoreError> {
     tokio::task::spawn_blocking(move || {
         let cwd = PathBuf::from(cwd);
@@ -440,6 +441,9 @@ pub(crate) async fn prefix(
                 std::env::consts::OS,
                 std::env::consts::ARCH,
                 opened,
+                scratch
+                    .as_ref()
+                    .map(|(path, sandbox)| (path.as_path(), *sandbox)),
             ),
         });
         (
