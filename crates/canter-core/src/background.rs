@@ -25,6 +25,13 @@ pub(crate) struct PendingEvents {
 }
 
 impl PendingEvents {
+    pub(crate) fn has_pending_wake(&self, limit: u32) -> bool {
+        !self.draining
+            && self.count < limit
+            && (self.deadline.is_some()
+                || (self.output_due.is_some() && self.output_wakes.values().any(|(_, wake)| *wake)))
+    }
+
     pub fn user_input(&mut self) {
         self.count = 0;
         self.reported = false;

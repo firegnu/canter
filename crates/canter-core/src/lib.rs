@@ -1,6 +1,7 @@
 //! Conversation sessions independent of HTTP and terminal clients.
 mod background;
 mod btw;
+mod clients;
 mod compaction;
 mod configuration;
 mod context;
@@ -27,6 +28,7 @@ mod user_shell;
 pub use btw::BtwStream;
 use canter_protocol::ErrorCode;
 pub use canter_tools::mcp;
+pub use clients::ClientConnection;
 pub use configuration::{Configuration, ConfigurationSource};
 pub use journal::Subscription;
 pub use session::Session;

@@ -174,10 +174,13 @@ impl Drop for Registry {
     }
 }
 impl Registry {
+    /// `stop` retires this registry gracefully; `shutdown` interrupts cleanup
+    /// only when the server is exiting, after its active sessions are closed.
     pub async fn connect(
         config: BTreeMap<String, ServerConfig>,
         home: std::path::PathBuf,
         stop: CancellationToken,
+        shutdown: CancellationToken,
     ) -> Self {
         let mut registry = Self {
             servers: Vec::new(),
@@ -210,8 +213,9 @@ impl Registry {
             });
             registry.servers.push(server.clone());
             let stop = registry.stop.clone();
+            let shutdown = shutdown.clone();
             let home = home.to_owned();
-            connecting.spawn(async move { connect(server, config, &home, stop).await });
+            connecting.spawn(async move { connect(server, config, &home, stop, shutdown).await });
         }
         while let Some(result) = connecting.join_next().await {
             if let Ok(Some(task)) = result {
@@ -395,6 +399,7 @@ async fn connect(
     config: ServerConfig,
     home: &std::path::Path,
     stop: CancellationToken,
+    shutdown: CancellationToken,
 ) -> Option<JoinHandle<()>> {
     let changed = Arc::new(Notify::new());
     let startup_timeout = config.startup_timeout();
@@ -474,6 +479,7 @@ async fn connect(
         }
     };
     let mut service = match tokio::select! {
+        _ = shutdown.cancelled() => { return None; }
         _ = stop.cancelled() => { return None; }
         result = tokio::time::timeout_at(deadline, initialize) => result,
     } {
@@ -489,7 +495,14 @@ async fn connect(
     };
     let peer = service.peer().clone();
     match tokio::select! {
-        _ = stop.cancelled() => { let _ = service.close().await; return None; }
+        _ = shutdown.cancelled() => { return None; }
+        _ = stop.cancelled() => {
+            tokio::select! {
+                _ = shutdown.cancelled() => {},
+                _ = service.close() => {},
+            }
+            return None;
+        }
         result = tokio::time::timeout_at(deadline, peer.list_all_tools()) => result,
     } {
         Ok(Ok(tools)) => server.update(tools),
@@ -497,7 +510,10 @@ async fn connect(
             server.disconnected("MCP tool listing failed or timed out");
             return Some(tokio::spawn(async move {
                 let _process_group = process_group;
-                let _ = service.close().await;
+                tokio::select! {
+                    _ = shutdown.cancelled() => {},
+                    _ = service.close() => {},
+                }
             }));
         }
     }
@@ -507,17 +523,35 @@ async fn connect(
         let service_stop = service.cancellation_token();
         let waiting = service.waiting();
         tokio::pin!(waiting);
-        loop {
+        let refresh_failed = loop {
             tokio::select! {
-                _ = stop.cancelled() => { service_stop.cancel(); let _ = waiting.await; break; }
-                _ = &mut waiting => { server.disconnected("MCP connection closed"); break; }
+                biased;
+                _ = shutdown.cancelled() => break false,
+                _ = stop.cancelled() => break false,
+                _ = &mut waiting => { server.disconnected("MCP connection closed"); return; }
                 _ = changed.notified() => {
-                    match tokio::time::timeout(startup_timeout, peer.list_all_tools()).await {
+                    let refreshed = tokio::select! {
+                        biased;
+                        _ = shutdown.cancelled() => break false,
+                        result = tokio::time::timeout(startup_timeout, peer.list_all_tools()) => result,
+                    };
+                    match refreshed {
                         Ok(Ok(tools)) => server.update(tools),
-                        _ => { service_stop.cancel(); let _ = waiting.await; server.disconnected("MCP tool listing failed or timed out"); break; }
+                        _ => break true,
                     }
                 }
             }
+        };
+        service_stop.cancel();
+        // Retirement and normal failures still await transport cleanup. Server
+        // shutdown must not wait for remote HTTP session deletion; the guard
+        // also kills a stdio server even when its transport is unresponsive.
+        tokio::select! {
+            _ = shutdown.cancelled() => {},
+            _ = &mut waiting => {},
+        }
+        if refresh_failed {
+            server.disconnected("MCP tool listing failed or timed out");
         }
     }))
 }

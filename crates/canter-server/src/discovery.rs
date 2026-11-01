@@ -130,7 +130,7 @@ async fn start_server(
     };
     let deadline = tokio::time::Instant::now()
         + if replace {
-            lifecycle::UPGRADE_GRACE + Duration::from_secs(30)
+            lifecycle::UPGRADE_GRACE + Duration::from_secs(45)
         } else {
             Duration::from_secs(15)
         };

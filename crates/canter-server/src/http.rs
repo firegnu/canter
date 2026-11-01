@@ -690,7 +690,6 @@ async fn resume(
                 .set_folder_trust(trust.trusted && !params.restricted_mode)
                 .await?;
             let response = session.snapshot().await;
-            session.session_start_hook("resume").await;
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
@@ -709,7 +708,6 @@ async fn resume(
                 .set_folder_trust(trust.trusted && !params.restricted_mode)
                 .await?;
             let response = session.snapshot().await;
-            session.session_start_hook("resume").await;
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
@@ -1027,14 +1025,20 @@ struct EventReader {
     cursor: u64,
     pending: VecDeque<Event>,
     subscription: Option<Subscription>,
+    _client: Option<canter_core::ClientConnection>,
 }
 
 impl EventReader {
     async fn new(app: Arc<App>, id: String, cursor: u64) -> Result<Self, ApiError> {
         let sessions = app.sessions.lock().await;
-        let (pending, subscription) = if let Some(session) = sessions.get(&id).cloned() {
+        let (pending, subscription, client) = if let Some(session) = sessions.get(&id).cloned() {
             drop(sessions);
-            (VecDeque::new(), Some(session.subscribe(cursor).await?))
+            let subscription = session.subscribe(cursor).await?;
+            (
+                VecDeque::new(),
+                Some(subscription),
+                session.attach_client().await,
+            )
         } else {
             let events = app.disk_events(&id, 0).await?;
             drop(sessions);
@@ -1051,6 +1055,7 @@ impl EventReader {
                     .filter(|event| event.seq > cursor)
                     .collect(),
                 None,
+                None,
             )
         };
         Ok(Self {
@@ -1059,6 +1064,7 @@ impl EventReader {
             cursor,
             pending,
             subscription,
+            _client: client,
         })
     }
 
@@ -1079,6 +1085,7 @@ impl EventReader {
             if let Some(session) = sessions.get(&self.id).cloned() {
                 drop(sessions);
                 self.subscription = Some(session.subscribe(self.cursor).await?);
+                self._client = session.attach_client().await;
             } else {
                 self.pending = self.app.disk_events(&self.id, self.cursor).await?.into();
                 drop(sessions);
