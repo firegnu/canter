@@ -45,6 +45,7 @@ pub(crate) struct Shared {
     pub lifetime: CancellationToken,
 }
 pub(crate) struct State {
+    pub fork_notice: Option<Message>,
     /// A non-interactive turn leaves automation paused until the next input.
     pub automatic_turns_paused: bool,
     pub lsp_delivery: crate::lsp::Delivery,
@@ -135,6 +136,7 @@ impl State {
     }
     fn new(journal: Journal) -> Self {
         Self {
+            fork_notice: None,
             automatic_turns_paused: false,
             lsp_delivery: Default::default(),
             goal_running: false,
@@ -239,7 +241,11 @@ impl State {
         let (prefix, sections) = crate::prompt::chat_completions(&segments);
         self.skills = skills;
         self.prefix_sections = sections;
-        if self.prefix != prefix || self.prefix_segments.as_ref() != Some(&segments) {
+        if self.fork_notice.is_some() {
+            if let Some(saved) = &self.prefix_segments {
+                self.prefix_sections = crate::prompt::chat_completions(saved).1;
+            }
+        } else if self.prefix != prefix || self.prefix_segments.as_ref() != Some(&segments) {
             self.journal
                 .record(HistoryEntry::Context {
                     messages: prefix.clone(),
@@ -664,14 +670,15 @@ impl Session {
         model: Arc<dyn Model>,
         options: CoreOptions,
     ) -> Result<(Self, SessionReadResponse), CoreError> {
-        owned(Self::open_inner(store, id, runtime, model, options)).await
+        owned(Self::open_inner(store, id, runtime, model, options, false)).await
     }
-    async fn open_inner(
+    pub(crate) async fn open_inner(
         store: Arc<Store>,
         id: String,
         runtime: RuntimeContext,
         model: Arc<dyn Model>,
         options: CoreOptions,
+        fresh_fork: bool,
     ) -> Result<(Self, SessionReadResponse), CoreError> {
         validate_options(&options)?;
         let owned_store = store.clone();
@@ -696,6 +703,10 @@ impl Session {
         )
         .await?;
         let mut state = State::new(Journal::new(store, writer, options.telemetry));
+        state.fork_notice = entries.iter().rev().find_map(|entry| match entry {
+            HistoryEntry::ForkNotice { message } => Some(message.clone()),
+            _ => None,
+        });
         if let Some(lsp) = tools.lsp() {
             lsp.restore_server_ids(&state.journal.snapshot.language_servers);
         }
@@ -713,6 +724,25 @@ impl Session {
         state.user_messages = restored.users;
         state.summary_index = restored.summary_index;
         state.background_events.all = restored.background_cards;
+        if fresh_fork {
+            let path = tools
+                .scratch_directory()
+                .and_then(|scratch| scratch.path())
+                .ok_or_else(|| {
+                    CoreError::new(
+                        ErrorCode::Internal,
+                        "Could not create the fork's scratch directory",
+                    )
+                })?;
+            let message = Message::User {
+                text: format!(
+                    "This session was forked from another session. Its scratch directory is now {}; use it instead of the scratch directory named earlier.",
+                    path.display()
+                ),
+            };
+            state.fork_notice = Some(message);
+            state.restate_fork_notice().await?;
+        }
         let recovered = state
             .journal
             .snapshot
@@ -797,7 +827,9 @@ impl Session {
             .complete_missing_tools("No result: the server stopped and this turn was interrupted")
             .await?;
         state.recover_background().await?;
-        state.restate_goal().await?;
+        if state.fork_notice.is_none() || state.journal.snapshot.goal.is_some() {
+            state.restate_goal().await?;
+        }
         state.cancel_requests().await?;
         let unfinished = state
             .journal
@@ -859,7 +891,9 @@ impl Session {
         let session = Self::from_state(state, tools, model, options, runtime);
         // Keep this warning after the opening client's snapshot cursor.
         session.scratch_warning().await?;
-        session.session_start_hook("resume").await;
+        session
+            .session_start_hook(if fresh_fork { "startup" } else { "resume" })
+            .await;
         Ok((session, response))
     }
 

@@ -144,7 +144,13 @@ pub(crate) fn layout(
     let selected = selected.min(options.len().saturating_sub(1));
     let mut tail = vec![Line::default()];
     if let Some(text) = custom {
-        tail.push(Line::from("What to do instead:"));
+        tail.push(Line::from(
+            if !text.is_empty() && "/fork".starts_with(text) {
+                "Command (/fork):"
+            } else {
+                "What to do instead:"
+            },
+        ));
         let input = wrap(
             &LogicalLine::new(Vec::new(), vec![Span::raw(format!("› {}▏", visible(text)))]),
             inner,

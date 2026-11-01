@@ -3,6 +3,9 @@ use super::*;
 #[path = "registry_tests.rs"]
 pub(crate) mod registry;
 
+#[path = "fork_tests.rs"]
+mod fork;
+
 struct Harness {
     app: Arc<App>,
     client: reqwest::Client,

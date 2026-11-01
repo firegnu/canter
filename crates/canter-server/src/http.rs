@@ -241,6 +241,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::SESSIONS, post(create).get(list))
         .route(routes::SESSION, get(read).patch(update).delete(close))
         .route(routes::SESSION_TRASH, post(trash))
+        .route(routes::SESSION_FORK, post(fork))
         .route(routes::GOAL, get(goal).post(set_goal).delete(clear_goal))
         .route(routes::GOAL_PAUSE, post(pause_goal))
         .route(routes::GOAL_RESUME, post(resume_goal))
@@ -381,6 +382,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
         features: Some(vec![
+            "sessionFork".into(),
             "conditionalName".into(),
             "sessionTrash".into(),
             "folderTrust".into(),
@@ -803,6 +805,60 @@ async fn resume(
             session: response.session,
             event_seq: response.event_seq,
         }))
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
+}
+
+async fn fork(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+    params: Result<Json<SessionResumeParams>, JsonRejection>,
+) -> Result<Json<SessionCreateResponse>, ApiError> {
+    let params = body(params)?;
+    tokio::spawn(async move {
+        let draining = app.draining.read().await;
+        if *draining {
+            return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
+        }
+        let operation = app.session_locks.lock(&id).await;
+        let snapshot = if let Some(session) = app.opened_session(&id).await {
+            session.fork_snapshot().await?
+        } else {
+            let store = app.store.clone();
+            let operation = operation.clone();
+            tokio::task::spawn_blocking(move || {
+                let _operation = operation;
+                canter_core::ForkSnapshot::read(&store, &id)
+            })
+            .await
+            .map_err(|_| ApiError::internal())??
+        };
+        drop(operation);
+        let config = app.configuration().await?;
+        let trust =
+            folder_trust_operation(app.home.clone(), snapshot.settings.cwd.clone(), false).await?;
+        let restricted = params.restricted_mode
+            || !trust.trusted
+            || snapshot.settings.restricted_mode == Some(true);
+        let id = crate::new_id();
+        let _operation = app.session_locks.lock(&id).await;
+        let (session, response) = snapshot
+            .create(
+                app.store.clone(),
+                id.clone(),
+                app.runtime(params.env, &config, restricted),
+                config.model.clone(),
+                config.options.clone(),
+            )
+            .await?;
+        app.configure_session(&session, config.revision).await?;
+        if let Some(warning) = trust.warning {
+            session.opening_warning(warning).await?;
+        }
+        app.sessions.lock().await.insert(id, session);
+        app.registry_changed.notify_waiters();
+        Ok(Json(response))
     })
     .await
     .map_err(|_| ApiError::internal())?

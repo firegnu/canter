@@ -131,6 +131,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::NewSession)),
     },
     Command {
+        name: "fork",
+        about: "Copy completed turns into a new session and switch to it",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::ForkSession)),
+    },
+    Command {
         name: "clear",
         about: "Start a new session (same as /new)",
         takes_args: false,
