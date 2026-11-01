@@ -1686,6 +1686,20 @@ impl Session {
                         "Cannot delete this session while a goal is scheduled to continue; pause the goal first.",
                     ));
                 }
+                // Closing would kill every running command, including user
+                // shell commands that never wake the model.
+                if state
+                    .journal
+                    .snapshot
+                    .background_commands
+                    .iter()
+                    .any(|command| command.running)
+                {
+                    return Err(CoreError::new(
+                        ErrorCode::Conflict,
+                        "Cannot delete this session while a background command is still running; open it and run /stop first.",
+                    ));
+                }
                 if !state.automatic_turns_paused
                     && state
                         .background_events
