@@ -22,7 +22,7 @@ mod permissions;
 mod history_read;
 
 #[path = "session_management_tests.rs"]
-mod session_management;
+pub(crate) mod session_management;
 
 // A failed model task is a real Core close-error path, without modifying Core or the store.
 struct PanicOnce {
@@ -72,7 +72,10 @@ async fn failed_close_can_be_resumed_through_http() {
         models: vec!["fake-model".into()],
         options: CoreOptions::default(),
         sessions: Default::default(),
+        session_locks: Default::default(),
         registry_changed: Default::default(),
+        #[cfg(test)]
+        pauses: Default::default(),
         draining: Default::default(),
         stopped: CancellationToken::new(),
     });
@@ -239,7 +242,10 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
         models: vec!["fake".into()],
         options: CoreOptions::default(),
         sessions: Default::default(),
+        session_locks: Default::default(),
         registry_changed: Default::default(),
+        #[cfg(test)]
+        pauses: Default::default(),
         draining: Default::default(),
         stopped: CancellationToken::new(),
     });
@@ -792,7 +798,10 @@ impl BtwTest {
                 ..Default::default()
             },
             sessions: Default::default(),
+            session_locks: Default::default(),
             registry_changed: Default::default(),
+            #[cfg(test)]
+            pauses: Default::default(),
             draining: Default::default(),
             stopped: CancellationToken::new(),
         });
@@ -1259,7 +1268,10 @@ async fn sandbox_route_reports_the_session_switch_and_current_scope() {
                 ..Default::default()
             },
             sessions: Default::default(),
+            session_locks: Default::default(),
             registry_changed: Default::default(),
+            #[cfg(test)]
+            pauses: Default::default(),
             draining: Default::default(),
             stopped: CancellationToken::new(),
         });

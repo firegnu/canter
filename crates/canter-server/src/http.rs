@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use crate::session_locks::{SessionGuard, SessionLocks};
 use axum::{
     Json, Router,
     body::Body,
@@ -39,12 +40,32 @@ pub(crate) struct App {
     pub mcp: canter_core::mcp::Registry,
     pub lsp: Arc<canter_tools::lsp::LspService>,
     pub sessions: Mutex<HashMap<String, Session>>,
+    pub session_locks: SessionLocks,
     pub registry_changed: Notify,
+    #[cfg(test)]
+    pub pauses: tests::session_management::registry::Pauses,
     pub draining: RwLock<bool>,
     pub stopped: CancellationToken,
 }
 
 impl App {
+    async fn opened_session(&self, id: &str) -> Option<Session> {
+        self.sessions.lock().await.get(id).cloned()
+    }
+
+    pub(crate) async fn opened_sessions(&self) -> Vec<Session> {
+        self.sessions.lock().await.values().cloned().collect()
+    }
+
+    pub(crate) async fn begin_drain(&self) -> Vec<Session> {
+        *self.draining.write().await = true;
+        let sessions = self.opened_sessions().await;
+        for session in &sessions {
+            session.drain().await;
+        }
+        sessions
+    }
+
     fn metadata(&self) -> (String, Vec<String>, CoreOptions) {
         self.reload.as_ref().map_or_else(
             || {
@@ -131,31 +152,57 @@ impl App {
     }
 
     async fn session(&self, id: &str) -> Result<Session, ApiError> {
-        let sessions = self.sessions.lock().await;
-        if let Some(session) = sessions.get(id) {
-            return Ok(session.clone());
+        let operation = self.session_locks.lock(id).await;
+        if let Some(session) = self.opened_session(id).await {
+            return Ok(session);
         }
-        self.disk_snapshot(id).await?;
+        self.disk_snapshot(id, operation).await?;
         Err(ApiError::new(
             ErrorCode::SessionNotResumed,
             "resume the session first: POST /v1/sessions/{id}/resume with env again",
         ))
     }
 
-    async fn disk_events(&self, id: &str, after: u64) -> Result<Vec<Event>, ApiError> {
+    async fn disk_events(
+        &self,
+        id: &str,
+        after: u64,
+        operation: Option<Arc<SessionGuard>>,
+    ) -> Result<Vec<Event>, ApiError> {
+        #[cfg(test)]
+        self.pauses.hit(id, "events").await;
         let store = self.store.clone();
         let id = id.to_string();
-        tokio::task::spawn_blocking(move || store.events_after(&id, after))
-            .await
-            .map_err(|_| ApiError::internal())?
-            .map_err(|error| CoreError::from(error).into())
+        #[cfg(test)]
+        let pauses = self.pauses.clone();
+        tokio::task::spawn_blocking(move || {
+            // Keep the exclusion alive even if the HTTP read is cancelled.
+            let _operation = operation;
+            #[cfg(test)]
+            tokio::runtime::Handle::current().block_on(pauses.hit(&id, "disk_io"));
+            store.events_after(&id, after)
+        })
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(|error| CoreError::from(error).into())
     }
 
-    async fn disk_snapshot(&self, id: &str) -> Result<SessionReadResponse, ApiError> {
+    async fn disk_snapshot(
+        &self,
+        id: &str,
+        operation: Arc<SessionGuard>,
+    ) -> Result<SessionReadResponse, ApiError> {
+        #[cfg(test)]
+        self.pauses.hit(id, "snapshot").await;
         let store = self.store.clone();
         let prices = self.metadata().2.prices;
         let id = id.to_string();
+        #[cfg(test)]
+        let pauses = self.pauses.clone();
         tokio::task::spawn_blocking(move || {
+            let _operation = operation;
+            #[cfg(test)]
+            tokio::runtime::Handle::current().block_on(pauses.hit(&id, "disk_io"));
             let mut snapshot = SessionSnapshot::empty(&id);
             let events = store.events_after(&id, 0).map_err(CoreError::from)?;
             for event in &events {
@@ -491,15 +538,14 @@ async fn list(state: State<Arc<App>>) -> Result<Json<SessionListResponse>, ApiEr
 }
 
 async fn ledger(app: &App, id: &str) -> Result<canter_core::usage::Ledger, ApiError> {
-    let sessions = app.sessions.lock().await;
-    let (mut events, through) = if let Some(session) = sessions.get(id).cloned() {
-        drop(sessions);
+    let operation = app.session_locks.lock(id).await;
+    let (mut events, through) = if let Some(session) = app.opened_session(id).await {
+        drop(operation);
         let through = session.snapshot().await.event_seq;
-        (app.disk_events(id, 0).await?, Some(through))
+        (app.disk_events(id, 0, None).await?, Some(through))
     } else {
         // An unopened session must stay unopened until the disk read completes.
-        let events = app.disk_events(id, 0).await?;
-        drop(sessions);
+        let events = app.disk_events(id, 0, Some(operation)).await?;
         (events, None)
     };
     if let Some(through) = through {
@@ -662,14 +708,12 @@ async fn read(
     State(app): State<Arc<App>>,
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<SessionReadResponse>, ApiError> {
-    let sessions = app.sessions.lock().await;
-    let response = if let Some(session) = sessions.get(&id).cloned() {
-        drop(sessions);
+    let operation = app.session_locks.lock(&id).await;
+    let response = if let Some(session) = app.opened_session(&id).await {
+        drop(operation);
         session.snapshot().await
     } else {
-        let response = app.disk_snapshot(&id).await?;
-        drop(sessions);
-        response
+        app.disk_snapshot(&id, operation).await?
     };
     Ok(Json(response))
 }
@@ -687,9 +731,11 @@ async fn resume(
         }
         // Opening settings and the returned snapshot belong to this resume.
         // Keep deletion from closing/moving its session halfway through.
-        let sessions = app.sessions.lock().await;
-        if let Some(session) = sessions.get(&id).cloned() {
+        let operation = app.session_locks.lock(&id).await;
+        if let Some(session) = app.opened_session(&id).await {
             let cwd = session.snapshot().await.session.settings.cwd;
+            #[cfg(test)]
+            app.pauses.hit(&id, "trust").await;
             let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
             session
                 .set_folder_trust(trust.trusted && !params.restricted_mode)
@@ -703,11 +749,13 @@ async fn resume(
                 event_seq: response.event_seq,
             }));
         }
-        drop(sessions);
+        drop(operation);
         let config = app.configuration().await?;
-        let mut sessions = app.sessions.lock().await;
-        let response = if let Some(session) = sessions.get(&id).cloned() {
+        let operation = app.session_locks.lock(&id).await;
+        let response = if let Some(session) = app.opened_session(&id).await {
             let cwd = session.snapshot().await.session.settings.cwd;
+            #[cfg(test)]
+            app.pauses.hit(&id, "trust").await;
             let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
             session
                 .set_folder_trust(trust.trusted && !params.restricted_mode)
@@ -718,8 +766,17 @@ async fn resume(
             }
             response
         } else {
-            let cwd = app.disk_snapshot(&id).await?.session.settings.cwd;
+            let cwd = app
+                .disk_snapshot(&id, operation.clone())
+                .await?
+                .session
+                .settings
+                .cwd;
+            #[cfg(test)]
+            app.pauses.hit(&id, "trust").await;
             let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
+            #[cfg(test)]
+            app.pauses.hit(&id, "open").await;
             let (session, response) = Session::open(
                 app.store.clone(),
                 id.clone(),
@@ -732,11 +789,13 @@ async fn resume(
                 config.options.clone(),
             )
             .await?;
+            #[cfg(test)]
+            app.pauses.hit(&id, "configure").await;
             app.configure_session(&session, config.revision).await?;
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
-            sessions.insert(id, session);
+            app.sessions.lock().await.insert(id, session);
             app.registry_changed.notify_waiters();
             response
         };
@@ -776,8 +835,8 @@ async fn create(
             ));
         }
         let trust = folder_trust_operation(app.home.clone(), params.cwd.clone(), false).await?;
-        let mut sessions = app.sessions.lock().await;
         let id = crate::new_id();
+        let operation = app.session_locks.lock(&id).await;
         let settings = SessionSettings {
             tags: params.tags,
             additional_directories: params.additional_directories,
@@ -797,6 +856,8 @@ async fn create(
             reasoning_effort: params.reasoning_effort.unwrap_or_default(),
         };
         app.validate_model(&settings.model)?;
+        #[cfg(test)]
+        app.pauses.hit(&id, "create").await;
         let (session, mut response) = Session::create(
             app.store.clone(),
             id.clone(),
@@ -810,10 +871,12 @@ async fn create(
             config.options.clone(),
         )
         .await?;
+        #[cfg(test)]
+        app.pauses.hit(&id, "configure").await;
         app.configure_session(&session, config.revision).await?;
-        sessions.insert(id, session.clone());
+        app.sessions.lock().await.insert(id, session.clone());
         app.registry_changed.notify_waiters();
-        drop(sessions);
+        drop(operation);
         drop(config);
         if let Some(input) = params.input {
             session
@@ -1010,6 +1073,9 @@ async fn close(
             // A final journal append can fail before Core releases its writer; a second close releases it.
             let _ = session.close().await;
         }
+        #[cfg(test)]
+        app.pauses.hit(&id, "close_remove").await;
+        let _operation = app.session_locks.lock(&id).await;
         let mut sessions = app.sessions.lock().await;
         if sessions
             .get(&id)
@@ -1034,13 +1100,16 @@ async fn trash(
         if *draining {
             return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
         }
-        let mut sessions = app.sessions.lock().await;
+        let operation = app.session_locks.lock(&id).await;
         let source = app.store.session_dir(&id).map_err(CoreError::from)?;
-        if !sessions.contains_key(&id) {
-            app.disk_snapshot(&id).await?;
+        let session = app.opened_session(&id).await;
+        if session.is_none() {
+            app.disk_snapshot(&id, operation.clone()).await?;
         }
         let trash = app.home.join("trash");
         let target = trash.join(&id);
+        #[cfg(test)]
+        app.pauses.hit(&id, "trash_prepare").await;
         let target = tokio::task::spawn_blocking(move || -> Result<PathBuf, ApiError> {
             use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
             match std::fs::symlink_metadata(&target) {
@@ -1054,10 +1123,14 @@ async fn trash(
                 .map_err(|_| ApiError::internal())?;
             Ok(target)
         }).await.map_err(|_| ApiError::internal())??;
-        if let Some(session) = sessions.get(&id) {
+        if let Some(session) = session {
+            #[cfg(test)]
+            app.pauses.hit(&id, "trash_close").await;
             session.close_for_trash().await?;
         }
-        sessions.remove(&id);
+        app.sessions.lock().await.remove(&id);
+        #[cfg(test)]
+        app.pauses.hit(&id, "trash_move").await;
         tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
             std::fs::rename(source, target).map_err(|error| canter_store::StoreError::from(error).into())
         }).await.map_err(|_| ApiError::internal())??;
@@ -1077,10 +1150,12 @@ struct EventReader {
 
 impl EventReader {
     async fn new(app: Arc<App>, id: String, cursor: u64) -> Result<Self, ApiError> {
-        let sessions = app.sessions.lock().await;
-        let (pending, subscription, client) = if let Some(session) = sessions.get(&id).cloned() {
-            // Attach under the registry lock, so trash cannot move a session
+        let operation = app.session_locks.lock(&id).await;
+        let (pending, subscription, client) = if let Some(session) = app.opened_session(&id).await {
+            // Attach under the per-session lock, so trash cannot move a session
             // between catch-up and registering this external client.
+            #[cfg(test)]
+            app.pauses.hit(&id, "subscribe").await;
             let subscription = session.subscribe(cursor).await?;
             (
                 VecDeque::new(),
@@ -1088,7 +1163,7 @@ impl EventReader {
                 session.attach_client().await,
             )
         } else {
-            let events = app.disk_events(&id, 0).await?;
+            let events = app.disk_events(&id, 0, Some(operation.clone())).await?;
             let last = events
                 .last()
                 .ok_or_else(|| ApiError::new(ErrorCode::SessionNotFound, "session not found"))?
@@ -1105,7 +1180,7 @@ impl EventReader {
                 None,
             )
         };
-        drop(sessions);
+        drop(operation);
         Ok(Self {
             app,
             id,
@@ -1128,15 +1203,21 @@ impl EventReader {
             let changed = self.app.registry_changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            // Keep the registry locked while reading an unopened session: resume cannot start a writer mid-read.
-            let sessions = self.app.sessions.lock().await;
-            if let Some(session) = sessions.get(&self.id).cloned() {
+            // Resume cannot start this session's writer mid-read.
+            let operation = self.app.session_locks.lock(&self.id).await;
+            if let Some(session) = self.app.opened_session(&self.id).await {
+                #[cfg(test)]
+                self.app.pauses.hit(&self.id, "subscribe").await;
                 self.subscription = Some(session.subscribe(self.cursor).await?);
                 self._client = session.attach_client().await;
-                drop(sessions);
+                drop(operation);
             } else {
-                self.pending = self.app.disk_events(&self.id, self.cursor).await?.into();
-                drop(sessions);
+                self.pending = self
+                    .app
+                    .disk_events(&self.id, self.cursor, Some(operation.clone()))
+                    .await?
+                    .into();
+                drop(operation);
             }
             if self.subscription.is_none() && self.pending.is_empty() {
                 changed.await;

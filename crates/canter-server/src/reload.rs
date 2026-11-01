@@ -255,7 +255,7 @@ impl LiveConfig {
                     let Some(app) = app.upgrade() else {
                         break;
                     };
-                    let sessions: Vec<_> = app.sessions.lock().await.values().cloned().collect();
+                    let sessions = app.opened_sessions().await;
                     for session in sessions {
                         let _ = session.configuration_warning(message.clone()).await;
                     }

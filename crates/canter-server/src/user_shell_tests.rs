@@ -150,7 +150,10 @@ impl Fixture {
             models: vec!["fake".into()],
             options,
             sessions: Default::default(),
+            session_locks: Default::default(),
             registry_changed: Default::default(),
+            #[cfg(test)]
+            pauses: Default::default(),
             draining: Default::default(),
             stopped: CancellationToken::new(),
         });

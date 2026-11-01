@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "registry_tests.rs"]
+pub(crate) mod registry;
+
 struct Harness {
     app: Arc<App>,
     client: reqwest::Client,
@@ -17,6 +20,10 @@ impl Harness {
     }
 
     async fn with_model(model: Arc<dyn Model>) -> Self {
+        Self::with_options(model, CoreOptions::default()).await
+    }
+
+    async fn with_options(model: Arc<dyn Model>, options: CoreOptions) -> Self {
         let root = tempfile::Builder::new()
             .prefix("canter-sessions-")
             .tempdir_in("/tmp")
@@ -29,11 +36,14 @@ impl Harness {
             model,
             default_model: "fake-model".into(),
             models: vec!["fake-model".into()],
-            options: CoreOptions::default(),
+            options,
             mcp: Default::default(),
             lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
             sessions: Default::default(),
+            session_locks: Default::default(),
             registry_changed: Default::default(),
+            #[cfg(test)]
+            pauses: Default::default(),
             draining: Default::default(),
             stopped: CancellationToken::new(),
         });

@@ -170,7 +170,10 @@ async fn check_rewind(
         models: vec!["fake".into()],
         options: CoreOptions::default(),
         sessions: Default::default(),
+        session_locks: Default::default(),
         registry_changed: Default::default(),
+        #[cfg(test)]
+        pauses: Default::default(),
         draining: Default::default(),
         stopped: CancellationToken::new(),
     });
@@ -470,7 +473,10 @@ async fn check_rewind(
         models: vec!["fake".into()],
         options: CoreOptions::default(),
         sessions: Default::default(),
+        session_locks: Default::default(),
         registry_changed: Default::default(),
+        #[cfg(test)]
+        pauses: Default::default(),
         draining: Default::default(),
         stopped: CancellationToken::new(),
     });
