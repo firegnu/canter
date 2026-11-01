@@ -151,3 +151,14 @@ cargo nextest run -p canter-core --test lsp --run-ignored only
 - **相关回归与检查**：前台运行 `cargo nextest run -p canter-core -p canter-server`，用过滤器仅选择 `folder_trust_lost_on_resume_detaches_running_lsp`、`untrusted_session_does_not_start_lsp_even_when_globally_enabled`、`disabled_lsp_requests_match_the_original_path_byte_for_byte`、`server_failure_does_not_turn_a_successful_file_change_into_failure`、`a_stopped_subscription_remains_stopped_on_reopen_and_can_be_retried`、`unversioned_empty_lists_do_not_claim_issues_are_resolved`，6 项全部通过（日志 `inline-related-tests.log`）。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过；使用指定独立 target，测试隔离 HOME / CANTER_HOME，未跑全套。
 - **踩过的坑**：第一版临时用例在假 LSP 启动完成前写文件，没有进入目标 `Ok` 窗口；加一轮预热并等待 Running 后才得到了上述有效复现，没有把启动等待失败算作目标缺陷证据。
 - **范围与待决事项**：最终仅修改 `inline()` 的句柄获取和两处使用，以及本记录。未改 worktree 文件读取建议、测试断言／超时、已有 ignore 或其它产品行为；未读改真实 `~/.canter`、未调用真实模型、未开其它 agent、未推送或合并。没有新的待主控决定事项。
+
+## 主控审查
+
+2026-11-01，canter/main。
+
+- 看了完成记录、返工记录、`trust.rs`、LSP 按文件限制和终端接线的 diff；交叉审查（Claude Code opus[1m] xhigh）首轮必须改 2 条（坏记录、删目录把用户挡在会话外），复核 1 条（恢复时降级让 `inline()` panic），第二轮复核「可以合并」。
+- 主控全套第一次 1312 项挂 12 项：11 项 `canter-tui` 假服务端没有 `folderTrust`（开发只跑了 `canter --test tui`），交回返工修好；1 项 reload 测试没复现，记 HANDOFF。
+- 用户中途的决定：worktree 照 Codex 认回主仓库（「这块你也要注意下，不然我现在git worktree也要点我觉得是不对的」）；`canter-core` LSP 计时测试不修、全部 `#[ignore]` 记到 P2-146（「全部封掉，记到146」）。主控决定：加进来的目录按各自仓库判断信任，不弹框。
+- 合并前全套（`97bd8c3`）：nextest 1299 项全过、25 项跳过；文档示例测试无失败。clippy、fmt 由开发和审查各自跑过。
+- 交叉审查的建议改（家目录是仓库、LSP 每次重读记录和 worktree 元数据、恢复多读会话记录）没改，记进 HANDOFF「已知没修的问题」。
+- 结果：返工 2 次

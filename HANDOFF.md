@@ -261,3 +261,10 @@
   - `/sandbox` 弹框打开时取一次数据，另一个客户端切了权限档，要关掉重开才看到新的 Network。
   - `/sandbox` 不列单条命令批准的 `writePaths`，也不列 worktree 在主仓库里那份可写的 Git 元数据目录。
   - 沙箱起不来时（比如会话缺 HOME）状态栏仍显示 `Sandbox on`（命令照样失败、不到墙外跑），`/sandbox` 只列 cwd 和新增目录。
+- 文件夹信任（P2-168，11-01 合并，没装；交叉审查建议改，合并前没改，等用户试用）：
+  - 家目录本身是 git 仓库时，信任一个不在别的仓库里的文件夹，会解析成信任整个家目录（Claude Code 家目录不存信任）。
+  - 开了 LSP 时，每检查一个文件都要重读 `trusted_folders.json`，worktree 还要多读最多四个 git 元数据文件，`cargo build` 写大量文件时开销会上去；LSP 默认关。
+  - 恢复一个没打开的长会话，终端和服务端为拿工作目录各多读一遍会话记录。
+  - 已信任仓库里的子模块、嵌套仓库按单独的仓库判断，里面的文件不起 LSP、也不弹框，要在那个目录里单独开一次 canter 信任（DESIGN 写明）。
+  - 撤销信任只能手改 `~/.canter/trusted_folders.json`；改坏了按受限打开并提示，不挡会话。
+  - 第一次全套时 `reload_tests::disabling_then_enabling_lsp_still_waits_for_the_original_turn` 并行挂过一次，单独 4 次、开发 2 次都过，没复现。
