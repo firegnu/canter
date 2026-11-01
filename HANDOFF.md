@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 11-01 第五十四次装 main `1bba1ce`（第一次用 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 1bba1ce`；比上一版多 P2-22：记忆，全局 `~/.canter/memory/`、项目 `~/.canter/projects/<键>/memory/`，`/memory` 查看改删）。upgrade 已换好服务端（pid 98593）。
+- 退回上一版 `f513989`：`canter rollback`（备份在 `~/.canter/backups/canter-…-f513989`）。存盘格式没变；退回后旧版不读记忆，记忆文件留着不动。
 - 11-01 第五十三次装 main `f513989`（`canter --version` 显示 `canter 0.1.0 · f513989`；比上一版多 P2-14：`canter service install/uninstall` 登录服务、`canter upgrade/rollback` 换版和退回（备份在 `~/.canter/backups`，留 5 份）、`/v1/runningTurns`，修 `--replace` 收尾竞态）。要 `canter serve --replace` 后生效。这是最后一次手动装，以后用 `canter upgrade`。
 - 退回上一版 `190b81e`：`cp -p ~/.canter/canter-190b81e ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变；装过服务的先 `canter service uninstall`。
 - 11-01 第五十二次装 main `190b81e`（`canter --version` 显示 `canter 0.1.0 · 190b81e`；比上一版多 P2-157：会话里 `/fork` 整份复制已完成的轮，切到新会话，名字加 ` (fork)`，原会话不动、用量不重算）。要 `canter serve --replace` 后生效。
@@ -133,6 +135,7 @@
   - 可以不改：每次打开可信会话都会建 `projects/<键>/memory` 空目录；用 shell 在记忆目录建的符号链接 `/memory` 不列、也删不了，只能手动清；没存分段的旧会话被可信分叉后信任又变时，前缀只用记忆段重建，下次普通打开整段重算；`canter-core/tests/prompts.rs` 用 `include_str!` 读任务文件里的批准原文，改那个代码块测试会失败。
 - 测试 `canter::deployment service_environment_survives_every_start_and_path_based_mcp_connects`（P2-14 加的）在 P2-22 合并前全套刚开跑时失败一次（第 20 个），报 `["serve", "--replace"]: … stderr: "canter: cannot connect to the registered server; it was not replaced"`（`crates/canter/tests/deployment.rs:189`），单独重跑通过。和下面 discovery 那两个一样像负载高时的偶发；再失败时看是不是旧服务端已登记、还没开始接连接时被探测。
 - P2-14（11-01 合并，已装 `f513989`）交叉审查可以不改：
+  - `canter upgrade` 编译时 cargo 打一行 `warning: be sure to add `/var/folders/…/canter-install-…/bin` to your PATH`（11-01 第一次用时看到）：cargo 装进临时目录时的固定提醒，canter 随后自己把程序换到原路径，没影响。要去掉可以给 `cargo install` 加 `--quiet` 或过滤这一行，属于显示问题。
   - 会话写盘失败（事件文件写不进去）后，`/v1/runningTurns` 可能一直报 `Continuing a goal`，upgrade 默认会一直等；Ctrl-C 后 `canter serve --replace`。要补就在条件里加 `state.available()`。
   - 运行轮查询一直失败时，upgrade 等待每秒悄悄重试、不打印。
   - `--replace` 只放宽「连不上」：探测刚连进旧服务端 backlog、监听随即被丢时会报连接被重置，窗口微秒级。
