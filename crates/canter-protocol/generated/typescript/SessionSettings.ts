@@ -18,4 +18,8 @@ planEnabled?: boolean,
  * Whether this session's model commands run in the sandbox, as the server
  * opened it; absent from servers that do not report it.
  */
-sandboxEnabled?: boolean, cwd: string, name: string | null, model: string, reasoningEffort?: ReasoningEffort, approvalPolicy: PermissionMode, };
+sandboxEnabled?: boolean,
+/**
+ * Effective folder restriction, determined by the server on open.
+ */
+restrictedMode?: boolean, cwd: string, name: string | null, model: string, reasoningEffort?: ReasoningEffort, approvalPolicy: PermissionMode, };

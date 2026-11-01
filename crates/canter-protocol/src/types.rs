@@ -84,6 +84,10 @@ pub struct SessionSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sandbox_enabled: Option<bool>,
+    /// Effective folder restriction, determined by the server on open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub restricted_mode: Option<bool>,
     #[serde(default)]
     pub cwd: String,
     pub name: Option<String>,
@@ -150,6 +154,7 @@ impl SessionSnapshot {
                 pre_plan_approval_policy: None,
                 plan_enabled: None,
                 sandbox_enabled: None,
+                restricted_mode: None,
                 cwd: String::new(),
                 name: None,
                 model: String::new(),

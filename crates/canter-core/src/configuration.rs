@@ -215,9 +215,9 @@ impl Shared {
                 })
                 .collect();
             state.journal.append(stopped).await?;
-            if let Some(service) = &context.lsp {
+            if let Some(service) = context.lsp.as_ref().filter(|_| !context.restricted_mode) {
                 tools = tools.with_lsp(
-                    service.session(
+                    service.session_with_access(
                         canter_tools::lsp::FileContext {
                             cwd: state.journal.snapshot.settings.cwd.clone().into(),
                             additional_directories: state
@@ -232,6 +232,7 @@ impl Shared {
                             round: canter_tools::lsp::Round::Modify,
                         },
                         context.protected_paths.clone(),
+                        context.lsp_file_access.clone(),
                     ),
                 );
             }

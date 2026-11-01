@@ -33,6 +33,8 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 #[derive(Clone, Default)]
 pub struct RuntimeContext {
+    pub restricted_mode: bool,
+    pub lsp_file_access: Option<canter_tools::lsp::FileAccess>,
     pub lsp: Option<std::sync::Arc<canter_tools::lsp::LspService>>,
     pub environment: BTreeMap<String, String>,
     pub protected_paths: Vec<PathBuf>,

@@ -64,3 +64,90 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-11-01，canter/dev-trust 完成，提交在 `p2-168-trust`。
+
+- **做了什么**：服务端新增正向信任记录 `trusted_folders.json`（状态目录内，0600、加锁、临时文件原子替换），按规范化的最近 git 仓库根或非 Git 目录自身查找，不从以前的会话推断信任。新增协议查询/记录端点、`folderTrust` 能力和可选会话设置 `restrictedMode`，同步生成 JSON Schema / TypeScript。终端在新建、`-r` / `-c`、会话列表和 `/new` 等入口先查询并显示英文信任选择；受限不留记录，AGENTS.md、技能、全局 MCP / 放行规则 / 沙箱保留原行为。exec 不询问，受限时 stderr 提示一行。核心同时保护首次打开和配置热重载；受限会话不挂 LSP，已经打开的会话在记录信任并恢复后可以正常使用 LSP。DESIGN 第 8 条和「文件夹信任（P2-168）」已说明协议差异与未来项目配置、hooks 的约束。
+- **主控决定**：本轮提出额外目录的边界问题后，主控选择中间办法：加目录不弹框、不加询问流程；工作目录受限时整个会话不启 LSP；工作目录已信任时，对文件按其 git 仓库根判断，非 Git 文件按覆盖它的已添加目录本身判断。A 的信任不放行 B；B 已被单独信任才允许其文件启动 LSP。原因是 B 的构建脚本同样可能被运行，信任仍按用户确定的仓库范围，而加目录的额外交互不在本件范围。已经写入 DESIGN，并用 Git / 非 Git 两种 B（含子目录文件）验证了未信任拦截、记录信任后恢复。没有新的待主控决定事项。
+- **验证了什么**：先写并运行针对性测试，确认未信任目录会启动假 LSP、缺少信任查询端点、A 的信任会放行 B、终端没有信任框、exec 没有受限提示这五种目标失败，再分别实现到通过。补验同仓库子目录共用记录、非 Git 目录不继承父目录记录、受限不写记录、AGENTS.md / 技能仍进模型上下文、热重载不解除受限、保存会话重启后恢复仍询问、终端两个选项和已信任子目录免询问、exec 无交互完成及同一已打开会话的信任升级。所有模型请求均走本地假模型，语言服务器用已有 Rust fixture。
+- **回归与检查**：`canter-server` 的 `reload_tests` 19 项、HTTP 相关测试 82 项通过；`canter-core` LSP 22 项、prompts 3 项、session 串行复跑 36 项通过；`canter-tools --lib lsp::` 37 项通过、1 项既有忽略；`canter-protocol` 与 `canter-store` 共 48 项通过；`canter --test exec` 16 项、最终 `canter --test tui` 69 项通过。额外目录测试扩为 Git / 非 Git 后，4 项 trust 测试再次通过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。编译均使用指定的独立 `CARGO_TARGET_DIR`，运行测试时隔离 HOME / CANTER_HOME；测试服务和 PTY 子进程按各 fixture 持有的 PID 结束。未跑工作区全套测试。
+- **参考了哪里**：只读 `/tmp/codex-ro` 的 Codex `rust-v0.163.0`：`codex-rs/tui/src/onboarding/trust_directory.rs` 的目录范围说明和显式确认，`codex-rs/config/src/config_toml.rs` 的 `ProjectConfig.trust_level`、`config/src/project_trust.rs` 的路径查询及 `core/src/config/edit.rs` 的信任写入入口。Claude Code 官方仓库克隆在 `/tmp/p2-168-claude-code-reference`，提交 `80c6959d28c4c30ecd14fc1cdf172f19d9adad81`，参考 `CHANGELOG.md` 对仓库范围和嵌套仓库信任的说明；此克隆不含终端信任框实现，文字另核对官方仓库 [issue #9256](https://github.com/anthropics/claude-code/issues/9256) 所附 2.0.13 对话框（询问是否信任目录、明确继续或退出）。仅参考，没有复制实现。
+- **没做的事**：未实现 P2-159 项目级配置或 P2-153 hooks，未增加全局配置项、exec 参数、撤销/列出信任命令或加目录询问。未读改真实 `~/.canter`，未调真实模型，未启动其他 agent，未推送或合并到 main；交叉审查交回主控。
+- **踩过的坑**：假 LSP 是异步启动，写完文件立刻看进程记录会误判，改为让假模型轮保持打开并有界等待后再断言；reqwest 没启用 query builder，测试改用已有 URL 类型编码查询参数。恢复 LSP 订阅时一度复用了完整 `allowed` 检查，macOS 路径别名导致已停止订阅未恢复，既有重试测试抓到后改成仅检查信任，回归通过。旧 PTY 用例没有预设信任而停在新框，已在它们的隔离 fixture 中显式记信任。核心 session 并行回归有一次 `session already open` 存盘锁冲突，该用例单独重跑及整个文件串行复跑都通过，没有改动存盘锁实现。
+
+
+## 返工记录
+
+2026-11-01，第 1 次，按主控及交叉审查意见完成，提交在 `p2-168-trust`。
+
+- **坏记录与警告**：查询遇到 `trusted_folders.json` 解析／读取错误，返回未信任并受限打开；创建和恢复会话不因此失败。英文警告包含记录文件完整路径和具体错误，先写入会话事件再返回，客户端从警告之前的游标订阅。POST 仍报错，不覆盖坏记录。终端查询失败直接请求受限打开并显示警告，不退出；协议新增可选请求字段 `restrictedMode`，只能要求更严格的打开方式，不能放行未信任目录。exec 恢复保留打开响应的游标，避免后续读快照漏掉警告；没有删减原有恢复读取。
+- **目录删除**：信任查询遇到不存在的 cwd 返回未信任；已打开会话和存盘会话都可以受限恢复，覆盖 `-r` 和 `/resume`。新建会话仍拒绝不存在的目录，错误明确为 `Directory does not exist`。恢复时原本已信任的会话也会降为受限，卸载 LSP、清除待交付诊断并把公开状态改为 Stopped；正在运行的轮后续写文件也不能重新起 LSP。
+- **worktree 与信任边界**：落实用户 11-01 的新决定：有效 Git worktree 共用主仓库信任。检查 `.git` → gitdir、gitdir 反向指回当前 checkout、commondir 指向正确公共目录，以及主仓库 `.git` 对该目录的所有权；校验不过按当前 worktree 自身判断。查询、exec 服务端打开和 LSP 按文件检查使用同一解析。只参考 `/tmp/codex-ro/codex-rs/git-utils/src/trust.rs`（Codex `rust-v0.163.0` 的 `resolve_root_git_project_for_trust`），以本地同步文件操作独立实现，没有搬代码。DESIGN 第 8 条和文件夹信任一节已更新，并明确子模块／嵌套仓库单独判断、未信任时不起 LSP 不弹框，需要在那里单独开 canter 来信任；加目录不弹框的既定决定保留。
+- **假服务端及指定 reload 测试**：给 `canter-tui::fake::FakeServer` 补齐 info 的 `folderTrust` 能力和查询端点。先复现 notifications 8 项、tab_title 2 项及 editor 1 项失败，再修到全部通过，未改断言和超时。核对指定 `disabling_then_enabling_lsp_still_waits_for_the_original_turn` 的原改动，只有创建会话前已经 await 完成的信任写入，原等待、模型请求门控和断言均未修改；本轮在两个相关并行批次中都通过，未复现主控报告的一次失败，没有证据把它归因于新增的测试时序，因此保留原测试，并把未能复现的情况如实记录。
+- **回归与检查**：坏记录查询／创建／恢复、POST 保留坏文件、删除目录后恢复、worktree 共享和 gitdir／commondir 反向链接错误等目标检查均先确认旧行为失败，再实现通过。最终相关服务端 10 项通过（含指定 reload 测试、受限 LSP、额外目录隔离）；`cargo nextest run -p canter-tui` 整包 582 项通过；终端及 exec 相关 17 项通过（含 `/new`、`/handoff`、计划新会话、`-r`、`/resume`）；协议 37 项通过，生成物一致性检查通过；核心 LSP 串行复跑 22 项通过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。所有命令前台等待完成，测试使用指定独立 target、隔离 HOME / CANTER_HOME 和本地假模型；未跑工作区全套。
+- **踩过的坑与验证限制**：删除目录的终端测试起初把 fixture 的服务端启动目录一起删了，改成单独的待删会话目录；跨目录 `/resume` 测试必须先 Tab 显示全部目录。补测发现 exec 恢复会跳过打开后发出的警告，保留恢复游标后创建／恢复均能显示。核心 LSP 与服务端合跑的 32 项中有 6 项核心 LSP 诊断时序失败，主要是未在既有 500 ms 窗口内收到诊断；这组核心测试不调用本轮新增的信任更新／警告方法，nextest 每个测试进程各自 rustc 编译假 LSP。保留原代码、断言和超时，串行 22 项全部通过，证据指向并行负载／启动抖动，未扩大本件去改这批测试。失败日志在 `/tmp/canter-p2-168-check/core-server-rework-final.log`，串行结果在 `core-lsp-rework-serial.log`，供主控合并前全套验证参考。
+- **没做的事与待决事项**：按主控要求未改“家目录本身是仓库”、LSP 每次读取信任记录、恢复多次读取三项建议，HANDOFF 由主控记；未加全局配置、CLI 参数或加目录询问，未修改本任务之外的测试断言／超时。未读改真实 `~/.canter`、未调用真实模型、未开其它 agent、未推送或合并 main。没有新增需要主控决定的事项。
+
+
+## 关掉的 LSP 计时测试
+
+2026-11-01，按用户新决定停止本轮 LSP 测试修复，将以下 6 项暂时跳过，后续修复追踪到 P2-146。它们均位于 `canter-core` 包的 `lsp` 集成测试目标，完整测试函数名如下：
+
+- `quick_diagnostics_are_in_the_file_tool_result`
+- `reports_are_bounded_and_only_delivered_diagnostics_are_deduplicated`
+- `confirmed_empty_reports_resolve_issues_without_claiming_project_checks_passed`
+- `history_changes_restart_reports_without_replaying_old_batches`
+- `expired_delivery_is_not_revived_by_a_later_model_request`
+- `push_and_pull_reports_for_one_file_are_not_duplicated`
+
+每项只添加 `#[ignore = "timing-sensitive under parallel load; fix tracked in P2-146"]`。未改断言、超时、假 LSP、产品代码或其它测试；`canter-tools` 的 `lsp::service::tests::rss_limits_stop_busy_process_trees_and_require_explicit_retry` 保持既有 ignore 不动。
+
+单独运行这 6 项的命令（仍使用任务指定的独立 target 和隔离 HOME / CANTER_HOME）：
+
+```sh
+cargo nextest run -p canter-core --test lsp --run-ignored only
+```
+
+验证：前台运行一次 `cargo nextest run -p canter-core --test lsp`，确认 6 项跳过；剩余 16 项中 15 项通过，`subscription_stop_and_retry_are_visible_without_waking_the_model` 在读取空的语言服务器列表时失败（index out of bounds）。单独复跑该项通过；它不在本次指定的 6 项中，按“不动别的测试”保留原样，没有把整组结果记成全部通过。整组日志在 `/tmp/canter-p2-168-check/lsp-ignore-tests.log`，单项复跑日志在 `lsp-ignore-extra-recheck.log`。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。未跑工作区全套、未推送或合并。
+
+
+### 追加：剩余 LSP 测试全部暂时关闭
+
+2026-11-01，主控在 `707b936` 上跑全套，1315 项中有 3 项失败：`subscription_stop_and_retry_are_visible_without_waking_the_model`、`unversioned_empty_lists_do_not_claim_issues_are_resolved`、`diagnostics_at_the_500ms_boundary_are_delivered_once`。用户 11-01 原话：「全部封掉，记到146」。
+
+按此决定，在 `crates/canter-core/tests/lsp.rs` 剩余 16 项测试上添加同样的 `#[ignore = "timing-sensitive under parallel load; fix tracked in P2-146"]`，此前 6 项保持不动，现在此目标共 22 项全部暂时跳过。新增的完整测试函数名如下：
+
+- `late_diagnostics_wait_for_a_real_request_and_preserve_the_sent_prefix`
+- `changing_the_file_discards_pending_diagnostics`
+- `subscription_stop_and_retry_are_visible_without_waking_the_model`
+- `disabled_lsp_requests_match_the_original_path_byte_for_byte`
+- `unsupported_files_and_stopped_subscriptions_preserve_plain_tool_results`
+- `reopening_keeps_delivered_history_but_drops_undelivered_diagnostics`
+- `compaction_labels_late_diagnostics_as_tools_and_does_not_replay_them`
+- `retracting_a_late_notice_keeps_later_user_words_labeled_as_user`
+- `rewind_discards_the_removed_changes_pending_diagnostics`
+- `unversioned_empty_lists_do_not_claim_issues_are_resolved`
+- `diagnostics_at_the_500ms_boundary_are_delivered_once`
+- `server_failure_does_not_turn_a_successful_file_change_into_failure`
+- `rewriting_the_same_bytes_invalidates_the_original_pending_change`
+- `a_stopped_subscription_remains_stopped_on_reopen_and_can_be_retried`
+- `late_diagnostics_do_not_enter_history_during_a_stream`
+- `server_initialization_is_inside_the_file_tools_wait_budget`
+
+上面的 `cargo nextest run -p canter-core --test lsp --run-ignored only` 现在会运行全部 22 项。没有修改断言、超时、假 LSP、产品代码或其它文件里的测试；RSS 测试保持既有 ignore。
+
+验证：前台运行 `cargo nextest run -p canter-core --test lsp`，编译成功，结果为 `0 tests run: 0 passed, 22 skipped`；全部跳过触发 nextest 默认的 `no tests to run`，退出码为 4，没有测试失败。日志在 `/tmp/canter-p2-168-check/lsp-ignore-all-tests.log`。随后 `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。命令均在前台跑完，使用指定独立 target 和隔离测试环境；未跑全套、未推送或合并，无新增待主控决定事项。
+
+
+## 复核返工：恢复降级时的 LSP 竞态
+
+2026-11-01，按交叉审查「复核」第三部分完成，提交在 `p2-168-trust`。
+
+- **原因与改法**：`inline()` 等待诊断票据、后续诊断和 state 锁期间，恢复会话可能调用 `set_folder_trust(false)`，从运行时卸载 LSP。原先两处重新查运行时并 `unwrap()` 会在这个窗口 panic，使轮次停在 InProgress。现在进入 `inline()` 时只取一次克隆句柄，取不到就返回空；后续诊断和报告统一用这个句柄。句柄关闭仍沿用已有的 Stopped／诊断不可用处理，不重新启动语言服务器。已检索确认 core 中不再有 `tools.lsp().unwrap()`。
+- **确定性复现与验证**：临时在票据返回 `Ok` 后加文件标记同步闸门，用现有假模型、假 LSP 和服务端 fixture 等到闸门，再损坏信任记录并 resume，确认受限后才释放。旧代码稳定命中 `Option::unwrap()` panic，后续模型请求没有到达；相同用例在修复后通过，轮次完成且下一次输入正常。再把闸门移到取得 state 锁之前验证另一处窗口，也通过。三次结果分别见 `/tmp/canter-p2-168-check/inline-race-red-warm.log`、`inline-race-green.log`、`inline-race-state-green.log`。
+- **未保留竞态回归的原因与保证**：现有公开测试入口不能控制票据返回后、取得 state 锁前的内部窗口；保留确定性用例需要把同步闸门留在产品路径。验证完成后已移除临时闸门和用例，没有留下靠 sleep 碰运气的回归。保证来自跨 await 持有同一个拥有所有权的 LSP 克隆、彻底移除两处运行时解包，以及上述两个窗口的受控验证和已有回归。临时用例与闸门文本保存在 `/tmp/canter-p2-168-check/inline-gate-test.txt`、`inline-gate.txt`，不进入提交。
+- **相关回归与检查**：前台运行 `cargo nextest run -p canter-core -p canter-server`，用过滤器仅选择 `folder_trust_lost_on_resume_detaches_running_lsp`、`untrusted_session_does_not_start_lsp_even_when_globally_enabled`、`disabled_lsp_requests_match_the_original_path_byte_for_byte`、`server_failure_does_not_turn_a_successful_file_change_into_failure`、`a_stopped_subscription_remains_stopped_on_reopen_and_can_be_retried`、`unversioned_empty_lists_do_not_claim_issues_are_resolved`，6 项全部通过（日志 `inline-related-tests.log`）。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过；使用指定独立 target，测试隔离 HOME / CANTER_HOME，未跑全套。
+- **踩过的坑**：第一版临时用例在假 LSP 启动完成前写文件，没有进入目标 `Ok` 窗口；加一轮预热并等待 Running 后才得到了上述有效复现，没有把启动等待失败算作目标缺陷证据。
+- **范围与待决事项**：最终仅修改 `inline()` 的句柄获取和两处使用，以及本记录。未改 worktree 文件读取建议、测试断言／超时、已有 ignore 或其它产品行为；未读改真实 `~/.canter`、未调用真实模型、未开其它 agent、未推送或合并。没有新的待主控决定事项。

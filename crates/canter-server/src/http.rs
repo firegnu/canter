@@ -118,8 +118,11 @@ impl App {
         &self,
         environment: std::collections::BTreeMap<String, String>,
         config: &canter_core::Configuration,
+        restricted_mode: bool,
     ) -> RuntimeContext {
         RuntimeContext {
+            restricted_mode,
+            lsp_file_access: Some(crate::trust::file_access(self.home.clone())),
             lsp: config.lsp.clone(),
             environment,
             mcp_tools: config.mcp_tools.clone(),
@@ -178,6 +181,7 @@ impl App {
 pub(crate) fn router(app: Arc<App>) -> Router {
     Router::new()
         .route(routes::INFO, get(info))
+        .route(routes::FOLDER_TRUST, get(folder_trust).post(trust_folder))
         .route(routes::MCP, get(mcp))
         .route(routes::COMMAND_RULES, get(command_rules))
         .route(routes::COMMAND_RULE_DELETE, post(delete_command_rule))
@@ -329,6 +333,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
         features: Some(vec![
+            "folderTrust".into(),
             "nonInteractiveInput".into(),
             "review".into(),
             "addDirectories".into(),
@@ -341,6 +346,48 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         protocol_version: PROTOCOL_VERSION,
         sessions,
     }))
+}
+
+async fn folder_trust(
+    State(app): State<Arc<App>>,
+    params: Result<Query<FolderTrustParams>, QueryRejection>,
+) -> Result<Json<FolderTrustResponse>, ApiError> {
+    let Query(params) = params.map_err(|_| ApiError::invalid())?;
+    folder_trust_operation(app.home.clone(), params.cwd, false)
+        .await
+        .map(Json)
+}
+
+async fn trust_folder(
+    State(app): State<Arc<App>>,
+    params: Result<Json<FolderTrustParams>, JsonRejection>,
+) -> Result<Json<FolderTrustResponse>, ApiError> {
+    let params = body(params)?;
+    folder_trust_operation(app.home.clone(), params.cwd, true)
+        .await
+        .map(Json)
+}
+
+async fn folder_trust_operation(
+    home: PathBuf,
+    cwd: String,
+    grant: bool,
+) -> Result<FolderTrustResponse, ApiError> {
+    tokio::task::spawn_blocking(move || {
+        if grant {
+            crate::trust::grant(&home, std::path::Path::new(&cwd))
+        } else {
+            crate::trust::query(&home, std::path::Path::new(&cwd))
+        }
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
+    .map_err(|error| {
+        ApiError::new(
+            ErrorCode::InvalidRequest,
+            &format!("Could not access folder trust: {error}"),
+        )
+    })
 }
 
 async fn command_rules(
@@ -637,7 +684,15 @@ async fn resume(
         }
         let existing = app.sessions.lock().await.get(&id).cloned();
         if let Some(session) = existing {
+            let cwd = session.snapshot().await.session.settings.cwd;
+            let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
+            session
+                .set_folder_trust(trust.trusted && !params.restricted_mode)
+                .await?;
             let response = session.snapshot().await;
+            if let Some(warning) = trust.warning {
+                session.opening_warning(warning).await?;
+            }
             return Ok(Json(SessionResumeResponse {
                 session: response.session,
                 event_seq: response.event_seq,
@@ -647,17 +702,35 @@ async fn resume(
         let mut sessions = app.sessions.lock().await;
         let response = if let Some(session) = sessions.get(&id).cloned() {
             drop(sessions);
-            session.snapshot().await
+            let cwd = session.snapshot().await.session.settings.cwd;
+            let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
+            session
+                .set_folder_trust(trust.trusted && !params.restricted_mode)
+                .await?;
+            let response = session.snapshot().await;
+            if let Some(warning) = trust.warning {
+                session.opening_warning(warning).await?;
+            }
+            response
         } else {
+            let cwd = app.disk_snapshot(&id).await?.session.settings.cwd;
+            let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
             let (session, response) = Session::open(
                 app.store.clone(),
                 id.clone(),
-                app.runtime(params.env, &config),
+                app.runtime(
+                    params.env,
+                    &config,
+                    !trust.trusted || params.restricted_mode,
+                ),
                 config.model.clone(),
                 config.options.clone(),
             )
             .await?;
             app.configure_session(&session, config.revision).await?;
+            if let Some(warning) = trust.warning {
+                session.opening_warning(warning).await?;
+            }
             sessions.insert(id, session);
             app.registry_changed.notify_waiters();
             response
@@ -691,6 +764,13 @@ async fn create(
             return Err(ApiError::invalid());
         }
         let config = app.configuration().await?;
+        if !std::path::Path::new(&params.cwd).is_dir() {
+            return Err(ApiError::new(
+                ErrorCode::InvalidRequest,
+                &format!("Directory does not exist: {}", params.cwd),
+            ));
+        }
+        let trust = folder_trust_operation(app.home.clone(), params.cwd.clone(), false).await?;
         let mut sessions = app.sessions.lock().await;
         let id = crate::new_id();
         let settings = SessionSettings {
@@ -700,6 +780,7 @@ async fn create(
             pre_plan_approval_policy: None,
             plan_enabled: None,
             sandbox_enabled: None,
+            restricted_mode: None,
             cwd: params.cwd,
             name: params.name,
             model: if params.model.is_empty() {
@@ -715,7 +796,11 @@ async fn create(
             app.store.clone(),
             id.clone(),
             settings,
-            app.runtime(params.env, &config),
+            app.runtime(
+                params.env,
+                &config,
+                !trust.trusted || params.restricted_mode,
+            ),
             config.model.clone(),
             config.options.clone(),
         )
@@ -741,6 +826,10 @@ async fn create(
                 session: snapshot.session,
                 event_seq: snapshot.event_seq,
             };
+        }
+        // Append after the returned cursor so the opening client sees the warning.
+        if let Some(warning) = trust.warning {
+            session.opening_warning(warning).await?;
         }
         Ok(Json(response))
     })

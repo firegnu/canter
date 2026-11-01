@@ -146,6 +146,7 @@ async fn pending_call(
             pre_plan_approval_policy: None,
             plan_enabled: None,
             sandbox_enabled: None,
+            restricted_mode: None,
             cwd: path.to_string_lossy().into(),
             model: "deepseek-flash".into(),
             name: None,

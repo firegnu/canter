@@ -537,6 +537,91 @@ impl State {
 }
 
 impl Session {
+    /// Record an opening warning before returning to a client that may immediately
+    /// start a turn. The caller retains the snapshot cursor from before this event.
+    pub async fn opening_warning(&self, message: String) -> Result<(), CoreError> {
+        self.shared
+            .state
+            .lock()
+            .await
+            .journal
+            .append(vec![EventPayload::Warning { message }])
+            .await?;
+        Ok(())
+    }
+
+    /// Recheck trust when resuming, including a failed lookup. Granting trust
+    /// never starts LSP by itself; the next file change drives startup.
+    pub async fn set_folder_trust(&self, trusted: bool) -> Result<(), CoreError> {
+        let mut state = self.shared.state.lock().await;
+        if self.shared.runtime().context.restricted_mode != trusted {
+            return Ok(());
+        }
+        let mut runtime = (*self.shared.runtime()).clone();
+        runtime.context.restricted_mode = !trusted;
+        if !trusted {
+            if let Some(lsp) = runtime.tools.lsp() {
+                lsp.close().await;
+            }
+            runtime.tools = runtime.tools.without_lsp();
+            state.lsp_delivery = Default::default();
+            let stopped = state
+                .journal
+                .snapshot
+                .language_servers
+                .iter()
+                .cloned()
+                .map(|mut server| {
+                    server.state = canter_protocol::LanguageServerState::Stopped;
+                    server.reason = Some("Folder is not trusted".into());
+                    server.shared_references = 0;
+                    server.rss_bytes = None;
+                    server.updated_at = crate::journal::now();
+                    EventPayload::LanguageServerUpdated { server }
+                })
+                .collect();
+            state.journal.append(stopped).await?;
+        } else if let Some(service) = &runtime.context.lsp {
+            runtime.tools = runtime.tools.with_lsp(
+                service.session_with_access(
+                    canter_tools::lsp::FileContext {
+                        cwd: state.journal.snapshot.settings.cwd.clone().into(),
+                        additional_directories: state
+                            .journal
+                            .snapshot
+                            .settings
+                            .additional_directories
+                            .iter()
+                            .map(Into::into)
+                            .collect(),
+                        environment: runtime.context.environment.clone(),
+                        round: if state.journal.snapshot.settings.plan_mode {
+                            canter_tools::lsp::Round::Plan
+                        } else if state
+                            .active
+                            .as_ref()
+                            .is_some_and(|active| active.turn.review.is_some())
+                        {
+                            canter_tools::lsp::Round::Review
+                        } else {
+                            canter_tools::lsp::Round::Modify
+                        },
+                    },
+                    runtime.context.protected_paths.clone(),
+                    runtime.context.lsp_file_access.clone(),
+                ),
+            );
+        }
+        let mut settings = state.journal.snapshot.settings.clone();
+        settings.restricted_mode = Some(!trusted);
+        state
+            .journal
+            .append(vec![EventPayload::SessionUpdated { settings }])
+            .await?;
+        *self.shared.runtime.write().unwrap() = Arc::new(runtime);
+        Ok(())
+    }
+
     pub async fn open(
         store: Arc<Store>,
         id: String,
@@ -656,10 +741,12 @@ impl Session {
         let sandbox_enabled = Some(tools.sandbox_enabled());
         if state.journal.snapshot.settings.plan_enabled != Some(options.plan_enabled)
             || state.journal.snapshot.settings.sandbox_enabled != sandbox_enabled
+            || state.journal.snapshot.settings.restricted_mode != Some(runtime.restricted_mode)
         {
             let mut settings = state.journal.snapshot.settings.clone();
             settings.plan_enabled = Some(options.plan_enabled);
             settings.sandbox_enabled = sandbox_enabled;
+            settings.restricted_mode = Some(runtime.restricted_mode);
             state
                 .journal
                 .append(vec![EventPayload::SessionUpdated { settings }])
@@ -785,6 +872,7 @@ impl Session {
         )
         .await?;
         settings.sandbox_enabled = Some(tools.sandbox_enabled());
+        settings.restricted_mode = Some(runtime.restricted_mode);
         settings.plan_enabled = Some(options.plan_enabled);
         let owned_store = store.clone();
         let writer = tokio::task::spawn_blocking(move || owned_store.create(&id, settings, now()))
@@ -1562,17 +1650,22 @@ async fn executor(
     options: &CoreOptions,
 ) -> Result<Tools, CoreError> {
     let options = options.clone();
-    let lsp = runtime.lsp.as_ref().map(|service| {
-        service.session(
-            canter_tools::lsp::FileContext {
-                cwd: cwd.clone().into(),
-                additional_directories: Vec::new(),
-                environment: runtime.environment.clone(),
-                round: canter_tools::lsp::Round::Modify,
-            },
-            runtime.protected_paths.clone(),
-        )
-    });
+    let lsp = runtime
+        .lsp
+        .as_ref()
+        .filter(|_| !runtime.restricted_mode)
+        .map(|service| {
+            service.session_with_access(
+                canter_tools::lsp::FileContext {
+                    cwd: cwd.clone().into(),
+                    additional_directories: Vec::new(),
+                    environment: runtime.environment.clone(),
+                    round: canter_tools::lsp::Round::Modify,
+                },
+                runtime.protected_paths.clone(),
+                runtime.lsp_file_access.clone(),
+            )
+        });
     tokio::task::spawn_blocking(move || {
         LocalExecutor::new(cwd.into(), runtime.environment, runtime.protected_paths)
             .map(|executor| {

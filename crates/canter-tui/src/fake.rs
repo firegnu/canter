@@ -146,6 +146,30 @@ impl FakeServer {
         shared.append(first);
 
         let app = Router::new()
+            .route(
+                routes::INFO,
+                get(|| async {
+                    axum::Json(canter_protocol::InfoResponse {
+                        features: Some(vec!["folderTrust".into()]),
+                        server_version: "fake".into(),
+                        protocol_version: 1,
+                        sessions: Vec::new(),
+                    })
+                }),
+            )
+            // Scripts run no project services. Keep replay fixtures trusted.
+            .route(
+                routes::FOLDER_TRUST,
+                get(
+                    |Query(params): Query<canter_protocol::FolderTrustParams>| async {
+                        axum::Json(canter_protocol::FolderTrustResponse {
+                            path: params.cwd,
+                            trusted: true,
+                            warning: None,
+                        })
+                    },
+                ),
+            )
             .route(routes::SESSION, get(read_session))
             // Nothing to open: resuming returns the snapshot, like reading it.
             .route(routes::RESUME, post(read_session))

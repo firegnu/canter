@@ -181,6 +181,7 @@ async fn create(
             pre_plan_approval_policy: None,
             plan_enabled: None,
             sandbox_enabled: None,
+            restricted_mode: None,
             cwd: root.path().to_string_lossy().into(),
             name: None,
             model: "fake".into(),

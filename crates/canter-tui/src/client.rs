@@ -46,6 +46,29 @@ pub struct Client {
 }
 
 impl Client {
+    pub async fn folder_trust(
+        &self,
+        cwd: &str,
+    ) -> Result<canter_protocol::FolderTrustResponse, ClientError> {
+        let mut endpoint = url(routes::FOLDER_TRUST, &[]);
+        endpoint.query_pairs_mut().append_pair("cwd", cwd);
+        decode(self.http.get(endpoint).send().await?).await
+    }
+
+    pub async fn trust_folder(
+        &self,
+        cwd: &str,
+    ) -> Result<canter_protocol::FolderTrustResponse, ClientError> {
+        decode(
+            self.http
+                .post(url(routes::FOLDER_TRUST, &[]))
+                .json(&canter_protocol::FolderTrustParams { cwd: cwd.into() })
+                .send()
+                .await?,
+        )
+        .await
+    }
+
     pub async fn goal(
         &self,
         session: &str,
@@ -388,7 +411,19 @@ impl Client {
         session: &str,
         env: &BTreeMap<String, String>,
     ) -> Result<SessionResumeResponse, ClientError> {
-        let params = SessionResumeParams { env: env.clone() };
+        self.resume_in_mode(session, env, false).await
+    }
+
+    pub async fn resume_in_mode(
+        &self,
+        session: &str,
+        env: &BTreeMap<String, String>,
+        restricted_mode: bool,
+    ) -> Result<SessionResumeResponse, ClientError> {
+        let params = SessionResumeParams {
+            env: env.clone(),
+            restricted_mode,
+        };
         let response = self
             .http
             .post(url(routes::RESUME, &[session]))

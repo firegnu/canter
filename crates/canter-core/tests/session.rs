@@ -1990,6 +1990,7 @@ fn settings(cwd: &std::path::Path) -> SessionSettings {
         pre_plan_approval_policy: None,
         plan_enabled: None,
         sandbox_enabled: None,
+        restricted_mode: None,
         cwd: cwd.to_string_lossy().into(),
         name: None,
         model: "fake".into(),

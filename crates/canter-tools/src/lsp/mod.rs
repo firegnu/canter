@@ -6,7 +6,9 @@ mod service;
 mod sync;
 mod transport;
 pub use service::{FileContext, Instance, LspService, Round};
-pub use sync::{ChangeTicket, DiagnosticBatch, DiagnosticSubscription, Freshness, LspSession};
+pub use sync::{
+    ChangeTicket, DiagnosticBatch, DiagnosticSubscription, FileAccess, Freshness, LspSession,
+};
 #[cfg(test)]
 mod test_support;
 

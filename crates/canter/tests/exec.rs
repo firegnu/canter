@@ -14,6 +14,84 @@ use tokio::{
 
 const WAIT: Duration = Duration::from_secs(20);
 
+#[tokio::test]
+async fn exec_corrupt_folder_trust_warns_on_create_and_resume_without_exiting() {
+    let world = World::new(vec![reply("First."), reply("Resumed.")], true).await;
+    let path = world.root.path().join("state/trusted_folders.json");
+    fs::write(&path, "[\"/tmp/a\", ]").unwrap();
+    let first = world.cli(&["exec", "hello"], "").await;
+    let session = world
+        .client()
+        .await
+        .list_sessions()
+        .await
+        .unwrap()
+        .remove(0);
+    let resumed = world
+        .cli(&["exec", "--resume", &session.id, "again"], "")
+        .await;
+    for output in [&first, &resumed] {
+        assert!(output.status.success(), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Restricted mode: LSP is disabled."),
+            "{stderr}"
+        );
+        assert!(stderr.contains(path.to_str().unwrap()), "{stderr}");
+        assert!(stderr.contains("trailing comma"), "{stderr}");
+    }
+    world.stop().await;
+}
+
+#[tokio::test]
+async fn exec_untrusted_folder_is_restricted_without_waiting_and_reports_it_on_stderr() {
+    let world = World::new(
+        vec![reply("Restricted answer."), reply("Trusted answer.")],
+        true,
+    )
+    .await;
+    let output = world.cli(&["exec", "hello"], "").await;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Restricted answer.\n"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let client = world.client().await;
+    let session = client.list_sessions().await.unwrap().remove(0);
+    assert_eq!(
+        client
+            .read_session(&session.id)
+            .await
+            .unwrap()
+            .session
+            .settings
+            .restricted_mode,
+        Some(true)
+    );
+    assert!(
+        !world
+            .root
+            .path()
+            .join("state/trusted_folders.json")
+            .exists()
+    );
+    client
+        .trust_folder(world.root.path().join("project").to_str().unwrap())
+        .await
+        .unwrap();
+    let trusted = world
+        .cli(&["exec", "--resume", &session.id, "again"], "")
+        .await;
+    assert!(trusted.status.success(), "{trusted:?}");
+    assert!(!String::from_utf8_lossy(&trusted.stderr).contains("Restricted mode"));
+    world.stop().await;
+    assert!(
+        stderr.contains("Restricted mode: LSP is disabled."),
+        "{stderr}"
+    );
+}
+
 fn reply(text: &str) -> Value {
     json!({"choices":[{"index":0,"delta":{"content":text},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}})
 }
