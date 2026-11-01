@@ -17,6 +17,7 @@ pub(crate) struct Scope {
 }
 
 pub(crate) struct Sandbox {
+    memory: Option<std::sync::Arc<crate::memory::Memory>>,
     scratch: std::sync::Arc<crate::ScratchDirectory>,
     cargo: PathBuf,
     npm: PathBuf,
@@ -32,6 +33,7 @@ impl Sandbox {
         environment: &BTreeMap<String, String>,
         protected: &[PathBuf],
         scratch: std::sync::Arc<crate::ScratchDirectory>,
+        memory: Option<std::sync::Arc<crate::memory::Memory>>,
     ) -> io::Result<Self> {
         if !cfg!(target_os = "macos") {
             return Err(io::Error::other("Seatbelt requires macOS"));
@@ -79,6 +81,7 @@ impl Sandbox {
             crate::executor::resolve_target(&path, &protected)?;
         }
         Ok(Self {
+            memory,
             scratch,
             cargo: cargo.canonicalize()?,
             npm: npm.canonicalize()?,
@@ -93,12 +96,21 @@ impl Sandbox {
     /// may write, then the read-only and the unreadable paths.
     pub(crate) fn listing(&self) -> (Vec<PathBuf>, &[PathBuf], &[PathBuf]) {
         let mut writable: Vec<PathBuf> = self.scratch.path().into_iter().collect();
+        if let Some(roots) = self.memory_roots() {
+            writable.extend([roots.global, roots.project]);
+        }
         writable.extend([self.cargo.clone(), self.npm.clone()]);
         (writable, &self.listed_readonly, &self.listed_unreadable)
     }
 
     pub(crate) fn unreadable_paths(&self) -> &[PathBuf] {
         &self.unreadable
+    }
+
+    pub(crate) fn memory_roots(&self) -> Option<crate::memory::MemoryRoots> {
+        self.memory
+            .as_ref()
+            .and_then(|memory| memory.roots().ok().flatten())
     }
 
     pub(crate) fn readonly_paths(&self) -> &[PathBuf] {
@@ -176,6 +188,7 @@ impl Sandbox {
         git_directories.sort();
         git_directories.dedup();
         let mut parameters = Parameters::default();
+        let memory = self.memory_roots();
         let mut profile = String::from(
             "(version 1)\n(deny default)\n(deny file-link)\n\
          (allow process-exec process-fork)\n\
@@ -207,6 +220,15 @@ impl Sandbox {
                 "(allow file-write* (subpath {}))\n",
                 parameters.path(path)?
             ));
+        }
+        if let Some(memory) = &memory {
+            for path in [&memory.global, &memory.project] {
+                profile.push_str(&format!(
+                    "(allow file-read* file-write* (subpath {}))\n",
+                    parameters.path(path)?
+                ));
+                protect_ancestors(&mut profile, &mut parameters, path)?;
+            }
         }
         let protected_names = ["config", "config.worktree", "hooks", "commondir", "gitdir"]
             .map(case_insensitive_name)
@@ -287,9 +309,15 @@ impl Sandbox {
         for path in &self.unreadable {
             let parameter = parameters.path(path)?;
             let insensitive = parameters.case_insensitive_subpath(path)?;
-            profile.push_str(&format!(
-                "(deny file-read* file-write* (subpath {parameter}) {insensitive})\n"
-            ));
+            if let Some(memory) = memory.as_ref().filter(|memory| path == &memory.home) {
+                let global = parameters.path(&memory.global)?;
+                let project = parameters.path(&memory.project)?;
+                profile.push_str(&format!("(deny file-read* file-write* (require-all (require-any (subpath {parameter}) {insensitive}) (require-not (subpath {global})) (require-not (subpath {project}))))\n"));
+            } else {
+                profile.push_str(&format!(
+                    "(deny file-read* file-write* (subpath {parameter}) {insensitive})\n"
+                ));
+            }
             profile.push_str(&format!(
                 "(deny network-outbound (remote unix-socket (subpath {parameter})) (remote unix-socket {insensitive}))\n"
             ));
@@ -443,7 +471,7 @@ fn git_protected_paths(directory: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(protected)
 }
 
-fn git_metadata(root: &Path) -> io::Result<Vec<PathBuf>> {
+pub(crate) fn git_metadata(root: &Path) -> io::Result<Vec<PathBuf>> {
     let root = root.canonicalize()?;
     for ancestor in root.ancestors() {
         let dot_git = ancestor.join(".git");

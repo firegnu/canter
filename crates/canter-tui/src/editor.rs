@@ -92,9 +92,20 @@ pub(crate) async fn edit(
         .open(&path)
         .and_then(|mut file| file.write_all(draft.as_bytes()))
         .map_err(|error| format!("Could not create the temporary file: {error}"))?;
+    open(program, args, &path).await?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("Could not read the edited message: {error}"))?;
+    let line_end = text
+        .strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix('\n'));
+    Ok(line_end.unwrap_or(&text).to_owned())
+}
+
+/// Hand an existing file to the editor without reading or rewriting it in the TUI.
+pub(crate) async fn open(program: &str, args: &[String], path: &Path) -> Result<(), String> {
     let mut editor = tokio::process::Command::new(program)
         .args(args)
-        .arg(&path)
+        .arg(path)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -112,12 +123,7 @@ pub(crate) async fn edit(
             None => format!("Editor stopped ({status})"),
         });
     }
-    let text = std::fs::read_to_string(&path)
-        .map_err(|error| format!("Could not read the edited message: {error}"))?;
-    let line_end = text
-        .strip_suffix("\r\n")
-        .or_else(|| text.strip_suffix('\n'));
-    Ok(line_end.unwrap_or(&text).to_owned())
+    Ok(())
 }
 
 /// Ctrl+C and Ctrl+\ typed while the editor has the terminal are for the

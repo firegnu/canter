@@ -14,6 +14,9 @@ use tokio_util::sync::CancellationToken;
 #[path = "support/telemetry.rs"]
 mod telemetry;
 
+#[path = "support/memory.rs"]
+mod memory;
+
 struct ScriptModel {
     scripts: Mutex<VecDeque<Vec<ModelEvent>>>,
     requests: Mutex<Vec<Request>>,

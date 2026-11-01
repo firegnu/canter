@@ -46,6 +46,50 @@ pub struct Client {
 }
 
 impl Client {
+    pub async fn memories(
+        &self,
+        session: &str,
+    ) -> Result<canter_protocol::MemoryListResponse, ClientError> {
+        if !self
+            .info()
+            .await?
+            .features
+            .unwrap_or_default()
+            .iter()
+            .any(|feature| feature == "memory")
+        {
+            return Err(ClientError::Protocol(
+                "This server does not support /memory; run canter serve --replace and retry".into(),
+            ));
+        }
+        decode(
+            self.http
+                .get(url(routes::MEMORIES, &[session]))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn delete_memory(
+        &self,
+        session: &str,
+        params: &canter_protocol::MemoryDeleteParams,
+    ) -> Result<(), ClientError> {
+        let response = self
+            .http
+            .post(url(routes::MEMORY_DELETE, &[session]))
+            .json(params)
+            .send()
+            .await?;
+        let status = response.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(server_error(status, &response.bytes().await?))
+        }
+    }
+
     pub async fn folder_trust(
         &self,
         cwd: &str,

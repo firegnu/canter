@@ -28,6 +28,8 @@ pub struct GoalResponse {
 }
 
 pub mod routes {
+    pub const MEMORIES: &str = "/v1/sessions/{id}/memories";
+    pub const MEMORY_DELETE: &str = "/v1/sessions/{id}/memories/delete";
     pub const INFO: &str = "/v1/info";
     pub const RUNNING_TURNS: &str = "/v1/runningTurns";
     pub const FOLDER_TRUST: &str = "/v1/folderTrust";

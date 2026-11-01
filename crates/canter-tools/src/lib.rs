@@ -8,6 +8,7 @@ mod process;
 pub use output::MAX_CLIENT_OUTPUT_BYTES;
 mod background;
 mod dangerous;
+pub mod memory;
 mod permission;
 mod readonly;
 pub mod rules;
@@ -669,6 +670,10 @@ impl Tools {
 
     pub fn scratch_directory(&self) -> Option<Arc<ScratchDirectory>> {
         self.executor.scratch_directory()
+    }
+
+    pub fn memory(&self) -> Option<Arc<memory::Memory>> {
+        self.executor.memory()
     }
 
     pub fn sandbox_scope(&self) -> canter_protocol::SessionSandboxResponse {

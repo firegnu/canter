@@ -53,6 +53,8 @@ input 为空，没有 userMessage，clientName 为 background。每批可以有�
 | 方法和路径常量 | Params | Response |
 | --- | --- | --- |
 | GET INFO | InfoParams | InfoResponse |
+| GET MEMORIES | 会话 ID | MemoryListResponse |
+| POST MEMORY_DELETE | MemoryDeleteParams | HTTP 204 |
 | GET MODELS | ModelListParams | ModelListResponse |
 | GET COMMAND_RULES | 无参数 | CommandRuleListResponse |
 | POST COMMAND_RULE_DELETE | CommandRule | CommandRuleDeleteResponse |

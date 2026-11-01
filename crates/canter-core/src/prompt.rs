@@ -18,6 +18,8 @@ pub(crate) enum SegmentKind {
     ProjectInstructions,
     Environment,
     McpCatalog,
+    MemoryInstructions,
+    MemoryIndex,
     #[serde(other)]
     Unknown,
 }
@@ -29,7 +31,7 @@ pub(crate) enum Stability {
 }
 
 // Stability belongs to the kind; it is never duplicated in stored segments.
-pub(crate) const SEGMENT_ORDER: [(SegmentKind, Stability); 7] = [
+pub(crate) const SEGMENT_ORDER: [(SegmentKind, Stability); 9] = [
     (SegmentKind::Core, Stability::AcrossSessions),
     (SegmentKind::ModelFamily, Stability::AcrossSessions),
     (SegmentKind::GlobalInstructions, Stability::AcrossSessions),
@@ -37,6 +39,8 @@ pub(crate) const SEGMENT_ORDER: [(SegmentKind, Stability); 7] = [
     (SegmentKind::ProjectInstructions, Stability::Session),
     (SegmentKind::Environment, Stability::Session),
     (SegmentKind::McpCatalog, Stability::Session),
+    (SegmentKind::MemoryInstructions, Stability::Session),
+    (SegmentKind::MemoryIndex, Stability::Session),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,6 +240,10 @@ pub(crate) fn chat_completions(segments: &[Segment]) -> (Vec<Message>, Vec<Conte
             ),
             SegmentKind::Environment => (ContextSectionKind::Environment, Some("environment")),
             SegmentKind::McpCatalog => (ContextSectionKind::System, Some("mcp_tools")),
+            SegmentKind::MemoryInstructions => {
+                (ContextSectionKind::Memory, Some("memory_instructions"))
+            }
+            SegmentKind::MemoryIndex => (ContextSectionKind::Memory, Some("memory_index")),
             SegmentKind::Unknown => continue,
         };
         if !text.is_empty() {

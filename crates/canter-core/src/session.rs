@@ -239,10 +239,23 @@ impl State {
                 text: catalog,
             });
         }
+        if !fresh_fork {
+            segments.extend(crate::memory::segments(tools).await);
+        }
         let (prefix, sections) = crate::prompt::chat_completions(&segments);
         self.skills = skills;
         self.prefix_sections = sections;
         if fresh_fork {
+            if tools
+                .memory()
+                .is_none_or(|memory| memory.roots().ok().flatten().is_none())
+            {
+                let mut saved = self.prefix_segments.clone().unwrap_or_default();
+                if saved.iter().any(crate::memory::is_memory) {
+                    saved.retain(|segment| !crate::memory::is_memory(segment));
+                    self.set_memory_prefix(saved).await?;
+                }
+            }
             if let Some(saved) = &self.prefix_segments {
                 self.prefix_sections = crate::prompt::chat_completions(saved).1;
             }
@@ -568,6 +581,15 @@ impl Session {
         Ok(())
     }
 
+    async fn memory_warning(&self) -> Result<(), CoreError> {
+        if let Some(memory) = self.shared.runtime().tools.memory()
+            && let Some(warning) = memory.take_warning()
+        {
+            self.opening_warning(warning).await?;
+        }
+        Ok(())
+    }
+
     /// Record an opening warning before returning to a client that may immediately
     /// start a turn. The caller retains the snapshot cursor from before this event.
     pub async fn opening_warning(&self, message: String) -> Result<(), CoreError> {
@@ -595,71 +617,118 @@ impl Session {
     /// Recheck trust when resuming, including a failed lookup. Granting trust
     /// never starts LSP by itself; the next file change drives startup.
     pub async fn set_folder_trust(&self, trusted: bool) -> Result<(), CoreError> {
+        let session = self.clone();
+        owned(async move { session.set_folder_trust_inner(trusted).await }).await
+    }
+
+    async fn set_folder_trust_inner(&self, trusted: bool) -> Result<(), CoreError> {
         let mut state = self.shared.state.lock().await;
         if self.shared.runtime().context.restricted_mode != trusted {
             return Ok(());
         }
         let mut runtime = (*self.shared.runtime()).clone();
         runtime.context.restricted_mode = !trusted;
-        if !trusted {
-            if let Some(lsp) = runtime.tools.lsp() {
-                lsp.close().await;
-            }
-            runtime.tools = runtime.tools.without_lsp();
-            state.lsp_delivery = Default::default();
-            let stopped = state
-                .journal
-                .snapshot
-                .language_servers
-                .iter()
-                .cloned()
-                .map(|mut server| {
-                    server.state = canter_protocol::LanguageServerState::Stopped;
-                    server.reason = Some("Folder is not trusted".into());
-                    server.shared_references = 0;
-                    server.rss_bytes = None;
-                    server.updated_at = crate::journal::now();
-                    EventPayload::LanguageServerUpdated { server }
+        let memory = runtime.tools.memory();
+        let update = async {
+            if let Some(memory) = &memory {
+                let opening = memory.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(error) = opening.set_enabled(trusted) {
+                        opening.disable_with_warning(error.to_string());
+                    }
                 })
-                .collect();
-            state.journal.append(stopped).await?;
-        } else if let Some(service) = &runtime.context.lsp {
-            runtime.tools = runtime.tools.with_lsp(
-                service.session_with_access(
-                    canter_tools::lsp::FileContext {
-                        cwd: state.journal.snapshot.settings.cwd.clone().into(),
-                        additional_directories: state
-                            .journal
-                            .snapshot
-                            .settings
-                            .additional_directories
-                            .iter()
-                            .map(Into::into)
-                            .collect(),
-                        environment: runtime.context.environment.clone(),
-                        round: if state.journal.snapshot.settings.plan_mode {
-                            canter_tools::lsp::Round::Plan
-                        } else if state
-                            .active
-                            .as_ref()
-                            .is_some_and(|active| active.turn.review.is_some())
-                        {
-                            canter_tools::lsp::Round::Review
-                        } else {
-                            canter_tools::lsp::Round::Modify
+                .await
+                .map_err(|_| CoreError::internal())?;
+                state.refresh_memory(&runtime.tools).await?;
+                if let Some(message) = memory.take_warning() {
+                    state
+                        .journal
+                        .append(vec![EventPayload::Warning { message }])
+                        .await?;
+                }
+            }
+            if !trusted {
+                if let Some(lsp) = runtime.tools.lsp() {
+                    lsp.close().await;
+                }
+                runtime.tools = runtime.tools.without_lsp();
+                state.lsp_delivery = Default::default();
+                let stopped = state
+                    .journal
+                    .snapshot
+                    .language_servers
+                    .iter()
+                    .cloned()
+                    .map(|mut server| {
+                        server.state = canter_protocol::LanguageServerState::Stopped;
+                        server.reason = Some("Folder is not trusted".into());
+                        server.shared_references = 0;
+                        server.rss_bytes = None;
+                        server.updated_at = crate::journal::now();
+                        EventPayload::LanguageServerUpdated { server }
+                    })
+                    .collect();
+                state.journal.append(stopped).await?;
+            } else if let Some(service) = &runtime.context.lsp {
+                runtime.tools = runtime.tools.with_lsp(
+                    service.session_with_access(
+                        canter_tools::lsp::FileContext {
+                            cwd: state.journal.snapshot.settings.cwd.clone().into(),
+                            additional_directories: state
+                                .journal
+                                .snapshot
+                                .settings
+                                .additional_directories
+                                .iter()
+                                .map(Into::into)
+                                .collect(),
+                            environment: runtime.context.environment.clone(),
+                            round: if state.journal.snapshot.settings.plan_mode {
+                                canter_tools::lsp::Round::Plan
+                            } else if state
+                                .active
+                                .as_ref()
+                                .is_some_and(|active| active.turn.review.is_some())
+                            {
+                                canter_tools::lsp::Round::Review
+                            } else {
+                                canter_tools::lsp::Round::Modify
+                            },
                         },
-                    },
-                    runtime.context.protected_paths.clone(),
-                    runtime.context.lsp_file_access.clone(),
-                ),
-            );
+                        runtime.context.protected_paths.clone(),
+                        runtime.context.lsp_file_access.clone(),
+                    ),
+                );
+            }
+            let mut settings = state.journal.snapshot.settings.clone();
+            settings.restricted_mode = Some(!trusted);
+            state
+                .journal
+                .append(vec![EventPayload::SessionUpdated { settings }])
+                .await?;
+            Ok::<_, CoreError>(runtime)
         }
-        let mut settings = state.journal.snapshot.settings.clone();
-        settings.restricted_mode = Some(!trusted);
-        state
-            .journal
-            .append(vec![EventPayload::SessionUpdated { settings }])
-            .await?;
+        .await;
+        let runtime = match update {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                if let Some(memory) = memory {
+                    memory
+                        .set_enabled(false)
+                        .expect("disabling memory does not access the filesystem");
+                    // The journal may no longer accept a corrective record. Remove memory
+                    // from the live prefix; a later open regenerates its persisted prefix.
+                    if let Some(segments) = state.prefix_segments.as_mut() {
+                        segments.retain(|segment| !crate::memory::is_memory(segment));
+                        let (prefix, sections) = crate::prompt::chat_completions(segments);
+                        state.prefix = prefix;
+                        state.prefix_sections = sections;
+                        state.measured_context = None;
+                    }
+                }
+                return Err(error);
+            }
+        };
         *self.shared.runtime.write().unwrap() = Arc::new(runtime);
         Ok(())
     }
@@ -892,6 +961,7 @@ impl Session {
         let session = Self::from_state(state, tools, model, options, runtime);
         // Keep this warning after the opening client's snapshot cursor.
         session.scratch_warning().await?;
+        session.memory_warning().await?;
         session
             .session_start_hook(if fresh_fork { "startup" } else { "resume" })
             .await;
@@ -973,6 +1043,7 @@ impl Session {
         };
         let session = Self::from_state(state, tools, model, options, runtime);
         session.scratch_warning().await?;
+        session.memory_warning().await?;
         session.session_start_hook("startup").await;
         Ok((session, response))
     }
@@ -1851,6 +1922,13 @@ async fn executor(
             )
         });
     tokio::task::spawn_blocking(move || {
+        let memory = runtime.memory_home.map(|home| {
+            let memory = Arc::new(canter_tools::memory::Memory::new(home, cwd.clone().into()));
+            if let Err(error) = memory.set_enabled(!runtime.restricted_mode) {
+                memory.disable_with_warning(error.to_string());
+            }
+            memory
+        });
         let scratch = Arc::new(canter_tools::ScratchDirectory::for_session(
             &session_directory,
         ));
@@ -1861,13 +1939,15 @@ async fn executor(
             scratch,
         )
         .map(|executor| {
-            let tools = Tools::new(Arc::new(executor.with_sandbox(options.sandbox)))
-                .with_telemetry(options.telemetry)
-                .with_plan_enabled(options.plan_enabled)
-                .with_web_search(options.web_search)
-                .with_mcp(runtime.mcp_tools)
-                .with_mcp_tool_search(options.mcp_tool_search)
-                .with_web_fetch_timeout(options.web_fetch_timeout);
+            let tools = Tools::new(Arc::new(
+                executor.with_memory(memory).with_sandbox(options.sandbox),
+            ))
+            .with_telemetry(options.telemetry)
+            .with_plan_enabled(options.plan_enabled)
+            .with_web_search(options.web_search)
+            .with_mcp(runtime.mcp_tools)
+            .with_mcp_tool_search(options.mcp_tool_search)
+            .with_web_fetch_timeout(options.web_fetch_timeout);
             match lsp {
                 Some(lsp) => tools.with_lsp(lsp),
                 None => tools,

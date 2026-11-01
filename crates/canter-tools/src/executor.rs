@@ -42,6 +42,9 @@ pub trait Executor: Send + Sync {
     fn scratch_directory(&self) -> Option<Arc<crate::ScratchDirectory>> {
         None
     }
+    fn memory(&self) -> Option<Arc<crate::memory::Memory>> {
+        None
+    }
     fn normalize_sandbox_request(
         &self,
         _request: &mut canter_protocol::SandboxRequest,
@@ -127,9 +130,14 @@ pub struct LocalExecutor {
     sandbox: Option<Arc<Mutex<Result<crate::sandbox::Sandbox, String>>>>,
     shell_scope: RwLock<crate::sandbox::Scope>,
     scratch: Arc<crate::ScratchDirectory>,
+    memory: Option<Arc<crate::memory::Memory>>,
 }
 
 impl LocalExecutor {
+    pub fn with_memory(mut self, memory: Option<Arc<crate::memory::Memory>>) -> Self {
+        self.memory = memory;
+        self
+    }
     pub fn with_sandbox(mut self, enabled: bool) -> Self {
         self.sandbox = enabled.then(|| {
             Arc::new(Mutex::new(
@@ -137,6 +145,7 @@ impl LocalExecutor {
                     &self.environment,
                     &self.shell_protected_paths,
                     self.scratch.clone(),
+                    self.memory.clone(),
                 )
                 .map_err(|error| error.to_string()),
             ))
@@ -187,6 +196,7 @@ impl LocalExecutor {
             sandbox: None,
             shell_scope: RwLock::default(),
             scratch,
+            memory: None,
         })
     }
 
@@ -289,6 +299,9 @@ impl Executor for LocalExecutor {
 
     fn scratch_directory(&self) -> Option<Arc<crate::ScratchDirectory>> {
         Some(self.scratch.clone())
+    }
+    fn memory(&self) -> Option<Arc<crate::memory::Memory>> {
+        self.memory.clone()
     }
 
     fn normalize_sandbox_request(
@@ -400,9 +413,12 @@ impl Executor for LocalExecutor {
         let path = self.resolve(path);
         let protected_paths = self.protected_paths.clone();
         let sandbox = self.sandbox.clone();
+        let memory = self.memory.clone();
         let resolved = tokio::task::spawn_blocking(move || {
-            let resolved = resolve_target(&path, &protected_paths)?;
-            check_protected(&resolved, &protected_paths)?;
+            let roots = memory
+                .as_ref()
+                .and_then(|memory| memory.roots().ok().flatten());
+            let resolved = resolve_with_memory(&path, &protected_paths, roots.as_ref())?;
             if let Some(sandbox) = sandbox {
                 return resolve_sandbox_read(
                     sandbox
@@ -482,12 +498,15 @@ impl Executor for LocalExecutor {
         let cwd = self.cwd.clone();
         let scope = self.shell_scope.read().unwrap().clone();
         // Do not select away from this worker: it must finish before the caller observes completion.
+        let memory = self.memory.clone();
         tokio::task::spawn_blocking(move || {
             use std::io::Write;
             use std::os::unix::fs::PermissionsExt;
             check_cancel(&cancel)?;
-            let path = resolve_target(&path, &protected_paths)?;
-            check_protected(&path, &protected_paths)?;
+            let roots = memory
+                .as_ref()
+                .and_then(|memory| memory.roots().ok().flatten());
+            let path = resolve_with_memory(&path, &protected_paths, roots.as_ref())?;
             let path = if let Some(sandbox) = sandbox {
                 resolve_sandbox_write(
                     sandbox
@@ -528,7 +547,13 @@ impl Executor for LocalExecutor {
                 .ok_or_else(|| io::Error::other("file has no parent"))?;
             std::fs::create_dir_all(parent)?;
             let mut temp = tempfile::Builder::new()
-                .permissions(std::fs::Permissions::from_mode(0o666))
+                .permissions(std::fs::Permissions::from_mode(
+                    if roots.as_ref().is_some_and(|roots| roots.contains(&path)) {
+                        0o600
+                    } else {
+                        0o666
+                    },
+                ))
                 .tempfile_in(parent)?;
             if let Ok(metadata) = std::fs::metadata(&path) {
                 temp.as_file().set_permissions(metadata.permissions())?;
@@ -575,11 +600,17 @@ impl Executor for LocalExecutor {
 
 fn resolve_sandbox_read(sandbox: &crate::sandbox::Sandbox, path: &Path) -> io::Result<PathBuf> {
     let unreadable = prepare_protected_paths(sandbox.unreadable_paths().to_vec())?;
-    let check = |path: &Path| {
-        if unreadable
-            .iter()
-            .any(|protected| crate::sandbox::within_private(path, protected))
-        {
+    let roots = sandbox.memory_roots();
+    let check = |path: &Path, ancestors: bool| {
+        if let Some(roots) = &roots {
+            roots.check_component(path)?;
+        }
+        if unreadable.iter().any(|protected| {
+            crate::sandbox::within_private(path, protected)
+                && !roots
+                    .as_ref()
+                    .is_some_and(|roots| roots.excepts(protected, path, ancestors))
+        }) {
             Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "This path is protected by the sandbox: credential directories such as ~/.ssh can't be read or changed. If the user really needs it, they can do it themselves.",
@@ -588,8 +619,35 @@ fn resolve_sandbox_read(sandbox: &crate::sandbox::Sandbox, path: &Path) -> io::R
             Ok(())
         }
     };
-    let resolved = resolve_target_checked(path, check)?;
-    check(&resolved)?;
+    let resolved = resolve_target_checked(path, |path| check(path, true))?;
+    check(&resolved, false)?;
+    Ok(resolved)
+}
+
+fn resolve_with_memory(
+    path: &Path,
+    protected: &[PathBuf],
+    roots: Option<&crate::memory::MemoryRoots>,
+) -> io::Result<PathBuf> {
+    let Some(roots) = roots else {
+        let resolved = resolve_target(path, protected)?;
+        check_protected(&resolved, protected)?;
+        return Ok(resolved);
+    };
+    let check = |path: &Path, ancestors: bool| {
+        roots.check_component(path)?;
+        for protected in protected {
+            if path.starts_with(protected) && !roots.excepts(protected, path, ancestors) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "this file is private to canter",
+                ));
+            }
+        }
+        Ok(())
+    };
+    let resolved = resolve_target_checked(path, |path| check(path, true))?;
+    check(&resolved, false)?;
     Ok(resolved)
 }
 

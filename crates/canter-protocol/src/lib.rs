@@ -9,6 +9,8 @@ mod telemetry;
 pub use stats::*;
 pub use telemetry::*;
 mod lsp;
+mod memory;
+pub use memory::*;
 mod types;
 pub use lsp::*;
 

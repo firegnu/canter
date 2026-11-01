@@ -61,6 +61,9 @@ Options:
   --yolo               use permission mode Allow all (never ask); commands still run in the sandbox
   -V, --version        show the version and commit
   -h, --help           show this help
+
+In a session:
+  /memory             view, edit, and delete global and project memories
 ";
 
 #[derive(Debug, PartialEq, Eq)]

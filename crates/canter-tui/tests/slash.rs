@@ -17,6 +17,19 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 #[test]
+fn memory_is_listed_and_takes_no_arguments() {
+    let mut screen = Screen::new();
+    screen.type_text("/memory");
+    screen.draw();
+    assert!(screen.text().contains("View, edit, and delete memories"));
+    assert!(screen.key(KeyCode::Enter).is_some());
+    let mut screen = Screen::new();
+    assert_eq!(screen.enter("/memory extra"), None);
+    screen.draw();
+    assert!(screen.text().contains("/memory takes no arguments"));
+}
+
+#[test]
 fn permissions_is_listed_and_takes_no_arguments() {
     let mut screen = Screen::new();
     screen.type_text("/permissions");
@@ -370,7 +383,7 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 34] = [
+const COMMANDS: [(&str, &str); 35] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
@@ -382,6 +395,7 @@ const COMMANDS: [(&str, &str); 34] = [
     ("/init", "Create or improve AGENTS.md for this project"),
     ("/lsp", "Show language servers"),
     ("/mcp", "Show MCP connections and tools"),
+    ("/memory", "View, edit, and delete memories"),
     ("/mode", "Change the permission mode"),
     ("/model", "Change the model"),
     ("/new", "Start a new session"),
@@ -901,7 +915,7 @@ fn usage_displays_models_total_last_turn_and_unknown_costs() {
 #[test]
 fn help_shows_the_commands_in_a_box() {
     // The shortcut sections come first: tall enough for the whole box.
-    let mut screen = Screen::sized(WIDTH, 105);
+    let mut screen = Screen::sized(WIDTH, 106);
     assert_eq!(screen.enter("/help"), None);
     screen.draw();
     let shown = screen.text();

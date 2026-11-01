@@ -104,6 +104,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::Mcp)),
     },
     Command {
+        name: "memory",
+        about: "View, edit, and delete memories",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::Memory)),
+    },
+    Command {
         name: "mode",
         about: "Change the permission mode",
         takes_args: true,
