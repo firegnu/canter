@@ -4005,6 +4005,46 @@
       ],
       "type": "object"
     },
+    "RunningTurn": {
+      "properties": {
+        "activity": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "turnId",
+        "activity"
+      ],
+      "type": "object"
+    },
+    "RunningTurnsResponse": {
+      "description": "GET /v1/runningTurns. Live in-memory turns only, including pending requests.",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/RunningTurn"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
     "SandboxRequest": {
       "additionalProperties": false,
       "description": "Extra scope for one model command; it never disables the sandbox.",

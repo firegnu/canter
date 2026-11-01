@@ -112,6 +112,71 @@ impl Drop for Daemon {
 }
 
 #[tokio::test]
+async fn replace_waits_while_old_server_has_stopped_accepting_but_still_holds_lock() {
+    use tokio::io::AsyncWriteExt;
+
+    if isolated("replace_waits_while_old_server_has_stopped_accepting_but_still_holds_lock").await {
+        return;
+    }
+    configure();
+    let binary = std::path::Path::new(env!("CARGO_BIN_EXE_canter"));
+    let initial = ensure_server(&home(), binary).await.unwrap();
+    let previous = Daemon::new(&initial);
+    let mut stalled = tokio::net::UnixStream::connect(&initial.registration.socket_path)
+        .await
+        .unwrap();
+    stalled.write_all(b"POST /v1/sessions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{")
+        .await.unwrap();
+    // An ordinary request confirms the daemon is serving before replacement.
+    initial
+        .client
+        .get("http://localhost/v1/info")
+        .send()
+        .await
+        .unwrap();
+    let started = tokio::time::Instant::now();
+    let output = tokio::time::timeout(
+        Duration::from_secs(20),
+        Command::new(binary)
+            .args(["serve", "--replace"])
+            .env_clear()
+            .env("CANTER_HOME", home())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "connection refusal during HTTP shutdown must not kill the successor: {output:?}"
+    );
+    let replacement = canter_server::discover(&home()).await.unwrap().unwrap();
+    let daemon = Daemon::new(&replacement);
+    assert_ne!(
+        initial.registration.instance,
+        replacement.registration.instance
+    );
+    assert!(
+        started.elapsed() >= Duration::from_secs(5),
+        "the stalled HTTP body must exercise shutdown with the lock still held"
+    );
+    assert!(
+        replacement
+            .client
+            .get("http://localhost/v1/info")
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    drop(stalled);
+    std::mem::forget(previous);
+    daemon.stop().await;
+}
+
+#[tokio::test]
 async fn replace_detaches_a_ready_server_with_and_without_an_existing_server() {
     if isolated("replace_detaches_a_ready_server_with_and_without_an_existing_server").await {
         return;

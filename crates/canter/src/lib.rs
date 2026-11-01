@@ -9,8 +9,10 @@ use canter_protocol::{PermissionMode, SessionUpdateParams};
 use canter_tui::client::Client;
 use canter_tui::{CLIENT_NAME, Connected, Connector, Launch, Open};
 
+pub mod deployment;
 pub mod exec;
 pub mod mcp;
+pub mod service;
 pub mod stats;
 
 #[cfg(test)]
@@ -30,6 +32,11 @@ Usage:
                               resume the latest session in the current directory
   canter serve               run the server in the foreground
   canter serve --replace     replace it in the background and exit when ready
+  canter service install     start once at login; save this terminal's PATH
+  canter service uninstall   remove login startup; keep the running server
+  canter upgrade [directory] [--now]  build, back up, install and replace the server
+  canter rollback [--now]    restore the latest backup and replace the server
+                              waits for running turns; --now waits at most 60s
   canter usage               show daily token usage and cost by model
   canter exec [options] [prompt]  run one turn without interaction
   canter exec --resume <id> [prompt]
@@ -63,6 +70,8 @@ pub enum Command {
     Stats(stats::Args),
     Exec(exec::Args),
     Mcp(mcp::Command),
+    Service(service::Command),
+    Deployment(deployment::Command),
     Chat(ChatArgs),
     Help,
     Version,
@@ -91,6 +100,28 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 .map_err(|arg| format!("argument is not UTF-8: {}", arg.to_string_lossy()))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if matches!(
+        args.first().map(String::as_str),
+        Some("upgrade" | "rollback")
+    ) {
+        if matches!(args.get(1).map(String::as_str), Some("--help" | "-h")) {
+            return Ok(Command::Help);
+        }
+        return deployment::parse(&args).map(Command::Deployment);
+    }
+    if args.first().map(String::as_str) == Some("service") {
+        return match args[1..]
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            ["install"] => Ok(Command::Service(service::Command::Install)),
+            ["uninstall"] => Ok(Command::Service(service::Command::Uninstall)),
+            ["--help" | "-h"] => Ok(Command::Help),
+            _ => Err("use canter service install or canter service uninstall".into()),
+        };
+    }
     if args.first().map(String::as_str) == Some("mcp") {
         return mcp::parse(&args[1..]).map(Command::Mcp);
     }

@@ -28,6 +28,7 @@ pub fn export_protocol(directory: &Path) -> Result<(), Box<dyn std::error::Error
         RequestPath,
         InfoParams,
         InfoResponse,
+        RunningTurnsResponse,
         ModelListParams,
         ModelListResponse,
         UsageResponse,

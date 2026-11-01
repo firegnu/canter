@@ -303,6 +303,7 @@ dependencies = [
  "eventsource-stream",
  "futures-util",
  "nix",
+ "plist",
  "ratatui",
  "reqwest",
  "serde_json",

@@ -15,6 +15,10 @@ async fn main() -> ExitCode {
             .await
             .map_err(|error| error.to_string()),
         Ok(Command::Chat(args)) => chat(args).await,
+        Ok(Command::Service(command)) => {
+            canter::service::run(command).map(|output| print!("{output}"))
+        }
+        Ok(Command::Deployment(command)) => canter::deployment::run(command).await,
         Ok(Command::Exec(args)) => {
             let result = match Context::current() {
                 Ok(context) => canter::exec::run(args, context).await,

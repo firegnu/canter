@@ -10,6 +10,7 @@ canter-server = { path = "../canter-server" }
 canter-tools = { path = "../canter-tools" }
 serde_json = { workspace = true, features = ["raw_value"] }
 tempfile.workspace = true
+plist = "=1.10.1"
 canter-tui = { path = "../canter-tui" }
 canter-protocol.workspace = true
 tokio.workspace = true
