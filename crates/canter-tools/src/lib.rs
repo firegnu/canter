@@ -12,6 +12,8 @@ mod permission;
 mod readonly;
 pub mod rules;
 mod sandbox;
+mod scratch;
+pub use scratch::ScratchDirectory;
 mod shell;
 pub use background::{BackgroundCommands, MAX_BACKGROUND_COMMANDS, MAX_BACKGROUND_OUTPUT_BYTES};
 mod web_fetch;
@@ -665,6 +667,10 @@ impl Tools {
         self.executor.sandbox_enabled()
     }
 
+    pub fn scratch_directory(&self) -> Option<Arc<ScratchDirectory>> {
+        self.executor.scratch_directory()
+    }
+
     pub fn sandbox_scope(&self) -> canter_protocol::SessionSandboxResponse {
         self.executor.sandbox_scope()
     }
@@ -672,7 +678,7 @@ impl Tools {
     pub fn definition(&self, tool: Tool) -> ToolDefinition {
         let mut definition = tool.definition();
         if tool == Tool::Shell && self.executor.sandbox_enabled() {
-            definition.description.to_mut().push_str("\n\nCommands run in a sandbox: they can write only the working directory, added directories, and a private temporary directory, and can't read credential directories such as ~/.ssh. Network access depends on the permission mode. If a command needs network access or needs to write somewhere else, set the sandbox request for that call and give a one-sentence justification; the user approves that one command. Don't use a request to get around a denial or a protected path.");
+            definition.description.to_mut().push_str("\n\nCommands run in a sandbox: they can write only the working directory, added directories, and the session scratch directory at $TMPDIR, and can't read credential directories such as ~/.ssh. Network access depends on the permission mode. If a command needs network access or needs to write somewhere else, set the sandbox request for that call and give a one-sentence justification; the user approves that one command. Don't use a request to get around a denial or a protected path.");
             definition.parameters["properties"]["sandboxRequest"] = json!({
                 "type":"object", "properties": {
                     "network":{"type":"boolean","default":false},

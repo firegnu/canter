@@ -28,7 +28,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 目标续跑（P2-109，10-29 主控和用户确认）：参考 Codex `rust-v0.163.0` 的 ThreadGoal 和目标更新通知，快照增加可选 `goal`，`session.goal.updated {goal}` 保存并广播完整状态（清除为 null）。字段为 `id/objective/status/budgetUsd/cost/createdAt/updatedAt`，`cost` 沿用 `{usd, unknown}`；状态 `active/paused/complete/blocked/budgetLimited`。`GET/POST/DELETE /v1/sessions/{id}/goal` 查询、设置、清除，`POST .../goal/pause` 和 `.../goal/resume` 暂停、继续；信息接口 features 增加 `goals`。旧客户端忽略新增字段和事件，旧会话没有目标。与 Codex 不同：预算按美元，只有用户能建目标，模型仅有 `get_goal` 和 `update_goal {status: complete|blocked}`；续跑轮提问有五分钟超时。
    - 命令规则（P2-108，10-29 主控确认）：批准决定增加字符串 `acceptWithExecpolicyAmendment`；请求增加可选 `proposedExecpolicyAmendment`（词前缀数组的列表），回答增加可选 `execpolicyAmendment`，服务端校验它与提议完全相同。沿用 Codex `rust-v0.163.0` 的命名与提议→确认结构；canter 保留原来的字符串决定枚举，把 amendment 放在回答顶层，并用二维数组支持组合命令一次写多条。请求另带可选 `sessionPrefixes`，明确本会话放行范围。所有新增字段可省略，旧客户端滤掉未知决定，旧会话仍能打开。
    - 加目录（P2-118，10-29 主控确认）：公开会话设置和创建参数新增可选 `additionalDirectories` 字符串数组，旧存盘缺省为空；PATCH 新增可选 `addDirectories`，由服务端追加、规范化、去重，省略或空数组不改变目录，不提供移除。完整列表随 `session.updated` 存盘和广播。沿用 Codex app-server v2 的会话设置和更新结构；Codex 的 `sandboxPolicy` 在 `type: workspaceWrite` 下带 `writableRoots`，canter 的目录同时用于模型环境、文件引用和批准判断，因而单列这两个字段，不引入沙箱策略或把它们称为沙箱可写根。多客户端并发追加在服务端串行处理，不由客户端读出整表再覆盖。`GET /v1/info.features` 增加 `addDirectories`，终端使用新参数或命令前检查支持情况，避免旧服务端忽略字段后误报成功；旧客户端忽略新字段，照常使用。
-   - 沙箱状态（P2-166，10-30 主控确认）：会话设置新增可选 `sandboxEnabled`，照 `planEnabled` 由服务端打开或新建会话时按实际执行器写入，变了随 `session.updated` 存盘和广播；新增 `GET /v1/sessions/{id}/sandbox`，返回 `{enabled, writable, readOnly, noAccess, network}`，每次按当前权限档、新增目录、会话临时目录和缓存现算，不进事件和存盘。与 Codex 不同：Codex app-server v2 的 `sandboxPolicy`（`readOnly` / `workspaceWrite` 带 `writableRoots`、`networkAccess` / `dangerFullAccess`）是客户端可以在会话和轮上设置的策略；canter 的沙箱只由服务端配置决定、第一版界面不能切换，所以协议只报告，不接受客户端设置，也不用策略对象的形状。开关放会话设置而不放 `/v1/info`：`canter serve --replace` 换配置后重开会话就会推送新值，客户端不会因为没重取信息接口把关着的服务端显示成开；旧服务端没有字段，终端不显示沙箱状态。范围单开接口而不进设置：临时目录每次打开都变，联网随权限档变，存进事件只会留下过期值；返回的是实际路径，网络按当前权限档，不是策略描述。
+   - 沙箱状态（P2-166，10-30 主控确认）：会话设置新增可选 `sandboxEnabled`，照 `planEnabled` 由服务端打开或新建会话时按实际执行器写入，变了随 `session.updated` 存盘和广播；新增 `GET /v1/sessions/{id}/sandbox`，返回 `{enabled, writable, readOnly, noAccess, network}`，每次按当前权限档、新增目录、会话临时目录和缓存现算，不进事件和存盘。与 Codex 不同：Codex app-server v2 的 `sandboxPolicy`（`readOnly` / `workspaceWrite` 带 `writableRoots`、`networkAccess` / `dangerFullAccess`）是客户端可以在会话和轮上设置的策略；canter 的沙箱只由服务端配置决定、第一版界面不能切换，所以协议只报告，不接受客户端设置，也不用策略对象的形状。开关放会话设置而不放 `/v1/info`：`canter serve --replace` 换配置后重开会话就会推送新值，客户端不会因为没重取信息接口把关着的服务端显示成开；旧服务端没有字段，终端不显示沙箱状态。范围单开接口而不进设置：临时目录的可用性和联网权限属于运行态（P2-91 起同一会话的临时路径固定），存进事件会留下过期值；返回的是实际路径，网络按当前权限档，不是策略描述。
    - `canter --add-dir <路径>` 可重复，配合 `-c` / `--resume` 加到打开的会话；会话内 `/add-dir <路径>` 提示结果。相对路径按会话 cwd，`~/` 按会话 HOME；必须是存在的目录，规范化后位于 cwd 或已加目录内则提示已覆盖。目录与会话一起保存，不读取新增目录的 `AGENTS.md`。`/new`、`/handoff`、计划批准选「清空上下文实施」的新会话沿用原会话加进来的目录，由服务端重新校验、规范化；失效的目录提示原因后跳过，仍开新会话，旧服务端不支持时不带目录（P2-122）。打开时的目录列入环境段；中途追加说明到模型历史尾部，保持已发送前缀。`@` 同时扫描新增目录、遵循各目录的 git 忽略规则；cwd 下仍用相对路径，额外目录用绝对路径区分同名文件。
    - `askForExecution` 下 write/edit 在 cwd 和新增目录内直接执行，目录外复用文件修改批准框。比较规范化后的真实路径，解析 `..` 和符号链接，新文件以最近存在的父目录解析；读文件、shell 批准、只读白名单、受保护路径、计划模式、审查轮、`alwaysAsk`、`allowAll` 不变。目录外选择 `acceptForSession` 沿用工具名授权（write/edit 各自独立，与 alwaysAsk 一致），不新增按目录授权规则。状态栏 git、`/diff`、`/review` 仍只看 cwd。本件不是沙箱。
    - 模型重试（P2-110，10-28 主控确认）：参考 Codex `rust-v0.163.0` 的 `ErrorNotification`（`error/willRetry/threadId/turnId`），其 `StreamError` 发 `willRetry: true`、不结束轮。canter 新增 `modelRetry` 项目，复用 `item.started/completed`，沿用 `error`、`willRetry`，会话和轮 ID 由既有事件外层携带；增加 `attempt/maxRetries/delaySeconds`，让客户端显示第几次、多久后再试、为什么。做成项目而非只发错误通知，是为了快照、重开、其它终端和导出都保留重试记录；旧客户端按 Unknown 项目跳过。回答和思考项目新增可选 `status: interrupted`，没有字段的旧存盘按正常完成读；只有断流出错重发而丢弃的半截才标 `status: interrupted`，不进入模型历史。用户按 Esc 打断的一切行为照 main 原样，不受本件影响：已收到的半截回答和思考留在模型历史中，已收到但未执行的工具调用照旧补 interrupted 占位结果；界面、存盘、导出均不额外给这些项目加中断标记（10-28 用户：「不能改现在esc的行为，这个破坏太多了」）。逐项完成的信号和项目 ID 是模型层到核心的内部事件，不进入客户端协议。`/btw`、`/handoff` 共用重试，通过各自私有流显示重试和重发后的内容，照旧不存盘、不广播。
@@ -193,7 +193,7 @@ LSP 默认关闭；`config.json` 的 `lsp.enabled` 开启后，配置中的语�
    - 分段：固定段 `core`、模型家族补充 `model_family`、全局说明 `global_instructions`、技能 `skills`、项目说明 `project_instructions`（每个文件一段）、环境 `environment`，按这个顺序，空段不出现；稳定性由种类决定（前三种所有会话都一样，后三种本会话固定）。模型历史的 `context` 记录在拼好的 `messages` 旁加 `segments`（种类、路径、内容）；打开会话时重算，段或 `messages` 不同才追加新记录。已有的旧会话第一次重开时换成新提示词（冷一次缓存）。全局说明读 canter 自己目录下的 `AGENTS.md`（P2-100，2026-10-27，用户：「我自己要有一份……而不是当时定的位置」）：会话环境里的 `CANTER_HOME`，没设就是 `~/.canter`（和终端找 `config.json` 的规矩一样）；不再读 P2-19 定的 `~/.agents/AGENTS.md`。理由：AGENTS.md 标准只管仓库里那份，全局各家放自己目录（Codex `~/.codex/`、pi `~/.pi/agent/`、opencode `~/.config/opencode/`），`~/.agents/AGENTS.md` 不是标准。全局技能仍在 `~/.agents/skills`。
    - 每个接口一个转换器，转换器是纯函数。Chat Completions（DeepSeek 等）拼成一条 `system`：固定段和家族补充原样，其余段用 `<global_instructions path="…">`、`<skills>`、`<project_instructions path="…">`、`<environment>` 包住，段之间空一行。Responses（ChatGPT）照 P2-33 方案整段放最前面的 developer 消息，接上后用对比场景再比「AGENTS.md 和环境放 user 消息」（Codex 的放法）；Anthropic 两块 system、各打缓存断点；Gemini 放 `systemInstruction`。后三种接那一家时做。
    - P2-162（10-30 用户已同意）：有按需 MCP 时保留批准、结果是数据的两处规则，并增加「First use mcp_search to read an MCP tool's description and parameter schema, then use mcp_call to invoke it.」。MCP 清单在环境后作为会话固定段追加；无 MCP 或全部连接失败时不改变任何请求字节。
-   - 环境段：工作目录、git 仓库根（不是仓库写 none）、系统和架构、打开会话时的本地日期、星期和时区（原来是 UTC 日期）。
+   - 环境段：工作目录、git 仓库根（不是仓库写 none）、系统和架构、打开会话时的本地日期、星期和时区（原来是 UTC 日期），以及成功创建的会话临时目录完整路径和用途（P2-91，原文及权限差异见下文）。
    - 10-27 补一句（P2-94 第 1 条，用户 10-27 点头）：`[shell]` 条件行加「To search file contents, use `rg`; to find files, use `rg --files` rather than `grep -r` or `find`.」。理由：Codex 提示词也这么写；`rg` 默认跳过 `.gitignore` 里的东西，比 `grep -r` 快、输出少，DeepSeek 不知道就可能用 `grep -r` 把 `target/` 也翻一遍。已有的会话缓存因此冷一次。
    - 压缩和 `/handoff` 共用 9 个固定小节（Goal、User's words、Constraints and preferences、Decisions、Files、Commands and results、Where it stopped、Open issues、Next steps），纯 Markdown、用用户的语言；`/handoff` 开头多一节 Task。 10-27 P2-72 真调里新版 `/handoff` 第一次用英文写（Rules 只说「用用户主要说的语言」，模板和默认方向是英文），用户同意补一句（P2-76）：语言按对话里用户自己的话来定，不按这些说明的语言。
    - 方案 §9 的选择：长任务中途在开始新一段、换方向、发现要紧的事时写一句进度，不逐个工具说；网页抓取和 MCP 结果这次不加「不可信」标记，先看提示词的效果；新旧对比用用户平时用的模型、避开高峰，真调上限 130 次请求或 1.5 美元，到了先停下报告。
@@ -330,6 +330,23 @@ P2-161 内置关键路径删除判断，只管模型 shell（前台、后台）�
 
 `/permissions` 同时显示命令 Allow / Ask / Deny 和文件 File rules 分组，文件项标 Ask / Deny；选择、确认删除、刷新与命令相同。新增和修改只在 `rules.json` 手填，空列表明确提示可加入 `fileRules`。两类删除和永久命令放行共用写锁、原子替换、0600，保留另一类规则；空文件规则段不写出。退回本件之前的版本时，其 `deny_unknown_fields` 会把带 `fileRules` 的文件当坏文件：模型 shell 退回单次询问，旧 `/permissions` 报错、不覆盖；旧版文件工具没有这层保护，退回前须自行移除该字段并了解限制。
 
+## 会话临时目录（P2-91）
+
+2026-11-01 用户确认：模型为完成任务临时写的脚本、中间结果、不属于项目的输出放进会话临时目录，不散落到项目或 `/tmp`。无论沙箱开关，打开会话时都尝试创建，模型 shell 和用户 `!` 命令（包括 `!cmd &`）的 `$TMPDIR` 都指向它；用户命令仍不套沙箱，临时文件同样随会话关闭清理。用规范化的会话存储路径（包含会话 ID）的 SHA-256 前 16 个十六进制字符和用户 ID 派生 `/tmp/canter-shell-<uid>-<digest16>`，实际路径按系统规范化（macOS 通常为 `/private/tmp/...`，三位用户 ID 时约 46 字节），为脚本在 `$TMPDIR` 下建立 Unix socket 留出路径长度。同一会话重开路径相同，不同状态目录下同名会话使用各自的目录名。创建时权限为 0700；已存在的路径必须是该用户拥有的 0700 目录，符号链接或不安全的占位路径拒绝使用，不跟随或删除其目标。
+
+目录由会话持有，执行器、重建的沙箱及 `retired_tools` 共享。热加载配置不换路径、不清空内容；正在运行的后台命令沿用原执行范围。关闭会话或正常停止服务端时，按现有流程先停命令并等它们结束，再删除临时目录；下次打开创建同路径的空目录。异常退出未清理的本会话目录在重开时清空，不扫描其它会话目录。初始化在取得存储的会话锁之后进行，旧执行器释放时不会删除已重新打开的目录。
+
+环境段只在打开会话时生成，使用以下已确认的原文；会话中途切换沙箱不改这一段，下次打开才按当时开关选择。`/btw`、`/handoff` 直接复用所属会话的主请求前缀，包括同一个临时目录路径，不重新生成环境段。路径稳定遵守第 17 条，各家模型共用，不按模型提供商分支。
+
+- 沙箱开启：`Scratch directory: <完整路径>. Put temporary files here (throwaway scripts, intermediate results, outputs that don't belong in the project) instead of the project or /tmp. It is private to this session, needs no approval, and is emptied when the session closes; copy anything worth keeping into the project or tell the user.`
+- 沙箱关闭：`Scratch directory: <完整路径>. Put temporary files here (throwaway scripts, intermediate results, outputs that don't belong in the project) instead of the project or /tmp. It is private to this session and is emptied when the session closes; copy anything worth keeping into the project or tell the user.`
+
+只有实际沙箱开启时，`write` / `edit` 写入本会话临时目录免批准，Always ask、Ask for execution、Allow all 都能直接执行。沙箱关闭时沿用原来的批准规则，两个询问档仍询问、Allow all 不问。路径按 P2-118 规范化，`..`、符号链接不能借此写到范围外；不增加整个 `/tmp` 或其它会话目录的写权限。`read` 不变，敏感路径、`fileRules`、计划模式及审查轮限制照旧优先（包括 Allow all 下原有的 prompt 文件规则语义）。沙箱开启时 shell 说明仅把临时目录的措辞改为 `the session scratch directory at $TMPDIR`，关闭时工具说明保持原样。
+
+目录创建失败不阻止打开会话：省略环境中的 Scratch directory 行，不授予临时目录写入豁免，并沿用 warning 事件显示一行英文 `Scratch directory unavailable at <path>: <error>`，包含尝试创建的路径及原因。沙箱不会因此放行整个 `/tmp`，也不会在墙外重试命令。`/sandbox` 沿用现有 writable 列表显示可用目录，无新增配置项、工具、协议字段或事件；第 8 条的 Codex 协议差异保持不变。
+
+对照：Claude Code 的会话草稿目录在系统提示词中提供完整路径、用途及通常不需批准的说明，本件采用这种明确引导；canter 的免批准以实际沙箱开启为条件。Codex `rust-v0.163.0` 没有该专门功能，workspace-write 默认允许 `/tmp` 和 `$TMPDIR`（可分别用 `exclude_slash_tmp`、`exclude_tmpdir_env_var` 关闭），提示词不专门介绍；canter 只开放本会话目录，路径固定且关闭清理，不扩大到系统临时根。
+
 ## 沙箱（P2-123，2026-10-30 用户定）
 
 依据 `docs/调研/P2-104-沙箱调研.md` §7.3，用户：「权限的问题我觉得接受你的建议」「选 A，其余都按推荐」。细节和每题原文记在 `docs/任务/P2-123-沙箱.md`。
@@ -344,7 +361,7 @@ P2-161 内置关键路径删除判断，只管模型 shell（前台、后台）�
 - P2-108 的 allow 规则、会话前缀授权只管免问，不能把命令放到墙外，也解不开敏感路径。P2-161 的危险命令判断照旧先于沙箱。
 - 沙箱开着时 read / write / edit 在服务端守同一套边界：敏感路径不能读写；`allowAll` 下 write / edit 不能写范围外；询问档可单次批准范围外的普通路径，已有 write / edit 会话授权也免不掉；`.git` 的 config、hooks、元数据指针和真实的 `~/.cargo`、`~/.npm` 能读不能改（P2-165）。这扩大了 P2-118「allowAll、读文件不变」的范围。
 - 用户 `!`（含 `!cmd &`）不套沙箱，界面标明；MCP、`web_fetch` 第一版在沙箱外，各自批准照旧，界面写明。
-- 沙箱关闭时一切照沙箱之前的行为。
+- 沙箱关闭时批准规则照沙箱之前的行为；P2-91 仍提供会话临时目录、`$TMPDIR` 和环境段说明。
 - 界面显示（P2-166）：状态栏在权限档后显示 `Sandbox on` / `Sandbox off`（off 为红色），放不下完整文字就不显示；`/sandbox` 只看不改，列出实际范围；沙箱开着时用户 `!`、MCP、`web_fetch` 卡片右侧标 `not sandboxed`。旧服务端不显示沙箱状态，`/sandbox` 提示升级服务端。协议见第 8 条。
 
 P2-164（10-30 主控确认）：模型 shell 仅在沙箱开启时增加可选 `sandboxRequest: { network, writePaths }` 和 `justification`，字段风格与 `timeoutMs` 一致。`network` 缺省 false，`writePaths` 缺省空数组；带申请必须给非空理由。路径相对 cwd，支持会话 HOME 的 `~`，按 P2-118 的真实路径办法处理符号链接、`..` 和不存在的尾部；批准框展示规范化后的路径。申请只给这条命令及其后代，后台和 Ctrl+B 转后台保持到退出，不加入会话目录或命令前缀授权；批准后启动前重新校验路径和硬边界。原缓存只读、Git 配置和元数据指针保护不因申请而解除。

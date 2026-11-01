@@ -54,6 +54,58 @@ fn assert_request_extension(previous: &Request, next: &Request) {
     );
 }
 
+// Cross-session comparisons ignore only the intentionally session-specific path.
+fn normalize_session_scratch(request: &mut Request) {
+    for message in &mut request.messages {
+        if let Message::System { text } = message {
+            let directory = text
+                .lines()
+                .find_map(|line| line.strip_prefix("Scratch directory: "))
+                .expect("scratch environment")
+                .split_once(". Put temporary files")
+                .unwrap()
+                .0;
+            *text = text.replace(
+                &format!("Scratch directory: {directory}."),
+                "Scratch directory: <scratch>.",
+            );
+        }
+    }
+}
+
+struct ScratchConfiguration {
+    state: Mutex<(u64, bool)>,
+    model: Arc<ScriptModel>,
+}
+
+impl canter_core::ConfigurationSource for ScratchConfiguration {
+    fn snapshot(&self) -> canter_core::Configuration {
+        let (revision, sandbox) = *self.state.lock().unwrap();
+        canter_core::Configuration {
+            revision: Some(revision),
+            options: CoreOptions {
+                sandbox,
+                ..Default::default()
+            },
+            model: self.model.clone(),
+            mcp_tools: Vec::new(),
+            lsp: None,
+            lease: Arc::new(()),
+        }
+    }
+    fn acquire(
+        &self,
+    ) -> futures_util::future::BoxFuture<
+        '_,
+        Result<canter_core::Configuration, canter_core::CoreError>,
+    > {
+        Box::pin(async { Ok(self.snapshot()) })
+    }
+    fn options(&self) -> CoreOptions {
+        self.snapshot().options
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn sandbox_model_request_exposes_scope_only_when_enabled() {
@@ -123,6 +175,7 @@ async fn sandbox_model_request_exposes_scope_only_when_enabled() {
                 if let Message::System { text } = message {
                     *text = text
                         .lines()
+                        .filter(|line| !line.starts_with("Scratch directory:"))
                         .map(|line| {
                             if line.starts_with("Session opened:") {
                                 "Session opened: <date>"
@@ -284,6 +337,16 @@ async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp()
                 ModelEvent::Finished(FinishReason::ToolCalls),
             ],
             vec![ModelEvent::Finished(FinishReason::Stop)],
+            vec![
+                call("third", "shell", &command),
+                ModelEvent::Finished(FinishReason::ToolCalls),
+            ],
+            vec![ModelEvent::Finished(FinishReason::Stop)],
+            vec![
+                call("fourth", "shell", &command),
+                ModelEvent::Finished(FinishReason::ToolCalls),
+            ],
+            vec![ModelEvent::Finished(FinishReason::Stop)],
         ]);
         let store = Arc::new(Store::new(temp.path().join("state/sessions")).unwrap());
         let runtime = RuntimeContext {
@@ -302,10 +365,10 @@ async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp()
             ..Default::default()
         };
         let (session, _) = Session::create(
-            store,
+            store.clone(),
             "sandbox".into(),
             settings(&temp.path().join("project")),
-            runtime,
+            runtime.clone(),
             model.clone(),
             CoreOptions {
                 sandbox: enabled,
@@ -347,13 +410,92 @@ async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp()
             "user"
         );
         let temporary = std::fs::read_to_string(temp.path().join("project/temp-path")).unwrap();
-        if enabled {
-            assert!(std::path::Path::new(&temporary).is_dir());
+        assert!(std::path::Path::new(&temporary).is_dir());
+        let digest = temporary.rsplit('-').next().unwrap();
+        assert_eq!(digest.len(), 16);
+        assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        let socket = std::path::Path::new(&temporary).join("script-listener.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        drop(listener);
+        std::fs::remove_file(socket).unwrap();
+        std::fs::write(
+            std::path::Path::new(&temporary).join("throwaway"),
+            "temporary",
+        )
+        .unwrap();
+        let source = Arc::new(ScratchConfiguration {
+            state: Mutex::new((0, enabled)),
+            model: model.clone(),
+        });
+        session.set_configuration_source(source.clone(), Some(0));
+        for (index, sandbox) in [!enabled, enabled].into_iter().enumerate() {
+            *source.state.lock().unwrap() = (index as u64 + 1, sandbox);
+            session
+                .input(input("after configuration change"))
+                .await
+                .unwrap();
+            finished(&mut events).await;
+            assert_eq!(
+                std::fs::read_to_string(temp.path().join("project/temp-path")).unwrap(),
+                temporary
+            );
+            assert_eq!(
+                std::fs::read_to_string(std::path::Path::new(&temporary).join("throwaway"))
+                    .unwrap(),
+                "temporary"
+            );
+            let scope = session.sandbox().await;
+            assert_eq!(scope.enabled, sandbox);
+            if sandbox {
+                assert!(scope.writable.contains(&temporary));
+            }
+        }
+        {
+            let requests = model.requests.lock().unwrap();
+            let Message::System { text } = &requests[0].messages[0] else {
+                panic!("system prompt")
+            };
+            let scratch = text
+                .lines()
+                .find(|line| line.starts_with("Scratch directory:"))
+                .expect("session environment must describe the scratch directory");
+            assert!(scratch.starts_with(&format!("Scratch directory: {temporary}. ")));
+            assert_eq!(scratch.contains("needs no approval"), enabled);
+            assert_eq!(
+                requests[0].messages[0],
+                requests.last().unwrap().messages[0]
+            );
         }
         session.close().await.unwrap();
-        if enabled {
-            assert!(!std::path::Path::new(&temporary).exists());
-        }
+        assert!(!std::path::Path::new(&temporary).exists());
+        let (reopened, response) = Session::open(
+            store,
+            "sandbox".into(),
+            runtime,
+            model,
+            CoreOptions {
+                sandbox: enabled,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let mut events = reopened.subscribe(response.event_seq).await.unwrap();
+        reopened
+            .shell_command(SessionShellCommandParams {
+                command: "printf '%s' \"$TMPDIR\" > reopened-path".into(),
+                timeout_ms: None,
+            })
+            .await
+            .unwrap();
+        finished(&mut events).await;
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("project/reopened-path")).unwrap(),
+            temporary
+        );
+        assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
+        reopened.close_for_shutdown().await.unwrap();
+        assert!(!std::path::Path::new(&temporary).exists());
     }
 }
 
@@ -1759,7 +1901,9 @@ async fn reopening_restores_the_exact_model_context_and_skips_future_history_ent
         }
         session.input(input("continue")).await.unwrap();
         finished(&mut events).await;
-        contexts.push(model.requests.lock().unwrap()[2].clone());
+        let mut request = model.requests.lock().unwrap()[2].clone();
+        normalize_session_scratch(&mut request);
+        contexts.push(request);
         assert!(contexts.last().unwrap().messages.iter().any(|message| matches!(message, Message::System { text } if text.contains("root instruction") && text.contains("nested instruction"))));
         session.close().await.unwrap();
         for file in ["events.jsonl", "model-history.jsonl"] {

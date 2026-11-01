@@ -195,11 +195,16 @@ impl State {
         self.gate
             .set_additional_directories(&self.journal.snapshot.settings.additional_directories);
         self.define_tools(tools);
+        let scratch = tools.scratch_directory();
         let (mut segments, warnings, skills) = crate::context::prefix(
             self.journal.snapshot.settings.cwd.clone(),
             home,
             canter_home,
             self.tool_definitions.clone(),
+            scratch
+                .as_ref()
+                .and_then(|scratch| scratch.path())
+                .map(|path| (path, tools.sandbox_enabled())),
         )
         .await?;
         if !self
@@ -537,6 +542,15 @@ impl State {
 }
 
 impl Session {
+    async fn scratch_warning(&self) -> Result<(), CoreError> {
+        if let Some(scratch) = self.shared.runtime().tools.scratch_directory()
+            && let Some(warning) = scratch.warning()
+        {
+            self.opening_warning(warning.to_owned()).await?;
+        }
+        Ok(())
+    }
+
     /// Record an opening warning before returning to a client that may immediately
     /// start a turn. The caller retains the snapshot cursor from before this event.
     pub async fn opening_warning(&self, message: String) -> Result<(), CoreError> {
@@ -655,6 +669,7 @@ impl Session {
         let canter_home = crate::context::canter_home(&runtime.environment);
         let tools = executor(
             writer.snapshot().settings.cwd.clone(),
+            store.session_dir(&writer.snapshot().id)?,
             runtime.clone(),
             &options,
         )
@@ -820,10 +835,10 @@ impl Session {
             session: state.journal.snapshot.clone(),
             event_seq: state.journal.snapshot.last_event_seq,
         };
-        Ok((
-            Self::from_state(state, tools, model, options, runtime),
-            response,
-        ))
+        let session = Self::from_state(state, tools, model, options, runtime);
+        // Keep this warning after the opening client's snapshot cursor.
+        session.scratch_warning().await?;
+        Ok((session, response))
     }
 
     pub async fn create(
@@ -863,7 +878,6 @@ impl Session {
             .get("HOME")
             .map(std::path::PathBuf::from);
         let canter_home = crate::context::canter_home(&runtime.environment);
-        let tools = executor(cwd, runtime.clone(), &options).await?;
         settings.additional_directories = crate::directories::append(
             settings.cwd.clone(),
             home.clone(),
@@ -871,13 +885,20 @@ impl Session {
             settings.additional_directories,
         )
         .await?;
-        settings.sandbox_enabled = Some(tools.sandbox_enabled());
+        settings.sandbox_enabled = Some(options.sandbox);
         settings.restricted_mode = Some(runtime.restricted_mode);
         settings.plan_enabled = Some(options.plan_enabled);
         let owned_store = store.clone();
         let writer = tokio::task::spawn_blocking(move || owned_store.create(&id, settings, now()))
             .await
             .map_err(|_| CoreError::internal())??;
+        let tools = executor(
+            cwd,
+            store.session_dir(&writer.snapshot().id)?,
+            runtime.clone(),
+            &options,
+        )
+        .await?;
         let mut journal = Journal::new(store, writer, options.telemetry);
         journal
             .append(vec![EventPayload::SessionStatus {
@@ -891,10 +912,9 @@ impl Session {
             session: state.journal.snapshot.clone(),
             event_seq: state.journal.snapshot.last_event_seq,
         };
-        Ok((
-            Self::from_state(state, tools, model, options, runtime),
-            response,
-        ))
+        let session = Self::from_state(state, tools, model, options, runtime);
+        session.scratch_warning().await?;
+        Ok((session, response))
     }
 
     fn from_state(
@@ -1646,6 +1666,7 @@ pub(crate) async fn owned<T: Send + 'static>(
 }
 async fn executor(
     cwd: String,
+    session_directory: std::path::PathBuf,
     runtime: RuntimeContext,
     options: &CoreOptions,
 ) -> Result<Tools, CoreError> {
@@ -1667,21 +1688,29 @@ async fn executor(
             )
         });
     tokio::task::spawn_blocking(move || {
-        LocalExecutor::new(cwd.into(), runtime.environment, runtime.protected_paths)
-            .map(|executor| {
-                let tools = Tools::new(Arc::new(executor.with_sandbox(options.sandbox)))
-                    .with_telemetry(options.telemetry)
-                    .with_plan_enabled(options.plan_enabled)
-                    .with_web_search(options.web_search)
-                    .with_mcp(runtime.mcp_tools)
-                    .with_mcp_tool_search(options.mcp_tool_search)
-                    .with_web_fetch_timeout(options.web_fetch_timeout);
-                match lsp {
-                    Some(lsp) => tools.with_lsp(lsp),
-                    None => tools,
-                }
-            })
-            .map_err(|_| CoreError::new(ErrorCode::InvalidRequest, "invalid execution context"))
+        let scratch = Arc::new(canter_tools::ScratchDirectory::for_session(
+            &session_directory,
+        ));
+        LocalExecutor::with_scratch_directory(
+            cwd.into(),
+            runtime.environment,
+            runtime.protected_paths,
+            scratch,
+        )
+        .map(|executor| {
+            let tools = Tools::new(Arc::new(executor.with_sandbox(options.sandbox)))
+                .with_telemetry(options.telemetry)
+                .with_plan_enabled(options.plan_enabled)
+                .with_web_search(options.web_search)
+                .with_mcp(runtime.mcp_tools)
+                .with_mcp_tool_search(options.mcp_tool_search)
+                .with_web_fetch_timeout(options.web_fetch_timeout);
+            match lsp {
+                Some(lsp) => tools.with_lsp(lsp),
+                None => tools,
+            }
+        })
+        .map_err(|_| CoreError::new(ErrorCode::InvalidRequest, "invalid execution context"))
     })
     .await
     .map_err(|_| CoreError::internal())?

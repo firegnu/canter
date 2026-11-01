@@ -146,7 +146,7 @@ impl PermissionGate {
     }
 
     fn outside_directories(&self, call: &PreparedCall) -> bool {
-        if !matches!(call.tool, Tool::Write | Tool::Edit) {
+        if !matches!(call.tool, Tool::Write | Tool::Edit) || self.scratch_write(call) {
             return false;
         }
         let Some(path) = &call.resolved_path else {
@@ -161,6 +161,20 @@ impl PermissionGate {
                 .additional_directories
                 .iter()
                 .any(|root| path.starts_with(root))
+    }
+
+    fn scratch_write(&self, call: &PreparedCall) -> bool {
+        call.executor.sandbox_enabled()
+            && matches!(call.tool, Tool::Write | Tool::Edit)
+            && call
+                .executor
+                .scratch_directory()
+                .and_then(|scratch| scratch.path())
+                .is_some_and(|root| {
+                    call.resolved_path
+                        .as_ref()
+                        .is_some_and(|path| path.starts_with(root))
+                })
     }
 
     fn file_rules<'a>(
@@ -373,6 +387,9 @@ impl PermissionGate {
     ) -> PermissionCheck<'a> {
         if let Some(check) = self.file_rules(call, mode) {
             return check;
+        }
+        if self.scratch_write(call) {
+            return PermissionCheck::Execute(ExecutionPermit { call });
         }
         if let Action::Shell(args) = &call.action {
             let rules = self.read_rules(false, Ok);

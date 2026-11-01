@@ -1232,7 +1232,8 @@ async fn plan_mode_blocks_all_mcp_tools_even_readonly_hints_without_approval() {
     }
 }
 
-// Recorded before P2-162. Normalize only the temporary cwd and host/date values;
+// Recorded before P2-162, with the P2-91 scratch line added. Normalize only the
+// temporary cwd, session scratch path, and host/date values;
 // all remaining HTTP request bytes, including tools and messages, are compared.
 fn stable_request(fixture: &Fixture, request: &str) -> String {
     let request = request.replace(&fixture.root.path().display().to_string(), "<TEMP>");
@@ -1250,6 +1251,15 @@ fn stable_request(fixture: &Fixture, request: &str) -> String {
         let encoded = serde_json::to_string(line).unwrap();
         result = result.replace(&encoded[1..encoded.len() - 1], replacement);
     }
+    let scratch = prompt
+        .lines()
+        .find_map(|line| line.strip_prefix("Scratch directory: "))
+        .unwrap()
+        .split_once(". Put temporary files")
+        .unwrap()
+        .0;
+    let encoded = serde_json::to_string(scratch).unwrap();
+    result = result.replace(&encoded[1..encoded.len() - 1], "<SCRATCH>");
     result
 }
 

@@ -39,6 +39,9 @@ pub trait Executor: Send + Sync {
     fn sandbox_enabled(&self) -> bool {
         false
     }
+    fn scratch_directory(&self) -> Option<Arc<crate::ScratchDirectory>> {
+        None
+    }
     fn normalize_sandbox_request(
         &self,
         _request: &mut canter_protocol::SandboxRequest,
@@ -123,14 +126,19 @@ pub struct LocalExecutor {
     shell_protected_paths: Vec<PathBuf>,
     sandbox: Option<Arc<Mutex<Result<crate::sandbox::Sandbox, String>>>>,
     shell_scope: RwLock<crate::sandbox::Scope>,
+    scratch: Arc<crate::ScratchDirectory>,
 }
 
 impl LocalExecutor {
     pub fn with_sandbox(mut self, enabled: bool) -> Self {
         self.sandbox = enabled.then(|| {
             Arc::new(Mutex::new(
-                crate::sandbox::Sandbox::new(&self.environment, &self.shell_protected_paths)
-                    .map_err(|error| error.to_string()),
+                crate::sandbox::Sandbox::new(
+                    &self.environment,
+                    &self.shell_protected_paths,
+                    self.scratch.clone(),
+                )
+                .map_err(|error| error.to_string()),
             ))
         });
         self
@@ -140,6 +148,20 @@ impl LocalExecutor {
         cwd: PathBuf,
         environment: BTreeMap<String, String>,
         protected_paths: Vec<PathBuf>,
+    ) -> io::Result<Self> {
+        Self::with_scratch_directory(
+            cwd,
+            environment,
+            protected_paths,
+            Arc::new(crate::ScratchDirectory::temporary()),
+        )
+    }
+
+    pub fn with_scratch_directory(
+        cwd: PathBuf,
+        environment: BTreeMap<String, String>,
+        protected_paths: Vec<PathBuf>,
+        scratch: Arc<crate::ScratchDirectory>,
     ) -> io::Result<Self> {
         if !cwd.is_absolute() {
             return Err(io::Error::new(
@@ -164,6 +186,7 @@ impl LocalExecutor {
             shell_protected_paths,
             sandbox: None,
             shell_scope: RwLock::default(),
+            scratch,
         })
     }
 
@@ -201,6 +224,12 @@ impl LocalExecutor {
             launch.env_clear().envs(&self.environment);
             launch
         };
+        if let Some(path) = self.scratch.path() {
+            launch.env("TMPDIR", &path);
+            if sandboxed {
+                launch.env("TMPPREFIX", path.join("zsh"));
+            }
+        }
         launch
             .args(["-c", command])
             .current_dir(&self.cwd)
@@ -256,6 +285,10 @@ impl Executor for LocalExecutor {
 
     fn sandbox_enabled(&self) -> bool {
         self.sandbox.is_some()
+    }
+
+    fn scratch_directory(&self) -> Option<Arc<crate::ScratchDirectory>> {
+        Some(self.scratch.clone())
     }
 
     fn normalize_sandbox_request(
@@ -336,11 +369,7 @@ impl Executor for LocalExecutor {
     }
 
     fn close_shell(&self) {
-        if let Some(sandbox) = &self.sandbox
-            && let Ok(sandbox) = sandbox.lock().unwrap().as_mut()
-        {
-            sandbox.close();
-        }
+        self.scratch.close();
     }
 
     fn dangerous_shell_reason(&self, command: &str, additional: &[PathBuf]) -> Option<String> {

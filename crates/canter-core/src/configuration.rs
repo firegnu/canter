@@ -34,7 +34,7 @@ pub(crate) struct Runtime {
     pub model: Arc<dyn Model>,
     pub tools: Tools,
     pub context: RuntimeContext,
-    // Background commands may still use a previous sandbox's temporary directory.
+    // Background commands may still use a previous executor; all share session scratch space.
     pub retired_tools: Vec<Tools>,
 }
 
@@ -178,8 +178,12 @@ impl Shared {
             let environment = context.environment.clone();
             let protected = context.protected_paths.clone();
             let sandbox = config.options.sandbox;
+            let scratch = old
+                .tools
+                .scratch_directory()
+                .expect("local session executor");
             let executor = tokio::task::spawn_blocking(move || {
-                LocalExecutor::new(cwd.into(), environment, protected)
+                LocalExecutor::with_scratch_directory(cwd.into(), environment, protected, scratch)
                     .map(|executor| executor.with_sandbox(sandbox))
             })
             .await

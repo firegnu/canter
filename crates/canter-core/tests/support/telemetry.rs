@@ -260,7 +260,9 @@ async fn disabled_telemetry_keeps_tags_usage_compaction_and_identical_model_requ
         .unwrap();
         assert_eq!(response.session.settings.tags["task"], "not-for-model");
         reopened.close().await.unwrap();
-        let requests = serde_json::to_value(model.requests.lock().unwrap().clone()).unwrap();
+        let mut requests = model.requests.lock().unwrap().clone();
+        requests.iter_mut().for_each(normalize_session_scratch);
+        let requests = serde_json::to_value(requests).unwrap();
         assert!(!requests.to_string().contains("not-for-model"));
         captured.push(requests);
     }

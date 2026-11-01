@@ -14,6 +14,142 @@ const MODES: [PermissionMode; 3] = [
     PermissionMode::AllowAll,
 ];
 
+#[tokio::test]
+async fn scratch_file_changes_follow_the_current_sandbox_switch() {
+    let fixture = Fixture::new();
+    let cancel = CancellationToken::new();
+    for sandbox in [true, false] {
+        let tools = fixture.tools(sandbox);
+        let scratch = tools.scratch_directory().unwrap().path().unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&scratch).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        for mode in MODES {
+            for tool in [Tool::Write, Tool::Edit] {
+                let path = scratch.join("script");
+                std::fs::write(&path, "original fixture").unwrap();
+                let call = tools
+                    .prepare(tool, "scratch", &arguments(tool, &path), &cancel)
+                    .await
+                    .unwrap();
+                let gate = PermissionGate::default();
+                if sandbox || mode == PermissionMode::AllowAll {
+                    let PermissionCheck::Execute(permit) = gate.evaluate(&call, mode) else {
+                        panic!(
+                            "scratch change should execute: sandbox={sandbox}, {mode:?}, {tool:?}"
+                        );
+                    };
+                    assert_eq!(
+                        tools.execute(permit, &cancel, &mut |_| {}).await.outcome,
+                        ToolOutcome::Completed
+                    );
+                } else {
+                    assert!(matches!(
+                        gate.evaluate(&call, mode),
+                        PermissionCheck::Ask(_)
+                    ));
+                }
+            }
+        }
+        if !sandbox {
+            assert_eq!(
+                tools.definition(Tool::Shell).description,
+                Tool::Shell.definition().description
+            );
+        }
+        tools.close_shell();
+    }
+}
+
+#[tokio::test]
+async fn scratch_allowance_does_not_escape_or_override_file_rules() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    let other = fixture.tools(true);
+    let scratch = tools.scratch_directory().unwrap().path().unwrap();
+    let other_scratch = other.scratch_directory().unwrap().path().unwrap();
+    let outside = fixture.file("outside/script");
+    std::fs::write(other_scratch.join("script"), "original fixture").unwrap();
+    std::os::unix::fs::symlink(fixture.path("outside"), scratch.join("link")).unwrap();
+    std::os::unix::fs::symlink(fixture.path("home/.ssh"), scratch.join("credentials")).unwrap();
+    fixture.file("home/.ssh/key");
+    let paths = [
+        outside,
+        other_scratch.join("script"),
+        scratch
+            .join("..")
+            .join(other_scratch.file_name().unwrap())
+            .join("script"),
+        scratch.join("link/script"),
+    ];
+    let cancel = CancellationToken::new();
+    let gate = PermissionGate::default();
+    for mode in MODES {
+        for tool in [Tool::Write, Tool::Edit] {
+            for path in &paths {
+                let call = tools
+                    .prepare(tool, "escape", &arguments(tool, path), &cancel)
+                    .await
+                    .unwrap();
+                match gate.evaluate(&call, mode) {
+                    PermissionCheck::Forbidden { .. } if mode == PermissionMode::AllowAll => {}
+                    PermissionCheck::Ask(_) if mode != PermissionMode::AllowAll => {}
+                    _ => panic!(
+                        "scratch escape allowed: {mode:?} {tool:?} {}",
+                        path.display()
+                    ),
+                }
+            }
+            assert!(
+                tools
+                    .prepare(
+                        tool,
+                        "private",
+                        &arguments(tool, &scratch.join("credentials/key")),
+                        &cancel
+                    )
+                    .await
+                    .is_err()
+            );
+        }
+    }
+    let rules = fixture.path("state/rules.json");
+    let gate = PermissionGate::default().with_rules_file(rules.clone());
+    let path = scratch.join("script");
+    std::fs::write(&path, "original fixture").unwrap();
+    for decision in ["prompt", "forbidden"] {
+        std::fs::write(
+            &rules,
+            serde_json::json!({"fileRules":[{"pattern":"script", "decision":decision}]})
+                .to_string(),
+        )
+        .unwrap();
+        for tool in [Tool::Write, Tool::Edit] {
+            let call = tools
+                .prepare(tool, "rules", &arguments(tool, &path), &cancel)
+                .await
+                .unwrap();
+            for mode in MODES {
+                assert_eq!(
+                    matches!(gate.evaluate(&call, mode), PermissionCheck::Execute(_)),
+                    decision == "prompt" && mode == PermissionMode::AllowAll
+                );
+                assert!(matches!(
+                    gate.evaluate_plan(&call, mode),
+                    PermissionCheck::Deny { .. }
+                ));
+                assert!(matches!(
+                    gate.evaluate_review(&call, mode),
+                    PermissionCheck::Deny { .. }
+                ));
+            }
+            assert!(!tools.allowed_in_plan_mode(tool.name(), &arguments(tool, &path)));
+        }
+    }
+}
+
 struct Fixture(tempfile::TempDir);
 
 impl Fixture {
