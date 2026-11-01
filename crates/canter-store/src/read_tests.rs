@@ -303,3 +303,48 @@ fn concurrent_list_calls_and_appends_converge_to_full_replay() {
     });
     assert_eq!(store.list().unwrap(), original_list(&store));
 }
+
+#[test]
+fn concurrent_lists_replay_each_changed_history_only_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::new(temp.path()).unwrap();
+    let mut writer = create(&store, "s1", 1);
+    writer
+        .append(
+            EventPayload::Warning {
+                message: "x".repeat(2 * 1024 * 1024),
+            },
+            2,
+        )
+        .unwrap();
+    let path = temp.path().join("s1/events.jsonl");
+    for round in 0..2 {
+        if round > 0 {
+            writer.append(warning(), 3).unwrap();
+        }
+        let expected = writer.snapshot().summary();
+        let start = std::sync::Barrier::new(8);
+        let bytes: u64 = std::thread::scope(|scope| {
+            let readers: Vec<_> = (0..8)
+                .map(|_| {
+                    let (store, expected, start) = (&store, &expected, &start);
+                    scope.spawn(move || {
+                        READ_BYTES.with(|bytes| bytes.set(0));
+                        start.wait();
+                        assert_eq!(store.list().unwrap(), vec![expected.clone()]);
+                        READ_BYTES.with(|bytes| bytes.get())
+                    })
+                })
+                .collect();
+            readers
+                .into_iter()
+                .map(|reader| reader.join().unwrap())
+                .sum()
+        });
+        assert_eq!(
+            bytes,
+            fs::metadata(&path).unwrap().len(),
+            "cold and invalidated caches must each replay only once"
+        );
+    }
+}

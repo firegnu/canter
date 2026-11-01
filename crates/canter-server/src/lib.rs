@@ -9,6 +9,7 @@ mod lsp_tests;
 mod reload;
 #[cfg(test)]
 mod reload_tests;
+mod startup;
 mod trust;
 
 pub use discovery::{Connection, discover, ensure_server, replace_server};
@@ -73,16 +74,7 @@ async fn serve_with_lsp(
         -> Result<Arc<canter_tools::lsp::LspService>, canter_tools::lsp::LspError>,
 ) -> Result<(), ServerError> {
     let home = state_directory()?;
-    let (lease, config, store) = tokio::task::spawn_blocking(move || {
-        let lease = lifecycle::Lease::acquire(home, replace)?;
-        let config = config::Config::load(&lease.home)?;
-        let store = canter_store::Store::new(lease.home.join("sessions"))
-            .map_err(|_| ServerError("cannot open the sessions directory".into()))?;
-        lifecycle::cleanup_creating(&lease.home.join("sessions"))?;
-        Ok::<_, ServerError>((lease, config, store))
-    })
-    .await
-    .map_err(|_| ServerError("initialization failed".into()))??;
+    let (lease, config, store) = startup::initialize(home, replace).await?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())

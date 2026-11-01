@@ -130,33 +130,7 @@ async fn large_history_read_benchmark() {
         .tempdir_in("/tmp")
         .unwrap();
     let app = app(root.path().join("state"));
-    let payload = "x".repeat(900);
-    let mut total = 0;
-    let mut last = 0;
-    for index in 0..16 {
-        let id = format!("s{index:02}");
-        let settings = SessionSnapshot::empty(&id).settings;
-        drop(app.store.create(&id, settings, 1).unwrap());
-        let path = app.store.session_dir(&id).unwrap().join("events.jsonl");
-        let mut size = fs::metadata(&path).unwrap().len();
-        let mut out =
-            std::io::BufWriter::new(fs::OpenOptions::new().append(true).open(&path).unwrap());
-        let mut seq = 1;
-        while size < 50 * 1024 * 1024 {
-            seq += 1;
-            let line = format!(
-                "{{\"sessionId\":\"{id}\",\"seq\":{seq},\"timestamp\":{seq},\"type\":\"warning\",\"message\":\"{payload}\"}}\n"
-            );
-            out.write_all(line.as_bytes()).unwrap();
-            size += line.len() as u64;
-        }
-        out.flush().unwrap();
-        total += size;
-        if index == 0 {
-            last = seq;
-        }
-    }
-    eprintln!("history_bytes={total}, long_session_events={last}");
+    let last = generate_history(&app.store);
     let socket = root.path().join("server.sock");
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
     let stop = CancellationToken::new();
@@ -210,4 +184,200 @@ async fn large_history_read_benchmark() {
     }
     stop.cancel();
     server.await.unwrap();
+}
+
+fn generate_history(store: &Store) -> u64 {
+    let payload = "x".repeat(900);
+    let mut total = 0;
+    let mut last = 0;
+    for index in 0..16 {
+        let id = format!("s{index:02}");
+        let settings = SessionSnapshot::empty(&id).settings;
+        drop(store.create(&id, settings, 1).unwrap());
+        let path = store.session_dir(&id).unwrap().join("events.jsonl");
+        let mut size = fs::metadata(&path).unwrap().len();
+        let mut out =
+            std::io::BufWriter::new(fs::OpenOptions::new().append(true).open(&path).unwrap());
+        let mut seq = 1;
+        while size < 50 * 1024 * 1024 {
+            seq += 1;
+            let line = format!(
+                "{{\"sessionId\":\"{id}\",\"seq\":{seq},\"timestamp\":{seq},\"type\":\"warning\",\"message\":\"{payload}\"}}\n"
+            );
+            out.write_all(line.as_bytes()).unwrap();
+            size += line.len() as u64;
+        }
+        out.flush().unwrap();
+        total += size;
+        if index == 0 {
+            last = seq;
+        }
+    }
+    eprintln!("history_bytes={total}, long_session_events={last}");
+    last
+}
+
+// A child test process runs the complete production startup and shutdown paths.
+#[tokio::test]
+async fn history_startup_server_process() {
+    if std::env::var_os("CANTER_HISTORY_STARTUP_PROCESS").is_some() {
+        crate::serve(false, "history-benchmark").await.unwrap();
+    }
+}
+
+#[tokio::test]
+#[ignore = "manual 800 MiB startup benchmark; run with --release"]
+async fn large_history_startup_benchmark() {
+    let root = tempfile::Builder::new()
+        .prefix("canter-startup-perf-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let home = root.path().join("state");
+    let source = Store::new(home.join("sessions")).unwrap();
+    let last = generate_history(&source);
+    fs::write(
+        home.join("config.json"),
+        serde_json::to_vec(&json!({
+            "base_url":"http://127.0.0.1:1", "model":"fake-model", "api_key":"test-only",
+            "context_window":1048576
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let old = crate::lifecycle::Lease::acquire(home.clone(), false).unwrap();
+    let warmed = Store::new(home.join("sessions")).unwrap();
+    let start = Instant::now();
+    crate::startup::warm_summaries(&warmed);
+    let prewarm = start.elapsed();
+    eprintln!("prewarm_ms={:.3}", prewarm.as_secs_f64() * 1000.0);
+    // The successor keeps this same cache across the daemon lock handoff.
+    drop(old);
+    let successor = crate::lifecycle::Lease::acquire(home.clone(), false).unwrap();
+    let start = Instant::now();
+    crate::startup::warm_summaries(&warmed);
+    let unchanged = start.elapsed();
+    eprintln!(
+        "post_lock_unchanged_ms={:.3}",
+        unchanged.as_secs_f64() * 1000.0
+    );
+    append_warning(&source, "s00", last + 1);
+    let start = Instant::now();
+    crate::startup::warm_summaries(&warmed);
+    eprintln!(
+        "post_lock_one_changed_ms={:.3}",
+        start.elapsed().as_secs_f64() * 1000.0
+    );
+    // Also account for the conservative case where every session changed.
+    for index in 0..16 {
+        append_warning(
+            &source,
+            &format!("s{index:02}"),
+            last + if index == 0 { 2 } else { 1 },
+        );
+    }
+    let start = Instant::now();
+    crate::startup::warm_summaries(&warmed);
+    let all_changed = start.elapsed();
+    eprintln!(
+        "post_lock_all_changed_ms={:.3}",
+        all_changed.as_secs_f64() * 1000.0
+    );
+    assert_eq!(warmed.list().unwrap().len(), 16);
+    drop(successor);
+    // Use a fresh process/cache. Poll only the registration, so the measured
+    // request really is the first /v1/info after production startup.
+    let startup = Instant::now();
+    let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "http::tests::history_read::history_startup_server_process",
+            "--nocapture",
+        ])
+        .env_clear()
+        .env("HOME", root.path())
+        .env("CANTER_HOME", &home)
+        .env("CANTER_HISTORY_STARTUP_PROCESS", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let registration = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "server exited during startup"
+            );
+            if let Some(registration) = crate::lifecycle::read_registration(&home).unwrap() {
+                break registration;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    eprintln!(
+        "production_startup_ms={:.3}",
+        startup.elapsed().as_secs_f64() * 1000.0
+    );
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .unix_socket(registration.socket_path)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap();
+    let start = Instant::now();
+    let response: InfoResponse = client
+        .get("http://localhost/v1/info")
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let elapsed = start.elapsed();
+    eprintln!("first_info_ms={:.3}", elapsed.as_secs_f64() * 1000.0);
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(child.id().unwrap() as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+    assert_eq!(response.sessions.len(), 16);
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "first request must fit discovery's deadline"
+    );
+    if !cfg!(debug_assertions) {
+        // Include the existing default MCP and discovery allowances; keep the
+        // ordinary startup's optional two-second probe-lock wait as well.
+        assert!(
+            prewarm.max(Duration::from_secs(2)) + unchanged + Duration::from_millis(12050)
+                < Duration::from_secs(15)
+        );
+        assert!(
+            prewarm.max(Duration::from_millis(85400)) + all_changed + Duration::from_millis(12050)
+                < Duration::from_secs(105)
+        );
+        assert!(
+            prewarm.max(Duration::from_secs(90)) + all_changed + Duration::from_millis(12050)
+                < Duration::from_secs(105)
+        );
+    }
+}
+
+fn append_warning(store: &Store, id: &str, seq: u64) {
+    let mut out = fs::OpenOptions::new()
+        .append(true)
+        .open(store.session_dir(id).unwrap().join("events.jsonl"))
+        .unwrap();
+    writeln!(out, "{{\"sessionId\":\"{id}\",\"seq\":{seq},\"timestamp\":{seq},\"type\":\"warning\",\"message\":\"changed\"}}").unwrap();
 }

@@ -226,6 +226,10 @@ impl Store {
     }
 
     pub fn list(&self) -> Result<Vec<SessionSummary>, StoreError> {
+        // One refresh at a time: waiting callers recheck metadata after the
+        // previous replay, rather than each replaying the same stale entry.
+        // This cache lock is independent of session writers and subscriptions.
+        let mut summaries = self.summaries.lock().expect("summary cache");
         let mut sessions = Vec::new();
         let mut seen = HashSet::new();
         for entry in fs::read_dir(&self.root)? {
@@ -248,10 +252,7 @@ impl Store {
                 continue;
             };
             seen.insert(id.clone());
-            let cached = self
-                .summaries
-                .lock()
-                .expect("summary cache")
+            let cached = summaries
                 .get(&id)
                 .filter(|entry| entry.stamp == stamp)
                 .map(|entry| entry.summary.clone());
@@ -267,7 +268,7 @@ impl Store {
                         // file's metadata has not changed.
                         Err(_) => continue,
                     };
-                    self.summaries.lock().expect("summary cache").insert(
+                    summaries.insert(
                         id,
                         CachedSummary {
                             stamp,
@@ -281,10 +282,7 @@ impl Store {
                 sessions.push(summary);
             }
         }
-        self.summaries
-            .lock()
-            .expect("summary cache")
-            .retain(|id, _| seen.contains(id));
+        summaries.retain(|id, _| seen.contains(id));
         sessions.sort_by(|a, b| {
             b.updated_at
                 .cmp(&a.updated_at)
