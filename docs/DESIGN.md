@@ -409,4 +409,6 @@ P2-164（10-30 主控确认）：模型 shell 仅在沙箱开启时增加可选 
 
 对照只参考 [Claude Code hooks 文档](https://code.claude.com/docs/en/hooks) 和 Codex `rust-v0.163.0` 的 `hooks/src/schema.rs`，没有搬代码。采用相同事件名、配置骨架和 stdin 字段名；Interrupt 参考 Codex，StopFailure 参考 Claude Code。canter 合并成功／失败工具通知到 PostToolUse，保留自己的权限档位和值类型。没有实现项目 hooks、prompt / agent / http 类型、钩子放行、Stop 拦下后继续、SessionStart / UserPromptSubmit 注入上下文、PreCompact / PostCompact、Notification、Subagent 事件、Codex 的钩子信任审核或 `/hooks` 界面。协议差异见第 8 条。
 
+11-01 用户追加（第 20 条文案已同意）：成功 write／edit 后若有匹配且允许运行的 PostToolUse 钩子，canter 自己只比较这次调用写入文件在钩子前后的内容，不论钩子成功、反馈或失败，内容变化或文件被删都在这次工具结果末尾追加一行 `<path> was changed by a PostToolUse hook after this call; read it again before editing it.`；这是 canter 的观察而非钩子输出，不进入系统提示词或环境段，未配置、未匹配或文件未变时保持原工具结果逐字不变。
+
 补充第 8 条的轮次语义：启用 UserPromptSubmit 预检时，TurnStarted.input 暂为空，放行后通过既有 userMessage 项目发布用户输入，TurnCompleted.input 带最终接收的初始输入，协议 reducer 在完成时回填该字段。被拦下的轮始终为空。终端在轮未完成时也从已接收的 userMessage 保留撤回草稿（包括重新连接的终端），保留发送序号以优先恢复原图片路径；不会把未放行的输入当成已接收消息。不增加字段或新的事件类型。

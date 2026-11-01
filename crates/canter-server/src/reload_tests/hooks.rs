@@ -4,6 +4,96 @@ fn command(script: &str) -> Value {
     json!([{"hooks":[{"type":"command","command":script}]}])
 }
 
+// The write/edit result on main for replacing "old\n" with "new\n".
+const FILE_RESULT: &str = "Updated nested/sample.txt: 1 lines added, 1 lines removed.";
+
+async fn file_tool_result(config: Value, tool: &str) -> String {
+    let mut fixture = Fixture::new(config).await;
+    fixture.trust(fixture.root.path()).await;
+    fs::create_dir(fixture.root.path().join("nested")).unwrap();
+    fs::write(fixture.root.path().join("nested/sample.txt"), "old\n").unwrap();
+    let url = fixture.create().await;
+    fixture.input(&url).await;
+    let first = fixture.request().await;
+    let prefix = first.body["messages"].as_array().unwrap().clone();
+    let arguments = if tool == "write" {
+        json!({"path":"nested/sample.txt","content":"new\n"})
+    } else {
+        json!({"path":"nested/sample.txt","edits":[{"oldText":"old","newText":"new"}]})
+    };
+    first.tool(tool, arguments);
+    let next = fixture.request().await;
+    let messages = next.body["messages"].as_array().unwrap();
+    assert_eq!(&messages[..prefix.len()], prefix);
+    let result = messages.iter().rev().find(|m| m["role"] == "tool").unwrap()["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    next.stop();
+    fixture.idle(&url).await;
+    fixture.shutdown().await;
+    result
+}
+
+#[tokio::test]
+async fn post_tool_file_changes_and_deletions_are_reported_regardless_of_hook_exit() {
+    for tool in ["write", "edit"] {
+        for (script, feedback) in [
+            ("printf 'fmt\\n' > nested/sample.txt", ""),
+            (
+                "printf 'fmt\\n' > nested/sample.txt; printf 'formatter feedback' >&2; exit 2",
+                "\n\nPostToolUse hook: formatter feedback",
+            ),
+            ("printf 'fmt\\n' > nested/sample.txt; exit 7", ""),
+            ("rm nested/sample.txt", ""),
+        ] {
+            let result = file_tool_result(
+                json!({"hooks":{"PostToolUse":command(&format!("cat >/dev/null; {script}"))}}),
+                tool,
+            )
+            .await;
+            assert_eq!(
+                result,
+                format!(
+                    "{FILE_RESULT}{feedback}\nnested/sample.txt was changed by a PostToolUse hook after this call; read it again before editing it."
+                ),
+                "{tool}: {script}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn post_tool_unchanged_files_and_unmatched_hooks_preserve_the_result() {
+    for tool in ["write", "edit"] {
+        for config in [
+            json!({"hooks":{"PostToolUse":command("cat >/dev/null")}}),
+            json!({"hooks":{"PostToolUse":command("cat >/dev/null; printf 'new\\n' > nested/sample.txt")}}),
+            json!({"hooks":{"PostToolUse":command("cat >/dev/null; touch nested/sample.txt")}}),
+            json!({"hooks":{"PostToolUse":command("cat >/dev/null; printf 'other\\n' > other.txt")}}),
+            json!({"hooks":{"PostToolUse":[{"matcher":"read","hooks":[{"type":"command","command":"printf 'fmt\\n' > nested/sample.txt"}]}]}}),
+            json!({"hooks":{"PostToolUse":[{"matcher":"write|edit","hooks":[]}]}}),
+        ] {
+            assert_eq!(
+                file_tool_result(config.clone(), tool).await,
+                FILE_RESULT,
+                "{tool}: {config}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn file_tool_results_without_hooks_match_main_byte_for_byte() {
+    for tool in ["write", "edit"] {
+        assert_eq!(
+            file_tool_result(json!({}), tool).await,
+            FILE_RESULT,
+            "{tool}"
+        );
+    }
+}
+
 impl Fixture {
     async fn hook_file(&self, name: &str) -> Value {
         tokio::time::timeout(Duration::from_secs(5), async {

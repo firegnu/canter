@@ -74,6 +74,14 @@ impl Hooks {
             .get(&event)
             .is_some_and(|groups| groups.iter().any(|g| !g.hooks.is_empty()))
     }
+
+    pub(crate) fn matches(&self, event: Event, tool: &str) -> bool {
+        self.0.get(&event).is_some_and(|groups| {
+            groups
+                .iter()
+                .any(|g| !g.hooks.is_empty() && g.matcher.as_ref().is_none_or(|m| m.is_match(tool)))
+        })
+    }
 }
 
 impl<'de> Deserialize<'de> for Hooks {

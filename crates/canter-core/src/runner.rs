@@ -949,6 +949,7 @@ async fn execute(
             .await
     };
     let mut executed = false;
+    let mut written_path = None;
     let mut output = match prepared {
         Err(mut output) => {
             if review
@@ -1102,16 +1103,48 @@ async fn execute(
                     {
                         shared.state.lock().await.abort_checkpoint(id).await?;
                     }
+                    if output.outcome == ToolOutcome::Completed {
+                        written_path = prepared.file_checkpoint().map(|file| file.path.to_owned());
+                    }
                     output
                 }
             }
         }
     };
+    let before_hook = if let Some(path) = written_path
+        && !shared.runtime().context.restricted_mode
+        && shared
+            .runtime()
+            .options
+            .hooks
+            .matches(crate::hooks::Event::PostToolUse, &call.name)
+    {
+        tokio::fs::read(&path).await.ok().map(|bytes| (path, bytes))
+    } else {
+        None
+    };
     if executed && let Some(reason) = crate::hooks::run(shared, crate::hooks::Event::PostToolUse,
         serde_json::json!({"tool_name":call.name,"tool_input":serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap_or_default(),"tool_response":output.text}), cancel).await? {
         output.text.push_str(&format!("\n\nPostToolUse hook: {reason}"));
     }
+    let hook_changed_file = if let Some((path, before)) = before_hook {
+        match tokio::fs::read(path).await {
+            Ok(after) => after != before,
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        }
+    } else {
+        false
+    };
     let diagnostic_items = crate::lsp::inline(shared, turn_id, &mut output).await;
+    if hook_changed_file
+        && let Item::FileChange { changes, .. } = &output.item
+        && let Some(change) = changes.first()
+    {
+        output.text.push_str(&format!(
+            "\n{} was changed by a PostToolUse hook after this call; read it again before editing it.",
+            change.path
+        ));
+    }
     shared.sync_background().await?;
     let imported = if output.images.is_empty() {
         None

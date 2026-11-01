@@ -120,3 +120,13 @@
 - 拿主意的地方：审查意见 1 采用用户指定的 a；意见 2 的统一短上限按授权定为 3 秒。SessionEnd 继续只在显式关闭或服务端关闭会话时触发，终端脱离不触发。没有待主控决定的事。
 - 没做的事：审查意见 3～7 均未改；原 UserPromptSubmit 的 A／空轮退路继续保留。没有新增协议字段或依赖，没有安装、合并 main、推送或改其它仓库。
 - 踩过的坑：首次包级运行中，既有 `startup_failure_returns_the_log_error_without_waiting_for_the_deadline` 触及其 3 秒时限；该用例缺少配置，尚未进入会话／钩子流程。未改代码或断言，单独复跑通过，随后三个包完整复跑也全部通过；不将这次超时认定为已确认的实现缺陷。
+
+## 用户追加记录
+
+- 依据：11-01 用户新增需求，不计返工；指定英文提示已按 DESIGN 第 20 条授权。
+- 做了什么：成功 write／edit 后复用工具已校验的写入路径，仅在非受限且有匹配 PostToolUse 命令时读取该文件的钩子前内容；全部钩子结束后比较字节内容，或确认文件已删除。不论钩子退出 0、2、其它错误，观测到变化就在本次工具结果最后追加 `<path> was changed by a PostToolUse hook after this call; read it again before editing it.`，路径沿用本次工具结果中的文件名。提示排在已有钩子反馈及 LSP 诊断后面，不放入系统提示词、环境段或钩子 stdin 的原工具结果。
+- 保持原样：不检查其它文件；未配置、未匹配、匹配组没有命令或受限模式时不新增文件读取；内容没变不追加观察提示。没有调整此前 UserPromptSubmit、审查轮交互、SessionEnd 触发范围或 3 秒通知关闭预算，没有新增协议、依赖、配置项。
+- 验证：先给既有格式化测试加末尾提示断言，确认因为缺少提示失败，再实现至通过。新增回归覆盖 write／edit 的等长改写、删除、钩子成功／反馈／失败，覆盖同内容重写、只改时间、只改其它文件、未匹配、空命令组；无钩子时逐字断言 main 的原始工具结果，并验证原请求前缀保持不变。四个针对性测试通过；`cargo nextest run -p canter-core -p canter-server -p canter --no-fail-fast --status-level fail --final-status-level fail`：473 通过、23 按既有配置跳过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。使用隔离 HOME／状态目录、假模型和 shell 钩子，真实模型调用 0 次，所有命令前台等完，未跑工作区全套。
+- 拿主意的地方：只对本次成功落盘的 write／edit 观察，使用实际文件内容作前后比较；不靠时间戳判断，不检查整个目录。没有待主控决定的事。
+- 没做的事：没有自动替模型重读文件，没有把文件内容或新增说明写进提示词前缀，没有安装、合并 main、推送或修改其它仓库。
+- 踩过的坑：没有。

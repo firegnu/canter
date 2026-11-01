@@ -332,6 +332,12 @@ async fn hooks_format_written_files_and_return_feedback_to_the_model() {
                 .unwrap()
                 .contains("formatter feedback")
     }));
+    assert!(messages.iter().any(|m| {
+        m["role"] == "tool"
+            && m["content"].as_str().unwrap().ends_with(
+                "sample.txt was changed by a PostToolUse hook after this call; read it again before editing it.",
+            )
+    }));
     next.stop();
     fixture.idle(&url).await;
     fixture.shutdown().await;
