@@ -272,6 +272,7 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
         .map_err(|error| error.to_string())?;
     let yolo = args.yolo.then_some(PermissionMode::AllowAll);
     let update = |model| SessionUpdateParams {
+        expected_name: None,
         add_directories: args.additional_directories.clone(),
         plan_mode: None,
         name: None,

@@ -160,6 +160,17 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::PickSession)),
     },
     Command {
+        name: "rename",
+        about: "Rename this session; omit the name to clear it",
+        takes_args: true,
+        run: |_, args| {
+            Ok(Some(Action::Update(SessionUpdateParams {
+                name: Some(args.to_owned()),
+                ..Default::default()
+            })))
+        },
+    },
+    Command {
         name: "sandbox",
         about: "Show what the sandbox allows",
         takes_args: false,
@@ -802,4 +813,32 @@ pub(crate) fn mcp(report: &canter_protocol::McpListResponse) -> Report {
             theme::secondary(),
         )]],
     )
+}
+
+#[cfg(test)]
+mod session_name_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    #[test]
+    fn rename_sets_or_clears_the_name_without_a_condition() {
+        for (input, expected) in [
+            ("/rename  A useful name  ", "A useful name"),
+            ("/rename", ""),
+        ] {
+            let mut app = App::new(canter_protocol::SessionSnapshot::empty("test"), None, 0);
+            app.handle_paste(input);
+            let action = app.handle_key(KeyEvent::from(KeyCode::Enter), 0);
+            let Some(Action::Update(params)) = action else {
+                panic!("/rename must update the session")
+            };
+            assert_eq!(params.name.as_deref(), Some(expected));
+            assert!(
+                serde_json::to_value(params)
+                    .unwrap()
+                    .get("expectedName")
+                    .is_none()
+            );
+        }
+    }
 }

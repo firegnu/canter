@@ -70,6 +70,7 @@ input 为空，没有 userMessage，clientName 为 background。每批可以有�
 | PATCH SESSION | SessionUpdateParams | SessionUpdateResponse |
 | POST COMPACT | SessionCompactParams | SessionCompactResponse |
 | DELETE SESSION | SessionCloseParams | SessionCloseResponse |
+| POST SESSION_TRASH | 无 | HTTP 204，无响应体 |
 | GET EVENTS | EventsParams | EventsResponse（每个 SSE data 帧） |
 
 协议版本为 `PROTOCOL_VERSION`。每个会话的事件序号从 1 开始，空快照的
@@ -149,8 +150,19 @@ shell 请求可带 `sessionPrefixes` 和 `proposedExecpolicyAmendment`，均为�
 新的可选字段不影响旧批准请求；旧客户端遇到新种类按 Unknown 跳过。
 
 `session.updated` 的 `settings` 是完整的公开设置（工作目录、名字、模型、思考档位、权限模式）。
-创建会话、PATCH 成功后各写一条。PATCH 中省略/null 表示不修改字段。
-PATCH 的 `name: ""` 清空会话名（快照中为 null），供撤回起名消息后重新起名。
+创建会话、实际修改的 PATCH 成功后各写一条。PATCH 中省略/null 表示不修改字段。
+PATCH 的 `name: ""` 清空会话名（快照中为 null），用于手动清名或自动撤销名字。
+可选字符串 `expectedName` 是条件更新：空串预期无名，其它字符串预期当前名字完全相同；
+不匹配时整个 PATCH 不做修改、不写事件，成功返回当前 `eventSeq`。省略/null 保留无条件更新。
+`features` 的 `conditionalName` 表示支持这一条件；新终端的自动起名/撤销先查能力，
+不支持时退回无条件更新。手动 `/rename` 不带条件，不新增存盘字段或标记文件。
+
+`POST /v1/sessions/{id}/trash` 将整个会话目录移到 `<CANTER_HOME>/trash/<id>`（0700），
+成功返回 204；保留原 DELETE 只关闭会话的含义。客户端连接、未结束的轮（含等批准/回答）、
+排队输入、目标续跑、后台待唤醒或侧问存在时返回 `conflict`；目标已存在也返回 `conflict`，
+需用户手动处理。服务端串行化删除与恢复、连接，并禁止关闭后写入。
+回收站不参与列表、继续上次会话、预热、统计；读取、恢复已删除 id 返回 `session_not_found`。
+`features` 的 `sessionTrash` 表示支持删除；终端在不支持时提示更新服务端。不提供恢复或自动清理。
 `cwd` 同时出现在公开设置和会话摘要中，供显示、选择恢复目录；PATCH 不修改它。
 环境变量只留在服务端内存中，供执行器和打开会话时的技能发现使用，不存盘，不进入事件、公开设置或快照。
 创建请求不实现 Debug，调用方也不得记录其请求体。

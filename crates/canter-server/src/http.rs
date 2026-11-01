@@ -193,6 +193,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::SESSION_STATS, get(session_stats))
         .route(routes::SESSIONS, post(create).get(list))
         .route(routes::SESSION, get(read).patch(update).delete(close))
+        .route(routes::SESSION_TRASH, post(trash))
         .route(routes::GOAL, get(goal).post(set_goal).delete(clear_goal))
         .route(routes::GOAL_PAUSE, post(pause_goal))
         .route(routes::GOAL_RESUME, post(resume_goal))
@@ -333,6 +334,8 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
         features: Some(vec![
+            "conditionalName".into(),
+            "sessionTrash".into(),
             "folderTrust".into(),
             "nonInteractiveInput".into(),
             "review".into(),
@@ -682,8 +685,10 @@ async fn resume(
         if *draining {
             return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
         }
-        let existing = app.sessions.lock().await.get(&id).cloned();
-        if let Some(session) = existing {
+        // Opening settings and the returned snapshot belong to this resume.
+        // Keep deletion from closing/moving its session halfway through.
+        let sessions = app.sessions.lock().await;
+        if let Some(session) = sessions.get(&id).cloned() {
             let cwd = session.snapshot().await.session.settings.cwd;
             let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
             session
@@ -698,10 +703,10 @@ async fn resume(
                 event_seq: response.event_seq,
             }));
         }
+        drop(sessions);
         let config = app.configuration().await?;
         let mut sessions = app.sessions.lock().await;
         let response = if let Some(session) = sessions.get(&id).cloned() {
-            drop(sessions);
             let cwd = session.snapshot().await.session.settings.cwd;
             let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
             session
@@ -1019,6 +1024,48 @@ async fn close(
     .map_err(|_| ApiError::internal())?
 }
 
+async fn trash(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<StatusCode, ApiError> {
+    // Finish the accepted command even if the HTTP caller disconnects.
+    tokio::spawn(async move {
+        let draining = app.draining.read().await;
+        if *draining {
+            return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
+        }
+        let mut sessions = app.sessions.lock().await;
+        let source = app.store.session_dir(&id).map_err(CoreError::from)?;
+        if !sessions.contains_key(&id) {
+            app.disk_snapshot(&id).await?;
+        }
+        let trash = app.home.join("trash");
+        let target = trash.join(&id);
+        let target = tokio::task::spawn_blocking(move || -> Result<PathBuf, ApiError> {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            match std::fs::symlink_metadata(&target) {
+                Ok(_) => return Err(ApiError::new(ErrorCode::Conflict, "The trash destination already exists; move or remove it manually before deleting this session.")),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                Err(_) => return Err(ApiError::internal()),
+            }
+            std::fs::DirBuilder::new().mode(0o700).recursive(true).create(&trash)
+                .map_err(|_| ApiError::internal())?;
+            std::fs::set_permissions(&trash, std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| ApiError::internal())?;
+            Ok(target)
+        }).await.map_err(|_| ApiError::internal())??;
+        if let Some(session) = sessions.get(&id) {
+            session.close_for_trash().await?;
+        }
+        sessions.remove(&id);
+        tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
+            std::fs::rename(source, target).map_err(|error| canter_store::StoreError::from(error).into())
+        }).await.map_err(|_| ApiError::internal())??;
+        app.registry_changed.notify_waiters();
+        Ok(StatusCode::NO_CONTENT)
+    }).await.map_err(|_| ApiError::internal())?
+}
+
 struct EventReader {
     app: Arc<App>,
     id: String,
@@ -1032,7 +1079,8 @@ impl EventReader {
     async fn new(app: Arc<App>, id: String, cursor: u64) -> Result<Self, ApiError> {
         let sessions = app.sessions.lock().await;
         let (pending, subscription, client) = if let Some(session) = sessions.get(&id).cloned() {
-            drop(sessions);
+            // Attach under the registry lock, so trash cannot move a session
+            // between catch-up and registering this external client.
             let subscription = session.subscribe(cursor).await?;
             (
                 VecDeque::new(),
@@ -1041,7 +1089,6 @@ impl EventReader {
             )
         } else {
             let events = app.disk_events(&id, 0).await?;
-            drop(sessions);
             let last = events
                 .last()
                 .ok_or_else(|| ApiError::new(ErrorCode::SessionNotFound, "session not found"))?
@@ -1058,6 +1105,7 @@ impl EventReader {
                 None,
             )
         };
+        drop(sessions);
         Ok(Self {
             app,
             id,
@@ -1083,9 +1131,9 @@ impl EventReader {
             // Keep the registry locked while reading an unopened session: resume cannot start a writer mid-read.
             let sessions = self.app.sessions.lock().await;
             if let Some(session) = sessions.get(&self.id).cloned() {
-                drop(sessions);
                 self.subscription = Some(session.subscribe(self.cursor).await?);
                 self._client = session.attach_client().await;
+                drop(sessions);
             } else {
                 self.pending = self.app.disk_events(&self.id, self.cursor).await?.into();
                 drop(sessions);

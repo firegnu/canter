@@ -171,6 +171,30 @@ impl Client {
         decode(self.http.get(url(routes::INFO, &[])).send().await?).await
     }
 
+    pub async fn trash_session(&self, session: &str) -> Result<(), ClientError> {
+        if !self
+            .info()
+            .await?
+            .features
+            .unwrap_or_default()
+            .iter()
+            .any(|feature| feature == "sessionTrash")
+        {
+            return Err(ClientError::Protocol("This server does not support deleting sessions; run canter serve --replace and retry".into()));
+        }
+        let response = self
+            .http
+            .post(url(routes::SESSION_TRASH, &[session]))
+            .send()
+            .await?;
+        let status = response.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(server_error(status, &response.bytes().await?))
+        }
+    }
+
     pub async fn btw(&self, session: &str, question: String) -> Result<BtwStream, ClientError> {
         self.private_answer(
             session,

@@ -12,6 +12,12 @@ pub(crate) struct Clients {
     generation: u64,
 }
 
+impl Clients {
+    pub(crate) fn is_attached(&self) -> bool {
+        self.count != 0
+    }
+}
+
 /// Keep this guard for the lifetime of an external client's event stream.
 pub struct ClientConnection(Session);
 
@@ -75,6 +81,8 @@ impl Drop for ClientConnection {
     }
 }
 
+// This only ends the client's hook lifecycle, without closing the session.
+// Waiting for user input counts as stopped here; close_for_trash is stricter.
 async fn finish_if_stopped(shared: &Shared, generation: u64) -> bool {
     let mut state = shared.state.lock().await;
     let clients = shared.clients.lock().unwrap();

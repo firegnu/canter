@@ -1,6 +1,35 @@
 use super::*;
 
 #[tokio::test]
+async fn trash_refuses_a_pending_background_wake() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("allowAll").await;
+    fixture.say(&url, "wake-background").await;
+    fixture.release("release-wake");
+    fixture
+        .until(&url, |s| {
+            !s.background_commands[0].running && s.status == SessionStatus::Idle
+        })
+        .await;
+    let response = fixture
+        .client
+        .post(format!("{url}/trash"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+    assert!(
+        response
+            .json::<canter_protocol::ErrorResponse>()
+            .await
+            .unwrap()
+            .message
+            .contains("background")
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
 async fn non_interactive_background_completion_does_not_start_a_turn() {
     let fixture = Fixture::new().await;
     let url = fixture.create("allowAll").await;

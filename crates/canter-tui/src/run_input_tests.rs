@@ -32,6 +32,7 @@ async fn picker_exits_on_hangup_while_the_event_reader_keeps_its_sender() {
     let picker = Picker::new(Vec::new(), "/work".into(), None);
     let mut shutdown = Shutdown::listen().unwrap();
     let mut tab = TabTitle::new(&BTreeMap::new());
+    let client = Client::new(std::path::Path::new("/unused-test-socket")).unwrap();
 
     // Hang up after the list is shown. Keep the sender alive, just as when
     // crossterm races the native poll and loops on EOF inside its reader.
@@ -47,6 +48,7 @@ async fn picker_exits_on_hangup_while_the_event_reader_keeps_its_sender() {
             &mut terminal,
             &mut input,
             picker,
+            &client,
             &mut shutdown,
             (&mut tab, "work"),
         ),
