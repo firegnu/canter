@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 11-01 第五十一次装 main `02c02e5`（`canter --version` 显示 `canter 0.1.0 · 02c02e5`；比上一版多 P2-172：最后一个客户端离开 10 秒后、会话停下再发 SessionEnd(client_exit)，再连上先发 SessionStart，停机钩子 10 秒，`--replace` 期限 105 秒；P2-105：订阅追赶只读新增部分，会话摘要缓存在内存、启动时预热；P2-32：`/resume` 列表按 `d` 删会话进 `~/.canter/trash/`，`/rename` 改名；P2-173：不同会话的慢操作互不挡）。要 `canter serve --replace` 后生效。
+- 退回上一版 `ac16511`：`cp -p ~/.canter/canter-ac16511 ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变；回收站里的会话旧版看不到，要用得手动移回 `~/.canter/sessions/`。
 - 11-01 第五十次装 main `ac16511`（`canter --version` 显示 `canter 0.1.0 · ac16511`；比上一版多 P2-153：`~/.canter/config.json` 的 `hooks`，照 Claude Code 九个事件，只能拦不能放行，受限会话不跑，坏钩子放行并提示；格式化钩子改了刚写的文件时提示模型重新读）。要 `canter serve --replace` 后生效；没配 `hooks` 时行为不变。
 - 退回上一版 `9ae9703`：`cp -p ~/.canter/canter-9ae9703 ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变（新加的 `InputRemovalReason::Blocked` 旧版读成 Unknown）。
 - 11-01 第四十九次装 main `9ae9703`（`canter --version` 显示 `canter 0.1.0 · 9ae9703`；比上一版多 P2-91：每个会话一个固定的临时目录 `/tmp/canter-shell-<uid>-<16位哈希>` 作 shell 和 `!` 的 `$TMPDIR`，环境一段告诉模型路径和用途；沙箱开着时 write / edit 写进去免批准；会话关掉或服务端停掉时清空）。要 `canter serve --replace` 后才生效；已有会话重开时环境一段会重新生成，带上这一行。
