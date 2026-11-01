@@ -89,3 +89,25 @@
 - **回归与检查**：坏记录查询／创建／恢复、POST 保留坏文件、删除目录后恢复、worktree 共享和 gitdir／commondir 反向链接错误等目标检查均先确认旧行为失败，再实现通过。最终相关服务端 10 项通过（含指定 reload 测试、受限 LSP、额外目录隔离）；`cargo nextest run -p canter-tui` 整包 582 项通过；终端及 exec 相关 17 项通过（含 `/new`、`/handoff`、计划新会话、`-r`、`/resume`）；协议 37 项通过，生成物一致性检查通过；核心 LSP 串行复跑 22 项通过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。所有命令前台等待完成，测试使用指定独立 target、隔离 HOME / CANTER_HOME 和本地假模型；未跑工作区全套。
 - **踩过的坑与验证限制**：删除目录的终端测试起初把 fixture 的服务端启动目录一起删了，改成单独的待删会话目录；跨目录 `/resume` 测试必须先 Tab 显示全部目录。补测发现 exec 恢复会跳过打开后发出的警告，保留恢复游标后创建／恢复均能显示。核心 LSP 与服务端合跑的 32 项中有 6 项核心 LSP 诊断时序失败，主要是未在既有 500 ms 窗口内收到诊断；这组核心测试不调用本轮新增的信任更新／警告方法，nextest 每个测试进程各自 rustc 编译假 LSP。保留原代码、断言和超时，串行 22 项全部通过，证据指向并行负载／启动抖动，未扩大本件去改这批测试。失败日志在 `/tmp/canter-p2-168-check/core-server-rework-final.log`，串行结果在 `core-lsp-rework-serial.log`，供主控合并前全套验证参考。
 - **没做的事与待决事项**：按主控要求未改“家目录本身是仓库”、LSP 每次读取信任记录、恢复多次读取三项建议，HANDOFF 由主控记；未加全局配置、CLI 参数或加目录询问，未修改本任务之外的测试断言／超时。未读改真实 `~/.canter`、未调用真实模型、未开其它 agent、未推送或合并 main。没有新增需要主控决定的事项。
+
+
+## 关掉的 LSP 计时测试
+
+2026-11-01，按用户新决定停止本轮 LSP 测试修复，将以下 6 项暂时跳过，后续修复追踪到 P2-146。它们均位于 `canter-core` 包的 `lsp` 集成测试目标，完整测试函数名如下：
+
+- `quick_diagnostics_are_in_the_file_tool_result`
+- `reports_are_bounded_and_only_delivered_diagnostics_are_deduplicated`
+- `confirmed_empty_reports_resolve_issues_without_claiming_project_checks_passed`
+- `history_changes_restart_reports_without_replaying_old_batches`
+- `expired_delivery_is_not_revived_by_a_later_model_request`
+- `push_and_pull_reports_for_one_file_are_not_duplicated`
+
+每项只添加 `#[ignore = "timing-sensitive under parallel load; fix tracked in P2-146"]`。未改断言、超时、假 LSP、产品代码或其它测试；`canter-tools` 的 `lsp::service::tests::rss_limits_stop_busy_process_trees_and_require_explicit_retry` 保持既有 ignore 不动。
+
+单独运行这 6 项的命令（仍使用任务指定的独立 target 和隔离 HOME / CANTER_HOME）：
+
+```sh
+cargo nextest run -p canter-core --test lsp --run-ignored only
+```
+
+验证：前台运行一次 `cargo nextest run -p canter-core --test lsp`，确认 6 项跳过；剩余 16 项中 15 项通过，`subscription_stop_and_retry_are_visible_without_waking_the_model` 在读取空的语言服务器列表时失败（index out of bounds）。单独复跑该项通过；它不在本次指定的 6 项中，按“不动别的测试”保留原样，没有把整组结果记成全部通过。整组日志在 `/tmp/canter-p2-168-check/lsp-ignore-tests.log`，单项复跑日志在 `lsp-ignore-extra-recheck.log`。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。未跑工作区全套、未推送或合并。

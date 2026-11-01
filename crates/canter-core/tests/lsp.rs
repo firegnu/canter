@@ -224,6 +224,7 @@ fn runtime(root: &Path, lsp: Option<Arc<LspService>>, mode: &str) -> RuntimeCont
 }
 
 #[tokio::test]
+#[ignore = "timing-sensitive under parallel load; fix tracked in P2-146"]
 async fn quick_diagnostics_are_in_the_file_tool_result() {
     let root = tempfile::tempdir().unwrap();
     let server = Server::start(vec![write("bad"), done()]).await;
@@ -346,6 +347,7 @@ fn tool_text(request: &Value) -> String {
         .into()
 }
 #[tokio::test]
+#[ignore = "timing-sensitive under parallel load; fix tracked in P2-146"]
 async fn reports_are_bounded_and_only_delivered_diagnostics_are_deduplicated() {
     let root = tempfile::tempdir().unwrap();
     let diagnostics:Vec<_>=(0..30).map(|i|json!({"range":{"start":{"line":i,"character":0},"end":{"line":i,"character":1}},"severity":if i==0{3}else{1},"code":format!("E{i}"),"message":format!("issue {i} {}","字".repeat(500))})).collect();
@@ -383,6 +385,7 @@ async fn reports_are_bounded_and_only_delivered_diagnostics_are_deduplicated() {
     );
 }
 #[tokio::test]
+#[ignore = "timing-sensitive under parallel load; fix tracked in P2-146"]
 async fn confirmed_empty_reports_resolve_issues_without_claiming_project_checks_passed() {
     let root = tempfile::tempdir().unwrap();
     let server = Server::start(vec![write("bad"), done(), write("good"), done()]).await;
@@ -721,6 +724,7 @@ async fn retracting_a_late_notice_keeps_later_user_words_labeled_as_user() {
 }
 
 #[tokio::test]
+#[ignore = "timing-sensitive under parallel load; fix tracked in P2-146"]
 async fn history_changes_restart_reports_without_replaying_old_batches() {
     for action in ["rewind", "retract", "compact"] {
         let root = tempfile::tempdir().unwrap();
@@ -866,6 +870,7 @@ async fn unversioned_empty_lists_do_not_claim_issues_are_resolved() {
     assert!(!output.contains("Resolved since last report:"));
 }
 #[tokio::test]
+#[ignore = "timing-sensitive under parallel load; fix tracked in P2-146"]
 async fn expired_delivery_is_not_revived_by_a_later_model_request() {
     let root = tempfile::tempdir().unwrap();
     let server = Server::start(vec![write("bad"), done(), done()]).await;
@@ -1010,6 +1015,7 @@ async fn a_stopped_subscription_remains_stopped_on_reopen_and_can_be_retried() {
 }
 
 #[tokio::test]
+#[ignore = "timing-sensitive under parallel load; fix tracked in P2-146"]
 async fn push_and_pull_reports_for_one_file_are_not_duplicated() {
     let root = tempfile::tempdir().unwrap();
     let server = Server::start(vec![write("bad"), done(), write("good"), done()]).await;
