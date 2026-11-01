@@ -126,6 +126,10 @@
   - P2-21 插件系统 10-26 挪到第三期。
 - P1-10 修第一期已知问题（`docs/任务/P1-10-第一期已知问题.md`）：第 4、5 条拆成 P1-13、P1-14 已派；第 1 到 3 条（性能）先不做。
 
+- P2-22 记忆（11-01 合并，没装）交叉审查没改的：
+  - 已打开的受限会话转可信时，记忆加载失败的那条警告写在快照游标之前，正在打开的客户端看不到（之前已连着的看得到）；例外和提示词是对的。
+  - 可以不改：每次打开可信会话都会建 `projects/<键>/memory` 空目录；用 shell 在记忆目录建的符号链接 `/memory` 不列、也删不了，只能手动清；没存分段的旧会话被可信分叉后信任又变时，前缀只用记忆段重建，下次普通打开整段重算；`canter-core/tests/prompts.rs` 用 `include_str!` 读任务文件里的批准原文，改那个代码块测试会失败。
+- 测试 `canter::deployment service_environment_survives_every_start_and_path_based_mcp_connects`（P2-14 加的）在 P2-22 合并前全套刚开跑时失败一次（第 20 个），报 `["serve", "--replace"]: … stderr: "canter: cannot connect to the registered server; it was not replaced"`（`crates/canter/tests/deployment.rs:189`），单独重跑通过。和下面 discovery 那两个一样像负载高时的偶发；再失败时看是不是旧服务端已登记、还没开始接连接时被探测。
 ## 已知没修的问题
 
 - P2-14（11-01 合并，没装）交叉审查可以不改：
