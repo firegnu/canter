@@ -11,6 +11,12 @@ fn main() {
     let dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("set by cargo"));
     let git = OsStr::new("git");
     let package = std::env::var("CARGO_PKG_VERSION").expect("set by cargo");
+    // Cargo keeps the original manifest directory for `cargo install --path`.
+    let source = dir
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("workspace layout");
+    println!("cargo:rustc-env=CANTER_SOURCE_DIR={}", source.display());
     let commit = version::commit(git, &dir);
     println!(
         "cargo:rustc-env=CANTER_VERSION={}",

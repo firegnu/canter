@@ -121,6 +121,204 @@ impl Harness {
 }
 
 struct PausedModel(Option<canter_model::ToolCall>);
+
+struct GoalGapModel(Arc<Notify>);
+impl Model for GoalGapModel {
+    fn stream(&self, _: Request, _: CancellationToken) -> ModelStream<'_> {
+        let finish = self.0.clone();
+        Box::pin(async_stream::stream! {
+            finish.notified().await;
+            yield Ok(ModelEvent::Finished(FinishReason::Stop));
+        })
+    }
+}
+
+#[tokio::test]
+async fn running_turns_includes_scheduled_goal_between_turns_until_pause_or_clear() {
+    for action in ["pause", "clear"] {
+        let finish = Arc::new(Notify::new());
+        let test = Harness::with_model(Arc::new(GoalGapModel(finish.clone()))).await;
+        let url = test.create().await;
+        let id = url.rsplit('/').next().unwrap();
+        let session = test.app.opened_session(id).await.unwrap();
+        tokio::time::pause();
+        session
+            .set_goal(GoalSetParams {
+                objective: "Keep working".into(),
+                budget_usd: Some(0.0),
+            })
+            .await
+            .unwrap();
+        finish.notify_one();
+        // Keep the executor runnable so paused time cannot advance over the gap.
+        let gap = loop {
+            let snapshot = session.snapshot().await;
+            if snapshot
+                .session
+                .turns
+                .last()
+                .is_some_and(|turn| turn.status == TurnStatus::Completed)
+            {
+                break snapshot;
+            }
+            tokio::task::yield_now().await;
+        };
+        assert_eq!(
+            gap.session.goal.as_ref().unwrap().status,
+            GoalStatus::Active
+        );
+        let report = serde_json::to_value(running_turns(State(test.app.clone())).await.0).unwrap();
+        assert_eq!(
+            report["data"].as_array().unwrap().len(),
+            1,
+            "scheduled goal must still block deployment: {report}"
+        );
+        assert_eq!(report["data"][0]["activity"], "Continuing a goal");
+        assert!(report["data"][0]["turnId"].is_null());
+        assert_eq!(session.snapshot().await.event_seq, gap.event_seq);
+        session.control_goal(action).await.unwrap();
+        assert!(
+            running_turns(State(test.app.clone()))
+                .await
+                .0
+                .data
+                .is_empty()
+        );
+        tokio::time::resume();
+        test.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn running_turns_reports_live_work_approval_and_answers_but_not_crashed_history() {
+    for kind in ["work", "approval", "answer"] {
+        let call = match kind {
+            "approval" => Some(canter_model::ToolCall { id: "write".into(), name: "write".into(), arguments: json!({"path":"file.txt", "content":"changed"}).to_string() }),
+            "answer" => Some(canter_model::ToolCall { id: "ask".into(), name: "ask_user".into(), arguments: json!({"question":"Which way?", "options":[{"label":"A", "description":"First"}, {"label":"B", "description":"Second"}]}).to_string() }),
+            _ => None,
+        };
+        let test = Harness::with_model(Arc::new(PausedModel(call))).await;
+        let url = test.create().await;
+        let _idle = test.create().await;
+        test.patch(&url, json!({"name":"Deployment check"})).await;
+        test.client
+            .post(format!("{url}/input"))
+            .json(&json!({"input":[{"type":"text","text":"hello"}], "clientName":"test"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        let before = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let read = test.read(&url).await;
+                if (kind == "work"
+                    && read.session.turns.iter().flat_map(|turn| &turn.items).any(
+                        |item| matches!(item, Item::AgentMessage { text, .. } if text == "working"),
+                    ))
+                    || (kind != "work" && read.session.status == SessionStatus::WaitingApproval)
+                {
+                    break read;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // A crashed session has durable InProgress history but no runtime session.
+        let mut writer = test
+            .app
+            .store
+            .create("crashed", before.session.settings.clone(), 1)
+            .unwrap();
+        writer
+            .append(
+                EventPayload::TurnStarted {
+                    turn: before.session.turns.last().unwrap().clone(),
+                    input_id: None,
+                },
+                2,
+            )
+            .unwrap();
+        drop(writer);
+        let response = test
+            .client
+            .get("http://localhost/v1/runningTurns")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "running-turn query must exist"
+        );
+        let report: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(report["data"].as_array().unwrap().len(), 1);
+        assert_eq!(report["data"][0]["id"], before.session.id);
+        assert_eq!(report["data"][0]["name"], "Deployment check");
+        let activity = report["data"][0]["activity"].as_str().unwrap();
+        match kind {
+            "approval" => assert!(
+                activity.contains("approval") && activity.contains("write"),
+                "{activity}"
+            ),
+            "answer" => assert!(activity.contains("answer"), "{activity}"),
+            _ => assert!(
+                activity.contains("hello"),
+                "activity should identify the current request: {activity}"
+            ),
+        }
+        assert_eq!(
+            test.read(&url).await.event_seq,
+            before.event_seq,
+            "query must be read-only"
+        );
+        let info: InfoResponse = test
+            .client
+            .get("http://localhost/v1/info")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(
+            info.features
+                .unwrap()
+                .iter()
+                .any(|feature| feature == "runningTurns")
+        );
+        test.client
+            .post(format!("{url}/interrupt"))
+            .json(&json!({"turnId":before.session.turns.last().unwrap().id}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let report: serde_json::Value = test
+                    .client
+                    .get("http://localhost/v1/runningTurns")
+                    .send()
+                    .await
+                    .unwrap()
+                    .json()
+                    .await
+                    .unwrap();
+                if report["data"] == json!([]) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        test.stop().await;
+    }
+}
+
 impl Model for PausedModel {
     fn stream(&self, _: Request, cancel: CancellationToken) -> ModelStream<'_> {
         let call = self.0.clone();

@@ -29,6 +29,7 @@ pub struct GoalResponse {
 
 pub mod routes {
     pub const INFO: &str = "/v1/info";
+    pub const RUNNING_TURNS: &str = "/v1/runningTurns";
     pub const FOLDER_TRUST: &str = "/v1/folderTrust";
     pub const COMMAND_RULES: &str = "/v1/commandRules";
     pub const COMMAND_RULE_DELETE: &str = "/v1/commandRules/delete";
@@ -341,6 +342,21 @@ pub enum SkillSource {
 #[serde(rename_all = "camelCase")]
 pub struct SessionListResponse {
     pub data: Vec<SessionSummary>,
+}
+
+/// GET /v1/runningTurns. Live work, including scheduled automatic continuation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct RunningTurnsResponse {
+    pub data: Vec<RunningTurn>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RunningTurn {
+    pub id: String,
+    pub name: Option<String>,
+    pub turn_id: Option<String>,
+    pub activity: String,
 }
 
 /// POST /v1/sessions. Do not log this body: env may contain credentials.

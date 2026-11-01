@@ -15,6 +15,13 @@ pub struct Connection {
 }
 
 pub async fn discover(home: &Path) -> Result<Option<Connection>, ServerError> {
+    discover_during_replacement(home, None).await
+}
+
+async fn discover_during_replacement(
+    home: &Path,
+    retiring: Option<&str>,
+) -> Result<Option<Connection>, ServerError> {
     let directory = home.to_path_buf();
     let registration = tokio::task::spawn_blocking(move || {
         if !lifecycle::server_running(&directory)? {
@@ -49,8 +56,16 @@ pub async fn discover(home: &Path) -> Result<Option<Connection>, ServerError> {
             .json::<InfoResponse>()
             .await
     };
-    let result = tokio::time::timeout(Duration::from_secs(2), probe)
-        .await
+    let result = tokio::time::timeout(Duration::from_secs(2), probe).await;
+    // HTTP shutdown closes the listener before releasing the daemon lock. Only
+    // the instance being replaced may refuse connections during that interval.
+    if retiring == Some(registration.instance.as_str())
+        && matches!(&result, Ok(Err(error)) if error.is_connect())
+        && server_running(home).await?
+    {
+        return Ok(None);
+    }
+    let result = result
         .map_err(|_| {
             ServerError("the registered server is not responding; it was not replaced".into())
         })
@@ -178,6 +193,9 @@ async fn start_server(
         )
         .stderr(log)
         .kill_on_drop(replace);
+    if let Some(environment) = crate::service_environment() {
+        command.envs(environment);
+    }
     // setsid is the only pre-exec operation; it detaches the daemon from the client's terminal.
     unsafe {
         command.pre_exec(|| {
@@ -190,7 +208,8 @@ async fn start_server(
         .spawn()
         .map_err(|_| ServerError("cannot start canter serve".into()))?;
     loop {
-        if let Some(connection) = discover(home).await?
+        if let Some(connection) =
+            discover_during_replacement(home, previous_instance.as_deref()).await?
             && previous_instance.as_ref() != Some(&connection.registration.instance)
         {
             if replace {

@@ -177,7 +177,7 @@ btw 已收到的用量计入本会话和跨会话汇总（取消后也记），�
 `discover(&home)` 只查找；`ensure_server(&home, &canter_executable)` 查不到时后台启动
 指定可执行文件的 `serve`，最多等 15 秒。多个客户端通过 `startup.lock` 串行启动，拿锁后
 重新发现已有服务端；服务端本身仍由 `server.lock` 保证单实例。子进程用独立 Unix session，
-清空继承环境，仅传 `CANTER_HOME`，stdin 关闭，stdout/stderr 写入 0600 的 `server.log`。
+清空继承环境，仅传 `CANTER_HOME`；装有服务配置时另带其中的 PATH、HOME（见下文 MCP 一节）。stdin 关闭，stdout/stderr 写入 0600 的 `server.log`。
 子进程退出且服务端锁空闲时立即返回错误，并附日志最后一个非空行，不等满启动期限。
 
 成功返回 `Connection { registration, client, version_warning }`。使用里面的 reqwest
@@ -314,7 +314,7 @@ canter mcp remove local
 stdio 直接执行命令，不经 shell；`args`、`env` 可省略。子进程先清空环境，只从服务端复制
 已有的 `HOME`、`PATH`、`USER`、`LOGNAME`、`SHELL`、`TMPDIR`、`LANG`、`LC_ALL`，
 不继承 `CANTER_HOME` 或其它变量，再用配置里的 `env` 增加或覆盖。
-客户端后台启动的服务端环境基本为空；`command` 写绝对路径，需要的 `PATH`、`HOME` 写进 `env`。
+装有 `canter service install` 写入的 plist 时，每次新起的服务端（包括客户端自动启动、upgrade / rollback / `serve --replace`）都使用其中保存的 PATH 和 HOME；更新它们需重新 install，下次起服务端生效。未装服务时，客户端后台启动的服务端环境基本为空；`command` 写绝对路径，需要的 `PATH`、`HOME` 写进 `env`。plist 读不了或格式错误时有提示，并按未装服务处理。
 HTTP 使用 Streamable HTTP，`headers` 可省略；仅 localhost / 回环 IP 允许 HTTP，其余必须
 HTTPS，不走代理，不跟随重定向。配置修改在服务端下次启动时生效。
 环境变量和请求头只保存在私有配置与运行内存中；配置解析、连接及协议错误不回显配置，

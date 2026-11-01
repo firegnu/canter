@@ -9,12 +9,14 @@ mod lsp_tests;
 mod reload;
 #[cfg(test)]
 mod reload_tests;
+mod service_env;
 mod session_locks;
 mod startup;
 mod trust;
 
 pub use discovery::{Connection, discover, ensure_server, replace_server};
 pub use lifecycle::{Registration, UPGRADE_GRACE};
+pub use service_env::service_environment;
 
 use std::{
     future::IntoFuture,

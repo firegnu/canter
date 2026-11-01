@@ -228,6 +228,7 @@ impl App {
 pub(crate) fn router(app: Arc<App>) -> Router {
     Router::new()
         .route(routes::INFO, get(info))
+        .route(routes::RUNNING_TURNS, get(running_turns))
         .route(routes::FOLDER_TRUST, get(folder_trust).post(trust_folder))
         .route(routes::MCP, get(mcp))
         .route(routes::COMMAND_RULES, get(command_rules))
@@ -382,6 +383,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
         features: Some(vec![
+            "runningTurns".into(),
             "sessionFork".into(),
             "conditionalName".into(),
             "sessionTrash".into(),
@@ -537,6 +539,17 @@ async fn list(state: State<Arc<App>>) -> Result<Json<SessionListResponse>, ApiEr
     Ok(Json(SessionListResponse {
         data: info(state).await?.0.sessions,
     }))
+}
+
+async fn running_turns(State(app): State<Arc<App>>) -> Json<RunningTurnsResponse> {
+    let mut data = Vec::new();
+    for session in app.opened_sessions().await {
+        if let Some(work) = session.running_work().await {
+            data.push(work);
+        }
+    }
+    data.sort_by(|a, b| a.id.cmp(&b.id));
+    Json(RunningTurnsResponse { data })
 }
 
 async fn ledger(app: &App, id: &str) -> Result<canter_core::usage::Ledger, ApiError> {

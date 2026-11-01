@@ -3,10 +3,33 @@ use std::process::ExitCode;
 
 use canter::{ChatArgs, Command, Context, USAGE};
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
-    let result = match canter::parse(arguments.clone()) {
+    let parsed = canter::parse(arguments.clone());
+    if matches!(
+        parsed,
+        Ok(Command::Serve {
+            foreground: true,
+            ..
+        })
+    ) && let Some(environment) = canter_server::service_environment()
+    {
+        for (name, value) in environment {
+            // No runtime or other threads exist yet; children must inherit these values.
+            unsafe {
+                std::env::set_var(name, value);
+            }
+        }
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("create Tokio runtime")
+        .block_on(run(arguments, parsed))
+}
+
+async fn run(arguments: Vec<std::ffi::OsString>, parsed: Result<Command, String>) -> ExitCode {
+    let result = match parsed {
         Ok(Command::Serve {
             replace: true,
             foreground: false,
@@ -15,6 +38,10 @@ async fn main() -> ExitCode {
             .await
             .map_err(|error| error.to_string()),
         Ok(Command::Chat(args)) => chat(args).await,
+        Ok(Command::Service(command)) => {
+            canter::service::run(command).map(|output| print!("{output}"))
+        }
+        Ok(Command::Deployment(command)) => canter::deployment::run(command).await,
         Ok(Command::Exec(args)) => {
             let result = match Context::current() {
                 Ok(context) => canter::exec::run(args, context).await,

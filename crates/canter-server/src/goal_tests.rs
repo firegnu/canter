@@ -423,6 +423,13 @@ async fn goal_starts_immediately_continues_and_model_completes_it() {
         })
         .await;
     assert_eq!(snapshot["goal"]["budgetUsd"], 5.0);
+    assert!(
+        running_turns(State(fixture.app.clone()))
+            .await
+            .0
+            .data
+            .is_empty()
+    );
     assert_eq!(snapshot["turns"].as_array().unwrap().len(), 2);
     let requests = fixture.requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 3);
@@ -471,6 +478,13 @@ async fn goal_budget_at_ninety_percent_summarizes_once_without_running_tools() {
         })
         .await;
     assert_eq!(snapshot["goal"]["cost"]["usd"], 10.0);
+    assert!(
+        running_turns(State(fixture.app.clone()))
+            .await
+            .0
+            .data
+            .is_empty()
+    );
     assert!(!fixture.root.path().join("project/must-not-start").exists());
     assert!(
         !fixture
@@ -534,6 +548,13 @@ async fn goal_pause_requires_explicit_resume_and_clear_allows_replacement() {
             s["status"] == "idle" && s["goal"]["status"] == "blocked"
         })
         .await;
+    assert!(
+        running_turns(State(fixture.app.clone()))
+            .await
+            .0
+            .data
+            .is_empty()
+    );
     fixture
         .client
         .delete(format!("{url}/goal"))
