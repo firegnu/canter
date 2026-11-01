@@ -1,4 +1,4 @@
-# 任务：第二期-19 - /permissions 查看和删除放行规则
+# 任务：第二期-18 - /permissions 查看和删除放行规则
 
 2026-10-30，canter/main 交给 canter/dev-permissions（Codex，gpt-6-astra / xhigh）；交叉审查交 Claude Code（opus[1m] / xhigh）。
 路由：碰要害 / 交叉审查要 / 影响面：碰要害（路由：重（置信 0.98）、要、碰要害）
