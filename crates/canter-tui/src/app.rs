@@ -136,6 +136,7 @@ pub enum Action {
     /// Open a new session with this one's directory, model and permission
     /// mode, and switch to it.
     NewSession,
+    ForkSession,
     /// Show the session list and switch to the session picked.
     PickSession,
     /// Go back to this session, the one `/handoff` came from.
@@ -1280,7 +1281,12 @@ impl App {
         let action = self.key_action(key, shown, at);
         if matches!(
             action,
-            Some(Action::NewSession | Action::PickSession | Action::ReturnFromHandoff(_))
+            Some(
+                Action::NewSession
+                    | Action::ForkSession
+                    | Action::PickSession
+                    | Action::ReturnFromHandoff(_)
+            )
         ) {
             self.mouse.link = None;
         }
@@ -3285,6 +3291,21 @@ impl App {
     /// into a marker).
     pub fn handle_paste(&mut self, text: &str) {
         self.mouse.selection = None;
+        if matches!(commands::parse(text), Some(("fork", "")))
+            && let Some(request) = self.open_request()
+            && (self.approval.request != request.id || self.approval.custom.is_none())
+        {
+            self.approval = ApprovalCursor {
+                request: request.id.clone(),
+                custom: Some(text.into()),
+                mode: match &request.kind {
+                    RequestKind::PlanApproval(plan) => Some(plan.approval_policy),
+                    _ => None,
+                },
+                ..Default::default()
+            };
+            return;
+        }
         if self.open_request().is_some_and(|request| {
             request.id == self.approval.request
                 && matches!(
@@ -4409,6 +4430,43 @@ impl App {
         if !shown.answers {
             return None;
         }
+        // Fork is a session command even while a request owns the input box.
+        // Do not resolve, cancel or mark that request answered.
+        if !guarded
+            && !self.answered.contains(&request_id)
+            && self
+                .snapshot
+                .pending_requests
+                .iter()
+                .any(|request| request.id == request_id)
+        {
+            if key.code == KeyCode::Char('/') && key.modifiers.is_empty() && !shown.custom_input {
+                if self.approval.request != request_id {
+                    self.approval = ApprovalCursor {
+                        request: request_id.clone(),
+                        mode: shown.plan_approval_policy,
+                        ..Default::default()
+                    };
+                }
+                self.approval.custom = Some("/".into());
+                return None;
+            }
+            if key.code == KeyCode::Enter
+                && shown.custom_input
+                && self.approval.request == request_id
+                && let Some(("fork", args)) =
+                    self.approval.custom.as_deref().and_then(commands::parse)
+            {
+                if args.is_empty() {
+                    return Some(Action::ForkSession);
+                }
+                self.copier.show(
+                    Line::from(" /fork does not take arguments"),
+                    at + crate::copy::FAILED_MS,
+                );
+                return None;
+            }
+        }
         if let Some(mode) = shown.plan_approval_policy {
             return self.plan_key(key, &request_id, mode, shown.custom_input, guarded, at);
         }
@@ -4571,7 +4629,7 @@ impl App {
                 }
                 KeyCode::Enter if text.trim_start().starts_with('/') => {
                     self.copier.show(
-                        Line::from(" Only /plan is available here; edit the command to continue"),
+                        Line::from(" Only /plan and /fork are available here; edit the command to continue"),
                         at + crate::copy::FAILED_MS,
                     );
                     return None;

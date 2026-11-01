@@ -137,7 +137,11 @@ fn an_unknown_slash_command_in_the_plan_box_is_not_sent_as_feedback() {
         "a command typo must not decline the plan or send feedback"
     );
     screen.draw();
-    assert!(screen.screen().contains("Only /plan is available here"));
+    assert!(
+        screen
+            .screen()
+            .contains("Only /plan and /fork are available here")
+    );
     assert_eq!(screen.key(KeyCode::Char('n')), None);
     screen.draw();
     assert_eq!(

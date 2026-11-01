@@ -47,6 +47,9 @@ pub(crate) enum HistoryEntry {
     PlanModeNotice {
         message: Message,
     },
+    ForkNotice {
+        message: Message,
+    },
     SkillNotice {
         message: Message,
     },
@@ -142,6 +145,7 @@ pub(crate) fn restore(
             }
             HistoryEntry::ToolImages { content } => tool_images.extend(content),
             HistoryEntry::PlanModeNotice { message }
+            | HistoryEntry::ForkNotice { message }
             | HistoryEntry::SkillNotice { message }
             | HistoryEntry::GoalNotice { message }
             | HistoryEntry::DirectoriesNotice { message } => plan_mode_notices.push(message),

@@ -186,6 +186,7 @@ pub(crate) async fn compact(
             let retained_messages = user_inputs.len();
             state.user_messages = user_inputs;
             state.measured_context = None;
+            state.restate_fork_notice().await?;
             state.restate_plan_mode().await?;
             state.restate_skills().await?;
             state.restate_goal().await?;
@@ -322,6 +323,7 @@ async fn summarize(
     let mut images = Vec::new();
     for (index, message) in history.iter().enumerate() {
         if crate::plan_mode::is_notice(message)
+            || crate::fork::is_notice(message)
             || crate::goal::is_notice(message)
             || skill_notices.contains(message)
         {

@@ -634,6 +634,11 @@ where
                         messages = receiver;
                     }
                 }
+                Some(Action::ForkSession) => {
+                    if let Some(receiver) = chat.fork_session(&mut ui).await {
+                        messages = receiver;
+                    }
+                }
                 Some(Action::PickSession) => {
                     let picked = chat
                         .pick_session(&mut ui, &mut input, &mut shutdown, &mut tab)
@@ -928,6 +933,23 @@ async fn require_tags(client: &Client) -> Result<(), ClientError> {
         Err(ClientError::Protocol(
             "This server does not support session tags; run canter serve --replace and retry"
                 .into(),
+        ))
+    }
+}
+
+async fn require_fork(client: &Client) -> Result<(), ClientError> {
+    if client
+        .info()
+        .await?
+        .features
+        .unwrap_or_default()
+        .iter()
+        .any(|feature| feature == "sessionFork")
+    {
+        Ok(())
+    } else {
+        Err(ClientError::Protocol(
+            "This server does not support /fork; run canter serve --replace and retry".into(),
         ))
     }
 }
@@ -1590,6 +1612,35 @@ impl<C: Connector> Chat<C> {
         }
     }
 
+    /// `/fork`: switch only after both creation and subscription succeed.
+    async fn fork_session<B: Backend>(
+        &mut self,
+        ui: &mut Ui<B>,
+    ) -> Option<mpsc::UnboundedReceiver<Message>> {
+        let failed = "Could not fork this session";
+        let params = canter_protocol::SessionResumeParams {
+            env: self.env.clone(),
+            restricted_mode: ui.app().snapshot().settings.restricted_mode == Some(true),
+        };
+        let response = async {
+            require_fork(&self.client).await?;
+            self.client.fork_session(&self.session, &params).await
+        }
+        .await;
+        match response {
+            Ok(created) => {
+                let receiver = self.show(ui, created.session, failed).await?;
+                ui.app_mut()
+                    .warning("Session forked. The original session is still available in /resume.");
+                Some(receiver)
+            }
+            Err(error) => {
+                ui.app_mut().warning(&format!("{failed}: {error}"));
+                None
+            }
+        }
+    }
+
     /// `/resume`: the session list in the screen's place; the session picked
     /// is shown instead of the one before, which stays open on the server.
     /// Esc goes back to the session on screen. Returns where the picked
@@ -2195,6 +2246,7 @@ impl<C: Connector> Chat<C> {
             | Action::RewindPreview(_)
             | Action::Rewind(_)
             | Action::NewSession
+            | Action::ForkSession
             | Action::PickSession
             | Action::ReturnFromHandoff(_)
             | Action::PickModel

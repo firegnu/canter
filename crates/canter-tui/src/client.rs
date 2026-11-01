@@ -457,6 +457,21 @@ impl Client {
         decode(response).await
     }
 
+    /// POST /v1/sessions/{id}/fork: copy completed turns into a new session.
+    pub async fn fork_session(
+        &self,
+        session: &str,
+        params: &SessionResumeParams,
+    ) -> Result<canter_protocol::SessionCreateResponse, ClientError> {
+        let response = self
+            .http
+            .post(url(routes::SESSION_FORK, &[session]))
+            .json(params)
+            .send()
+            .await?;
+        decode(response).await
+    }
+
     /// PATCH /v1/sessions/{id}: change the name, model or permission mode.
     pub async fn update(
         &self,
