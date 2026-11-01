@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 11-01 第四十八次装 main `f915ba9`（`canter --version` 显示 `canter 0.1.0 · f915ba9`；比上一版多 P2-168：第一次在没信任过的仓库里开会话时弹框问信任，按 git 仓库根记在 `~/.canter/trusted_folders.json`，worktree 认回主仓库；选受限就这次不起 LSP、下次还问；`canter exec` 不问，没信任过的按受限跑、stderr 一行提示；记录坏了或目录没了按受限打开并提示）。新终端要求服务端有 `folderTrust`，用户 `canter serve --replace` 后重开终端。
+- 退回上一版 `212c0bf`：这次装之前没留备份。要退就在 main 仓库 `git worktree add --detach /tmp/canter-212c0bf 212c0bf`，在那里 `cargo install --locked --path crates/canter`（单独的编译目录），再 `canter serve --replace`；用完删掉这个 worktree。`trusted_folders.json` 旧版不读，留着无害。
 - 11-01 第四十七次装 main `212c0bf`（`canter --version` 显示 `canter 0.1.0 · 212c0bf`；代码同 P2-154 合并后，之后只改了文档。比上一版多 P2-154：服务端盯着 `~/.canter/config.json`，保存后校验、下一轮生效，正在跑的轮用旧配置跑完；MCP、LSP 逐服务等旧轮结束再交接；改坏了沿用旧配置，终端一行英文提示，改对后恢复）。用户自己 `cargo install`，要 `canter serve --replace` 一次换上新服务端；之后改 `config.json` 不用再重启。
 - 退回上一版 `d948540`：`cp -p ~/.canter/canter-d948540 ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变。
 - 10-31 第四十六次装 main `d948540`（`canter --version` 显示 `canter 0.1.0 · d948540`；比上一版多 P2-171：压缩的前缀请求沿用会话的思考设置和普通输出上限，摘要只取正文）。同日第四十五次装 `eb6ffa4`（P2-144：压缩请求复用普通请求的前缀、末尾加总结说明，超窗、上下文太长、服务商拒收、回工具调用或空文字时退回拼稿；`canter stats` 记压缩走的哪条路），两次之间没留备份。11-01 长程试跑压缩请求命中缓存 96–98%（见 P2-144 任务文件）。服务端改了：用户 `canter serve --replace`。
