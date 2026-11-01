@@ -239,10 +239,23 @@ impl State {
                 text: catalog,
             });
         }
+        if !fresh_fork {
+            segments.extend(crate::memory::segments(tools).await?);
+        }
         let (prefix, sections) = crate::prompt::chat_completions(&segments);
         self.skills = skills;
         self.prefix_sections = sections;
         if fresh_fork {
+            if tools
+                .memory()
+                .is_none_or(|memory| memory.roots().is_ok_and(|roots| roots.is_none()))
+            {
+                let mut saved = self.prefix_segments.clone().unwrap_or_default();
+                if saved.iter().any(crate::memory::is_memory) {
+                    saved.retain(|segment| !crate::memory::is_memory(segment));
+                    self.set_memory_prefix(saved).await?;
+                }
+            }
             if let Some(saved) = &self.prefix_segments {
                 self.prefix_sections = crate::prompt::chat_completions(saved).1;
             }
@@ -601,6 +614,24 @@ impl Session {
         }
         let mut runtime = (*self.shared.runtime()).clone();
         runtime.context.restricted_mode = !trusted;
+        if let Some(memory) = runtime.tools.memory() {
+            let opening = memory.clone();
+            tokio::task::spawn_blocking(move || opening.set_enabled(trusted))
+                .await
+                .map_err(|_| CoreError::internal())?
+                .map_err(|error| {
+                    CoreError::new(
+                        ErrorCode::Internal,
+                        &format!("Could not open memory: {error}"),
+                    )
+                })?;
+            if let Err(error) = state.refresh_memory(&runtime.tools).await {
+                memory
+                    .set_enabled(false)
+                    .expect("disabling memory does not access the filesystem");
+                return Err(error);
+            }
+        }
         if !trusted {
             if let Some(lsp) = runtime.tools.lsp() {
                 lsp.close().await;
@@ -1851,6 +1882,20 @@ async fn executor(
             )
         });
     tokio::task::spawn_blocking(move || {
+        let memory = runtime
+            .memory_home
+            .map(|home| {
+                let memory = Arc::new(canter_tools::memory::Memory::new(home, cwd.clone().into()));
+                memory.set_enabled(!runtime.restricted_mode)?;
+                Ok::<_, std::io::Error>(memory)
+            })
+            .transpose()
+            .map_err(|error| {
+                CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    &format!("Could not open memory: {error}"),
+                )
+            })?;
         let scratch = Arc::new(canter_tools::ScratchDirectory::for_session(
             &session_directory,
         ));
@@ -1861,13 +1906,15 @@ async fn executor(
             scratch,
         )
         .map(|executor| {
-            let tools = Tools::new(Arc::new(executor.with_sandbox(options.sandbox)))
-                .with_telemetry(options.telemetry)
-                .with_plan_enabled(options.plan_enabled)
-                .with_web_search(options.web_search)
-                .with_mcp(runtime.mcp_tools)
-                .with_mcp_tool_search(options.mcp_tool_search)
-                .with_web_fetch_timeout(options.web_fetch_timeout);
+            let tools = Tools::new(Arc::new(
+                executor.with_memory(memory).with_sandbox(options.sandbox),
+            ))
+            .with_telemetry(options.telemetry)
+            .with_plan_enabled(options.plan_enabled)
+            .with_web_search(options.web_search)
+            .with_mcp(runtime.mcp_tools)
+            .with_mcp_tool_search(options.mcp_tool_search)
+            .with_web_fetch_timeout(options.web_fetch_timeout);
             match lsp {
                 Some(lsp) => tools.with_lsp(lsp),
                 None => tools,

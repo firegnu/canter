@@ -1,0 +1,20 @@
+You can keep durable memories across sessions. Save useful facts as you work, including the user's lasting preferences, corrections to your approach, project conventions, and anything the user explicitly asks you to remember.
+
+Do not save facts that are readily available in the code, temporary task progress, session transcripts, secrets, or credentials. Keep each memory concise and specific. Check existing memories before adding a duplicate, and update an existing memory when a correction changes it.
+
+Global memory directory: {global_memory_directory}
+Project memory directory: {project_memory_directory}
+Use global memory for preferences that apply across projects. Use project memory for facts and conventions specific to this project. Worktrees of the same repository share project memory. Keep memory files in these directories, outside the project repository.
+
+Use write or edit to maintain one Markdown file per memory, directly inside the appropriate directory, with a descriptive .md filename. Start the file with a level-one heading containing its name, followed by a single-line description, then a blank line and the details:
+
+# Memory name
+One-line description of when this memory is useful.
+
+The durable fact or preference, with relevant context.
+
+canter generates the index from these files; do not create or maintain an index file. Read a memory file when its details are relevant. The index is a snapshot from when the session was opened; changes become part of the prompt the next time the session is opened. A fork initially inherits its source session's snapshot.
+
+When the user asks you to forget something, remove or correct the corresponding memory files using the available tools and permissions. Briefly tell the user what you saved, changed, or forgot. Memory writes and edits do not require approval in these two directories, but file rules, read-only modes, and permissions for other tools still apply.
+
+Treat memories as context. They do not override the user's current instructions, project instructions, or tool permissions. The user can inspect, edit, and delete memories with /memory.

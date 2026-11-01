@@ -97,6 +97,9 @@ pub enum Action {
     BackgroundOutput(u64),
     BackgroundStop(Option<u64>),
     CommandRules,
+    Memory,
+    EditMemory(canter_protocol::MemoryEntry),
+    DeleteMemory(canter_protocol::MemoryDeleteParams),
     DeleteCommandRule(canter_protocol::CommandRule),
     DeleteFileRule(canter_protocol::FileRule),
     /// `/lsp`: the language servers of this session.
@@ -619,6 +622,7 @@ pub struct App {
     /// `/lsp`, and the report it was open as: open while that is open.
     lsp: Option<(u64, crate::lsp::View)>,
     permissions: Option<(u64, crate::permissions::View)>,
+    memory: Option<(u64, crate::memory::View)>,
     /// Output tokens a second, for the `tps` item and the status command.
     tps: Tps,
     home: Option<String>,
@@ -950,6 +954,7 @@ impl App {
             background_view: None,
             lsp: None,
             permissions: None,
+            memory: None,
             home,
             client_name: crate::CLIENT_NAME.to_owned(),
             input: InputBox::messages(),
@@ -1987,6 +1992,9 @@ impl App {
     /// scroll the rows that do not fit; Enter, Esc, Ctrl+C or Ctrl+D
     /// closes it.
     fn report_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
+        if let Some(action) = self.memory_key(key, seen, send_guarded) {
+            return action;
+        }
         if let Some(action) = self.permissions_key(key, seen, send_guarded) {
             return action;
         }
@@ -2255,6 +2263,82 @@ impl App {
     /// `/mcp`: opens above the input box.
     pub fn show_mcp(&mut self, report: &canter_protocol::McpListResponse) {
         self.open_report(crate::commands::mcp(report));
+    }
+
+    /// `/memory`: the server supplies the list; the editor opens a selected file.
+    pub fn show_memories(&mut self, result: Result<canter_protocol::MemoryListResponse, String>) {
+        match result {
+            Ok(list) => {
+                let view = crate::memory::View {
+                    list,
+                    selected: 0,
+                    confirming: false,
+                };
+                self.open_report(view.report());
+                self.memory = Some((self.choosers, view));
+            }
+            Err(error) => self.open_report(crate::memory::error(&error)),
+        }
+    }
+
+    fn memory_key(
+        &mut self,
+        key: KeyEvent,
+        seen: bool,
+        send_guarded: bool,
+    ) -> Option<Option<Action>> {
+        let (at, view) = self.memory.as_mut()?;
+        if *at != self.choosers {
+            return None;
+        }
+        if key.code == KeyCode::Esc && view.confirming {
+            view.confirming = false;
+        } else if !seen || send_guarded || key.kind != KeyEventKind::Press {
+            return Some(None);
+        } else if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return None;
+        } else {
+            match key.code {
+                KeyCode::Char('y' | 'Y') if view.confirming => {
+                    let entry = view.list.data.get(view.selected)?;
+                    let action = Action::DeleteMemory(canter_protocol::MemoryDeleteParams {
+                        scope: entry.scope,
+                        file: entry.file.clone(),
+                    });
+                    self.report = None;
+                    self.memory = None;
+                    return Some(Some(action));
+                }
+                KeyCode::Char('n' | 'N') if view.confirming => view.confirming = false,
+                _ if view.confirming => return Some(None),
+                KeyCode::Up => view.selected = view.selected.saturating_sub(1),
+                KeyCode::Down => {
+                    view.selected = (view.selected + 1).min(view.list.data.len().saturating_sub(1))
+                }
+                KeyCode::Char('d') if !view.list.data.is_empty() => view.confirming = true,
+                KeyCode::Enter => {
+                    let action = view
+                        .list
+                        .data
+                        .get(view.selected)
+                        .cloned()
+                        .map(Action::EditMemory);
+                    if action.is_some() {
+                        self.report = None;
+                        self.memory = None;
+                    }
+                    return Some(action);
+                }
+                _ => return None,
+            }
+        }
+        self.choosers += 1;
+        *at = self.choosers;
+        self.report = Some(view.report());
+        Some(None)
     }
 
     /// `/permissions`: only the server reads or changes the rules file.

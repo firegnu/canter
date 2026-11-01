@@ -980,6 +980,7 @@ pub enum ContextSectionKind {
     ProjectInstructions,
     Skills,
     Environment,
+    Memory,
     #[serde(other)]
     Unknown,
 }

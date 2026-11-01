@@ -146,7 +146,10 @@ impl PermissionGate {
     }
 
     fn outside_directories(&self, call: &PreparedCall) -> bool {
-        if !matches!(call.tool, Tool::Write | Tool::Edit) || self.scratch_write(call) {
+        if !matches!(call.tool, Tool::Write | Tool::Edit)
+            || self.scratch_write(call)
+            || self.memory_write(call)
+        {
             return false;
         }
         let Some(path) = &call.resolved_path else {
@@ -174,6 +177,19 @@ impl PermissionGate {
                     call.resolved_path
                         .as_ref()
                         .is_some_and(|path| path.starts_with(root))
+                })
+    }
+
+    fn memory_write(&self, call: &PreparedCall) -> bool {
+        matches!(call.tool, Tool::Write | Tool::Edit)
+            && call
+                .executor
+                .memory()
+                .and_then(|memory| memory.roots().ok().flatten())
+                .is_some_and(|roots| {
+                    call.resolved_path
+                        .as_ref()
+                        .is_some_and(|path| roots.contains(path))
                 })
     }
 
@@ -388,7 +404,7 @@ impl PermissionGate {
         if let Some(check) = self.file_rules(call, mode) {
             return check;
         }
-        if self.scratch_write(call) {
+        if self.scratch_write(call) || self.memory_write(call) {
             return PermissionCheck::Execute(ExecutionPermit { call });
         }
         if let Action::Shell(args) = &call.action {

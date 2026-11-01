@@ -142,6 +142,7 @@ impl App {
         restricted_mode: bool,
     ) -> RuntimeContext {
         RuntimeContext {
+            memory_home: Some(self.home.clone()),
             restricted_mode,
             lsp_file_access: Some(crate::trust::file_access(self.home.clone())),
             lsp: config.lsp.clone(),
@@ -232,6 +233,8 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::FOLDER_TRUST, get(folder_trust).post(trust_folder))
         .route(routes::MCP, get(mcp))
         .route(routes::COMMAND_RULES, get(command_rules))
+        .route(routes::MEMORIES, get(memories))
+        .route(routes::MEMORY_DELETE, post(delete_memory))
         .route(routes::COMMAND_RULE_DELETE, post(delete_command_rule))
         .route(routes::FILE_RULE_DELETE, post(delete_file_rule))
         .route(routes::MODELS, get(models))
@@ -383,6 +386,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
         features: Some(vec![
+            "memory".into(),
             "runningTurns".into(),
             "sessionFork".into(),
             "conditionalName".into(),
@@ -456,6 +460,22 @@ async fn command_rules(
     .map_err(|_| ApiError::internal())?
     .map_err(|error| command_rules_error(&path, error))?;
     Ok(Json(data))
+}
+
+async fn memories(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<MemoryListResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.memories().await?))
+}
+
+async fn delete_memory(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+    params: Result<Json<MemoryDeleteParams>, JsonRejection>,
+) -> Result<StatusCode, ApiError> {
+    app.session(&id).await?.delete_memory(body(params)?).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn command_rules_error(path: &std::path::Path, error: std::io::Error) -> ApiError {

@@ -11,6 +11,28 @@ use std::sync::Mutex;
 
 const WAIT: Duration = Duration::from_secs(10);
 
+#[tokio::test]
+async fn memory_editor_opens_the_existing_file_and_preserves_the_message_draft() {
+    let editor = Editor::new(
+        "printf '%s' \"$1\" > '$OUT/path'\nprintf '# Changed\\nUpdated description.\\n\\nBody.\\n' > \"$1\"\n",
+    );
+    let path = editor.dir.path().join("memory with spaces.md");
+    std::fs::write(&path, "# Before\nOld description.\n\nBody.").unwrap();
+    let mut ui = drafted();
+    let before = ui.app().editor_draft();
+    let (_sender, input) = input();
+    edit_memory(&mut ui, &input, &editor.env(), path.to_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(editor.out("path"), path.to_str().unwrap());
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .starts_with("# Changed\nUpdated description.")
+    );
+    assert_eq!(ui.app().editor_draft(), before);
+}
+
 fn lines(n: usize) -> String {
     (1..=n)
         .map(|i| format!("line {i}"))

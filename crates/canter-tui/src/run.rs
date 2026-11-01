@@ -743,6 +743,38 @@ where
                         .map_err(|error| error.to_string());
                     ui.app_mut().show_command_rules(result);
                 }
+                Some(Action::Memory) => {
+                    let result = chat
+                        .client
+                        .memories(&chat.session)
+                        .await
+                        .map_err(|error| error.to_string());
+                    ui.app_mut().show_memories(result);
+                }
+                Some(Action::DeleteMemory(params)) => {
+                    match chat.client.delete_memory(&chat.session, &params).await {
+                        Ok(()) => {
+                            let result = chat
+                                .client
+                                .memories(&chat.session)
+                                .await
+                                .map_err(|error| error.to_string());
+                            ui.app_mut().show_memories(result);
+                        }
+                        Err(error) => ui.app_mut().show_memories(Err(error.to_string())),
+                    }
+                }
+                Some(Action::EditMemory(entry)) => {
+                    if let Err(error) = edit_memory(&mut ui, &input, &chat.env, &entry.path).await {
+                        break 'run Err(error);
+                    }
+                    let result = chat
+                        .client
+                        .memories(&chat.session)
+                        .await
+                        .map_err(|error| error.to_string());
+                    ui.app_mut().show_memories(result);
+                }
                 Some(action @ (Action::DeleteCommandRule(_) | Action::DeleteFileRule(_))) => {
                     let (description, result) = match action {
                         Action::DeleteCommandRule(rule) => (
@@ -1152,6 +1184,38 @@ where
     input.focused.store(true, Ordering::SeqCst);
     ui.terminal_mut().clear().map_err(terminal_error)?;
     ui.app_mut().editor_closed(edited, now_ms());
+    Ok(())
+}
+
+async fn edit_memory<B>(
+    ui: &mut Ui<B>,
+    input: &Input,
+    env: &BTreeMap<String, String>,
+    path: &str,
+) -> Result<(), RunError>
+where
+    B: FrameSync,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    let (program, args) = match crate::editor::command(env) {
+        Ok(command) => command,
+        Err(reason) => {
+            ui.app_mut().warning(&reason);
+            return Ok(());
+        }
+    };
+    let _reading = input.reading.lock().await;
+    ui.backend_mut().suspend().map_err(terminal_error)?;
+    let result = crate::editor::open(&program, &args, std::path::Path::new(path)).await;
+    if let Some(tty) = &input.tty {
+        unsafe { nix::libc::tcflush(tty.as_raw_fd(), nix::libc::TCIFLUSH) };
+    }
+    ui.backend_mut().resume().map_err(terminal_error)?;
+    input.focused.store(true, Ordering::SeqCst);
+    ui.terminal_mut().clear().map_err(terminal_error)?;
+    if let Err(reason) = result {
+        ui.app_mut().warning(&reason);
+    }
     Ok(())
 }
 
@@ -2259,6 +2323,9 @@ impl<C: Connector> Chat<C> {
             | Action::Sandbox
             | Action::Mcp
             | Action::CommandRules
+            | Action::Memory
+            | Action::EditMemory(_)
+            | Action::DeleteMemory(_)
             | Action::DeleteCommandRule(_)
             | Action::DeleteFileRule(_)
             | Action::Files

@@ -24,6 +24,8 @@
   replace.lock           串行化主动升级的请求
   replace.json           主动升级时才存在；目标是完整的旧登记记录
   sessions/<id>/         canter-store 的事件和模型历史
+  memory/                全局记忆，每份一个 Markdown 文件（目录 0700）
+  projects/<key>/memory/  项目记忆；同仓库 worktree 共用，目录 0700
   input_history.jsonl    终端的输入历史（目录、文字、时间，最多 2000 条）；服务端不读写
   input_history.lock     几个终端写输入历史时轮流用的文件锁
 ```

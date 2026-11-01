@@ -12,6 +12,7 @@ pub mod hooks;
 mod images;
 mod journal;
 mod lsp;
+mod memory;
 mod plan_mode;
 mod prompt;
 mod response;
@@ -39,6 +40,8 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 #[derive(Clone, Default)]
 pub struct RuntimeContext {
+    /// Server-owned state directory; embedded callers opt in explicitly.
+    pub memory_home: Option<PathBuf>,
     pub restricted_mode: bool,
     pub lsp_file_access: Option<canter_tools::lsp::FileAccess>,
     pub lsp: Option<std::sync::Arc<canter_tools::lsp::LspService>>,

@@ -184,9 +184,10 @@ impl Shared {
                 .tools
                 .scratch_directory()
                 .expect("local session executor");
+            let memory = old.tools.memory();
             let executor = tokio::task::spawn_blocking(move || {
                 LocalExecutor::with_scratch_directory(cwd.into(), environment, protected, scratch)
-                    .map(|executor| executor.with_sandbox(sandbox))
+                    .map(|executor| executor.with_memory(memory).with_sandbox(sandbox))
             })
             .await
             .map_err(|_| CoreError::internal())?

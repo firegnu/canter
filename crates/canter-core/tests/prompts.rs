@@ -54,6 +54,95 @@ fn contexts(store: &Store) -> Vec<Value> {
 }
 
 #[tokio::test]
+async fn memory_prompt_uses_approved_text_and_freezes_the_opening_index() {
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    let home = temp.path().join("home");
+    let project = temp.path().join("project");
+    let state = home.join(".canter");
+    std::fs::create_dir_all(state.join("memory")).unwrap();
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(
+        state.join("memory/preference.md"),
+        "# Tests\nUse isolated fixtures.\n\nPrivate detail.\n",
+    )
+    .unwrap();
+    let store = Arc::new(Store::new(state.join("sessions")).unwrap());
+    let mut runtime = runtime(&home);
+    runtime.memory_home = Some(state.clone());
+    let (session, _) = Session::create(
+        store.clone(),
+        "prompt".into(),
+        settings(&project),
+        runtime.clone(),
+        Arc::new(NoRequests),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let records = contexts(&store);
+    let segments = records.last().unwrap()["segments"].as_array().unwrap();
+    let instructions = segments
+        .iter()
+        .find(|segment| segment["kind"] == "memory_instructions")
+        .expect("trusted sessions need the memory instructions even before their first memory");
+    let text = instructions["text"].as_str().unwrap();
+    let approved = include_str!("../../../docs/任务/P2-22-记忆.md")
+        .split("<memory_instructions>\n")
+        .nth(1)
+        .unwrap()
+        .split("\n</memory_instructions>")
+        .next()
+        .unwrap();
+    let directories = canter_tools::memory::Memory::new(state.clone(), project.clone());
+    directories.set_enabled(true).unwrap();
+    let roots = directories.roots().unwrap().unwrap();
+    assert_eq!(
+        text,
+        approved
+            .replace(
+                "{global_memory_directory}",
+                &serde_json::to_string(&roots.global).unwrap()
+            )
+            .replace(
+                "{project_memory_directory}",
+                &serde_json::to_string(&roots.project).unwrap()
+            )
+    );
+    let index = segments
+        .iter()
+        .find(|segment| segment["kind"] == "memory_index")
+        .unwrap()["text"]
+        .as_str()
+        .unwrap();
+    assert!(index.contains("Use isolated fixtures."));
+    assert!(!index.contains("Private detail"));
+    std::fs::write(
+        state.join("memory/preference.md"),
+        "# Tests\nUpdated preference.\n\nBody.\n",
+    )
+    .unwrap();
+    assert_eq!(contexts(&store), records);
+    session.close().await.unwrap();
+    let (session, _) = Session::open(
+        store.clone(),
+        "prompt".into(),
+        runtime,
+        Arc::new(NoRequests),
+        CoreOptions::default(),
+    )
+    .await
+    .unwrap();
+    let records = contexts(&store);
+    assert!(
+        records.last().unwrap()["messages"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Updated preference.")
+    );
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn unavailable_scratch_warns_without_preventing_session_open() {
     for sandbox in [false, true] {
         let temp = tempfile::tempdir_in("/tmp").unwrap();

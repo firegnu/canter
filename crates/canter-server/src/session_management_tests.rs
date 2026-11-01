@@ -6,6 +6,9 @@ pub(crate) mod registry;
 #[path = "fork_tests.rs"]
 mod fork;
 
+#[path = "memory_tests.rs"]
+mod memory;
+
 struct Harness {
     app: Arc<App>,
     client: reqwest::Client,

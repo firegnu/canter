@@ -26,6 +26,7 @@ pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<(String
             ContextSectionKind::ProjectInstructions => "Project AGENTS.md".into(),
             ContextSectionKind::Skills => format!("Skills ({})", report.skill_count),
             ContextSectionKind::Environment => "Environment".into(),
+            ContextSectionKind::Memory => "Memory".into(),
             ContextSectionKind::Unknown => continue,
         };
         let path = section
