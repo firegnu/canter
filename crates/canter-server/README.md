@@ -177,7 +177,7 @@ btw 已收到的用量计入本会话和跨会话汇总（取消后也记），�
 `discover(&home)` 只查找；`ensure_server(&home, &canter_executable)` 查不到时后台启动
 指定可执行文件的 `serve`，最多等 15 秒。多个客户端通过 `startup.lock` 串行启动，拿锁后
 重新发现已有服务端；服务端本身仍由 `server.lock` 保证单实例。子进程用独立 Unix session，
-清空继承环境，仅传 `CANTER_HOME`，stdin 关闭，stdout/stderr 写入 0600 的 `server.log`。
+清空继承环境，仅传 `CANTER_HOME`；装有服务配置时另带其中的 PATH、HOME（见下文 MCP 一节）。stdin 关闭，stdout/stderr 写入 0600 的 `server.log`。
 子进程退出且服务端锁空闲时立即返回错误，并附日志最后一个非空行，不等满启动期限。
 
 成功返回 `Connection { registration, client, version_warning }`。使用里面的 reqwest

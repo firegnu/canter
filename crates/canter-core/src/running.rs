@@ -43,7 +43,15 @@ impl Session {
             .iter()
             .find(|command| command.running)
         {
-            format!("Running background command #{}", command.id)
+            let preview = command
+                .command
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(60)
+                .collect::<String>();
+            format!("Running background command #{}: {preview}", command.id)
         } else if !state.automatic_turns_paused
             && state
                 .background_events

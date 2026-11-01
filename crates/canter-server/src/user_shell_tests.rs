@@ -520,6 +520,12 @@ async fn running_turns_waits_for_background_commands_and_scheduled_model_wakes()
                 .is_empty()
         );
         fixture.close().await;
+        assert!(
+            report.data[0]
+                .activity
+                .contains("while [ ! -e release-wake ]; do sleep 0.01"),
+            "waiting list must identify the command: {report:?}"
+        );
     }
 }
 
