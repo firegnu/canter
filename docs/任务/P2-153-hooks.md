@@ -130,3 +130,13 @@
 - 拿主意的地方：只对本次成功落盘的 write／edit 观察，使用实际文件内容作前后比较；不靠时间戳判断，不检查整个目录。没有待主控决定的事。
 - 没做的事：没有自动替模型重读文件，没有把文件内容或新增说明写进提示词前缀，没有安装、合并 main、推送或修改其它仓库。
 - 踩过的坑：没有。
+
+## 主控审查
+
+2026-11-01，canter/main。
+- 第一版 `d83cf6e`：PreToolUse 只在 canter 自己判成「要问」「直接执行」时跑，拦下当 Forbidden、跑完重判权限，放宽不了限制；改到的旧测试只是提示文字加了 `and hooks`，没放宽断言。全套 1321 个通过。开发中途问 UserPromptSubmit 被拦后「不进历史」的范围，主控定 A（不进模型历史、不发给模型、重开不回放；排队记录可留；尽量不留空轮，要大改启动流程就退回空轮），开发用了空轮退路，理由在完成记录。
+- 交叉审查（canter/review-hooks，Claude Code opus[1m] xhigh）：可以合并，必须改 0。用户 11-01 定：建议改 1 选 a（恢复审查轮 ask_user / submit_plan 原行为），建议改 2 顺带改（停机时通知钩子封顶，开发定 3 秒），建议改 3 SessionEnd 照现在、另开 P2-172。返工 1 `83fe920`。
+- 用户追加（不算返工）`703b0d5`：write / edit 的 PostToolUse 钩子改了刚写的文件时，工具结果末尾加 `<path> was changed by a PostToolUse hook after this call; read it again before editing it.`；没配钩子时工具结果逐字不变。
+- 复核：可以合并，建议改 1 条（3 秒到期用 abort，窄窗口下关会话可能报错），记 HANDOFF。`703b0d5` 上全套 1327 个全部通过（25 个本来就设为跳过），文档示例测试没有失败。
+- 用户另提的两件记进 P2-172：退出终端不触发 SessionEnd；停机时 SessionEnd 只有 3 秒。
+结果：返工 1 次
