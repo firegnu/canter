@@ -157,7 +157,7 @@
   - 服务端重启后或模型请求最终失败后，目标仍显示 active，其实已不自动续跑；要用户发消息或 `/goal resume`。
   - `/goal <目标>` 或 `/goal resume` 请求还没返回时按 Esc，请求失败的话这次 Esc 会丢。
   - 接 GPT 订阅（P2-80）后订阅模型没有价钱，每个目标会马上收尾，到时在 P2-80 里定。
-- LSP 计时测试（10-31 P2-169 合并前全套时看到，main 上也有）：机器负载高（约 8～10）时 canter-core `lsp` 有 6 项超时失败，负载低时通过。和改动无关，全套里见到先看负载。 11-01 用户：「先封掉。我日常现在也不用LSP，把这个几个封掉的记到146就好了」，P2-168 分支上给其中 6 项加了 `#[ignore]`（合并后生效），名字和单独跑的命令见 P2-146；`subscription_stop_and_retry_are_visible_without_waking_the_model` 也在整组跑时挂过一次，没关。
+- LSP 计时测试（10-31 P2-169 合并前全套时看到，main 上也有）：机器负载高（约 8～10）时 canter-core `lsp` 有 6 项超时失败，负载低时通过。和改动无关，全套里见到先看负载。 11-01 用户：「先封掉。我日常现在也不用LSP，把这个几个封掉的记到146就好了」，P2-168 分支上先关 6 项，合并前全套又挂 3 项后用户：「全部封掉，记到146」，`canter-core` `tests/lsp.rs` 的 22 项全部 `#[ignore]`（合并后生效），名字和单独跑的命令见 P2-146。`canter-server` 的 `lsp_tests`、`reload_tests` 和 `canter-tools` 的 LSP 单元测试（除 `rss_limits`）照常跑。
 - 非交互模式（P2-30 复核建议改和可以不改，10-31 按「只有必须改挡合并」不改，等用户试用）：
   - 轮开始后 exec 因客户端出错退出（`canter exec --json … | head -n 1` 让标准输出提前关掉、事件流中断）时不打断服务端那一轮，没人看着会一直跑完、继续花钱；终端能接上按 Esc 打断。同一个错误 stderr 打两遍（`canter exec: Broken pipe`、`canter: Broken pipe`）。改法：已有 turn_id 时出错前尽量 interrupt 一次；stdout 写失败后不再写结局行。
   - exec 那一轮在跑时，终端用户打字收到 `input with turn-scoped settings requires an idle session`，看不懂原因；改法是区分「当前是非交互轮」和「这次输入带了临时设置」分开报。
