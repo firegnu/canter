@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 11-01 第五十二次装 main `190b81e`（`canter --version` 显示 `canter 0.1.0 · 190b81e`；比上一版多 P2-157：会话里 `/fork` 整份复制已完成的轮，切到新会话，名字加 ` (fork)`，原会话不动、用量不重算）。要 `canter serve --replace` 后生效。
+- 退回上一版 `02c02e5`：`cp -p ~/.canter/canter-02c02e5 ~/.cargo/bin/canter`，再 `canter serve --replace`。已有文件格式没变；分叉出来的会话多一种模型历史记录 `fork_notice`，旧版能不能打开没验证，退回后先别开分叉出来的会话。
 - 11-01 第五十一次装 main `02c02e5`（`canter --version` 显示 `canter 0.1.0 · 02c02e5`；比上一版多 P2-172：最后一个客户端离开 10 秒后、会话停下再发 SessionEnd(client_exit)，再连上先发 SessionStart，停机钩子 10 秒，`--replace` 期限 105 秒；P2-105：订阅追赶只读新增部分，会话摘要缓存在内存、启动时预热；P2-32：`/resume` 列表按 `d` 删会话进 `~/.canter/trash/`，`/rename` 改名；P2-173：不同会话的慢操作互不挡）。要 `canter serve --replace` 后生效。
 - 退回上一版 `ac16511`：`cp -p ~/.canter/canter-ac16511 ~/.cargo/bin/canter`，再 `canter serve --replace`。存盘格式没变；回收站里的会话旧版看不到，要用得手动移回 `~/.canter/sessions/`。
 - 11-01 第五十次装 main `ac16511`（`canter --version` 显示 `canter 0.1.0 · ac16511`；比上一版多 P2-153：`~/.canter/config.json` 的 `hooks`，照 Claude Code 九个事件，只能拦不能放行，受限会话不跑，坏钩子放行并提示；格式化钩子改了刚写的文件时提示模型重新读）。要 `canter serve --replace` 后生效；没配 `hooks` 时行为不变。
