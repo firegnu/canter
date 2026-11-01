@@ -113,6 +113,34 @@ cargo nextest run -p canter-core --test lsp --run-ignored only
 验证：前台运行一次 `cargo nextest run -p canter-core --test lsp`，确认 6 项跳过；剩余 16 项中 15 项通过，`subscription_stop_and_retry_are_visible_without_waking_the_model` 在读取空的语言服务器列表时失败（index out of bounds）。单独复跑该项通过；它不在本次指定的 6 项中，按“不动别的测试”保留原样，没有把整组结果记成全部通过。整组日志在 `/tmp/canter-p2-168-check/lsp-ignore-tests.log`，单项复跑日志在 `lsp-ignore-extra-recheck.log`。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。未跑工作区全套、未推送或合并。
 
 
+### 追加：剩余 LSP 测试全部暂时关闭
+
+2026-11-01，主控在 `707b936` 上跑全套，1315 项中有 3 项失败：`subscription_stop_and_retry_are_visible_without_waking_the_model`、`unversioned_empty_lists_do_not_claim_issues_are_resolved`、`diagnostics_at_the_500ms_boundary_are_delivered_once`。用户 11-01 原话：「全部封掉，记到146」。
+
+按此决定，在 `crates/canter-core/tests/lsp.rs` 剩余 16 项测试上添加同样的 `#[ignore = "timing-sensitive under parallel load; fix tracked in P2-146"]`，此前 6 项保持不动，现在此目标共 22 项全部暂时跳过。新增的完整测试函数名如下：
+
+- `late_diagnostics_wait_for_a_real_request_and_preserve_the_sent_prefix`
+- `changing_the_file_discards_pending_diagnostics`
+- `subscription_stop_and_retry_are_visible_without_waking_the_model`
+- `disabled_lsp_requests_match_the_original_path_byte_for_byte`
+- `unsupported_files_and_stopped_subscriptions_preserve_plain_tool_results`
+- `reopening_keeps_delivered_history_but_drops_undelivered_diagnostics`
+- `compaction_labels_late_diagnostics_as_tools_and_does_not_replay_them`
+- `retracting_a_late_notice_keeps_later_user_words_labeled_as_user`
+- `rewind_discards_the_removed_changes_pending_diagnostics`
+- `unversioned_empty_lists_do_not_claim_issues_are_resolved`
+- `diagnostics_at_the_500ms_boundary_are_delivered_once`
+- `server_failure_does_not_turn_a_successful_file_change_into_failure`
+- `rewriting_the_same_bytes_invalidates_the_original_pending_change`
+- `a_stopped_subscription_remains_stopped_on_reopen_and_can_be_retried`
+- `late_diagnostics_do_not_enter_history_during_a_stream`
+- `server_initialization_is_inside_the_file_tools_wait_budget`
+
+上面的 `cargo nextest run -p canter-core --test lsp --run-ignored only` 现在会运行全部 22 项。没有修改断言、超时、假 LSP、产品代码或其它文件里的测试；RSS 测试保持既有 ignore。
+
+验证：前台运行 `cargo nextest run -p canter-core --test lsp`，编译成功，结果为 `0 tests run: 0 passed, 22 skipped`；全部跳过触发 nextest 默认的 `no tests to run`，退出码为 4，没有测试失败。日志在 `/tmp/canter-p2-168-check/lsp-ignore-all-tests.log`。随后 `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。命令均在前台跑完，使用指定独立 target 和隔离测试环境；未跑全套、未推送或合并，无新增待主控决定事项。
+
+
 ## 复核返工：恢复降级时的 LSP 竞态
 
 2026-11-01，按交叉审查「复核」第三部分完成，提交在 `p2-168-trust`。
