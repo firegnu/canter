@@ -105,6 +105,71 @@ async fn folder_trust_prompt_restricts_then_trusts_on_resume_and_covers_subfolde
 }
 
 #[tokio::test]
+async fn folder_trust_corrupt_record_opens_terminal_restricted_with_warning() {
+    let mut world = World::new(Vec::new()).await;
+    world.start_server().await;
+    let path = world.path("state/trusted_folders.json");
+    fs::write(&path, "[\"/tmp/a\", ]").unwrap();
+    let terminal = Terminal::start_with_trust(
+        &[],
+        world.context("corrupt-trust", &world.path("work")),
+        false,
+    )
+    .await;
+    terminal.wait_for("Restricted mode: LSP is disabled.").await;
+    terminal.wait_for("trailing comma").await;
+    assert!(terminal.screen().contains(path.to_str().unwrap()));
+    assert!(!terminal.screen().contains("Trust this folder?"));
+    let id = terminal.quit().await;
+    assert_eq!(
+        world.snapshot(&id).await.settings.restricted_mode,
+        Some(true)
+    );
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn folder_trust_deleted_directory_resumes_via_cli_and_slash_restricted() {
+    let mut world = World::new(vec![text_reply("Saved conversation.")]).await;
+    fs::create_dir(world.path("deleted-worktree")).unwrap();
+    world.start_server().await;
+    let terminal = Terminal::start(
+        &["Save this session"],
+        world.context("deleted-trust", &world.path("deleted-worktree")),
+    )
+    .await;
+    terminal.wait_for("Saved conversation.").await;
+    terminal.wait_idle().await;
+    let id = terminal.quit().await;
+    fs::remove_dir_all(world.path("deleted-worktree")).unwrap();
+    // Reopen from disk as well as the already-open session used by /resume.
+    world.stop_server(Signal::SIGTERM).await;
+    world.start_server().await;
+    let terminal = Terminal::start_with_trust(
+        &["-r", &id],
+        world.context("deleted-resume", &world.path("home")),
+        false,
+    )
+    .await;
+    terminal.wait_for("Restricted mode: LSP is disabled.").await;
+    terminal.wait_for("Directory does not exist").await;
+    terminal.wait_for("Saved conversation.").await;
+    assert_eq!(terminal.quit().await, id);
+    let terminal = Terminal::start(&[], world.context("slash-resume", &world.path("home"))).await;
+    terminal.wait_idle().await;
+    terminal.type_line("/resume").await;
+    terminal.wait_for("Which session to resume?").await;
+    terminal.press(KeyCode::Tab).await;
+    terminal.press(KeyCode::Down).await;
+    terminal.press(KeyCode::Enter).await;
+    terminal.wait_for("Saved conversation.").await;
+    terminal.wait_for("Restricted mode: LSP is disabled.").await;
+    terminal.wait_for("Directory does not exist").await;
+    assert_eq!(terminal.quit().await, id);
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
 async fn open_terminal_keeps_questions_and_permissions_after_exec_resume() {
     for yolo in [false, true] {
         let mut world = World::new(vec![

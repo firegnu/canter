@@ -35,7 +35,13 @@ async fn clear_context_plan_resolves_then_starts_a_new_session_with_selected_per
         chat, ui, requests, ..
     } = &mut test;
     let (receiver, ()) = tokio::join!(
-        chat.resolve_plan(ui, "proposal", "# Build\n\nImplement and verify.", answer),
+        chat.resolve_plan(
+            ui,
+            "proposal",
+            "# Build\n\nImplement and verify.",
+            answer,
+            trust::Opening::default()
+        ),
         async {
             let resolve = next(requests).await;
             assert!(resolve.path.ends_with("/requests/proposal"));

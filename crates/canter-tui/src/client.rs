@@ -411,7 +411,19 @@ impl Client {
         session: &str,
         env: &BTreeMap<String, String>,
     ) -> Result<SessionResumeResponse, ClientError> {
-        let params = SessionResumeParams { env: env.clone() };
+        self.resume_in_mode(session, env, false).await
+    }
+
+    pub async fn resume_in_mode(
+        &self,
+        session: &str,
+        env: &BTreeMap<String, String>,
+        restricted_mode: bool,
+    ) -> Result<SessionResumeResponse, ClientError> {
+        let params = SessionResumeParams {
+            env: env.clone(),
+            restricted_mode,
+        };
         let response = self
             .http
             .post(url(routes::RESUME, &[session]))

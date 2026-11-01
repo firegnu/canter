@@ -21,7 +21,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 跟着改的：第一期改文件用「整文件写 + 按文字替换」；Codex 的 apply_patch 是给 GPT 用的，等接 OpenAI 时再搬（用户 10-24 选定）。
 7. **名字和仓库**：`canter`（马的「慢跑」步法），仓库 `github.com/firegnu/canter`，公开，Apache-2.0。用户：「开源，repo就放在github上」。
 8. **协议：结构照 Codex，传输和类型 canter 自己定（报告 §5.7 的 C）**。2026-10-24 在 canter 仓库定的，用户：「好，就用 C，改 DESIGN」。
-   - 文件夹信任（P2-168）：新增 `GET /v1/folderTrust?cwd=...` 查询和 `POST /v1/folderTrust {cwd}` 记录信任，均返回 `{path, trusted}`；path 是服务端判定的规范化仓库根或非 Git 目录。公开会话设置增加可选 `restrictedMode`，由服务端在创建、恢复时按记录计算，变化沿用 `session.updated`，旧存盘缺省；创建、PATCH 不接受客户端指定受限状态。`features` 增加 `folderTrust`，新版终端和 exec 在打开前要求此能力，旧服务端提示 `canter serve --replace`，不悄悄绕过检查。Codex `rust-v0.163.0` 用 projects 配置里的 `trust_level`（trusted / untrusted）及配置写入机制；canter 不开放通用配置写入，只记正向信任，增加独立查询/记录端点和服务端实际会话状态，供终端、GPUI 和网页复用，不修改既有批准、沙箱或轮次协议。
+   - 文件夹信任（P2-168）：新增 `GET /v1/folderTrust?cwd=...` 查询和 `POST /v1/folderTrust {cwd}` 记录信任，返回 `{path, trusted, warning?}`；path 是服务端判定的规范化仓库根或非 Git 目录，查询失败时 warning 给出英文原因并返回未信任。公开会话设置增加可选 `restrictedMode`，由服务端在创建、恢复时按记录计算，变化沿用 `session.updated`，旧存盘缺省。创建、恢复请求可带 `restrictedMode: true`，仅要求此次受限打开，false 或缺省不能放行未信任目录；PATCH 不接受修改。`features` 增加 `folderTrust`，新版终端和 exec 在打开前要求此能力，旧服务端提示 `canter serve --replace`，不悄悄绕过检查。Codex `rust-v0.163.0` 用 projects 配置里的 `trust_level`（trusted / untrusted）及配置写入机制；canter 不开放通用配置写入，只记正向信任，增加独立查询/记录端点和服务端实际会话状态，供终端、GPUI 和网页复用，不修改既有批准、沙箱或轮次协议。
    - 文件规则（P2-167）：`GET /v1/commandRules` 保留 `path/data`，增加可省略的 `fileRules:[{pattern, decision}]`（空时不发送）；文件模式为字符串，decision 仅 `prompt/forbidden`。新增 `POST /v1/fileRules/delete`，按完整模式字符串和 decision 删除重复项，返回沿用 `{removed, message}`；旧命令删除端点不变。旧客户端忽略新增字段，仍能管理命令规则；新客户端读旧服务端时文件列表缺省为空。这是 canter 的全局规则管理扩展，不改变会话协议或批准决定。
    - 命令规则管理（P2-156，10-30 主控确认）：新增全局 `GET /v1/commandRules`，返回 `{path, data:[{pattern, decision}]}`；`POST /v1/commandRules/delete` 接收 `{pattern, decision}`，返回 `{removed, message}`，removed 为删掉的条数，完全相同的重复规则一起删，已经不存在时为 0、仍成功。列表沿用 Codex app-server v2 的 `data` 结构，条目沿用已定 `rules.json` 的 `pattern/decision`；Codex 没有此文件管理接口，规则管理端点、文件路径和删除结果是 canter 扩展，用于服务端规则的查看和删除，不改变会话协议或旧客户端行为。删除使用 POST 而不是带请求体的 DELETE：HTTP 没有为 DELETE 请求体定义语义，以后网页客户端经过代理可能被丢；canter 现有按内容操作（如后台命令停止）也使用 POST。按完整词前缀数组和 decision 识别规则，不使用列表下标；删除与批准框永久放行共用写锁，原子替换、权限 0600，坏文件报错且不覆盖。
    - LSP（P2-134，10-29 主控确认）：新增 `diagnostics` 项目、`languageServer.updated` 状态事件、可选快照 `languageServers` 和 `lsp` 能力标识；查询诊断/服务器及按会话单个订阅停止/重试。沿用会话→轮→项目和 `item.started/completed`，LSP 字段与端点是 canter 扩展，不是 Codex v2 原有接口。P2-135 给 diagnostics 项目补可选 `errorCount/warningCount/delivery`（`inline/late`），旧存盘缺省。具体字段、兼容和模型交付见下文「LSP 诊断交付和协议」。
@@ -244,13 +244,17 @@ LSP 默认关闭；`config.json` 的 `lsp.enabled` 开启后，配置中的语�
 
 目的：防止打开别人的仓库时，由项目设置或语言服务器自动执行代码；不是限制模型，也不替代工具批准和沙箱。以前使用过或已有存盘会话的目录不自动视为信任。
 
-信任由服务端管理，保存在自己的状态目录 `trusted_folders.json`（默认 `~/.canter`，支持 `CANTER_HOME`），只记录已信任的规范化绝对路径。写入与旁边的锁文件串行，临时文件原子替换，权限 0600；坏文件报错，不覆盖或当作信任。目录先解析符号链接，再向上找到最近的 `.git` 所在目录作为仓库根；支持 `.git` 文件形式的 worktree / 子模块，但不沿 gitdir / common-dir 指针把另一个工作树的信任带过来。仓库内各子目录共用一条记录；非 Git 目录按自身记录，不继承父目录的记录。查询不创建记录。
+信任由服务端管理，保存在自己的状态目录 `trusted_folders.json`（默认 `~/.canter`，支持 `CANTER_HOME`），只记录已信任的规范化绝对路径。写入与旁边的锁文件串行，临时文件原子替换，权限 0600。查询遇到读坏或不可读的记录按未信任处理，受限打开、不挡会话；会话沿用 `warning` 事件给出英文警告，包含记录文件完整路径和解析／读取错误。警告写在打开响应的事件游标之后，终端和 exec 能收到。POST 记录信任时仍严格报错，不覆盖坏文件。工作目录不存在时查询也返回未信任，恢复已有会话受限打开；新建会话仍拒绝，明确提示 `Directory does not exist`。
 
-终端在新建或恢复会话之前查询服务端；恢复按存盘会话的 cwd 查询，不按启动终端所在目录猜。未信任时显示英文 `Trust this folder?` 和服务端返回的信任范围，提供 `Trust and continue`、`Open restricted` 两项；选择信任先保存再打开，选择受限仅本次打开、不保存拒绝，下次仍问。`-r`、`-c`、会话列表及 `/new` 等创建/切换入口遵守同一流程；信任过的不再询问。取消不会创建新会话，也不会发送启动时附带的输入。已在服务端打开的受限会话，之后记录信任并显式恢复时可转为正常会话，不需要重启服务端。
+目录先解析符号链接，再向上找到最近的 `.git` 所在目录。11-01 用户决定：Git worktree 参考 Codex `rust-v0.163.0` 的 `resolve_root_git_project_for_trust`，有效时认回主仓库，共用主仓库的信任。沿 `.git` 的 gitdir 找到主仓库元数据下的 `worktrees/<id>`，校验其中 gitdir 反向指回当前 checkout 的 `.git`、commondir 规范化后等于该公共元数据目录，并确认主仓库自己的 `.git` 确实拥有它；读取这些指针只接受有大小限制的普通文件，不接受替换的符号链接。任一校验失败，按当前 worktree 目录自身判断，不借用别的仓库信任。信任查询、exec 创建／恢复以及 LSP 的按文件检查共用此解析。仓库内各子目录共用一条记录；非 Git 目录按自身记录，不继承父目录的记录。查询不创建记录。
+
+终端在新建或恢复会话之前查询服务端；恢复按存盘会话的 cwd 查询，不按启动终端所在目录猜。未信任时显示英文 `Trust this folder?` 和服务端返回的信任范围，提供 `Trust and continue`、`Open restricted` 两项；选择信任先保存再打开，选择受限仅本次打开、不保存拒绝，下次仍问。查询失败或返回读取错误／目录不存在警告时，不停在询问框，直接请求受限打开并显示警告，不因此退出。`-r`、`-c`、会话列表及 `/new` 等创建/切换入口遵守同一流程；信任过的不再询问。取消不会创建新会话，也不会发送启动时附带的输入。已在服务端打开的会话每次恢复也重新判断：后来记录信任可转为正常会话，读取失败或目录删除则转为受限并卸载 LSP，不需要重启服务端。
 
 服务端用信任记录决定 `restrictedMode`；不采用旧存盘里的此字段作为授权。工作目录未信任时，整个会话不挂载 LSP，不启动语言服务器、不收取新诊断；配置热重载也不能重新启用它。终端以一行 `Restricted mode: LSP is disabled.` 提示。AGENTS.md 和技能继续正常加载；用户全局 `config.json` 的 MCP、放行规则、沙箱继续照常生效。不增加全局配置开关、撤销或列出信任的界面。
 
 11-01 主控补充决定：加目录不弹框、不新增询问流程。工作目录已信任时，对每个文件另按它所在的 git 仓库根判断；文件不在仓库里，则按覆盖它的那个已添加目录本身判断（cwd 内文件按 cwd）。A 信任不代表 B 信任：A 的文件照常起 LSP，未信任 B 的文件不起；B 已有信任记录则照常起。工作目录受限时，即使 B 已信任，整个会话仍不启动 LSP。检查在文件订阅、同步和诊断交付处执行，也覆盖恢复和重试。这样遵守按仓库记信任的决定，避免 A 连带放行 B 的构建脚本，同时不扩展加目录的交互范围。
+
+已信任仓库里的子模块、嵌套仓库按单独仓库判断；未单独信任时，里面的文件不起 LSP，也不弹框，需要在那个目录里单独开一次 canter 来信任。
 
 `canter exec` 不弹框、不加参数：服务端照同一记录打开会话，未信任时受限运行，在 stderr 输出同一行英文提示；信任过的照常。输入、模型权限、stdout / JSONL 和退出码语义不变。协议结构与 Codex app-server v2 的差别见第 8 条；已生成 JSON Schema 和 TypeScript 类型。
 

@@ -388,6 +388,7 @@ where
     // goes through the clearing below.
     let mut none_to_continue = false;
     let mut directory_notices = Vec::new();
+    let mut opening_warning = None;
     let opened: Result<Option<(SessionSnapshot, EventStream)>, RunError> = async {
         let open = match open {
             Open::Continue { cwd, update } => {
@@ -431,10 +432,14 @@ where
                 if requested_directories > 0 {
                     require_add_directories(&client).await?;
                 }
-                if !trust::confirm(&client, &cwd, &mut terminal, &mut input, &mut shutdown).await? {
+                let Some(opening) =
+                    trust::confirm(&client, &cwd, &mut terminal, &mut input, &mut shutdown).await?
+                else {
                     return Ok(None);
-                }
+                };
+                opening_warning = opening.warning;
                 let params = SessionCreateParams {
+                    restricted_mode: opening.restricted,
                     tags,
                     additional_directories,
                     cwd,
@@ -470,13 +475,21 @@ where
                 match id {
                     Some(id) => {
                         let cwd = resume_cwd(&client, &id).await?;
-                        if !trust::confirm(&client, &cwd, &mut terminal, &mut input, &mut shutdown)
-                            .await?
-                        {
+                        let Some(opening) =
+                            trust::confirm(&client, &cwd, &mut terminal, &mut input, &mut shutdown)
+                                .await?
+                        else {
                             return Ok(None);
-                        }
-                        let snapshot =
-                            resume(&client, &id, &env, &SessionUpdateParams::default()).await?;
+                        };
+                        opening_warning = opening.warning;
+                        let snapshot = resume(
+                            &client,
+                            &id,
+                            &env,
+                            &SessionUpdateParams::default(),
+                            opening.restricted,
+                        )
+                        .await?;
                         directory_notices.extend(update_settings(&client, &id, &update).await?);
                         Ok(snapshot)
                     }
@@ -521,6 +534,9 @@ where
     }
     for warning in &notify_warnings {
         app.warning(warning);
+    }
+    if let Some(warning) = opening_warning {
+        app.warning(&warning);
     }
     if none_to_continue {
         app.warning("No session in this directory yet; started a new one");
@@ -597,8 +613,9 @@ where
                 }
                 Some(Action::NewSession) => {
                     let cwd = ui.app().snapshot().settings.cwd.clone();
-                    if trust::in_ui(&chat.client, &cwd, &mut ui, &mut input, &mut shutdown).await
-                        && let Some(receiver) = chat.new_session(&mut ui, None).await
+                    if let Some(opening) =
+                        trust::in_ui(&chat.client, &cwd, &mut ui, &mut input, &mut shutdown).await
+                        && let Some(receiver) = chat.new_session(&mut ui, None, opening).await
                     {
                         messages = receiver;
                     }
@@ -627,16 +644,23 @@ where
                     answer,
                 }) => {
                     let cwd = ui.app().snapshot().settings.cwd.clone();
-                    if answer.decision == canter_protocol::PlanDecision::ClearContext
-                        && !trust::in_ui(&chat.client, &cwd, &mut ui, &mut input, &mut shutdown)
-                            .await
+                    let opening = if answer.decision == canter_protocol::PlanDecision::ClearContext
                     {
-                        ui.app_mut()
-                            .answer_failed(&request_id, "Folder was not opened");
-                        continue;
-                    }
-                    if let Some(receiver) =
-                        chat.resolve_plan(&mut ui, &request_id, &plan, answer).await
+                        let Some(opening) =
+                            trust::in_ui(&chat.client, &cwd, &mut ui, &mut input, &mut shutdown)
+                                .await
+                        else {
+                            ui.app_mut()
+                                .answer_failed(&request_id, "Folder was not opened");
+                            continue;
+                        };
+                        opening
+                    } else {
+                        trust::Opening::default()
+                    };
+                    if let Some(receiver) = chat
+                        .resolve_plan(&mut ui, &request_id, &plan, answer, opening)
+                        .await
                     {
                         messages = receiver;
                     }
@@ -794,8 +818,9 @@ where
         }
         if let Some(note) = ui.app_mut().take_handoff() {
             let cwd = ui.app().snapshot().settings.cwd.clone();
-            if trust::in_ui(&chat.client, &cwd, &mut ui, &mut input, &mut shutdown).await
-                && let Some(receiver) = chat.new_session(&mut ui, Some(note)).await
+            if let Some(opening) =
+                trust::in_ui(&chat.client, &cwd, &mut ui, &mut input, &mut shutdown).await
+                && let Some(receiver) = chat.new_session(&mut ui, Some(note), opening).await
             {
                 messages = receiver;
             }
@@ -830,8 +855,9 @@ async fn resume(
     id: &str,
     env: &BTreeMap<String, String>,
     update: &SessionUpdateParams,
+    restricted: bool,
 ) -> Result<SessionSnapshot, RunError> {
-    let snapshot = match client.resume(id, env).await {
+    let snapshot = match client.resume_in_mode(id, env, restricted).await {
         Ok(resumed) => resumed.session,
         Err(ClientError::Server {
             code: ErrorCode::SessionNotFound,
@@ -1336,6 +1362,7 @@ impl<C: Connector> Chat<C> {
         request_id: &str,
         plan: &str,
         answer: canter_protocol::PlanAnswer,
+        opening: trust::Opening,
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let params = RequestResolveParams {
             execpolicy_amendment: None,
@@ -1391,6 +1418,7 @@ impl<C: Connector> Chat<C> {
             ""
         };
         let mut params = SessionCreateParams {
+            restricted_mode: opening.restricted,
             tags: settings.tags.clone(),
             additional_directories: settings.additional_directories.clone(),
             cwd: settings.cwd.clone(),
@@ -1426,6 +1454,7 @@ impl<C: Connector> Chat<C> {
         for notice in notices {
             ui.app_mut().warning(&notice);
         }
+        opening.report(ui.app_mut());
         ui.app_mut()
             .restore_plan_draft(draft, inputs, missing_images);
         receiver
@@ -1457,9 +1486,11 @@ impl<C: Connector> Chat<C> {
         &mut self,
         ui: &mut Ui<B>,
         handoff: Option<String>,
+        opening: trust::Opening,
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let settings = &ui.app().snapshot().settings;
         let mut params = SessionCreateParams {
+            restricted_mode: opening.restricted,
             tags: settings.tags.clone(),
             additional_directories: settings.additional_directories.clone(),
             cwd: settings.cwd.clone(),
@@ -1505,6 +1536,7 @@ impl<C: Connector> Chat<C> {
                 for notice in notices {
                     ui.app_mut().warning(&notice);
                 }
+                opening.report(ui.app_mut());
                 Some(receiver)
             }
             Err(error) => {
@@ -1547,12 +1579,14 @@ impl<C: Connector> Chat<C> {
             _ => return Ok(ControlFlow::Continue(None)),
         };
         let cwd = resume_cwd(&self.client, &id).await?;
-        if !trust::in_ui(&self.client, &cwd, ui, input, shutdown).await {
+        let Some(opening) = trust::in_ui(&self.client, &cwd, ui, input, shutdown).await else {
             return Ok(ControlFlow::Continue(None));
-        }
-        Ok(ControlFlow::Continue(
-            self.open(ui, &id, "Could not resume the session").await,
-        ))
+        };
+        let receiver = self
+            .open(ui, &id, "Could not resume the session", opening.restricted)
+            .await;
+        opening.report(ui.app_mut());
+        Ok(ControlFlow::Continue(receiver))
     }
 
     /// Esc twice after `/handoff`: back to `source`, the session the note
@@ -1563,8 +1597,13 @@ impl<C: Connector> Chat<C> {
         ui: &mut Ui<B>,
         source: &str,
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
-        self.open(ui, source, "Could not return to the original session")
-            .await
+        self.open(
+            ui,
+            source,
+            "Could not return to the original session",
+            false,
+        )
+        .await
     }
 
     /// Shows session `id`, open on the server, in place of the one on
@@ -1574,9 +1613,10 @@ impl<C: Connector> Chat<C> {
         ui: &mut Ui<B>,
         id: &str,
         failed: &str,
+        restricted: bool,
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let update = SessionUpdateParams::default();
-        match resume(&self.client, id, &self.env, &update).await {
+        match resume(&self.client, id, &self.env, &update, restricted).await {
             Ok(snapshot) => self.show(ui, snapshot, failed).await,
             Err(error) => {
                 ui.app_mut().warning(&format!("{failed}: {error}"));

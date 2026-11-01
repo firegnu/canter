@@ -685,13 +685,14 @@ async fn resume(
         let existing = app.sessions.lock().await.get(&id).cloned();
         if let Some(session) = existing {
             let cwd = session.snapshot().await.session.settings.cwd;
-            if folder_trust_operation(app.home.clone(), cwd, false)
-                .await?
-                .trusted
-            {
-                session.trust_folder().await?;
-            }
+            let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
+            session
+                .set_folder_trust(trust.trusted && !params.restricted_mode)
+                .await?;
             let response = session.snapshot().await;
+            if let Some(warning) = trust.warning {
+                session.opening_warning(warning).await?;
+            }
             return Ok(Json(SessionResumeResponse {
                 session: response.session,
                 event_seq: response.event_seq,
@@ -702,27 +703,34 @@ async fn resume(
         let response = if let Some(session) = sessions.get(&id).cloned() {
             drop(sessions);
             let cwd = session.snapshot().await.session.settings.cwd;
-            if folder_trust_operation(app.home.clone(), cwd, false)
-                .await?
-                .trusted
-            {
-                session.trust_folder().await?;
+            let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
+            session
+                .set_folder_trust(trust.trusted && !params.restricted_mode)
+                .await?;
+            let response = session.snapshot().await;
+            if let Some(warning) = trust.warning {
+                session.opening_warning(warning).await?;
             }
-            session.snapshot().await
+            response
         } else {
             let cwd = app.disk_snapshot(&id).await?.session.settings.cwd;
-            let restricted = !folder_trust_operation(app.home.clone(), cwd, false)
-                .await?
-                .trusted;
+            let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
             let (session, response) = Session::open(
                 app.store.clone(),
                 id.clone(),
-                app.runtime(params.env, &config, restricted),
+                app.runtime(
+                    params.env,
+                    &config,
+                    !trust.trusted || params.restricted_mode,
+                ),
                 config.model.clone(),
                 config.options.clone(),
             )
             .await?;
             app.configure_session(&session, config.revision).await?;
+            if let Some(warning) = trust.warning {
+                session.opening_warning(warning).await?;
+            }
             sessions.insert(id, session);
             app.registry_changed.notify_waiters();
             response
@@ -756,9 +764,13 @@ async fn create(
             return Err(ApiError::invalid());
         }
         let config = app.configuration().await?;
-        let restricted = !folder_trust_operation(app.home.clone(), params.cwd.clone(), false)
-            .await?
-            .trusted;
+        if !std::path::Path::new(&params.cwd).is_dir() {
+            return Err(ApiError::new(
+                ErrorCode::InvalidRequest,
+                &format!("Directory does not exist: {}", params.cwd),
+            ));
+        }
+        let trust = folder_trust_operation(app.home.clone(), params.cwd.clone(), false).await?;
         let mut sessions = app.sessions.lock().await;
         let id = crate::new_id();
         let settings = SessionSettings {
@@ -784,7 +796,11 @@ async fn create(
             app.store.clone(),
             id.clone(),
             settings,
-            app.runtime(params.env, &config, restricted),
+            app.runtime(
+                params.env,
+                &config,
+                !trust.trusted || params.restricted_mode,
+            ),
             config.model.clone(),
             config.options.clone(),
         )
@@ -810,6 +826,10 @@ async fn create(
                 session: snapshot.session,
                 event_seq: snapshot.event_seq,
             };
+        }
+        // Append after the returned cursor so the opening client sees the warning.
+        if let Some(warning) = trust.warning {
+            session.opening_warning(warning).await?;
         }
         Ok(Json(response))
     })

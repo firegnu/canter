@@ -537,16 +537,51 @@ impl State {
 }
 
 impl Session {
-    /// A resumed session may now be trusted. Granting trust never starts a
-    /// server by itself; the next file change still drives LSP startup.
-    pub async fn trust_folder(&self) -> Result<(), CoreError> {
+    /// Record an opening warning before returning to a client that may immediately
+    /// start a turn. The caller retains the snapshot cursor from before this event.
+    pub async fn opening_warning(&self, message: String) -> Result<(), CoreError> {
+        self.shared
+            .state
+            .lock()
+            .await
+            .journal
+            .append(vec![EventPayload::Warning { message }])
+            .await?;
+        Ok(())
+    }
+
+    /// Recheck trust when resuming, including a failed lookup. Granting trust
+    /// never starts LSP by itself; the next file change drives startup.
+    pub async fn set_folder_trust(&self, trusted: bool) -> Result<(), CoreError> {
         let mut state = self.shared.state.lock().await;
-        if !self.shared.runtime().context.restricted_mode {
+        if self.shared.runtime().context.restricted_mode != trusted {
             return Ok(());
         }
         let mut runtime = (*self.shared.runtime()).clone();
-        runtime.context.restricted_mode = false;
-        if let Some(service) = &runtime.context.lsp {
+        runtime.context.restricted_mode = !trusted;
+        if !trusted {
+            if let Some(lsp) = runtime.tools.lsp() {
+                lsp.close().await;
+            }
+            runtime.tools = runtime.tools.without_lsp();
+            state.lsp_delivery = Default::default();
+            let stopped = state
+                .journal
+                .snapshot
+                .language_servers
+                .iter()
+                .cloned()
+                .map(|mut server| {
+                    server.state = canter_protocol::LanguageServerState::Stopped;
+                    server.reason = Some("Folder is not trusted".into());
+                    server.shared_references = 0;
+                    server.rss_bytes = None;
+                    server.updated_at = crate::journal::now();
+                    EventPayload::LanguageServerUpdated { server }
+                })
+                .collect();
+            state.journal.append(stopped).await?;
+        } else if let Some(service) = &runtime.context.lsp {
             runtime.tools = runtime.tools.with_lsp(
                 service.session_with_access(
                     canter_tools::lsp::FileContext {
@@ -578,7 +613,7 @@ impl Session {
             );
         }
         let mut settings = state.journal.snapshot.settings.clone();
-        settings.restricted_mode = Some(false);
+        settings.restricted_mode = Some(!trusted);
         state
             .journal
             .append(vec![EventPayload::SessionUpdated { settings }])

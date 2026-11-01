@@ -80,6 +80,10 @@ pub struct FolderTrustResponse {
     /// Canonical repository root, or the folder itself outside a repository.
     pub path: String,
     pub trusted: bool,
+    /// A failed lookup opens restricted instead of blocking the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -342,6 +346,10 @@ pub struct SessionListResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(optional_fields = nullable)]
 pub struct SessionCreateParams {
+    /// Restrict this opening even if the server has a positive trust record.
+    #[serde(default, skip_serializing_if = "crate::types::is_false")]
+    #[ts(optional = nullable)]
+    pub restricted_mode: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[ts(optional = nullable)]
     pub tags: BTreeMap<String, String>,
@@ -378,6 +386,13 @@ session_response!(
 /// POST /v1/sessions/{id}/resume. Never log this body or replace an open session's environment.
 #[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct SessionResumeParams {
+    #[serde(
+        default,
+        rename = "restrictedMode",
+        skip_serializing_if = "crate::types::is_false"
+    )]
+    #[ts(optional = nullable)]
+    pub restricted_mode: bool,
     pub env: BTreeMap<String, String>,
 }
 

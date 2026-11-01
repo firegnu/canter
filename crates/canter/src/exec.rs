@@ -202,8 +202,8 @@ async fn run_inner(
     } else {
         PermissionMode::AskForExecution
     };
-    let snapshot = if let Some(id) = resume {
-        client
+    let (snapshot, opening_seq) = if let Some(id) = resume {
+        let resumed = client
             .resume(&id, &context.env)
             .await
             .map_err(|error| error.to_string())?;
@@ -218,14 +218,16 @@ async fn run_inner(
             )
             .await
             .map_err(|error| error.to_string())?;
-        client
+        let response = client
             .read_session(&id)
             .await
-            .map_err(|error| error.to_string())?
-            .session
+            .map_err(|error| error.to_string())?;
+        // Keep warnings emitted after resume, even if the later read includes them.
+        (response.session, resumed.event_seq)
     } else {
-        client
+        let created = client
             .create_session(&SessionCreateParams {
+                restricted_mode: false,
                 tags: args.tags,
                 additional_directories: args.additional_directories,
                 cwd,
@@ -238,8 +240,8 @@ async fn run_inner(
                 client_name: "canter-exec".into(),
             })
             .await
-            .map_err(|error| error.to_string())?
-            .session
+            .map_err(|error| error.to_string())?;
+        (created.session, created.event_seq)
     };
     let id = &snapshot.id;
     if snapshot.settings.restricted_mode == Some(true) {
@@ -253,7 +255,7 @@ async fn run_inner(
     output.session_id = Some(id.clone());
     output.json_line(&serde_json::json!({"type":"exec.started","sessionId":id}))?;
     let mut events = client
-        .subscribe(id, snapshot.last_event_seq)
+        .subscribe(id, opening_seq)
         .await
         .map_err(|error| error.to_string())?;
     tokio::select! {

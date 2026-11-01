@@ -2289,6 +2289,13 @@
         },
         "trusted": {
           "type": "boolean"
+        },
+        "warning": {
+          "description": "A failed lookup opens restricted instead of blocking the session.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -4126,6 +4133,10 @@
             }
           ]
         },
+        "restrictedMode": {
+          "description": "Restrict this opening even if the server has a positive trust record.",
+          "type": "boolean"
+        },
         "tags": {
           "additionalProperties": {
             "type": "string"
@@ -4368,6 +4379,9 @@
             "type": "string"
           },
           "type": "object"
+        },
+        "restrictedMode": {
+          "type": "boolean"
         }
       },
       "required": [

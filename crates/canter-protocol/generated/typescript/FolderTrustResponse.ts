@@ -4,4 +4,8 @@ export type FolderTrustResponse = {
 /**
  * Canonical repository root, or the folder itself outside a repository.
  */
-path: string, trusted: boolean, };
+path: string, trusted: boolean,
+/**
+ * A failed lookup opens restricted instead of blocking the session.
+ */
+warning?: string, };

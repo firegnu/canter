@@ -76,3 +76,16 @@
 - **参考了哪里**：只读 `/tmp/codex-ro` 的 Codex `rust-v0.163.0`：`codex-rs/tui/src/onboarding/trust_directory.rs` 的目录范围说明和显式确认，`codex-rs/config/src/config_toml.rs` 的 `ProjectConfig.trust_level`、`config/src/project_trust.rs` 的路径查询及 `core/src/config/edit.rs` 的信任写入入口。Claude Code 官方仓库克隆在 `/tmp/p2-168-claude-code-reference`，提交 `80c6959d28c4c30ecd14fc1cdf172f19d9adad81`，参考 `CHANGELOG.md` 对仓库范围和嵌套仓库信任的说明；此克隆不含终端信任框实现，文字另核对官方仓库 [issue #9256](https://github.com/anthropics/claude-code/issues/9256) 所附 2.0.13 对话框（询问是否信任目录、明确继续或退出）。仅参考，没有复制实现。
 - **没做的事**：未实现 P2-159 项目级配置或 P2-153 hooks，未增加全局配置项、exec 参数、撤销/列出信任命令或加目录询问。未读改真实 `~/.canter`，未调真实模型，未启动其他 agent，未推送或合并到 main；交叉审查交回主控。
 - **踩过的坑**：假 LSP 是异步启动，写完文件立刻看进程记录会误判，改为让假模型轮保持打开并有界等待后再断言；reqwest 没启用 query builder，测试改用已有 URL 类型编码查询参数。恢复 LSP 订阅时一度复用了完整 `allowed` 检查，macOS 路径别名导致已停止订阅未恢复，既有重试测试抓到后改成仅检查信任，回归通过。旧 PTY 用例没有预设信任而停在新框，已在它们的隔离 fixture 中显式记信任。核心 session 并行回归有一次 `session already open` 存盘锁冲突，该用例单独重跑及整个文件串行复跑都通过，没有改动存盘锁实现。
+
+
+## 返工记录
+
+2026-11-01，第 1 次，按主控及交叉审查意见完成，提交在 `p2-168-trust`。
+
+- **坏记录与警告**：查询遇到 `trusted_folders.json` 解析／读取错误，返回未信任并受限打开；创建和恢复会话不因此失败。英文警告包含记录文件完整路径和具体错误，先写入会话事件再返回，客户端从警告之前的游标订阅。POST 仍报错，不覆盖坏记录。终端查询失败直接请求受限打开并显示警告，不退出；协议新增可选请求字段 `restrictedMode`，只能要求更严格的打开方式，不能放行未信任目录。exec 恢复保留打开响应的游标，避免后续读快照漏掉警告；没有删减原有恢复读取。
+- **目录删除**：信任查询遇到不存在的 cwd 返回未信任；已打开会话和存盘会话都可以受限恢复，覆盖 `-r` 和 `/resume`。新建会话仍拒绝不存在的目录，错误明确为 `Directory does not exist`。恢复时原本已信任的会话也会降为受限，卸载 LSP、清除待交付诊断并把公开状态改为 Stopped；正在运行的轮后续写文件也不能重新起 LSP。
+- **worktree 与信任边界**：落实用户 11-01 的新决定：有效 Git worktree 共用主仓库信任。检查 `.git` → gitdir、gitdir 反向指回当前 checkout、commondir 指向正确公共目录，以及主仓库 `.git` 对该目录的所有权；校验不过按当前 worktree 自身判断。查询、exec 服务端打开和 LSP 按文件检查使用同一解析。只参考 `/tmp/codex-ro/codex-rs/git-utils/src/trust.rs`（Codex `rust-v0.163.0` 的 `resolve_root_git_project_for_trust`），以本地同步文件操作独立实现，没有搬代码。DESIGN 第 8 条和文件夹信任一节已更新，并明确子模块／嵌套仓库单独判断、未信任时不起 LSP 不弹框，需要在那里单独开 canter 来信任；加目录不弹框的既定决定保留。
+- **假服务端及指定 reload 测试**：给 `canter-tui::fake::FakeServer` 补齐 info 的 `folderTrust` 能力和查询端点。先复现 notifications 8 项、tab_title 2 项及 editor 1 项失败，再修到全部通过，未改断言和超时。核对指定 `disabling_then_enabling_lsp_still_waits_for_the_original_turn` 的原改动，只有创建会话前已经 await 完成的信任写入，原等待、模型请求门控和断言均未修改；本轮在两个相关并行批次中都通过，未复现主控报告的一次失败，没有证据把它归因于新增的测试时序，因此保留原测试，并把未能复现的情况如实记录。
+- **回归与检查**：坏记录查询／创建／恢复、POST 保留坏文件、删除目录后恢复、worktree 共享和 gitdir／commondir 反向链接错误等目标检查均先确认旧行为失败，再实现通过。最终相关服务端 10 项通过（含指定 reload 测试、受限 LSP、额外目录隔离）；`cargo nextest run -p canter-tui` 整包 582 项通过；终端及 exec 相关 17 项通过（含 `/new`、`/handoff`、计划新会话、`-r`、`/resume`）；协议 37 项通过，生成物一致性检查通过；核心 LSP 串行复跑 22 项通过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。所有命令前台等待完成，测试使用指定独立 target、隔离 HOME / CANTER_HOME 和本地假模型；未跑工作区全套。
+- **踩过的坑与验证限制**：删除目录的终端测试起初把 fixture 的服务端启动目录一起删了，改成单独的待删会话目录；跨目录 `/resume` 测试必须先 Tab 显示全部目录。补测发现 exec 恢复会跳过打开后发出的警告，保留恢复游标后创建／恢复均能显示。核心 LSP 与服务端合跑的 32 项中有 6 项核心 LSP 诊断时序失败，主要是未在既有 500 ms 窗口内收到诊断；这组核心测试不调用本轮新增的信任更新／警告方法，nextest 每个测试进程各自 rustc 编译假 LSP。保留原代码、断言和超时，串行 22 项全部通过，证据指向并行负载／启动抖动，未扩大本件去改这批测试。失败日志在 `/tmp/canter-p2-168-check/core-server-rework-final.log`，串行结果在 `core-lsp-rework-serial.log`，供主控合并前全套验证参考。
+- **没做的事与待决事项**：按主控要求未改“家目录本身是仓库”、LSP 每次读取信任记录、恢复多次读取三项建议，HANDOFF 由主控记；未加全局配置、CLI 参数或加目录询问，未修改本任务之外的测试断言／超时。未读改真实 `~/.canter`、未调用真实模型、未开其它 agent、未推送或合并 main。没有新增需要主控决定的事项。

@@ -7,6 +7,20 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 
+#[derive(Default)]
+pub(super) struct Opening {
+    pub restricted: bool,
+    pub warning: Option<String>,
+}
+
+impl Opening {
+    pub fn report(&self, app: &mut App) {
+        if let Some(warning) = &self.warning {
+            app.warning(warning);
+        }
+    }
+}
+
 /// Before creating or resuming: neither project services nor a first input run
 /// until the user has selected how to open this folder.
 pub(super) async fn confirm<B: FrameSync>(
@@ -15,7 +29,7 @@ pub(super) async fn confirm<B: FrameSync>(
     terminal: &mut Terminal<B>,
     input: &mut Input,
     shutdown: &mut Shutdown,
-) -> Result<bool, RunError>
+) -> Result<Option<Opening>, RunError>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
@@ -33,16 +47,33 @@ where
         )
         .into());
     }
-    let trust = client.folder_trust(cwd).await?;
+    let trust = match client.folder_trust(cwd).await {
+        Ok(trust) => trust,
+        Err(error) => {
+            return Ok(Some(Opening {
+                restricted: true,
+                warning: Some(format!(
+                    "Could not check folder trust: {error}. Opening in restricted mode; LSP is disabled."
+                )),
+            }));
+        }
+    };
+    if trust.warning.is_some() {
+        // The server also appends this warning after the opening snapshot.
+        return Ok(Some(Opening {
+            restricted: true,
+            warning: None,
+        }));
+    }
     if trust.trusted {
-        return Ok(true);
+        return Ok(Some(Opening::default()));
     }
     let mut restricted = false;
     let mut first_frame = None;
     let ready_at = now_ms() + crate::ANSWER_GUARD_MS;
     loop {
         if shutdown.requested() {
-            return Ok(false);
+            return Ok(None);
         }
         terminal
             .backend_mut()
@@ -114,12 +145,12 @@ where
         let first = *first_frame.get_or_insert(frame);
         let event = tokio::select! {
             biased;
-            _ = shutdown.wait() => return Ok(false),
+            _ = shutdown.wait() => return Ok(None),
             event = input.recv() => event,
         };
         let Some((frame, at, TermEvent::Key(key))) = event else {
             if event.is_none() {
-                return Ok(false);
+                return Ok(None);
             }
             continue;
         };
@@ -129,7 +160,7 @@ where
         if key.code == KeyCode::Esc
             || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
         {
-            return Ok(false);
+            return Ok(None);
         }
         match key.code {
             KeyCode::Up | KeyCode::Down | KeyCode::Tab => restricted = !restricted,
@@ -139,7 +170,10 @@ where
                 if !restricted {
                     client.trust_folder(cwd).await?;
                 }
-                return Ok(true);
+                return Ok(Some(Opening {
+                    restricted,
+                    warning: None,
+                }));
             }
             _ => {}
         }
@@ -152,7 +186,7 @@ pub(super) async fn in_ui<B: FrameSync>(
     ui: &mut Ui<B>,
     input: &mut Input,
     shutdown: &mut Shutdown,
-) -> bool
+) -> Option<Opening>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
@@ -161,7 +195,52 @@ where
         Err(error) => {
             ui.app_mut()
                 .warning(&format!("Could not check folder trust: {error}"));
-            false
+            None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn failed_folder_trust_query_opens_restricted_with_warning() {
+        let root = tempfile::tempdir().unwrap();
+        let socket = root.path().join("server.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let router = axum::Router::new()
+            .route("/v1/info", axum::routing::get(|| async {
+                axum::Json(serde_json::json!({"features":["folderTrust"],"serverVersion":"test","protocolVersion":1,"sessions":[]}))
+            }))
+            .route("/v1/folderTrust", axum::routing::get(|| async {
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            }));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let client = Client::new(&socket).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let (_keys, mut input) = input();
+        let mut shutdown = Shutdown::listen().unwrap();
+        let opening = confirm(
+            &client,
+            root.path().to_str().unwrap(),
+            &mut terminal,
+            &mut input,
+            &mut shutdown,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(opening.restricted);
+        let warning = opening.warning.unwrap();
+        assert!(
+            warning.contains("Could not check folder trust"),
+            "{warning}"
+        );
+        assert!(warning.contains("500"), "{warning}");
+        server.abort();
+        let _ = server.await;
     }
 }
