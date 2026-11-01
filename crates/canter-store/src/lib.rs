@@ -1,16 +1,26 @@
 //! Synchronous, Unix session storage. Callers choose an isolated root directory.
 //! Keep a `SessionWriter` alive for the duration of a writable session.
 
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::fs::{DirBuilderExt, FileExt, OpenOptionsExt, PermissionsExt};
+use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
+use std::os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use canter_protocol::{
     Event, EventPayload, ModelRequestTelemetry, ReduceError, SessionSettings, SessionSnapshot,
     SessionSummary, apply_event_mut, validate_event,
 };
 use serde::{Serialize, de::DeserializeOwned};
+
+#[cfg(test)]
+mod read_tests;
+
+#[cfg(test)]
+thread_local! {
+    static READ_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -30,6 +40,81 @@ pub enum StoreError {
 
 pub struct Store {
     root: PathBuf,
+    summaries: Mutex<HashMap<String, CachedSummary>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    device: u64,
+    inode: u64,
+    len: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+impl FileStamp {
+    fn read(file: &File) -> io::Result<Self> {
+        let metadata = file.metadata()?;
+        Ok(Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            len: metadata.len(),
+            modified: (metadata.mtime(), metadata.mtime_nsec()),
+            changed: (metadata.ctime(), metadata.ctime_nsec()),
+        })
+    }
+}
+
+struct CachedSummary {
+    stamp: FileStamp,
+    summary: Option<SessionSummary>,
+}
+
+/// A subscription's reusable reader of committed events.
+#[derive(Clone)]
+pub struct EventReader {
+    path: PathBuf,
+    id: String,
+    stamp: Option<FileStamp>,
+    offset: u64,
+    seq: u64,
+}
+
+impl EventReader {
+    /// Read and validate the appended suffix, returning events in `(after, through]`.
+    /// The checkpoint never passes `through`: disk writes may precede publication
+    /// of the journal's committed sequence. Errors leave the checkpoint unchanged.
+    pub fn read_after(&mut self, after: u64, through: u64) -> Result<Vec<Event>, StoreError> {
+        let file = File::open(&self.path)?;
+        let stamp = FileStamp::read(&file)?;
+        let reset = after < self.seq
+            || through < self.seq
+            || self.stamp.is_some_and(|old| {
+                old.device != stamp.device
+                    || old.inode != stamp.inode
+                    || stamp.len < self.offset
+                    || (stamp.len <= old.len && stamp != old)
+            });
+        let (offset, seq) = if reset {
+            (0, 0)
+        } else {
+            (self.offset, self.seq)
+        };
+        let mut checkpoint = (offset, seq);
+        let mut events = Vec::new();
+        read_events_from(&file, &self.id, offset, seq, |event, end| {
+            if event.seq <= through {
+                checkpoint = (end, event.seq);
+            }
+            if event.seq > after && event.seq <= through {
+                events.push(event);
+            }
+            Ok(())
+        })?;
+        self.stamp = Some(stamp);
+        (self.offset, self.seq) = checkpoint;
+        Ok(events)
+    }
 }
 
 impl Store {
@@ -41,7 +126,10 @@ impl Store {
             .mode(0o700)
             .create(&root)?;
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            summaries: Mutex::new(HashMap::new()),
+        })
     }
 
     pub fn create(
@@ -138,7 +226,12 @@ impl Store {
     }
 
     pub fn list(&self) -> Result<Vec<SessionSummary>, StoreError> {
+        // One refresh at a time: waiting callers recheck metadata after the
+        // previous replay, rather than each replaying the same stale entry.
+        // This cache lock is independent of session writers and subscriptions.
+        let mut summaries = self.summaries.lock().expect("summary cache");
         let mut sessions = Vec::new();
+        let mut seen = HashSet::new();
         for entry in fs::read_dir(&self.root)? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
@@ -153,13 +246,43 @@ impl Store {
             let Ok(file) = File::open(dir.join("events.jsonl")) else {
                 continue;
             };
-            let Ok((snapshot, _)) = replay(&file, &id) else {
+            // Capture before replay: an append during replay must invalidate the
+            // entry on the next call, even if this read observes some of it.
+            let Ok(stamp) = FileStamp::read(&file) else {
                 continue;
             };
-            if snapshot.last_event_seq > 0 {
-                sessions.push(snapshot.summary());
+            seen.insert(id.clone());
+            let cached = summaries
+                .get(&id)
+                .filter(|entry| entry.stamp == stamp)
+                .map(|entry| entry.summary.clone());
+            let summary = match cached {
+                Some(summary) => summary,
+                None => {
+                    let summary = match replay(&file, &id) {
+                        Ok((snapshot, _)) => {
+                            (snapshot.last_event_seq > 0).then(|| snapshot.summary())
+                        }
+                        Err(StoreError::Json(_) | StoreError::Replay(_)) => None,
+                        // A transient read failure must be retried even if the
+                        // file's metadata has not changed.
+                        Err(_) => continue,
+                    };
+                    summaries.insert(
+                        id,
+                        CachedSummary {
+                            stamp,
+                            summary: summary.clone(),
+                        },
+                    );
+                    summary
+                }
+            };
+            if let Some(summary) = summary {
+                sessions.push(summary);
             }
         }
+        summaries.retain(|id, _| seen.contains(id));
         sessions.sort_by(|a, b| {
             b.updated_at
                 .cmp(&a.updated_at)
@@ -179,6 +302,16 @@ impl Store {
             Ok(())
         })?;
         Ok(events)
+    }
+
+    pub fn event_reader(&self, id: &str) -> Result<EventReader, StoreError> {
+        Ok(EventReader {
+            path: self.session_dir(id)?.join("events.jsonl"),
+            id: id.to_owned(),
+            stamp: None,
+            offset: 0,
+            seq: 0,
+        })
     }
 
     /// Read private model history using the caller's model-layer type.
@@ -346,8 +479,17 @@ fn read_events(
     id: &str,
     mut visit: impl FnMut(Event) -> Result<(), StoreError>,
 ) -> Result<u64, StoreError> {
-    let mut last_seq: u64 = 0;
-    read_jsonl(file, |event: Event| {
+    read_events_from(file, id, 0, 0, |event, _| visit(event))
+}
+
+fn read_events_from(
+    file: &File,
+    id: &str,
+    offset: u64,
+    mut last_seq: u64,
+    mut visit: impl FnMut(Event, u64) -> Result<(), StoreError>,
+) -> Result<u64, StoreError> {
+    read_jsonl_from(file, offset, |event: Event, end| {
         if event.session_id != id {
             return Err(ReduceError::WrongSession.into());
         }
@@ -362,7 +504,7 @@ fn read_events(
             .into());
         }
         last_seq = event.seq;
-        visit(event)
+        visit(event, end)
     })
 }
 
@@ -370,17 +512,28 @@ fn read_jsonl<T: DeserializeOwned>(
     file: &File,
     mut visit: impl FnMut(T) -> Result<(), StoreError>,
 ) -> Result<u64, StoreError> {
+    read_jsonl_from(file, 0, |entry, _| visit(entry))
+}
+
+fn read_jsonl_from<T: DeserializeOwned>(
+    mut file: &File,
+    offset: u64,
+    mut visit: impl FnMut(T, u64) -> Result<(), StoreError>,
+) -> Result<u64, StoreError> {
+    file.seek(SeekFrom::Start(offset))?;
     let mut reader = BufReader::new(file);
     let mut line = Vec::new();
-    let mut committed_bytes = 0;
+    let mut committed_bytes = offset;
     loop {
         line.clear();
         let read = reader.read_until(b'\n', &mut line)?;
+        #[cfg(test)]
+        READ_BYTES.with(|bytes| bytes.set(bytes.get() + read as u64));
         if read == 0 || line.last() != Some(&b'\n') {
             break;
         }
-        visit(serde_json::from_slice(&line)?)?;
         committed_bytes += read as u64;
+        visit(serde_json::from_slice(&line)?, committed_bytes)?;
     }
     Ok(committed_bytes)
 }

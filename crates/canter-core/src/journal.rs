@@ -1,6 +1,6 @@
 use crate::{CoreError, context::HistoryEntry};
 use canter_protocol::*;
-use canter_store::{SessionWriter, Store};
+use canter_store::{EventReader, SessionWriter, Store};
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -11,6 +11,10 @@ use tokio::sync::{broadcast, watch};
 #[cfg(test)]
 #[path = "private_telemetry_tests.rs"]
 mod private_telemetry_tests;
+
+#[cfg(test)]
+#[path = "subscription_read_tests.rs"]
+mod subscription_read_tests;
 
 pub(crate) fn now() -> i64 {
     SystemTime::now()
@@ -233,8 +237,7 @@ impl Journal {
 
 /// Durable catch-up followed by live events. A slow reader catches up from disk.
 pub struct Subscription {
-    pub(crate) store: Arc<Store>,
-    pub(crate) id: String,
+    pub(crate) disk_reader: EventReader,
     pub(crate) receiver: broadcast::Receiver<Event>,
     pub(crate) committed: watch::Receiver<u64>,
     pub(crate) pending: VecDeque<Event>,
@@ -243,16 +246,19 @@ pub struct Subscription {
 }
 impl Subscription {
     pub(crate) async fn catch_up(&mut self) -> Result<(), CoreError> {
-        let store = self.store.clone();
-        let id = self.id.clone();
+        // Only install the checkpoint together with its events. If this future
+        // is cancelled while the blocking read finishes, retry from the old one.
+        let mut reader = self.disk_reader.clone();
         let cursor = self.cursor;
         let through = *self.committed.borrow();
-        self.pending = tokio::task::spawn_blocking(move || store.events_after(&id, cursor))
-            .await
-            .map_err(|_| CoreError::internal())??
-            .into_iter()
-            .take_while(|event| event.seq <= through)
-            .collect();
+        let (reader, events) = tokio::task::spawn_blocking(move || {
+            let events = reader.read_after(cursor, through)?;
+            Ok::<_, canter_store::StoreError>((reader, events))
+        })
+        .await
+        .map_err(|_| CoreError::internal())??;
+        self.disk_reader = reader;
+        self.pending = events.into();
         Ok(())
     }
     pub async fn recv(&mut self) -> Result<Option<Event>, CoreError> {

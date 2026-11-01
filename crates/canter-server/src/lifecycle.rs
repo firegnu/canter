@@ -98,6 +98,14 @@ pub(crate) struct Lease {
 impl Lease {
     // Runs on a blocking thread, including bounded waiting for an explicit replacement.
     pub fn acquire(home: PathBuf, replace: bool) -> Result<Self, ServerError> {
+        Self::acquire_with_wait(home, replace, || {})
+    }
+
+    pub(crate) fn acquire_with_wait(
+        home: PathBuf,
+        replace: bool,
+        on_wait: impl FnOnce(),
+    ) -> Result<Self, ServerError> {
         private_dir(&home)?;
         let home =
             fs::canonicalize(home).map_err(|_| ServerError("invalid state directory".into()))?;
@@ -139,6 +147,9 @@ impl Lease {
                 // A private filesystem request avoids signalling a stale/reused PID or adding an HTTP command.
                 write_json(&home, "replace.json", &previous)?;
                 let deadline = Instant::now() + UPGRADE_GRACE + Duration::from_secs(30);
+                // Start read-only preparation only after every rejection before
+                // the lock wait. A rejected startup must not wait for disk replay.
+                on_wait();
                 loop {
                     match lock.try_lock() {
                         Ok(()) => break,
