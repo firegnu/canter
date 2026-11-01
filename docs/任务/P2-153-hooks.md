@@ -111,3 +111,12 @@
 - 参考：只读参考 https://code.claude.com/docs/en/hooks（任务给的 Anthropic 链接重定向至此）及 `/tmp/codex-ro/codex-rs/hooks/src/schema.rs`，版本 `rust-v0.163.0`；只采用事件名、配置骨架和字段约定，没有搬代码。permission_mode 报告 canter 自己的实际权限档位，差异已说明。
 - 没做的事：任务排除的项目 hooks、其它钩子类型、钩子放行、Stop 控制续跑、输出注入上下文、额外事件、信任审核和 /hooks 界面均未做；没有新增客户端环境转发，没有改其它仓库，没有安装、合并 main 或推送。
 - 踩过的坑：将交互工具直接接入通用批准判断会给 ask_user 多弹一次批准框，包级回归发现后保留原交互许可；模型已经结束时，仅凭仍有插话决定续跑会在全部插话被拦后多发空请求，改为只在实际消费了输入后续跑。延后用户消息暴露了旧 reducer 不回填 input、撤回草稿只读轮开始输入的问题，补了对应回归；回填必须仅作用于空 input，不能破坏旧完成事件保留原输入的契约。测试夹具的关闭／回答路由、ask_user 参数和重连后先绘制一帧的要求已按现有接口修正；一次文案替换误碰普通 LSP 禁用错误的断言，已恢复，不改变其行为。
+
+## 返工 1 记录
+
+- 做了什么：按 11-01 主控转达的用户决定恢复 main 的审查轮交互。AskUser、SubmitPlan 在 permission() 中先走原交互许可，不再被 review_denied 提前拒绝；PreToolUse 保留，submit_plan 自身的计划批准框仍通知 PermissionRequest。新增服务端回归验证审查轮在 alwaysAsk 下只弹提问框、能够接收回答，未开计划模式的 submit_plan 返回与 main 原说明逐字相同，两个工具的 PreToolUse 均触发。
+- 停机上限：选择 3 秒，已写入 DESIGN。关会话和停服务端时，已有通知与 SessionEnd 共用这个预算；到期同时取消剩余通知任务，再等待任务退出，确保命令的进程组清理已执行。沿用服务端并行关闭会话，不按通知数量或会话数量累加等待，不改每条命令正常运行时的 timeout。两个关闭回归各配卡住的 Stop、PermissionRequest、Interrupt、SessionEnd，验证关闭在 3 秒预算加 1 秒 HTTP／进程收尾余量内完成，shell 和 sleep 子进程均已被杀。
+- 验证：先运行三个新增回归，确认审查提问框缺失、两条关闭路径超过预算而失败，再作最小修复，三个回归全部通过。`cargo nextest run -p canter-core -p canter-server -p canter --no-fail-fast` 最终 470 通过、23 按既有配置跳过；覆盖所有改动包及要求的 server / canter。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。所有命令均前台等完，测试使用隔离 HOME／状态目录、假模型和 shell 钩子，真实模型调用 0 次，未跑工作区全套。
+- 拿主意的地方：审查意见 1 采用用户指定的 a；意见 2 的统一短上限按授权定为 3 秒。SessionEnd 继续只在显式关闭或服务端关闭会话时触发，终端脱离不触发。没有待主控决定的事。
+- 没做的事：审查意见 3～7 均未改；原 UserPromptSubmit 的 A／空轮退路继续保留。没有新增协议字段或依赖，没有安装、合并 main、推送或改其它仓库。
+- 踩过的坑：首次包级运行中，既有 `startup_failure_returns_the_log_error_without_waiting_for_the_deadline` 触及其 3 秒时限；该用例缺少配置，尚未进入会话／钩子流程。未改代码或断言，单独复跑通过，随后三个包完整复跑也全部通过；不将这次超时认定为已确认的实现缺陷。

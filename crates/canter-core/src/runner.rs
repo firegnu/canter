@@ -1220,13 +1220,13 @@ async fn permission<'a>(
                 state.gate.evaluate_review(call, state.approval_policy()),
                 PermissionCheck::Deny { .. }
             );
-        let permission = if review_denied {
+        // These tools open their own question/plan dialogs, including in review
+        // turns; they never required a separate ordinary tool approval.
+        let permission = if matches!(call.tool(), Tool::AskUser | Tool::SubmitPlan) {
+            state.gate.evaluate_plan(call, state.approval_policy())
+        } else if review_denied {
             state.gate.evaluate_review(call, state.approval_policy())
-        } else if state.journal.snapshot.settings.plan_mode
-            // These tools open their own question/plan dialogs; they never
-            // required a separate ordinary tool approval.
-            || matches!(call.tool(), Tool::AskUser | Tool::SubmitPlan)
-        {
+        } else if state.journal.snapshot.settings.plan_mode {
             state.gate.evaluate_plan(call, state.approval_policy())
         } else if state
             .active

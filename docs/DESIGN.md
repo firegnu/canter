@@ -403,9 +403,9 @@ P2-164（10-30 主控确认）：模型 shell 仅在沙箱开启时增加可选 
 
 命令在服务端执行 `/bin/sh -c <command>`，cwd 为会话工作目录，事件 JSON 经 stdin 传入，额外设置 `CANTER_SESSION_ID`、`CANTER_PROJECT_DIR`。继承服务端环境，不新增客户端环境转发，不使用模型的会话临时目录，也不套模型沙箱。受限打开的会话不运行任何钩子，开启提示为 `Restricted mode: LSP and hooks are disabled.`，重新判定信任和热加载也遵守服务端状态。
 
-同一事件匹配命令并行执行，可拦和可反馈事件等待全部结果；任一命令拦截即生效。通知事件异步执行，不让模型轮等待，也不消费其决定。会话关闭等待已有通知与 SessionEnd 在各自超时内清理，避免正常停服丢失退出通知。每条命令用独立进程组；超时、所属轮打断或 future 被丢弃都杀掉该组，领导进程退出也清理剩余子进程。持续读取并丢弃超限部分，stdout、stderr 各最多保留 32 KiB，不持有会话状态锁等待命令。
+同一事件匹配命令并行执行，可拦和可反馈事件等待全部结果；任一命令拦截即生效。通知事件异步执行，不让模型轮等待，也不消费其决定。显式关会话和服务端停止时，已有通知（包括 Stop、Interrupt、PermissionRequest）与 SessionEnd 共用最多 3 秒的等待预算，不按事件或命令累加，也不因配置更长的 timeout 延长；到期取消剩余通知任务，杀掉其进程组并收完任务。服务端并行关闭各会话，通知等待不随会话数量累加，避免卡住 `canter serve --replace`。SessionEnd 仍只在显式关会话或服务端关闭会话时触发，终端脱离不触发。每条命令用独立进程组；超时、所属轮打断或 future 被丢弃都杀掉该组，领导进程退出也清理剩余子进程。持续读取并丢弃超限部分，stdout、stderr 各最多保留 32 KiB，不持有会话状态锁等待命令。
 
-退出码 0 放行，2 用 stderr 作为拦截／PostToolUse 反馈原因。成功退出时也识别 stdout JSON 的 `decision: "block"` + `reason`；PreToolUse 另识别 `hookSpecificOutput.permissionDecision: "deny"` + `permissionDecisionReason`。allow、ask、其它字段忽略；通知事件里的 block 同样不改变流程。命令启动失败、超时、其它退出码、非空 stdout 不是有效 JSON，一律放行，用英文 warning 标明事件、命令和故障；命令及故障提示压成单行并限长。除了 PreToolUse 的拦截原因、PostToolUse 的反馈，任何钩子输出均不进入模型内容。钩子等待后重新检查工具权限，不能放宽敏感路径、fileRules、计划／审查轮、沙箱和批准档位。
+退出码 0 放行，2 用 stderr 作为拦截／PostToolUse 反馈原因。成功退出时也识别 stdout JSON 的 `decision: "block"` + `reason`；PreToolUse 另识别 `hookSpecificOutput.permissionDecision: "deny"` + `permissionDecisionReason`。allow、ask、其它字段忽略；通知事件里的 block 同样不改变流程。命令启动失败、超时、其它退出码、非空 stdout 不是有效 JSON，一律放行，用英文 warning 标明事件、命令和故障；命令及故障提示压成单行并限长。除了 PreToolUse 的拦截原因、PostToolUse 的反馈，任何钩子输出均不进入模型内容。钩子等待后重新检查工具权限，不能放宽敏感路径、fileRules、计划／审查轮、沙箱和批准档位。审查轮保留原有交互：ask_user 仍弹提问框，submit_plan 仍由计划模式处理（未开计划模式时返回原说明），不被 review_denied 提前拒绝；二者仍经过 PreToolUse，计划批准框仍触发 PermissionRequest。
 
 对照只参考 [Claude Code hooks 文档](https://code.claude.com/docs/en/hooks) 和 Codex `rust-v0.163.0` 的 `hooks/src/schema.rs`，没有搬代码。采用相同事件名、配置骨架和 stdin 字段名；Interrupt 参考 Codex，StopFailure 参考 Claude Code。canter 合并成功／失败工具通知到 PostToolUse，保留自己的权限档位和值类型。没有实现项目 hooks、prompt / agent / http 类型、钩子放行、Stop 拦下后继续、SessionStart / UserPromptSubmit 注入上下文、PreCompact / PostCompact、Notification、Subagent 事件、Codex 的钩子信任审核或 `/hooks` 界面。协议差异见第 8 条。
 

@@ -648,6 +648,171 @@ async fn plan_approval_notifies_permission_request() {
 }
 
 #[tokio::test]
+async fn review_keeps_question_dialogs_and_the_original_submit_plan_response() {
+    let mut fixture = Fixture::new(json!({"hooks":{"PreToolUse":[
+        {"matcher":"ask_user","hooks":[{"type":"command","command":"cat > review-question.json"}]},
+        {"matcher":"submit_plan","hooks":[{"type":"command","command":"cat > review-plan.json"}]}
+    ]}}))
+    .await;
+    fixture.trust(fixture.root.path()).await;
+    let url = fixture.create().await;
+    fixture
+        .set(&url, json!({"approvalPolicy":"alwaysAsk"}))
+        .await;
+    fixture.client.post(format!("{url}/input"))
+        .json(&json!({"input":[{"type":"text","text":"Review the changes."}],"review":"Review: changes","clientName":"test"}))
+        .send().await.unwrap().error_for_status().unwrap();
+    fixture.request().await.tool("ask_user", json!({"question":"Which files?","options":[{"label":"All","description":"All files"},{"label":"Rust","description":"Rust files"}]}));
+    let pending = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let pending = fixture.snapshot(&url).await.session.pending_requests;
+            if !pending.is_empty() {
+                break pending;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("review ask_user must open a question dialog");
+    assert_eq!(pending.len(), 1);
+    assert!(
+        matches!(&pending[0].kind, canter_protocol::RequestKind::UserInput(question) if question.question == "Which files?")
+    );
+    assert_eq!(
+        fixture.hook_file("review-question.json").await["tool_name"],
+        "ask_user"
+    );
+    fixture
+        .client
+        .post(format!("{url}/requests/{}", pending[0].id))
+        .json(&json!({"answer":{"type":"option","label":"Rust"},"clientName":"test"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fixture
+        .request()
+        .await
+        .tool("submit_plan", json!({"plan":"Inspect the Rust changes."}));
+    let next = fixture.request().await;
+    let result = next.body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "tool")
+        .unwrap();
+    assert_eq!(
+        result["content"],
+        "This session is not in Plan mode. Only the user can enable Plan mode; continue the task under the current permission policy."
+    );
+    assert_eq!(
+        fixture.hook_file("review-plan.json").await["tool_name"],
+        "submit_plan"
+    );
+    assert!(
+        fixture
+            .snapshot(&url)
+            .await
+            .session
+            .pending_requests
+            .is_empty()
+    );
+    next.stop();
+    fixture.idle(&url).await;
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn close_bounds_notification_wait_and_kills_hook_process_groups() {
+    stalled_notifications_shutdown(true).await;
+}
+
+#[tokio::test]
+async fn shutdown_bounds_notification_wait_and_kills_hook_process_groups() {
+    stalled_notifications_shutdown(false).await;
+}
+
+async fn stalled_notifications_shutdown(close_session: bool) {
+    let output = tempfile::tempdir().unwrap();
+    let events = ["Stop", "PermissionRequest", "Interrupt", "SessionEnd"];
+    let mut hooks = json!({});
+    for event in events {
+        hooks[event] = command(&format!(
+            "cat >/dev/null; sleep 30 & echo $! > '{0}/{event}-child.pid'; echo $$ > '{0}/{event}-shell.pid'; wait",
+            output.path().display()
+        ));
+    }
+    let mut fixture = Fixture::new(json!({"hooks":hooks})).await;
+    fixture.trust(fixture.root.path()).await;
+    let url = fixture.create().await;
+    fixture.input(&url).await;
+    fixture.request().await.stop();
+    fixture.idle(&url).await;
+    fixture
+        .set(&url, json!({"approvalPolicy":"alwaysAsk"}))
+        .await;
+    fixture.input(&url).await;
+    fixture
+        .request()
+        .await
+        .tool("write", json!({"path":"pending.txt","content":"pending"}));
+    fixture
+        .hook_file(
+            output
+                .path()
+                .join("PermissionRequest-shell.pid")
+                .to_str()
+                .unwrap(),
+        )
+        .await;
+    fixture.interrupt_hook_turn(&url).await;
+    for event in &events[..3] {
+        fixture
+            .hook_file(
+                output
+                    .path()
+                    .join(format!("{event}-shell.pid"))
+                    .to_str()
+                    .unwrap(),
+            )
+            .await;
+    }
+    let stop = async {
+        if close_session {
+            fixture.close(&url).await;
+        }
+        fixture.shutdown().await;
+    };
+    tokio::pin!(stop);
+    // The collective budget is 3 seconds, with 1 second for HTTP/process cleanup.
+    let bounded = tokio::time::timeout(Duration::from_secs(4), &mut stop)
+        .await
+        .is_ok();
+    if !bounded {
+        // Clean up the deliberately stalled hooks before reporting a regression.
+        for event in events {
+            let pid = fs::read_to_string(output.path().join(format!("{event}-shell.pid")))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(pid),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
+        stop.await;
+    }
+    assert!(bounded, "notification hooks exceeded the shutdown budget");
+    for event in events {
+        assert_dead(&output.path().join(format!("{event}-shell.pid"))).await;
+        assert_dead(&output.path().join(format!("{event}-child.pid"))).await;
+    }
+}
+
+#[tokio::test]
 async fn accepted_prompt_retains_the_turn_input_in_snapshots_and_replay() {
     let mut fixture =
         Fixture::new(json!({"hooks":{"UserPromptSubmit":command("cat >/dev/null")}})).await;

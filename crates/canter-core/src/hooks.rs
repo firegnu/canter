@@ -14,6 +14,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
 const OUTPUT_LIMIT: usize = 32 * 1024;
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Event {
@@ -220,7 +221,19 @@ pub(crate) fn notify(
 
 pub(crate) async fn drain(shared: &Shared) {
     let tasks = std::mem::take(&mut *shared.hook_tasks.lock().unwrap());
-    join_all(tasks).await;
+    let aborts: Vec<_> = tasks.iter().map(|task| task.abort_handle()).collect();
+    let drain = join_all(tasks);
+    tokio::pin!(drain);
+    if tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut drain)
+        .await
+        .is_err()
+    {
+        for task in aborts {
+            task.abort();
+        }
+        // Await cancellation so every command's process-group guard has run.
+        drain.await;
+    }
 }
 
 pub(crate) fn tool_fields(call: &canter_model::ToolCall) -> Value {
