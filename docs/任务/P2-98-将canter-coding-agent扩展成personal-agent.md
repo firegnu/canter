@@ -1,4 +1,4 @@
-# 任务：将canter coding agent扩展成personal agent
+# 任务：第四期 - 将canter coding agent扩展成personal agent
 
 2026-10-27，用户在看板上新建。
 
