@@ -12,7 +12,7 @@ use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::approval::shorten_home;
 use crate::short_path::fit_path;
-use crate::text::{sanitize, str_width, truncate};
+use crate::text::{LogicalLine, sanitize, str_width, truncate, wrap};
 use crate::theme;
 
 /// Rows of sessions shown at once.
@@ -24,6 +24,8 @@ const DIRECTORY_COLUMNS: usize = 24;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pick {
     Open(String),
+    /// Confirmed deletion, handled without leaving the picker.
+    Trash(String),
     Cancel,
     /// Input ended or the terminal was asked to shut down.
     Exit,
@@ -36,6 +38,8 @@ pub struct Picker {
     /// Every directory, not just `cwd`.
     all: bool,
     selected: usize,
+    confirm: Option<String>,
+    error: Option<String>,
 }
 
 impl Picker {
@@ -48,11 +52,32 @@ impl Picker {
             home,
             all: false,
             selected: 0,
+            confirm: None,
+            error: None,
         }
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<Pick> {
         if key.kind == KeyEventKind::Release {
+            return None;
+        }
+        if matches!(key.code, KeyCode::Char('c' | 'd'))
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            return Some(Pick::Cancel);
+        }
+        if self.confirm.is_some() {
+            match key.code {
+                KeyCode::Char('y' | 'Y')
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    return self.confirm.take().map(Pick::Trash);
+                }
+                KeyCode::Char('n' | 'N') | KeyCode::Esc => self.confirm = None,
+                _ => {}
+            }
             return None;
         }
         let shown = self.shown().len();
@@ -69,13 +94,27 @@ impl Picker {
                     .get(self.selected)
                     .map(|session| Pick::Open(session.id.clone()));
             }
-            KeyCode::Esc => return Some(Pick::Cancel),
-            KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                return Some(Pick::Cancel);
+            KeyCode::Char('d') if key.modifiers.is_empty() => {
+                self.confirm = self
+                    .shown()
+                    .get(self.selected)
+                    .map(|session| session.id.clone());
+                self.error = None;
             }
+            KeyCode::Esc => return Some(Pick::Cancel),
             _ => {}
         }
         None
+    }
+
+    pub fn trashed(&mut self, id: &str) {
+        self.sessions.retain(|session| session.id != id);
+        self.selected = self.selected.min(self.shown().len().saturating_sub(1));
+        self.error = None;
+    }
+
+    pub fn deletion_failed(&mut self, error: String) {
+        self.error = Some(error);
     }
 
     /// The session at the top of the list as it opens: `canter -c`.
@@ -94,7 +133,18 @@ impl Picker {
     pub(crate) fn view(&self, width: u16, height: u16) -> PickerView {
         let shown = self.shown();
         let inner = usize::from(width.saturating_sub(2));
-        let room = usize::from(height.saturating_sub(4)).clamp(1, MAX_ROWS);
+        let notice = if self.confirm.is_some() {
+            Span::styled("Move selected session to trash? Y/N", theme::accent())
+        } else if let Some(error) = &self.error {
+            Span::styled(sanitize(error).replace('\n', " "), theme::failure())
+        } else {
+            Span::raw("")
+        };
+        let notice = wrap(
+            &LogicalLine::new(vec![Span::raw("   ")], vec![notice]),
+            width.saturating_sub(2),
+        );
+        let room = usize::from(height.saturating_sub(3 + notice.len() as u16)).clamp(1, MAX_ROWS);
         let first = (self.selected + 1).saturating_sub(room);
         let mut rows = Vec::new();
         if shown.is_empty() {
@@ -108,14 +158,14 @@ impl Picker {
         for (index, session) in shown.iter().enumerate().skip(first).take(room) {
             rows.push(self.row(session, index == self.selected, inner));
         }
-        rows.push(Line::default());
+        rows.extend(notice);
         let tab = if self.all {
             "Tab this directory only"
         } else {
             "Tab all directories"
         };
         rows.push(Line::from(Span::styled(
-            format!("   {tab} · Enter open · Esc cancel"),
+            format!("   {tab} · Enter open · d delete · Esc cancel"),
             theme::secondary(),
         )));
         PickerView { rows }
@@ -138,7 +188,7 @@ impl Picker {
         }
         match &session.name {
             Some(name) => spans.push(Span::raw(sanitize(name).replace('\n', " "))),
-            None => spans.push(Span::styled("(no messages yet)", theme::secondary())),
+            None => spans.push(Span::styled("(unnamed session)", theme::secondary())),
         }
         let style = if selected {
             Style::new().bold()
@@ -205,6 +255,65 @@ fn pad(text: &str, columns: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deletion_requires_confirmation_and_ctrl_d_still_cancels() {
+        let mut picker = Picker::new(
+            vec![SessionSummary {
+                id: "s1".into(),
+                cwd: "/project".into(),
+                name: Some("my session".into()),
+                status: SessionStatus::Idle,
+                updated_at: 0,
+                last_event_seq: 1,
+            }],
+            "/project".into(),
+            None,
+        );
+        assert_eq!(picker.handle_key(KeyEvent::from(KeyCode::Char('d'))), None);
+        let text: String = picker
+            .view(100, 20)
+            .rows
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(
+            text.contains("Move") && text.contains("trash") && text.contains("Y/N"),
+            "{text}"
+        );
+        assert_eq!(picker.handle_key(KeyEvent::from(KeyCode::Char('n'))), None);
+        assert_eq!(
+            picker.handle_key(KeyEvent::from(KeyCode::Enter)),
+            Some(Pick::Open("s1".into()))
+        );
+        picker.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(
+            picker.handle_key(KeyEvent::from(KeyCode::Char('y'))),
+            Some(Pick::Trash("s1".into()))
+        );
+        assert_eq!(
+            picker.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+            Some(Pick::Cancel)
+        );
+    }
+
+    #[test]
+    fn deletion_error_keeps_the_recovery_instruction_on_narrow_screens() {
+        let mut picker = Picker::new(Vec::new(), "/work".into(), None);
+        picker.deletion_failed(
+            "This server does not support deleting sessions; run canter serve --replace and retry"
+                .into(),
+        );
+        let text: String = picker
+            .view(55, 20)
+            .rows
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.contains("--replace and retry"), "{text}");
+    }
 
     /// With every directory shown, a long one loses whole directories from
     /// its middle and keeps its first part and its last: the name column

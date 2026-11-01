@@ -40,6 +40,7 @@ pub mod routes {
     pub const SESSION_USAGE: &str = "/v1/sessions/{id}/usage";
     pub const SESSIONS: &str = "/v1/sessions";
     pub const SESSION: &str = "/v1/sessions/{id}";
+    pub const SESSION_TRASH: &str = "/v1/sessions/{id}/trash";
     pub const GOAL: &str = "/v1/sessions/{id}/goal";
     pub const GOAL_PAUSE: &str = "/v1/sessions/{id}/goal/pause";
     pub const GOAL_RESUME: &str = "/v1/sessions/{id}/goal/resume";
@@ -513,6 +514,9 @@ pub struct RequestResolveResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(optional_fields = nullable)]
 pub struct SessionUpdateParams {
+    /// Compare before applying the update; empty means unnamed. Omitted is unconditional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_name: Option<String>,
     /// Append directories; never replaces or removes existing directories.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional = nullable)]

@@ -84,6 +84,10 @@ mod goal_tests;
 #[path = "run_lsp_tests.rs"]
 mod lsp_tests;
 
+#[cfg(test)]
+#[path = "run_session_management_tests.rs"]
+mod session_management_tests;
+
 /// A connection to the server.
 pub struct Connected {
     pub client: Client,
@@ -466,9 +470,19 @@ where
                         let dir = crate::tab_title::dir_name(&cwd, home.as_deref());
                         let picker = Picker::new(client.list_sessions().await?, cwd, home.clone());
                         let tab = (&mut tab, dir.as_str());
-                        match pick(&mut terminal, &mut input, picker, &mut shutdown, tab).await? {
+                        match pick(
+                            &mut terminal,
+                            &mut input,
+                            picker,
+                            &client,
+                            &mut shutdown,
+                            tab,
+                        )
+                        .await?
+                        {
                             Pick::Open(id) => Some(id),
                             Pick::Cancel | Pick::Exit => return Ok(None),
+                            Pick::Trash(_) => unreachable!("handled inside the picker"),
                         }
                     }
                 };
@@ -1018,6 +1032,7 @@ async fn pick<B>(
     terminal: &mut Terminal<B>,
     input: &mut Input,
     mut picker: Picker,
+    client: &Client,
     shutdown: &mut Shutdown,
     (tab, dir): (&mut TabTitle, &str),
 ) -> Result<Pick, RunError>
@@ -1059,7 +1074,19 @@ where
             None => return Ok(Pick::Exit),
             Some((_, _, TermEvent::Key(key))) => {
                 if let Some(picked) = picker.handle_key(key) {
-                    return Ok(picked);
+                    if let Pick::Trash(id) = picked {
+                        let result = tokio::select! {
+                            biased;
+                            _ = shutdown.wait() => return Ok(Pick::Exit),
+                            result = client.trash_session(&id) => result,
+                        };
+                        match result {
+                            Ok(()) => picker.trashed(&id),
+                            Err(error) => picker.deletion_failed(error.to_string()),
+                        }
+                    } else {
+                        return Ok(picked);
+                    }
                 }
             }
             Some(_) => {}
@@ -1268,7 +1295,7 @@ struct AutoName {
     turn: Option<(String, String)>,
     clearing: Option<String>,
     eligible: bool,
-    updates: mpsc::UnboundedSender<(Client, String)>,
+    updates: mpsc::UnboundedSender<(Client, String, String)>,
 }
 
 impl AutoName {
@@ -1277,15 +1304,32 @@ impl AutoName {
         named_first: bool,
         messages: mpsc::UnboundedSender<Message>,
     ) -> Self {
-        let (updates, mut receive) = mpsc::unbounded_channel::<(Client, String)>();
+        let (updates, mut receive) = mpsc::unbounded_channel::<(Client, String, String)>();
         let session = snapshot.id.clone();
         tokio::spawn(async move {
-            while let Some((client, name)) = receive.recv().await {
-                let params = SessionUpdateParams {
-                    name: Some(name),
-                    ..Default::default()
-                };
-                if let Err(error) = client.update(&session, &params).await {
+            while let Some((client, name, expected)) = receive.recv().await {
+                let result = async {
+                    // Recheck the connected server; it may have been replaced.
+                    let conditional = client
+                        .info()
+                        .await?
+                        .features
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|feature| feature == "conditionalName");
+                    client
+                        .update(
+                            &session,
+                            &SessionUpdateParams {
+                                name: Some(name),
+                                expected_name: conditional.then_some(expected),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                }
+                .await;
+                if let Err(error) = result {
                     let _ = messages.send(Message::NameFailed(error.to_string()));
                 }
             }
@@ -1335,7 +1379,7 @@ impl AutoName {
         self.eligible = false;
         self.turn = Some((turn, title.clone()));
         self.clearing = None;
-        let _ = self.updates.send((client.clone(), title));
+        let _ = self.updates.send((client.clone(), title, String::new()));
     }
 
     fn retracted(&mut self, turn: &str, snapshot: &SessionSnapshot, client: &Client) {
@@ -1348,8 +1392,8 @@ impl AutoName {
                 .as_ref()
                 .is_none_or(|name| *name == title);
             if self.eligible {
-                self.clearing = Some(title);
-                let _ = self.updates.send((client.clone(), String::new()));
+                self.clearing = Some(title.clone());
+                let _ = self.updates.send((client.clone(), String::new(), title));
             }
         }
     }
@@ -1573,7 +1617,16 @@ impl<C: Connector> Chat<C> {
         let picker = Picker::new(sessions, cwd, self.home.clone());
         let dir = ui.app().tab_dir();
         let tab = (tab, dir.as_str());
-        let id = match pick(ui.terminal_mut(), input, picker, shutdown, tab).await? {
+        let id = match pick(
+            ui.terminal_mut(),
+            input,
+            picker,
+            &self.client,
+            shutdown,
+            tab,
+        )
+        .await?
+        {
             Pick::Open(id) if id != self.session => id,
             Pick::Exit => return Ok(ControlFlow::Break(())),
             _ => return Ok(ControlFlow::Continue(None)),
@@ -2115,6 +2168,11 @@ impl<C: Connector> Chat<C> {
                 });
             }
             Action::Update(params) => {
+                if params.name.is_some() {
+                    self.naming.eligible = false;
+                    self.naming.turn = None;
+                    self.naming.clearing = None;
+                }
                 tokio::spawn(async move {
                     match update_settings(&client, &session, &params).await {
                         Ok(notices) => {

@@ -1,6 +1,99 @@
 use super::*;
 
 #[tokio::test]
+async fn trash_refuses_a_running_model_background_command() {
+    assert_running_background_blocks_trash(false).await;
+}
+
+#[tokio::test]
+async fn trash_refuses_a_running_user_background_command() {
+    assert_running_background_blocks_trash(true).await;
+}
+
+async fn assert_running_background_blocks_trash(user_shell: bool) {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("allowAll").await;
+    let started = if user_shell {
+        fixture
+            .shell(
+                &url,
+                "while [ ! -e release-wake ]; do sleep 0.01; done; exit 7 &",
+            )
+            .await
+    } else {
+        fixture.say(&url, "wake-background").await
+    };
+    assert!(started.session.background_commands[0].running);
+    let directory = fixture.app.store.session_dir(&started.session.id).unwrap();
+    let trash = fixture.app.home.join("trash").join(&started.session.id);
+    assert!(directory.is_dir());
+    let response = fixture
+        .client
+        .post(format!("{url}/trash"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(
+        response
+            .json::<canter_protocol::ErrorResponse>()
+            .await
+            .unwrap()
+            .message,
+        "Cannot delete this session while a background command is still running; open it and run /stop first."
+    );
+    assert!(directory.is_dir());
+    assert!(!trash.exists());
+    let output: BackgroundCommandOutput = fixture
+        .client
+        .get(format!("{url}/backgroundCommands/1"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(output.command.running);
+    fixture.release("release-wake");
+    let completed = fixture
+        .until(&url, |s| !s.background_commands[0].running)
+        .await;
+    assert_eq!(completed.background_commands[0].exit_code, Some(7));
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn trash_refuses_a_pending_background_wake() {
+    let fixture = Fixture::new().await;
+    let url = fixture.create("allowAll").await;
+    fixture.say(&url, "wake-background").await;
+    fixture.release("release-wake");
+    fixture
+        .until(&url, |s| {
+            !s.background_commands[0].running && s.status == SessionStatus::Idle
+        })
+        .await;
+    let response = fixture
+        .client
+        .post(format!("{url}/trash"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+    assert!(
+        response
+            .json::<canter_protocol::ErrorResponse>()
+            .await
+            .unwrap()
+            .message
+            .contains("background")
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
 async fn non_interactive_background_completion_does_not_start_a_turn() {
     let fixture = Fixture::new().await;
     let url = fixture.create("allowAll").await;

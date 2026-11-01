@@ -92,6 +92,12 @@ impl Harness {
             .unwrap()
             .unwrap()
     }
+    async fn naming_request(&mut self) -> Request {
+        let info = self.request().await;
+        assert_eq!(info.path, "/v1/info");
+        info.json(json!({"serverVersion":"test", "protocolVersion":1, "sessions":[], "features":["conditionalName"]}));
+        self.request().await
+    }
     pub(super) async fn message(&mut self) {
         let message = tokio::time::timeout(Duration::from_secs(5), self.messages.recv())
             .await
@@ -334,10 +340,54 @@ async fn first_message_after_user_shell_becomes_the_session_name() {
         if !event_first {
             test.start("first-message", text, None);
         }
-        let naming = test.request().await;
+        let naming = test.naming_request().await;
         assert_eq!(naming.path, "/v1/sessions/test");
         assert_eq!(naming.body["name"], text);
         naming.json(json!({"eventSeq":test.ui.app().snapshot().last_event_seq + 1}));
+        test.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn automatic_name_and_retraction_negotiate_conditions() {
+    for supported in [true, false] {
+        let mut test = Harness::new().await;
+        test.ui.app_mut().handle_paste("first title");
+        test.key(KeyCode::Enter);
+        test.request()
+            .await
+            .json(json!({"eventSeq":1,"turnId":"first"}));
+        test.message().await;
+        test.start("first", "first title", None);
+        let info = test.request().await;
+        assert_eq!(info.path, "/v1/info");
+        info.json(json!({"serverVersion":"test", "protocolVersion":1, "sessions":[], "features":if supported { vec!["conditionalName"] } else { vec![] }}));
+        let naming = test.request().await;
+        assert_eq!(naming.body["name"], "first title");
+        assert_eq!(
+            naming.body.get("expectedName"),
+            supported.then_some(&json!(""))
+        );
+        naming.json(json!({"eventSeq":3}));
+        let mut settings = test.ui.app().snapshot().settings.clone();
+        settings.name = Some("first title".into());
+        test.event(EventPayload::SessionUpdated { settings });
+        test.key(KeyCode::Esc);
+        let interrupt = test.request().await;
+        test.event(EventPayload::TurnRetracted {
+            turn_id: "first".into(),
+        });
+        interrupt.json(json!({"eventSeq":5, "retracted":true}));
+        let info = test.request().await;
+        assert_eq!(info.path, "/v1/info");
+        info.json(json!({"serverVersion":"test", "protocolVersion":1, "sessions":[], "features":if supported { vec!["conditionalName"] } else { vec![] }}));
+        let clear = test.request().await;
+        assert_eq!(clear.body["name"], "");
+        assert_eq!(
+            clear.body.get("expectedName"),
+            supported.then_some(&json!("first title"))
+        );
+        clear.json(json!({"eventSeq":6}));
         test.stop().await;
     }
 }
@@ -352,7 +402,7 @@ async fn retract_clears_its_auto_title_even_if_naming_finishes_late_and_names_th
     input.json(json!({"eventSeq":1,"turnId":"first"}));
     test.message().await;
     test.start("first", "mistyped title", None);
-    let naming = test.request().await;
+    let naming = test.naming_request().await;
     assert_eq!(naming.body["name"], "mistyped title");
     // Keep the naming reply in flight while Esc retracts this input.
     test.key(KeyCode::Esc);
@@ -372,7 +422,7 @@ async fn retract_clears_its_auto_title_even_if_naming_finishes_late_and_names_th
         settings: settings.clone(),
     });
     naming.json(json!({"eventSeq":5}));
-    let clear = test.request().await;
+    let clear = test.naming_request().await;
     assert_eq!(clear.path, "/v1/sessions/test");
     assert_eq!(clear.body["name"], "");
     settings.name = None;
@@ -384,7 +434,7 @@ async fn retract_clears_its_auto_title_even_if_naming_finishes_late_and_names_th
     input.json(json!({"eventSeq":7,"turnId":"next"}));
     test.message().await;
     test.start("next", "corrected title", None);
-    let naming = test.request().await;
+    let naming = test.naming_request().await;
     assert_eq!(naming.body["name"], "corrected title");
     naming.json(json!({"eventSeq":9}));
     test.stop().await;

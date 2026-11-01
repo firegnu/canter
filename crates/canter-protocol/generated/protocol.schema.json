@@ -4802,6 +4802,13 @@
             }
           ]
         },
+        "expectedName": {
+          "description": "Compare before applying the update; empty means unnamed. Omitted is unconditional.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "model": {
           "type": [
             "string",

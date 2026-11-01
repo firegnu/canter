@@ -9,6 +9,10 @@ import type { ReasoningEffort } from "./ReasoningEffort";
  */
 export type SessionUpdateParams = {
 /**
+ * Compare before applying the update; empty means unnamed. Omitted is unconditional.
+ */
+expectedName?: string | null,
+/**
  * Append directories; never replaces or removes existing directories.
  */
 addDirectories?: Array<string>, planMode?: boolean | null, name?: string | null, model?: string | null, reasoningEffort?: ReasoningEffort | null, approvalPolicy?: PermissionMode | null, };

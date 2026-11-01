@@ -1469,6 +1469,22 @@ impl Session {
     ) -> Result<SessionUpdateResponse, CoreError> {
         let mut state = self.shared.state.lock().await;
         state.available()?;
+        // Automatic names and their undo must not overwrite a manual rename
+        // that arrived after the terminal's snapshot.
+        if params.expected_name.as_ref().is_some_and(|expected| {
+            state
+                .journal
+                .snapshot
+                .settings
+                .name
+                .as_deref()
+                .unwrap_or("")
+                != expected
+        }) {
+            return Ok(SessionUpdateResponse {
+                event_seq: state.journal.snapshot.last_event_seq,
+            });
+        }
         if params.approval_policy == Some(PermissionMode::Unknown)
             || params.reasoning_effort == Some(ReasoningEffort::Unknown)
             || params
@@ -1614,19 +1630,87 @@ impl Session {
             .await
     }
 
+    /// Atomically exclude clients and new work before the server moves this
+    /// session. The server must hold its registry lock through the move.
+    pub async fn close_for_trash(&self) -> Result<SessionCloseResponse, CoreError> {
+        let session = self.clone();
+        owned(async move {
+            session
+                .close_inner(SessionCloseReason::ClientRequest, true)
+                .await
+        })
+        .await
+    }
+
     async fn close_with_reason(
         &self,
         reason: SessionCloseReason,
     ) -> Result<SessionCloseResponse, CoreError> {
         let session = self.clone();
-        owned(async move { session.close_inner(reason).await }).await
+        owned(async move { session.close_inner(reason, false).await }).await
     }
     async fn close_inner(
         &self,
         reason: SessionCloseReason,
+        for_trash: bool,
     ) -> Result<SessionCloseResponse, CoreError> {
         let (done, btw_done) = {
             let mut state = self.shared.state.lock().await;
+            if for_trash {
+                state.available()?;
+                if self.shared.clients.lock().unwrap().is_attached() {
+                    return Err(CoreError::new(
+                        ErrorCode::Conflict,
+                        "Cannot delete this session while a terminal is attached; leave it in every terminal first.",
+                    ));
+                }
+                // Unlike SessionEnd(client_exit), deletion must preserve a
+                // suspended turn: waiting for approval/an answer is still work.
+                if state.journal.snapshot.status == SessionStatus::WaitingApproval
+                    || !state.requests.is_empty()
+                {
+                    return Err(CoreError::new(
+                        ErrorCode::Conflict,
+                        "Cannot delete this session while it is waiting for approval or an answer.",
+                    ));
+                }
+                if state.active.is_some() || !state.queue.is_empty() || state.btw.is_some() {
+                    return Err(CoreError::new(
+                        ErrorCode::Conflict,
+                        "Cannot delete this session while a turn, queued input, or side question is still running.",
+                    ));
+                }
+                if state.goal_deadline.is_some() {
+                    return Err(CoreError::new(
+                        ErrorCode::Conflict,
+                        "Cannot delete this session while a goal is scheduled to continue; pause the goal first.",
+                    ));
+                }
+                // Closing would kill every running command, including user
+                // shell commands that never wake the model.
+                if state
+                    .journal
+                    .snapshot
+                    .background_commands
+                    .iter()
+                    .any(|command| command.running)
+                {
+                    return Err(CoreError::new(
+                        ErrorCode::Conflict,
+                        "Cannot delete this session while a background command is still running; open it and run /stop first.",
+                    ));
+                }
+                if !state.automatic_turns_paused
+                    && state
+                        .background_events
+                        .has_pending_wake(self.shared.next_options().auto_wake_limit)
+                {
+                    return Err(CoreError::new(
+                        ErrorCode::Conflict,
+                        "Cannot delete this session while a background command has a pending wake.",
+                    ));
+                }
+            }
             state.closing = true;
             let done = state.active.as_ref().map(|active| {
                 active.cancel.cancel();
