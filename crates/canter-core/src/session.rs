@@ -1145,8 +1145,10 @@ impl Session {
             |sender| sender.subscribe(),
         );
         let mut subscription = Subscription {
-            store: state.journal.store.clone(),
-            id: state.journal.snapshot.id.clone(),
+            disk_reader: state
+                .journal
+                .store
+                .event_reader(&state.journal.snapshot.id)?,
             receiver,
             committed: state.journal.committed.subscribe(),
             pending: VecDeque::new(),
