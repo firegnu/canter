@@ -1,19 +1,98 @@
 # 任务：第二期-12 - hooks（事件钩子）
 
-依据：10-29 用户定从第三期插件系统 P2-21 里拿出来，进第二期：照 Claude Code 的 hooks，某个事件发生时跑用户配的命令（比如改完文件自动跑格式化）。
+依据：10-29 用户定从第三期插件系统 P2-21 里拿出来，进第二期：照 Claude Code 的 hooks，某个事件发生时跑用户配的命令（比如改完文件自动跑格式化）。本件只做全局钩子；事件名、配置格式、标准输入的 JSON 照 Claude Code（Codex `rust-v0.163.0` 用的是同一套），事件挑日常用得上的和 corral 以后要用的。
 执行：派出
-待用户：还没分解。开工时主控补全，先问用户：要哪些事件（改完文件、跑命令前后、一轮结束、等批准……）、钩子能不能拦下操作、配置写哪；照 Claude Code 还是先对照别家（Codex、pi）
+待用户：确认主控的四个建议（钩子只能拦不能放行；Stop 只通知、不能让模型接着干；没信任的文件夹不跑钩子；钩子输出不加进上下文）
 
 ## 用户原话
 
 - 10-29 主控为「日常用、长程任务、拿数据说话」又过了一遍，问 hooks 留第三期还是进第二期；用户：「都同意，hooks 调整到第二期。还有其他的我没想到的要做的功能吗？」
 - 11-01 P2-159 项目级配置挪到第三期（用户：「同意，挪到第三期吧」）。本件先只做全局 hooks，项目里的 hooks 等第三期跟项目级配置一起做。
 - 11-01 P2-83 接 corral 和 paddock 提进第二期（第二期-26），标题写着「尤其注意hook的问题」：corral 靠 agent 的钩子判断它在干活还是空闲，本件定事件时一并考虑 corral 要用的。
+- 11-01 用户：「开始写 hooks 的任务文件吧。写好之后告诉我你怎么设计的。」
+
+## 先读
+
+- `docs/DESIGN.md`：第 8 条（协议）、第 17 条（照顾缓存命中）、第 20 条（提示词分段）、第 23 条（功能核心不绑定 DeepSeek）、「文件夹信任（P2-168）」「改配置不用重启（P2-154）」「按命令放行（P2-108）」「按文件名的读写规则（P2-167）」「沙箱（P2-123）」几节。
+- `docs/调研/R49-自研agent调研.md` §6.4「做法一」里钩子那一条（corral 以后怎么用钩子；本件不做 corral 那边的事）。
+- `crates/canter-server/src/config.rs`（`config.json` 怎么读、校验）和 P2-154 热加载的接线。
+- `crates/canter-tools/src/permission.rs`（批准怎么判，钩子插在哪一步）；`crates/canter-core/src/session.rs` 里一轮开始、结束、打断、失败，弹批准框，工具开始和完成的地方。
+- 只读参考（不搬代码）：Claude Code hooks 文档（https://docs.anthropic.com/en/docs/claude-code/hooks）；Codex `/tmp/codex-ro/codex-rs/hooks/src/schema.rs`（各事件标准输入的字段）。参考了哪里写进完成记录。
+
+## 在哪里干活
+
+- worktree：`../canter-worktrees/p2-153-hooks`，分支 `p2-153-hooks`（已从 main 建好）。
+- 编译目录：命令前加 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-153-hooks`。
 
 ## 要做的
 
-（待分解时补全。）
+1. **配置**：`~/.canter/config.json` 加 `hooks`，格式照 Claude Code `settings.json` 里的 `hooks`：
+
+   ```json
+   "hooks": {
+     "PostToolUse": [
+       {"matcher": "write|edit", "hooks": [{"type": "command", "command": "cargo fmt", "timeout": 60}]}
+     ]
+   }
+   ```
+
+   - 只认 `"type": "command"`；`timeout` 单位秒，缺省 60。
+   - `matcher` 只对带工具的事件（PreToolUse、PermissionRequest、PostToolUse）有效，按工具名整名匹配（正则，`|` 分多个；空或 `*` 匹配全部）。工具名用 canter 给模型的名字：`read`、`write`、`edit`、`shell`、`ask_user`、`web_fetch`、`mcp_call`……
+   - 写错时照 P2-154：整份配置沿用旧的、界面一行英文提示，不挡会话；改了下一轮生效，正在跑的这一轮用旧的。
+   - 只读全局这一份，不读项目里的钩子（第三期）。
+
+2. **事件**（名字照 Claude Code / Codex）：
+
+   | 事件 | 什么时候 | 标准输入里除共同字段外带什么 | 钩子能做什么 |
+   |---|---|---|---|
+   | `SessionStart` | 会话打开（新建、恢复） | `source`：`startup` / `resume` | 只通知 |
+   | `SessionEnd` | 会话关掉（客户端关、服务端停） | `reason` | 只通知 |
+   | `UserPromptSubmit` | 用户的一句话开始处理、发给模型之前 | `prompt` 原文 | **能拦**：这句不发给模型、不进历史，界面一行英文写原因 |
+   | `PreToolUse` | 模型调工具，canter 自己的规则（敏感路径、`fileRules`、计划模式、沙箱等）放过之后、弹批准框之前 | `tool_name`、`tool_input` | **能拦**：不弹框、不执行，原因作为这次工具的结果给模型 |
+   | `PermissionRequest` | 要弹批准框、等用户点的时候 | `tool_name`、`tool_input` | 只通知（不能替用户批准或拒绝） |
+   | `PostToolUse` | 工具跑完（成功或失败） | `tool_name`、`tool_input`、`tool_response` | **能反馈**：原因附在这次工具结果后面给模型（比如格式化、lint 报错）；工具已经执行，不撤销 |
+   | `Stop` | 一轮正常结束 | `last_assistant_message`（最后一条回复原文） | 只通知 |
+   | `StopFailure` | 一轮出错结束 | `error` | 只通知 |
+   | `Interrupt` | 一轮被打断 | 无 | 只通知 |
+
+   - 共同字段：`session_id`、`cwd`、`hook_event_name`、`permission_mode`。字段名照 Claude Code / Codex 的写法（snake_case），canter 没有的字段不硬造。
+   - 一轮不管怎么开始的都算：用户送的话、排队的输入、后台命令完成叫醒、目标续跑、计划批准后开的新会话、`/new`、`/handoff`、`canter exec`。`UserPromptSubmit` 只在用户送的话上触发，自动叫醒的那一轮不触发。
+
+3. **怎么跑**：
+   - 在服务端跑，`/bin/sh -c <command>`，工作目录是会话的工作目录；事件 JSON 从标准输入给；环境变量加 `CANTER_SESSION_ID`、`CANTER_PROJECT_DIR`（会话工作目录）。
+   - 不套沙箱（和 Claude Code、Codex 一样：钩子是用户自己写的命令）。会话临时目录（P2-91）不给钩子用。
+   - 同一个事件匹配上的几条钩子并行跑；有一条拦就算拦。
+   - 结果：退出码 0 放行；退出码 2 是拦（或 PostToolUse 的反馈），原因取标准错误。也认 Claude Code 的 JSON 写法：标准输出 `{"decision":"block","reason":"..."}`，PreToolUse 的 `hookSpecificOutput.permissionDecision: "deny"` 加 `permissionDecisionReason`。JSON 里的 `allow`、`ask` 和别的字段忽略，不报错。
+   - 能拦的事件要等钩子跑完再往下走；一轮被打断时，正在跑的钩子整组杀掉。只通知的事件不让这一轮等它。
+   - 一个会话的钩子慢、卡住，不能卡住别的会话、界面和服务端；超时整组杀掉。标准输出、标准错误限长，超了截断。
+
+4. **判断不出来时**：钩子起不来、超时、退出码不是 0 也不是 2、JSON 解析不了，一律**不拦**，照常往下走，界面一行英文提示（哪个事件、哪条命令、原因）。不能因为钩子坏了把用户挡在会话外面，也不能让这一轮卡住。
+
+5. **没信任的文件夹**（P2-168 受限打开）：不跑钩子，和不起 LSP 一样；打开时提示里写明。
+
+6. **钩子输出不进上下文**：除了 PreToolUse 拦下的原因和 PostToolUse 的反馈（都放在那次工具结果里），钩子的输出不加进给模型的内容；系统提示词和环境一段不变（第 17、20 条）。
+
+7. **DESIGN**：写一节「钩子（P2-153）」：上面 1～6 条，事件表，和 Claude Code、Codex 的对照（没做的：项目里的钩子、`prompt` / `agent` / `http` 类型、钩子放行、Stop 拦下让模型接着干、SessionStart / UserPromptSubmit 加上下文、PreCompact / PostCompact、Notification、Subagent 事件、Codex 的钩子信任审核）。协议有变化的照第 8 条写明和 Codex 的不同。
 
 ## 怎么算做完
 
-（待分解时补全。）
+- 用户原话的那个例子能用：`config.json` 配 PostToolUse、`matcher` 为 `write|edit`、跑一条格式化命令，模型改完文件后命令跑了、文件被格式化。
+- 上表九个事件都在该触发的时候触发、不该触发的时候不触发，标准输入的字段对；UserPromptSubmit、PreToolUse 拦得住，PostToolUse 的反馈模型看得到；钩子起不来、超时、乱输出时照常往下走、有提示；没信任的文件夹不跑。
+- 验证只做这些：先写针对性的测试（假模型服务端、隔离的 HOME 和 canter 状态目录，钩子命令写成测试里的 shell 脚本），确认因为现在没有钩子而失败，再实现。**改了哪个包，就跑那个包的全部测试；改了给模型的内容（工具结果）的，`canter-server`、`canter` 两个包也全跑**（`cargo nextest run -p <包>`），加 `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check`。不跑全套，不调真实模型。
+
+## 不要做
+
+- 不做项目里的钩子、`prompt` / `agent` / `http` 类型的钩子、钩子放行（`allow` 跳过批准）、Stop 拦下让模型接着干、钩子输出加进上下文、`/hooks` 界面、钩子信任审核。不加上面没写的事件。
+- 不为 corral 写特例，代码和文档里不出现 corral（DESIGN 第 1 条）；会话带上客户端环境变量是 P2-83 的事，本件不做。
+- 钩子不能放宽 canter 自己的任何限制（敏感路径、`fileRules`、计划模式、审查轮、沙箱、批准档位）。
+- 不在核心逻辑里按 DeepSeek 的名字、接口地址、请求字段或缓存行为分支（DESIGN 第 23 条）。
+- 实现、测试和辅助命令不用 Python（也不用 Ruby 等别的脚本语言），只用 shell 和 Rust。
+- 不读、不改用户真实的 `~/.canter`；测试用隔离的 HOME、canter 状态目录和临时目录。测试不调真实模型接口。
+- 界面上的文字用英文。
+- 不要按项目名或路径批量杀进程（`pkill -f canter` 这类）。停自己起的服务端用起的时候记下的 PID。
+- 碰到要拿主意的事，停下来，在回复里写清问题、可选办法和你的建议，然后结束这一轮，等主控回复再接着做；不要自己换别的办法。主控的决定写进完成记录。
+- 不合并到 main，不推送。只在 `p2-153-hooks` 上提交。
+
+## 做完
+
+在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
