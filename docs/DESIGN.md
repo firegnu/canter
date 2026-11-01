@@ -332,18 +332,18 @@ P2-161 内置关键路径删除判断，只管模型 shell（前台、后台）�
 
 ## 会话临时目录（P2-91）
 
-2026-11-01 用户确认：模型为完成任务临时写的脚本、中间结果、不属于项目的输出放进会话临时目录，不散落到项目或 `/tmp`。无论沙箱开关，打开会话时都尝试创建，模型 shell 的 `$TMPDIR` 指向它。用规范化的会话存储路径（包含会话 ID）的 SHA-256 和用户 ID 派生 `/tmp/canter-shell-<uid>-<digest>`，实际路径按系统规范化（macOS 通常为 `/private/tmp/...`）；同一会话重开路径相同，不同状态目录下同名会话也互不冲突。创建时权限为 0700；已存在的路径必须是该用户拥有的 0700 目录，符号链接或不安全的占位路径拒绝使用，不跟随或删除其目标。
+2026-11-01 用户确认：模型为完成任务临时写的脚本、中间结果、不属于项目的输出放进会话临时目录，不散落到项目或 `/tmp`。无论沙箱开关，打开会话时都尝试创建，模型 shell 和用户 `!` 命令（包括 `!cmd &`）的 `$TMPDIR` 都指向它；用户命令仍不套沙箱，临时文件同样随会话关闭清理。用规范化的会话存储路径（包含会话 ID）的 SHA-256 前 16 个十六进制字符和用户 ID 派生 `/tmp/canter-shell-<uid>-<digest16>`，实际路径按系统规范化（macOS 通常为 `/private/tmp/...`，三位用户 ID 时约 46 字节），为脚本在 `$TMPDIR` 下建立 Unix socket 留出路径长度。同一会话重开路径相同，不同状态目录下同名会话使用各自的目录名。创建时权限为 0700；已存在的路径必须是该用户拥有的 0700 目录，符号链接或不安全的占位路径拒绝使用，不跟随或删除其目标。
 
 目录由会话持有，执行器、重建的沙箱及 `retired_tools` 共享。热加载配置不换路径、不清空内容；正在运行的后台命令沿用原执行范围。关闭会话或正常停止服务端时，按现有流程先停命令并等它们结束，再删除临时目录；下次打开创建同路径的空目录。异常退出未清理的本会话目录在重开时清空，不扫描其它会话目录。初始化在取得存储的会话锁之后进行，旧执行器释放时不会删除已重新打开的目录。
 
-环境段只在打开会话时生成，使用以下已确认的原文；会话中途切换沙箱不改这一段，下次打开才按当时开关选择。路径稳定遵守第 17 条，各家模型共用，不按模型提供商分支。
+环境段只在打开会话时生成，使用以下已确认的原文；会话中途切换沙箱不改这一段，下次打开才按当时开关选择。`/btw`、`/handoff` 直接复用所属会话的主请求前缀，包括同一个临时目录路径，不重新生成环境段。路径稳定遵守第 17 条，各家模型共用，不按模型提供商分支。
 
 - 沙箱开启：`Scratch directory: <完整路径>. Put temporary files here (throwaway scripts, intermediate results, outputs that don't belong in the project) instead of the project or /tmp. It is private to this session, needs no approval, and is emptied when the session closes; copy anything worth keeping into the project or tell the user.`
 - 沙箱关闭：`Scratch directory: <完整路径>. Put temporary files here (throwaway scripts, intermediate results, outputs that don't belong in the project) instead of the project or /tmp. It is private to this session and is emptied when the session closes; copy anything worth keeping into the project or tell the user.`
 
 只有实际沙箱开启时，`write` / `edit` 写入本会话临时目录免批准，Always ask、Ask for execution、Allow all 都能直接执行。沙箱关闭时沿用原来的批准规则，两个询问档仍询问、Allow all 不问。路径按 P2-118 规范化，`..`、符号链接不能借此写到范围外；不增加整个 `/tmp` 或其它会话目录的写权限。`read` 不变，敏感路径、`fileRules`、计划模式及审查轮限制照旧优先（包括 Allow all 下原有的 prompt 文件规则语义）。沙箱开启时 shell 说明仅把临时目录的措辞改为 `the session scratch directory at $TMPDIR`，关闭时工具说明保持原样。
 
-目录创建失败不阻止打开会话：省略环境中的 Scratch directory 行，不授予临时目录写入豁免，并沿用 warning 事件显示一行英文 `Scratch directory unavailable: <原因>`。沙箱不会因此放行整个 `/tmp`，也不会在墙外重试命令。`/sandbox` 沿用现有 writable 列表显示可用目录，无新增配置项、工具、协议字段或事件；第 8 条的 Codex 协议差异保持不变。
+目录创建失败不阻止打开会话：省略环境中的 Scratch directory 行，不授予临时目录写入豁免，并沿用 warning 事件显示一行英文 `Scratch directory unavailable at <path>: <error>`，包含尝试创建的路径及原因。沙箱不会因此放行整个 `/tmp`，也不会在墙外重试命令。`/sandbox` 沿用现有 writable 列表显示可用目录，无新增配置项、工具、协议字段或事件；第 8 条的 Codex 协议差异保持不变。
 
 对照：Claude Code 的会话草稿目录在系统提示词中提供完整路径、用途及通常不需批准的说明，本件采用这种明确引导；canter 的免批准以实际沙箱开启为条件。Codex `rust-v0.163.0` 没有该专门功能，workspace-write 默认允许 `/tmp` 和 `$TMPDIR`（可分别用 `exclude_slash_tmp`、`exclude_tmpdir_env_var` 关闭），提示词不专门介绍；canter 只开放本会话目录，路径固定且关闭清理，不扩大到系统临时根。
 

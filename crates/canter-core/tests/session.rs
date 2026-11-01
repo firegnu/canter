@@ -411,6 +411,13 @@ async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp()
         );
         let temporary = std::fs::read_to_string(temp.path().join("project/temp-path")).unwrap();
         assert!(std::path::Path::new(&temporary).is_dir());
+        let digest = temporary.rsplit('-').next().unwrap();
+        assert_eq!(digest.len(), 16);
+        assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        let socket = std::path::Path::new(&temporary).join("script-listener.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        drop(listener);
+        std::fs::remove_file(socket).unwrap();
         std::fs::write(
             std::path::Path::new(&temporary).join("throwaway"),
             "temporary",

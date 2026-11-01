@@ -17,12 +17,16 @@ impl ScratchDirectory {
     /// Call only while holding the store's exclusive lock for this session.
     /// The canonical storage path separates identical IDs in independent stores.
     pub fn for_session(session_directory: &Path) -> Self {
-        Self::from_result((|| {
+        let mut path = PathBuf::from("/tmp");
+        let result = (|| {
             let session_directory = session_directory.canonicalize()?;
             let owner = std::fs::metadata(&session_directory)?.uid();
-            let digest = Sha256::digest(session_directory.as_os_str().as_encoded_bytes());
-            let name = format!("canter-shell-{owner}-{digest:x}");
-            let path = Path::new("/tmp").join(&name);
+            let digest = format!(
+                "{:x}",
+                Sha256::digest(session_directory.as_os_str().as_encoded_bytes())
+            );
+            let name = format!("canter-shell-{owner}-{}", &digest[..16]);
+            path = path.canonicalize()?.join(&name);
             match std::fs::symlink_metadata(&path) {
                 Ok(metadata) => {
                     if !metadata.is_dir()
@@ -43,11 +47,13 @@ impl ScratchDirectory {
                 .rand_bytes(0)
                 .permissions(std::fs::Permissions::from_mode(0o700))
                 .tempdir_in("/tmp")
-        })())
+        })();
+        Self::from_result(&path, result)
     }
 
     pub(crate) fn temporary() -> Self {
         Self::from_result(
+            Path::new("/tmp"),
             tempfile::Builder::new()
                 .prefix("canter-shell-")
                 .permissions(std::fs::Permissions::from_mode(0o700))
@@ -55,7 +61,7 @@ impl ScratchDirectory {
         )
     }
 
-    fn from_result(result: io::Result<tempfile::TempDir>) -> Self {
+    fn from_result(path: &Path, result: io::Result<tempfile::TempDir>) -> Self {
         let result = result.and_then(|directory| {
             let path = directory.path().canonicalize()?;
             Ok((directory, path))
@@ -69,7 +75,10 @@ impl ScratchDirectory {
             Err(error) => Self {
                 directory: Mutex::new(None),
                 path: None,
-                warning: Some(format!("Scratch directory unavailable: {error}")),
+                warning: Some(format!(
+                    "Scratch directory unavailable at {}: {error}",
+                    path.display()
+                )),
             },
         }
     }

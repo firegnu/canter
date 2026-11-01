@@ -556,9 +556,12 @@ async fn handoff_appends_instructions_without_changing_history_and_charges_sourc
         test.input(id, "hello").await;
         test.wait_status(id, SessionStatus::Idle).await;
     }
+    let source_prefix = test.model.0.lock().unwrap().last().unwrap().messages[0].clone();
     test.input(&control, "next").await;
     test.wait_status(&control, SessionStatus::Idle).await;
-    let baseline = test.model.0.lock().unwrap().last().unwrap().clone();
+    let mut baseline = test.model.0.lock().unwrap().last().unwrap().clone();
+    // Compare against the source's actual main prefix, including its private scratch path.
+    baseline.messages[0] = source_prefix;
     let history = test
         .app
         .store
@@ -899,9 +902,12 @@ async fn btw_preserves_main_requests_history_and_context_but_records_cost() {
         test.input(id, "hello").await;
         test.wait_status(id, SessionStatus::Idle).await;
     }
+    let session_prefix = test.model.0.lock().unwrap().last().unwrap().messages[0].clone();
     test.input(&control, "next").await;
     test.wait_status(&control, SessionStatus::Idle).await;
-    let baseline = test.model.0.lock().unwrap().last().unwrap().clone();
+    let mut baseline = test.model.0.lock().unwrap().last().unwrap().clone();
+    // Compare against this session's main prefix, not the control's scratch path.
+    baseline.messages[0] = session_prefix;
     let history = test
         .app
         .store

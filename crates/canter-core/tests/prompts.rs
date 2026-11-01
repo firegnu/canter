@@ -120,10 +120,10 @@ async fn unavailable_scratch_warns_without_preventing_session_open() {
             .unwrap()
             .unwrap();
         assert!(
-            matches!(&notice.payload, canter_protocol::EventPayload::Warning { message } if message.starts_with("Scratch directory unavailable:"))
+            matches!(&notice.payload, canter_protocol::EventPayload::Warning { message } if message.starts_with(&format!("Scratch directory unavailable at {scratch}: ")))
         );
         let events = store.events_after("prompt", before).unwrap();
-        assert!(events.iter().any(|event| matches!(&event.payload, canter_protocol::EventPayload::Warning { message } if message.starts_with("Scratch directory unavailable:") && message.contains("private directory"))));
+        assert!(events.iter().any(|event| matches!(&event.payload, canter_protocol::EventPayload::Warning { message } if message.starts_with(&format!("Scratch directory unavailable at {scratch}: ")) && message.contains("private directory"))));
         assert!(
             !contexts(&store).last().unwrap()["messages"][0]["text"]
                 .as_str()
