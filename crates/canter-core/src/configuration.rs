@@ -78,6 +78,7 @@ impl Shared {
             configuration: Default::default(),
             configuration_warnings: Default::default(),
             lifetime: self.lifetime.clone(),
+            hook_tasks: self.hook_tasks.clone(),
         }
     }
 

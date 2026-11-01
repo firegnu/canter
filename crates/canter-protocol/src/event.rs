@@ -161,6 +161,7 @@ pub enum EventPayload {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum InputRemovalReason {
+    Blocked,
     Steered,
     Merged,
     Interrupted,

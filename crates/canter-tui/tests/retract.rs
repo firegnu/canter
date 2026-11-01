@@ -102,6 +102,59 @@ fn screen(ui: &Ui<TestBackend>) -> String {
 }
 
 #[test]
+fn retract_restores_a_prompt_published_after_the_hook_precheck() {
+    for reconnect in [false, true] {
+        let mut ui = ui();
+        let turn = serde_json::from_value(json!({
+            "id":"turn", "input":[], "items":[], "clientName":"test",
+            "status":"inProgress", "error":null, "usage":null,
+        }))
+        .unwrap();
+        event(
+            &mut ui,
+            EventPayload::TurnStarted {
+                turn,
+                input_id: None,
+            },
+        );
+        event(
+            &mut ui,
+            EventPayload::SessionStatus {
+                status: SessionStatus::Working,
+                close_reason: None,
+            },
+        );
+        event(
+            &mut ui,
+            EventPayload::ItemCompleted {
+                turn_id: "turn".into(),
+                item: Item::UserMessage {
+                    id: "user".into(),
+                    content: text("accepted prompt"),
+                },
+            },
+        );
+        if reconnect {
+            let snapshot = ui.app().snapshot().clone();
+            ui = Ui::new(TestBackend::new(90, 28), App::new(snapshot, None, 0)).unwrap();
+            ui.draw(0).unwrap();
+        }
+        assert_eq!(
+            ui.app_mut().handle_key(key(KeyCode::Esc), 0),
+            Some(Action::Interrupt {
+                turn_id: "turn".into()
+            })
+        );
+        ui.app_mut().interrupt_finished("turn", true);
+        retract(&mut ui);
+        assert_eq!(
+            ui.app_mut().handle_key(key(KeyCode::Enter), 0),
+            Some(Action::Send("accepted prompt".into()))
+        );
+    }
+}
+
+#[test]
 fn retract_restores_multiline_queued_inputs_before_the_draft_only_on_initiator() {
     for draft in ["", "original draft"] {
         let mut initiator = ui();

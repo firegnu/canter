@@ -105,7 +105,7 @@ pub(crate) fn query(home: &Path, cwd: &Path) -> io::Result<FolderTrustResponse> 
                 path: cwd.to_string_lossy().into_owned(),
                 trusted: false,
                 warning: Some(format!(
-                    "{error}. Opening in restricted mode; LSP is disabled."
+                    "{error}. Opening in restricted mode; LSP and hooks are disabled."
                 )),
             });
         }
@@ -116,7 +116,7 @@ pub(crate) fn query(home: &Path, cwd: &Path) -> io::Result<FolderTrustResponse> 
         Err(error) => (
             false,
             Some(format!(
-                "Could not read folder trust from {error}. Opening in restricted mode; LSP is disabled."
+                "Could not read folder trust from {error}. Opening in restricted mode; LSP and hooks are disabled."
             )),
         ),
     };

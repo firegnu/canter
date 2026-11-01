@@ -7,6 +7,7 @@ use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::{fs, process::Stdio};
 use tokio::sync::{mpsc, oneshot};
+mod hooks;
 
 #[tokio::test]
 async fn server_process() {
@@ -290,6 +291,56 @@ impl Fixture {
 struct Warnings {
     receiver: mpsc::UnboundedReceiver<String>,
     task: tokio::task::JoinHandle<()>,
+}
+
+#[tokio::test]
+async fn hooks_format_written_files_and_return_feedback_to_the_model() {
+    let mut fixture = Fixture::new(json!({"hooks":{"PostToolUse":[{
+        "matcher":"write|edit", "hooks":[{"type":"command", "command":
+        "cat > hook-input.json; printf 'formatted\\n' > sample.txt; printf 'formatter feedback' >&2; exit 2"}]
+    }]}})).await;
+    fixture.trust(fixture.root.path()).await;
+    let url = fixture.create().await;
+    fixture.input(&url).await;
+    fixture.request().await.tool(
+        "write",
+        json!({"path":"sample.txt","content":"unformatted"}),
+    );
+    let next = fixture.request().await;
+    assert_eq!(
+        fs::read_to_string(fixture.root.path().join("sample.txt")).unwrap(),
+        "formatted\n"
+    );
+    let input: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("hook-input.json")).unwrap())
+            .unwrap();
+    assert_eq!(input["hook_event_name"], "PostToolUse");
+    assert_eq!(input["tool_name"], "write");
+    assert_eq!(
+        input["tool_input"],
+        json!({"path":"sample.txt","content":"unformatted"})
+    );
+    assert_eq!(input["session_id"], url.rsplit('/').next().unwrap());
+    assert_eq!(input["cwd"], fixture.root.path().to_str().unwrap());
+    assert!(input.get("permission_mode").is_some());
+    assert!(input.get("tool_response").is_some());
+    let messages = next.body["messages"].as_array().unwrap();
+    assert!(messages.iter().any(|m| {
+        m["role"] == "tool"
+            && m["content"]
+                .as_str()
+                .unwrap()
+                .contains("formatter feedback")
+    }));
+    assert!(messages.iter().any(|m| {
+        m["role"] == "tool"
+            && m["content"].as_str().unwrap().ends_with(
+                "sample.txt was changed by a PostToolUse hook after this call; read it again before editing it.",
+            )
+    }));
+    next.stop();
+    fixture.idle(&url).await;
+    fixture.shutdown().await;
 }
 impl Warnings {
     async fn next(&mut self) -> String {

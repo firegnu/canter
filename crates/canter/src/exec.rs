@@ -245,7 +245,7 @@ async fn run_inner(
     };
     let id = &snapshot.id;
     if snapshot.settings.restricted_mode == Some(true) {
-        eprintln!("Restricted mode: LSP is disabled.");
+        eprintln!("Restricted mode: LSP and hooks are disabled.");
     }
     if snapshot.settings.sandbox_enabled == Some(false) {
         eprintln!(

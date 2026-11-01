@@ -21,6 +21,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 跟着改的：第一期改文件用「整文件写 + 按文字替换」；Codex 的 apply_patch 是给 GPT 用的，等接 OpenAI 时再搬（用户 10-24 选定）。
 7. **名字和仓库**：`canter`（马的「慢跑」步法），仓库 `github.com/firegnu/canter`，公开，Apache-2.0。用户：「开源，repo就放在github上」。
 8. **协议：结构照 Codex，传输和类型 canter 自己定（报告 §5.7 的 C）**。2026-10-24 在 canter 仓库定的，用户：「好，就用 C，改 DESIGN」。
+   - 钩子（P2-153）：沿用既有 `warning` 事件显示配置错误、执行故障和用户输入拦截原因；`input.removed` 的 reason 增加 `blocked`，表示插话被 UserPromptSubmit 拦下，客户端移除排队显示、不当成已消费消息，也不按 interrupted 自动恢复草稿。旧客户端按 Unknown 原因移除输入。没有新增 HTTP 端点、请求、工具项目或 hook 专用 SSE 事件。钩子 stdin 是服务端向用户命令发送的独立 JSON，字段采用 Claude Code / Codex 的 snake_case，不改变客户端协议的 camelCase。主控确认被拦输入不进模型历史、不回放给模型，允许保留原排队事件；为保留现有启动、取消、撤回和 exec 的完成信号，普通及排队输入的预检轮可保留一条不含用户文本的空轮，放行后才写用户消息。
    - 文件夹信任（P2-168）：新增 `GET /v1/folderTrust?cwd=...` 查询和 `POST /v1/folderTrust {cwd}` 记录信任，返回 `{path, trusted, warning?}`；path 是服务端判定的规范化仓库根或非 Git 目录，查询失败时 warning 给出英文原因并返回未信任。公开会话设置增加可选 `restrictedMode`，由服务端在创建、恢复时按记录计算，变化沿用 `session.updated`，旧存盘缺省。创建、恢复请求可带 `restrictedMode: true`，仅要求此次受限打开，false 或缺省不能放行未信任目录；PATCH 不接受修改。`features` 增加 `folderTrust`，新版终端和 exec 在打开前要求此能力，旧服务端提示 `canter serve --replace`，不悄悄绕过检查。Codex `rust-v0.163.0` 用 projects 配置里的 `trust_level`（trusted / untrusted）及配置写入机制；canter 不开放通用配置写入，只记正向信任，增加独立查询/记录端点和服务端实际会话状态，供终端、GPUI 和网页复用，不修改既有批准、沙箱或轮次协议。
    - 文件规则（P2-167）：`GET /v1/commandRules` 保留 `path/data`，增加可省略的 `fileRules:[{pattern, decision}]`（空时不发送）；文件模式为字符串，decision 仅 `prompt/forbidden`。新增 `POST /v1/fileRules/delete`，按完整模式字符串和 decision 删除重复项，返回沿用 `{removed, message}`；旧命令删除端点不变。旧客户端忽略新增字段，仍能管理命令规则；新客户端读旧服务端时文件列表缺省为空。这是 canter 的全局规则管理扩展，不改变会话协议或批准决定。
    - 命令规则管理（P2-156，10-30 主控确认）：新增全局 `GET /v1/commandRules`，返回 `{path, data:[{pattern, decision}]}`；`POST /v1/commandRules/delete` 接收 `{pattern, decision}`，返回 `{removed, message}`，removed 为删掉的条数，完全相同的重复规则一起删，已经不存在时为 0、仍成功。列表沿用 Codex app-server v2 的 `data` 结构，条目沿用已定 `rules.json` 的 `pattern/decision`；Codex 没有此文件管理接口，规则管理端点、文件路径和删除结果是 canter 扩展，用于服务端规则的查看和删除，不改变会话协议或旧客户端行为。删除使用 POST 而不是带请求体的 DELETE：HTTP 没有为 DELETE 请求体定义语义，以后网页客户端经过代理可能被丢；canter 现有按内容操作（如后台命令停止）也使用 POST。按完整词前缀数组和 decision 识别规则，不使用列表下标；删除与批准框永久放行共用写锁，原子替换、权限 0600，坏文件报错且不覆盖。
@@ -252,7 +253,7 @@ LSP 默认关闭；`config.json` 的 `lsp.enabled` 开启后，配置中的语�
 
 终端在新建或恢复会话之前查询服务端；恢复按存盘会话的 cwd 查询，不按启动终端所在目录猜。未信任时显示英文 `Trust this folder?` 和服务端返回的信任范围，提供 `Trust and continue`、`Open restricted` 两项；选择信任先保存再打开，选择受限仅本次打开、不保存拒绝，下次仍问。查询失败或返回读取错误／目录不存在警告时，不停在询问框，直接请求受限打开并显示警告，不因此退出。`-r`、`-c`、会话列表及 `/new` 等创建/切换入口遵守同一流程；信任过的不再询问。取消不会创建新会话，也不会发送启动时附带的输入。已在服务端打开的会话每次恢复也重新判断：后来记录信任可转为正常会话，读取失败或目录删除则转为受限并卸载 LSP，不需要重启服务端。
 
-服务端用信任记录决定 `restrictedMode`；不采用旧存盘里的此字段作为授权。工作目录未信任时，整个会话不挂载 LSP，不启动语言服务器、不收取新诊断；配置热重载也不能重新启用它。终端以一行 `Restricted mode: LSP is disabled.` 提示。AGENTS.md 和技能继续正常加载；用户全局 `config.json` 的 MCP、放行规则、沙箱继续照常生效。不增加全局配置开关、撤销或列出信任的界面。
+服务端用信任记录决定 `restrictedMode`；不采用旧存盘里的此字段作为授权。工作目录未信任时，整个会话不挂载 LSP，不启动语言服务器、不收取新诊断；配置热重载也不能重新启用它。终端以一行 `Restricted mode: LSP and hooks are disabled.` 提示。AGENTS.md 和技能继续正常加载；用户全局 `config.json` 的 MCP、放行规则、沙箱继续照常生效。不增加全局配置开关、撤销或列出信任的界面。
 
 11-01 主控补充决定：加目录不弹框、不新增询问流程。工作目录已信任时，对每个文件另按它所在的 git 仓库根判断；文件不在仓库里，则按覆盖它的那个已添加目录本身判断（cwd 内文件按 cwd）。A 信任不代表 B 信任：A 的文件照常起 LSP，未信任 B 的文件不起；B 已有信任记录则照常起。工作目录受限时，即使 B 已信任，整个会话仍不启动 LSP。检查在文件订阅、同步和诊断交付处执行，也覆盖恢复和重试。这样遵守按仓库记信任的决定，避免 A 连带放行 B 的构建脚本，同时不扩展加目录的交互范围。
 
@@ -260,7 +261,7 @@ LSP 默认关闭；`config.json` 的 `lsp.enabled` 开启后，配置中的语�
 
 `canter exec` 不弹框、不加参数：服务端照同一记录打开会话，未信任时受限运行，在 stderr 输出同一行英文提示；信任过的照常。输入、模型权限、stdout / JSONL 和退出码语义不变。协议结构与 Codex app-server v2 的差别见第 8 条；已生成 JSON Schema 和 TypeScript 类型。
 
-以后 P2-159 项目级配置、P2-153 hooks 必须使用这套服务端信任状态，在受限模式下不加载。本件不实现它们，也不预留配置项。
+P2-153 hooks 已使用这套服务端信任状态，在受限模式下不运行。以后 P2-159 项目级配置也必须遵守；本节不预留项目级配置项。
 
 ## 改配置不用重启（P2-154）
 
@@ -373,3 +374,41 @@ P2-164（10-30 主控确认）：模型 shell 仅在沙箱开启时增加可选 
 协议新增 `RequestKind` 的 `sandboxApproval` 类型，载荷沿用 `ApprovalRequest`，`arguments` 带规范化后的 `sandboxRequest` 和原 `justification`；仅提供 accept / decline / declineWithFeedback / cancel。旧客户端按已有 Unknown 分支忽略新类型，不会显示为普通命令批准，需新版客户端回答；只加服务端 features 无法约束旧客户端，因此不采用。Codex app-server v2 使用命令批准请求并可携带额外权限，shell 使用 `sandbox_permissions` / `additional_permissions` / `justification`；canter 使用自己 HTTP + SSE 的独立请求类型以防旧客户端漏显范围，且只扩展指定网络／写路径，永不提供整条命令脱离沙箱或永久越界授权。没有移植 Codex 实现。
 
 这不是资源配额或回滚：看护进程、超时、进程组清理照旧。以后再做：按域名代理、精简传给命令的环境变量、MCP 隔离、文件工具移进受限进程、Linux 和 Windows 的实现。
+
+## 钩子（P2-153）
+
+只读全局 `~/.canter/config.json`（支持既有 `CANTER_HOME`），不读取项目 hooks。`hooks` 的对象键是下表事件名，值沿用 Claude Code 的 matcher 分组和命令数组：
+
+```json
+{"hooks":{"PostToolUse":[{"matcher":"write|edit","hooks":[{"type":"command","command":"cargo fmt","timeout":60}]}]}}
+```
+
+仅支持 `type: "command"`。timeout 为正数秒，缺省 60；matcher 只对 PreToolUse、PermissionRequest、PostToolUse 生效，按 canter 给模型的工具整名匹配正则（例如 read、write、edit、shell、ask_user、web_fetch、mcp_call），空字符串、缺省或 `*` 匹配全部，`write|edit` 匹配两个整名；其它事件忽略 matcher。非法事件、类型、正则、空命令、非正 timeout 或结构错误使整份配置校验失败，沿用 P2-154 的旧配置和英文 warning，不挡现有会话。成功修改下一轮生效，当前轮用原配置；不改系统提示词、环境段或已经发送的前缀。
+
+共同字段为 `session_id`、`cwd`、`hook_event_name`、`permission_mode`。permission_mode 表示实际 canter 档位 `alwaysAsk` / `askForExecution` / `allowAll`，计划模式为 `plan`；保留实际语义，不把开着沙箱的 Allow all 伪装为 Claude Code 的 bypassPermissions。没有 transcript_path 等数据的字段不硬造。
+
+| 事件 | 触发时机 | 其它 stdin 字段 | 作用 |
+|---|---|---|---|
+| SessionStart | 新建、恢复（包括已打开的会话再次恢复） | source: startup / resume | 通知 |
+| SessionEnd | 显式关闭、服务端正常停止 | reason: client_request / server_shutdown | 通知 |
+| UserPromptSubmit | 用户输入或排队输入开始处理、插话消费前 | prompt 原文（文本部分，多个文本片段以换行连接） | 可拦；不写模型历史和用户消息，不向模型请求，也不在恢复时回放 |
+| PreToolUse | 准备工具、通过 canter 自己的规则后，批准框前 | tool_name、tool_input | 可拦；原因成为工具结果，不弹框、不执行 |
+| PermissionRequest | 工具需要用户批准、即将等待用户时 | tool_name、tool_input | 通知，不替用户作答；exec 自动拒绝的请求不触发 |
+| PostToolUse | 实际执行的工具返回，成功或失败均触发 | tool_name、tool_input、tool_response（原工具结果文字） | 反馈追加到该工具结果，不撤销执行；准备失败、规则拒绝、钩子拒绝或用户拒绝没有执行，不触发 |
+| Stop | 轮正常结束 | last_assistant_message，取本轮最后一条助手消息；没有时为空串 | 通知，不启动续跑 |
+| StopFailure | 轮出错结束 | error 错误文字 | 通知 |
+| Interrupt | 轮被打断 | 无 | 通知 |
+
+普通输入、排队输入、插话、目标续跑、后台叫醒，以及客户端通过现有创建／输入接口实现的计划清空后实施、`/new`、`/handoff`、`canter exec` 共用这些入口。自动轮不触发 UserPromptSubmit。主控 11-01 选择 A：拦下的话不能进入模型历史，已存的排队事件可以保留。优先在 TurnStarted 前检查，但如果要大改轮启动流程，允许退回空轮。本件采用这个退路：配置就绪等待、Esc、关闭、撤回和 exec 已依赖可见 active turn 及完成信号；因此先登记无输入文本的可取消轮，钩子在状态锁外运行，放行才写用户消息，拦下则显示一行英文原因并完成空轮。插话不另开轮，被拦后用 `input.removed/blocked` 移除；所有插话都被拦下时不因此再次调用模型。
+
+命令在服务端执行 `/bin/sh -c <command>`，cwd 为会话工作目录，事件 JSON 经 stdin 传入，额外设置 `CANTER_SESSION_ID`、`CANTER_PROJECT_DIR`。继承服务端环境，不新增客户端环境转发，不使用模型的会话临时目录，也不套模型沙箱。受限打开的会话不运行任何钩子，开启提示为 `Restricted mode: LSP and hooks are disabled.`，重新判定信任和热加载也遵守服务端状态。
+
+同一事件匹配命令并行执行，可拦和可反馈事件等待全部结果；任一命令拦截即生效。通知事件异步执行，不让模型轮等待，也不消费其决定。显式关会话和服务端停止时，已有通知（包括 Stop、Interrupt、PermissionRequest）与 SessionEnd 共用最多 3 秒的等待预算，不按事件或命令累加，也不因配置更长的 timeout 延长；到期取消剩余通知任务，杀掉其进程组并收完任务。服务端并行关闭各会话，通知等待不随会话数量累加，避免卡住 `canter serve --replace`。SessionEnd 仍只在显式关会话或服务端关闭会话时触发，终端脱离不触发。每条命令用独立进程组；超时、所属轮打断或 future 被丢弃都杀掉该组，领导进程退出也清理剩余子进程。持续读取并丢弃超限部分，stdout、stderr 各最多保留 32 KiB，不持有会话状态锁等待命令。
+
+退出码 0 放行，2 用 stderr 作为拦截／PostToolUse 反馈原因。成功退出时也识别 stdout JSON 的 `decision: "block"` + `reason`；PreToolUse 另识别 `hookSpecificOutput.permissionDecision: "deny"` + `permissionDecisionReason`。allow、ask、其它字段忽略；通知事件里的 block 同样不改变流程。命令启动失败、超时、其它退出码、非空 stdout 不是有效 JSON，一律放行，用英文 warning 标明事件、命令和故障；命令及故障提示压成单行并限长。除了 PreToolUse 的拦截原因、PostToolUse 的反馈，任何钩子输出均不进入模型内容。钩子等待后重新检查工具权限，不能放宽敏感路径、fileRules、计划／审查轮、沙箱和批准档位。审查轮保留原有交互：ask_user 仍弹提问框，submit_plan 仍由计划模式处理（未开计划模式时返回原说明），不被 review_denied 提前拒绝；二者仍经过 PreToolUse，计划批准框仍触发 PermissionRequest。
+
+对照只参考 [Claude Code hooks 文档](https://code.claude.com/docs/en/hooks) 和 Codex `rust-v0.163.0` 的 `hooks/src/schema.rs`，没有搬代码。采用相同事件名、配置骨架和 stdin 字段名；Interrupt 参考 Codex，StopFailure 参考 Claude Code。canter 合并成功／失败工具通知到 PostToolUse，保留自己的权限档位和值类型。没有实现项目 hooks、prompt / agent / http 类型、钩子放行、Stop 拦下后继续、SessionStart / UserPromptSubmit 注入上下文、PreCompact / PostCompact、Notification、Subagent 事件、Codex 的钩子信任审核或 `/hooks` 界面。协议差异见第 8 条。
+
+11-01 用户追加（第 20 条文案已同意）：成功 write／edit 后若有匹配且允许运行的 PostToolUse 钩子，canter 自己只比较这次调用写入文件在钩子前后的内容，不论钩子成功、反馈或失败，内容变化或文件被删都在这次工具结果末尾追加一行 `<path> was changed by a PostToolUse hook after this call; read it again before editing it.`；这是 canter 的观察而非钩子输出，不进入系统提示词或环境段，未配置、未匹配或文件未变时保持原工具结果逐字不变。
+
+补充第 8 条的轮次语义：启用 UserPromptSubmit 预检时，TurnStarted.input 暂为空，放行后通过既有 userMessage 项目发布用户输入，TurnCompleted.input 带最终接收的初始输入，协议 reducer 在完成时回填该字段。被拦下的轮始终为空。终端在轮未完成时也从已接收的 userMessage 保留撤回草稿（包括重新连接的终端），保留发送序号以优先恢复原图片路径；不会把未放行的输入当成已接收消息。不增加字段或新的事件类型。

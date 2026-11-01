@@ -53,7 +53,7 @@ where
             return Ok(Some(Opening {
                 restricted: true,
                 warning: Some(format!(
-                    "Could not check folder trust: {error}. Opening in restricted mode; LSP is disabled."
+                    "Could not check folder trust: {error}. Opening in restricted mode; LSP and hooks are disabled."
                 )),
             }));
         }

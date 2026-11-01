@@ -214,6 +214,10 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
                 .find(|existing| existing.id == turn.id)
                 .expect("validated turn");
             existing.status = turn.status;
+            // Prompt hooks may defer the input until after TurnStarted.
+            if existing.input.is_empty() {
+                existing.input = turn.input.clone();
+            }
             existing.error = turn.error.clone();
             existing.usage = turn.usage.clone();
             existing.completed_at = Some(event.timestamp.div_euclid(1000));

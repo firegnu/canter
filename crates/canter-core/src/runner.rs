@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
     // Late steering may re-enter conversation without starting a new turn.
     let mut auto_compaction_failed = false;
-    loop {
+    'turn: loop {
         let cancel = shared
             .state
             .lock()
@@ -26,7 +26,10 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             .expect("active turn")
             .cancel
             .clone();
-        let configuration = shared.prepare_turn(&cancel).await;
+        let mut configuration = shared.prepare_turn(&cancel).await;
+        if configuration.is_ok() && !cancel.is_cancelled() {
+            configuration = shared.check_prompt(&cancel).await;
+        }
         let ready = configuration.is_ok();
         let (turn, cancel, manual_compaction, user_shell) = {
             let state = shared.state.lock().await;
@@ -49,7 +52,16 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         };
         let mut result = if let Err(error) = configuration {
             Err(error)
-        } else if cancel.is_cancelled() {
+        } else if cancel.is_cancelled()
+            || shared
+                .state
+                .lock()
+                .await
+                .active
+                .as_ref()
+                .unwrap()
+                .prompt_blocked
+        {
             Ok(())
         } else if let Some(params) = user_shell {
             crate::user_shell::run(&shared, &turn.id, &params, &cancel).await
@@ -60,6 +72,14 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
         };
         if ready
             && !cancel.is_cancelled()
+            && !shared
+                .state
+                .lock()
+                .await
+                .active
+                .as_ref()
+                .unwrap()
+                .prompt_blocked
             && shared
                 .state
                 .lock()
@@ -71,6 +91,22 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             result = conversation(&shared, &turn.id, &cancel, &mut auto_compaction_failed).await;
         }
         let mut state = shared.state.lock().await;
+        while result.is_err() && !cancel.is_cancelled() && !state.steers.is_empty() {
+            drop(state);
+            let consumed = shared.consume_steering(&turn.id, &cancel).await;
+            state = shared.state.lock().await;
+            if let Err(error) = consumed {
+                result = Err(error);
+                break;
+            }
+        }
+        let prompt_blocked = state.active.as_ref().unwrap().prompt_blocked;
+        if prompt_blocked {
+            let steers = std::mem::take(&mut state.steers);
+            for input in steers.into_iter().rev() {
+                state.queue.push_front(input);
+            }
+        }
         if state.goal_summary.is_some() {
             // A final summary cannot re-enter goal work. Preserve late user
             // steering as normal input for a separate, uncharged turn.
@@ -80,7 +116,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             }
         }
         // An input accepted just as the model stopped still belongs to this turn.
-        if result.is_ok()
+        while result.is_ok()
             && !cancel.is_cancelled()
             && !state.steers.is_empty()
             && !state
@@ -88,7 +124,14 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                 .as_ref()
                 .is_some_and(|active| active.plan_handoff)
         {
-            continue;
+            drop(state);
+            let consumed = shared.consume_steering(&turn.id, &cancel).await;
+            state = shared.state.lock().await;
+            match consumed {
+                Ok(true) => continue 'turn,
+                Ok(false) => {}
+                Err(error) => result = Err(error),
+            }
         }
         let mut completed = turn;
         completed.usage = state
@@ -111,6 +154,39 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             })
         };
         let failed = completed.status == TurnStatus::Failed;
+        let (hook_event, hook_fields) = if cancel.is_cancelled() {
+            (crate::hooks::Event::Interrupt, serde_json::json!({}))
+        } else if let Some(error) = &completed.error {
+            (
+                crate::hooks::Event::StopFailure,
+                serde_json::json!({"error":error.message}),
+            )
+        } else {
+            let text = state
+                .journal
+                .snapshot
+                .turns
+                .iter()
+                .find(|t| t.id == completed.id)
+                .and_then(|t| {
+                    t.items.iter().rev().find_map(|item| match item {
+                        Item::AgentMessage { text, .. } => Some(text.clone()),
+                        _ => None,
+                    })
+                })
+                .unwrap_or_default();
+            (
+                crate::hooks::Event::Stop,
+                serde_json::json!({"last_assistant_message":text}),
+            )
+        };
+        crate::hooks::notify(
+            &shared,
+            &state,
+            hook_event,
+            hook_fields,
+            shared.lifetime.child_token(),
+        );
         let finish = async {
             if state.active.as_ref().is_some_and(|active| active.retracted) {
                 state.discard_queue(InputRemovalReason::Interrupted).await?;
@@ -178,10 +254,6 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                     InputRemovalReason::Interrupted
                 };
                 state.discard_queue(reason).await?;
-            } else if completed.status == TurnStatus::Failed {
-                // Accepted steering belongs to this turn even if the model
-                // failed; preserve it in context before exposing the failure.
-                state.consume_steering(&completed.id).await?;
             }
             if let Some(error) = &completed.error {
                 state
@@ -225,7 +297,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             break;
         }
         let Some(input) = state.queue.pop_front() else {
-            if failed {
+            if failed || prompt_blocked {
                 // Keep the saved goal, but do not turn a provider/configuration
                 // failure into an unlimited sequence of failed goal turns.
                 state.goal_running = false;
@@ -271,9 +343,12 @@ async fn conversation(
         }
         shared.sync_background().await?;
         crate::lsp::before_request(shared, turn_id).await?;
+        shared.consume_steering(turn_id, cancel).await?;
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
         let (request, summary) = {
             let mut state = shared.state.lock().await;
-            state.consume_steering(turn_id).await?;
             state.background_cards(turn_id).await?;
             let summary = state.summary_request().await?;
             let mut request = context::request(&state, shared.runtime().options.max_output_tokens);
@@ -791,7 +866,7 @@ async fn execute(
     call: ToolCall,
     cancel: &CancellationToken,
 ) -> Result<(), CoreError> {
-    if crate::goal::execute(shared, &call).await? {
+    if crate::goal::execute(shared, &call, cancel).await? {
         return Ok(());
     }
     let plan_mode = shared
@@ -873,6 +948,8 @@ async fn execute(
             .prepare_named(&call.name, id("tool"), &call.arguments, cancel)
             .await
     };
+    let mut executed = false;
+    let mut written_path = None;
     let mut output = match prepared {
         Err(mut output) => {
             if review
@@ -898,14 +975,8 @@ async fn execute(
             }
             output
         }
-        Ok(prepared) if prepared.tool() == Tool::AskUser => {
-            ask_user(shared, turn_id, &prepared, cancel).await?
-        }
-        Ok(prepared) if prepared.tool() == Tool::SubmitPlan => {
-            crate::plan_mode::submit(shared, turn_id, &prepared, cancel).await?
-        }
         Ok(prepared) => {
-            let permission = permission(shared, turn_id, &prepared, cancel).await?;
+            let permission = permission(shared, turn_id, &prepared, &call, cancel).await?;
             match permission {
                 None => {
                     let mut item = prepared.started_item();
@@ -918,6 +989,8 @@ async fn execute(
                             *status = ItemStatus::Failed
                         }
                         Item::McpToolSearch { status, .. }
+                        | Item::UserInput { status, .. }
+                        | Item::PlanProposal { status, .. }
                         | Item::Plan { status, .. }
                         | Item::McpToolCall { status, .. }
                         | Item::WebFetch { status, .. }
@@ -972,6 +1045,14 @@ async fn execute(
                     output
                 }
                 Some(PermissionCheck::Ask(_)) => unreachable!("approval resolved"),
+                Some(PermissionCheck::Execute(_)) if prepared.tool() == Tool::AskUser => {
+                    executed = true;
+                    ask_user(shared, turn_id, &prepared, cancel).await?
+                }
+                Some(PermissionCheck::Execute(_)) if prepared.tool() == Tool::SubmitPlan => {
+                    executed = true;
+                    crate::plan_mode::submit(shared, turn_id, &prepared, cancel).await?
+                }
                 Some(PermissionCheck::Execute(_))
                     if shared.state.lock().await.goal_summary.is_some() =>
                 {
@@ -980,6 +1061,7 @@ async fn execute(
                     output
                 }
                 Some(PermissionCheck::Execute(permit)) => {
+                    executed = true;
                     let checkpoint = shared
                         .state
                         .lock()
@@ -1021,12 +1103,48 @@ async fn execute(
                     {
                         shared.state.lock().await.abort_checkpoint(id).await?;
                     }
+                    if output.outcome == ToolOutcome::Completed {
+                        written_path = prepared.file_checkpoint().map(|file| file.path.to_owned());
+                    }
                     output
                 }
             }
         }
     };
+    let before_hook = if let Some(path) = written_path
+        && !shared.runtime().context.restricted_mode
+        && shared
+            .runtime()
+            .options
+            .hooks
+            .matches(crate::hooks::Event::PostToolUse, &call.name)
+    {
+        tokio::fs::read(&path).await.ok().map(|bytes| (path, bytes))
+    } else {
+        None
+    };
+    if executed && let Some(reason) = crate::hooks::run(shared, crate::hooks::Event::PostToolUse,
+        serde_json::json!({"tool_name":call.name,"tool_input":serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap_or_default(),"tool_response":output.text}), cancel).await? {
+        output.text.push_str(&format!("\n\nPostToolUse hook: {reason}"));
+    }
+    let hook_changed_file = if let Some((path, before)) = before_hook {
+        match tokio::fs::read(path).await {
+            Ok(after) => after != before,
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        }
+    } else {
+        false
+    };
     let diagnostic_items = crate::lsp::inline(shared, turn_id, &mut output).await;
+    if hook_changed_file
+        && let Item::FileChange { changes, .. } = &output.item
+        && let Some(change) = changes.first()
+    {
+        output.text.push_str(&format!(
+            "\n{} was changed by a PostToolUse hook after this call; read it again before editing it.",
+            change.path
+        ));
+    }
     shared.sync_background().await?;
     let imported = if output.images.is_empty() {
         None
@@ -1109,17 +1227,24 @@ async fn permission<'a>(
     shared: &Shared,
     turn_id: &str,
     call: &'a PreparedCall,
+    model_call: &ToolCall,
     cancel: &CancellationToken,
 ) -> Result<Option<PermissionCheck<'a>>, CoreError> {
-    let (mut receiver, session_prefixes) = {
+    let mut checked_hook = false;
+    let (mut receiver, session_prefixes) = loop {
         let mut state = shared.state.lock().await;
-        state
-            .journal
-            .append(vec![EventPayload::ItemStarted {
-                turn_id: turn_id.into(),
-                item: call.started_item(),
-            }])
-            .await?;
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
+        if !checked_hook && !matches!(call.tool(), Tool::AskUser | Tool::SubmitPlan) {
+            state
+                .journal
+                .append(vec![EventPayload::ItemStarted {
+                    turn_id: turn_id.into(),
+                    item: call.started_item(),
+                }])
+                .await?;
+        }
         let review_denied = state
             .active
             .as_ref()
@@ -1128,7 +1253,11 @@ async fn permission<'a>(
                 state.gate.evaluate_review(call, state.approval_policy()),
                 PermissionCheck::Deny { .. }
             );
-        let permission = if review_denied {
+        // These tools open their own question/plan dialogs, including in review
+        // turns; they never required a separate ordinary tool approval.
+        let permission = if matches!(call.tool(), Tool::AskUser | Tool::SubmitPlan) {
+            state.gate.evaluate_plan(call, state.approval_policy())
+        } else if review_denied {
             state.gate.evaluate_review(call, state.approval_policy())
         } else if state.journal.snapshot.settings.plan_mode {
             state.gate.evaluate_plan(call, state.approval_policy())
@@ -1161,6 +1290,34 @@ async fn permission<'a>(
                 .append(vec![EventPayload::Warning { message }])
                 .await?;
         }
+        if !checked_hook
+            && !shared.runtime().context.restricted_mode
+            && shared
+                .runtime()
+                .options
+                .hooks
+                .has(crate::hooks::Event::PreToolUse)
+            && matches!(
+                permission,
+                PermissionCheck::Ask(_) | PermissionCheck::Execute(_)
+            )
+        {
+            drop(state);
+            if let Some(reason) = crate::hooks::run(
+                shared,
+                crate::hooks::Event::PreToolUse,
+                crate::hooks::tool_fields(model_call),
+                cancel,
+            )
+            .await?
+            {
+                return Ok(Some(PermissionCheck::Forbidden {
+                    reason: format!("PreToolUse hook blocked: {reason}"),
+                }));
+            }
+            checked_hook = true;
+            continue;
+        }
         match permission {
             PermissionCheck::Ask(approval) => {
                 let session_prefixes = approval.session_prefixes.clone();
@@ -1192,6 +1349,13 @@ async fn permission<'a>(
                         feedback: Some(feedback),
                     }));
                 }
+                crate::hooks::notify(
+                    shared,
+                    &state,
+                    crate::hooks::Event::PermissionRequest,
+                    crate::hooks::tool_fields(model_call),
+                    cancel.clone(),
+                );
                 let (sender, receiver) = tokio::sync::oneshot::channel();
                 state
                     .journal
@@ -1206,7 +1370,7 @@ async fn permission<'a>(
                     ])
                     .await?;
                 state.requests.insert(request.id, sender);
-                (receiver, session_prefixes)
+                break (receiver, session_prefixes);
             }
             permission => return Ok(Some(permission)),
         }
