@@ -355,9 +355,38 @@ impl Session {
     }
 }
 
-pub(crate) async fn execute(shared: &Shared, call: &ToolCall) -> Result<bool, CoreError> {
+pub(crate) async fn execute(
+    shared: &Shared,
+    call: &ToolCall,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<bool, CoreError> {
     if !matches!(call.name.as_str(), "get_goal" | "update_goal") {
         return Ok(false);
+    }
+    if let Some(reason) = crate::hooks::run(
+        shared,
+        crate::hooks::Event::PreToolUse,
+        crate::hooks::tool_fields(call),
+        cancel,
+    )
+    .await?
+    {
+        shared
+            .state
+            .lock()
+            .await
+            .tool_result(
+                call,
+                format!("PreToolUse hook blocked: {reason}"),
+                false,
+                Default::default(),
+                None,
+            )
+            .await?;
+        return Ok(true);
+    }
+    if cancel.is_cancelled() {
+        return Ok(true);
     }
     let mut state = shared.state.lock().await;
     let args = serde_json::from_str::<serde_json::Value>(&call.arguments).ok();
@@ -384,14 +413,18 @@ pub(crate) async fn execute(shared: &Shared, call: &ToolCall) -> Result<bool, Co
         }
     };
     let success = result.is_ok();
+    let mut text = result.unwrap_or_else(|text| text);
+    drop(state);
+    let mut fields = crate::hooks::tool_fields(call);
+    fields["tool_response"] = json!(text);
+    if let Some(reason) =
+        crate::hooks::run(shared, crate::hooks::Event::PostToolUse, fields, cancel).await?
+    {
+        text.push_str(&format!("\n\nPostToolUse hook: {reason}"));
+    }
+    let mut state = shared.state.lock().await;
     state
-        .tool_result(
-            call,
-            result.unwrap_or_else(|text| text),
-            success,
-            Default::default(),
-            None,
-        )
+        .tool_result(call, text, success, Default::default(), None)
         .await?;
     Ok(true)
 }

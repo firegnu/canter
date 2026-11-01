@@ -6,6 +6,7 @@ mod configuration;
 mod context;
 mod directories;
 mod goal;
+pub mod hooks;
 mod images;
 mod journal;
 mod lsp;
@@ -43,6 +44,7 @@ pub struct RuntimeContext {
 
 #[derive(Clone, Debug)]
 pub struct CoreOptions {
+    pub hooks: hooks::Hooks,
     pub telemetry: bool,
     /// Embedded callers opt in explicitly; the server's config.json defaults to true.
     pub sandbox: bool,
@@ -75,6 +77,7 @@ pub struct CoreOptions {
 impl Default for CoreOptions {
     fn default() -> Self {
         Self {
+            hooks: Default::default(),
             telemetry: true,
             sandbox: false,
             command_rules_path: None,

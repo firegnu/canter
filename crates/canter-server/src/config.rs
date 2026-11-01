@@ -42,6 +42,8 @@ pub(crate) struct Config {
     pub mcp_servers: std::collections::BTreeMap<String, canter_core::mcp::ServerConfig>,
     #[serde(default)]
     pub lsp: canter_tools::lsp::LspConfig,
+    #[serde(default)]
+    hooks: canter_core::hooks::Hooks,
 }
 
 impl Config {
@@ -174,6 +176,7 @@ impl Config {
                 ))
             });
         CoreOptions {
+            hooks: self.hooks.clone(),
             plan_enabled: self.plan_enabled,
             mcp_tool_search: self.mcp_tool_search,
             sandbox: self.sandbox,

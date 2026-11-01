@@ -136,6 +136,13 @@ pub(crate) async fn submit(
             return Ok(output(item_id, plan, None, ItemStatus::Declined,
                 "No one is available to approve this plan. Stay in Plan mode; do not implement the proposal.".into()));
         }
+        crate::hooks::notify(
+            shared,
+            &state,
+            crate::hooks::Event::PermissionRequest,
+            serde_json::json!({"tool_name":"submit_plan","tool_input":{"plan":plan}}),
+            cancel.clone(),
+        );
         let (sender, receiver) = tokio::sync::oneshot::channel();
         state
             .journal

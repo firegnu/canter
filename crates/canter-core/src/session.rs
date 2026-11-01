@@ -35,6 +35,7 @@ impl Drop for Lifetime {
     }
 }
 pub(crate) struct Shared {
+    pub hook_tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     pub input_waiters: AtomicUsize,
     pub state: Arc<Mutex<State>>,
     pub runtime: std::sync::RwLock<Arc<crate::configuration::Runtime>>,
@@ -75,11 +76,14 @@ pub(crate) struct State {
     pub requests: HashMap<String, oneshot::Sender<ApprovalResolution>>,
     pub resolved: HashMap<String, u64>,
     pub closing: bool,
+    hook_session_ended: bool,
     pub measured_context: Option<(u64, u64)>,
     pub rewind: crate::rewind::Checkpoints,
     plan_tool_calls: u8,
 }
 pub(crate) struct Active {
+    pub pending_prompt: Option<(Vec<UserInput>, Vec<crate::skill_invocation::Snapshot>)>,
+    pub prompt_blocked: bool,
     pub configuration_lease: Option<Arc<dyn Send + Sync>>,
     pub non_interactive: bool,
     pub approval_policy: Option<PermissionMode>,
@@ -160,6 +164,7 @@ impl State {
             requests: HashMap::new(),
             resolved: HashMap::new(),
             closing: false,
+            hook_session_ended: false,
             measured_context: None,
             rewind: Default::default(),
             plan_tool_calls: 0,
@@ -403,7 +408,7 @@ impl State {
         })
         .await
     }
-    async fn user_input(
+    pub(crate) async fn user_input(
         &mut self,
         input: &[UserInput],
         turn_id: &str,
@@ -474,8 +479,11 @@ impl State {
         self.queued_skills.clear();
         Ok(())
     }
-    pub async fn consume_steering(&mut self, turn_id: &str) -> Result<(), CoreError> {
-        let inputs = self.steers.clone();
+    pub async fn consume_steering(
+        &mut self,
+        turn_id: &str,
+        inputs: Vec<QueuedInput>,
+    ) -> Result<(), CoreError> {
         if inputs.is_empty() {
             return Ok(());
         }
@@ -501,7 +509,8 @@ impl State {
             turn_id: Some(turn_id.into()),
         });
         self.journal.append(payloads).await?;
-        self.steers.clear();
+        self.steers
+            .retain(|input| !inputs.iter().any(|used| used.id == input.id));
         Ok(())
     }
     pub async fn cancel_requests(&mut self) -> Result<(), CoreError> {
@@ -562,6 +571,17 @@ impl Session {
             .append(vec![EventPayload::Warning { message }])
             .await?;
         Ok(())
+    }
+
+    pub async fn session_start_hook(&self, source: &str) {
+        let state = self.shared.state.lock().await;
+        crate::hooks::notify(
+            &self.shared,
+            &state,
+            crate::hooks::Event::SessionStart,
+            serde_json::json!({"source":source}),
+            self.shared.lifetime.child_token(),
+        );
     }
 
     /// Recheck trust when resuming, including a failed lookup. Granting trust
@@ -838,6 +858,7 @@ impl Session {
         let session = Self::from_state(state, tools, model, options, runtime);
         // Keep this warning after the opening client's snapshot cursor.
         session.scratch_warning().await?;
+        session.session_start_hook("resume").await;
         Ok((session, response))
     }
 
@@ -914,6 +935,7 @@ impl Session {
         };
         let session = Self::from_state(state, tools, model, options, runtime);
         session.scratch_warning().await?;
+        session.session_start_hook("startup").await;
         Ok((session, response))
     }
 
@@ -932,6 +954,7 @@ impl Session {
             .restore(&state.journal.snapshot.background_commands);
         let lifetime = CancellationToken::new();
         let shared = Arc::new(Shared {
+            hook_tasks: Default::default(),
             input_waiters: AtomicUsize::new(0),
             state: Arc::new(Mutex::new(state)),
             runtime: std::sync::RwLock::new(Arc::new(crate::configuration::Runtime {
@@ -1632,6 +1655,19 @@ impl Session {
             state.journal.release().await?;
             return Err(CoreError::internal());
         }
+        if !state.hook_session_ended && state.journal.snapshot.status != SessionStatus::Closed {
+            state.hook_session_ended = true;
+            crate::hooks::notify(
+                &self.shared,
+                &state,
+                crate::hooks::Event::SessionEnd,
+                serde_json::json!({"reason": if reason == SessionCloseReason::ServerShutdown { "server_shutdown" } else { "client_request" }}),
+                self.shared.lifetime.child_token(),
+            );
+            drop(state);
+            crate::hooks::drain(&self.shared).await;
+            state = self.shared.state.lock().await;
+        }
         if reason == SessionCloseReason::ClientRequest
             && state.journal.snapshot.status == SessionStatus::Closed
             && state.journal.snapshot.close_reason != Some(SessionCloseReason::ClientRequest)
@@ -1766,13 +1802,24 @@ impl Shared {
                 ),
             ));
         }
+        let check_prompt = !params.input.is_empty()
+            && !self.runtime().context.restricted_mode
+            && self
+                .runtime()
+                .options
+                .hooks
+                .has(crate::hooks::Event::UserPromptSubmit);
         let turn = Turn {
             review: params.review,
             id: id("turn"),
             items: Vec::new(),
             status: TurnStatus::InProgress,
             error: None,
-            input: params.input.clone(),
+            input: if check_prompt {
+                Vec::new()
+            } else {
+                params.input.clone()
+            },
             client_name: params.client_name,
             usage: None,
             started_at: None,
@@ -1791,8 +1838,10 @@ impl Shared {
             state.user_messages.len(),
             state.invoked_skills.len(),
         );
-        if !params.input.is_empty() {
-            state.user_input(&params.input, &turn.id, skills).await?;
+        if !params.input.is_empty() && !check_prompt {
+            state
+                .user_input(&params.input, &turn.id, skills.clone())
+                .await?;
         }
         let mut payloads = vec![
             EventPayload::TurnStarted {
@@ -1804,18 +1853,20 @@ impl Shared {
                 close_reason: None,
             },
         ];
-        if !params.input.is_empty() {
+        if !params.input.is_empty() && !check_prompt {
             payloads.push(EventPayload::ItemCompleted {
                 turn_id: turn.id.clone(),
                 item: Item::UserMessage {
                     id: id("user"),
-                    content: params.input,
+                    content: params.input.clone(),
                 },
             });
         }
         let events = state.journal.append(payloads).await?;
         let (done, receiver) = watch::channel(None);
         state.active = Some(Active {
+            pending_prompt: check_prompt.then_some((params.input, skills)),
+            prompt_blocked: false,
             configuration_lease,
             non_interactive: params.non_interactive,
             approval_policy: params.approval_policy,

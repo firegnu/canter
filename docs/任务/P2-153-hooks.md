@@ -101,3 +101,13 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：实现全局 command hooks 的配置校验与轮边界热加载、九个事件和共同 stdin 字段。命令使用会话 cwd、服务端环境及两个 CANTER 标识变量，在独立进程组中并行执行；默认 60 秒、stdout/stderr 各保留 32 KiB，超时／取消清理进程组。可拦事件、PostToolUse 反馈及通知事件分别按任务语义处理，坏钩子放行并发英文 warning。PreToolUse 放在既有规则之后、批准之前，并在等待后重新检查权限；ask_user 保持原有提问流程，submit_plan 自身的批准框也通知 PermissionRequest。受限会话不运行 hooks，终端和 exec 的开启提示已更新。
+- 输入与协议：被拦原话不写模型历史、不发送、恢复后不回放；插话用新增的 InputRemovalReason::Blocked 移除，不因被拦的晚到插话再发一次模型请求。放行后才发布 userMessage；TurnCompleted 只回填此前为空的 input，保留原协议“不覆盖已有初始输入”的行为。终端可从延后发布的 userMessage 恢复撤回草稿，涵盖另一终端及重连。JSON Schema / TypeScript 已重新生成，DESIGN 第 8 条及「钩子（P2-153）」已写配置、事件、限制和对照。
+- 验证：最先写服务端格式化回归，确认未实现时文件仍为 unformatted、测试因缺少 hooks 失败，再实现至通过。后续生命周期／拦截测试先确认缺少事件时失败；晚到插话误续跑、计划批准漏通知、放行输入的快照／撤回分别有针对性 RED→GREEN。最终 `cargo nextest run -p canter-core -p canter-server -p canter-protocol -p canter-tui -p canter --no-fail-fast --status-level fail --final-status-level fail`：1087 通过，23 按既有配置跳过；五个包覆盖所有修改包，也包含工具结果受影响的 server / canter。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。没有跑工作区全套，没有调用真实模型（0 次）。新增服务端测试使用隔离 HOME、状态目录、临时 socket／端口、假模型和 shell 命令，覆盖热加载回退、正常／失败／打断／关闭／恢复、队列／插话、目标续跑／后台叫醒、权限与受限状态、并行、限长、超时和子进程清理。
+- 拿主意的地方：主控 11-01 明确选 A，允许排队事件留存，但被拦输入不能进模型历史或恢复回放；优先不留可见空轮，如要大改启动流程可退回 A。采用已授权的空轮退路：现有配置交接等待、Esc、关闭、撤回、exec 都依赖 active turn 和完成信号；先登记不含输入的可取消轮，在锁外运行预检，放行后记录用户消息，拦下则显示原因并完成空轮，避免另建启动／取消协议。插话沿用 InputRemoved，新原因 blocked 已按要求记入 DESIGN。没有其它待主控决定的事。
+- 参考：只读参考 https://code.claude.com/docs/en/hooks（任务给的 Anthropic 链接重定向至此）及 `/tmp/codex-ro/codex-rs/hooks/src/schema.rs`，版本 `rust-v0.163.0`；只采用事件名、配置骨架和字段约定，没有搬代码。permission_mode 报告 canter 自己的实际权限档位，差异已说明。
+- 没做的事：任务排除的项目 hooks、其它钩子类型、钩子放行、Stop 控制续跑、输出注入上下文、额外事件、信任审核和 /hooks 界面均未做；没有新增客户端环境转发，没有改其它仓库，没有安装、合并 main 或推送。
+- 踩过的坑：将交互工具直接接入通用批准判断会给 ask_user 多弹一次批准框，包级回归发现后保留原交互许可；模型已经结束时，仅凭仍有插话决定续跑会在全部插话被拦后多发空请求，改为只在实际消费了输入后续跑。延后用户消息暴露了旧 reducer 不回填 input、撤回草稿只读轮开始输入的问题，补了对应回归；回填必须仅作用于空 input，不能破坏旧完成事件保留原输入的契约。测试夹具的关闭／回答路由、ask_user 参数和重连后先绘制一帧的要求已按现有接口修正；一次文案替换误碰普通 LSP 禁用错误的断言，已恢复，不改变其行为。

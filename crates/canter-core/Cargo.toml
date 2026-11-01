@@ -21,6 +21,7 @@ thiserror.workspace = true
 chrono.workspace = true
 httpdate.workspace = true
 nix.workspace = true
+regex-automata = "=0.4.18"
 
 [dev-dependencies]
 axum.workspace = true

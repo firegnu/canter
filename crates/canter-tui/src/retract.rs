@@ -1,5 +1,5 @@
 use canter_protocol::{
-    Event, EventPayload, InputRemovalReason, SessionSnapshot, TurnStatus, UserInput,
+    Event, EventPayload, InputRemovalReason, Item, SessionSnapshot, TurnStatus, UserInput,
 };
 use std::collections::{BTreeMap, HashMap};
 
@@ -62,7 +62,17 @@ impl Drafts {
                     turn.id.clone(),
                     vec![Source {
                         seq: 0,
-                        input: turn.input.clone(),
+                        input: if turn.input.is_empty() {
+                            turn.items
+                                .iter()
+                                .find_map(|item| match item {
+                                    Item::UserMessage { content, .. } => Some(content.clone()),
+                                    _ => None,
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            turn.input.clone()
+                        },
                     }],
                 );
             }
@@ -154,6 +164,23 @@ impl Drafts {
                         input: input.input.clone(),
                     }],
                 );
+            }
+            EventPayload::ItemCompleted {
+                turn_id,
+                item: Item::UserMessage { content, .. },
+            } => {
+                // A prompt accepted by a hook arrives after the empty start.
+                // Keep the start's sequence so original attachment paths still win.
+                for sources in self.sources.get_mut(turn_id).into_iter().chain(
+                    self.pending
+                        .iter_mut()
+                        .filter(|p| p.turn == *turn_id)
+                        .map(|p| &mut p.sources),
+                ) {
+                    if sources.len() == 1 && sources[0].input.is_empty() {
+                        sources[0].input = content.clone();
+                    }
+                }
             }
             EventPayload::InputRemoved {
                 input_ids,

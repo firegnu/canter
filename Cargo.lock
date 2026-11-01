@@ -326,6 +326,7 @@ dependencies = [
  "futures-util",
  "httpdate",
  "nix",
+ "regex-automata",
  "serde",
  "serde_json",
  "tempfile",

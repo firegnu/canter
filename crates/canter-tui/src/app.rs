@@ -1008,7 +1008,7 @@ impl App {
     pub fn with_welcome(mut self, version: impl Into<String>) -> Self {
         self.welcome = Some(version.into());
         if self.snapshot.settings.restricted_mode == Some(true) {
-            self.information("Restricted mode: LSP is disabled.");
+            self.information("Restricted mode: LSP and hooks are disabled.");
         }
         self
     }

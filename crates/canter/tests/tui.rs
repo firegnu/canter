@@ -62,7 +62,9 @@ async fn folder_trust_prompt_restricts_then_trusts_on_resume_and_covers_subfolde
     assert!(client.list_sessions().await.unwrap().is_empty());
     terminal.press(KeyCode::Down).await;
     terminal.press(KeyCode::Enter).await;
-    terminal.wait_for("Restricted mode: LSP is disabled.").await;
+    terminal
+        .wait_for("Restricted mode: LSP and hooks are disabled.")
+        .await;
     terminal.type_line("hello").await;
     terminal.wait_for("Restricted still works.").await;
     terminal.wait_idle().await;
@@ -116,7 +118,9 @@ async fn folder_trust_corrupt_record_opens_terminal_restricted_with_warning() {
         false,
     )
     .await;
-    terminal.wait_for("Restricted mode: LSP is disabled.").await;
+    terminal
+        .wait_for("Restricted mode: LSP and hooks are disabled.")
+        .await;
     terminal.wait_for("trailing comma").await;
     assert!(terminal.screen().contains(path.to_str().unwrap()));
     assert!(!terminal.screen().contains("Trust this folder?"));
@@ -151,7 +155,9 @@ async fn folder_trust_deleted_directory_resumes_via_cli_and_slash_restricted() {
         false,
     )
     .await;
-    terminal.wait_for("Restricted mode: LSP is disabled.").await;
+    terminal
+        .wait_for("Restricted mode: LSP and hooks are disabled.")
+        .await;
     terminal.wait_for("Directory does not exist").await;
     terminal.wait_for("Saved conversation.").await;
     assert_eq!(terminal.quit().await, id);
@@ -163,7 +169,9 @@ async fn folder_trust_deleted_directory_resumes_via_cli_and_slash_restricted() {
     terminal.press(KeyCode::Down).await;
     terminal.press(KeyCode::Enter).await;
     terminal.wait_for("Saved conversation.").await;
-    terminal.wait_for("Restricted mode: LSP is disabled.").await;
+    terminal
+        .wait_for("Restricted mode: LSP and hooks are disabled.")
+        .await;
     terminal.wait_for("Directory does not exist").await;
     assert_eq!(terminal.quit().await, id);
     world.stop_server(Signal::SIGTERM).await;

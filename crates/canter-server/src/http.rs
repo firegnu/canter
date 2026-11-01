@@ -690,6 +690,7 @@ async fn resume(
                 .set_folder_trust(trust.trusted && !params.restricted_mode)
                 .await?;
             let response = session.snapshot().await;
+            session.session_start_hook("resume").await;
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
@@ -708,6 +709,7 @@ async fn resume(
                 .set_folder_trust(trust.trusted && !params.restricted_mode)
                 .await?;
             let response = session.snapshot().await;
+            session.session_start_hook("resume").await;
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }

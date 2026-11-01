@@ -34,7 +34,7 @@ async fn exec_corrupt_folder_trust_warns_on_create_and_resume_without_exiting() 
         assert!(output.status.success(), "{output:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("Restricted mode: LSP is disabled."),
+            stderr.contains("Restricted mode: LSP and hooks are disabled."),
             "{stderr}"
         );
         assert!(stderr.contains(path.to_str().unwrap()), "{stderr}");
@@ -87,7 +87,7 @@ async fn exec_untrusted_folder_is_restricted_without_waiting_and_reports_it_on_s
     assert!(!String::from_utf8_lossy(&trusted.stderr).contains("Restricted mode"));
     world.stop().await;
     assert!(
-        stderr.contains("Restricted mode: LSP is disabled."),
+        stderr.contains("Restricted mode: LSP and hooks are disabled."),
         "{stderr}"
     );
 }
