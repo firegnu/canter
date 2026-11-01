@@ -1,4 +1,5 @@
 use super::*;
+mod client_exit;
 
 fn command(script: &str) -> Value {
     json!([{"hooks":[{"type":"command","command":script}]}])
@@ -876,8 +877,9 @@ async fn stalled_notifications_shutdown(close_session: bool) {
         fixture.shutdown().await;
     };
     tokio::pin!(stop);
-    // The collective budget is 3 seconds, with 1 second for HTTP/process cleanup.
-    let bounded = tokio::time::timeout(Duration::from_secs(4), &mut stop)
+    // The collective budget is 10 seconds, with 2 seconds for HTTP/process cleanup.
+    let started = tokio::time::Instant::now();
+    let bounded = tokio::time::timeout(Duration::from_secs(12), &mut stop)
         .await
         .is_ok();
     if !bounded {
@@ -896,6 +898,10 @@ async fn stalled_notifications_shutdown(close_session: bool) {
         stop.await;
     }
     assert!(bounded, "notification hooks exceeded the shutdown budget");
+    assert!(
+        started.elapsed() >= Duration::from_secs(10),
+        "notifications lost their ten-second budget"
+    );
     for event in events {
         assert_dead(&output.path().join(format!("{event}-shell.pid"))).await;
         assert_dead(&output.path().join(format!("{event}-child.pid"))).await;

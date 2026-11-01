@@ -24,6 +24,7 @@ fn main() {
     if std::env::var_os("HANG_INITIALIZE").is_some() {
         std::thread::sleep(std::time::Duration::from_secs(600));
     }
+    let mut listed = false;
     for line in io::stdin().lock().lines() {
         let line = line.unwrap();
         let Some(tail) = line.split("\"id\":").nth(1) else {
@@ -40,6 +41,10 @@ fn main() {
         let result = if line.contains("\"initialize\"") {
             r#"{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"fixture","version":"1"}}"#
         } else if line.contains("\"tools/list\"") {
+            if listed && let Ok(path) = std::env::var("REFRESH_STARTED_FILE") {
+                std::fs::write(path, "started").unwrap();
+                std::thread::sleep(std::time::Duration::from_secs(600));
+            }
             r#"{"tools":[{"name":"echo","description":"stdio echo","inputSchema":{"type":"object","properties":{"text":{"type":"string"}}}}]}"#
         } else if line.contains("\"tools/call\"") {
             if let Ok(path) = std::env::var("CALL_STARTED_FILE") {
@@ -58,6 +63,12 @@ fn main() {
             "{}"
         };
         println!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{result}}}");
+        if line.contains("\"tools/list\"") && !listed {
+            listed = true;
+            if std::env::var_os("REFRESH_STARTED_FILE").is_some() {
+                println!("{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}}");
+            }
+        }
         io::stdout().flush().unwrap();
     }
 }

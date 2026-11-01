@@ -138,7 +138,7 @@ impl Lease {
                 ))?;
                 // A private filesystem request avoids signalling a stale/reused PID or adding an HTTP command.
                 write_json(&home, "replace.json", &previous)?;
-                let deadline = Instant::now() + UPGRADE_GRACE + Duration::from_secs(15);
+                let deadline = Instant::now() + UPGRADE_GRACE + Duration::from_secs(30);
                 loop {
                     match lock.try_lock() {
                         Ok(()) => break,

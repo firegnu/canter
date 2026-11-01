@@ -489,7 +489,7 @@ async fn connect(
     };
     let peer = service.peer().clone();
     match tokio::select! {
-        _ = stop.cancelled() => { let _ = service.close().await; return None; }
+        _ = stop.cancelled() => { return None; }
         result = tokio::time::timeout_at(deadline, peer.list_all_tools()) => result,
     } {
         Ok(Ok(tools)) => server.update(tools),
@@ -497,7 +497,10 @@ async fn connect(
             server.disconnected("MCP tool listing failed or timed out");
             return Some(tokio::spawn(async move {
                 let _process_group = process_group;
-                let _ = service.close().await;
+                tokio::select! {
+                    _ = stop.cancelled() => {},
+                    _ = service.close() => {},
+                }
             }));
         }
     }
@@ -507,17 +510,34 @@ async fn connect(
         let service_stop = service.cancellation_token();
         let waiting = service.waiting();
         tokio::pin!(waiting);
-        loop {
+        let refresh_failed = loop {
             tokio::select! {
-                _ = stop.cancelled() => { service_stop.cancel(); let _ = waiting.await; break; }
-                _ = &mut waiting => { server.disconnected("MCP connection closed"); break; }
+                biased;
+                _ = stop.cancelled() => break false,
+                _ = &mut waiting => { server.disconnected("MCP connection closed"); return; }
                 _ = changed.notified() => {
-                    match tokio::time::timeout(startup_timeout, peer.list_all_tools()).await {
+                    let refreshed = tokio::select! {
+                        biased;
+                        _ = stop.cancelled() => break false,
+                        result = tokio::time::timeout(startup_timeout, peer.list_all_tools()) => result,
+                    };
+                    match refreshed {
                         Ok(Ok(tools)) => server.update(tools),
-                        _ => { service_stop.cancel(); let _ = waiting.await; server.disconnected("MCP tool listing failed or timed out"); break; }
+                        _ => break true,
                     }
                 }
             }
+        };
+        service_stop.cancel();
+        // Normal failures still await transport cleanup. Shutdown must not wait
+        // for a remote HTTP session deletion; the process-group guard below
+        // also kills a stdio server even when its transport is unresponsive.
+        tokio::select! {
+            _ = stop.cancelled() => {},
+            _ = &mut waiting => {},
+        }
+        if refresh_failed {
+            server.disconnected("MCP tool listing failed or timed out");
         }
     }))
 }

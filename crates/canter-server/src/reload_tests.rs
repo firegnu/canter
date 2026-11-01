@@ -118,7 +118,7 @@ impl Fixture {
         let client = reqwest::Client::builder()
             .no_proxy()
             .unix_socket(connection.registration.socket_path)
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(15))
             .build()
             .unwrap();
         Self {
@@ -276,7 +276,7 @@ impl Fixture {
             nix::sys::signal::Signal::SIGTERM,
         )
         .unwrap();
-        let status = tokio::time::timeout(Duration::from_secs(10), self.child.wait())
+        let status = tokio::time::timeout(Duration::from_secs(15), self.child.wait())
             .await
             .unwrap()
             .unwrap();
@@ -759,6 +759,32 @@ async fn until(mut condition: impl FnMut() -> bool) {
 fn gone(pid: u32) -> bool {
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None)
         == Err(nix::errno::Errno::ESRCH)
+}
+
+#[tokio::test]
+async fn shutdown_cancels_a_stalled_mcp_tool_list_refresh() {
+    let directory = tempfile::tempdir().unwrap();
+    let pid_file = directory.path().join("mcp.pid");
+    let started = directory.path().join("refresh.started");
+    let fixture = Fixture::new(json!({"mcp_servers":{
+        "refresh":{"transport":"stdio","command":mcp_executable(),"args":["--fixture"],
+            "startup_timeout_sec":600,"env":{"PID_FILE":pid_file,"REFRESH_STARTED_FILE":started}}
+    }}))
+    .await;
+    until(|| started.exists()).await;
+    let pid: u32 = fs::read_to_string(pid_file).unwrap().parse().unwrap();
+    let stopped = tokio::time::timeout(Duration::from_secs(5), fixture.shutdown()).await;
+    if stopped.is_err() {
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+    assert!(
+        stopped.is_ok(),
+        "shutdown waited for the stalled MCP refresh"
+    );
+    until(|| gone(pid)).await;
 }
 
 #[tokio::test]

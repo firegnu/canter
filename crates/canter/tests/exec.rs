@@ -15,6 +15,60 @@ use tokio::{
 const WAIT: Duration = Duration::from_secs(20);
 
 #[tokio::test]
+async fn exec_completion_emits_client_exit_and_resume_starts_a_new_pair() {
+    let world = World::configured(vec![reply("First."), reply("Again.")], false,
+        json!({"hooks":{
+            "SessionStart":[{"hooks":[{"type":"command","command":"input=$(cat); printf '%s\\n' \"$input\" >> starts.jsonl"}]}],
+            "SessionEnd":[{"hooks":[{"type":"command","command":"input=$(cat); printf '%s\\n' \"$input\" >> ends.jsonl"}]}]
+        }})).await;
+    let client = world.client().await;
+    client
+        .trust_folder(world.root.path().join("project").to_str().unwrap())
+        .await
+        .unwrap();
+    let output = world.cli(&["exec", "hello"], "").await;
+    assert!(output.status.success(), "{output:?}");
+    let id = client.list_sessions().await.unwrap()[0].id.clone();
+    for count in [1, 2] {
+        if count == 2 {
+            let output = world.cli(&["exec", "--resume", &id, "again"], "").await;
+            assert!(output.status.success(), "{output:?}");
+        }
+        let ended = tokio::time::timeout(WAIT, async {
+            loop {
+                let values: Vec<Value> =
+                    fs::read_to_string(world.root.path().join("project/ends.jsonl"))
+                        .unwrap_or_default()
+                        .lines()
+                        .filter_map(|line| serde_json::from_str(line).ok())
+                        .collect();
+                if values.len() >= count {
+                    break values;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("exec must detach its event stream after completion");
+        assert_eq!(ended.len(), count);
+        assert_eq!(ended[count - 1]["reason"], "client_exit");
+        assert_eq!(
+            client.read_session(&id).await.unwrap().session.status,
+            canter_protocol::SessionStatus::Idle
+        );
+    }
+    let starts: Vec<Value> = fs::read_to_string(world.root.path().join("project/starts.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0]["source"], "startup");
+    assert_eq!(starts[1]["source"], "resume");
+    world.stop().await;
+}
+
+#[tokio::test]
 async fn exec_corrupt_folder_trust_warns_on_create_and_resume_without_exiting() {
     let world = World::new(vec![reply("First."), reply("Resumed.")], true).await;
     let path = world.root.path().join("state/trusted_folders.json");

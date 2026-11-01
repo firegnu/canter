@@ -35,6 +35,7 @@ impl Drop for Lifetime {
     }
 }
 pub(crate) struct Shared {
+    pub clients: Arc<std::sync::Mutex<crate::clients::Clients>>,
     pub hook_tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     pub input_waiters: AtomicUsize,
     pub state: Arc<Mutex<State>>,
@@ -76,7 +77,7 @@ pub(crate) struct State {
     pub requests: HashMap<String, oneshot::Sender<ApprovalResolution>>,
     pub resolved: HashMap<String, u64>,
     pub closing: bool,
-    hook_session_ended: bool,
+    pub hook_session_ended: bool,
     pub measured_context: Option<(u64, u64)>,
     pub rewind: crate::rewind::Checkpoints,
     plan_tool_calls: u8,
@@ -573,7 +574,7 @@ impl Session {
         Ok(())
     }
 
-    pub async fn session_start_hook(&self, source: &str) {
+    async fn session_start_hook(&self, source: &str) {
         let state = self.shared.state.lock().await;
         crate::hooks::notify(
             &self.shared,
@@ -954,6 +955,7 @@ impl Session {
             .restore(&state.journal.snapshot.background_commands);
         let lifetime = CancellationToken::new();
         let shared = Arc::new(Shared {
+            clients: Default::default(),
             hook_tasks: Default::default(),
             input_waiters: AtomicUsize::new(0),
             state: Arc::new(Mutex::new(state)),
@@ -1664,10 +1666,12 @@ impl Session {
                 serde_json::json!({"reason": if reason == SessionCloseReason::ServerShutdown { "server_shutdown" } else { "client_request" }}),
                 self.shared.lifetime.child_token(),
             );
-            drop(state);
-            crate::hooks::drain(&self.shared).await;
-            state = self.shared.state.lock().await;
         }
+        // A previous client_exit may still be running, along with later turn
+        // notifications. Closing always drains them, even without a new End.
+        drop(state);
+        crate::hooks::drain(&self.shared).await;
+        state = self.shared.state.lock().await;
         if reason == SessionCloseReason::ClientRequest
             && state.journal.snapshot.status == SessionStatus::Closed
             && state.journal.snapshot.close_reason != Some(SessionCloseReason::ClientRequest)

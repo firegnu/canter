@@ -72,6 +72,7 @@ impl Session {
 impl Shared {
     pub(crate) fn frozen(&self) -> Self {
         Self {
+            clients: self.clients.clone(),
             input_waiters: std::sync::atomic::AtomicUsize::new(0),
             state: self.state.clone(),
             runtime: std::sync::RwLock::new(self.runtime()),
