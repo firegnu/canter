@@ -1,5 +1,10 @@
 # 任务：第二期-12 后续 - SessionEnd 钩子在客户端离开时也触发
 
+2026-11-01，canter/main 交给 canter/dev-session-end（Codex，gpt-6-astra / xhigh）。
+路由：碰要害 / 交叉审查要 / 影响面：碰要害（路由：重（置信 0.92）、要、碰要害）
+类型：功能变更
+提示：围绕已确认的使用目标完成变更，优先沿用现有机制。
+你是被委派的 agent：照本文件做，不要再开别的 agent。
 依据：P2-153 hooks 的 SessionEnd 只在会话被关掉时触发；会话常驻服务端，退出终端、`canter exec` 跑完都不关会话，所以现在基本只有服务端停掉时才触发。本件让「最后一个客户端离开」也触发 SessionEnd，和打开会话时的 SessionStart 成对；停机时 SessionEnd 的时间放宽到 10 秒。
 依赖：P2-153
 执行：派出
