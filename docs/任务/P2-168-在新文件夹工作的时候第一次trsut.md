@@ -111,3 +111,15 @@ cargo nextest run -p canter-core --test lsp --run-ignored only
 ```
 
 验证：前台运行一次 `cargo nextest run -p canter-core --test lsp`，确认 6 项跳过；剩余 16 项中 15 项通过，`subscription_stop_and_retry_are_visible_without_waking_the_model` 在读取空的语言服务器列表时失败（index out of bounds）。单独复跑该项通过；它不在本次指定的 6 项中，按“不动别的测试”保留原样，没有把整组结果记成全部通过。整组日志在 `/tmp/canter-p2-168-check/lsp-ignore-tests.log`，单项复跑日志在 `lsp-ignore-extra-recheck.log`。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。未跑工作区全套、未推送或合并。
+
+
+## 复核返工：恢复降级时的 LSP 竞态
+
+2026-11-01，按交叉审查「复核」第三部分完成，提交在 `p2-168-trust`。
+
+- **原因与改法**：`inline()` 等待诊断票据、后续诊断和 state 锁期间，恢复会话可能调用 `set_folder_trust(false)`，从运行时卸载 LSP。原先两处重新查运行时并 `unwrap()` 会在这个窗口 panic，使轮次停在 InProgress。现在进入 `inline()` 时只取一次克隆句柄，取不到就返回空；后续诊断和报告统一用这个句柄。句柄关闭仍沿用已有的 Stopped／诊断不可用处理，不重新启动语言服务器。已检索确认 core 中不再有 `tools.lsp().unwrap()`。
+- **确定性复现与验证**：临时在票据返回 `Ok` 后加文件标记同步闸门，用现有假模型、假 LSP 和服务端 fixture 等到闸门，再损坏信任记录并 resume，确认受限后才释放。旧代码稳定命中 `Option::unwrap()` panic，后续模型请求没有到达；相同用例在修复后通过，轮次完成且下一次输入正常。再把闸门移到取得 state 锁之前验证另一处窗口，也通过。三次结果分别见 `/tmp/canter-p2-168-check/inline-race-red-warm.log`、`inline-race-green.log`、`inline-race-state-green.log`。
+- **未保留竞态回归的原因与保证**：现有公开测试入口不能控制票据返回后、取得 state 锁前的内部窗口；保留确定性用例需要把同步闸门留在产品路径。验证完成后已移除临时闸门和用例，没有留下靠 sleep 碰运气的回归。保证来自跨 await 持有同一个拥有所有权的 LSP 克隆、彻底移除两处运行时解包，以及上述两个窗口的受控验证和已有回归。临时用例与闸门文本保存在 `/tmp/canter-p2-168-check/inline-gate-test.txt`、`inline-gate.txt`，不进入提交。
+- **相关回归与检查**：前台运行 `cargo nextest run -p canter-core -p canter-server`，用过滤器仅选择 `folder_trust_lost_on_resume_detaches_running_lsp`、`untrusted_session_does_not_start_lsp_even_when_globally_enabled`、`disabled_lsp_requests_match_the_original_path_byte_for_byte`、`server_failure_does_not_turn_a_successful_file_change_into_failure`、`a_stopped_subscription_remains_stopped_on_reopen_and_can_be_retried`、`unversioned_empty_lists_do_not_claim_issues_are_resolved`，6 项全部通过（日志 `inline-related-tests.log`）。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过；使用指定独立 target，测试隔离 HOME / CANTER_HOME，未跑全套。
+- **踩过的坑**：第一版临时用例在假 LSP 启动完成前写文件，没有进入目标 `Ok` 窗口；加一轮预热并等待 Running 后才得到了上述有效复现，没有把启动等待失败算作目标缺陷证据。
+- **范围与待决事项**：最终仅修改 `inline()` 的句柄获取和两处使用，以及本记录。未改 worktree 文件读取建议、测试断言／超时、已有 ignore 或其它产品行为；未读改真实 `~/.canter`、未调用真实模型、未开其它 agent、未推送或合并。没有新的待主控决定事项。

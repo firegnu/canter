@@ -342,6 +342,10 @@ pub(crate) async fn inline(
     turn_id: &str,
     output: &mut canter_tools::ToolOutput,
 ) -> Vec<Item> {
+    // A concurrent resume can remove LSP while we await diagnostics or the state lock.
+    let Some(lsp) = shared.runtime().tools.lsp().cloned() else {
+        return Vec::new();
+    };
     let Some(ticket) = output.change_ticket.take() else {
         return Vec::new();
     };
@@ -368,7 +372,7 @@ pub(crate) async fn inline(
             pending.reported = true;
             let mut batches = tokio::time::timeout_at(
                 ticket.changed_at + shared.runtime().options.lsp_inline_wait,
-                shared.runtime().tools.lsp().unwrap().diagnostics(),
+                lsp.diagnostics(),
             )
             .await
             .unwrap_or_default();
@@ -380,7 +384,7 @@ pub(crate) async fn inline(
             let report = state.lsp_delivery.render(batches, &cwd, false);
             items = report_items(
                 &report,
-                shared.runtime().tools.lsp().unwrap(),
+                &lsp,
                 &cwd,
                 Some(&pending.item_id),
                 DiagnosticDelivery::Inline,
