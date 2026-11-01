@@ -232,7 +232,10 @@ impl Fixture {
             mcp: Default::default(),
             lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
             sessions: Default::default(),
+            session_locks: Default::default(),
             registry_changed: Default::default(),
+            #[cfg(test)]
+            pauses: Default::default(),
             draining: Default::default(),
             stopped: CancellationToken::new(),
         });

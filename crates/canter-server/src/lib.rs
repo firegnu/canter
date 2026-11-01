@@ -9,6 +9,7 @@ mod lsp_tests;
 mod reload;
 #[cfg(test)]
 mod reload_tests;
+mod session_locks;
 mod startup;
 mod trust;
 
@@ -122,7 +123,10 @@ async fn serve_with_lsp(
         default_model: config.model,
         models: config.models,
         sessions: Default::default(),
+        session_locks: Default::default(),
         registry_changed: Default::default(),
+        #[cfg(test)]
+        pauses: Default::default(),
         draining: Default::default(),
         stopped: CancellationToken::new(),
     });
@@ -171,9 +175,7 @@ async fn serve_with_lsp(
         tokio::pin!(exit);
         let replacing = tokio::select! { _ = &mut exit => false, _ = upgrade => true };
         if let Some(reload) = &shutdown.reload { reload.stop_reloading(); }
-        *shutdown.draining.write().await = true;
-        let sessions: Vec<_> = shutdown.sessions.lock().await.values().cloned().collect();
-        for session in &sessions { session.drain().await; }
+        let sessions = shutdown.begin_drain().await;
         if replacing {
             let wait = async {
                 loop {

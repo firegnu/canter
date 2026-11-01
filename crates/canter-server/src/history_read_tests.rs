@@ -16,7 +16,10 @@ fn app(home: PathBuf) -> Arc<App> {
         models: vec!["fake-model".into()],
         options: CoreOptions::default(),
         sessions: Default::default(),
+        session_locks: Default::default(),
         registry_changed: Default::default(),
+        #[cfg(test)]
+        pauses: Default::default(),
         draining: Default::default(),
         stopped: CancellationToken::new(),
     })
@@ -186,7 +189,7 @@ async fn large_history_read_benchmark() {
     server.await.unwrap();
 }
 
-fn write_round(out: &mut impl Write, id: &str, seq: &mut u64, number: u64) -> u64 {
+pub(super) fn write_round(out: &mut impl Write, id: &str, seq: &mut u64, number: u64) -> u64 {
     let mut bytes = 0;
     let mut line = Vec::new();
     let mut emit = |payload| {
