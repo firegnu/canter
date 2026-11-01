@@ -762,6 +762,100 @@ fn gone(pid: u32) -> bool {
 }
 
 #[tokio::test]
+async fn mcp_removal_allows_stdio_to_read_eof_before_exiting() {
+    let directory = tempfile::tempdir().unwrap();
+    let pid_file = directory.path().join("mcp.pid");
+    let eof = directory.path().join("stdin.eof");
+    let mut fixture = Fixture::new(json!({"mcp_servers":{
+        "removed":{"transport":"stdio","command":mcp_executable(),"args":["--fixture"],
+            "env":{"PID_FILE":pid_file,"STDIN_EOF_FILE":eof}}
+    }}))
+    .await;
+    let pid: u32 = fs::read_to_string(pid_file).unwrap().parse().unwrap();
+    fixture.config["mcp_servers"] = json!({});
+    fixture.applied("mcp-removed").await;
+    until(|| gone(pid)).await;
+    assert_eq!(
+        fs::read_to_string(eof).ok().as_deref(),
+        Some("eof"),
+        "retiring MCP must close stdin and allow the process to exit"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn mcp_retirement_waits_for_refresh_then_closes_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let pid_file = directory.path().join("mcp.pid");
+    let started = directory.path().join("refresh.started");
+    let release = directory.path().join("refresh.release");
+    let eof = directory.path().join("stdin.eof");
+    let mut fixture = Fixture::new(json!({"mcp_servers":{
+        "removed":{"transport":"stdio","command":mcp_executable(),"args":["--fixture"],
+            "startup_timeout_sec":600,"env":{"PID_FILE":pid_file,"REFRESH_STARTED_FILE":started,
+                "REFRESH_RELEASE_FILE":release,"STDIN_EOF_FILE":eof}}
+    }}))
+    .await;
+    until(|| started.exists()).await;
+    let pid: u32 = fs::read_to_string(pid_file).unwrap().parse().unwrap();
+    fixture.config["mcp_servers"] = json!({});
+    fixture.applied("mcp-removed").await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !gone(pid),
+        "retirement must allow the in-flight refresh to finish"
+    );
+    fs::write(release, "release").unwrap();
+    until(|| gone(pid)).await;
+    assert_eq!(fs::read_to_string(eof).unwrap(), "eof");
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn replacement_drain_keeps_mcp_available_to_the_active_turn() {
+    let mut fixture = Fixture::new(json!({"mcp_tool_search":false,"mcp_servers":{
+        "kept":{"transport":"stdio","command":mcp_executable(),"args":["--fixture"]}
+    }}))
+    .await;
+    let url = fixture.create().await;
+    fixture.input(&url).await;
+    let running = fixture.request().await;
+    let state = fixture.root.path().join("state");
+    fs::copy(state.join("server.json"), state.join("replace.json")).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let response = fixture
+                .client
+                .patch(&url)
+                .json(&json!({"name":"drain probe"}))
+                .send()
+                .await
+                .unwrap();
+            if response.status() == reqwest::StatusCode::CONFLICT {
+                break;
+            }
+            response.error_for_status().unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    running.tool(
+        "mcp__kept__echo",
+        json!({"text":"finish the accepted turn"}),
+    );
+    let next = fixture.request().await;
+    assert!(next.body["messages"].to_string().contains("stdio result"));
+    next.stop();
+    let status = tokio::time::timeout(Duration::from_secs(10), fixture.child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    fixture.model.abort();
+    assert!(status.success());
+}
+
+#[tokio::test]
 async fn shutdown_cancels_a_stalled_mcp_tool_list_refresh() {
     let directory = tempfile::tempdir().unwrap();
     let pid_file = directory.path().join("mcp.pid");
@@ -785,6 +879,21 @@ async fn shutdown_cancels_a_stalled_mcp_tool_list_refresh() {
         "shutdown waited for the stalled MCP refresh"
     );
     until(|| gone(pid)).await;
+}
+
+#[tokio::test]
+async fn shutdown_releases_a_retirement_waiting_for_stalled_mcp_refresh() {
+    let directory = tempfile::tempdir().unwrap();
+    let started = directory.path().join("refresh.started");
+    let mut fixture = Fixture::new(json!({"mcp_servers":{
+        "removed":{"transport":"stdio","command":mcp_executable(),"args":["--fixture"],
+            "startup_timeout_sec":600,"env":{"REFRESH_STARTED_FILE":started}}
+    }}))
+    .await;
+    until(|| started.exists()).await;
+    fixture.config["mcp_servers"] = json!({});
+    fixture.applied("mcp-removed").await;
+    fixture.shutdown().await;
 }
 
 #[tokio::test]

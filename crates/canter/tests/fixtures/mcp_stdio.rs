@@ -43,7 +43,13 @@ fn main() {
         } else if line.contains("\"tools/list\"") {
             if listed && let Ok(path) = std::env::var("REFRESH_STARTED_FILE") {
                 std::fs::write(path, "started").unwrap();
-                std::thread::sleep(std::time::Duration::from_secs(600));
+                if let Ok(release) = std::env::var("REFRESH_RELEASE_FILE") {
+                    while !std::path::Path::new(&release).exists() {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                } else {
+                    std::thread::sleep(std::time::Duration::from_secs(600));
+                }
             }
             r#"{"tools":[{"name":"echo","description":"stdio echo","inputSchema":{"type":"object","properties":{"text":{"type":"string"}}}}]}"#
         } else if line.contains("\"tools/call\"") {
@@ -70,5 +76,8 @@ fn main() {
             }
         }
         io::stdout().flush().unwrap();
+    }
+    if let Ok(path) = std::env::var("STDIN_EOF_FILE") {
+        std::fs::write(path, "eof").unwrap();
     }
 }

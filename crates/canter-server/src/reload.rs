@@ -90,6 +90,8 @@ pub(crate) struct LiveConfig {
     mcp_lineage: Mutex<BTreeMap<String, Arc<ServiceSlot>>>,
     workers: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     stop: CancellationToken,
+    // Separate from stop_reloading: active turns may still use MCP during drain.
+    shutdown: CancellationToken,
     warning: Mutex<Option<String>>,
 }
 impl LiveConfig {
@@ -100,16 +102,22 @@ impl LiveConfig {
         lsp: Arc<LspService>,
         stop: CancellationToken,
     ) -> Arc<Self> {
+        let shutdown = stop.child_token();
         let mcp: BTreeMap<_, _> =
             futures_util::future::join_all(config.mcp_servers.iter().map(|(name, config)| {
                 let name = name.clone();
                 let config = config.clone();
                 let home = home.clone();
                 let stop = stop.child_token();
+                let shutdown = shutdown.clone();
                 async move {
-                    let registry =
-                        Registry::connect(BTreeMap::from([(name.clone(), config)]), home, stop)
-                            .await;
+                    let registry = Registry::connect(
+                        BTreeMap::from([(name.clone(), config)]),
+                        home,
+                        stop,
+                        shutdown,
+                    )
+                    .await;
                     (name, ServiceSlot::new(Some(Service::Mcp(registry))))
                 }
             }))
@@ -138,6 +146,7 @@ impl LiveConfig {
             slots: Mutex::new(slots),
             workers: Mutex::new(Vec::new()),
             stop: CancellationToken::new(),
+            shutdown,
             warning: Mutex::new(None),
         })
     }
@@ -311,6 +320,7 @@ impl LiveConfig {
             slots.push(slot.clone());
             let home = self.home.clone();
             let stop = self.stop.clone();
+            let shutdown = self.shutdown.clone();
             let lsp_config = next.config.lsp.clone();
             workers.push(tokio::spawn(async move {
                 if let Some(previous) = previous
@@ -327,6 +337,7 @@ impl LiveConfig {
                         BTreeMap::from([(name, config)]),
                         home,
                         connect_stop.clone(),
+                        shutdown,
                     );
                     tokio::pin!(connecting);
                     let mcp = tokio::select! {
@@ -353,6 +364,9 @@ impl LiveConfig {
 
     pub async fn shutdown(&self) {
         self.stop.cancel();
+        // Release even workers already blocked inside graceful MCP retirement.
+        // serve calls this only after all sessions have finished closing.
+        self.shutdown.cancel();
         for worker in self.workers.lock().await.drain(..) {
             let _ = worker.await;
         }
