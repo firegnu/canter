@@ -189,7 +189,182 @@ async fn fork_copies_completed_conversation_and_settings_without_touching_source
 }
 
 #[tokio::test]
-async fn fork_preserves_request_bytes_after_compaction_rewind_and_plan_and_reopen() {
+async fn fork_reopen_refreshes_project_instructions_and_skills() {
+    let model = Arc::new(Replay::default());
+    let test = Harness::with_model(model.clone()).await;
+    let instructions = test.root.path().join("AGENTS.md");
+    std::fs::write(&instructions, "Original fork instruction").unwrap();
+    let source = create(&test).await;
+    send(&test, &source, "Original conversation").await;
+    let fork = copy(&test, &source).await;
+    let url = format!("http://localhost/v1/sessions/{}", fork.session.id);
+    send(&test, &url, "Before reopening").await;
+    let before = model.0.lock().unwrap().last().unwrap().clone();
+    assert!(
+        matches!(&before.messages[0], Message::System { text } if text.contains("Original fork instruction"))
+    );
+    let notice = before.messages.iter().find(|message| matches!(message, Message::User { text } if text.starts_with("This session was forked"))).unwrap().clone();
+    let history = test
+        .app
+        .store
+        .model_history::<serde_json::Value>(&fork.session.id)
+        .unwrap();
+    let contexts = history
+        .iter()
+        .filter(|entry| entry["type"] == "context")
+        .count();
+    test.client
+        .delete(&url)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    std::fs::write(
+        &instructions,
+        "Refreshed project instruction after reopening",
+    )
+    .unwrap();
+    let skill = test.root.path().join(".agents/skills/after-fork/SKILL.md");
+    std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    std::fs::write(skill, "---\nname: after-fork\ndescription: Skill added after the fork\n---\nFollow the refreshed project instructions.\n").unwrap();
+    test.client
+        .post(format!("{url}/resume"))
+        .json(&json!({"env":environment(&test)}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    send(&test, &url, "After reopening").await;
+    let actual = model.0.lock().unwrap().last().unwrap().clone();
+    let Message::System { text } = &actual.messages[0] else {
+        panic!("missing system prefix")
+    };
+    assert!(
+        text.contains("Refreshed project instruction after reopening"),
+        "reopening must refresh AGENTS.md"
+    );
+    assert!(!text.contains("Original fork instruction"));
+    assert!(text.contains("after-fork") && text.contains("Skill added after the fork"));
+    let skills: SkillListResponse = test
+        .client
+        .get(format!("{url}/skills"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(skills.data.iter().any(|skill| skill.name == "after-fork"));
+    assert_eq!(
+        actual
+            .messages
+            .iter()
+            .filter(|message| *message == &notice)
+            .count(),
+        1
+    );
+    let history = test
+        .app
+        .store
+        .model_history::<serde_json::Value>(&fork.session.id)
+        .unwrap();
+    let updated: Vec<_> = history
+        .iter()
+        .filter(|entry| entry["type"] == "context")
+        .collect();
+    assert_eq!(updated.len(), contexts + 1);
+    assert_eq!(
+        updated.last().unwrap()["messages"],
+        json!([actual.messages[0]])
+    );
+    test.stop().await;
+}
+
+#[tokio::test]
+async fn fork_appends_goal_cleared_after_its_notice_and_restates_on_reopen() {
+    let model = Arc::new(Replay::default());
+    let test = Harness::with_model(model.clone()).await;
+    let source = create(&test).await;
+    test.client
+        .post(format!("{source}/goal"))
+        .json(&json!({"objective":"Original session goal","budgetUsd":0}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    test.client
+        .post(format!("{source}/goal/pause"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    send(&test, &source, "Keep the paused goal history").await;
+    let before = test.read(&source).await;
+    let files = saved_files(&test, &before.session.id);
+    let fork = copy(&test, &source).await;
+    let url = format!("http://localhost/v1/sessions/{}", fork.session.id);
+    assert!(fork.session.goal.is_none());
+    assert_eq!(test.read(&source).await, before);
+    assert_eq!(saved_files(&test, &before.session.id), files);
+    send(&test, &source, "Continue here").await;
+    let expected = model.0.lock().unwrap().last().unwrap().clone();
+    assert!(
+        expected
+            .messages
+            .iter()
+            .any(|message| matches!(message, Message::User { text } if text.starts_with("[Goal]")))
+    );
+    send(&test, &url, "Continue here").await;
+    let actual = model.0.lock().unwrap().last().unwrap().clone();
+    let notice = actual.messages.iter().find(|message| matches!(message, Message::User { text } if text.starts_with("This session was forked"))).unwrap().clone();
+    let cleared = Message::User {
+        text:
+            "[Goal cleared] There is no current goal. Do not pursue a previous goal automatically."
+                .into(),
+    };
+    let mut messages = expected.messages;
+    let index = messages.len() - 1;
+    messages.splice(index..index, [notice, cleared.clone()]);
+    assert_eq!(
+        serde_json::to_vec(&actual.messages).unwrap(),
+        serde_json::to_vec(&messages).unwrap(),
+        "fork must append the existing goal-cleared notice immediately after its scratch notice"
+    );
+    test.client
+        .delete(&url)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    test.client
+        .post(format!("{url}/resume"))
+        .json(&json!({"env":environment(&test)}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    send(&test, &url, "Continue after reopening").await;
+    let actual = model.0.lock().unwrap().last().unwrap().clone();
+    assert_eq!(actual.messages[actual.messages.len() - 2], cleared);
+    assert_eq!(
+        actual
+            .messages
+            .iter()
+            .filter(|message| *message == &cleared)
+            .count(),
+        2
+    );
+    test.stop().await;
+}
+
+#[tokio::test]
+async fn fork_preserves_request_bytes_after_compaction_rewind_and_plan() {
     for scenario in ["compaction", "rewind", "plan"] {
         let model = Arc::new(Replay::default());
         let test = Harness::with_options(
@@ -262,27 +437,7 @@ async fn fork_preserves_request_bytes_after_compaction_rewind_and_plan_and_reope
                 "This session was forked from another session. Its scratch directory is now {scratch}; use it instead of the scratch directory named earlier."
             ),
         };
-        // Reopening must use exactly the saved inherited prefix and notice.
-        test.client
-            .delete(&url)
-            .send()
-            .await
-            .unwrap()
-            .error_for_status()
-            .unwrap();
-        std::fs::write(
-            test.root.path().join("AGENTS.md"),
-            "New instructions after the fork",
-        )
-        .unwrap();
-        test.client
-            .post(format!("{url}/resume"))
-            .json(&json!({"env":environment(&test)}))
-            .send()
-            .await
-            .unwrap()
-            .error_for_status()
-            .unwrap();
+        // Only the fresh fork keeps the source's system prefix byte-for-byte.
         send(&test, &source, "Continue here").await;
         let expected = model.0.lock().unwrap().last().unwrap().clone();
         let before = test.read(&source).await;

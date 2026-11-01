@@ -178,6 +178,7 @@ impl State {
         home: Option<std::path::PathBuf>,
         canter_home: Option<std::path::PathBuf>,
         tools: &Tools,
+        fresh_fork: bool,
     ) -> Result<(), CoreError> {
         self.directory_home = home.clone();
         tools.configure_shell(
@@ -241,7 +242,7 @@ impl State {
         let (prefix, sections) = crate::prompt::chat_completions(&segments);
         self.skills = skills;
         self.prefix_sections = sections;
-        if self.fork_notice.is_some() {
+        if fresh_fork {
             if let Some(saved) = &self.prefix_segments {
                 self.prefix_sections = crate::prompt::chat_completions(saved).1;
             }
@@ -781,7 +782,9 @@ impl Session {
         if !recovered.is_empty() {
             state.journal.append(recovered).await?;
         }
-        state.initialize_prefix(home, canter_home, &tools).await?;
+        state
+            .initialize_prefix(home, canter_home, &tools, fresh_fork)
+            .await?;
         if let Some(lsp) = tools.lsp() {
             let cwd = std::path::Path::new(&state.journal.snapshot.settings.cwd);
             let files = state
@@ -827,9 +830,7 @@ impl Session {
             .complete_missing_tools("No result: the server stopped and this turn was interrupted")
             .await?;
         state.recover_background().await?;
-        if state.fork_notice.is_none() || state.journal.snapshot.goal.is_some() {
-            state.restate_goal().await?;
-        }
+        state.restate_goal().await?;
         state.cancel_requests().await?;
         let unfinished = state
             .journal
@@ -963,7 +964,9 @@ impl Session {
             }])
             .await?;
         let mut state = State::new(journal);
-        state.initialize_prefix(home, canter_home, &tools).await?;
+        state
+            .initialize_prefix(home, canter_home, &tools, false)
+            .await?;
         let response = SessionCreateResponse {
             session: state.journal.snapshot.clone(),
             event_seq: state.journal.snapshot.last_event_seq,
