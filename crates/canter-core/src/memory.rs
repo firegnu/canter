@@ -9,11 +9,13 @@ pub(crate) fn is_memory(segment: &Segment) -> bool {
     )
 }
 
-pub(crate) async fn segments(tools: &canter_tools::Tools) -> Result<Vec<Segment>, CoreError> {
+pub(crate) async fn segments(tools: &canter_tools::Tools) -> Vec<Segment> {
     let Some(memory) = tools.memory() else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
-    tokio::task::spawn_blocking(move || {
+    let loading = memory.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let memory = loading;
         let Some(roots) = memory.roots()? else {
             return Ok(Vec::new());
         };
@@ -43,13 +45,14 @@ pub(crate) async fn segments(tools: &canter_tools::Tools) -> Result<Vec<Segment>
         Ok::<_, std::io::Error>(segments)
     })
     .await
-    .map_err(|_| CoreError::internal())?
-    .map_err(|error| {
-        CoreError::new(
-            ErrorCode::Internal,
-            &format!("Could not load memory: {error}"),
-        )
-    })
+    .unwrap_or_else(|error| Err(std::io::Error::other(error)));
+    match result {
+        Ok(segments) => segments,
+        Err(error) => {
+            memory.disable_with_warning(error.to_string());
+            Vec::new()
+        }
+    }
 }
 
 impl crate::session::State {
@@ -59,7 +62,7 @@ impl crate::session::State {
     ) -> Result<(), CoreError> {
         let mut segments = self.prefix_segments.clone().unwrap_or_default();
         segments.retain(|segment| !is_memory(segment));
-        segments.extend(crate::memory::segments(tools).await?);
+        segments.extend(crate::memory::segments(tools).await);
         self.set_memory_prefix(segments).await
     }
 

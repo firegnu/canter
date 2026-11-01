@@ -230,6 +230,159 @@ async fn unavailable_scratch_warns_without_preventing_session_open() {
 }
 
 #[tokio::test]
+async fn unreadable_memory_file_warns_and_remains_listed_without_blocking_session_open() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    let home = temp.path().join("home");
+    let project = temp.path().join("project");
+    let state = home.join(".canter");
+    std::fs::create_dir_all(state.join("memory")).unwrap();
+    std::fs::create_dir(&project).unwrap();
+    let unreadable = state.join("memory/unreadable.md");
+    std::fs::write(&unreadable, "# Unreadable\nHidden description.\n\nDetails.").unwrap();
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+    std::fs::write(
+        state.join("memory/valid.md"),
+        "# Valid\nA useful description.\n\nDetails.",
+    )
+    .unwrap();
+    let store = Arc::new(Store::new(state.join("sessions")).unwrap());
+    let mut runtime = runtime(&home);
+    runtime.memory_home = Some(state.clone());
+    let (session, response) = Session::create(
+        store.clone(),
+        "prompt".into(),
+        settings(&project),
+        runtime.clone(),
+        Arc::new(NoRequests),
+        CoreOptions::default(),
+    )
+    .await
+    .expect("an unreadable memory must not block session creation");
+    {
+        let cursor = response.event_seq;
+        assert!(store.events_after("prompt", cursor).unwrap().iter().any(|event| matches!(&event.payload, canter_protocol::EventPayload::Warning { message } if message.contains("memory") && message.contains("read"))));
+        let listed = session.memories().await.unwrap().data;
+        assert_eq!(listed[0].name, "unreadable.md");
+        assert!(listed[0].description.is_empty());
+        assert_eq!(listed[1].name, "Valid");
+        let records = contexts(&store);
+        let prefix = records.last().unwrap()["messages"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(prefix.contains("A useful description."));
+        assert!(!prefix.contains("Hidden description."));
+        assert!(!prefix.contains("unreadable.md"));
+        session.close().await.unwrap();
+    }
+    let (session, response) = Session::open(
+        store.clone(),
+        "prompt".into(),
+        runtime,
+        Arc::new(NoRequests),
+        CoreOptions::default(),
+    )
+    .await
+    .expect("an unreadable memory must not block reopening");
+    assert!(store.events_after("prompt", response.event_seq).unwrap().iter().any(|event| matches!(&event.payload, canter_protocol::EventPayload::Warning { message } if message.contains("memory") && message.contains("read"))));
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn unavailable_memory_warns_without_preventing_session_create_or_reopen() {
+    for fault in ["directory", "git"] {
+        for reopen in [false, true] {
+            let temp = tempfile::tempdir_in("/tmp").unwrap();
+            let home = temp.path().join("home");
+            let project = temp.path().join("project");
+            let state = home.join(".canter");
+            std::fs::create_dir_all(&state).unwrap();
+            std::fs::create_dir(&project).unwrap();
+            let store = Arc::new(Store::new(state.join("sessions")).unwrap());
+            let mut runtime = runtime(&home);
+            runtime.memory_home = Some(state.clone());
+            runtime.protected_paths = vec![state.clone()];
+            let options = CoreOptions {
+                sandbox: true,
+                ..Default::default()
+            };
+            if reopen {
+                let (session, _) = Session::create(
+                    store.clone(),
+                    "prompt".into(),
+                    settings(&project),
+                    runtime.clone(),
+                    Arc::new(NoRequests),
+                    options.clone(),
+                )
+                .await
+                .unwrap();
+                session.close().await.unwrap();
+            }
+            match fault {
+                "directory" => {
+                    if reopen {
+                        std::fs::remove_dir(state.join("memory")).unwrap();
+                    }
+                    std::fs::write(state.join("memory"), "This path is not a directory.").unwrap();
+                }
+                "git" => {
+                    std::fs::write(project.join(".git"), "gitdir: missing-worktree-metadata\n")
+                        .unwrap()
+                }
+                _ => unreachable!(),
+            }
+            let (session, cursor) = if reopen {
+                Session::open(
+                    store.clone(),
+                    "prompt".into(),
+                    runtime,
+                    Arc::new(NoRequests),
+                    options,
+                )
+                .await
+                .map(|(session, response)| (session, response.event_seq))
+            } else {
+                Session::create(
+                    store.clone(),
+                    "prompt".into(),
+                    settings(&project),
+                    runtime,
+                    Arc::new(NoRequests),
+                    options,
+                )
+                .await
+                .map(|(session, response)| (session, response.event_seq))
+            }
+            .expect("memory initialization failure must not prevent opening a session");
+            assert_eq!(
+                session.snapshot().await.session.status,
+                canter_protocol::SessionStatus::Idle
+            );
+            assert!(store.events_after("prompt", cursor).unwrap().iter().any(|event| matches!(&event.payload, canter_protocol::EventPayload::Warning { message } if message.starts_with("Memory unavailable:"))));
+            let records = contexts(&store);
+            assert!(
+                !records.last().unwrap()["messages"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("<memory_")
+            );
+            assert!(session.memories().await.is_err());
+            let state = state.canonicalize().unwrap();
+            assert!(
+                !session
+                    .sandbox()
+                    .await
+                    .writable
+                    .iter()
+                    .any(|path| Path::new(path).starts_with(&state))
+            );
+            session.close().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
 async fn prefix_renders_ordered_sections_and_allocates_the_whole_message() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("project&\"<>");

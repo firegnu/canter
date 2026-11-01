@@ -341,3 +341,89 @@ fn disabled_memory_does_not_create_directories() {
     assert!(memory.list().is_err());
     assert!(!temp.path().join("missing-state").exists());
 }
+
+#[tokio::test]
+async fn missing_memory_directory_does_not_block_project_files_or_shell() {
+    for sandbox in [false, true] {
+        for global in [false, true] {
+            let fixture = Fixture::new();
+            let tools = fixture.tools(sandbox);
+            let roots = fixture.memory.roots().unwrap().unwrap();
+            let path = fixture.cwd.join("project.txt");
+            std::fs::write(&path, "project content").unwrap();
+            let cancel = CancellationToken::new();
+            let gate = PermissionGate::default();
+            let pending_write = tools
+                .prepare(
+                    Tool::Write,
+                    "before-removal",
+                    &serde_json::json!({"path":path,"content":"updated project"}).to_string(),
+                    &cancel,
+                )
+                .await
+                .unwrap();
+            std::fs::remove_dir(if global {
+                &roots.global
+            } else {
+                &roots.project
+            })
+            .unwrap();
+            let read = tools
+                .prepare(
+                    Tool::Read,
+                    "after-removal",
+                    &serde_json::json!({"path":path}).to_string(),
+                    &cancel,
+                )
+                .await
+                .expect("missing memories must not block reading project files");
+            for call in [&read, &pending_write] {
+                let PermissionCheck::Execute(permit) =
+                    gate.evaluate(call, PermissionMode::AllowAll)
+                else {
+                    panic!("project file should be allowed")
+                };
+                let output = tools.execute(permit, &cancel, &mut |_| {}).await;
+                assert_eq!(output.outcome, ToolOutcome::Completed, "{}", output.text);
+            }
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "updated project");
+            let write = tools
+                .prepare(
+                    Tool::Write,
+                    "after-removal",
+                    &serde_json::json!({"path":path,"content":"second update"}).to_string(),
+                    &cancel,
+                )
+                .await
+                .unwrap();
+            let PermissionCheck::Execute(permit) = gate.evaluate(&write, PermissionMode::AllowAll)
+            else {
+                panic!("project write should be allowed")
+            };
+            assert_eq!(
+                tools.execute(permit, &cancel, &mut |_| {}).await.outcome,
+                ToolOutcome::Completed
+            );
+            let shell = tools
+                .prepare(
+                    Tool::Shell,
+                    "shell-after-removal",
+                    r#"{"command":"printf 'shell content' > shell.txt; cat shell.txt"}"#,
+                    &cancel,
+                )
+                .await
+                .unwrap();
+            let PermissionCheck::Execute(permit) = gate.evaluate(&shell, PermissionMode::AllowAll)
+            else {
+                panic!("shell should be allowed")
+            };
+            let output = tools.execute(permit, &cancel, &mut |_| {}).await;
+            assert_eq!(output.outcome, ToolOutcome::Completed, "{}", output.text);
+            assert!(output.text.contains("shell content"));
+            for root in [&roots.global, &roots.project] {
+                assert!(tools.prepare(Tool::Write, "memory-after-removal", &serde_json::json!({"path":root.join("new.md"),"content":"# Name\nDescription\n\nBody"}).to_string(), &cancel).await.is_err(), "both memory exceptions must be unavailable");
+            }
+            tools.close_shell();
+        }
+    }
+}

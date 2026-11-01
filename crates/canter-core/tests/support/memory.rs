@@ -208,36 +208,180 @@ async fn memory_fork_keeps_the_snapshot_and_trust_changes_remove_or_reload_only_
 }
 
 #[tokio::test]
+#[cfg(target_os = "macos")]
 async fn memory_failed_trust_upgrade_does_not_leave_directory_exceptions_enabled() {
+    use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+    struct RestoreWriter {
+        target: i32,
+        backup: i32,
+    }
+    impl Drop for RestoreWriter {
+        fn drop(&mut self) {
+            // Restore only this fixture's descriptor, including when an assertion panics.
+            unsafe {
+                nix::libc::dup2(self.backup, self.target);
+                nix::libc::close(self.backup);
+            }
+        }
+    }
+    for log in ["model-history.jsonl", "events.jsonl"] {
+        let fixture = Fixture::new();
+        let session = fixture
+            .create("restricted", ScriptModel::new(Vec::new()), true)
+            .await;
+        session.set_folder_trust(false).await.unwrap();
+        let path = fixture.store.session_dir("restricted").unwrap().join(log);
+        let metadata = std::fs::metadata(&path).unwrap();
+        // Fault the public storage boundary without adding production test hooks:
+        // the already-open writer gets a read-only descriptor for the same isolated file.
+        let target = std::fs::read_dir("/dev/fd")
+            .unwrap()
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let fd: i32 = entry.file_name().to_str()?.parse().ok()?;
+                let mut opened = std::mem::MaybeUninit::<nix::libc::stat>::uninit();
+                if unsafe { nix::libc::fstat(fd, opened.as_mut_ptr()) } != 0 {
+                    return None;
+                }
+                let opened = unsafe { opened.assume_init() };
+                let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFL) };
+                (opened.st_dev as u64 == metadata.dev()
+                    && opened.st_ino == metadata.ino()
+                    && flags >= 0
+                    && flags & nix::libc::O_ACCMODE != nix::libc::O_RDONLY)
+                    .then_some(fd)
+            })
+            .next()
+            .expect("the session log has an open writer");
+        let backup = unsafe { nix::libc::dup(target) };
+        assert!(backup >= 0);
+        let restore = RestoreWriter { target, backup };
+        let readonly = std::fs::File::open(&path).unwrap();
+        assert_eq!(
+            unsafe { nix::libc::dup2(readonly.as_raw_fd(), target) },
+            target
+        );
+        let result = session.set_folder_trust(true).await;
+        drop(restore);
+        assert!(result.is_err(), "a journal write must actually fail");
+        if log == "events.jsonl" {
+            let records = fixture
+                .store
+                .model_history::<serde_json::Value>("restricted")
+                .unwrap();
+            assert!(
+                records
+                    .iter()
+                    .rev()
+                    .find(|entry| entry["type"] == "context")
+                    .unwrap()["messages"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("<memory_instructions>"),
+                "the prefix write must have succeeded before SessionUpdated failed"
+            );
+        }
+        assert_eq!(
+            session.snapshot().await.session.settings.restricted_mode,
+            Some(true)
+        );
+        assert!(session.memories().await.is_err());
+        assert!(
+            !session
+                .context()
+                .await
+                .prefix
+                .iter()
+                .any(|section| section.kind == ContextSectionKind::Memory)
+        );
+        let home = fixture.home.canonicalize().unwrap();
+        assert!(
+            !session
+                .sandbox()
+                .await
+                .writable
+                .iter()
+                .any(|path| std::path::Path::new(path).starts_with(&home)),
+            "{log}: failed upgrade must revoke both memory exceptions"
+        );
+        session.set_folder_trust(false).await.unwrap();
+        assert!(
+            !session
+                .sandbox()
+                .await
+                .writable
+                .iter()
+                .any(|path| std::path::Path::new(path).starts_with(&home)),
+            "restricted reopen must not keep stale exceptions"
+        );
+        assert!(
+            session.close().await.is_err(),
+            "the failed journal requires reopening"
+        );
+    }
+}
+
+#[tokio::test]
+async fn memory_trust_upgrade_warns_and_continues_when_memory_is_unavailable() {
     use std::os::unix::fs::PermissionsExt;
-    let fixture = Fixture::new();
-    let model = ScriptModel::new(Vec::new());
-    let session = fixture.create("restricted", model, true).await;
-    session.set_folder_trust(false).await.unwrap();
-    let path = fixture.home.join("memory/unreadable.md");
-    std::fs::write(&path, "# Preference\nA lasting preference.\n\nDetails.").unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let result = session.set_folder_trust(true).await;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    assert!(
-        result.is_err(),
-        "unreadable memory prevents loading the new prefix"
-    );
-    assert_eq!(
-        session.snapshot().await.session.settings.restricted_mode,
-        Some(true)
-    );
-    assert!(session.memories().await.is_err());
-    let memory_root = path.parent().unwrap().canonicalize().unwrap();
-    assert!(
-        !session
-            .sandbox()
+    for unreadable_file in [true, false] {
+        let fixture = Fixture::new();
+        let session = fixture
+            .create("restricted", ScriptModel::new(Vec::new()), true)
+            .await;
+        session.set_folder_trust(false).await.unwrap();
+        let root = fixture.home.join("memory");
+        let file = root.join("unreadable.md");
+        if unreadable_file {
+            std::fs::write(&file, "# Preference\nA lasting preference.\n\nDetails.").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+        } else {
+            std::fs::remove_dir(&root).unwrap();
+            std::fs::write(&root, "Not a directory.").unwrap();
+        }
+        let cursor = session.snapshot().await.event_seq;
+        session
+            .set_folder_trust(true)
             .await
-            .writable
-            .contains(&memory_root.display().to_string()),
-        "failed upgrade must revoke its memory exception"
-    );
-    session.set_folder_trust(true).await.unwrap();
-    assert_eq!(session.memories().await.unwrap().data.len(), 1);
-    session.close().await.unwrap();
+            .expect("memory failure must not block a trust upgrade");
+        assert_eq!(
+            session.snapshot().await.session.settings.restricted_mode,
+            Some(false)
+        );
+        assert!(fixture.store.events_after("restricted", cursor).unwrap().iter().any(|event| matches!(&event.payload, EventPayload::Warning { message } if message.to_lowercase().contains("memory"))), "the opening client must receive a memory warning");
+        if unreadable_file {
+            assert_eq!(
+                session.memories().await.unwrap().data[0].name,
+                "unreadable.md"
+            );
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        } else {
+            assert!(session.memories().await.is_err());
+            assert!(
+                !session
+                    .context()
+                    .await
+                    .prefix
+                    .iter()
+                    .any(|section| section.kind == ContextSectionKind::Memory)
+            );
+            let home = fixture.home.canonicalize().unwrap();
+            assert!(
+                !session
+                    .sandbox()
+                    .await
+                    .writable
+                    .iter()
+                    .any(|path| std::path::Path::new(path).starts_with(&home))
+            );
+            std::fs::remove_file(&root).unwrap();
+        }
+        session.set_folder_trust(false).await.unwrap();
+        session.set_folder_trust(true).await.unwrap();
+        assert!(
+            session.memories().await.is_ok(),
+            "the next trusted open retries memory"
+        );
+        session.close().await.unwrap();
+    }
 }

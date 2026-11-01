@@ -96,7 +96,7 @@ impl Sandbox {
     /// may write, then the read-only and the unreadable paths.
     pub(crate) fn listing(&self) -> (Vec<PathBuf>, &[PathBuf], &[PathBuf]) {
         let mut writable: Vec<PathBuf> = self.scratch.path().into_iter().collect();
-        if let Ok(Some(roots)) = self.memory_roots() {
+        if let Some(roots) = self.memory_roots() {
             writable.extend([roots.global, roots.project]);
         }
         writable.extend([self.cargo.clone(), self.npm.clone()]);
@@ -107,12 +107,10 @@ impl Sandbox {
         &self.unreadable
     }
 
-    pub(crate) fn memory_roots(&self) -> io::Result<Option<crate::memory::MemoryRoots>> {
+    pub(crate) fn memory_roots(&self) -> Option<crate::memory::MemoryRoots> {
         self.memory
             .as_ref()
-            .map(|memory| memory.roots())
-            .transpose()
-            .map(Option::flatten)
+            .and_then(|memory| memory.roots().ok().flatten())
     }
 
     pub(crate) fn readonly_paths(&self) -> &[PathBuf] {
@@ -190,7 +188,7 @@ impl Sandbox {
         git_directories.sort();
         git_directories.dedup();
         let mut parameters = Parameters::default();
-        let memory = self.memory_roots()?;
+        let memory = self.memory_roots();
         let mut profile = String::from(
             "(version 1)\n(deny default)\n(deny file-link)\n\
          (allow process-exec process-fork)\n\

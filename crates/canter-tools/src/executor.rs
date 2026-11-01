@@ -417,9 +417,7 @@ impl Executor for LocalExecutor {
         let resolved = tokio::task::spawn_blocking(move || {
             let roots = memory
                 .as_ref()
-                .map(|memory| memory.roots())
-                .transpose()?
-                .flatten();
+                .and_then(|memory| memory.roots().ok().flatten());
             let resolved = resolve_with_memory(&path, &protected_paths, roots.as_ref())?;
             if let Some(sandbox) = sandbox {
                 return resolve_sandbox_read(
@@ -507,9 +505,7 @@ impl Executor for LocalExecutor {
             check_cancel(&cancel)?;
             let roots = memory
                 .as_ref()
-                .map(|memory| memory.roots())
-                .transpose()?
-                .flatten();
+                .and_then(|memory| memory.roots().ok().flatten());
             let path = resolve_with_memory(&path, &protected_paths, roots.as_ref())?;
             let path = if let Some(sandbox) = sandbox {
                 resolve_sandbox_write(
@@ -604,7 +600,7 @@ impl Executor for LocalExecutor {
 
 fn resolve_sandbox_read(sandbox: &crate::sandbox::Sandbox, path: &Path) -> io::Result<PathBuf> {
     let unreadable = prepare_protected_paths(sandbox.unreadable_paths().to_vec())?;
-    let roots = sandbox.memory_roots()?;
+    let roots = sandbox.memory_roots();
     let check = |path: &Path, ancestors: bool| {
         if let Some(roots) = &roots {
             roots.check_component(path)?;

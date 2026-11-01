@@ -6,7 +6,7 @@ use std::{
     io::{self, BufRead, Read},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
-    sync::RwLock,
+    sync::{Mutex, RwLock},
 };
 
 /// Shared with retired executors so a trust change revokes every file-tool exception.
@@ -14,6 +14,7 @@ pub struct Memory {
     home: PathBuf,
     cwd: PathBuf,
     roots: RwLock<Option<MemoryRoots>>,
+    warning: Mutex<Option<String>>,
 }
 
 #[derive(Clone)]
@@ -29,16 +30,27 @@ impl Memory {
             home,
             cwd,
             roots: RwLock::new(None),
+            warning: Mutex::new(None),
         }
     }
 
     pub fn set_enabled(&self, enabled: bool) -> io::Result<()> {
+        self.warning.lock().unwrap().take();
         let mut roots = self.roots.write().unwrap();
         *roots = None;
         if enabled {
             *roots = Some(MemoryRoots::open(&self.home, &self.cwd)?);
         }
         Ok(())
+    }
+
+    pub fn take_warning(&self) -> Option<String> {
+        self.warning.lock().unwrap().take()
+    }
+
+    pub fn disable_with_warning(&self, reason: String) {
+        *self.roots.write().unwrap() = None;
+        *self.warning.lock().unwrap() = Some(format!("Memory unavailable: {reason}"));
     }
 
     pub fn roots(&self) -> io::Result<Option<MemoryRoots>> {
@@ -52,6 +64,7 @@ impl Memory {
     pub fn list(&self) -> io::Result<Vec<MemoryEntry>> {
         let roots = self.roots()?.ok_or_else(disabled)?;
         let mut entries = Vec::new();
+        let mut unreadable = 0;
         for (scope, directory) in [
             (MemoryScope::Global, &roots.global),
             (MemoryScope::Project, &roots.project),
@@ -68,20 +81,25 @@ impl Memory {
                 let Some(file) = entry.file_name().to_str().map(str::to_owned) else {
                     continue;
                 };
-                // Read only the header; the body is loaded by the model's normal read tool.
-                let input = fs::OpenOptions::new()
-                    .read(true)
-                    .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-                    .open(&path)?;
-                if !input.metadata()?.is_file() {
-                    continue;
-                }
-                let mut reader = io::BufReader::new(input.take(64 * 1024));
                 let mut first = String::new();
                 let mut second = String::new();
-                let header = reader
-                    .read_line(&mut first)
-                    .and_then(|_| reader.read_line(&mut second));
+                // One unreadable file is still listed, but contributes no index entry.
+                let header = (|| {
+                    let input = fs::OpenOptions::new()
+                        .read(true)
+                        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+                        .open(&path)?;
+                    if !input.metadata()?.is_file() {
+                        return Err(io::Error::other("Memory must be a regular file"));
+                    }
+                    // The body is loaded by the model's normal read tool.
+                    let mut reader = io::BufReader::new(input.take(64 * 1024));
+                    reader.read_line(&mut first)?;
+                    reader.read_line(&mut second)
+                })();
+                if header.is_err() {
+                    unreadable += 1;
+                }
                 let name = first
                     .trim()
                     .strip_prefix("# ")
@@ -100,6 +118,11 @@ impl Memory {
                     path: path.to_string_lossy().into_owned(),
                 });
             }
+        }
+        if unreadable > 0 {
+            *self.warning.lock().unwrap() = Some(format!(
+                "Some memory files could not be read ({unreadable}). They are listed by filename in /memory and omitted from the index."
+            ));
         }
         Ok(entries)
     }
@@ -191,7 +214,7 @@ pub fn quote(text: &str) -> String {
 fn disabled() -> io::Error {
     io::Error::new(
         io::ErrorKind::PermissionDenied,
-        "Memory is unavailable in restricted mode",
+        "Memory is unavailable for this session",
     )
 }
 
