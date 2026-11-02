@@ -147,3 +147,12 @@
 - 终端测试的假服务端在时刻 0 画第一帧，回答批准后输入有 300 ms 的防误触，按键要放在之后才生效；在跑的用时要把 `startedAt` 设成负数才有值。
 - 父会话多了 `agent.updated` 事件后，`running_child_blocks_trash_and_rewind_without_changing_parent` 取「之前」的快照太早，改成等这条事件到了再取。
 - `crates/canter/tests/tui.rs` 读输入框上方状态行的辅助函数读到了新加的子 agent 行，改成跳过它。
+
+## 主控审查
+
+2026-11-02，canter/main。
+
+- diff 只动了该动的，「不要做」一件没做；用户定的 4 条和第 1～5 节逐条做到。停掉走新接口 `POST /v1/sessions/{id}/agents/{agentId}/stop`，加 `agent.stopped`、`agent.updated` 事件和 `collabAgentToolCall` 项目，DESIGN 第 8 条写了和 Codex 的差别，同意。`approval.rs` 那处（子会话一屏里主会话自己的请求不加来源行）对。新加的界面字符串没有中文。
+- 合并前全套（`08c6118`）：1493 跑、1493 过、49 跳过；文档测试过。负载约 7.5～8.9。
+- 建议改（不挡合并，交用户定）：1. 子 agent 名字仍是 P2-178 的 `agent-xxxxxx`，列表、卡片、批准框都显示它，几个一起跑时不好认；线框画的是按任务取的短名字。2. 子会话一屏只转批准，主会话的 `ask_user` 提问和计划批准不转，要回主会话才看到。
+- 结果：一次过
