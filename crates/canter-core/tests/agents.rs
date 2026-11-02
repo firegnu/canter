@@ -233,6 +233,7 @@ async fn plan_mode_and_review_allow_only_explorers() {
                 "explorer".into(),
                 "Inspect code".into(),
                 AgentType::Explorer,
+                None,
             )
             .await
             .unwrap();
@@ -475,6 +476,7 @@ async fn explorer_rejects_writes_and_nested_agents_but_keeps_its_own_checklist()
             "explorer".into(),
             "Inspect parser".into(),
             AgentType::Explorer,
+            None,
         )
         .await
         .unwrap();
@@ -609,7 +611,7 @@ async fn child_completion_wakes_interactive_parent_but_exec_waits_for_next_input
         let requests = test.fake.requests.lock().unwrap().clone();
         let delivered = requests.last().unwrap()["messages"].to_string();
         assert!(delivered.contains("Parser findings"));
-        assert!(delivered.contains("agent-child"));
+        assert!(delivered.contains("Inspect parser"));
         assert!(delivered.contains("completed"));
         test.stop(&[child]).await;
     }
@@ -904,6 +906,7 @@ async fn explorer_from_plan_mode_uses_its_checklist_without_the_parent_plan_work
             "explorer".into(),
             "Inspect parser".into(),
             AgentType::Explorer,
+            None,
         )
         .await
         .unwrap();

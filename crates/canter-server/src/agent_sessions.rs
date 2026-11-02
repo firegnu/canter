@@ -22,8 +22,8 @@ impl canter_core::AgentHost for Host {
             }
             let result: Result<canter_core::AgentToolOutput, ApiError> = async {
                 match command {
-                canter_core::AgentCommand::SpawnAgent { task, kind } => {
-                    let response = app.spawn_agent_of_type(parent, task, kind).await?;
+                canter_core::AgentCommand::SpawnAgent { task, kind, name } => {
+                    let response = app.spawn_agent_of_type(parent, task, kind, name).await?;
                     Ok(canter_core::AgentToolOutput {
                         value: serde_json::json!({"id":response.session.id,"name":response.session.settings.name}),
                         agents: vec![collab_agent(&response.session, false)],
@@ -217,7 +217,7 @@ impl App {
         parent_id: String,
         task: String,
     ) -> Result<SessionCreateResponse, ApiError> {
-        self.spawn_agent_of_type(parent_id, task, AgentType::General)
+        self.spawn_agent_of_type(parent_id, task, AgentType::General, None)
             .await
     }
 
@@ -226,6 +226,7 @@ impl App {
         parent_id: String,
         task: String,
         kind: AgentType,
+        name: Option<String>,
     ) -> Result<SessionCreateResponse, ApiError> {
         let app = self.clone();
         tokio::spawn(async move {
@@ -246,7 +247,9 @@ impl App {
             };
             let id = crate::new_id();
             let _child_operation = app.session_locks.lock(&id).await;
-            let (child, response) = parent.spawn_agent_of_type(id.clone(), task, kind).await?;
+            let (child, response) = parent
+                .spawn_agent_of_type(id.clone(), task, kind, name)
+                .await?;
             app.register_session(id, child).await?;
             Ok(response)
         })

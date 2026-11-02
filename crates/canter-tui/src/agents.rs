@@ -2,7 +2,7 @@
 //! `/agents` list it opens, the two rows on top of a sub-agent's screen,
 //! and the words cards use for an agent's type and status.
 
-use canter_protocol::{AgentStatus, AgentSummary, AgentType, SessionSnapshot};
+use canter_protocol::{AgentStatus, AgentSummary, AgentType, RequestKind, SessionSnapshot};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
@@ -66,6 +66,17 @@ pub(crate) struct Agents {
 }
 
 impl Agents {
+    pub fn main_waiting(&self) -> bool {
+        self.main.as_ref().is_some_and(|main| {
+            main.pending_requests.iter().any(|request| {
+                matches!(
+                    request.kind,
+                    RequestKind::UserInput(_) | RequestKind::PlanApproval(_)
+                )
+            })
+        })
+    }
+
     /// Takes `agent`'s entry in place of the one before, or adds it.
     pub fn update(&mut self, agent: AgentSummary) {
         match self.list.iter_mut().find(|old| old.id == agent.id) {

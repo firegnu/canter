@@ -435,6 +435,8 @@ P2-164（10-30 主控确认）：模型 shell 仅在沙箱开启时增加可选 
 | SubagentStart | 主 agent 创建子 agent 后、其第一轮开始前 | agent_id、agent_type、parent_session_id、task | 异步通知，不拦、不注入上下文 |
 | SubagentStop | 子 agent 每轮完成、失败、中断或在跑时被关闭 | agent_id、agent_type、parent_session_id、status（completed / failed / interrupted / closed）、last_assistant_message（本轮最后助手消息，没有为空串） | 异步通知，不拦、不启动续跑 |
 
+P2-183（11-02 主控决定）：只在子会话钩子的 stdin 中与 agent_id、agent_type、parent_session_id 一起新增 agent_name，包括 SubagentStart、SubagentStop；值取子会话现有名字字段，也就是本件模型给出或服务端兜底、消重后的名字。已有字段不改，主会话钩子不加 agent_name。钩子 stdin 仍是独立的 snake_case JSON，不改变 HTTP/SSE 协议。
+
 P2-180（11-02）：子会话的 PreToolUse、PermissionRequest、PostToolUse 保持原作用；UserPromptSubmit 只对用户直接在子会话输入（含排队和插话）触发，初始任务、主 agent 的 send_input 和自动叫醒不触发。上述事件及两个新事件的 stdin 带 agent_id（子会话 ID）、agent_type（explorer / general）、parent_session_id，共同字段和 CANTER_SESSION_ID 仍属于子会话。子会话不发 SessionStart、SessionEnd（包括客户端进出）、Stop、StopFailure、Interrupt，轮结束统一发 SubagentStop；关闭已经结束的轮不重复发。两个新事件忽略 matcher，通知结果不改变行为，沿用关会话和停机的共同 10 秒通知预算；exec 同样适用。是否禁用钩子按子会话自身受限状态判断。主会话的 P2-153/P2-172 行为不变。
 
 用户原话：11-02 主控提议把 P2-78 拆成四件，用户：「先把任务开了吧。之后咱们按照顺序一个个讨论。讨论完一件做一件」。P2-180 选项页三题用户：「都按你的建议」。主控随后确认：原有子会话钩子和自动输入的行为差异正是本件授权修改范围；只有改动会破坏主会话 P2-153/P2-172 行为时才暂停询问。
@@ -477,13 +479,15 @@ P2-178（2026-11-02 主控决定 A）：`canter exec` 保持单轮语义，不�
 
 父会话有子会话在跑时拒绝回退；退掉对话轮时，这些轮创建的子会话一同进回收站；只回退文件而保留对话时不移走子会话。回退主会话不还原子 agent 改过的文件。保留已有单会话的关闭、回收站及回退机制；关系信息用于协调这些操作，避免留下指向已退掉轮次的活动子会话。家族操作的状态锁统一先父后子，取消后释放锁再等轮结束，避免删除、回退、叫醒、记账和工具调用互相等待。
 
-P2-178 的四个模型工具：`spawn_agent {task,type}` 立即返回 ID 和短名；`wait_agent {ids,timeoutMs}` 等任一个完成、失败、关闭、中断或超时后返回每一个的状态和可用结果，默认 30 秒、最长 600 秒；`send_input {id,message}` 交互主会话中忙时排队，空闲或中断时开新轮；`canter exec` 下须先用 `wait_agent` 等正在运行的子 agent 停下，再 `send_input`，本次只澄清英文工具说明，不改排队和当轮参数行为；`close_agent {id}` 取消当前轮并停其后台命令，保留已有完成结果。最终回复经现有工具输出的 32 KiB 首尾截断后交回主 agent。没有 `resume_agent`、fork 式子 agent 或收件箱。
+P2-178 的四个模型工具：`spawn_agent {task,type,name}` 立即返回 ID 和短名；`wait_agent {ids,timeoutMs}` 等任一个完成、失败、关闭、中断或超时后返回每一个的状态和可用结果，默认 30 秒、最长 600 秒；`send_input {id,message}` 交互主会话中忙时排队，空闲或中断时开新轮；`canter exec` 下须先用 `wait_agent` 等正在运行的子 agent 停下，再 `send_input`，本次只澄清英文工具说明，不改排队和当轮参数行为；`close_agent {id}` 取消当前轮并停其后台命令，保留已有完成结果。最终回复经现有工具输出的 32 KiB 首尾截断后交回主 agent。没有 `resume_agent`、fork 式子 agent 或收件箱。
 
 `explorer` 使用计划模式的只读工具，去掉 ask_user、submit_plan，允许 mcp_search，禁止 mcp_call；`general` 使用全部工具但去掉四个子 agent 工具和 ask_user。两种都能 update_plan，清单属于各自会话。最多同时跑 4 个，未停的后台工作也占用名额；只有一层，子 agent 不能再开子 agent。主会话计划模式和审查轮只许开或继续 explorer。英文工具说明要求先自己列计划、关键路径自己做；explorer 可以自主开来查代码、找资料、节省主上下文，general 仅在用户或 AGENTS.md 明确要求子 agent、委派或并行时开，「仔细查」「深入分析」不算授权；给 general 的任务须明确文件归属、共享仓库、不得改回别人改动。
 
 子会话正常装入 AGENTS.md 和技能；系统提示说明子 agent 身份、最终回复交回父 agent、不向用户提问、把问题或阻碍写进最终回复。不装入记忆段、不开放记忆读写；配置刷新和重开保持此限制。explorer 压缩或回退后仍保留自己的清单，不补入要求 ask_user、禁用 update_plan、最后 submit_plan 的普通计划流程指令。批准复用现有框和回答方式，主界面多显示 `Requested by sub-agent <name>`，拒绝只拒本次调用，子 agent 继续；exec 子会话沿用父轮的自动批准处理。
 
 完成、失败或独立中断通过 P2-101 的后台事件与 2 秒合并窗口送给父会话，英文说明带 ID、名字、状态及截断后的结果；exec 的单轮例外见本节开头。返工确认：`wait_agent` 返回某个子 agent 的终态结果后，该子轮不再发完成通知；已排队但尚未交给模型的通知撤掉，也不再为它叫醒。交付记录和撤回存入父会话私有历史，恢复后仍有效；已经发给模型的历史保持原样，其他子 agent 和同一子 agent 后续轮次不受影响。父轮 Esc 连带停子 agent 并抑制这次中断的叫醒。子 agent 的请求花费按请求开始时父目标计入其上限；达到 P2-109 阈值时一同取消子 agent 与后台工作，父会话沿用唯一总结轮。列表界面见 P2-179，SubagentStart/SubagentStop 钩子和统计页面见 P2-180；抑制父会话叫醒不抑制这些钩子通知，停服务端的在跑子轮按 interrupted 通知。
+
+P2-183（11-02）：`name` 在模型工具定义中必填，英文说明要求 3～5 个英文词，说明子 agent 做什么，供用户在列表和卡片里辨认。服务端去掉首尾空白；缺失、为空或超过 40 个字符时，用任务第一行前 5 个词兜底，超长截断并加 `…`，不因名字拒绝创建。同一主会话的直接子 agent 重名时，后开的依次加 ` 2`、` 3`……，包括已完成、已关闭的子会话。名字仍存进现有会话名字字段，列表、卡片、批准来源、统计和钩子共用；不改 ID，不改已有子会话名字，不改变 HTTP/SSE 协议；钩子新增 agent_name 见钩子一节。用户原话：11-02「推送吧，两条记进HANDOFF。建议另开任务。排在181后面」；主控给了模型起名和任务截取两个选项，推荐模型起名，用户：「都按你的建议，推送吧」。
 
 ## 子 agent 终端界面（P2-179）
 
@@ -492,6 +496,8 @@ P2-178 的四个模型工具：`spawn_agent {task,type}` 立即返回 ID 和短�
 列表：主会话有子 agent 时，输入框上方、`▸ N background commands` 和待办清单之后显示一行 `▸ 2 sub-agents running · 1 done`（没有停下的不写 ` · N done`，都停了写 `▸ 3 sub-agents`，单数 `sub-agent`）。点这一行或 `/agents` 在原位置展开，标题 `▾ 3 sub-agents · 2 running`（没有在跑的不写 running），每个子 agent 一行：状态符号（`●` 在跑、`✓` 做完、`✗` 失败、`■` 中断、`○` 关闭）、名字、灰色 `<type> · <status> <用时>`；用户停掉的状态写 `stopped by you`；最后一行 `↑↓ select · enter open · s stop · esc close`。做完、关掉、中断的照列。没有子 agent 时不出这一行，`/agents` 显示 `No sub-agents in this session.`。列表由 `GET /v1/sessions/{id}/agents` 读出，之后跟主会话事件流里的 `agent.updated` 变，主会话空闲时也照常更新；断线重连后重读一次。
 
 子会话一屏：列表里回车整屏切到子会话（沿用按 ID 恢复和订阅），记录、卡片、滚动、搜索照主会话。只要屏上的会话带 `parent` 就按子会话一屏画：顶上固定两行 `Sub-agent · <name> · <type> · <status>` 和灰色 `from: <主会话名字> · /agents to go back`，输入框空着时灰字 `Message this sub-agent`，发的话走子会话的普通输入。这一屏另读主会话快照并订阅主会话事件流，主会话自己的批准和别的子 agent 转发来的批准合进本屏要回答的请求，回答仍发往各自会话；主会话自己的请求不加 `Requested by sub-agent` 那一行，本子 agent 自己的请求只按它自己的快照显示一次。`/agents` 在这一屏多一条最上面的 `← Main session · <主会话名字>`。Esc 在子 agent 正在跑时等于 `s`，调停止接口而不是普通打断；没有在跑的 agent 轮（比如 `!` 命令）时照普通打断。`/rewind`、`/new`、`/handoff` 等命令在子会话一屏照 P2-177 的单会话规则，本件不改。
+
+P2-183（11-02）：子会话一屏中，主会话有未回答的 `ask_user` 或待批准的计划时，顶上固定两行下面加一行黄色 `Main session is waiting for you · /agents to go back`，点击直接回主会话，等于 `/agents` 选 `← Main session`。回答、计划批准或拒绝、撤回后消失；普通批准照旧弹出，不触发这一行。沿用已经订阅的主会话快照和事件，不加接口，不把提问和计划弹到子会话。主控给了顶上提示和直接弹出两个选项，推荐只提示；用户原话：「都按你的建议，推送吧」。
 
 停掉：`s` 只对在跑的子 agent 起作用。服务端在父会话里停：先父后子锁，取消它当前轮、停它的后台命令、等轮结束，这一轮记进 `suppressed_agent_turns` 不发完成通知、不叫醒；子会话追加 `agent.stopped {turnId}`，快照 `agent.stoppedByUser` 变 true，列表写 `stopped by you`，已有结果照现有规则保留。父会话私有历史加一条不叫醒、不在对话里显示的说明，下一次模型请求（空闲时等用户下次输入，忙时附到当轮下一次请求）带上英文：`[Sub-agent <id> (<name>) stopped by the user]`，说明轮被打断、后台命令已停，除非用户要求，不要重开它或为同一任务另开子 agent。之后用户在子会话里发话，它接着跑，再做完、失败照 P2-178 通知或叫醒主 agent，`stoppedByUser` 随新一轮清掉。
 

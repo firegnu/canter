@@ -152,6 +152,7 @@ pub(crate) fn input(state: &State, event: Event, mut fields: Value) -> Value {
     );
     if let Some(parent) = &state.journal.snapshot.parent {
         fields["agent_id"] = json!(state.journal.snapshot.id);
+        fields["agent_name"] = json!(settings.name);
         fields["agent_type"] = json!(parent.agent_type);
         fields["parent_session_id"] = json!(parent.session_id);
     }

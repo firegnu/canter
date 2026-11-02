@@ -64,7 +64,7 @@ async fn spawn_with(
         .send().await.unwrap().error_for_status().unwrap();
     fixture.request().await.tool(
         "spawn_agent",
-        json!({"task":"Inspect the parser", "type":kind}),
+        json!({"task":"Inspect the parser", "type":kind, "name":"Trace parser errors"}),
     );
     let first = fixture.request().await;
     let second = fixture.request().await;
@@ -141,6 +141,7 @@ async fn child_hooks_identify_tools_and_only_check_human_prompts() {
         let rows = records(&fixture, child_id, event);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["agent_id"], child_id);
+        assert_eq!(rows[0]["agent_name"], "Trace parser errors");
         assert_eq!(rows[0]["session_id"], child_id);
         assert_eq!(rows[0]["agent_type"], "general");
         assert_eq!(rows[0]["parent_session_id"], parent_id);
@@ -152,7 +153,7 @@ async fn child_hooks_identify_tools_and_only_check_human_prompts() {
     for event in ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"] {
         let rows = records(&fixture, parent_id, event);
         assert_eq!(rows.len(), 1, "parent {event}");
-        for key in ["agent_id", "agent_type", "parent_session_id"] {
+        for key in ["agent_id", "agent_name", "agent_type", "parent_session_id"] {
             assert!(rows[0].get(key).is_none());
         }
     }
@@ -179,6 +180,7 @@ async fn subagent_notifications_are_async_and_agent_inputs_skip_prompt_hooks() {
     assert_eq!(start[0]["task"], "Inspect the parser");
     assert_eq!(start[0]["parent_session_id"], parent_id);
     assert_eq!(start[0]["agent_id"], id);
+    assert_eq!(start[0]["agent_name"], "Trace parser errors");
     assert_eq!(start[0]["session_id"], id);
     assert_eq!(start[0]["agent_type"], "general");
     parent_request.tool(
@@ -209,6 +211,7 @@ async fn subagent_notifications_are_async_and_agent_inputs_skip_prompt_hooks() {
         assert_eq!(stop["status"], "completed");
         assert_eq!(stop["last_assistant_message"], "done");
         assert_eq!(stop["agent_id"], id);
+        assert_eq!(stop["agent_name"], "Trace parser errors");
     }
     fs::write(fixture.root.path().join("home/release"), "").unwrap();
     parent_request.tool(
@@ -342,6 +345,7 @@ async fn child_tool_hooks_keep_denials_feedback_and_approval_notifications() {
     next.tool("write", json!({"path":"allowed.txt","content":"yes"}));
     let permission = wait_records(&fixture, id, "PermissionRequest", 1).await;
     assert_eq!(permission[0]["agent_id"], id);
+    assert_eq!(permission[0]["agent_name"], "Trace parser errors");
     assert_eq!(permission[0]["permission_mode"], "alwaysAsk");
     assert_eq!(permission[0]["tool_name"], "write");
     let pending = fixture.snapshot(&child).await.session.pending_requests;
@@ -600,6 +604,7 @@ async fn stats_endpoint_exposes_child_usage_without_mixing_request_or_tool_rows(
     assert_eq!(report["tools"][0]["name"], "spawn_agent");
     let row = &report["subAgents"][0];
     assert_eq!(row["id"], id);
+    assert_eq!(row["name"], "Trace parser errors");
     assert_eq!(row["requestCount"], 2);
     assert_eq!(row["toolCount"], 1);
     assert_eq!(row["usage"]["cost"]["usd"], 1.0);
