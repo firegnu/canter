@@ -10,7 +10,7 @@ pub(crate) fn dollars(usd: f64) -> String {
     }
 }
 
-fn cost(value: &UsageCost) -> String {
+pub(crate) fn cost(value: &UsageCost) -> String {
     if value.unknown && value.usd == 0.0 {
         "unknown".into()
     } else {

@@ -1,5 +1,6 @@
 use super::*;
 mod client_exit;
+mod subagents;
 
 fn command(script: &str) -> Value {
     json!([{"hooks":[{"type":"command","command":script}]}])

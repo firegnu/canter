@@ -99,3 +99,15 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-11-02，分支 `p2-180-subagent-hooks-stats`。
+
+- 做了什么：子会话的工具和直接用户输入钩子带来源字段；初始任务、空闲及排队的 send_input、后台叫醒不触发 UserPromptSubmit。创建发一次 SubagentStart，每轮结束发 SubagentStop，覆盖完成、失败、独立中断、用户停止、父轮连带中断、花费上限、显式关闭及停机；消息只取本轮，显式关闭为 closed、停机中断为 interrupted。子会话不发普通会话生命周期事件，主会话的 P2-153/P2-172 行为不变。新事件复用异步通知和共同 10 秒收尾预算，忽略 matcher，输出不影响模型。
+- 做了什么：服务端统计新增直接子会话明细、父会话来源和包含子 agent 的用量合计，保留原用量、请求及工具字段的本会话含义；缺用量不补零，删除的子会话跳过，列表仍不列子会话。文本及 HTML 增加两行用量、Sub-agents 表、灰色 Details 提示和 Parent 行；JSON 使用相同协议数据。更新 DESIGN、JSON Schema 和 TypeScript 导出。只参考 Claude Code hooks 文档的 SubagentStart、SubagentStop、agent_id、agent_type，没有搬代码。
+- 验证了什么：针对性测试先确认原实现的子 SessionStart、未知新事件配置、缺失子会话统计及缺失输出分别失败，再实现并跑绿；停机误报 closed 也先用测试复现再修正。新增 12 条服务端假模型回放测试，钩子脚本写进隔离 HOME 并记录 stdin，使用临时状态目录、端口和 socket；覆盖工具拦截／反馈／批准、自动与用户输入、所有结束路径、受限状态、exec、客户端进出、异步通知及关闭／停机预算，另测 HTTP 统计明细、合计与只读性。补充 core 存盘统计、协议向后兼容、文本／HTML 输出测试。
+- 验证了什么：`cargo nextest run -p canter-core -p canter-server -p canter-protocol -p canter-tui --status-level fail --final-status-level fail`，1099 通过，27 个按仓库现有配置跳过；四个修改 crate 的全部默认测试均已运行。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过；协议导出已重新生成。所有 Cargo 命令均使用本任务独立 target 目录，所有命令都在前台等到结束。
+- 拿主意的地方：主控明确决定：「你查到的这些（子会话发 SessionStart/SessionEnd、Stop/StopFailure/Interrupt，初始任务和 send_input 触发 UserPromptSubmit）正是本件要改的，用户选了 A，任务文件第 1 节写的『先查清再改成下面这样』就是指它们，属于授权范围，照 A 做。『停下来问』那条只管改了会破坏主会话里 P2-153/P2-172 已有行为的情况：主会话里的钩子行为一律不变。」已按此执行。项目规矩按根目录 CLAUDE.md 执行；仓库没有 AGENTS.md。没有其它需要主控决定的事项。
+- 没做的事：未调用真实模型、未读取或修改用户真实的 ~/.canter；未跑整个 workspace 的全套测试；未扩展项目级钩子、钩子注入／拦停、子 agent 名称或对话功能，也未改统计之外的终端界面。未合并 main、未推送。
+- 踩过的坑：浏览器连接不可用，改用 Chrome 原生应用打开并核对选项页。结束状态测试曾对 close_agent 已关闭的子会话再次发 DELETE，得到 409，改为按已执行的关闭路径收尾。最初用 closing 判断 SubagentStop 的 closed，把服务端停机也算成主动关闭；针对性测试确认后保留关闭原因，区分 closed 和 interrupted。clippy 指出新测试默认值初始化后的字段赋值，已改为结构体初始化。

@@ -487,14 +487,17 @@ impl Session {
             ));
         }
         child
-            .input(SessionInputParams {
-                input: vec![UserInput::Text { text: message }],
-                client_name: "agent".into(),
-                mode: InputMode::Queue,
-                review: None,
-                non_interactive: parent.non_interactive(),
-                approval_policy: None,
-            })
+            .input_with_prompt_hook(
+                SessionInputParams {
+                    input: vec![UserInput::Text { text: message }],
+                    client_name: "agent".into(),
+                    mode: InputMode::Queue,
+                    review: None,
+                    non_interactive: parent.non_interactive(),
+                    approval_policy: None,
+                },
+                false,
+            )
             .await
     }
 
@@ -591,15 +594,22 @@ impl Session {
             state.agent_children.push(std::sync::Arc::downgrade(&child.shared));
             child.shared.state.lock().await.inherited_policy = Some(state.permission_policy.subscribe());
             watch_agent(&parent, &child).await?;
+            crate::hooks::notify(
+                &child.shared,
+                &*child.shared.state.lock().await,
+                crate::hooks::Event::SubagentStart,
+                serde_json::json!({"task":task}),
+                child.shared.lifetime.child_token(),
+            );
             child
-                .input(SessionInputParams {
+                .input_with_prompt_hook(SessionInputParams {
                     input: vec![UserInput::Text { text: task }],
                     client_name: "agent".into(),
                     mode: InputMode::Queue,
                     review: None,
                     non_interactive: state.non_interactive(),
                     approval_policy: None,
-                })
+                }, false)
                 .await?;
             // Keep the parent's service generation alive for the child's first
             // turn; subsequent turns use ordinary server configuration reload.

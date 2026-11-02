@@ -2,6 +2,12 @@
 use crate::text::{sanitize, str_width};
 use canter_protocol::*;
 use std::fmt::Write;
+use std::io::IsTerminal;
+
+const AGENT_HEADERS: &[&str] = &[
+    "Name", "Type", "Status", "Requests", "In", "Out", "Cost", "Tools", "Time",
+];
+const AGENT_DETAILS: &str = "Details: canter stats <sub-agent id>";
 
 const REQUEST_HEADERS: &[&str] = &[
     "#",
@@ -151,13 +157,69 @@ fn overview(report: &StatsResponse) -> Vec<String> {
             o.recorded_retry_count
         ),
     ];
-    if let Some(usage) = &o.usage {
+    if let Some(parent) = &report.parent {
+        lines.push(format!(
+            "Parent: {} · {}",
+            parent.session_id,
+            label(&parent.agent_type)
+        ));
+    }
+    if !report.sub_agents.is_empty() {
+        lines.push(format!(
+            "Usage (this session): {}",
+            usage_summary(o.usage.as_ref().map(|usage| &usage.total))
+        ));
+        lines.push(format!(
+            "Usage (with sub-agents): {}",
+            usage_summary(o.usage_with_sub_agents.as_ref())
+        ));
+    } else if let Some(usage) = &o.usage {
         lines.extend(crate::usage::format_report(usage));
     } else {
         lines.push("Usage and cost: unknown (no usage recorded).".into());
     }
     lines.push("Context and result sizes are estimated tokens. Unknown values are not zero. Signals do not determine information loss.".into());
     lines
+}
+
+fn usage_summary(usage: Option<&UsageRow>) -> String {
+    usage.map_or_else(
+        || "unknown".into(),
+        |usage| {
+            format!(
+                "in {} (cached {}) · out {} · {}",
+                usage
+                    .cached_input_tokens
+                    .saturating_add(usage.uncached_input_tokens),
+                usage.cached_input_tokens,
+                usage.output_tokens,
+                crate::usage::cost(&usage.cost),
+            )
+        },
+    )
+}
+
+fn agent_cells(agent: &StatsSubAgent) -> Vec<String> {
+    let usage = agent.usage.as_ref();
+    vec![
+        agent.name.clone().unwrap_or_else(|| "unknown".into()),
+        label(&agent.agent_type),
+        label(&agent.status),
+        agent.request_count.to_string(),
+        known(usage.map(|usage| {
+            usage
+                .cached_input_tokens
+                .saturating_add(usage.uncached_input_tokens)
+        })),
+        known(usage.map(|usage| usage.output_tokens)),
+        usage.map_or_else(|| "unknown".into(), |usage| crate::usage::cost(&usage.cost)),
+        agent.tool_count.to_string(),
+        known(
+            agent
+                .duration_ms
+                .map(|ms| format!("{}:{:02}", ms / 60_000, ms / 1000 % 60)),
+        ),
+    ]
 }
 fn request_cells(number: usize, row: &StatsRequest) -> Vec<String> {
     let context = row.context.as_ref();
@@ -329,6 +391,18 @@ fn timeline(report: &StatsResponse) -> Vec<Timeline<'_>> {
 
 pub fn format_report(report: &StatsResponse) -> String {
     let mut lines = overview(report);
+    if !report.sub_agents.is_empty() {
+        lines.push("\nSub-agents".into());
+        lines.extend(table(
+            AGENT_HEADERS,
+            &report
+                .sub_agents
+                .iter()
+                .map(agent_cells)
+                .collect::<Vec<_>>(),
+        ));
+        lines.push(AGENT_DETAILS.into());
+    }
     lines.push("\nRequests".into());
     let rows: Vec<_> = report
         .requests
@@ -368,7 +442,13 @@ pub fn format_report(report: &StatsResponse) -> String {
     lines.push(format!("\n{}", approvals(report)));
     lines
         .into_iter()
-        .map(|line| sanitize(&line))
+        .map(|line| {
+            if line == AGENT_DETAILS && std::io::stdout().is_terminal() {
+                format!("\x1b[90m{line}\x1b[0m")
+            } else {
+                sanitize(&line)
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
         + "\n"
@@ -410,7 +490,20 @@ pub fn html_report(report: &StatsResponse) -> String {
     for line in overview(report) {
         let _ = write!(html, "<p>{}</p>", escape(&line));
     }
-    html.push_str("</div><h2>Context across requests</h2><p>Estimated tokens. Unknown measurements are gaps. Request numbers match the table.</p><div class=\"panel scroll\">");
+    html.push_str("</div>");
+    if !report.sub_agents.is_empty() {
+        html.push_str("<h2>Sub-agents</h2><div class=\"panel scroll\"><table>");
+        html.push_str(&html_header(AGENT_HEADERS));
+        for agent in &report.sub_agents {
+            html.push_str(&html_cells("td", &agent_cells(agent)));
+        }
+        let _ = write!(
+            html,
+            "</tbody></table><p style=\"color:#7c818c\">{}</p></div>",
+            escape(AGENT_DETAILS)
+        );
+    }
+    html.push_str("<h2>Context across requests</h2><p>Estimated tokens. Unknown measurements are gaps. Request numbers match the table.</p><div class=\"panel scroll\">");
     html.push_str(&chart(report));
     html.push_str("<div class=\"legend\"><span style=\"--color:#4778d6\">System / fixed prefix</span><span style=\"--color:#b375cf\">Tool definitions</span><span style=\"--color:#3a9c85\">Dialogue</span><span style=\"--color:#d59a39\">Tool results</span></div></div><h2>Requests</h2><div class=\"panel scroll\"><table>");
     html.push_str(&html_header(REQUEST_HEADERS));

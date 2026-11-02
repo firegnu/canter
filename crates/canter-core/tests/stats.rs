@@ -92,6 +92,77 @@ fn read_item(id: &str, path: &str, status: &str) -> Value {
     json!({"type":"fileRead","id":id,"path":path,"startLine":1,"content":"abc","status":status})
 }
 
+fn child_records(saved: &Saved, id: &str, parent: &str, usage: bool, finished: bool) {
+    let mut payloads = vec![
+        json!({"type":"session.updated","settings":{"cwd":"/work","model":"unpriced","name":format!("agent-{id}"),"approvalPolicy":"allowAll"}}),
+        json!({"type":"session.parent","parent":{"sessionId":parent,"turnId":"t1","task":"Inspect","agentType":"explorer"}}),
+        json!({"type":"turn.started","turn":{"id":"ct","items":[],"status":"inProgress","error":null,"input":[],"clientName":"agent","usage":null}}),
+    ];
+    if usage {
+        payloads.push(usage_event(Some("cr"), false));
+    }
+    if finished {
+        payloads.push(json!({"type":"turn.completed","turn":{"id":"ct","items":[],"status":"completed","error":null,"input":[],"clientName":"agent","usage":null}}));
+    }
+    let dir = saved.root.path().join(id);
+    fs::create_dir_all(&dir).unwrap();
+    let mut file = fs::File::create(dir.join("events.jsonl")).unwrap();
+    for (i, mut payload) in payloads.into_iter().enumerate() {
+        payload["sessionId"] = json!(id);
+        payload["seq"] = json!(i + 1);
+        payload["timestamp"] = json!(2000 + i * 1000);
+        writeln!(file, "{payload}").unwrap();
+    }
+}
+
+#[test]
+fn subagent_stats_add_direct_children_without_changing_the_parent_ledger() {
+    let mut saved = Saved::new();
+    saved.event(usage_event(Some("r1"), false));
+    child_records(&saved, "child", "s1", true, true);
+    child_records(&saved, "grandchild", "child", true, true);
+    child_records(&saved, "unrelated", "other", true, true);
+    let report = saved.report();
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["subAgents"].as_array().map(Vec::len), Some(1));
+    let child = &json["subAgents"][0];
+    assert_eq!(child["id"], "child");
+    assert_eq!(child["name"], "agent-child");
+    assert_eq!(child["agentType"], "explorer");
+    assert_eq!(child["status"], "completed");
+    assert_eq!(child["requestCount"], 1);
+    assert_eq!(child["toolCount"], 0);
+    assert_eq!(child["durationMs"], 4000);
+    assert_eq!(json["overview"]["usageWithSubAgents"]["outputTokens"], 40);
+    assert_eq!(json["overview"]["usageWithSubAgents"]["cost"]["usd"], 0.02);
+    assert_eq!(report.overview.usage.unwrap().total.output_tokens, 20);
+    assert_eq!(report.requests.len(), 1);
+    assert!(report.tools.is_empty());
+    let child_report = stats::report(&saved.store, "child", &usage::builtin_prices()).unwrap();
+    let child_json = serde_json::to_value(&child_report).unwrap();
+    assert_eq!(child_json["parent"]["sessionId"], "s1");
+    assert_eq!(child_json["parent"]["agentType"], "explorer");
+    assert_eq!(stats::list(&saved.store, true).unwrap().data.len(), 1);
+    fs::remove_dir_all(saved.root.path().join("child")).unwrap();
+    let json = serde_json::to_value(saved.report()).unwrap();
+    assert!(
+        json.get("subAgents")
+            .is_none_or(|v| v.as_array().unwrap().is_empty())
+    );
+}
+
+#[test]
+fn subagent_stats_keep_missing_usage_unknown_and_time_running_children_on_the_server() {
+    let mut saved = Saved::new();
+    saved.event(usage_event(Some("r1"), false));
+    child_records(&saved, "child", "s1", false, false);
+    let json = serde_json::to_value(saved.report()).unwrap();
+    assert_eq!(json["subAgents"][0]["status"], "running");
+    assert!(json["subAgents"][0]["usage"].is_null());
+    assert!(json["overview"]["usageWithSubAgents"].is_null());
+    assert!(json["subAgents"][0]["durationMs"].as_u64().unwrap() > 4000);
+}
+
 #[test]
 fn saved_telemetry_joins_usage_tools_private_requests_and_approvals_without_writing() {
     let mut saved = Saved::new();
