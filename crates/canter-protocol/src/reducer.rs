@@ -128,6 +128,13 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
         add_time(&mut turn.duration_ms, elapsed);
     }
     match &event.payload {
+        EventPayload::SessionParent { parent } => {
+            snapshot.parent = Some(parent.clone());
+            snapshot.agent = Some(crate::AgentState {
+                status: crate::AgentStatus::Running,
+                result: None,
+            });
+        }
         EventPayload::TurnRetracted { turn_id } => {
             snapshot.turns.retain(|turn| turn.id != *turn_id);
         }
@@ -371,12 +378,71 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
                 .any(|turn| turn.items.iter().any(|item| item.id() == Some(id)))
         });
     }
+    if snapshot.parent.is_some() {
+        update_agent(snapshot, &event.payload);
+    }
     if snapshot.last_event_seq == 0 {
         snapshot.created_at = event.timestamp;
     }
     snapshot.last_event_seq = event.seq;
     snapshot.updated_at = event.timestamp;
     Ok(())
+}
+
+fn update_agent(snapshot: &mut SessionSnapshot, payload: &EventPayload) {
+    use crate::{AgentState, AgentStatus, SessionCloseReason};
+    let status = match payload {
+        EventPayload::TurnStarted { .. } => AgentStatus::Running,
+        EventPayload::TurnCompleted { .. }
+        | EventPayload::TurnRetracted { .. }
+        | EventPayload::SessionRewound { .. } => match snapshot
+            .turns
+            .iter()
+            .rev()
+            .find(|turn| turn.client_name != "rewind")
+            .map(|turn| turn.status)
+        {
+            Some(TurnStatus::InProgress) => AgentStatus::Running,
+            Some(TurnStatus::Completed) => AgentStatus::Completed,
+            Some(TurnStatus::Failed) => AgentStatus::Failed,
+            _ => AgentStatus::Interrupted,
+        },
+        EventPayload::SessionStatus {
+            status: SessionStatus::Closed,
+            close_reason: Some(SessionCloseReason::ClientRequest),
+        } => AgentStatus::Closed,
+        EventPayload::SessionStatus {
+            status: SessionStatus::Closed,
+            close_reason: Some(SessionCloseReason::ServerShutdown),
+        } if snapshot
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.status == AgentStatus::Running) =>
+        {
+            AgentStatus::Interrupted
+        }
+        _ => return,
+    };
+    let result = (status == AgentStatus::Completed)
+        .then(|| {
+            snapshot
+                .turns
+                .iter()
+                .rev()
+                .find(|turn| turn.client_name != "rewind")
+                .and_then(|turn| {
+                    turn.items.iter().rev().find_map(|item| match item {
+                        Item::AgentMessage {
+                            text,
+                            status: None | Some(crate::ItemStatus::Completed),
+                            ..
+                        } => Some(text.clone()),
+                        _ => None,
+                    })
+                })
+        })
+        .flatten();
+    snapshot.agent = Some(AgentState { status, result });
 }
 
 /// Adds to a known time; an unknown one stays unknown.

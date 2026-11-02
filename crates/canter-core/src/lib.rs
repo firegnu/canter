@@ -1,4 +1,5 @@
 //! Conversation sessions independent of HTTP and terminal clients.
+mod agents;
 mod background;
 mod btw;
 mod clients;
@@ -30,6 +31,8 @@ mod telemetry;
 pub mod usage;
 mod user_shell;
 
+pub use agents::SessionMaintenance;
+pub use agents::recover_agent_sessions;
 pub use btw::BtwStream;
 use canter_protocol::ErrorCode;
 pub use canter_tools::mcp;

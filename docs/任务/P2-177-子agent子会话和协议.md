@@ -94,3 +94,16 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：新增可选 `parent` 来源、五种子会话状态及最终回复，来源随创建原子发布，旧数据按普通会话读取。核心 `Session::spawn_agent` 取父会话当前设置和内存环境，从空白对话用任务启动首轮；续跑和关闭复用 `input` / `close`。服务端内部入口把创建和登记作为一个不随调用方断开而取消的操作，为 P2-178 留好接入点，没有增加 HTTP 创建端点或模型工具。
+- 协议及列表：新增 `/v1/sessions/{id}/agents` 和 `subagentSessions` feature；子会话仍使用普通读取、恢复及 SSE。默认会话列表统一在 Store 过滤子会话，因而 resume、stats、`-c` 和 `exec --last` 都不选它，按 ID 访问不受影响。更新 JSON Schema、TypeScript 产物及 DESIGN 第 8 条的协议差异；终端仅为现有测试构造补可选字段，没有改界面。
+- 生命周期：父会话及后代按祖先在前取得操作锁；删除先检查所有成员的现有删除条件，再关闭和移入回收站。有子会话在跑时删除、回退均拒绝。回退对话时移走被退掉轮次创建的子会话，只退文件则保留。分叉沿用现有复制逻辑，不复制子会话或 parent。启动在拿到服务端独占权之后补记未完成子会话的中断，复用普通会话的轮中断记录，不恢复模型运行或环境变量。
+- 验证：协议来源、默认列表过滤、核心创建、HTTP 列表、级联回收、回退回收及重启恢复均先取得针对行为的失败检查，再实现并通过。新增测试覆盖继承当前模型／思考／权限／沙箱／目录／环境、全局规则后续变更立即生效、首轮与续跑、最终回复重开一致、五种状态、旧数据兼容、普通读取和 SSE、父子分叉、运行中拒绝删和回退、回退选择、直接删子会话及 `-c` / `exec --last` 跳过较新的子会话。模型调用使用本机假 HTTP 服务，真实模型调用 0 次；测试使用临时 HOME、状态目录、端口和 socket。
+- 验证命令：指定本任务独立 `CARGO_TARGET_DIR`，运行 `cargo nextest run -p canter-protocol -p canter-store -p canter-core -p canter-server -p canter-tui -p canter`，1249 项通过、26 项按既有配置跳过。最后将新增服务端测试统一改为本机假模型 HTTP 服务后，重跑 `cargo nextest run -p canter-server`，217 项通过、3 项按既有配置跳过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 全部通过。没有跑 workspace 全套或文档示例测试。
+- 拿主意的地方：11-02 主控明确选择 A。放行规则是全局 `rules.json`，子会话与普通会话一样每次权限检查实时读取，不做规则快照；其余要求的继承项取创建时父会话的值。会话级临时批准不是全局规则，不复制。已写入 DESIGN。没有其它待主控决定的事项。
+- 自然沿用的钩子：在配置存在且会话可信等原条件满足时，普通流程仍触发 SessionStart、SessionEnd、UserPromptSubmit、PreToolUse、PermissionRequest、PostToolUse、Stop、StopFailure、Interrupt；不新增 Subagent 事件。冷启动只补存盘中断状态，不为恢复记录重跑模型或钩子。
+- 没做的事：没有模型工具、角色、并发／嵌套上限、批准转发、叫醒父会话、fork 式子会话、自定义 agent 文件、终端子 agent 界面、统计聚合或花费算法修改；没有安装、重启用户服务、合并到 main 或推送。
+- 参考：只读参考了 Codex `rust-v0.166.0` 的 `core/src/agent/child_config.rs` 和 `app-server/src/filters.rs`，没有搬代码，没有增加跨项目依赖或模型供应商特例。
+- 踩过的坑：测试夹具最初混淆 PATCH 的 `addDirectories` 和快照的 `additionalDirectories`，修正为现有接口字段；禁止工具调用的断言改为核对既有 forbidden 反馈及没有创建文件。端到端测试中 `/tmp` 与 macOS 实际进程 cwd 的 `/private/tmp` 写法不同，导致 `exec --last` 测试误报，已统一夹具的规范目录。清理自己创建的临时 Rust 辅助程序时 `rm -f` 被工具拒绝，改用明确文件路径的普通 `rm` 后完成。上述均未通过改旧行为、放宽原测试或缩短超时处理。

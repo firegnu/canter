@@ -29,6 +29,9 @@ use tokio_util::sync::CancellationToken;
 #[path = "http_tests.rs"]
 mod tests;
 
+#[path = "agent_sessions.rs"]
+mod agent_sessions;
+
 pub(crate) struct App {
     pub reload: Option<Arc<crate::reload::LiveConfig>>,
     pub home: PathBuf,
@@ -246,6 +249,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::SESSION, get(read).patch(update).delete(close))
         .route(routes::SESSION_TRASH, post(trash))
         .route(routes::SESSION_FORK, post(fork))
+        .route(routes::SESSION_AGENTS, get(agents))
         .route(routes::GOAL, get(goal).post(set_goal).delete(clear_goal))
         .route(routes::GOAL_PAUSE, post(pause_goal))
         .route(routes::GOAL_RESUME, post(resume_goal))
@@ -386,6 +390,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
         features: Some(vec![
+            "subagentSessions".into(),
             "memory".into(),
             "runningTurns".into(),
             "sessionFork".into(),
@@ -559,6 +564,41 @@ async fn list(state: State<Arc<App>>) -> Result<Json<SessionListResponse>, ApiEr
     Ok(Json(SessionListResponse {
         data: info(state).await?.0.sessions,
     }))
+}
+
+async fn agents(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<AgentListResponse>, ApiError> {
+    let operation = app.session_locks.lock(&id).await;
+    if app.opened_session(&id).await.is_none() {
+        app.disk_snapshot(&id, operation.clone()).await?;
+    }
+    let store = app.store.clone();
+    let children = tokio::task::spawn_blocking(move || store.list_all())
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(CoreError::from)?;
+    let mut data = Vec::new();
+    for child in children.into_iter().filter(|child| {
+        child
+            .parent
+            .as_ref()
+            .is_some_and(|parent| parent.session_id == id)
+    }) {
+        let snapshot = read(State(app.clone()), ApiPath(child.id)).await?.0.session;
+        if let (Some(parent), Some(agent)) = (snapshot.parent, snapshot.agent) {
+            data.push(AgentSummary {
+                id: snapshot.id,
+                task: parent.task,
+                status: agent.status,
+                result: agent.result,
+                created_at: snapshot.created_at,
+                updated_at: snapshot.updated_at,
+            });
+        }
+    }
+    Ok(Json(AgentListResponse { data }))
 }
 
 async fn running_turns(State(app): State<Arc<App>>) -> Json<RunningTurnsResponse> {
@@ -1190,6 +1230,11 @@ async fn trash(
             return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
         }
         let operation = app.session_locks.lock(&id).await;
+        let family = agent_sessions::Family::lock(&app, &id, operation.clone()).await?;
+        if family.len() > 1 {
+            family.trash(&app).await?;
+            return Ok(StatusCode::NO_CONTENT);
+        }
         let source = app.store.session_dir(&id).map_err(CoreError::from)?;
         let session = app.opened_session(&id).await;
         if session.is_none() {
@@ -1400,9 +1445,18 @@ async fn rewind(
     params: Result<Json<SessionRewindParams>, JsonRejection>,
 ) -> Result<Json<SessionRewindResponse>, ApiError> {
     let params = body(params)?;
-    let draining = app.draining.read().await;
-    if *draining {
-        return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
-    }
-    Ok(Json(app.session(&id).await?.rewind(params).await?))
+    tokio::spawn(async move {
+        let draining = app.draining.read().await;
+        if *draining {
+            return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
+        }
+        let operation = app.session_locks.lock(&id).await;
+        if app.opened_session(&id).await.is_none() {
+            app.disk_snapshot(&id, operation.clone()).await?;
+        }
+        let family = agent_sessions::Family::lock(&app, &id, operation).await?;
+        Ok(Json(family.rewind(&app, params).await?))
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
 }

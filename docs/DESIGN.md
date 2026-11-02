@@ -21,6 +21,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 跟着改的：第一期改文件用「整文件写 + 按文字替换」；Codex 的 apply_patch 是给 GPT 用的，等接 OpenAI 时再搬（用户 10-24 选定）。
 7. **名字和仓库**：`canter`（马的「慢跑」步法），仓库 `github.com/firegnu/canter`，公开，Apache-2.0。用户：「开源，repo就放在github上」。
 8. **协议：结构照 Codex，传输和类型 canter 自己定（报告 §5.7 的 C）**。2026-10-24 在 canter 仓库定的，用户：「好，就用 C，改 DESIGN」。
+   - 子会话（P2-177，11-02）：快照和摘要增加可选 `parent: {sessionId, turnId, task}`；快照增加可选 `agent: {status, result}`。`session.parent` 事件记录创建来源，状态和最终回复随既有轮事件重放，关闭沿用 `session.status`。新增 `GET /v1/sessions/{id}/agents`，返回 `{data:[{id, task, status, result, createdAt, updatedAt}]}`，`features` 增加 `subagentSessions`。五种状态为 `running/completed/failed/closed/interrupted`；时间沿用会话的 Unix 毫秒。子会话沿用原有按 ID 读取、恢复、输入和 SSE 接口。Codex `rust-v0.166.0` 用 `SessionSource::SubAgent(ThreadSpawn { parent_thread_id, .. })` 标来源；canter 用独立 `parent`，保留父轮和任务以支持回退及父会话下的列表，不引入整套来源分类。
    - 记忆（P2-22，11-01 用户确认）：新增 `GET /v1/sessions/{id}/memories`，返回 `{data:[{scope, file, name, description, path}]}`；`POST /v1/sessions/{id}/memories/delete` 接收 `{scope, file}`，成功返回 HTTP 204。scope 为 `global/project`，file 为单层 `.md` 文件名；服务端按会话确定目录，不接受任意路径，受限会话拒绝这两个操作。`features` 增加 `memory`。沿用 Codex v2 的会话 ID、camelCase 和 `data` 列表；文件记忆管理端点是 canter 扩展，供终端及未来客户端共用。模型写记忆沿用 write/edit 卡片，没有专用模型工具或新 SSE 事件。终端列出和删除走协议，只有外部编辑器在本机打开服务端给出的文件路径。
    - 运行轮查询（P2-14，11-01 主控决定及交叉审查返工）：新增只读 `GET /v1/runningTurns`，返回 `{data:[{id, name, turnId, activity}]}`，`features` 增加 `runningTurns`。只看服务端内存中加载着的会话，核心在状态锁内轻量读取、不复制整份历史：未结束的轮（含等批准、等回答）、已排好目标自动续跑、仍在运行的后台命令，以及已排好的后台模型唤醒都算。用户 11-01 定会叫醒模型的后台命令也要等；用户复核后确认「等，列表里显示命令」，不叫醒的命令（包括用户 `!`）一并等待，避免替换停掉仍在执行的命令。没有当前轮时 `turnId` 为 null，activity 分别写 `Continuing a goal`、`Running background command #<id>: <command>`（快照中的 command 压成一行，取前 60 个字符）、`Waiting for a background command to wake the model`。目标完成、受阻、到预算、暂停、清除或未恢复自动续跑时，不以目标续跑名义上报；实际未结束的轮和后台命令仍按自己的状态上报。不加载或恢复存盘会话，崩溃残留不计入。普通轮的 activity 保留简短英文工作类型和本轮输入前 120 个字符，等待时说明批准或回答，不读取私有环境、配置凭证或完整工具参数。沿用 Codex 的会话/轮 ID 和 `data` 列表结构；这个只读 HTTP 接口、运行范围、activity 和没有真实轮时的 null turnId 是 canter 扩展，目的是安装命令能等完真实工作及已排好的自动续跑，不把存盘状态或两轮间隙当成空闲；不改变会话、轮次或调度行为。客户端只在进入等待或重连时查 feature，之后约每秒只查运行接口，请求失败再 discover。旧服务端缺 feature 时不猜测空闲，说明程序已装好、服务端没换，提示 `canter serve --replace`（最多等轮 60 秒），不再提示重新 upgrade / rollback。
    - 会话分叉（P2-157，11-01）：`POST /v1/sessions/{id}/fork` 接收 `{env, restrictedMode?}`，返回 `{session, eventSeq}`，`features` 增加 `sessionFork`。沿用 Codex `rust-v0.163.0` 的 `thread/fork`：源 ID 指定已有会话，返回新 ID 和继承的对话、设置；canter 仅复制已经结束的轮，不提供路径、选轮、配置覆盖、临时会话或目标继承参数。新会话名字在非空原名后加 ` (fork)`，终端 `/fork` 成功后切过去，原会话留在 `/resume`。源会话只读，不恢复、不挂接客户端、不发钩子；新会话发普通新建的 SessionStart(startup)。按源 ID 操作锁及已打开会话的 Core 状态锁取得一致副本，释放源锁后创建新会话，不同时等待两个 ID 的锁。新会话继承工作目录、追加目录、模型、思考强度、权限、计划模式及标签；不带进行中的轮、队列、待答请求、目标、后台命令、遥测或文件回退备份。显示历史保留，使用既有事件重建并省略用量；私有历史先应用既有回退、撤回，再省略旧轮边界及文件备份引用，因此继承部分不计费，也不能被新会话 `/rewind` 回退。
@@ -451,3 +452,15 @@ P2-172（11-01 用户决定）：客户端挂在会话上指有一条订阅该�
 11-01 用户追加（第 20 条文案已同意）：成功 write／edit 后若有匹配且允许运行的 PostToolUse 钩子，canter 自己只比较这次调用写入文件在钩子前后的内容，不论钩子成功、反馈或失败，内容变化或文件被删都在这次工具结果末尾追加一行 `<path> was changed by a PostToolUse hook after this call; read it again before editing it.`；这是 canter 的观察而非钩子输出，不进入系统提示词或环境段，未配置、未匹配或文件未变时保持原工具结果逐字不变。
 
 补充第 8 条的轮次语义：启用 UserPromptSubmit 预检时，TurnStarted.input 暂为空，放行后通过既有 userMessage 项目发布用户输入，TurnCompleted.input 带最终接收的初始输入，协议 reducer 在完成时回填该字段。被拦下的轮始终为空。终端在轮未完成时也从已接收的 userMessage 保留撤回草稿（包括重新连接的终端），保留发送序号以优先恢复原图片路径；不会把未放行的输入当成已接收消息。不增加字段或新的事件类型。
+
+## 子 agent 的子会话（P2-177）
+
+子 agent 在同一服务端里运行，是 `<CANTER_HOME>/sessions/<id>/` 中带父会话标记的普通会话；复用存盘、读取、压缩、遥测和事件订阅。核心提供从父会话创建并用任务启动首轮的接口，之后用普通输入继续，用普通关闭取消运行中的轮。创建关联父会话当时的轮，不复制父会话的对话。
+
+模型、思考档位、权限档位、沙箱、工作目录、新增目录和内存环境变量取创建时父会话的有效值；环境变量仍不存盘、不公开。11-02 主控补定 A：放行规则沿用全局 `rules.json`，与普通会话一样每次权限检查实时读取，不做规则快照。会话级临时批准不作为全局规则复制。
+
+子会话状态跟随最近一轮：在跑、做完、失败、被关、中断；做完时取这一轮最后一条最终回复作为结果，下一轮清除旧结果。状态与结果由存盘事件恢复。服务端重启将未完成的子会话标成中断，不自动续跑，不需要恢复环境变量或发模型请求。正常结束的子会话保持结果。
+
+默认会话列表、统计列表及当前目录最近会话的选择均排除子会话，按 ID 打开仍允许；父会话的 `/agents` 列出其直接子会话。父会话进回收站时子会话一同移入，有子会话在跑则拒绝，沿用现有删除限制。直接删除子会话照普通规则。分叉只复制源会话的已结束对话，既不复制其子会话，也不继承源会话的 `parent`。
+
+父会话有子会话在跑时拒绝回退；退掉对话轮时，这些轮创建的子会话一同进回收站；只回退文件而保留对话时不移走子会话。保留已有单会话的关闭、回收站及回退机制；关系信息用于协调这些操作，避免留下指向已退掉轮次的活动子会话。本件不提供模型工具、角色、并发或嵌套上限、批准转发、父会话唤醒、终端界面或 Subagent 钩子。

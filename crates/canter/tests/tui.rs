@@ -3842,3 +3842,74 @@ async fn shell_prefix_approval_saves_exact_compound_prefixes_and_other_commands_
     terminal.quit().await;
     world.stop_server(Signal::SIGTERM).await;
 }
+
+/// Both last-session entry points ignore a newer persisted child in this cwd.
+#[tokio::test]
+async fn continue_and_exec_last_skip_child_sessions_after_restart() {
+    use std::io::Write;
+    let mut world = World::new(vec![
+        text_reply("Parent answer"),
+        text_reply("Continued parent"),
+    ])
+    .await;
+    world.start_server().await;
+    let cwd = world.path("work").canonicalize().unwrap();
+    let terminal = Terminal::start(&["Parent task"], world.context("parent", &cwd)).await;
+    terminal.wait_for("Parent answer").await;
+    terminal.wait_idle().await;
+    let parent_id = terminal.quit().await;
+    let parent = world.snapshot(&parent_id).await;
+    world.stop_server(Signal::SIGTERM).await;
+    let directory = world.path("state/sessions/newer-child");
+    fs::create_dir(&directory).unwrap();
+    let mut file = fs::File::create(directory.join("events.jsonl")).unwrap();
+    for (index, payload) in [
+        json!({"type":"session.updated","settings":parent.settings}),
+        json!({"type":"session.parent","parent":{"sessionId":parent_id,"turnId":parent.turns[0].id,"task":"Child task"}}),
+    ].into_iter().enumerate() {
+        let mut event = json!({"sessionId":"newer-child","seq":index+1,"timestamp":parent.updated_at+1000+index as i64});
+        event.as_object_mut().unwrap().extend(payload.as_object().unwrap().clone());
+        writeln!(file, "{event}").unwrap();
+    }
+    drop(file);
+    world.start_server().await;
+    let child = world.snapshot("newer-child").await;
+    assert_eq!(
+        child.agent.unwrap().status,
+        canter_protocol::AgentStatus::Interrupted
+    );
+    for flag in ["-c", "--continue"] {
+        let terminal = Terminal::start(&[flag], world.context("continue", &cwd)).await;
+        terminal.wait_for("Parent answer").await;
+        terminal.wait_idle().await;
+        assert_eq!(terminal.quit().await, parent_id);
+    }
+    let client = Client::new(&world.path("state/server.sock")).unwrap();
+    client
+        .resume("newer-child", &world.context("child", &cwd).env)
+        .await
+        .unwrap();
+    assert!(
+        world.snapshot("newer-child").await.updated_at
+            > world.snapshot(&parent_id).await.updated_at
+    );
+    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_canter"))
+        .args(["exec", "--last", "Continue parent"])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", world.path("home"))
+        .env("CANTER_HOME", world.path("state"))
+        .current_dir(&cwd)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(world.snapshot(&parent_id).await.turns.len(), 2);
+    assert!(world.snapshot("newer-child").await.turns.is_empty());
+    world.stop_server(Signal::SIGTERM).await;
+}

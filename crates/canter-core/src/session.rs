@@ -922,36 +922,8 @@ impl Session {
                 .await?;
         }
         let mut payloads = Vec::new();
-        for mut turn in unfinished {
-            for mut item in std::mem::take(&mut turn.items) {
-                match &mut item {
-                    Item::PlanProposal { status, .. }
-                    | Item::Plan { status, .. }
-                    | Item::McpToolCall { status, .. }
-                    | Item::McpToolSearch { status, .. }
-                    | Item::WebFetch { status, .. }
-                    | Item::WebSearch { status, .. }
-                    | Item::CommandExecution { status, .. }
-                    | Item::FileChange { status, .. }
-                    | Item::FileRead { status, .. }
-                    | Item::UserInput { status, .. }
-                        if *status == ItemStatus::InProgress =>
-                    {
-                        *status = ItemStatus::Failed;
-                        payloads.push(EventPayload::ItemCompleted {
-                            turn_id: turn.id.clone(),
-                            item,
-                        });
-                    }
-                    _ => {}
-                }
-            }
-            turn.status = TurnStatus::Interrupted;
-            // Replay fills the times from event timestamps; keep them out of the event.
-            turn.started_at = None;
-            turn.completed_at = None;
-            turn.duration_ms = None;
-            payloads.push(EventPayload::TurnCompleted { turn });
+        for turn in unfinished {
+            payloads.extend(interrupted_turn(turn));
         }
         state.discard_queue(InputRemovalReason::Interrupted).await?;
         payloads.push(EventPayload::SessionStatus {
@@ -982,17 +954,18 @@ impl Session {
         options: CoreOptions,
     ) -> Result<(Self, SessionCreateResponse), CoreError> {
         owned(Self::create_inner(
-            store, id, settings, runtime, model, options,
+            store, id, settings, runtime, model, options, None,
         ))
         .await
     }
-    async fn create_inner(
+    pub(crate) async fn create_inner(
         store: Arc<Store>,
         id: String,
         mut settings: SessionSettings,
         runtime: RuntimeContext,
         model: Arc<dyn Model>,
         options: CoreOptions,
+        parent: Option<SessionParent>,
     ) -> Result<(Self, SessionCreateResponse), CoreError> {
         validate_options(&options)?;
         if settings.model.trim().is_empty()
@@ -1021,9 +994,12 @@ impl Session {
         settings.restricted_mode = Some(runtime.restricted_mode);
         settings.plan_enabled = Some(options.plan_enabled);
         let owned_store = store.clone();
-        let writer = tokio::task::spawn_blocking(move || owned_store.create(&id, settings, now()))
-            .await
-            .map_err(|_| CoreError::internal())??;
+        let writer = tokio::task::spawn_blocking(move || match parent {
+            Some(parent) => owned_store.create_child(&id, settings, parent, now()),
+            None => owned_store.create(&id, settings, now()),
+        })
+        .await
+        .map_err(|_| CoreError::internal())??;
         let tools = executor(
             cwd,
             store.session_dir(&writer.snapshot().id)?,
@@ -1763,6 +1739,63 @@ impl Session {
         let session = self.clone();
         owned(async move { session.close_inner(reason, false).await }).await
     }
+    pub(crate) fn check_trashable(&self, state: &State) -> Result<(), CoreError> {
+        state.available()?;
+        if self.shared.clients.lock().unwrap().is_attached() {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "Cannot delete this session while a terminal is attached; leave it in every terminal first.",
+            ));
+        }
+        // Unlike SessionEnd(client_exit), deletion must preserve a
+        // suspended turn: waiting for approval/an answer is still work.
+        if state.journal.snapshot.status == SessionStatus::WaitingApproval
+            || !state.requests.is_empty()
+        {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "Cannot delete this session while it is waiting for approval or an answer.",
+            ));
+        }
+        if state.active.is_some() || !state.queue.is_empty() || state.btw.is_some() {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "Cannot delete this session while a turn, queued input, or side question is still running.",
+            ));
+        }
+        if state.goal_deadline.is_some() {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "Cannot delete this session while a goal is scheduled to continue; pause the goal first.",
+            ));
+        }
+        // Closing would kill every running command, including user
+        // shell commands that never wake the model.
+        if state
+            .journal
+            .snapshot
+            .background_commands
+            .iter()
+            .any(|command| command.running)
+        {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "Cannot delete this session while a background command is still running; open it and run /stop first.",
+            ));
+        }
+        if !state.automatic_turns_paused
+            && state
+                .background_events
+                .has_pending_wake(self.shared.next_options().auto_wake_limit)
+        {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "Cannot delete this session while a background command has a pending wake.",
+            ));
+        }
+        Ok(())
+    }
+
     async fn close_inner(
         &self,
         reason: SessionCloseReason,
@@ -1771,59 +1804,7 @@ impl Session {
         let (done, btw_done) = {
             let mut state = self.shared.state.lock().await;
             if for_trash {
-                state.available()?;
-                if self.shared.clients.lock().unwrap().is_attached() {
-                    return Err(CoreError::new(
-                        ErrorCode::Conflict,
-                        "Cannot delete this session while a terminal is attached; leave it in every terminal first.",
-                    ));
-                }
-                // Unlike SessionEnd(client_exit), deletion must preserve a
-                // suspended turn: waiting for approval/an answer is still work.
-                if state.journal.snapshot.status == SessionStatus::WaitingApproval
-                    || !state.requests.is_empty()
-                {
-                    return Err(CoreError::new(
-                        ErrorCode::Conflict,
-                        "Cannot delete this session while it is waiting for approval or an answer.",
-                    ));
-                }
-                if state.active.is_some() || !state.queue.is_empty() || state.btw.is_some() {
-                    return Err(CoreError::new(
-                        ErrorCode::Conflict,
-                        "Cannot delete this session while a turn, queued input, or side question is still running.",
-                    ));
-                }
-                if state.goal_deadline.is_some() {
-                    return Err(CoreError::new(
-                        ErrorCode::Conflict,
-                        "Cannot delete this session while a goal is scheduled to continue; pause the goal first.",
-                    ));
-                }
-                // Closing would kill every running command, including user
-                // shell commands that never wake the model.
-                if state
-                    .journal
-                    .snapshot
-                    .background_commands
-                    .iter()
-                    .any(|command| command.running)
-                {
-                    return Err(CoreError::new(
-                        ErrorCode::Conflict,
-                        "Cannot delete this session while a background command is still running; open it and run /stop first.",
-                    ));
-                }
-                if !state.automatic_turns_paused
-                    && state
-                        .background_events
-                        .has_pending_wake(self.shared.next_options().auto_wake_limit)
-                {
-                    return Err(CoreError::new(
-                        ErrorCode::Conflict,
-                        "Cannot delete this session while a background command has a pending wake.",
-                    ));
-                }
+                self.check_trashable(&state)?;
             }
             state.closing = true;
             let done = state.active.as_ref().map(|active| {
@@ -2130,3 +2111,37 @@ fn validate_options(options: &CoreOptions) -> Result<(), CoreError> {
 #[cfg(test)]
 #[path = "decline_feedback_tests.rs"]
 mod decline_feedback_tests;
+
+pub(crate) fn interrupted_turn(mut turn: Turn) -> Vec<EventPayload> {
+    let mut payloads = Vec::new();
+    for mut item in std::mem::take(&mut turn.items) {
+        match &mut item {
+            Item::PlanProposal { status, .. }
+            | Item::Plan { status, .. }
+            | Item::McpToolCall { status, .. }
+            | Item::McpToolSearch { status, .. }
+            | Item::WebFetch { status, .. }
+            | Item::WebSearch { status, .. }
+            | Item::CommandExecution { status, .. }
+            | Item::FileChange { status, .. }
+            | Item::FileRead { status, .. }
+            | Item::UserInput { status, .. }
+                if *status == ItemStatus::InProgress =>
+            {
+                *status = ItemStatus::Failed;
+                payloads.push(EventPayload::ItemCompleted {
+                    turn_id: turn.id.clone(),
+                    item,
+                });
+            }
+            _ => {}
+        }
+    }
+    turn.status = TurnStatus::Interrupted;
+    // Replay fills the times from event timestamps; keep them out of the event.
+    turn.started_at = None;
+    turn.completed_at = None;
+    turn.duration_ms = None;
+    payloads.push(EventPayload::TurnCompleted { turn });
+    payloads
+}
