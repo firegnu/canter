@@ -148,7 +148,14 @@ pub(crate) fn layout(
         ),
     };
 
-    if let Some(forwarded) = forwarded {
+    // On a sub-agent's screen the main session's own requests come forwarded
+    // too (P2-179); they are not from a sub-agent.
+    if let Some(forwarded) = forwarded.filter(|forwarded| {
+        snapshot
+            .parent
+            .as_ref()
+            .is_none_or(|parent| parent.session_id != forwarded.agent_id)
+    }) {
         body.insert(
             0,
             Line::from(format!(

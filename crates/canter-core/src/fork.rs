@@ -136,6 +136,7 @@ impl ForkSnapshot {
                         event_id: None,
                         command_id: None,
                         visible: false,
+                        agent: None,
                     })
                 }
                 entry => history.push(entry),

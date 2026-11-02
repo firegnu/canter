@@ -13,6 +13,7 @@
 //! - [`Ui`]: the screen on any ratatui backend; [`run`] opens a session and
 //!   drives the screen in a real terminal, [`run_on`] on any backend.
 
+mod agents;
 mod app;
 mod approval;
 mod background;

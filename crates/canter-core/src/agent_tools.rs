@@ -1,7 +1,9 @@
 //! Model-facing collaboration, implemented independently after reading Codex v1.
 use crate::{CoreError, session::Shared};
 use canter_model::{ToolCall, ToolDefinition};
-use canter_protocol::{AgentType, ErrorCode};
+use canter_protocol::{
+    AgentType, CollabAgent, CollabAgentTool, ErrorCode, EventPayload, Item, ItemStatus,
+};
 use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -35,6 +37,14 @@ fn wait_timeout() -> u64 {
     30_000
 }
 
+/// What a sub-agent tool returns.
+pub struct AgentToolOutput {
+    /// The result the model gets, as JSON.
+    pub value: Value,
+    /// The agents the call named or started, as its card shows them after.
+    pub agents: Vec<CollabAgent>,
+}
+
 /// The host owns the session registry and serializes family operations.
 pub trait AgentHost: Send + Sync {
     fn execute(
@@ -42,7 +52,10 @@ pub trait AgentHost: Send + Sync {
         parent: String,
         command: AgentCommand,
         cancel: CancellationToken,
-    ) -> BoxFuture<'_, Result<Value, CoreError>>;
+    ) -> BoxFuture<'_, Result<AgentToolOutput, CoreError>>;
+    /// The parent's children with these ids as last known, for the card of a
+    /// call still running. An id that is not one of them keeps its id as name.
+    fn describe(&self, parent: String, ids: Vec<String>) -> BoxFuture<'_, Vec<CollabAgent>>;
 }
 
 pub(crate) fn is_tool(name: &str) -> bool {
@@ -67,14 +80,127 @@ impl crate::Session {
     }
 }
 
+fn parse(call: &ToolCall) -> Result<AgentCommand, CoreError> {
+    let mut args: Value = serde_json::from_str(&call.arguments)
+        .map_err(|_| CoreError::new(ErrorCode::InvalidRequest, "Invalid agent tool arguments"))?;
+    let object = args.as_object_mut().ok_or_else(|| {
+        CoreError::new(
+            ErrorCode::InvalidRequest,
+            "Agent tool arguments must be an object",
+        )
+    })?;
+    object.insert("tool".into(), json!(call.name));
+    serde_json::from_value(args).map_err(|error| {
+        CoreError::new(
+            ErrorCode::InvalidRequest,
+            &format!("Invalid agent tool arguments: {error}"),
+        )
+    })
+}
+
+/// The card shown for a call: the tool, the task or message, and the agents
+/// it names with what is known of them when it starts.
+async fn card(
+    host: Option<&Arc<dyn AgentHost>>,
+    parent: &str,
+    name: &str,
+    command: &Result<AgentCommand, CoreError>,
+) -> Item {
+    let (tool, prompt, ids) = match command {
+        Ok(AgentCommand::SpawnAgent { task, .. }) => {
+            (CollabAgentTool::SpawnAgent, Some(task.clone()), Vec::new())
+        }
+        Ok(AgentCommand::WaitAgent { ids, .. }) => (CollabAgentTool::Wait, None, ids.clone()),
+        Ok(AgentCommand::SendInput { id, message }) => (
+            CollabAgentTool::SendInput,
+            Some(message.clone()),
+            vec![id.clone()],
+        ),
+        Ok(AgentCommand::CloseAgent { id }) => {
+            (CollabAgentTool::CloseAgent, None, vec![id.clone()])
+        }
+        Err(_) => (
+            match name {
+                "spawn_agent" => CollabAgentTool::SpawnAgent,
+                "wait_agent" => CollabAgentTool::Wait,
+                "send_input" => CollabAgentTool::SendInput,
+                _ => CollabAgentTool::CloseAgent,
+            },
+            None,
+            Vec::new(),
+        ),
+    };
+    let agents = match (host, command) {
+        // Not started yet: only its type is known.
+        (_, Ok(AgentCommand::SpawnAgent { kind, .. })) => vec![CollabAgent {
+            id: String::new(),
+            name: String::new(),
+            agent_type: *kind,
+            status: None,
+            result: None,
+        }],
+        (Some(host), _) if !ids.is_empty() => host.describe(parent.into(), ids).await,
+        _ => Vec::new(),
+    };
+    Item::CollabAgentToolCall {
+        id: crate::session::id("agent-tool"),
+        tool,
+        status: ItemStatus::InProgress,
+        prompt,
+        agents,
+        error: None,
+        started_at: Some(crate::journal::now()),
+        duration_ms: None,
+    }
+}
+
 pub(crate) async fn execute(
     shared: &Shared,
+    turn_id: &str,
     call: &ToolCall,
     cancel: &CancellationToken,
 ) -> Result<bool, CoreError> {
     if !is_tool(&call.name) {
         return Ok(false);
     }
+    let parent = shared.state.lock().await.journal.snapshot.id.clone();
+    let command = parse(call);
+    let host = shared.agent_host.get();
+    let mut item = card(host, &parent, &call.name, &command).await;
+    let item_id = item.id().unwrap_or_default().to_owned();
+    shared
+        .state
+        .lock()
+        .await
+        .journal
+        .append(vec![EventPayload::ItemStarted {
+            turn_id: turn_id.into(),
+            item: item.clone(),
+        }])
+        .await?;
+    let finish = |item: &mut Item,
+                  done: ItemStatus,
+                  found: Option<Vec<CollabAgent>>,
+                  why: Option<String>| {
+        if let Item::CollabAgentToolCall {
+            status,
+            agents,
+            error,
+            started_at,
+            duration_ms,
+            ..
+        } = item
+        {
+            *status = done;
+            if let Some(found) = found {
+                *agents = found;
+            }
+            *error = why;
+            *duration_ms = started_at.map(|start| {
+                u64::try_from(crate::journal::now().saturating_sub(start)).unwrap_or(0)
+            });
+        }
+    };
     if let Some(reason) = crate::hooks::run(
         shared,
         crate::hooks::Event::PreToolUse,
@@ -83,54 +209,50 @@ pub(crate) async fn execute(
     )
     .await?
     {
-        shared
-            .state
-            .lock()
-            .await
-            .tool_result(
-                call,
-                format!("PreToolUse hook blocked: {reason}"),
-                false,
-                Default::default(),
-                None,
-            )
+        let text = format!("PreToolUse hook blocked: {reason}");
+        finish(&mut item, ItemStatus::Failed, None, Some(text.clone()));
+        let mut state = shared.state.lock().await;
+        state
+            .journal
+            .append(vec![EventPayload::ItemCompleted {
+                turn_id: turn_id.into(),
+                item,
+            }])
+            .await?;
+        state
+            .tool_result(call, text, false, Default::default(), Some(&item_id))
             .await?;
         return Ok(true);
     }
     if cancel.is_cancelled() {
+        finish(&mut item, ItemStatus::Interrupted, None, None);
+        shared
+            .state
+            .lock()
+            .await
+            .journal
+            .append(vec![EventPayload::ItemCompleted {
+                turn_id: turn_id.into(),
+                item,
+            }])
+            .await?;
         return Ok(true);
     }
-    let parent = shared.state.lock().await.journal.snapshot.id.clone();
     let result = async {
-        let mut args: Value = serde_json::from_str(&call.arguments).map_err(|_| {
-            CoreError::new(ErrorCode::InvalidRequest, "Invalid agent tool arguments")
-        })?;
-        let object = args.as_object_mut().ok_or_else(|| {
-            CoreError::new(
-                ErrorCode::InvalidRequest,
-                "Agent tool arguments must be an object",
-            )
-        })?;
-        object.insert("tool".into(), json!(call.name));
-        let command = serde_json::from_value(args).map_err(|error| {
-            CoreError::new(
-                ErrorCode::InvalidRequest,
-                &format!("Invalid agent tool arguments: {error}"),
-            )
-        })?;
-        let host = shared.agent_host.get().ok_or_else(|| {
+        let host = host.ok_or_else(|| {
             CoreError::new(
                 ErrorCode::InvalidRequest,
                 "Sub-agent tools require a session host",
             )
         })?;
-        host.execute(parent, command, cancel.clone()).await
+        host.execute(parent, command?, cancel.clone()).await
     }
     .await;
     let success = result.is_ok();
-    let mut text = result
-        .map(|value| value.to_string())
-        .unwrap_or_else(|error| error.message);
+    let (mut text, found, error) = match result {
+        Ok(output) => (output.value.to_string(), Some(output.agents), None),
+        Err(error) => (error.message.clone(), None, Some(error.message)),
+    };
     let mut fields = crate::hooks::tool_fields(call);
     fields["tool_response"] = json!(text);
     if let Some(reason) =
@@ -138,11 +260,24 @@ pub(crate) async fn execute(
     {
         text.push_str(&format!("\n\nPostToolUse hook: {reason}"));
     }
-    shared
-        .state
-        .lock()
-        .await
-        .tool_result(call, text, success, Default::default(), None)
+    let status = if success {
+        ItemStatus::Completed
+    } else if cancel.is_cancelled() {
+        ItemStatus::Interrupted
+    } else {
+        ItemStatus::Failed
+    };
+    finish(&mut item, status, found, error);
+    let mut state = shared.state.lock().await;
+    state
+        .journal
+        .append(vec![EventPayload::ItemCompleted {
+            turn_id: turn_id.into(),
+            item,
+        }])
+        .await?;
+    state
+        .tool_result(call, text, success, Default::default(), Some(&item_id))
         .await?;
     Ok(true)
 }

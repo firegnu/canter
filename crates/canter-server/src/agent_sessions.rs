@@ -8,7 +8,7 @@ impl canter_core::AgentHost for Host {
         parent: String,
         command: canter_core::AgentCommand,
         cancel: CancellationToken,
-    ) -> futures_util::future::BoxFuture<'_, Result<serde_json::Value, CoreError>> {
+    ) -> futures_util::future::BoxFuture<'_, Result<canter_core::AgentToolOutput, CoreError>> {
         Box::pin(async move {
             let app = self.0.upgrade().ok_or_else(|| CoreError {
                 code: ErrorCode::Conflict,
@@ -20,11 +20,14 @@ impl canter_core::AgentHost for Host {
                     message: "Turn interrupted".into(),
                 });
             }
-            let result: Result<serde_json::Value, ApiError> = async {
+            let result: Result<canter_core::AgentToolOutput, ApiError> = async {
                 match command {
                 canter_core::AgentCommand::SpawnAgent { task, kind } => {
                     let response = app.spawn_agent_of_type(parent, task, kind).await?;
-                    Ok(serde_json::json!({"id":response.session.id,"name":response.session.settings.name}))
+                    Ok(canter_core::AgentToolOutput {
+                        value: serde_json::json!({"id":response.session.id,"name":response.session.settings.name}),
+                        agents: vec![collab_agent(&response.session, false)],
+                    })
                 }
                 canter_core::AgentCommand::WaitAgent { ids, timeout_ms } => {
                     app.wait_agents(&parent, &ids, timeout_ms, &cancel).await
@@ -48,7 +51,10 @@ impl canter_core::AgentHost for Host {
                         }
                     };
                     let response = parent_session.send_agent_input(&child, message).await?;
-                    Ok(serde_json::json!({"id":id,"turnId":response.turn_id}))
+                    Ok(canter_core::AgentToolOutput {
+                        value: serde_json::json!({"id":id,"turnId":response.turn_id}),
+                        agents: vec![collab_agent(&child.snapshot().await.session, false)],
+                    })
                 }
                 canter_core::AgentCommand::CloseAgent { id } => {
                     if id == parent {
@@ -72,7 +78,10 @@ impl canter_core::AgentHost for Host {
                     app.sessions.lock().await.remove(&id);
                     app.registry_changed.notify_waiters();
                     let snapshot = app.agent_snapshot(&parent, &id, child_operation).await?;
-                    Ok(agent_value(&snapshot))
+                    Ok(canter_core::AgentToolOutput {
+                        value: agent_value(&snapshot),
+                        agents: vec![collab_agent(&snapshot, false)],
+                    })
                 }
                 }
             }.await;
@@ -80,6 +89,27 @@ impl canter_core::AgentHost for Host {
                 code: error.0.code,
                 message: error.0.message,
             })
+        })
+    }
+
+    fn describe(
+        &self,
+        parent: String,
+        ids: Vec<String>,
+    ) -> futures_util::future::BoxFuture<'_, Vec<CollabAgent>> {
+        Box::pin(async move {
+            let Some(app) = self.0.upgrade() else {
+                return ids.into_iter().map(unknown_agent).collect();
+            };
+            let mut agents = Vec::new();
+            for id in ids {
+                let operation = app.session_locks.lock(&id).await;
+                agents.push(match app.agent_snapshot(&parent, &id, operation).await {
+                    Ok(snapshot) => collab_agent(&snapshot, false),
+                    Err(_) => unknown_agent(id),
+                });
+            }
+            agents
         })
     }
 }
@@ -114,7 +144,7 @@ impl App {
         ids: &[String],
         timeout_ms: u64,
         cancel: &CancellationToken,
-    ) -> Result<serde_json::Value, ApiError> {
+    ) -> Result<canter_core::AgentToolOutput, ApiError> {
         use futures_util::{StreamExt, stream::FuturesUnordered};
         if ids.is_empty() || ids.iter().any(|id| id == parent) || timeout_ms == 0 {
             return Err(ApiError::new(
@@ -126,6 +156,7 @@ impl App {
         loop {
             let parent_operation = self.session_locks.lock(parent).await;
             let mut data = Vec::new();
+            let mut agents = Vec::new();
             let mut completed = Vec::new();
             let mut terminal = false;
             let mut changes = FuturesUnordered::new();
@@ -156,6 +187,7 @@ impl App {
                     });
                 }
                 data.push(agent_value(&snapshot));
+                agents.push(collab_agent(&snapshot, true));
                 if stopped {
                     completed.push(snapshot);
                 }
@@ -166,7 +198,10 @@ impl App {
                         parent.acknowledge_agent_result(snapshot).await?;
                     }
                 }
-                return Ok(serde_json::json!({"data":data}));
+                return Ok(canter_core::AgentToolOutput {
+                    value: serde_json::json!({"data":data}),
+                    agents,
+                });
             }
             drop(parent_operation);
             tokio::select! {
@@ -218,10 +253,71 @@ impl App {
         .await
         .map_err(|_| ApiError::internal())?
     }
+
+    /// P2-179: the user stops child `id` of `parent`. Not running: nothing
+    /// changes. Returns the child's list entry after.
+    pub(super) async fn stop_agent(
+        &self,
+        parent: &str,
+        id: &str,
+    ) -> Result<AgentSummary, ApiError> {
+        let _parent_operation = self.session_locks.lock(parent).await;
+        let child_operation = self.session_locks.lock(id).await;
+        self.agent_snapshot(parent, id, child_operation.clone())
+            .await?;
+        let parent_session = self.opened_session(parent).await.ok_or_else(|| {
+            ApiError::new(
+                ErrorCode::SessionNotResumed,
+                "Resume the parent session first",
+            )
+        })?;
+        // A child that is not open has no turn running.
+        if let Some(child) = self.opened_session(id).await {
+            parent_session.stop_agent(&child).await?;
+        }
+        let snapshot = self.agent_snapshot(parent, id, child_operation).await?;
+        AgentSummary::from_snapshot(&snapshot).ok_or_else(ApiError::internal)
+    }
 }
 
 fn agent_value(snapshot: &SessionSnapshot) -> serde_json::Value {
     serde_json::json!({"id":snapshot.id,"name":snapshot.settings.name,"status":snapshot.agent.as_ref().map(|agent| agent.status),"result":snapshot.agent.as_ref().and_then(|agent| agent.result.as_deref()).map(canter_tools::truncate_model_output)})
+}
+
+/// A child as a sub-agent tool card shows it; `with_result` adds the final
+/// reply as given to the model.
+fn collab_agent(snapshot: &SessionSnapshot, with_result: bool) -> CollabAgent {
+    CollabAgent {
+        id: snapshot.id.clone(),
+        name: snapshot
+            .settings
+            .name
+            .clone()
+            .unwrap_or_else(|| snapshot.id.clone()),
+        agent_type: snapshot
+            .parent
+            .as_ref()
+            .map(|parent| parent.agent_type)
+            .unwrap_or_default(),
+        status: snapshot.agent.as_ref().map(|agent| agent.status),
+        result: snapshot
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.result.as_deref())
+            .filter(|_| with_result)
+            .map(canter_tools::truncate_model_output),
+    }
+}
+
+/// An id that is not a child of the parent: known by its id alone.
+fn unknown_agent(id: String) -> CollabAgent {
+    CollabAgent {
+        name: id.clone(),
+        id,
+        agent_type: AgentType::default(),
+        status: None,
+        result: None,
+    }
 }
 
 struct Member {

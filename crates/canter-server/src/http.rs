@@ -280,6 +280,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::SESSION_TRASH, post(trash))
         .route(routes::SESSION_FORK, post(fork))
         .route(routes::SESSION_AGENTS, get(agents))
+        .route(routes::SESSION_AGENT_STOP, post(stop_agent))
         .route(routes::GOAL, get(goal).post(set_goal).delete(clear_goal))
         .route(routes::GOAL_PAUSE, post(pause_goal))
         .route(routes::GOAL_RESUME, post(resume_goal))
@@ -422,6 +423,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         features: Some(vec![
             "subagentSessions".into(),
             "subagentTools".into(),
+            "subagentStop".into(),
             "memory".into(),
             "runningTurns".into(),
             "sessionFork".into(),
@@ -624,18 +626,19 @@ async fn agents(
             Err(error) if error.0.code == ErrorCode::SessionNotFound => continue,
             Err(error) => return Err(error),
         };
-        if let (Some(parent), Some(agent)) = (snapshot.parent, snapshot.agent) {
-            data.push(AgentSummary {
-                id: snapshot.id,
-                task: parent.task,
-                status: agent.status,
-                result: agent.result,
-                created_at: snapshot.created_at,
-                updated_at: snapshot.updated_at,
-            });
+        if let Some(agent) = AgentSummary::from_snapshot(&snapshot) {
+            data.push(agent);
         }
     }
     Ok(Json(AgentListResponse { data }))
+}
+
+/// P2-179: stop a running sub-agent without waking the parent.
+async fn stop_agent(
+    State(app): State<Arc<App>>,
+    ApiPath((id, agent_id)): ApiPath<(String, String)>,
+) -> Result<Json<AgentSummary>, ApiError> {
+    Ok(Json(app.stop_agent(&id, &agent_id).await?))
 }
 
 async fn running_turns(State(app): State<Arc<App>>) -> Json<RunningTurnsResponse> {

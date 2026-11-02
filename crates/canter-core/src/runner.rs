@@ -900,7 +900,7 @@ async fn execute(
     {
         return shared.state.lock().await.tool_result(&call, "This tool is unavailable to this sub-agent. Include unresolved questions in your final reply.".into(), false, Default::default(), None).await;
     }
-    if crate::agent_tools::execute(shared, &call, cancel).await? {
+    if crate::agent_tools::execute(shared, turn_id, &call, cancel).await? {
         return Ok(());
     }
     if crate::goal::execute(shared, &call, cancel).await? {

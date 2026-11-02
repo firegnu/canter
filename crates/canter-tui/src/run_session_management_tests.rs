@@ -133,6 +133,9 @@ async fn fork_switches_with_history_or_keeps_original_on_failure() {
             let request = requests.recv().await.unwrap();
             assert_eq!(request.path, "/v1/sessions/forked/skills");
             request.json(json!({"data":[]}));
+            let request = requests.recv().await.unwrap();
+            assert_eq!(request.path, "/v1/sessions/forked/agents");
+            request.json(json!({"data":[]}));
         };
         let (receiver, ()) = tokio::time::timeout(Duration::from_secs(5), async {
             tokio::join!(chat.fork_session(ui), drive)

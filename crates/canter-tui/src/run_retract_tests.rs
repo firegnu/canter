@@ -22,7 +22,7 @@ pub(super) struct Harness {
     pub(super) chat: Chat<SocketConnector>,
     pub(super) ui: Ui<TestBackend>,
     pub(super) requests: mpsc::UnboundedReceiver<Request>,
-    messages: mpsc::UnboundedReceiver<Message>,
+    pub(super) messages: mpsc::UnboundedReceiver<Message>,
     pub(super) server: tokio::task::JoinHandle<()>,
     _temp: tempfile::TempDir,
 }
@@ -68,6 +68,7 @@ impl Harness {
             status_line: None,
             sender,
             pump: tokio::spawn(async {}),
+            main_pump: None,
             btw: None,
             naming,
         };

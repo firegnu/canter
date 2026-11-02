@@ -57,6 +57,10 @@
         },
         "status": {
           "$ref": "#/$defs/AgentStatus"
+        },
+        "stoppedByUser": {
+          "description": "P2-179: the user stopped the latest agent turn (`agent.stopped`);\ncleared when another agent turn starts.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -77,11 +81,29 @@
     },
     "AgentSummary": {
       "properties": {
+        "agentType": {
+          "$ref": "#/$defs/AgentType",
+          "default": "general"
+        },
         "createdAt": {
           "format": "int64",
           "type": "integer"
         },
+        "durationMs": {
+          "description": "How long the latest agent turn took; absent while it runs.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "id": {
+          "type": "string"
+        },
+        "name": {
+          "default": "",
+          "description": "P2-179 fields; absent from older servers.",
           "type": "string"
         },
         "result": {
@@ -90,8 +112,19 @@
             "null"
           ]
         },
+        "startedAt": {
+          "description": "Unix ms when the latest agent turn started.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "status": {
           "$ref": "#/$defs/AgentStatus"
+        },
+        "stoppedByUser": {
+          "type": "boolean"
         },
         "task": {
           "type": "string"
@@ -470,6 +503,54 @@
           "type": "object"
         }
       ]
+    },
+    "CollabAgent": {
+      "description": "P2-179: a sub-agent named on a `collabAgentToolCall` card or a\n`backgroundEvent` that delivered its result, as last known.",
+      "properties": {
+        "agentType": {
+          "$ref": "#/$defs/AgentType",
+          "default": "general"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "result": {
+          "description": "The final reply as given to the model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "CollabAgentTool": {
+      "description": "The four sub-agent tools; names follow Codex's `CollabAgentTool`.",
+      "enum": [
+        "spawnAgent",
+        "wait",
+        "sendInput",
+        "closeAgent",
+        "unknown"
+      ],
+      "type": "string"
     },
     "CommandRule": {
       "additionalProperties": false,
@@ -1582,6 +1663,40 @@
           "type": "object"
         },
         {
+          "description": "P2-179, on a child session: the user stopped this agent turn.",
+          "properties": {
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "agent.stopped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turnId"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "P2-179, on the parent: a child's list entry after its status, name or\nlatest turn changed.",
+          "properties": {
+            "agent": {
+              "$ref": "#/$defs/AgentSummary"
+            },
+            "type": {
+              "const": "agent.updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "agent"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "agentId": {
               "type": "string"
@@ -2339,6 +2454,40 @@
           "type": "object"
         },
         {
+          "description": "P2-179, on a child session: the user stopped this agent turn.",
+          "properties": {
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "agent.stopped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "turnId"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "P2-179, on the parent: a child's list entry after its status, name or\nlatest turn changed.",
+          "properties": {
+            "agent": {
+              "$ref": "#/$defs/AgentSummary"
+            },
+            "type": {
+              "const": "agent.updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "agent"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "agentId": {
               "type": "string"
@@ -2830,6 +2979,17 @@
         },
         {
           "properties": {
+            "agent": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CollabAgent"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "P2-179: the sub-agent whose result this delivered, with its status."
+            },
             "commandId": {
               "format": "uint64",
               "minimum": 0,
@@ -2853,6 +3013,69 @@
             "type",
             "id",
             "text"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "P2-179: one call of a sub-agent tool, after Codex `collabAgentToolCall`.",
+          "properties": {
+            "agents": {
+              "description": "The agents named or started, in the call's order, as last known.",
+              "items": {
+                "$ref": "#/$defs/CollabAgent"
+              },
+              "type": "array"
+            },
+            "durationMs": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "error": {
+              "description": "Why the call failed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "prompt": {
+              "description": "spawn_agent's task or send_input's message.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "startedAt": {
+              "description": "Unix ms when the call started and how long it took once done.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "tool": {
+              "$ref": "#/$defs/CollabAgentTool"
+            },
+            "type": {
+              "const": "collabAgentToolCall",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "tool",
+            "status",
+            "agents"
           ],
           "type": "object"
         },

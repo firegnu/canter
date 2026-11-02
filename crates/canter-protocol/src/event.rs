@@ -141,6 +141,13 @@ pub enum EventPayload {
         #[serde(flatten)]
         forwarded: crate::AgentRequest,
     },
+    /// P2-179, on a child session: the user stopped this agent turn.
+    #[serde(rename = "agent.stopped")]
+    AgentStopped { turn_id: String },
+    /// P2-179, on the parent: a child's list entry after its status, name or
+    /// latest turn changed.
+    #[serde(rename = "agent.updated")]
+    AgentUpdated { agent: crate::AgentSummary },
     #[serde(rename = "agent.request.resolved")]
     AgentRequestResolved {
         agent_id: String,

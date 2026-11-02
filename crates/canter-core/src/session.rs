@@ -2255,6 +2255,7 @@ pub(crate) fn interrupted_turn(mut turn: Turn) -> Vec<EventPayload> {
             | Item::FileChange { status, .. }
             | Item::FileRead { status, .. }
             | Item::UserInput { status, .. }
+            | Item::CollabAgentToolCall { status, .. }
                 if *status == ItemStatus::InProgress =>
             {
                 *status = ItemStatus::Failed;

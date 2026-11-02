@@ -279,6 +279,18 @@ async fn running_child_blocks_trash_and_rewind_without_changing_parent() {
         test.read(&child).await.session.agent.unwrap().status,
         AgentStatus::Running
     );
+    // The parent hears that the child's turn started (P2-179); after that
+    // only the attempts below could change it.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !event_types(&test, &parent).await.iter().any(|event| {
+            event["type"] == "agent.updated" && event["agent"]["startedAt"].is_number()
+        }) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let before = test.read(&parent).await;
     assert_eq!(
         test.client
             .post(format!("{parent}/trash"))
@@ -546,7 +558,7 @@ async fn agent_tools_wait_continue_interrupted_and_close_without_losing_results(
         )
         .await
         .unwrap();
-    assert_eq!(result["data"][0]["status"], "running");
+    assert_eq!(result.value["data"][0]["status"], "running");
     let child = test.app.opened_session(&child_id).await.unwrap();
     let turn = child
         .snapshot()
@@ -575,7 +587,7 @@ async fn agent_tools_wait_continue_interrupted_and_close_without_losing_results(
         )
         .await
         .unwrap();
-    assert_eq!(result["data"][0]["status"], "interrupted");
+    assert_eq!(result.value["data"][0]["status"], "interrupted");
     host.execute(
         parent_id.clone(),
         AgentCommand::SendInput {
@@ -597,8 +609,8 @@ async fn agent_tools_wait_continue_interrupted_and_close_without_losing_results(
         )
         .await
         .unwrap();
-    assert_eq!(result["data"][0]["status"], "completed");
-    assert_eq!(result["data"][0]["result"], "recovered");
+    assert_eq!(result.value["data"][0]["status"], "completed");
+    assert_eq!(result.value["data"][0]["result"], "recovered");
     host.execute(
         parent_id,
         AgentCommand::CloseAgent { id: child_id },
@@ -787,10 +799,10 @@ async fn wait_returns_all_states_on_any_completion_and_bounds_the_reply() {
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(result["data"].as_array().unwrap().len(), 2);
-    assert_eq!(result["data"][0]["status"], "completed");
-    assert_eq!(result["data"][1]["status"], "running");
-    let bounded = result["data"][0]["result"].as_str().unwrap();
+    assert_eq!(result.value["data"].as_array().unwrap().len(), 2);
+    assert_eq!(result.value["data"][0]["status"], "completed");
+    assert_eq!(result.value["data"][1]["status"], "running");
+    let bounded = result.value["data"][0]["result"].as_str().unwrap();
     assert!(bounded.len() <= canter_tools::MAX_MODEL_OUTPUT_BYTES);
     assert!(
         bounded.starts_with("Start") && bounded.ends_with("End") && bounded.contains("[truncated ")
@@ -870,8 +882,8 @@ async fn wait_withdraws_queued_completion_without_waking_and_survives_reopen() {
         )
         .await
         .unwrap();
-    assert_eq!(result["data"][0]["status"], "completed");
-    assert_eq!(result["data"][0]["result"], "recovered");
+    assert_eq!(result.value["data"][0]["status"], "completed");
+    assert_eq!(result.value["data"][0]["result"], "recovered");
     assert_eq!(
         session.context().await.messages.count,
         before,
@@ -970,8 +982,8 @@ async fn close_agent_stops_its_background_command_and_keeps_its_final_reply() {
         )
         .await
         .unwrap();
-    assert_eq!(result["status"], "closed");
-    assert_eq!(result["result"], "Started the command");
+    assert_eq!(result.value["status"], "closed");
+    assert_eq!(result.value["result"], "Started the command");
     assert!(
         test.read(&child)
             .await
@@ -1011,7 +1023,7 @@ async fn wait_only_acknowledges_terminal_results_and_keeps_already_sent_notices(
         )
         .await
         .unwrap();
-    assert_eq!(timeout["data"][0]["status"], "running");
+    assert_eq!(timeout.value["data"][0]["status"], "running");
     let done = spawn(&test, &url, "Inspect code").await;
     idle(&test, &done).await;
     let done_id = done.rsplit('/').next().unwrap().to_owned();
@@ -1026,8 +1038,8 @@ async fn wait_only_acknowledges_terminal_results_and_keeps_already_sent_notices(
         )
         .await
         .unwrap();
-    assert_eq!(result["data"][0]["status"], "completed");
-    assert_eq!(result["data"][1]["status"], "running");
+    assert_eq!(result.value["data"][0]["status"], "completed");
+    assert_eq!(result.value["data"][1]["status"], "running");
     let child = test.app.opened_session(&running_id).await.unwrap();
     let turn_id = child
         .snapshot()
@@ -1088,6 +1100,435 @@ async fn wait_only_acknowledges_terminal_results_and_keeps_already_sent_notices(
             1
         );
     }
+    test.stop().await;
+    fake.stop().await;
+}
+
+async fn stop_agent(test: &Harness, parent: &str, child: &str) -> AgentSummary {
+    let id = child.rsplit('/').next().unwrap();
+    test.client
+        .post(format!("{parent}/agents/{id}/stop"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+async fn event_types(test: &Harness, url: &str) -> Vec<serde_json::Value> {
+    let id = url.rsplit('/').next().unwrap();
+    let mut events = test
+        .client
+        .get(format!("http://localhost/v1/events?session={id}&after=0"))
+        .send()
+        .await
+        .unwrap();
+    // The stream stays open; read what is there now.
+    let mut text = String::new();
+    while let Ok(Ok(Some(chunk))) =
+        tokio::time::timeout(Duration::from_millis(200), events.chunk()).await
+    {
+        text.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    text.lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn user_stop_does_not_wake_and_tells_the_parent_at_its_next_request() {
+    let reply = |delta: serde_json::Value, finish: &str| {
+        model_server::Reply::sse(format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            json!({"choices":[{"index":0,"delta":delta,"finish_reason":finish}]})
+        ))
+    };
+    let fake = model_server::Server::start(vec![
+        reply(json!({"content":"Ready"}), "stop"),
+        reply(json!({"tool_calls":[{"index":0,"id":"background","type":"function","function":{"name":"shell","arguments":"{\"command\":\"sleep 30\",\"background\":true}"}}]}), "tool_calls"),
+        model_server::Reply { hang: true, ..model_server::Reply::sse("") },
+        reply(json!({"content":"Noted"}), "stop"),
+        reply(json!({"content":"Done again"}), "stop"),
+        reply(json!({"content":"Got the result"}), "stop"),
+    ])
+    .await;
+    let model = canter_model::ChatCompletions::new(
+        &fake.base_url,
+        canter_model::ApiKey::new(model_server::KEY),
+    )
+    .unwrap();
+    let test = Harness::with_model(Arc::new(model)).await;
+    let url = parent(&test).await;
+    test.patch(&url, json!({"approvalPolicy":"allowAll"})).await;
+    let child = spawn(&test, &url, "Run a long job").await;
+    let child_id = child.rsplit('/').next().unwrap().to_owned();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while fake.requests.lock().unwrap().len() < 3 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        test.read(&child)
+            .await
+            .session
+            .background_commands
+            .iter()
+            .any(|command| command.running)
+    );
+
+    let stopped = stop_agent(&test, &url, &child).await;
+    assert_eq!(stopped.status, AgentStatus::Interrupted);
+    assert!(stopped.stopped_by_user);
+    let snapshot = test.read(&child).await.session;
+    assert!(
+        snapshot
+            .background_commands
+            .iter()
+            .all(|command| !command.running),
+        "its background commands stop with it"
+    );
+    assert!(snapshot.agent.unwrap().stopped_by_user);
+    // Stopping again, or a child that is not running, changes nothing.
+    assert!(stop_agent(&test, &url, &child).await.stopped_by_user);
+    let agents: AgentListResponse = test
+        .client
+        .get(format!("{url}/agents"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(agents.data[0].stopped_by_user);
+    assert!(
+        event_types(&test, &url).await.iter().any(|event| {
+            event["type"] == "agent.updated" && event["agent"]["stoppedByUser"] == true
+        }),
+        "the parent's clients hear of the stop"
+    );
+
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert_eq!(
+        test.read(&url).await.session.turns.len(),
+        1,
+        "a stop by the user must not wake the parent"
+    );
+    assert_eq!(fake.requests.lock().unwrap().len(), 3);
+
+    say(&test, &url, "What next?").await;
+    let sent = fake.requests.lock().unwrap()[3]["messages"].to_string();
+    assert!(sent.contains(&format!("[Sub-agent {child_id} (")), "{sent}");
+    assert!(sent.contains("stopped by the user"), "{sent}");
+    assert!(sent.contains("Do not restart it"), "{sent}");
+    assert!(
+        !sent.contains(") interrupted]"),
+        "no completion notice for the stopped turn: {sent}"
+    );
+
+    // Sent to again, it runs, and its result reaches the parent as usual.
+    test.client
+        .post(format!("{child}/input"))
+        .json(&json!({"input":[{"type":"text","text":"Go on"}],"mode":"queue","clientName":"test"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    idle(&test, &child).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while test.read(&url).await.session.turns.len() < 3 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    idle(&test, &url).await;
+    let sent = fake.requests.lock().unwrap()[5]["messages"].to_string();
+    assert!(sent.contains(") completed]"), "{sent}");
+    let agents: AgentListResponse = test
+        .client
+        .get(format!("{url}/agents"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(agents.data[0].status, AgentStatus::Completed);
+    assert!(!agents.data[0].stopped_by_user);
+    assert!(
+        event_types(&test, &child)
+            .await
+            .iter()
+            .any(|event| event["type"] == "agent.stopped")
+    );
+    test.stop().await;
+    fake.stop().await;
+}
+
+#[tokio::test]
+async fn user_stop_while_the_parent_works_reaches_its_next_request() {
+    let reply = |delta: serde_json::Value, finish: &str| {
+        model_server::Reply::sse(format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            json!({"choices":[{"index":0,"delta":delta,"finish_reason":finish}]})
+        ))
+    };
+    let fake = model_server::Server::start(vec![
+        reply(json!({"content":"Ready"}), "stop"),
+        model_server::Reply { hang: true, ..model_server::Reply::sse("") },
+        reply(json!({"tool_calls":[{"index":0,"id":"sleep","type":"function","function":{"name":"shell","arguments":"{\"command\":\"sleep 2\"}"}}]}), "tool_calls"),
+        reply(json!({"content":"Slept"}), "stop"),
+    ])
+    .await;
+    let model = canter_model::ChatCompletions::new(
+        &fake.base_url,
+        canter_model::ApiKey::new(model_server::KEY),
+    )
+    .unwrap();
+    let test = Harness::with_model(Arc::new(model)).await;
+    let url = parent(&test).await;
+    test.patch(&url, json!({"approvalPolicy":"allowAll"})).await;
+    let child = spawn(&test, &url, "Run a long job").await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while fake.requests.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    test.client
+        .post(format!("{url}/input"))
+        .json(&json!({"input":[{"type":"text","text":"Sleep"}],"mode":"queue","clientName":"test"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let busy = test
+                .read(&url)
+                .await
+                .session
+                .turns
+                .last()
+                .is_some_and(|turn| {
+                    turn.items.iter().any(|item| {
+                        matches!(
+                            item,
+                            Item::CommandExecution {
+                                status: ItemStatus::InProgress,
+                                ..
+                            }
+                        )
+                    })
+                });
+            if busy {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(stop_agent(&test, &url, &child).await.stopped_by_user);
+    let snapshot = idle(&test, &url).await;
+    assert_eq!(snapshot.turns.len(), 2, "no turn of its own");
+    let requests = fake.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 4);
+    assert!(
+        requests[3]["messages"]
+            .to_string()
+            .contains("stopped by the user")
+    );
+    test.stop().await;
+    fake.stop().await;
+}
+
+/// Drives the four tools from the parent; a child answers at once. The
+/// parent spawns, waits, sends, closes, then waits on an id not its own.
+struct Collab;
+impl Model for Collab {
+    fn stream(&self, request: Request, _: CancellationToken) -> ModelStream<'_> {
+        let parent = request.tools.iter().any(|tool| tool.name == "spawn_agent");
+        let started = request.messages.iter().any(|message| {
+            matches!(message, canter_model::Message::User { text } if text == "Use agents")
+        });
+        let results: Vec<serde_json::Value> = request
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                canter_model::Message::ToolResult { text, .. } => {
+                    Some(serde_json::from_str(text).unwrap_or(json!(text)))
+                }
+                _ => None,
+            })
+            .collect();
+        let id = results.first().map(|spawned| spawned["id"].clone());
+        let call = |name: &str, arguments: serde_json::Value| {
+            Some(canter_model::ToolCall {
+                id: format!("call-{}", results.len()),
+                name: name.into(),
+                arguments: arguments.to_string(),
+            })
+        };
+        let call = match (parent && started, results.len()) {
+            (false, _) => None,
+            (_, 0) => call(
+                "spawn_agent",
+                json!({"task":"Inspect the parser\nthen report","type":"explorer"}),
+            ),
+            (_, 1) => call("wait_agent", json!({"ids":[id],"timeoutMs":5000})),
+            (_, 2) => call(
+                "send_input",
+                json!({"id":id,"message":"Also check the lexer\nthanks"}),
+            ),
+            (_, 3) => call("close_agent", json!({"id":id})),
+            (_, 4) => call("wait_agent", json!({"ids":["missing"]})),
+            _ => None,
+        };
+        Box::pin(futures_util::stream::iter(match call {
+            Some(call) => vec![
+                Ok(ModelEvent::ToolCall(call)),
+                Ok(ModelEvent::Finished(FinishReason::ToolCalls)),
+            ],
+            None => vec![
+                Ok(ModelEvent::TextDelta {
+                    item_id: "text".into(),
+                    delta: if parent {
+                        "Done"
+                    } else {
+                        "Found it.\nLine two"
+                    }
+                    .into(),
+                }),
+                Ok(ModelEvent::Finished(FinishReason::Stop)),
+            ],
+        }))
+    }
+}
+
+#[tokio::test]
+async fn sub_agent_tools_leave_cards_naming_their_agents() {
+    let test = Harness::with_model(Arc::new(Collab)).await;
+    let url = parent(&test).await;
+    say(&test, &url, "Use agents").await;
+    let snapshot = test.read(&url).await.session;
+    let cards: Vec<&Item> = snapshot.turns[1]
+        .items
+        .iter()
+        .filter(|item| matches!(item, Item::CollabAgentToolCall { .. }))
+        .collect();
+    assert_eq!(cards.len(), 5, "{cards:#?}");
+    let agents: AgentListResponse = test
+        .client
+        .get(format!("{url}/agents"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let child = &agents.data[0];
+    assert!(child.name.starts_with("agent-"));
+    assert_eq!(child.agent_type, AgentType::Explorer);
+    assert!(child.started_at.is_some());
+    let card = |index: usize| match cards[index] {
+        Item::CollabAgentToolCall {
+            tool,
+            status,
+            prompt,
+            agents,
+            error,
+            started_at,
+            duration_ms,
+            ..
+        } => {
+            assert!(started_at.is_some() && duration_ms.is_some());
+            (
+                *tool,
+                *status,
+                prompt.clone(),
+                agents.clone(),
+                error.clone(),
+            )
+        }
+        _ => unreachable!(),
+    };
+    let (tool, status, prompt, agents, _) = card(0);
+    assert_eq!(tool, CollabAgentTool::SpawnAgent);
+    assert_eq!(status, ItemStatus::Completed);
+    assert_eq!(prompt.as_deref(), Some("Inspect the parser\nthen report"));
+    assert_eq!(agents[0].id, child.id);
+    assert_eq!(agents[0].name, child.name);
+    assert_eq!(agents[0].agent_type, AgentType::Explorer);
+    let (tool, status, _, agents, _) = card(1);
+    assert_eq!(
+        (tool, status),
+        (CollabAgentTool::Wait, ItemStatus::Completed)
+    );
+    assert_eq!(agents[0].name, child.name);
+    assert_eq!(agents[0].status, Some(AgentStatus::Completed));
+    assert_eq!(agents[0].result.as_deref(), Some("Found it.\nLine two"));
+    let (tool, _, prompt, agents, _) = card(2);
+    assert_eq!(tool, CollabAgentTool::SendInput);
+    assert_eq!(prompt.as_deref(), Some("Also check the lexer\nthanks"));
+    assert_eq!(agents[0].name, child.name);
+    let (tool, _, _, agents, _) = card(3);
+    assert_eq!(tool, CollabAgentTool::CloseAgent);
+    assert_eq!(agents[0].name, child.name);
+    assert_eq!(agents[0].status, Some(AgentStatus::Closed));
+    let (tool, status, _, agents, error) = card(4);
+    assert_eq!((tool, status), (CollabAgentTool::Wait, ItemStatus::Failed));
+    assert_eq!(agents[0].name, "missing");
+    assert!(
+        error.as_ref().is_some_and(|error| !error.is_empty()),
+        "{error:?}"
+    );
+    // While a wait runs, its card already names the agents it waits for.
+    let events = event_types(&test, &url).await;
+    let started = events
+        .iter()
+        .find(|event| event["type"] == "item.started" && event["item"]["tool"] == "wait")
+        .unwrap();
+    assert_eq!(started["item"]["status"], "inProgress");
+    assert_eq!(started["item"]["agents"][0]["name"], json!(child.name));
+    test.stop().await;
+}
+
+#[tokio::test]
+async fn a_result_sent_to_the_model_names_its_agent() {
+    let (test, fake) = harness(false).await;
+    let url = parent(&test).await;
+    let child = spawn(&test, &url, "Inspect code").await;
+    idle(&test, &child).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while test.read(&url).await.session.turns.len() < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let snapshot = idle(&test, &url).await;
+    let name = test.read(&child).await.session.settings.name.unwrap();
+    let agent = snapshot.turns[1]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::BackgroundEvent { agent, .. } => agent.clone(),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(agent.id, child.rsplit('/').next().unwrap());
+    assert_eq!(agent.name, name);
+    assert_eq!(agent.status, Some(AgentStatus::Completed));
     test.stop().await;
     fake.stop().await;
 }

@@ -32,7 +32,7 @@ mod telemetry;
 pub mod usage;
 mod user_shell;
 
-pub use agent_tools::{AgentCommand, AgentHost};
+pub use agent_tools::{AgentCommand, AgentHost, AgentToolOutput};
 pub use agents::SessionMaintenance;
 pub use agents::recover_agent_sessions;
 pub use btw::BtwStream;

@@ -1033,7 +1033,15 @@ impl Terminal {
         let screen = self.screen();
         let lines: Vec<&str> = screen.lines().collect();
         match lines.iter().rposition(|line| line.starts_with('╭')) {
-            Some(top) if top > 0 => lines[top - 1].trim().to_owned(),
+            Some(top) if top > 0 => {
+                // The sub-agents row (P2-179) goes between it and the box.
+                let mut top = top - 1;
+                let line = lines[top].trim();
+                if top > 0 && line.starts_with("▸ ") && line.contains(" sub-agent") {
+                    top -= 1;
+                }
+                lines[top].trim().to_owned()
+            }
             _ => "（还没画出来）".to_owned(),
         }
     }

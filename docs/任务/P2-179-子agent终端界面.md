@@ -110,3 +110,40 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+### 做了什么
+
+- 服务端：新接口 `POST /v1/sessions/{id}/agents/{agentId}/stop` 和 feature `subagentStop`。在父会话里停：取消子 agent 当前轮、停它的后台命令，这一轮不发完成通知、不叫醒；子会话记 `agent.stopped`，快照 `stoppedByUser`；父会话私有历史加一条英文说明，空闲时随下一次输入、忙时随当轮下一次模型请求带给模型。父会话在子 agent 变化时发 `agent.updated`；`AgentSummary` 加名字、类型、`stoppedByUser`、`startedAt`、`durationMs`。四个子 agent 工具改为产出 `collabAgentToolCall` 项目（开始时 inProgress，结束时带各 agent 的状态和交给模型的回复）；完成通知的 `backgroundEvent` 带上 `agent`。TypeScript 和 JSON schema 已重新生成。
+- 终端（新文件 `crates/canter-tui/src/agents.rs`）：输入框上方的 `▸ N sub-agents …` 一行，点它或 `/agents` 原位置展开（`▾` 标题、每行状态符号/名字/灰色类型状态用时、按键行），↑↓、回车、`s`、Esc；没有子 agent 时 `/agents` 弹 `No sub-agents in this session.`。`/agents` 进了 `/` 列表和 `?` 帮助。回车整屏切到子会话：顶上两行、输入框灰字、`/agents` 最上面多 `← Main session · <名字>`；这一屏另订阅主会话事件流，主会话和别的子 agent 的批准照常弹出，回答发往各自会话；Esc 在子 agent 在跑时调停止接口。四种卡片、灰色 `◇ Sub-agent <name> <status> — result sent to the model`、失败红卡片，`/export` 对应英文。
+- DESIGN：第 8 条加 P2-179 协议一条（含和 Codex `CollabAgentToolCall`、`turn/interrupt` 的不同和原因），新增「子 agent 终端界面（P2-179）」一节。
+
+### 验证了什么
+
+- 先写的停掉测试：`user_stop_does_not_wake_and_tells_the_parent_at_its_next_request`、`user_stop_while_the_parent_works_reaches_its_next_request`，改之前跑是红的（`a stop by the user must not wake the parent`，模型请求 2 次、应为 1 次），改完变绿。
+- 新加的针对测试：服务端 `sub_agent_tools_leave_cards_naming_their_agents`、`a_result_sent_to_the_model_names_its_agent`（假模型回放）；终端 `run_agents_tests.rs` 四个（收起行和展开列表、`s` 只停在跑的、列表随事件变；没有子 agent 的提示；子会话一屏的两行、灰字、主会话入口、主会话批准弹出和回答走向、Esc 调停止；四种卡片、粗体名字、折叠和 ctrl+o 展开、◇ 一行），`agents.rs` 计数单测，`export.rs` 的 `sub_agent_cards_export_as_what_they_say`（现有假服务端）。
+- 改过的 crate 全部测试：`cargo nextest run -p canter-protocol -p canter-core -p canter-tui -p canter-server` 和 `-p canter` 都过（canter-server 231、canter 183）。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 干净；`crates/canter-tui/src` 新加字符串里没有中文。
+- 没有调真实模型，没有在真终端里用真模型走一遍。
+
+### 拿主意的地方
+
+- 停掉用新接口，不给现有打断加标记：列表不知道子 agent 当前的轮 ID，「不叫醒、下次请求带说明」要经父会话做；普通的子会话打断照 P2-178 不变。
+- 列表靠父会话的新事件 `agent.updated` 更新，客户端不用订阅每个子会话。
+- 在子会话一屏，主会话自己的批准不加 `Requested by sub-agent` 那一行（`approval.rs` 只改了判断来源的一个条件，批准框本身没改）；只转批准类请求，主会话的计划批准和提问不搬到子会话一屏。
+- Esc 只在子 agent 正在跑时等于 `s`，否则照普通打断（比如 `!` 命令）。带 `parent` 的会话（包括从 `/resume` 打开的）都按子会话一屏画。
+- `wait_agent` 卡片各状态都写 `Waiting for`（照线框）；结果折叠到 3 行，同 MCP 工具输出；用时用 canter 现有的 `42s` / `2m 13s`。
+- 子会话一屏跟主会话的事件流断线时只重连订阅，不替主会话恢复。
+- 现有切换会话的测试会多收到一次 `/agents` 列表请求，已在测试里应答。
+
+### 没做的事
+
+- 任务说的不要做的都没做：钩子和统计（P2-180）、自定义子 agent 类型、批准框、`canter exec`、「后台运行中」。
+- `/rewind`、`/new`、`/handoff` 在子会话一屏照 P2-177 原样，没有改，也没碰到冲突。
+- 子 agent 名字仍是 P2-178 的 `agent-xxxxxx`。
+
+### 踩过的坑
+
+- 终端测试的假服务端在时刻 0 画第一帧，回答批准后输入有 300 ms 的防误触，按键要放在之后才生效；在跑的用时要把 `startedAt` 设成负数才有值。
+- 父会话多了 `agent.updated` 事件后，`running_child_blocks_trash_and_rewind_without_changing_parent` 取「之前」的快照太早，改成等这条事件到了再取。
+- `crates/canter/tests/tui.rs` 读输入框上方状态行的辅助函数读到了新加的子 agent 行，改成跳过它。

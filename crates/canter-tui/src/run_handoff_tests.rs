@@ -97,6 +97,9 @@ async fn clear_context_plan_resolves_then_starts_a_new_session_with_selected_per
             let skills = next(requests).await;
             assert_eq!(skills.path, "/v1/sessions/implementation/skills");
             skills.json(json!({"data":[]}));
+            let agents = next(requests).await;
+            assert_eq!(agents.path, "/v1/sessions/implementation/agents");
+            agents.json(json!({"data":[]}));
         }
     );
     assert!(receiver.is_some());
@@ -200,6 +203,9 @@ async fn esc_twice_returns_to_the_original_session_and_shows_its_conversation() 
             let skills = next(requests).await;
             assert_eq!(skills.path, "/v1/sessions/original/skills");
             skills.json(json!({"data":[]}));
+            let agents = next(requests).await;
+            assert_eq!(agents.path, "/v1/sessions/original/agents");
+            agents.json(json!({"data":[]}));
         }
     );
     assert!(receiver.is_some());
