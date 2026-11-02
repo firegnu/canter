@@ -173,3 +173,13 @@
 - 针对验证：先复现原四条 canter 失败。新增两条权限测试在修复前均实际写出了 pending.txt、next.txt 和 shell-write.txt，修复后全部拒绝，读取和子清单仍成功；通知测试修复前 wait 后仍留有第三条上下文消息，修复后撤回且不叫醒，重开不补发，下一子轮仍正常叫醒。另覆盖超时返回 running、混合返回终态与 running、保留其他子通知和已发送历史前缀；工具描述通过实际模型请求检查。子 agent 相关 30 条及原四条 canter 回归均通过。
 - 最终验证：使用独立编译目录，前台完成 `cargo nextest run -p canter-core -p canter-protocol -p canter-store -p canter-tools -p canter-server -p canter-tui -p canter --no-fail-fast --test-threads 4`：1487 条全部通过，28 条按现有配置跳过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。测试只用隔离目录及假模型，真实模型调用 0 次；未跑全仓或文档测试，未合并、推送、安装或重启用户服务。
 - 踩过的坑：首次七 crate 检查发现 core 的沙箱关闭请求夹具也包含旧 send_input 描述，补齐后保留原字节断言。默认并发完整运行曾出现升级/回退测试服务替换连接失败，以及两条 LSP 同步测试等待诊断超时；三条单独复查全部通过，再以 4 路并发完整跑七个 crate 全部通过，没有改这些实现、断言或超时。新增测试的显式 drop 未通过 clippy 的持锁跨 await 检查，改成明确的块作用域后通过。
+
+## 主控审查
+
+2026-11-02，canter/main。
+
+- 第一次审查：diff 只动了该动的，「不要做」一件没做；exec 单轮和自动叫醒冲突，开发停下来问，主控定 A（exec 不自动续轮，结果留到下一次输入；交互主会话照常叫醒），写进 DESIGN。全套重跑发现 canter crate 4 条测试挂（工具清单和请求夹具没补新工具，开发没跑 `-p canter`），交回返工。
+- 交叉审查（Claude Code opus[1m] / xhigh）：可以合并，必须改 0、建议改 4。用户定：返工时一并修建议 1（wait_agent 拿到结果后通知重复交付）、2（已在跑的通用子 agent 跟主会话计划模式和审查轮实时收紧）、3（只改 send_input 说明）；建议 4（父会话打开时子会话自己的目标不记账）不改，记 HANDOFF。
+- 返工后复核：四条都改对，夹具没有放宽断言；新提一条建议改（主会话首个输出前按 Esc 撤回一轮，期间到的子 agent 完成通知会丢，`42d7724` 就有），记 HANDOFF。
+- 合并前全套（`31cbef8`）：1504 跑、1496 过、8 挂，都是 LSP：7 条 `canter-tools lsp::sync::tests::*` 和 `reload_tests::disabling_then_enabling_lsp_still_waits_for_the_original_turn`，都是等诊断超时；文档测试过。单独复跑一次：reload 那条过，lsp::sync 仍挂 10 条。main 上跑同一组 lsp::sync 同样挂（「Waiting for LSP diagnostics timed out」），机器负载约 6.8，判定和本件无关、是现有的环境问题，记 HANDOFF。
+- 结果：返工 1 次
