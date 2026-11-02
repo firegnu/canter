@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 11-02 第五十九次装 main `6c8a114`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 6c8a114`；比上一版多 P2-177～P2-184：子 agent 整套（子会话、`spawn_agent` / `wait_agent` / `send_input` / `close_agent`、只读查找可自己开、通用要用户明说、批准转到主界面、输入框上方列表和 `/agents`、整屏切到子会话、`s` 停掉、专门卡片、`SubagentStart` / `SubagentStop` 钩子、`canter stats` 的 Sub-agents 一节、模型给的短名字、主会话在等时的黄色提示），后台命令状态和回退、审查里剩下的中文改成英文）。服务端已换好（pid 44327）。工具列表变了，已有会话第一次请求缓存冷一次。
+- 退回上一版 `5b39513`：`canter rollback`。会话存盘多了子会话（带 `parent`）和几种新事件，旧版打开子会话或带子 agent 的主会话能不能照常续聊没测过。
 - 11-02 第五十八次装 main `5b39513`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 5b39513`；比上一版多 P2-176：系统提示词 `[Context budget]` 那条改成让模型用 `update_plan` 记待办、说明压缩后自动带回，`update_plan` 说明末尾加「The checklist is restored automatically after compaction.」）。服务端已换好（pid 4559）。
 - 11-02 第五十七次装 main `4b123ce`（`canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 4b123ce`；比上一版多 P2-175：`[Context budget]` 提示末尾加「Compaction will then free space; this is not a limit on the task.」）。upgrade 已换好服务端（pid 80227）。系统提示词没变。这次下载 crates.io 索引两次报 `[16] Error in the HTTP2 framing layer`，加 `CARGO_HTTP_MULTIPLEXING=false` 后装上。
 - 退回上一版 `b255bfa`：`canter rollback`（备份在 `~/.canter/backups/canter-…-b255bfa`）。
