@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 11-02 第五十五次装 main `58e2620`（`canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 58e2620`；比上一版多 P2-174：占用到压缩线 75%、90% 时各给模型一条 `[Context budget]` 提示，系统提示词加了空间不够时挑着读、边读边写；上次有进展之后连续 3 次自动压缩就停下这一轮、暂停目标，屏幕上一行 warning）。upgrade 已换好服务端（pid 92606）。系统提示词变了，已有会话第一次请求缓存冷一次。
+- 退回上一版 `1bba1ce`：`canter rollback`（备份在 `~/.canter/backups/canter-…-1bba1ce`）。会话存盘多了一种私有历史记录 `context_budget_notice`，旧版重开这类会话能不能照常续聊没测过。
 - 11-01 第五十四次装 main `1bba1ce`（第一次用 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 1bba1ce`；比上一版多 P2-22：记忆，全局 `~/.canter/memory/`、项目 `~/.canter/projects/<键>/memory/`，`/memory` 查看改删）。upgrade 已换好服务端（pid 98593）。
 - 退回上一版 `f513989`：`canter rollback`（备份在 `~/.canter/backups/canter-…-f513989`）。存盘格式没变；退回后旧版不读记忆，记忆文件留着不动。
 - 11-01 第五十三次装 main `f513989`（`canter --version` 显示 `canter 0.1.0 · f513989`；比上一版多 P2-14：`canter service install/uninstall` 登录服务、`canter upgrade/rollback` 换版和退回（备份在 `~/.canter/backups`，留 5 份）、`/v1/runningTurns`，修 `--replace` 收尾竞态）。要 `canter serve --replace` 后生效。这是最后一次手动装，以后用 `canter upgrade`。
