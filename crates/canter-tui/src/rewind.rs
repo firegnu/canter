@@ -92,7 +92,9 @@ pub(crate) fn confirm(
             if file.external_change_unknown {
                 format!("{action}; cannot determine changes outside canter — confirmation required")
             } else if file.external_change {
-                format!("{action}; 之后在 canter 以外被改过 — confirming overwrites these changes")
+                format!(
+                    "{action}; changed outside canter since then — confirming overwrites these changes"
+                )
             } else {
                 action.into()
             }

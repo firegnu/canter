@@ -190,7 +190,7 @@ esac
         .await
         .unwrap();
     let text = prompt(&params);
-    assert!(text.contains("已截断，需要时用读文件工具看"));
+    assert!(text.contains("[Truncated; use read tools if needed.]"));
     assert!(text.contains("large.txt | +40001 -0"));
     assert!(text.contains("+changed"));
     assert_untrusted(text, "PR_DIFF_0", "+changed");
@@ -267,7 +267,7 @@ async fn large_local_diff_has_stats_a_bounded_prefix_and_a_truncation_notice() {
         .await
         .unwrap();
     let text = prompt(&params);
-    assert!(text.contains("已截断，需要时用读文件工具看"));
+    assert!(text.contains("[Truncated; use read tools if needed.]"));
     assert!(text.contains("30001 insertions"), "missing full diff stats");
     assert!(
         text.contains("new-untracked.txt"),
@@ -337,6 +337,6 @@ async fn large_local_diff_and_untracked_list_keep_the_message_under_300_kib() {
         .unwrap()
             < block_start
     );
-    assert!(text.contains("已截断，需要时用读文件工具看"));
+    assert!(text.contains("[Truncated; use read tools if needed.]"));
     assert_untrusted(text, "STAGED_DIFF_0", "+changed line");
 }

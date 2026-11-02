@@ -3608,7 +3608,7 @@ async fn rewind_conflict_repreviews_the_changed_file_before_confirming_delete() 
     fs::write(world.path("work/rewind.txt"), "user saved after preview").unwrap();
     terminal.press(KeyCode::Enter).await;
     terminal.wait_for("Changes since preview").await;
-    terminal.wait_for("之后在 canter 以外被改过").await;
+    terminal.wait_for("changed outside canter since then").await;
     assert_eq!(
         fs::read_to_string(world.path("work/rewind.txt")).unwrap(),
         "user saved after preview"
