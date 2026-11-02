@@ -212,17 +212,22 @@ async fn budget_notices_follow_both_thresholds_once_at_each_limit() {
         );
         for (index, percent) in [(2, 76), (4, 91)] {
             let note = notes(&requests[index]).pop().unwrap();
-            let values: Vec<u64> = note
-                .split_whitespace()
-                .filter_map(|word| word.parse().ok())
-                .collect();
-            assert_eq!(values.len(), 3, "{note}");
-            assert_eq!(values[1], limit);
+            let used = note
+                .strip_prefix("[Context budget] ")
+                .and_then(|rest| rest.split(' ').next())
+                .and_then(|word| word.parse::<u64>().ok())
+                .unwrap_or_else(|| panic!("{note}"));
             assert!(
-                (limit * percent / 100..limit * percent / 100 + 500).contains(&values[0]),
+                (limit * percent / 100..limit * percent / 100 + 500).contains(&used),
                 "{note}"
             );
-            assert_eq!(values[2], limit - values[0]);
+            assert_eq!(
+                note,
+                format!(
+                    "[Context budget] {used} of {limit} tokens used before automatic compaction; about {} left. Compaction will then free space; this is not a limit on the task.",
+                    limit - used
+                )
+            );
             assert_eq!(
                 requests[index]["messages"]
                     .as_array()
