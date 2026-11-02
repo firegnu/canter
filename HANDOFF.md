@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 11-02 第六十次装 main `5e26ad5`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 5e26ad5`，服务端 pid 4538；比上一版多 P2-185：`config.json` 可写 `headers`，值里 `{session_id}` 换成会话 ID；所有模型请求带 `User-Agent: canter/0.1.0`）。装上后配置换成 opencode go 订阅：`base_url` `https://opencode.ai/inference/go/openai/v1`、模型 `deepseek-v4.1-flash`（另可选 `deepseek-v4-pro`）、`headers` `{"x-opencode-session": "{session_id}"}`、`prices` 照官网高峰非高峰两档，密钥从 pi 的 `~/.pi/agent/auth.json` 复制；压缩线 400000 等日常设置没变。用 opencode go 时没有 `web_search`。改前的官网 DeepSeek 配置在 `~/.canter/config.json.bak-before-opencode-go`（官网 DeepSeek 11-02 余额用完，充值前用不了）。
+- 退回上一版 `6c8a114`：先把 `config.json` 换回 `config.json.bak-before-opencode-go`（旧版不认 `headers`，会报配置错误），再 `canter rollback`。在 opencode 下开的会话记的模型名是 `deepseek-v4.1-flash`，换回官网后要先 `/model` 换成 `deepseek-flash`。
 - 11-02 第五十九次装 main `6c8a114`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 6c8a114`；比上一版多 P2-177～P2-184：子 agent 整套（子会话、`spawn_agent` / `wait_agent` / `send_input` / `close_agent`、只读查找可自己开、通用要用户明说、批准转到主界面、输入框上方列表和 `/agents`、整屏切到子会话、`s` 停掉、专门卡片、`SubagentStart` / `SubagentStop` 钩子、`canter stats` 的 Sub-agents 一节、模型给的短名字、主会话在等时的黄色提示），后台命令状态和回退、审查里剩下的中文改成英文）。服务端已换好（pid 44327）。工具列表变了，已有会话第一次请求缓存冷一次。
 - 退回上一版 `5b39513`：`canter rollback`。会话存盘多了子会话（带 `parent`）和几种新事件，旧版打开子会话或带子 agent 的主会话能不能照常续聊没测过。
 - 11-02 第五十八次装 main `5b39513`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 5b39513`；比上一版多 P2-176：系统提示词 `[Context budget]` 那条改成让模型用 `update_plan` 记待办、说明压缩后自动带回，`update_plan` 说明末尾加「The checklist is restored automatically after compaction.」）。服务端已换好（pid 4559）。
@@ -139,7 +141,7 @@
 ## 已知没修的问题
 
 - 子 agent 起名（P2-183，11-02 合并，没装）主控审查建议改：每开一个子 agent 都 `list_all` 列全部会话摘要来查重名（`crates/canter-core/src/agents.rs` 的起名处），会话很多时开子 agent 会变慢；可改成只列本主会话的子会话。
-- 接 opencode go（P2-185，11-02 合并，没装）交叉审查建议改：`config.json` 的 `headers` 写错（头名、头值不合法，或写了 `User-Agent` 这类保留名）时，报错只说「第几行第几列不对」，不说原因（`crates/canter-server/src/config.rs` 映射 serde 错误处）；可改成原因是那三句固定文字时附上，serde 自带的类型错误仍只给行列（会带出值）。
+- 接 opencode go（P2-185，11-02 合并，已装）交叉审查建议改：`config.json` 的 `headers` 写错（头名、头值不合法，或写了 `User-Agent` 这类保留名）时，报错只说「第几行第几列不对」，不说原因（`crates/canter-server/src/config.rs` 映射 serde 错误处）；可改成原因是那三句固定文字时附上，serde 自带的类型错误仍只给行列（会带出值）。
 - 子 agent 工具和批准（P2-178，11-02 合并，没装）交叉审查没改的：
   - 建议 4（用户定不改）：父会话打开时，子会话的请求只算进父会话的目标，子会话自己的目标永远不记账。只有用户按 ID 打开子会话、手动给它设带预算的目标才会碰到，这时预算上限不生效，目标会一直续跑。
   - 复核时新提的建议：主会话一轮开始后、模型还没有任何输出前（包括首个请求等第一个字的几秒），某个子 agent 正好做完，完成通知写进这一轮；用户这时按 Esc 撤回这一轮，通知随历史被删，撤回时只补回后台命令的通知、不补子 agent 的，之后不会再交给模型或叫醒。结果还在子会话里，模型自己调 wait_agent 能拿到。改法：撤回时对未交付的子 agent 通知同样补回。
