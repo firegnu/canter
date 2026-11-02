@@ -592,7 +592,7 @@ async fn plan_mode_compactions_preserve_the_earlier_modifying_turn_count() {
 }
 
 #[tokio::test]
-async fn manual_compaction_neither_counts_nor_resets_and_goal_turns_keep_the_count() {
+async fn new_goal_starts_a_fresh_count_that_persists_across_automatic_turns() {
     let fixture = Fixture::new(
         vec![
             read(41_000),

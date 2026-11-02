@@ -3,6 +3,8 @@ mod background;
 mod btw;
 mod clients;
 mod compaction;
+#[cfg(test)]
+mod compaction_tests;
 mod configuration;
 mod context;
 mod directories;
