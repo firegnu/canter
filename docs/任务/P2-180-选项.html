@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2-180 钩子和统计</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --fg: #1f1f1f; --muted: #6b6b6b; --card: #ffffff; --line: #e2e0d8;
+    --term: #16181d; --tfg: #d7dae0; --dim: #7c818c; --cyan: #56b6c2; --green: #98c379;
+    --yellow: #e5c07b; --magenta: #c678dd; --accent: #b4532a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111214; --fg: #e6e6e6; --muted: #9a9a9a; --card: #1b1c1f; --line: #2c2d31; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.65 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  .q { font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 18px; margin-top: 12px; }
+  .opt { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .opt.rec { border: 2px solid var(--accent); }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px;
+    background: var(--accent); color: #fff; margin-left: 6px; vertical-align: 2px; }
+  .opt h3 { margin: 0 0 8px; font-size: 16px; }
+  .opt p, .opt ul { margin: 8px 0 0; font-size: 14px; }
+  .opt ul { padding-left: 20px; }
+  table { border-collapse: collapse; font-size: 13.5px; width: 100%; margin-top: 8px; }
+  th, td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: var(--bg); }
+  pre.t { background: var(--term); color: var(--tfg); border-radius: 8px; padding: 12px 14px; margin: 8px 0 0;
+    font: 12.5px/1.5 "SF Mono", Menlo, monospace; overflow-x: auto; white-space: pre; }
+  .d { color: var(--dim); } .c { color: var(--cyan); } .y { color: var(--yellow); } .g { color: var(--green); }
+  .summary { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; }
+  .summary ol { margin: 6px 0 0; padding-left: 22px; }
+  code { font: 13px "SF Mono", Menlo, monospace; }
+  .note { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>P2-180 子 agent 的钩子和统计</h1>
+  <p class="sub">3 个问题，橙框是主控的推荐。钩子是 P2-153 做的全局钩子（<code>~/.canter/config.json</code> 的 <code>hooks</code>）；统计是 <code>canter stats &lt;会话 ID&gt;</code>。</p>
+
+  <div class="summary">
+    <b>主控的推荐，一句话版</b>
+    <ol>
+      <li>子 agent 里干的活照常触发工具类钩子，并标明「这是哪个子 agent」；子 agent 的一轮结束发 <code>SubagentStop</code>，不发 <code>Stop</code>。</li>
+      <li>新加的 <code>SubagentStart</code>、<code>SubagentStop</code> 只通知，不能拦、不能改子 agent 的行为（和现在的 <code>Stop</code> 一样）。</li>
+      <li><code>canter stats &lt;主会话&gt;</code> 的总花费把子 agent 算进去，下面加一节 Sub-agents，每个子 agent 一行。</li>
+    </ol>
+  </div>
+
+  <!-- Q1 -->
+  <h2>1. 子 agent 里干活时，现有的钩子怎么触发</h2>
+  <p class="q">子 agent 是带父会话标记的普通会话。现有 9 个钩子事件在它身上怎么发？</p>
+  <div class="grid">
+    <div class="opt rec">
+      <h3>A. 照 Claude Code：工具类照发并标来源，结束换成 SubagentStop<span class="tag">推荐</span></h3>
+      <table>
+        <tr><th>事件</th><th>在子 agent 里</th></tr>
+        <tr><td>PreToolUse / PermissionRequest / PostToolUse</td><td>照常发；stdin 多 <code>agent_id</code>、<code>agent_type</code>（<code>explorer</code> / <code>general</code>）、<code>parent_session_id</code>。比如「改完文件跑 cargo fmt」对子 agent 改的文件也生效。</td></tr>
+        <tr><td>UserPromptSubmit</td><td>只在你自己在子会话一屏里打字时发；主 agent 交给它的任务、<code>send_input</code> 不发（属于自动输入，和现在目标续跑、后台叫醒一样）。</td></tr>
+        <tr><td>Stop / StopFailure / Interrupt</td><td>不发，换成 <code>SubagentStop</code>（见下）。所以「每轮结束响一声」的 Stop 钩子不会因为子 agent 响一堆。</td></tr>
+        <tr><td>SessionStart / SessionEnd</td><td>不发：子 agent 不算一个会话的开始和结束，换成 <code>SubagentStart</code> / <code>SubagentStop</code>。</td></tr>
+      </table>
+      <p>新增两个事件：</p>
+      <table>
+        <tr><th>事件</th><th>什么时候</th><th>stdin 多的字段</th></tr>
+        <tr><td>SubagentStart</td><td>主 agent 开出一个子 agent，它开始第一轮前</td><td><code>agent_id</code>、<code>agent_type</code>、<code>task</code></td></tr>
+        <tr><td>SubagentStop</td><td>子 agent 的一轮结束（做完、失败、中断、被停掉）</td><td><code>agent_id</code>、<code>agent_type</code>、<code>status</code>、<code>last_assistant_message</code></td></tr>
+      </table>
+    </div>
+    <div class="opt">
+      <h3>B. 子 agent 当普通会话，全部照发</h3>
+      <ul>
+        <li>9 个事件在子会话里全部照普通会话发，只加 <code>SubagentStart</code> / <code>SubagentStop</code> 两个新事件。</li>
+        <li>改动最少；但 Stop、SessionStart/End 会因为子 agent 多发很多次，钩子脚本分不清是主会话还是子 agent，除非自己去读会话文件。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Q2 -->
+  <h2>2. SubagentStart、SubagentStop 能做什么</h2>
+  <div class="grid">
+    <div class="opt rec">
+      <h3>A. 只通知<span class="tag">推荐</span></h3>
+      <ul>
+        <li>和现在的 <code>Stop</code>、<code>SessionStart</code> 一样：异步跑，不让子 agent 等，结果不影响它。</li>
+        <li>够用来记日志、发提醒、统计子 agent 开了几个。</li>
+      </ul>
+    </div>
+    <div class="opt">
+      <h3>B. 照 Claude Code 能改行为</h3>
+      <ul>
+        <li><code>SubagentStart</code> 的输出可以往子 agent 的上下文里加一段话。</li>
+        <li><code>SubagentStop</code> 可以拦下，让子 agent 不许停、接着干（附原因）。</li>
+        <li>canter 现在的 <code>Stop</code> 也不支持拦下接着干（P2-153 没做），只给子 agent 做会不一致；要做得同时想清楚和 <code>wait_agent</code>、叫醒、花费上限怎么配合。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Q3 -->
+  <h2>3. <code>canter stats</code> 怎么显示子 agent</h2>
+  <p class="q">现在子 agent 是单独的会话：<code>canter stats</code> 的列表不列它，主会话的统计也不含它（<code>/usage</code> 已经算进去了，P2-178 做的）。</p>
+  <div class="grid">
+    <div class="opt rec">
+      <h3>A. 主会话总花费含子 agent，下面每个子 agent 一行<span class="tag">推荐</span></h3>
+<pre class="t">Session: 01M6E…
+Directory: ~/canter-test-rust
+Model: deepseek-flash
+Turns: 6  Recorded requests: 41  Retries: 0
+Usage (this session):    in 812k (cached 790k) · out 18k · <span class="y">$0.031</span>
+Usage (with sub-agents): in 1.43M (cached 1.31M) · out 34k · <span class="y">$0.058</span>
+
+<b>Sub-agents</b>
+Name                 Type      Status      Requests  In      Out   Cost    Tools  Time
+<span class="c">Session lock order</span>   explorer  completed         9  281k    6k  $0.011     14  2:13
+<span class="c">Rewind cascade</span>       explorer  completed         7  203k    5k  $0.008     11  1:40
+<span class="c">Fix lsp wait</span>         general   interrupted      12  134k    5k  $0.008     19  3:02
+<span class="d">Details: canter stats &lt;sub-agent id&gt;</span>
+
+<b>Requests</b>
+#  Time   Purpose  Outcome  …               <span class="d">(只有主会话自己的请求，照现在)</span>
+<b>Tools</b>
+Tool         Calls  Failed …                <span class="d">(只有主会话自己的，spawn_agent 等也在这里)</span></pre>
+      <ul>
+        <li>上面一行是主会话自己，下面一行是加上子 agent 的总数；没有子 agent 时只有一行，和现在一样。</li>
+        <li><code>canter stats &lt;子 agent 的 ID&gt;</code> 照普通会话看它自己的明细，顶上多一行 <code>Parent: &lt;主会话 ID&gt; · explorer</code>。</li>
+        <li><code>canter stats</code> 的会话列表照旧不列子 agent。<code>--json</code> 同样多这些字段，网页版（HTML）同样多这一节。</li>
+        <li>名字在 P2-183 改好之前显示 <code>agent-xxxxxx</code>。</li>
+      </ul>
+    </div>
+    <div class="opt">
+      <h3>B. 只把子 agent 并进总数</h3>
+<pre class="t">Usage: in 1.43M (cached 1.31M) · out 34k · <span class="y">$0.058</span>
+       <span class="d">(includes 3 sub-agents)</span></pre>
+      <ul>
+        <li>简单，但看不出钱花在哪个子 agent 上，长程试跑时比不出「子 agent 省了主上下文没有」。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>做完以后</h2>
+  <p>P2-78 四件做完后，用长程试跑看子 agent 实际用起来怎样：主上下文是不是省了、花了多少、模型会不会乱开子 agent。试跑要调 DeepSeek 花钱，到时先问你。</p>
+  <p class="note">不做的：项目级钩子（第三期，跟项目级配置一起）、钩子的 prompt / http 类型、子 agent 之间对话（P2-182）、子 agent 名字（P2-183）。</p>
+</main>
+</body>
+</html>
