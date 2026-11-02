@@ -141,10 +141,35 @@ impl Store {
         self.create_with_sync(id, settings, timestamp, |path| File::open(path)?.sync_all())
     }
 
+    /// Publish the parent marker together with the initial settings, so a child
+    /// can never appear transiently in the ordinary session list.
+    pub fn create_child(
+        &self,
+        id: &str,
+        settings: SessionSettings,
+        parent: canter_protocol::SessionParent,
+        timestamp: i64,
+    ) -> Result<SessionWriter, StoreError> {
+        self.create_inner(id, settings, Some(parent), timestamp, |path| {
+            File::open(path)?.sync_all()
+        })
+    }
+
     fn create_with_sync(
         &self,
         id: &str,
         settings: SessionSettings,
+        timestamp: i64,
+        sync: impl FnMut(&std::path::Path) -> io::Result<()>,
+    ) -> Result<SessionWriter, StoreError> {
+        self.create_inner(id, settings, None, timestamp, sync)
+    }
+
+    fn create_inner(
+        &self,
+        id: &str,
+        settings: SessionSettings,
+        parent: Option<canter_protocol::SessionParent>,
         timestamp: i64,
         mut sync: impl FnMut(&std::path::Path) -> io::Result<()>,
     ) -> Result<SessionWriter, StoreError> {
@@ -182,6 +207,9 @@ impl Store {
             write_failed: false,
         };
         writer.append(EventPayload::SessionUpdated { settings }, timestamp)?;
+        if let Some(parent) = parent {
+            writer.append(EventPayload::SessionParent { parent }, timestamp)?;
+        }
         sync(dir)?;
         // Published session directories are nonempty: a competing create's
         // rename cannot overwrite a successfully published session.
@@ -226,6 +254,16 @@ impl Store {
     }
 
     pub fn list(&self) -> Result<Vec<SessionSummary>, StoreError> {
+        Ok(self
+            .list_all()?
+            .into_iter()
+            .filter(|session| session.parent.is_none())
+            .collect())
+    }
+
+    /// Includes child sessions for lifecycle coordination; user-facing lists
+    /// should use `list` instead.
+    pub fn list_all(&self) -> Result<Vec<SessionSummary>, StoreError> {
         // One refresh at a time: waiting callers recheck metadata after the
         // previous replay, rather than each replaying the same stale entry.
         // This cache lock is independent of session writers and subscriptions.

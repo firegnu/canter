@@ -105,6 +105,12 @@ pub(crate) fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<SessionParent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub agent: Option<AgentState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional = nullable)]
     pub language_servers: Vec<crate::LanguageServer>,
@@ -144,6 +150,8 @@ impl SessionSnapshot {
     /// Empty replay state. The first durable event supplies public settings.
     pub fn empty(id: impl Into<String>) -> Self {
         Self {
+            parent: None,
+            agent: None,
             language_servers: Vec::new(),
             id: id.into(),
             goal: None,
@@ -178,6 +186,7 @@ impl SessionSnapshot {
 
     pub fn summary(&self) -> SessionSummary {
         SessionSummary {
+            parent: self.parent.clone(),
             id: self.id.clone(),
             cwd: self.settings.cwd.clone(),
             name: self.settings.name.clone(),
@@ -234,6 +243,9 @@ pub enum GoalStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<SessionParent>,
     pub id: String,
     #[serde(default)]
     pub cwd: String,
@@ -243,6 +255,51 @@ pub struct SessionSummary {
     pub updated_at: i64,
     #[ts(type = "number")]
     pub last_event_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionParent {
+    pub session_id: String,
+    pub turn_id: String,
+    pub task: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentStatus {
+    Running,
+    Completed,
+    Failed,
+    Closed,
+    Interrupted,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentState {
+    pub status: AgentStatus,
+    pub result: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSummary {
+    pub id: String,
+    pub task: String,
+    pub status: AgentStatus,
+    pub result: Option<String>,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number")]
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct AgentListResponse {
+    pub data: Vec<AgentSummary>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

@@ -16,6 +16,7 @@ import type { RequestPurpose } from "./RequestPurpose";
 import type { RequestSettings } from "./RequestSettings";
 import type { SessionCloseReason } from "./SessionCloseReason";
 import type { SessionGoal } from "./SessionGoal";
+import type { SessionParent } from "./SessionParent";
 import type { SessionSettings } from "./SessionSettings";
 import type { SessionStatus } from "./SessionStatus";
 import type { TokenUsage } from "./TokenUsage";
@@ -25,7 +26,7 @@ export type Event = { seq: number, sessionId: string,
 /**
  * Unix time in milliseconds.
  */
-timestamp: number, } & ({ "type": "telemetry.compaction", turnId: string, itemId: string, trigger?: CompactionTrigger,
+timestamp: number, } & ({ "type": "session.parent", parent: SessionParent, } | { "type": "telemetry.compaction", turnId: string, itemId: string, trigger?: CompactionTrigger,
 /**
  * Summary request shape: `prefix` or `transcript`; absent in older events.
  */

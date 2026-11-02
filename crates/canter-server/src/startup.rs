@@ -83,6 +83,10 @@ impl Summaries {
                     .map_err(|_| ServerError("cannot open the sessions directory".into()))?,
             };
             lifecycle::cleanup_creating(&self.home.join("sessions"))?;
+            // The replacement owns the daemon lease now. Earlier prewarming
+            // may overlap the old process and must remain strictly read-only.
+            canter_core::recover_agent_sessions(&store)
+                .map_err(|_| ServerError("cannot recover interrupted child sessions".into()))?;
             // First replay for ordinary startup, or refresh changes made by the
             // old daemon during replacement. Both overlap MCP initialization.
             warm_summaries(&store);

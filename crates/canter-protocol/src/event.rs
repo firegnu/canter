@@ -23,6 +23,8 @@ pub struct Event {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum EventPayload {
+    #[serde(rename = "session.parent")]
+    SessionParent { parent: crate::SessionParent },
     #[serde(rename = "telemetry.compaction")]
     TelemetryCompaction {
         turn_id: String,
