@@ -2,7 +2,7 @@
 
 2026-10-27，用户在看板上新建。
 
-待用户：看 `docs/调研/P2-78-子agent调研.md` 第 6 节，定 7 件事后主控拆实现任务。
+待用户：拆成 P2-177～P2-180 四件，按次序和用户一件件讨论，讨论完一件做一件。
 
 ## 用户原话
 
@@ -20,3 +20,14 @@
   - Codex `rust-v0.163.0`：`spawn_agent`、`send_input`、`resume_agent`、`wait_agent`、`close_agent`（`multi_agent` 稳定、默认开）；v2 换成 `send_message`、`followup_task`、`list_agents`、`interrupt_agent` 等，默认关。
   - Claude Code：`Agent` 工具。opencode：`subagent`。pi：不内置，只在 `examples/extensions/` 里当示例。
 - 分解时要和用户定：子 agent 跑在同一个服务端还是另开进程、能用哪些工具、批准怎么走、和 corral 派活（P2-83）的分界。
+
+## 拆分（11-02）
+
+调研报告：`docs/调研/P2-78-子agent调研.md`（主体照 Codex v1，几处借 Claude Code）。用户：「先把任务开了吧。之后咱们按照顺序一个个讨论。讨论完一件做一件」。
+
+1. P2-177 子会话和协议（第二期-13.1）
+2. P2-178 模型工具和批准（第二期-13.2）
+3. P2-179 终端界面（第二期-13.3）
+4. P2-180 钩子和统计（第二期-13.4）
+
+报告第 6 节的 7 件事在讨论对应那件时定。四件都做完，本件收尾。
