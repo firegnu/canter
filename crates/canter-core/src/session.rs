@@ -76,6 +76,7 @@ pub(crate) struct State {
     pub used_files: Vec<(String, String)>,
     pub restored_file_notices: std::collections::BTreeSet<usize>,
     pub queued_skills: HashMap<String, Vec<crate::skill_invocation::Snapshot>>,
+    pub agent_inputs: std::collections::HashSet<String>,
     pub tool_definitions: Vec<canter_model::ToolDefinition>,
     pub prefix_sections: Vec<ContextSection>,
     pub summary_index: Option<usize>,
@@ -92,6 +93,7 @@ pub(crate) struct State {
     pub requests: HashMap<String, oneshot::Sender<ApprovalResolution>>,
     pub resolved: HashMap<String, u64>,
     pub closing: bool,
+    pub closing_reason: Option<SessionCloseReason>,
     pub hook_session_ended: bool,
     pub measured_context: Option<(u64, u64)>,
     pub context_budget_notices: std::collections::BTreeMap<usize, u8>,
@@ -228,6 +230,7 @@ impl State {
             used_files: Vec::new(),
             restored_file_notices: Default::default(),
             queued_skills: HashMap::new(),
+            agent_inputs: Default::default(),
             tool_definitions: Vec::new(),
             prefix_sections: Vec::new(),
             summary_index: None,
@@ -243,6 +246,7 @@ impl State {
             requests: HashMap::new(),
             resolved: HashMap::new(),
             closing: false,
+            closing_reason: None,
             hook_session_ended: false,
             measured_context: None,
             context_budget_notices: Default::default(),
@@ -592,6 +596,7 @@ impl State {
         self.queue.clear();
         self.steers.clear();
         self.queued_skills.clear();
+        self.agent_inputs.clear();
         Ok(())
     }
     pub async fn consume_steering(
@@ -1194,17 +1199,26 @@ impl Session {
         &self,
         params: SessionInputParams,
     ) -> Result<SessionInputResponse, CoreError> {
+        self.input_with_prompt_hook(params, true).await
+    }
+
+    pub(crate) async fn input_with_prompt_hook(
+        &self,
+        params: SessionInputParams,
+        prompt_hook: bool,
+    ) -> Result<SessionInputResponse, CoreError> {
         let session = self.clone();
         session.shared.input_waiters.fetch_add(1, Ordering::SeqCst);
         owned(async move {
             let _waiting = InputWaiting(session.shared.clone());
-            session.input_inner(params).await
+            session.input_inner(params, prompt_hook).await
         })
         .await
     }
     async fn input_inner(
         &self,
         mut params: SessionInputParams,
+        prompt_hook: bool,
     ) -> Result<SessionInputResponse, CoreError> {
         if params.mode == InputMode::Unknown
             || params.approval_policy == Some(PermissionMode::Unknown)
@@ -1321,6 +1335,9 @@ impl Session {
                 state.steers.push(input);
                 state.active.as_ref().map(|active| active.turn.id.clone())
             } else {
+                if !prompt_hook {
+                    state.agent_inputs.insert(input.id.clone());
+                }
                 state.queued_skills.insert(input.id.clone(), skills);
                 state.queue.push_back(input);
                 None
@@ -1333,7 +1350,10 @@ impl Session {
                 turn_id,
             });
         }
-        let (response, done) = self.shared.start(&mut state, params, None, skills).await?;
+        let (response, done) = self
+            .shared
+            .start_input(&mut state, params, None, skills, prompt_hook)
+            .await?;
         if let Some(imported) = imported {
             imported.keep();
         }
@@ -1931,6 +1951,7 @@ impl Session {
                 self.check_trashable(&state)?;
             }
             state.closing = true;
+            state.closing_reason = Some(reason);
             if let Some(turn) = state.active.as_ref().map(|active| active.turn.id.clone()) {
                 state.suppressed_agent_turns.insert(turn);
             }
@@ -2106,6 +2127,18 @@ impl Shared {
         input_id: Option<String>,
         skills: Vec<crate::skill_invocation::Snapshot>,
     ) -> Result<(SessionInputResponse, Done), CoreError> {
+        self.start_input(state, params, input_id, skills, true)
+            .await
+    }
+
+    pub(crate) async fn start_input(
+        &self,
+        state: &mut State,
+        params: SessionInputParams,
+        input_id: Option<String>,
+        skills: Vec<crate::skill_invocation::Snapshot>,
+        prompt_hook: bool,
+    ) -> Result<(SessionInputResponse, Done), CoreError> {
         let configuration_lease = self.configure(state).await?;
         if params
             .input
@@ -2125,7 +2158,8 @@ impl Shared {
                 ),
             ));
         }
-        let check_prompt = !params.input.is_empty()
+        let check_prompt = prompt_hook
+            && !params.input.is_empty()
             && !self.runtime().context.restricted_mode
             && self
                 .runtime()

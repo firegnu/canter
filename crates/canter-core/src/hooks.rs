@@ -27,6 +27,8 @@ pub(crate) enum Event {
     Stop,
     StopFailure,
     Interrupt,
+    SubagentStart,
+    SubagentStop,
 }
 impl Event {
     fn tool(self) -> bool {
@@ -148,6 +150,11 @@ pub(crate) fn input(state: &State, event: Event, mut fields: Value) -> Value {
         .unwrap()
         .clone(),
     );
+    if let Some(parent) = &state.journal.snapshot.parent {
+        fields["agent_id"] = json!(state.journal.snapshot.id);
+        fields["agent_type"] = json!(parent.agent_type);
+        fields["parent_session_id"] = json!(parent.session_id);
+    }
     fields
 }
 
@@ -214,7 +221,18 @@ pub(crate) fn notify(
     cancel: CancellationToken,
 ) {
     let runtime = shared.runtime();
-    if runtime.context.restricted_mode || !runtime.options.hooks.has(event) {
+    if runtime.context.restricted_mode
+        || !runtime.options.hooks.has(event)
+        || (state.journal.snapshot.parent.is_some()
+            && matches!(
+                event,
+                Event::SessionStart
+                    | Event::SessionEnd
+                    | Event::Stop
+                    | Event::StopFailure
+                    | Event::Interrupt
+            ))
+    {
         return;
     }
     let input = input(state, event, fields);
@@ -246,6 +264,22 @@ pub(crate) async fn drain(shared: &Shared) {
 
 pub(crate) fn tool_fields(call: &canter_model::ToolCall) -> Value {
     json!({"tool_name":call.name,"tool_input":serde_json::from_str::<Value>(&call.arguments).unwrap_or_default()})
+}
+
+pub(crate) fn last_assistant_message(state: &State, turn_id: &str) -> String {
+    state
+        .journal
+        .snapshot
+        .turns
+        .iter()
+        .find(|turn| turn.id == turn_id)
+        .and_then(|turn| {
+            turn.items.iter().rev().find_map(|item| match item {
+                canter_protocol::Item::AgentMessage { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+        })
+        .unwrap_or_default()
 }
 
 fn prompt_text(input: &[canter_protocol::UserInput]) -> String {

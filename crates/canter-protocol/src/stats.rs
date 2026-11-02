@@ -34,6 +34,12 @@ pub struct StatsResponse {
     #[ts(type = "number")]
     pub event_seq: u64,
     pub overview: StatsOverview,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<SessionParent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
+    pub sub_agents: Vec<StatsSubAgent>,
     pub requests: Vec<StatsRequest>,
     pub compactions: Vec<StatsCompaction>,
     pub tools: Vec<StatsTool>,
@@ -54,9 +60,26 @@ pub struct StatsOverview {
     pub turn_count: usize,
     pub request_count: usize,
     pub usage: Option<UsageResponse>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub usage_with_sub_agents: Option<UsageRow>,
     #[ts(type = "number | null")]
     pub retry_count: Option<u64>,
     pub recorded_retry_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsSubAgent {
+    pub id: String,
+    pub name: Option<String>,
+    pub agent_type: AgentType,
+    pub status: AgentStatus,
+    pub request_count: usize,
+    pub usage: Option<UsageRow>,
+    pub tool_count: usize,
+    #[ts(type = "number | null")]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

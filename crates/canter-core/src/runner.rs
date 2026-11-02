@@ -154,7 +154,24 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             })
         };
         let failed = completed.status == TurnStatus::Failed;
-        let (hook_event, hook_fields) = if cancel.is_cancelled() {
+        let (hook_event, hook_fields) = if state.journal.snapshot.parent.is_some() {
+            let status = if state.closing_reason == Some(SessionCloseReason::ClientRequest) {
+                "closed"
+            } else {
+                match completed.status {
+                    TurnStatus::Completed => "completed",
+                    TurnStatus::Failed => "failed",
+                    _ => "interrupted",
+                }
+            };
+            (
+                crate::hooks::Event::SubagentStop,
+                serde_json::json!({
+                    "status":status,
+                    "last_assistant_message":crate::hooks::last_assistant_message(&state, &completed.id),
+                }),
+            )
+        } else if cancel.is_cancelled() {
             (crate::hooks::Event::Interrupt, serde_json::json!({}))
         } else if let Some(error) = &completed.error {
             (
@@ -162,19 +179,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                 serde_json::json!({"error":error.message}),
             )
         } else {
-            let text = state
-                .journal
-                .snapshot
-                .turns
-                .iter()
-                .find(|t| t.id == completed.id)
-                .and_then(|t| {
-                    t.items.iter().rev().find_map(|item| match item {
-                        Item::AgentMessage { text, .. } => Some(text.clone()),
-                        _ => None,
-                    })
-                })
-                .unwrap_or_default();
+            let text = crate::hooks::last_assistant_message(&state, &completed.id);
             (
                 crate::hooks::Event::Stop,
                 serde_json::json!({"last_assistant_message":text}),
@@ -320,8 +325,9 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             client_name: input.client_name,
         };
         let skills = state.queued_skills.remove(&input.id).unwrap_or_default();
+        let prompt_hook = !state.agent_inputs.remove(&input.id);
         match shared
-            .start(&mut state, params, Some(input.id), skills)
+            .start_input(&mut state, params, Some(input.id), skills, prompt_hook)
             .await
         {
             Ok((_, next)) => {

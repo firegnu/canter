@@ -5873,6 +5873,17 @@
               "type": "null"
             }
           ]
+        },
+        "usageWithSubAgents": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageRow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -6025,6 +6036,16 @@
         "overview": {
           "$ref": "#/$defs/StatsOverview"
         },
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionParent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "requests": {
           "items": {
             "$ref": "#/$defs/StatsRequest"
@@ -6033,6 +6054,12 @@
         },
         "sessionId": {
           "type": "string"
+        },
+        "subAgents": {
+          "items": {
+            "$ref": "#/$defs/StatsSubAgent"
+          },
+          "type": "array"
         },
         "toolCalls": {
           "items": {
@@ -6088,6 +6115,61 @@
         "sessionId",
         "updatedAt",
         "cwd"
+      ],
+      "type": "object"
+    },
+    "StatsSubAgent": {
+      "properties": {
+        "agentType": {
+          "$ref": "#/$defs/AgentType"
+        },
+        "durationMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/AgentStatus"
+        },
+        "toolCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageRow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "agentType",
+        "status",
+        "requestCount",
+        "toolCount"
       ],
       "type": "object"
     },

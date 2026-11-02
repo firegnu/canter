@@ -21,6 +21,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 跟着改的：第一期改文件用「整文件写 + 按文字替换」；Codex 的 apply_patch 是给 GPT 用的，等接 OpenAI 时再搬（用户 10-24 选定）。
 7. **名字和仓库**：`canter`（马的「慢跑」步法），仓库 `github.com/firegnu/canter`，公开，Apache-2.0。用户：「开源，repo就放在github上」。
 8. **协议：结构照 Codex，传输和类型 canter 自己定（报告 §5.7 的 C）**。2026-10-24 在 canter 仓库定的，用户：「好，就用 C，改 DESIGN」。
+   - 子 agent 钩子和统计（P2-180，11-02）：钩子 stdin 新增 SubagentStart / SubagentStop 事件和子会话来源字段，仍是独立的 snake_case JSON，不增加 HTTP/SSE 事件。统计响应新增可选 `parent`（沿用 SessionParent）、缺省为空的 `subAgents`，每项 `{id,name,agentType,status,requestCount,usage,toolCount,durationMs}`；usage 为可空 UsageRow，时长为从创建到最新轮结束或当前的毫秒数。`overview` 新增可空 `usageWithSubAgents`（UsageRow），仅合计本会话和全部仍存在的直接子会话；任何一份用量缺失时合计为 null，已知用量的未知价格仍沿用 UsageCost.unknown。原 usage、请求和工具字段含义不变，旧客户端忽略新增字段，新客户端读旧报告缺省无子会话。这些是 canter 统计扩展，计算全部留在服务端。
    - 子 agent 终端界面（P2-179，11-02）：新增 `POST /v1/sessions/{id}/agents/{agentId}/stop`，无请求体，父会话须已打开；在跑的子 agent 被停下，不在跑时不做事，都返回它的 `AgentSummary`；`features` 增加 `subagentStop`。子会话追加 `agent.stopped {turnId}`，快照 `agent` 增加缺省 false 的 `stoppedByUser`，下一个 agent 轮开始时清掉。父会话追加 `agent.updated {agent}`，在子 agent 的状态、名字或最新一轮变化时带上它最新的列表项，客户端不必另订阅每个子会话。`AgentSummary` 增加 `name`、`agentType`、`stoppedByUser`（缺省 false）、`startedAt`（最新 agent 轮开始的 Unix 毫秒）、`durationMs`（那一轮已结束时的用时），旧服务端缺省。新增项目 `collabAgentToolCall {id, tool: spawnAgent/wait/sendInput/closeAgent, status, prompt?, agents:[{id, name, agentType, status?, result?}], error?, startedAt?, durationMs?}`；`backgroundEvent` 增加可选 `agent`（同一结构），标出哪个子 agent 的结果交给了模型。没有新字段改变已有字段的含义，旧客户端按 Unknown 跳过新事件和项目。对照本地 Codex `rust-v0.163.0`（`codex-rs/app-server-protocol/src/protocol/v2/{item,turn}.rs`）：停子线程用通用的 `turn/interrupt {threadId, turnId}`；canter 加独立的停止接口，是因为停下还要不叫醒父会话、给父会话下一次请求附说明，这两件事只有经父会话做才对，客户端也不必知道子 agent 当前的轮 ID；普通的子会话打断接口照 P2-178 不变。项目结构照 Codex `CollabAgentToolCall`（`tool`、`status`、`prompt`、按 ID 列出的 agent 和各自状态），工具只留 canter 有的四种（未知的按 Unknown）；不带 `senderThreadId`（总是本会话），把 Codex 分开的 `receiverThreadIds`、`agentsStates` 合成一个按调用顺序的 `agents` 列表，并带名字、类型和交给模型的最终回复，卡片不必另读子会话；不带 `model`、`reasoningEffort`（子 agent 沿用父会话的）；`error` 和时间沿用 canter 别的工具项目。
    - 子 agent 工具和批准（P2-178，11-02）：`parent` 增加 `agentType: explorer/general`（旧记录缺省 general，未知角色按只读处理）；会话摘要增加可选 `agentStatus`，供启动恢复先筛在跑的子会话。新增 `agent.request.opened {agentId, agentName, request, cwd, item?}`、`agent.request.resolved {agentId, requestId, resolution, clientName}`，前者的 request 沿用 `PendingRequest`，item 是批准内容对应项目的快照。主会话快照增加缺省为空的 `agentRequests`，不改变原 `pendingRequests` 的本会话含义；客户端恢复后仍可显示未回答的子请求。回答仍发往 `POST /v1/sessions/{agentId}/requests/{requestId}`，临时批准只记在子会话。Codex 把带子线程 ID 的请求送到同一个客户端；canter 的 SSE 按会话订阅，因而使用独立转发事件及来源字段，父流使用父序号，子流和原批准事件保持原样，旧客户端按 Unknown 跳过。`features` 增加 `subagentTools`。四个工具是模型工具，不另加 HTTP spawn/wait/send/close 接口。
    - 子会话（P2-177，11-02）：快照和摘要增加可选 `parent: {sessionId, turnId, task}`；快照增加可选 `agent: {status, result}`。`session.parent` 事件记录创建来源，状态和最终回复随既有轮事件重放，关闭沿用 `session.status`。新增 `GET /v1/sessions/{id}/agents`，返回 `{data:[{id, task, status, result, createdAt, updatedAt}]}`，`features` 增加 `subagentSessions`。五种状态为 `running/completed/failed/closed/interrupted`；时间沿用会话的 Unix 毫秒。子会话沿用原有按 ID 读取、恢复、输入和 SSE 接口。Codex `rust-v0.166.0` 用 `SessionSource::SubAgent(ThreadSpawn { parent_thread_id, .. })` 标来源；canter 用独立 `parent`，保留父轮和任务以支持回退及父会话下的列表，不引入整套来源分类。
@@ -324,6 +325,7 @@ MCP/LSP 配置随轮固定。MCP 按服务分别交接：新增服务直接连�
 
 ## 遥测查看（P2-170）
 
+- P2-180：有直接子 agent 时，概览显示 `Usage (this session)` 和 `Usage (with sub-agents)` 两行，其后增加 Sub-agents 表（Name、Type、Status、Requests、In、Out、Cost、Tools、Time），灰色提示 `Details: canter stats <sub-agent id>`。没有子 agent 时保留原输出。按子 ID 查询显示自己的报告，并加 `Parent: <id> · <type>`。列表仍不列子会话；已删除子会话跳过；文本、JSON、HTML 使用同一服务端数据。请求数和工具数沿用报告的可观测记录计数；缺失用量或时间写 unknown，不当 0。后续 Requests、Tools 始终只列所查会话自己的记录。
 - 新增只读 `GET /v1/stats?all=true` 和 `GET /v1/sessions/{id}/stats`，`info.features` 广告 `stats`。列表沿用 Codex v2 的 `data` 包装，会话查询沿用 session ID；统计内容和这些 HTTP 端点是 canter 扩展。客户端先查能力，旧服务端不支持则提示 `canter serve --replace`，不发统计请求。终端编号是当前按 `updatedAt` 倒序、同时间按 ID 升序的列表位置，从 1 起，并非永久 ID；跨命令期间新活动可能改变编号，需要稳定引用时用 ID。
 - 服务端在 blocking 任务中只读存盘，不打开 SessionWriter、不取运行会话或会话登记表的锁、不恢复会话、不追加事件。统计覆盖只追加账本中实际发生过的记录（包括后来回退/撤回的工作，与 usage 一致），不把它当成当前模型上下文。运行中的读取是各文件完整行的观测，不是跨文件事务快照，尚未落盘的部分保持未知；私有遥测坏行和半截尾行跳过。列表不读取私有历史，最多返回最近 20 条，`all=true` 返回全部。
 - JSON 字段名自此只加不改；未知标量和不可观测的清单用 `null`（枚举用 `unknown`），不当作 0。时间戳均为 Unix 毫秒，时长毫秒，大小为 P2-169 的字节 token 估算。列表为 `{data:[{number,sessionId,updatedAt,cwd,firstMessage}]}`，第一句话保留完整文本供客户端截断。
@@ -430,6 +432,12 @@ P2-164（10-30 主控确认）：模型 shell 仅在沙箱开启时增加可选 
 | Stop | 轮正常结束 | last_assistant_message，取本轮最后一条助手消息；没有时为空串 | 通知，不启动续跑 |
 | StopFailure | 轮出错结束 | error 错误文字 | 通知 |
 | Interrupt | 轮被打断 | 无 | 通知 |
+| SubagentStart | 主 agent 创建子 agent 后、其第一轮开始前 | agent_id、agent_type、parent_session_id、task | 异步通知，不拦、不注入上下文 |
+| SubagentStop | 子 agent 每轮完成、失败、中断或在跑时被关闭 | agent_id、agent_type、parent_session_id、status（completed / failed / interrupted / closed）、last_assistant_message（本轮最后助手消息，没有为空串） | 异步通知，不拦、不启动续跑 |
+
+P2-180（11-02）：子会话的 PreToolUse、PermissionRequest、PostToolUse 保持原作用；UserPromptSubmit 只对用户直接在子会话输入（含排队和插话）触发，初始任务、主 agent 的 send_input 和自动叫醒不触发。上述事件及两个新事件的 stdin 带 agent_id（子会话 ID）、agent_type（explorer / general）、parent_session_id，共同字段和 CANTER_SESSION_ID 仍属于子会话。子会话不发 SessionStart、SessionEnd（包括客户端进出）、Stop、StopFailure、Interrupt，轮结束统一发 SubagentStop；关闭已经结束的轮不重复发。两个新事件忽略 matcher，通知结果不改变行为，沿用关会话和停机的共同 10 秒通知预算；exec 同样适用。是否禁用钩子按子会话自身受限状态判断。主会话的 P2-153/P2-172 行为不变。
+
+用户原话：11-02 主控提议把 P2-78 拆成四件，用户：「先把任务开了吧。之后咱们按照顺序一个个讨论。讨论完一件做一件」。P2-180 选项页三题用户：「都按你的建议」。主控随后确认：原有子会话钩子和自动输入的行为差异正是本件授权修改范围；只有改动会破坏主会话 P2-153/P2-172 行为时才暂停询问。
 
 普通输入、排队输入、插话、目标续跑、后台叫醒，以及客户端通过现有创建／输入接口实现的计划清空后实施、`/new`、`/handoff`、`canter exec` 共用这些入口。自动轮不触发 UserPromptSubmit。主控 11-01 选择 A：拦下的话不能进入模型历史，已存的排队事件可以保留。优先在 TurnStarted 前检查，但如果要大改轮启动流程，允许退回空轮。本件采用这个退路：配置就绪等待、Esc、关闭、撤回和 exec 已依赖可见 active turn 及完成信号；因此先登记无输入文本的可取消轮，钩子在状态锁外运行，放行才写用户消息，拦下则显示一行英文原因并完成空轮。插话不另开轮，被拦后用 `input.removed/blocked` 移除；所有插话都被拦下时不因此再次调用模型。
 
@@ -449,7 +457,7 @@ P2-172（11-01 用户决定）：客户端挂在会话上指有一条订阅该�
 
 退出码 0 放行，2 用 stderr 作为拦截／PostToolUse 反馈原因。成功退出时也识别 stdout JSON 的 `decision: "block"` + `reason`；PreToolUse 另识别 `hookSpecificOutput.permissionDecision: "deny"` + `permissionDecisionReason`。allow、ask、其它字段忽略；通知事件里的 block 同样不改变流程。命令启动失败、超时、其它退出码、非空 stdout 不是有效 JSON，一律放行，用英文 warning 标明事件、命令和故障；命令及故障提示压成单行并限长。除了 PreToolUse 的拦截原因、PostToolUse 的反馈，任何钩子输出均不进入模型内容。钩子等待后重新检查工具权限，不能放宽敏感路径、fileRules、计划／审查轮、沙箱和批准档位。审查轮保留原有交互：ask_user 仍弹提问框，submit_plan 仍由计划模式处理（未开计划模式时返回原说明），不被 review_denied 提前拒绝；二者仍经过 PreToolUse，计划批准框仍触发 PermissionRequest。
 
-对照只参考 [Claude Code hooks 文档](https://code.claude.com/docs/en/hooks) 和 Codex `rust-v0.163.0` 的 `hooks/src/schema.rs`，没有搬代码。采用相同事件名、配置骨架和 stdin 字段名；Interrupt 参考 Codex，StopFailure 参考 Claude Code。canter 合并成功／失败工具通知到 PostToolUse，保留自己的权限档位和值类型。没有实现项目 hooks、prompt / agent / http 类型、钩子放行、Stop 拦下后继续、SessionStart / UserPromptSubmit 注入上下文、PreCompact / PostCompact、Notification、Subagent 事件、Codex 的钩子信任审核或 `/hooks` 界面。协议差异见第 8 条。
+对照只参考 [Claude Code hooks 文档](https://code.claude.com/docs/en/hooks) 和 Codex `rust-v0.163.0` 的 `hooks/src/schema.rs`，没有搬代码。采用相同事件名、配置骨架和 stdin 字段名；Interrupt 参考 Codex，StopFailure 参考 Claude Code。canter 合并成功／失败工具通知到 PostToolUse，保留自己的权限档位和值类型。没有实现项目 hooks、prompt / agent / http 类型、钩子放行、Stop 拦下后继续、SessionStart / UserPromptSubmit 注入上下文、PreCompact / PostCompact、Notification、Codex 的钩子信任审核或 `/hooks` 界面。P2-180 只参考 Claude Code 的 SubagentStart、SubagentStop 和 agent_id / agent_type 字段；与它不同，两个事件均只通知，忽略 matcher，不注入上下文、不拦住子 agent。协议差异见第 8 条。
 
 11-01 用户追加（第 20 条文案已同意）：成功 write／edit 后若有匹配且允许运行的 PostToolUse 钩子，canter 自己只比较这次调用写入文件在钩子前后的内容，不论钩子成功、反馈或失败，内容变化或文件被删都在这次工具结果末尾追加一行 `<path> was changed by a PostToolUse hook after this call; read it again before editing it.`；这是 canter 的观察而非钩子输出，不进入系统提示词或环境段，未配置、未匹配或文件未变时保持原工具结果逐字不变。
 
@@ -465,7 +473,7 @@ P2-178（2026-11-02 主控决定 A）：`canter exec` 保持单轮语义，不�
 
 子会话状态跟随最近一轮普通 agent 工作：在跑、做完、失败、被关、中断；做完时取这一轮最后一条最终回复作为结果，下一轮清除旧结果。手动压缩、`!命令` 和回退记录轮不改变最近工作的状态和结果；关闭空闲已完成的子会话保留结果。状态与结果由存盘事件恢复。服务端重启将未完成的子会话标成中断，不自动续跑，不需要恢复环境变量或发模型请求；先按摘要筛选 running，再逐个打开，单个打开或写入失败只记录警告、跳过。正常结束的子会话保持结果。
 
-默认会话列表、统计列表及当前目录最近会话的选择均排除子会话，按 ID 打开仍允许；父会话的 `/agents` 列出其直接子会话，枚举后刚被删掉的子会话跳过。`/v1/usage` 汇总包含子会话，统计页面归组留给 P2-180。父会话进回收站时子会话一同移入，有子会话在跑则拒绝，沿用现有删除限制。直接删除子会话照普通规则。分叉只复制源会话的已结束对话，既不复制其子会话，也不继承源会话的 `parent`。
+默认会话列表、统计列表及当前目录最近会话的选择均排除子会话，按 ID 打开仍允许；父会话的 `/agents` 列出其直接子会话，枚举后刚被删掉的子会话跳过。`/v1/usage` 汇总包含子会话，统计页面归组见 P2-180。父会话进回收站时子会话一同移入，有子会话在跑则拒绝，沿用现有删除限制。直接删除子会话照普通规则。分叉只复制源会话的已结束对话，既不复制其子会话，也不继承源会话的 `parent`。
 
 父会话有子会话在跑时拒绝回退；退掉对话轮时，这些轮创建的子会话一同进回收站；只回退文件而保留对话时不移走子会话。回退主会话不还原子 agent 改过的文件。保留已有单会话的关闭、回收站及回退机制；关系信息用于协调这些操作，避免留下指向已退掉轮次的活动子会话。家族操作的状态锁统一先父后子，取消后释放锁再等轮结束，避免删除、回退、叫醒、记账和工具调用互相等待。
 
@@ -475,7 +483,7 @@ P2-178 的四个模型工具：`spawn_agent {task,type}` 立即返回 ID 和短�
 
 子会话正常装入 AGENTS.md 和技能；系统提示说明子 agent 身份、最终回复交回父 agent、不向用户提问、把问题或阻碍写进最终回复。不装入记忆段、不开放记忆读写；配置刷新和重开保持此限制。explorer 压缩或回退后仍保留自己的清单，不补入要求 ask_user、禁用 update_plan、最后 submit_plan 的普通计划流程指令。批准复用现有框和回答方式，主界面多显示 `Requested by sub-agent <name>`，拒绝只拒本次调用，子 agent 继续；exec 子会话沿用父轮的自动批准处理。
 
-完成、失败或独立中断通过 P2-101 的后台事件与 2 秒合并窗口送给父会话，英文说明带 ID、名字、状态及截断后的结果；exec 的单轮例外见本节开头。返工确认：`wait_agent` 返回某个子 agent 的终态结果后，该子轮不再发完成通知；已排队但尚未交给模型的通知撤掉，也不再为它叫醒。交付记录和撤回存入父会话私有历史，恢复后仍有效；已经发给模型的历史保持原样，其他子 agent 和同一子 agent 后续轮次不受影响。父轮 Esc 连带停子 agent 并抑制这次中断的叫醒。子 agent 的请求花费按请求开始时父目标计入其上限；达到 P2-109 阈值时一同取消子 agent 与后台工作，父会话沿用唯一总结轮。没有新增 SubagentStart/SubagentStop 钩子、子 agent 列表界面或统计页面。
+完成、失败或独立中断通过 P2-101 的后台事件与 2 秒合并窗口送给父会话，英文说明带 ID、名字、状态及截断后的结果；exec 的单轮例外见本节开头。返工确认：`wait_agent` 返回某个子 agent 的终态结果后，该子轮不再发完成通知；已排队但尚未交给模型的通知撤掉，也不再为它叫醒。交付记录和撤回存入父会话私有历史，恢复后仍有效；已经发给模型的历史保持原样，其他子 agent 和同一子 agent 后续轮次不受影响。父轮 Esc 连带停子 agent 并抑制这次中断的叫醒。子 agent 的请求花费按请求开始时父目标计入其上限；达到 P2-109 阈值时一同取消子 agent 与后台工作，父会话沿用唯一总结轮。列表界面见 P2-179，SubagentStart/SubagentStop 钩子和统计页面见 P2-180；抑制父会话叫醒不抑制这些钩子通知，停服务端的在跑子轮按 interrupted 通知。
 
 ## 子 agent 终端界面（P2-179）
 

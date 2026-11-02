@@ -62,6 +62,94 @@ pub fn report(
     prices: &usage::PriceBook,
 ) -> Result<StatsResponse, StoreError> {
     let events = store.events_after(id, 0)?;
+    let mut report = session_report(store, id, prices, &events)?;
+    let now = crate::journal::now();
+    for child in store.list_all()?.into_iter().filter(|child| {
+        child
+            .parent
+            .as_ref()
+            .is_some_and(|parent| parent.session_id == id)
+    }) {
+        let events = match store.events_after(&child.id, 0) {
+            Ok(events) if events.is_empty() => continue,
+            Ok(events) => events,
+            Err(StoreError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        let mut snapshot = SessionSnapshot::empty(&child.id);
+        for event in &events {
+            apply_event_mut(&mut snapshot, event)?;
+        }
+        let Some(parent) = snapshot
+            .parent
+            .as_ref()
+            .filter(|parent| parent.session_id == id)
+        else {
+            continue;
+        };
+        let child_report = match session_report(store, &child.id, prices, &events) {
+            Ok(report) => report,
+            Err(StoreError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        let end = snapshot
+            .turns
+            .iter()
+            .rev()
+            .find(|turn| is_agent_turn(&turn.client_name))
+            .and_then(|turn| {
+                if turn.status == TurnStatus::InProgress {
+                    Some(now)
+                } else {
+                    events.iter().rev().find_map(|event| match &event.payload {
+                        EventPayload::TurnCompleted { turn: completed }
+                            if completed.id == turn.id =>
+                        {
+                            Some(event.timestamp)
+                        }
+                        _ => None,
+                    })
+                }
+            });
+        report.sub_agents.push(StatsSubAgent {
+            id: child.id,
+            name: snapshot.settings.name,
+            agent_type: parent.agent_type,
+            status: snapshot
+                .agent
+                .as_ref()
+                .map_or(AgentStatus::Unknown, |agent| agent.status),
+            request_count: child_report.overview.request_count,
+            usage: child_report.overview.usage.map(|usage| usage.total),
+            tool_count: child_report.tool_calls.len(),
+            duration_ms: end
+                .map(|end| u64::try_from(end.saturating_sub(snapshot.created_at)).unwrap_or(0)),
+        });
+    }
+    if !report.sub_agents.is_empty() {
+        report.overview.usage_with_sub_agents = report.sub_agents.iter().fold(
+            report
+                .overview
+                .usage
+                .as_ref()
+                .map(|usage| usage.total.clone()),
+            |total, child| {
+                total.zip(child.usage.as_ref()).map(|(mut total, usage)| {
+                    total.add(usage);
+                    total
+                })
+            },
+        );
+    }
+    Ok(report)
+}
+
+fn session_report(
+    store: &Store,
+    id: &str,
+    prices: &usage::PriceBook,
+    events: &[Event],
+) -> Result<StatsResponse, StoreError> {
     if events.is_empty() {
         return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "session not found").into());
     }
@@ -70,7 +158,7 @@ pub fn report(
         Err(StoreError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(error),
     };
-    let ledger = usage::Ledger::replay(&events, prices);
+    let ledger = usage::Ledger::replay(events, prices);
     let mut report = StatsResponse {
         session_id: id.into(),
         event_seq: events.last().unwrap().seq,
@@ -90,8 +178,9 @@ pub fn report(
     let mut turns = BTreeSet::new();
     let mut turn_id = None;
     let mut compacting = false;
-    for event in &events {
+    for event in events {
         match &event.payload {
+            EventPayload::SessionParent { parent } => report.parent = Some(parent.clone()),
             EventPayload::SessionUpdated { settings } => {
                 report.overview.cwd.clone_from(&settings.cwd);
                 report.overview.model.clone_from(&settings.model);
@@ -286,7 +375,7 @@ pub fn report(
     let mut items: Vec<_> = items.into_values().collect();
     items.sort_by_key(|row| row.seq);
     signals::fill(&mut report.compactions, &items, &report.overview.cwd);
-    report.tool_calls = tools::calls(&events, &history, &items);
+    report.tool_calls = tools::calls(events, &history, &items);
     report.tools = tools::aggregate(&report.tool_calls);
     report.approvals.data = approvals.into_values().collect();
     report.approvals.data.sort_by_key(|row| row.timestamp);
