@@ -4,6 +4,7 @@
 
 ## 装的哪一版、怎么退回
 
+- 11-02 第五十八次装 main `5b39513`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 5b39513`；比上一版多 P2-176：系统提示词 `[Context budget]` 那条改成让模型用 `update_plan` 记待办、说明压缩后自动带回，`update_plan` 说明末尾加「The checklist is restored automatically after compaction.」）。服务端已换好（pid 4559）。
 - 11-02 第五十七次装 main `4b123ce`（`canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 4b123ce`；比上一版多 P2-175：`[Context budget]` 提示末尾加「Compaction will then free space; this is not a limit on the task.」）。upgrade 已换好服务端（pid 80227）。系统提示词没变。这次下载 crates.io 索引两次报 `[16] Error in the HTTP2 framing layer`，加 `CARGO_HTTP_MULTIPLEXING=false` 后装上。
 - 退回上一版 `b255bfa`：`canter rollback`（备份在 `~/.canter/backups/canter-…-b255bfa`）。
 - 11-02 09:37 第五十六次装 main `b255bfa`（`canter upgrade`，代码同 `58e2620`，只多 HANDOFF 记录；P2-174 长程试跑跑在这一版上）。`58e2620` 备份在 `~/.canter/backups/canter-…-58e2620`。
