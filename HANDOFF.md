@@ -140,7 +140,6 @@
   - 建议 4（用户定不改）：父会话打开时，子会话的请求只算进父会话的目标，子会话自己的目标永远不记账。只有用户按 ID 打开子会话、手动给它设带预算的目标才会碰到，这时预算上限不生效，目标会一直续跑。
   - 复核时新提的建议：主会话一轮开始后、模型还没有任何输出前（包括首个请求等第一个字的几秒），某个子 agent 正好做完，完成通知写进这一轮；用户这时按 Esc 撤回这一轮，通知随历史被删，撤回时只补回后台命令的通知、不补子 agent 的，之后不会再交给模型或叫醒。结果还在子会话里，模型自己调 wait_agent 能拿到。改法：撤回时对未交付的子 agent 通知同样补回。
   - 可以不改：exec 里开的子 agent 还在跑时，用户打开主会话交互、让模型 send_input，仍报 `input with turn-scoped settings requires an idle session`（说明里写的是「交互会话里排队」）；模型可以先 wait 再发。
-- LSP 同步测试在负载高时成批超时（11-02 P2-178 合并前全套）：7 条 `canter-tools lsp::sync::tests::*` 和 `reload_tests::disabling_then_enabling_lsp_still_waits_for_the_original_turn` 挂，都是 `Waiting for LSP diagnostics timed out`；单独复跑 lsp::sync 仍挂 10 条，main 上同样挂，机器负载约 6.8。和 P2-178 无关；下次全套再挂时先看负载，要修另开一件。
 
 - 压缩空转（P2-174，11-02 合并，没装）交叉审查可以不改的：
   - 排队（Queue）的消息在接收时就清零计数，但要等这一轮结束才进对话；这一轮接着空转到停下时，走中断路径会把这条排队消息丢掉，用户得重发。按 Esc 也会这样丢，不是 P2-174 改出来的。插话不受影响。
@@ -199,7 +198,7 @@
   - 服务端重启后或模型请求最终失败后，目标仍显示 active，其实已不自动续跑；要用户发消息或 `/goal resume`。
   - `/goal <目标>` 或 `/goal resume` 请求还没返回时按 Esc，请求失败的话这次 Esc 会丢。
   - 接 GPT 订阅（P2-80）后订阅模型没有价钱，每个目标会马上收尾，到时在 P2-80 里定。
-- LSP 计时测试（10-31 P2-169 合并前全套时看到，main 上也有）：机器负载高（约 8～10）时 canter-core `lsp` 有 6 项超时失败，负载低时通过。和改动无关，全套里见到先看负载。 11-01 用户：「先封掉。我日常现在也不用LSP，把这个几个封掉的记到146就好了」，P2-168 分支上先关 6 项，合并前全套又挂 3 项后用户：「全部封掉，记到146」，`canter-core` `tests/lsp.rs` 的 22 项全部 `#[ignore]`（合并后生效），名字和单独跑的命令见 P2-146。`canter-server` 的 `lsp_tests`、`reload_tests` 和 `canter-tools` 的 LSP 单元测试（除 `rss_limits`）照常跑。
+- LSP 计时测试（10-31 P2-169 合并前全套时看到，main 上也有）：机器负载高（约 8～10）时 canter-core `lsp` 有 6 项超时失败，负载低时通过。和改动无关，全套里见到先看负载。 11-01 用户：「先封掉。我日常现在也不用LSP，把这个几个封掉的记到146就好了」，P2-168 分支上先关 6 项，合并前全套又挂 3 项后用户：「全部封掉，记到146」，`canter-core` `tests/lsp.rs` 的 22 项全部 `#[ignore]`（合并后生效），名字和单独跑的命令见 P2-146。`canter-server` 的 `lsp_tests`、`reload_tests` 和 `canter-tools` 的 LSP 单元测试（除 `rss_limits`）照常跑。 11-02 P2-178 合并前全套（负载约 6.8），这些没封的也挂了 8 项：7 项 `canter-tools lsp::sync::tests::*` 和 `reload_tests::disabling_then_enabling_lsp_still_waits_for_the_original_turn`，都是 `Waiting for LSP diagnostics timed out`；单独复跑 lsp::sync 挂 10 项，main 上同样挂。
 - 非交互模式（P2-30 复核建议改和可以不改，10-31 按「只有必须改挡合并」不改，等用户试用）：
   - 轮开始后 exec 因客户端出错退出（`canter exec --json … | head -n 1` 让标准输出提前关掉、事件流中断）时不打断服务端那一轮，没人看着会一直跑完、继续花钱；终端能接上按 Esc 打断。同一个错误 stderr 打两遍（`canter exec: Broken pipe`、`canter: Broken pipe`）。改法：已有 turn_id 时出错前尽量 interrupt 一次；stdout 写失败后不再写结局行。
   - exec 那一轮在跑时，终端用户打字收到 `input with turn-scoped settings requires an idle session`，看不懂原因；改法是区分「当前是非交互轮」和「这次输入带了临时设置」分开报。
