@@ -140,6 +140,9 @@
 
 ## 已知没修的问题
 
+- 预测下一个 prompt（P2-102，11-02 合并，没装）交叉审查没改的（用户定只修第 1 条受限模式和 git 加固）：
+  - 建议改 2：没有终端连着时也生成建议（`crates/canter-core/src/suggestions.rs` `start`），一轮跑着时关了终端，这一轮结束仍发一次请求，花钱没人收到，还会让「连续 20 条没用」提前计数；可改成没有订阅者就不出。
+  - 可以不改：接受建议后删掉重打仍记「用了」，接受后按 Shift+Tab 再发则不记（只影响少出计数）；`canter exec` 打开空会话极少数情况下 `--json` 会多一行 `seq: 0` 的 `session.promptSuggestion`；别的客户端 rewind 后本终端已显示的灰字不清；进计划模式、rewind、切模型时不取消在跑的建议请求（不会发出，只多花一次钱）；建议请求自己因长度停下时可能发出半句（主线 `max_output_tokens` 很大，基本遇不到）；git 示例没设 `GIT_NO_LAZY_FETCH=1`，部分克隆里可能联网补取，最多 2 秒超时后不出示例。
 - 子 agent 起名（P2-183，11-02 合并，没装）主控审查建议改：每开一个子 agent 都 `list_all` 列全部会话摘要来查重名（`crates/canter-core/src/agents.rs` 的起名处），会话很多时开子 agent 会变慢；可改成只列本主会话的子会话。
 - 接 opencode go（P2-185，11-02 合并，已装）交叉审查建议改：`config.json` 的 `headers` 写错（头名、头值不合法，或写了 `User-Agent` 这类保留名）时，报错只说「第几行第几列不对」，不说原因（`crates/canter-server/src/config.rs` 映射 serde 错误处）；可改成原因是那三句固定文字时附上，serde 自带的类型错误仍只给行列（会带出值）。
 - 子 agent 工具和批准（P2-178，11-02 合并，没装）交叉审查没改的：
