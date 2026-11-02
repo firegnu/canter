@@ -32,7 +32,7 @@ pub(crate) fn chooser(commands: &[BackgroundCommand], now: i64) -> Chooser {
 }
 fn status(command: &BackgroundCommand) -> String {
     if command.running {
-        "后台运行中".into()
+        "running".into()
     } else {
         format!(
             "exit code: {}",
