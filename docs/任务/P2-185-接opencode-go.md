@@ -122,3 +122,9 @@
 - 用户 11-02 同意装好后真发：「可以真发」。主控在用户在场时用 opencode go 真发一两次确认，次数记在下面。
 - 派之前排查时，主控经用户同意（「可以，发吧」）直接给 opencode go 发过 1 次测试请求，回 400 `MissingSessionID`。
 - 结果：一次过
+
+## 装上后真发（11-02）
+
+- 用户跑 `canter upgrade` 装上 `5e26ad5`，主控把配置换成 opencode go（`headers` 带 `x-opencode-session: {session_id}`，价格照官网写高峰、非高峰两档，改前备份 `~/.canter/config.json.bak-before-opencode-go`），用户在新会话里试：1 次请求，成功，用户：「试过了，能正常回答」。
+- 本件前后对 opencode go 的真实请求共 4 次：装之前旧版 canter 2 次（400）、主控排查 1 次（400 `MissingSessionID`）、装上后 1 次（成功）。
+- 用户问 opencode go 别的模型；主控说明别家思考参数格式、全局只有一个上下文窗口、价格要逐个写，用户：「暂时就这两个吧」。配置里只放 `deepseek-v4.1-flash`、`deepseek-v4-pro`。
