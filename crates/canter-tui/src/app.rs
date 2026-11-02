@@ -2953,7 +2953,7 @@ impl App {
         );
         if let Some(background) = background {
             let text = if background.running {
-                format!("Background #{} · 后台运行中", background.id)
+                format!("Background #{} · running", background.id)
             } else {
                 format!(
                     "Background #{} finished: {} · exit code: {}",

@@ -1986,7 +1986,7 @@ async fn background_shell_controls_work_through_terminal_and_survive_client_exit
     a.wait_for("user-ready").await;
     let id = world.only_session().await;
     let b = world.open(&["--resume", &id], "background-b").await;
-    b.wait_for("后台运行中").await;
+    b.wait_for("Background #1 · running").await;
     assert_eq!(a.quit().await, id);
     assert!(world.snapshot(&id).await.background_commands[0].running);
     b.type_line("/ps").await;

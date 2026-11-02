@@ -109,12 +109,12 @@ fn background_card_and_pinned_count_survive_opening_the_snapshot() {
     snapshot.background_commands.push(serde_json::from_value(serde_json::json!({"id":1,"itemId":"shell-item","command":"npm run dev","startedAt":0,"completedAt":null,"running":true,"exitCode":null})).unwrap());
     let mut ui = Ui::new(TestBackend::new(100, 24), App::new(snapshot, None, 0)).unwrap();
     let shown = text(&mut ui);
-    assert!(shown.contains("后台运行中"), "{shown}");
+    assert!(shown.contains("Background #1 · running"), "{shown}");
     assert!(shown.contains("▸ 1 background commands"), "{shown}");
     let event = serde_json::from_value(serde_json::json!({"seq":1,"sessionId":"background","timestamp":2000,"type":"backgroundCommand.updated","command":{"id":1,"itemId":"shell-item","command":"npm run dev","startedAt":0,"completedAt":2000,"running":false,"exitCode":7}})).unwrap();
     ui.app_mut().apply_event(&event, 2000);
     let done = text(&mut ui);
-    assert!(!done.contains("后台运行中"));
+    assert!(!done.contains("Background #1 · running"));
     assert!(!done.contains("1 background commands"));
     assert!(done.contains("Background #1 finished: npm run dev · exit code: 7"));
     let mut reopened = Ui::new(
