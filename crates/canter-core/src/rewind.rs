@@ -69,6 +69,11 @@ impl Checkpoints {
     pub fn clear_boundaries(&mut self) {
         self.boundaries.clear();
     }
+    pub fn remove_message(&mut self, index: usize) {
+        for boundary in &mut self.boundaries {
+            boundary.messages -= usize::from(boundary.messages > index);
+        }
+    }
     pub fn retract(&mut self, turn_id: &str) -> Option<(usize, usize, usize)> {
         let index = self.boundaries.iter().position(|b| b.turn_id == turn_id)?;
         let boundary = &self.boundaries[index];

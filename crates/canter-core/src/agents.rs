@@ -225,6 +225,42 @@ impl SessionMaintenance {
 }
 
 impl Session {
+    /// Mark exactly the terminal child turn returned by wait_agent as delivered.
+    /// The host holds the parent's operation lock while obtaining the snapshot.
+    pub async fn acknowledge_agent_result(
+        &self,
+        snapshot: &SessionSnapshot,
+    ) -> Result<(), CoreError> {
+        let mut state = self.shared.state.lock().await;
+        if snapshot
+            .parent
+            .as_ref()
+            .is_none_or(|parent| parent.session_id != state.journal.snapshot.id)
+        {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "Expected a child agent snapshot",
+            ));
+        }
+        if snapshot
+            .agent
+            .as_ref()
+            .is_none_or(|agent| agent.status == AgentStatus::Running)
+        {
+            return Ok(());
+        }
+        if let Some(turn) = snapshot.turns.iter().rev().find(|turn| {
+            !matches!(
+                turn.client_name.as_str(),
+                "compact" | "userShell" | "rewind"
+            )
+        }) {
+            state
+                .acknowledge_agent_result(agent_notice_id(&snapshot.id, &turn.id))
+                .await?;
+        }
+        Ok(())
+    }
     /// A dormant parent has no turn override; use its last persisted policy.
     pub async fn restore_agent_policy(&self) -> Result<(), CoreError> {
         let state = self.shared.state.lock().await;
@@ -239,10 +275,18 @@ impl Session {
                     .into_iter()
                     .rev()
                     .find_map(|event| match event.payload {
-                        EventPayload::SessionUpdated { settings } => Some(settings.approval_policy),
+                        EventPayload::SessionUpdated { settings } => {
+                            Some(crate::session::AgentPolicy {
+                                approval: settings.approval_policy,
+                                readonly: settings.plan_mode,
+                            })
+                        }
                         _ => None,
                     })
-                    .unwrap_or(PermissionMode::AlwaysAsk)
+                    .unwrap_or(crate::session::AgentPolicy {
+                        approval: PermissionMode::AlwaysAsk,
+                        readonly: false,
+                    })
             })
         })
         .await
@@ -594,7 +638,11 @@ async fn watch_agent(parent: &Session, child: &Session) -> Result<(), CoreError>
                                 agent.result.as_deref().unwrap_or("No final reply.")
                             )
                         );
-                        if state.agent_notice(text).await.is_err() {
+                        if state
+                            .agent_notice(agent_notice_id(&snapshot.id, &turn.id), text)
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -617,6 +665,10 @@ async fn watch_agent(parent: &Session, child: &Session) -> Result<(), CoreError>
         }
     });
     Ok(())
+}
+
+fn agent_notice_id(agent_id: &str, turn_id: &str) -> String {
+    format!("agent-result-{agent_id}-{turn_id}")
 }
 
 fn forwarded_request(snapshot: &SessionSnapshot, request: PendingRequest) -> AgentRequest {

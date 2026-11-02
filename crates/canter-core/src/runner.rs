@@ -909,7 +909,7 @@ async fn execute(
     let (plan_mode, is_agent) = {
         let state = shared.state.lock().await;
         (
-            state.journal.snapshot.settings.plan_mode || state.readonly_agent(),
+            state.journal.snapshot.settings.plan_mode || state.agent_requires_readonly(),
             state.journal.snapshot.parent.is_some(),
         )
     };
@@ -1330,7 +1330,7 @@ async fn permission<'a>(
                 state.gate.evaluate_plan(call, state.approval_policy())
             } else if review_denied {
                 state.gate.evaluate_review(call, state.approval_policy())
-            } else if state.journal.snapshot.settings.plan_mode || state.readonly_agent() {
+            } else if state.journal.snapshot.settings.plan_mode || state.agent_requires_readonly() {
                 state.gate.evaluate_plan(call, state.approval_policy())
             } else if state
                 .active
@@ -1343,7 +1343,7 @@ async fn permission<'a>(
             };
         // First enforce the hard plan/review restriction, then command policy.
         let restricted = state.journal.snapshot.settings.plan_mode
-            || state.readonly_agent()
+            || state.agent_requires_readonly()
             || state
                 .active
                 .as_ref()
@@ -1464,7 +1464,7 @@ async fn permission<'a>(
         return Err(CoreError::internal());
     };
     let mut state = shared.state.lock().await;
-    if (state.journal.snapshot.settings.plan_mode || state.readonly_agent())
+    if (state.journal.snapshot.settings.plan_mode || state.agent_requires_readonly())
         && matches!(
             state.gate.evaluate_plan(call, state.approval_policy()),
             PermissionCheck::Deny { .. }

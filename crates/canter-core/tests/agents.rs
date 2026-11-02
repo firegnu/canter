@@ -147,6 +147,14 @@ async fn spawn_inherits_current_settings_runs_fresh_and_can_continue_and_reopen(
     for name in ["spawn_agent", "wait_agent", "send_input", "close_agent"] {
         assert!(!tools.iter().any(|tool| tool["function"]["name"] == name));
     }
+    let send_input = requests[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["function"]["name"] == "send_input")
+        .unwrap();
+    assert!(send_input["function"]["description"].as_str().unwrap()
+        .contains("In canter exec, first use wait_agent until the running sub-agent stops, then send_input."));
     assert_eq!(
         std::fs::read_to_string(root.path().join("work/inherited-env")).unwrap(),
         "in-memory-value"
@@ -605,6 +613,105 @@ async fn child_completion_wakes_interactive_parent_but_exec_waits_for_next_input
         assert!(delivered.contains("completed"));
         test.stop(&[child]).await;
     }
+}
+
+#[tokio::test]
+async fn running_general_child_follows_parent_plan_mode_on_every_check() {
+    running_child_follows_readonly_parent(false).await;
+}
+
+#[tokio::test]
+async fn running_general_child_follows_parent_review_on_every_check() {
+    running_child_follows_readonly_parent(true).await;
+}
+
+async fn running_child_follows_readonly_parent(review: bool) {
+    let mut replies = vec![tool("write", json!({"path":"pending.txt","content":"no"}))];
+    if review {
+        replies.push(Reply {
+            hang: true,
+            ..Reply::sse("")
+        });
+    }
+    replies.extend([
+        tool("write", json!({"path":"next.txt","content":"no"})),
+        shell("touch shell-write.txt"),
+        tool("read", json!({"path":"readable.txt"})),
+        tool(
+            "update_plan",
+            json!({"plan":[{"step":"Inspect only","status":"completed"}]}),
+        ),
+        complete("Read-only work done"),
+    ]);
+    let test = Fixture::new(replies).await;
+    std::fs::write(
+        test.root.path().join("work/readable.txt"),
+        "read-only evidence",
+    )
+    .unwrap();
+    test.parent
+        .update(serde_json::from_value(json!({"approvalPolicy":"alwaysAsk"})).unwrap())
+        .await
+        .unwrap();
+    let (child, _) = test
+        .parent
+        .spawn_agent("child".into(), "Work on files".into())
+        .await
+        .unwrap();
+    let request = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(request) = child.snapshot().await.session.pending_requests.first() {
+                break request.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    test.parent
+        .update(serde_json::from_value(json!({"approvalPolicy":"allowAll"})).unwrap())
+        .await
+        .unwrap();
+    if review {
+        let mut params = input("Review changes");
+        params.review = Some("Review the current changes".into());
+        test.parent.input(params).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while test.fake.requests.lock().unwrap().len() < 3 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+    } else {
+        test.parent
+            .update(serde_json::from_value(json!({"planMode":true})).unwrap())
+            .await
+            .unwrap();
+    }
+    child
+        .resolve(
+            &request.id,
+            serde_json::from_value(json!({"decision":"accept","clientName":"test"})).unwrap(),
+        )
+        .await
+        .unwrap();
+    let done = idle(&child).await;
+    let changed: Vec<_> = ["pending.txt", "next.txt", "shell-write.txt"]
+        .into_iter()
+        .filter(|path| test.root.path().join("work").join(path).exists())
+        .collect();
+    assert!(
+        changed.is_empty(),
+        "parent read-only mode must reject pending approvals and subsequent writes: {changed:?}"
+    );
+    assert_eq!(done.current_plan().unwrap()[0].step, "Inspect only");
+    assert!(
+        test.fake.requests.lock().unwrap().last().unwrap()["messages"]
+            .to_string()
+            .contains("read-only evidence")
+    );
+    test.stop(&[child]).await;
 }
 
 #[tokio::test]

@@ -126,15 +126,17 @@ impl App {
         loop {
             let parent_operation = self.session_locks.lock(parent).await;
             let mut data = Vec::new();
+            let mut completed = Vec::new();
             let mut terminal = false;
             let mut changes = FuturesUnordered::new();
             for id in ids {
                 let operation = self.session_locks.lock(id).await;
                 let snapshot = self.agent_snapshot(parent, id, operation).await?;
-                terminal |= snapshot
+                let stopped = snapshot
                     .agent
                     .as_ref()
                     .is_none_or(|agent| agent.status != AgentStatus::Running);
+                terminal |= stopped;
                 if let Some(session) = self.opened_session(id).await {
                     let mut events = session.subscribe(snapshot.last_event_seq).await?;
                     changes.push(async move {
@@ -154,11 +156,19 @@ impl App {
                     });
                 }
                 data.push(agent_value(&snapshot));
+                if stopped {
+                    completed.push(snapshot);
+                }
             }
-            drop(parent_operation);
             if terminal || tokio::time::Instant::now() >= deadline || changes.is_empty() {
+                if let Some(parent) = self.opened_session(parent).await {
+                    for snapshot in &completed {
+                        parent.acknowledge_agent_result(snapshot).await?;
+                    }
+                }
                 return Ok(serde_json::json!({"data":data}));
             }
+            drop(parent_operation);
             tokio::select! {
                 _ = cancel.cancelled() => return Err(ApiError::new(ErrorCode::Conflict, "Wait interrupted")),
                 _ = tokio::time::sleep_until(deadline) => {},

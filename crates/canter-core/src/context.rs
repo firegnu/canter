@@ -71,6 +71,10 @@ pub(crate) enum HistoryEntry {
         #[serde(default)]
         visible: bool,
     },
+    AgentResultDelivered {
+        notice_id: String,
+        withdrawn: bool,
+    },
     DiagnosticsNotice {
         message: Message,
     },
@@ -109,6 +113,7 @@ pub(crate) fn known(message: Message) -> Option<Message> {
 }
 
 pub(crate) struct Restored {
+    pub acknowledged_agent_results: std::collections::HashSet<String>,
     pub context_budget_notices: BTreeMap<usize, u8>,
     pub restored_file_notices: std::collections::BTreeSet<usize>,
     pub diagnostic_notices: std::collections::BTreeSet<usize>,
@@ -127,6 +132,25 @@ pub(crate) fn restore(
     entries: Vec<HistoryEntry>,
     rewind: &mut crate::rewind::Checkpoints,
 ) -> Restored {
+    let acknowledged_agent_results = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            HistoryEntry::AgentResultDelivered { notice_id, .. } => Some(notice_id.clone()),
+            _ => None,
+        })
+        .collect();
+    // Omit withdrawn notices during replay so all message indices and rewind
+    // boundaries are rebuilt from the same history as the live session.
+    let withdrawn: std::collections::HashSet<_> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            HistoryEntry::AgentResultDelivered {
+                notice_id,
+                withdrawn: true,
+            } => Some(notice_id.clone()),
+            _ => None,
+        })
+        .collect();
     let mut prefix = Vec::new();
     let mut invoked_skills = Vec::new();
     let mut segments = None;
@@ -165,6 +189,13 @@ pub(crate) fn restore(
                 command_id,
                 visible,
             } => {
+                if event_id
+                    .as_deref()
+                    .or_else(|| crate::background::event_id(&message))
+                    .is_some_and(|id| withdrawn.contains(id))
+                {
+                    continue;
+                }
                 if visible && let (Some(id), Message::User { text }) = (event_id, &message) {
                     background_cards.insert(
                         id.clone(),
@@ -250,12 +281,14 @@ pub(crate) fn restore(
                 };
             }
             HistoryEntry::CompactionRequest { .. } => {}
+            HistoryEntry::AgentResultDelivered { .. } => {}
             HistoryEntry::Unknown => {}
         }
         flush_tool_images(&mut history, &mut users, &mut tool_images);
         flush_plan_mode_notices(&mut history, &mut plan_mode_notices);
     }
     Restored {
+        acknowledged_agent_results,
         context_budget_notices,
         restored_file_notices,
         diagnostic_notices,

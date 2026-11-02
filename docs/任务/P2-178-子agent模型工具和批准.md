@@ -161,3 +161,15 @@
 - 拿主意的地方：按主控明确决定 A，`canter exec` 保持单轮，不因子 agent 完成自动起下一轮；结果保留到主会话下一次输入，包括 `exec --resume` 或交互打开后的输入；exec 当轮要结果用 wait_agent，交互主会话空闲时按第 5 节叫醒。该决定已写进 DESIGN。批准新增独立转发事件和 `agentRequests`，保留原 `pendingRequests` 的本会话含义；旧子会话缺角色字段按 general 恢复，未知角色按只读限制。没有剩余需要主控决定的事项。
 - 没做的事：没有子 agent 列表/记录/停止界面、SubagentStart/SubagentStop 钩子、统计页面归组、用户角色文件、fork 式子 agent、收件箱或 resume_agent；回退主会话不恢复子 agent 改过的文件。只参考 Codex `rust-v0.166.0` 的 `core/src/tools/handlers/multi_agents_spec.rs`、`multi_agents/` 和 `core/src/agent/role.rs`，独立实现，没有搬代码。没有合并 main、推送、安装或重启用户服务。
 - 踩过的坑：exec 单轮与自动叫醒的原设计存在冲突，先停下交主控，收到 A 后继续。新增工具增大了上下文，使两个紧贴容量边界的压缩夹具走了另一条路径；给原预期路径留出容量，并保留所有原行为断言。批准测试最初误用了 `/requests/{id}/resolve`，改回现有 `/requests/{id}`。假模型按 7 字节拆包时，单个 80 KiB SSE 帧未在夹具时限内完成，改成正常的多段流式正文，仍验证超限截断，没有缩短超时或放宽长度断言。新完成通知使旧删除测试存在待叫醒工作，改为等待该轮结束后再验证原有删除断言。
+
+### 返工
+
+2026-11-02，按主控审查和 `P2-178-交叉审查.md` 中用户同意的建议完成。
+
+- 做了什么：修正 canter 的三条 MCP 测试和 `ask_user_second_option_returns_to_the_model_and_continues` 的工具清单、数量、MCP 索引及 `no_mcp_request.json`，补入四个子 agent 工具，保留顺序、描述、参数、结果和完整请求字节断言。验证新请求移除新增四工具后与原夹具逐字节相同。同步 core 的 `sandbox-disabled-request.json` 中 send_input 描述，其他字节不变。
+- 结果交付：wait_agent 返回终态时按子会话 ID 和具体工作轮登记已交付；转发任务不再为该轮生成完成通知，已排队但未发给模型的通知从待发队列和上下文撤掉，并取消它的叫醒。交付与撤回存入父会话私有历史，重开后保持；已发送历史不删，其他子 agent、仍在运行的轮和后续轮次继续正常通知。撤回同步调整上下文索引和回退边界，锁顺序保持先父后子。
+- 实时权限：将父会话计划模式和当前审查轮的只读状态放入实时权限快照；已经运行的 general 在每次检查、钩子返回后的重查和批准返回后都按当前状态收紧，使用 evaluate_plan，仍允许自己的 update_plan。父会话未打开时恢复其持久化档位和计划模式。DESIGN 已写明这些规则。
+- 说明与决定：send_input 英文说明明确 canter exec 下先用 wait_agent 等正在运行的子 agent 停下再发，运行行为不改。继续采用主控决定 A：exec 单轮、不自动续轮，未等待的结果留到主会话下一次输入；交互空闲仍按合并窗口叫醒。建议 4 按用户决定不改，由主控记 HANDOFF；其他未授权建议不扩展。没有剩余需要主控决定的事项。
+- 针对验证：先复现原四条 canter 失败。新增两条权限测试在修复前均实际写出了 pending.txt、next.txt 和 shell-write.txt，修复后全部拒绝，读取和子清单仍成功；通知测试修复前 wait 后仍留有第三条上下文消息，修复后撤回且不叫醒，重开不补发，下一子轮仍正常叫醒。另覆盖超时返回 running、混合返回终态与 running、保留其他子通知和已发送历史前缀；工具描述通过实际模型请求检查。子 agent 相关 30 条及原四条 canter 回归均通过。
+- 最终验证：使用独立编译目录，前台完成 `cargo nextest run -p canter-core -p canter-protocol -p canter-store -p canter-tools -p canter-server -p canter-tui -p canter --no-fail-fast --test-threads 4`：1487 条全部通过，28 条按现有配置跳过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。测试只用隔离目录及假模型，真实模型调用 0 次；未跑全仓或文档测试，未合并、推送、安装或重启用户服务。
+- 踩过的坑：首次七 crate 检查发现 core 的沙箱关闭请求夹具也包含旧 send_input 描述，补齐后保留原字节断言。默认并发完整运行曾出现升级/回退测试服务替换连接失败，以及两条 LSP 同步测试等待诊断超时；三条单独复查全部通过，再以 4 路并发完整跑七个 crate 全部通过，没有改这些实现、断言或超时。新增测试的显式 drop 未通过 clippy 的持锁跨 await 检查，改成明确的块作用域后通过。

@@ -46,12 +46,19 @@ pub(crate) struct Shared {
     pub configuration_warnings: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>,
     pub lifetime: CancellationToken,
 }
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct AgentPolicy {
+    pub approval: PermissionMode,
+    pub readonly: bool,
+}
+
 pub(crate) struct State {
     pub agent_forwarding: bool,
     pub suppressed_agent_turns: std::collections::HashSet<String>,
+    pub acknowledged_agent_results: std::collections::HashSet<String>,
     pub agent_children: Vec<std::sync::Weak<Shared>>,
-    pub permission_policy: watch::Sender<PermissionMode>,
-    pub inherited_policy: Option<watch::Receiver<PermissionMode>>,
+    pub permission_policy: watch::Sender<AgentPolicy>,
+    pub inherited_policy: Option<watch::Receiver<AgentPolicy>>,
     pub fork_notice: Option<Message>,
     /// A non-interactive turn leaves automation paused until the next input.
     pub automatic_turns_paused: bool,
@@ -143,17 +150,34 @@ impl State {
             .as_ref()
             .map(|policy| *policy.borrow())
             .unwrap_or_else(|| {
-                self.active
+                let approval = self
+                    .active
                     .as_ref()
                     .and_then(|active| active.approval_policy)
-                    .unwrap_or(self.journal.snapshot.settings.approval_policy)
+                    .unwrap_or(self.journal.snapshot.settings.approval_policy);
+                AgentPolicy {
+                    approval,
+                    readonly: self.journal.snapshot.settings.plan_mode
+                        || self
+                            .active
+                            .as_ref()
+                            .is_some_and(|active| active.turn.review.is_some()),
+                }
             });
         self.permission_policy.send_if_modified(|current| {
             let changed = *current != policy;
             *current = policy;
             changed
         });
-        policy
+        policy.approval
+    }
+
+    pub(crate) fn agent_requires_readonly(&self) -> bool {
+        self.readonly_agent()
+            || self
+                .inherited_policy
+                .as_ref()
+                .is_some_and(|policy| policy.borrow().readonly)
     }
 
     pub(crate) async fn resolve_without_user(
@@ -181,7 +205,12 @@ impl State {
             agent_children: Vec::new(),
             agent_forwarding: false,
             suppressed_agent_turns: Default::default(),
-            permission_policy: watch::channel(journal.snapshot.settings.approval_policy).0,
+            acknowledged_agent_results: Default::default(),
+            permission_policy: watch::channel(AgentPolicy {
+                approval: journal.snapshot.settings.approval_policy,
+                readonly: journal.snapshot.settings.plan_mode,
+            })
+            .0,
             inherited_policy: None,
             fork_notice: None,
             automatic_turns_paused: false,
@@ -861,6 +890,7 @@ impl Session {
         crate::usage::Ledger::replay(&events, &options.prices)
             .fill_costs(&mut state.journal.snapshot);
         let restored = crate::context::restore(entries.clone(), &mut state.rewind);
+        state.acknowledged_agent_results = restored.acknowledged_agent_results;
         state.prefix = restored.prefix;
         state.invoked_skills = restored.invoked_skills;
         state.restored_file_notices = restored.restored_file_notices;

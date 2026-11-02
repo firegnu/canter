@@ -840,6 +840,96 @@ async fn exec_result_survives_reopening_the_parent_before_its_next_input() {
 }
 
 #[tokio::test]
+async fn wait_withdraws_queued_completion_without_waking_and_survives_reopen() {
+    use canter_core::{AgentCommand, AgentHost};
+    let (test, fake) = harness(false).await;
+    let url = parent(&test).await;
+    let parent_id = url.rsplit('/').next().unwrap().to_owned();
+    let session = test.app.opened_session(&parent_id).await.unwrap();
+    let before = session.context().await.messages.count;
+    let child = spawn(&test, &url, "Inspect code").await;
+    let child_id = child.rsplit('/').next().unwrap().to_owned();
+    idle(&test, &child).await;
+    // Observe the queued notice through the public context API before waiting.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while session.context().await.messages.count == before {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let host = super::super::agent_sessions::Host(Arc::downgrade(&test.app));
+    let result = host
+        .execute(
+            parent_id.clone(),
+            AgentCommand::WaitAgent {
+                ids: vec![child_id.clone()],
+                timeout_ms: 1000,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["data"][0]["status"], "completed");
+    assert_eq!(result["data"][0]["result"], "recovered");
+    assert_eq!(
+        session.context().await.messages.count,
+        before,
+        "wait must withdraw an undelivered completion notice"
+    );
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert_eq!(
+        test.read(&url).await.session.turns.len(),
+        1,
+        "an acknowledged result must not wake the parent"
+    );
+    drop(session);
+    test.client
+        .delete(&url)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    test.client.post(format!("{url}/resume")).json(&json!({"env":{"HOME":test.root.path().join("home"),"CANTER_HOME":test.app.home,"PATH":"/usr/bin:/bin"}})).send().await.unwrap().error_for_status().unwrap();
+    say(&test, &url, "Continue after waiting").await;
+    assert!(
+        !fake.requests.lock().unwrap().last().unwrap()["messages"]
+            .to_string()
+            .contains("[Sub-agent "),
+        "reopen must not restore the withdrawn notice"
+    );
+    // Acknowledgement is for one child turn, not for the entire child session.
+    host.execute(
+        parent_id,
+        AgentCommand::SendInput {
+            id: child_id,
+            message: "Inspect the next file".into(),
+        },
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    idle(&test, &child).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while test.read(&url).await.session.turns.len() < 3 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    idle(&test, &url).await;
+    assert!(
+        fake.requests.lock().unwrap().last().unwrap()["messages"]
+            .to_string()
+            .contains("[Sub-agent "),
+        "a later child turn must still notify and wake"
+    );
+    test.stop().await;
+    fake.stop().await;
+}
+
+#[tokio::test]
 async fn close_agent_stops_its_background_command_and_keeps_its_final_reply() {
     use canter_core::{AgentCommand, AgentHost};
     let reply = |delta: serde_json::Value, finish: &str| {
@@ -890,6 +980,114 @@ async fn close_agent_stops_its_background_command_and_keeps_its_final_reply() {
             .iter()
             .all(|command| !command.running)
     );
+    test.stop().await;
+    fake.stop().await;
+}
+
+#[tokio::test]
+async fn wait_only_acknowledges_terminal_results_and_keeps_already_sent_notices() {
+    use canter_core::{AgentCommand, AgentHost};
+    let (test, fake) = harness(true).await;
+    let url = parent(&test).await;
+    let parent_id = url.rsplit('/').next().unwrap().to_owned();
+    let running = spawn(&test, &url, "Wait for work").await;
+    let running_id = running.rsplit('/').next().unwrap().to_owned();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while fake.requests.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let host = super::super::agent_sessions::Host(Arc::downgrade(&test.app));
+    let timeout = host
+        .execute(
+            parent_id.clone(),
+            AgentCommand::WaitAgent {
+                ids: vec![running_id.clone()],
+                timeout_ms: 10,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(timeout["data"][0]["status"], "running");
+    let done = spawn(&test, &url, "Inspect code").await;
+    idle(&test, &done).await;
+    let done_id = done.rsplit('/').next().unwrap().to_owned();
+    let result = host
+        .execute(
+            parent_id.clone(),
+            AgentCommand::WaitAgent {
+                ids: vec![done_id.clone(), running_id.clone()],
+                timeout_ms: 1000,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["data"][0]["status"], "completed");
+    assert_eq!(result["data"][1]["status"], "running");
+    let child = test.app.opened_session(&running_id).await.unwrap();
+    let turn_id = child
+        .snapshot()
+        .await
+        .session
+        .turns
+        .last()
+        .unwrap()
+        .id
+        .clone();
+    child
+        .interrupt(SessionInterruptParams {
+            turn_id,
+            retract: None,
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while test.read(&url).await.session.turns.len() < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    idle(&test, &url).await;
+    let sent = fake.requests.lock().unwrap().last().unwrap()["messages"].clone();
+    let notice = format!("[Sub-agent {running_id} ");
+    assert_eq!(
+        sent.to_string().matches(&notice).count(),
+        1,
+        "a previously running result must still notify"
+    );
+    assert!(!sent.to_string().contains(&format!("[Sub-agent {done_id} ")));
+    host.execute(
+        parent_id,
+        AgentCommand::WaitAgent {
+            ids: vec![running_id],
+            timeout_ms: 1000,
+        },
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    say(&test, &url, "Keep working").await;
+    {
+        let requests = fake.requests.lock().unwrap();
+        let messages = requests.last().unwrap()["messages"].as_array().unwrap();
+        assert_eq!(
+            &messages[..sent.as_array().unwrap().len()],
+            sent.as_array().unwrap(),
+            "waiting after delivery must preserve the sent history prefix"
+        );
+        assert_eq!(
+            serde_json::to_string(messages)
+                .unwrap()
+                .matches(&notice)
+                .count(),
+            1
+        );
+    }
     test.stop().await;
     fake.stop().await;
 }
