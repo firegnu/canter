@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2-179 子 agent 终端界面</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --fg: #1f1f1f; --muted: #6b6b6b; --card: #ffffff; --line: #e2e0d8;
+    --term: #16181d; --tfg: #d7dae0; --dim: #7c818c; --cyan: #56b6c2; --green: #98c379;
+    --yellow: #e5c07b; --red: #e06c75; --magenta: #c678dd; --blue: #61afef; --accent: #b4532a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111214; --fg: #e6e6e6; --muted: #9a9a9a; --card: #1b1c1f; --line: #2c2d31; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.65 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  .q { font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 18px; margin-top: 12px; }
+  .opt { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .opt.rec { border: 2px solid var(--accent); }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px;
+    background: var(--accent); color: #fff; margin-left: 6px; vertical-align: 2px; }
+  .opt h3 { margin: 0 0 8px; font-size: 16px; }
+  .opt p, .opt ul { margin: 8px 0 0; font-size: 14px; }
+  .opt ul { padding-left: 20px; }
+  pre.t { background: var(--term); color: var(--tfg); border-radius: 8px; padding: 12px 14px; margin: 0;
+    font: 13px/1.5 "SF Mono", Menlo, monospace; overflow-x: auto; white-space: pre; }
+  .d { color: var(--dim); } .c { color: var(--cyan); } .g { color: var(--green); } .y { color: var(--yellow); }
+  .r { color: var(--red); } .m { color: var(--magenta); } .b { color: var(--blue); }
+  .sel { background: #2c313c; }
+  .note { font-size: 13px; color: var(--muted); }
+  .summary { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; }
+  .summary ol { margin: 6px 0 0; padding-left: 22px; }
+  code { font: 13px "SF Mono", Menlo, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <h1>P2-179 子 agent 终端界面 · 线框</h1>
+  <p class="sub">4 个问题，每题列出可选样子，橙框是主控的推荐。界面上的字都是英文；子 agent 的名字是 P2-178 现在的做法（取自任务）。批准框标明来源，P2-178 已经做了，放在最后供参考。</p>
+
+  <div class="summary">
+    <b>主控的推荐，一句话版</b>
+    <ol>
+      <li>子 agent 列表照「后台命令」那一行：放在输入框上方，平时收成一行，点它或 <code>/agents</code> 展开。</li>
+      <li>回车打开一个子 agent，整屏切到它的会话，能看记录、能直接给它发话；<code>/agents</code> 选最上面一条回主会话。</li>
+      <li>在列表里按 <code>s</code> 停掉一个子 agent。停掉后不叫醒主 agent，等它下次发请求时告诉它「被用户停了」。</li>
+      <li>对话里四个子 agent 工具的卡片专门画，一眼看出开了谁、在等谁、谁回来了。</li>
+    </ol>
+  </div>
+
+  <!-- Q1 -->
+  <h2>1. 子 agent 列表放哪</h2>
+  <p class="q">平时怎么看到「有几个子 agent、在不在跑」？</p>
+  <div class="grid">
+    <div class="opt rec">
+      <h3>A. 输入框上方一行，可展开<span class="tag">推荐</span></h3>
+<pre class="t"> <span class="c">●</span> Spawned explorer · <b>Session lock order</b>
+ <span class="c">●</span> Spawned explorer · <b>Rewind cascade</b>
+ <span class="y">◐</span> Waiting for 2 sub-agents <span class="d">· 0:12</span>
+
+ <span class="c">⠋</span> Working <span class="d">(0:18 · esc to interrupt)</span>
+
+ <span class="d">▸</span> 2 sub-agents running <span class="d">· 1 done</span>
+ <span class="d">▸</span> 1 background command
+<span class="d">╭──────────────────────────────────────────────╮</span>
+<span class="d">│</span> ›                                            <span class="d">│</span>
+<span class="d">╰──────────────────────────────────────────────╯</span>
+ <span class="c">deepseek-flash</span> <span class="m">high</span> <span class="d">Ask</span> <span class="b">~/canter</span> <span class="g">main</span></pre>
+<p>点这一行，或输入 <code>/agents</code>，在原位置展开：</p>
+<pre class="t"> <span class="d">▾</span> 3 sub-agents <span class="d">· 2 running</span>
+<span class="sel"> › <span class="c">●</span> Session lock order   <span class="d">explorer · running 0:42</span> </span>
+   <span class="c">●</span> Rewind cascade       <span class="d">explorer · running 0:40</span>
+   <span class="g">✓</span> Fix lsp wait         <span class="d">general  · completed 2:13</span>
+   <span class="d">↑↓ select · enter open · s stop · esc close</span></pre>
+      <ul>
+        <li>和后台命令、待办清单同一处，用法一样（P2-117 定的「原位置那行可点」）。</li>
+        <li>没有子 agent 时这一行不出现；做完、关掉的也列，状态写在后面。</li>
+        <li>主 agent 空闲、子 agent 还在跑时，这一行照样在，看得出还有活没完。</li>
+      </ul>
+    </div>
+    <div class="opt">
+      <h3>B. 输入框下方一行一个（Claude Code 的样子）</h3>
+<pre class="t"> <span class="c">⠋</span> Working <span class="d">(0:18 · esc to interrupt)</span>
+<span class="d">╭──────────────────────────────────────────────╮</span>
+<span class="d">│</span> ›                                            <span class="d">│</span>
+<span class="d">╰──────────────────────────────────────────────╯</span>
+   <span class="c">●</span> Session lock order   <span class="d">explorer · 0:42</span>
+   <span class="c">●</span> Rewind cascade       <span class="d">explorer · 0:40</span>
+   <span class="g">✓</span> Fix lsp wait         <span class="d">general · done</span>
+ <span class="c">deepseek-flash</span> <span class="m">high</span> <span class="d">Ask</span> <span class="b">~/canter</span> <span class="g">main</span></pre>
+      <ul>
+        <li>一直摊开，不用点就能看到每一个。</li>
+        <li>4 个子 agent 就多占 4 行；和输入历史的 ↑↓ 抢键，要另想怎么进列表。</li>
+        <li>和 canter 现有的后台命令那一行是两种做法。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Q2 -->
+  <h2>2. 打开一个子 agent 看什么、能不能给它发话</h2>
+  <p class="q">在列表里按回车之后呢？</p>
+  <div class="grid">
+    <div class="opt rec">
+      <h3>A. 整屏切到子会话，能发话<span class="tag">推荐</span></h3>
+<pre class="t"> <span class="y">Sub-agent</span> · <b>Session lock order</b> <span class="d">· explorer · running</span>
+ <span class="d">from: Refactor session locks · /agents to go back</span>
+
+ › Trace how session locks are taken in canter-server
+ <span class="c">●</span> Read <span class="d">crates/canter-server/src/agent_sessions.rs</span>
+ <span class="c">●</span> Search <span class="d">"session_locks.lock" · 14 matches</span>
+ <span class="c">⠋</span> Working <span class="d">(0:44)</span>
+
+<span class="d">╭──────────────────────────────────────────────╮</span>
+<span class="d">│</span> › <span class="d">Message this sub-agent</span>                     <span class="d">│</span>
+<span class="d">╰──────────────────────────────────────────────╯</span>
+ <span class="c">deepseek-flash</span> <span class="m">high</span> <span class="d">Ask</span> <span class="b">~/canter</span> <span class="g">main</span></pre>
+<p>回主会话：<code>/agents</code>，列表最上面多一条：</p>
+<pre class="t"><span class="sel"> › <span class="d">←</span> Main session · Refactor session locks </span>
+   <span class="c">●</span> Session lock order   <span class="d">explorer · running 0:44</span>
+   <span class="c">●</span> Rewind cascade       <span class="d">explorer · running 0:42</span></pre>
+      <ul>
+        <li>就是打开那个子会话（P2-177 已经能按 ID 打开），记录、工具卡片、滚动、搜索都照主会话。</li>
+        <li>顶上两行固定：哪个子 agent、什么类型、状态；从哪个主会话来、怎么回去。</li>
+        <li>在这里发的话直接给子 agent（等于用户替主 agent 说了一句）；在这里按 Esc 打断的是子 agent。</li>
+        <li>子 agent 要批准时，不管你在哪一屏，批准框都照常弹。</li>
+      </ul>
+    </div>
+    <div class="opt">
+      <h3>B. 弹框只读看记录</h3>
+<pre class="t"> <span class="d">╭ Session lock order · explorer · running ────────╮</span>
+ <span class="d">│</span> › Trace how session locks are taken ...          <span class="d">│</span>
+ <span class="d">│</span> ● Read crates/canter-server/src/agent_sessions.rs <span class="d">│</span>
+ <span class="d">│</span> ● Search "session_locks.lock" · 14 matches       <span class="d">│</span>
+ <span class="d">│</span>                                                  <span class="d">│</span>
+ <span class="d">╰ ↑↓ scroll · s stop · esc close ──────────────────╯</span>
+<span class="d">╭──────────────────────────────────────────────╮</span>
+<span class="d">│</span> ›                                            <span class="d">│</span>
+<span class="d">╰──────────────────────────────────────────────╯</span></pre>
+      <ul>
+        <li>和 <code>/context</code>、<code>/diff</code> 同一种弹框，不离开主会话。</li>
+        <li>只能看，不能给子 agent 发话。</li>
+        <li>记录长时弹框装不下，只能看个大概；跑着的时候要一直刷新。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Q3 -->
+  <h2>3. 用户停掉一个子 agent 后，主 agent 怎么知道</h2>
+  <p class="q">在列表里按 <code>s</code>（照后台命令列表的 <code>s stop</code>），子 agent 这一轮停下、标成 interrupted，结果保留。然后：</p>
+  <div class="grid">
+    <div class="opt rec">
+      <h3>A. 不叫醒，下次请求时告诉它<span class="tag">推荐</span></h3>
+<pre class="t"> <span class="d">▾</span> 3 sub-agents <span class="d">· 1 running</span>
+   <span class="c">●</span> Session lock order   <span class="d">explorer · running 0:52</span>
+<span class="sel"> › <span class="r">■</span> Rewind cascade       <span class="d">explorer · stopped by you</span> </span>
+   <span class="g">✓</span> Fix lsp wait         <span class="d">general  · completed 2:13</span></pre>
+      <ul>
+        <li>和主会话按 Esc 时连带停子 agent 一样，不因此开新一轮。</li>
+        <li>主 agent 下一次发请求时带一句英文说明：这个子 agent 被用户停了。它不会自己再去开同样的子 agent 绕回来。</li>
+      </ul>
+    </div>
+    <div class="opt">
+      <h3>B. 当成「中断」叫醒主 agent</h3>
+      <ul>
+        <li>照 P2-178 子 agent 中断的现有规则：主会话空闲就叫醒开一轮，在忙就附到下一次请求。</li>
+        <li>主 agent 马上知道，但它可能接着再开一个，等于用户白停。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Q4 -->
+  <h2>4. 对话里四个子 agent 工具的卡片</h2>
+  <p class="q">现在 <code>spawn_agent</code> 这些在对话里是普通工具卡片。要不要专门画？</p>
+  <div class="grid">
+    <div class="opt rec">
+      <h3>A. 专门画<span class="tag">推荐</span></h3>
+<pre class="t"> <span class="c">●</span> Spawned explorer · <b>Session lock order</b>
+   <span class="d">└ Trace how session locks are taken in canter-server</span>
+
+ <span class="c">●</span> Waiting for <b>Session lock order</b>, <b>Rewind cascade</b> <span class="d">· 0:31</span>
+   <span class="d">└</span> <span class="g">✓</span> Session lock order <span class="d">completed</span>
+     <span class="d">  Locks are always taken parent first: operation lock, then …</span>
+     <span class="d">  … +18 lines (ctrl+o to expand)</span>
+   <span class="d">└</span> <span class="c">●</span> Rewind cascade <span class="d">still running</span>
+
+ <span class="c">●</span> Sent to <b>Rewind cascade</b>
+   <span class="d">└ Also check fork and trash paths</span>
+
+ <span class="c">●</span> Closed <b>Fix lsp wait</b>
+
+ <span class="d">◇ Sub-agent</span> <b>Rewind cascade</b> <span class="d">completed — result sent to the model</span></pre>
+      <ul>
+        <li>开、等、发话、关各一种写法；名字加粗，任务、回复灰色、折叠，<code>ctrl+o</code> 展开（照现有工具输出）。</li>
+        <li>最后一行是子 agent 做完、自动交给主 agent 时，对话里留的一行。</li>
+        <li>失败、拒绝（比如超过 4 个）照现有失败卡片画红。</li>
+      </ul>
+    </div>
+    <div class="opt">
+      <h3>B. 照普通工具卡片</h3>
+<pre class="t"> <span class="c">●</span> spawn_agent <span class="d">{"task":"Trace how session locks are taken in canter-server","type":"explorer"}</span>
+   <span class="d">└ {"id":"01M6…","name":"Session lock order"}</span>
+
+ <span class="c">●</span> wait_agent <span class="d">{"ids":["01M6…","01M6…"],"timeoutMs":30000}</span>
+   <span class="d">└ [{"id":"01M6…","status":"completed","result":"Locks are …</span></pre>
+      <ul>
+        <li>不用改，但看到的是参数和 ID，读不出在干什么。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>参考：批准框（P2-178 已做，不改）</h2>
+<pre class="t" style="max-width:640px"><span class="d">╭ Allow command? ────────────────────────────────╮</span>
+<span class="d">│</span> <span class="y">Requested by sub-agent Fix lsp wait</span>              <span class="d">│</span>
+<span class="d">│</span> cargo nextest run -p canter-tools              <span class="d">│</span>
+<span class="d">│</span>                                                <span class="d">│</span>
+<span class="d">│</span> › Allow once   Allow for session   Deny         <span class="d">│</span>
+<span class="d">╰────────────────────────────────────────────────╯</span></pre>
+  <p class="note">不做的（留给 P2-180 或不做）：钩子、<code>canter stats</code> 里按子 agent 分组、用户自定义子 agent 类型。<code>canter exec</code> 没有界面，不改。</p>
+</main>
+</body>
+</html>
