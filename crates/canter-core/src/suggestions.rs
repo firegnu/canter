@@ -151,6 +151,9 @@ fn valid_text(text: &str) -> Option<String> {
 
 impl Session {
     pub(crate) async fn suggest_example(&self) {
+        if self.shared.runtime().context.restricted_mode {
+            return;
+        }
         let mut state = self.shared.state.lock().await;
         if !self.shared.next_options().prompt_suggestions
             || state.closing
@@ -208,7 +211,13 @@ async fn git_example(
     use tokio::io::AsyncReadExt;
     let mut child = tokio::process::Command::new("git")
         .args([
+            "--no-pager",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
             "log",
+            "--no-show-signature",
             "-30",
             "--format=",
             "--name-only",
@@ -222,6 +231,8 @@ async fn git_example(
         .env_clear()
         .envs(environment)
         .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

@@ -37,6 +37,13 @@ impl Fixture {
         .await
     }
     async fn with_options(replies: Vec<Reply>, options: CoreOptions) -> Self {
+        Self::with_restricted_mode(replies, options, false).await
+    }
+    async fn with_restricted_mode(
+        replies: Vec<Reply>,
+        options: CoreOptions,
+        restricted_mode: bool,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         let server = Server::start(replies).await;
         let store = Arc::new(Store::new(root.path().join("sessions")).unwrap());
@@ -49,6 +56,7 @@ impl Fixture {
             )
             .unwrap(),
             RuntimeContext {
+                restricted_mode,
                 environment: [
                     (
                         "HOME".into(),
@@ -406,6 +414,81 @@ fn git(root: &std::path::Path, args: &[&str]) {
         "{}",
         String::from_utf8_lossy(&status.stderr)
     );
+}
+
+#[tokio::test]
+async fn restricted_mode_does_not_provide_a_git_example() {
+    let f = Fixture::with_restricted_mode(
+        vec![],
+        CoreOptions {
+            prompt_suggestions: true,
+            ..Default::default()
+        },
+        true,
+    )
+    .await;
+    git(f.root.path(), &["init", "-q"]);
+    std::fs::write(f.root.path().join("parser.rs"), "fn parse() {}\n").unwrap();
+    git(f.root.path(), &["add", "parser.rs"]);
+    git(f.root.path(), &["commit", "-qm", "Add parser"]);
+    let mut events = f.session.subscribe(0).await.unwrap();
+    no_suggestion(&mut events).await;
+    assert!(f.server.requests.lock().unwrap().is_empty());
+    f.session.close().await.unwrap();
+    f.server.stop().await;
+}
+
+#[tokio::test]
+async fn git_example_passes_hardened_arguments_and_environment() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new(vec![]).await;
+    std::fs::create_dir(f.root.path().join("bin")).unwrap();
+    let git = f.root.path().join("bin/git");
+    // Record the invocation directly; no repository configuration is involved.
+    std::fs::write(
+        &git,
+        r#"#!/bin/sh
+printf '%s\n' "$GIT_CONFIG_GLOBAL" "$GIT_CONFIG_NOSYSTEM" "$GIT_OPTIONAL_LOCKS" > git-env
+printf '%s\n' "$@" > git-args
+printf 'parser.rs\000'
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(git, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(f.root.path().join("parser.rs"), "fn parse() {}\n").unwrap();
+    let mut events = f.session.subscribe(0).await.unwrap();
+    let example = next_type(&mut events, "session.promptSuggestion").await;
+    assert_eq!(example["text"], "explain how parser.rs works");
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("git-env")).unwrap(),
+        "/dev/null\n1\n0\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("git-args"))
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "--no-pager",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "log",
+            "--no-show-signature",
+            "-30",
+            "--format=",
+            "--name-only",
+            "-z",
+            "--relative",
+            "--diff-filter=AM",
+            "--",
+            ".",
+        ]
+    );
+    assert!(f.server.requests.lock().unwrap().is_empty());
+    f.session.close().await.unwrap();
+    f.server.stop().await;
 }
 
 #[tokio::test]
