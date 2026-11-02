@@ -6,8 +6,9 @@ use eventsource_stream::{EventStreamError, Eventsource};
 use futures_util::StreamExt;
 use reqwest::{
     Client, Url,
-    header::{AUTHORIZATION, HeaderValue},
+    header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT},
 };
+use serde::Deserialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -37,11 +38,66 @@ impl fmt::Display for ApiKey {
     }
 }
 
+/// Validated local request headers. Values are credentials, never diagnostics.
+#[derive(Clone, Default, Deserialize)]
+#[serde(try_from = "BTreeMap<String, String>")]
+pub struct RequestHeaders(Vec<(HeaderName, String)>);
+
+impl TryFrom<BTreeMap<String, String>> for RequestHeaders {
+    type Error = &'static str;
+
+    fn try_from(headers: BTreeMap<String, String>) -> Result<Self, Self::Error> {
+        let mut entries = Vec::new();
+        for (name, value) in headers {
+            let name =
+                HeaderName::from_bytes(name.as_bytes()).map_err(|_| "invalid model header name")?;
+            if matches!(name, AUTHORIZATION | CONTENT_TYPE | USER_AGENT) {
+                return Err(
+                    "model headers must not override Authorization, Content-Type or User-Agent",
+                );
+            }
+            HeaderValue::from_str(&value).map_err(|_| "invalid model header value")?;
+            entries.push((name, value));
+        }
+        Ok(Self(entries))
+    }
+}
+
+impl fmt::Debug for RequestHeaders {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RequestHeaders([REDACTED])")
+    }
+}
+
+impl RequestHeaders {
+    fn values(&self, session_id: Option<&str>) -> Result<HeaderMap, ModelError> {
+        let mut headers = HeaderMap::new();
+        for (name, value) in &self.0 {
+            let expanded;
+            let value = if value.contains("{session_id}") {
+                let Some(session_id) = session_id else {
+                    continue;
+                };
+                expanded = value.replace("{session_id}", session_id);
+                &expanded
+            } else {
+                value
+            };
+            let mut value = HeaderValue::from_str(value)
+                .map_err(|_| ModelError::new(ErrorKind::InvalidRequest))?;
+            value.set_sensitive(true);
+            headers.insert(name.clone(), value);
+        }
+        Ok(headers)
+    }
+}
+
 pub struct ChatCompletions {
     retry: crate::RetryPolicy,
     client: Client,
     endpoint: Url,
     authorization: HeaderValue,
+    headers: RequestHeaders,
 }
 
 impl fmt::Debug for ChatCompletions {
@@ -51,6 +107,11 @@ impl fmt::Debug for ChatCompletions {
 }
 
 impl ChatCompletions {
+    pub fn with_headers(mut self, headers: RequestHeaders) -> Self {
+        self.headers = headers;
+        self
+    }
+
     pub fn with_retry_policy(mut self, policy: crate::RetryPolicy) -> Self {
         self.retry = policy;
         self
@@ -75,6 +136,7 @@ impl ChatCompletions {
             .map_err(|_| ModelError::new(ErrorKind::Authentication))?;
         authorization.set_sensitive(true);
         let client = Client::builder()
+            .user_agent(concat!("canter/", env!("CARGO_PKG_VERSION")))
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -87,13 +149,15 @@ impl ChatCompletions {
             client,
             endpoint,
             authorization,
+            headers: RequestHeaders::default(),
         })
     }
 
-    fn attempt(&self, body: Value) -> ModelStream<'_> {
+    fn attempt(&self, body: Value, session_id: Option<String>) -> ModelStream<'_> {
         Box::pin(async_stream::try_stream! {
             let response = self.client.post(self.endpoint.clone())
                 .header(AUTHORIZATION, self.authorization.clone())
+                .headers(self.headers.values(session_id.as_deref())?)
                 .json(&body).send().await.map_err(transport_error)?;
             let response = if response.status().is_success() { response }
                 else { Err(http_error(response).await)? };
@@ -165,12 +229,13 @@ impl ChatCompletions {
 impl Model for ChatCompletions {
     fn stream(&self, request: Request, cancellation: CancellationToken) -> ModelStream<'_> {
         let body = wire::request_body(&request);
+        let session_id = request.session_id;
         let mut retry = self.retry.clone();
         if let Some(limit) = request.options.max_retries {
             retry.max_retries = retry.max_retries.min(limit);
         }
         Box::pin(async_stream::stream! {
-            let mut stream = retry.stream(cancellation, move || self.attempt(body.clone()));
+            let mut stream = retry.stream(cancellation, move || self.attempt(body.clone(), session_id.clone()));
             while let Some(event) = stream.next().await { yield event; }
         })
     }

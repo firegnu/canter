@@ -61,7 +61,13 @@ impl Fixture {
             store.clone(),
             "cache".into(),
             runtime,
-            Arc::new(ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap()),
+            Arc::new(
+                ChatCompletions::new(&server.base_url, ApiKey::new(KEY))
+                    .unwrap()
+                    .with_headers(
+                        serde_json::from_value(json!({"x-test-session":"{session_id}"})).unwrap(),
+                    ),
+            ),
             options,
         )
         .await
@@ -121,6 +127,123 @@ async fn finished(events: &mut Subscription) {
     })
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn session_id_survives_compaction_and_reopening_with_a_fresh_store() {
+    for fallback in [false, true] {
+        let mut replies = vec![answer("Before compaction.")];
+        if fallback {
+            replies.push(context_too_long());
+        }
+        replies.extend([
+            answer("Summary."),
+            answer("After compaction."),
+            answer("After reopening."),
+        ]);
+        let mut fixture = Fixture::new(replies, CoreOptions::default()).await;
+        fixture.send("First turn.").await;
+        fixture.compact().await;
+        fixture.send("Next turn.").await;
+        fixture.session.close().await.unwrap();
+        fixture.store = Arc::new(Store::new(fixture.root.path().join("sessions")).unwrap());
+        let (session, _) = Session::open(
+            fixture.store.clone(),
+            "cache".into(),
+            RuntimeContext {
+                environment: [
+                    (
+                        "HOME".into(),
+                        fixture.root.path().join("home").display().to_string(),
+                    ),
+                    (
+                        "CANTER_HOME".into(),
+                        fixture.root.path().join("state").display().to_string(),
+                    ),
+                ]
+                .into(),
+                ..Default::default()
+            },
+            Arc::new(
+                ChatCompletions::new(&fixture.server.base_url, ApiKey::new(KEY))
+                    .unwrap()
+                    .with_headers(
+                        serde_json::from_value(json!({"x-test-session":"{session_id}"})).unwrap(),
+                    ),
+            ),
+            CoreOptions::default(),
+        )
+        .await
+        .unwrap();
+        fixture.session = session;
+        fixture.send("Reopened turn.").await;
+        {
+            let headers = fixture.server.headers.lock().unwrap();
+            assert_eq!(headers.len(), if fallback { 5 } else { 4 });
+            for header in headers.iter() {
+                assert_eq!(
+                    header.get("x-test-session").and_then(|v| v.to_str().ok()),
+                    Some("cache")
+                );
+            }
+        }
+        fixture.close().await;
+    }
+}
+
+#[tokio::test]
+async fn review_btw_and_handoff_use_the_owning_session_id() {
+    let fixture = Fixture::new(
+        (0..4).map(|_| answer("Done.")).collect(),
+        CoreOptions::default(),
+    )
+    .await;
+    fixture.send("First turn.").await;
+    let mut events = fixture.events().await;
+    fixture
+        .session
+        .input(SessionInputParams {
+            input: vec![UserInput::Text {
+                text: "Review the current work.".into(),
+            }],
+            mode: InputMode::Queue,
+            client_name: "test".into(),
+            non_interactive: false,
+            approval_policy: None,
+            review: Some("Current work".into()),
+        })
+        .await
+        .unwrap();
+    finished(&mut events).await;
+    for handoff in [false, true] {
+        let mut stream = if handoff {
+            fixture.session.handoff(None).await.unwrap()
+        } else {
+            fixture.session.btw("What changed?".into()).await.unwrap()
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match stream.recv().await.expect("private answer must finish") {
+                    BtwEvent::Delta { .. } => {}
+                    BtwEvent::Completed => break,
+                    event => panic!("unexpected private event: {event:?}"),
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
+    {
+        let headers = fixture.server.headers.lock().unwrap();
+        assert_eq!(headers.len(), 4);
+        for header in headers.iter() {
+            assert_eq!(
+                header.get("x-test-session").and_then(|v| v.to_str().ok()),
+                Some("cache")
+            );
+        }
+    }
+    fixture.close().await;
 }
 
 #[tokio::test]

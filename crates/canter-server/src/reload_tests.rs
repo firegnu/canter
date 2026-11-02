@@ -18,6 +18,7 @@ async fn server_process() {
 
 struct Request {
     body: Value,
+    headers: axum::http::HeaderMap,
     reply: oneshot::Sender<String>,
 }
 impl Request {
@@ -66,17 +67,23 @@ impl Fixture {
         let (requests, receiver) = mpsc::unbounded_channel();
         let router = axum::Router::new().route(
             "/chat/completions",
-            axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
-                let requests = requests.clone();
-                async move {
-                    let (reply, response) = oneshot::channel();
-                    let _ = requests.send(Request { body, reply });
-                    (
-                        [("content-type", "text/event-stream")],
-                        response.await.unwrap_or_default(),
-                    )
-                }
-            }),
+            axum::routing::post(
+                move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<Value>| {
+                    let requests = requests.clone();
+                    async move {
+                        let (reply, response) = oneshot::channel();
+                        let _ = requests.send(Request {
+                            body,
+                            headers,
+                            reply,
+                        });
+                        (
+                            [("content-type", "text/event-stream")],
+                            response.await.unwrap_or_default(),
+                        )
+                    }
+                },
+            ),
         );
         let model = tokio::spawn(async move {
             axum::serve(endpoint, router).await.unwrap();
@@ -566,6 +573,141 @@ async fn opening_sessions_and_listing_mcp_do_not_wait_for_service_handover() {
     assert!(first.tools().contains(&"mcp__local__echo"));
     first.stop();
     fixture.idle(&reopen).await;
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn distinct_sessions_send_distinct_model_header_ids() {
+    let mut fixture = Fixture::new(json!({"headers":{"x-test-session":"{session_id}"}})).await;
+    let first = fixture.create().await;
+    let second = fixture.create().await;
+    assert_ne!(first, second);
+    for url in [&first, &second] {
+        fixture.input(url).await;
+        let request = fixture.request().await;
+        assert_eq!(
+            request
+                .headers
+                .get("x-test-session")
+                .and_then(|v| v.to_str().ok()),
+            url.rsplit('/').next()
+        );
+        request.stop();
+        fixture.idle(url).await;
+    }
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn model_header_values_stay_out_of_errors_events_telemetry_and_logs() {
+    const SECRET: &str = "test-only-private-header-credential";
+    let mut fixture = Fixture::new(json!({"headers":{"x-test-token":SECRET}})).await;
+    let url = fixture.create().await;
+    fixture.input(&url).await;
+    let request = fixture.request().await;
+    assert!(
+        request
+            .headers
+            .get("x-test-token")
+            .is_some_and(|v| v == SECRET)
+    );
+    request
+        .reply
+        .send(format!("data: {}\n\n", json!({"error":{"message":SECRET}})))
+        .unwrap();
+    let snapshot = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = fixture.snapshot(&url).await;
+            if snapshot
+                .session
+                .turns
+                .last()
+                .is_some_and(|turn| turn.status == canter_protocol::TurnStatus::Failed)
+            {
+                break snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(snapshot.session.turns.last().unwrap().error.is_some());
+    assert!(!serde_json::to_string(&snapshot).unwrap().contains(SECRET));
+    let directory = fixture
+        .root
+        .path()
+        .join("state/sessions")
+        .join(url.rsplit('/').next().unwrap());
+    let events = fs::read_to_string(directory.join("events.jsonl")).unwrap();
+    assert!(events.contains("telemetry.modelRequest"));
+    assert!(!events.contains(SECRET));
+    assert!(
+        !fs::read_to_string(fixture.root.path().join("server.log"))
+            .unwrap()
+            .contains(SECRET)
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn model_headers_reload_next_turn_and_invalid_headers_keep_the_old_config() {
+    let mut fixture = Fixture::new(json!({"headers":{"x-test-token":"test-only-first"}})).await;
+    let url = fixture.create().await;
+    let mut warnings = fixture.warnings(&url).await;
+    fixture.input(&url).await;
+    let running = fixture.request().await;
+    assert!(
+        running
+            .headers
+            .get("x-test-token")
+            .is_some_and(|v| v == "test-only-first")
+    );
+    fixture.config["headers"] = json!({"x-test-token":"test-only-second"});
+    fixture.applied("headers-updated").await;
+    running.tool("read", json!({"path":"missing.txt"}));
+    let continuation = fixture.request().await;
+    assert!(
+        continuation
+            .headers
+            .get("x-test-token")
+            .is_some_and(|v| v == "test-only-first")
+    );
+    continuation.stop();
+    fixture.idle(&url).await;
+    fixture.input(&url).await;
+    let next = fixture.request().await;
+    assert!(
+        next.headers
+            .get("x-test-token")
+            .is_some_and(|v| v == "test-only-second")
+    );
+    next.stop();
+    fixture.idle(&url).await;
+
+    fixture.config["headers"] = json!({"uSeR-aGeNt":"test-only-invalid-private-value"});
+    fixture.save();
+    let error = warnings.next().await;
+    assert!(error.contains("config"));
+    assert!(!error.contains("test-only-invalid-private-value"));
+    fixture.input(&url).await;
+    let retained = fixture.request().await;
+    assert!(
+        retained
+            .headers
+            .get("x-test-token")
+            .is_some_and(|v| v == "test-only-second")
+    );
+    retained.stop();
+    fixture.idle(&url).await;
+
+    fixture.config.as_object_mut().unwrap().remove("headers");
+    fixture.applied("headers-removed").await;
+    assert!(warnings.next().await.contains("recovered"));
+    fixture.input(&url).await;
+    let removed = fixture.request().await;
+    assert!(!removed.headers.contains_key("x-test-token"));
+    removed.stop();
+    fixture.idle(&url).await;
     fixture.shutdown().await;
 }
 

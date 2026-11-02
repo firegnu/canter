@@ -17,7 +17,8 @@ pub(super) async fn harness(hold_child: bool) -> (Harness, model_server::Server)
         &fake.base_url,
         canter_model::ApiKey::new(model_server::KEY),
     )
-    .unwrap();
+    .unwrap()
+    .with_headers(serde_json::from_value(json!({"x-test-session":"{session_id}"})).unwrap());
     (Harness::with_model(Arc::new(model)).await, fake)
 }
 
@@ -75,6 +76,34 @@ pub(super) async fn spawn(test: &Harness, parent: &str, task: &str) -> String {
         .await
         .unwrap_or_else(|error| panic!("{}", error.0.message));
     format!("http://localhost/v1/sessions/{}", response.session.id)
+}
+
+#[tokio::test]
+async fn child_model_requests_use_the_child_session_id() {
+    let (test, fake) = harness(false).await;
+    let parent = parent(&test).await;
+    let child = spawn(&test, &parent, "Inspect parser").await;
+    idle(&test, &child).await;
+    {
+        let headers = fake.headers.lock().unwrap();
+        let parent_id = parent.rsplit('/').next().unwrap();
+        let child_id = child.rsplit('/').next().unwrap();
+        assert_ne!(parent_id, child_id);
+        assert_eq!(
+            headers[0]
+                .get("x-test-session")
+                .and_then(|v| v.to_str().ok()),
+            Some(parent_id)
+        );
+        assert_eq!(
+            headers[1]
+                .get("x-test-session")
+                .and_then(|v| v.to_str().ok()),
+            Some(child_id)
+        );
+    }
+    test.stop().await;
+    fake.stop().await;
 }
 
 #[tokio::test]

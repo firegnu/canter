@@ -572,6 +572,8 @@ async fn handoff_appends_instructions_without_changing_history_and_charges_sourc
     test.input(&control, "next").await;
     test.wait_status(&control, SessionStatus::Idle).await;
     let mut baseline = test.model.0.lock().unwrap().last().unwrap().clone();
+    assert_eq!(baseline.session_id.as_deref(), Some(control.as_str()));
+    baseline.session_id = Some(source.clone());
     // Compare against the source's actual main prefix, including its private scratch path.
     baseline.messages[0] = source_prefix;
     let history = test
