@@ -743,6 +743,7 @@ impl EventStream {
         loop {
             while let Some(data) = self.parser.ready.pop_front() {
                 match serde_json::from_str::<Event>(&data) {
+                    Ok(event) if event.payload.is_ephemeral() => return Some(Ok(event)),
                     Ok(event) if event.seq <= self.last_seq => {}
                     Ok(event) => {
                         self.last_seq = event.seq;

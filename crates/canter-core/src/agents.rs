@@ -511,6 +511,7 @@ impl Session {
         child
             .input_with_prompt_hook(
                 SessionInputParams {
+                    from_suggestion: false,
                     input: vec![UserInput::Text { text: message }],
                     client_name: "agent".into(),
                     mode: InputMode::Queue,
@@ -640,6 +641,7 @@ impl Session {
             );
             child
                 .input_with_prompt_hook(SessionInputParams {
+                    from_suggestion: false,
                     input: vec![UserInput::Text { text: task }],
                     client_name: "agent".into(),
                     mode: InputMode::Queue,

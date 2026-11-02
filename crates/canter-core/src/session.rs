@@ -88,6 +88,7 @@ pub(crate) struct State {
     pub gate: PermissionGate,
     pub active: Option<Active>,
     pub btw: Option<crate::btw::ActiveBtw>,
+    pub suggestions: crate::suggestions::Suggestions,
     pub queue: VecDeque<QueuedInput>,
     pub steers: Vec<QueuedInput>,
     pub requests: HashMap<String, oneshot::Sender<ApprovalResolution>>,
@@ -114,6 +115,7 @@ pub(crate) struct Active {
     pub manual_compaction: bool,
     pub user_shell: Option<SessionShellCommandParams>,
     pub model_started: bool,
+    pub suggestion_ready: bool,
     pub retracted: bool,
     pub cancel: CancellationToken,
     pub done: watch::Receiver<Option<Result<u64, CoreError>>>,
@@ -241,6 +243,7 @@ impl State {
             gate: PermissionGate::default(),
             active: None,
             btw: None,
+            suggestions: Default::default(),
             queue: VecDeque::new(),
             steers: Vec::new(),
             requests: HashMap::new(),
@@ -1211,6 +1214,7 @@ impl Session {
         session.shared.input_waiters.fetch_add(1, Ordering::SeqCst);
         owned(async move {
             let _waiting = InputWaiting(session.shared.clone());
+            session.shared.state.lock().await.suggestions.cancel();
             session.input_inner(params, prompt_hook).await
         })
         .await
@@ -1294,6 +1298,9 @@ impl Session {
         let skills = crate::skill_invocation::load(&params.input, &state.skills).await?;
         state.auto_compactions_without_progress = 0;
         state.background_events.user_input();
+        if params.from_suggestion {
+            state.suggestions.used();
+        }
         if state
             .journal
             .snapshot
@@ -1389,6 +1396,7 @@ impl Session {
         };
         drop(state);
         subscription.catch_up().await?;
+        self.suggest_example().await;
         Ok(subscription)
     }
 
@@ -1826,6 +1834,7 @@ impl Session {
             .start(
                 &mut state,
                 SessionInputParams {
+                    from_suggestion: false,
                     non_interactive: false,
                     approval_policy: None,
                     review: None,
@@ -1945,13 +1954,19 @@ impl Session {
         reason: SessionCloseReason,
         for_trash: bool,
     ) -> Result<SessionCloseResponse, CoreError> {
-        let (done, btw_done, children) = {
+        let (done, btw_done, suggestion_done, children) = {
             let mut state = self.shared.state.lock().await;
             if for_trash {
                 self.check_trashable(&state)?;
             }
             state.closing = true;
             state.closing_reason = Some(reason);
+            state.suggestions.cancel();
+            let suggestion_done = state
+                .suggestions
+                .active
+                .as_ref()
+                .map(|active| active.done.clone());
             if let Some(turn) = state.active.as_ref().map(|active| active.turn.id.clone()) {
                 state.suppressed_agent_turns.insert(turn);
             }
@@ -1964,9 +1979,13 @@ impl Session {
                 btw.done.clone()
             });
             let children = state.interrupt_agents().await;
-            (done, btw_done, children)
+            (done, btw_done, suggestion_done, children)
         };
         crate::agents::finish_agent_stops(children).await?;
+        if let Some(mut done) = suggestion_done {
+            // Cancellation drops the model stream; only local accounting remains.
+            let _ = done.wait_for(|done| *done).await;
+        }
         let mut stopped = if let Some(done) = done {
             wait_done(done).await.map(|_| ())
         } else {
@@ -2139,6 +2158,7 @@ impl Shared {
         skills: Vec<crate::skill_invocation::Snapshot>,
         prompt_hook: bool,
     ) -> Result<(SessionInputResponse, Done), CoreError> {
+        state.suggestions.cancel();
         let configuration_lease = self.configure(state).await?;
         if params
             .input
@@ -2234,6 +2254,7 @@ impl Shared {
             manual_compaction: false,
             user_shell: None,
             model_started: false,
+            suggestion_ready: false,
             retracted: false,
             cancel: self.lifetime.child_token(),
             done: receiver,

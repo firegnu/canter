@@ -8,6 +8,10 @@ import type { UserInput } from "./UserInput";
  */
 export type SessionInputParams = {
 /**
+ * Accepted via Tab / Right, including a subsequently edited suggestion.
+ */
+fromSuggestion?: boolean,
+/**
  * No client will answer requests in this turn. Accepted only while idle.
  */
 nonInteractive?: boolean,

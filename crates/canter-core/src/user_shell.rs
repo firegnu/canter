@@ -44,6 +44,7 @@ impl Session {
             .start(
                 &mut state,
                 SessionInputParams {
+                    from_suggestion: false,
                     non_interactive: false,
                     approval_policy: None,
                     review: None,

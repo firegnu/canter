@@ -37,6 +37,17 @@ pub(crate) struct Journal {
     pub failed: bool,
 }
 impl Journal {
+    pub(crate) fn ephemeral(&self, payload: EventPayload) {
+        debug_assert!(payload.is_ephemeral());
+        if let Some(sender) = &self.events {
+            let _ = sender.send(Event {
+                seq: 0,
+                session_id: self.snapshot.id.clone(),
+                timestamp: now(),
+                payload,
+            });
+        }
+    }
     pub fn new(store: Arc<Store>, writer: SessionWriter, telemetry: bool) -> Self {
         let snapshot = writer.snapshot().clone();
         let committed = watch::channel(snapshot.last_event_seq).0;
@@ -285,6 +296,9 @@ impl Subscription {
                     }
                 }
             };
+            if event.payload.is_ephemeral() {
+                return Ok(Some(event));
+            }
             if event.seq <= self.cursor {
                 continue;
             }

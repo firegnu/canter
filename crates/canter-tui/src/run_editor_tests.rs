@@ -408,6 +408,7 @@ printf 'written in the editor\n' > "$1"
     // Another terminal sends a message; its whole turn happens meanwhile.
     let other = Client::new(&socket).unwrap();
     let params = SessionInputParams {
+        from_suggestion: false,
         non_interactive: false,
         approval_policy: None,
         review: None,

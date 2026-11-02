@@ -13,6 +13,8 @@ pub(crate) struct Config {
     #[serde(skip)]
     pub contents: Vec<u8>,
     #[serde(default = "default_enabled")]
+    prompt_suggestions: bool,
+    #[serde(default = "default_enabled")]
     plan_enabled: bool,
     #[serde(default = "default_enabled")]
     mcp_tool_search: bool,
@@ -180,6 +182,7 @@ impl Config {
                 ))
             });
         CoreOptions {
+            prompt_suggestions: self.prompt_suggestions,
             hooks: self.hooks.clone(),
             plan_enabled: self.plan_enabled,
             mcp_tool_search: self.mcp_tool_search,
@@ -336,6 +339,26 @@ mod tests {
             .extend(extra.as_object().unwrap().clone());
         fs::write(root.path().join("config.json"), config.to_string()).unwrap();
         Config::load(root.path())
+    }
+
+    #[test]
+    fn prompt_suggestions_default_on_and_require_a_boolean() {
+        assert!(load(json!({})).unwrap().options().prompt_suggestions);
+        assert!(
+            load(json!({"prompt_suggestions":true}))
+                .unwrap()
+                .options()
+                .prompt_suggestions
+        );
+        assert!(
+            !load(json!({"prompt_suggestions":false}))
+                .unwrap()
+                .options()
+                .prompt_suggestions
+        );
+        for value in [json!("false"), json!(0), json!(null)] {
+            assert!(load(json!({"prompt_suggestions":value})).is_err());
+        }
     }
 
     #[test]

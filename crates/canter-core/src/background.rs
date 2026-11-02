@@ -578,6 +578,7 @@ pub(crate) fn watch(shared: &Arc<Shared>) {
                         continue;
                     }
                     let params = SessionInputParams {
+                        from_suggestion: false,
                         non_interactive: false,
                         approval_policy: None,
                         input: Vec::new(),

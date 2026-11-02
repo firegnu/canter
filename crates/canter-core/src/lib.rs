@@ -28,6 +28,7 @@ mod session;
 mod skill_invocation;
 mod skills;
 pub mod stats;
+mod suggestions;
 mod telemetry;
 pub mod usage;
 mod user_shell;
@@ -59,6 +60,8 @@ pub struct RuntimeContext {
 
 #[derive(Clone, Debug)]
 pub struct CoreOptions {
+    /// Embedded callers opt in; config.json enables suggestions by default.
+    pub prompt_suggestions: bool,
     pub hooks: hooks::Hooks,
     pub telemetry: bool,
     /// Embedded callers opt in explicitly; the server's config.json defaults to true.
@@ -92,6 +95,7 @@ pub struct CoreOptions {
 impl Default for CoreOptions {
     fn default() -> Self {
         Self {
+            prompt_suggestions: false,
             hooks: Default::default(),
             telemetry: true,
             sandbox: false,

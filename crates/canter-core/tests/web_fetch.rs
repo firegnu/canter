@@ -205,6 +205,7 @@ async fn create_with(
 }
 fn input(review: bool) -> SessionInputParams {
     SessionInputParams {
+        from_suggestion: false,
         non_interactive: false,
         approval_policy: None,
         input: vec![UserInput::Text {

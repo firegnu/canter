@@ -1047,6 +1047,7 @@ async fn create(
         if let Some(input) = params.input {
             session
                 .input(SessionInputParams {
+                    from_suggestion: false,
                     non_interactive: false,
                     approval_policy: None,
                     review: None,
