@@ -265,6 +265,7 @@ impl Session {
                         }
                         if state.active.as_ref().is_some_and(|a| a.cancel.is_cancelled()) { return Err(CoreError::new(ErrorCode::Conflict, "turn is stopping")); }
                         state.goal_status(GoalStatus::Active).await?;
+                        state.auto_compactions_without_progress = 0;
                         state.goal_running = true;
                         state.goal_notice("[Goal resumed] The user resumed this goal. Start a fresh three-turn blocker audit if it was blocked.".into()).await?;
                         if state.active.is_none() {
@@ -335,6 +336,7 @@ impl Session {
                     updated_at: now,
                 }))
                 .await?;
+            state.auto_compactions_without_progress = 0;
             state.goal_running = true;
             state.goal_summary = None;
             if state.active.is_none() {

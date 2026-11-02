@@ -273,7 +273,13 @@ pub(crate) async fn compact(
                     },
                 }])
                 .await?;
-            if trigger == CompactionTrigger::Auto {
+            if trigger == CompactionTrigger::Auto
+                && !state.journal.snapshot.settings.plan_mode
+                && state
+                    .active
+                    .as_ref()
+                    .is_none_or(|active| active.turn.review.is_none())
+            {
                 state.auto_compactions_without_progress += 1;
                 if state.auto_compactions_without_progress == 3 {
                     if state

@@ -33,6 +33,14 @@ fn read(tokens: u64) -> Reply {
     tool("read", json!({"path":"note.txt"}), tokens)
 }
 
+fn question() -> Reply {
+    tool(
+        "ask_user",
+        json!({"question":"Continue?","options":[{"label":"Yes","description":"Continue work"},{"label":"No","description":"Stop work"}]}),
+        100,
+    )
+}
+
 struct Fixture {
     root: tempfile::TempDir,
     store: Arc<Store>,
@@ -143,6 +151,22 @@ async fn finished(events: &mut Subscription) -> Turn {
                 events.recv().await.unwrap().unwrap().payload
             {
                 return turn;
+            }
+        }
+    })
+    .await
+    .unwrap()
+}
+
+async fn pending_question(events: &mut Subscription) -> PendingRequest {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match events.recv().await.unwrap().unwrap().payload {
+                EventPayload::RequestOpened { request } => return request,
+                EventPayload::TurnCompleted { turn } => {
+                    panic!("turn ended before question: {:?}", turn.status)
+                }
+                _ => {}
             }
         }
     })
@@ -443,6 +467,131 @@ async fn shell_failed_edits_and_unchanged_files_or_completed_steps_are_not_progr
 }
 
 #[tokio::test]
+async fn review_and_plan_mode_turns_can_compact_three_times_without_stopping() {
+    for plan_mode in [false, true] {
+        let mut replies = Vec::new();
+        for _ in 0..3 {
+            replies.extend([read(37_000), read(41_000), answer("Summary.")]);
+        }
+        replies.push(answer("Done."));
+        let fixture = Fixture::new(replies, 40_000).await;
+        fixture
+            .session
+            .update(SessionUpdateParams {
+                plan_mode: Some(plan_mode),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut events = fixture.events().await;
+        fixture
+            .session
+            .input(SessionInputParams {
+                input: vec![UserInput::Text {
+                    text: "Inspect.".into(),
+                }],
+                mode: InputMode::Queue,
+                client_name: "test".into(),
+                non_interactive: false,
+                approval_policy: None,
+                review: (!plan_mode).then(|| "Review files".into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            finished(&mut events).await.status,
+            TurnStatus::Completed,
+            "plan mode: {plan_mode}"
+        );
+        let requests = fixture.server.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 10);
+        // Plan mode keeps its existing notices; review turns still omit them.
+        assert_eq!(
+            requests.iter().any(|request| !notes(request).is_empty()),
+            plan_mode
+        );
+        let events = fixture.store.events_after("spin", 0).unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event.payload,
+                    EventPayload::TelemetryCompaction {
+                        succeeded: true,
+                        trigger: CompactionTrigger::Auto,
+                        ..
+                    }
+                ))
+                .count(),
+            3
+        );
+        assert!(!events.iter().any(|event| matches!(&event.payload, EventPayload::Warning { message } if message == STOP_REASON)));
+        fixture.close().await;
+    }
+}
+
+#[tokio::test]
+async fn plan_mode_compactions_preserve_the_earlier_modifying_turn_count() {
+    let fixture = Fixture::new(
+        vec![
+            read(41_000),
+            answer("Modification summary 1."),
+            question(),
+            read(41_000),
+            answer("Plan summary 1."),
+            read(41_000),
+            answer("Plan summary 2."),
+            read(41_000),
+            answer("Plan summary 3."),
+            question(),
+            read(41_000),
+            answer("Modification summary 2."),
+            read(41_000),
+            answer("Modification summary 3."),
+            answer("Must not be requested."),
+        ],
+        40_000,
+    )
+    .await;
+    let mut events = fixture.events().await;
+    fixture
+        .session
+        .input(
+            serde_json::from_value(
+                json!({"input":[{"type":"text","text":"Inspect."}],"clientName":"test"}),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    for plan_mode in [true, false] {
+        let request = pending_question(&mut events).await;
+        fixture
+            .session
+            .update(SessionUpdateParams {
+                plan_mode: Some(plan_mode),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        fixture
+            .session
+            .resolve(
+                &request.id,
+                serde_json::from_value(
+                    json!({"answer":{"type":"option","label":"Yes"},"clientName":"test"}),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(finished(&mut events).await.status, TurnStatus::Interrupted);
+    assert_eq!(fixture.server.requests.lock().unwrap().len(), 14);
+    fixture.close().await;
+}
+
+#[tokio::test]
 async fn manual_compaction_neither_counts_nor_resets_and_goal_turns_keep_the_count() {
     let fixture = Fixture::new(
         vec![
@@ -455,6 +604,8 @@ async fn manual_compaction_neither_counts_nor_resets_and_goal_turns_keep_the_cou
             answer("Next goal turn."),
             read(41_000),
             answer("Summary 3."),
+            read(41_000),
+            answer("Summary 4."),
             answer("Must not be requested."),
         ],
         40_000,
@@ -473,12 +624,81 @@ async fn manual_compaction_neither_counts_nor_resets_and_goal_turns_keep_the_cou
         .unwrap();
     assert_eq!(finished(&mut events).await.status, TurnStatus::Completed);
     assert_eq!(finished(&mut events).await.status, TurnStatus::Interrupted);
-    assert_eq!(fixture.server.requests.lock().unwrap().len(), 9);
+    assert_eq!(fixture.server.requests.lock().unwrap().len(), 11);
     assert_eq!(
         fixture.session.goal().await.goal.unwrap().status,
         GoalStatus::Paused
     );
     fixture.close().await;
+}
+
+async fn goal_instruction_starts_a_fresh_compaction_count(resume: bool) {
+    let fixture = Fixture::new(
+        vec![
+            read(41_000),
+            answer("Old summary 1."),
+            read(41_000),
+            answer("Old summary 2."),
+            if resume {
+                question()
+            } else {
+                answer("Initial round.")
+            },
+            read(41_000),
+            answer("New summary 1."),
+            answer("First goal turn."),
+            read(41_000),
+            answer("New summary 2."),
+            answer("Second goal turn."),
+            read(41_000),
+            answer("New summary 3."),
+            answer("Must not be requested."),
+        ],
+        40_000,
+    )
+    .await;
+    let goal = || GoalSetParams {
+        objective: "Inspect the file.".into(),
+        budget_usd: Some(0.0),
+    };
+    if resume {
+        let mut events = fixture.events().await;
+        fixture.session.set_goal(goal()).await.unwrap();
+        pending_question(&mut events).await;
+        fixture.session.control_goal("pause").await.unwrap();
+        assert_eq!(
+            fixture.session.goal().await.goal.unwrap().status,
+            GoalStatus::Paused
+        );
+    } else {
+        assert_eq!(fixture.send("Inspect.").await.status, TurnStatus::Completed);
+    }
+    assert_eq!(fixture.server.requests.lock().unwrap().len(), 5);
+    let mut events = fixture.events().await;
+    if resume {
+        fixture.session.control_goal("resume").await.unwrap();
+    } else {
+        fixture.session.set_goal(goal()).await.unwrap();
+    }
+    assert_eq!(finished(&mut events).await.status, TurnStatus::Completed);
+    assert_eq!(finished(&mut events).await.status, TurnStatus::Completed);
+    assert_eq!(finished(&mut events).await.status, TurnStatus::Interrupted);
+    assert_eq!(fixture.server.requests.lock().unwrap().len(), 13);
+    assert_eq!(
+        fixture.session.goal().await.goal.unwrap().status,
+        GoalStatus::Paused
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn setting_a_new_goal_resets_the_compaction_count() {
+    goal_instruction_starts_a_fresh_compaction_count(false).await;
+}
+
+#[tokio::test]
+async fn resuming_a_paused_goal_resets_the_compaction_count() {
+    goal_instruction_starts_a_fresh_compaction_count(true).await;
 }
 
 #[tokio::test]
