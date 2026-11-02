@@ -35,6 +35,8 @@ impl Drop for Lifetime {
     }
 }
 pub(crate) struct Shared {
+    pub agent_parent: Arc<std::sync::RwLock<Option<std::sync::Weak<Shared>>>>,
+    pub agent_host: std::sync::OnceLock<Arc<dyn crate::AgentHost>>,
     pub clients: Arc<std::sync::Mutex<crate::clients::Clients>>,
     pub hook_tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     pub input_waiters: AtomicUsize,
@@ -44,7 +46,19 @@ pub(crate) struct Shared {
     pub configuration_warnings: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>,
     pub lifetime: CancellationToken,
 }
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct AgentPolicy {
+    pub approval: PermissionMode,
+    pub readonly: bool,
+}
+
 pub(crate) struct State {
+    pub agent_forwarding: bool,
+    pub suppressed_agent_turns: std::collections::HashSet<String>,
+    pub acknowledged_agent_results: std::collections::HashSet<String>,
+    pub agent_children: Vec<std::sync::Weak<Shared>>,
+    pub permission_policy: watch::Sender<AgentPolicy>,
+    pub inherited_policy: Option<watch::Receiver<AgentPolicy>>,
     pub fork_notice: Option<Message>,
     /// A non-interactive turn leaves automation paused until the next input.
     pub automatic_turns_paused: bool,
@@ -103,6 +117,27 @@ pub(crate) struct Active {
     pub done: watch::Receiver<Option<Result<u64, CoreError>>>,
 }
 impl State {
+    pub(crate) fn readonly_agent(&self) -> bool {
+        self.journal
+            .snapshot
+            .parent
+            .as_ref()
+            .is_some_and(|parent| parent.agent_type != AgentType::General)
+    }
+
+    pub(crate) fn allows_agent_tool(&self, name: &str, tools: &Tools) -> bool {
+        if self.journal.snapshot.parent.is_none() {
+            return true;
+        }
+        if name == "ask_user" || crate::agent_tools::is_tool(name) {
+            return false;
+        }
+        if !self.readonly_agent() {
+            return true;
+        }
+        name != "submit_plan"
+            && (matches!(name, "shell" | "update_plan") || tools.allowed_in_plan_mode(name, "{}"))
+    }
     pub(crate) fn non_interactive(&self) -> bool {
         self.active
             .as_ref()
@@ -110,10 +145,39 @@ impl State {
     }
 
     pub(crate) fn approval_policy(&self) -> PermissionMode {
-        self.active
+        let policy = self
+            .inherited_policy
             .as_ref()
-            .and_then(|active| active.approval_policy)
-            .unwrap_or(self.journal.snapshot.settings.approval_policy)
+            .map(|policy| *policy.borrow())
+            .unwrap_or_else(|| {
+                let approval = self
+                    .active
+                    .as_ref()
+                    .and_then(|active| active.approval_policy)
+                    .unwrap_or(self.journal.snapshot.settings.approval_policy);
+                AgentPolicy {
+                    approval,
+                    readonly: self.journal.snapshot.settings.plan_mode
+                        || self
+                            .active
+                            .as_ref()
+                            .is_some_and(|active| active.turn.review.is_some()),
+                }
+            });
+        self.permission_policy.send_if_modified(|current| {
+            let changed = *current != policy;
+            *current = policy;
+            changed
+        });
+        policy.approval
+    }
+
+    pub(crate) fn agent_requires_readonly(&self) -> bool {
+        self.readonly_agent()
+            || self
+                .inherited_policy
+                .as_ref()
+                .is_some_and(|policy| policy.borrow().readonly)
     }
 
     pub(crate) async fn resolve_without_user(
@@ -138,6 +202,16 @@ impl State {
     }
     fn new(journal: Journal) -> Self {
         Self {
+            agent_children: Vec::new(),
+            agent_forwarding: false,
+            suppressed_agent_turns: Default::default(),
+            acknowledged_agent_results: Default::default(),
+            permission_policy: watch::channel(AgentPolicy {
+                approval: journal.snapshot.settings.approval_policy,
+                readonly: journal.snapshot.settings.plan_mode,
+            })
+            .0,
+            inherited_policy: None,
             fork_notice: None,
             automatic_turns_paused: false,
             lsp_delivery: Default::default(),
@@ -243,6 +317,13 @@ impl State {
                 text: catalog,
             });
         }
+        if self.journal.snapshot.parent.is_some()
+            && let Some(core) = segments
+                .iter_mut()
+                .find(|segment| segment.kind == crate::prompt::SegmentKind::Core)
+        {
+            core.text.push_str(crate::agent_tools::PROMPT);
+        }
         if !fresh_fork {
             segments.extend(crate::memory::segments(tools).await);
         }
@@ -288,7 +369,11 @@ impl State {
     fn define_tools(&mut self, tools: &Tools) {
         self.tool_definitions = canter_tools::Tool::ALL
             .into_iter()
-            .filter(|tool| tools.find(tool.name()).is_some())
+            .filter(|tool| {
+                tools.find(tool.name()).is_some()
+                    || (self.journal.snapshot.parent.is_some()
+                        && *tool == canter_tools::Tool::UpdatePlan)
+            })
             .map(|tool| {
                 let def = tools.definition(tool);
                 canter_model::ToolDefinition {
@@ -298,6 +383,7 @@ impl State {
                 }
             })
             .chain(crate::goal::definitions())
+            .chain(crate::agent_tools::definitions())
             .chain(
                 canter_tools::Tool::MCP
                     .into_iter()
@@ -322,6 +408,7 @@ impl State {
                         parameters: tool.parameters.clone(),
                     }),
             )
+            .filter(|definition| self.allows_agent_tool(&definition.name, tools))
             .collect();
     }
 
@@ -333,6 +420,9 @@ impl State {
             .find(|segment| segment.kind == crate::prompt::SegmentKind::Core)
         {
             core.text = crate::prompt::core(&self.tool_definitions);
+            if self.journal.snapshot.parent.is_some() {
+                core.text.push_str(crate::agent_tools::PROMPT);
+            }
         }
         segments.retain(|segment| segment.kind != crate::prompt::SegmentKind::McpCatalog);
         if let Some(text) = tools.mcp_catalog() {
@@ -749,9 +839,9 @@ impl Session {
     pub(crate) async fn open_inner(
         store: Arc<Store>,
         id: String,
-        runtime: RuntimeContext,
+        mut runtime: RuntimeContext,
         model: Arc<dyn Model>,
-        options: CoreOptions,
+        mut options: CoreOptions,
         fresh_fork: bool,
     ) -> Result<(Self, SessionReadResponse), CoreError> {
         validate_options(&options)?;
@@ -764,6 +854,19 @@ impl Session {
         })
         .await
         .map_err(|_| CoreError::internal())??;
+        if writer.snapshot().parent.is_some() {
+            runtime.memory_home = None;
+            options.sandbox = writer
+                .snapshot()
+                .settings
+                .sandbox_enabled
+                .unwrap_or(options.sandbox);
+            runtime.restricted_mode = writer
+                .snapshot()
+                .settings
+                .restricted_mode
+                .unwrap_or(runtime.restricted_mode);
+        }
         let home = runtime
             .environment
             .get("HOME")
@@ -787,6 +890,7 @@ impl Session {
         crate::usage::Ledger::replay(&events, &options.prices)
             .fill_costs(&mut state.journal.snapshot);
         let restored = crate::context::restore(entries.clone(), &mut state.rewind);
+        state.acknowledged_agent_results = restored.acknowledged_agent_results;
         state.prefix = restored.prefix;
         state.invoked_skills = restored.invoked_skills;
         state.restored_file_notices = restored.restored_file_notices;
@@ -906,6 +1010,19 @@ impl Session {
         state.recover_background().await?;
         state.restate_goal().await?;
         state.cancel_requests().await?;
+        let stale = state
+            .journal
+            .snapshot
+            .agent_requests
+            .iter()
+            .map(|request| EventPayload::AgentRequestResolved {
+                agent_id: request.agent_id.clone(),
+                request_id: request.request.id.clone(),
+                resolution: ApprovalResolution::Cancelled,
+                client_name: None,
+            })
+            .collect();
+        state.journal.append(stale).await?;
         let unfinished = state
             .journal
             .snapshot
@@ -962,7 +1079,7 @@ impl Session {
         store: Arc<Store>,
         id: String,
         mut settings: SessionSettings,
-        runtime: RuntimeContext,
+        mut runtime: RuntimeContext,
         model: Arc<dyn Model>,
         options: CoreOptions,
         parent: Option<SessionParent>,
@@ -976,6 +1093,9 @@ impl Session {
                 ErrorCode::InvalidRequest,
                 "invalid session settings",
             ));
+        }
+        if parent.is_some() {
+            runtime.memory_home = None;
         }
         let cwd = settings.cwd.clone();
         let home = runtime
@@ -1044,6 +1164,8 @@ impl Session {
             .restore(&state.journal.snapshot.background_commands);
         let lifetime = CancellationToken::new();
         let shared = Arc::new(Shared {
+            agent_parent: Default::default(),
+            agent_host: Default::default(),
             clients: Default::default(),
             hook_tasks: Default::default(),
             input_waiters: AtomicUsize::new(0),
@@ -1288,7 +1410,7 @@ impl Session {
         &self,
         params: SessionInterruptParams,
     ) -> Result<SessionInterruptResponse, CoreError> {
-        let (done, retracted) = {
+        let (done, retracted, children) = {
             let mut state = self.shared.state.lock().await;
             state.available()?;
             let active = state
@@ -1319,8 +1441,10 @@ impl Session {
             }
             state.goal_summary = None;
             state.background_events.interrupt();
-            result
+            let children = state.interrupt_agents().await;
+            (result.0, result.1, children)
         };
+        crate::agents::finish_agent_stops(children).await?;
         Ok(SessionInterruptResponse {
             event_seq: wait_done(done).await?,
             retracted: params.retract.map(|_| retracted),
@@ -1801,12 +1925,15 @@ impl Session {
         reason: SessionCloseReason,
         for_trash: bool,
     ) -> Result<SessionCloseResponse, CoreError> {
-        let (done, btw_done) = {
+        let (done, btw_done, children) = {
             let mut state = self.shared.state.lock().await;
             if for_trash {
                 self.check_trashable(&state)?;
             }
             state.closing = true;
+            if let Some(turn) = state.active.as_ref().map(|active| active.turn.id.clone()) {
+                state.suppressed_agent_turns.insert(turn);
+            }
             let done = state.active.as_ref().map(|active| {
                 active.cancel.cancel();
                 active.done.clone()
@@ -1815,8 +1942,10 @@ impl Session {
                 btw.cancel.cancel();
                 btw.done.clone()
             });
-            (done, btw_done)
+            let children = state.interrupt_agents().await;
+            (done, btw_done, children)
         };
+        crate::agents::finish_agent_stops(children).await?;
         let mut stopped = if let Some(done) = done {
             wait_done(done).await.map(|_| ())
         } else {

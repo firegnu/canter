@@ -63,7 +63,7 @@ pub(crate) fn notice_text(text: &str) -> &str {
         .map_or(text, |(text, _)| text)
 }
 
-fn event_id(message: &Message) -> Option<&str> {
+pub(crate) fn event_id(message: &Message) -> Option<&str> {
     let Message::User { text } = message else {
         return None;
     };
@@ -91,16 +91,28 @@ pub(crate) fn notice_id(message: &Message) -> Option<u64> {
 }
 
 impl State {
+    pub(crate) async fn agent_notice(&mut self, id: String, text: String) -> Result<(), CoreError> {
+        if self.acknowledged_agent_results.contains(&id) {
+            return Ok(());
+        }
+        let wake_at =
+            (!self.automatic_turns_paused).then(|| Instant::now() + Duration::from_secs(2));
+        self.new_background_notice(Some(id), None, text, true, wake_at)
+            .await?;
+        self.background_events.changed.notify_one();
+        Ok(())
+    }
     async fn new_background_notice(
         &mut self,
-        command_id: u64,
+        event_id: Option<String>,
+        command_id: Option<u64>,
         text: String,
         visible: bool,
         wake_at: Option<Instant>,
     ) -> Result<(), CoreError> {
         let item = Item::BackgroundEvent {
-            id: crate::session::id("background-event"),
-            command_id: Some(command_id),
+            id: event_id.unwrap_or_else(|| crate::session::id("background-event")),
+            command_id,
             text,
         };
         let message = card_message(&item);
@@ -122,6 +134,55 @@ impl State {
             }
         }
         self.background_notice(message).await
+    }
+    pub(crate) async fn acknowledge_agent_result(&mut self, id: String) -> Result<(), CoreError> {
+        if self.acknowledged_agent_results.contains(&id) {
+            return Ok(());
+        }
+        let pending = self
+            .background_events
+            .cards
+            .iter()
+            .find(|item| item.id() == Some(id.as_str()))
+            .map(card_message);
+        self.journal
+            .record(HistoryEntry::AgentResultDelivered {
+                notice_id: id.clone(),
+                withdrawn: pending.is_some(),
+            })
+            .await?;
+        self.acknowledged_agent_results.insert(id.clone());
+        if let Some(message) = pending {
+            self.background_events.all.remove(&id);
+            self.plan_mode_notices.retain(|notice| notice != &message);
+            if let Some(index) = self.history.iter().position(|notice| notice == &message) {
+                self.history.remove(index);
+                // Background notices are not user inputs or indexed diagnostic,
+                // budget or restored-file notices. Shift their later indices.
+                let shift = |i: usize| i - usize::from(i > index);
+                self.lsp_delivery.notices = self
+                    .lsp_delivery
+                    .notices
+                    .iter()
+                    .map(|&i| shift(i))
+                    .collect();
+                self.restored_file_notices = self
+                    .restored_file_notices
+                    .iter()
+                    .map(|&i| shift(i))
+                    .collect();
+                self.context_budget_notices = self
+                    .context_budget_notices
+                    .iter()
+                    .map(|(&i, &threshold)| (shift(i), threshold))
+                    .collect();
+                self.summary_index = self.summary_index.map(shift);
+                self.rewind.remove_message(index);
+            }
+            self.consume_background_notices(&[message]);
+            self.background_events.changed.notify_one();
+        }
+        Ok(())
     }
     fn has_background_card(&self, item: &Item) -> bool {
         self.journal
@@ -292,7 +353,8 @@ impl State {
                 },
             );
             self.new_background_notice(
-                command.id,
+                None,
+                Some(command.id),
                 text,
                 wake,
                 wake.then(|| Instant::now() + Duration::from_secs(2)),
@@ -370,7 +432,7 @@ impl Shared {
                         .remove(&id)
                         .is_some_and(|(_, wake)| wake);
                 state
-                    .new_background_notice(id, text, true, wake.then(Instant::now))
+                    .new_background_notice(None, Some(id), text, true, wake.then(Instant::now))
                     .await?;
             }
             state.background_events.output_due = None;

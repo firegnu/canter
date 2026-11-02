@@ -166,7 +166,7 @@ async fn answer(
             return Ok(());
         }
         let mut started_at = (shared.runtime().options.request_time)();
-        let mut goal_id = shared.state.lock().await.charge_goal();
+        let mut goal_id = shared.charge_goal().await;
         let (prepared, estimate) = if shared.runtime().options.telemetry {
             context::measure(request.clone()).await?
         } else {
@@ -247,7 +247,7 @@ async fn answer(
                         break Ok(false);
                     }
                     started_at = (shared.runtime().options.request_time)();
-                    goal_id = shared.state.lock().await.charge_goal();
+                    goal_id = shared.charge_goal().await;
                 }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),
                 Some(Ok(ModelEvent::Finished(_))) => break Ok(false),

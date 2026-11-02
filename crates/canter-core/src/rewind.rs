@@ -69,6 +69,11 @@ impl Checkpoints {
     pub fn clear_boundaries(&mut self) {
         self.boundaries.clear();
     }
+    pub fn remove_message(&mut self, index: usize) {
+        for boundary in &mut self.boundaries {
+            boundary.messages -= usize::from(boundary.messages > index);
+        }
+    }
     pub fn retract(&mut self, turn_id: &str) -> Option<(usize, usize, usize)> {
         let index = self.boundaries.iter().position(|b| b.turn_id == turn_id)?;
         let boundary = &self.boundaries[index];
@@ -395,6 +400,13 @@ impl Session {
         params: SessionRewindParams,
     ) -> Result<SessionRewindResponse, CoreError> {
         let mut state = self.shared.state.lock().await;
+        self.rewind_locked(&mut state, params).await
+    }
+    pub(crate) async fn rewind_locked(
+        &self,
+        state: &mut State,
+        params: SessionRewindParams,
+    ) -> Result<SessionRewindResponse, CoreError> {
         state.available()?;
         if params.last_event_seq != Some(state.journal.snapshot.last_event_seq) {
             return Err(CoreError::new(
@@ -404,7 +416,7 @@ impl Session {
         }
         let boundary = state.rewind_boundary(&params)?;
         let files = if params.rewind_files {
-            plan(&state, &boundary).await?
+            plan(state, &boundary).await?
         } else {
             Vec::new()
         };

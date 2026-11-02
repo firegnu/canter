@@ -1,17 +1,196 @@
 //! Coordinate related ordinary sessions under ancestor-first operation locks.
 use super::*;
 
+pub(super) struct Host(pub std::sync::Weak<App>);
+impl canter_core::AgentHost for Host {
+    fn execute(
+        &self,
+        parent: String,
+        command: canter_core::AgentCommand,
+        cancel: CancellationToken,
+    ) -> futures_util::future::BoxFuture<'_, Result<serde_json::Value, CoreError>> {
+        Box::pin(async move {
+            let app = self.0.upgrade().ok_or_else(|| CoreError {
+                code: ErrorCode::Conflict,
+                message: "Session host stopped".into(),
+            })?;
+            if cancel.is_cancelled() {
+                return Err(CoreError {
+                    code: ErrorCode::Conflict,
+                    message: "Turn interrupted".into(),
+                });
+            }
+            let result: Result<serde_json::Value, ApiError> = async {
+                match command {
+                canter_core::AgentCommand::SpawnAgent { task, kind } => {
+                    let response = app.spawn_agent_of_type(parent, task, kind).await?;
+                    Ok(serde_json::json!({"id":response.session.id,"name":response.session.settings.name}))
+                }
+                canter_core::AgentCommand::WaitAgent { ids, timeout_ms } => {
+                    app.wait_agents(&parent, &ids, timeout_ms, &cancel).await
+                }
+                canter_core::AgentCommand::SendInput { id, message } => {
+                    if id == parent {
+                        return Err(ApiError::new(ErrorCode::InvalidRequest, "Expected a child agent id"));
+                    }
+                    let _parent_operation = app.session_locks.lock(&parent).await;
+                    let child_operation = app.session_locks.lock(&id).await;
+                    app.agent_snapshot(&parent, &id, child_operation).await?;
+                    let parent_session = app.opened_session(&parent).await.ok_or_else(|| {
+                        ApiError::new(ErrorCode::SessionNotResumed, "Resume the parent session first")
+                    })?;
+                    let child = match app.opened_session(&id).await {
+                        Some(child) if child.snapshot().await.session.status != SessionStatus::Closed => child,
+                        _ => {
+                            let child = parent_session.open_agent(id.clone()).await?;
+                            app.register_session(id.clone(), child.clone()).await?;
+                            child
+                        }
+                    };
+                    let response = parent_session.send_agent_input(&child, message).await?;
+                    Ok(serde_json::json!({"id":id,"turnId":response.turn_id}))
+                }
+                canter_core::AgentCommand::CloseAgent { id } => {
+                    if id == parent {
+                        return Err(ApiError::new(ErrorCode::InvalidRequest, "Expected a child agent id"));
+                    }
+                    let _parent_operation = app.session_locks.lock(&parent).await;
+                    let child_operation = app.session_locks.lock(&id).await;
+                    let snapshot = app.agent_snapshot(&parent, &id, child_operation.clone()).await?;
+                    if snapshot.status != SessionStatus::Closed {
+                        let child = match app.opened_session(&id).await {
+                            Some(child) => child,
+                            None => {
+                                let parent = app.opened_session(&parent).await.ok_or_else(|| {
+                                    ApiError::new(ErrorCode::SessionNotResumed, "Resume the parent session first")
+                                })?;
+                                parent.open_agent(id.clone()).await?
+                            }
+                        };
+                        child.close().await?;
+                    }
+                    app.sessions.lock().await.remove(&id);
+                    app.registry_changed.notify_waiters();
+                    let snapshot = app.agent_snapshot(&parent, &id, child_operation).await?;
+                    Ok(agent_value(&snapshot))
+                }
+                }
+            }.await;
+            result.map_err(|error| CoreError {
+                code: error.0.code,
+                message: error.0.message,
+            })
+        })
+    }
+}
+
 impl App {
-    /// Server-side entry point for the next phase's model tools. Creation and
-    /// registration belong to one accepted operation even if its caller leaves.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "P2-178 will expose the model tools")
-    )]
+    async fn agent_snapshot(
+        &self,
+        parent: &str,
+        id: &str,
+        operation: Arc<SessionGuard>,
+    ) -> Result<SessionSnapshot, ApiError> {
+        let snapshot = match self.opened_session(id).await {
+            Some(session) => session.snapshot().await.session,
+            None => self.disk_snapshot(id, operation).await?.session,
+        };
+        if snapshot
+            .parent
+            .as_ref()
+            .is_none_or(|source| source.session_id != parent)
+        {
+            return Err(ApiError::new(
+                ErrorCode::InvalidRequest,
+                "Agent does not belong to this session",
+            ));
+        }
+        Ok(snapshot)
+    }
+
+    async fn wait_agents(
+        &self,
+        parent: &str,
+        ids: &[String],
+        timeout_ms: u64,
+        cancel: &CancellationToken,
+    ) -> Result<serde_json::Value, ApiError> {
+        use futures_util::{StreamExt, stream::FuturesUnordered};
+        if ids.is_empty() || ids.iter().any(|id| id == parent) || timeout_ms == 0 {
+            return Err(ApiError::new(
+                ErrorCode::InvalidRequest,
+                "wait_agent requires child ids and a positive timeoutMs",
+            ));
+        }
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms.min(600_000));
+        loop {
+            let parent_operation = self.session_locks.lock(parent).await;
+            let mut data = Vec::new();
+            let mut completed = Vec::new();
+            let mut terminal = false;
+            let mut changes = FuturesUnordered::new();
+            for id in ids {
+                let operation = self.session_locks.lock(id).await;
+                let snapshot = self.agent_snapshot(parent, id, operation).await?;
+                let stopped = snapshot
+                    .agent
+                    .as_ref()
+                    .is_none_or(|agent| agent.status != AgentStatus::Running);
+                terminal |= stopped;
+                if let Some(session) = self.opened_session(id).await {
+                    let mut events = session.subscribe(snapshot.last_event_seq).await?;
+                    changes.push(async move {
+                        while let Some(event) = events.recv().await? {
+                            if matches!(
+                                event.payload,
+                                EventPayload::TurnCompleted { .. }
+                                    | EventPayload::SessionStatus {
+                                        status: SessionStatus::Closed,
+                                        ..
+                                    }
+                            ) {
+                                break;
+                            }
+                        }
+                        Ok::<_, CoreError>(())
+                    });
+                }
+                data.push(agent_value(&snapshot));
+                if stopped {
+                    completed.push(snapshot);
+                }
+            }
+            if terminal || tokio::time::Instant::now() >= deadline || changes.is_empty() {
+                if let Some(parent) = self.opened_session(parent).await {
+                    for snapshot in &completed {
+                        parent.acknowledge_agent_result(snapshot).await?;
+                    }
+                }
+                return Ok(serde_json::json!({"data":data}));
+            }
+            drop(parent_operation);
+            tokio::select! {
+                _ = cancel.cancelled() => return Err(ApiError::new(ErrorCode::Conflict, "Wait interrupted")),
+                _ = tokio::time::sleep_until(deadline) => {},
+                changed = changes.next() => { if let Some(result) = changed { result?; } },
+            }
+        }
+    }
+    #[cfg(test)]
     pub(crate) async fn spawn_agent(
         self: &Arc<Self>,
         parent_id: String,
         task: String,
+    ) -> Result<SessionCreateResponse, ApiError> {
+        self.spawn_agent_of_type(parent_id, task, AgentType::General)
+            .await
+    }
+
+    pub(crate) async fn spawn_agent_of_type(
+        self: &Arc<Self>,
+        parent_id: String,
+        task: String,
+        kind: AgentType,
     ) -> Result<SessionCreateResponse, ApiError> {
         let app = self.clone();
         tokio::spawn(async move {
@@ -32,14 +211,17 @@ impl App {
             };
             let id = crate::new_id();
             let _child_operation = app.session_locks.lock(&id).await;
-            let (child, response) = parent.spawn_agent(id.clone(), task).await?;
-            app.sessions.lock().await.insert(id, child);
-            app.registry_changed.notify_waiters();
+            let (child, response) = parent.spawn_agent_of_type(id.clone(), task, kind).await?;
+            app.register_session(id, child).await?;
             Ok(response)
         })
         .await
         .map_err(|_| ApiError::internal())?
     }
+}
+
+fn agent_value(snapshot: &SessionSnapshot) -> serde_json::Value {
+    serde_json::json!({"id":snapshot.id,"name":snapshot.settings.name,"status":snapshot.agent.as_ref().map(|agent| agent.status),"result":snapshot.agent.as_ref().and_then(|agent| agent.result.as_deref()).map(canter_tools::truncate_model_output)})
 }
 
 struct Member {
@@ -152,7 +334,8 @@ impl Family {
         let session = parent.session.as_ref().ok_or_else(|| {
             ApiError::new(ErrorCode::SessionNotResumed, "resume the session first")
         })?;
-        let snapshot = session.snapshot().await.session;
+        let mut parent_guard = session.maintenance().await;
+        let snapshot = parent_guard.snapshot();
         let removed_turns = if params.rewind_conversation {
             snapshot
                 .turns
@@ -195,13 +378,14 @@ impl Family {
         }
         // Core checks preview sequence, boundaries and file conflicts under its
         // parent state lock. Until it succeeds no child has been changed.
-        let response = session.rewind(params).await?;
+        let response = parent_guard.rewind(params).await?;
         for (index, guard) in &mut guards {
             if removed.contains(&self.0[*index].id) {
                 guard.reserve_close();
             }
         }
         drop(guards);
+        drop(parent_guard);
         self.move_to_trash(app, &removed).await?;
         Ok(response)
     }

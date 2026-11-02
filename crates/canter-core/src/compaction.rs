@@ -562,7 +562,7 @@ async fn summarize(
                 .await?;
             let prepared = crate::images::prepare(shared, request.clone()).await?;
             let started_at = (shared.runtime().options.request_time)();
-            let goal_id = shared.state.lock().await.charge_goal();
+            let goal_id = shared.charge_goal().await;
             let (prepared, estimate) = if shared.runtime().options.telemetry {
                 context::measure(prepared).await?
             } else {

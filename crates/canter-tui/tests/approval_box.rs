@@ -1074,3 +1074,24 @@ fn session_prefix_resolution_does_not_describe_a_whole_tool_grant() {
     assert!(text.contains("command prefixes for this session"), "{text}");
     assert!(!text.contains("don't ask again for this tool"), "{text}");
 }
+
+#[test]
+fn forwarded_child_approval_shows_its_source_while_parent_is_idle() {
+    let mut screen = Screen::new(100, 28);
+    screen.event(json!({"type":"agent.request.opened","agentId":"child-1","agentName":"agent-cedar","cwd":"/child/work","item":null,"request":{
+        "id":"child-request","turnId":"child-turn","createdAt":NOW,
+        "kind":{"type":"approval","itemId":"child-tool","tool":"shell","arguments":{"command":"cargo check"},"availableDecisions":["accept","acceptForSession","decline","cancel"]}
+    }}));
+    screen.draw();
+    screen.read_the_box();
+    let text = screen.screen();
+    assert!(
+        text.contains("Requested by sub-agent agent-cedar"),
+        "{text}"
+    );
+    assert!(text.contains("cargo check"), "{text}");
+    assert!(text.contains("/child/work"), "{text}");
+    assert!(
+        matches!(screen.key(KeyCode::Char('3')), Some(Action::Resolve { request_id, decision: ApprovalDecision::Decline, .. }) if request_id == "child-request")
+    );
+}

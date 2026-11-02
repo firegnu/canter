@@ -6,6 +6,7 @@ pub mod mcp;
 mod output;
 mod process;
 pub use output::MAX_CLIENT_OUTPUT_BYTES;
+pub use output::truncate_model_output;
 mod background;
 mod dangerous;
 pub mod memory;

@@ -136,6 +136,18 @@ pub enum EventPayload {
     ItemCompleted { turn_id: String, item: Item },
     #[serde(rename = "request.opened")]
     RequestOpened { request: PendingRequest },
+    #[serde(rename = "agent.request.opened")]
+    AgentRequestOpened {
+        #[serde(flatten)]
+        forwarded: crate::AgentRequest,
+    },
+    #[serde(rename = "agent.request.resolved")]
+    AgentRequestResolved {
+        agent_id: String,
+        request_id: String,
+        resolution: ApprovalResolution,
+        client_name: Option<String>,
+    },
     #[serde(rename = "request.resolved")]
     RequestResolved {
         request_id: String,

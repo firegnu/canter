@@ -260,6 +260,7 @@ mod tests {
     fn deletion_requires_confirmation_and_ctrl_d_still_cancels() {
         let mut picker = Picker::new(
             vec![SessionSummary {
+                agent_status: None,
                 parent: None,
                 id: "s1".into(),
                 cwd: "/project".into(),
@@ -322,6 +323,7 @@ mod tests {
     #[test]
     fn a_long_directory_loses_directories_from_its_middle() {
         let session = |id: &str, cwd: &str| SessionSummary {
+            agent_status: None,
             parent: None,
             id: id.into(),
             cwd: cwd.into(),

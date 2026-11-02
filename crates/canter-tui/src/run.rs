@@ -1504,7 +1504,11 @@ impl<C: Connector> Chat<C> {
         };
         match self
             .client
-            .resolve(&self.session, request_id, &params)
+            .resolve(
+                ui.app().snapshot().request_session(request_id),
+                request_id,
+                &params,
+            )
             .await
         {
             Ok(response) if response.already_resolved => {
@@ -1518,6 +1522,9 @@ impl<C: Connector> Chat<C> {
             }
         }
         if answer.decision != canter_protocol::PlanDecision::ClearContext {
+            return None;
+        }
+        if ui.app().snapshot().request_session(request_id) != self.session {
             return None;
         }
         let turn_id = ui
@@ -2190,8 +2197,7 @@ impl<C: Connector> Chat<C> {
                     == Some(canter_protocol::ApprovalDecision::AcceptWithExecpolicyAmendment)
                 {
                     app.snapshot()
-                        .pending_requests
-                        .iter()
+                        .requests()
                         .find(|request| request.id == request_id)
                         .and_then(|request| match &request.kind {
                             canter_protocol::RequestKind::Approval(approval)
@@ -2211,6 +2217,7 @@ impl<C: Connector> Chat<C> {
                     answer,
                     client_name: self.client_name.clone(),
                 };
+                let session = app.snapshot().request_session(&request_id).to_owned();
                 tokio::spawn(async move {
                     let message = match client.resolve(&session, &request_id, &params).await {
                         Ok(response) if response.already_resolved => Message::AnswerLate,

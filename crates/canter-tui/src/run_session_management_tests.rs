@@ -188,6 +188,7 @@ async fn shared_resume_picker_deletes_or_displays_the_server_reason() {
         let mut tab = TabTitle::new(&BTreeMap::new());
         let picker = Picker::new(
             vec![canter_protocol::SessionSummary {
+                agent_status: None,
                 parent: None,
                 id: "test".into(),
                 cwd: "/work".into(),

@@ -14,6 +14,39 @@
       ],
       "type": "object"
     },
+    "AgentRequest": {
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "agentName": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "item": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Item"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request": {
+          "$ref": "#/$defs/PendingRequest"
+        }
+      },
+      "required": [
+        "agentId",
+        "agentName",
+        "request",
+        "cwd"
+      ],
+      "type": "object"
+    },
     "AgentState": {
       "properties": {
         "result": {
@@ -76,6 +109,14 @@
         "updatedAt"
       ],
       "type": "object"
+    },
+    "AgentType": {
+      "enum": [
+        "explorer",
+        "general",
+        "unknown"
+      ],
+      "type": "string"
     },
     "ApprovalDecision": {
       "enum": [
@@ -1504,6 +1545,74 @@
         },
         {
           "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "agentName": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "item": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Item"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "request": {
+              "$ref": "#/$defs/PendingRequest"
+            },
+            "type": {
+              "const": "agent.request.opened",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "agentId",
+            "agentName",
+            "request",
+            "cwd"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "clientName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "resolution": {
+              "$ref": "#/$defs/ApprovalResolution"
+            },
+            "type": {
+              "const": "agent.request.resolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "agentId",
+            "requestId",
+            "resolution"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "clientName": {
               "type": [
                 "string",
@@ -2188,6 +2297,74 @@
           "required": [
             "type",
             "request"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "agentName": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "item": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Item"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "request": {
+              "$ref": "#/$defs/PendingRequest"
+            },
+            "type": {
+              "const": "agent.request.opened",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "agentId",
+            "agentName",
+            "request",
+            "cwd"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "clientName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "resolution": {
+              "$ref": "#/$defs/ApprovalResolution"
+            },
+            "type": {
+              "const": "agent.request.resolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "agentId",
+            "requestId",
+            "resolution"
           ],
           "type": "object"
         },
@@ -4558,6 +4735,10 @@
     },
     "SessionParent": {
       "properties": {
+        "agentType": {
+          "$ref": "#/$defs/AgentType",
+          "default": "general"
+        },
         "sessionId": {
           "type": "string"
         },
@@ -4863,6 +5044,12 @@
             }
           ]
         },
+        "agentRequests": {
+          "items": {
+            "$ref": "#/$defs/AgentRequest"
+          },
+          "type": "array"
+        },
         "approvalFeedback": {
           "additionalProperties": {
             "type": "string"
@@ -5002,6 +5189,16 @@
     },
     "SessionSummary": {
       "properties": {
+        "agentStatus": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "cwd": {
           "default": "",
           "type": "string"

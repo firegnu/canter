@@ -60,6 +60,35 @@ impl App {
         self.sessions.lock().await.values().cloned().collect()
     }
 
+    async fn register_session(&self, id: String, session: Session) -> Result<(), ApiError> {
+        self.sessions
+            .lock()
+            .await
+            .insert(id.clone(), session.clone());
+        if let Some(source) = session.snapshot().await.session.parent {
+            if let Some(parent) = self.opened_session(&source.session_id).await {
+                parent.attach_agent(&session).await?;
+            } else {
+                session.restore_agent_policy().await?;
+            }
+        } else {
+            for child in self.opened_sessions().await {
+                if child
+                    .snapshot()
+                    .await
+                    .session
+                    .parent
+                    .as_ref()
+                    .is_some_and(|source| source.session_id == id)
+                {
+                    session.attach_agent(&child).await?;
+                }
+            }
+        }
+        self.registry_changed.notify_waiters();
+        Ok(())
+    }
+
     pub(crate) async fn begin_drain(&self) -> Vec<Session> {
         *self.draining.write().await = true;
         let sessions = self.opened_sessions().await;
@@ -98,10 +127,11 @@ impl App {
     }
 
     async fn configure_session(
-        &self,
+        self: &Arc<Self>,
         session: &Session,
         revision: Option<u64>,
     ) -> Result<(), ApiError> {
+        session.set_agent_host(Arc::new(agent_sessions::Host(Arc::downgrade(self))));
         if let Some(reload) = &self.reload {
             session.set_configuration_source(reload.clone(), revision);
             if let Some(message) = reload.warning().await {
@@ -391,6 +421,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
     Ok(Json(InfoResponse {
         features: Some(vec![
             "subagentSessions".into(),
+            "subagentTools".into(),
             "memory".into(),
             "runningTurns".into(),
             "sessionFork".into(),
@@ -580,13 +611,19 @@ async fn agents(
         .map_err(|_| ApiError::internal())?
         .map_err(CoreError::from)?;
     let mut data = Vec::new();
+    #[cfg(test)]
+    app.pauses.hit(&id, "agents.listed").await;
     for child in children.into_iter().filter(|child| {
         child
             .parent
             .as_ref()
             .is_some_and(|parent| parent.session_id == id)
     }) {
-        let snapshot = read(State(app.clone()), ApiPath(child.id)).await?.0.session;
+        let snapshot = match read(State(app.clone()), ApiPath(child.id)).await {
+            Ok(response) => response.0.session,
+            Err(error) if error.0.code == ErrorCode::SessionNotFound => continue,
+            Err(error) => return Err(error),
+        };
         if let (Some(parent), Some(agent)) = (snapshot.parent, snapshot.agent) {
             data.push(AgentSummary {
                 id: snapshot.id,
@@ -674,7 +711,7 @@ async fn session_stats(
 
 async fn usage(State(app): State<Arc<App>>) -> Result<Json<UsageResponse>, ApiError> {
     let store = app.store.clone();
-    let sessions = tokio::task::spawn_blocking(move || store.list())
+    let sessions = tokio::task::spawn_blocking(move || store.list_all())
         .await
         .map_err(|_| ApiError::internal())?
         .map_err(CoreError::from)?;
@@ -870,8 +907,7 @@ async fn resume(
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
-            app.sessions.lock().await.insert(id, session);
-            app.registry_changed.notify_waiters();
+            app.register_session(id, session).await?;
             response
         };
         Ok(Json(SessionResumeResponse {
@@ -929,8 +965,7 @@ async fn fork(
         if let Some(warning) = trust.warning {
             session.opening_warning(warning).await?;
         }
-        app.sessions.lock().await.insert(id, session);
-        app.registry_changed.notify_waiters();
+        app.register_session(id, session).await?;
         Ok(Json(response))
     })
     .await
@@ -1003,8 +1038,7 @@ async fn create(
         #[cfg(test)]
         app.pauses.hit(&id, "configure").await;
         app.configure_session(&session, config.revision).await?;
-        app.sessions.lock().await.insert(id, session.clone());
-        app.registry_changed.notify_waiters();
+        app.register_session(id, session.clone()).await?;
         drop(operation);
         drop(config);
         if let Some(input) = params.input {

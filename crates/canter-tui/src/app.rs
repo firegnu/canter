@@ -1032,8 +1032,9 @@ impl App {
     pub fn apply_event(&mut self, event: &Event, now_ms: i64) {
         let plan_visible = self.snapshot.settings.plan_enabled != Some(false);
         let open_request = match &event.payload {
-            EventPayload::RequestResolved { request_id, .. } => {
-                self.snapshot.pending_requests.iter().find_map(|request| {
+            EventPayload::RequestResolved { request_id, .. }
+            | EventPayload::AgentRequestResolved { request_id, .. } => {
+                self.snapshot.requests().find_map(|request| {
                     if request.id != *request_id {
                         return None;
                     }
@@ -1155,6 +1156,13 @@ impl App {
                     self.notifications.push(notification);
                 }
             }
+            EventPayload::AgentRequestOpened { forwarded } => {
+                if let Some(notification) =
+                    crate::notify::Notification::request(&forwarded.request, &self.snapshot)
+                {
+                    self.notifications.push(notification);
+                }
+            }
             EventPayload::SessionStatus { status, .. } => match status {
                 SessionStatus::Working | SessionStatus::WaitingApproval => {
                     self.working_since.get_or_insert(now_ms);
@@ -1182,6 +1190,12 @@ impl App {
                 request_id,
                 resolution,
                 client_name,
+            }
+            | EventPayload::AgentRequestResolved {
+                request_id,
+                resolution,
+                client_name,
+                ..
             } => {
                 self.answered.remove(request_id);
                 if let Some((tool, prefixes)) = open_request
@@ -2081,7 +2095,7 @@ impl App {
     pub(crate) fn start_handoff(&mut self, direction: &str) -> Result<Option<Action>, String> {
         if self.sending_image.is_some()
             || !self.snapshot.queued_inputs.is_empty()
-            || !self.snapshot.pending_requests.is_empty()
+            || self.snapshot.requests().next().is_some()
             || self
                 .snapshot
                 .turns
@@ -2602,7 +2616,7 @@ impl App {
     }
 
     fn foreground_command(&self) -> Option<&str> {
-        if !self.snapshot.pending_requests.is_empty() {
+        if self.snapshot.requests().next().is_some() {
             return None;
         }
         self.snapshot
@@ -4486,7 +4500,7 @@ impl App {
     /// The pending request the box shows: the first one this terminal has
     /// not answered yet.
     fn open_request(&self) -> Option<&PendingRequest> {
-        self.snapshot.pending_requests.iter().find(|request| {
+        self.snapshot.requests().find(|request| {
             !matches!(request.kind, RequestKind::Unknown) && !self.answered.contains(&request.id)
         })
     }
@@ -4520,8 +4534,7 @@ impl App {
             && !self.answered.contains(&request_id)
             && self
                 .snapshot
-                .pending_requests
-                .iter()
+                .requests()
                 .any(|request| request.id == request_id)
         {
             if key.code == KeyCode::Char('/') && key.modifiers.is_empty() && !shown.custom_input {
@@ -4554,23 +4567,22 @@ impl App {
         if let Some(mode) = shown.plan_approval_policy {
             return self.plan_key(key, &request_id, mode, shown.custom_input, guarded, at);
         }
-        if self.snapshot.pending_requests.iter().any(|request| {
+        if self.snapshot.requests().any(|request| {
             request.id == request_id && matches!(request.kind, RequestKind::UserInput(_))
         }) {
             return self.question_key(key, &request_id, shown.custom_input, guarded);
         }
-        let options =
-            self.snapshot
-                .pending_requests
-                .iter()
-                .find_map(|request| match &request.kind {
-                    RequestKind::Approval(approval) | RequestKind::SandboxApproval(approval)
-                        if request.id == request_id && !self.answered.contains(&request.id) =>
-                    {
-                        Some(approval::options(approval))
-                    }
-                    _ => None,
-                })?;
+        let options = self
+            .snapshot
+            .requests()
+            .find_map(|request| match &request.kind {
+                RequestKind::Approval(approval) | RequestKind::SandboxApproval(approval)
+                    if request.id == request_id && !self.answered.contains(&request.id) =>
+                {
+                    Some(approval::options(approval))
+                }
+                _ => None,
+            })?;
         if self.approval.request != request_id {
             self.approval = ApprovalCursor {
                 request: request_id.clone(),
@@ -4669,14 +4681,10 @@ impl App {
         if guarded || self.answered.contains(request_id) {
             return None;
         }
-        let proposal = self
-            .snapshot
-            .pending_requests
-            .iter()
-            .find_map(|r| match &r.kind {
-                RequestKind::PlanApproval(plan) if r.id == request_id => Some(plan.clone()),
-                _ => None,
-            })?;
+        let proposal = self.snapshot.requests().find_map(|r| match &r.kind {
+            RequestKind::PlanApproval(plan) if r.id == request_id => Some(plan.clone()),
+            _ => None,
+        })?;
         if self.approval.request != request_id {
             self.approval = ApprovalCursor {
                 request: request_id.into(),
@@ -4792,14 +4800,13 @@ impl App {
         if guarded || self.answered.contains(request_id) {
             return None;
         }
-        let question =
-            self.snapshot
-                .pending_requests
-                .iter()
-                .find_map(|request| match &request.kind {
-                    RequestKind::UserInput(question) if request.id == request_id => Some(question),
-                    _ => None,
-                })?;
+        let question = self
+            .snapshot
+            .requests()
+            .find_map(|request| match &request.kind {
+                RequestKind::UserInput(question) if request.id == request_id => Some(question),
+                _ => None,
+            })?;
         if self.approval.request != request_id {
             self.approval = ApprovalCursor {
                 request: request_id.into(),
@@ -4998,8 +5005,7 @@ impl App {
         let cwd = &self.snapshot.settings.cwd;
         let waiting: Vec<&str> = self
             .snapshot
-            .pending_requests
-            .iter()
+            .requests()
             .filter_map(|request| match &request.kind {
                 RequestKind::PlanApproval(plan) => Some(plan.item_id.as_str()),
                 RequestKind::Approval(approval) | RequestKind::SandboxApproval(approval) => {
@@ -5281,8 +5287,7 @@ impl App {
                 Span::styled(
                     if self
                         .snapshot
-                        .pending_requests
-                        .iter()
+                        .requests()
                         .any(|request| matches!(request.kind, RequestKind::UserInput(_)))
                     {
                         " ⏸ Waiting for your answer"

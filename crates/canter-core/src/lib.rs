@@ -1,4 +1,5 @@
 //! Conversation sessions independent of HTTP and terminal clients.
+mod agent_tools;
 mod agents;
 mod background;
 mod btw;
@@ -31,6 +32,7 @@ mod telemetry;
 pub mod usage;
 mod user_shell;
 
+pub use agent_tools::{AgentCommand, AgentHost};
 pub use agents::SessionMaintenance;
 pub use agents::recover_agent_sessions;
 pub use btw::BtwStream;

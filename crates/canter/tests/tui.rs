@@ -1540,7 +1540,11 @@ async fn ask_user_second_option_returns_to_the_model_and_continues() {
                 "shell_stop",
                 "monitor",
                 "get_goal",
-                "update_goal"
+                "update_goal",
+                "spawn_agent",
+                "wait_agent",
+                "send_input",
+                "close_agent"
             ]
         );
     }

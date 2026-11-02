@@ -563,7 +563,7 @@ async fn model_response(
     let request = crate::images::prepare(shared, request).await?;
     let model = request.model.clone();
     let mut started_at = (shared.runtime().options.request_time)();
-    let mut goal_id = shared.state.lock().await.charge_goal();
+    let mut goal_id = shared.charge_goal().await;
     let mut stream = crate::telemetry::stream(
         shared,
         Some(turn_id),
@@ -599,7 +599,7 @@ async fn model_response(
                     if shared.state.lock().await.goal_summary.is_some() { break; }
                     record_retry(shared, turn_id, &error, attempt, max_retries, delay).await?;
                     started_at = (shared.runtime().options.request_time)();
-                    goal_id = shared.state.lock().await.charge_goal();
+                    goal_id = shared.charge_goal().await;
                 }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),
                 Some(Ok(ModelEvent::Finished(finish))) => {
@@ -753,6 +753,12 @@ pub(crate) async fn record_usage(
     goal_id: Option<&str>,
     request_id: Option<&str>,
 ) -> Result<(), CoreError> {
+    // Charges and cancellation share the ancestor-first state lock order.
+    let parent = shared.parent_agent();
+    let mut parent_state = match &parent {
+        Some(parent) => Some(parent.state.lock().await),
+        None => None,
+    };
     let mut state = shared.state.lock().await;
     let last = TokenUsageBreakdown {
         input_tokens: usage.input_tokens,
@@ -856,6 +862,16 @@ pub(crate) async fn record_usage(
     }
     state.journal.append(payloads).await?;
     state.limit_goal().await?;
+    drop(state);
+    if let Some(parent) = parent_state.as_mut()
+        && let Some(mut goal) = parent.journal.snapshot.goal.clone()
+        && goal_id == Some(goal.id.as_str())
+    {
+        goal.cost.add(&charge);
+        goal.updated_at = crate::journal::now();
+        parent.save_goal(Some(goal)).await?;
+        parent.limit_goal().await?;
+    }
     Ok(())
 }
 fn add_usage(total: &mut TokenUsageBreakdown, last: &TokenUsageBreakdown) {
@@ -876,23 +892,37 @@ async fn execute(
     call: ToolCall,
     cancel: &CancellationToken,
 ) -> Result<(), CoreError> {
-    if crate::goal::execute(shared, &call, cancel).await? {
-        return Ok(());
-    }
-    let plan_mode = shared
+    if !shared
         .state
         .lock()
         .await
-        .journal
-        .snapshot
-        .settings
-        .plan_mode;
-    let Some(tool) = shared
-        .runtime()
-        .tools
-        .find(&call.name)
-        .or_else(|| (plan_mode && call.name == "update_plan").then_some(Tool::UpdatePlan))
-    else {
+        .allows_agent_tool(&call.name, &shared.runtime().tools)
+    {
+        return shared.state.lock().await.tool_result(&call, "This tool is unavailable to this sub-agent. Include unresolved questions in your final reply.".into(), false, Default::default(), None).await;
+    }
+    if crate::agent_tools::execute(shared, &call, cancel).await? {
+        return Ok(());
+    }
+    if crate::goal::execute(shared, &call, cancel).await? {
+        return Ok(());
+    }
+    let (plan_mode, is_agent) = {
+        let state = shared.state.lock().await;
+        (
+            state.journal.snapshot.settings.plan_mode || state.agent_requires_readonly(),
+            state.journal.snapshot.parent.is_some(),
+        )
+    };
+    {
+        let state = shared.state.lock().await;
+        shared.runtime().tools.configure_shell(
+            state.approval_policy(),
+            &state.journal.snapshot.settings.additional_directories,
+        );
+    }
+    let Some(tool) = shared.runtime().tools.find(&call.name).or_else(|| {
+        (call.name == "update_plan" && (plan_mode || is_agent)).then_some(Tool::UpdatePlan)
+    }) else {
         let mut state = shared.state.lock().await;
         state
             .tool_result(
@@ -929,6 +959,7 @@ async fn execute(
         review
     };
     let prepared = if plan_mode
+        && !(is_agent && tool == Tool::UpdatePlan)
         && !shared
             .runtime()
             .tools
@@ -1266,6 +1297,10 @@ async fn permission<'a>(
     let mut checked_hook = false;
     let (mut receiver, session_prefixes) = loop {
         let mut state = shared.state.lock().await;
+        shared.runtime().tools.configure_shell(
+            state.approval_policy(),
+            &state.journal.snapshot.settings.additional_directories,
+        );
         if cancel.is_cancelled() {
             return Ok(None);
         }
@@ -1288,23 +1323,27 @@ async fn permission<'a>(
             );
         // These tools open their own question/plan dialogs, including in review
         // turns; they never required a separate ordinary tool approval.
-        let permission = if matches!(call.tool(), Tool::AskUser | Tool::SubmitPlan) {
-            state.gate.evaluate_plan(call, state.approval_policy())
-        } else if review_denied {
-            state.gate.evaluate_review(call, state.approval_policy())
-        } else if state.journal.snapshot.settings.plan_mode {
-            state.gate.evaluate_plan(call, state.approval_policy())
-        } else if state
-            .active
-            .as_ref()
-            .is_some_and(|active| active.turn.review.is_some())
-        {
-            state.gate.evaluate_review(call, state.approval_policy())
-        } else {
-            state.gate.evaluate(call, state.approval_policy())
-        };
+        let permission =
+            if call.tool() == Tool::UpdatePlan && state.journal.snapshot.parent.is_some() {
+                state.gate.evaluate(call, state.approval_policy())
+            } else if matches!(call.tool(), Tool::AskUser | Tool::SubmitPlan) {
+                state.gate.evaluate_plan(call, state.approval_policy())
+            } else if review_denied {
+                state.gate.evaluate_review(call, state.approval_policy())
+            } else if state.journal.snapshot.settings.plan_mode || state.agent_requires_readonly() {
+                state.gate.evaluate_plan(call, state.approval_policy())
+            } else if state
+                .active
+                .as_ref()
+                .is_some_and(|active| active.turn.review.is_some())
+            {
+                state.gate.evaluate_review(call, state.approval_policy())
+            } else {
+                state.gate.evaluate(call, state.approval_policy())
+            };
         // First enforce the hard plan/review restriction, then command policy.
         let restricted = state.journal.snapshot.settings.plan_mode
+            || state.agent_requires_readonly()
             || state
                 .active
                 .as_ref()
@@ -1425,7 +1464,7 @@ async fn permission<'a>(
         return Err(CoreError::internal());
     };
     let mut state = shared.state.lock().await;
-    if state.journal.snapshot.settings.plan_mode
+    if (state.journal.snapshot.settings.plan_mode || state.agent_requires_readonly())
         && matches!(
             state.gate.evaluate_plan(call, state.approval_policy()),
             PermissionCheck::Deny { .. }
