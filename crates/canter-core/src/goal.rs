@@ -54,6 +54,12 @@ impl State {
                 .as_ref()
                 .map(|goal| (goal.id.clone(), false));
             self.goal_status(GoalStatus::BudgetLimited).await?;
+            let children = self.interrupt_agents().await;
+            tokio::spawn(async move {
+                if let Err(error) = crate::agents::finish_agent_stops(children).await {
+                    eprintln!("Warning: could not finish stopping sub-agents: {error}");
+                }
+            });
             if self.active.is_none() {
                 self.schedule_goal();
             }
@@ -179,6 +185,21 @@ impl State {
 }
 
 impl Shared {
+    pub(crate) fn parent_agent(&self) -> Option<std::sync::Arc<Shared>> {
+        self.agent_parent
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+    }
+
+    pub(crate) async fn charge_goal(&self) -> Option<String> {
+        if let Some(parent) = self.parent_agent() {
+            parent.state.lock().await.charge_goal()
+        } else {
+            self.state.lock().await.charge_goal()
+        }
+    }
     pub(crate) async fn start_goal(&self, state: &mut State) -> Result<Done, CoreError> {
         state.goal_deadline = None;
         let (_, done) = self

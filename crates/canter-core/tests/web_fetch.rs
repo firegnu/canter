@@ -282,7 +282,11 @@ async fn model_fetches_html_as_markdown_and_continues_with_a_fixed_tool_list() {
                 "shell_stop",
                 "monitor",
                 "get_goal",
-                "update_goal"
+                "update_goal",
+                "spawn_agent",
+                "wait_agent",
+                "send_input",
+                "close_agent"
             ]
         );
         assert_eq!(tools, serde_json::to_value(&requests[1].tools).unwrap());

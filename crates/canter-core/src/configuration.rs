@@ -72,6 +72,8 @@ impl Session {
 impl Shared {
     pub(crate) fn frozen(&self) -> Self {
         Self {
+            agent_host: self.agent_host.clone(),
+            agent_parent: self.agent_parent.clone(),
             clients: self.clients.clone(),
             input_waiters: std::sync::atomic::AtomicUsize::new(0),
             state: self.state.clone(),
@@ -147,9 +149,12 @@ impl Shared {
     async fn apply_configuration(
         &self,
         state: &mut State,
-        config: Configuration,
+        mut config: Configuration,
     ) -> Result<Arc<dyn Send + Sync>, CoreError> {
         let old = self.runtime();
+        if state.journal.snapshot.parent.is_some() {
+            config.options.sandbox = old.options.sandbox;
+        }
         if config.revision.is_some() && old.revision == config.revision {
             return Ok(config.lease);
         }

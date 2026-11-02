@@ -89,17 +89,25 @@ pub(crate) fn layout(
 ) -> ApprovalBox {
     // Border and one column of padding on each side.
     let inner = width.saturating_sub(4).max(1);
-    let item = snapshot
-        .turns
+    let forwarded = snapshot
+        .agent_requests
         .iter()
-        .find(|turn| turn.id == request.turn_id)
-        .and_then(|turn| {
-            turn.items
+        .find(|forwarded| forwarded.request.id == request.id);
+    let item = forwarded
+        .and_then(|forwarded| forwarded.item.as_ref())
+        .or_else(|| {
+            snapshot
+                .turns
                 .iter()
-                .find(|item| item.id() == Some(approval.item_id.as_str()))
+                .find(|turn| turn.id == request.turn_id)
+                .and_then(|turn| {
+                    turn.items
+                        .iter()
+                        .find(|item| item.id() == Some(approval.item_id.as_str()))
+                })
         });
-    let cwd = &snapshot.settings.cwd;
-    let (title, body) = match approval.tool.as_str() {
+    let cwd = forwarded.map_or(&snapshot.settings.cwd, |forwarded| &forwarded.cwd);
+    let (title, mut body) = match approval.tool.as_str() {
         "web_search" => (
             "Search the web?".to_owned(),
             json_body(&approval.arguments, inner),
@@ -140,6 +148,15 @@ pub(crate) fn layout(
         ),
     };
 
+    if let Some(forwarded) = forwarded {
+        body.insert(
+            0,
+            Line::from(format!(
+                "Requested by sub-agent {}",
+                visible(&forwarded.agent_name)
+            )),
+        );
+    }
     let options = options(approval);
     let selected = selected.min(options.len().saturating_sub(1));
     let mut tail = vec![Line::default()];

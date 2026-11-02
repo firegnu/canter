@@ -550,7 +550,11 @@ async fn web_search_is_absent_from_unconfigured_session_requests() {
                 "shell_stop",
                 "monitor",
                 "get_goal",
-                "update_goal"
+                "update_goal",
+                "spawn_agent",
+                "wait_agent",
+                "send_input",
+                "close_agent"
             ]
         );
         let prompt = format!("{:?}", requests[0].messages);

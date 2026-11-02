@@ -129,3 +129,49 @@ fn old_snapshots_and_summaries_remain_ordinary_sessions() {
         serde_json::from_value(serde_json::to_value(restored.summary()).unwrap()).unwrap();
     assert!(summary.parent.is_none());
 }
+
+#[test]
+fn completed_child_keeps_result_through_maintenance_turns_and_close() {
+    let mut snapshot = SessionSnapshot::empty("child");
+    apply(
+        &mut snapshot,
+        json!({"type":"session.parent","parent":{"sessionId":"parent","turnId":"p1","task":"Inspect"}}),
+    );
+    apply(
+        &mut snapshot,
+        json!({"type":"turn.started","turn":turn("t1", "inProgress")}),
+    );
+    apply(
+        &mut snapshot,
+        json!({"type":"item.completed","turnId":"t1","item":{"type":"agentMessage","id":"answer","text":"Findings preserved"}}),
+    );
+    apply(
+        &mut snapshot,
+        json!({"type":"turn.completed","turn":turn("t1", "completed")}),
+    );
+    let completed = snapshot.agent.clone();
+    for client in ["compact", "userShell"] {
+        let mut maintenance = turn(client, "inProgress");
+        maintenance["clientName"] = json!(client);
+        apply(
+            &mut snapshot,
+            json!({"type":"turn.started","turn":maintenance}),
+        );
+        assert_eq!(snapshot.agent, completed);
+        maintenance["status"] = json!("completed");
+        apply(
+            &mut snapshot,
+            json!({"type":"turn.completed","turn":maintenance}),
+        );
+        assert_eq!(snapshot.agent, completed);
+    }
+    apply(
+        &mut snapshot,
+        json!({"type":"session.status","status":"closed","closeReason":"clientRequest"}),
+    );
+    assert_eq!(snapshot.agent.as_ref().unwrap().status, AgentStatus::Closed);
+    assert_eq!(
+        snapshot.agent.as_ref().unwrap().result.as_deref(),
+        Some("Findings preserved")
+    );
+}

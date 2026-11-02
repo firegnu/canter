@@ -91,16 +91,24 @@ pub(crate) fn notice_id(message: &Message) -> Option<u64> {
 }
 
 impl State {
+    pub(crate) async fn agent_notice(&mut self, text: String) -> Result<(), CoreError> {
+        let wake_at =
+            (!self.automatic_turns_paused).then(|| Instant::now() + Duration::from_secs(2));
+        self.new_background_notice(None, text, true, wake_at)
+            .await?;
+        self.background_events.changed.notify_one();
+        Ok(())
+    }
     async fn new_background_notice(
         &mut self,
-        command_id: u64,
+        command_id: Option<u64>,
         text: String,
         visible: bool,
         wake_at: Option<Instant>,
     ) -> Result<(), CoreError> {
         let item = Item::BackgroundEvent {
             id: crate::session::id("background-event"),
-            command_id: Some(command_id),
+            command_id,
             text,
         };
         let message = card_message(&item);
@@ -292,7 +300,7 @@ impl State {
                 },
             );
             self.new_background_notice(
-                command.id,
+                Some(command.id),
                 text,
                 wake,
                 wake.then(|| Instant::now() + Duration::from_secs(2)),
@@ -370,7 +378,7 @@ impl Shared {
                         .remove(&id)
                         .is_some_and(|(_, wake)| wake);
                 state
-                    .new_background_notice(id, text, true, wake.then(Instant::now))
+                    .new_background_notice(Some(id), text, true, wake.then(Instant::now))
                     .await?;
             }
             state.background_events.output_due = None;

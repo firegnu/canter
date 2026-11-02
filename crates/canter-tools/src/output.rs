@@ -2,6 +2,12 @@ use std::collections::VecDeque;
 
 pub const MAX_CLIENT_OUTPUT_BYTES: usize = 1024 * 1024;
 
+pub fn truncate_model_output(text: &str) -> String {
+    let mut output = BoundedText::new(crate::MAX_MODEL_OUTPUT_BYTES);
+    output.push(text.as_bytes());
+    output.render(true)
+}
+
 /// Retain only a bounded prefix and suffix, counting everything discarded in between.
 pub(crate) struct BoundedText {
     head: Vec<u8>,

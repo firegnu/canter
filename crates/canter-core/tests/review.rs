@@ -1563,7 +1563,8 @@ async fn failed_automatic_compaction_continues_only_when_the_request_still_fits(
             let (_temp, store, session) = create(
                 model.clone(),
                 CoreOptions {
-                    context_window: 100_000,
+                    // Keep room for a prefix summary with the agent tool definitions.
+                    context_window: 105_000,
                     max_output_tokens: 32_768,
                     ..CoreOptions::default()
                 },

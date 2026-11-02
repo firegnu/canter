@@ -21,6 +21,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 跟着改的：第一期改文件用「整文件写 + 按文字替换」；Codex 的 apply_patch 是给 GPT 用的，等接 OpenAI 时再搬（用户 10-24 选定）。
 7. **名字和仓库**：`canter`（马的「慢跑」步法），仓库 `github.com/firegnu/canter`，公开，Apache-2.0。用户：「开源，repo就放在github上」。
 8. **协议：结构照 Codex，传输和类型 canter 自己定（报告 §5.7 的 C）**。2026-10-24 在 canter 仓库定的，用户：「好，就用 C，改 DESIGN」。
+   - 子 agent 工具和批准（P2-178，11-02）：`parent` 增加 `agentType: explorer/general`（旧记录缺省 general，未知角色按只读处理）；会话摘要增加可选 `agentStatus`，供启动恢复先筛在跑的子会话。新增 `agent.request.opened {agentId, agentName, request, cwd, item?}`、`agent.request.resolved {agentId, requestId, resolution, clientName}`，前者的 request 沿用 `PendingRequest`，item 是批准内容对应项目的快照。主会话快照增加缺省为空的 `agentRequests`，不改变原 `pendingRequests` 的本会话含义；客户端恢复后仍可显示未回答的子请求。回答仍发往 `POST /v1/sessions/{agentId}/requests/{requestId}`，临时批准只记在子会话。Codex 把带子线程 ID 的请求送到同一个客户端；canter 的 SSE 按会话订阅，因而使用独立转发事件及来源字段，父流使用父序号，子流和原批准事件保持原样，旧客户端按 Unknown 跳过。`features` 增加 `subagentTools`。四个工具是模型工具，不另加 HTTP spawn/wait/send/close 接口。
    - 子会话（P2-177，11-02）：快照和摘要增加可选 `parent: {sessionId, turnId, task}`；快照增加可选 `agent: {status, result}`。`session.parent` 事件记录创建来源，状态和最终回复随既有轮事件重放，关闭沿用 `session.status`。新增 `GET /v1/sessions/{id}/agents`，返回 `{data:[{id, task, status, result, createdAt, updatedAt}]}`，`features` 增加 `subagentSessions`。五种状态为 `running/completed/failed/closed/interrupted`；时间沿用会话的 Unix 毫秒。子会话沿用原有按 ID 读取、恢复、输入和 SSE 接口。Codex `rust-v0.166.0` 用 `SessionSource::SubAgent(ThreadSpawn { parent_thread_id, .. })` 标来源；canter 用独立 `parent`，保留父轮和任务以支持回退及父会话下的列表，不引入整套来源分类。
    - 记忆（P2-22，11-01 用户确认）：新增 `GET /v1/sessions/{id}/memories`，返回 `{data:[{scope, file, name, description, path}]}`；`POST /v1/sessions/{id}/memories/delete` 接收 `{scope, file}`，成功返回 HTTP 204。scope 为 `global/project`，file 为单层 `.md` 文件名；服务端按会话确定目录，不接受任意路径，受限会话拒绝这两个操作。`features` 增加 `memory`。沿用 Codex v2 的会话 ID、camelCase 和 `data` 列表；文件记忆管理端点是 canter 扩展，供终端及未来客户端共用。模型写记忆沿用 write/edit 卡片，没有专用模型工具或新 SSE 事件。终端列出和删除走协议，只有外部编辑器在本机打开服务端给出的文件路径。
    - 运行轮查询（P2-14，11-01 主控决定及交叉审查返工）：新增只读 `GET /v1/runningTurns`，返回 `{data:[{id, name, turnId, activity}]}`，`features` 增加 `runningTurns`。只看服务端内存中加载着的会话，核心在状态锁内轻量读取、不复制整份历史：未结束的轮（含等批准、等回答）、已排好目标自动续跑、仍在运行的后台命令，以及已排好的后台模型唤醒都算。用户 11-01 定会叫醒模型的后台命令也要等；用户复核后确认「等，列表里显示命令」，不叫醒的命令（包括用户 `!`）一并等待，避免替换停掉仍在执行的命令。没有当前轮时 `turnId` 为 null，activity 分别写 `Continuing a goal`、`Running background command #<id>: <command>`（快照中的 command 压成一行，取前 60 个字符）、`Waiting for a background command to wake the model`。目标完成、受阻、到预算、暂停、清除或未恢复自动续跑时，不以目标续跑名义上报；实际未结束的轮和后台命令仍按自己的状态上报。不加载或恢复存盘会话，崩溃残留不计入。普通轮的 activity 保留简短英文工作类型和本轮输入前 120 个字符，等待时说明批准或回答，不读取私有环境、配置凭证或完整工具参数。沿用 Codex 的会话/轮 ID 和 `data` 列表结构；这个只读 HTTP 接口、运行范围、activity 和没有真实轮时的 null turnId 是 canter 扩展，目的是安装命令能等完真实工作及已排好的自动续跑，不把存盘状态或两轮间隙当成空闲；不改变会话、轮次或调度行为。客户端只在进入等待或重连时查 feature，之后约每秒只查运行接口，请求失败再 discover。旧服务端缺 feature 时不猜测空闲，说明程序已装好、服务端没换，提示 `canter serve --replace`（最多等轮 60 秒），不再提示重新 upgrade / rollback。
@@ -455,12 +456,22 @@ P2-172（11-01 用户决定）：客户端挂在会话上指有一条订阅该�
 
 ## 子 agent 的子会话（P2-177）
 
+P2-178（2026-11-02 主控决定 A）：`canter exec` 保持单轮语义，不因子 agent 完成而自动开下一轮。主 agent 要在 exec 当轮拿结果，使用 `wait_agent`；轮后到达的子 agent 结果保留到主会话下一次输入（包括 `exec --resume` 或交互打开后输入）再交给模型。交互主会话空闲时仍按 P2-101 的合并窗口叫醒，忙时附到下一次模型请求。
+
 子 agent 在同一服务端里运行，是 `<CANTER_HOME>/sessions/<id>/` 中带父会话标记的普通会话；复用存盘、读取、压缩、遥测和事件订阅。核心提供从父会话创建并用任务启动首轮的接口，之后用普通输入继续，用普通关闭取消运行中的轮。创建关联父会话当时的轮，不复制父会话的对话。
 
-模型、思考档位、权限档位、沙箱、工作目录、新增目录和内存环境变量取创建时父会话的有效值；环境变量仍不存盘、不公开。11-02 主控补定 A：放行规则沿用全局 `rules.json`，与普通会话一样每次权限检查实时读取，不做规则快照。会话级临时批准不作为全局规则复制。
+模型、思考档位、沙箱、工作目录、新增目录、受限打开和内存环境变量取创建时父会话的有效值；环境变量仍不存盘、不公开。P2-178 改权限档位：每次检查读取父会话当前的有效档位，包括 exec 的当轮覆盖；父会话未打开时用其最后持久化的档位，重新打开后接回实时档位。放行规则沿用全局 `rules.json`，与普通会话一样每次权限检查实时读取，不做规则快照。会话级临时批准不继承；子批准上的「本会话允许」只作用于子会话，「以后都允许」仍写全局规则。每个子会话有自己的临时目录。
 
-子会话状态跟随最近一轮：在跑、做完、失败、被关、中断；做完时取这一轮最后一条最终回复作为结果，下一轮清除旧结果。状态与结果由存盘事件恢复。服务端重启将未完成的子会话标成中断，不自动续跑，不需要恢复环境变量或发模型请求。正常结束的子会话保持结果。
+子会话状态跟随最近一轮普通 agent 工作：在跑、做完、失败、被关、中断；做完时取这一轮最后一条最终回复作为结果，下一轮清除旧结果。手动压缩、`!命令` 和回退记录轮不改变最近工作的状态和结果；关闭空闲已完成的子会话保留结果。状态与结果由存盘事件恢复。服务端重启将未完成的子会话标成中断，不自动续跑，不需要恢复环境变量或发模型请求；先按摘要筛选 running，再逐个打开，单个打开或写入失败只记录警告、跳过。正常结束的子会话保持结果。
 
-默认会话列表、统计列表及当前目录最近会话的选择均排除子会话，按 ID 打开仍允许；父会话的 `/agents` 列出其直接子会话。父会话进回收站时子会话一同移入，有子会话在跑则拒绝，沿用现有删除限制。直接删除子会话照普通规则。分叉只复制源会话的已结束对话，既不复制其子会话，也不继承源会话的 `parent`。
+默认会话列表、统计列表及当前目录最近会话的选择均排除子会话，按 ID 打开仍允许；父会话的 `/agents` 列出其直接子会话，枚举后刚被删掉的子会话跳过。`/v1/usage` 汇总包含子会话，统计页面归组留给 P2-180。父会话进回收站时子会话一同移入，有子会话在跑则拒绝，沿用现有删除限制。直接删除子会话照普通规则。分叉只复制源会话的已结束对话，既不复制其子会话，也不继承源会话的 `parent`。
 
-父会话有子会话在跑时拒绝回退；退掉对话轮时，这些轮创建的子会话一同进回收站；只回退文件而保留对话时不移走子会话。保留已有单会话的关闭、回收站及回退机制；关系信息用于协调这些操作，避免留下指向已退掉轮次的活动子会话。本件不提供模型工具、角色、并发或嵌套上限、批准转发、父会话唤醒、终端界面或 Subagent 钩子。
+父会话有子会话在跑时拒绝回退；退掉对话轮时，这些轮创建的子会话一同进回收站；只回退文件而保留对话时不移走子会话。回退主会话不还原子 agent 改过的文件。保留已有单会话的关闭、回收站及回退机制；关系信息用于协调这些操作，避免留下指向已退掉轮次的活动子会话。家族操作的状态锁统一先父后子，取消后释放锁再等轮结束，避免删除、回退、叫醒、记账和工具调用互相等待。
+
+P2-178 的四个模型工具：`spawn_agent {task,type}` 立即返回 ID 和短名；`wait_agent {ids,timeoutMs}` 等任一个完成、失败、关闭、中断或超时后返回每一个的状态和可用结果，默认 30 秒、最长 600 秒；`send_input {id,message}` 忙时排队，空闲或中断时开新轮；`close_agent {id}` 取消当前轮并停其后台命令，保留已有完成结果。最终回复经现有工具输出的 32 KiB 首尾截断后交回主 agent。没有 `resume_agent`、fork 式子 agent 或收件箱。
+
+`explorer` 使用计划模式的只读工具，去掉 ask_user、submit_plan，允许 mcp_search，禁止 mcp_call；`general` 使用全部工具但去掉四个子 agent 工具和 ask_user。两种都能 update_plan，清单属于各自会话。最多同时跑 4 个，未停的后台工作也占用名额；只有一层，子 agent 不能再开子 agent。主会话计划模式和审查轮只许开或继续 explorer。英文工具说明要求先自己列计划、关键路径自己做；explorer 可以自主开来查代码、找资料、节省主上下文，general 仅在用户或 AGENTS.md 明确要求子 agent、委派或并行时开，「仔细查」「深入分析」不算授权；给 general 的任务须明确文件归属、共享仓库、不得改回别人改动。
+
+子会话正常装入 AGENTS.md 和技能；系统提示说明子 agent 身份、最终回复交回父 agent、不向用户提问、把问题或阻碍写进最终回复。不装入记忆段、不开放记忆读写；配置刷新和重开保持此限制。explorer 压缩或回退后仍保留自己的清单，不补入要求 ask_user、禁用 update_plan、最后 submit_plan 的普通计划流程指令。批准复用现有框和回答方式，主界面多显示 `Requested by sub-agent <name>`，拒绝只拒本次调用，子 agent 继续；exec 子会话沿用父轮的自动批准处理。
+
+完成、失败或独立中断通过 P2-101 的后台事件与 2 秒合并窗口送给父会话，英文说明带 ID、名字、状态及截断后的结果；exec 的单轮例外见本节开头。父轮 Esc 连带停子 agent 并抑制这次中断的叫醒。子 agent 的请求花费按请求开始时父目标计入其上限；达到 P2-109 阈值时一同取消子 agent 与后台工作，父会话沿用唯一总结轮。没有新增 SubagentStart/SubagentStop 钩子、子 agent 列表界面或统计页面。

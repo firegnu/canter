@@ -17,7 +17,8 @@ pub(crate) fn is_notice(message: &Message) -> bool {
 
 impl State {
     pub(crate) async fn restate_plan_mode(&mut self) -> Result<(), CoreError> {
-        if self.journal.snapshot.settings.plan_mode {
+        // Explorers keep their own checklist and never submit a plan for approval.
+        if self.journal.snapshot.settings.plan_mode && !self.readonly_agent() {
             self.plan_mode_notice(ENTER).await?;
         }
         Ok(())

@@ -134,6 +134,9 @@ pub struct SessionSnapshot {
     #[ts(optional = nullable)]
     pub background_commands: Vec<BackgroundCommand>,
     pub pending_requests: Vec<PendingRequest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
+    pub agent_requests: Vec<AgentRequest>,
     /// User feedback from declined approvals, keyed by tool item ID.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     #[ts(optional = nullable)]
@@ -176,6 +179,7 @@ impl SessionSnapshot {
             turns: Vec::new(),
             background_commands: Vec::new(),
             pending_requests: Vec::new(),
+            agent_requests: Vec::new(),
             approval_feedback: Default::default(),
             queued_inputs: Vec::new(),
             token_usage: None,
@@ -187,6 +191,7 @@ impl SessionSnapshot {
     pub fn summary(&self) -> SessionSummary {
         SessionSummary {
             parent: self.parent.clone(),
+            agent_status: self.agent.as_ref().map(|agent| agent.status),
             id: self.id.clone(),
             cwd: self.settings.cwd.clone(),
             name: self.settings.name.clone(),
@@ -194,6 +199,21 @@ impl SessionSnapshot {
             updated_at: self.updated_at,
             last_event_seq: self.last_event_seq,
         }
+    }
+
+    pub fn requests(&self) -> impl Iterator<Item = &PendingRequest> {
+        self.pending_requests.iter().chain(
+            self.agent_requests
+                .iter()
+                .map(|forwarded| &forwarded.request),
+        )
+    }
+
+    pub fn request_session(&self, request_id: &str) -> &str {
+        self.agent_requests
+            .iter()
+            .find(|forwarded| forwarded.request.id == request_id)
+            .map_or(self.id.as_str(), |forwarded| forwarded.agent_id.as_str())
     }
 
     /// The latest successful replacement, including an explicitly empty plan.
@@ -245,6 +265,9 @@ pub enum GoalStatus {
 pub struct SessionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub agent_status: Option<AgentStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub parent: Option<SessionParent>,
     pub id: String,
     #[serde(default)]
@@ -260,9 +283,21 @@ pub struct SessionSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionParent {
+    #[serde(default)]
+    pub agent_type: AgentType,
     pub session_id: String,
     pub turn_id: String,
     pub task: String,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentType {
+    Explorer,
+    #[default]
+    General,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -749,6 +784,16 @@ pub struct PendingRequest {
     #[ts(type = "number")]
     pub created_at: i64,
     pub kind: RequestKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRequest {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub request: PendingRequest,
+    pub cwd: String,
+    pub item: Option<Item>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

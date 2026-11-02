@@ -548,3 +548,25 @@ async fn escape_restores_queued_inputs_only_when_this_terminal_stopped_the_turn(
         test.stop().await;
     }
 }
+
+#[tokio::test]
+async fn forwarded_approval_answer_uses_the_child_request_endpoint() {
+    let mut test = Harness::new().await;
+    test.event(serde_json::from_value(json!({"type":"agent.request.opened","agentId":"child-1","agentName":"agent-cedar","cwd":"/child/work","item":null,"request":{
+        "id":"child-request","turnId":"child-turn","createdAt":0,"kind":{"type":"approval","itemId":"child-tool","tool":"shell","arguments":{"command":"cargo check"},"availableDecisions":["accept","acceptForSession","decline","cancel"]}
+    }})).unwrap());
+    test.chat.act(
+        test.ui.app_mut(),
+        Action::Resolve {
+            request_id: "child-request".into(),
+            decision: canter_protocol::ApprovalDecision::Decline,
+            feedback: None,
+        },
+    );
+    let request = test.request().await;
+    assert_eq!(request.path, "/v1/sessions/child-1/requests/child-request");
+    assert_eq!(request.body["decision"], "decline");
+    request.json(json!({"eventSeq":1}));
+    test.message().await;
+    test.stop().await;
+}

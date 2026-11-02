@@ -822,3 +822,37 @@ async fn long_resume_other_session_input_benchmark() {
     }
     test.stop().await;
 }
+
+#[tokio::test]
+async fn agents_list_skips_a_child_deleted_after_enumeration() {
+    let (test, fake) = super::agents::harness(false).await;
+    let parent = super::agents::parent(&test).await;
+    let child = super::agents::spawn(&test, &parent, "Inspect code").await;
+    super::agents::idle(&test, &child).await;
+    let block = test
+        .app
+        .pauses
+        .block(parent.rsplit('/').next().unwrap(), "agents.listed");
+    let request = test.client.get(format!("{parent}/agents"));
+    let listing = tokio::spawn(async move { request.send().await.unwrap() });
+    block.reached().await;
+    test.client
+        .post(format!("{child}/trash"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    drop(block);
+    let response: AgentListResponse = listing
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(response.data.is_empty());
+    test.stop().await;
+    fake.stop().await;
+}

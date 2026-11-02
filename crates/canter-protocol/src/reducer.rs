@@ -128,6 +128,21 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
         add_time(&mut turn.duration_ms, elapsed);
     }
     match &event.payload {
+        EventPayload::AgentRequestOpened { forwarded } => {
+            snapshot.agent_requests.retain(|old| {
+                old.agent_id != forwarded.agent_id || old.request.id != forwarded.request.id
+            });
+            snapshot.agent_requests.push(forwarded.clone());
+        }
+        EventPayload::AgentRequestResolved {
+            agent_id,
+            request_id,
+            ..
+        } => {
+            snapshot
+                .agent_requests
+                .retain(|old| &old.agent_id != agent_id || &old.request.id != request_id);
+        }
         EventPayload::SessionParent { parent } => {
             snapshot.parent = Some(parent.clone());
             snapshot.agent = Some(crate::AgentState {
@@ -391,6 +406,16 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
 
 fn update_agent(snapshot: &mut SessionSnapshot, payload: &EventPayload) {
     use crate::{AgentState, AgentStatus, SessionCloseReason};
+    let is_agent_turn = |turn: &crate::Turn| {
+        !matches!(
+            turn.client_name.as_str(),
+            "rewind" | "compact" | "userShell"
+        )
+    };
+    if matches!(payload, EventPayload::TurnStarted { turn, .. } | EventPayload::TurnCompleted { turn } if !is_agent_turn(turn))
+    {
+        return;
+    }
     let status = match payload {
         EventPayload::TurnStarted { .. } => AgentStatus::Running,
         EventPayload::TurnCompleted { .. }
@@ -399,7 +424,7 @@ fn update_agent(snapshot: &mut SessionSnapshot, payload: &EventPayload) {
             .turns
             .iter()
             .rev()
-            .find(|turn| turn.client_name != "rewind")
+            .find(|turn| is_agent_turn(turn))
             .map(|turn| turn.status)
         {
             Some(TurnStatus::InProgress) => AgentStatus::Running,
@@ -423,25 +448,32 @@ fn update_agent(snapshot: &mut SessionSnapshot, payload: &EventPayload) {
         }
         _ => return,
     };
-    let result = (status == AgentStatus::Completed)
-        .then(|| {
-            snapshot
-                .turns
-                .iter()
-                .rev()
-                .find(|turn| turn.client_name != "rewind")
-                .and_then(|turn| {
-                    turn.items.iter().rev().find_map(|item| match item {
-                        Item::AgentMessage {
-                            text,
-                            status: None | Some(crate::ItemStatus::Completed),
-                            ..
-                        } => Some(text.clone()),
-                        _ => None,
+    let result = if status == AgentStatus::Closed {
+        snapshot
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.result.clone())
+    } else {
+        (status == AgentStatus::Completed)
+            .then(|| {
+                snapshot
+                    .turns
+                    .iter()
+                    .rev()
+                    .find(|turn| is_agent_turn(turn))
+                    .and_then(|turn| {
+                        turn.items.iter().rev().find_map(|item| match item {
+                            Item::AgentMessage {
+                                text,
+                                status: None | Some(crate::ItemStatus::Completed),
+                                ..
+                            } => Some(text.clone()),
+                            _ => None,
+                        })
                     })
-                })
-        })
-        .flatten();
+            })
+            .flatten()
+    };
     snapshot.agent = Some(AgentState { status, result });
 }
 
