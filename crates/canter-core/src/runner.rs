@@ -205,6 +205,9 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                 let removed = state.history.split_off(messages);
                 state.lsp_delivery.notices.retain(|index| *index < messages);
                 state
+                    .context_budget_notices
+                    .retain(|index, _| *index < messages);
+                state
                     .restored_file_notices
                     .retain(|index| *index < messages);
                 state.lsp_delivery.reset_baseline();
@@ -357,7 +360,7 @@ async fn conversation(
             }
             (request, summary)
         };
-        let (request, context) = context::measure(request).await?;
+        let (mut request, mut context) = context::measure(request).await?;
         let estimated = context.total();
         let occupancy =
             shared
@@ -419,6 +422,13 @@ async fn conversation(
                 ErrorCode::InvalidRequest,
                 "context remains too large after compaction",
             ));
+        }
+        if !summary && compaction::budget_notice(shared, occupancy).await? {
+            request = context::request(
+                &*shared.state.lock().await,
+                shared.runtime().options.max_output_tokens,
+            );
+            (request, context) = context::measure(request).await?;
         }
         shared
             .state
@@ -950,6 +960,7 @@ async fn execute(
     };
     let mut executed = false;
     let mut written_path = None;
+    let mut changed_file = false;
     let mut output = match prepared {
         Err(mut output) => {
             if review
@@ -1105,6 +1116,9 @@ async fn execute(
                     }
                     if output.outcome == ToolOutcome::Completed {
                         written_path = prepared.file_checkpoint().map(|file| file.path.to_owned());
+                        changed_file = prepared
+                            .file_checkpoint()
+                            .is_some_and(|file| file.original != Some(file.content));
                     }
                     output
                 }
@@ -1159,6 +1173,25 @@ async fn execute(
         Some(crate::images::import_tool(store, session, std::mem::take(&mut output.images)).await?)
     };
     let mut state = shared.state.lock().await;
+    let completed_step = if let Item::Plan {
+        plan,
+        status: ItemStatus::Completed,
+        ..
+    } = &output.item
+    {
+        let previous = state.journal.snapshot.current_plan().unwrap_or_default();
+        plan.iter().any(|step| {
+            step.status == PlanStepStatus::Completed
+                && !previous
+                    .iter()
+                    .any(|old| old.step == step.step && old.status == PlanStepStatus::Completed)
+        })
+    } else {
+        false
+    };
+    if changed_file || completed_step {
+        state.auto_compactions_without_progress = 0;
+    }
     if let Some((items, content, saved)) = imported {
         match &mut output.item {
             Item::FileRead { content_items, .. } | Item::McpToolCall { content_items, .. } => {

@@ -15,6 +15,79 @@ use tokio::{
 const WAIT: Duration = Duration::from_secs(20);
 
 #[tokio::test]
+async fn exec_stops_compaction_spin_with_a_reason_and_the_existing_interrupt_hook() {
+    for json_output in [false, true] {
+        let mut replies = Vec::new();
+        for _ in 0..3 {
+            let mut read = call("read", json!({"path":"note.txt"}));
+            read["usage"] =
+                json!({"prompt_tokens":41_000,"completion_tokens":1,"total_tokens":41_001});
+            replies.extend([read, reply("Summary.")]);
+        }
+        replies.push(reply("Continued."));
+        let world = World::configured(replies, false, json!({
+            "auto_compact_tokens":40_000,
+            "hooks":{"Interrupt":[{"hooks":[{"type":"command","command":"printf interrupted > interrupted.txt"}]}]}
+        })).await;
+        fs::write(world.root.path().join("project/note.txt"), "File facts.").unwrap();
+        let client = world.client().await;
+        client
+            .trust_folder(world.root.path().join("project").to_str().unwrap())
+            .await
+            .unwrap();
+        let args = if json_output {
+            vec!["exec", "--json", "Inspect."]
+        } else {
+            vec!["exec", "Inspect."]
+        };
+        let output = world.cli(&args, "").await;
+        assert_eq!(output.status.code(), Some(130), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Stopped: context was compacted 3 times in a row with no file edits or completed plan steps."));
+        assert_eq!(world.requests.lock().unwrap().len(), 6);
+        if json_output {
+            let lines: Vec<Value> = String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(lines.last().unwrap()["outcome"], "interrupted");
+            assert!(lines.iter().any(|line| {
+                line["type"] == "warning"
+                    && line["message"]
+                        .as_str()
+                        .is_some_and(|text| text.starts_with("Stopped: context was compacted"))
+            }));
+        }
+        tokio::time::timeout(WAIT, async {
+            while !world.root.path().join("project/interrupted.txt").exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let session = client.list_sessions().await.unwrap().remove(0);
+        assert_eq!(
+            client
+                .read_session(&session.id)
+                .await
+                .unwrap()
+                .session
+                .turns
+                .last()
+                .unwrap()
+                .status,
+            canter_protocol::TurnStatus::Interrupted
+        );
+        let continued = world
+            .cli(&["exec", "--resume", &session.id, "Continue."], "")
+            .await;
+        assert!(continued.status.success(), "{continued:?}");
+        assert_eq!(String::from_utf8_lossy(&continued.stdout), "Continued.\n");
+        world.stop().await;
+    }
+}
+
+#[tokio::test]
 async fn exec_completion_emits_client_exit_and_resume_starts_a_new_pair() {
     let world = World::configured(vec![reply("First."), reply("Again.")], false,
         json!({"hooks":{

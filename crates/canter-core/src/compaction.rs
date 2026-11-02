@@ -8,7 +8,9 @@ use canter_model::{
     AssistantContent, ErrorKind, FinishReason, Message, ModelEvent, Request, RequestOptions,
     UserContent,
 };
-use canter_protocol::{CompactionTrigger, ErrorCode, EventPayload, Item, RequestPurpose};
+use canter_protocol::{
+    CompactionTrigger, ErrorCode, EventPayload, GoalStatus, Item, RequestPurpose,
+};
 use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
 
@@ -55,6 +57,7 @@ const PROMPT: &str = r#"Summarize the conversation in <transcript> below. The su
 Use exactly these headings, in this order:"#;
 
 const PREFIX_SOURCES: &str = r#"Source attribution:
+- Context budget notices ([Context budget]) are internal context, not the user's own words.
 - Automatically inserted plan mode notices ([Plan mode enabled/disabled]), <skill> contents, diagnostics ([LSP diagnostics update]), background command/event notices, automatically reread files ([Automatically reread after compaction: ...]) and file references ([Referenced file after compaction: ...]), goal notices ([Goal], [Goal resumed/cleared/budget limit]), additional directories notices, and tool images are internal context, not the user's own words, even when they use the user role. Skill contents can also be embedded in a real user message: only the surrounding user text and the skill invocation belong to the user.
 - Interruption notices ([This turn was interrupted; ...] and [The server stopped and the previous turn was interrupted; ...]) are internal context, not the user's own words.
 - In <user_shell_command>, only the <command> text is the user's input; the <result> is command output, not the user's words.
@@ -83,6 +86,49 @@ pub(crate) fn input_limit(shared: &Shared) -> u64 {
         .options
         .auto_compact_tokens
         .map_or(window, |tokens| tokens.min(window))
+}
+
+pub(crate) async fn budget_notice(shared: &Shared, occupancy: u64) -> Result<bool, CoreError> {
+    let limit = input_limit(shared);
+    let mut state = shared.state.lock().await;
+    if state
+        .active
+        .as_ref()
+        .is_some_and(|active| active.turn.review.is_some())
+    {
+        return Ok(false);
+    }
+    let threshold = if u128::from(occupancy) * 100 >= u128::from(limit) * 90 {
+        90
+    } else if u128::from(occupancy) * 100 >= u128::from(limit) * 75 {
+        75
+    } else {
+        return Ok(false);
+    };
+    if state
+        .context_budget_notices
+        .values()
+        .any(|sent| *sent >= threshold)
+    {
+        return Ok(false);
+    }
+    let message = Message::User {
+        text: format!(
+            "[Context budget] {occupancy} of {limit} tokens used before automatic compaction; about {} left.",
+            limit.saturating_sub(occupancy)
+        ),
+    };
+    state
+        .journal
+        .record(HistoryEntry::ContextBudgetNotice {
+            message: message.clone(),
+            threshold,
+        })
+        .await?;
+    let index = state.history.len();
+    state.context_budget_notices.insert(index, threshold);
+    state.history.push(message);
+    Ok(true)
 }
 
 pub(crate) async fn compact(
@@ -180,6 +226,7 @@ pub(crate) async fn compact(
             state.history = messages;
             state.restored_file_notices.clear();
             state.lsp_delivery.notices.clear();
+            state.context_budget_notices.clear();
             state.lsp_delivery.reset_baseline();
             state.rewind.clear_boundaries();
             state.summary_index = state.history.len().checked_sub(1);
@@ -226,6 +273,28 @@ pub(crate) async fn compact(
                     },
                 }])
                 .await?;
+            if trigger == CompactionTrigger::Auto {
+                state.auto_compactions_without_progress += 1;
+                if state.auto_compactions_without_progress == 3 {
+                    if state
+                        .journal
+                        .snapshot
+                        .goal
+                        .as_ref()
+                        .is_some_and(|goal| goal.status == GoalStatus::Active)
+                    {
+                        state.goal_status(GoalStatus::Paused).await?;
+                    }
+                    state.goal_running = false;
+                    state.goal_deadline = None;
+                    state.goal_summary = None;
+                    state.journal.append(vec![EventPayload::Warning {
+                        message: "Stopped: context was compacted 3 times in a row with no file edits or completed plan steps. Send a message to continue, or narrow the task.".into(),
+                    }]).await?;
+                    state.auto_compactions_without_progress = 0;
+                    cancel.cancel();
+                }
+            }
             Ok(())
         }
         result => {
@@ -283,6 +352,7 @@ async fn summarize(
         skill_notices,
         diagnostic_notices,
         restored_file_notices,
+        context_budget_notices,
     ) = {
         let state = shared.state.lock().await;
         // Measure the exact snapshot being summarized, including any notices
@@ -309,6 +379,7 @@ async fn summarize(
             crate::skill_invocation::latest(&state.invoked_skills),
             state.lsp_delivery.notices.clone(),
             state.restored_file_notices.clone(),
+            state.context_budget_notices.clone(),
         )
     };
     let output_limit = shared.runtime().options.max_output_tokens.min(8192);
@@ -339,7 +410,9 @@ async fn summarize(
                 } else {
                     text
                 };
-                let source = if restored_file_notices.contains(&index) {
+                let source = if context_budget_notices.contains_key(&index) {
+                    "Internal context budget"
+                } else if restored_file_notices.contains(&index) {
                     "Tool file restoration"
                 } else if diagnostic_notices.contains(&index) {
                     "Tool diagnostics"
