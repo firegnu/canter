@@ -114,7 +114,7 @@ pub(crate) async fn budget_notice(shared: &Shared, occupancy: u64) -> Result<boo
     }
     let message = Message::User {
         text: format!(
-            "[Context budget] {occupancy} of {limit} tokens used before automatic compaction; about {} left.",
+            "[Context budget] {occupancy} of {limit} tokens used before automatic compaction; about {} left. Compaction will then free space; this is not a limit on the task.",
             limit.saturating_sub(occupancy)
         ),
     };
