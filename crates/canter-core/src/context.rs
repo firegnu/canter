@@ -522,6 +522,7 @@ pub(crate) fn request(
         effort => effort,
     };
     Request {
+        session_id: Some(state.journal.snapshot.id.clone()),
         model: state.journal.snapshot.settings.model.clone(),
         messages: state.prefix.iter().chain(&state.history).cloned().collect(),
         tools: state.tool_definitions.clone(),

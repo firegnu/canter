@@ -37,6 +37,8 @@ pub(crate) struct Config {
     model_max_retries: u32,
     api_key: String,
     #[serde(default)]
+    headers: canter_model::RequestHeaders,
+    #[serde(default)]
     prices: canter_core::usage::PriceBook,
     #[serde(default)]
     pub mcp_servers: std::collections::BTreeMap<String, canter_core::mcp::ServerConfig>,
@@ -151,10 +153,12 @@ impl Config {
     pub fn model_client(&self) -> Result<Arc<dyn Model>, ServerError> {
         ChatCompletions::new(&self.base_url, ApiKey::new(self.api_key.clone()))
             .map(|model| {
-                model.with_retry_policy(canter_model::RetryPolicy {
-                    max_retries: self.model_max_retries,
-                    ..Default::default()
-                })
+                model.with_headers(self.headers.clone()).with_retry_policy(
+                    canter_model::RetryPolicy {
+                        max_retries: self.model_max_retries,
+                        ..Default::default()
+                    },
+                )
             })
             .map(|model| Arc::new(model) as Arc<dyn Model>)
             .map_err(|_| ServerError("invalid model config".into()))
@@ -226,6 +230,48 @@ fn default_image_models() -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn model_headers_reject_invalid_names_values_and_reserved_names_without_echoing_values() {
+        for name in [
+            "",
+            "bad name",
+            "bad:name",
+            "Authorization",
+            "aUtHoRiZaTiOn",
+            "Content-Type",
+            "CONTENT-TYPE",
+            "User-Agent",
+            "uSeR-aGeNt",
+        ] {
+            let error = load(json!({"headers":{name:"test-only-private-value"}}))
+                .err()
+                .expect("invalid model header must fail configuration loading");
+            assert!(!format!("{error:?} {error}").contains("test-only-private-value"));
+        }
+        for value in ["test-only-private-value\r\n", "test-only-private-value\0"] {
+            let error = load(json!({"headers":{"x-test":value}}))
+                .err()
+                .expect("invalid model header value must fail configuration loading");
+            assert!(!format!("{error:?} {error}").contains("test-only-private-value"));
+        }
+        for headers in [
+            json!(null),
+            json!([]),
+            json!("test-only-private-value"),
+            json!({"x-test":42}),
+            json!({"x-test":true}),
+        ] {
+            let error = load(json!({"headers":headers}))
+                .err()
+                .expect("headers must be a map of strings");
+            assert!(!format!("{error:?} {error}").contains("test-only-private-value"));
+        }
+        assert!(
+            load(json!({"headers":{"x-test":"test-only-private-value {session_id} {other}"}}))
+                .is_ok()
+        );
+    }
 
     #[test]
     fn sandbox_defaults_on_and_accepts_an_explicit_false() {

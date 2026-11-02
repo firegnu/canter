@@ -46,6 +46,30 @@
 启动时收紧已有配置权限；缺失或无效时用不含配置内容的错误退出。配置格式为 JSON，
 `base_url`、`model`、`context_window`、`api_key` 必填；窗口必须大于 81,920
 （核心的输出预留 65,536 加压缩余量 16,384）。
+
+`headers` 是可选的额外模型请求头，JSON 对象的名字和值都必须是字符串。
+只用于 Chat Completions 模型请求（包括重试），搜网页和读网页不会带上这些头。
+值中的 `{session_id}` 替换为请求所属会话的 ID；同一会话压缩、重开或服务端重启后不变，
+子 agent 用自己的子会话 ID。请求没有会话 ID 时，含该占位符的整个头不发送；
+其它文字和占位符原样发送。头名、头值必须合法，且不能覆盖 `Authorization`、
+`Content-Type`、`User-Agent`（不分大小写）。头值按 `api_key` 保密，不进入日志、事件、
+错误或遥测。修改后自动重载，下一轮生效；运行中的轮保留旧配置，坏配置提示错误并沿用
+最近一次有效配置（P2-154）。所有模型请求都自动带 `User-Agent: canter/<版本>`。
+
+例如接 opencode go，在已有配置里设置下面三个字段，并填写自己的 `api_key` 和
+`context_window`；模型价格沿用 `prices` 配置，不新增内置价格：
+
+```json
+{
+  "base_url": "https://opencode.ai/inference/go/openai/v1",
+  "model": "deepseek-v4.1-flash",
+  "headers": { "x-opencode-session": "{session_id}" }
+}
+```
+
+一次只连一家，几家同时配置和跨家切换放第三期。接这个地址时不提供 `web_search`，
+因为 P2-106 只认官网 DeepSeek 地址；`web_fetch` 仍按原规则提供。
+
 `auto_compact_tokens` 是可选的正整数：上下文占用超过它就自动压缩（压缩后保留多少用户原话也按它算）；
 不写时压缩线是窗口减输出预留再减 16,384，比这条线大时也按这条线。和窗口一样启动时读，改了重启服务端生效；
 写 0 报错退出。生效的压缩线随用量发给客户端（`TokenUsage.autoCompactTokens`）。

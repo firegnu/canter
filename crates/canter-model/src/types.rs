@@ -81,6 +81,10 @@ pub struct ToolDefinition {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Request {
+    /// The session this request belongs to, when known.
+    /// Local metadata, not part of the serialized model payload.
+    #[serde(skip)]
+    pub session_id: Option<String>,
     pub model: String,
     pub messages: Vec<Message>,
     pub tools: Vec<ToolDefinition>,

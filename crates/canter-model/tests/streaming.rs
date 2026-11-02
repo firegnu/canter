@@ -25,6 +25,155 @@ fn request() -> Request {
 }
 
 #[tokio::test]
+async fn default_request_only_adds_canter_user_agent_and_preserves_body_bytes() {
+    let server = Server::start(vec![Reply::sse(STOP)]).await;
+    let model = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
+    let events: Vec<_> = model
+        .stream(
+            Request {
+                session_id: Some("session-a".into()),
+                ..request()
+            },
+            CancellationToken::new(),
+        )
+        .collect()
+        .await;
+    assert_eq!(events, vec![Ok(ModelEvent::Finished(FinishReason::Stop))]);
+    {
+        let headers = server.headers.lock().unwrap();
+        assert_eq!(
+            headers[0].get("user-agent").and_then(|v| v.to_str().ok()),
+            Some(concat!("canter/", env!("CARGO_PKG_VERSION")))
+        );
+        let mut names: Vec<_> = headers[0].keys().map(|name| name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            [
+                "accept",
+                "authorization",
+                "content-length",
+                "content-type",
+                "host",
+                "user-agent"
+            ]
+        );
+        assert_eq!(server.bodies.lock().unwrap()[0].as_ref(), br#"{"messages":[{"content":"Hello","role":"user"}],"model":"test-model","stream":true,"stream_options":{"include_usage":true}}"#);
+    }
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn configured_headers_expand_only_session_id_and_omit_it_when_absent() {
+    let server = Server::start(vec![
+        Reply {
+            status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            body: "{}".into(),
+            retry_after: Some("0".into()),
+            hang: false,
+        },
+        Reply::sse(STOP),
+        Reply::sse(STOP),
+    ])
+    .await;
+    let headers: canter_model::RequestHeaders = serde_json::from_value(json!({
+        "x-test-session":"prefix-{session_id}-{session_id}-{unknown}",
+        "x-test-token":"test-only-private-value {other}",
+        "x-test-empty":""
+    }))
+    .unwrap();
+    assert!(!format!("{headers:?}").contains("test-only-private-value"));
+    let model = ChatCompletions::new(&server.base_url, ApiKey::new(KEY))
+        .unwrap()
+        .with_headers(headers);
+    for id in [Some("session-a"), None] {
+        let events: Vec<_> = model
+            .stream(
+                Request {
+                    session_id: id.map(str::to_owned),
+                    ..request()
+                },
+                CancellationToken::new(),
+            )
+            .collect()
+            .await;
+        assert_eq!(
+            events.last(),
+            Some(&Ok(ModelEvent::Finished(FinishReason::Stop)))
+        );
+    }
+    {
+        let headers = server.headers.lock().unwrap();
+        assert_eq!(headers.len(), 3);
+        for request in &headers[..2] {
+            assert!(
+                request
+                    .get("x-test-session")
+                    .is_some_and(|v| v == "prefix-session-a-session-a-{unknown}")
+            );
+        }
+        assert!(!headers[2].contains_key("x-test-session"));
+        for request in headers.iter() {
+            assert!(
+                request
+                    .get("x-test-token")
+                    .is_some_and(|v| v == "test-only-private-value {other}")
+            );
+            assert!(request.get("x-test-empty").is_some_and(|v| v.is_empty()));
+            assert_eq!(
+                request["user-agent"],
+                concat!("canter/", env!("CARGO_PKG_VERSION"))
+            );
+        }
+        let bodies = server.bodies.lock().unwrap();
+        assert_eq!(bodies[0], bodies[1]);
+        assert_eq!(bodies[1], bodies[2]);
+    }
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn header_credentials_are_absent_from_model_errors_and_retry_events() {
+    const SECRET: &str = "test-only-private-header-credential";
+    for status in [400, 401, 403, 408, 422, 429, 500, 503] {
+        let server = Server::start(
+            (0..2)
+                .map(|_| Reply {
+                    status: axum::http::StatusCode::from_u16(status).unwrap(),
+                    body: json!({"error":{"message":SECRET}}).to_string(),
+                    retry_after: Some("0".into()),
+                    hang: false,
+                })
+                .collect(),
+        )
+        .await;
+        let headers = serde_json::from_value(json!({"x-test-token":SECRET})).unwrap();
+        let model = ChatCompletions::new(&server.base_url, ApiKey::new(KEY))
+            .unwrap()
+            .with_headers(headers)
+            .with_retry_policy(canter_model::RetryPolicy {
+                max_retries: 1,
+                ..Default::default()
+            });
+        let events: Vec<_> = model
+            .stream(request(), CancellationToken::new())
+            .collect()
+            .await;
+        assert!(events.last().unwrap().is_err());
+        assert!(!format!("{model:?} {events:?}").contains(SECRET));
+        for event in &events {
+            if let Err(error) = event {
+                assert!(!error.to_string().contains(SECRET));
+            }
+        }
+        for headers in server.headers.lock().unwrap().iter() {
+            assert!(headers.get("x-test-token").is_some_and(|v| v == SECRET));
+        }
+        server.stop().await;
+    }
+}
+
+#[tokio::test]
 async fn default_backoff_is_exponential_jittered_and_capped() {
     let server = Server::start(
         (0..11)
@@ -305,6 +454,7 @@ async fn streams_content_tools_and_usage_and_replays_reasoning() {
     let server = Server::start(vec![Reply::sse(body)]).await;
     let client = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
     let request = Request {
+        session_id: None,
         model: "caller-model".into(),
         messages: vec![
             Message::System {

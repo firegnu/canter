@@ -6,7 +6,7 @@ mod retry;
 mod types;
 mod wire;
 
-pub use chat_completions::{ApiKey, ChatCompletions};
+pub use chat_completions::{ApiKey, ChatCompletions, RequestHeaders};
 pub use error::{ErrorKind, ModelError};
 pub use retry::{RetryPolicy, RetrySleep};
 pub use types::*;

@@ -388,6 +388,7 @@ async fn summarize(
             state.context_budget_notices.clone(),
         )
     };
+    let session_id = prefix_request.session_id.clone();
     let output_limit = shared.runtime().options.max_output_tokens.min(8192);
     prefix_request.messages.push(Message::User {
         text: format!("{PREFIX_PROMPT}\n\n{SECTIONS}\n\n{RULES}\n\n{PREFIX_SOURCES}\n\nWrite the summary now with the headings above, and output only the summary."),
@@ -490,6 +491,7 @@ async fn summarize(
         let use_prefix = prefix_request.is_some();
         *method = if use_prefix { "prefix" } else { "transcript" };
         let mut request = prefix_request.take().unwrap_or_else(|| Request {
+            session_id: session_id.clone(),
             model: model.clone(),
             messages: prefix.clone(),
             tools: Vec::new(),
