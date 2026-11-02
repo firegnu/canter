@@ -111,3 +111,12 @@
 - 拿主意的地方：主控明确决定：「你查到的这些（子会话发 SessionStart/SessionEnd、Stop/StopFailure/Interrupt，初始任务和 send_input 触发 UserPromptSubmit）正是本件要改的，用户选了 A，任务文件第 1 节写的『先查清再改成下面这样』就是指它们，属于授权范围，照 A 做。『停下来问』那条只管改了会破坏主会话里 P2-153/P2-172 已有行为的情况：主会话里的钩子行为一律不变。」已按此执行。项目规矩按根目录 CLAUDE.md 执行；仓库没有 AGENTS.md。没有其它需要主控决定的事项。
 - 没做的事：未调用真实模型、未读取或修改用户真实的 ~/.canter；未跑整个 workspace 的全套测试；未扩展项目级钩子、钩子注入／拦停、子 agent 名称或对话功能，也未改统计之外的终端界面。未合并 main、未推送。
 - 踩过的坑：浏览器连接不可用，改用 Chrome 原生应用打开并核对选项页。结束状态测试曾对 close_agent 已关闭的子会话再次发 DELETE，得到 409，改为按已执行的关闭路径收尾。最初用 closing 判断 SubagentStop 的 closed，把服务端停机也算成主动关闭；针对性测试确认后保留关闭原因，区分 closed 和 interrupted。clippy 指出新测试默认值初始化后的字段赋值，已改为结构体初始化。
+
+## 主控审查
+
+2026-11-02，canter/main。
+
+- 开发第一轮停下问：子会话现有的 SessionStart/SessionEnd、Stop/StopFailure/Interrupt 和任务、send_input 触发 UserPromptSubmit 算不算冲突。主控定：正是用户选的 A 要改的，照做；主会话钩子行为一律不变。
+- diff 只动了该动的，「不要做」一件没做；用户定的 3 条和第 1～4 节做到。主会话路径都套在 `parent.is_some()` 判断后，行为没变；SubagentStop 覆盖完成、失败、中断、用户停、连带停、花费上限、关闭、停机。统计保留原字段的本会话含义，新增合计和子 agent 明细。
+- 合并前全套（`c27b764`）：1510 跑、1510 过、49 跳过；文档测试过。负载约 9.6。
+- 结果：一次过
