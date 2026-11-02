@@ -107,3 +107,12 @@
 - 没做的事：没有模型工具、角色、并发／嵌套上限、批准转发、叫醒父会话、fork 式子会话、自定义 agent 文件、终端子 agent 界面、统计聚合或花费算法修改；没有安装、重启用户服务、合并到 main 或推送。
 - 参考：只读参考了 Codex `rust-v0.166.0` 的 `core/src/agent/child_config.rs` 和 `app-server/src/filters.rs`，没有搬代码，没有增加跨项目依赖或模型供应商特例。
 - 踩过的坑：测试夹具最初混淆 PATCH 的 `addDirectories` 和快照的 `additionalDirectories`，修正为现有接口字段；禁止工具调用的断言改为核对既有 forbidden 反馈及没有创建文件。端到端测试中 `/tmp` 与 macOS 实际进程 cwd 的 `/private/tmp` 写法不同，导致 `exec --last` 测试误报，已统一夹具的规范目录。清理自己创建的临时 Rust 辅助程序时 `rm -f` 被工具拒绝，改用明确文件路径的普通 `rm` 后完成。上述均未通过改旧行为、放宽原测试或缩短超时处理。
+
+## 主控审查
+
+2026-11-02，canter/main。
+- 中途决定：开发问放行规则按开的那一刻冻结还是实时读，主控定 A：放行规则是全局 `rules.json`，子会话和普通会话一样每次实时读，不做快照；其余继承项按开的那一刻父会话的值。已写进 DESIGN。
+- 看了 diff：范围对，「不要做」没越界；`session.rs` 主要是把原有逻辑抽成函数复用。完成记录逐条对得上「要做的」。
+- 交叉审查（canter/review-subagent-sessions，Claude Code opus[1m] / xhigh，见 `P2-177-交叉审查.md`）：可以合并，必须改 0、建议改 7、可以不改 3。建议改 1～7 都要等 P2-178 能真正开子会话后才会碰到（本件没有正式开子会话的入口），不在本件返工，记进 P2-178「主控记下的」，讨论 P2-178 时和用户一起定；可以不改 8～10 同意不改。
+- 合并前全套：`cargo nextest run --all-targets` 1478 通过、28 跳过；`cargo test --doc --workspace` 通过。没调真实模型。
+结果：一次过
