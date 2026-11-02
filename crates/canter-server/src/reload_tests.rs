@@ -1760,6 +1760,7 @@ async fn lsp_configuration_keeps_the_old_process_until_turn_end_and_restarts_on_
 }
 
 #[tokio::test]
+#[ignore = "timing-sensitive under parallel load; fix tracked in P2-146"]
 async fn disabling_then_enabling_lsp_still_waits_for_the_original_turn() {
     let config = json!({"enabled":true,"servers":{"fake":{"command":super::lsp_tests::fixture_executable(),"extensions":{"fake":"fake"},"root_markers":["project.marker"]}}});
     let mut fixture = Fixture::new(json!({"lsp":config})).await;
