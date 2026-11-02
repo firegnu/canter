@@ -235,6 +235,14 @@ async fn a_sub_agents_screen_shows_it_with_the_main_sessions_approvals() {
     main.settings.name = Some("Refactor locks".into());
     main.pending_requests =
         vec![serde_json::from_value(approval("r1", "t0", "cargo test")).unwrap()];
+    let question = json!({
+        "id": "question", "turnId": "t0", "createdAt": 0,
+        "kind": { "type": "userInput", "itemId": "ask", "question": "Which parser?",
+            "options": [ { "label": "Current", "description": "Use current parser" },
+                         { "label": "New", "description": "Use new parser" } ] },
+    });
+    main.pending_requests
+        .push(serde_json::from_value(question.clone()).unwrap());
     // This sub-agent's own request reaches the main session forwarded; it
     // is not shown again as someone else's.
     main.agent_requests = vec![
@@ -299,6 +307,23 @@ async fn a_sub_agents_screen_shows_it_with_the_main_sessions_approvals() {
     let text = screen.join("\n");
     assert_eq!(screen[0], " Sub-agent · agent-child · explorer · running");
     assert_eq!(screen[1], " from: Refactor locks · /agents to go back");
+    const WAITING: &str = "Main session is waiting for you · /agents to go back";
+    assert_eq!(screen[2].trim(), WAITING);
+    assert_eq!(
+        test.ui.backend().buffer()[(1, 2)].fg,
+        ratatui::style::Color::Yellow
+    );
+    assert!(!text.contains("Which parser?"), "{text}");
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 4,
+        row: 2,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert_eq!(
+        test.ui.app_mut().handle_mouse(click),
+        Some(Action::OpenAgent("test".into()))
+    );
     // The main session's own approval, not from a sub-agent.
     assert!(text.contains("cargo test"), "{text}");
     assert!(!text.contains("Requested by sub-agent"), "{text}");
@@ -410,6 +435,65 @@ async fn a_sub_agents_screen_shows_it_with_the_main_sessions_approvals() {
         "{}",
         shown(&test)
     );
+    // Answer the question loaded in the main snapshot, then open/resolve
+    // questions and plans through the already subscribed main SSE stream.
+    let plan = json!({
+        "id": "plan", "turnId": "t0", "createdAt": 0,
+        "kind": { "type": "planApproval", "itemId": "submit", "plan": "Replace the parser",
+            "approvalPolicy": "alwaysAsk" },
+    });
+    let mut seq = 13;
+    for (request, resolution) in [
+        (
+            question.clone(),
+            json!({"type":"userInput", "answer":{"type":"option","label":"Current"}}),
+        ),
+        (question, json!({"type":"cancelled"})),
+        (
+            plan.clone(),
+            json!({"type":"plan","answer":{"decision":"implement","approvalPolicy":"alwaysAsk"}}),
+        ),
+        (
+            plan.clone(),
+            json!({"type":"plan","answer":{"decision":"keepPlanning","approvalPolicy":"alwaysAsk"}}),
+        ),
+        (plan, json!({"type":"cancelled"})),
+    ] {
+        if seq > 13 {
+            events
+                .send(frame(
+                    "test",
+                    seq,
+                    json!({"type":"request.opened", "request":request}),
+                ))
+                .unwrap();
+            seq += 1;
+            test.message().await;
+        }
+        assert_eq!(rows(&test)[2].trim(), WAITING);
+        assert!(!shown(&test).contains("Which parser?"));
+        assert!(!shown(&test).contains("Replace the parser"));
+        assert_eq!(
+            test.ui.app_mut().handle_mouse(click),
+            Some(Action::OpenAgent("test".into()))
+        );
+        events
+            .send(frame(
+                "test",
+                seq,
+                json!({"type":"request.resolved", "requestId":request["id"],
+            "resolution":resolution, "clientName":"other"}),
+            ))
+            .unwrap();
+        seq += 1;
+        test.message().await;
+        assert!(!shown(&test).contains(WAITING), "{}", shown(&test));
+        assert_eq!(test.ui.app_mut().handle_mouse(click), None);
+    }
+    events.send(frame("test", seq, json!({"type":"request.opened", "request":approval("only-approval", "t0", "cargo check")}))).unwrap();
+    test.message().await;
+    assert!(shown(&test).contains("cargo check"));
+    assert!(!shown(&test).contains(WAITING));
     if let Some(pump) = test.chat.main_pump.take() {
         pump.abort();
     }

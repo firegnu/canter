@@ -427,9 +427,113 @@ async fn child_trash_conflict_and_stale_rewind_leave_family_intact() {
 
 #[tokio::test]
 async fn model_can_spawn_a_named_child_without_waiting_for_its_result() {
+    assert_model_agent_name(
+        json!({"task":"Inspect the parser","name":"  Trace parser errors  ","type":"explorer"}),
+        "Trace parser errors",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn duplicate_agent_names_include_closed_siblings_but_not_other_parents() {
+    let (test, fake) = harness(false).await;
+    let url = parent(&test).await;
+    let id = url.rsplit('/').next().unwrap();
+    for expected in [
+        "Trace parser errors",
+        "Trace parser errors 2",
+        "Trace parser errors 3",
+    ] {
+        let response = test
+            .app
+            .spawn_agent_of_type(
+                id.into(),
+                "Inspect parser".into(),
+                AgentType::Explorer,
+                Some("Trace parser errors".into()),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{}", error.0.message));
+        assert_eq!(response.session.settings.name.as_deref(), Some(expected));
+        let child = format!("http://localhost/v1/sessions/{}", response.session.id);
+        idle(&test, &child).await;
+        test.client
+            .delete(&child)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    }
+    let agents: AgentListResponse = test
+        .client
+        .get(format!("{url}/agents"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut names = agents
+        .data
+        .iter()
+        .map(|agent| agent.name.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "Trace parser errors",
+            "Trace parser errors 2",
+            "Trace parser errors 3"
+        ]
+    );
+    let other = parent(&test).await;
+    let other_id = other.rsplit('/').next().unwrap();
+    let response = test
+        .app
+        .spawn_agent_of_type(
+            other_id.into(),
+            "Inspect parser".into(),
+            AgentType::Explorer,
+            Some("Trace parser errors".into()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{}", error.0.message));
+    assert_eq!(
+        response.session.settings.name.as_deref(),
+        Some("Trace parser errors")
+    );
+    test.stop().await;
+    fake.stop().await;
+}
+
+#[tokio::test]
+async fn model_agent_names_fall_back_to_the_first_five_task_words() {
+    for name in [None, Some(" \t ".to_owned()), Some("x".repeat(41))] {
+        let mut arguments =
+            json!({"task":"Inspect the parser and its errors\nIgnore this line","type":"explorer"});
+        if let Some(name) = name {
+            arguments["name"] = json!(name);
+        }
+        assert_model_agent_name(arguments, "Inspect the parser and its").await;
+    }
+    assert_model_agent_name(
+        json!({"task":"abcdefghijklmnopqrstuvwxyzabcdefghijklmnop more words","type":"explorer"}),
+        "abcdefghijklmnopqrstuvwxyzabcdefghijklm…",
+    )
+    .await;
+    assert_model_agent_name(
+        json!({"task":"Fallback task","type":"explorer","name":"é".repeat(40)}),
+        &"é".repeat(40),
+    )
+    .await;
+}
+
+async fn assert_model_agent_name(arguments: serde_json::Value, expected: &str) {
     let spawn = model_server::Reply::sse(format!(
         "data: {}\n\ndata: [DONE]\n\n",
-        json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"spawn-1","type":"function","function":{"name":"spawn_agent","arguments":json!({"task":"Inspect the parser","type":"explorer"}).to_string()}}]},"finish_reason":"tool_calls"}]})
+        json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"spawn-1","type":"function","function":{"name":"spawn_agent","arguments":arguments.to_string()}}]},"finish_reason":"tool_calls"}]})
     ));
     let mut replies = vec![spawn];
     replies.extend((0..8).map(|_| model_server::Reply::sse(format!("data: {}\n\ndata: [DONE]\n\n", json!({"choices":[{"index":0,"delta":{"content":"Inspection finished"},"finish_reason":"stop"}]})))));
@@ -460,9 +564,29 @@ async fn model_can_spawn_a_named_child_without_waiting_for_its_result() {
         ))
         .await
         .session;
-    assert!(!child.settings.name.as_ref().unwrap().is_empty());
+    assert_eq!(child.settings.name.as_deref(), Some(expected));
+    assert_eq!(agents.data[0].name, expected);
+    let main = test.read(&url).await.session;
+    assert!(main.turns.iter().flat_map(|turn| &turn.items).any(|item| {
+        matches!(item, Item::CollabAgentToolCall { agents, .. }
+            if agents.iter().any(|agent| agent.id == child.id && agent.name == expected))
+    }));
     assert_eq!(child.settings.model, "fake-model");
     let requests = fake.requests.lock().unwrap().clone();
+    let spawn = requests[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["function"]["name"] == "spawn_agent")
+        .unwrap();
+    assert_eq!(
+        spawn["function"]["parameters"]["required"],
+        json!(["task", "type", "name"])
+    );
+    assert_eq!(
+        spawn["function"]["parameters"]["properties"]["name"]["type"],
+        "string"
+    );
     assert!(
         requests[0]["tools"]
             .as_array()
@@ -1437,7 +1561,7 @@ async fn sub_agent_tools_leave_cards_naming_their_agents() {
         .await
         .unwrap();
     let child = &agents.data[0];
-    assert!(child.name.starts_with("agent-"));
+    assert_eq!(child.name, "Inspect the parser");
     assert_eq!(child.agent_type, AgentType::Explorer);
     assert!(child.started_at.is_some());
     let card = |index: usize| match cards[index] {

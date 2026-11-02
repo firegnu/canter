@@ -559,6 +559,8 @@ struct Shown {
     background: DrawnBackground,
     /// The sub-agents row and the `/agents` list, for a click on them.
     agents: DrawnAgents,
+    /// The waiting hint below the sub-agent header was on screen.
+    main_waiting: bool,
     /// The prompt on the top row, for a click on it.
     sticky: Option<DrawnSticky>,
 }
@@ -2703,14 +2705,18 @@ impl App {
 
     /// A click on the sub-agents row drawn on frame `frame` opens
     /// `/agents`, or closes it when it showed open; a click on an entry in
-    /// the list opens that session, as Enter. Not while an approval box or
-    /// the search box is open.
+    /// the list opens that session, as Enter. The waiting hint always goes
+    /// back to the main session; the list is inactive during approval/search.
     fn agents_click(&mut self, y: usize, frame: u64) -> Option<Action> {
-        if self.search.is_some() || frame > self.latest_frame {
+        if frame > self.latest_frame {
             return None;
         }
         let (_, shown) = self.shown.iter().rev().find(|(since, _)| *since <= frame)?;
-        if shown.approval.is_some() {
+        if y == 2 && shown.main_waiting && self.agents.main_waiting() {
+            self.agents.selected = None;
+            return Some(Action::OpenAgent(self.main_session().to_owned()));
+        }
+        if self.search.is_some() || shown.approval.is_some() {
             return None;
         }
         let drawn = &shown.agents;
@@ -4298,6 +4304,7 @@ impl App {
             input: None,
             background: DrawnBackground::default(),
             agents: DrawnAgents::default(),
+            main_waiting: false,
             sticky: None,
         };
         let (bottom, input_rows) = match approval {
@@ -4313,12 +4320,22 @@ impl App {
         };
         self.scan_mentions();
         // On a sub-agent's screen, two rows on top say which and how to go back.
-        let header = crate::agents::header(
+        let mut header = crate::agents::header(
             &self.snapshot,
             &self.agents.main_name(self.main_session()),
             width,
         )
         .map_or_else(Vec::new, Vec::from);
+        if !header.is_empty() && self.agents.main_waiting() {
+            header.push(Line::from(truncate(
+                vec![Span::styled(
+                    " Main session is waiting for you · /agents to go back",
+                    theme::warning(),
+                )],
+                usize::from(width),
+            )));
+            self.drawing.main_waiting = height > 2 && width > 0;
+        }
         let header_rows = header.len();
         // Commands and paths are only for the input box.
         let list = match bottom {

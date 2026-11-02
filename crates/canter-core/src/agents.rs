@@ -1,6 +1,28 @@
 use crate::{CoreError, Session};
 use canter_protocol::*;
 
+fn agent_name(name: Option<&str>, task: &str) -> String {
+    if let Some(name) = name.map(str::trim)
+        && !name.is_empty()
+        && name.chars().count() <= 40
+    {
+        return name.to_owned();
+    }
+    let name = task
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .take(5)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if name.chars().count() > 40 {
+        format!("{}…", name.chars().take(39).collect::<String>())
+    } else {
+        name
+    }
+}
+
 pub(crate) struct AgentStop {
     shared: std::sync::Arc<crate::session::Shared>,
     done: Option<tokio::sync::watch::Receiver<Option<Result<u64, CoreError>>>>,
@@ -516,7 +538,8 @@ impl Session {
         id: String,
         task: String,
     ) -> Result<(Session, SessionCreateResponse), CoreError> {
-        self.spawn_agent_of_type(id, task, AgentType::General).await
+        self.spawn_agent_of_type(id, task, AgentType::General, None)
+            .await
     }
 
     pub async fn spawn_agent_of_type(
@@ -524,6 +547,7 @@ impl Session {
         id: String,
         task: String,
         kind: AgentType,
+        name: Option<String>,
     ) -> Result<(Session, SessionCreateResponse), CoreError> {
         let parent = self.clone();
         crate::session::owned(async move {
@@ -578,8 +602,21 @@ impl Session {
             };
             let runtime = parent.shared.runtime();
             let mut settings = state.journal.snapshot.settings.clone();
-            let suffix = id.chars().rev().take(6).collect::<String>();
-            settings.name = Some(format!("agent-{}", suffix.chars().rev().collect::<String>()));
+            let base = agent_name(name.as_deref(), &task);
+            let store = state.journal.store.clone();
+            let siblings = tokio::task::spawn_blocking(move || store.list_all()).await
+                .map_err(|_| CoreError::internal())??;
+            let names: std::collections::HashSet<_> = siblings.into_iter()
+                .filter(|child| child.parent.as_ref().is_some_and(|parent| parent.session_id == source.session_id))
+                .filter_map(|child| child.name)
+                .collect();
+            let mut name = base.clone();
+            let mut suffix = 2;
+            while names.contains(&name) {
+                name = format!("{base} {suffix}");
+                suffix += 1;
+            }
+            settings.name = Some(name);
             settings.approval_policy = state.approval_policy();
             let (child, _) = Self::create_inner(
                 state.journal.store.clone(),
