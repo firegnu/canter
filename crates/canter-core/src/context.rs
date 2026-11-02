@@ -74,6 +74,10 @@ pub(crate) enum HistoryEntry {
     DiagnosticsNotice {
         message: Message,
     },
+    ContextBudgetNotice {
+        message: Message,
+        threshold: u8,
+    },
     CompactionRequest {
         messages: Vec<Message>,
     },
@@ -105,6 +109,7 @@ pub(crate) fn known(message: Message) -> Option<Message> {
 }
 
 pub(crate) struct Restored {
+    pub context_budget_notices: BTreeMap<usize, u8>,
     pub restored_file_notices: std::collections::BTreeSet<usize>,
     pub diagnostic_notices: std::collections::BTreeSet<usize>,
     pub invoked_skills: Vec<crate::skill_invocation::Invocation>,
@@ -133,8 +138,13 @@ pub(crate) fn restore(
     let mut background_cards = BTreeMap::new();
     let mut diagnostic_notices = std::collections::BTreeSet::new();
     let mut restored_file_notices = std::collections::BTreeSet::new();
+    let mut context_budget_notices = BTreeMap::new();
     for entry in entries {
         match entry {
+            HistoryEntry::ContextBudgetNotice { message, threshold } => {
+                context_budget_notices.insert(history.len(), threshold);
+                history.push(message);
+            }
             HistoryEntry::RestoredFileNotice { message } => {
                 restored_file_notices.insert(history.len());
                 history.push(message);
@@ -176,6 +186,7 @@ pub(crate) fn restore(
                     history.truncate(messages);
                     diagnostic_notices.retain(|index| *index < messages);
                     restored_file_notices.retain(|index| *index < messages);
+                    context_budget_notices.retain(|index, _| *index < messages);
                     users.truncate(user_count);
                     invoked_skills.truncate(skills);
                 }
@@ -186,6 +197,7 @@ pub(crate) fn restore(
                     history.truncate(messages);
                     diagnostic_notices.retain(|index| *index < messages);
                     restored_file_notices.retain(|index| *index < messages);
+                    context_budget_notices.retain(|index, _| *index < messages);
                     users.truncate(user_count);
                     invoked_skills.truncate(skills);
                 }
@@ -226,6 +238,7 @@ pub(crate) fn restore(
                 history = messages.into_iter().filter_map(known).collect();
                 diagnostic_notices.clear();
                 restored_file_notices.clear();
+                context_budget_notices.clear();
                 summary_index = history.len().checked_sub(1);
                 users = if user_inputs.is_empty() {
                     user_messages
@@ -243,6 +256,7 @@ pub(crate) fn restore(
         flush_plan_mode_notices(&mut history, &mut plan_mode_notices);
     }
     Restored {
+        context_budget_notices,
         restored_file_notices,
         diagnostic_notices,
         invoked_skills,

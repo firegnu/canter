@@ -80,6 +80,8 @@ pub(crate) struct State {
     pub closing: bool,
     pub hook_session_ended: bool,
     pub measured_context: Option<(u64, u64)>,
+    pub context_budget_notices: std::collections::BTreeMap<usize, u8>,
+    pub auto_compactions_without_progress: u8,
     pub rewind: crate::rewind::Checkpoints,
     plan_tool_calls: u8,
 }
@@ -169,6 +171,8 @@ impl State {
             closing: false,
             hook_session_ended: false,
             measured_context: None,
+            context_budget_notices: Default::default(),
+            auto_compactions_without_progress: 0,
             rewind: Default::default(),
             plan_tool_calls: 0,
         }
@@ -789,6 +793,7 @@ impl Session {
         state.prefix_segments = restored.segments;
         state.history = restored.history;
         state.lsp_delivery.notices = restored.diagnostic_notices;
+        state.context_budget_notices = restored.context_budget_notices;
         state.plan_mode_notices = restored.plan_mode_notices;
         state.tool_images = restored.tool_images;
         state.user_messages = restored.users;
@@ -1175,6 +1180,7 @@ impl Session {
             None
         };
         let skills = crate::skill_invocation::load(&params.input, &state.skills).await?;
+        state.auto_compactions_without_progress = 0;
         state.background_events.user_input();
         if state
             .journal

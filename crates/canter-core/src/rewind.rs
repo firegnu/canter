@@ -509,6 +509,9 @@ impl Session {
             let removed = state.history.split_off(messages);
             state.lsp_delivery.notices.retain(|index| *index < messages);
             state
+                .context_budget_notices
+                .retain(|index, _| *index < messages);
+            state
                 .restored_file_notices
                 .retain(|index| *index < messages);
             state.user_messages.truncate(users);
