@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 11-02 第六十一次装 main `c5b7faf`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · c5b7faf`，服务端 pid 2209；比上一版多 P2-102：每轮结束后输入框灰字建议下一句，Tab / → 放进输入框，Enter 才发；空会话给 git 示例，受限模式不给；`config.json` 的 `prompt_suggestions` 默认开，用户配置里没写）。配置没改，仍是 opencode go。
+- 退回上一版 `5e26ad5`：`canter rollback`（备份在 `~/.canter/backups/`）。配置里没写 `prompt_suggestions`，退回不用改配置。
 - 11-02 第六十次装 main `5e26ad5`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 5e26ad5`，服务端 pid 4538；比上一版多 P2-185：`config.json` 可写 `headers`，值里 `{session_id}` 换成会话 ID；所有模型请求带 `User-Agent: canter/0.1.0`）。装上后配置换成 opencode go 订阅：`base_url` `https://opencode.ai/inference/go/openai/v1`、模型 `deepseek-v4.1-flash`（另可选 `deepseek-v4-pro`）、`headers` `{"x-opencode-session": "{session_id}"}`、`prices` 照官网高峰非高峰两档，密钥从 pi 的 `~/.pi/agent/auth.json` 复制；压缩线 400000 等日常设置没变。用 opencode go 时没有 `web_search`。改前的官网 DeepSeek 配置在 `~/.canter/config.json.bak-before-opencode-go`（官网 DeepSeek 11-02 余额用完，充值前用不了）。
 - 退回上一版 `6c8a114`：先把 `config.json` 换回 `config.json.bak-before-opencode-go`（旧版会忽略 `headers`，不带会话请求头，opencode 会拒掉请求），再 `canter rollback`。在 opencode 下开的会话记的模型名是 `deepseek-v4.1-flash`，换回官网后要先 `/model` 换成 `deepseek-flash`。
 - 11-02 第五十九次装 main `6c8a114`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 6c8a114`；比上一版多 P2-177～P2-184：子 agent 整套（子会话、`spawn_agent` / `wait_agent` / `send_input` / `close_agent`、只读查找可自己开、通用要用户明说、批准转到主界面、输入框上方列表和 `/agents`、整屏切到子会话、`s` 停掉、专门卡片、`SubagentStart` / `SubagentStop` 钩子、`canter stats` 的 Sub-agents 一节、模型给的短名字、主会话在等时的黄色提示），后台命令状态和回退、审查里剩下的中文改成英文）。服务端已换好（pid 44327）。工具列表变了，已有会话第一次请求缓存冷一次。
