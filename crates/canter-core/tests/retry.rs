@@ -75,6 +75,7 @@ async fn create(root: &std::path::Path, store: Arc<Store>, model: Arc<ChatComple
 }
 fn input() -> SessionInputParams {
     SessionInputParams {
+        from_suggestion: false,
         non_interactive: false,
         approval_policy: None,
         input: vec![UserInput::Text {

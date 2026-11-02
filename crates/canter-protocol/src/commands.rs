@@ -433,6 +433,10 @@ pub enum InputMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInputParams {
+    /// Accepted via Tab / Right, including a subsequently edited suggestion.
+    #[serde(default, skip_serializing_if = "crate::types::is_false")]
+    #[ts(optional = nullable)]
+    pub from_suggestion: bool,
     /// No client will answer requests in this turn. Accepted only while idle.
     #[serde(default, skip_serializing_if = "crate::types::is_false")]
     #[ts(optional = nullable)]
@@ -614,6 +618,12 @@ pub enum ErrorCode {
 pub const SSE_EVENT_NAME: &str = "message";
 
 pub fn sse_frame(event: &Event) -> Result<String, serde_json::Error> {
+    if event.payload.is_ephemeral() {
+        return Ok(format!(
+            "event: {SSE_EVENT_NAME}\ndata: {}\n\n",
+            serde_json::to_string(event)?
+        ));
+    }
     Ok(format!(
         "id: {}\nevent: {SSE_EVENT_NAME}\ndata: {}\n\n",
         event.seq,

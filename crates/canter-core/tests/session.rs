@@ -1680,6 +1680,7 @@ async fn two_clients_resolve_once_and_steering_precedes_the_next_model_request()
     let queued = session.input(input("queued follow-up")).await.unwrap();
     let steer = session
         .input(SessionInputParams {
+            from_suggestion: false,
             non_interactive: false,
             approval_policy: None,
             review: None,
@@ -2122,6 +2123,7 @@ fn call(id: &str, name: &str, arguments: &str) -> ModelEvent {
 }
 fn input(text: &str) -> SessionInputParams {
     SessionInputParams {
+        from_suggestion: false,
         non_interactive: false,
         approval_policy: None,
         review: None,

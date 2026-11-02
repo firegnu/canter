@@ -10,6 +10,7 @@ pub enum RequestPurpose {
     Compaction,
     Btw,
     Handoff,
+    Suggestion,
     #[default]
     #[serde(other)]
     Unknown,

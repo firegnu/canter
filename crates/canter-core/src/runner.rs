@@ -154,6 +154,18 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
             })
         };
         let failed = completed.status == TurnStatus::Failed;
+        let suggestion_turn = (completed.status == TurnStatus::Completed
+            && !prompt_blocked
+            && state.goal_summary.is_none()
+            && state.requests.is_empty()
+            && state.active.as_ref().is_some_and(|active| {
+                !active.non_interactive
+                    && !active.manual_compaction
+                    && active.user_shell.is_none()
+                    && !active.plan_handoff
+                    && active.suggestion_ready
+            }))
+        .then(|| completed.id.clone());
         let (hook_event, hook_fields) = if state.journal.snapshot.parent.is_some() {
             let status = if state.closing_reason == Some(SessionCloseReason::ClientRequest) {
                 "closed"
@@ -314,9 +326,13 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                 state.schedule_goal();
             }
             state.background_events.turn_finished();
+            if let Some(turn_id) = suggestion_turn {
+                crate::suggestions::start(&shared, &mut state, turn_id);
+            }
             break;
         };
         let params = SessionInputParams {
+            from_suggestion: false,
             non_interactive: false,
             approval_policy: None,
             review: input.review,
@@ -346,6 +362,14 @@ async fn conversation(
     auto_compaction_failed: &mut bool,
 ) -> Result<(), CoreError> {
     let mut compacted = false;
+    shared
+        .state
+        .lock()
+        .await
+        .active
+        .as_mut()
+        .expect("active turn")
+        .suggestion_ready = false;
     loop {
         if cancel.is_cancelled() {
             return Ok(());
@@ -503,6 +527,14 @@ async fn conversation(
             ));
         }
         if reason != Some(FinishReason::ToolCalls) && !interrupted_with_content {
+            shared
+                .state
+                .lock()
+                .await
+                .active
+                .as_mut()
+                .expect("active turn")
+                .suggestion_ready = reason == Some(FinishReason::Stop);
             shared
                 .state
                 .lock()

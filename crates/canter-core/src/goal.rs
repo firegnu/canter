@@ -207,6 +207,7 @@ impl Shared {
             .start(
                 state,
                 SessionInputParams {
+                    from_suggestion: false,
                     non_interactive: false,
                     approval_policy: None,
                     input: Vec::new(),

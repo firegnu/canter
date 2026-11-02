@@ -379,6 +379,7 @@ async fn drive_turn(
         .send_input(
             session,
             &SessionInputParams {
+                from_suggestion: false,
                 non_interactive: false,
                 approval_policy: None,
                 input: vec![UserInput::Text { text }],

@@ -106,6 +106,7 @@ impl Fixture {
         let mut events = self.events().await;
         self.session
             .input(SessionInputParams {
+                from_suggestion: false,
                 input: vec![UserInput::Text { text: text.into() }],
                 mode: InputMode::Queue,
                 client_name: "test".into(),
@@ -492,6 +493,7 @@ async fn review_and_plan_mode_turns_can_compact_three_times_without_stopping() {
         fixture
             .session
             .input(SessionInputParams {
+                from_suggestion: false,
                 input: vec![UserInput::Text {
                     text: "Inspect.".into(),
                 }],

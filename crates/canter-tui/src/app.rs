@@ -619,6 +619,9 @@ impl Shown {
 }
 
 pub struct App {
+    suggestion: Option<String>,
+    suggestion_dismissed: bool,
+    from_suggestion: bool,
     goal_starting: bool,
     pause_goal_when_started: bool,
     snapshot: SessionSnapshot,
@@ -963,6 +966,9 @@ impl App {
         );
         Self {
             branch: crate::git::branch(&snapshot.settings.cwd),
+            suggestion: None,
+            suggestion_dismissed: false,
+            from_suggestion: false,
             git_diff: None,
             retract_drafts: crate::retract::Drafts::new(&snapshot),
             steering: crate::steer::Steering::default(),
@@ -1060,6 +1066,32 @@ impl App {
     }
 
     pub fn apply_event(&mut self, event: &Event, now_ms: i64) {
+        if event.payload.is_ephemeral() {
+            if event.session_id != self.snapshot.id {
+                return;
+            }
+            match &event.payload {
+                EventPayload::SessionPromptSuggestion { turn_id, text } => {
+                    let current = match (turn_id, self.snapshot.turns.last()) {
+                        (None, None) => true,
+                        (Some(id), Some(turn)) => {
+                            *id == turn.id && turn.status == TurnStatus::Completed
+                        }
+                        _ => false,
+                    };
+                    if current && !self.suggestion_dismissed && self.input.is_empty() {
+                        self.suggestion = Some(sanitize(text));
+                    }
+                }
+                EventPayload::SessionPromptSuggestionsReduced => self.notice(cells::notice(
+                    "",
+                    "Showing fewer prompt suggestions · use one to bring them back",
+                    theme::secondary(),
+                )),
+                _ => {}
+            }
+            return;
+        }
         let plan_visible = self.snapshot.settings.plan_enabled != Some(false);
         let open_request = match &event.payload {
             EventPayload::RequestResolved { request_id, .. }
@@ -1144,6 +1176,8 @@ impl App {
                 self.chooser = None;
             }
             EventPayload::TurnStarted { turn, .. } => {
+                self.suggestion = None;
+                self.suggestion_dismissed = false;
                 self.working_since = Some(event.timestamp);
                 if let Some(tips) = &mut self.tips {
                     tips.start(&turn.id);
@@ -1322,6 +1356,15 @@ impl App {
     /// [`App::key_action`]. Esc drops a click waiting to open a link, and
     /// so does switching to another session.
     fn key_on(&mut self, key: KeyEvent, shown: Shown, at: i64) -> Option<Action> {
+        if key.kind != KeyEventKind::Release && matches!(key.code, KeyCode::Char(_) | KeyCode::Esc)
+        {
+            let dismiss_only = key.code == KeyCode::Esc && self.visible_suggestion().is_some();
+            self.suggestion = None;
+            self.suggestion_dismissed = true;
+            if dismiss_only {
+                return None;
+            }
+        }
         if key.kind != KeyEventKind::Release {
             self.turn_mark = None;
         }
@@ -1329,6 +1372,19 @@ impl App {
             self.mouse.link = None;
         }
         let action = self.key_action(key, shown, at);
+        if action.is_some()
+            && !matches!(
+                action,
+                Some(
+                    Action::Send(_)
+                        | Action::SendInput { .. }
+                        | Action::SendImages { .. }
+                        | Action::Steer { .. }
+                )
+            )
+        {
+            self.from_suggestion = false;
+        }
         if matches!(
             action,
             Some(
@@ -1472,6 +1528,17 @@ impl App {
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if matches!(key.code, KeyCode::Tab | KeyCode::Right)
+            && key.modifiers.is_empty()
+            && !send_guarded
+            && shown.turn.is_none()
+            && self.visible_suggestion().is_some()
+        {
+            self.input.insert(&self.suggestion.take().unwrap());
+            self.suggestion_dismissed = true;
+            self.from_suggestion = true;
+            return None;
+        }
         match key.code {
             KeyCode::Esc if self.handoff_back_open() => return self.handoff_back(at),
             KeyCode::Esc => return self.interrupt_seen(shown.turn),
@@ -3651,6 +3718,8 @@ impl App {
     /// to the message draft with its newlines intact (a large one folds
     /// into a marker).
     pub fn handle_paste(&mut self, text: &str) {
+        self.suggestion = None;
+        self.suggestion_dismissed = true;
         self.mouse.selection = None;
         if matches!(commands::parse(text), Some(("fork", "")))
             && let Some(request) = self.open_request()
@@ -3832,6 +3901,8 @@ impl App {
     }
 
     pub fn input_sending(&mut self) {
+        self.suggestion = None;
+        self.suggestion_dismissed = true;
         self.retract_drafts.sending();
     }
 
@@ -4751,6 +4822,31 @@ impl App {
         commands::list_rows(&entries, selected, width, max)
     }
 
+    pub(crate) fn take_suggestion_origin(&mut self) -> bool {
+        std::mem::take(&mut self.from_suggestion)
+    }
+
+    fn visible_suggestion(&self) -> Option<&str> {
+        let suggestion = self.suggestion.as_deref()?;
+        if self.input.is_empty()
+            && self.snapshot.status == SessionStatus::Idle
+            && self
+                .snapshot
+                .turns
+                .last()
+                .is_none_or(|turn| turn.status != TurnStatus::InProgress)
+            && self.open_request().is_none()
+            && !self.choosing()
+            && self.search.is_none()
+            && self.command_list().is_none()
+            && self.active_btw.is_none()
+        {
+            Some(suggestion)
+        } else {
+            None
+        }
+    }
+
     /// The input box, and the byte ranges of the rows it shows.
     fn input_view(&self, width: u16, now_ms: i64) -> (Bottom, Vec<Range<usize>>) {
         // Like the approval box's answers, the rows show dim while Enter does
@@ -4774,7 +4870,12 @@ impl App {
                 theme::accent(),
                 crate::agents::PLACEHOLDER,
             ),
-            None => (&self.input, "› ", theme::accent(), PLACEHOLDER),
+            None => (
+                &self.input,
+                "› ",
+                theme::accent(),
+                self.visible_suggestion().unwrap_or(PLACEHOLDER),
+            ),
         };
         // The prompt's columns past those of `› `, which INPUT_CHROME counts.
         let extra = str_width(prompt) - 2;
@@ -4800,7 +4901,7 @@ impl App {
             };
             let mut spans = vec![Span::raw(" "), Span::styled(prompt, prompt_style.bold())];
             if input.is_empty() {
-                spans.push(Span::styled(placeholder, theme::secondary()));
+                spans.push(Span::styled(placeholder.to_owned(), theme::secondary()));
             } else {
                 spans.push(Span::raw(input.text()[range.clone()].to_owned()));
             }

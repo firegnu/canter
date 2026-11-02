@@ -88,7 +88,7 @@ impl Fixture {
         let model = tokio::spawn(async move {
             axum::serve(endpoint, router).await.unwrap();
         });
-        let mut config = json!({"base_url":format!("http://{address}"),"model":"fake","models":["fake"],"api_key":"test-only-key","context_window":1048576,"sandbox":false});
+        let mut config = json!({"base_url":format!("http://{address}"),"model":"fake","models":["fake"],"api_key":"test-only-key","context_window":1048576,"sandbox":false,"prompt_suggestions":false});
         config
             .as_object_mut()
             .unwrap()
@@ -298,6 +298,186 @@ impl Fixture {
 struct Warnings {
     receiver: mpsc::UnboundedReceiver<String>,
     task: tokio::task::JoinHandle<()>,
+}
+
+#[tokio::test]
+async fn pending_background_wake_suppresses_prompt_suggestions() {
+    let mut fixture = Fixture::new(json!({"prompt_suggestions":true})).await;
+    let url = fixture
+        .create_with_env(json!({"PATH":"/usr/bin:/bin"}))
+        .await;
+    fixture.input(&url).await;
+    fixture.request().await.tool("shell", json!({"command":"while [ ! -e release-suggestion-wake ]; do sleep 0.01; done; exit 7","background":true}));
+    let final_answer = fixture.request().await;
+    fs::write(fixture.root.path().join("release-suggestion-wake"), "ready").unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let snapshot = fixture.snapshot(&url).await.session;
+            if snapshot
+                .background_commands
+                .iter()
+                .any(|command| !command.running)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    final_answer.stop();
+    fixture.idle(&url).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), fixture.requests.recv())
+            .await
+            .is_err()
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn entering_plan_mode_discards_an_in_flight_suggestion() {
+    let mut fixture = Fixture::new(json!({"prompt_suggestions":true})).await;
+    let url = fixture.create().await;
+    let id = url.rsplit('/').next().unwrap();
+    let response = fixture
+        .client
+        .get(format!("http://localhost/v1/events?session={id}&after=0"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let (send, mut events) = mpsc::unbounded_channel();
+    let reader = tokio::spawn(async move {
+        let mut stream = response.bytes_stream().eventsource();
+        while let Some(Ok(event)) = stream.next().await {
+            let event: Event = serde_json::from_str(&event.data).unwrap();
+            if send.send(event).is_err() {
+                break;
+            }
+        }
+    });
+    fixture.input(&url).await;
+    fixture.request().await.stop();
+    fixture.idle(&url).await;
+    let suggestion = fixture.request().await;
+    fixture
+        .client
+        .patch(&url)
+        .json(&json!({"planMode":true}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    suggestion.stop();
+    let telemetry = fixture
+        .root
+        .path()
+        .join(format!("state/sessions/{id}/private-telemetry.jsonl"));
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !fs::read_to_string(&telemetry).is_ok_and(|text| text.contains("suggestion")) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let suggested = tokio::time::timeout(Duration::from_millis(150), async {
+        while let Some(event) = events.recv().await {
+            if matches!(event.payload, EventPayload::SessionPromptSuggestion { .. }) {
+                return;
+            }
+        }
+    })
+    .await
+    .is_ok();
+    reader.abort();
+    let _ = reader.await;
+    fixture.shutdown().await;
+    assert!(
+        !suggested,
+        "a suggestion completed after entering plan mode"
+    );
+}
+
+#[tokio::test]
+async fn suggestions_reload_next_turn_and_a_hanging_request_does_not_lock_other_sessions() {
+    let mut fixture = Fixture::new(json!({"prompt_suggestions":true})).await;
+    let first_url = fixture.create().await;
+    fixture.input(&first_url).await;
+    let first = fixture.request().await;
+    fixture.config["prompt_suggestions"] = json!(false);
+    fixture.applied("suggestions-off").await;
+    first.stop();
+    fixture.idle(&first_url).await;
+    // This turn retains its original options; the suggestion waits for headers forever.
+    let hanging = fixture.request().await;
+    assert!(
+        hanging.body["messages"].as_array().unwrap().last().unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .contains("most likely next prompt")
+    );
+    let other_url = fixture.create().await;
+    fixture.input(&other_url).await;
+    fixture.request().await.stop();
+    fixture.idle(&other_url).await;
+    fixture.input(&first_url).await;
+    let next = fixture.request().await;
+    assert_eq!(
+        next.body["messages"].as_array().unwrap().last().unwrap()["content"],
+        "hello"
+    );
+    next.stop();
+    fixture.idle(&first_url).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), fixture.requests.recv())
+            .await
+            .is_err()
+    );
+    fixture.config["prompt_suggestions"] = json!(true);
+    fixture.applied("suggestions-on").await;
+    fixture.input(&first_url).await;
+    fixture.request().await.stop();
+    fixture.idle(&first_url).await;
+    let second_hanging = fixture.request().await;
+    assert!(
+        second_hanging.body["messages"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .contains("most likely next prompt")
+    );
+    fixture
+        .client
+        .post(format!("{first_url}/trash"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let id = first_url.rsplit('/').next().unwrap();
+    let records = fs::read_to_string(
+        fixture
+            .root
+            .path()
+            .join(format!("state/trash/{id}/private-telemetry.jsonl")),
+    )
+    .unwrap();
+    assert_eq!(
+        records
+            .lines()
+            .filter(|line| line.contains("\"purpose\":\"suggestion\"")
+                && line.contains("\"outcome\":\"cancelled\""))
+            .count(),
+        2
+    );
+    drop((hanging, second_hanging));
+    fixture.shutdown().await;
 }
 
 #[tokio::test]

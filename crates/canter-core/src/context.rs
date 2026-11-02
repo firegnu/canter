@@ -661,6 +661,7 @@ mod tests {
         let mut events = session.subscribe(0).await.unwrap();
         session
             .input(SessionInputParams {
+                from_suggestion: false,
                 non_interactive: false,
                 approval_policy: None,
                 review: None,

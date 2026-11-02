@@ -376,7 +376,9 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
             snapshot.token_usage = Some(token_usage.clone())
         }
         EventPayload::Error { error, .. } => snapshot.error = Some(error.clone()),
-        EventPayload::TelemetryCompaction { .. }
+        EventPayload::SessionPromptSuggestion { .. }
+        | EventPayload::SessionPromptSuggestionsReduced
+        | EventPayload::TelemetryCompaction { .. }
         | EventPayload::TelemetryToolResult { .. }
         | EventPayload::TelemetryApproval { .. }
         | EventPayload::TelemetryModelRequest { .. }

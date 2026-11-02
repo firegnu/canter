@@ -91,6 +91,7 @@ impl Fixture {
         let mut events = self.events().await;
         self.session
             .input(SessionInputParams {
+                from_suggestion: false,
                 input: vec![UserInput::Text { text: text.into() }],
                 mode: InputMode::Queue,
                 client_name: "test".into(),
@@ -203,6 +204,7 @@ async fn review_btw_and_handoff_use_the_owning_session_id() {
     fixture
         .session
         .input(SessionInputParams {
+            from_suggestion: false,
             input: vec![UserInput::Text {
                 text: "Review the current work.".into(),
             }],

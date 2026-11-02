@@ -75,7 +75,7 @@ input 为空，没有 userMessage，clientName 为 background。每批可以有�
 | POST SESSION_TRASH | 无 | HTTP 204，无响应体 |
 | GET EVENTS | EventsParams | EventsResponse（每个 SSE data 帧） |
 
-协议版本为 `PROTOCOL_VERSION`。每个会话的事件序号从 1 开始，空快照的
+协议版本为 `PROTOCOL_VERSION`。每个会话的持久事件序号从 1 开始，空快照的
 `lastEventSeq` 为 0；时间为 Unix 毫秒。单会话命令回复的 `eventSeq` 指向
 该命令对应的事件，取快照时与快照的 `lastEventSeq` 一致。`info` 和列表
 没有全局序号，各个 `SessionSummary` 自带 `lastEventSeq`；SSE 每帧自带 `seq`。
@@ -327,6 +327,13 @@ data: {"seq":42,"sessionId":"s1","timestamp":9,"type":"warning","message":"notic
 ```
 
 `id:` 是该会话事件的十进制序号，`event:` 固定为 `message`，实际种类在 JSON 的 `type`。
+
+提示建议是即时事件例外：`session.promptSuggestion {turnId, text}` 和
+`session.promptSuggestionsReduced` 的 JSON `seq` 固定为 0，SSE 不带 `id:`。
+只发送给当时已订阅的客户端，不存盘、不重放、不推进快照或重连游标；新客户端按事件类型
+接收后单独处理，旧客户端按 Unknown 或旧游标跳过。`turnId: null` 表示无对话会话的 git 示例，
+非空时仅适用于最近已完成的轮。输入参数可带 `fromSuggestion: true`，表示经 Tab / → 接受
+（含编辑后）的建议，用于恢复服务端的建议频率；缺省 false，不存入对话。
 data 为单行 JSON，内容里的换行保持 JSON 转义；帧末两个换行。
 续传严格取序号大于游标的事件。`Last-Event-ID` 存在时优先于查询参数 `after`，
 否则用 `after`（默认 0）；空、负数、非十进制或溢出的 header 返回 invalid_request。

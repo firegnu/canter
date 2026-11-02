@@ -23,6 +23,14 @@ pub struct Event {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum EventPayload {
+    /// Live only; seq is zero and does not advance the durable cursor.
+    #[serde(rename = "session.promptSuggestion")]
+    SessionPromptSuggestion {
+        turn_id: Option<String>,
+        text: String,
+    },
+    #[serde(rename = "session.promptSuggestionsReduced")]
+    SessionPromptSuggestionsReduced,
     #[serde(rename = "session.parent")]
     SessionParent { parent: crate::SessionParent },
     #[serde(rename = "telemetry.compaction")]
@@ -177,6 +185,15 @@ pub enum EventPayload {
     #[serde(rename = "unknown")]
     #[serde(other)]
     Unknown,
+}
+
+impl EventPayload {
+    pub fn is_ephemeral(&self) -> bool {
+        matches!(
+            self,
+            Self::SessionPromptSuggestion { .. } | Self::SessionPromptSuggestionsReduced
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

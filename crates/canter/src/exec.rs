@@ -267,6 +267,7 @@ async fn run_inner(
         .send_input(
             id,
             &SessionInputParams {
+                from_suggestion: false,
                 non_interactive: true,
                 approval_policy: Some(policy),
                 review: None,

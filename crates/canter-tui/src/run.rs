@@ -77,6 +77,10 @@ mod editor_tests;
 mod steer_tests;
 
 #[cfg(test)]
+#[path = "run_suggestion_tests.rs"]
+mod suggestion_tests;
+
+#[cfg(test)]
 #[path = "run_goal_tests.rs"]
 mod goal_tests;
 
@@ -2221,6 +2225,7 @@ impl<C: Connector> Chat<C> {
                 };
                 let title = session_title(&text);
                 let params = SessionInputParams {
+                    from_suggestion: app.take_suggestion_origin(),
                     non_interactive: false,
                     approval_policy: None,
                     review: None,

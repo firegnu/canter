@@ -76,6 +76,7 @@ Task for the new session:
         handoff: bool,
     ) -> Result<BtwStream, CoreError> {
         let mut state = self.shared.state.lock().await;
+        state.suggestions.cancel();
         state.available()?;
         if state.btw.is_some() {
             return Err(CoreError::new(
@@ -129,7 +130,12 @@ Task for the new session:
         });
         let run_cancel = cancel.clone();
         tokio::spawn(async move {
-            let result = answer(&shared, request, handoff, &run_cancel, &sender).await;
+            let purpose = if handoff {
+                RequestPurpose::Handoff
+            } else {
+                RequestPurpose::Btw
+            };
+            let result = answer(&shared, request, purpose, &run_cancel, &sender).await;
             let mut state = shared.state.lock().await;
             state.btw = None;
             let event = match result {
@@ -151,10 +157,10 @@ Task for the new session:
     }
 }
 
-async fn answer(
+pub(crate) async fn answer(
     shared: &Shared,
     request: Request,
-    handoff: bool,
+    purpose: RequestPurpose,
     cancel: &CancellationToken,
     sender: &mpsc::UnboundedSender<BtwEvent>,
 ) -> Result<(), CoreError> {
@@ -172,19 +178,8 @@ async fn answer(
         } else {
             (request.clone(), Default::default())
         };
-        let mut stream = crate::telemetry::stream(
-            shared,
-            None,
-            if handoff {
-                RequestPurpose::Handoff
-            } else {
-                RequestPurpose::Btw
-            },
-            prepared,
-            estimate,
-            cancel,
-        )
-        .await;
+        let mut stream =
+            crate::telemetry::stream(shared, None, purpose, prepared, estimate, cancel).await;
         let request_id = stream.request_id().map(str::to_owned);
         let mut response = crate::response::Response::default();
         let mut usage = None;

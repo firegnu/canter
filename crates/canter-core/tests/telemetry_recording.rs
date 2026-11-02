@@ -50,6 +50,7 @@ async fn turn(session: &Session) {
         .unwrap();
     session
         .input(SessionInputParams {
+            from_suggestion: false,
             non_interactive: false,
             approval_policy: None,
             input: vec![UserInput::Text {

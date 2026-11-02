@@ -79,6 +79,7 @@ async fn replay() {
         panic!("Enter sends the input");
     };
     let params = SessionInputParams {
+        from_suggestion: false,
         non_interactive: false,
         approval_policy: None,
         review: None,

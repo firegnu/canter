@@ -107,7 +107,8 @@ impl Fixture {
             axum::serve(listener, app).await.unwrap();
         });
         let mut config = json!({
-            "base_url":base_url, "model":default_model, "context_window":1048576, "api_key":KEY
+            "base_url":base_url, "model":default_model, "context_window":1048576, "api_key":KEY,
+            "prompt_suggestions":false
         });
         if let Some(models) = models {
             config["models"] = json!(models);

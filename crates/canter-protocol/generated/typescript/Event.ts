@@ -27,7 +27,7 @@ export type Event = { seq: number, sessionId: string,
 /**
  * Unix time in milliseconds.
  */
-timestamp: number, } & ({ "type": "session.parent", parent: SessionParent, } | { "type": "telemetry.compaction", turnId: string, itemId: string, trigger?: CompactionTrigger,
+timestamp: number, } & ({ "type": "session.promptSuggestion", turnId: string | null, text: string, } | { "type": "session.promptSuggestionsReduced" } | { "type": "session.parent", parent: SessionParent, } | { "type": "telemetry.compaction", turnId: string, itemId: string, trigger?: CompactionTrigger,
 /**
  * Summary request shape: `prefix` or `transcript`; absent in older events.
  */

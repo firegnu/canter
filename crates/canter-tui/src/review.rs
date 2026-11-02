@@ -22,6 +22,7 @@ pub async fn prepare(
             pull_request(cwd, env, target).await?
         };
         Ok(SessionInputParams {
+            from_suggestion: false,
             non_interactive: false,
             approval_policy: None,
             review: Some(title),
