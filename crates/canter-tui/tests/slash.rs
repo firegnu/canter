@@ -383,7 +383,7 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order, with what the list says about it.
-const COMMANDS: [(&str, &str); 35] = [
+const COMMANDS: [(&str, &str); 36] = [
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
@@ -424,6 +424,7 @@ const COMMANDS: [(&str, &str); 35] = [
     ("/rewind", "Rewind conversation, files, or both"),
     ("/statusline", "Choose and order what the status line shows"),
     ("/ps", "List background commands and inspect or stop one"),
+    ("/agents", "List sub-agents and open or stop one"),
     ("/stop", "Stop all background commands in this session"),
     ("/theme", "Choose the code colour theme"),
     ("/add-dir", "Add a directory to this session"),
@@ -915,7 +916,7 @@ fn usage_displays_models_total_last_turn_and_unknown_costs() {
 #[test]
 fn help_shows_the_commands_in_a_box() {
     // The shortcut sections come first: tall enough for the whole box.
-    let mut screen = Screen::sized(WIDTH, 106);
+    let mut screen = Screen::sized(WIDTH, 107);
     assert_eq!(screen.enter("/help"), None);
     screen.draw();
     let shown = screen.text();

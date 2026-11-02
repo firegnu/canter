@@ -70,6 +70,9 @@ pub(crate) enum HistoryEntry {
         command_id: Option<u64>,
         #[serde(default)]
         visible: bool,
+        /// P2-179: the sub-agent a result card is for.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<canter_protocol::CollabAgent>,
     },
     AgentResultDelivered {
         notice_id: String,
@@ -188,6 +191,7 @@ pub(crate) fn restore(
                 event_id,
                 command_id,
                 visible,
+                agent,
             } => {
                 if event_id
                     .as_deref()
@@ -203,6 +207,7 @@ pub(crate) fn restore(
                             id,
                             command_id,
                             text: crate::background::notice_text(text).into(),
+                            agent,
                         },
                     );
                 }

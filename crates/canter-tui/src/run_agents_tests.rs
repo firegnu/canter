@@ -1,0 +1,581 @@
+//! Sub-agents on screen against a local HTTP server (P2-179): the row
+//! above the input box, `/agents` and `s` to stop, a sub-agent's screen
+//! with the main session's approvals, and the tool cards.
+
+use super::retract_tests::Harness;
+use super::*;
+use axum::body::{Body, Bytes};
+use axum::response::Response;
+use canter_protocol::{AgentState, AgentStatus, EventPayload};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use serde_json::{Value, json};
+
+/// Keys come in well after the frames are drawn (at 0), past the guards.
+const LATER: i64 = 10_000;
+
+fn rows(test: &Harness) -> Vec<String> {
+    let buffer = test.ui.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect()
+}
+
+fn shown(test: &Harness) -> String {
+    rows(test).join("\n")
+}
+
+fn has(test: &Harness, parts: &[&str]) -> bool {
+    rows(test)
+        .iter()
+        .any(|row| parts.iter().all(|part| row.contains(part)))
+}
+
+/// The key's action, left for the test to carry out.
+fn press(test: &mut Harness, code: KeyCode) -> Option<Action> {
+    let action = test
+        .ui
+        .app_mut()
+        .handle_key(KeyEvent::new(code, KeyModifiers::NONE), LATER);
+    test.ui.draw(0).unwrap();
+    action
+}
+
+fn agent(id: &str, kind: &str, status: &str, more: Value) -> Value {
+    let mut agent = json!({
+        "id": id, "task": "Inspect", "status": status, "result": null,
+        "createdAt": 0, "updatedAt": 0, "name": format!("agent-{id}"), "agentType": kind,
+    });
+    agent
+        .as_object_mut()
+        .unwrap()
+        .extend(more.as_object().unwrap().clone());
+    agent
+}
+
+fn payload(value: Value) -> EventPayload {
+    serde_json::from_value(value).unwrap()
+}
+
+/// Types `/agents`, answers the list read with `list` and shows it.
+async fn open_list(test: &mut Harness, main: &str, list: Value) {
+    for c in "/agents".chars() {
+        press(test, KeyCode::Char(c));
+    }
+    let action = press(test, KeyCode::Enter).unwrap();
+    test.chat.act(test.ui.app_mut(), action);
+    let request = test.request().await;
+    assert_eq!(request.path, format!("/v1/sessions/{main}/agents"));
+    request.json(json!({ "data": list }));
+    test.message().await;
+}
+
+#[tokio::test]
+async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
+    let mut test = Harness::new().await;
+    assert!(!shown(&test).contains("sub-agent"), "{}", shown(&test));
+    // The harness draws at 0.
+    let started = json!({ "startedAt": -42_000 });
+    let a = agent("a", "explorer", "running", started.clone());
+    let b = agent("b", "general", "running", started.clone());
+    let c = agent(
+        "c",
+        "general",
+        "completed",
+        json!({ "durationMs": 133_000 }),
+    );
+    for entry in [&a, &b, &c] {
+        test.event(payload(json!({ "type": "agent.updated", "agent": entry })));
+    }
+    // Right above the input box, live while the session is idle.
+    let screen = rows(&test);
+    let top = screen.iter().rposition(|row| row.starts_with('╭')).unwrap();
+    assert_eq!(screen[top - 1].trim(), "▸ 2 sub-agents running · 1 done");
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 4,
+        row: (top - 1) as u16,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert_eq!(
+        test.ui.app_mut().handle_mouse(click),
+        Some(Action::AgentList)
+    );
+
+    open_list(&mut test, "test", json!([a, b, c])).await;
+    let text = shown(&test);
+    assert!(has(&test, &["▾ 3 sub-agents · 2 running"]), "{text}");
+    assert!(!text.contains("▸ 2 sub-agents"), "{text}");
+    assert!(
+        has(&test, &["› ● agent-a", "explorer · running 42s"]),
+        "{text}"
+    );
+    assert!(has(&test, &["● agent-b", "general · running"]), "{text}");
+    assert!(
+        has(&test, &["✓ agent-c", "general · completed 2m 13s"]),
+        "{text}"
+    );
+    assert!(
+        has(&test, &["↑↓ select · enter open · s stop · esc close"]),
+        "{text}"
+    );
+
+    // `s` stops the running agent selected through the server.
+    test.ui
+        .app_mut()
+        .handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE), LATER)
+        .map(|action| test.chat.act(test.ui.app_mut(), action))
+        .unwrap();
+    let stop = test.request().await;
+    assert_eq!(stop.path, "/v1/sessions/test/agents/a/stop");
+    stop.json(agent(
+        "a",
+        "explorer",
+        "interrupted",
+        json!({ "stoppedByUser": true, "durationMs": 5_000 }),
+    ));
+    test.message().await;
+    let text = shown(&test);
+    assert!(
+        has(&test, &["■ agent-a", "explorer · stopped by you 5s"]),
+        "{text}"
+    );
+    assert!(has(&test, &["▾ 3 sub-agents · 1 running"]), "{text}");
+    // Not running any more: `s` does nothing.
+    assert_eq!(press(&mut test, KeyCode::Char('s')), None);
+    press(&mut test, KeyCode::Down);
+    press(&mut test, KeyCode::Down);
+    assert_eq!(press(&mut test, KeyCode::Char('s')), None);
+
+    // The open list follows the events too.
+    let b = agent("b", "general", "failed", json!({ "durationMs": 9_000 }));
+    test.event(payload(json!({ "type": "agent.updated", "agent": b })));
+    let text = shown(&test);
+    assert!(
+        rows(&test).iter().any(|row| row.trim() == "▾ 3 sub-agents"),
+        "{text}"
+    );
+    assert!(has(&test, &["✗ agent-b", "general · failed 9s"]), "{text}");
+    assert_eq!(press(&mut test, KeyCode::Up), None);
+    assert_eq!(
+        press(&mut test, KeyCode::Enter),
+        Some(Action::OpenAgent("b".into()))
+    );
+    let text = shown(&test);
+    assert!(has(&test, &["▸ 3 sub-agents"]), "{text}");
+    assert!(!text.contains("▾"), "{text}");
+    test.stop().await;
+}
+
+#[tokio::test]
+async fn agents_without_sub_agents_says_so() {
+    let mut test = Harness::new().await;
+    open_list(&mut test, "test", json!([])).await;
+    let text = shown(&test);
+    assert!(has(&test, &[" No sub-agents in this session."]), "{text}");
+    assert!(!text.contains("▸"), "{text}");
+    test.stop().await;
+}
+
+/// An event of `session` as one SSE frame.
+fn frame(session: &str, seq: u64, payload: Value) -> Bytes {
+    let mut event = json!({ "seq": seq, "sessionId": session, "timestamp": 0 });
+    event
+        .as_object_mut()
+        .unwrap()
+        .extend(payload.as_object().unwrap().clone());
+    Bytes::from(format!("data: {event}\n\n"))
+}
+
+fn approval(id: &str, turn: &str, command: &str) -> Value {
+    json!({
+        "id": id, "turnId": turn, "createdAt": 0,
+        "kind": { "type": "approval", "itemId": format!("item-{id}"), "tool": "shell",
+                  "arguments": { "command": command },
+                  "availableDecisions": ["accept", "decline", "cancel"] },
+    })
+}
+
+#[tokio::test]
+async fn a_sub_agents_screen_shows_it_with_the_main_sessions_approvals() {
+    let mut test = Harness::new().await;
+    let cwd = test.ui.app().snapshot().settings.cwd.clone();
+    let mut child = SessionSnapshot::empty("child");
+    child.status = SessionStatus::Working;
+    child.settings.cwd = cwd.clone();
+    child.settings.name = Some("agent-child".into());
+    child.parent = Some(
+        serde_json::from_value(json!({
+            "agentType": "explorer", "sessionId": "test", "turnId": "t0", "task": "Trace locks",
+        }))
+        .unwrap(),
+    );
+    child.agent = Some(AgentState {
+        status: AgentStatus::Running,
+        result: None,
+        stopped_by_user: false,
+    });
+    child.turns.push(
+        serde_json::from_value(json!({
+            "id": "ct1", "input": [{ "type": "text", "text": "Trace locks" }], "items": [],
+            "status": "inProgress", "clientName": "agent", "error": null, "usage": null,
+            "review": null,
+        }))
+        .unwrap(),
+    );
+    child.last_event_seq = 5;
+    let mut main = SessionSnapshot::empty("test");
+    main.status = SessionStatus::WaitingApproval;
+    main.settings.cwd = cwd;
+    main.settings.name = Some("Refactor locks".into());
+    main.pending_requests =
+        vec![serde_json::from_value(approval("r1", "t0", "cargo test")).unwrap()];
+    // This sub-agent's own request reaches the main session forwarded; it
+    // is not shown again as someone else's.
+    main.agent_requests = vec![
+        serde_json::from_value(json!({
+            "agentId": "child", "agentName": "agent-child", "cwd": "/w", "item": null,
+            "request": approval("r0", "ct1", "rm -rf build"),
+        }))
+        .unwrap(),
+    ];
+    main.last_event_seq = 9;
+    let (events, receive) = mpsc::unbounded_channel::<Bytes>();
+    let Harness {
+        chat, ui, requests, ..
+    } = &mut test;
+    let (receiver, ()) = tokio::join!(
+        chat.open(ui, "child", "Could not open the session", false),
+        async {
+            let resume = next(requests).await;
+            assert_eq!(resume.path, "/v1/sessions/child/resume");
+            resume.json(json!({ "session": child, "eventSeq": 5 }));
+            let stream = next(requests).await;
+            assert_eq!(stream.path, "/v1/events");
+            let open = futures_util::stream::pending::<Result<Bytes, io::Error>>();
+            assert!(
+                stream
+                    .reply
+                    .send(Response::new(Body::from_stream(open)))
+                    .is_ok()
+            );
+            next(requests)
+                .await
+                .json(json!({ "data": [], "nextCursor": null }));
+            let skills = next(requests).await;
+            assert_eq!(skills.path, "/v1/sessions/child/skills");
+            skills.json(json!({ "data": [] }));
+            let read = next(requests).await;
+            assert_eq!(read.path, "/v1/sessions/test");
+            read.json(json!({ "session": main, "eventSeq": 9 }));
+            let stream = next(requests).await;
+            assert_eq!(stream.path, "/v1/events");
+            let main_events = futures_util::stream::unfold(receive, |mut receive| async move {
+                let bytes = receive.recv().await?;
+                Some((Ok::<_, io::Error>(bytes), receive))
+            });
+            assert!(
+                stream
+                    .reply
+                    .send(Response::new(Body::from_stream(main_events)))
+                    .is_ok()
+            );
+            let list = next(requests).await;
+            assert_eq!(list.path, "/v1/sessions/test/agents");
+            list.json(json!({ "data": [
+                agent("child", "explorer", "running", json!({})),
+                agent("sib", "general", "running", json!({})),
+            ] }));
+        }
+    );
+    test.messages = receiver.unwrap();
+    test.ui.draw(0).unwrap();
+    let screen = rows(&test);
+    let text = screen.join("\n");
+    assert_eq!(screen[0], " Sub-agent · agent-child · explorer · running");
+    assert_eq!(screen[1], " from: Refactor locks · /agents to go back");
+    // The main session's own approval, not from a sub-agent.
+    assert!(text.contains("cargo test"), "{text}");
+    assert!(!text.contains("Requested by sub-agent"), "{text}");
+
+    // Another sub-agent asks once the main session's is answered.
+    events
+        .send(frame(
+            "test",
+            10,
+            json!({ "type": "request.resolved", "requestId": "r1",
+                    "resolution": { "type": "answered", "decision": "accept" }, "clientName": "other" }),
+        ))
+        .unwrap();
+    events
+        .send(frame(
+            "test",
+            11,
+            json!({ "type": "agent.request.opened", "agentId": "sib", "agentName": "agent-sib",
+                    "cwd": "/w", "item": null, "request": approval("r2", "st1", "cargo build") }),
+        ))
+        .unwrap();
+    test.message().await;
+    test.message().await;
+    let text = shown(&test);
+    assert!(text.contains("Requested by sub-agent agent-sib"), "{text}");
+    assert!(text.contains("cargo build"), "{text}");
+    assert!(!text.contains("rm -rf build"), "{text}");
+    // Its answer goes to that sub-agent.
+    let answer = press(&mut test, KeyCode::Enter).unwrap();
+    test.chat.act(test.ui.app_mut(), answer);
+    let resolve = test.request().await;
+    assert_eq!(resolve.path, "/v1/sessions/sib/requests/r2");
+    resolve.json(json!({ "eventSeq": 12, "alreadyResolved": false }));
+    events
+        .send(frame(
+            "test",
+            12,
+            json!({ "type": "agent.request.resolved", "agentId": "sib", "requestId": "r2",
+                    "resolution": { "type": "answered", "decision": "accept" }, "clientName": "test" }),
+        ))
+        .unwrap();
+    test.message().await;
+    let text = shown(&test);
+    assert!(!text.contains("cargo build"), "{text}");
+    assert!(has(&test, &["› Message this sub-agent"]), "{text}");
+
+    // `/agents` here goes back to the main session first.
+    open_list(
+        &mut test,
+        "test",
+        json!([
+            agent("child", "explorer", "running", json!({})),
+            agent("sib", "general", "running", json!({})),
+        ]),
+    )
+    .await;
+    let text = shown(&test);
+    assert!(has(&test, &["› ← Main session · Refactor locks"]), "{text}");
+    assert!(
+        has(&test, &["● agent-child", "explorer · running"]),
+        "{text}"
+    );
+    assert!(has(&test, &["● agent-sib", "general · running"]), "{text}");
+    assert_eq!(
+        press(&mut test, KeyCode::Enter),
+        Some(Action::OpenAgent("test".into()))
+    );
+
+    // Esc stops this sub-agent as `s` does, not a plain interrupt.
+    let stop = press(&mut test, KeyCode::Esc).unwrap();
+    assert_eq!(
+        stop,
+        Action::Interrupt {
+            turn_id: "ct1".into()
+        }
+    );
+    test.chat.act(test.ui.app_mut(), stop);
+    let request = test.request().await;
+    assert_eq!(request.path, "/v1/sessions/test/agents/child/stop");
+    request.json(agent(
+        "child",
+        "explorer",
+        "interrupted",
+        json!({ "stoppedByUser": true }),
+    ));
+    test.message().await;
+    test.message().await;
+    let mut done = test.ui.app().snapshot().turns[0].clone();
+    done.status = canter_protocol::TurnStatus::Interrupted;
+    for payload in [
+        EventPayload::TurnCompleted { turn: done },
+        EventPayload::AgentStopped {
+            turn_id: "ct1".into(),
+        },
+    ] {
+        let event = Event {
+            seq: test.ui.app().snapshot().last_event_seq + 1,
+            session_id: "child".into(),
+            timestamp: 0,
+            payload,
+        };
+        test.chat
+            .message(&mut test.ui, Message::Server(Box::new(event)));
+    }
+    test.ui.draw(0).unwrap();
+    assert_eq!(
+        rows(&test)[0],
+        " Sub-agent · agent-child · explorer · stopped by you",
+        "{}",
+        shown(&test)
+    );
+    if let Some(pump) = test.chat.main_pump.take() {
+        pump.abort();
+    }
+    test.chat.pump.abort();
+    test.server.abort();
+}
+
+async fn next(
+    requests: &mut mpsc::UnboundedReceiver<super::retract_tests::Request>,
+) -> super::retract_tests::Request {
+    tokio::time::timeout(Duration::from_secs(5), requests.recv())
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+fn card(id: &str, tool: &str, status: &str, more: Value) -> Value {
+    let mut item = json!({
+        "type": "collabAgentToolCall", "id": id, "tool": tool, "status": status,
+        "prompt": null, "agents": [], "error": null, "startedAt": 0, "durationMs": 5,
+    });
+    item.as_object_mut()
+        .unwrap()
+        .extend(more.as_object().unwrap().clone());
+    item
+}
+
+fn collab(id: &str, kind: &str, status: Option<&str>, result: Option<&str>) -> Value {
+    json!({ "id": id, "name": format!("agent-{id}"), "agentType": kind,
+            "status": status, "result": result })
+}
+
+/// Whether `text` on the row that has it is drawn bold.
+fn bold(test: &Harness, row_has: &str, text: &str) -> bool {
+    let screen = rows(test);
+    let Some(y) = screen.iter().position(|row| row.contains(row_has)) else {
+        return false;
+    };
+    let x = screen[y]
+        .find(text)
+        .map(|at| screen[y][..at].chars().count());
+    let buffer = test.ui.backend().buffer();
+    x.is_some_and(|x| {
+        buffer[(x as u16, y as u16)]
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    })
+}
+
+#[tokio::test]
+async fn the_four_sub_agent_tools_have_their_own_cards() {
+    let mut test = Harness::new().await;
+    test.ui = Ui::new(
+        TestBackend::new(90, 50),
+        App::new(test.ui.app().snapshot().clone(), None, 0),
+    )
+    .unwrap();
+    test.start("t1", "Use agents", None);
+    let reply = "Locks are taken parent first\nline 2\nline 3\nline 4\nline 5";
+    let items = [
+        card(
+            "s1",
+            "spawnAgent",
+            "completed",
+            json!({
+                "prompt": "Trace how locks are taken\nand report",
+                "agents": [collab("a", "explorer", Some("running"), None)],
+            }),
+        ),
+        card(
+            "w1",
+            "wait",
+            "completed",
+            json!({
+                "durationMs": 31_000,
+                "agents": [
+                    collab("a", "explorer", Some("completed"), Some(reply)),
+                    collab("b", "general", Some("running"), None),
+                    collab("c", "general", Some("interrupted"), None),
+                ],
+            }),
+        ),
+        card(
+            "i1",
+            "sendInput",
+            "completed",
+            json!({
+                "prompt": "Also check the lexer\nthanks",
+                "agents": [collab("b", "general", Some("running"), None)],
+            }),
+        ),
+        card(
+            "c1",
+            "closeAgent",
+            "completed",
+            json!({
+                "agents": [collab("c", "general", Some("closed"), None)],
+            }),
+        ),
+        card(
+            "s2",
+            "spawnAgent",
+            "failed",
+            json!({
+                "error": "At most four agents may run at once",
+                "agents": [{ "id": "", "name": "", "agentType": "general" }],
+            }),
+        ),
+        json!({ "type": "backgroundEvent", "id": "agent-result-a-t2", "commandId": null,
+                "text": "[Sub-agent a (agent-a) completed]\nLocks are taken parent first",
+                "agent": collab("a", "explorer", Some("completed"), None) }),
+        json!({ "type": "backgroundEvent", "id": "agent-result-b-t3", "commandId": null,
+                "text": "[Sub-agent b (agent-b) interrupted]\nNo final reply.",
+                "agent": collab("b", "general", Some("interrupted"), None) }),
+    ];
+    for item in items {
+        test.event(payload(
+            json!({ "type": "item.started", "turnId": "t1", "item": item }),
+        ));
+        test.event(payload(
+            json!({ "type": "item.completed", "turnId": "t1", "item": item }),
+        ));
+    }
+    let text = shown(&test);
+    assert!(has(&test, &["● Spawned explorer · agent-a"]), "{text}");
+    assert!(bold(&test, "Spawned explorer", "agent-a"), "{text}");
+    assert!(has(&test, &["    └ Trace how locks are taken …"]), "{text}");
+    assert!(
+        has(&test, &["● Waiting for agent-a, agent-b, agent-c · 31s"]),
+        "{text}"
+    );
+    assert!(has(&test, &["└ ✓ agent-a completed"]), "{text}");
+    assert!(has(&test, &["┃ Locks are taken parent first"]), "{text}");
+    assert!(has(&test, &["… 2 more lines · Ctrl+O"]), "{text}");
+    assert!(!text.contains("line 5"), "{text}");
+    assert!(has(&test, &["└ ● agent-b still running"]), "{text}");
+    assert!(has(&test, &["└ ■ agent-c interrupted"]), "{text}");
+    assert!(has(&test, &["● Sent to agent-b"]), "{text}");
+    assert!(has(&test, &["    └ Also check the lexer …"]), "{text}");
+    assert!(has(&test, &["● Closed agent-c"]), "{text}");
+    assert!(has(&test, &["✗ Spawn general", "failed"]), "{text}");
+    assert!(
+        has(&test, &["┃ At most four agents may run at once"]),
+        "{text}"
+    );
+    assert!(
+        has(
+            &test,
+            &["◇ Sub-agent agent-a completed — result sent to the model"]
+        ),
+        "{text}"
+    );
+    assert!(
+        has(
+            &test,
+            &["◇ Sub-agent agent-b interrupted — result sent to the model"]
+        ),
+        "{text}"
+    );
+    // Ctrl+O shows the whole reply.
+    test.ui.app_mut().handle_key(
+        KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+        LATER,
+    );
+    test.ui.draw(0).unwrap();
+    let text = shown(&test);
+    assert!(has(&test, &["┃ line 5"]), "{text}");
+    test.stop().await;
+}

@@ -225,6 +225,72 @@ impl SessionMaintenance {
 }
 
 impl Session {
+    /// P2-179: the user stops a running child. Its turn and background
+    /// commands stop as when the parent's Esc stops them, so no completion
+    /// notice and no wake; instead the parent's model is told at its next
+    /// request. The host holds the parent's, then the child's operation lock.
+    /// Returns whether a turn was running to stop.
+    pub async fn stop_agent(&self, child: &Session) -> Result<bool, CoreError> {
+        let (stop, turn_id) = {
+            let parent = self.shared.state.lock().await;
+            let mut state = child.shared.state.lock().await;
+            if state
+                .journal
+                .snapshot
+                .parent
+                .as_ref()
+                .is_none_or(|source| source.session_id != parent.journal.snapshot.id)
+            {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "Agent does not belong to this session",
+                ));
+            }
+            let running = state
+                .journal
+                .snapshot
+                .agent
+                .as_ref()
+                .is_some_and(|agent| agent.status == AgentStatus::Running);
+            let Some((turn_id, done)) = state.active.as_ref().filter(|_| running).map(|active| {
+                active.cancel.cancel();
+                (active.turn.id.clone(), active.done.clone())
+            }) else {
+                return Ok(false);
+            };
+            state.suppressed_agent_turns.insert(turn_id.clone());
+            state.automatic_turns_paused = true;
+            state.background_events.interrupt();
+            let stop = AgentStop {
+                shared: child.shared.clone(),
+                done: Some(done),
+            };
+            (stop, turn_id)
+        };
+        finish_agent_stops(vec![stop]).await?;
+        let mut state = child.shared.state.lock().await;
+        state
+            .journal
+            .append(vec![EventPayload::AgentStopped {
+                turn_id: turn_id.clone(),
+            }])
+            .await?;
+        let snapshot = &state.journal.snapshot;
+        let id = snapshot.id.clone();
+        let text = format!(
+            "[Sub-agent {id} ({}) stopped by the user]\nThe user stopped this sub-agent: its turn was interrupted and its background commands were stopped. Do not restart it or start another sub-agent for the same task unless the user asks.",
+            snapshot.settings.name.as_deref().unwrap_or(&id),
+        );
+        drop(state);
+        self.shared
+            .state
+            .lock()
+            .await
+            .agent_stopped_notice(format!("agent-stopped-{id}-{turn_id}"), text)
+            .await?;
+        Ok(true)
+    }
+
     /// Mark exactly the terminal child turn returned by wait_agent as delivered.
     /// The host holds the parent's operation lock while obtaining the snapshot.
     pub async fn acknowledge_agent_result(
@@ -575,6 +641,15 @@ async fn watch_agent(parent: &Session, child: &Session) -> Result<(), CoreError>
     let mut events = child.subscribe(snapshot.last_event_seq).await?;
     let parent_link = child.shared.agent_parent.clone();
     let child = std::sync::Arc::downgrade(&child.shared);
+    // The list entry the parent's clients last heard of, leaving out the time
+    // that changes with every event.
+    let listed = |snapshot: &SessionSnapshot| {
+        AgentSummary::from_snapshot(snapshot).map(|agent| AgentSummary {
+            updated_at: 0,
+            ..agent
+        })
+    };
+    let mut last_listed = listed(&snapshot);
     tokio::spawn(async move {
         while let Ok(Some(event)) = events.recv().await {
             if apply_event_mut(&mut snapshot, &event).is_err() {
@@ -590,6 +665,22 @@ async fn watch_agent(parent: &Session, child: &Session) -> Result<(), CoreError>
                 // following the child so attachment can replace the weak link.
                 continue;
             };
+            let now_listed = listed(&snapshot);
+            if now_listed != last_listed
+                && let Some(agent) = AgentSummary::from_snapshot(&snapshot)
+            {
+                let mut state = parent.state.lock().await;
+                if !state.closing
+                    && state
+                        .journal
+                        .append(vec![EventPayload::AgentUpdated { agent }])
+                        .await
+                        .is_err()
+                {
+                    break;
+                }
+                last_listed = now_listed;
+            }
             let payload = match event.payload {
                 EventPayload::RequestOpened { request } => Some(EventPayload::AgentRequestOpened {
                     forwarded: forwarded_request(&snapshot, request),
@@ -638,8 +729,23 @@ async fn watch_agent(parent: &Session, child: &Session) -> Result<(), CoreError>
                                 agent.result.as_deref().unwrap_or("No final reply.")
                             )
                         );
+                        let agent = CollabAgent {
+                            id: snapshot.id.clone(),
+                            name: snapshot
+                                .settings
+                                .name
+                                .clone()
+                                .unwrap_or_else(|| snapshot.id.clone()),
+                            agent_type: snapshot
+                                .parent
+                                .as_ref()
+                                .map(|parent| parent.agent_type)
+                                .unwrap_or_default(),
+                            status: Some(agent.status),
+                            result: None,
+                        };
                         if state
-                            .agent_notice(agent_notice_id(&snapshot.id, &turn.id), text)
+                            .agent_notice(agent_notice_id(&snapshot.id, &turn.id), text, agent)
                             .await
                             .is_err()
                         {

@@ -91,16 +91,36 @@ pub(crate) fn notice_id(message: &Message) -> Option<u64> {
 }
 
 impl State {
-    pub(crate) async fn agent_notice(&mut self, id: String, text: String) -> Result<(), CoreError> {
+    pub(crate) async fn agent_notice(
+        &mut self,
+        id: String,
+        text: String,
+        agent: CollabAgent,
+    ) -> Result<(), CoreError> {
         if self.acknowledged_agent_results.contains(&id) {
             return Ok(());
         }
         let wake_at =
             (!self.automatic_turns_paused).then(|| Instant::now() + Duration::from_secs(2));
-        self.new_background_notice(Some(id), None, text, true, wake_at)
+        self.new_background_notice(Some(id), None, text, true, Some(agent), wake_at)
             .await?;
         self.background_events.changed.notify_one();
         Ok(())
+    }
+    /// P2-179: tells the model the user stopped a sub-agent, at its next
+    /// request; no card and no wake.
+    pub(crate) async fn agent_stopped_notice(
+        &mut self,
+        id: String,
+        text: String,
+    ) -> Result<(), CoreError> {
+        self.background_notice(card_message(&Item::BackgroundEvent {
+            id,
+            command_id: None,
+            text,
+            agent: None,
+        }))
+        .await
     }
     async fn new_background_notice(
         &mut self,
@@ -108,12 +128,14 @@ impl State {
         command_id: Option<u64>,
         text: String,
         visible: bool,
+        agent: Option<CollabAgent>,
         wake_at: Option<Instant>,
     ) -> Result<(), CoreError> {
         let item = Item::BackgroundEvent {
             id: event_id.unwrap_or_else(|| crate::session::id("background-event")),
             command_id,
             text,
+            agent,
         };
         let message = card_message(&item);
         if visible {
@@ -263,6 +285,7 @@ impl State {
             id: crate::session::id("wake-limit"),
             command_id: None,
             text,
+            agent: None,
         };
         self.journal
             .append(vec![
@@ -313,14 +336,20 @@ impl State {
             return Ok(());
         }
         let event_id = event_id(&message).map(str::to_owned);
-        let visible = event_id
+        let card = event_id
             .as_ref()
-            .is_some_and(|id| self.background_events.all.contains_key(id));
+            .and_then(|id| self.background_events.all.get(id));
+        let visible = card.is_some();
+        let agent = match card {
+            Some(Item::BackgroundEvent { agent, .. }) => agent.clone(),
+            _ => None,
+        };
         self.journal
             .record(HistoryEntry::BackgroundNotice {
                 command_id: notice_id(&message),
                 event_id,
                 visible,
+                agent,
                 message: message.clone(),
             })
             .await?;
@@ -357,6 +386,7 @@ impl State {
                 Some(command.id),
                 text,
                 wake,
+                None,
                 wake.then(|| Instant::now() + Duration::from_secs(2)),
             )
             .await?;
@@ -432,7 +462,14 @@ impl Shared {
                         .remove(&id)
                         .is_some_and(|(_, wake)| wake);
                 state
-                    .new_background_notice(None, Some(id), text, true, wake.then(Instant::now))
+                    .new_background_notice(
+                        None,
+                        Some(id),
+                        text,
+                        true,
+                        None,
+                        wake.then(Instant::now),
+                    )
                     .await?;
             }
             state.background_events.output_due = None;

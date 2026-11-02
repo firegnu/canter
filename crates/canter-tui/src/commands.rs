@@ -253,6 +253,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::BackgroundList)),
     },
     Command {
+        name: "agents",
+        about: "List sub-agents and open or stop one",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::AgentList)),
+    },
+    Command {
         name: "stop",
         about: "Stop all background commands in this session",
         takes_args: false,

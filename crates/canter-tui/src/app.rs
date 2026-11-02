@@ -9,9 +9,9 @@ use std::ops::Range;
 use std::time::Duration;
 
 use canter_protocol::{
-    ApprovalDecision, ApprovalResolution, Event, EventPayload, Item, ItemStatus, PendingRequest,
-    PermissionMode, RequestKind, SessionSnapshot, SessionStatus, SessionUpdateParams, Turn,
-    TurnStatus, UserInput, UserInputAnswer, apply_event_mut,
+    AgentStatus, AgentSummary, ApprovalDecision, ApprovalResolution, Event, EventPayload, Item,
+    ItemStatus, PendingRequest, PermissionMode, RequestKind, SessionSnapshot, SessionStatus,
+    SessionUpdateParams, Turn, TurnStatus, UserInput, UserInputAnswer, apply_event_mut,
 };
 use chrono::TimeZone;
 use crossterm::event::{
@@ -96,6 +96,13 @@ pub enum Action {
     BackgroundList,
     BackgroundOutput(u64),
     BackgroundStop(Option<u64>),
+    /// `/agents`: read the main session's sub-agents and list them.
+    AgentList,
+    /// Show this session in place of the one on screen: a sub-agent, or
+    /// the main session it came from.
+    OpenAgent(String),
+    /// The user stops this sub-agent of the main session.
+    StopAgent(String),
     CommandRules,
     Memory,
     EditMemory(canter_protocol::MemoryEntry),
@@ -320,6 +327,9 @@ struct Scroll {
     sticky: bool,
     /// That prompt was clicked: it stays hidden until the view scrolls.
     sticky_hidden: bool,
+    /// From the last layout: rows on top of a sub-agent's screen, above
+    /// the prompt row and the conversation.
+    header: usize,
     /// From the last layout: rows per page, the furthest top row and the
     /// conversation rows on screen.
     page: usize,
@@ -547,6 +557,8 @@ struct Shown {
     input: Option<DrawnInput>,
     /// `▸ N background commands` and the `/ps` list, for a click on them.
     background: DrawnBackground,
+    /// The sub-agents row and the `/agents` list, for a click on them.
+    agents: DrawnAgents,
     /// The prompt on the top row, for a click on it.
     sticky: Option<DrawnSticky>,
 }
@@ -570,6 +582,19 @@ struct DrawnBackground {
     /// The screen row of the list's first command shown, and the ids of
     /// the commands shown from there; empty while the list did not show.
     choices: (usize, Vec<u64>),
+}
+
+/// The sub-agents row (`▸ 2 sub-agents running`), or the open `/agents`
+/// list's title in its place, as a frame drew them.
+#[derive(Debug, Default, Clone, PartialEq)]
+struct DrawnAgents {
+    /// The row's screen row; `None` while it did not show.
+    row: Option<usize>,
+    /// Whether the list showed open: the row is its title.
+    open: bool,
+    /// The screen row of the list's first entry shown, and what each
+    /// entry shown from there opens: `None` is the main session.
+    choices: (usize, Vec<Option<String>>),
 }
 
 /// The draft as the input box drew it.
@@ -663,6 +688,8 @@ pub struct App {
     choosers: u64,
     /// The number of the `/ps` list or log page opened last.
     background_list: Option<u64>,
+    /// The main session's sub-agents, and `/agents` while it is open.
+    agents: crate::agents::Agents,
     /// How many times a command name was completed in the input box.
     completions: u64,
     /// In the order they came, which is also the order of their places.
@@ -976,6 +1003,7 @@ impl App {
             chooser: None,
             choosers: 0,
             background_list: None,
+            agents: Default::default(),
             completions: 0,
             notices: Vec::new(),
             active_btw: None,
@@ -1163,6 +1191,7 @@ impl App {
                     self.notifications.push(notification);
                 }
             }
+            EventPayload::AgentUpdated { agent } => self.agents.update(agent.clone()),
             EventPayload::SessionStatus { status, .. } => match status {
                 SessionStatus::Working | SessionStatus::WaitingApproval => {
                     self.working_since.get_or_insert(now_ms);
@@ -1376,6 +1405,9 @@ impl App {
             }
             if self.report.is_some() {
                 return self.report_key(key, seen, send_guarded);
+            }
+            if self.agents.selected.is_some() {
+                return self.agents_key(key, seen, send_guarded);
             }
             return self.chooser_key(key, seen, send_guarded);
         }
@@ -1891,6 +1923,7 @@ impl App {
     /// Offers a choice above the input box.
     pub(crate) fn choose(&mut self, chooser: Chooser) {
         self.choosers += 1;
+        self.agents.selected = None;
         self.setup = None;
         self.report = None;
         self.close_theme_picker();
@@ -1904,12 +1937,14 @@ impl App {
             || self.setup.is_some()
             || self.report.is_some()
             || self.theme_picker.is_some()
+            || self.agents.selected.is_some()
     }
 
     /// `/theme`: opens with the theme in use selected, numbered like a
     /// choice.
     pub(crate) fn open_theme_picker(&mut self) {
         self.choosers += 1;
+        self.agents.selected = None;
         self.chooser = None;
         self.setup = None;
         self.report = None;
@@ -1968,6 +2003,7 @@ impl App {
     /// numbered like a choice.
     pub(crate) fn open_status_setup(&mut self) {
         self.choosers += 1;
+        self.agents.selected = None;
         self.chooser = None;
         self.report = None;
         self.close_theme_picker();
@@ -2456,6 +2492,7 @@ impl App {
     fn open_report(&mut self, report: crate::report::Report) {
         self.background_view = None;
         self.choosers += 1;
+        self.agents.selected = None;
         self.chooser = None;
         self.setup = None;
         self.close_theme_picker();
@@ -2479,6 +2516,223 @@ impl App {
         self.open_report(crate::background::output(output));
         self.background_view = Some(output.command.id);
         self.background_list = Some(self.choosers);
+    }
+
+    /// The main session: the one on screen, or the one the sub-agent on
+    /// screen came from.
+    pub(crate) fn main_session(&self) -> &str {
+        self.snapshot
+            .parent
+            .as_ref()
+            .map_or(&self.snapshot.id, |parent| &parent.session_id)
+    }
+
+    /// The main session's sub-agents as just read, for the row above the
+    /// input box.
+    pub(crate) fn set_agents(&mut self, list: Vec<AgentSummary>) {
+        self.agents.list = list;
+    }
+
+    /// `/agents`: the list just read, open above the input box, the main
+    /// session first on a sub-agent's screen. With no sub-agent, says so.
+    pub(crate) fn show_agents(&mut self, list: Vec<AgentSummary>) {
+        self.agents.list = list;
+        if self.agents.list.is_empty() && self.snapshot.parent.is_none() {
+            self.open_report(crate::agents::empty());
+            return;
+        }
+        self.choosers += 1;
+        self.chooser = None;
+        self.setup = None;
+        self.report = None;
+        self.close_theme_picker();
+        self.agents.selected = Some(0);
+    }
+
+    /// A sub-agent's entry changed: the stop just asked for, or what the
+    /// main session's events say.
+    pub(crate) fn agent_updated(&mut self, agent: AgentSummary) {
+        self.agents.update(agent);
+    }
+
+    /// On a sub-agent's screen: the main session as just read. Its own
+    /// approvals and those of the other sub-agents show here too.
+    pub(crate) fn set_main(&mut self, main: SessionSnapshot) {
+        self.agents.main = Some(main);
+        self.share_main_requests();
+    }
+
+    /// An event of the main session, on a sub-agent's screen.
+    pub(crate) fn apply_main_event(&mut self, event: &Event) {
+        let Some(main) = self.agents.main.as_mut() else {
+            return;
+        };
+        if event.seq <= main.last_event_seq || apply_event_mut(main, event).is_err() {
+            return;
+        }
+        let notification = match &event.payload {
+            EventPayload::RequestOpened { request } => {
+                crate::notify::Notification::request(request, main)
+            }
+            EventPayload::AgentRequestOpened { forwarded }
+                if forwarded.agent_id != self.snapshot.id =>
+            {
+                crate::notify::Notification::request(&forwarded.request, main)
+            }
+            _ => None,
+        };
+        self.notifications.extend(notification);
+        match &event.payload {
+            EventPayload::AgentUpdated { agent } => self.agents.update(agent.clone()),
+            EventPayload::RequestResolved { request_id, .. }
+            | EventPayload::AgentRequestResolved { request_id, .. } => {
+                self.answered.remove(request_id);
+            }
+            _ => {}
+        }
+        self.share_main_requests();
+    }
+
+    /// On a sub-agent's screen: the approvals the main session and the
+    /// other sub-agents wait for, as requests forwarded to this screen, so
+    /// the approval box shows them as on the main session's. This
+    /// sub-agent's own are in its own snapshot.
+    fn share_main_requests(&mut self) {
+        let Some(main) = &self.agents.main else {
+            return;
+        };
+        let approval = |request: &PendingRequest| match &request.kind {
+            RequestKind::Approval(approval) | RequestKind::SandboxApproval(approval) => {
+                Some(approval.item_id.clone())
+            }
+            _ => None,
+        };
+        let mut shared: Vec<canter_protocol::AgentRequest> = main
+            .pending_requests
+            .iter()
+            .filter_map(|request| {
+                let item_id = approval(request)?;
+                let item = main
+                    .turns
+                    .iter()
+                    .find(|turn| turn.id == request.turn_id)
+                    .and_then(|turn| turn.items.iter().find(|item| item.id() == Some(&item_id)))
+                    .cloned();
+                Some(canter_protocol::AgentRequest {
+                    agent_id: main.id.clone(),
+                    agent_name: main.settings.name.clone().unwrap_or_default(),
+                    request: request.clone(),
+                    cwd: main.settings.cwd.clone(),
+                    item,
+                })
+            })
+            .collect();
+        shared.extend(
+            main.agent_requests
+                .iter()
+                .filter(|forwarded| {
+                    forwarded.agent_id != self.snapshot.id && approval(&forwarded.request).is_some()
+                })
+                .cloned(),
+        );
+        self.snapshot.agent_requests = shared;
+    }
+
+    /// Keys while `/agents` is open: Up and Down select, Enter opens the
+    /// session selected, `s` stops the sub-agent selected when it runs;
+    /// Esc, Ctrl+C or Ctrl+D closes the list.
+    fn agents_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
+        let main = self
+            .snapshot
+            .parent
+            .as_ref()
+            .map(|parent| parent.session_id.clone());
+        let targets = self.agents.targets(main.as_deref());
+        let last = targets.len().saturating_sub(1);
+        let selected = self.agents.selected?.min(last);
+        let target = targets.get(selected).map(|target| match target {
+            Some(agent) => (agent.id.clone(), agent.status == AgentStatus::Running),
+            None => (main.clone().unwrap_or_default(), false),
+        });
+        match key.code {
+            KeyCode::Up if seen => self.agents.selected = Some(selected.saturating_sub(1)),
+            KeyCode::Down if seen => self.agents.selected = Some((selected + 1).min(last)),
+            KeyCode::Char('s') if seen && !send_guarded && key.modifiers.is_empty() => {
+                if let Some((id, true)) = target
+                    && main.as_deref() != Some(id.as_str())
+                {
+                    return Some(Action::StopAgent(id));
+                }
+            }
+            KeyCode::Enter if seen && !send_guarded => {
+                self.agents.selected = None;
+                return target
+                    .map(|(id, _)| id)
+                    .filter(|id| *id != self.snapshot.id)
+                    .map(Action::OpenAgent);
+            }
+            KeyCode::Esc => self.agents.selected = None,
+            KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.agents.selected = None;
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// What each entry the open `/agents` list shows in `rows` rows opens,
+    /// `None` being the main session; empty while it is not open.
+    fn agent_choices(&self, rows: usize) -> Vec<Option<String>> {
+        let Some(selected) = self.agents.selected else {
+            return Vec::new();
+        };
+        let main = self
+            .snapshot
+            .parent
+            .as_ref()
+            .map(|parent| parent.session_id.as_str());
+        let targets = self.agents.targets(main);
+        let selected = selected.min(targets.len().saturating_sub(1));
+        targets
+            .into_iter()
+            .skip(commands::first_shown(selected, rows))
+            .take(rows)
+            .map(|target| target.map(|agent| agent.id.clone()))
+            .collect()
+    }
+
+    /// A click on the sub-agents row drawn on frame `frame` opens
+    /// `/agents`, or closes it when it showed open; a click on an entry in
+    /// the list opens that session, as Enter. Not while an approval box or
+    /// the search box is open.
+    fn agents_click(&mut self, y: usize, frame: u64) -> Option<Action> {
+        if self.search.is_some() || frame > self.latest_frame {
+            return None;
+        }
+        let (_, shown) = self.shown.iter().rev().find(|(since, _)| *since <= frame)?;
+        if shown.approval.is_some() {
+            return None;
+        }
+        let drawn = &shown.agents;
+        // Still the list that frame showed.
+        let same = shown.chooser == Some(self.choosers) && self.agents.selected.is_some();
+        if drawn.row == Some(y) {
+            if !drawn.open {
+                return Some(Action::AgentList);
+            }
+            if same {
+                self.agents.selected = None;
+            }
+            return None;
+        }
+        let (top, targets) = &drawn.choices;
+        let target = targets.get(y.checked_sub(*top)?)?.clone();
+        if !same {
+            return None;
+        }
+        self.agents.selected = None;
+        let id = target.unwrap_or_else(|| self.main_session().to_owned());
+        (id != self.snapshot.id).then_some(Action::OpenAgent(id))
     }
 
     /// `/lsp`: the language servers, above the input box.
@@ -2756,7 +3010,10 @@ impl App {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.press(cell, frame, now_ms);
-                return self.background_click(usize::from(cell.1), frame);
+                let y = usize::from(cell.1);
+                return self
+                    .background_click(y, frame)
+                    .or_else(|| self.agents_click(y, frame));
             }
             MouseEventKind::ScrollUp => {
                 self.scroll_by(-(WHEEL_ROWS as isize));
@@ -2799,7 +3056,7 @@ impl App {
         // The hint under the conversation goes to the bottom and follows
         // again. A press right after it is not a double click: the
         // conversation is under it now.
-        let above = usize::from(self.scroll.sticky);
+        let above = self.scroll.header + usize::from(self.scroll.sticky);
         if self.scroll.hint && usize::from(cell.1) == above + self.scroll.area {
             self.scroll.top = None;
             self.mouse.press = None;
@@ -2898,7 +3155,7 @@ impl App {
             return;
         }
         let y = usize::from(y);
-        let above = usize::from(self.scroll.sticky);
+        let above = self.scroll.header + usize::from(self.scroll.sticky);
         let rows = if y <= above {
             -1
         } else if y + 1 >= above + self.scroll.area {
@@ -2999,7 +3256,7 @@ impl App {
     /// The first row of the prompt drawn above the conversation at `cell` on
     /// frame `frame`. None when the view has moved since, or the width.
     fn sticky_at(&self, (_, y): (u16, u16), frame: u64) -> Option<usize> {
-        if y != 0 || frame > self.latest_frame {
+        if usize::from(y) != self.scroll.header || frame > self.latest_frame {
             return None;
         }
         let (_, shown) = self.shown.iter().rev().find(|(since, _)| *since <= frame)?;
@@ -3043,7 +3300,7 @@ impl App {
         let top = self.scroll.top.unwrap_or(self.scroll.max_top);
         let area = self.scroll.area;
         let (y, x) = (usize::from(y), usize::from(x));
-        let at = match y.checked_sub(usize::from(self.scroll.sticky)) {
+        let at = match y.checked_sub(self.scroll.header + usize::from(self.scroll.sticky)) {
             None => (top, 0),
             Some(y) if y >= area => (top + area.saturating_sub(1), usize::MAX),
             Some(y) => (top + y, x),
@@ -4040,6 +4297,7 @@ impl App {
             }),
             input: None,
             background: DrawnBackground::default(),
+            agents: DrawnAgents::default(),
             sticky: None,
         };
         let (bottom, input_rows) = match approval {
@@ -4054,11 +4312,20 @@ impl App {
             None => self.input_view(width, now_ms),
         };
         self.scan_mentions();
+        // On a sub-agent's screen, two rows on top say which and how to go back.
+        let header = crate::agents::header(
+            &self.snapshot,
+            &self.agents.main_name(self.main_session()),
+            width,
+        )
+        .map_or_else(Vec::new, Vec::from);
+        let header_rows = header.len();
         // Commands and paths are only for the input box.
         let list = match bottom {
             Bottom::Input { .. } => self.list_view(
                 width,
-                usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height())),
+                usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height()))
+                    .saturating_sub(header_rows),
                 now_ms,
             ),
             Bottom::Approval(_) => Vec::new(),
@@ -4067,7 +4334,7 @@ impl App {
         self.drawing.chooser = (self.choosing() && !list.is_empty()).then_some(self.choosers);
 
         let plan_room = usize::from(height.saturating_sub(3 + INFO_ROWS + bottom.height()))
-            .saturating_sub(list.len());
+            .saturating_sub(list.len() + header_rows);
         let background_count = self
             .snapshot
             .background_commands
@@ -4087,11 +4354,23 @@ impl App {
                 usize::from(width),
             )));
         }
+        // The sub-agents row goes last, so `/agents` opens in its place.
+        let agents_open = self.agents.selected.is_some() && !list.is_empty();
+        let agent_row = self
+            .agents
+            .row()
+            .filter(|_| !agents_open && plan_room > plan.len());
         plan.extend(crate::plan::pinned(
             &self.snapshot,
             width,
-            plan_room.saturating_sub(plan.len()),
+            plan_room.saturating_sub(plan.len() + usize::from(agent_row.is_some())),
         ));
+        if let Some(row) = &agent_row {
+            plan.push(Line::from(truncate(
+                vec![Span::styled(format!("  {row}"), theme::secondary())],
+                usize::from(width),
+            )));
+        }
 
         self.edge_scroll(now_ms);
         self.extend_history(width);
@@ -4112,7 +4391,7 @@ impl App {
         let lead = lead(history, &live);
         let total = history.len() + live.len() - lead;
         let room = usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height()))
-            .saturating_sub(list.len() + plan.len());
+            .saturating_sub(list.len() + plan.len() + header_rows);
         // Only under the status line of a turn that started here, with the
         // bare input box below; it goes first when rows run short.
         let tip = match (&self.tips, &self.drawing.turn) {
@@ -4171,9 +4450,10 @@ impl App {
         self.drawing.input = draft_shown.then(|| DrawnInput {
             width,
             text: self.input.text().to_owned(),
-            // Under the conversation: the hint, status line, tip, plan, list
-            // and the box's top border.
-            top: area
+            // Under the header and the conversation: the hint, status line,
+            // tip, plan, list and the box's top border.
+            top: header_rows
+                + area
                 + usize::from(hint.is_some())
                 + 1
                 + usize::from(tip.is_some())
@@ -4182,15 +4462,31 @@ impl App {
                 + 1,
             rows: input_rows,
         });
-        // Under the conversation: the hint, the status line and the tip; the
-        // list starts with its title.
-        let background_top = area + usize::from(hint.is_some()) + 1 + usize::from(tip.is_some());
+        // Under the header and the conversation: the hint, the status line
+        // and the tip; the list starts with its title.
+        let background_top =
+            header_rows + area + usize::from(hint.is_some()) + 1 + usize::from(tip.is_some());
         self.drawing.background = DrawnBackground {
             row: background_row.then_some(background_top),
             open: background_open,
             choices: (
                 background_top + plan.len() + 1,
                 self.background_choices(list.len().saturating_sub(1)),
+            ),
+        };
+        // The sub-agents row is the last of the plan rows; the open list's
+        // title is the row under them.
+        let agents_top = background_top + plan.len();
+        self.drawing.agents = DrawnAgents {
+            row: if agents_open {
+                Some(agents_top)
+            } else {
+                agent_row.as_ref().map(|_| agents_top - 1)
+            },
+            open: agents_open,
+            choices: (
+                agents_top + 1,
+                self.agent_choices(list.len().saturating_sub(2)),
             ),
         };
         let starts = starts(&self.history, live_parts, lead);
@@ -4230,6 +4526,7 @@ impl App {
             }
         }
         self.scroll.sticky = sticky.is_some();
+        self.scroll.header = header_rows;
         let sticky_rows = usize::from(sticky.is_some());
         let area = area - sticky_rows;
         let sticky = sticky.map(|(row, text)| {
@@ -4278,7 +4575,11 @@ impl App {
             .filter(|_| !searching)
             .flat_map(|(y, row)| {
                 row.links.iter().map(move |(columns, target)| {
-                    (sticky_rows + y, columns.clone(), target.clone())
+                    (
+                        header_rows + sticky_rows + y,
+                        columns.clone(),
+                        target.clone(),
+                    )
                 })
             })
             .collect();
@@ -4340,6 +4641,7 @@ impl App {
         let found = current.map(|current| (current, hits.len()));
         let (info, mode_in_full) = self.info_rows(width, now_ms);
         let view = View {
+            header,
             plan,
             sticky,
             conversation,
@@ -4393,6 +4695,14 @@ impl App {
     /// a report such as `/context`, the commands matching what is typed, or the paths
     /// matching the `@` word. At most `max` rows.
     fn list_view(&mut self, width: u16, max: usize, now_ms: i64) -> Vec<Line<'static>> {
+        if self.agents.selected.is_some() {
+            let main = self
+                .snapshot
+                .parent
+                .as_ref()
+                .map(|parent| parent.session_id.as_str());
+            return self.agents.rows(main, width, max, now_ms);
+        }
         if let Some(chooser) = &self.chooser {
             return chooser.rows(width, max);
         }
@@ -4441,6 +4751,12 @@ impl App {
         let (input, prompt, prompt_style, placeholder) = match &self.search {
             Some(search) => (&search.query, FIND, theme::accent(), ""),
             None if shell => (&self.input, "! ", theme::shell(), ""),
+            None if self.snapshot.parent.is_some() => (
+                &self.input,
+                "› ",
+                theme::accent(),
+                crate::agents::PLACEHOLDER,
+            ),
             None => (&self.input, "› ", theme::accent(), PLACEHOLDER),
         };
         // The prompt's columns past those of `› `, which INPUT_CHROME counts.
@@ -5539,6 +5855,8 @@ fn after_plan(settings: &canter_protocol::SessionSettings) -> PermissionMode {
 
 /// The screen's content, laid out for one frame.
 pub(crate) struct View {
+    /// On a sub-agent's screen: which it is and how to go back, on top.
+    header: Vec<Line<'static>>,
     plan: Vec<Line<'static>>,
     /// While scrolled back past it: the prompt the rows in view answer, on
     /// the top row.
@@ -5606,7 +5924,9 @@ impl View {
             y += height;
             rect
         };
-        let above = u16::from(self.sticky.is_some());
+        let above = self.header.len() as u16 + u16::from(self.sticky.is_some());
+        let header_height = self.header.len() as u16;
+        frame.render_widget(Paragraph::new(self.header), row(header_height));
         if let Some(sticky) = self.sticky {
             frame.render_widget(Paragraph::new(sticky), row(1));
         }

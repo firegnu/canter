@@ -141,6 +141,33 @@ impl Client {
         )
         .await
     }
+    /// The sub-agents `session` started.
+    pub async fn agents(
+        &self,
+        session: &str,
+    ) -> Result<canter_protocol::AgentListResponse, ClientError> {
+        decode(
+            self.http
+                .get(url(routes::SESSION_AGENTS, &[session]))
+                .send()
+                .await?,
+        )
+        .await
+    }
+    /// The user stops sub-agent `agent` of `session` (P2-179).
+    pub async fn stop_agent(
+        &self,
+        session: &str,
+        agent: &str,
+    ) -> Result<canter_protocol::AgentSummary, ClientError> {
+        decode(
+            self.http
+                .post(url(routes::SESSION_AGENT_STOP, &[session, agent]))
+                .send()
+                .await?,
+        )
+        .await
+    }
     pub async fn background_output(
         &self,
         session: &str,

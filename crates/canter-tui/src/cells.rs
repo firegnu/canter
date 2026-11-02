@@ -5,8 +5,8 @@
 use std::ops::Range;
 
 use canter_protocol::{
-    FileUpdateChange, Item, ItemStatus, PatchChangeKind, ToolContentItem, Turn, TurnStatus,
-    UserInput,
+    AgentStatus, CollabAgentTool, FileUpdateChange, Item, ItemStatus, PatchChangeKind,
+    ToolContentItem, Turn, TurnStatus, UserInput,
 };
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -158,6 +158,25 @@ pub(crate) fn item(
         Item::ModelRetry { .. } => {
             wrap_all(&agent_message(&item.retry_message().unwrap(), width), width)
         }
+        // A sub-agent's result the model was given without asking.
+        Item::BackgroundEvent {
+            agent: Some(agent), ..
+        } => wrap_rows(
+            &notice(
+                "◇ ",
+                &format!(
+                    "Sub-agent {} {} — result sent to the model",
+                    visible(&agent.name),
+                    crate::agents::status_label(
+                        agent.status.unwrap_or(AgentStatus::Unknown),
+                        false
+                    )
+                ),
+                theme::secondary(),
+            ),
+            width,
+        ),
+        Item::CollabAgentToolCall { .. } => agent_tool(item, details, width),
         Item::BackgroundEvent {
             command_id, text, ..
         } => {
@@ -1276,6 +1295,117 @@ fn mcp_call(
         theme::secondary()
     };
     rows.extend(output_rows(result, fold, style, bar(failed), width));
+    rows
+}
+
+/// The four sub-agent tools (P2-179): `● Spawned explorer · <name>` and
+/// the task, `● Waiting for <name>, <name> · 12s` and how each came back
+/// with its final reply folded, `● Sent to <name>` and the message,
+/// `● Closed <name>`. Names are bold. A failed call is a failed card with
+/// its error.
+fn agent_tool(item: &Item, details: bool, width: u16) -> Vec<Row> {
+    let Item::CollabAgentToolCall {
+        tool,
+        status,
+        prompt,
+        agents,
+        error,
+        started_at,
+        duration_ms,
+        ..
+    } = item
+    else {
+        return Vec::new();
+    };
+    let dim = theme::secondary();
+    let bold = Style::new().bold();
+    let names = || {
+        let mut spans = Vec::new();
+        for (index, agent) in agents.iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::raw(", "));
+            }
+            spans.push(Span::styled(visible(&agent.name), bold));
+        }
+        spans
+    };
+    let (bullet, right) = match status {
+        ItemStatus::InProgress => (dot(dim), Vec::new()),
+        ItemStatus::Interrupted => (dot(dim), vec![Span::styled("interrupted", dim)]),
+        other => status_marks(*other),
+    };
+    // While it runs, once it worked, once it did not.
+    let tense = |running, done, not| match status {
+        ItemStatus::InProgress => running,
+        ItemStatus::Completed => done,
+        _ => not,
+    };
+    let (verb, object) = match tool {
+        CollabAgentTool::SpawnAgent => {
+            let agent = agents.first();
+            let kind = agent.map_or("agent", |agent| crate::agents::type_label(agent.agent_type));
+            let mut object = vec![Span::raw(kind)];
+            if let Some(agent) = agent.filter(|agent| !agent.name.is_empty()) {
+                object.push(Span::raw(" · "));
+                object.push(Span::styled(visible(&agent.name), bold));
+            }
+            (tense("Spawning ", "Spawned ", "Spawn "), object)
+        }
+        CollabAgentTool::Wait => {
+            let mut object = names();
+            let time = match (duration_ms, started_at) {
+                (Some(ms), _) => Some(took(*ms)),
+                (None, Some(start)) if *status == ItemStatus::InProgress => {
+                    Some(format_elapsed(crate::now_ms() - start))
+                }
+                _ => None,
+            };
+            if let Some(time) = time {
+                object.push(Span::raw(format!(" · {time}")));
+            }
+            ("Waiting for ", object)
+        }
+        CollabAgentTool::SendInput => (tense("Sending to ", "Sent to ", "Send to "), names()),
+        CollabAgentTool::CloseAgent | CollabAgentTool::Unknown => {
+            (tense("Closing ", "Closed ", "Close "), names())
+        }
+    };
+    let mut rows = vec![title(bullet, verb, object, right, None, width)];
+    let branch = |spans: Vec<Span<'static>>| {
+        let mut line = vec![Span::raw("    "), Span::styled("└ ", dim)];
+        line.extend(spans);
+        Row::text_from(Line::from(truncate(line, usize::from(width))), 6)
+    };
+    if let Some(prompt) = prompt {
+        rows.push(branch(vec![Span::styled(first_line(prompt), dim)]));
+    }
+    let fold = || {
+        if details {
+            Fold::Details
+        } else {
+            Fold::Head(MCP_HEAD)
+        }
+    };
+    if *tool == CollabAgentTool::Wait && *status == ItemStatus::Completed {
+        for agent in agents {
+            let state = agent.status.unwrap_or(AgentStatus::Unknown);
+            let said = match state {
+                AgentStatus::Running => "still running",
+                other => crate::agents::status_label(other, false),
+            };
+            rows.push(branch(vec![
+                crate::agents::mark(state),
+                Span::styled(visible(&agent.name), bold),
+                Span::raw(format!(" {said}")),
+            ]));
+            if let Some(result) = &agent.result {
+                rows.extend(output_rows(result, fold(), dim, bar(false), width));
+            }
+        }
+    }
+    if let Some(error) = error.as_deref().filter(|_| *status == ItemStatus::Failed) {
+        rows.extend(output_rows(error, fold(), Style::new(), bar(true), width));
+    }
     rows
 }
 

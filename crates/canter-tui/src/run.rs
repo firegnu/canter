@@ -88,6 +88,10 @@ mod lsp_tests;
 #[path = "run_session_management_tests.rs"]
 mod session_management_tests;
 
+#[cfg(test)]
+#[path = "run_agents_tests.rs"]
+mod agents_tests;
+
 /// A connection to the server.
 pub struct Connected {
     pub client: Client,
@@ -582,9 +586,11 @@ where
         status_line,
         sender,
         pump,
+        main_pump: None,
         btw: None,
         naming,
     };
+    chat.follow_main(&mut ui).await;
     let mut every = ui.app().redraw_every(now_ms());
     let mut tick = tokio::time::interval(every);
 
@@ -705,6 +711,15 @@ where
                         Err(error) => ui
                             .app_mut()
                             .warning(&format!("Could not list background commands: {error}")),
+                    }
+                }
+                Some(Action::OpenAgent(id)) => {
+                    let restricted = ui.app().snapshot().settings.restricted_mode == Some(true);
+                    if let Some(receiver) = chat
+                        .open(&mut ui, &id, "Could not open the session", restricted)
+                        .await
+                    {
+                        messages = receiver;
                     }
                 }
                 Some(Action::BackgroundOutput(id)) => {
@@ -1335,6 +1350,14 @@ enum Message {
     },
     Reconnecting(String),
     Reconnected(Connected),
+    /// On a sub-agent's screen: an event of the main session.
+    Main(Box<Event>),
+    /// The main session's sub-agents, read again.
+    Agents(Vec<canter_protocol::AgentSummary>),
+    /// A sub-agent's entry after the user stopped it.
+    AgentUpdated(canter_protocol::AgentSummary),
+    /// `/agents`: the list to show.
+    AgentList(Vec<canter_protocol::AgentSummary>),
 }
 
 /// `event` came in at `at` (Unix ms) while frame `frame` was on screen.
@@ -1371,6 +1394,8 @@ struct Chat<C> {
     sender: mpsc::UnboundedSender<Message>,
     /// Forwards the session's events.
     pump: tokio::task::JoinHandle<()>,
+    /// On a sub-agent's screen: forwards the main session's events.
+    main_pump: Option<tokio::task::JoinHandle<()>>,
     btw: Option<(usize, tokio::task::JoinHandle<()>)>,
     naming: AutoName,
 }
@@ -1853,7 +1878,47 @@ impl<C: Connector> Chat<C> {
                 .app_mut()
                 .warning(&format!("Could not load skill commands: {error}")),
         }
+        self.follow_main(ui).await;
         Some(messages)
+    }
+
+    /// The main session's sub-agents, for the row above the input box. On
+    /// a sub-agent's screen, also the main session, whose events then come
+    /// in alongside this one's, for its approvals and the list. A server
+    /// without sub-agents leaves the row out.
+    async fn follow_main<B: Backend>(&mut self, ui: &mut Ui<B>) {
+        if let Some(pump) = self.main_pump.take() {
+            pump.abort();
+        }
+        let main = ui.app().main_session().to_owned();
+        if main != self.session {
+            let followed = async {
+                let snapshot = self.client.read_session(&main).await?.session;
+                let stream = self
+                    .client
+                    .subscribe(&main, snapshot.last_event_seq)
+                    .await?;
+                Ok::<_, ClientError>((snapshot, stream))
+            }
+            .await;
+            match followed {
+                Ok((snapshot, stream)) => {
+                    self.main_pump = Some(tokio::spawn(main_pump(
+                        self.connector.clone(),
+                        stream,
+                        main.clone(),
+                        self.sender.clone(),
+                    )));
+                    ui.app_mut().set_main(snapshot);
+                }
+                Err(error) => ui
+                    .app_mut()
+                    .warning(&format!("Could not follow the main session: {error}")),
+            }
+        }
+        if let Ok(list) = self.client.agents(&main).await {
+            ui.app_mut().set_agents(list.data);
+        }
     }
 
     fn message<B: Backend>(&mut self, ui: &mut Ui<B>, message: Message) -> bool {
@@ -1943,7 +2008,19 @@ impl<C: Connector> Chat<C> {
                 if let Some(warning) = connected.warning {
                     app.warning(&warning);
                 }
+                // Agents may have started or stopped while the stream was down.
+                let (client, sender) = (self.client.clone(), self.sender.clone());
+                let main = app.main_session().to_owned();
+                tokio::spawn(async move {
+                    if let Ok(list) = client.agents(&main).await {
+                        let _ = sender.send(Message::Agents(list.data));
+                    }
+                });
             }
+            Message::Main(event) => app.apply_main_event(&event),
+            Message::Agents(list) => app.set_agents(list),
+            Message::AgentUpdated(agent) => app.agent_updated(agent),
+            Message::AgentList(list) => app.show_agents(list),
         }
         false
     }
@@ -2230,6 +2307,59 @@ impl<C: Connector> Chat<C> {
                     let _ = sender.send(message);
                 });
             }
+            // Esc on a running sub-agent's screen stops it as `s` in
+            // `/agents` does: the main agent is not woken.
+            Action::Interrupt { turn_id }
+                if app
+                    .snapshot()
+                    .agent
+                    .as_ref()
+                    .is_some_and(|agent| agent.status == canter_protocol::AgentStatus::Running) =>
+            {
+                let main = app.main_session().to_owned();
+                tokio::spawn(async move {
+                    match client.stop_agent(&main, &session).await {
+                        Ok(agent) => {
+                            let _ = sender.send(Message::AgentUpdated(agent));
+                            let _ = sender.send(Message::Interrupted {
+                                turn_id,
+                                stopped: true,
+                            });
+                        }
+                        Err(error) => {
+                            let _ = sender.send(Message::InterruptFailed {
+                                turn_id,
+                                connection_error: matches!(error, ClientError::Http(_)),
+                                message: error.to_string(),
+                            });
+                        }
+                    }
+                });
+            }
+            Action::AgentList => {
+                let main = app.main_session().to_owned();
+                tokio::spawn(async move {
+                    let message = match client.agents(&main).await {
+                        Ok(list) => Message::AgentList(list.data),
+                        Err(error) => {
+                            Message::Warning(format!("Could not list sub-agents: {error}"))
+                        }
+                    };
+                    let _ = sender.send(message);
+                });
+            }
+            Action::StopAgent(agent) => {
+                let main = app.main_session().to_owned();
+                tokio::spawn(async move {
+                    let message = match client.stop_agent(&main, &agent).await {
+                        Ok(agent) => Message::AgentUpdated(agent),
+                        Err(error) => {
+                            Message::Warning(format!("Could not stop the sub-agent: {error}"))
+                        }
+                    };
+                    let _ = sender.send(message);
+                });
+            }
             Action::Interrupt { turn_id } => {
                 let pause_goal = app
                     .snapshot()
@@ -2325,6 +2455,7 @@ impl<C: Connector> Chat<C> {
             | Action::BackgroundList
             | Action::BackgroundOutput(_)
             | Action::BackgroundStop(_)
+            | Action::OpenAgent(_)
             | Action::ShellBackground(_)
             | Action::Context
             | Action::Sandbox
@@ -2392,6 +2523,36 @@ async fn pump<C: Connector>(
                         return;
                     }
                 }
+            }
+        };
+    }
+}
+
+/// On a sub-agent's screen: forwards the main session's events. When the
+/// stream drops, subscribes again from the last event delivered; the
+/// sub-agent's own stream says the server is down meanwhile.
+async fn main_pump<C: Connector>(
+    connector: Arc<C>,
+    mut stream: EventStream,
+    session: String,
+    sender: mpsc::UnboundedSender<Message>,
+) {
+    loop {
+        while let Some(Ok(event)) = stream.next().await {
+            if sender.send(Message::Main(Box::new(event))).is_err() {
+                return;
+            }
+        }
+        let cursor = stream.last_seq();
+        stream = loop {
+            tokio::time::sleep(RETRY).await;
+            if sender.is_closed() {
+                return;
+            }
+            if let Ok(connected) = connector.connect().await
+                && let Ok(stream) = connected.client.subscribe(&session, cursor).await
+            {
+                break stream;
             }
         };
     }

@@ -317,6 +317,11 @@ pub enum AgentStatus {
 pub struct AgentState {
     pub status: AgentStatus,
     pub result: Option<String>,
+    /// P2-179: the user stopped the latest agent turn (`agent.stopped`);
+    /// cleared when another agent turn starts.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
+    pub stopped_by_user: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -330,6 +335,93 @@ pub struct AgentSummary {
     pub created_at: i64,
     #[ts(type = "number")]
     pub updated_at: i64,
+    /// P2-179 fields; absent from older servers.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub name: String,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub agent_type: AgentType,
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
+    pub stopped_by_user: bool,
+    /// Unix ms when the latest agent turn started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub started_at: Option<i64>,
+    /// How long the latest agent turn took; absent while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub duration_ms: Option<u64>,
+}
+
+impl AgentSummary {
+    /// A child session's list entry; `None` for a session without a parent.
+    pub fn from_snapshot(snapshot: &SessionSnapshot) -> Option<Self> {
+        let (parent, agent) = (snapshot.parent.as_ref()?, snapshot.agent.as_ref()?);
+        let turn = snapshot
+            .turns
+            .iter()
+            .rev()
+            .find(|turn| is_agent_turn(&turn.client_name));
+        Some(Self {
+            id: snapshot.id.clone(),
+            task: parent.task.clone(),
+            status: agent.status,
+            result: agent.result.clone(),
+            created_at: snapshot.created_at,
+            updated_at: snapshot.updated_at,
+            name: snapshot
+                .settings
+                .name
+                .clone()
+                .unwrap_or_else(|| snapshot.id.clone()),
+            agent_type: parent.agent_type,
+            stopped_by_user: agent.stopped_by_user,
+            started_at: turn
+                .and_then(|turn| turn.started_at)
+                .map(|seconds| seconds.saturating_mul(1000)),
+            duration_ms: turn
+                .filter(|turn| turn.status != TurnStatus::InProgress)
+                .and_then(|turn| turn.duration_ms),
+        })
+    }
+}
+
+/// Turns that make up a sub-agent's work, as opposed to compaction, `!`
+/// commands and rewinds.
+pub fn is_agent_turn(client_name: &str) -> bool {
+    !matches!(client_name, "rewind" | "compact" | "userShell")
+}
+
+/// P2-179: a sub-agent named on a `collabAgentToolCall` card or a
+/// `backgroundEvent` that delivered its result, as last known.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CollabAgent {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub agent_type: AgentType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub status: Option<AgentStatus>,
+    /// The final reply as given to the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub result: Option<String>,
+}
+
+/// The four sub-agent tools; names follow Codex's `CollabAgentTool`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum CollabAgentTool {
+    SpawnAgent,
+    Wait,
+    SendInput,
+    CloseAgent,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -492,6 +584,33 @@ pub enum Item {
         #[ts(optional, type = "number")]
         command_id: Option<u64>,
         text: String,
+        /// P2-179: the sub-agent whose result this delivered, with its status.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        agent: Option<CollabAgent>,
+    },
+    /// P2-179: one call of a sub-agent tool, after Codex `collabAgentToolCall`.
+    CollabAgentToolCall {
+        id: String,
+        tool: CollabAgentTool,
+        status: ItemStatus,
+        /// spawn_agent's task or send_input's message.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        prompt: Option<String>,
+        /// The agents named or started, in the call's order, as last known.
+        agents: Vec<CollabAgent>,
+        /// Why the call failed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        error: Option<String>,
+        /// Unix ms when the call started and how long it took once done.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        started_at: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        duration_ms: Option<u64>,
     },
     BackgroundCommandAction {
         id: String,
@@ -710,7 +829,9 @@ impl Item {
         match self {
             Self::Diagnostics { id, .. } => Some(id),
             Self::ModelRetry { id, .. } => Some(id),
-            Self::BackgroundCommandAction { id, .. } | Self::BackgroundEvent { id, .. } => Some(id),
+            Self::BackgroundCommandAction { id, .. }
+            | Self::BackgroundEvent { id, .. }
+            | Self::CollabAgentToolCall { id, .. } => Some(id),
             Self::UserMessage { id, .. }
             | Self::Plan { id, .. }
             | Self::PlanProposal { id, .. }

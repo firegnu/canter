@@ -176,6 +176,7 @@ impl State {
                                 ""
                             }
                         ),
+                        agent: None,
                     },
                 }])
                 .await?;

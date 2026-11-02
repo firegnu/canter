@@ -46,6 +46,8 @@ pub mod routes {
     pub const SESSION_TRASH: &str = "/v1/sessions/{id}/trash";
     pub const SESSION_FORK: &str = "/v1/sessions/{id}/fork";
     pub const SESSION_AGENTS: &str = "/v1/sessions/{id}/agents";
+    /// P2-179: POST, no body; returns the stopped child's `AgentSummary`.
+    pub const SESSION_AGENT_STOP: &str = "/v1/sessions/{id}/agents/{agentId}/stop";
     pub const GOAL: &str = "/v1/sessions/{id}/goal";
     pub const GOAL_PAUSE: &str = "/v1/sessions/{id}/goal/pause";
     pub const GOAL_RESUME: &str = "/v1/sessions/{id}/goal/resume";

@@ -183,6 +183,25 @@ impl Body {
             Item::ModelRetry { .. } => {
                 self.block("Retry", &sanitize(&item.retry_message().unwrap()))
             }
+            Item::BackgroundEvent {
+                agent: Some(agent), ..
+            } => self.block(
+                "Event",
+                &format!(
+                    "Sub-agent {} {} — result sent to the model",
+                    sanitize(&agent.name),
+                    crate::agents::status_label(
+                        agent
+                            .status
+                            .unwrap_or(canter_protocol::AgentStatus::Unknown),
+                        false
+                    )
+                ),
+            ),
+            Item::CollabAgentToolCall { .. } => {
+                let (summary, output) = agent_tool(item, feedback);
+                self.block(assistant, &tool(&summary, &output, ""));
+            }
             Item::BackgroundEvent { text, .. } => {
                 let text = sanitize(text);
                 let fence = "`".repeat((longest_run(&text, '`') + 1).max(3));
@@ -528,6 +547,78 @@ fn file_change(change: &FileUpdateChange, cwd: &str) -> String {
 }
 
 /// How a tool call went, with the reason given when it was declined.
+/// A sub-agent tool call as the card says it, and what goes under it: the
+/// task or message, each agent waited for with its final reply, or the error.
+fn agent_tool(item: &Item, feedback: Option<&str>) -> (String, String) {
+    use canter_protocol::{AgentStatus, CollabAgentTool};
+    let Item::CollabAgentToolCall {
+        tool,
+        status,
+        prompt,
+        agents,
+        error,
+        duration_ms,
+        ..
+    } = item
+    else {
+        return Default::default();
+    };
+    let names = agents
+        .iter()
+        .map(|agent| sanitize(&agent.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let done = *status == ItemStatus::Completed;
+    let mut summary = match tool {
+        CollabAgentTool::SpawnAgent => {
+            let kind = agents
+                .first()
+                .map_or("agent", |agent| crate::agents::type_label(agent.agent_type));
+            let verb = if done { "Spawned" } else { "Spawn" };
+            match names.as_str() {
+                "" => format!("{verb} {kind}"),
+                name => format!("{verb} {kind} · {name}"),
+            }
+        }
+        CollabAgentTool::Wait => format!("Waited for {names}"),
+        CollabAgentTool::SendInput => {
+            format!("{} {names}", if done { "Sent to" } else { "Send to" })
+        }
+        CollabAgentTool::CloseAgent | CollabAgentTool::Unknown => {
+            format!("{} {names}", if done { "Closed" } else { "Close" })
+        }
+    };
+    if let Some(ms) = duration_ms.filter(|_| *tool == CollabAgentTool::Wait) {
+        summary.push_str(&format!(
+            " · {}",
+            crate::app::format_elapsed(i64::try_from(ms).unwrap_or(i64::MAX))
+        ));
+    }
+    summary.push_str(&format!(" · {}", outcome(*status, feedback)));
+    let output = if let Some(error) = error.as_deref().filter(|_| *status == ItemStatus::Failed) {
+        error.to_owned()
+    } else if *tool == CollabAgentTool::Wait && done {
+        agents
+            .iter()
+            .map(|agent| {
+                let state = match agent.status.unwrap_or(AgentStatus::Unknown) {
+                    AgentStatus::Running => "still running",
+                    other => crate::agents::status_label(other, false),
+                };
+                let mut text = format!("{} {state}", agent.name);
+                if let Some(result) = &agent.result {
+                    text.push_str(&format!(":\n{}", result.trim_end()));
+                }
+                text
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        prompt.clone().unwrap_or_default()
+    };
+    (summary, output)
+}
+
 fn outcome(status: ItemStatus, feedback: Option<&str>) -> String {
     match status {
         ItemStatus::Interrupted => "interrupted".into(),
@@ -873,6 +964,74 @@ _Failed: model unreachable_
         );
     }
 
+    /// The four sub-agent tools and a result sent to the model, in words
+    /// that say what the cards say (P2-179).
+    #[test]
+    fn sub_agent_cards_export_as_what_they_say() {
+        let item = |value: serde_json::Value| -> Item { serde_json::from_value(value).unwrap() };
+        let agent = |id: &str, status: &str, result: Option<&str>| {
+            serde_json::json!({ "id": id, "name": format!("agent-{id}"), "agentType": "explorer",
+                                "status": status, "result": result })
+        };
+        let card = |tool: &str, status: &str, more: serde_json::Value| {
+            let mut card = serde_json::json!({
+                "type": "collabAgentToolCall", "id": tool, "tool": tool, "status": status,
+                "prompt": null, "agents": [], "error": null, "startedAt": 0, "durationMs": 31_000,
+            });
+            card.as_object_mut()
+                .unwrap()
+                .extend(more.as_object().unwrap().clone());
+            item(card)
+        };
+        let items = vec![
+            card(
+                "spawnAgent",
+                "completed",
+                serde_json::json!({ "prompt": "Trace locks", "agents": [agent("a", "running", None)] }),
+            ),
+            card(
+                "wait",
+                "completed",
+                serde_json::json!({ "agents": [
+                    agent("a", "completed", Some("Parent first")),
+                    agent("b", "running", None),
+                ] }),
+            ),
+            card(
+                "sendInput",
+                "completed",
+                serde_json::json!({ "prompt": "Check the lexer", "agents": [agent("b", "running", None)] }),
+            ),
+            card(
+                "closeAgent",
+                "completed",
+                serde_json::json!({ "agents": [agent("b", "closed", None)] }),
+            ),
+            card(
+                "spawnAgent",
+                "failed",
+                serde_json::json!({ "error": "At most four agents may run at once",
+                                    "agents": [{ "id": "", "name": "", "agentType": "general" }] }),
+            ),
+            item(serde_json::json!({
+                "type": "backgroundEvent", "id": "e1", "commandId": null, "text": "raw",
+                "agent": agent("a", "failed", None),
+            })),
+        ];
+        let text = markdown(&snapshot(None, vec![turn("t1", "go", items)]), "now").unwrap();
+        for expected in [
+            "**Tool** · Spawned explorer · agent-a · ok\n\n```\nTrace locks\n```",
+            "**Tool** · Waited for agent-a, agent-b · 31s · ok\n\n```\nagent-a completed:\nParent first\nagent-b still running\n```",
+            "**Tool** · Sent to agent-b · ok\n\n```\nCheck the lexer\n```",
+            "**Tool** · Closed agent-b · ok\n",
+            "**Tool** · Spawn general · failed\n\n```\nAt most four agents may run at once\n```",
+            "Sub-agent agent-a failed — result sent to the model",
+        ] {
+            assert!(text.contains(expected), "{expected}\n---\n{text}");
+        }
+        assert!(!text.contains("raw"), "{text}");
+    }
+
     #[test]
     fn wake_event_export_keeps_all_matching_lines_and_pause_notice() {
         let lines = (1..=20).map(|i| format!("error {i}\n")).collect::<String>();
@@ -883,11 +1042,13 @@ _Failed: model unreachable_
                 id: "event".into(),
                 command_id: Some(1),
                 text: lines.clone(),
+                agent: None,
             },
             Item::BackgroundEvent {
                 id: "limit".into(),
                 command_id: None,
                 text: "Auto wake paused: send a message to resume.".into(),
+                agent: None,
             },
         ];
         let exported = markdown(&snapshot(None, vec![wake]), "now").unwrap();

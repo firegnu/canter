@@ -148,6 +148,7 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
             snapshot.agent = Some(crate::AgentState {
                 status: crate::AgentStatus::Running,
                 result: None,
+                stopped_by_user: false,
             });
         }
         EventPayload::TurnRetracted { turn_id } => {
@@ -380,6 +381,9 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
         | EventPayload::TelemetryApproval { .. }
         | EventPayload::TelemetryModelRequest { .. }
         | EventPayload::Warning { .. }
+        // `agent.stopped` is applied by `update_agent`; `agent.updated` is for clients.
+        | EventPayload::AgentStopped { .. }
+        | EventPayload::AgentUpdated { .. }
         | EventPayload::Unknown => {}
     }
     if matches!(
@@ -406,12 +410,17 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
 
 fn update_agent(snapshot: &mut SessionSnapshot, payload: &EventPayload) {
     use crate::{AgentState, AgentStatus, SessionCloseReason};
-    let is_agent_turn = |turn: &crate::Turn| {
-        !matches!(
-            turn.client_name.as_str(),
-            "rewind" | "compact" | "userShell"
-        )
-    };
+    let is_agent_turn = |turn: &crate::Turn| crate::is_agent_turn(&turn.client_name);
+    if let EventPayload::AgentStopped { .. } = payload {
+        if let Some(agent) = snapshot
+            .agent
+            .as_mut()
+            .filter(|agent| agent.status == AgentStatus::Interrupted)
+        {
+            agent.stopped_by_user = true;
+        }
+        return;
+    }
     if matches!(payload, EventPayload::TurnStarted { turn, .. } | EventPayload::TurnCompleted { turn } if !is_agent_turn(turn))
     {
         return;
@@ -474,7 +483,17 @@ fn update_agent(snapshot: &mut SessionSnapshot, payload: &EventPayload) {
             })
             .flatten()
     };
-    snapshot.agent = Some(AgentState { status, result });
+    // "Stopped by you" lasts while the stopped turn is the latest.
+    let stopped_by_user = status == AgentStatus::Interrupted
+        && snapshot
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.stopped_by_user);
+    snapshot.agent = Some(AgentState {
+        status,
+        result,
+        stopped_by_user,
+    });
 }
 
 /// Adds to a known time; an unknown one stays unknown.
