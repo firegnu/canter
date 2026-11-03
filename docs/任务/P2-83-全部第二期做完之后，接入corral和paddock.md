@@ -93,4 +93,5 @@
 - 用户问订事件流放 corral 核心还是接入文件；主控查了 corral 没有外部插件机制，建议订阅和翻译放 canter 的接入文件、公共代码只加通用挂点，写进需求单由 ranch 定。
 - 用户确认范围：「这一版不做pause和fence，其他都会做，包括paddock相关的」；pony 也算（提醒、列表、送话自动能用，补「拒绝」「打断」的按法）。
 - 受管理模式：「做全的，按你的建议走」。
-- 拆分：canter 三件 P2-190、P2-191、P2-192，一件做完派下一件；最后 P2-193 联调；corral、paddock、pony 的需求单放 `docs/需求/` 交用户。决定写进 DESIGN「接 corral、paddock、pony（P2-83）」一节。
+- 拆分：canter 三件 P2-190、P2-191、P2-192，一件做完派下一件；最后 P2-193 联调；corral、paddock、pony 的需求单直接交用户，由用户放进各自仓库（canter 仓库不放，DESIGN 第 1 条）。决定写进 DESIGN「接 corral、paddock、pony（P2-83）」一节。
+- 用户：「我的意思是功能不能反向依赖，而不是开发顺序。以后canter要能独立运行的」。三件都是通用、可选的能力，规则写进 DESIGN「接 corral、paddock、pony（P2-83）」最后一条和各件任务文件；需求单不进 canter 仓库。
