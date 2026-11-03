@@ -167,3 +167,7 @@
 - 取舍表态：16 色下用红色代替橙色，同意（用户试用时看）；保留 P2-188 的结束时刻 ` · 11:13`，同意；被打断、失败那行的 ` · 12s` 挪进 `Worked for` 行，同意；所有动词后加 `…`，同意；后台命令、子 agent 那两行排在 Tip 下面，同意；进行中那一轮不填金额，同意。
 - 合并前主控跑全套：`cargo nextest run --all-targets` 1622 个里 1620 过、2 个失败（49 个跳过）。一个是 HANDOFF 里已记的 `canter-core::suggestions no_example_for_non_git_empty_git_disabled_or_timed_out_git`；另一个是 P2-192 加的 `close_on_exit::managed_hup_exits_within_five_seconds_while_server_finishes_cleanup`，单独重跑仍失败，查到是测试自己的竞争（子进程 `fs::write` 写 `ready.json`，父进程一见文件就读，读到空文件），主控让开发在本分支改成先写临时文件再改名（`bf972b1`，只改测试辅助代码），之后 `close_on_exit` 8 个全过。`cargo test --doc --workspace` 通过。
 - 结果：一次过
+
+## 用户试用
+
+- 2026-11-03 用户装上 `16fb98c` 试用：「看起来感官不错」。
