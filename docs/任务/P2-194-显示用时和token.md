@@ -159,3 +159,11 @@
   - 16 色的扫光原来按 `light >= 0.5` 分两档，正好落在 f32 的 cos 边界上，结果不稳；改成 `>= 0.6`。
   - 画屏幕那段已有一个叫 `lead` 的变量（对话前面的空行），Tip 的前缀起名 `tip_lead` 避开遮蔽。
 - **合并前补修（主控决定）**：主控跑全套时 P2-192 的 `close_on_exit::managed_hup_exits_within_five_seconds_while_server_finishes_cleanup` 失败，单独重跑也失败（`crates/canter/tests/support/close_on_exit.rs` 解析 `ready.json` 时 EOF）。原因是测试自己的竞争：子进程用 `fs::write` 写 `ready.json`，父进程一看到文件存在就读，可能读到还没写完的空文件；本件改了画屏，时序变了更容易碰上。只改这一处：子进程先写同目录的 `ready.json.tmp`，再 `rename` 成 `ready.json`，父进程看到文件时内容已经完整。没改别的测试、断言、超时和功能代码。`cargo nextest run -p canter --test tui -E 'test(close_on_exit::)'` 8 个全过，clippy、`fmt --check`、`git diff --check` 都过。
+
+## 主控审查
+
+- 2026-11-03，canter/main 看了 diff：终端改状态行、底部排法、每轮结束一行和主题里的橙色；协议只在归并里把 `session.usage` 的 `last` 加到进行中那一轮（`/btw` 不加，`turn.completed` 照旧换成服务端整轮用量），加了 `TokenUsageBreakdown::add`，没加字段、没改已有字段含义；服务端计用量没动；没碰提示词、压缩、请求、缓存、模型历史；终端字符串没有中文。
+- 「怎么算做完」达到：第 1～5 节（含 1.1）都有针对测试，开发说明改前失败、改后通过。
+- 取舍表态：16 色下用红色代替橙色，同意（用户试用时看）；保留 P2-188 的结束时刻 ` · 11:13`，同意；被打断、失败那行的 ` · 12s` 挪进 `Worked for` 行，同意；所有动词后加 `…`，同意；后台命令、子 agent 那两行排在 Tip 下面，同意；进行中那一轮不填金额，同意。
+- 合并前主控跑全套：`cargo nextest run --all-targets` 1622 个里 1620 过、2 个失败（49 个跳过）。一个是 HANDOFF 里已记的 `canter-core::suggestions no_example_for_non_git_empty_git_disabled_or_timed_out_git`；另一个是 P2-192 加的 `close_on_exit::managed_hup_exits_within_five_seconds_while_server_finishes_cleanup`，单独重跑仍失败，查到是测试自己的竞争（子进程 `fs::write` 写 `ready.json`，父进程一见文件就读，读到空文件），主控让开发在本分支改成先写临时文件再改名（`bf972b1`，只改测试辅助代码），之后 `close_on_exit` 8 个全过。`cargo test --doc --workspace` 通过。
+- 结果：一次过
