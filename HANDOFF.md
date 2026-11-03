@@ -173,7 +173,7 @@
 - P2-22 记忆（11-01 合并，没装）交叉审查没改的：
   - 已打开的受限会话转可信时，记忆加载失败的那条警告写在快照游标之前，正在打开的客户端看不到（之前已连着的看得到）；例外和提示词是对的。
   - 可以不改：每次打开可信会话都会建 `projects/<键>/memory` 空目录；用 shell 在记忆目录建的符号链接 `/memory` 不列、也删不了，只能手动清；没存分段的旧会话被可信分叉后信任又变时，前缀只用记忆段重建，下次普通打开整段重算；`canter-core/tests/prompts.rs` 用 `include_str!` 读任务文件里的批准原文，改那个代码块测试会失败。
-- 测试 `canter::deployment service_environment_survives_every_start_and_path_based_mcp_connects`（P2-14 加的）在 P2-22 合并前全套刚开跑时失败一次（第 20 个），报 `["serve", "--replace"]: … stderr: "canter: cannot connect to the registered server; it was not replaced"`（`crates/canter/tests/deployment.rs:189`），单独重跑通过。和下面 discovery 那两个一样像负载高时的偶发；再失败时看是不是旧服务端已登记、还没开始接连接时被探测。
+- 测试 `canter::deployment service_environment_survives_every_start_and_path_based_mcp_connects`（P2-14 加的）在 P2-22 合并前全套刚开跑时失败一次（第 20 个），报 `["serve", "--replace"]: … stderr: "canter: cannot connect to the registered server; it was not replaced"`（`crates/canter/tests/deployment.rs:189`），单独重跑通过。和下面 discovery 那两个一样像负载高时的偶发；再失败时看是不是旧服务端已登记、还没开始接连接时被探测。 11-03 P2-198 合并前全套里 `upgrade_keeps_five_backups_and_rollback_can_switch_back_again` 报同一句（`deployment.rs:125`），单独重跑通过。
 - P2-14（11-01 合并，已装 `f513989`）交叉审查可以不改：
   - `canter upgrade` 编译时 cargo 打一行 `warning: be sure to add `/var/folders/…/canter-install-…/bin` to your PATH`（11-01 第一次用时看到）：cargo 装进临时目录时的固定提醒，canter 随后自己把程序换到原路径，没影响。要去掉可以给 `cargo install` 加 `--quiet` 或过滤这一行，属于显示问题。
   - 会话写盘失败（事件文件写不进去）后，`/v1/runningTurns` 可能一直报 `Continuing a goal`，upgrade 默认会一直等；Ctrl-C 后 `canter serve --replace`。要补就在条件里加 `state.available()`。

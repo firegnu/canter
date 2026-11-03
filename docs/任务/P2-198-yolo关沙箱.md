@@ -83,3 +83,12 @@
 - 踩过的坑：新写的 Shift+Tab 测试连续发送两次切换时，第二次可能仍基于旧档位；改为等第一次服务端状态到达再发第二次。新增协议字段后两个比较工具示例缺少结构体字段，补了 false；协议导出一致性测试提示遗漏生成文件，用仓库导出器重新生成后通过。改动 crate 测试并行运行时，未改动的 `no_example_for_non_git_empty_git_disabled_or_timed_out_git` 一次读到刚创建但尚未写入的空 PID，报 `ParseIntError`；原样单独复跑通过，没有改测试、断言或超时。
 - 没做的事：没有真实模型调用（0 次），没有碰用户真实状态、安装程序或重启用户服务端，没有改其他仓库、发送消息、合并 main 或推送。实现和记录只提交在本任务分支；交叉审查、合并、全套和对外通知由主控处理。目前没有需要主控决定的事项。
 - 交叉审查返工（11-03）：按主控要求只处理「审查意见」第 1 条。在 `open_agent` 的 `Self::open` 之后、`attach_agent` 之前，调用 `set_sandbox_disabled(runtime.context.sandbox_disabled, runtime.options.sandbox)`，使从盘上重开的子 agent 采用父会话当时的实际沙箱，覆盖存盘的旧 yolo 豁免；仍在内存里的子 agent 路径不变。DESIGN 沙箱和子会话两节补齐此规则。新增服务端测试 `parent_send_input_reopens_child_with_current_sandbox`：带 `sandboxDisabled` 创建父子会话，关闭两者，不带该字段恢复父会话，再经 `AgentHost` 的 `SendInput`（模型 `send_input` 的同一路径）重开子会话。先确认失败于子会话仍为 `Some(false)`，修复后断言 `Some(true)`，并确认假模型命令写入项目内文件成功、写项目外失败。只跑新测试及 canter-core / canter-server 里直接相关的 6 项子 agent 回归测试，共 7 项全过；clippy、fmt、git diff 检查通过，均使用本分支独立编译目录、前台等到完成。没有重跑五个 crate 全部测试；第 2、3 条未改，无新踩坑或待主控决定事项。
+
+## 主控审查
+
+2026-11-03，canter/main。
+- 初审 `5286b72`：diff 只动了该动的，「不要做」没碰（没改 Shift+Tab、沙箱规则、权限三档含义，没加配置项）；沙箱选择记在每次打开的 `RuntimeContext`，不进存盘的权限档；配置重读保留豁免；DESIGN、协议 README、`--help`、exec 提示已改，屏幕文字是英文。
+- 开发中途停下问旧断言（`--yolo` 后 `/new` 显示 `Sandbox on`），主控定：这正是本件推翻的旧规矩，改成 `Sandbox off`，另加普通启动仍 `Sandbox on` 的回归测试；同类旧行为断言直接改、列在完成记录里。
+- 交叉审查（`P2-198-交叉审查.md`）1 条必须改：父会话从盘上重开子 agent 沿用存盘的 `--yolo` 豁免。返工 `877b65c` 照改，复核可以合并。可以不改的 3 条没改（`/sandbox` 关着时总提示 `--yolo`、换执行器后环境段半句不跟着变、DESIGN 写「已关掉」的子 agent 而重启后被标中断的也走同一条路）。
+- 合并前全套（含 P2-197、P2-199）：`cargo nextest run --all-targets` 1635 项，1634 过、1 项失败：`canter::deployment upgrade_keeps_five_backups_and_rollback_can_switch_back_again` 报 `cannot connect to the registered server; it was not replaced`，单独重跑通过；本件没碰升级替换路径，记进 HANDOFF。`cargo test --doc --workspace` 通过。
+结果：返工 1 次
