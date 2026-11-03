@@ -134,6 +134,48 @@ fn prompt_rows(input: &[UserInput], source: Option<&str>, width: u16) -> Vec<Row
 
 /// The model's text as markdown, indented two columns, for a screen `width`
 /// columns wide.
+/// What a model retry in a turn shows: retries in a row are one row, on the
+/// last of them. While it is the turn's latest item and the turn goes on,
+/// the retry on its way; after that, how many retries there were and why.
+pub(crate) enum Retry {
+    /// Another retry comes right after it.
+    Hidden,
+    Waiting(String),
+    Over(String),
+}
+
+/// `None` when the item at `index` is not a model retry.
+pub(crate) fn retry(turn: &Turn, index: usize) -> Option<Retry> {
+    let item = &turn.items[index];
+    let Item::ModelRetry { error, attempt, .. } = item else {
+        return None;
+    };
+    Some(match turn.items.get(index + 1) {
+        Some(Item::ModelRetry { .. }) => Retry::Hidden,
+        None if turn.status == TurnStatus::InProgress => Retry::Waiting(item.retry_message()?),
+        _ => Retry::Over(canter_protocol::model_retry_summary(
+            &error.message,
+            *attempt,
+        )),
+    })
+}
+
+/// The row for [`retry`]: the summary dim.
+pub(crate) fn retry_rows(retry: &Retry, width: u16) -> Vec<Row> {
+    let (text, style) = match retry {
+        Retry::Hidden => return Vec::new(),
+        Retry::Waiting(text) => (text, Style::default()),
+        Retry::Over(text) => (text, theme::secondary()),
+    };
+    wrap_rows(
+        &LogicalLine::new(
+            vec![Span::raw("  ")],
+            vec![Span::styled(sanitize(text), style)],
+        ),
+        width,
+    )
+}
+
 pub(crate) fn agent_message(text: &str, width: u16) -> Vec<LogicalLine> {
     markdown::render(&sanitize(text), width.saturating_sub(2))
         .into_iter()

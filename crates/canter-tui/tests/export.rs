@@ -37,7 +37,7 @@ fn retry_and_interrupted_reply_remain_visible_after_snapshot_reload_and_export()
     assert!(
         screen
             .text()
-            .contains("Retrying in 4.0s (3/10): server error 503"),
+            .contains("Retried 3 times after server error 503"),
         "{}",
         screen.text()
     );
@@ -50,7 +50,7 @@ fn retry_and_interrupted_reply_remain_visible_after_snapshot_reload_and_export()
     screen.wait_for("retry.md");
     let text = std::fs::read_to_string(screen.path("retry.md")).unwrap();
     assert!(text.contains("partial reply") && text.contains("_Interrupted_"));
-    assert!(text.contains("Retrying in 4.0s (3/10): server error 503"));
+    assert!(text.contains("Retried 3 times after server error 503"));
 }
 
 struct Screen {
@@ -320,4 +320,103 @@ fn mcp_search_card_survives_snapshot_reload_and_export() {
     let text = std::fs::read_to_string(screen.path("mcp.md")).unwrap();
     assert!(text.contains("Searched MCP tools `issue` · 1 found"));
     assert!(text.contains("mcp__github__issues"));
+}
+
+fn retry_json(id: &str, message: &str, attempt: u32, delay: f64) -> Value {
+    json!({"type":"modelRetry","id":id,"error":{"message":message,"additionalDetails":null},
+        "willRetry":true,"attempt":attempt,"maxRetries":10,"delaySeconds":delay})
+}
+
+impl Screen {
+    /// The rows that mention a retry.
+    fn retry_rows(&self) -> Vec<String> {
+        self.text()
+            .lines()
+            .filter(|row| row.contains("etr"))
+            .map(|row| row.trim().to_owned())
+            .collect()
+    }
+}
+
+/// Retries in a row are one row that changes while they go on and then says
+/// how many there were; exported the same. Text saved by older versions is
+/// shown as it was, also as one row.
+#[test]
+fn retries_in_a_row_are_one_row_then_a_dim_summary() {
+    let mut screen = Screen::with_turn(Ok(()));
+    let mut turn = json!({"id":"t2","items":[],"status":"inProgress","error":null,"input":[],"clientName":"test","usage":null});
+    screen.event(json!({"type":"turn.started","turn":turn}));
+    for (attempt, delay) in [(1, 0.5), (2, 1.2), (3, 2.0), (4, 3.9)] {
+        let item = retry_json(
+            &format!("r{attempt}"),
+            "server error (HTTP 500)",
+            attempt,
+            delay,
+        );
+        screen.event(json!({"type":"item.started","turnId":"t2","item":item}));
+        screen.event(json!({"type":"item.completed","turnId":"t2","item":item}));
+        screen.draw();
+        let seconds = delay.ceil() as u64;
+        assert_eq!(
+            screen.retry_rows(),
+            [format!(
+                "Server error (HTTP 500) · retrying in {seconds}s ({attempt}/10)"
+            )],
+            "{}",
+            screen.text()
+        );
+    }
+    let answer = json!({"type":"agentMessage","id":"m2","text":"好了。"});
+    screen.event(json!({"type":"item.completed","turnId":"t2","item":answer}));
+    screen.draw();
+    assert_eq!(
+        screen.retry_rows(),
+        ["Retried 4 times after server error (HTTP 500)"]
+    );
+    let buffer = screen.ui.backend().buffer();
+    let y = screen
+        .text()
+        .lines()
+        .position(|row| row.contains("Retried 4 times"))
+        .unwrap() as u16;
+    assert!(
+        buffer[(2, y)]
+            .modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
+    turn["status"] = json!("completed");
+    screen.event(json!({"type":"turn.completed","turn":turn}));
+
+    // An older session's text, as it was saved; one retry alone says once.
+    let mut old = json!({"id":"t3","items":[],"status":"inProgress","error":null,"input":[],"clientName":"test","usage":null});
+    screen.event(json!({"type":"turn.started","turn":old}));
+    for attempt in [1, 2] {
+        let item = retry_json(
+            &format!("o{attempt}"),
+            "model request failed: Server (HTTP status: Some(500))",
+            attempt,
+            1.0,
+        );
+        screen.event(json!({"type":"item.completed","turnId":"t3","item":item}));
+    }
+    screen.event(json!({"type":"item.completed","turnId":"t3","item":{"type":"agentMessage","id":"m3","text":"嗯。"}}));
+    let item = retry_json("o3", "network error", 1, 1.0);
+    screen.event(json!({"type":"item.completed","turnId":"t3","item":item}));
+    old["status"] = json!("completed");
+    screen.event(json!({"type":"turn.completed","turn":old}));
+    screen.draw();
+    let shown = [
+        "Retried 4 times after server error (HTTP 500)",
+        "Retried 2 times after model request failed: Server (HTTP status: Some(500))",
+        "Retried once after network error",
+    ];
+    assert_eq!(screen.retry_rows(), shown, "{}", screen.text());
+
+    screen.export(Export::File(Some("retries.md".into())));
+    screen.wait_for("retries.md");
+    let text = std::fs::read_to_string(screen.path("retries.md")).unwrap();
+    for line in shown {
+        assert_eq!(text.matches(line).count(), 1, "{text}");
+    }
+    assert!(!text.contains("retrying in"), "{text}");
 }

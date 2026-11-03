@@ -1008,12 +1008,9 @@ async fn authentication_error_preserves_partial_reply_for_the_next_turn() {
         unreachable!()
     };
     assert_eq!(turn.status, TurnStatus::Failed);
-    assert!(
-        turn.error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("Authentication")
+    assert_eq!(
+        turn.error.as_ref().unwrap().message,
+        "Model request failed: authentication failed (HTTP 401)"
     );
     assert_eq!(model.requests.lock().unwrap().len(), 1);
 

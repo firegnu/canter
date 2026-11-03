@@ -3493,7 +3493,7 @@ async fn handoff_cancellation_and_errors_leave_the_original_session_open() {
     assert_eq!(world.snapshot(&original).await, before);
     // Let the cancelled HTTP response reach the server before retrying.
     a.frames_later(2).await;
-    for expected in ["handoff note is empty", "Network", "Server"] {
+    for expected in ["handoff note is empty", "network error", "server error"] {
         a.type_line("/handoff").await;
         a.wait_until(expected, |a| {
             a.screen()
@@ -3569,10 +3569,10 @@ async fn btw_is_private_streams_and_escape_cancels_it_before_the_main_tool() {
     a.type_line("/btw try again").await;
     a.wait_for("private final answer").await;
     a.type_line("/btw broken connection").await;
-    a.wait_for("Retrying in").await;
-    assert!(!b.screen().contains("Retrying in"));
+    a.wait_for("retrying in").await;
+    assert!(!b.screen().contains("retrying in"));
     a.wait_for("Error:").await;
-    assert!(a.screen().contains("retried 1 times"));
+    assert!(a.screen().contains("after 1 retry"));
     assert_eq!(world.requests.lock().unwrap().len(), 5);
     assert_eq!(world.snapshot(&id).await.turns.len(), 1);
     let events =

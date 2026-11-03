@@ -3009,6 +3009,9 @@ impl App {
             let cwd = &self.snapshot.settings.cwd;
             return crate::lsp::rows(&turn.items, index, self.details, cwd, width);
         }
+        if let Some(retry) = cells::retry(turn, index) {
+            return cells::retry_rows(&retry, width);
+        }
         // A turn's first plan is the whole card; its later updates one row
         // each, unless Ctrl+O shows everything.
         if let Item::Plan {
@@ -5506,6 +5509,10 @@ impl App {
         };
         if let Some(status) = status {
             return status != ItemStatus::InProgress;
+        }
+        // A retry's row changes until something comes after it.
+        if matches!(item, Item::ModelRetry { .. }) {
+            return turn.status != TurnStatus::InProgress || index + 1 < turn.items.len();
         }
         let closed = item
             .id()

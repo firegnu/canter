@@ -992,7 +992,10 @@ async fn exec_reports_tools_and_retries_on_stderr_and_only_the_final_answer_on_s
     assert!(output.status.success(), "{output:?}");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Final answer.\n");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Retry"), "{stderr}");
+    assert!(
+        stderr.contains("Network error · retrying in 1s (1/1)"),
+        "{stderr}"
+    );
     assert!(stderr.contains("shell: printf tool-output"), "{stderr}");
     assert!(stderr.contains("Tool failed"), "{stderr}");
     world.stop().await;
