@@ -15,8 +15,8 @@ use super::bar::{Bar, Entry, Values};
 use crate::text::{sanitize, truncate};
 use crate::theme;
 
-const TITLE: &str = " Configure status line";
-const KEYS: &str = " Space toggle · ←/→ move · Enter save · Esc cancel";
+const TITLE: &str = "Configure status line";
+const KEYS: &str = "Space toggle · ←/→ move · Enter save · Esc cancel";
 const SWITCH: &str = "[x] Use statusLine script";
 /// Item names are padded to the longest, `permission`, and three spaces.
 const NAME_WIDTH: usize = "permission".len() + 3;
@@ -84,19 +84,16 @@ impl Setup {
         }
     }
 
-    /// At most `max` rows: the title and the keys, the switch, the entries,
-    /// then the preview. When the entries do not all fit, they show only
+    /// At most `max` rows: the title, the switch, the entries, the preview,
+    /// then the keys. When the entries do not all fit, they show only
     /// the rows around the one selected, with how many more there are above
     /// and below; the rest stays. With fewer than three rows left for the
     /// entries, the preview folds away; nothing when not even one fits.
     pub fn rows(&self, width: u16, max: usize, values: &Values) -> Vec<Line<'static>> {
         let width = usize::from(width);
         let cut = |spans: Vec<Span<'static>>| Line::from(truncate(spans, width));
-        let mut head = vec![
-            cut(vec![Span::styled(TITLE, Style::new().bold())]),
-            cut(vec![Span::styled(KEYS, theme::secondary())]),
-            Line::default(),
-        ];
+        let mut head = vec![cut(crate::report::title(TITLE, "")), Line::default()];
+        let keys = cut(vec![crate::report::keys(KEYS)]);
         if self.script.is_some() {
             let mark = if self.bar.use_script { "[x]" } else { "[ ]" };
             head.push(cut(row(
@@ -135,10 +132,10 @@ impl Setup {
             second,
         ];
         let entries = self.entries(values);
-        let mut room = max.saturating_sub(head.len() + tail.len());
+        let mut room = max.saturating_sub(head.len() + tail.len() + 1);
         if room < entries.len() && room < 3 {
             tail.clear();
-            room = max.saturating_sub(head.len());
+            room = max.saturating_sub(head.len() + 1);
         }
         if room == 0 {
             return Vec::new();
@@ -147,6 +144,7 @@ impl Setup {
         let at = self.selected.saturating_sub(self.switch());
         head.extend(window(entries, at, room).into_iter().map(cut));
         head.extend(tail);
+        head.push(keys);
         head
     }
 

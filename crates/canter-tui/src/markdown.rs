@@ -152,13 +152,15 @@ impl Renderer {
     fn start(&mut self, tag: Tag) {
         match tag {
             Tag::Paragraph | Tag::HtmlBlock => self.block_start(),
+            // Told apart from each other and from bold in a paragraph: `#`
+            // underlined, `##` in the accent colour, `###` and below italic.
             Tag::Heading { level, .. } => {
                 self.block_start();
                 let style = Style::new().bold();
-                self.styles.push(if level == HeadingLevel::H1 {
-                    style.underlined()
-                } else {
-                    style
+                self.styles.push(match level {
+                    HeadingLevel::H1 => style.underlined(),
+                    HeadingLevel::H2 => style.patch(theme::accent()),
+                    _ => style.italic(),
                 });
             }
             Tag::BlockQuote(_) => {

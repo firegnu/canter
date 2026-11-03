@@ -109,7 +109,7 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
 
     open_list(&mut test, "test", json!([a, b, c])).await;
     let text = shown(&test);
-    assert!(has(&test, &["▾ 3 sub-agents · 2 running"]), "{text}");
+    assert!(has(&test, &[" Sub-agents · 3 · 2 running"]), "{text}");
     assert!(!text.contains("▸ 2 sub-agents"), "{text}");
     assert!(
         has(&test, &["› ● agent-a", "explorer · running 42s"]),
@@ -121,7 +121,7 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
         "{text}"
     );
     assert!(
-        has(&test, &["↑↓ select · enter open · s stop · esc close"]),
+        has(&test, &["↑↓ select · Enter open · s stop · Esc close"]),
         "{text}"
     );
 
@@ -145,7 +145,7 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
         has(&test, &["■ agent-a", "explorer · stopped by you 5s"]),
         "{text}"
     );
-    assert!(has(&test, &["▾ 3 sub-agents · 1 running"]), "{text}");
+    assert!(has(&test, &[" Sub-agents · 3 · 1 running"]), "{text}");
     // Not running any more: `s` does nothing.
     assert_eq!(press(&mut test, KeyCode::Char('s')), None);
     press(&mut test, KeyCode::Down);
@@ -157,7 +157,7 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     test.event(payload(json!({ "type": "agent.updated", "agent": b })));
     let text = shown(&test);
     assert!(
-        rows(&test).iter().any(|row| row.trim() == "▾ 3 sub-agents"),
+        rows(&test).iter().any(|row| row.trim() == "Sub-agents · 3"),
         "{text}"
     );
     assert!(has(&test, &["✗ agent-b", "general · failed 9s"]), "{text}");

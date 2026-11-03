@@ -295,12 +295,7 @@ impl View {
     }
 
     pub fn report(&self, home: Option<&str>) -> Report {
-        let title = |text: String| {
-            vec![
-                Span::styled(" LSP", Style::new().bold()),
-                Span::styled(text, theme::secondary()),
-            ]
-        };
+        let title = |detail: String| crate::report::title("LSP", &detail);
         if self.detail
             && let Some(server) = self.current()
         {
@@ -318,17 +313,11 @@ impl View {
                     rows: 3,
                 });
             }
-            return Report::new(
-                title(format!("  {}", clean(&server.name))),
-                body,
-                vec![vec![Span::styled(
-                    " s stop · r retry · Backspace list",
-                    theme::secondary(),
-                )]],
-            );
+            return Report::new(title(clean(&server.name)), body, Vec::new())
+                .keys(" s stop · r retry · Backspace list · Esc close");
         }
         let count = self.servers.len() as u32;
-        let title = title(format!("  {}", plural(count, "server")));
+        let title = title(plural(count, "server"));
         if self.servers.is_empty() {
             let body = vec![
                 Part::Line(vec![Span::raw(" No language servers for this session.")]),
@@ -366,7 +355,7 @@ impl View {
 /// `/lsp` when the server does not have the `lsp` feature.
 pub(crate) fn unsupported() -> Report {
     Report::new(
-        vec![Span::styled(" LSP", Style::new().bold())],
+        crate::report::title("LSP", ""),
         vec![Part::Wrap {
             indent: 1,
             text: "This canter server does not support LSP. Run canter serve --replace.".into(),

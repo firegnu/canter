@@ -21,6 +21,7 @@ const SESSION: &str = "s1";
 const WIDTH: u16 = 80;
 const HEIGHT: u16 = 30;
 const TITLE: &str = " Configure status line";
+const KEYS: &str = " Space toggle · ←/→ move · Enter save · Esc cancel";
 
 /// A temporary home with `CANTER_HOME` in it (or not), and the session's
 /// directory `~/src/canter`, a git repository on `main`.
@@ -287,7 +288,6 @@ fn statusline_shows_every_item_with_its_value_and_a_preview() {
         screen.picker(),
         [
             TITLE,
-            " Space toggle · ←/→ move · Enter save · Esc cancel",
             "",
             " › [x] model        deepseek-v4-pro",
             "   [x] thinking     think high",
@@ -306,6 +306,7 @@ fn statusline_shows_every_item_with_its_value_and_a_preview() {
             " Preview",
             "  deepseek-v4-pro · think high · Always ask · $0.12",
             "  ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12% of window) · cache 95% (last 98…",
+            KEYS,
         ]
     );
     // Nothing is saved or changed yet.
@@ -324,7 +325,7 @@ fn space_and_arrows_change_the_preview_as_they_go() {
     screen.enter("/statusline");
 
     screen.key(KeyCode::Char(' '));
-    assert_eq!(screen.picker()[3], " › [ ] model        deepseek-v4-pro");
+    assert_eq!(screen.picker()[2], " › [ ] model        deepseek-v4-pro");
     assert_eq!(
         screen.preview(),
         [
@@ -335,8 +336,8 @@ fn space_and_arrows_change_the_preview_as_they_go() {
 
     // Back on, then one place later.
     screen.keys(&[KeyCode::Char(' '), KeyCode::Right]);
-    assert_eq!(screen.picker()[3], "   [x] thinking     think high");
-    assert_eq!(screen.picker()[4], " › [x] model        deepseek-v4-pro");
+    assert_eq!(screen.picker()[2], "   [x] thinking     think high");
+    assert_eq!(screen.picker()[3], " › [x] model        deepseek-v4-pro");
     assert_eq!(
         screen.preview()[0],
         "  think high · deepseek-v4-pro · Always ask · $0.12"
@@ -344,7 +345,7 @@ fn space_and_arrows_change_the_preview_as_they_go() {
 
     // The line 2 row moves like an item: one place up puts cost on line 2.
     screen.keys(&[KeyCode::Down, KeyCode::Down, KeyCode::Down, KeyCode::Left]);
-    assert_eq!(screen.picker()[6], " › ─── line 2 ───");
+    assert_eq!(screen.picker()[5], " › ─── line 2 ───");
     assert_eq!(
         screen.preview(),
         [
@@ -355,14 +356,14 @@ fn space_and_arrows_change_the_preview_as_they_go() {
 
     // tps checked, and moved up to after the branch.
     screen.keys(&[KeyCode::Down; 7]);
-    assert_eq!(screen.picker()[13], " › [ ] tps          32.5 tok/s");
+    assert_eq!(screen.picker()[12], " › [ ] tps          32.5 tok/s");
     screen.keys(&[
         KeyCode::Char(' '),
         KeyCode::Left,
         KeyCode::Left,
         KeyCode::Left,
     ]);
-    assert_eq!(screen.picker()[10], " › [x] tps          32.5 tok/s");
+    assert_eq!(screen.picker()[9], " › [x] tps          32.5 tok/s");
     let second = &screen.preview()[1];
     assert!(
         second.starts_with(
@@ -373,9 +374,9 @@ fn space_and_arrows_change_the_preview_as_they_go() {
 
     // At the end, the line leaves line 2 empty.
     screen.keys(&[KeyCode::Up; 4]);
-    assert_eq!(screen.picker()[6], " › ─── line 2 ───");
+    assert_eq!(screen.picker()[5], " › ─── line 2 ───");
     screen.keys(&[KeyCode::Right; 11]);
-    assert_eq!(screen.picker()[15], " › ─── line 2 ───");
+    assert_eq!(screen.picker()[14], " › ─── line 2 ───");
     let [first, second] = screen.preview();
     assert!(
         first.starts_with(
@@ -455,9 +456,9 @@ fn a_terminal_opened_later_reads_the_same_settings_back() {
     );
     screen.enter("/statusline");
     let picker = screen.picker();
-    assert_eq!(picker[7], "   [x] cost");
-    assert_eq!(picker[12], "   [ ] tps");
-    assert_eq!(picker[15], "   [x] session      会话名字");
+    assert_eq!(picker[6], "   [x] cost");
+    assert_eq!(picker[11], "   [ ] tps");
+    assert_eq!(picker[14], "   [x] session      会话名字");
 
     let mut again = home.open(None);
     assert_eq!(again.bar(), bar);
@@ -477,7 +478,7 @@ fn esc_closes_without_saving() {
     assert_eq!(screen.bar(), bar);
     assert!(!home.tui_json().exists());
     screen.enter("/statusline");
-    assert_eq!(screen.picker()[3], " › [x] model        test-model");
+    assert_eq!(screen.picker()[2], " › [x] model        test-model");
 }
 
 #[test]
@@ -502,7 +503,7 @@ fn an_unreadable_tui_json_means_the_defaults_and_unknown_items_are_skipped() {
         screen.draw();
         assert!(!screen.status().contains("tui.json"), "{}", screen.status());
         screen.enter("/statusline");
-        assert_eq!(screen.picker()[3], " › [x] model        test-model");
+        assert_eq!(screen.picker()[2], " › [x] model        test-model");
     }
 
     let home = Home::new();
@@ -536,9 +537,9 @@ async fn with_a_script_a_switch_on_top_chooses_the_script_or_the_items() {
     screen.wait_for("custom").await;
     screen.enter("/statusline");
     let picker = screen.picker();
-    assert_eq!(picker[3], " › [x] Use statusLine script");
-    assert!(picker[4].starts_with("   ───"), "{picker:?}");
-    assert_eq!(picker[5], "   [x] model        test-model");
+    assert_eq!(picker[2], " › [x] Use statusLine script");
+    assert!(picker[3].starts_with("   ───"), "{picker:?}");
+    assert_eq!(picker[4], "   [x] model        test-model");
     assert!(
         screen.preview()[0].contains("statusLine script"),
         "{picker:?}"
@@ -546,7 +547,7 @@ async fn with_a_script_a_switch_on_top_chooses_the_script_or_the_items() {
 
     // Off: the items below show, and the script stops running.
     screen.key(KeyCode::Char(' '));
-    assert_eq!(screen.picker()[3], " › [ ] Use statusLine script");
+    assert_eq!(screen.picker()[2], " › [ ] Use statusLine script");
     assert_eq!(
         screen.preview()[0],
         "  test-model · think high · Always ask"
@@ -574,7 +575,7 @@ async fn with_a_script_a_switch_on_top_chooses_the_script_or_the_items() {
 
     // On again: back to the script.
     again.enter("/statusline");
-    assert_eq!(again.picker()[3], " › [ ] Use statusLine script");
+    assert_eq!(again.picker()[2], " › [ ] Use statusLine script");
     again.keys(&[KeyCode::Char(' '), KeyCode::Enter]);
     again.wait_for("custom").await;
     assert_eq!(std::fs::read_to_string(&config).unwrap(), config_text);
@@ -618,13 +619,10 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
         " Preview",
         "  test-model · think high · Always ask",
         "  ~/src/canter (main)",
+        KEYS,
     ];
     let shown = |list: &[&str]| -> Vec<String> {
-        let head = [
-            TITLE,
-            " Space toggle · ←/→ move · Enter save · Esc cancel",
-            "",
-        ];
+        let head = [TITLE, ""];
         head.iter()
             .chain(list)
             .chain(&preview)
@@ -658,7 +656,7 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
     screen.keys(&[KeyCode::Right; 2]);
     let picker = screen.picker();
     assert_eq!(
-        picker[3..8],
+        picker[2..7],
         [
             "   ↑ 4 more",
             "   [x] directory    ~/src/canter",
@@ -668,12 +666,13 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
         ]
     );
     assert_eq!(
-        picker[8..],
+        picker[7..],
         [
             "",
             " Preview",
             "  test-model · think high · Always ask · ~/src/canter (main)",
             "",
+            KEYS,
         ]
     );
     screen.keys(&[KeyCode::Left; 2]);
@@ -696,7 +695,6 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
         screen.picker(),
         [
             TITLE,
-            " Space toggle · ←/→ move · Enter save · Esc cancel",
             "",
             "   ↑ 8 more",
             "   [x] context",
@@ -704,6 +702,7 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
             "   [ ] tps",
             "   [ ] version      0.1.0 · a3b8fe7",
             " › [ ] session      会话名字",
+            KEYS,
         ]
     );
 }
@@ -756,7 +755,7 @@ fn a_tui_json_saved_with_compact_and_before_diff_gets_diff_after_the_branch_unti
         let mark = if branch { 'x' } else { ' ' };
         let picker = screen.picker();
         assert_eq!(
-            picker[9..13],
+            picker[8..12],
             [
                 format!("   [{mark}] branch       (main)"),
                 "   [x] diff".to_owned(),
@@ -774,11 +773,11 @@ fn a_tui_json_saved_with_compact_and_before_diff_gets_diff_after_the_branch_unti
     let mut screen = home.open(None);
     screen.enter("/statusline");
     screen.keys(&[KeyCode::Down; 7]);
-    assert_eq!(screen.picker()[10], " › [x] diff");
+    assert_eq!(screen.picker()[9], " › [x] diff");
     screen.keys(&[KeyCode::Char(' '), KeyCode::Enter]);
     let mut again = home.open(None);
     again.enter("/statusline");
-    assert_eq!(again.picker()[10], "   [ ] diff");
+    assert_eq!(again.picker()[9], "   [ ] diff");
 }
 
 #[test]

@@ -68,17 +68,14 @@ pub(crate) async fn popup(snapshot: &SessionSnapshot, home: Option<&str>) -> Rep
         Status::Repository { entries, .. } => entries.len(),
         Status::Unavailable(_) => 0,
     };
-    let title = vec![
-        Span::styled(" Files", Style::new().bold()),
-        Span::styled(
-            format!(
-                "  read {} · changed {} · git {git_count}",
-                read.len(),
-                changed.len()
-            ),
-            theme::secondary(),
+    let title = crate::report::title(
+        "Files",
+        &format!(
+            "read {} · changed {} · git {git_count}",
+            read.len(),
+            changed.len()
         ),
-    ];
+    );
     let mut body = vec![heading("Read", None)];
     if read.is_empty() {
         body.push(none("(none)"));

@@ -1076,6 +1076,11 @@ impl App {
         &self.snapshot
     }
 
+    /// The user's home directory, for showing paths as `~/…`.
+    pub(crate) fn home(&self) -> Option<&str> {
+        self.home.as_deref()
+    }
+
     pub fn apply_event(&mut self, event: &Event, now_ms: i64) {
         if event.payload.is_ephemeral() {
             if event.session_id != self.snapshot.id {
@@ -2212,13 +2217,9 @@ impl App {
         self.skills = skills;
     }
 
+    /// `/usage`: opens above the input box.
     pub fn show_usage(&mut self, report: &canter_protocol::UsageResponse) {
-        self.show(
-            crate::usage::format_report(report)
-                .into_iter()
-                .map(|line| LogicalLine::new(vec![Span::raw("  ")], vec![Span::raw(line)]))
-                .collect(),
-        );
+        self.open_report(crate::usage::popup(report));
     }
 
     pub(crate) fn start_btw(&mut self, question: &str) -> Result<Option<Action>, String> {

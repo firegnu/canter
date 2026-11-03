@@ -382,8 +382,15 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
     assert!(!screen.text().contains("PRIVATE ASSEMBLED"));
 }
 
-/// Every command, in the list's order, with what the list says about it.
+/// Every command, in the list's order (by name), with what the list says about it.
 const COMMANDS: [(&str, &str); 36] = [
+    ("/add-dir", "Add a directory to this session"),
+    ("/agents", "List sub-agents and open or stop one"),
+    (
+        "/btw",
+        "Ask one question without adding it to the conversation",
+    ),
+    ("/clear", "Start a new session (same as /new)"),
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
@@ -391,6 +398,15 @@ const COMMANDS: [(&str, &str); 36] = [
     ("/exit", "Quit canter"),
     ("/export", "Save or copy the conversation as Markdown"),
     ("/files", "List session files and git status"),
+    (
+        "/fork",
+        "Copy completed turns into a new session and switch to it",
+    ),
+    (
+        "/goal",
+        "Set or view a goal; pause, resume, clear, or --budget USD",
+    ),
+    ("/handoff", "Draft a handoff note in a new session"),
     ("/help", "Show available commands"),
     ("/init", "Create or improve AGENTS.md for this project"),
     ("/lsp", "Show language servers"),
@@ -399,39 +415,23 @@ const COMMANDS: [(&str, &str); 36] = [
     ("/mode", "Change the permission mode"),
     ("/model", "Change the model"),
     ("/new", "Start a new session"),
-    (
-        "/fork",
-        "Copy completed turns into a new session and switch to it",
-    ),
-    ("/clear", "Start a new session (same as /new)"),
     ("/permissions", "View and delete command and file rules"),
     ("/plan", "Enter or leave read-only Plan mode"),
-    ("/resume", "Switch to another session"),
+    ("/ps", "List background commands and inspect or stop one"),
     ("/rename", "Rename this session; omit the name to clear it"),
-    ("/sandbox", "Show what the sandbox allows"),
-    ("/skills", "List this session's skills"),
-    ("/think", "Change thinking effort (none, low, high, max)"),
-    ("/usage", "Show this session's token usage and cost"),
-    (
-        "/btw",
-        "Ask one question without adding it to the conversation",
-    ),
-    ("/handoff", "Draft a handoff note in a new session"),
+    ("/resume", "Switch to another session"),
     (
         "/review",
         "Review uncommitted changes or a PR number/URL (read-only)",
     ),
     ("/rewind", "Rewind conversation, files, or both"),
+    ("/sandbox", "Show what the sandbox allows"),
+    ("/skills", "List this session's skills"),
     ("/statusline", "Choose and order what the status line shows"),
-    ("/ps", "List background commands and inspect or stop one"),
-    ("/agents", "List sub-agents and open or stop one"),
     ("/stop", "Stop all background commands in this session"),
     ("/theme", "Choose the code colour theme"),
-    ("/add-dir", "Add a directory to this session"),
-    (
-        "/goal",
-        "Set or view a goal; pause, resume, clear, or --budget USD",
-    ),
+    ("/think", "Change thinking effort (none, low, high, max)"),
+    ("/usage", "Show this session's token usage and cost"),
 ];
 
 struct Screen {
@@ -732,8 +732,12 @@ fn a_slash_lists_the_commands_above_the_input_box() {
             "{name} on {row:?}:\n{shown}"
         );
     }
-    assert!(list[0].starts_with(" › /compact"), "{shown}");
-    assert!(list[1].starts_with("   /context"), "{shown}");
+    assert!(list[0].starts_with(" › /add-dir"), "{shown}");
+    assert!(list[1].starts_with("   /agents"), "{shown}");
+    let names: Vec<&str> = COMMANDS.iter().map(|(name, _)| *name).collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    assert_eq!(names, sorted, "the list is by name");
 
     screen.type_text("e");
     screen.draw();
@@ -751,6 +755,28 @@ fn a_slash_lists_the_commands_above_the_input_box() {
     assert!(screen.no_list(), "{}", screen.text());
 }
 
+/// What is typed narrows the list; what is left stays by name.
+#[test]
+fn a_narrowed_list_stays_by_name() {
+    for (typed, left) in [
+        ("/re", ["/rename", "/resume", "/review", "/rewind"]),
+        ("/s", ["/sandbox", "/skills", "/statusline", "/stop"]),
+    ] {
+        let mut screen = Screen::sized(WIDTH, COMMANDS.len() as u16 + 6);
+        screen.type_text(typed);
+        screen.draw();
+        let shown = screen.text();
+        let rows = screen.above_box(left.len());
+        for (row, name) in rows.iter().zip(left) {
+            assert_eq!(
+                row.split_whitespace().find(|word| word.starts_with('/')),
+                Some(name),
+                "{typed}:\n{shown}"
+            );
+        }
+    }
+}
+
 /// Up and Down move the selection; Tab, or Enter on a name not typed in
 /// full, completes the input to the selected command; Enter then runs it.
 #[test]
@@ -765,14 +791,14 @@ fn up_down_tab_and_enter_work_on_the_list() {
     screen.draw();
     let shown = screen.text();
     assert!(
-        screen.above_box(COMMANDS.len())[1].starts_with(" › /context"),
+        screen.above_box(COMMANDS.len())[1].starts_with(" › /agents"),
         "{shown}"
     );
 
     assert_eq!(screen.key(KeyCode::Tab), None);
     screen.draw();
-    assert_eq!(screen.input(), "› /context", "{}", screen.text());
-    assert_eq!(screen.key(KeyCode::Enter), Some(Action::Context));
+    assert_eq!(screen.input(), "› /agents", "{}", screen.text());
+    assert_eq!(screen.key(KeyCode::Enter), Some(Action::AgentList));
 
     // Enter on `/` alone completes the command selected, like Tab.
     let mut screen = Screen::new();
@@ -781,20 +807,20 @@ fn up_down_tab_and_enter_work_on_the_list() {
     assert_eq!(screen.key(KeyCode::Down), None);
     assert_eq!(screen.key(KeyCode::Enter), None);
     screen.draw();
-    assert_eq!(screen.input(), "› /context", "{}", screen.text());
-    assert_eq!(screen.key(KeyCode::Enter), Some(Action::Context));
+    assert_eq!(screen.input(), "› /agents", "{}", screen.text());
+    assert_eq!(screen.key(KeyCode::Enter), Some(Action::AgentList));
 }
 
 /// The user's decision: Enter runs a command only when its whole name is
 /// typed. `/` alone or the start of a name only completes the command
-/// selected (`/compact` comes first), so a quick `/` and Enter does not
-/// compact the session; the next Enter does.
+/// selected (`/add-dir` comes first), so a quick `/` and Enter runs
+/// nothing; the next Enter runs the command completed.
 #[test]
 fn enter_runs_only_a_whole_command_name() {
     let mut screen = Screen::new();
     assert_eq!(screen.enter("/"), None, "/ and Enter runs nothing");
     screen.draw();
-    assert_eq!(screen.input(), "› /compact", "{}", screen.text());
+    assert_eq!(screen.input(), "› /add-dir", "{}", screen.text());
     assert!(screen.no_list(), "{}", screen.text());
 
     let mut screen = Screen::new();
@@ -873,42 +899,53 @@ fn clear_does_what_new_does() {
     );
 }
 
+/// `/usage` opens above the input box like `/context`: the title, the table
+/// with token counts as `340k` and `1.2M`, the last turn's cost, then the
+/// keys. Esc closes it and leaves nothing in the conversation.
 #[test]
-fn usage_displays_models_total_last_turn_and_unknown_costs() {
-    let mut screen = Screen::new();
+fn usage_opens_above_the_input_box_with_short_token_counts() {
+    let mut screen = Screen::sized(WIDTH, 30);
     assert_eq!(screen.enter("/usage"), Some(Action::Usage));
     let report = serde_json::from_value(json!({
         "data":[
-            {"model":"deepseek-flash","cachedInputTokens":800,"uncachedInputTokens":200,"outputTokens":100,"cost":{"usd":0.001,"unknown":false}},
+            {"model":"deepseek-flash","cachedInputTokens":340000,"uncachedInputTokens":1200000,"outputTokens":950,"cost":{"usd":0.001,"unknown":false}},
             {"model":"unpriced","cachedInputTokens":20,"uncachedInputTokens":30,"outputTokens":40,"cost":{"usd":0.0,"unknown":true}}
         ],
-        "total":{"cachedInputTokens":820,"uncachedInputTokens":230,"outputTokens":140,"cost":{"usd":0.001,"unknown":true}},
+        "total":{"cachedInputTokens":340020,"uncachedInputTokens":1200030,"outputTokens":990,"cost":{"usd":0.001,"unknown":true}},
         "lastTurnCost":{"usd":0.12,"unknown":false}
     })).unwrap();
     screen.ui.app_mut().show_usage(&report);
     screen.draw();
-    let rows = screen
-        .lines()
-        .into_iter()
-        .filter(|line| line.starts_with("  "))
-        .map(|line| {
-            line.split_whitespace()
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    let shown = screen.text();
+    let popup = screen.above_box(9);
+    let words: Vec<Vec<&str>> = popup
+        .iter()
+        .map(|row| row.split_whitespace().collect())
+        .collect();
     assert_eq!(
-        rows,
+        words,
         vec![
+            vec!["Usage"],
+            vec![],
             vec![
                 "Model", "Cache", "hit", "Cache", "miss", "Output", "Cost", "(USD)"
             ],
-            vec!["deepseek-flash", "800", "200", "100", "<$0.01"],
+            vec!["deepseek-flash", "340k", "1.2M", "950", "<$0.01"],
             vec!["unpriced", "20", "30", "40", "unknown"],
-            vec!["Total", "820", "230", "140", "<$0.01+?"],
+            vec!["Total", "340k", "1.2M", "990", "<$0.01+?"],
+            vec![],
             vec!["Last", "turn:", "$0.12"],
-        ]
+            vec!["Esc", "close"],
+        ],
+        "{shown}"
     );
+    assert_eq!(screen.key(KeyCode::Esc), None);
+    screen.draw();
+    let shown = screen.text();
+    for gone in ["Usage", "deepseek-flash", "Cache hit", "Last turn"] {
+        assert!(!shown.contains(gone), "{gone}:\n{shown}");
+    }
+    assert!(screen.input().contains("Type a message"), "{shown}");
 }
 
 /// /help opens the Help box above the input box with every command, prints
@@ -984,13 +1021,17 @@ fn mode_alone_offers_the_three_modes() {
     assert_eq!(screen.enter("/mode"), None);
     screen.draw();
     let shown = screen.text();
-    let choices = screen.above_box(3);
+    let choices = screen.above_box(4);
     assert!(choices[0].contains("always-ask"), "{shown}");
     assert!(
         choices[1].starts_with(" › ask-for-execution (current)"),
         "{shown}"
     );
     assert!(choices[2].contains("allow-all"), "{shown}");
+    assert_eq!(
+        choices[3], " ↑↓ select · Enter choose · Esc cancel",
+        "the keys last:\n{shown}"
+    );
     assert_eq!(shown.matches("(current)").count(), 1, "{shown}");
 
     assert_eq!(screen.key(KeyCode::Down), None);
@@ -1085,7 +1126,7 @@ fn keys_queued_before_the_mode_choice_shows_do_not_choose() {
     let shown = screen.text();
     assert!(shown.contains("Permission mode"), "{shown}");
     assert!(
-        screen.above_box(3)[0].starts_with(" › always-ask (current)"),
+        screen.above_box(4)[0].starts_with(" › always-ask (current)"),
         "the Downs were dropped:\n{shown}"
     );
     // On screen now: keys choose.
@@ -1173,13 +1214,13 @@ fn text_after_a_command_without_arguments_is_refused() {
     assert_eq!(screen.input(), "› /compact");
 }
 
-/// Cross review 4: after Enter completes `/` to `/compact`, a second Enter
+/// Cross review 4: after Enter completes `/co` to `/compact`, a second Enter
 /// pressed before the completion is on screen was meant for what was there
 /// before, so it does not compact. Enter once it shows does.
 #[test]
 fn enter_before_the_completion_shows_does_not_run_it() {
     let mut screen = Screen::new();
-    screen.type_text("/");
+    screen.type_text("/co");
     screen.draw();
     assert_eq!(screen.key(KeyCode::Enter), None, "completes");
     assert_eq!(
@@ -1201,7 +1242,7 @@ fn the_modes_say_read_only_commands_do_not_ask() {
         screen.settings(mode);
         assert_eq!(screen.enter("/mode"), None);
         screen.draw();
-        let choices = screen.above_box(3);
+        let choices = screen.above_box(4);
         let shown = screen.text();
         assert!(
             choices[0].ends_with("Ask before edits and non-read-only commands"),
@@ -1486,10 +1527,10 @@ async fn files_lists_deduplicated_history_and_isolated_git_status() {
     screen.draw();
     let shown = screen.text();
     assert!(
-        shown.contains(" Files  read 2 · changed 2 · git 3"),
+        shown.contains(" Files · read 2 · changed 2 · git 3"),
         "{shown}"
     );
-    let shown = &shown[shown.find(" Files  read").unwrap()..];
+    let shown = &shown[shown.find(" Files · read").unwrap()..];
     assert!(shown.contains("Changed by canter"), "{shown}");
     assert_eq!(shown.matches("~/other.txt").count(), 1, "{shown}");
     assert_eq!(shown.matches("created.txt").count(), 1, "{shown}");
@@ -1590,7 +1631,7 @@ fn context_lists_categories_measured_usage_and_truncates_narrow_rows() {
     screen.ui.app_mut().show_context(&report);
     screen.draw();
     let shown = screen.text();
-    assert!(shown.contains("Context  no request yet"), "{shown}");
+    assert!(shown.contains("Context · no request yet"), "{shown}");
     assert!(!shown.contains("Compaction summary"));
 }
 

@@ -13,6 +13,21 @@ use crate::theme;
 
 const KEYS: &str = " Esc close";
 
+/// The first row of every list or report above the input box: ` name` in
+/// bold, then ` · detail` dim when there is a detail.
+pub(crate) fn title(name: &str, detail: &str) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::styled(format!(" {name}"), Style::new().bold())];
+    if !detail.is_empty() {
+        spans.push(Span::styled(format!(" · {detail}"), theme::secondary()));
+    }
+    spans
+}
+
+/// The last row of every list or report above the input box: its keys, dim.
+pub(crate) fn keys(keys: &str) -> Span<'static> {
+    Span::styled(format!(" {keys}"), theme::secondary())
+}
+
 /// Server or file system text, safe to draw on one row.
 pub(crate) fn clean(text: &str) -> String {
     sanitize(text).replace('\n', " ")

@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 
 use crate::app::{Action, App};
 use crate::export::Export;
-use crate::report::{Part, Report, clean};
+use crate::report::{Part, Report, clean, keys, title};
 use crate::text::{sanitize, str_width, truncate};
 use crate::theme;
 
@@ -28,8 +28,44 @@ pub(crate) struct Command {
     pub run: fn(&mut App, &str) -> Result<Option<Action>, String>,
 }
 
-/// In the order the command list shows them.
+/// In the order the command list and `/help` show them: by name.
 pub(crate) const COMMANDS: &[Command] = &[
+    Command {
+        name: "add-dir",
+        about: "Add a directory to this session",
+        takes_args: true,
+        run: |_, args| {
+            if args.is_empty() {
+                return Err("Usage: /add-dir <path>".into());
+            }
+            let path = args
+                .strip_prefix('"')
+                .and_then(|path| path.strip_suffix('"'))
+                .unwrap_or(args);
+            Ok(Some(Action::Update(SessionUpdateParams {
+                add_directories: vec![path.to_owned()],
+                ..Default::default()
+            })))
+        },
+    },
+    Command {
+        name: "agents",
+        about: "List sub-agents and open or stop one",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::AgentList)),
+    },
+    Command {
+        name: "btw",
+        about: "Ask one question without adding it to the conversation",
+        takes_args: true,
+        run: App::start_btw,
+    },
+    Command {
+        name: "clear",
+        about: "Start a new session (same as /new)",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::NewSession)),
+    },
     Command {
         name: "compact",
         about: "Summarize the conversation to free up context",
@@ -71,6 +107,24 @@ pub(crate) const COMMANDS: &[Command] = &[
         about: "List session files and git status",
         takes_args: false,
         run: |_, _| Ok(Some(Action::Files)),
+    },
+    Command {
+        name: "fork",
+        about: "Copy completed turns into a new session and switch to it",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::ForkSession)),
+    },
+    Command {
+        name: "goal",
+        about: "Set or view a goal; pause, resume, clear, or --budget USD",
+        takes_args: true,
+        run: |_, args| crate::goal::parse(args).map(|command| Some(Action::Goal(command))),
+    },
+    Command {
+        name: "handoff",
+        about: "Draft a handoff note in a new session",
+        takes_args: true,
+        run: App::start_handoff,
     },
     Command {
         name: "help",
@@ -137,18 +191,6 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::NewSession)),
     },
     Command {
-        name: "fork",
-        about: "Copy completed turns into a new session and switch to it",
-        takes_args: false,
-        run: |_, _| Ok(Some(Action::ForkSession)),
-    },
-    Command {
-        name: "clear",
-        about: "Start a new session (same as /new)",
-        takes_args: false,
-        run: |_, _| Ok(Some(Action::NewSession)),
-    },
-    Command {
         name: "permissions",
         about: "View and delete command and file rules",
         takes_args: false,
@@ -166,10 +208,10 @@ pub(crate) const COMMANDS: &[Command] = &[
         },
     },
     Command {
-        name: "resume",
-        about: "Switch to another session",
+        name: "ps",
+        about: "List background commands and inspect or stop one",
         takes_args: false,
-        run: |_, _| Ok(Some(Action::PickSession)),
+        run: |_, _| Ok(Some(Action::BackgroundList)),
     },
     Command {
         name: "rename",
@@ -181,6 +223,24 @@ pub(crate) const COMMANDS: &[Command] = &[
                 ..Default::default()
             })))
         },
+    },
+    Command {
+        name: "resume",
+        about: "Switch to another session",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::PickSession)),
+    },
+    Command {
+        name: "review",
+        about: "Review uncommitted changes or a PR number/URL (read-only)",
+        takes_args: true,
+        run: |_, args| Ok(Some(Action::Review(args.to_owned()))),
+    },
+    Command {
+        name: "rewind",
+        about: "Rewind conversation, files, or both",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::RewindList)),
     },
     Command {
         name: "sandbox",
@@ -202,42 +262,6 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::ListSkills)),
     },
     Command {
-        name: "think",
-        about: "Change thinking effort (none, low, high, max)",
-        takes_args: true,
-        run: think,
-    },
-    Command {
-        name: "usage",
-        about: "Show this session's token usage and cost",
-        takes_args: false,
-        run: |_, _| Ok(Some(Action::Usage)),
-    },
-    Command {
-        name: "btw",
-        about: "Ask one question without adding it to the conversation",
-        takes_args: true,
-        run: App::start_btw,
-    },
-    Command {
-        name: "handoff",
-        about: "Draft a handoff note in a new session",
-        takes_args: true,
-        run: App::start_handoff,
-    },
-    Command {
-        name: "review",
-        about: "Review uncommitted changes or a PR number/URL (read-only)",
-        takes_args: true,
-        run: |_, args| Ok(Some(Action::Review(args.to_owned()))),
-    },
-    Command {
-        name: "rewind",
-        about: "Rewind conversation, files, or both",
-        takes_args: false,
-        run: |_, _| Ok(Some(Action::RewindList)),
-    },
-    Command {
         name: "statusline",
         about: "Choose and order what the status line shows",
         takes_args: false,
@@ -245,18 +269,6 @@ pub(crate) const COMMANDS: &[Command] = &[
             app.open_status_setup();
             Ok(None)
         },
-    },
-    Command {
-        name: "ps",
-        about: "List background commands and inspect or stop one",
-        takes_args: false,
-        run: |_, _| Ok(Some(Action::BackgroundList)),
-    },
-    Command {
-        name: "agents",
-        about: "List sub-agents and open or stop one",
-        takes_args: false,
-        run: |_, _| Ok(Some(Action::AgentList)),
     },
     Command {
         name: "stop",
@@ -274,28 +286,16 @@ pub(crate) const COMMANDS: &[Command] = &[
         },
     },
     Command {
-        name: "add-dir",
-        about: "Add a directory to this session",
+        name: "think",
+        about: "Change thinking effort (none, low, high, max)",
         takes_args: true,
-        run: |_, args| {
-            if args.is_empty() {
-                return Err("Usage: /add-dir <path>".into());
-            }
-            let path = args
-                .strip_prefix('"')
-                .and_then(|path| path.strip_suffix('"'))
-                .unwrap_or(args);
-            Ok(Some(Action::Update(SessionUpdateParams {
-                add_directories: vec![path.to_owned()],
-                ..Default::default()
-            })))
-        },
+        run: think,
     },
     Command {
-        name: "goal",
-        about: "Set or view a goal; pause, resume, clear, or --budget USD",
-        takes_args: true,
-        run: |_, args| crate::goal::parse(args).map(|command| Some(Action::Goal(command))),
+        name: "usage",
+        about: "Show this session's token usage and cost",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::Usage)),
     },
 ];
 
@@ -304,18 +304,15 @@ pub(crate) const COMMANDS: &[Command] = &[
 pub(crate) fn skills(skills: &[canter_protocol::Skill]) -> Report {
     use canter_protocol::SkillSource;
     let count = |source| skills.iter().filter(|skill| skill.source == source).count();
-    let title = vec![
-        Span::styled(" Skills", Style::new().bold()),
-        Span::styled(
-            format!(
-                "  {} · global {} · project {}",
-                skills.len(),
-                count(SkillSource::Global),
-                count(SkillSource::Project)
-            ),
-            theme::secondary(),
+    let title = title(
+        "Skills",
+        &format!(
+            "{} · global {} · project {}",
+            skills.len(),
+            count(SkillSource::Global),
+            count(SkillSource::Project)
         ),
-    ];
+    );
     if skills.is_empty() {
         let body = [
             "No skills in this session.",
@@ -415,6 +412,7 @@ fn think(app: &mut App, args: &str) -> Result<Option<Action>, String> {
             .unwrap_or(0);
         app.choose(Chooser {
             title: "Thinking effort",
+            keys: CHOOSE,
             choices,
             selected,
         });
@@ -451,6 +449,7 @@ pub(crate) fn choose_model(app: &mut App, models: Vec<canter_protocol::Model>) {
         .collect();
     app.choose(Chooser {
         title: "Model",
+        keys: CHOOSE,
         choices,
         selected,
     });
@@ -528,6 +527,7 @@ fn mode(app: &mut App, args: &str) -> Result<Option<Action>, String> {
             .unwrap_or(0);
         app.choose(Chooser {
             title: "Permission mode",
+            keys: CHOOSE,
             choices,
             selected,
         });
@@ -550,6 +550,7 @@ fn export(app: &mut App, args: &str) -> Result<Option<Action>, String> {
     }
     app.choose(Chooser {
         title: "Export conversation",
+        keys: CHOOSE,
         choices: vec![
             Choice {
                 label: "Save to file".into(),
@@ -615,9 +616,14 @@ pub(crate) fn parse(text: &str) -> Option<(&str, &str)> {
 /// `/mode` alone offers.
 pub(crate) struct Chooser {
     pub title: &'static str,
+    /// The last row: [`CHOOSE`], or those keys and more.
+    pub keys: &'static str,
     pub choices: Vec<Choice>,
     pub selected: usize,
 }
+
+/// The keys of a choice.
+pub(crate) const CHOOSE: &str = "↑↓ select · Enter choose · Esc cancel";
 
 pub(crate) struct Choice {
     pub label: String,
@@ -627,28 +633,25 @@ pub(crate) struct Choice {
 }
 
 impl Chooser {
-    /// Its title, then the choices; nothing when not even one choice fits in `max` rows.
+    /// Its title, the choices, then its keys; nothing when not even one
+    /// choice fits in `max` rows.
     pub fn rows(&self, width: u16, max: usize) -> Vec<Line<'static>> {
         let entries: Vec<(&str, &str)> = self
             .choices
             .iter()
             .map(|choice| (choice.label.as_str(), choice.about.as_str()))
             .collect();
-        let choices = list_rows(&entries, self.selected, width, max.saturating_sub(1));
+        let choices = list_rows(&entries, self.selected, width, max.saturating_sub(2));
         if choices.is_empty() {
             return choices;
         }
-        let title = Line::from(truncate(
-            vec![
-                Span::styled(format!(" {}", self.title), Style::new().bold()),
-                Span::styled(
-                    "  ↑↓ select · Enter choose · Esc cancel",
-                    theme::secondary(),
-                ),
-            ],
-            usize::from(width),
-        ));
-        std::iter::once(title).chain(choices).collect()
+        let width = usize::from(width);
+        let title = Line::from(truncate(title(self.title, ""), width));
+        let keys = Line::from(truncate(vec![keys(self.keys)], width));
+        std::iter::once(title)
+            .chain(choices)
+            .chain(std::iter::once(keys))
+            .collect()
     }
 }
 
@@ -711,7 +714,7 @@ pub(crate) fn sandbox(
     };
     if !report.enabled {
         return Report::new(
-            vec![Span::styled(" Sandbox off.", Style::new().bold())],
+            title("Sandbox", "off"),
             vec![line(
                 "Set \"sandbox\": true in config.json (or remove the line), then run canter serve --replace."
                     .into(),
@@ -744,11 +747,7 @@ pub(crate) fn sandbox(
         ),
         line("Not sandboxed: ! commands, MCP tools, web_fetch".into()),
     ];
-    Report::new(
-        vec![Span::styled(" Sandbox on", Style::new().bold())],
-        body,
-        Vec::new(),
-    )
+    Report::new(title("Sandbox", "on"), body, Vec::new())
 }
 
 /// `/mcp`: each service with whether it is connected, then its tools'
@@ -757,17 +756,14 @@ pub(crate) fn mcp(report: &canter_protocol::McpListResponse) -> Report {
     let plural =
         |count: usize, word: &str| format!("{count} {word}{}", if count == 1 { "" } else { "s" });
     let tools: usize = report.data.iter().map(|server| server.tools.len()).sum();
-    let title = vec![
-        Span::styled(" MCP", Style::new().bold()),
-        Span::styled(
-            format!(
-                "  {} · {}",
-                plural(report.data.len(), "service"),
-                plural(tools, "tool")
-            ),
-            theme::secondary(),
+    let title = title(
+        "MCP",
+        &format!(
+            "{} · {}",
+            plural(report.data.len(), "service"),
+            plural(tools, "tool")
         ),
-    ];
+    );
     if report.data.is_empty() {
         let body = vec![Part::Line(vec![Span::raw(" No MCP services configured.")])];
         return Report::new(title, body, Vec::new());

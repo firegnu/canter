@@ -147,11 +147,7 @@ pub(crate) fn popup() -> Report {
     }
     let width = commands.iter().map(|(name, _)| str_width(name)).max();
     section(&mut body, "Commands", &commands, width.unwrap_or(0));
-    Report::new(
-        vec![Span::styled(" Help", Style::new().bold())],
-        body,
-        Vec::new(),
-    )
+    Report::new(crate::report::title("Help", ""), body, Vec::new())
 }
 
 /// `title` and its rows, the keys `width` columns wide, after a blank row

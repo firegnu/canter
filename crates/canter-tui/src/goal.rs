@@ -90,7 +90,7 @@ pub(crate) fn popup(goal: Option<&SessionGoal>) -> Report {
         None => vec![Part::Line(vec![Span::raw("No goal set.")])],
     };
     Report::new(
-        vec![Span::styled("Goal", Style::new().bold())],
+        crate::report::title("Goal", ""),
         body,
         vec![
             vec![Span::styled(
