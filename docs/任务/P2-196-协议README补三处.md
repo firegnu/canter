@@ -58,3 +58,11 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：只改 `crates/canter-protocol/README.md`，补三处：HTTP 对照表后新增 `### GET /v1/info`，列 `features`、`serverVersion`、`protocolVersion`、`sessions` 的含义，并点明 `server.json` 里版本叫 `version`；「归并」里 `session.status` 那句后补六种取值、`error` 的实际行为，以及模型出错时 failed 轮、`error` 事件和回到 `idle`；待处理请求段后补 `agent.request.opened`、`agent.request.resolved` 的字段、父快照 `agentRequests` 的形状、回答接口和重开/重挂时的转发行为。
+- 验证了什么：`git diff --check` 通过；逐项对照 `commands.rs`（`InfoResponse`、`SessionSummary`、`RequestPath`）、`event.rs`（`AgentRequestOpened`、`AgentRequestResolved`、`Error`）、`types.rs`（`AgentRequest`、`PendingRequest`、`SessionStatus`、`TurnStatus`）、`reducer.rs`（`agentRequests`、`error`、`session.status`）、`runner.rs`（failed 轮、`error` 事件、回 `idle`、重试）、`session.rs` 和 `agents.rs`（重开时补 cancelled、重挂时补发）、`http.rs`（`info` 字段和 `/v1/sessions` 复用 `info.sessions`）核对字段名。
+- 拿主意的地方：三处放在最相关的现有段落旁；`features` 只举例、不列全，免得以后加能力就过期。读代码发现和「来由」不一致：本版服务端没有任何路径写 `session.status: error`（只写 idle / working / waiting_approval / closed），模型出错时那一轮 failed、另发 `error` 事件、会话回 idle；照代码写，`error` 只作为协议保留值，要求客户端能解码、按未关闭处理。
+- 没做的事：没改代码、测试、生成文件和 DESIGN，没动 README 其它节，没跑测试套件，没合并、没推送。看到「审查轮」一节还写着「本版返回 `["review"]`」（实际 `features` 有 17 项），已过时，按任务要求没动，留给主控。
+- 踩过的坑：没有。
