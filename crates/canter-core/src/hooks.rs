@@ -190,7 +190,12 @@ async fn run_input(
         .flat_map(|g| &g.hooks);
     let results = join_all(commands.map(|command| {
         let input = &input;
-        async move { (command, execute(command, input, cancel).await) }
+        async move {
+            (
+                command,
+                execute(command, input, &runtime.context.environment, cancel).await,
+            )
+        }
     }))
     .await;
     let mut reasons = Vec::new();
@@ -430,6 +435,7 @@ async fn capture(mut pipe: impl AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
 async fn execute(
     command: &Command,
     input: &Value,
+    environment: &BTreeMap<String, String>,
     cancel: &CancellationToken,
 ) -> Result<Option<String>, String> {
     if cancel.is_cancelled() {
@@ -438,6 +444,8 @@ async fn execute(
     let mut child = tokio::process::Command::new("/bin/sh")
         .args(["-c", &command.command])
         .current_dir(input["cwd"].as_str().unwrap())
+        .env_clear()
+        .envs(environment)
         .env("CANTER_SESSION_ID", input["session_id"].as_str().unwrap())
         .env("CANTER_PROJECT_DIR", input["cwd"].as_str().unwrap())
         .stdin(Stdio::piped())

@@ -16,6 +16,10 @@ SessionWriter 操作、执行器构造和项目指令读取都在 `spawn_blockin
 核心不读取或合并服务端进程的环境。工具和 PermissionGate 每次打开重新创建，
 会话授权不存盘。恢复时的未知权限模式仍交给闸门按每次问处理。
 
+所有钩子命令也先清空继承环境，再使用本会话的 `RuntimeContext.environment`，
+最后由 canter 覆盖 `CANTER_SESSION_ID`、`CANTER_PROJECT_DIR`。cwd 沿用会话目录，
+不注入模型命令的会话临时目录，客户端的 `TMPDIR` 原样保留；受限会话不跑钩子。
+
 | 方法 | 行为与成功回复的 eventSeq |
 | --- | --- |
 | `create` / `open` | 初始化/恢复至 idle；返回快照对应的最后序号 |

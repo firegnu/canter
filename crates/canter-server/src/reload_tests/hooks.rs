@@ -6,6 +6,32 @@ fn command(script: &str) -> Value {
     json!([{"hooks":[{"type":"command","command":script}]}])
 }
 
+#[tokio::test]
+async fn hooks_use_session_environment_and_override_session_identity() {
+    let fixture = Fixture::new(json!({"hooks":{"SessionStart":command(
+        r#"cat >/dev/null; printf '["%s","%s","%s","%s","%s"]' "$CLIENT_HOOK_VALUE" "${CANTER_RELOAD_TEST-unset}" "$CANTER_SESSION_ID" "$CANTER_PROJECT_DIR" "$TMPDIR" > environment.json"#
+    )}})).await;
+    fixture.trust(fixture.root.path()).await;
+    let url = fixture
+        .create_with_env(json!({
+            "CLIENT_HOOK_VALUE":"client-only-value",
+            "CANTER_SESSION_ID":"fake-session-id",
+            "CANTER_PROJECT_DIR":"/fake-project",
+            "TMPDIR":"/client-temp"
+        }))
+        .await;
+    let environment = fixture.hook_file("environment.json").await;
+    let expected = json!([
+        "client-only-value",
+        "unset",
+        url.rsplit('/').next().unwrap(),
+        fixture.root.path(),
+        "/client-temp"
+    ]);
+    fixture.shutdown().await;
+    assert_eq!(environment, expected);
+}
+
 // The write/edit result on main for replacing "old\n" with "new\n".
 const FILE_RESULT: &str = "Updated nested/sample.txt: 1 lines added, 1 lines removed.";
 
