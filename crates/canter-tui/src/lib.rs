@@ -72,6 +72,7 @@ mod tips;
 mod tui_json;
 pub mod uncommitted;
 pub mod usage;
+mod verbs;
 mod welcome;
 
 pub use app::{ANSWER_GUARD_MS, Action, App};

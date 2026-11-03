@@ -324,31 +324,33 @@ fn blank_rows_stay_put_when_a_part_finishes() {
     assert_eq!(written, writing, "nothing moves when the message finishes");
 }
 
+/// The turn keeps its playful word (P2-199) whatever it does; a command and
+/// compacting are said as they are.
 #[test]
-fn the_status_line_names_what_the_turn_is_doing() {
+fn the_status_line_keeps_the_turns_word_and_names_a_command() {
     let mut screen = Screen::new(WIDTH, 20);
-    assert_eq!(screen.status(), " ⠋ Working… · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Galloping… · 0s · Esc to interrupt");
 
     screen.started(json!({ "type": "reasoning", "id": "r1", "summary": [], "content": [] }));
-    assert_eq!(screen.status(), " ⠋ Thinking… · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Galloping… · 0s · Esc to interrupt");
 
     screen.started(json!({ "type": "agentMessage", "id": "m1", "text": "Hi" }));
-    assert_eq!(screen.status(), " ⠋ Writing… · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Galloping… · 0s · Esc to interrupt");
 
     screen.read("f1", "a.txt", "inProgress");
-    assert_eq!(screen.status(), " ⠋ Reading… · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Galloping… · 0s · Esc to interrupt");
     screen.read("f1", "a.txt", "completed");
-    assert_eq!(screen.status(), " ⠋ Working… · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Galloping… · 0s · Esc to interrupt");
 
     screen.edit("e1", "inProgress");
-    assert_eq!(screen.status(), " ⠋ Editing… · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Galloping… · 0s · Esc to interrupt");
     screen.edit("e1", "completed");
 
     screen.started(json!({
         "type": "mcpToolCall", "id": "p1", "server": "github", "tool": "search",
         "arguments": {}, "result": "", "status": "inProgress",
     }));
-    assert_eq!(screen.status(), " ⠋ Calling… · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Galloping… · 0s · Esc to interrupt");
     screen.completed(json!({
         "type": "mcpToolCall", "id": "p1", "server": "github", "tool": "search",
         "arguments": {}, "result": "ok", "status": "completed",
@@ -358,7 +360,7 @@ fn the_status_line_names_what_the_turn_is_doing() {
         "type": "webFetch", "id": "w1", "url": "https://example.com/",
         "result": "", "status": "inProgress",
     }));
-    assert_eq!(screen.status(), " ⠋ Fetching… · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Galloping… · 0s · Esc to interrupt");
     screen.completed(json!({
         "type": "webFetch", "id": "w1", "url": "https://example.com/",
         "result": "ok", "status": "completed",
@@ -370,7 +372,7 @@ fn the_status_line_names_what_the_turn_is_doing() {
     assert_eq!(screen.command_row(), "   Running cargo build …");
     assert_eq!(
         screen.status(),
-        " ⠋ Working… · 0s · Esc to int… · Ctrl+B to run in background"
+        " ⠋ Galloping… · 0s · Esc to i… · Ctrl+B to run in background"
     );
     screen.command("c1", "cargo build\ncargo test", "completed");
 
@@ -386,7 +388,7 @@ fn the_status_line_names_what_the_turn_is_doing() {
     assert_eq!(command.width(), usize::from(WIDTH));
     let status = screen.status();
     assert!(
-        status.starts_with(" ⠋ Working…") && status.ends_with(" · Ctrl+B to run in background"),
+        status.starts_with(" ⠋ Galloping…") && status.ends_with(" · Ctrl+B to run in background"),
         "{status:?}"
     );
 }
@@ -449,7 +451,7 @@ fn waiting_for_approval_does_not_offer_esc() {
 }
 
 #[test]
-fn scrolled_back_a_new_word_in_the_status_line_is_not_new_output() {
+fn scrolled_back_the_status_line_is_not_new_output() {
     let mut screen = Screen::new(WIDTH, 14);
     for i in 0..10 {
         screen.say(&format!("m{i}"), &format!("Message {i}."));
@@ -457,11 +459,11 @@ fn scrolled_back_a_new_word_in_the_status_line_is_not_new_output() {
     let message = json!({ "type": "agentMessage", "id": "last", "text": "Last one." });
     screen.started(message.clone());
     screen.key(KeyCode::PageUp);
-    assert!(screen.status().starts_with(" ⠋ Writing"));
+    assert!(screen.status().starts_with(" ⠋ Galloping…"));
     let before = screen.conversation();
 
     screen.completed(message);
-    assert!(screen.status().starts_with(" ⠋ Working"));
+    assert!(screen.status().starts_with(" ⠋ Galloping…"));
     let lines = screen.lines();
     assert!(
         !lines.iter().any(|line| line.contains("New output below")),

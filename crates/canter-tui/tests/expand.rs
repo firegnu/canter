@@ -408,7 +408,7 @@ fn ctrl_o_shows_long_output_and_diffs_in_full_and_folds_them_again() {
     // A narrow status row keeps the complete background shortcut.
     assert_eq!(
         screen.status(),
-        " ⠋ Working… · 0s · Esc to int… · Ctrl+B to run in background"
+        " ⠋ Galloping… · 0s · Esc to i… · Ctrl+B to run in background"
     );
 
     screen.finish_turn();

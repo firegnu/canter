@@ -233,7 +233,7 @@ fn once_compacted_the_conversation_says_so_and_the_turn_goes_on() {
     assert!(
         screen
             .status()
-            .ends_with("Thinking… · 1s · Esc to interrupt"),
+            .ends_with("Galloping… · 1s · Esc to interrupt"),
         "{}",
         screen.text()
     );

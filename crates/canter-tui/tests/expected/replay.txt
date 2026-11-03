@@ -17,7 +17,7 @@
 
 
 
- ⠋ Thinking… · 0s · Esc to interrupt
+ ⠋ Galloping… · 0s · Esc to interrupt
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -42,7 +42,7 @@
       Ctrl+B to run in background
 
    Running cargo build
- ⠋ Working… · 0s · Esc to interrupt · Ctrl+B to run in background
+ ⠋ Galloping… · 0s · Esc to interrupt · Ctrl+B to run in background
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -67,7 +67,7 @@
       Ctrl+B to run in background
 
    Running cargo build
- ⠋ Working… · 0s · Esc to interrupt · Ctrl+B to run in background
+ ⠋ Galloping… · 0s · Esc to interrupt · Ctrl+B to run in background
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -92,7 +92,7 @@
 
   • 删掉 git clone、cd、
 
- ⠋ Writing… · 0s · Esc to interrupt
+ ⠋ Galloping… · 0s · Esc to interrupt
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯

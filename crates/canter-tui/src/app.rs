@@ -11,7 +11,8 @@ use std::time::Duration;
 use canter_protocol::{
     AgentStatus, AgentSummary, ApprovalDecision, ApprovalResolution, Event, EventPayload, Item,
     ItemStatus, PendingRequest, PermissionMode, RequestKind, SessionSnapshot, SessionStatus,
-    SessionUpdateParams, Turn, TurnStatus, UserInput, UserInputAnswer, apply_event_mut,
+    SessionUpdateParams, TokenUsageBreakdown, Turn, TurnStatus, UserInput, UserInputAnswer,
+    apply_event_mut,
 };
 use chrono::TimeZone;
 use crossterm::event::{
@@ -5785,9 +5786,10 @@ impl App {
         Line::from(truncate(spans, width))
     }
 
-    /// What the turn in progress is doing: the verb for its latest item
-    /// not done yet, and for a command the command. `None` while nothing is
-    /// in progress, such as while waiting for the model.
+    /// What the turn in progress is doing, when the status line says it as
+    /// it is: a command and the command, or compacting. `None` otherwise,
+    /// and while nothing is in progress, such as while waiting for the
+    /// model; then the line has the turn's playful word ([`App::turn_word`]).
     fn doing(&self) -> Option<(&'static str, Option<String>)> {
         let turn = self
             .snapshot
@@ -5799,32 +5801,36 @@ impl App {
             .rev()
             .find(|&index| !self.item_done(turn, index))?;
         Some(match &turn.items[index] {
-            Item::Reasoning { .. } => ("Thinking…", None),
-            Item::AgentMessage { .. } => ("Writing…", None),
             Item::CommandExecution { command, .. } => {
                 ("Running ", Some(cells::command_line(command)))
             }
-            Item::FileRead { .. } => ("Reading…", None),
-            Item::FileChange { .. } => ("Editing…", None),
-            Item::McpToolCall { .. } => ("Calling…", None),
-            Item::WebFetch { .. } => ("Fetching…", None),
-            Item::WebSearch { .. } | Item::McpToolSearch { .. } => ("Searching…", None),
             Item::ContextCompaction { .. } => ("Compacting context…", None),
             _ => return None,
         })
     }
 
-    /// The output tokens (thinking included) of the turn in progress so
-    /// far, as the server counts them for it; `None` until its first
-    /// request is done.
-    fn turn_output(&self) -> Option<u64> {
+    /// The playful word for the turn in progress, or the latest turn
+    /// (P2-199).
+    fn turn_word(&self) -> &'static str {
+        let turns = &self.snapshot.turns;
+        let end = turns
+            .iter()
+            .rposition(|turn| turn.status == TurnStatus::InProgress)
+            .map_or(turns.len(), |at| at + 1);
+        crate::verbs::word(&turns[..end])
+    }
+
+    /// The tokens of the turn in progress so far, sent and received
+    /// (thinking included), as the server counts them for it; `None` until
+    /// its first request is done.
+    fn turn_usage(&self) -> Option<&TokenUsageBreakdown> {
         let turn = self
             .snapshot
             .turns
             .iter()
             .rev()
             .find(|turn| turn.status == TurnStatus::InProgress)?;
-        Some(turn.usage.as_ref()?.total.output_tokens)
+        Some(&turn.usage.as_ref()?.total)
     }
 
     /// The status line without the Ctrl+O hint, a long command cut to fit
@@ -5877,23 +5883,30 @@ impl App {
             SessionStatus::Working => {
                 let frame = SPINNER[(now_ms.max(0) / 80) as usize % SPINNER.len()];
                 let spinner = format!(" {frame} ");
+                let word = self.turn_word();
                 let (verb, command) = match self.doing() {
-                    Some((_, Some(_))) if command_above => ("Working…", None),
-                    doing => doing.unwrap_or(("Working…", None)),
+                    Some((_, Some(_))) if command_above => (word, None),
+                    doing => doing.unwrap_or((word, None)),
                 };
                 let mut numbers = format!(" · {elapsed}");
                 let keys = format!(" · Esc to interrupt{steer}");
-                // The turn's output tokens go first when the window is too
-                // narrow, while the time still fits.
+                // The turn's tokens go first when the window is too narrow,
+                // those sent before those received, while the time still
+                // fits.
                 let before = str_width(&spinner)
                     + str_width(verb)
                     + command
                         .as_deref()
                         .map_or(0, |command| str_width(command).min(MIN_COMMAND))
                     + str_width(&numbers);
-                if let Some(output) = self.turn_output() {
-                    let tokens = format!(" · ↓ {} tokens", token_count(output));
-                    if before + str_width(&tokens) <= room {
+                if let Some(total) = self.turn_usage() {
+                    let output = format!("↓ {} tokens", token_count(total.output_tokens));
+                    let both = format!(" · ↑ {} · {output}", token_count(total.input_tokens));
+                    let output = format!(" · {output}");
+                    if let Some(tokens) = [both, output]
+                        .into_iter()
+                        .find(|tokens| before + str_width(tokens) <= room)
+                    {
                         numbers += &tokens;
                     }
                 }

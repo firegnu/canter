@@ -318,7 +318,7 @@ fn web_search_approval_shows_query_session_scope_and_escape_interrupts() {
     }}));
     screen.draw();
     assert!(screen.text().contains("Search Rust docs"));
-    assert!(screen.text().contains("Searching"));
+    assert!(screen.text().contains("Galloping…"));
     assert_eq!(
         screen.key(KeyCode::Esc),
         Some(Action::Interrupt {
@@ -1379,7 +1379,7 @@ fn shift_tab_works_while_the_model_answers() {
     let mut screen = Screen::new();
     screen.start_turn("t1");
     screen.draw();
-    assert!(screen.text().contains("Working"), "{}", screen.text());
+    assert!(screen.text().contains("Galloping…"), "{}", screen.text());
     assert_eq!(
         screen.shift_tab(),
         set_mode(PermissionMode::AskForExecution)
