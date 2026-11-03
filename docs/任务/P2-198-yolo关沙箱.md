@@ -28,6 +28,6 @@
 
 ## 做完以后
 
-- 改 DESIGN 第 424 行和相关说明。
-- 合并后由主控跑一次全套（用户：「做完在跑全套」，P2-197 没跑的一起补）。
+- 改 DESIGN 第 424 行和相关说明；`canter --help` 里 `--yolo` 的说明（现在写着 `commands still run in the sandbox`）跟着改。
+- 合并后由主控跑一次全套（用户：「做完在跑全套」，P2-197、P2-199 没跑的一起补）。
 - 告诉 ranch/main、paddock/main：`--yolo` 起的 canter 不再套沙箱，请它们改各自的说明。
