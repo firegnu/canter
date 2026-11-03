@@ -451,9 +451,10 @@ fn dragging_to_the_bottom_edge_scrolls_and_extends_the_selection() {
         "{}",
         screen.text()
     );
-    // The hint to jump to the bottom is on the row under it.
-    let bottom = HEIGHT - BELOW - 2;
-    assert_eq!(screen.lines()[bottom as usize].trim(), "line 11");
+    // The hint to jump to the bottom is on the row under it, then the blank
+    // row above the status line.
+    let bottom = HEIGHT - BELOW - 3;
+    assert_eq!(screen.lines()[bottom as usize].trim(), "line 10");
 
     screen.press(screen.find("line 3"));
     screen.drag((20, 8));
@@ -467,13 +468,13 @@ fn dragging_to_the_bottom_edge_scrolls_and_extends_the_selection() {
     assert_eq!(screen.lines()[0], "› show many lines");
     assert_eq!(
         screen.lines()[bottom as usize].trim(),
-        "line 13",
+        "line 12",
         "three rows on:\n{}",
         screen.text()
     );
     screen.release((20, bottom));
     let copied = screen.clipboard();
-    let expected: Vec<String> = (3..=13).map(|n| format!("line {n}")).collect();
+    let expected: Vec<String> = (3..=12).map(|n| format!("line {n}")).collect();
     assert_eq!(copied, expected.join("\n"));
 }
 
@@ -621,9 +622,9 @@ fn the_status_line_says_what_was_copied_for_two_seconds() {
     assert_eq!(screen.status(), "✓ Copied 2 lines · 13 chars");
     screen.now += 200;
     screen.draw();
-    assert!(before.contains("Working · 0s"), "{before}");
+    assert!(before.contains("Working… · 0s"), "{before}");
     assert!(
-        screen.status().contains("Working · 2s") && !screen.status().contains("Copied"),
+        screen.status().contains("Working… · 2s") && !screen.status().contains("Copied"),
         "{}",
         screen.text()
     );

@@ -462,7 +462,7 @@ pub(crate) enum Shimmer {
     /// Fixed colours shading into each other, two sets for a dark or light
     /// terminal: with 256 colours or more and the background known.
     Gradient,
-    /// A few steps of the terminal's own colours and dim and bold.
+    /// Two steps: a colour, and a brighter one near the light's middle.
     Steps,
     /// `NO_COLOR`: nothing sweeps.
     Off,
@@ -477,27 +477,43 @@ pub(crate) fn shimmer() -> Shimmer {
     }
 }
 
+/// The spinner and the verb on the status line while working: bold and
+/// orange, so the line stands out on a dark or a light background. See
+/// [`working_shimmer`]; this is where the light is not.
+pub fn working() -> Style {
+    working_shimmer(0.0)
+}
+
+/// The working verb's orange and the brighter orange under the light: on a
+/// dark terminal, and a deeper pair on a light one.
+const WORKING_DARK: ([u8; 3], [u8; 3]) = ([0xd7, 0x77, 0x57], [0xff, 0xc2, 0xa0]);
+const WORKING_LIGHT: ([u8; 3], [u8; 3]) = ([0xb4, 0x4a, 0x1e], [0xf0, 0x78, 0x30]);
+
 /// A letter of the working verb on the status line, `light` (0 to 1) from
-/// the light sweeping over it. Gradient: grey shading to white on a dark
-/// terminal, to black on a light one, bold in the light's middle. Steps:
-/// dim away from the light, normal near it, bold in its middle.
+/// the light sweeping over it; always bold. Gradient: orange shading to a
+/// brighter orange. Steps (with the background unknown): orange 166 of
+/// the 256, which reads on either background, and 208 near the light's
+/// middle; with 16 colours red, and bright red there. Without colours
+/// bold only.
 pub(crate) fn working_shimmer(light: f32) -> Style {
     let theme = current();
     let colours = match theme.background {
-        Background::Dark => Some(([0x7f, 0x7b, 0x75], [0xff, 0xff, 0xff])),
-        Background::Light => Some(([0x8a, 0x85, 0x7e], [0x00, 0x00, 0x00])),
+        Background::Dark => Some(WORKING_DARK),
+        Background::Light => Some(WORKING_LIGHT),
         Background::Unknown => None,
     };
-    match (shimmer(), colours) {
-        (Shimmer::Gradient, Some((grey, bright))) => {
-            let style = Style::new().fg(theme.shade(mix(grey, bright, light * 0.95)));
-            if light > 0.5 { style.bold() } else { style }
+    let near = light >= 0.6;
+    let style = match (shimmer(), colours) {
+        (Shimmer::Gradient, Some((orange, bright))) => {
+            Style::new().fg(theme.shade(mix(orange, bright, light)))
         }
         (Shimmer::Off, _) => Style::new(),
-        _ if light < 0.2 => Style::new().dim(),
-        _ if light < 0.6 => Style::new(),
-        _ => Style::new().bold(),
-    }
+        _ if theme.depth == Depth::Ansi16 => {
+            Style::new().fg(if near { Color::LightRed } else { Color::Red })
+        }
+        _ => Style::new().fg(Color::Indexed(if near { 208 } else { 166 })),
+    };
+    style.bold()
 }
 
 /// A highlighted character, drawn in `style`, under the light (`light` 0

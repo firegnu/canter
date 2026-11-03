@@ -274,9 +274,10 @@ fn off_cyan(cell: &Cell, cyan: (i32, i32, i32)) -> Option<i32> {
     }
 }
 
-/// On a dark true-colour terminal the verb is grey, and a light sweeps it
-/// left to right every two seconds, by the time: one second in, it is on
-/// the word's middle letter, white and bold there, bold either side.
+/// On a dark true-colour terminal the verb is orange and bold, and a light
+/// sweeps it left to right every two seconds, by the time: one second in,
+/// it is on the middle of `Thinking…`, a bright orange there, fading either
+/// side.
 #[test]
 fn the_working_verb_shimmers_on_a_dark_terminal() {
     let mut screen = Screen::new(DARK);
@@ -284,73 +285,79 @@ fn the_working_verb_shimmers_on_a_dark_terminal() {
     screen.start_item(reasoning());
 
     screen.draw_at(NOW);
-    let cells = screen.status_cells("Thinking");
+    let cells = screen.status_cells("Thinking…");
     for cell in &cells {
-        assert_eq!(rgb(cell), (0x7f, 0x7b, 0x75), "grey away from the light");
+        assert_eq!(rgb(cell), (0xd7, 0x77, 0x57), "orange away from the light");
     }
-    assert_eq!(bold(&cells), "");
+    assert_eq!(bold(&cells), "Thinking…");
 
     screen.draw_at(NOW + 1000);
-    let cells = screen.status_cells("Thinking");
-    assert_eq!(rgb(&cells[4]), (249, 248, 248), "the light is on the k");
-    assert_eq!(bold(&cells), "inkin");
+    let cells = screen.status_cells("Thinking…");
+    assert_eq!(rgb(&cells[4]), (254, 192, 158), "the light is on the k");
+    assert_eq!(rgb(&cells[5]), rgb(&cells[4]), "and on the i after it");
+    assert_eq!(bold(&cells), "Thinking…");
     let light = |cell: &Cell| {
         let (r, g, b) = rgb(cell);
         u32::from(r) + u32::from(g) + u32::from(b)
     };
     assert!(light(&cells[3]) < light(&cells[4]) && light(&cells[2]) < light(&cells[3]));
     assert!(light(&cells[0]) < light(&cells[2]));
-    // The rest of the line is as before.
+    // The rest of the line is as before: the time plain, the keys dim.
     assert!(
         screen
             .status()
-            .ends_with("Thinking · 1s · Esc to interrupt"),
+            .ends_with("Thinking… · 1s · Esc to interrupt"),
         "{}",
         screen.status()
     );
-    for cell in screen.status_cells(" · 1s · Esc to interrupt") {
-        assert_eq!(cell.fg, Color::Reset);
-        assert_eq!(cell.modifier, Modifier::DIM);
+    for cell in screen.status_cells(" · 1s") {
+        assert_eq!((cell.fg, cell.modifier), (Color::Reset, Modifier::empty()));
+    }
+    for cell in screen.status_cells(" · Esc to interrupt") {
+        assert_eq!((cell.fg, cell.modifier), (Color::Reset, Modifier::DIM));
     }
 
     // Another sweep, the same place.
     screen.draw_at(NOW + 3000);
-    assert_eq!(bold(&screen.status_cells("Thinking")), "inkin");
+    assert_eq!(rgb(&screen.status_cells("Thinking…")[4]), (254, 192, 158));
 }
 
-/// On a light terminal the light is black.
+/// On a light terminal the orange is deeper, and so is its light.
 #[test]
 fn the_working_verb_shimmers_on_a_light_terminal() {
     let mut screen = Screen::new(LIGHT);
     screen.start_turn();
     screen.start_item(reasoning());
     screen.draw_at(NOW);
-    for cell in screen.status_cells("Thinking") {
-        assert_eq!(rgb(&cell), (0x8a, 0x85, 0x7e));
+    for cell in screen.status_cells("Thinking…") {
+        assert_eq!(rgb(&cell), (0xb4, 0x4a, 0x1e));
     }
     screen.draw_at(NOW + 1000);
-    let cells = screen.status_cells("Thinking");
-    assert_eq!(rgb(&cells[4]), (7, 7, 6));
-    assert_eq!(bold(&cells), "inkin");
+    let cells = screen.status_cells("Thinking…");
+    assert_eq!(rgb(&cells[4]), (239, 119, 48));
+    assert_eq!(bold(&cells), "Thinking…");
 }
 
-/// With 16 colours the light is three steps: dim away from it, normal
-/// near it, bold in its middle.
+/// With 16 colours the verb is red, and bright red near the light's
+/// middle; bold all along.
 #[test]
-fn with_16_colours_the_verb_shimmers_in_three_steps() {
+fn with_16_colours_the_verb_shimmers_in_two_steps() {
     let mut screen = Screen::new(SIXTEEN);
     screen.start_turn();
     screen.start_item(reasoning());
     screen.draw_at(NOW);
-    for cell in screen.status_cells("Thinking") {
-        assert_eq!((cell.fg, cell.modifier), (Color::Reset, Modifier::DIM));
+    for cell in screen.status_cells("Thinking…") {
+        assert_eq!((cell.fg, cell.modifier), (Color::Red, Modifier::BOLD));
     }
     screen.draw_at(NOW + 1000);
-    let cells = screen.status_cells("Thinking");
-    let steps: Vec<Modifier> = cells.iter().map(|cell| cell.modifier).collect();
-    let (dim, normal, bold) = (Modifier::DIM, Modifier::empty(), Modifier::BOLD);
-    assert_eq!(steps, [dim, normal, bold, bold, bold, bold, bold, normal]);
-    assert!(cells.iter().all(|cell| cell.fg == Color::Reset));
+    let cells = screen.status_cells("Thinking…");
+    let steps: Vec<Color> = cells.iter().map(|cell| cell.fg).collect();
+    let (red, bright) = (Color::Red, Color::LightRed);
+    assert_eq!(
+        steps,
+        [red, red, red, bright, bright, bright, bright, red, red]
+    );
+    assert_eq!(bold(&cells), "Thinking…");
 }
 
 /// Only the verb shimmers: a running command after it stays as it was.
@@ -387,8 +394,8 @@ fn nothing_shimmers_without_colours_or_while_not_working() {
     screen.start_item(reasoning());
     for now in [NOW, NOW + 1000] {
         screen.draw_at(now);
-        for cell in screen.status_cells("Thinking") {
-            assert_eq!((cell.fg, cell.modifier), (Color::Reset, Modifier::empty()));
+        for cell in screen.status_cells("Thinking…") {
+            assert_eq!((cell.fg, cell.modifier), (Color::Reset, Modifier::BOLD));
         }
     }
 

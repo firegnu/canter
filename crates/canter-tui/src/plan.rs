@@ -6,6 +6,7 @@ use ratatui::{
 };
 
 use crate::{
+    app::{HUNG, UNDER_HUNG},
     text::{LogicalLine, Row, sanitize, str_width, truncate, wrap_rows},
     theme,
 };
@@ -160,7 +161,16 @@ pub(crate) fn update_row(before: &[PlanStep], plan: &[PlanStep], width: u16) -> 
         .next()
 }
 
-pub(crate) fn pinned(snapshot: &SessionSnapshot, width: u16, room: usize) -> Vec<Line<'static>> {
+/// The plan's unfinished steps, the one in progress first, in at most
+/// `room` rows (and five). Under the status line while working they `hang`:
+/// the first row after `   ⎿ `, the rest lined up with it; else two spaces
+/// in.
+pub(crate) fn pinned(
+    snapshot: &SessionSnapshot,
+    width: u16,
+    room: usize,
+    hang: bool,
+) -> Vec<Line<'static>> {
     if snapshot.settings.plan_enabled == Some(false) || room == 0 {
         return Vec::new();
     }
@@ -175,13 +185,18 @@ pub(crate) fn pinned(snapshot: &SessionSnapshot, width: u16, room: usize) -> Vec
                 .filter(|step| step.status == PlanStepStatus::Pending),
         )
         .collect();
+    let lead = |row: usize| match (hang, row) {
+        (false, _) => "  ",
+        (true, 0) => HUNG,
+        (true, _) => UNDER_HUNG,
+    };
     let limit = room.min(5);
     if limit == 1 && steps.len() > 1 {
         let step = steps[0];
         let suffix = format!(" (+{} more)", steps.len() - 1);
         let mut spans = truncate(
             vec![
-                Span::raw("  "),
+                Span::styled(lead(0), theme::secondary()),
                 Span::styled(format!("□ {}", text(&step.step)), step_style(step.status)),
             ],
             usize::from(width).saturating_sub(str_width(&suffix)),
@@ -197,10 +212,11 @@ pub(crate) fn pinned(snapshot: &SessionSnapshot, width: u16, room: usize) -> Vec
     let mut rows: Vec<_> = steps
         .iter()
         .take(shown)
-        .map(|step| {
+        .enumerate()
+        .map(|(row, step)| {
             Line::from(truncate(
                 vec![
-                    Span::raw("  "),
+                    Span::styled(lead(row), theme::secondary()),
                     Span::styled(format!("□ {}", text(&step.step)), step_style(step.status)),
                 ],
                 usize::from(width),
@@ -209,10 +225,13 @@ pub(crate) fn pinned(snapshot: &SessionSnapshot, width: u16, room: usize) -> Vec
         .collect();
     if steps.len() > shown {
         rows.push(Line::from(truncate(
-            vec![Span::styled(
-                format!("  … and {} more", steps.len() - shown),
-                theme::secondary(),
-            )],
+            vec![
+                Span::styled(lead(shown), theme::secondary()),
+                Span::styled(
+                    format!("… and {} more", steps.len() - shown),
+                    theme::secondary(),
+                ),
+            ],
             usize::from(width),
         )));
     }

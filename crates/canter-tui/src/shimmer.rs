@@ -33,13 +33,17 @@ const LAG: f32 = 1.5;
 /// Half the width of the copy's light with 16 colours: four columns.
 const BAND: f32 = 2.0;
 
-/// `verb` (such as `Thinking`, or `Running ` with its space) with the light
-/// where it is at `now_ms`; as it is without colours.
+/// `verb` (such as `Thinking…`, or `Running ` with its space) with the light
+/// where it is at `now_ms`; only bold without colours.
 pub(crate) fn working(verb: &'static str, now_ms: i64) -> Vec<Span<'static>> {
-    if theme::shimmer() == Shimmer::Off {
-        return vec![Span::raw(verb)];
-    }
     let word = verb.trim_end();
+    if theme::shimmer() == Shimmer::Off {
+        let mut spans = vec![Span::styled(word, theme::working())];
+        if word.len() < verb.len() {
+            spans.push(Span::raw(&verb[word.len()..]));
+        }
+        return spans;
+    }
     let letters = word.chars().count() as f32;
     let period = letters + 2.0 * PAD;
     let at = now_ms.rem_euclid(SWEEP_MS) as f32 / SWEEP_MS as f32 * period - PAD;

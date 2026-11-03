@@ -52,6 +52,11 @@ const INPUT_CHROME: u16 = 6;
 pub(crate) const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Columns of a running command the status line keeps however narrow the window.
 const MIN_COMMAND: usize = 12;
+/// While working, what hangs under the status line (the plan's steps, then
+/// the tip) starts after this, under the verb; the rows after the first
+/// line up with its text.
+pub(crate) const HUNG: &str = "   ⎿ ";
+pub(crate) const UNDER_HUNG: &str = "     ";
 /// Conversation rows one step of the mouse wheel scrolls.
 const WHEEL_ROWS: usize = 3;
 /// Presses on the same cell this close together (ms) count as a double or
@@ -4524,11 +4529,21 @@ impl App {
             .agents
             .row()
             .filter(|_| !agents_open && plan_room > plan.len());
-        plan.extend(crate::plan::pinned(
+        // While working, the plan's steps hang under the status line, then
+        // the tip; with a blank row above the status line.
+        let working = self.snapshot.status == SessionStatus::Working && self.search.is_none();
+        let steps = crate::plan::pinned(
             &self.snapshot,
             width,
             plan_room.saturating_sub(plan.len() + usize::from(agent_row.is_some())),
-        ));
+            working,
+        );
+        let mut hung = Vec::new();
+        if working {
+            hung = steps;
+        } else {
+            plan.extend(steps);
+        }
         if let Some(row) = &agent_row {
             plan.push(Line::from(truncate(
                 vec![Span::styled(format!("  {row}"), theme::secondary())],
@@ -4555,22 +4570,26 @@ impl App {
         let lead = lead(history, &live);
         let total = history.len() + live.len() - lead;
         let room = usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height()))
-            .saturating_sub(list.len() + plan.len() + header_rows);
+            .saturating_sub(list.len() + plan.len() + hung.len() + header_rows);
         // Only under the status line of a turn that started here, with the
         // bare input box below; it goes first when rows run short.
+        let tip_lead = if hung.is_empty() { HUNG } else { UNDER_HUNG };
         let tip = match (&self.tips, &self.drawing.turn) {
             (Some(tips), Some(turn))
-                if self.snapshot.status == SessionStatus::Working
+                if working
                     && matches!(bottom, Bottom::Input { .. })
                     && list.is_empty()
-                    && self.search.is_none()
                     && room > 2 =>
             {
-                tips.line(turn, width)
+                tips.line(turn, width, tip_lead)
             }
             _ => None,
         };
         let room = room - usize::from(tip.is_some());
+        hung.extend(tip);
+        // The blank row goes next.
+        let gap = working && room > 2;
+        let room = room - usize::from(gap);
         // While the button is down the view stays where it is.
         let held = self
             .mouse
@@ -4614,22 +4633,25 @@ impl App {
         self.drawing.input = draft_shown.then(|| DrawnInput {
             width,
             text: self.input.text().to_owned(),
-            // Under the header and the conversation: the hint, status line,
-            // tip, plan, list and the box's top border.
+            // Under the header and the conversation: the hint, the blank
+            // row, the status line, the rows hung under it, plan, list and
+            // the box's top border.
             top: header_rows
                 + area
                 + usize::from(hint.is_some())
+                + usize::from(gap)
                 + 1
-                + usize::from(tip.is_some())
+                + hung.len()
                 + plan.len()
                 + list.len()
                 + 1,
             rows: input_rows,
         });
-        // Under the header and the conversation: the hint, the status line
-        // and the tip; the list starts with its title.
+        // Under the header and the conversation: the hint, the blank row,
+        // the status line and the rows hung under it; the list starts with
+        // its title.
         let background_top =
-            header_rows + area + usize::from(hint.is_some()) + 1 + usize::from(tip.is_some());
+            header_rows + area + usize::from(hint.is_some()) + usize::from(gap) + 1 + hung.len();
         self.drawing.background = DrawnBackground {
             row: background_row.then_some(background_top),
             open: background_open,
@@ -4823,7 +4845,8 @@ impl App {
                     self.status_line(now_ms, width, steer)
                 }
             },
-            tip,
+            gap,
+            hung,
             list,
             bottom,
             info,
@@ -5749,19 +5772,32 @@ impl App {
             .rev()
             .find(|&index| !self.item_done(turn, index))?;
         Some(match &turn.items[index] {
-            Item::Reasoning { .. } => ("Thinking", None),
-            Item::AgentMessage { .. } => ("Writing", None),
+            Item::Reasoning { .. } => ("Thinking…", None),
+            Item::AgentMessage { .. } => ("Writing…", None),
             Item::CommandExecution { command, .. } => {
                 ("Running ", Some(cells::command_line(command)))
             }
-            Item::FileRead { .. } => ("Reading", None),
-            Item::FileChange { .. } => ("Editing", None),
-            Item::McpToolCall { .. } => ("Calling", None),
-            Item::WebFetch { .. } => ("Fetching", None),
-            Item::WebSearch { .. } | Item::McpToolSearch { .. } => ("Searching", None),
-            Item::ContextCompaction { .. } => ("Compacting context", None),
+            Item::FileRead { .. } => ("Reading…", None),
+            Item::FileChange { .. } => ("Editing…", None),
+            Item::McpToolCall { .. } => ("Calling…", None),
+            Item::WebFetch { .. } => ("Fetching…", None),
+            Item::WebSearch { .. } | Item::McpToolSearch { .. } => ("Searching…", None),
+            Item::ContextCompaction { .. } => ("Compacting context…", None),
             _ => return None,
         })
+    }
+
+    /// The output tokens (thinking included) of the turn in progress so
+    /// far, as the server counts them for it; `None` until its first
+    /// request is done.
+    fn turn_output(&self) -> Option<u64> {
+        let turn = self
+            .snapshot
+            .turns
+            .iter()
+            .rev()
+            .find(|turn| turn.status == TurnStatus::InProgress)?;
+        Some(turn.usage.as_ref()?.total.output_tokens)
     }
 
     /// The status line without the Ctrl+O hint, a long command cut to fit
@@ -5807,16 +5843,33 @@ impl App {
             SessionStatus::Working => {
                 let frame = SPINNER[(now_ms.max(0) / 80) as usize % SPINNER.len()];
                 let spinner = format!(" {frame} ");
-                let after = format!(" · {elapsed} · Esc to interrupt{steer}");
-                let (verb, command) = self.doing().unwrap_or(("Working", None));
-                let used = str_width(&spinner) + str_width(verb) + str_width(&after);
-                let mut spans = vec![Span::styled(spinner, theme::accent())];
+                let (verb, command) = self.doing().unwrap_or(("Working…", None));
+                let mut numbers = format!(" · {elapsed}");
+                let keys = format!(" · Esc to interrupt{steer}");
+                // The turn's output tokens go first when the window is too
+                // narrow, while the time still fits.
+                let before = str_width(&spinner)
+                    + str_width(verb)
+                    + command
+                        .as_deref()
+                        .map_or(0, |command| str_width(command).min(MIN_COMMAND))
+                    + str_width(&numbers);
+                if let Some(output) = self.turn_output() {
+                    let tokens = format!(" · ↓ {} tokens", token_count(output));
+                    if before + str_width(&tokens) <= room {
+                        numbers += &tokens;
+                    }
+                }
+                let used =
+                    str_width(&spinner) + str_width(verb) + str_width(&numbers) + str_width(&keys);
+                let mut spans = vec![Span::styled(spinner, theme::working())];
                 spans.extend(shimmer::working(verb, now_ms));
                 if let Some(command) = command {
                     let fits = room.saturating_sub(used).max(MIN_COMMAND);
                     spans.extend(truncate(vec![Span::raw(command)], fits));
                 }
-                spans.push(Span::styled(after, theme::secondary()));
+                spans.push(Span::raw(numbers));
+                spans.push(Span::styled(keys, theme::secondary()));
                 Line::from(spans)
             }
             SessionStatus::WaitingApproval => Line::from(vec![
@@ -6123,8 +6176,10 @@ pub(crate) struct View {
     /// there is new output below.
     hint: Option<Line<'static>>,
     status: Line<'static>,
-    /// A tip under the status line while working.
-    tip: Option<Line<'static>>,
+    /// While working: a blank row above the status line.
+    gap: bool,
+    /// While working, under the status line: the plan's steps and the tip.
+    hung: Vec<Line<'static>>,
     /// The command list or a choice, right above the input box.
     list: Vec<Line<'static>>,
     bottom: Bottom,
@@ -6155,12 +6210,14 @@ impl Bottom {
 }
 
 impl View {
-    /// Rows under the conversation: the hint, the status line, the tip,
-    /// the list, the box and the info rows.
+    /// Rows under the conversation: the hint, the blank row, the status line,
+    /// the rows hung under it, the plan rows, the list, the box and the info
+    /// rows.
     fn below(&self) -> u16 {
         u16::from(self.hint.is_some())
             + 1
-            + u16::from(self.tip.is_some())
+            + u16::from(self.gap)
+            + self.hung.len() as u16
             + self.plan.len() as u16
             + self.list.len() as u16
             + self.bottom.height()
@@ -6190,10 +6247,12 @@ impl View {
         if let Some(hint) = self.hint {
             frame.render_widget(Paragraph::new(hint), row(1));
         }
-        frame.render_widget(Paragraph::new(self.status), row(1));
-        if let Some(tip) = self.tip {
-            frame.render_widget(Paragraph::new(tip), row(1));
+        if self.gap {
+            row(1);
         }
+        frame.render_widget(Paragraph::new(self.status), row(1));
+        let hung_height = self.hung.len() as u16;
+        frame.render_widget(Paragraph::new(self.hung), row(hung_height));
         let plan_height = self.plan.len() as u16;
         frame.render_widget(Paragraph::new(self.plan), row(plan_height));
         frame.render_widget(Paragraph::new(self.list), row(list));
@@ -6524,6 +6583,36 @@ pub(crate) fn tokens(n: u64) -> String {
         0 => format!("{}M", tenths / 10),
         tenth => format!("{}.{tenth}M", tenths / 10),
     }
+}
+
+/// A token count to three figures: `950`, `1.5k`, `26.2k`, `440k`, `1.27M`.
+pub(crate) fn token_count(n: u64) -> String {
+    if n < 1000 {
+        return n.to_string();
+    }
+    let mut text = String::new();
+    for (unit, suffix) in [(1e3, "k"), (1e6, "M"), (1e9, "B")] {
+        let value = n as f64 / unit;
+        let decimals = if value < 9.995 {
+            2
+        } else if value < 99.95 {
+            1
+        } else {
+            0
+        };
+        let figures = format!("{value:.decimals$}");
+        let figures = if figures.contains('.') {
+            figures.trim_end_matches('0').trim_end_matches('.')
+        } else {
+            &figures
+        };
+        text = format!("{figures}{suffix}");
+        // `1000k` is `1M`.
+        if figures.parse::<f64>().is_ok_and(|shown| shown < 1000.0) {
+            break;
+        }
+    }
+    text
 }
 
 pub(crate) fn format_elapsed(ms: i64) -> String {

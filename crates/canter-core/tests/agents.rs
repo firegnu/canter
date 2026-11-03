@@ -828,6 +828,13 @@ async fn child_spending_reaches_parent_goal_budget_and_stops_siblings() {
     .expect("child usage must count toward the parent's budget");
     assert_eq!(goal.cost.usd, 1.0);
     assert!(!goal.cost.unknown);
+    // The child's tokens are not the parent's turn's.
+    let parent = test.parent.snapshot().await.session;
+    assert!(
+        parent.turns.iter().all(|turn| turn.usage.is_none()),
+        "{:?}",
+        parent.turns
+    );
     assert_eq!(
         idle(&waiting).await.agent.unwrap().status,
         AgentStatus::Interrupted

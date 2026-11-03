@@ -225,7 +225,8 @@ fn a_finished_turn_ends_with_how_long_it_worked() {
     );
 }
 
-/// An interrupted or failed turn keeps its row and adds ` · <time>` to it.
+/// An interrupted or failed turn keeps its row, and says how long it ran in
+/// a `Worked for … · HH:MM` row after it.
 #[test]
 fn an_interrupted_or_failed_turn_says_how_long_it_ran() {
     let mut screen = Screen::new();
@@ -241,16 +242,20 @@ fn an_interrupted_or_failed_turn_says_how_long_it_ran() {
         json!({ "message": "boom", "additionalDetails": null }),
     );
     let conversation = screen.conversation();
-    assert!(
-        conversation.contains(&"  ■ Turn interrupted · 12s".to_owned()),
+    assert_eq!(
+        after(&conversation, "■ Turn interrupted"),
+        format!("  Worked for 12s · {}", clock(T0 + 12_300)),
         "{conversation:?}"
     );
-    assert!(
-        conversation.contains(&"  ✗ Turn failed: boom · 1m 01s".to_owned()),
+    assert_eq!(
+        after(&conversation, "✗ Turn failed: boom"),
+        format!("  Worked for 1m 01s · {}", clock(T0 + 74_300)),
         "{conversation:?}"
     );
-    assert!(!conversation.iter().any(|row| row.contains("Worked for")));
-    assert!(grey(screen.draw(), "■ Turn interrupted · 12s"));
+    assert!(conversation.contains(&"  ■ Turn interrupted".to_owned()));
+    assert!(conversation.contains(&"  ✗ Turn failed: boom".to_owned()));
+    assert!(grey(screen.draw(), "■ Turn interrupted"));
+    assert!(grey(screen.draw(), "Worked for 12s · "));
 }
 
 /// Finished thinking says how long it took, up to its last line:
