@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 11-03 装 main `16fb98c`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 16fb98c`，服务端 pid 86706；11-02 第六十一次之后今天还装过 `467547e`、`55806f6`、`79e4572`、`327dd4c`，HANDOFF 没逐次记，备份都在 `~/.canter/backups/`。比 `55806f6` 多 P2-190 钩子用会话环境、P2-191 `--session-file` 和只看订阅、P2-192 `--close-on-exit`、P2-194 干活那一行醒目和每轮用时 / token、P2-195 卡片按类型上色）。用户试用：「看起来感官不错」。配置没改，仍是 opencode go。
+- 退回上一版 `327dd4c`：`canter rollback`。存盘格式没变。
 - 11-02 第六十一次装 main `c5b7faf`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · c5b7faf`，服务端 pid 2209；比上一版多 P2-102：每轮结束后输入框灰字建议下一句，Tab / → 放进输入框，Enter 才发；空会话给 git 示例，受限模式不给；`config.json` 的 `prompt_suggestions` 默认开，用户配置里没写）。配置没改，仍是 opencode go。
 - 退回上一版 `5e26ad5`：`canter rollback`（备份在 `~/.canter/backups/`）。配置里没写 `prompt_suggestions`，退回不用改配置。
 - 11-02 第六十次装 main `5e26ad5`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 5e26ad5`，服务端 pid 4538；比上一版多 P2-185：`config.json` 可写 `headers`，值里 `{session_id}` 换成会话 ID；所有模型请求带 `User-Agent: canter/0.1.0`）。装上后配置换成 opencode go 订阅：`base_url` `https://opencode.ai/inference/go/openai/v1`、模型 `deepseek-v4.1-flash`（另可选 `deepseek-v4-pro`）、`headers` `{"x-opencode-session": "{session_id}"}`、`prices` 照官网高峰非高峰两档，密钥从 pi 的 `~/.pi/agent/auth.json` 复制；压缩线 400000 等日常设置没变。用 opencode go 时没有 `web_search`。改前的官网 DeepSeek 配置在 `~/.canter/config.json.bak-before-opencode-go`（官网 DeepSeek 11-02 余额用完，充值前用不了）。
