@@ -6,6 +6,7 @@
 //! one item's output.
 
 use canter_protocol::{Event, SessionSnapshot};
+use canter_tui::theme::{Background, Depth, Theme};
 use canter_tui::{Action, App, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
@@ -378,7 +379,7 @@ fn failed_command_keeps_ten_lines_in_the_default_colour() {
         assert_eq!(cell.fg, Color::Reset, "the default colour");
     }
     for cell in letters(&cells_of(buffer, "ok 3")) {
-        assert!(cell.modifier.contains(Modifier::DIM), "grey");
+        assert_eq!(cell.fg, Color::DarkGray, "grey");
     }
 }
 
@@ -634,6 +635,106 @@ fn the_command_is_coloured_as_bash() {
     for cell in letters(&cells_of(buffer, "Ran ")) {
         assert!(cell.modifier.contains(Modifier::BOLD));
     }
+}
+
+/// The programs a command runs stand out (P2-189): the first word, and the
+/// first after `;` and `|`, blue and bold. Arguments, quotes and operators
+/// keep their Bash colours. The user's `!` commands too.
+#[test]
+fn programs_in_a_command_are_blue_and_bold() {
+    let mut screen = Screen::new(30);
+    screen.command("c1", "rg --files -g '!node_modules'", "", 0);
+    screen.command("c2", "git status --short; echo \"---\"", "", 0);
+    screen.command("c3", "npm test 2>&1 | tail -25", "", 0);
+    screen.completed(json!({
+        "type": "commandExecution", "id": "u1", "command": "cargo fmt", "cwd": "/work",
+        "source": "userShell", "status": "completed", "aggregatedOutput": "",
+        "exitCode": 0, "durationMs": 0,
+    }));
+    let buffer = screen.draw();
+    for text in [
+        "rg --files",
+        "git status",
+        "echo \"---\"",
+        "npm test",
+        "tail -25",
+        "cargo fmt",
+    ] {
+        let program = text.split(' ').next().unwrap();
+        for cell in &cells_of(buffer, text)[..program.len()] {
+            assert_eq!(cell.fg, Color::Blue, "{text:?}");
+            assert!(cell.modifier.contains(Modifier::BOLD), "{text:?}");
+        }
+        for cell in letters(&cells_of(buffer, text)[program.len()..]) {
+            assert_ne!(cell.fg, Color::Blue, "{text:?}");
+            assert!(!cell.modifier.contains(Modifier::BOLD), "{text:?}");
+        }
+    }
+    // A quoted argument keeps its colour as a string.
+    for cell in letters(&cells_of(buffer, "'!node_modules'")) {
+        assert_ne!(cell.fg, Color::Reset, "a string has a colour");
+        assert_ne!(cell.fg, Color::Blue);
+    }
+    for text in ["--files", "status --short", "2>&1 | ", "-25"] {
+        for cell in letters(&cells_of(buffer, text)) {
+            assert_ne!(cell.fg, Color::Blue, "{text:?}");
+            assert!(!cell.modifier.contains(Modifier::BOLD), "{text:?}");
+        }
+    }
+}
+
+/// Without colours (`NO_COLOR`) the programs are bold only.
+#[test]
+fn without_colours_programs_are_bold_only() {
+    canter_tui::theme::set(Theme {
+        depth: Depth::None,
+        background: Background::Dark,
+    });
+    let mut screen = Screen::new(30);
+    screen.command("c1", "git log | head -5", "", 0);
+    let buffer = screen.draw();
+    for text in ["git", "head"] {
+        for cell in cells_of(buffer, &format!("{text} "))
+            .iter()
+            .take(text.len())
+        {
+            assert_eq!(cell.fg, Color::Reset, "{text:?}");
+            assert!(cell.modifier.contains(Modifier::BOLD), "{text:?}");
+        }
+    }
+    for cell in letters(&cells_of(buffer, "log | ")) {
+        assert!(!cell.modifier.contains(Modifier::BOLD));
+    }
+}
+
+/// A command's output is a grey foreground (P2-189), not the terminal's
+/// dim, while it runs, once it worked and with Ctrl+O; a failed command's
+/// output keeps the default colour.
+#[test]
+fn command_output_is_grey_unless_the_command_failed() {
+    let mut screen = Screen::new(40);
+    screen.command("c1", "cargo test", "all passed\n", 0);
+    screen.command("c2", "cargo clippy", "an error\n", 101);
+    screen.event(json!({ "type": "item.started", "turnId": "t1", "item": {
+        "type": "commandExecution", "id": "c3", "command": "sleep 60", "cwd": "/work",
+        "status": "inProgress", "aggregatedOutput": "still going\n",
+    }}));
+    let grey = |screen: &mut Screen| {
+        let buffer = screen.draw();
+        for text in ["all passed", "still going"] {
+            for cell in letters(&cells_of(buffer, text)) {
+                assert_eq!(cell.fg, Color::DarkGray, "{text:?}");
+                assert!(!cell.modifier.contains(Modifier::DIM), "{text:?}");
+            }
+        }
+        for cell in letters(&cells_of(buffer, "an error")) {
+            assert_eq!(cell.fg, Color::Reset, "the default colour");
+            assert!(!cell.modifier.contains(Modifier::DIM));
+        }
+    };
+    grey(&mut screen);
+    assert_eq!(screen.ctrl_o(), None);
+    grey(&mut screen);
 }
 
 /// Other cards' output follows a thick bar: grey on a card that worked, is

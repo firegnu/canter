@@ -17,6 +17,7 @@ use crate::diff::Diff;
 use crate::highlight;
 use crate::links::{self, Target};
 use crate::markdown;
+use crate::programs;
 use crate::short_path::{PATH_MIN, fit_paths};
 use crate::text::{
     LogicalLine, Row, char_width, drawn_width, push_linked, sanitize, spans_width, str_width,
@@ -1498,14 +1499,15 @@ fn command_card(
         _ => "Ran ",
     };
     let mut rows = command_title(command, user, (bullet, verb), status_spans, details, width);
+    let grey = theme::output();
     let (fold, style) = if details {
-        (Fold::Details, if failed { Style::new() } else { dim })
+        (Fold::Details, if failed { Style::new() } else { grey })
     } else if status == ItemStatus::InProgress {
-        (Fold::Tail(LIVE_TAIL), dim)
+        (Fold::Tail(LIVE_TAIL), grey)
     } else if failed {
         (Fold::Tail(FAILED_TAIL), Style::new())
     } else {
-        (Fold::Head(FINISHED_LINES), dim)
+        (Fold::Head(FINISHED_LINES), grey)
     };
     rows.extend(lines_rows(output, fold, style, Gutter::Branch, width));
     rows
@@ -1939,7 +1941,8 @@ fn lines_rows(output: &str, fold: Fold, style: Style, gutter: Gutter, width: u16
 /// Bash, as in the approval box, and each of its lines wraps by words
 /// under where it starts. Unless `whole`, it takes at most `COMMAND_ROWS`
 /// rows, then a row saying how many more there are. Control characters in
-/// the command show as escapes.
+/// the command show as escapes. The programs it runs are blue and bold
+/// ([`programs`]).
 /// With `bang`, the user ran it: `! ` before it, the `!` red.
 fn command_title(
     command: &str,
@@ -1960,6 +1963,7 @@ fn command_title(
             .map(|line| vec![Span::raw((*line).to_owned())])
             .collect()
     });
+    programs::emphasize(&mut bodies, theme::program());
     if bang {
         bodies[0].splice(0..0, [Span::styled("!", theme::shell()), Span::raw(" ")]);
     }
