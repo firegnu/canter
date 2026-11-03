@@ -13,7 +13,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKi
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Size};
-use ratatui::style::{Color, Modifier};
+use ratatui::style::Color;
 use unicode_width::UnicodeWidthStr;
 
 const WIDTH: u16 = 80;
@@ -119,7 +119,8 @@ async fn replay() {
         "screens differ from {expected_path}\n--- actual ---\n{report}"
     );
 
-    // Colors the text above cannot show: diff lines, and grey thinking.
+    // Colors the text above cannot show: diff lines, and finished thinking's
+    // purple label.
     // The welcome header pushed the end of the diff below: one step of the
     // wheel down brings it back.
     let wheel = MouseEvent {
@@ -136,9 +137,10 @@ async fn replay() {
     let removed = find(top, "- git clone https://github.com/firegnu/canter");
     assert_eq!(top[removed].fg, Color::Red, "removed lines are red");
     let thinking = find(top, "Thought for <1s · ");
-    assert!(
-        top[thinking].modifier.contains(Modifier::DIM),
-        "thinking is grey"
+    assert_eq!(
+        top[thinking].fg,
+        Color::Magenta,
+        "finished thinking is purple"
     );
 }
 

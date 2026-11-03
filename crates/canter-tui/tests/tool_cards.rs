@@ -481,7 +481,8 @@ fn ctrl_o_shows_whole_commands_and_at_most_500_lines_of_output() {
 }
 
 /// A file that could not be read is a row of its own: a red `•` and a red
-/// `failed`; one that was read goes under `• Explored`, its `•` grey.
+/// `failed`, its verb red too; one that was read goes under `• Explored`,
+/// its `•` and title cyan.
 #[test]
 fn failed_file_read_shows_a_red_mark() {
     let mut screen = Screen::new(30);
@@ -510,9 +511,12 @@ fn failed_file_read_shows_a_red_mark() {
     for cell in letters(&cells_of(buffer, "failed")) {
         assert_eq!(cell.fg, Color::Red);
     }
-    let explored = cells_of(buffer, "• Explored")[0];
-    assert!(explored.modifier.contains(Modifier::DIM));
-    assert_ne!(explored.fg, Color::Red);
+    for cell in letters(&cells_of(buffer, "• Read src/theme.rs")[..6]) {
+        assert_eq!(cell.fg, Color::Red, "the mark and verb are red");
+    }
+    for cell in letters(&cells_of(buffer, "• Explored")) {
+        assert_eq!(cell.fg, Color::Cyan, "the mark and title are cyan");
+    }
 }
 
 /// `echo arg01 arg02 …` up to `arg{count}`.

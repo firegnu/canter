@@ -172,6 +172,15 @@ fn cell<'a>(buffer: &'a Buffer, text: &str) -> &'a Cell {
     cells(buffer, text)[0]
 }
 
+/// The cells of `cells` that are not blank.
+fn letters<'a>(cells: &[&'a Cell]) -> Vec<&'a Cell> {
+    cells
+        .iter()
+        .copied()
+        .filter(|cell| !cell.symbol().trim().is_empty())
+        .collect()
+}
+
 fn clock(ms: i64) -> String {
     chrono::Local
         .timestamp_opt(ms / 1000, 0)
@@ -182,8 +191,9 @@ fn clock(ms: i64) -> String {
 
 // §1
 
-/// The answer starts with `• `, its later rows indent 2; tool cards start
-/// with `•` in the colour of how they went. The prompt keeps `›`.
+/// The answer starts with a bold `● `, its later rows indent 2; tool cards
+/// start with `•`, a command's mark and verb in the colour of how it went.
+/// The prompt keeps `›`.
 #[test]
 fn the_answer_and_tool_cards_start_with_a_bullet() {
     let mut screen = Screen::new(WIDTH);
@@ -215,7 +225,7 @@ fn the_answer_and_tool_cards_start_with_a_bullet() {
     assert_eq!(
         screen.rows(),
         [
-            "• First row.",
+            "● First row.",
             "  Second row.",
             "• Ran cargo build",
             "• Ran cargo test  exit 1",
@@ -226,6 +236,32 @@ fn the_answer_and_tool_cards_start_with_a_bullet() {
     let buffer = screen.draw();
     assert_eq!(cell(buffer, "• Ran cargo build").fg, Color::Green);
     assert_eq!(cell(buffer, "• Ran cargo test").fg, Color::Red);
+    for cell in letters(&cells(buffer, "• Ran")) {
+        assert_eq!(
+            cell.fg,
+            Color::Green,
+            "a command that worked: mark and verb green"
+        );
+    }
+    assert!(
+        cell(buffer, "Ran cargo build")
+            .modifier
+            .contains(Modifier::BOLD)
+    );
+    let failed = cells(buffer, "• Ran cargo test");
+    for cell in letters(&failed[..5]) {
+        assert_eq!(
+            cell.fg,
+            Color::Red,
+            "a command that failed: mark and verb red"
+        );
+    }
+    let said = cell(buffer, "● First row.");
+    assert!(
+        said.modifier.contains(Modifier::BOLD),
+        "the answer's `●` is bold"
+    );
+    assert_eq!(said.fg, Color::Reset, "in the default colour");
     let live = cell(buffer, "• Running");
     assert!(live.modifier.contains(Modifier::DIM));
     assert_ne!(live.fg, Color::Green);
@@ -237,7 +273,8 @@ fn the_answer_and_tool_cards_start_with_a_bullet() {
 
 /// While thinking: `✻ Thinking…` and the latest line; then folded to
 /// `✻ Thought for 2s · ` and the start of the thought, the label in the
-/// secondary grey, the text fainter and italic, from column 0.
+/// secondary grey while it runs and purple once done, the text fainter and
+/// italic, from column 0.
 #[test]
 fn thinking_shows_its_latest_line_then_folds_with_its_time() {
     let mut screen = Screen::new(WIDTH);
@@ -269,7 +306,8 @@ fn thinking_shows_its_latest_line_then_folds_with_its_time() {
     );
     let buffer = screen.draw();
     let label = cell(buffer, "✻ Thought for 2s");
-    assert!(label.modifier.contains(Modifier::DIM));
+    assert_eq!(label.fg, Color::Magenta, "purple once done");
+    assert!(!label.modifier.contains(Modifier::DIM));
     assert!(!label.modifier.contains(Modifier::ITALIC));
     let text = cell(buffer, "Look at the tests.");
     assert!(text.modifier.contains(Modifier::ITALIC));
@@ -302,8 +340,9 @@ fn a_thought_without_a_time_is_thought_and_is_cut_to_the_width() {
 // §3
 
 /// Reads in a row are one block, growing as each read ends: `• Explored`,
-/// then `  └ Read ` and the file names. `Read` is coloured, the names in the
-/// body colour without an underline, the commas dim.
+/// then `  └ Read ` and the file names. The mark and `Explored` are cyan,
+/// `Read` is blue, the names in the body colour without an underline, the
+/// commas dim.
 #[test]
 fn reads_in_a_row_are_one_explored_block_that_grows() {
     let mut screen = Screen::new(WIDTH);
@@ -319,6 +358,9 @@ fn reads_in_a_row_are_one_explored_block_that_grows() {
     );
     let buffer = screen.draw();
     assert!(cell(buffer, "Explored").modifier.contains(Modifier::BOLD));
+    for cell in letters(&cells(buffer, "• Explored")) {
+        assert_eq!(cell.fg, Color::Cyan, "the mark and title are cyan");
+    }
     assert_eq!(cell(buffer, "Read app.rs").fg, Color::Blue);
     for name in ["app.rs", "README.md", "cells.rs"] {
         for cell in cells(buffer, name) {
@@ -631,6 +673,101 @@ fn paths_in_titles_are_coloured_and_addresses_underlined() {
         assert_eq!(cell.fg, Color::Reset);
         assert!(cell.modifier.contains(Modifier::UNDERLINED));
     }
+}
+
+/// An edit that worked has its mark and verb orange, as the working verb,
+/// for the background; orange 166 of the 256 with the background unknown;
+/// yellow with 16 colours (P2-195).
+#[test]
+fn an_edit_is_orange() {
+    for (depth, background, orange) in [
+        (
+            Depth::TrueColor,
+            Background::Dark,
+            Color::Rgb(0xd7, 0x77, 0x57),
+        ),
+        (
+            Depth::TrueColor,
+            Background::Light,
+            Color::Rgb(0xb4, 0x4a, 0x1e),
+        ),
+        (Depth::Ansi256, Background::Unknown, Color::Indexed(166)),
+        (Depth::Ansi16, Background::Dark, Color::Yellow),
+    ] {
+        let mut screen = Screen::themed(Theme { depth, background }, WIDTH);
+        screen.completed(edit("completed"));
+        let buffer = screen.draw();
+        for cell in letters(&cells(buffer, "• Edit")) {
+            assert_eq!(cell.fg, orange, "{depth:?} {background:?}");
+        }
+        assert!(cell(buffer, "Edit").modifier.contains(Modifier::BOLD));
+    }
+}
+
+/// Without colours the cards' titles are only bold, finished thinking's
+/// label grey, and the answer still starts with `●` (P2-195).
+#[test]
+fn without_colours_titles_are_only_bold() {
+    let mut screen = Screen::themed(
+        Theme {
+            depth: Depth::None,
+            background: Background::Dark,
+        },
+        WIDTH,
+    );
+    screen.completed(json!({
+        "type": "reasoning", "id": "r1", "summary": [], "content": ["Look first."],
+    }));
+    screen.read("f1", "/work/src/app.rs", "completed");
+    screen.completed(edit("completed"));
+    screen.completed(command(
+        "ok",
+        "cargo build",
+        "",
+        "completed",
+        json!(0),
+        json!(10),
+    ));
+    screen.completed(command(
+        "bad",
+        "cargo test",
+        "",
+        "failed",
+        json!(1),
+        json!(10),
+    ));
+    screen.say("m1", "Done.");
+    let rows = screen.rows();
+    assert!(rows.contains(&"● Done.".to_owned()), "{rows:#?}");
+    let buffer = screen.draw();
+    for title in ["Explored", "Edit", "Ran cargo build", "Ran cargo test"] {
+        let cell = cell(buffer, title);
+        assert_eq!(cell.fg, Color::Reset, "{title}");
+        assert!(cell.modifier.contains(Modifier::BOLD), "{title}");
+    }
+    for mark in [
+        "• Explored",
+        "• Edit",
+        "• Ran cargo build",
+        "• Ran cargo test",
+    ] {
+        assert_eq!(cell(buffer, mark).fg, Color::Reset, "{mark}");
+    }
+    let label = cell(buffer, "✻ Thought");
+    assert_eq!(label.fg, Color::Reset);
+    assert!(label.modifier.contains(Modifier::DIM));
+    assert!(cell(buffer, "● Done.").modifier.contains(Modifier::BOLD));
+}
+
+/// An edit of `src/lib.rs`.
+fn edit(status: &str) -> Value {
+    json!({
+        "type": "fileChange", "id": "e1", "status": status,
+        "changes": [{
+            "path": "/work/src/lib.rs", "kind": { "type": "update", "movePath": null },
+            "diff": "@@ -1 +1 @@\n-old\n+new\n",
+        }],
+    })
 }
 
 // §7

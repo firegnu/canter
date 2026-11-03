@@ -24,7 +24,7 @@
  deepseek-chat · think high · Always ask
  ~/canter
 == 第 21 条事件后，屏幕 ==
-• 先看一下 README 现在怎么写的。
+● 先看一下 README 现在怎么写的。
 
 • Explored
   └ Read README.md
@@ -86,7 +86,7 @@
        Compiling libc v0.2.177
     + 9 lines (Ctrl+O to expand)
 
-• 改好了，安装步骤现在只有一行 cargo install --path crates/canter。
+● 改好了，安装步骤现在只有一行 cargo install --path crates/canter。
 
   改了什么
 
@@ -114,7 +114,7 @@
 
 › 你好
 
-• This is a fake server; it only replays scripted events. Received: 你好
+● This is a fake server; it only replays scripted events. Received: 你好
 
   Worked for <1s · HH:MM
 
@@ -133,7 +133,7 @@
 
 ✻ Thought for <1s · 用户想把 README 的安装步骤换成 cargo install。先读 README …
 
-• 先看一下 README 现在怎么写的。
+● 先看一下 README 现在怎么写的。
 
 • Explored
   └ Read README.md

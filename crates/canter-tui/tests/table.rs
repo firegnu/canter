@@ -82,7 +82,7 @@ impl Screen {
         let at = lines
             .iter()
             .position(|line| {
-                line.trim_start_matches("• ")
+                line.trim_start_matches("● ")
                     .trim_start()
                     .starts_with(first)
             })
@@ -120,7 +120,7 @@ fn a_table_that_fits_is_drawn_with_box_lines_aligned_by_display_width() {
     assert_eq!(
         screen.rows_from("┌", 7),
         [
-            "• ┌─────────────┬──────┬─────────────────────┐",
+            "● ┌─────────────┬──────┬─────────────────────┐",
             "  │ 文件        │ 行数 │ 做什么              │",
             "  ├─────────────┼──────┼─────────────────────┤",
             "  │ cells.rs    │  513 │ 每种项目怎么画      │",
@@ -154,7 +154,7 @@ fn a_narrower_screen_wraps_the_last_column_and_draws_lines_between_rows() {
     assert_eq!(
         screen.rows_from("┌", 13),
         [
-            "• ┌─────────────┬──────┬──────────┐",
+            "● ┌─────────────┬──────┬──────────┐",
             "  │ 文件        │ 行数 │ 做什么   │",
             "  ├─────────────┼──────┼──────────┤",
             "  │ cells.rs    │  513 │ 每种项目 │",
@@ -192,7 +192,7 @@ fn a_table_with_many_columns_becomes_records_of_header_and_value() {
     assert_eq!(
         screen.rows_from("名字: canter", 17),
         [
-            "• 名字: canter",
+            "● 名字: canter",
             "  语言: Rust",
             "  行数: 8650",
             "  测试: 有",
@@ -228,7 +228,7 @@ fn columns_follow_left_center_and_right_alignment() {
     assert_eq!(
         screen.rows_from("┌", 6),
         [
-            "• ┌────────┬──────────┬───────┬──────┐",
+            "● ┌────────┬──────────┬───────┬──────┐",
             "  │ left   │  center  │ right │ none │",
             "  ├────────┼──────────┼───────┼──────┤",
             "  │ a      │    b     │     c │ d    │",
@@ -250,7 +250,7 @@ fn bold_and_inline_code_inside_cells_keep_their_styles() {
     assert_eq!(
         screen.rows_from("┌", 5),
         [
-            "• ┌──────┬──────────────────┐",
+            "● ┌──────┬──────────────────┐",
             "  │ 名字 │ 说明             │",
             "  ├──────┼──────────────────┤",
             "  │ 粗体 │ 用 cargo test 跑 │",
@@ -311,7 +311,7 @@ fn a_table_still_streaming_draws_without_breaking_and_is_whole_once_done() {
     assert_eq!(
         screen.rows_from("┌", 7),
         [
-            "• ┌─────────────┬──────┬─────────────────────┐",
+            "● ┌─────────────┬──────┬─────────────────────┐",
             "  │ 文件        │ 行数 │ 做什么              │",
             "  ├─────────────┼──────┼─────────────────────┤",
             "  │ cells.rs    │  513 │ 每种项目怎么画      │",

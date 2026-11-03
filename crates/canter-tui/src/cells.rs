@@ -185,12 +185,12 @@ pub(crate) fn agent_message(text: &str, width: u16) -> Vec<LogicalLine> {
         .collect()
 }
 
-/// What the model said: [`agent_message`] with `• ` in place of the first
-/// row's indent.
+/// What the model said: [`agent_message`] with a bold `● ` in the default
+/// colour in place of the first row's indent, apart from the cards' `•`.
 fn said(text: &str, width: u16) -> Vec<LogicalLine> {
     let mut lines = agent_message(text, width);
     if let Some(first) = lines.first_mut() {
-        first.indent[0] = Span::raw("• ");
+        first.indent[0] = Span::styled("● ", Style::new().bold());
     }
     lines
 }
@@ -236,7 +236,7 @@ pub(crate) fn item(
             let label =
                 command_id.map_or_else(|| "Auto wake".into(), |id| format!("Background #{id}"));
             let mut rows = vec![title(
-                dot(theme::accent()),
+                done(theme::accent()),
                 "Event ",
                 vec![Span::raw(label)],
                 Vec::new(),
@@ -343,7 +343,7 @@ pub(crate) fn item(
             status,
             ..
         } => {
-            let (bullet, mut right) = status_marks(*status);
+            let (mark, mut right) = status_marks(*status, theme::explored());
             if *status == ItemStatus::Completed {
                 right = vec![Span::styled(
                     format!("{} found", tools.len()),
@@ -351,7 +351,7 @@ pub(crate) fn item(
                 )];
             }
             let mut rows = vec![title(
-                bullet,
+                mark,
                 if *status == ItemStatus::InProgress {
                     "Searching MCP tools "
                 } else {
@@ -822,7 +822,8 @@ pub(crate) fn wrap_all(lines: &[LogicalLine], width: u16) -> Vec<Row> {
 /// Thinking, from the summary when there is one. Folded it is one row:
 /// `✻ Thinking… <the latest line>` while it runs, `✻ Thought · <the first
 /// line>` once done, `✻ Thought for 4s · …` when its time is known; the
-/// label grey, what follows it fainter and italic. With `details`, the
+/// label grey while it runs and purple once done ([`theme::thought`]),
+/// what follows it fainter and italic. With `details`, the
 /// label (`✻ Thought for 4s`) and then the whole text as markdown, grey and
 /// italic, each row after a grey `┊`.
 fn reasoning(
@@ -833,7 +834,11 @@ fn reasoning(
     details: bool,
     width: u16,
 ) -> Vec<Row> {
-    let label_style = theme::secondary();
+    let label_style = if finished {
+        theme::thought()
+    } else {
+        theme::secondary()
+    };
     let text_style = theme::thinking_text();
     let summarized = summary.iter().any(|part| !part.trim().is_empty());
     let parts = if summarized { summary } else { content };
@@ -1043,19 +1048,14 @@ fn read_row(lead: Vec<Span<'static>>, verb: Style, item: &Item, cwd: &str, width
 /// A read on a row of its own, as one that failed or was declined is:
 /// `• Read <path>` and how it went.
 fn file_read(item: &Item, cwd: &str, width: u16) -> Row {
-    let failed = matches!(
-        item,
+    let (mark, verb) = match item {
         Item::FileRead {
             status: ItemStatus::Failed,
             ..
-        }
-    );
-    let mark = if failed {
-        failed_dot()
-    } else {
-        dot(theme::secondary())
+        } => failed(),
+        _ => plain(theme::secondary()),
     };
-    read_row(vec![mark], Style::new().bold(), item, cwd, width)
+    read_row(vec![mark], verb, item, cwd, width)
 }
 
 /// Whether a read goes in a `• Explored` block with the reads next to it:
@@ -1123,8 +1123,8 @@ pub(crate) fn explored(
     let dim = theme::secondary();
     let mut rows = vec![Row::text_from(
         Line::from(vec![
-            dot(dim),
-            Span::styled("Explored", Style::new().bold()),
+            dot(theme::explored()),
+            Span::styled("Explored", theme::explored().bold()),
         ]),
         2,
     )];
@@ -1268,7 +1268,7 @@ pub(crate) fn waiting(
         Item::CommandExecution { command, .. } => command_title(
             command,
             false,
-            (dot(theme::secondary()), "Run "),
+            (plain(theme::secondary()), "Run "),
             Vec::new(),
             false,
             width,
@@ -1280,7 +1280,7 @@ pub(crate) fn waiting(
                 let (header, links) = change_header(
                     change,
                     &diff,
-                    dot(theme::secondary()),
+                    plain(theme::secondary()),
                     None,
                     cwd,
                     usize::from(width),
@@ -1300,23 +1300,20 @@ fn file_change(
     width: u16,
 ) -> Vec<Row> {
     let diff = Diff::parse(&sanitize(&change.diff), &change.kind, &change.path);
-    let (bullet, suffix) = match status {
+    let (mark, suffix) = match status {
         ItemStatus::Blocked => (
-            dot(theme::warning()),
+            plain(theme::warning()),
             Some(Span::styled("  blocked (Plan mode)", theme::warning())),
         ),
-        ItemStatus::InProgress => (dot(theme::secondary()), None),
-        ItemStatus::Failed => (
-            failed_dot(),
-            Some(Span::styled("  failed", theme::failure())),
-        ),
+        ItemStatus::InProgress => (plain(theme::secondary()), None),
+        ItemStatus::Failed => (failed(), Some(Span::styled("  failed", theme::failure()))),
         ItemStatus::Declined => (
-            dot(theme::secondary()),
+            plain(theme::secondary()),
             Some(Span::styled("  declined", theme::secondary())),
         ),
-        _ => (dot(theme::success()), None),
+        _ => (done(theme::edited()), None),
     };
-    let (header, links) = change_header(change, &diff, bullet, suffix, cwd, usize::from(width));
+    let (header, links) = change_header(change, &diff, mark, suffix, cwd, usize::from(width));
     let mut rows = vec![cut_row(header, links, width)];
     let limit = match &change.kind {
         _ if details => None,
@@ -1335,7 +1332,7 @@ fn file_change(
 fn change_header(
     change: &FileUpdateChange,
     diff: &Diff,
-    bullet: Span<'static>,
+    (bullet, verb_style): Mark,
     suffix: Option<Span<'static>>,
     cwd: &str,
     width: usize,
@@ -1353,7 +1350,7 @@ fn change_header(
     );
     let mut header = vec![
         bullet,
-        Span::styled(verb, Style::new().bold()),
+        Span::styled(verb, verb_style),
         if linked {
             path_span(&change.path, cwd)
         } else {
@@ -1479,23 +1476,21 @@ fn command_card(
     let (command, source) = command;
     let dim = theme::secondary();
     let searched_nothing = no_matches(command, exit_code, output);
-    let (bullet, mut status_spans) = match (status, exit_code) {
-        (ItemStatus::InProgress, _) => (dot(dim), Vec::new()),
-        (ItemStatus::Declined, _) => (dot(dim), vec![Span::styled("declined", dim)]),
+    let (mark, mut status_spans) = match (status, exit_code) {
+        (ItemStatus::InProgress, _) => (plain(dim), Vec::new()),
+        (ItemStatus::Declined, _) => (plain(dim), vec![Span::styled("declined", dim)]),
         (ItemStatus::Blocked, _) => (
-            dot(theme::warning()),
+            plain(theme::warning()),
             vec![Span::styled("blocked (Plan mode)", theme::warning())],
         ),
-        _ if searched_nothing => (dot(dim), vec![Span::styled("No matches", dim)]),
-        (_, Some(0)) => (dot(theme::success()), Vec::new()),
+        _ if searched_nothing => (plain(dim), vec![Span::styled("No matches", dim)]),
+        (_, Some(0)) => (done(theme::success()), Vec::new()),
         (_, Some(code)) => (
-            failed_dot(),
+            failed(),
             vec![Span::styled(format!("exit {code}"), theme::failure())],
         ),
-        (ItemStatus::Failed, None) => {
-            (failed_dot(), vec![Span::styled("failed", theme::failure())])
-        }
-        (_, None) => (dot(theme::success()), Vec::new()),
+        (ItemStatus::Failed, None) => (failed(), vec![Span::styled("failed", theme::failure())]),
+        (_, None) => (done(theme::success()), Vec::new()),
     };
     // How long it took, from a second on.
     if let Some(ms) = duration_ms.filter(|&ms| ms >= 1000 && status != ItemStatus::InProgress) {
@@ -1517,7 +1512,7 @@ fn command_card(
         ItemStatus::Declined | ItemStatus::Blocked => "Run ",
         _ => "Ran ",
     };
-    let mut rows = command_title(command, user, (bullet, verb), status_spans, details, width);
+    let mut rows = command_title(command, user, (mark, verb), status_spans, details, width);
     let grey = theme::output();
     let (fold, style) = if details {
         (Fold::Details, if failed { Style::new() } else { grey })
@@ -1572,7 +1567,7 @@ fn mcp_call(
     (details, sandbox): (bool, bool),
     width: u16,
 ) -> Vec<Row> {
-    let (bullet, mut right) = status_marks(status);
+    let (mark, mut right) = status_marks(status, theme::success());
     if sandbox {
         not_sandboxed(&mut right);
     }
@@ -1584,7 +1579,7 @@ fn mcp_call(
             first_line(&arguments.to_string())
         )));
     }
-    let mut rows = vec![title(bullet, "Call ", object, right, None, width)];
+    let mut rows = vec![title(mark, "Call ", object, right, None, width)];
     let fold = if details {
         Fold::Details
     } else {
@@ -1631,10 +1626,10 @@ fn agent_tool(item: &Item, details: bool, width: u16) -> Vec<Row> {
         }
         spans
     };
-    let (bullet, right) = match status {
-        ItemStatus::InProgress => (dot(dim), Vec::new()),
-        ItemStatus::Interrupted => (dot(dim), vec![Span::styled("interrupted", dim)]),
-        other => status_marks(*other),
+    let (mark, right) = match status {
+        ItemStatus::InProgress => (plain(dim), Vec::new()),
+        ItemStatus::Interrupted => (plain(dim), vec![Span::styled("interrupted", dim)]),
+        other => status_marks(*other, theme::success()),
     };
     // While it runs, once it worked, once it did not.
     let tense = |running, done, not| match status {
@@ -1672,7 +1667,7 @@ fn agent_tool(item: &Item, details: bool, width: u16) -> Vec<Row> {
             (tense("Closing ", "Closed ", "Close "), names())
         }
     };
-    let mut rows = vec![title(bullet, verb, object, right, None, width)];
+    let mut rows = vec![title(mark, verb, object, right, None, width)];
     let branch = |spans: Vec<Span<'static>>| {
         let mut line = vec![Span::raw("    "), Span::styled("└ ", dim)];
         line.extend(spans);
@@ -1722,7 +1717,7 @@ fn web_fetch(
     width: u16,
 ) -> Vec<Row> {
     let dim = theme::secondary();
-    let (bullet, mut right) = status_marks(status);
+    let (mark, mut right) = status_marks(status, theme::explored());
     let one_line = !result.trim_end().contains('\n');
     let redirect = one_line && result.starts_with("Redirected to ");
     let note = one_line
@@ -1741,7 +1736,7 @@ fn web_fetch(
         not_sandboxed(&mut right);
     }
     let mut rows = vec![title(
-        bullet,
+        mark,
         "Fetch ",
         vec![Span::raw(first_line(url))],
         right,
@@ -1770,7 +1765,7 @@ fn web_search(
     details: bool,
     width: u16,
 ) -> Vec<Row> {
-    let (bullet, mut right) = status_marks(status);
+    let (mark, mut right) = status_marks(status, theme::explored());
     if status == ItemStatus::Completed {
         right = vec![Span::styled(
             format!(
@@ -1782,7 +1777,7 @@ fn web_search(
         )];
     }
     let mut rows = vec![title(
-        bullet,
+        mark,
         "Search ",
         vec![Span::raw(first_line(query))],
         right,
@@ -1823,18 +1818,19 @@ fn web_search(
     rows
 }
 
-/// The mark and right-hand status of a card that has no exit code.
-fn status_marks(status: ItemStatus) -> (Span<'static>, Vec<Span<'static>>) {
+/// The mark, verb style and right-hand status of a card that has no exit
+/// code; once it worked, the mark and verb in `kind`, its kind's colour.
+fn status_marks(status: ItemStatus, kind: Style) -> (Mark, Vec<Span<'static>>) {
     let dim = theme::secondary();
     match status {
         ItemStatus::Blocked => (
-            dot(theme::warning()),
+            plain(theme::warning()),
             vec![Span::styled("blocked (Plan mode)", theme::warning())],
         ),
-        ItemStatus::InProgress => (dot(dim), vec![Span::styled("running", dim)]),
-        ItemStatus::Declined => (dot(dim), vec![Span::styled("declined", dim)]),
-        ItemStatus::Failed => (failed_dot(), vec![Span::styled("failed", theme::failure())]),
-        _ => (dot(theme::success()), Vec::new()),
+        ItemStatus::InProgress => (plain(dim), vec![Span::styled("running", dim)]),
+        ItemStatus::Declined => (plain(dim), vec![Span::styled("declined", dim)]),
+        ItemStatus::Failed => (failed(), vec![Span::styled("failed", theme::failure())]),
+        _ => (done(kind), Vec::new()),
     }
 }
 
@@ -1966,7 +1962,7 @@ fn lines_rows(output: &str, fold: Fold, style: Style, gutter: Gutter, width: u16
 fn command_title(
     command: &str,
     bang: bool,
-    (bullet, verb): (Span<'static>, &'static str),
+    ((bullet, verb_style), verb): (Mark, &'static str),
     status: Vec<Span<'static>>,
     whole: bool,
     width: u16,
@@ -2001,7 +1997,7 @@ fn command_title(
         rows.extend(wrap_rows(&line, width));
     }
     // The mark and verb in place of the first row's indent.
-    let mut first = vec![bullet, Span::styled(verb, Style::new().bold())];
+    let mut first = vec![bullet, Span::styled(verb, verb_style)];
     first.extend(rows[0].line.spans.drain(1..));
     let first_width = spans_width(&first);
     let status_width = spans_width(&status);
@@ -2033,14 +2029,14 @@ fn command_title(
 /// A card's first row: `● Verb object` with `right` flush with the right
 /// edge; the object a link to `link` when there is one.
 fn title(
-    bullet: Span<'static>,
+    (bullet, verb_style): Mark,
     verb: &'static str,
     object: Vec<Span<'static>>,
     right: Vec<Span<'static>>,
     link: Option<Target>,
     width: u16,
 ) -> Row {
-    let mut left = vec![bullet, Span::styled(verb, Style::new().bold())];
+    let mut left = vec![bullet, Span::styled(verb, verb_style)];
     let start = drawn_width(&left);
     let links = link
         .map(|target| (start..start + drawn_width(&object), target))
@@ -2092,9 +2088,24 @@ fn dot(style: Style) -> Span<'static> {
     Span::styled("• ", style)
 }
 
-/// A failed card's mark: a red `•`.
-fn failed_dot() -> Span<'static> {
-    Span::styled("• ", theme::failure())
+/// A card's mark and the style of the verb after it.
+type Mark = (Span<'static>, Style);
+
+/// A finished card's mark and verb, both in `style` (the colour of its
+/// kind, or red when it failed), the verb bold.
+fn done(style: Style) -> Mark {
+    (dot(style), style.bold())
+}
+
+/// A mark in `style` and the verb plainly bold: a card still going,
+/// declined or blocked.
+fn plain(style: Style) -> Mark {
+    (dot(style), Style::new().bold())
+}
+
+/// A failed card's mark and verb: red.
+fn failed() -> Mark {
+    done(theme::failure())
 }
 
 /// `left`, then two spaces and `right` (a card's status); the left side is
