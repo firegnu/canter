@@ -164,6 +164,12 @@ impl Screen {
         let lines = self.lines();
         lines[lines.len() - BELOW].clone()
     }
+
+    /// The row above the status line: a running command's own row.
+    fn command_row(&mut self) -> String {
+        let lines = self.lines();
+        lines[lines.len() - BELOW - 1].clone()
+    }
 }
 
 fn row(buffer: &Buffer, y: u16) -> String {
@@ -358,28 +364,37 @@ fn the_status_line_names_what_the_turn_is_doing() {
         "result": "ok", "status": "completed",
     }));
 
+    // A command gets its own row above the status line, which says
+    // `Working…`.
     screen.command("c1", "cargo build\ncargo test", "inProgress");
+    assert_eq!(screen.command_row(), "   Running cargo build …");
     assert_eq!(
         screen.status(),
-        " ⠋ Running cargo build… · 0s … · ctrl+b to run in background"
+        " ⠋ Working… · 0s · Esc to int… · Ctrl+B to run in background"
     );
     screen.command("c1", "cargo build\ncargo test", "completed");
 
-    // In a narrow window the background shortcut stays whole.
+    // In a narrow window the command is cut at the edge, and the
+    // background shortcut stays whole.
     let long = format!("cargo test {}", "--package canter-tui ".repeat(5));
     screen.command("c2", &long, "inProgress");
+    let command = screen.command_row();
+    assert!(
+        command.starts_with("   Running cargo test") && command.ends_with('…'),
+        "{command:?}"
+    );
+    assert_eq!(command.width(), usize::from(WIDTH));
     let status = screen.status();
     assert!(
-        status.starts_with(" ⠋ Running cargo test")
-            && status.ends_with(" · ctrl+b to run in background"),
+        status.starts_with(" ⠋ Working…") && status.ends_with(" · Ctrl+B to run in background"),
         "{status:?}"
     );
-    assert_eq!(status.width(), usize::from(WIDTH));
 }
 
 #[test]
 fn with_details_shown_both_hints_show_and_a_narrow_window_cuts_the_command_first() {
-    let mut screen = Screen::new(100, 20);
+    // Too short for the command's own row: it stays on the status line.
+    let mut screen = Screen::new(100, 8);
     screen.command("c1", "cargo build", "inProgress");
     screen.ui.app_mut().handle_key(
         KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
@@ -387,7 +402,7 @@ fn with_details_shown_both_hints_show_and_a_narrow_window_cuts_the_command_first
     );
     assert_eq!(
         screen.status(),
-        " ⠋ Running cargo build · 0s · Esc to interrupt · ctrl+b to run in background · Ctrl+O to fold"
+        " ⠋ Running cargo build · 0s · Esc to interrupt · Ctrl+B to run in background · Ctrl+O to fold"
     );
 
     let long = format!("cargo test {}", "--package canter-tui ".repeat(5));
@@ -397,17 +412,17 @@ fn with_details_shown_both_hints_show_and_a_narrow_window_cuts_the_command_first
     assert!(
         status.starts_with(" ⠋ Running cargo test")
             && status.ends_with(
-                "… · 0s · Esc to interrupt · ctrl+b to run in background · Ctrl+O to fold"
+                "… · 0s · Esc to interrupt · Ctrl+B to run in background · Ctrl+O to fold"
             ),
         "{status:?}"
     );
     assert_eq!(status.width(), 100);
 
     // Too narrow for the shortest command kept: the Ctrl+O hint is left out.
-    screen.ui.backend_mut().resize(50, 20);
+    screen.ui.backend_mut().resize(50, 8);
     assert_eq!(
         screen.status(),
-        " ⠋ Running cargo te… · ctrl+b to run in background"
+        " ⠋ Running cargo te… · Ctrl+B to run in background"
     );
 }
 

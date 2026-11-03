@@ -408,17 +408,22 @@ fn ctrl_o_shows_long_output_and_diffs_in_full_and_folds_them_again() {
     // A narrow status row keeps the complete background shortcut.
     assert_eq!(
         screen.status(),
-        " ⠋ Running cargo build · 0s ·… · ctrl+b to run in background"
+        " ⠋ Working… · 0s · Esc to int… · Ctrl+B to run in background"
     );
 
     screen.finish_turn();
     assert_eq!(screen.status(), format!(" {DETAILS}"), "idle too");
 
     assert_eq!(screen.ctrl_o(), None);
-    // Folded as before; the turn has ended, so the file it changed and its
-    // time follow now.
+    // Folded as before; the running command's own row is gone, and as the
+    // turn has ended, the file it changed and its time follow now.
     let mut refolded = folded.clone();
-    refolded.retain(|row| !row.contains("ctrl+b to run in background"));
+    refolded.retain(|row| !row.contains("Ctrl+B to run in background"));
+    for row in &mut refolded {
+        if row.starts_with("   Running ") {
+            row.clear();
+        }
+    }
     refolded.push(String::new());
     let end = refolded.iter().rposition(|row| !row.is_empty()).unwrap() + 1;
     refolded[end + 1] = "• Changed 1 file  +10 −10".to_owned();
