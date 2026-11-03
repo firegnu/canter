@@ -77,6 +77,22 @@ input 为空，没有 userMessage，clientName 为 background。每批可以有�
 | GET MANAGED_CLIENT | 路径 id，无请求体 | 独立保活 SSE，仅心跳注释 |
 | DELETE MANAGED_CLIENT | 路径 id，无请求体 | HTTP 202，无响应体 |
 
+### GET /v1/info
+
+`InfoResponse` 的字段：
+
+- `features`：可选字符串数组，每项是一项扩展能力（如 `review`、`addDirectories`、
+  `managedClients`、`subagentTools`）。本版服务端总是给出；旧服务端省略或为 null，
+  客户端缺少某项时不调用对应接口，按各节写的旧服务端行为处理。
+- `serverVersion`：运行中服务端程序的版本。`server.json` 里同一个值叫 `version`：
+  登记文件用 `version`，本接口用 `serverVersion`，两者是同一个服务端版本。
+- `protocolVersion`：协议版本，等于 `PROTOCOL_VERSION`；`server.json` 里也叫
+  `protocolVersion`，两边应一致。
+- `sessions`：顶层会话的 `SessionSummary` 数组，不含子会话和回收站里的会话。
+  每项有 `id`、`cwd`、`name`（无名时为 null）、`status`、`updatedAt`（Unix 毫秒）和
+  `lastEventSeq`；`lastEventSeq` 是该会话的续传游标。`info` 本身没有全局序号，
+  各会话自带游标，和 `GET /v1/sessions` 的 `data` 项相同。
+
 ### Managed terminal lifetime (P2-192)
 
 `info.features` includes `managedClients`. Before opening any managed session,
@@ -398,7 +414,14 @@ data 为单行 JSON，内容里的换行保持 JSON 转义；帧末两个换行�
 不会因为已知事件中出现新的状态、输入或回答而中断整条流。未知事件、项目和增量跳过，
 但仍推进事件游标，以便继续处理后续已知事件。未知项目不加入各轮的项目列表。
 
-`session.status` 是会话状态的唯一来源，不从项目状态推测。
+`session.status` 是会话状态的唯一来源，不从项目状态推测。取值是 `starting`、`idle`、
+`working`、`waiting_approval`、`error`、`closed`。`error` 是协议保留的取值，本版服务端
+不会发出；客户端仍要能解码，按未关闭显示错误。模型请求出错时，这一轮以 `turn.completed`
+的 `status: failed` 和该轮的 `error {message, additionalDetails}` 结束，之前另有一条
+`error {error, willRetry: false, turnId}` 事件；随后 `session.status` 回到 `idle`，
+会话照常可用：可以继续发输入（已排队的输入接着开下一轮）、回答请求和关闭，
+不会因为出错变成 `closed`，也不需要重新 resume。可重试的模型错误先记 `modelRetry`
+项目并重试（P2-110），重试期间会话仍是 `working`，重试都失败才按上面的方式结束这一轮。
 `turn.completed` 只更新目标轮的 status/error/usage，忽略其 items/input/clientName，
 因此生产者可以发送空 items，不必重复整轮输出。项目以 `item.*` 为准，
 `item.completed` 携带完整最终项目并替换同 id 的项目。
@@ -429,6 +452,24 @@ kind 内层为带 type 的 RequestKind，包含 approval、userInput 及未知�
 取消、关闭和重开会话时沿用批准的请求取消及未完成工具收尾规则。
 待处理请求由 `request.opened` 加入、`request.resolved` 移除；对已移除请求重复处理
 不会改变批准状态。若输入历史本身包含一条新的重复处理事件，只更新其游标和时间。
+
+子 agent 请求转发（P2-178）：父会话和子会话同时打开时，子会话的 `request.opened` 和
+`request.resolved` 还会在父会话里各写一条 `agent.request.opened` 和
+`agent.request.resolved`，存盘、重放和 `seq` 都按父会话。
+`agent.request.opened {agentId, agentName, request, cwd, item}`：`agentId` 是子会话 ID，
+`agentName` 是它的显示名（没有名字时为 ID），`request` 沿用 `PendingRequest`，
+`cwd` 是子会话的工作目录；`item` 只在批准、沙箱批准和计划批准时给出对应工具项目的快照，
+提问和其它种类为 null，找不到项目时也为 null。
+`agent.request.resolved {agentId, requestId, resolution, clientName}` 的 `resolution` 和
+`clientName` 与普通 `request.resolved` 相同，取消、超时时 `clientName` 为 null。
+父会话快照的 `agentRequests` 按到达顺序保存未回答的转发请求，每项为
+`{agentId, agentName, request, cwd, item}`（旧存盘缺省为空）；同一 `agentId` 和
+`request.id` 的 opened 覆盖旧项，resolved 按这两者移除。回答仍发往
+`POST /v1/sessions/{agentId}/requests/{requestId}`，和回答子会话自己的请求一样，
+`acceptForSession` 只作用于该子会话。重开父会话时，快照里残留的转发请求补发
+`cancelled` 的 resolved（`clientName` 为 null）；父会话或子会话重新挂上时，子会话里
+仍在等待的请求重新转发。旧客户端按 Unknown 跳过这两种事件。
+
 `warning` 只供实时展示；最近的 `error` 和 `session.usage` 保存在快照中。
 结束会话使用 `session.status: closed`，不删除存盘。事件和 `SessionSnapshot`
 带可选的 `closeReason`：`clientRequest` 表示客户端 DELETE，`serverShutdown`
