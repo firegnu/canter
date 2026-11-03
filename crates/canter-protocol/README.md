@@ -230,7 +230,7 @@ input、interrupt、批准回答、compact、PATCH、DELETE 返回 `session_not_
 - `messages`：`count`、`tokens`、`user`、`assistant`、`toolResults`、`images`；摘要单独统计。
 - `estimatedTokens`：上述各项合计；`freeTokens`：窗口减估算值，最小为 0；
   `modelContextWindow`：窗口大小；`contextTokens`：与状态栏相同的最近普通请求实测占用，
-  尚无用量记录时为 null。
+  尚无用量记录时为 null；`autoCompactTokens`（可选，P2-79）：自动压缩线，和用量里的同名字段同一口径，旧服务端没有。
 
 估算沿用压缩判断的字节启发式和图片固定估算；系统消息的角色、JSON 开销计入 system，
 其余前缀段（含标签和段间空行）按追加前后的估算差分计入，保持总和一致。排队输入、尚未产生的工具结果和
