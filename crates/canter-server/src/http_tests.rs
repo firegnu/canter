@@ -74,6 +74,7 @@ async fn failed_close_can_be_resumed_through_http() {
         sessions: Default::default(),
         session_locks: Default::default(),
         registry_changed: Default::default(),
+        managed: Default::default(),
         #[cfg(test)]
         pauses: Default::default(),
         draining: Default::default(),
@@ -244,6 +245,7 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
         sessions: Default::default(),
         session_locks: Default::default(),
         registry_changed: Default::default(),
+        managed: Default::default(),
         #[cfg(test)]
         pauses: Default::default(),
         draining: Default::default(),
@@ -802,6 +804,7 @@ impl BtwTest {
             sessions: Default::default(),
             session_locks: Default::default(),
             registry_changed: Default::default(),
+            managed: Default::default(),
             #[cfg(test)]
             pauses: Default::default(),
             draining: Default::default(),
@@ -1272,6 +1275,7 @@ async fn sandbox_route_reports_the_session_switch_and_current_scope() {
             sessions: Default::default(),
             session_locks: Default::default(),
             registry_changed: Default::default(),
+            managed: Default::default(),
             #[cfg(test)]
             pauses: Default::default(),
             draining: Default::default(),

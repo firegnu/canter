@@ -92,6 +92,7 @@ impl Fixture {
             sessions: Default::default(),
             session_locks: Default::default(),
             registry_changed: Default::default(),
+            managed: Default::default(),
             #[cfg(test)]
             pauses: Default::default(),
             draining: Default::default(),

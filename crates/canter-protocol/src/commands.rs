@@ -28,6 +28,8 @@ pub struct GoalResponse {
 }
 
 pub mod routes {
+    pub const MANAGED_CLIENT: &str = "/v1/managedClients/{id}";
+    pub const MANAGED_CLIENT_HEADER: &str = "x-canter-managed-client";
     pub const MEMORIES: &str = "/v1/sessions/{id}/memories";
     pub const MEMORY_DELETE: &str = "/v1/sessions/{id}/memories/delete";
     pub const INFO: &str = "/v1/info";

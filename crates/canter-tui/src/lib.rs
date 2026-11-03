@@ -37,6 +37,7 @@ mod input;
 mod input_history;
 mod links;
 mod lsp;
+mod managed;
 mod markdown;
 mod memory;
 mod mention;

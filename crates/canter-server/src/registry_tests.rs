@@ -12,7 +12,7 @@ struct Pause {
     release: CancellationToken,
 }
 
-struct Block(Arc<Pause>);
+pub(super) struct Block(Arc<Pause>);
 
 impl Drop for Block {
     fn drop(&mut self) {
@@ -21,7 +21,7 @@ impl Drop for Block {
 }
 
 impl Block {
-    async fn reached(&self) {
+    pub(super) async fn reached(&self) {
         tokio::time::timeout(Duration::from_secs(5), self.0.reached.notified())
             .await
             .expect("operation did not reach the I/O boundary");
@@ -29,7 +29,7 @@ impl Block {
 }
 
 impl Pauses {
-    fn block(&self, id: &str, point: &'static str) -> Block {
+    pub(super) fn block(&self, id: &str, point: &'static str) -> Block {
         let pause = Arc::new(Pause {
             id: id.into(),
             point,

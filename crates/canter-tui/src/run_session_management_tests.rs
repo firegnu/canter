@@ -173,7 +173,7 @@ async fn fork_switches_with_history_or_keeps_original_on_failure() {
         }
         assert!(test.requests.try_recv().is_err());
         test.chat.pump.abort();
-        let _ = test.chat.pump.await;
+        let _ = (&mut test.chat.pump).await;
         test.server.abort();
         assert!(test.server.await.unwrap_err().is_cancelled());
     }

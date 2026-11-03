@@ -43,6 +43,7 @@ pub enum ClientError {
 #[derive(Debug, Clone)]
 pub struct Client {
     http: reqwest::Client,
+    pub(crate) managed_id: Option<String>,
 }
 
 impl Client {
@@ -465,7 +466,49 @@ impl Client {
         let http = reqwest::Client::builder()
             .unix_socket(socket.to_path_buf())
             .build()?;
-        Ok(Self { http })
+        Ok(Self {
+            http,
+            managed_id: None,
+        })
+    }
+
+    /// Give this terminal run a fresh, memory-only closing responsibility.
+    pub fn with_close_on_exit(mut self) -> std::io::Result<Self> {
+        use std::io::Read;
+        let mut bytes = [0; 16];
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+        self.managed_id = Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect());
+        Ok(self)
+    }
+
+    fn opening_request(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.managed_id {
+            Some(id) => request.header(routes::MANAGED_CLIENT_HEADER, id),
+            None => request,
+        }
+    }
+
+    pub(crate) async fn managed_connect(&self, id: &str) -> Result<reqwest::Response, ClientError> {
+        let response = self
+            .http
+            .get(url(routes::MANAGED_CLIENT, &[id]))
+            .send()
+            .await?;
+        let status = response.status();
+        if status.is_success() {
+            Ok(response)
+        } else {
+            Err(server_error(status, &response.bytes().await?))
+        }
+    }
+
+    pub(crate) async fn managed_close(&self, id: &str) -> Result<(), ClientError> {
+        self.http
+            .delete(url(routes::MANAGED_CLIENT, &[id]))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
     }
 
     /// GET /v1/sessions: every session, most recently updated first.
@@ -481,8 +524,7 @@ impl Client {
         params: &SessionCreateParams,
     ) -> Result<SessionCreateResponse, ClientError> {
         let response = self
-            .http
-            .post(url(routes::SESSIONS, &[]))
+            .opening_request(self.http.post(url(routes::SESSIONS, &[])))
             .json(params)
             .send()
             .await?;
@@ -520,8 +562,7 @@ impl Client {
             restricted_mode,
         };
         let response = self
-            .http
-            .post(url(routes::RESUME, &[session]))
+            .opening_request(self.http.post(url(routes::RESUME, &[session])))
             .json(&params)
             .send()
             .await?;
@@ -535,8 +576,7 @@ impl Client {
         params: &SessionResumeParams,
     ) -> Result<canter_protocol::SessionCreateResponse, ClientError> {
         let response = self
-            .http
-            .post(url(routes::SESSION_FORK, &[session]))
+            .opening_request(self.http.post(url(routes::SESSION_FORK, &[session])))
             .json(params)
             .send()
             .await?;

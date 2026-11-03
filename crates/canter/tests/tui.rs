@@ -587,6 +587,9 @@ async fn add_dir_cli_slash_resume_and_continue_share_persisted_directories() {
 
 #[path = "support/session_file.rs"]
 mod session_file;
+
+#[path = "support/close_on_exit.rs"]
+mod close_on_exit;
 #[path = "support/statusline.rs"]
 mod statusline;
 #[path = "support/tags.rs"]

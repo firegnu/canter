@@ -32,6 +32,9 @@ mod tests;
 #[path = "agent_sessions.rs"]
 mod agent_sessions;
 
+#[path = "managed.rs"]
+mod managed;
+
 pub(crate) struct App {
     pub reload: Option<Arc<crate::reload::LiveConfig>>,
     pub home: PathBuf,
@@ -45,6 +48,7 @@ pub(crate) struct App {
     pub sessions: Mutex<HashMap<String, Session>>,
     pub session_locks: SessionLocks,
     pub registry_changed: Notify,
+    pub managed: managed::Clients,
     #[cfg(test)]
     pub pauses: tests::session_management::registry::Pauses,
     pub draining: RwLock<bool>,
@@ -90,6 +94,7 @@ impl App {
     }
 
     pub(crate) async fn begin_drain(&self) -> Vec<Session> {
+        self.managed.disarm();
         *self.draining.write().await = true;
         let sessions = self.opened_sessions().await;
         for session in &sessions {
@@ -276,6 +281,10 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .route(routes::STATS, get(stats_list))
         .route(routes::SESSION_STATS, get(session_stats))
         .route(routes::SESSIONS, post(create).get(list))
+        .route(
+            routes::MANAGED_CLIENT,
+            get(managed::connect).delete(managed::close),
+        )
         .route(routes::SESSION, get(read).patch(update).delete(close))
         .route(routes::SESSION_TRASH, post(trash))
         .route(routes::SESSION_FORK, post(fork))
@@ -421,6 +430,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
         features: Some(vec![
+            "managedClients".into(),
             "subagentSessions".into(),
             "subagentTools".into(),
             "subagentStop".into(),
@@ -836,9 +846,11 @@ async fn read(
 async fn resume(
     State(app): State<Arc<App>>,
     ApiPath(id): ApiPath<String>,
+    headers: HeaderMap,
     params: Result<Json<SessionResumeParams>, JsonRejection>,
 ) -> Result<Json<SessionResumeResponse>, ApiError> {
     let params = body(params)?;
+    let owner = app.managed.owner(&headers)?;
     tokio::spawn(async move {
         let draining = app.draining.read().await;
         if *draining {
@@ -859,6 +871,7 @@ async fn resume(
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
+            managed::claim(&app, owner.as_ref(), &id, &session).await?;
             return Ok(Json(SessionResumeResponse {
                 session: response.session,
                 event_seq: response.event_seq,
@@ -879,6 +892,7 @@ async fn resume(
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
+            managed::claim(&app, owner.as_ref(), &id, &session).await?;
             response
         } else {
             let cwd = app
@@ -910,7 +924,8 @@ async fn resume(
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
-            app.register_session(id, session).await?;
+            app.register_session(id.clone(), session.clone()).await?;
+            managed::claim(&app, owner.as_ref(), &id, &session).await?;
             response
         };
         Ok(Json(SessionResumeResponse {
@@ -925,9 +940,11 @@ async fn resume(
 async fn fork(
     State(app): State<Arc<App>>,
     ApiPath(id): ApiPath<String>,
+    headers: HeaderMap,
     params: Result<Json<SessionResumeParams>, JsonRejection>,
 ) -> Result<Json<SessionCreateResponse>, ApiError> {
     let params = body(params)?;
+    let owner = app.managed.owner(&headers)?;
     tokio::spawn(async move {
         let draining = app.draining.read().await;
         if *draining {
@@ -968,7 +985,8 @@ async fn fork(
         if let Some(warning) = trust.warning {
             session.opening_warning(warning).await?;
         }
-        app.register_session(id, session).await?;
+        app.register_session(id.clone(), session.clone()).await?;
+        managed::claim(&app, owner.as_ref(), &id, &session).await?;
         Ok(Json(response))
     })
     .await
@@ -977,9 +995,11 @@ async fn fork(
 
 async fn create(
     State(app): State<Arc<App>>,
+    headers: HeaderMap,
     params: Result<Json<SessionCreateParams>, JsonRejection>,
 ) -> Result<Json<SessionCreateResponse>, ApiError> {
     let params = body(params)?;
+    let owner = app.managed.owner(&headers)?;
     // Registry insertion belongs to the accepted command, even if its HTTP caller disconnects.
     tokio::spawn(async move {
         let draining = app.draining.read().await;
@@ -1041,7 +1061,8 @@ async fn create(
         #[cfg(test)]
         app.pauses.hit(&id, "configure").await;
         app.configure_session(&session, config.revision).await?;
-        app.register_session(id, session.clone()).await?;
+        app.register_session(id.clone(), session.clone()).await?;
+        managed::claim(&app, owner.as_ref(), &id, &session).await?;
         drop(operation);
         drop(config);
         if let Some(input) = params.input {
@@ -1235,26 +1256,36 @@ async fn close(
     params.map_err(|_| ApiError::invalid())?;
     tokio::spawn(async move {
         let session = app.session(&id).await?;
+        app.close_session(id, session).await.map(Json)
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
+}
+
+impl App {
+    async fn close_session(
+        &self,
+        id: String,
+        session: Session,
+    ) -> Result<SessionCloseResponse, ApiError> {
         let response = session.close().await;
         if response.is_err() {
             // A final journal append can fail before Core releases its writer; a second close releases it.
             let _ = session.close().await;
         }
         #[cfg(test)]
-        app.pauses.hit(&id, "close_remove").await;
-        let _operation = app.session_locks.lock(&id).await;
-        let mut sessions = app.sessions.lock().await;
+        self.pauses.hit(&id, "close_remove").await;
+        let _operation = self.session_locks.lock(&id).await;
+        let mut sessions = self.sessions.lock().await;
         if sessions
             .get(&id)
             .is_some_and(|current| current.same_instance(&session))
         {
             sessions.remove(&id);
         }
-        app.registry_changed.notify_waiters();
-        Ok(Json(response?))
-    })
-    .await
-    .map_err(|_| ApiError::internal())?
+        self.registry_changed.notify_waiters();
+        Ok(response?)
+    }
 }
 
 async fn trash(
