@@ -79,6 +79,107 @@ pub(super) async fn spawn(test: &Harness, parent: &str, task: &str) -> String {
 }
 
 #[tokio::test]
+#[cfg(target_os = "macos")]
+async fn parent_send_input_reopens_child_with_current_sandbox() {
+    use canter_core::{AgentCommand, AgentHost};
+
+    let complete = || {
+        model_server::Reply::sse(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        )
+    };
+    let command = "printf allowed > inside-result; printf blocked > ../outside-result";
+    let shell = model_server::Reply::sse(format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"write-output","type":"function","function":{"name":"shell","arguments":json!({"command":command}).to_string()}}]},"finish_reason":"tool_calls"}]})
+    ));
+    let fake = model_server::Server::start(vec![complete(), complete(), shell, complete()]).await;
+    let model = Arc::new(
+        canter_model::ChatCompletions::new(
+            &fake.base_url,
+            canter_model::ApiKey::new(model_server::KEY),
+        )
+        .unwrap(),
+    );
+    let test = Harness::with_options(
+        model,
+        CoreOptions {
+            sandbox: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let work = test.root.path().join("work");
+    let home = test.root.path().join("home");
+    std::fs::create_dir(&work).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    let env = json!({"HOME":home,"CANTER_HOME":test.app.home,"PATH":"/usr/bin:/bin"});
+    let created: SessionCreateResponse = test.client.post("http://localhost/v1/sessions")
+        .json(&json!({"cwd":work,"env":env,"model":"fake-model","approvalPolicy":"allowAll","clientName":"test","sandboxDisabled":true}))
+        .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    assert_eq!(created.session.settings.sandbox_enabled, Some(false));
+    let parent_id = created.session.id;
+    let parent = format!("http://localhost/v1/sessions/{parent_id}");
+    say(&test, &parent, "Parent task").await;
+    let child = spawn(&test, &parent, "Inspect parser").await;
+    let initial = idle(&test, &child).await;
+    assert_eq!(initial.settings.sandbox_enabled, Some(false));
+    for url in [&child, &parent] {
+        test.client
+            .delete(url)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    }
+    let resumed: SessionResumeResponse = test
+        .client
+        .post(format!("{parent}/resume"))
+        .json(&json!({"env":env}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resumed.session.settings.sandbox_enabled, Some(true));
+    let host = agent_sessions::Host(Arc::downgrade(&test.app));
+    host.execute(
+        parent_id,
+        AgentCommand::SendInput {
+            id: initial.id,
+            message: "Write the requested output".into(),
+        },
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let snapshot = idle(&test, &child).await;
+    assert_eq!(snapshot.settings.sandbox_enabled, Some(true));
+    assert_eq!(
+        std::fs::read_to_string(work.join("inside-result")).unwrap(),
+        "allowed"
+    );
+    assert!(!test.root.path().join("outside-result").exists());
+    assert!(
+        snapshot
+            .turns
+            .last()
+            .unwrap()
+            .items
+            .iter()
+            .any(|item| matches!(
+                item, Item::CommandExecution { exit_code: Some(code), .. } if *code != 0
+            ))
+    );
+    test.stop().await;
+    fake.stop().await;
+}
+
+#[tokio::test]
 async fn explicitly_reopening_a_child_uses_the_terminals_sandbox_choice() {
     let fake = model_server::Server::start((0..2).map(|_| model_server::Reply::sse(
         "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
