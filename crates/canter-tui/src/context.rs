@@ -7,14 +7,24 @@ use ratatui::text::Span;
 /// Each line, and the path that ends it (empty when none).
 pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<(String, String)> {
     let window = report.model_context_window;
+    let percent = crate::statusline::percent;
+    // Of the window, and of the compaction line when the server says it.
     let mut lines = vec![match report.context_tokens {
-        Some(used) if window > 0 => format!(
-            "Context  ctx {}% {}/{} (last request)",
-            (u128::from(used) * 100 + u128::from(window) / 2) / u128::from(window),
-            tokens(used),
-            tokens(window)
-        ),
-        Some(used) => format!("Context  {} (last request)", tokens(used)),
+        Some(used) if window > 0 => {
+            let mut line = format!(
+                "Context  {}/{} window ({}%)",
+                tokens(used),
+                tokens(window),
+                percent(window, used).unwrap_or_default()
+            );
+            if let Some(at) = report.auto_compact_tokens
+                && let Some(share) = percent(at, used)
+            {
+                line += &format!(" · compacts at {} ({share}%)", tokens(at));
+            }
+            line + " · last request"
+        }
+        Some(used) => format!("Context  {} · last request", tokens(used)),
         None => "Context  no request yet".into(),
     }];
     let mut paths = vec![String::new()];

@@ -1183,6 +1183,11 @@ pub struct ContextResponse {
     pub model_context_window: u64,
     #[ts(type = "number | null")]
     pub context_tokens: Option<u64>,
+    /// The context occupancy past which the server compacts automatically.
+    /// Absent from older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub auto_compact_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

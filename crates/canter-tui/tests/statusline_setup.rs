@@ -270,7 +270,7 @@ fn git(dir: &Path, args: &[&str]) {
 
 const DEFAULT_BAR: [&str; 2] = [
     " deepseek-v4-pro · think high · Always ask · $0.12",
-    " ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12%) · cache 95% (last 98%)",
+    " ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12% of window) · cache 95% (last 98%)",
 ];
 
 #[test]
@@ -297,7 +297,7 @@ fn statusline_shows_every_item_with_its_value_and_a_preview() {
             "   [x] directory    ~/src/canter",
             "   [x] branch       (main)",
             "   [x] diff",
-            "   [x] context      █░░░░░░░░░ 120k/1M (12%)",
+            "   [x] context      █░░░░░░░░░ 120k/1M (12% of window)",
             "   [x] cache        cache 95% (last 98%)",
             "   [ ] tps          32.5 tok/s",
             "   [ ] version      0.1.0 · a3b8fe7",
@@ -305,7 +305,7 @@ fn statusline_shows_every_item_with_its_value_and_a_preview() {
             "",
             " Preview",
             "  deepseek-v4-pro · think high · Always ask · $0.12",
-            "  ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12%) · cache 95% (last 98%)",
+            "  ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12% of window) · cache 95% (last 98…",
         ]
     );
     // Nothing is saved or changed yet.
@@ -329,7 +329,7 @@ fn space_and_arrows_change_the_preview_as_they_go() {
         screen.preview(),
         [
             "  think high · Always ask · $0.12",
-            "  ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12%) · cache 95% (last 98%)",
+            "  ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12% of window) · cache 95% (last 98…",
         ]
     );
 
@@ -349,7 +349,7 @@ fn space_and_arrows_change_the_preview_as_they_go() {
         screen.preview(),
         [
             "  think high · deepseek-v4-pro · Always ask",
-            "  $0.12 · ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12%) · cache 95% (last 98%)",
+            "  $0.12 · ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12% of window) · cache 95% …",
         ]
     );
 
@@ -365,7 +365,7 @@ fn space_and_arrows_change_the_preview_as_they_go() {
     assert_eq!(screen.picker()[10], " › [x] tps          32.5 tok/s");
     let second = &screen.preview()[1];
     assert!(
-        second.starts_with("  $0.12 · ~/src/canter (main) · 32.5 tok/s · █░░░░░░░░░ 120k/1M (12%)"),
+        second.starts_with("  $0.12 · ~/src/canter (main) · 32.5 tok/s · █░░░░░░░░░ 120k/1M (12% of window)"),
         "{second}"
     );
 
@@ -740,10 +740,15 @@ fn a_tui_json_saved_with_compact_and_before_diff_gets_diff_after_the_branch_unti
             }}),
         );
         screen.draw();
-        let shown = if branch { " (main)" } else { "" };
+        // With the branch the row is too wide: the directory gives first.
+        let shown = if branch {
+            "…/canter (main)"
+        } else {
+            "~/src/canter"
+        };
         assert_eq!(
             screen.bar()[1],
-            format!(" ~/src/canter{shown} · ███░░░░░░░ 120k/400k (30%) · cache 95% (last 98%)")
+            format!(" {shown} · ███░░░░░░░ 120k/400k (30% to compact) · cache 95% (last 98%)")
         );
         screen.enter("/statusline");
         let mark = if branch { 'x' } else { ' ' };
@@ -753,12 +758,12 @@ fn a_tui_json_saved_with_compact_and_before_diff_gets_diff_after_the_branch_unti
             [
                 format!("   [{mark}] branch       (main)"),
                 "   [x] diff".to_owned(),
-                "   [x] context      ███░░░░░░░ 120k/400k (30%)".to_owned(),
+                "   [x] context      ███░░░░░░░ 120k/400k (30% to compact)".to_owned(),
                 "   [x] cache        cache 95% (last 98%)".to_owned(),
             ]
         );
         assert!(
-            !picker.iter().any(|row| row.contains("compact")),
+            !picker.iter().any(|row| row.contains("] compact")),
             "{picker:#?}"
         );
     }

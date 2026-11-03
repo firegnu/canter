@@ -159,7 +159,7 @@ fn two_rows_with_usage_in_a_git_repository() {
         screen.bar(),
         [
             " deepseek-flash · think high · Always ask".to_owned(),
-            " ~/canter (main) · ████░░░░░░ 420k/1M (42%) · cache 92% (last 99%)".to_owned(),
+            " ~/canter (main) · ████░░░░░░ 420k/1M (42% of window) · cache 92% (last 99%)".to_owned(),
         ]
     );
 }
@@ -222,7 +222,7 @@ fn outside_a_git_repository_there_are_no_brackets() {
     screen.usage(Some(1_000_000));
     assert_eq!(
         screen.bar()[1],
-        " ~/plain · ████░░░░░░ 420k/1M (42%) · cache 92% (last 99%)"
+        " ~/plain · ████░░░░░░ 420k/1M (42% of window) · cache 92% (last 99%)"
     );
 }
 
@@ -358,11 +358,11 @@ fn context_is_a_bar_that_is_full_at_the_compaction_line() {
     // Ten cells and the percent of the line in use, both rounded; past the
     // line the bar stays full and the percent says how far past.
     for (used, expected) in [
-        (0, "░░░░░░░░░░ 0/400k (0%)"),
-        (120_000, "███░░░░░░░ 120k/400k (30%)"),
-        (184_000, "█████░░░░░ 184k/400k (46%)"),
-        (400_000, "██████████ 400k/400k (100%)"),
-        (420_000, "██████████ 420k/400k (105%)"),
+        (0, "░░░░░░░░░░ 0/400k (0% to compact)"),
+        (120_000, "███░░░░░░░ 120k/400k (30% to compact)"),
+        (184_000, "█████░░░░░ 184k/400k (46% to compact)"),
+        (400_000, "██████████ 400k/400k (100% to compact)"),
+        (420_000, "██████████ 420k/400k (105% to compact)"),
     ] {
         screen.usage_with_line(used, 1_000_000, Some(400_000));
         assert_eq!(
@@ -375,7 +375,7 @@ fn context_is_a_bar_that_is_full_at_the_compaction_line() {
     screen.usage_with_line(420_000, 1_000_000, None);
     assert_eq!(
         screen.bar()[1],
-        " ~/canter (main) · ████░░░░░░ 420k/1M (42%) · cache 92% (last 99%)"
+        " ~/canter (main) · ████░░░░░░ 420k/1M (42% of window) · cache 92% (last 99%)"
     );
 }
 
@@ -427,7 +427,7 @@ fn each_item_has_its_colour_and_the_bar_turns_with_the_room_left() {
     screen.usage_with_line(900_000, 1_000_000, Some(1_000_000));
     assert_eq!(
         screen.bar()[1],
-        " ~/canter (main) · █████████░ 900k/1M (90%) · cache 92% (last 99%)"
+        " ~/canter (main) · █████████░ 900k/1M (90% to compact) · cache 92% (last 99%)"
     );
     for (row, text) in [
         (0, "deepseek-flash"),
@@ -652,5 +652,85 @@ fn a_narrow_window_leaves_the_sandbox_state_out_rather_than_cut_it() {
             approval_policy: Some(PermissionMode::AllowAll),
             ..Default::default()
         }))
+    );
+}
+
+/// `~/work/<30 a>/src/canter`, a git repository on `main` with one commit.
+fn long_repo() -> (TempDir, std::path::PathBuf) {
+    let home = TempDir::new().unwrap();
+    let dir = home
+        .path()
+        .join("work")
+        .join("a".repeat(30))
+        .join("src")
+        .join("canter");
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q", "-b", "main"]);
+    commit(&dir);
+    (home, dir)
+}
+
+/// A long directory loses directories in the middle, as the welcome header
+/// shows it, so the branch, diff and context after it on the row still
+/// show; it keeps its last part, and only past that is the row cut at its
+/// end.
+#[tokio::test]
+async fn a_long_directory_is_shortened_in_the_middle_before_the_row_is_cut() {
+    let (home, dir) = long_repo();
+    let mut screen = Screen::with_git_diff(&dir, home.path());
+    screen.usage(Some(1_000_000));
+    let tail = " (main) · (+0,-0) · ████░░░░░░ 420k/1M (42% of window) · cache 92% (last 99%)";
+    screen.resize(100);
+    screen
+        .wait_for_second_row(&format!(" ~/…/src/canter{tail}"))
+        .await;
+    // Room for all of it: as it was.
+    let full = format!(" ~/work/{}/src/canter{tail}", "a".repeat(30));
+    screen.resize(full.width() as u16);
+    assert_eq!(screen.bar()[1], full);
+    // One column less: only the directory gives, a directory at a time.
+    screen.resize(full.width() as u16 - 1);
+    assert_eq!(
+        screen.bar()[1],
+        format!(" ~/…/{}/src/canter{tail}", "a".repeat(30))
+    );
+    // Not even the last part leaves room: the row is cut at its end.
+    screen.resize(60);
+    let second = screen.bar()[1].clone();
+    assert!(
+        second.starts_with(" …/canter (main) · (+0,-0) · ████") && second.ends_with('…'),
+        "{second:?}"
+    );
+    assert_eq!(second.width(), 60);
+}
+
+#[test]
+fn a_long_directory_on_the_first_row_is_shortened_the_same_way() {
+    let (home, dir) = long_repo();
+    let canter_home = home.path().join("canter-home");
+    std::fs::create_dir(&canter_home).unwrap();
+    std::fs::write(
+        canter_home.join("tui.json"),
+        json!({"statusLine": {"items": [
+            {"name": "directory"}, {"name": "branch"}, {"name": "model"}, {"name": "line2"},
+            {"name": "context"},
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    let env = std::collections::BTreeMap::from([(
+        "CANTER_HOME".to_owned(),
+        canter_home.to_str().unwrap().to_owned(),
+    )]);
+    let app = app(&dir, home.path(), PermissionMode::AlwaysAsk).with_status_line(None, env);
+    let mut screen = Screen::of(app);
+    screen.usage(Some(1_000_000));
+    screen.resize(50);
+    assert_eq!(
+        screen.bar(),
+        [
+            " ~/…/src/canter (main) · deepseek-flash".to_owned(),
+            " ████░░░░░░ 420k/1M (42% of window)".to_owned(),
+        ]
     );
 }

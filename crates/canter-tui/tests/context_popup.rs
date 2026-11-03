@@ -12,7 +12,7 @@ use unicode_width::UnicodeWidthStr;
 
 const SESSION: &str = "s1";
 const WIDTH: u16 = 80;
-const TITLE: &str = " Context  ctx 12% 120k/1M (last request)";
+const TITLE: &str = " Context  120k/1M window (12%) · last request";
 
 struct Screen {
     ui: Ui<TestBackend>,
@@ -312,5 +312,25 @@ fn in_a_short_window_the_sections_scroll_and_the_rest_stays() {
             SECTIONS[3],
             "   ↓ 4 more",
         ],
+    );
+}
+
+/// The first line says how much of the window is in use and, when the
+/// server says where it compacts, how much of that line; an older server
+/// that does not say gets only the window.
+#[test]
+fn the_first_line_names_the_window_and_the_compaction_line() {
+    let mut screen = Screen::new(30);
+    screen.open();
+    assert_eq!(screen.popup()[0], TITLE);
+
+    let mut report = serde_json::to_value(report()).unwrap();
+    report["autoCompactTokens"] = json!(400_000);
+    let report: ContextResponse = serde_json::from_value(report).unwrap();
+    screen.ui.app_mut().show_context(&report);
+    screen.draw();
+    assert_eq!(
+        screen.rows().iter().find(|row| row.starts_with(" Context")),
+        Some(&" Context  120k/1M window (12%) · compacts at 400k (30%) · last request".to_owned())
     );
 }

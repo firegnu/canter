@@ -600,6 +600,7 @@ impl crate::Session {
                 .as_ref()
                 .filter(|usage| usage.model_context_window.is_some())
                 .map(|usage| usage.context_tokens),
+            auto_compact_tokens: Some(crate::compaction::input_limit(&self.shared)),
         }
     }
 }

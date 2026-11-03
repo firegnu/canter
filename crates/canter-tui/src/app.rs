@@ -5777,8 +5777,13 @@ impl App {
             }
             return (rows, false);
         }
+        let error = " statusline error";
+        let failed = self.status_line.as_ref().is_some_and(|line| line.failed);
+        let mut values = self.bar_values(now_ms);
+        let first_extra = str_width(&goal_prefix) + if failed { error.len() } else { 0 };
+        self.fit_directory(&mut values, width, [first_extra, 0]);
         // Permission shortcuts only require the mode itself to be fully visible.
-        let (mut rows, through_mode, mut sandbox_at) = self.bar.draw(&self.bar_values(now_ms));
+        let (mut rows, through_mode, mut sandbox_at) = self.bar.draw(&values);
         let through_mode = through_mode.map(|through| format!("{goal_prefix}{through}"));
         if !goal_prefix.is_empty() {
             rows[0].insert(0, Span::raw(goal_prefix));
@@ -5786,8 +5791,6 @@ impl App {
                 *range = range.start + 1..range.end + 1;
             }
         }
-        let error = " statusline error";
-        let failed = self.status_line.as_ref().is_some_and(|line| line.failed);
         // The sandbox state shows in full or not at all: a cut `Sandbox o…`
         // would not say which.
         if let Some((row, range)) = sandbox_at {
@@ -5816,6 +5819,28 @@ impl App {
             rows,
             through_mode.is_some_and(|through| kept.starts_with(&through)),
         )
+    }
+
+    /// A directory too long for its row loses directories in the middle, as
+    /// the welcome header shows it, so the items after it on that row still
+    /// fit; it keeps at least `…/<last part>`, and past that the row is cut at
+    /// its end. `extra` is what each row gets besides the items.
+    fn fit_directory(&self, values: &mut bar::Values, width: u16, extra: [usize; 2]) {
+        let index = bar::Item::Directory as usize;
+        let (Some(row), Some(spans)) = (self.bar.row_of(bar::Item::Directory), &values[index])
+        else {
+            return;
+        };
+        let used = spans_width(&self.bar.draw(values).0[row]) + extra[row];
+        let Some(over) = used.checked_sub(usize::from(width)).filter(|over| *over > 0) else {
+            return;
+        };
+        let path: String = spans.iter().map(|span| span.content.as_ref()).collect();
+        let style = spans.first().map_or_else(Style::default, |span| span.style);
+        let last = path.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+        let least = str_width(&path).min(str_width(last) + str_width("…/"));
+        let room = str_width(&path).saturating_sub(over).max(least);
+        values[index] = Some(vec![Span::styled(fit_path(&path, room), style)]);
     }
 
     /// What each item of the rows at the bottom says now, each in its colour
@@ -5884,9 +5909,13 @@ impl App {
                 ]
             }),
             // Ten cells, full at the compaction line, or else at the window;
-            // past it full, and the percent says how far past.
+            // past it full, and the percent says how far past. The words
+            // after the percent say which.
             bar::Item::Context => usage.and_then(|usage| {
-                let full = usage.auto_compact_tokens.or(usage.model_context_window)?;
+                let (full, of) = match usage.auto_compact_tokens {
+                    Some(line) => (line, " to compact)"),
+                    None => (usage.model_context_window?, " of window)"),
+                };
                 let used = usage.context_tokens;
                 let percent = percent(full, used)?;
                 let cells = ((u128::from(used) * 10 + u128::from(full) / 2) / u128::from(full))
@@ -5900,7 +5929,7 @@ impl App {
                         theme::secondary(),
                     ),
                     Span::styled(format!("{percent}%"), room),
-                    Span::styled(")", theme::secondary()),
+                    Span::styled(of, theme::secondary()),
                 ])
             }),
             bar::Item::Cache => usage.and_then(|usage| {

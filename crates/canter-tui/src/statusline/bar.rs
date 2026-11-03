@@ -153,6 +153,11 @@ impl Bar {
         self.rows()[0].contains(&Item::Permission)
     }
 
+    /// The row `item` is shown on; `None` when it is hidden.
+    pub fn row_of(&self, item: Item) -> Option<usize> {
+        self.rows().iter().position(|row| row.contains(&item))
+    }
+
     /// The two rows, not cut to any width: after a space, the items with a
     /// value between ` · `, a branch right after the directory after a
     /// space. Also the first row's text up to the end of the permission
