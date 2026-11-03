@@ -4996,6 +4996,19 @@ impl App {
 
     /// The pending request the box shows: the first one this terminal has
     /// not answered yet.
+    /// How long the request the box shows has waited (or else the latest
+    /// one); `None` when none is open.
+    fn waited(&self, now_ms: i64) -> Option<String> {
+        let request = self.open_request().or_else(|| {
+            self.snapshot
+                .requests()
+                .max_by_key(|request| request.created_at)
+        })?;
+        Some(format_elapsed(
+            now_ms.saturating_sub(request.created_at).max(0),
+        ))
+    }
+
     fn open_request(&self) -> Option<&PendingRequest> {
         self.snapshot.requests().find(|request| {
             !matches!(request.kind, RequestKind::Unknown) && !self.answered.contains(&request.id)
@@ -5798,7 +5811,10 @@ impl App {
                     },
                     theme::warning(),
                 ),
-                Span::styled(format!(" · {elapsed}{steer}"), theme::secondary()),
+                Span::styled(
+                    format!(" · {}{steer}", self.waited(now_ms).unwrap_or(elapsed)),
+                    theme::secondary(),
+                ),
             ]),
             SessionStatus::Starting => Line::from(Span::styled(" Starting…", theme::secondary())),
             SessionStatus::Error => {

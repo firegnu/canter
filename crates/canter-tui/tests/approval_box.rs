@@ -1210,3 +1210,100 @@ fn only_allow_once_here_goes_unsaid_and_each_answer_follows_its_card() {
         assert_eq!(screen.row_of(line), screen.row_of(command) + 1, "{text}");
     }
 }
+
+impl Screen {
+    /// The status line, under the conversation.
+    fn status(&self) -> String {
+        self.screen()
+            .lines()
+            .find(|row| row.starts_with(" ⏸") || row.contains("Esc to interrupt"))
+            .unwrap_or_else(|| panic!("no status line:\n{}", self.screen()))
+            .to_owned()
+    }
+
+    /// The model asks to run `command`; the request opens at `at`.
+    fn ask_at(&mut self, request: &str, command: &str, at: i64) {
+        let item = format!("item-{request}");
+        self.event(json!({
+            "type": "item.started", "turnId": "t1",
+            "item": command_json(&item, command, "inProgress"),
+        }));
+        self.event(json!({
+            "type": "request.opened",
+            "request": {
+                "id": request, "turnId": "t1", "createdAt": at,
+                "kind": {
+                    "type": "approval", "itemId": item, "tool": "shell",
+                    "arguments": { "command": command },
+                    "availableDecisions": ["accept", "decline"],
+                },
+            },
+        }));
+        self.event(json!({ "type": "session.status", "status": "waiting_approval" }));
+    }
+}
+
+/// The cards waiting for an answer say nothing about waiting; the status
+/// line does, counting from when this box appeared, and once it closes the
+/// turn's own time comes back.
+#[test]
+fn waiting_is_said_once_and_counted_from_when_the_box_appeared() {
+    let mut screen = Screen::new(100, 40);
+    screen.start_turn("t1");
+    screen.wait(20_000);
+    screen.ask_at("r1", "echo one", 20_000);
+    screen.wait(4_000);
+    screen.draw();
+    let card = screen
+        .screen()
+        .lines()
+        .find(|row| row.contains("Run echo one"))
+        .unwrap()
+        .to_owned();
+    assert!(!card.contains("Waiting"), "{card:?}");
+    assert_eq!(screen.screen().matches("Waiting for approval").count(), 1);
+    assert_eq!(screen.status(), " ⏸ Waiting for approval · 4s");
+
+    // Answered: the turn's time again.
+    screen.event(json!({
+        "type": "request.resolved", "requestId": "r1",
+        "resolution": { "type": "answered", "decision": "accept" },
+        "clientName": "canter-tui b",
+    }));
+    screen.event(json!({ "type": "session.status", "status": "working" }));
+    screen.draw();
+    assert!(screen.status().contains(" · 24s · "), "{}", screen.status());
+
+    // The next box counts from its own start.
+    screen.wait(6_000);
+    screen.ask_at("r2", "echo two", 30_000);
+    screen.wait(1_000);
+    screen.draw();
+    assert_eq!(screen.status(), " ⏸ Waiting for approval · 1s");
+
+    // A question: the question alone on its card.
+    screen.event(json!({
+        "type": "request.resolved", "requestId": "r2",
+        "resolution": { "type": "answered", "decision": "accept" },
+        "clientName": "canter-tui b",
+    }));
+    screen.event(json!({
+        "type": "item.started", "turnId": "t1",
+        "item": { "type": "userInput", "id": "item-q1", "question": "Pick storage", "status": "inProgress" },
+    }));
+    screen.event(json!({"type":"request.opened","request":{
+        "id":"q1","turnId":"t1","createdAt":40_000,"kind":{
+            "type":"userInput","itemId":"item-q1","question":"Pick storage","options":[
+                {"label":"SQLite","description":"Local files"},
+                {"label":"PostgreSQL","description":"Shared server"}
+            ]
+        }
+    }}));
+    screen.event(json!({"type":"session.status","status":"waiting_approval"}));
+    screen.wait(12_000);
+    screen.draw();
+    let text = screen.screen();
+    assert!(text.contains("? Pick storage\n"), "{text}");
+    assert_eq!(text.matches("Waiting for your answer").count(), 1, "{text}");
+    assert_eq!(screen.status(), " ⏸ Waiting for your answer · 3s");
+}
