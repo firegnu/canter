@@ -142,8 +142,14 @@
 
 ## 已知没修的问题
 
+- 受管理模式（P2-192，11-03 合并，没装）交叉审查建议改、没做的（用户可以试用后再定）：
+  - 正在 `--replace` / `upgrade` 换服务端的那段（旧服务端排空，最长约 60 秒加关会话的时间）里受管终端正常退出，显式收尾不起作用，会话由排空按 `ServerShutdown` 关；另有普通终端连着时，它会在新服务端把会话恢复回来，「照样收尾」没做到。改法：排空时只停 10 秒宽限的收尾，显式退出照常关（`crates/canter-server/src/managed.rs` `finish`）。
+  - 受管终端收到 TERM 时外层直接丢掉界面：标签页标题和进度标记留在终端上，不打 `To resume` 提示；开着外部编辑器时编辑器留着（`crates/canter-tui/src/run.rs` 受管分支的 `select!`）。改法：先给内部正常退出一小段时间再丢，总共仍在 5 秒内。
+  - 终端还活着、服务端已经替它收尾（比如保活断了超过 10 秒）时，终端一直显示 `Reconnecting: managed client has exited`，不停也不说清；未知 ID、已退出、服务端正在停止回的是同一句。
+  - 可以不改：每次受管运行在服务端内存里留一个空墓碑；协议 README 新加的一节是英文；升级时排空先关了会话，服务端日志会误报一句 `could not close a managed session`。
+
 - 界面美化第三件（P2-188，11-03 合并，没装）：MCP、网页抓取、子 agent 卡片的内容仍挂在 `┃` 后面，没换成 `└`；标题左移两格后，这些内容比标题文字多缩两格。读文件等批准时和 `Explored` 同时出现的情况没有专门的测试。
-- 测试 `canter-core::suggestions no_example_for_non_git_empty_git_disabled_or_timed_out_git`（P2-102 加的）在 P2-188 合并前全套里失败一次（4.6s），单独重跑 3.2s 通过；像负载高时 git 超时的余量不够，再失败时看这个测试里超时和等待的时间。 11-03 又出现两次：P2-190 开发时、P2-191 合并前全套（5.1s），都是单独重跑通过，那两件都没改 canter-core。
+- 测试 `canter-core::suggestions no_example_for_non_git_empty_git_disabled_or_timed_out_git`（P2-102 加的）在 P2-188 合并前全套里失败一次（4.6s），单独重跑 3.2s 通过；像负载高时 git 超时的余量不够，再失败时看这个测试里超时和等待的时间。 11-03 又出现两次：P2-190 开发时、P2-191 合并前全套（5.1s），都是单独重跑通过，那两件都没改 canter-core。 11-03 P2-192 合并前全套又失败一次（5.0s），单独重跑通过；这次看到报错是 `crates/canter-core/tests/suggestions.rs:375` 的 `pid.parse().unwrap()` 遇到空字符串（`ParseIntError { kind: Empty }`）：测试读 `git-pid` 时文件已建好、PID 还没写进去，是测试自己的竞争，不是功能问题；修法是读到空内容就接着等。
 - 界面美化第二件（P2-187，11-03 合并，没装）：`NO_COLOR` 下 `##` 标题没有颜色，和正文加粗分不开；开发看到没改的：`/rewind` 确认前的预览还写进对话，`/goal` 弹框正文没有左边一格缩进。
 - 界面美化（P2-79，11-03 合并，没装）主控审查建议改：`crates/canter-tui/src/cells.rs` 新加的 `Retry` 插在 `agent_message` 的文档注释和函数之间，`app.rs` 新加的 `waited` 插在 `open_request` 的文档注释和函数之间，两处文档注释挂错了函数。开发记下的：最后失败时重试总结行和报错有点重复；同时多个批准框时结果行不一定紧贴它的卡片；`/statusline` 预览不缩目录，80 列下预览第二行末尾会被截掉几个字。
 - 预测下一个 prompt（P2-102，11-02 合并，没装）交叉审查没改的（用户定只修第 1 条受限模式和 git 加固）：
