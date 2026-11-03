@@ -2420,7 +2420,10 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     read_the_box().await;
     terminal.press(KeyCode::Enter).await;
     terminal.wait_for("写好了").await;
-    assert!(terminal.screen().contains("You chose: Allow once"));
+    assert!(
+        !terminal.screen().contains("You chose"),
+        "Allow once shows no line"
+    );
     assert_eq!(
         fs::read_to_string(anywhere.join("env.txt")).unwrap(),
         env_value("canter-tui a"),
@@ -2584,9 +2587,12 @@ async fn the_later_answer_to_an_approval_closes_and_names_the_first() {
 
     let id = world.only_session().await;
     assert!(world.snapshot(&id).await.pending_requests.is_empty());
-    let (winner, loser, label) = if a.screen().contains("You chose: Allow once") {
+    // Allow once chosen here shows no line; a decline says so.
+    let (winner, loser, label) = if b.screen().contains("canter-tui a answered: Allow once") {
+        assert!(!a.screen().contains("You chose"), "{}", a.screen());
         (&a, &b, "canter-tui a answered: Allow once")
     } else {
+        assert!(b.screen().contains("You chose: Decline"), "{}", b.screen());
         (&b, &a, "canter-tui b answered: Decline")
     };
     assert!(
@@ -3487,7 +3493,7 @@ async fn handoff_cancellation_and_errors_leave_the_original_session_open() {
     assert_eq!(world.snapshot(&original).await, before);
     // Let the cancelled HTTP response reach the server before retrying.
     a.frames_later(2).await;
-    for expected in ["handoff note is empty", "Network", "Server"] {
+    for expected in ["handoff note is empty", "network error", "server error"] {
         a.type_line("/handoff").await;
         a.wait_until(expected, |a| {
             a.screen()
@@ -3563,10 +3569,10 @@ async fn btw_is_private_streams_and_escape_cancels_it_before_the_main_tool() {
     a.type_line("/btw try again").await;
     a.wait_for("private final answer").await;
     a.type_line("/btw broken connection").await;
-    a.wait_for("Retrying in").await;
-    assert!(!b.screen().contains("Retrying in"));
+    a.wait_for("retrying in").await;
+    assert!(!b.screen().contains("retrying in"));
     a.wait_for("Error:").await;
-    assert!(a.screen().contains("retried 1 times"));
+    assert!(a.screen().contains("after 1 retry"));
     assert_eq!(world.requests.lock().unwrap().len(), 5);
     assert_eq!(world.snapshot(&id).await.turns.len(), 1);
     let events =

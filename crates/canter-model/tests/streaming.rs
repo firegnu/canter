@@ -589,10 +589,13 @@ async fn zero_retries_and_exhaustion_report_the_actual_retry_count() {
             .await;
         let error = events.last().unwrap().as_ref().unwrap_err();
         assert_eq!(error.retries, limit);
-        assert!(
-            error
-                .to_string()
-                .contains(&format!("retried {limit} times"))
+        let after = match limit {
+            0 => String::new(),
+            limit => format!(" after {limit} retries"),
+        };
+        assert_eq!(
+            error.to_string(),
+            format!("Model request failed: server error (HTTP 503){after}")
         );
         assert_eq!(server.requests.lock().unwrap().len(), limit as usize + 1);
         server.stop().await;

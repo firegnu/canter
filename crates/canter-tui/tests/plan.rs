@@ -297,3 +297,130 @@ fn plan_blocked_tool_cards_are_marked_in_the_conversation() {
     let text = screen.lines().join("\n");
     assert_eq!(text.matches("blocked (Plan mode)").count(), 4, "{text}");
 }
+
+impl Screen {
+    fn plan_in(&mut self, turn: &str, id: &str, plan: Value) {
+        self.event(json!({"type":"item.completed","turnId":turn,"item":{"type":"plan","id":id,"status":"completed","explanation":"Progress","plan":plan}}));
+    }
+
+    fn ctrl_o(&mut self) {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        self.ui
+            .app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL), 0);
+    }
+}
+
+/// In a turn the first plan is the whole card and each later update one row
+/// with what changed; Ctrl+O shows every card whole; a new turn starts with
+/// the whole card again; reopened, it looks the same.
+#[test]
+fn later_updates_in_a_turn_are_one_row_each() {
+    let mut screen = Screen::new();
+    screen.ui.backend_mut().resize(70, 60);
+    screen.plan("p1", steps());
+    screen.plan(
+        "p2",
+        json!([
+            {"step":"Read","status":"completed"},
+            {"step":"Implement","status":"completed"},
+            {"step":"Verify","status":"inProgress"}
+        ]),
+    );
+    assert_eq!(
+        screen.pinned(),
+        ["  □ Verify"],
+        "the pinned plan stays whole"
+    );
+    let lines = screen.lines();
+    assert!(
+        lines.contains(&"  ● Updated Plan · 1/3 complete".to_owned()),
+        "{lines:#?}"
+    );
+    assert!(
+        lines.contains(&"  ● Plan 2/3 · ✔ Implement · □ Verify".to_owned()),
+        "{lines:#?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("Updated Plan · 2/3")),
+        "{lines:#?}"
+    );
+    // Marked and coloured as on the card.
+    let y = lines
+        .iter()
+        .position(|line| line.contains("Plan 2/3"))
+        .unwrap() as u16;
+    let x = |text: &str| lines[y as usize][..lines[y as usize].find(text).unwrap()].width() as u16;
+    let buffer = screen.ui.backend().buffer();
+    assert!(
+        buffer[(x("✔ Implement"), y)]
+            .modifier
+            .contains(Modifier::CROSSED_OUT)
+    );
+    assert_eq!(buffer[(x("□ Verify"), y)].fg, Color::Cyan);
+
+    // A step added, then all done.
+    screen.plan(
+        "p3",
+        json!([
+            {"step":"Read","status":"completed"},
+            {"step":"Implement","status":"completed"},
+            {"step":"Verify","status":"inProgress"},
+            {"step":"Report","status":"pending"}
+        ]),
+    );
+    screen.plan(
+        "p4",
+        json!([
+            {"step":"Read","status":"completed"},
+            {"step":"Implement","status":"completed"},
+            {"step":"Verify","status":"completed"},
+            {"step":"Report","status":"completed"}
+        ]),
+    );
+    let lines = screen.lines();
+    assert!(
+        lines.contains(&"  ● Plan 2/4 · □ Report".to_owned()),
+        "{lines:#?}"
+    );
+    assert!(
+        lines.contains(&"  ● Plan 4/4 complete".to_owned()),
+        "{lines:#?}"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("Updated Plan"))
+            .count(),
+        1,
+        "{lines:#?}"
+    );
+
+    // Reopened, the same rows.
+    let snapshot = screen.ui.app().snapshot().clone();
+    let mut other = Screen {
+        ui: Ui::new(TestBackend::new(70, 60), App::new(snapshot, None, 0)).unwrap(),
+    };
+    assert_eq!(other.lines(), screen.lines());
+
+    // Ctrl+O: every update whole.
+    screen.ctrl_o();
+    let text = screen.lines().join("\n");
+    for label in ["1/3", "2/3", "2/4", "4/4"] {
+        assert!(
+            text.contains(&format!("● Updated Plan · {label} complete")),
+            "{text}"
+        );
+    }
+    screen.ctrl_o();
+
+    // A new turn: its first plan is whole again.
+    screen.event(json!({"type":"turn.completed","turn":{"id":"t1","items":[],"input":[],"clientName":"test","status":"completed","error":null,"usage":null}}));
+    screen.event(json!({"type":"turn.started","turn":{"id":"t2","items":[],"input":[],"clientName":"test","status":"inProgress","error":null,"usage":null}}));
+    screen.plan_in("t2", "p5", json!([{"step":"Ship","status":"inProgress"}]));
+    let lines = screen.lines();
+    assert!(
+        lines.contains(&"  ● Updated Plan · 0/1 complete".to_owned()),
+        "{lines:#?}"
+    );
+}

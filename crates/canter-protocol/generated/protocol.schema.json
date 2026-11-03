@@ -743,6 +743,15 @@
     "ContextResponse": {
       "description": "Read-only estimate of the currently loaded context, using the compaction heuristic.",
       "properties": {
+        "autoCompactTokens": {
+          "description": "The context occupancy past which the server compacts automatically.\nAbsent from older servers.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "compactionTokens": {
           "format": "uint64",
           "minimum": 0,

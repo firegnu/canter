@@ -134,6 +134,48 @@ fn prompt_rows(input: &[UserInput], source: Option<&str>, width: u16) -> Vec<Row
 
 /// The model's text as markdown, indented two columns, for a screen `width`
 /// columns wide.
+/// What a model retry in a turn shows: retries in a row are one row, on the
+/// last of them. While it is the turn's latest item and the turn goes on,
+/// the retry on its way; after that, how many retries there were and why.
+pub(crate) enum Retry {
+    /// Another retry comes right after it.
+    Hidden,
+    Waiting(String),
+    Over(String),
+}
+
+/// `None` when the item at `index` is not a model retry.
+pub(crate) fn retry(turn: &Turn, index: usize) -> Option<Retry> {
+    let item = &turn.items[index];
+    let Item::ModelRetry { error, attempt, .. } = item else {
+        return None;
+    };
+    Some(match turn.items.get(index + 1) {
+        Some(Item::ModelRetry { .. }) => Retry::Hidden,
+        None if turn.status == TurnStatus::InProgress => Retry::Waiting(item.retry_message()?),
+        _ => Retry::Over(canter_protocol::model_retry_summary(
+            &error.message,
+            *attempt,
+        )),
+    })
+}
+
+/// The row for [`retry`]: the summary dim.
+pub(crate) fn retry_rows(retry: &Retry, width: u16) -> Vec<Row> {
+    let (text, style) = match retry {
+        Retry::Hidden => return Vec::new(),
+        Retry::Waiting(text) => (text, Style::default()),
+        Retry::Over(text) => (text, theme::secondary()),
+    };
+    wrap_rows(
+        &LogicalLine::new(
+            vec![Span::raw("  ")],
+            vec![Span::styled(sanitize(text), style)],
+        ),
+        width,
+    )
+}
+
 pub(crate) fn agent_message(text: &str, width: u16) -> Vec<LogicalLine> {
     markdown::render(&sanitize(text), width.saturating_sub(2))
         .into_iter()
@@ -430,22 +472,20 @@ pub(crate) fn item(
             status,
             ..
         } => {
+            // Still open: the question alone; the box below asks it.
             let answer = match answer {
-                Some(canter_protocol::UserInputAnswer::Option { label }) => label.clone(),
+                Some(canter_protocol::UserInputAnswer::Option { label }) => Some(label.clone()),
                 Some(canter_protocol::UserInputAnswer::Text { text }) => {
-                    format!("Own answer: {text}")
+                    Some(format!("Own answer: {text}"))
                 }
-                _ if *status == ItemStatus::InProgress => "Waiting for your answer".into(),
-                _ => "No answer".into(),
+                _ if *status == ItemStatus::InProgress => None,
+                _ => Some("No answer".into()),
             };
-            wrap_rows(
-                &notice(
-                    "? ",
-                    &format!("{} → {}", visible(question), visible(&answer)),
-                    theme::secondary(),
-                ),
-                width,
-            )
+            let text = match answer {
+                Some(answer) => format!("{} → {}", visible(question), visible(&answer)),
+                None => visible(question),
+            };
+            wrap_rows(&notice("? ", &text, theme::secondary()), width)
         }
         Item::Plan {
             plan,
@@ -978,8 +1018,8 @@ fn clip(links: Vec<(Range<usize>, Target)>, end: usize) -> Vec<(Range<usize>, Ta
         .collect()
 }
 
-/// An item waiting for an approval: only its title row, marked 「等你批准」.
-/// The approval box below shows the whole command or diff.
+/// An item waiting for an approval: only its title row; the approval box
+/// below shows the whole command or diff, and the status line that it waits.
 pub(crate) fn waiting(
     item: &Item,
     details: bool,
@@ -987,13 +1027,12 @@ pub(crate) fn waiting(
     width: u16,
     sandbox: bool,
 ) -> Vec<Row> {
-    let mark = || vec![Span::styled("Waiting for approval", theme::warning())];
     match item {
         Item::CommandExecution { command, .. } => command_title(
             command,
             false,
             dot(theme::secondary()),
-            mark(),
+            Vec::new(),
             false,
             width,
         ),
@@ -1001,10 +1040,15 @@ pub(crate) fn waiting(
             .iter()
             .map(|change| {
                 let diff = Diff::parse(&sanitize(&change.diff), &change.kind, &change.path);
-                let room = left_room(&mark(), usize::from(width));
-                let (header, links) =
-                    change_header(change, &diff, dot(theme::secondary()), None, cwd, room);
-                card_row(right_aligned(header, mark(), usize::from(width)), links)
+                let (header, links) = change_header(
+                    change,
+                    &diff,
+                    dot(theme::secondary()),
+                    None,
+                    cwd,
+                    usize::from(width),
+                );
+                cut_row(header, links, width)
             })
             .collect(),
         _ => self::item(item, false, details, cwd, width, None, sandbox),

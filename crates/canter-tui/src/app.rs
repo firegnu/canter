@@ -195,9 +195,12 @@ struct Place {
 }
 
 /// A line from the client or server (warning, error, who answered), shown
-/// where the finished part of the conversation ended when it came.
+/// where the finished part of the conversation ended when it came; who
+/// answered an approval, right under its card.
 struct Notice {
     at: Place,
+    /// Right under the card before it, with no blank row between.
+    attached: bool,
     content: NoticeContent,
 }
 
@@ -207,6 +210,14 @@ enum NoticeContent {
 }
 
 impl Notice {
+    fn kind(&self) -> Kind {
+        if self.attached {
+            Kind::Attached
+        } else {
+            Kind::Notice
+        }
+    }
+
     fn rows(&self, width: u16) -> Vec<Row> {
         match &self.content {
             NoticeContent::Btw(answer) => answer.rows(width),
@@ -1102,9 +1113,11 @@ impl App {
                     }
                     match &request.kind {
                         RequestKind::Approval(approval)
-                        | RequestKind::SandboxApproval(approval) => {
-                            Some((approval.tool.clone(), approval.session_prefixes.is_some()))
-                        }
+                        | RequestKind::SandboxApproval(approval) => Some((
+                            approval.tool.clone(),
+                            approval.session_prefixes.is_some(),
+                            approval.item_id.clone(),
+                        )),
                         _ => None,
                     }
                 })
@@ -1263,11 +1276,29 @@ impl App {
                 ..
             } => {
                 self.answered.remove(request_id);
-                if let Some((tool, prefixes)) = open_request
+                if let Some((tool, prefixes, item_id)) = open_request
                     && let Some(notice) =
                         self.resolution_notice(resolution, client_name.as_deref(), &tool, prefixes)
                 {
-                    self.notice(notice);
+                    // Right under the card it answers, when that card is here.
+                    let after =
+                        self.snapshot
+                            .turns
+                            .iter()
+                            .enumerate()
+                            .rev()
+                            .find_map(|(turn, items)| {
+                                let item = items
+                                    .items
+                                    .iter()
+                                    .position(|item| item.id() == Some(item_id.as_str()))?;
+                                Some(Place {
+                                    turn,
+                                    prompt: true,
+                                    item: item + 1,
+                                })
+                            });
+                    self.notice_at(after, notice);
                 }
             }
             EventPayload::Warning { message } => {
@@ -2254,6 +2285,7 @@ impl App {
         answer.handoff = handoff;
         self.notices.push(Notice {
             at,
+            attached: false,
             content: NoticeContent::Btw(answer),
         });
         self.active_btw = Some(id);
@@ -2976,6 +3008,32 @@ impl App {
         if matches!(item, Item::Diagnostics { .. }) {
             let cwd = &self.snapshot.settings.cwd;
             return crate::lsp::rows(&turn.items, index, self.details, cwd, width);
+        }
+        if let Some(retry) = cells::retry(turn, index) {
+            return cells::retry_rows(&retry, width);
+        }
+        // A turn's first plan is the whole card; its later updates one row
+        // each, unless Ctrl+O shows everything.
+        if let Item::Plan {
+            plan,
+            status: ItemStatus::Completed,
+            ..
+        } = item
+            && !self.details
+            && let Some(before) = turn.items[..index]
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    Item::Plan {
+                        plan,
+                        status: ItemStatus::Completed,
+                        ..
+                    } => Some(plan),
+                    _ => None,
+                })
+            && let Some(row) = crate::plan::update_row(before, plan, width)
+        {
+            return vec![row];
         }
         self.render_item(item, done, width)
     }
@@ -3970,12 +4028,20 @@ impl App {
     /// Puts `line` after everything finished so far, before what is still
     /// in progress.
     fn notice(&mut self, line: LogicalLine) {
+        self.notice_at(None, line);
+    }
+
+    /// A notice at `at` (or later, when that has already passed: notices
+    /// stay in the order they came), or else where the finished part ends.
+    fn notice_at(&mut self, at: Option<Place>, line: LogicalLine) {
         self.extend_history(self.width);
+        let earliest = self
+            .notices
+            .last()
+            .map_or(self.history.end, |last| last.at.max(self.history.end));
         self.notices.push(Notice {
-            at: self
-                .notices
-                .last()
-                .map_or(self.history.end, |last| last.at.max(self.history.end)),
+            at: at.map_or(earliest, |at| at.max(earliest)),
+            attached: at.is_some_and(|at| at >= earliest),
             content: NoticeContent::Line(line),
         });
     }
@@ -4092,7 +4158,7 @@ impl App {
                 if matches!(&notice.content, NoticeContent::Btw(answer) if !answer.done) {
                     return;
                 }
-                let part = (Part::Notice(self.history.notices), Kind::Notice);
+                let part = (Part::Notice(self.history.notices), notice.kind());
                 let history = &mut self.history;
                 push_part(
                     &mut history.rows,
@@ -4933,6 +4999,19 @@ impl App {
 
     /// The pending request the box shows: the first one this terminal has
     /// not answered yet.
+    /// How long the request the box shows has waited (or else the latest
+    /// one); `None` when none is open.
+    fn waited(&self, now_ms: i64) -> Option<String> {
+        let request = self.open_request().or_else(|| {
+            self.snapshot
+                .requests()
+                .max_by_key(|request| request.created_at)
+        })?;
+        Some(format_elapsed(
+            now_ms.saturating_sub(request.created_at).max(0),
+        ))
+    }
+
     fn open_request(&self) -> Option<&PendingRequest> {
         self.snapshot.requests().find(|request| {
             !matches!(request.kind, RequestKind::Unknown) && !self.answered.contains(&request.id)
@@ -5361,7 +5440,8 @@ impl App {
         Some(Action::Interrupt { turn_id })
     }
 
-    /// Who answered an approval, for the conversation.
+    /// Who answered an approval, for the conversation; nothing when this
+    /// terminal chose Allow once, which the card going on shows.
     fn resolution_notice(
         &self,
         resolution: &ApprovalResolution,
@@ -5371,6 +5451,10 @@ impl App {
     ) -> Option<LogicalLine> {
         let dim = theme::secondary();
         match resolution {
+            ApprovalResolution::Answered {
+                decision: ApprovalDecision::Accept,
+                ..
+            } if client == Some(self.client_name.as_str()) => None,
             ApprovalResolution::Answered { decision, .. } => {
                 let label = match decision {
                     ApprovalDecision::AcceptForSession if prefixes => {
@@ -5426,6 +5510,10 @@ impl App {
         if let Some(status) = status {
             return status != ItemStatus::InProgress;
         }
+        // A retry's row changes until something comes after it.
+        if matches!(item, Item::ModelRetry { .. }) {
+            return turn.status != TurnStatus::InProgress || index + 1 < turn.items.len();
+        }
         let closed = item
             .id()
             .is_some_and(|id| self.completed.contains(&(turn.id.clone(), id.to_owned())));
@@ -5463,7 +5551,7 @@ impl App {
                                   tail: &mut Option<Tail>,
                                   at: Place| {
             while let Some((index, notice)) = notices.next_if(|(_, notice)| notice.at <= at) {
-                let part = (Part::Notice(index), Kind::Notice);
+                let part = (Part::Notice(index), notice.kind());
                 push_part(rows, parts, tail, part, notice.rows(width));
             }
         };
@@ -5525,7 +5613,7 @@ impl App {
         }
         // A btw can follow all turns, including in a session without any turns.
         for (index, notice) in notices {
-            let part = (Part::Notice(index), Kind::Notice);
+            let part = (Part::Notice(index), notice.kind());
             push_part(&mut rows, &mut parts, &mut tail, part, notice.rows(width));
         }
         // Steers go in before the queued messages: into this turn.
@@ -5730,7 +5818,10 @@ impl App {
                     },
                     theme::warning(),
                 ),
-                Span::styled(format!(" · {elapsed}{steer}"), theme::secondary()),
+                Span::styled(
+                    format!(" · {}{steer}", self.waited(now_ms).unwrap_or(elapsed)),
+                    theme::secondary(),
+                ),
             ]),
             SessionStatus::Starting => Line::from(Span::styled(" Starting…", theme::secondary())),
             SessionStatus::Error => {
@@ -5777,8 +5868,13 @@ impl App {
             }
             return (rows, false);
         }
+        let error = " statusline error";
+        let failed = self.status_line.as_ref().is_some_and(|line| line.failed);
+        let mut values = self.bar_values(now_ms);
+        let first_extra = str_width(&goal_prefix) + if failed { error.len() } else { 0 };
+        self.fit_directory(&mut values, width, [first_extra, 0]);
         // Permission shortcuts only require the mode itself to be fully visible.
-        let (mut rows, through_mode, mut sandbox_at) = self.bar.draw(&self.bar_values(now_ms));
+        let (mut rows, through_mode, mut sandbox_at) = self.bar.draw(&values);
         let through_mode = through_mode.map(|through| format!("{goal_prefix}{through}"));
         if !goal_prefix.is_empty() {
             rows[0].insert(0, Span::raw(goal_prefix));
@@ -5786,8 +5882,6 @@ impl App {
                 *range = range.start + 1..range.end + 1;
             }
         }
-        let error = " statusline error";
-        let failed = self.status_line.as_ref().is_some_and(|line| line.failed);
         // The sandbox state shows in full or not at all: a cut `Sandbox o…`
         // would not say which.
         if let Some((row, range)) = sandbox_at {
@@ -5816,6 +5910,31 @@ impl App {
             rows,
             through_mode.is_some_and(|through| kept.starts_with(&through)),
         )
+    }
+
+    /// A directory too long for its row loses directories in the middle, as
+    /// the welcome header shows it, so the items after it on that row still
+    /// fit; it keeps at least `…/<last part>`, and past that the row is cut at
+    /// its end. `extra` is what each row gets besides the items.
+    fn fit_directory(&self, values: &mut bar::Values, width: u16, extra: [usize; 2]) {
+        let index = bar::Item::Directory as usize;
+        let (Some(row), Some(spans)) = (self.bar.row_of(bar::Item::Directory), &values[index])
+        else {
+            return;
+        };
+        let used = spans_width(&self.bar.draw(values).0[row]) + extra[row];
+        let Some(over) = used
+            .checked_sub(usize::from(width))
+            .filter(|over| *over > 0)
+        else {
+            return;
+        };
+        let path: String = spans.iter().map(|span| span.content.as_ref()).collect();
+        let style = spans.first().map_or_else(Style::default, |span| span.style);
+        let last = path.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+        let least = str_width(&path).min(str_width(last) + str_width("…/"));
+        let room = str_width(&path).saturating_sub(over).max(least);
+        values[index] = Some(vec![Span::styled(fit_path(&path, room), style)]);
     }
 
     /// What each item of the rows at the bottom says now, each in its colour
@@ -5884,9 +6003,13 @@ impl App {
                 ]
             }),
             // Ten cells, full at the compaction line, or else at the window;
-            // past it full, and the percent says how far past.
+            // past it full, and the percent says how far past. The words
+            // after the percent say which.
             bar::Item::Context => usage.and_then(|usage| {
-                let full = usage.auto_compact_tokens.or(usage.model_context_window)?;
+                let (full, of) = match usage.auto_compact_tokens {
+                    Some(line) => (line, " to compact)"),
+                    None => (usage.model_context_window?, " of window)"),
+                };
                 let used = usage.context_tokens;
                 let percent = percent(full, used)?;
                 let cells = ((u128::from(used) * 10 + u128::from(full) / 2) / u128::from(full))
@@ -5900,7 +6023,7 @@ impl App {
                         theme::secondary(),
                     ),
                     Span::styled(format!("{percent}%"), room),
-                    Span::styled(")", theme::secondary()),
+                    Span::styled(of, theme::secondary()),
                 ])
             }),
             bar::Item::Cache => usage.and_then(|usage| {

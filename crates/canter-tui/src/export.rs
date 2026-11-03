@@ -138,6 +138,16 @@ impl Body {
                 }
                 continue;
             }
+            // Retries in a row are one block, as on screen.
+            if let Some(retry) = crate::cells::retry(turn, index) {
+                match retry {
+                    crate::cells::Retry::Hidden => {}
+                    crate::cells::Retry::Waiting(text) | crate::cells::Retry::Over(text) => {
+                        self.block("Retry", &sanitize(&text))
+                    }
+                }
+                continue;
+            }
             let feedback = item
                 .id()
                 .and_then(|id| snapshot.approval_feedback.get(id))

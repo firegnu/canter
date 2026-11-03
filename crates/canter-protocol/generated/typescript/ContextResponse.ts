@@ -5,4 +5,9 @@ import type { ContextSection } from "./ContextSection";
 /**
  * Read-only estimate of the currently loaded context, using the compaction heuristic.
  */
-export type ContextResponse = { prefix: Array<ContextSection>, skillCount: number, toolCount: number, toolTokens: number, compactionTokens: number | null, messages: ContextMessages, estimatedTokens: number, freeTokens: number, modelContextWindow: number, contextTokens: number | null, };
+export type ContextResponse = { prefix: Array<ContextSection>, skillCount: number, toolCount: number, toolTokens: number, compactionTokens: number | null, messages: ContextMessages, estimatedTokens: number, freeTokens: number, modelContextWindow: number, contextTokens: number | null,
+/**
+ * The context occupancy past which the server compacts automatically.
+ * Absent from older servers.
+ */
+autoCompactTokens?: number, };

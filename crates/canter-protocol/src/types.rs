@@ -851,13 +851,29 @@ impl Item {
     }
 }
 
+/// A retry on its way: `Server error (HTTP 500) · retrying in 4s (4/10)`,
+/// the delay rounded up to whole seconds.
 pub fn model_retry_message(
     reason: &str,
     attempt: u32,
     max_retries: u32,
     delay_seconds: f64,
 ) -> String {
-    format!("Retrying in {delay_seconds:.1}s ({attempt}/{max_retries}): {reason}")
+    let mut chars = reason.chars();
+    let reason: String = chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default();
+    let seconds = delay_seconds.max(0.0).ceil() as u64;
+    format!("{reason} · retrying in {seconds}s ({attempt}/{max_retries})")
+}
+
+/// Retries that are over: `Retried 4 times after server error (HTTP 500)`.
+pub fn model_retry_summary(reason: &str, retries: u32) -> String {
+    match retries {
+        1 => format!("Retried once after {reason}"),
+        retries => format!("Retried {retries} times after {reason}"),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1183,6 +1199,11 @@ pub struct ContextResponse {
     pub model_context_window: u64,
     #[ts(type = "number | null")]
     pub context_tokens: Option<u64>,
+    /// The context occupancy past which the server compacts automatically.
+    /// Absent from older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub auto_compact_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
