@@ -203,6 +203,23 @@ pub fn secondary() -> Style {
     Style::new().dim()
 }
 
+/// The program a command runs, in a command card's title: blue and bold;
+/// without colours bold only.
+pub fn program() -> Style {
+    current().fg(Color::Blue).bold()
+}
+
+/// A command's output under `└` (unless it failed): dark grey, as the
+/// `/btw` answer and folded thinking but not dim, so it is plainly fainter
+/// than the command on a dark or light background. Without colours dim, as
+/// [`secondary`].
+pub fn output() -> Style {
+    match current().depth {
+        Depth::None => secondary(),
+        _ => Style::new().fg(Color::DarkGray),
+    }
+}
+
 /// Thinking: dim and italic.
 pub fn thinking() -> Style {
     Style::new().dim().italic()

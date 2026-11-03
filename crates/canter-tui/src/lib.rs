@@ -47,6 +47,7 @@ mod plan;
 mod plan_mode;
 #[cfg(test)]
 mod popup_tests;
+mod programs;
 pub use goal::GoalCommand;
 mod question;
 mod report;
