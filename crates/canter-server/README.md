@@ -106,9 +106,10 @@ Enter 只发送已接受的文字。连续 20 条未采用后每四轮生成一�
 AppKit，只读取剪贴板已有的 PNG 表示，不转换格式。临时截图文件在本终端退出／换会话时清理。
 非本机 `http://` 地址被拒绝，本机仅接受 localhost 或 loopback IP；模型客户端禁用代理和跳转。
 模型、key、窗口在服务端启动时读取，修改后需显式重启。
-`sandbox` 是可选布尔开关，默认 `true`，只在服务端启动时读取。模型 shell 默认在 macOS
-Seatbelt 中运行，`false` 恢复原执行行为；改动后重启服务端生效。`--yolo` 仅选择
-Allow all，不关闭沙箱。用户 `!` 不套墙；本件没有改变文件工具、MCP 或网页工具。
+`sandbox` 是可选布尔开关，默认 `true`，服务端自动重读、下一轮生效。模型 shell 默认在 macOS
+Seatbelt 中运行，`false` 恢复原执行行为。交互和 exec 的 `--yolo` 同时选择 Allow all 并强制
+关闭沙箱，不受配置重读影响；不带它时按配置。豁免跟随这次打开会话的客户端，包括派生会话和
+重连；同会话以最后一次打开为准。Shift+Tab 切到 Allow all 不关闭沙箱。用户 `!` 不套墙。
 缓存使用会话 HOME 下的 `Library/Caches/canter/{cargo,npm}`，不自动清理；不复制原
 `~/.cargo` 的配置、credentials 或 bin。Cargo 仍从 cwd 逐级向上查找 `.cargo/config(.toml)`，
 所以项目位于 HOME 内时仍可能读到原 `~/.cargo/config.toml`；按 CARGO_HOME 查找的配置和

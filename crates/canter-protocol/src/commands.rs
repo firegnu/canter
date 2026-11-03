@@ -371,6 +371,10 @@ pub struct RunningTurn {
 #[serde(rename_all = "camelCase")]
 #[ts(optional_fields = nullable)]
 pub struct SessionCreateParams {
+    /// Disable the sandbox for this opening, regardless of server configuration.
+    #[serde(default, skip_serializing_if = "crate::types::is_false")]
+    #[ts(optional = nullable)]
+    pub sandbox_disabled: bool,
     /// Restrict this opening even if the server has a positive trust record.
     #[serde(default, skip_serializing_if = "crate::types::is_false")]
     #[ts(optional = nullable)]
@@ -411,6 +415,14 @@ session_response!(
 /// POST /v1/sessions/{id}/resume. Never log this body or replace an open session's environment.
 #[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct SessionResumeParams {
+    /// False or omitted follows server configuration, not saved session state.
+    #[serde(
+        default,
+        rename = "sandboxDisabled",
+        skip_serializing_if = "crate::types::is_false"
+    )]
+    #[ts(optional = nullable)]
+    pub sandbox_disabled: bool,
     #[serde(
         default,
         rename = "restrictedMode",

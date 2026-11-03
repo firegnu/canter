@@ -72,3 +72,13 @@
 
 - 跑一次全套（用户：「做完在跑全套」，P2-197、P2-199 没跑的一起补）。
 - 告诉 ranch/main、paddock/main：`--yolo` 起的 canter 不再套沙箱，请它们改各自的说明。
+
+## 完成记录
+
+- 做了什么：新建、恢复和分叉请求增加缺省 false 的 `sandboxDisabled`，服务端用 `sessionSandbox` 宣告能力；带关闭请求的客户端先检查支持情况。交互终端和 exec 保存本次启动的 `--yolo` 意图，覆盖 `/new`、`/resume`、`-r`、`-c`、分叉、交接和服务端重连。运行时豁免与存盘权限档分离，最后一次打开决定当前执行器；`session.updated` 同步所有终端的实际沙箱状态。配置重读保留豁免，子 agent 继承创建时的实际沙箱；明确恢复子会话也采用这次终端的选择。未改 Shift+Tab 的权限逻辑或沙箱范围规则。
+- 说明与协议：更新 DESIGN 第 8 条、非交互和沙箱章节、CLI 帮助、exec stderr、`/sandbox` 关闭提示及相关 README；重新生成协议 JSON Schema 和 TypeScript。参考 `/tmp/codex-ro` 的 `rust-v0.163.0`，`codex-rs/app-server-protocol/src/protocol/v2/thread.rs` 中 `ThreadStartParams` / `ThreadResumeParams.sandbox`；只参考打开边界传参的做法，没有搬代码。canter 使用布尔豁免、而非 Codex 多模式策略的理由已写进 DESIGN。
+- 验证：先运行改成新预期的 `/new` 测试，确认失败于仍显示 `Sandbox on`；恢复同一会话和从磁盘恢复子会话也先取得真实行为失败，再实现到通过。新增普通终端 Shift+Tab 到 Allow all 后 `/new` 仍开沙箱、会话互不影响、最后打开者和双终端状态同步、磁盘恢复、`-c`、自动重连、分叉、配置重读、exec 新建/恢复/最近会话、子 agent 实际命令范围及协议兼容测试，并补交接状态断言。全部使用本机假模型、隔离 HOME / 状态目录和临时端口；验证了 yolo 命令确实能写项目外的测试临时文件，非 yolo 子 agent 仍受原边界限制。
+- 验证命令：统一使用本任务独立 `CARGO_TARGET_DIR`。运行 `cargo nextest run -p canter -p canter-core -p canter-protocol -p canter-server -p canter-tui --no-fail-fast --status-level fail --final-status-level fail`：1,402 项运行，1,399 项首次通过，27 项默认跳过；另外三项见下文，处理后按原名定向复跑全部通过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。没有跑 workspace 全套或文档示例测试。
+- 主控决定：首次检查发现旧 `/new` 断言要求 yolo 仍显示 `Sandbox on`，依任务要求暂停。11-03 主控明确同意改为 `Sandbox off`，并要求普通启动 `/new` 仍显示 on 的回归测试；同时授权直接更新第 1～9 条明确推翻的旧行为断言，其余需要放宽或修改的仍先问。实际更新了 `slash_new_opens_a_new_session_in_this_terminal` 的状态文字；`new_session_retries_with_default_model_when_previous_model_was_removed` 中不带 yolo 恢复后，旧会话和新会话的预期 `sandbox_enabled` 改为 true，其余设置仍整份严格比较；`sandbox_lists_what_it_allows_or_how_to_turn_it_on` 的精确文本列表增加“不带 --yolo 启动”的提示。未删除测试或放宽断言。
+- 踩过的坑：新写的 Shift+Tab 测试连续发送两次切换时，第二次可能仍基于旧档位；改为等第一次服务端状态到达再发第二次。新增协议字段后两个比较工具示例缺少结构体字段，补了 false；协议导出一致性测试提示遗漏生成文件，用仓库导出器重新生成后通过。改动 crate 测试并行运行时，未改动的 `no_example_for_non_git_empty_git_disabled_or_timed_out_git` 一次读到刚创建但尚未写入的空 PID，报 `ParseIntError`；原样单独复跑通过，没有改测试、断言或超时。
+- 没做的事：没有真实模型调用（0 次），没有碰用户真实状态、安装程序或重启用户服务端，没有改其他仓库、发送消息、合并 main 或推送。实现和记录只提交在本任务分支；交叉审查、合并、全套和对外通知由主控处理。目前没有需要主控决定的事项。

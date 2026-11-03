@@ -3,4 +3,8 @@
 /**
  * POST /v1/sessions/{id}/resume. Never log this body or replace an open session's environment.
  */
-export type SessionResumeParams = { restrictedMode?: boolean, env: { [key in string]: string }, };
+export type SessionResumeParams = {
+/**
+ * False or omitted follows server configuration, not saved session state.
+ */
+sandboxDisabled?: boolean, restrictedMode?: boolean, env: { [key in string]: string }, };

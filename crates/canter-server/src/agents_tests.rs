@@ -79,6 +79,82 @@ pub(super) async fn spawn(test: &Harness, parent: &str, task: &str) -> String {
 }
 
 #[tokio::test]
+async fn explicitly_reopening_a_child_uses_the_terminals_sandbox_choice() {
+    let fake = model_server::Server::start((0..2).map(|_| model_server::Reply::sse(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+    )).collect()).await;
+    let model = Arc::new(
+        canter_model::ChatCompletions::new(
+            &fake.base_url,
+            canter_model::ApiKey::new(model_server::KEY),
+        )
+        .unwrap(),
+    );
+    let test = Harness::with_options(
+        model,
+        CoreOptions {
+            sandbox: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let parent = parent(&test).await;
+    let env = json!({"HOME":test.root.path().join("home"),"CANTER_HOME":test.app.home,"PATH":"/usr/bin:/bin"});
+    test.client
+        .post(format!("{parent}/resume"))
+        .json(&json!({"env":env,"sandboxDisabled":true}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let child = spawn(&test, &parent, "Inspect parser").await;
+    assert_eq!(
+        idle(&test, &child).await.settings.sandbox_enabled,
+        Some(false)
+    );
+    test.client
+        .delete(&child)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let resumed: SessionResumeResponse = test
+        .client
+        .post(format!("{child}/resume"))
+        .json(&json!({"env":env}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resumed.session.settings.sandbox_enabled, Some(true));
+    assert_eq!(
+        test.read(&parent).await.session.settings.sandbox_enabled,
+        Some(false)
+    );
+    let resumed: SessionResumeResponse = test
+        .client
+        .post(format!("{child}/resume"))
+        .json(&json!({"env":env,"sandboxDisabled":true}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resumed.session.settings.sandbox_enabled, Some(false));
+    test.stop().await;
+    fake.stop().await;
+}
+
+#[tokio::test]
 async fn child_model_requests_use_the_child_session_id() {
     let (test, fake) = harness(false).await;
     let parent = parent(&test).await;

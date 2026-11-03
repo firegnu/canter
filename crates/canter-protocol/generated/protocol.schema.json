@@ -4837,6 +4837,10 @@
           "description": "Restrict this opening even if the server has a positive trust record.",
           "type": "boolean"
         },
+        "sandboxDisabled": {
+          "description": "Disable the sandbox for this opening, regardless of server configuration.",
+          "type": "boolean"
+        },
         "tags": {
           "additionalProperties": {
             "type": "string"
@@ -5108,6 +5112,10 @@
           "type": "object"
         },
         "restrictedMode": {
+          "type": "boolean"
+        },
+        "sandboxDisabled": {
+          "description": "False or omitted follows server configuration, not saved session state.",
           "type": "boolean"
         }
       },

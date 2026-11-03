@@ -715,10 +715,13 @@ pub(crate) fn sandbox(
     if !report.enabled {
         return Report::new(
             title("Sandbox", "off"),
-            vec![line(
-                "Set \"sandbox\": true in config.json (or remove the line), then run canter serve --replace."
-                    .into(),
-            )],
+            vec![
+                line("Start canter without --yolo to follow config.json.".into()),
+                line(
+                    "Set \"sandbox\": true in config.json (or remove the line), then run canter serve --replace."
+                        .into(),
+                ),
+            ],
             Vec::new(),
         );
     }

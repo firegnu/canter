@@ -60,7 +60,7 @@ Options:
   -r, --resume [id]     resume a session; without an id, pick from a list
   --tag <key=value>     label a new session (repeatable; last value wins)
   --close-on-exit       close every session opened by this terminal when it exits
-  --yolo               use permission mode Allow all (never ask); commands still run in the sandbox
+  --yolo               use permission mode Allow all (never ask) and disable the sandbox regardless of config
   -V, --version        show the version and commit
   -h, --help           show this help
 
@@ -268,6 +268,7 @@ fn client_name() -> String {
 /// It does not start one: whoever stopped the server starts the next.
 pub struct ServerConnector {
     state_dir: PathBuf,
+    sandbox_disabled: bool,
 }
 
 impl Connector for ServerConnector {
@@ -276,7 +277,11 @@ impl Connector for ServerConnector {
             .await
             .map_err(|error| error.to_string())?
             .ok_or("no server found")?;
-        connected(connection)
+        let mut connected = connected(connection)?;
+        connected.client = connected
+            .client
+            .with_sandbox_disabled(self.sandbox_disabled);
+        Ok(connected)
     }
 }
 
@@ -355,6 +360,7 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
         },
     };
     let mut connected = connected(connection)?;
+    connected.client = connected.client.with_sandbox_disabled(args.yolo);
     if args.close_on_exit {
         connected.client = connected
             .client
@@ -366,6 +372,7 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
         connected,
         connector: ServerConnector {
             state_dir: context.state_dir,
+            sandbox_disabled: args.yolo,
         },
         open,
         home: context.env.get("HOME").cloned(),

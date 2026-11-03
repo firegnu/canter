@@ -39,6 +39,49 @@ pub(crate) struct Runtime {
 }
 
 impl Session {
+    /// A new terminal opening replaces the previous opening's sandbox choice.
+    /// The environment and saved approval policy stay with the session.
+    pub async fn set_sandbox_disabled(
+        &self,
+        disabled: bool,
+        configured: bool,
+    ) -> Result<(), CoreError> {
+        let mut state = self.shared.state.lock().await;
+        let mut runtime = (*self.shared.runtime()).clone();
+        runtime.context.sandbox_disabled = disabled;
+        runtime.options.sandbox = configured;
+        let enabled = runtime.options.sandbox && !disabled;
+        if runtime.tools.sandbox_enabled() != enabled {
+            let tools = sandbox_tools(&state, &runtime.context, &runtime.tools, enabled).await?;
+            tools.configure_shell(
+                state.approval_policy(),
+                &state.journal.snapshot.settings.additional_directories,
+            );
+            state.refresh_tools(&tools).await?;
+            if !runtime
+                .tools
+                .background()
+                .list()
+                .iter()
+                .any(|command| command.running)
+            {
+                runtime.retired_tools.clear();
+            }
+            runtime.retired_tools.push(runtime.tools);
+            runtime.tools = tools;
+            let mut settings = state.journal.snapshot.settings.clone();
+            settings.sandbox_enabled = Some(enabled);
+            state
+                .journal
+                .append(vec![canter_protocol::EventPayload::SessionUpdated {
+                    settings,
+                }])
+                .await?;
+        }
+        *self.shared.runtime.write().unwrap() = Arc::new(runtime);
+        Ok(())
+    }
+
     /// Attach immediately after creating or opening the session, using the
     /// revision that supplied its initial options, model and tools.
     pub fn set_configuration_source(
@@ -180,25 +223,10 @@ impl Shared {
         {
             retired_tools.clear();
         }
-        if old.options.sandbox != config.options.sandbox {
-            let cwd = state.journal.snapshot.settings.cwd.clone();
-            let environment = context.environment.clone();
-            let protected = context.protected_paths.clone();
-            let sandbox = config.options.sandbox;
-            let scratch = old
-                .tools
-                .scratch_directory()
-                .expect("local session executor");
-            let memory = old.tools.memory();
-            let executor = tokio::task::spawn_blocking(move || {
-                LocalExecutor::with_scratch_directory(cwd.into(), environment, protected, scratch)
-                    .map(|executor| executor.with_memory(memory).with_sandbox(sandbox))
-            })
-            .await
-            .map_err(|_| CoreError::internal())?
-            .map_err(|_| CoreError::internal())?;
+        let sandbox = config.options.sandbox && !context.sandbox_disabled;
+        if old.tools.sandbox_enabled() != sandbox {
             retired_tools.push(old.tools.clone());
-            tools = tools.with_executor(Arc::new(executor));
+            tools = sandbox_tools(state, &context, &tools, sandbox).await?;
         }
         let same_lsp = match (&old.context.lsp, &context.lsp) {
             (Some(old), Some(new)) => Arc::ptr_eq(old, new),
@@ -256,7 +284,7 @@ impl Shared {
         state.refresh_tools(&tools).await?;
         let mut settings = state.journal.snapshot.settings.clone();
         settings.plan_enabled = Some(config.options.plan_enabled);
-        settings.sandbox_enabled = Some(config.options.sandbox);
+        settings.sandbox_enabled = Some(sandbox);
         if settings != state.journal.snapshot.settings {
             state
                 .journal
@@ -280,4 +308,25 @@ impl Shared {
         });
         Ok(config.lease)
     }
+}
+
+async fn sandbox_tools(
+    state: &State,
+    context: &RuntimeContext,
+    tools: &Tools,
+    enabled: bool,
+) -> Result<Tools, CoreError> {
+    let cwd = state.journal.snapshot.settings.cwd.clone();
+    let environment = context.environment.clone();
+    let protected = context.protected_paths.clone();
+    let scratch = tools.scratch_directory().expect("local session executor");
+    let memory = tools.memory();
+    let executor = tokio::task::spawn_blocking(move || {
+        LocalExecutor::with_scratch_directory(cwd.into(), environment, protected, scratch)
+            .map(|executor| executor.with_memory(memory).with_sandbox(enabled))
+    })
+    .await
+    .map_err(|_| CoreError::internal())?
+    .map_err(|_| CoreError::internal())?;
+    Ok(tools.clone().with_executor(Arc::new(executor)))
 }

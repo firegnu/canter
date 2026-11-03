@@ -178,8 +178,10 @@ impl App {
         environment: std::collections::BTreeMap<String, String>,
         config: &canter_core::Configuration,
         restricted_mode: bool,
+        sandbox_disabled: bool,
     ) -> RuntimeContext {
         RuntimeContext {
+            sandbox_disabled,
             memory_home: Some(self.home.clone()),
             restricted_mode,
             lsp_file_access: Some(crate::trust::file_access(self.home.clone())),
@@ -430,6 +432,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
         features: Some(vec![
+            "sessionSandbox".into(),
             "managedClients".into(),
             "subagentSessions".into(),
             "subagentTools".into(),
@@ -867,6 +870,9 @@ async fn resume(
             session
                 .set_folder_trust(trust.trusted && !params.restricted_mode)
                 .await?;
+            session
+                .set_sandbox_disabled(params.sandbox_disabled, app.metadata().2.sandbox)
+                .await?;
             let response = session.snapshot().await;
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
@@ -888,6 +894,9 @@ async fn resume(
             session
                 .set_folder_trust(trust.trusted && !params.restricted_mode)
                 .await?;
+            session
+                .set_sandbox_disabled(params.sandbox_disabled, app.metadata().2.sandbox)
+                .await?;
             let response = session.snapshot().await;
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
@@ -906,13 +915,14 @@ async fn resume(
             let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
             #[cfg(test)]
             app.pauses.hit(&id, "open").await;
-            let (session, response) = Session::open(
+            let (session, _) = Session::open(
                 app.store.clone(),
                 id.clone(),
                 app.runtime(
                     params.env,
                     &config,
                     !trust.trusted || params.restricted_mode,
+                    params.sandbox_disabled,
                 ),
                 config.model.clone(),
                 config.options.clone(),
@@ -921,6 +931,10 @@ async fn resume(
             #[cfg(test)]
             app.pauses.hit(&id, "configure").await;
             app.configure_session(&session, config.revision).await?;
+            session
+                .set_sandbox_disabled(params.sandbox_disabled, config.options.sandbox)
+                .await?;
+            let response = session.snapshot().await;
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
@@ -976,7 +990,7 @@ async fn fork(
             .create(
                 app.store.clone(),
                 id.clone(),
-                app.runtime(params.env, &config, restricted),
+                app.runtime(params.env, &config, restricted, params.sandbox_disabled),
                 config.model.clone(),
                 config.options.clone(),
             )
@@ -1053,6 +1067,7 @@ async fn create(
                 params.env,
                 &config,
                 !trust.trusted || params.restricted_mode,
+                params.sandbox_disabled,
             ),
             config.model.clone(),
             config.options.clone(),

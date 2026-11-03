@@ -280,6 +280,12 @@ input、interrupt、批准回答、compact、PATCH、DELETE 返回 `session_not_
 
 ### 沙箱状态（P2-166）
 
+P2-198：新建、恢复和分叉请求接受可选 `sandboxDisabled`（缺省 false）。true 强制这次打开
+不套沙箱；false 或省略按服务端配置，覆盖上次打开的选择，不从存盘权限档推导。子 agent
+创建时继承父会话的实际沙箱状态；明确恢复子会话也采用本次打开的选择。`features` 增加
+`sessionSandbox`；发送 true 前检查支持情况，避免旧服务端忽略它。交互终端和 exec 的
+`--yolo` 在每次打开、派生和重连时携带这一选择，配置重读不会撤销豁免。
+
 `settings.sandboxEnabled` 是可选布尔值，报告这个会话的模型命令是否套沙箱：服务端
 打开或新建会话时按实际执行器写入，和存盘不同就追加 `session.updated`，因此
 `canter serve --replace` 换了配置后，重开会话即可看到新值。旧服务端没有这个字段，
@@ -594,6 +600,6 @@ state and budget accounting, but goals and background notifications do not start
 new turns automatically until the next ordinary input. Opening the session requires
 no settings change, even while exec is running; clients can watch and interrupt it.
 
-`canter exec` checks the feature before sending session requests, preserves the
-server's sandbox setting, and exposes the JSONL result and exit-code contract
+`canter exec` checks the feature before sending session requests, follows the
+server's sandbox setting unless `--yolo` disables it for this opening, and exposes the JSONL result and exit-code contract
 documented in `docs/DESIGN.md` under P2-30.

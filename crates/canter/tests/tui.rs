@@ -39,6 +39,9 @@ const WAIT: Duration = Duration::from_secs(20);
 /// What the shell tool writes when it runs with a session's environment.
 const WRITE_ENV: &str = r#"printf '%s' "$CANTER_TEST_ENV" > env.txt"#;
 
+#[path = "support/yolo.rs"]
+mod yolo;
+
 #[tokio::test]
 async fn folder_trust_prompt_restricts_then_trusts_on_resume_and_covers_subfolders() {
     let mut world = World::new(vec![text_reply("Restricted still works.")]).await;
@@ -2268,11 +2271,14 @@ async fn new_session_retries_with_default_model_when_previous_model_was_removed(
     a.wait_idle().await;
     let new = a.quit().await;
     assert_ne!(new, old);
-    let mut expected = old_settings.clone();
+    // Resuming without --yolo restores the configured sandbox for both sessions.
+    let mut resumed_settings = old_settings;
+    resumed_settings.sandbox_enabled = Some(true);
+    let mut expected = resumed_settings.clone();
     expected.model = "fake-model".into();
     expected.name = Some("继续".into());
     assert_eq!(world.snapshot(&new).await.settings, expected);
-    assert_eq!(world.snapshot(&old).await.settings, old_settings);
+    assert_eq!(world.snapshot(&old).await.settings, resumed_settings);
     let client = Client::new(&world.path("state/server.sock")).unwrap();
     assert_eq!(client.list_sessions().await.unwrap().len(), 2);
     {
@@ -2968,8 +2974,9 @@ async fn slash_new_opens_a_new_session_in_this_terminal() {
     a.wait_until("the new session", |a| !a.screen().contains("第一句"))
         .await;
     assert!(
-        a.info()
-            .starts_with("deepseek-v4-pro · think max · Allow all · Sandbox on · /tmp/canter-tui-"),
+        a.info().starts_with(
+            "deepseek-v4-pro · think max · Allow all · Sandbox off · /tmp/canter-tui-"
+        ),
         "{}",
         a.screen()
     );
@@ -2996,6 +3003,33 @@ async fn slash_new_opens_a_new_session_in_this_terminal() {
     assert_eq!(world.snapshot(&new).await.turns.len(), 1);
     assert_eq!(world.snapshot(&old).await.turns.len(), 1);
     assert_eq!(a.quit().await, new, "quitting names the session on screen");
+    world.stop_server(Signal::SIGTERM).await;
+}
+
+#[tokio::test]
+async fn ordinary_terminal_new_keeps_configured_sandbox_even_after_allow_all() {
+    let mut world = World::new(Vec::new()).await;
+    world.start_server().await;
+    let terminal = world.open(&[], "ordinary").await;
+    terminal.wait_for("Sandbox on").await;
+    let old = world.only_session().await;
+    terminal.press(KeyCode::BackTab).await;
+    terminal.wait_for("Ask for execution").await;
+    terminal.press(KeyCode::BackTab).await;
+    terminal.wait_for("Allow all").await;
+    assert!(terminal.info().contains("Sandbox on"));
+    terminal.type_line("/new").await;
+    terminal.wait_idle().await;
+    let new = terminal.quit().await;
+    assert_ne!(new, old);
+    assert_eq!(
+        world.snapshot(&new).await.settings.sandbox_enabled,
+        Some(true)
+    );
+    assert_eq!(
+        world.snapshot(&new).await.settings.approval_policy,
+        PermissionMode::AllowAll
+    );
     world.stop_server(Signal::SIGTERM).await;
 }
 
@@ -3416,6 +3450,8 @@ async fn handoff_opens_matching_session_with_an_editable_unsent_note() {
         .id
         .clone();
     let created = world.snapshot(&new).await;
+    assert_eq!(created.settings.sandbox_enabled, Some(false));
+    a.wait_for("Sandbox off").await;
     assert_eq!(created.settings.cwd, before.settings.cwd);
     assert_eq!(created.settings.model, before.settings.model);
     assert_eq!(

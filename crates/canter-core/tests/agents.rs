@@ -42,6 +42,73 @@ async fn idle(session: &Session) -> SessionSnapshot {
 }
 
 #[tokio::test]
+#[cfg(target_os = "macos")]
+async fn child_inherits_the_opening_sandbox_exemption_and_actual_command_scope() {
+    for disabled in [false, true] {
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        for directory in ["home", "work", "state"] {
+            std::fs::create_dir(root.path().join(directory)).unwrap();
+        }
+        let fake = Server::start(vec![
+            complete("Parent ready"),
+            shell("printf inherited > ../child-output"),
+            complete("Child done"),
+        ])
+        .await;
+        let model = Arc::new(ChatCompletions::new(&fake.base_url, ApiKey::new(KEY)).unwrap());
+        let store = Arc::new(Store::new(root.path().join("state/sessions")).unwrap());
+        let runtime = RuntimeContext {
+            sandbox_disabled: disabled,
+            environment: [
+                (
+                    "HOME".into(),
+                    root.path().join("home").display().to_string(),
+                ),
+                (
+                    "CANTER_HOME".into(),
+                    root.path().join("state").display().to_string(),
+                ),
+                ("PATH".into(), "/usr/bin:/bin".into()),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        let settings = serde_json::from_value(json!({"cwd":root.path().join("work"),"model":"fake-model","name":null,"approvalPolicy":"allowAll"})).unwrap();
+        let (parent, _) = Session::create(
+            store,
+            "parent".into(),
+            settings,
+            runtime,
+            model,
+            CoreOptions {
+                sandbox: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        parent.input(input("Parent task")).await.unwrap();
+        idle(&parent).await;
+        let (child, created) = parent
+            .spawn_agent("child".into(), "Write the requested output".into())
+            .await
+            .unwrap();
+        assert_eq!(created.session.settings.sandbox_enabled, Some(!disabled));
+        assert_eq!(child.sandbox().await.enabled, !disabled);
+        assert_eq!(
+            idle(&child).await.agent.unwrap().result.as_deref(),
+            Some("Child done")
+        );
+        let output = root.path().join("child-output");
+        assert_eq!(output.exists(), disabled);
+        if disabled {
+            assert_eq!(std::fs::read_to_string(output).unwrap(), "inherited");
+        }
+        parent.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn spawn_inherits_current_settings_runs_fresh_and_can_continue_and_reopen() {
     let root = tempfile::tempdir_in("/tmp").unwrap();
     for name in ["home", "work", "extra", "state"] {
