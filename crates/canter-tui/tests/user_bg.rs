@@ -245,17 +245,21 @@ fn a_sent_message_is_on_its_background_with_a_row_of_it_above_and_below() {
         assert_eq!(second, first + 1, "{}", screen.text());
         let answer = screen.find("Worked for").1;
         let read = screen.find("Read README.md").1;
+        assert!(
+            lines[usize::from(answer)].starts_with("  Worked for <1s · "),
+            "{theme:?}"
+        );
         assert_eq!(
-            lines[usize::from(answer)..=usize::from(read)],
+            lines[usize::from(answer) + 1..=usize::from(read)],
             [
-                "  ─ Worked for <1s ─",
                 "",
                 "",
                 "› 把 README 里的安装步骤改成 cargo install",
                 "  另外顺手把版本号也改一下",
                 "",
                 "",
-                "  ◇ Read README.md  lines 1–2",
+                "• Explored",
+                "  └ Read README.md",
             ],
             "{theme:?}"
         );
@@ -297,15 +301,19 @@ fn no_background_with_16_colours_or_an_unknown_background() {
         let lines = screen.lines();
         let answer = screen.find("Worked for").1;
         let read = screen.find("Read README.md").1;
+        assert!(
+            lines[usize::from(answer)].starts_with("  Worked for <1s · "),
+            "{theme:?}"
+        );
         assert_eq!(
-            lines[usize::from(answer)..=usize::from(read)],
+            lines[usize::from(answer) + 1..=usize::from(read)],
             [
-                "  ─ Worked for <1s ─",
                 "",
                 "› 把 README 里的安装步骤改成 cargo install",
                 "  另外顺手把版本号也改一下",
                 "",
-                "  ◇ Read README.md  lines 1–2",
+                "• Explored",
+                "  └ Read README.md",
             ],
             "{theme:?}"
         );

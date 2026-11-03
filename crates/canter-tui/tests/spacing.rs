@@ -185,7 +185,7 @@ fn outline(rows: &[String]) -> Vec<String> {
 }
 
 #[test]
-fn a_blank_row_separates_messages_cards_and_thinking_but_not_reads_in_a_row() {
+fn a_blank_row_separates_messages_cards_and_thinking_and_reads_in_a_row_are_one_block() {
     let mut screen = Screen::new(WIDTH, 40);
     screen.thought("r1", "Look at the files first.");
     screen.say("m1", "Reading two files.");
@@ -204,31 +204,31 @@ fn a_blank_row_separates_messages_cards_and_thinking_but_not_reads_in_a_row() {
         [
             "› do it",
             "",
-            "Thought: Look at",
+            "✻ Thought ·",
             "",
-            "Reading two files.",
+            "• Reading two",
             "",
-            "◇ Read a.txt",
-            "◇ Read b.txt",
+            "• Explored",
+            "└ Read a.txt,",
             "",
-            "● Edit a.txt",
+            "• Edit a.txt",
             "1 - old",
             "1 + new",
             "",
-            "● Run cargo",
-            "┃ ok",
+            "• Ran cargo",
+            "└ ok",
             "",
-            "Done.",
+            "• Done.",
             "",
-            "● Changed 1",
+            "• Changed 1",
             "a.txt +1 −1",
-            "─ Worked for",
+            "Worked for <1s",
             "",
             "› thanks",
             "",
-            "You're welcome.",
+            "• You're welcome.",
             "",
-            "─ Worked for",
+            "Worked for <1s",
         ]
     );
 }
@@ -250,12 +250,12 @@ fn notices_a_turn_end_and_queued_messages_are_blocks_set_apart() {
         [
             "› do it",
             "",
-            "Before.",
+            "• Before.",
             "",
             "! First warning",
             "! Second warning",
             "",
-            "After.",
+            "• After.",
             "",
             "· Queued: one",
             "· Queued: two",
@@ -272,10 +272,13 @@ fn notices_a_turn_end_and_queued_messages_are_blocks_set_apart() {
     screen.event(json!({ "type": "session.status", "status": "idle" }));
     assert_eq!(
         outline(&screen.conversation()),
-        ["› do it", "", "Stopping.", "", "■ Turn interrupted"]
+        ["› do it", "", "• Stopping.", "", "■ Turn interrupted"]
     );
 }
 
+/// Rows already drawn stay where they are as parts finish: a read still
+/// going shows nothing yet, the `Explored` block takes each file once
+/// read, and what comes after it starts below it.
 #[test]
 fn blank_rows_stay_put_when_a_part_finishes() {
     let mut screen = Screen::new(WIDTH, 30);
@@ -292,14 +295,19 @@ fn blank_rows_stay_put_when_a_part_finishes() {
     screen.completed(message);
     let written = screen.conversation();
 
-    assert_eq!(
-        outline(&reading),
-        ["› do it", "", "Reading.", "", "◇ Read a.txt"]
-    );
+    assert_eq!(outline(&reading), ["› do it", "", "• Reading."]);
     assert_eq!(outline(&second[..reading.len()]), outline(&reading));
-    assert_eq!(outline(&second[reading.len()..]), ["◇ Read b.txt"]);
-    assert_eq!(outline(&writing[..second.len()]), outline(&second));
-    assert_eq!(outline(&writing[second.len()..]), ["", "All read."]);
+    assert_eq!(
+        outline(&second[reading.len()..]),
+        ["", "• Explored", "└ Read a.txt"]
+    );
+    let last = second.len() - 1;
+    assert_eq!(writing[..last], second[..last]);
+    assert_eq!(
+        outline(&writing[last..]),
+        ["└ Read a.txt,", "", "• All read."]
+    );
+    assert_eq!(writing[last], "  └ Read a.txt, b.txt");
     assert_eq!(written, writing, "nothing moves when the message finishes");
 }
 

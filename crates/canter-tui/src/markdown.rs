@@ -153,13 +153,13 @@ impl Renderer {
         match tag {
             Tag::Paragraph | Tag::HtmlBlock => self.block_start(),
             // Told apart from each other and from bold in a paragraph: `#`
-            // underlined, `##` in the accent colour, `###` and below italic.
+            // underlined, `##` in the heading colour, `###` and below italic.
             Tag::Heading { level, .. } => {
                 self.block_start();
                 let style = Style::new().bold();
                 self.styles.push(match level {
                     HeadingLevel::H1 => style.underlined(),
-                    HeadingLevel::H2 => style.patch(theme::accent()),
+                    HeadingLevel::H2 => theme::heading(),
                     _ => style.italic(),
                 });
             }
@@ -221,7 +221,7 @@ impl Renderer {
                 self.marker = Some(marker);
             }
             Tag::Emphasis => self.styles.push(Style::new().italic()),
-            Tag::Strong => self.styles.push(Style::new().bold()),
+            Tag::Strong => self.styles.push(theme::strong()),
             Tag::Strikethrough => self.styles.push(Style::new().crossed_out()),
             // Only links to http and https are underlined, when drawn.
             Tag::Link { dest_url, .. } => {

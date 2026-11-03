@@ -135,7 +135,7 @@ async fn replay() {
     assert_eq!(top[added].fg, Color::Green, "added lines are green");
     let removed = find(top, "- git clone https://github.com/firegnu/canter");
     assert_eq!(top[removed].fg, Color::Red, "removed lines are red");
-    let thinking = find(top, "Thought for <1s: ");
+    let thinking = find(top, "Thought for <1s · ");
     assert!(
         top[thinking].modifier.contains(Modifier::DIM),
         "thinking is grey"
@@ -161,10 +161,26 @@ fn key(code: KeyCode) -> KeyEvent {
 fn rows(buffer: &Buffer) -> String {
     let mut out = String::new();
     for y in 0..buffer.area.height {
-        out += row(buffer, y).trim_end();
+        out += &clock_hidden(row(buffer, y).trim_end());
         out.push('\n');
     }
     out
+}
+
+/// `row` with the local time a turn ended (`Worked for 14s · 18:00`) as
+/// `HH:MM`: it depends on the time zone, and the fake server's own turn
+/// ends now.
+fn clock_hidden(row: &str) -> String {
+    match row.rsplit_once(" · ") {
+        Some((before, time))
+            if before.trim_start().starts_with("Worked for ")
+                && time.len() == 5
+                && time.as_bytes()[2] == b':' =>
+        {
+            format!("{before} · HH:MM")
+        }
+        _ => row.to_owned(),
+    }
 }
 
 /// Position of the first cell of `text` in the buffer.

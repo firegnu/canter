@@ -1,7 +1,8 @@
 //! Links in the conversation: the http and https addresses in answers, and
-//! the paths and addresses in tool card titles. They are underlined, and a
-//! click opens one (see [`LinkSystem`] for how): the program is started
-//! without a shell, the link as one argument, on a thread of its own so the
+//! the paths and addresses in tool card titles. Addresses are underlined;
+//! paths are blue, or underlined without colours. A click opens one (see
+//! [`LinkSystem`] for how): the program is started without a shell, the
+//! link as one argument, on a thread of its own so the
 //! screen never waits. Where a program could open the wrong thing or on the
 //! wrong machine, a click copies the link instead.
 //!
@@ -149,13 +150,15 @@ fn trimmed(run: &str) -> usize {
     end
 }
 
-/// `line` with the columns of each of `links` underlined.
+/// `line` with the columns of each of `links` underlined: addresses always,
+/// paths only without colours. With colours a path in a card's title shows
+/// it opens by its colour instead ([`theme::path_link`]).
 pub(crate) fn underline(line: &Line<'static>, links: &[(Range<usize>, Target)]) -> Line<'static> {
+    let paths = theme::current().depth == theme::Depth::None;
     select::restyle(line, |place, style| {
-        if links
-            .iter()
-            .any(|(columns, _)| columns.contains(&place.column))
-        {
+        if links.iter().any(|(columns, target)| {
+            columns.contains(&place.column) && (paths || matches!(target, Target::Web(_)))
+        }) {
             style.add_modifier(Modifier::UNDERLINED)
         } else {
             style

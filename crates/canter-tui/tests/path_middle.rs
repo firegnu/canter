@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 
 use canter_protocol::{Event, SessionSnapshot};
 use canter_tui::{App, LinkSystem, Ui};
-use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
@@ -101,6 +101,13 @@ impl Screen {
             "type": "fileChange", "id": id, "status": "completed",
             "changes": [{ "path": path, "kind": kind, "diff": "@@ -1 +1 @@\n-old\n+new\n" }],
         }));
+    }
+
+    fn ctrl_o(&mut self) {
+        self.ui.app_mut().handle_key(
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+            self.now,
+        );
     }
 
     fn draw(&mut self) {
@@ -209,29 +216,33 @@ fn row(buffer: &Buffer, y: u16) -> String {
     row
 }
 
-/// In a narrow window a read card keeps the file name and `lines 1–2`: the
-/// directories in the middle go, more of them the narrower it is.
+/// In a narrow window a read's row keeps the file name and `lines 1–2`:
+/// the directories in the middle go, more of them the narrower it is. A
+/// file read shows its path under `• Explored` with Ctrl+O; one that could
+/// not be read shows it on a row of its own.
 #[test]
 fn a_read_card_keeps_the_file_name_and_its_lines() {
     let mut screen = Screen::new("/work", 40);
     screen.read("r1", APP, "completed");
     screen.read("r2", "crates/canter-tui/src/cells.rs", "failed");
+    screen.ctrl_o();
     screen.draw();
     let text = screen.text();
     assert!(
-        text.contains("  ◇ Read crates/…/src/app.rs  lines 1–2\n"),
+        text.contains("  └ Read crates/…/src/app.rs  lines 1–2\n"),
         "{text}"
     );
     assert!(
-        text.contains("  ✗ Read crates/…/src/cells.rs  failed\n"),
+        text.contains("• Read crates/…/src/cells.rs  failed\n"),
         "{text}"
     );
 
     let mut screen = Screen::new("/work", 30);
     screen.read("r1", APP, "completed");
+    screen.ctrl_o();
     screen.draw();
     let text = screen.text();
-    assert!(text.contains("  ◇ Read …/app.rs  lines 1–2\n"), "{text}");
+    assert!(text.contains("  └ Read …/app.rs  lines 1–2\n"), "{text}");
 }
 
 /// A moved file's card shares the room between its two paths; the line
@@ -247,13 +258,13 @@ fn a_moved_files_card_shortens_both_paths() {
     screen.draw();
     let text = screen.text();
     assert!(
-        text.contains("  ● Edit crates/…/old_name.rs → crates/…/new_name.rs  +1 −1\n"),
+        text.contains("• Edit crates/…/old_name.rs → crates/…/new_name.rs  +1 −1\n"),
         "{text}"
     );
 }
 
-/// The link is on the path as drawn, shorter, and a click on it opens the
-/// whole path; the status line says which, shortened the same way.
+/// The link is on the path as drawn, shorter and blue, and a click on it
+/// opens the whole path; the status line says which, shortened the same way.
 #[test]
 fn a_shortened_path_is_a_link_to_the_whole_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -262,13 +273,18 @@ fn a_shortened_path_is_a_link_to_the_whole_path() {
     std::fs::write(&file, "fn main() {}\n").unwrap();
     let mut screen = Screen::new(&dir.path().to_string_lossy(), 40);
     screen.read("r1", APP, "completed");
+    screen.ctrl_o();
     screen.draw();
-    assert_eq!(
-        screen.underlined(),
-        ["crates/…/src/app.rs"],
-        "{}",
-        screen.text()
-    );
+    let at = screen.find("crates/…/src/app.rs");
+    for x in at.0..at.0 + "crates/…/src/app.rs".width() as u16 {
+        assert_eq!(
+            screen.buffer()[(x, at.1)].fg,
+            Color::Blue,
+            "{}",
+            screen.text()
+        );
+    }
+    assert!(screen.underlined().is_empty(), "{}", screen.text());
 
     let at = screen.find("…/src");
     screen.click_and_wait(at);

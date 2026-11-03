@@ -1925,7 +1925,7 @@ async fn killing_server_with_sigkill_also_kills_background_process_groups() {
         .type_line("!echo $$ > leader.pid; /bin/sleep 60 & echo $! > child.pid; printf guard-ready; wait &")
         .await;
     terminal.wait_for("▸ 1 background commands").await;
-    terminal.wait_for("┃ guard-ready").await;
+    terminal.wait_for("└ guard-ready").await;
     let leader: i32 = fs::read_to_string(world.path("work/leader.pid"))
         .unwrap()
         .trim()
@@ -2011,7 +2011,7 @@ async fn background_shell_controls_work_through_terminal_and_survive_client_exit
     b.type_line("start model command").await;
     b.wait_for("ctrl+b to run in background").await;
     // Match streamed output, not the command text shown before spawn completes.
-    b.wait_for("┃ model-ready").await;
+    b.wait_for("└ model-ready").await;
     b.press_with(KeyCode::Char('b'), KeyModifiers::CONTROL)
         .await;
     b.wait_for("continued after backgrounding").await;

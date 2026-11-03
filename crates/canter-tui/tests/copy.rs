@@ -424,15 +424,15 @@ fn part_of_a_row_and_a_card_title_copy_only_their_text() {
         "exitCode": 0, "durationMs": 1200,
     }}));
     screen.draw();
-    let title = screen.find("● Run cargo test");
-    assert!(screen.lines()[title.1 as usize].ends_with("exit 0 · 1.2s"));
+    let title = screen.find("• Ran cargo test");
+    assert!(screen.lines()[title.1 as usize].ends_with("cargo test  1.2s"));
     let end = screen.find_end("  ok");
     screen.select(title, end);
     screen.draw();
     assert_eq!(
         screen.clipboard(),
-        "Run cargo test\nrunning 3 tests\n  ok",
-        "no mark, no status, no `│`; the output's own indent stays"
+        "Ran cargo test\nrunning 3 tests\n  ok",
+        "no mark, no status, no `└`; the output's own indent stays"
     );
 }
 
@@ -928,8 +928,8 @@ fn new_command_output_does_not_move_the_selection_to_another_line() {
     assert_eq!(screen.clipboard(), "line3", "{}", screen.text());
 }
 
-/// A command that ends folds to its last 3 lines and an answer comes after
-/// it: the selection stays on its line and never runs into the answer.
+/// A command that ends folds to its first 3 lines and an answer comes after
+/// it: the selection on a line still shown stays on it and never runs into the answer.
 #[test]
 fn a_command_folding_as_it_ends_keeps_the_selection_on_its_line() {
     let mut screen = Screen::new();
@@ -943,17 +943,17 @@ fn a_command_folding_as_it_ends_keeps_the_selection_on_its_line() {
     };
     screen.event(json!({ "type": "item.started", "turnId": "t1", "item": command("inProgress") }));
     screen.draw();
-    let from = screen.find("line6");
-    let to = screen.find_end("line6");
+    let from = screen.find("line3");
+    let to = screen.find_end("line3");
     screen.press(from);
     screen.drag(to);
 
     screen.event(json!({ "type": "item.completed", "turnId": "t1", "item": command("completed") }));
     screen.say("t1", "m1", "abcdefghijklmnop");
     screen.draw();
-    assert_eq!(screen.highlighted_text(), ["line6"], "{}", screen.text());
+    assert_eq!(screen.highlighted_text(), ["line3"], "{}", screen.text());
     screen.release(to);
-    assert_eq!(screen.clipboard(), "line6", "{}", screen.text());
+    assert_eq!(screen.clipboard(), "line3", "{}", screen.text());
 }
 
 /// A queued message that leaves the queue takes its selection with it: the
@@ -1019,9 +1019,8 @@ fn a_double_click_takes_a_word_with_a_combining_accent_whole() {
     assert_eq!(screen.clipboard(), "cafe\u{301}");
 }
 
-/// A card title with emoji, close to the status on the right (the rest of
-/// the command wraps below): dragging over the whole row copies and
-/// highlights the title, not the status.
+/// A card title with emoji and the status after it: dragging over the whole
+/// row copies and highlights the title, not the status.
 #[test]
 fn a_card_title_with_emoji_copies_without_the_status() {
     let mut screen = Screen::sized(40, 20);
@@ -1029,18 +1028,14 @@ fn a_card_title_with_emoji_copies_without_the_status() {
     screen.event(json!({ "type": "item.completed", "turnId": "t1", "item": {
         "type": "commandExecution", "id": "c1", "command": "echo 👩\u{200d}💻 👩\u{200d}💻 abcdefghijkl",
         "cwd": "/work", "status": "completed", "aggregatedOutput": "", "exitCode": 0,
-        "durationMs": null,
+        "durationMs": 1200,
     }}));
     screen.draw();
-    let at = screen.find("● Run");
+    let at = screen.find("• Ran");
     let row = screen.lines()[usize::from(at.1)].clone();
-    assert!(row.ends_with("  exit 0"), "{}", screen.text());
-    assert_eq!(
-        screen.lines()[usize::from(at.1) + 1],
-        "        abcdefghijkl"
-    );
-    let title = row.trim_start().trim_start_matches("● ");
-    let title = title.trim_end_matches("exit 0").trim_end().to_owned();
+    assert!(row.ends_with("abcdefghijkl  1.2s"), "{}", screen.text());
+    let title = row.trim_start_matches("• ");
+    let title = title.trim_end_matches("1.2s").trim_end().to_owned();
     screen.select(at, (39, at.1));
     assert_eq!(screen.clipboard(), title, "{}", screen.text());
     screen.draw();
@@ -1120,12 +1115,12 @@ fn a_wrapped_command_copies_as_one_line() {
         "durationMs": 1200,
     }}));
     screen.draw();
-    let title = screen.find("● Run echo arg01");
+    let title = screen.find("• Ran echo arg01");
     assert_eq!(
         screen.lines()[usize::from(title.1) + 1],
-        "        arg06 arg07 arg08 arg09 arg10 arg11 arg12"
+        "      arg09 arg10 arg11 arg12"
     );
     let end = screen.find_end("ls -la");
     screen.select(title, end);
-    assert_eq!(screen.clipboard(), format!("Run {line}\nls -la"));
+    assert_eq!(screen.clipboard(), format!("Ran {line}\nls -la"));
 }
