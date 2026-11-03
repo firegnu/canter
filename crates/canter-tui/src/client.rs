@@ -43,6 +43,7 @@ pub enum ClientError {
 #[derive(Debug, Clone)]
 pub struct Client {
     http: reqwest::Client,
+    sandbox_disabled: bool,
     pub(crate) managed_id: Option<String>,
 }
 
@@ -468,8 +469,32 @@ impl Client {
             .build()?;
         Ok(Self {
             http,
+            sandbox_disabled: false,
             managed_id: None,
         })
+    }
+
+    /// Apply this terminal's sandbox choice to every session it opens.
+    pub fn with_sandbox_disabled(mut self, disabled: bool) -> Self {
+        self.sandbox_disabled = disabled;
+        self
+    }
+
+    async fn require_session_sandbox(&self, disabled: bool) -> Result<(), ClientError> {
+        if disabled
+            && !self
+                .info()
+                .await?
+                .features
+                .unwrap_or_default()
+                .iter()
+                .any(|feature| feature == "sessionSandbox")
+        {
+            return Err(ClientError::Protocol(
+                "This server does not support --yolo without a sandbox; run canter serve --replace and retry".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Give this terminal run a fresh, memory-only closing responsibility.
@@ -523,9 +548,13 @@ impl Client {
         &self,
         params: &SessionCreateParams,
     ) -> Result<SessionCreateResponse, ClientError> {
+        let mut params = params.clone();
+        params.sandbox_disabled |= self.sandbox_disabled;
+        self.require_session_sandbox(params.sandbox_disabled)
+            .await?;
         let response = self
             .opening_request(self.http.post(url(routes::SESSIONS, &[])))
-            .json(params)
+            .json(&params)
             .send()
             .await?;
         decode(response).await
@@ -558,9 +587,12 @@ impl Client {
         restricted_mode: bool,
     ) -> Result<SessionResumeResponse, ClientError> {
         let params = SessionResumeParams {
+            sandbox_disabled: self.sandbox_disabled,
             env: env.clone(),
             restricted_mode,
         };
+        self.require_session_sandbox(params.sandbox_disabled)
+            .await?;
         let response = self
             .opening_request(self.http.post(url(routes::RESUME, &[session])))
             .json(&params)
@@ -575,9 +607,13 @@ impl Client {
         session: &str,
         params: &SessionResumeParams,
     ) -> Result<canter_protocol::SessionCreateResponse, ClientError> {
+        let mut params = params.clone();
+        params.sandbox_disabled |= self.sandbox_disabled;
+        self.require_session_sandbox(params.sandbox_disabled)
+            .await?;
         let response = self
             .opening_request(self.http.post(url(routes::SESSION_FORK, &[session])))
-            .json(params)
+            .json(&params)
             .send()
             .await?;
         decode(response).await

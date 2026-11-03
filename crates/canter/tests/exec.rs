@@ -724,6 +724,81 @@ async fn exec_rejects_old_servers_before_any_session_request() {
 }
 
 #[tokio::test]
+async fn exec_yolo_disables_configured_sandbox_for_create_resume_and_last() {
+    for configured in [true, false] {
+        let world = World::new(
+            vec![
+                call(
+                    "shell",
+                    json!({"command":"printf new > ../created-outside"}),
+                ),
+                reply("Created."),
+                reply("Resumed ordinarily."),
+                call(
+                    "shell",
+                    json!({"command":"printf resumed > ../resumed-outside"}),
+                ),
+                reply("Resumed with yolo."),
+            ],
+            configured,
+        )
+        .await;
+        let output = world
+            .cli(&["exec", "--yolo", "Write outside the project"], "")
+            .await;
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            fs::read_to_string(world.root.path().join("created-outside")).unwrap(),
+            "new"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("Sandbox is off (--yolo)"), "{stderr}");
+        assert!(!stderr.contains("will be denied"), "{stderr}");
+        let client = world.client().await;
+        let id = client.list_sessions().await.unwrap()[0].id.clone();
+        let snapshot = client.read_session(&id).await.unwrap().session;
+        assert_eq!(snapshot.settings.sandbox_enabled, Some(false));
+        assert_eq!(
+            snapshot.settings.approval_policy,
+            canter_protocol::PermissionMode::AlwaysAsk
+        );
+        let output = world
+            .cli(&["exec", "--resume", &id, "Continue ordinarily"], "")
+            .await;
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            client
+                .read_session(&id)
+                .await
+                .unwrap()
+                .session
+                .settings
+                .sandbox_enabled,
+            Some(configured)
+        );
+        let output = world
+            .cli(&["exec", "--yolo", "--last", "Write outside again"], "")
+            .await;
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            fs::read_to_string(world.root.path().join("resumed-outside")).unwrap(),
+            "resumed"
+        );
+        assert_eq!(
+            client
+                .read_session(&id)
+                .await
+                .unwrap()
+                .session
+                .settings
+                .sandbox_enabled,
+            Some(false)
+        );
+        world.stop().await;
+    }
+}
+
+#[tokio::test]
 async fn exec_respects_disabled_sandbox_and_yolo_while_preserving_forbidden_rules() {
     let shell = call("shell", json!({"command":"printf allowed > result.txt"}));
     let world = World::new(

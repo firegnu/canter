@@ -157,7 +157,9 @@ async fn run_inner(
     if let Some(warning) = &connection.version_warning {
         eprintln!("{warning}");
     }
-    let client = crate::connected(connection)?.client;
+    let client = crate::connected(connection)?
+        .client
+        .with_sandbox_disabled(args.yolo);
     let features = client
         .info()
         .await
@@ -227,6 +229,7 @@ async fn run_inner(
     } else {
         let created = client
             .create_session(&SessionCreateParams {
+                sandbox_disabled: false,
                 restricted_mode: false,
                 tags: args.tags,
                 additional_directories: args.additional_directories,
@@ -248,9 +251,15 @@ async fn run_inner(
         eprintln!("Restricted mode: LSP and hooks are disabled.");
     }
     if snapshot.settings.sandbox_enabled == Some(false) {
-        eprintln!(
-            "Sandbox is off. Commands requiring approval will be denied in default exec mode; use --yolo to allow them under the configured rules."
-        );
+        if args.yolo {
+            eprintln!(
+                "Sandbox is off (--yolo). Commands run with Allow all under the configured rules."
+            );
+        } else {
+            eprintln!(
+                "Sandbox is off in config.json. Commands requiring approval will be denied in default exec mode; use --yolo to allow them under the configured rules."
+            );
+        }
     }
     output.session_id = Some(id.clone());
     output.json_line(&serde_json::json!({"type":"exec.started","sessionId":id}))?;

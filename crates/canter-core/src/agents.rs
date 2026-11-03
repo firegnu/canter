@@ -399,6 +399,9 @@ impl Session {
         if let Some(source) = self.shared.configuration.get() {
             child.set_configuration_source(source.clone(), runtime.revision);
         }
+        child
+            .set_sandbox_disabled(runtime.context.sandbox_disabled, runtime.options.sandbox)
+            .await?;
         self.attach_agent(&child).await?;
         Ok(child)
     }

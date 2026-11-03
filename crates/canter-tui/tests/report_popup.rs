@@ -581,6 +581,7 @@ fn sandbox_lists_what_it_allows_or_how_to_turn_it_on() {
         [
             " Sandbox · off",
             "",
+            " Start canter without --yolo to follow config.json.",
             " Set \"sandbox\": true in config.json (or remove the line), then run canter serve --replace.",
             "",
             " Esc close",

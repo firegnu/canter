@@ -1118,7 +1118,7 @@ impl Session {
             settings.additional_directories,
         )
         .await?;
-        settings.sandbox_enabled = Some(options.sandbox);
+        settings.sandbox_enabled = Some(options.sandbox && !runtime.sandbox_disabled);
         settings.restricted_mode = Some(runtime.restricted_mode);
         settings.plan_enabled = Some(options.plan_enabled);
         let owned_store = store.clone();
@@ -2096,7 +2096,9 @@ async fn executor(
         )
         .map(|executor| {
             let tools = Tools::new(Arc::new(
-                executor.with_memory(memory).with_sandbox(options.sandbox),
+                executor
+                    .with_memory(memory)
+                    .with_sandbox(options.sandbox && !runtime.sandbox_disabled),
             ))
             .with_telemetry(options.telemetry)
             .with_plan_enabled(options.plan_enabled)

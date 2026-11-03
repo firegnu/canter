@@ -521,6 +521,7 @@ where
                 };
                 opening_warning = opening.warning;
                 let params = SessionCreateParams {
+                    sandbox_disabled: false,
                     restricted_mode: opening.restricted,
                     tags,
                     additional_directories,
@@ -1681,6 +1682,7 @@ impl<C: Connector> Chat<C> {
             ""
         };
         let mut params = SessionCreateParams {
+            sandbox_disabled: false,
             restricted_mode: opening.restricted,
             tags: settings.tags.clone(),
             additional_directories: settings.additional_directories.clone(),
@@ -1753,6 +1755,7 @@ impl<C: Connector> Chat<C> {
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let settings = &ui.app().snapshot().settings;
         let mut params = SessionCreateParams {
+            sandbox_disabled: false,
             restricted_mode: opening.restricted,
             tags: settings.tags.clone(),
             additional_directories: settings.additional_directories.clone(),
@@ -1816,6 +1819,7 @@ impl<C: Connector> Chat<C> {
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
         let failed = "Could not fork this session";
         let params = canter_protocol::SessionResumeParams {
+            sandbox_disabled: false,
             env: self.env.clone(),
             restricted_mode: ui.app().snapshot().settings.restricted_mode == Some(true),
         };
