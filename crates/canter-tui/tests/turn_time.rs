@@ -7,7 +7,7 @@ use chrono::TimeZone;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, Cell};
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
@@ -166,6 +166,15 @@ fn grey(buffer: &Buffer, text: &str) -> bool {
         .all(|cell| cell.modifier.contains(Modifier::DIM))
 }
 
+/// Every non-blank cell of `text` is purple: the label of thinking that is
+/// done.
+fn purple(buffer: &Buffer, text: &str) -> bool {
+    cells_of(buffer, text)
+        .iter()
+        .filter(|cell| cell.symbol() != " " && !cell.symbol().is_empty())
+        .all(|cell| cell.fg == Color::Magenta)
+}
+
 /// The row right after the last row containing `text`, skipping blank rows.
 fn after<'a>(conversation: &'a [String], text: &str) -> &'a str {
     let at = conversation
@@ -291,7 +300,9 @@ fn thinking_says_how_long_it_thought() {
             "{expected:?} in {conversation:?}"
         );
     }
-    assert!(grey(screen.draw(), "Thought for 4s · Look at the README.…"));
+    let buffer = screen.draw();
+    assert!(purple(buffer, "Thought for 4s · "));
+    assert!(grey(buffer, "Look at the README.…"));
 
     screen.ctrl_o();
     let details = screen.conversation();

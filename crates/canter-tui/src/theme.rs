@@ -4,7 +4,8 @@
 //! Text uses the terminal's own 16 colours, so it follows the terminal's
 //! colour scheme. Only the diff backgrounds and the background of a sent
 //! message are true colours, and only when the terminal can show them and its
-//! background is known to be dark or light; so are the shimmers' shades;
+//! background is known to be dark or light; so are the shimmers' shades
+//! and the orange of an edit's card ([`edited`]);
 //! and the welcome header's pony, when the terminal can show them; and
 //! code, when `/theme` chose a theme other than `terminal` and the terminal
 //! shows 256 colours or more.
@@ -256,6 +257,39 @@ pub fn path_link() -> Style {
 /// `Read` under `• Explored`: blue.
 pub fn read() -> Style {
     current().fg(Color::Blue)
+}
+
+/// A finished card that read or searched (`• Explored`, a fetch, a web
+/// search), its mark and verb: cyan, as [`accent`].
+pub fn explored() -> Style {
+    accent()
+}
+
+/// A file change that worked, its mark and verb: the orange of the working
+/// verb ([`working`]) for the background, or orange 166 of the 256 when
+/// the background is unknown. With 16 colours there is no orange: yellow,
+/// and on a light background (where yellow is faint, as for [`warning`])
+/// the default colour. Without colours nothing.
+pub fn edited() -> Style {
+    let theme = current();
+    let color = match (theme.depth, theme.background) {
+        (Depth::None, _) | (Depth::Ansi16, Background::Light) => return Style::new(),
+        (Depth::Ansi16, _) => Color::Yellow,
+        (_, Background::Dark) => theme.shade(WORKING_DARK.0),
+        (_, Background::Light) => theme.shade(WORKING_LIGHT.0),
+        (_, Background::Unknown) => Color::Indexed(166),
+    };
+    Style::new().fg(color)
+}
+
+/// `✻ Thought for 12s` once thinking is done: magenta, as [`heading`] and
+/// [`shell`], which the terminal's colour scheme keeps readable on a dark
+/// or light background. Without colours dim, as [`secondary`].
+pub fn thought() -> Style {
+    match current().depth {
+        Depth::None => secondary(),
+        _ => Style::new().fg(Color::Magenta),
+    }
 }
 
 /// What an item of the status bar at the bottom shows, for its colour.

@@ -206,7 +206,7 @@ fn a_blank_row_separates_messages_cards_and_thinking_and_reads_in_a_row_are_one_
             "",
             "✻ Thought ·",
             "",
-            "• Reading two",
+            "● Reading two",
             "",
             "• Explored",
             "└ Read a.txt,",
@@ -218,7 +218,7 @@ fn a_blank_row_separates_messages_cards_and_thinking_and_reads_in_a_row_are_one_
             "• Ran cargo",
             "└ ok",
             "",
-            "• Done.",
+            "● Done.",
             "",
             "• Changed 1",
             "a.txt +1 −1",
@@ -226,7 +226,7 @@ fn a_blank_row_separates_messages_cards_and_thinking_and_reads_in_a_row_are_one_
             "",
             "› thanks",
             "",
-            "• You're welcome.",
+            "● You're welcome.",
             "",
             "Worked for <1s",
         ]
@@ -250,12 +250,12 @@ fn notices_a_turn_end_and_queued_messages_are_blocks_set_apart() {
         [
             "› do it",
             "",
-            "• Before.",
+            "● Before.",
             "",
             "! First warning",
             "! Second warning",
             "",
-            "• After.",
+            "● After.",
             "",
             "· Queued: one",
             "· Queued: two",
@@ -275,7 +275,7 @@ fn notices_a_turn_end_and_queued_messages_are_blocks_set_apart() {
         [
             "› do it",
             "",
-            "• Stopping.",
+            "● Stopping.",
             "",
             "■ Turn interrupted",
             "Worked for <1s"
@@ -302,7 +302,7 @@ fn blank_rows_stay_put_when_a_part_finishes() {
     screen.completed(message);
     let written = screen.conversation();
 
-    assert_eq!(outline(&reading), ["› do it", "", "• Reading."]);
+    assert_eq!(outline(&reading), ["› do it", "", "● Reading."]);
     assert_eq!(outline(&second[..reading.len()]), outline(&reading));
     assert_eq!(
         outline(&second[reading.len()..]),
@@ -312,7 +312,7 @@ fn blank_rows_stay_put_when_a_part_finishes() {
     assert_eq!(writing[..last], second[..last]);
     assert_eq!(
         outline(&writing[last..]),
-        ["└ Read a.txt,", "", "• All read."]
+        ["└ Read a.txt,", "", "● All read."]
     );
     assert_eq!(writing[last], "  └ Read a.txt, b.txt");
     assert_eq!(written, writing, "nothing moves when the message finishes");

@@ -8,7 +8,7 @@ use chrono::TimeZone;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, Cell};
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
@@ -225,6 +225,19 @@ fn grey_upright(buffer: &Buffer, text: &str) -> bool {
         })
 }
 
+/// Every non-blank cell of `text` is purple, not dim and not italic: the
+/// label of thinking that is done.
+fn purple_upright(buffer: &Buffer, text: &str) -> bool {
+    cells_of(buffer, text)
+        .iter()
+        .filter(|cell| cell.symbol() != " " && !cell.symbol().is_empty())
+        .all(|cell| {
+            cell.fg == Color::Magenta
+                && !cell.modifier.contains(Modifier::DIM)
+                && !cell.modifier.contains(Modifier::ITALIC)
+        })
+}
+
 /// While thinking, one row shows `✻ Thinking…` in grey and the latest line
 /// written, fainter and italic; when it is too long, only its end, after `…`.
 #[test]
@@ -296,7 +309,7 @@ fn finished_thinking_folds_to_its_first_line() {
     assert!(!conversation.iter().any(|row| row.contains("Then edit")));
     assert!(!conversation.iter().any(|row| row.contains("raw thoughts")));
     let buffer = screen.draw();
-    assert!(grey_upright(buffer, "✻ Thought"));
+    assert!(purple_upright(buffer, "✻ Thought"));
     assert!(grey_italic(buffer, "Read the README first.…"));
 }
 
@@ -332,11 +345,11 @@ fn ctrl_o_shows_thinking_in_full() {
     assert!(
         conversation[at + 1 + body.len()..]
             .iter()
-            .any(|row| row == "• Done.")
+            .any(|row| row == "● Done.")
     );
 
     let buffer = screen.draw();
-    assert!(grey_upright(buffer, "✻ Thought"));
+    assert!(purple_upright(buffer, "✻ Thought"));
     assert!(grey_italic(buffer, "Read the README first."));
     assert!(grey_italic(buffer, "check the install steps"));
     let bar = cells_of(buffer, "┊")[0];
@@ -437,9 +450,9 @@ fn ctrl_o_keeps_the_top_item_in_place() {
         rows[rows.len() - 2].clone()
     };
     assert_eq!(screen.ctrl_o(), None);
-    assert_eq!(latest(&mut screen), "• line 40");
+    assert_eq!(latest(&mut screen), "● line 40");
     assert_eq!(screen.ctrl_o(), None);
-    assert_eq!(latest(&mut screen), "• line 40");
+    assert_eq!(latest(&mut screen), "● line 40");
 
     // Scrolled back to a message after the long items.
     for _ in 0..5 {
@@ -450,7 +463,7 @@ fn ctrl_o_keeps_the_top_item_in_place() {
     let conversation = screen.conversation();
     assert_eq!(conversation[0], "› do it");
     let top = conversation[1].clone();
-    assert!(top.starts_with("• line "), "{top:?}");
+    assert!(top.starts_with("● line "), "{top:?}");
     for _ in 0..2 {
         assert_eq!(screen.ctrl_o(), None);
         let conversation = screen.conversation();

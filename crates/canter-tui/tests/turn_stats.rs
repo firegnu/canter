@@ -467,7 +467,7 @@ fn the_status_line_stands_apart_with_the_plan_and_tip_under_it() {
     let at = screen.status_at();
     let rows = screen.rows();
     assert_eq!(rows[at - 1], "", "{rows:#?}");
-    assert_eq!(rows[at - 2], "• Working on it.", "{rows:#?}");
+    assert_eq!(rows[at - 2], "● Working on it.", "{rows:#?}");
     assert!(rows[at + 1].starts_with("   ⎿ Tip: "), "{rows:#?}");
 
     screen.plan(json!([
