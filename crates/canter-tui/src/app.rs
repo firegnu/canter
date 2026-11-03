@@ -3111,7 +3111,7 @@ impl App {
             ));
         } else if item.id().is_some() && item.id() == self.foreground_command() {
             rows.extend(wrap_rows(
-                &cells::notice("    ", "ctrl+b to run in background", theme::secondary()),
+                &cells::notice("    ", "Ctrl+B to run in background", theme::secondary()),
                 width,
             ));
         }
@@ -4587,7 +4587,20 @@ impl App {
         };
         let room = room - usize::from(tip.is_some());
         hung.extend(tip);
-        // The blank row goes next.
+        // A running command gets its own row above the status line; the
+        // blank row goes before it when rows run short, and without it the
+        // command goes back onto the status line.
+        let command = match self.doing() {
+            Some((_, Some(command))) if working && room > 2 => Some(Line::from(truncate(
+                vec![Span::styled(
+                    format!("   Running {command}"),
+                    theme::secondary(),
+                )],
+                usize::from(width),
+            ))),
+            _ => None,
+        };
+        let room = room - usize::from(command.is_some());
         let gap = working && room > 2;
         let room = room - usize::from(gap);
         // While the button is down the view stays where it is.
@@ -4634,12 +4647,13 @@ impl App {
             width,
             text: self.input.text().to_owned(),
             // Under the header and the conversation: the hint, the blank
-            // row, the status line, the rows hung under it, plan, list and
-            // the box's top border.
+            // row, the command row, the status line, the rows hung under it,
+            // plan, list and the box's top border.
             top: header_rows
                 + area
                 + usize::from(hint.is_some())
                 + usize::from(gap)
+                + usize::from(command.is_some())
                 + 1
                 + hung.len()
                 + plan.len()
@@ -4648,10 +4662,15 @@ impl App {
             rows: input_rows,
         });
         // Under the header and the conversation: the hint, the blank row,
-        // the status line and the rows hung under it; the list starts with
-        // its title.
-        let background_top =
-            header_rows + area + usize::from(hint.is_some()) + usize::from(gap) + 1 + hung.len();
+        // the command row, the status line and the rows hung under it; the
+        // list starts with its title.
+        let background_top = header_rows
+            + area
+            + usize::from(hint.is_some())
+            + usize::from(gap)
+            + usize::from(command.is_some())
+            + 1
+            + hung.len();
         self.drawing.background = DrawnBackground {
             row: background_row.then_some(background_top),
             open: background_open,
@@ -4842,10 +4861,11 @@ impl App {
                         && matches!(bottom, Bottom::Input { .. })
                         && self.drawing.turn.is_some()
                         && self.steerable();
-                    self.status_line(now_ms, width, steer)
+                    self.status_line(now_ms, width, steer, command.is_some())
                 }
             },
             gap,
+            command,
             hung,
             list,
             bottom,
@@ -5689,9 +5709,16 @@ impl App {
 
     /// What is going on; at the end, while details are shown, how to fold
     /// them. While working, when the window is too narrow, a running command
-    /// is cut first; then the Ctrl+O hint is left out.
-    fn status_line(&self, now_ms: i64, width: u16, steer: bool) -> Line<'static> {
-        const BACKGROUND: &str = " · ctrl+b to run in background";
+    /// is cut first; then the Ctrl+O hint is left out. With `command_above`
+    /// the command has its own row and this line says `Working…`.
+    fn status_line(
+        &self,
+        now_ms: i64,
+        width: u16,
+        steer: bool,
+        command_above: bool,
+    ) -> Line<'static> {
+        const BACKGROUND: &str = " · Ctrl+B to run in background";
         let width = usize::from(width);
         let foreground = self.foreground_command().is_some();
         let fold = if foreground {
@@ -5702,7 +5729,7 @@ impl App {
         let room = width
             .saturating_sub(if self.details { str_width(fold) } else { 0 })
             .saturating_sub(if foreground { str_width(BACKGROUND) } else { 0 });
-        let (mut line, doing) = self.activity(now_ms, room, steer);
+        let (mut line, doing) = self.activity(now_ms, room, steer, command_above);
         if foreground {
             line.spans = truncate(line.spans, width.saturating_sub(str_width(BACKGROUND)));
             line.spans
@@ -5801,8 +5828,15 @@ impl App {
     }
 
     /// The status line without the Ctrl+O hint, a long command cut to fit
-    /// `room` columns; and whether it says what the turn is doing.
-    fn activity(&self, now_ms: i64, room: usize, steer: bool) -> (Line<'static>, bool) {
+    /// `room` columns, or left to its own row with `command_above`; and
+    /// whether it says what the turn is doing.
+    fn activity(
+        &self,
+        now_ms: i64,
+        room: usize,
+        steer: bool,
+        command_above: bool,
+    ) -> (Line<'static>, bool) {
         if self.shell_wait
             && self.input.full_text().trim_start().starts_with('!')
             && (self.snapshot.status != SessionStatus::Idle
@@ -5843,7 +5877,10 @@ impl App {
             SessionStatus::Working => {
                 let frame = SPINNER[(now_ms.max(0) / 80) as usize % SPINNER.len()];
                 let spinner = format!(" {frame} ");
-                let (verb, command) = self.doing().unwrap_or(("Working…", None));
+                let (verb, command) = match self.doing() {
+                    Some((_, Some(_))) if command_above => ("Working…", None),
+                    doing => doing.unwrap_or(("Working…", None)),
+                };
                 let mut numbers = format!(" · {elapsed}");
                 let keys = format!(" · Esc to interrupt{steer}");
                 // The turn's output tokens go first when the window is too
@@ -6178,6 +6215,9 @@ pub(crate) struct View {
     status: Line<'static>,
     /// While working: a blank row above the status line.
     gap: bool,
+    /// While a command runs: the command, on its own row above the status
+    /// line.
+    command: Option<Line<'static>>,
     /// While working, under the status line: the plan's steps and the tip.
     hung: Vec<Line<'static>>,
     /// The command list or a choice, right above the input box.
@@ -6210,13 +6250,14 @@ impl Bottom {
 }
 
 impl View {
-    /// Rows under the conversation: the hint, the blank row, the status line,
-    /// the rows hung under it, the plan rows, the list, the box and the info
-    /// rows.
+    /// Rows under the conversation: the hint, the blank row, the command
+    /// row, the status line, the rows hung under it, the plan rows, the
+    /// list, the box and the info rows.
     fn below(&self) -> u16 {
         u16::from(self.hint.is_some())
             + 1
             + u16::from(self.gap)
+            + u16::from(self.command.is_some())
             + self.hung.len() as u16
             + self.plan.len() as u16
             + self.list.len() as u16
@@ -6249,6 +6290,9 @@ impl View {
         }
         if self.gap {
             row(1);
+        }
+        if let Some(command) = self.command {
+            frame.render_widget(Paragraph::new(command), row(1));
         }
         frame.render_widget(Paragraph::new(self.status), row(1));
         let hung_height = self.hung.len() as u16;

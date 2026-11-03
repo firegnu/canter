@@ -110,8 +110,8 @@ impl Screen {
         self.ui.backend().buffer()
     }
 
-    /// The conversation's rows, above the status line, without the prompt
-    /// and the blank rows.
+    /// The conversation's rows, above the status line, without the prompt,
+    /// the blank rows and the running command's own row.
     fn rows(&mut self) -> Vec<String> {
         let buffer = self.draw();
         let rows: Vec<String> = (0..buffer.area.height)
@@ -119,7 +119,9 @@ impl Screen {
             .collect();
         rows[..rows.len() - BELOW]
             .iter()
-            .filter(|row| !row.is_empty() && !row.starts_with('›'))
+            .filter(|row| {
+                !row.is_empty() && !row.starts_with('›') && !row.starts_with("   Running ")
+            })
             .cloned()
             .collect()
     }
@@ -230,7 +232,7 @@ fn the_answer_and_tool_cards_start_with_a_bullet() {
             "• Ran cargo build",
             "• Ran cargo test  exit 1",
             "• Running sleep 9",
-            "      ctrl+b to run in background",
+            "      Ctrl+B to run in background",
         ]
     );
     let buffer = screen.draw();
@@ -494,7 +496,7 @@ fn a_command_is_run_then_running_then_ran() {
             "    out 5",
             "    out 6",
             "    out 7",
-            "      ctrl+b to run in background",
+            "      Ctrl+B to run in background",
         ]
     );
 

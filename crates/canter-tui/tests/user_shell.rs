@@ -144,7 +144,7 @@ fn ctrl_b_uses_the_shown_command_and_respects_search_and_popups() {
         let mut ui = foreground(source);
         let shown = text(&mut ui);
         assert_eq!(
-            shown.matches("ctrl+b to run in background").count(),
+            shown.matches("Ctrl+B to run in background").count(),
             2,
             "{shown}"
         );

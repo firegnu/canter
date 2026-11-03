@@ -360,7 +360,8 @@ fn with_16_colours_the_verb_shimmers_in_two_steps() {
     assert_eq!(bold(&cells), "Thinking…");
 }
 
-/// Only the verb shimmers: a running command after it stays as it was.
+/// Only the verb shimmers: a running command, on its own row above the
+/// status line, stays as it was.
 #[test]
 fn a_running_command_does_not_shimmer() {
     for theme in [DARK, SIXTEEN] {
@@ -370,18 +371,22 @@ fn a_running_command_does_not_shimmer() {
             "type": "commandExecution", "id": "c1", "command": "cargo test", "cwd": "/work",
             "status": "inProgress", "aggregatedOutput": "", "exitCode": null, "durationMs": null,
         }));
+        let command = |screen: &Screen| {
+            let y = screen.status_y() - 1;
+            assert_eq!(row(screen.buffer(), y).trim(), "Running cargo test");
+            (0..WIDTH)
+                .map(|x| screen.buffer()[(x, y)].clone())
+                .collect::<Vec<_>>()
+        };
         screen.draw_at(NOW + 1000);
         assert!(
-            !bold(&screen.status_cells("Running")).is_empty(),
+            !bold(&screen.status_cells("Working…")).is_empty(),
             "{theme:?}"
         );
-        for cell in screen.status_cells(" cargo test") {
-            assert_eq!(
-                (cell.fg, cell.modifier),
-                (Color::Reset, Modifier::empty()),
-                "{theme:?}"
-            );
-        }
+        let before = command(&screen);
+        screen.draw_at(NOW + 1500);
+        assert_eq!(command(&screen), before, "{theme:?}");
+        assert!(bold(&before).is_empty(), "{theme:?}");
     }
 }
 
