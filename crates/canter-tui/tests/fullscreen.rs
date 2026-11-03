@@ -298,7 +298,7 @@ fn a_long_conversation_follows_the_latest_output() {
     let shown = screen_text(&screen.lines());
     assert_eq!(screen.above_status(), "  line 40", "{shown}");
     assert!(
-        screen.lines()[usize::from(HEIGHT) - BELOW].starts_with(" ⠋ Working"),
+        screen.lines()[usize::from(HEIGHT) - BELOW].starts_with(" ⠋ Galloping"),
         "{shown}"
     );
     let area = usize::from(HEIGHT) - screen.below();

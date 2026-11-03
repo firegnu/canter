@@ -3191,7 +3191,7 @@ async fn slash_compact_during_an_answer_shows_the_server_error() {
         a.screen()
             .lines()
             .any(|line| line.starts_with("   Running sleep 5"))
-            && a.status().contains("Working…")
+            && a.status().contains("Ctrl+B to run in background")
     })
     .await;
 
@@ -3546,7 +3546,7 @@ async fn btw_is_private_streams_and_escape_cancels_it_before_the_main_tool() {
         a.screen()
             .lines()
             .any(|line| line.starts_with("   Running sleep 60"))
-            && a.status().contains("Working…")
+            && a.status().contains("Ctrl+B to run in background")
     })
     .await;
     let id = world.only_session().await;

@@ -622,9 +622,9 @@ fn the_status_line_says_what_was_copied_for_two_seconds() {
     assert_eq!(screen.status(), "✓ Copied 2 lines · 13 chars");
     screen.now += 200;
     screen.draw();
-    assert!(before.contains("Working… · 0s"), "{before}");
+    assert!(before.contains("Galloping… · 0s"), "{before}");
     assert!(
-        screen.status().contains("Working… · 2s") && !screen.status().contains("Copied"),
+        screen.status().contains("Galloping… · 2s") && !screen.status().contains("Copied"),
         "{}",
         screen.text()
     );

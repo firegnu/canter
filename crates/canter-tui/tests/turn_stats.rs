@@ -230,11 +230,11 @@ fn the_working_verb_stands_out_and_the_time_is_plain() {
         screen.wait(284_000);
         let status = screen.status();
         assert!(
-            status.contains("Working… · 4m 44s · Esc to interrupt"),
+            status.contains("Galloping… · 4m 44s · Esc to interrupt"),
             "{theme:?}: {status:?}"
         );
         let buffer = screen.draw().clone();
-        let verb = letters(&cells_of(&buffer, "Working…"));
+        let verb = letters(&cells_of(&buffer, "Galloping…"));
         let colour = verb[0].fg;
         assert_ne!(colour, Color::Reset, "{theme:?}");
         for cell in &verb {
@@ -249,7 +249,7 @@ fn the_working_verb_stands_out_and_the_time_is_plain() {
             assert_eq!(cell.fg, colour, "{theme:?}: the light is off the verb");
         }
         // The spinner, right before the verb.
-        let at = status.find("Working").unwrap();
+        let at = status.find("Galloping").unwrap();
         let spinner = status[..at].trim().to_owned();
         let spinner = letters(&cells_of(&buffer, &spinner));
         assert_eq!(spinner[0].fg, colour, "{theme:?}");
@@ -271,7 +271,7 @@ fn the_working_verb_stands_out_and_the_time_is_plain() {
         // A second on, the light is on the verb: brighter there.
         screen.wait(1_000);
         let buffer = screen.draw().clone();
-        let verb = letters(&cells_of(&buffer, "Working…"));
+        let verb = letters(&cells_of(&buffer, "Galloping…"));
         assert!(verb.iter().any(|cell| cell.fg != colour), "{theme:?}");
         assert!(
             verb.iter()
@@ -294,7 +294,7 @@ fn without_colours_the_verb_is_only_bold() {
     screen.start_turn("t1");
     screen.wait(1_000);
     let buffer = screen.draw().clone();
-    for cell in letters(&cells_of(&buffer, "Working…")) {
+    for cell in letters(&cells_of(&buffer, "Galloping…")) {
         assert!(cell.modifier.contains(Modifier::BOLD), "{cell:?}");
         assert_eq!(cell.fg, Color::Reset, "{cell:?}");
     }
@@ -303,38 +303,51 @@ fn without_colours_the_verb_is_only_bold() {
     }
 }
 
-/// The turn's output tokens so far show after its time once a request of
-/// this session is done, each request adding to them; a `/btw` request does
-/// not. When the window is too narrow they go before the time does.
+/// The turn's tokens so far, sent and received, show after its time once a
+/// request of this session is done, each request adding to them; a `/btw`
+/// request does not. When the window is too narrow the sent ones go first,
+/// then the received ones, before the time does.
 #[test]
-fn the_status_line_counts_the_turns_output_tokens() {
+fn the_status_line_counts_the_turns_tokens() {
     let mut screen = Screen::new(100);
     screen.start_turn("t1");
     screen.wait(2_000);
     let status = screen.status();
     assert!(
-        status.contains("Working… · 2s · Esc to interrupt"),
+        status.contains("Galloping… · 2s · Esc to interrupt"),
         "no usage yet: {status:?}"
     );
     screen.used("session.usage", counts(30_000, 20_000, 26_200));
     let status = screen.status();
     assert!(
-        status.contains("Working… · 2s · ↓ 26.2k tokens · Esc to interrupt"),
+        status.contains("Galloping… · 2s · ↑ 30k · ↓ 26.2k tokens · Esc to interrupt"),
         "{status:?}"
     );
     screen.used("session.btwUsage", counts(5_000, 0, 4_000));
     screen.used("session.usage", counts(31_000, 30_000, 1_000));
     let status = screen.status();
-    assert!(status.contains("· 2s · ↓ 27.2k tokens ·"), "{status:?}");
+    assert!(
+        status.contains("· 2s · ↑ 61k · ↓ 27.2k tokens ·"),
+        "{status:?}"
+    );
 
     let prefix = status.find(" · 2s").unwrap() + " · 2s".len();
+    let status_row = |screen: &mut Screen| {
+        let rows = screen.rows();
+        rows.iter()
+            .find(|row| row.contains("Galloping…"))
+            .unwrap_or_else(|| panic!("{}", rows.join("\n")))
+            .clone()
+    };
+    let width = (status[..prefix].width() + " · ↓ 27.2k tokens".width()) as u16;
+    screen.ui.backend_mut().resize(width, HEIGHT);
+    let status = status_row(&mut screen);
+    assert!(status.contains("· 2s · ↓ 27.2k tokens"), "{status:?}");
+    assert!(!status.contains('↑'), "{status:?}");
+
     let width = status[..prefix].width() as u16 + 4;
     screen.ui.backend_mut().resize(width, HEIGHT);
-    let rows = screen.rows();
-    let status = rows
-        .iter()
-        .find(|row| row.contains("Working…"))
-        .unwrap_or_else(|| panic!("{}", rows.join("\n")));
+    let status = status_row(&mut screen);
     assert!(status.contains("· 2s"), "{status:?}");
     assert!(!status.contains('↓'), "{status:?}");
 }
