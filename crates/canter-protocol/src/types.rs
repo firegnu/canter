@@ -1151,6 +1151,20 @@ pub struct TokenUsageBreakdown {
     pub total_tokens: u64,
 }
 
+impl TokenUsageBreakdown {
+    pub fn add(&mut self, other: &Self) {
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.cached_input_tokens = self
+            .cached_input_tokens
+            .saturating_add(other.cached_input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.reasoning_output_tokens = self
+            .reasoning_output_tokens
+            .saturating_add(other.reasoning_output_tokens);
+        self.total_tokens = self.total_tokens.saturating_add(other.total_tokens);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorInfo {

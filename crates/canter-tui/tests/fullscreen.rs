@@ -3,7 +3,7 @@
 //! to the bottom, scrolling back with the mouse wheel and PgUp/PgDn, and
 //! rewrapping when the window changes size.
 
-use canter_protocol::{Event, SessionSnapshot};
+use canter_protocol::{Event, SessionSnapshot, SessionStatus};
 use canter_tui::{Action, App, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
@@ -16,7 +16,8 @@ const NOW: i64 = 0;
 const SESSION: &str = "s1";
 const WIDTH: u16 = 60;
 const HEIGHT: u16 = 20;
-/// Rows below the conversation: status line, input box (3) and info rows (2).
+/// Rows below the conversation: status line, input box (3) and info rows (2);
+/// while working one more, the blank row above the status line.
 const BELOW: usize = 6;
 /// The hint while scrolled back, with nothing new below and with new output.
 const JUMP: &str = " ↓ Jump to bottom · click or End";
@@ -148,17 +149,28 @@ impl Screen {
     /// the hint when it shows.
     fn conversation(&self) -> Vec<String> {
         let lines = self.lines();
-        let mut end = lines.len() - BELOW;
+        let mut end = lines.len() - self.below();
         if lines[end - 1].starts_with(" ↓ ") {
             end -= 1;
         }
         lines[..end].to_vec()
     }
 
-    /// The row just above the status line.
+    /// Rows below the conversation and the hint.
+    fn below(&self) -> usize {
+        BELOW + usize::from(self.ui.app().snapshot().status == SessionStatus::Working)
+    }
+
+    /// The hint row while scrolled back.
+    fn hint_row(&self) -> u16 {
+        HEIGHT - self.below() as u16 - 1
+    }
+
+    /// The row just above the status line, and above the blank row while
+    /// working.
     fn above_status(&self) -> String {
         let lines = self.lines();
-        lines[lines.len() - BELOW - 1].clone()
+        lines[lines.len() - self.below() - 1].clone()
     }
 }
 
@@ -289,7 +301,7 @@ fn a_long_conversation_follows_the_latest_output() {
         screen.lines()[usize::from(HEIGHT) - BELOW].starts_with(" ⠋ Working"),
         "{shown}"
     );
-    let area = usize::from(HEIGHT) - BELOW;
+    let area = usize::from(HEIGHT) - screen.below();
     assert_eq!(
         screen.lines()[0],
         format!("  line {}", 40 - area + 1),
@@ -308,7 +320,7 @@ fn a_long_conversation_follows_the_latest_output() {
 #[test]
 fn the_wheel_scrolls_back_and_new_output_does_not_pull_the_view_down() {
     let mut screen = Screen::long_turn(40);
-    let area = usize::from(HEIGHT) - BELOW;
+    let area = usize::from(HEIGHT) - screen.below();
     screen.wheel(MouseEventKind::ScrollUp);
     screen.draw();
     // The prompt, scrolled out of view, shows on the top row.
@@ -355,7 +367,7 @@ fn the_wheel_scrolls_back_and_new_output_does_not_pull_the_view_down() {
 #[test]
 fn page_up_then_sending_a_message_follows_again() {
     let mut screen = Screen::long_turn(40);
-    let area = usize::from(HEIGHT) - BELOW;
+    let area = usize::from(HEIGHT) - screen.below();
     assert_eq!(screen.key(KeyCode::PageUp), None);
     screen.draw();
     // The prompt, scrolled out of view, shows on the top row.
@@ -491,7 +503,7 @@ fn clicking_the_hint_jumps_to_the_bottom_and_follows() {
     screen.draw();
     assert_eq!(screen.above_status(), NEW);
 
-    screen.click(hint_row());
+    screen.click(screen.hint_row());
     screen.draw();
     let shown = screen_text(&screen.lines());
     assert_eq!(screen.above_status(), "• line 41", "{shown}");
@@ -542,9 +554,4 @@ fn end_with_words_typed_moves_the_cursor_only() {
         shown.contains("│ › abc"),
         "the cursor went to the end:\n{shown}"
     );
-}
-
-/// The hint row while scrolled back.
-fn hint_row() -> u16 {
-    HEIGHT - BELOW as u16 - 1
 }

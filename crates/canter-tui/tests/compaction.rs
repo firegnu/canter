@@ -166,7 +166,17 @@ fn bold(cells: &[Cell]) -> String {
         .collect()
 }
 
-/// While compacting, the status line says `Compacting context`, the light
+/// The letters the working verb's light is on: brighter than its orange.
+fn lit(cells: &[Cell]) -> String {
+    let orange = theme::working().fg.unwrap();
+    cells
+        .iter()
+        .filter(|cell| cell.fg != orange)
+        .map(Cell::symbol)
+        .collect()
+}
+
+/// While compacting, the status line says `Compacting context…`, the light
 /// sweeping both words like it sweeps `Thinking`; the conversation says
 /// `Compacting context…`, the same at any time, and not that it compacted.
 #[test]
@@ -177,7 +187,7 @@ fn while_compacting_both_lines_say_so_and_only_the_status_line_shimmers() {
     assert!(
         screen
             .status()
-            .ends_with("Compacting context · 1s · Esc to interrupt"),
+            .ends_with("Compacting context… · 1s · Esc to interrupt"),
         "{}",
         screen.text()
     );
@@ -191,11 +201,14 @@ fn while_compacting_both_lines_say_so_and_only_the_status_line_shimmers() {
     // The light is in the middle of the verb: on the end of one word and
     // the start of the other.
     let status = HEIGHT - BELOW;
-    let lit = bold(&screen.cells(status, "Compacting context"));
-    assert!(lit.contains('g') && lit.contains('c'), "{lit:?}");
+    let lighted = lit(&screen.cells(status, "Compacting context"));
+    assert!(
+        lighted.contains('g') && lighted.contains('c'),
+        "{lighted:?}"
+    );
     // Away from the light, none of it is.
     screen.draw_at(NOW);
-    assert_eq!(bold(&screen.cells(status, "Compacting context")), "");
+    assert_eq!(lit(&screen.cells(status, "Compacting context")), "");
 
     let y = screen.row_of(COMPACTING.trim());
     let before = screen.cells(y, COMPACTING.trim());
@@ -220,7 +233,7 @@ fn once_compacted_the_conversation_says_so_and_the_turn_goes_on() {
     assert!(
         screen
             .status()
-            .ends_with("Thinking · 1s · Esc to interrupt"),
+            .ends_with("Thinking… · 1s · Esc to interrupt"),
         "{}",
         screen.text()
     );

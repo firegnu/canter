@@ -163,11 +163,13 @@ async fn managed_terminal_process() {
     terminal
         .wait_until("second session", |_| published(&binding) != first)
         .await;
+    // Written whole before it shows up: the parent reads it as soon as it exists.
     fs::write(
-        root.join("ready.json"),
+        root.join("ready.json.tmp"),
         serde_json::to_vec(&json!([first, published(&binding)])).unwrap(),
     )
     .unwrap();
+    fs::rename(root.join("ready.json.tmp"), root.join("ready.json")).unwrap();
     let _ = terminal.task.await.unwrap().unwrap();
 }
 

@@ -272,7 +272,14 @@ fn notices_a_turn_end_and_queued_messages_are_blocks_set_apart() {
     screen.event(json!({ "type": "session.status", "status": "idle" }));
     assert_eq!(
         outline(&screen.conversation()),
-        ["› do it", "", "• Stopping.", "", "■ Turn interrupted"]
+        [
+            "› do it",
+            "",
+            "• Stopping.",
+            "",
+            "■ Turn interrupted",
+            "Worked for <1s"
+        ]
     );
 }
 
@@ -314,28 +321,28 @@ fn blank_rows_stay_put_when_a_part_finishes() {
 #[test]
 fn the_status_line_names_what_the_turn_is_doing() {
     let mut screen = Screen::new(WIDTH, 20);
-    assert_eq!(screen.status(), " ⠋ Working · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Working… · 0s · Esc to interrupt");
 
     screen.started(json!({ "type": "reasoning", "id": "r1", "summary": [], "content": [] }));
-    assert_eq!(screen.status(), " ⠋ Thinking · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Thinking… · 0s · Esc to interrupt");
 
     screen.started(json!({ "type": "agentMessage", "id": "m1", "text": "Hi" }));
-    assert_eq!(screen.status(), " ⠋ Writing · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Writing… · 0s · Esc to interrupt");
 
     screen.read("f1", "a.txt", "inProgress");
-    assert_eq!(screen.status(), " ⠋ Reading · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Reading… · 0s · Esc to interrupt");
     screen.read("f1", "a.txt", "completed");
-    assert_eq!(screen.status(), " ⠋ Working · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Working… · 0s · Esc to interrupt");
 
     screen.edit("e1", "inProgress");
-    assert_eq!(screen.status(), " ⠋ Editing · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Editing… · 0s · Esc to interrupt");
     screen.edit("e1", "completed");
 
     screen.started(json!({
         "type": "mcpToolCall", "id": "p1", "server": "github", "tool": "search",
         "arguments": {}, "result": "", "status": "inProgress",
     }));
-    assert_eq!(screen.status(), " ⠋ Calling · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Calling… · 0s · Esc to interrupt");
     screen.completed(json!({
         "type": "mcpToolCall", "id": "p1", "server": "github", "tool": "search",
         "arguments": {}, "result": "ok", "status": "completed",
@@ -345,7 +352,7 @@ fn the_status_line_names_what_the_turn_is_doing() {
         "type": "webFetch", "id": "w1", "url": "https://example.com/",
         "result": "", "status": "inProgress",
     }));
-    assert_eq!(screen.status(), " ⠋ Fetching · 0s · Esc to interrupt");
+    assert_eq!(screen.status(), " ⠋ Fetching… · 0s · Esc to interrupt");
     screen.completed(json!({
         "type": "webFetch", "id": "w1", "url": "https://example.com/",
         "result": "ok", "status": "completed",

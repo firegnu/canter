@@ -90,10 +90,10 @@ impl Screen {
             .collect()
     }
 
-    /// The tip on screen, checked to be right under the status line.
+    /// The tip on screen, checked to hang right under the status line.
     fn tip(&self) -> Option<String> {
         let rows = self.rows();
-        let at = rows.iter().position(|row| row.starts_with(" Tip: "))?;
+        let at = rows.iter().position(|row| row.starts_with("   ⎿ Tip: "))?;
         assert!(
             rows[at - 1].contains("Esc to interrupt"),
             "not under the status line:\n{}",

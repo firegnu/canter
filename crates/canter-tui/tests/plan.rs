@@ -81,7 +81,7 @@ fn plan_cards_pin_unfinished_steps_and_collapse_after_completion() {
             .any(|line| line == "  ● Updated Plan · 1/3 complete"),
         "{lines:#?}"
     );
-    assert_eq!(screen.pinned(), ["  □ Implement", "  □ Verify"]);
+    assert_eq!(screen.pinned(), ["   ⎿ □ Implement", "     □ Verify"]);
     let read = lines
         .iter()
         .position(|line| line.contains("✔ Read"))
@@ -122,11 +122,11 @@ fn pinned_plan_uses_at_most_five_rows_with_active_first_and_overflow_count() {
     assert_eq!(
         screen.pinned(),
         [
-            "  □ Step 7",
-            "  □ Step 1",
-            "  □ Step 2",
-            "  □ Step 3",
-            "  … and 3 more"
+            "   ⎿ □ Step 7",
+            "     □ Step 1",
+            "     □ Step 2",
+            "     □ Step 3",
+            "     … and 3 more"
         ]
     );
     screen.ui.backend_mut().resize(20, 12);
@@ -140,7 +140,7 @@ fn pinned_plan_uses_at_most_five_rows_with_active_first_and_overflow_count() {
         "{lines:#?}"
     );
     let input = lines.iter().position(|line| line.starts_with('╭')).unwrap();
-    assert!(lines[input - 1].starts_with("  □ "), "{lines:#?}");
+    assert!(lines[input - 1].starts_with("   ⎿ □ "), "{lines:#?}");
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn a_single_plan_row_keeps_the_active_step_and_overflow_count() {
     ]));
     let pinned = screen.pinned();
     assert_eq!(pinned.len(), 1, "{pinned:#?}");
-    assert!(pinned[0].starts_with("  □ Implement"), "{pinned:#?}");
+    assert!(pinned[0].starts_with("   ⎿ □ Implement"), "{pinned:#?}");
     assert!(pinned[0].ends_with(" (+2 more)"), "{pinned:#?}");
 }
 
@@ -329,7 +329,7 @@ fn later_updates_in_a_turn_are_one_row_each() {
     );
     assert_eq!(
         screen.pinned(),
-        ["  □ Verify"],
+        ["   ⎿ □ Verify"],
         "the pinned plan stays whole"
     );
     let lines = screen.lines();

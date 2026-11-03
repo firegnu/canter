@@ -403,6 +403,12 @@ data 为单行 JSON，内容里的换行保持 JSON 转义；帧末两个换行�
 因此生产者可以发送空 items，不必重复整轮输出。项目以 `item.*` 为准，
 `item.completed` 携带完整最终项目并替换同 id 的项目。
 
+进行中那一轮的用量（P2-194）也由归并填，事件不变：`session.usage` 到达时，若有进行中的轮，
+把它的 `last` 加进这一轮 `usage.total`（没有就从 0 起），其余字段照这条事件，`cost` 不填；
+和服务端给这一轮记的一样，只有这个会话自己的请求（`session.btwUsage` 不加，子 agent 的用量在子会话里）。
+`turn.completed` 照旧用服务端给的整轮用量（含 cost）替换。客户端据此在干活时显示这一轮到目前的 token；
+旧快照里进行中的轮没有用量，从读进来以后的请求加起。
+
 用时（P2-43）由归并按事件自带的 `timestamp` 填，生产者不填，事件和存盘不变：
 `Turn.startedAt`、`completedAt` 是 `turn.started`、`turn.completed` 的 Unix 秒；
 `Turn.durationMs` 在 `turn.started` 置 0，之后每归并一条事件（不论种类）

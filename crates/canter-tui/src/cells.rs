@@ -531,37 +531,56 @@ pub(crate) fn item(
     rows
 }
 
-/// What a turn leaves behind once it has ended: `Worked for 12s · 11:13`
-/// (when it ended, in local time, if known), or why it did not end
-/// normally, with ` · 12s` when its time is known.
-fn turn_footer(turn: &Turn, error_shown: bool) -> Option<LogicalLine> {
-    let time = turn.duration_ms.map(took);
-    let mut line = match turn.status {
-        TurnStatus::Completed => {
-            let mut text = format!("Worked for {}", time?);
-            if let Some(ended) = turn
-                .completed_at
-                .and_then(|secs| chrono::Local.timestamp_opt(secs, 0).single())
-            {
-                text += &ended.format(" · %H:%M").to_string();
-            }
-            return Some(notice("", &text, theme::secondary()));
+/// What a turn leaves behind once it has ended: why it did not end
+/// normally, if so; then, when its time is known,
+/// `Worked for 3m 05s · ↑ 1.27M (98% cached) · ↓ 26.2k · 11:13`: the input
+/// tokens of all its requests and how many of them were cached, its output
+/// tokens (when its usage is known), and when it ended, in local time (if
+/// known).
+fn turn_footer(turn: &Turn, error_shown: bool) -> Vec<LogicalLine> {
+    let mut lines = Vec::new();
+    match turn.status {
+        TurnStatus::Completed => {}
+        TurnStatus::Interrupted => {
+            lines.push(notice("■ ", "Turn interrupted", theme::secondary()));
         }
-        TurnStatus::Interrupted => notice("■ ", "Turn interrupted", theme::secondary()),
         TurnStatus::Failed if !error_shown => {
             let message = turn
                 .error
                 .as_ref()
                 .map_or("no reason given", |error| error.message.as_str());
-            notice("✗ ", &format!("Turn failed: {message}"), theme::failure())
+            lines.push(notice(
+                "✗ ",
+                &format!("Turn failed: {message}"),
+                theme::failure(),
+            ));
         }
-        _ => return None,
-    };
-    if let Some(time) = time {
-        line.body
-            .push(Span::styled(format!(" · {time}"), theme::secondary()));
+        TurnStatus::Failed => {}
+        _ => return lines,
     }
-    Some(line)
+    let Some(ms) = turn.duration_ms else {
+        return lines;
+    };
+    let mut text = format!("Worked for {}", took(ms));
+    if let Some(usage) = &turn.usage {
+        let total = &usage.total;
+        text += &format!(" · ↑ {}", crate::app::token_count(total.input_tokens));
+        if total.input_tokens > 0 {
+            let cached = (u128::from(total.cached_input_tokens) * 100
+                + u128::from(total.input_tokens) / 2)
+                / u128::from(total.input_tokens);
+            text += &format!(" ({cached}% cached)");
+        }
+        text += &format!(" · ↓ {}", crate::app::token_count(total.output_tokens));
+    }
+    if let Some(ended) = turn
+        .completed_at
+        .and_then(|secs| chrono::Local.timestamp_opt(secs, 0).single())
+    {
+        text += &ended.format(" · %H:%M").to_string();
+    }
+    lines.push(notice("", &text, theme::secondary()));
+    lines
 }
 
 /// Files a turn's end lists at most; the rest are counted.
@@ -571,9 +590,9 @@ const CHANGED_FILES: usize = 8;
 /// changed in it ([`changed_files`]), then [`turn_footer`].
 pub(crate) fn turn_end(turn: &Turn, error_shown: bool, cwd: &str, width: u16) -> Vec<Row> {
     let mut rows = changed_files(turn, cwd, width);
-    rows.extend(
-        turn_footer(turn, error_shown).map_or_else(Vec::new, |footer| wrap_rows(&footer, width)),
-    );
+    for footer in turn_footer(turn, error_shown) {
+        rows.extend(wrap_rows(&footer, width));
+    }
     rows
 }
 

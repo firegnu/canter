@@ -53,11 +53,11 @@ impl Tips {
         self.next = (self.next + 1) % TIPS.len();
     }
 
-    /// The row for `turn`: only one that started here, and only when the
-    /// whole tip fits in `width` columns.
-    pub(crate) fn line(&self, turn: &str, width: u16) -> Option<Line<'static>> {
+    /// The row for `turn`, after `lead`: only one that started here, and
+    /// only when the whole tip fits in `width` columns.
+    pub(crate) fn line(&self, turn: &str, width: u16, lead: &str) -> Option<Line<'static>> {
         let (id, tip) = self.turn.as_ref()?;
-        let text = format!(" Tip: {tip}");
+        let text = format!("{lead}Tip: {tip}");
         (id == turn && str_width(&text) <= usize::from(width))
             .then(|| Line::from(Span::styled(text, theme::secondary())))
     }

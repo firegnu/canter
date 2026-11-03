@@ -136,9 +136,7 @@ impl Screen {
             .unwrap_or_else(|| panic!("no summary: {rows:#?}"));
         let end = rows[start..]
             .iter()
-            .position(|row| {
-                row.starts_with("  Worked") || row.starts_with("  ■") || row.starts_with("  ✗")
-            })
+            .position(|row| row.starts_with("  Worked"))
             .unwrap_or_else(|| panic!("no footer: {rows:#?}"));
         rows[start..=start + end]
             .iter()
@@ -366,7 +364,8 @@ fn interrupted_and_failed_turns_list_and_running_ones_do_not() {
         [
             "• Changed 1 file  +1 −1",
             "    a.rs  +1 −1",
-            "  ■ Turn interrupted · 2s",
+            "  ■ Turn interrupted",
+            "  Worked for 2s",
         ]
     );
     let folded = screen.summary();
@@ -382,7 +381,8 @@ fn interrupted_and_failed_turns_list_and_running_ones_do_not() {
         [
             "• Changed 1 file  +1",
             "    a.rs  +1",
-            "  ✗ Turn failed: no reason given · 2s",
+            "  ✗ Turn failed: no reason given",
+            "  Worked for 2s",
         ]
     );
 }

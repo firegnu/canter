@@ -1,6 +1,6 @@
 use crate::{
     ApprovalDecision, ApprovalResolution, Event, EventPayload, Item, ItemDelta, RequestKind,
-    SessionSnapshot, SessionStatus, TurnStatus,
+    SessionSnapshot, SessionStatus, TokenUsage, TurnStatus,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -371,8 +371,31 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
                 .pending_requests
                 .retain(|request| request.id != *request_id);
         }
-        EventPayload::SessionUsage { token_usage }
-        | EventPayload::SessionBtwUsage { token_usage } => {
+        EventPayload::SessionUsage { token_usage } => {
+            // The turn in progress adds up its own requests, as the server
+            // does for it, so clients can show them while it runs. Its cost
+            // is left out; `turn.completed` brings the server's usage.
+            if let Some(turn) = snapshot
+                .turns
+                .iter_mut()
+                .rev()
+                .find(|turn| turn.status == TurnStatus::InProgress)
+            {
+                let mut total = turn
+                    .usage
+                    .as_ref()
+                    .map(|usage| usage.total.clone())
+                    .unwrap_or_default();
+                total.add(&token_usage.last);
+                turn.usage = Some(TokenUsage {
+                    total,
+                    cost: None,
+                    ..token_usage.clone()
+                });
+            }
+            snapshot.token_usage = Some(token_usage.clone())
+        }
+        EventPayload::SessionBtwUsage { token_usage } => {
             snapshot.token_usage = Some(token_usage.clone())
         }
         EventPayload::Error { error, .. } => snapshot.error = Some(error.clone()),

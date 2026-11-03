@@ -420,7 +420,8 @@ fn ctrl_o_shows_long_output_and_diffs_in_full_and_folds_them_again() {
 /// Following the latest output, the view stays at the bottom.
 #[test]
 fn ctrl_o_keeps_the_top_item_in_place() {
-    let mut screen = Screen::new(20);
+    // The rows of a 20-row screen before the blank row over the status line.
+    let mut screen = Screen::new(21);
     screen.command("c1", "cargo test", &numbered(30, "out"), "completed");
     screen.thought("r1", &[], &[&numbered(10, "idea")]);
     for n in 1..=40 {
@@ -428,11 +429,17 @@ fn ctrl_o_keeps_the_top_item_in_place() {
     }
     screen.draw();
 
-    // Following: the latest output stays right above the status line.
+    // Following: the latest output stays right above the status line and
+    // the blank row over it.
+    let latest = |screen: &mut Screen| {
+        let rows = screen.conversation();
+        assert_eq!(rows[rows.len() - 1], "", "{rows:#?}");
+        rows[rows.len() - 2].clone()
+    };
     assert_eq!(screen.ctrl_o(), None);
-    assert_eq!(screen.conversation().last().unwrap(), "• line 40");
+    assert_eq!(latest(&mut screen), "• line 40");
     assert_eq!(screen.ctrl_o(), None);
-    assert_eq!(screen.conversation().last().unwrap(), "• line 40");
+    assert_eq!(latest(&mut screen), "• line 40");
 
     // Scrolled back to a message after the long items.
     for _ in 0..5 {
