@@ -205,7 +205,8 @@ fn a_block_without_or_with_an_unknown_language_stays_all_cyan() {
     ] {
         let mut screen = Screen::new(60);
         screen.say(text);
-        let colors = row_colors(screen.draw(), "cargo install");
+        // The code's row, without the `•` of an answer that starts with it.
+        let colors = text_colors(screen.draw(), 0, "cargo install --path crates/canter");
         assert!(
             colors.iter().all(|&c| c == Color::Cyan),
             "{text}: {colors:?}"

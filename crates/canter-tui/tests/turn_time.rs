@@ -3,6 +3,7 @@
 
 use canter_protocol::{Event, SessionSnapshot};
 use canter_tui::{App, Ui};
+use chrono::TimeZone;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, Cell};
@@ -177,8 +178,9 @@ fn after<'a>(conversation: &'a [String], text: &str) -> &'a str {
         .map_or("", String::as_str)
 }
 
-/// A turn that ended normally gets a grey `─ Worked for … ─` row after its
-/// last item, timed as the status line times a turn, `<1s` under a second.
+/// A turn that ended normally gets a grey `Worked for … · HH:MM` row after
+/// its last item, timed as the status line times a turn, `<1s` under a
+/// second, then the local time it ended.
 /// A turn still running has none: the status line counts.
 #[test]
 fn a_finished_turn_ends_with_how_long_it_worked() {
@@ -195,10 +197,10 @@ fn a_finished_turn_ends_with_how_long_it_worked() {
     let conversation = screen.conversation();
     assert_eq!(
         after(&conversation, "First answer."),
-        "  ─ Worked for 3m 05s ─",
+        format!("  Worked for 3m 05s · {}", clock(T0 + 185_400)),
         "{conversation:?}"
     );
-    assert!(grey(screen.draw(), "─ Worked for 3m 05s ─"));
+    assert!(grey(screen.draw(), "Worked for 3m 05s · "));
 
     screen.wait(1_000);
     screen.start_turn("t2");
@@ -213,12 +215,12 @@ fn a_finished_turn_ends_with_how_long_it_worked() {
     let conversation = screen.conversation();
     assert_eq!(
         after(&conversation, "Second answer."),
-        "  ─ Worked for <1s ─",
+        format!("  Worked for <1s · {}", clock(T0 + 186_800)),
         "{conversation:?}"
     );
     assert_eq!(
         after(&conversation, "Third answer."),
-        "  ─ Worked for 12s ─",
+        format!("  Worked for 12s · {}", clock(T0 + 200_799)),
         "{conversation:?}"
     );
 }
@@ -252,7 +254,7 @@ fn an_interrupted_or_failed_turn_says_how_long_it_ran() {
 }
 
 /// Finished thinking says how long it took, up to its last line:
-/// `Thought for 4s: …` folded, `Thought for 4s` shown in full. Thinking
+/// `✻ Thought for 4s · …` folded, `✻ Thought for 4s` shown in full. Thinking
 /// still going, and thinking with no known time, look as before.
 #[test]
 fn thinking_says_how_long_it_thought() {
@@ -265,7 +267,7 @@ fn thinking_says_how_long_it_thought() {
     screen.think("r1", "\n\nThen edit it.");
     let thinking = screen.conversation();
     assert!(
-        thinking.contains(&"  Thinking… Then edit it.".to_owned()),
+        thinking.contains(&"✻ Thinking… Then edit it.".to_owned()),
         "{thinking:?}"
     );
     screen.wait(3_000);
@@ -276,21 +278,31 @@ fn thinking_says_how_long_it_thought() {
     screen.end_turn("completed", Value::Null);
     let conversation = screen.conversation();
     for expected in [
-        "  Thought for 4s: Look at the README.…",
-        "  Thought: No start was seen for this one.",
+        "✻ Thought for 4s · Look at the README.…",
+        "✻ Thought · No start was seen for this one.",
     ] {
         assert!(
             conversation.contains(&expected.to_owned()),
             "{expected:?} in {conversation:?}"
         );
     }
-    assert!(grey(screen.draw(), "Thought for 4s: Look at the README.…"));
+    assert!(grey(screen.draw(), "Thought for 4s · Look at the README.…"));
 
     screen.ctrl_o();
     let details = screen.conversation();
     assert!(
-        details.contains(&"  Thought for 4s".to_owned()),
+        details.contains(&"✻ Thought for 4s".to_owned()),
         "{details:?}"
     );
-    assert!(details.contains(&"  Thought".to_owned()), "{details:?}");
+    assert!(details.contains(&"✻ Thought".to_owned()), "{details:?}");
+}
+
+/// `HH:MM` in local time at Unix milliseconds `ms`, to the second the
+/// reducer keeps.
+fn clock(ms: i64) -> String {
+    chrono::Local
+        .timestamp_opt(ms.div_euclid(1000), 0)
+        .unwrap()
+        .format("%H:%M")
+        .to_string()
 }

@@ -3013,6 +3013,10 @@ impl App {
         if let Some(retry) = cells::retry(turn, index) {
             return cells::retry_rows(&retry, width);
         }
+        let cwd = &self.snapshot.settings.cwd;
+        if let Some(rows) = cells::explored(&turn.items, index, self.details, cwd, width) {
+            return rows;
+        }
         // A turn's first plan is the whole card; its later updates one row
         // each, unless Ctrl+O shows everything.
         if let Item::Plan {
@@ -4238,7 +4242,12 @@ impl App {
             .get(at.turn)
             .and_then(|turn| turn.items.get(at.item))
         {
-            Some(Item::FileRead { .. }) => Kind::Read,
+            // Reads that failed or were declined, each on a row of its own.
+            Some(Item::FileRead { .. })
+                if cells::reads_around(&self.snapshot.turns[at.turn].items, at.item).is_none() =>
+            {
+                Kind::Read
+            }
             Some(Item::Diagnostics { .. }) => {
                 if crate::lsp::inline(&self.snapshot.turns[at.turn].items, at.item) {
                     Kind::Attached
@@ -4261,7 +4270,7 @@ impl App {
             return Some((rows, Place { prompt: true, ..at }));
         }
         if let Some(item) = turn.items.get(at.item) {
-            if !self.item_done(turn, at.item) {
+            if !self.item_done(turn, at.item) || reads_open(turn, at.item) {
                 return None;
             }
             let rows = if Some(at.item) == echo_index(turn)
@@ -5590,7 +5599,11 @@ impl App {
                     continue;
                 }
                 let done = self.item_done(turn, index);
-                let new = if !done && item.id().is_some_and(|id| waiting.contains(&id)) {
+                // A read waiting for approval is in its `Explored` block.
+                let new = if !done
+                    && !matches!(item, Item::FileRead { .. })
+                    && item.id().is_some_and(|id| waiting.contains(&id))
+                {
                     cells::waiting(item, self.details, cwd, width, self.sandbox_on())
                 } else {
                     self.render_at(turn, index, done, width)
@@ -6407,6 +6420,24 @@ fn nearest(hits: &[Hit], anchor: &Anchor) -> Option<usize> {
 /// The client to name next to what someone sent, when it was not this terminal.
 fn source<'a>(own: &str, client: &'a str) -> Option<&'a str> {
     (!client.is_empty() && client != own).then_some(client)
+}
+
+/// Whether the item at `index` is one of reads in a row
+/// ([`cells::reads_around`]) whose `Explored` block may still change: one
+/// of them is still going, or the turn may read more after them.
+fn reads_open(turn: &Turn, index: usize) -> bool {
+    cells::reads_around(&turn.items, index).is_some_and(|reads| {
+        (reads.end == turn.items.len() && turn.status == TurnStatus::InProgress)
+            || turn.items[reads].iter().any(|item| {
+                matches!(
+                    item,
+                    Item::FileRead {
+                        status: ItemStatus::InProgress,
+                        ..
+                    }
+                )
+            })
+    })
 }
 
 /// The item that repeats the turn's input as a user message, if any.

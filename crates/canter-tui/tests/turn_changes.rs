@@ -126,20 +126,27 @@ impl Screen {
         lines[..lines.len() - BELOW].to_vec()
     }
 
-    /// The rows from `  ● Changed` up to and including the turn's last row.
+    /// The rows from `• Changed` up to and including the turn's last row,
+    /// the time the turn ended left out of `Worked for 2s · HH:MM`.
     fn summary(&mut self) -> Vec<String> {
         let rows = self.conversation();
         let start = rows
             .iter()
-            .position(|row| row.starts_with("  ● Changed"))
+            .position(|row| row.starts_with("• Changed"))
             .unwrap_or_else(|| panic!("no summary: {rows:#?}"));
         let end = rows[start..]
             .iter()
             .position(|row| {
-                row.starts_with("  ─ Worked") || row.starts_with("  ■") || row.starts_with("  ✗")
+                row.starts_with("  Worked") || row.starts_with("  ■") || row.starts_with("  ✗")
             })
             .unwrap_or_else(|| panic!("no footer: {rows:#?}"));
-        rows[start..=start + end].to_vec()
+        rows[start..=start + end]
+            .iter()
+            .map(|row| match row.split_once(" · ") {
+                Some((worked, _)) if worked.starts_with("  Worked for ") => worked.to_owned(),
+                _ => row.clone(),
+            })
+            .collect()
     }
 }
 
@@ -209,29 +216,29 @@ fn three_changed_files_are_listed_above_worked_for() {
     assert_eq!(
         screen.summary(),
         [
-            "  ● Changed 3 files  +40 −12",
-            "      src/app.rs    +30 −8",
-            "      src/input.rs   +8 −4",
-            "      README.md      +2",
-            "  ─ Worked for 2s ─",
+            "• Changed 3 files  +40 −12",
+            "    src/app.rs    +30 −8",
+            "    src/input.rs   +8 −4",
+            "    README.md      +2",
+            "  Worked for 2s",
         ]
     );
     let buffer = screen.draw();
-    for cell in cells_of(buffer, "  ● Changed", "+40") {
+    for cell in cells_of(buffer, "• Changed", "+40") {
         assert_eq!(cell.fg, Color::Green);
     }
-    for cell in cells_of(buffer, "  ● Changed", "−12") {
+    for cell in cells_of(buffer, "• Changed", "−12") {
         assert_eq!(cell.fg, Color::Red);
     }
-    for cell in cells_of(buffer, "      src/app.rs", "−8") {
+    for cell in cells_of(buffer, "    src/app.rs", "−8") {
         assert_eq!(cell.fg, Color::Red);
     }
-    for text in ["●", "Changed 3 files"] {
-        for cell in cells_of(buffer, "  ● Changed", text) {
+    for text in ["•", "Changed 3 files"] {
+        for cell in cells_of(buffer, "• Changed", text) {
             assert!(cell.modifier.contains(Modifier::DIM), "{text:?} is grey");
         }
     }
-    for cell in cells_of(buffer, "      src/app.rs", "src/app.rs") {
+    for cell in cells_of(buffer, "    src/app.rs", "src/app.rs") {
         assert!(cell.modifier.contains(Modifier::DIM), "the path is grey");
     }
 }
@@ -249,10 +256,10 @@ fn a_file_changed_twice_is_one_row() {
     assert_eq!(
         screen.summary(),
         [
-            "  ● Changed 2 files  +6 −3",
-            "      b.rs  +4 −3",
-            "      a.rs  +2",
-            "  ─ Worked for 2s ─",
+            "• Changed 2 files  +6 −3",
+            "    b.rs  +4 −3",
+            "    a.rs  +2",
+            "  Worked for 2s",
         ]
     );
 
@@ -261,7 +268,7 @@ fn a_file_changed_twice_is_one_row() {
     screen.change("completed", json!([update("a.rs", 1, 0)]));
     screen.change("completed", json!([update("a.rs", 1, 0)]));
     screen.end_turn("completed");
-    assert_eq!(screen.summary()[0], "  ● Changed 1 file  +2");
+    assert_eq!(screen.summary()[0], "• Changed 1 file  +2");
 }
 
 /// A new file says `new`, a deleted one `deleted`, a moved one is written
@@ -282,11 +289,11 @@ fn new_deleted_and_moved_files() {
     assert_eq!(
         screen.summary(),
         [
-            "  ● Changed 3 files  +8 −5",
-            "      new.rs       +6     new",
-            "      old.rs          −4  deleted",
-            "      a.rs → b.rs  +2 −1",
-            "  ─ Worked for 2s ─",
+            "• Changed 3 files  +8 −5",
+            "    new.rs       +6     new",
+            "    old.rs          −4  deleted",
+            "    a.rs → b.rs  +2 −1",
+            "  Worked for 2s",
         ]
     );
 }
@@ -304,11 +311,7 @@ fn failed_declined_and_shell_changes_do_not_count() {
     screen.end_turn("completed");
     assert_eq!(
         screen.summary(),
-        [
-            "  ● Changed 1 file  +1",
-            "      kept.rs  +1",
-            "  ─ Worked for 2s ─",
-        ]
+        ["• Changed 1 file  +1", "    kept.rs  +1", "  Worked for 2s",]
     );
 
     for changes in [false, true] {
@@ -323,7 +326,7 @@ fn failed_declined_and_shell_changes_do_not_count() {
         let rows = screen.conversation();
         assert!(!rows.iter().any(|row| row.contains("Changed")), "{rows:#?}");
         assert!(
-            rows.iter().any(|row| row == "  ─ Worked for 2s ─"),
+            rows.iter().any(|row| row.starts_with("  Worked for 2s · ")),
             "{rows:#?}"
         );
     }
@@ -340,11 +343,11 @@ fn more_than_eight_files() {
     screen.change("completed", Value::Array(changes));
     screen.end_turn("completed");
     let summary = screen.summary();
-    assert_eq!(summary[0], "  ● Changed 11 files  +11");
-    assert_eq!(summary[1], "      f1.rs  +1");
-    assert_eq!(summary[8], "      f8.rs  +1");
-    assert_eq!(summary[9], "      … and 3 more");
-    assert_eq!(summary[10], "  ─ Worked for 2s ─");
+    assert_eq!(summary[0], "• Changed 11 files  +11");
+    assert_eq!(summary[1], "    f1.rs  +1");
+    assert_eq!(summary[8], "    f8.rs  +1");
+    assert_eq!(summary[9], "    … and 3 more");
+    assert_eq!(summary[10], "  Worked for 2s");
     assert_eq!(summary.len(), 11);
 }
 
@@ -361,8 +364,8 @@ fn interrupted_and_failed_turns_list_and_running_ones_do_not() {
     assert_eq!(
         screen.summary(),
         [
-            "  ● Changed 1 file  +1 −1",
-            "      a.rs  +1 −1",
+            "• Changed 1 file  +1 −1",
+            "    a.rs  +1 −1",
             "  ■ Turn interrupted · 2s",
         ]
     );
@@ -377,8 +380,8 @@ fn interrupted_and_failed_turns_list_and_running_ones_do_not() {
     assert_eq!(
         screen.summary(),
         [
-            "  ● Changed 1 file  +1",
-            "      a.rs  +1",
+            "• Changed 1 file  +1",
+            "    a.rs  +1",
             "  ✗ Turn failed: no reason given · 2s",
         ]
     );

@@ -213,6 +213,34 @@ pub fn aside() -> Style {
     current().fg(Color::DarkGray).add_modifier(Modifier::DIM)
 }
 
+/// What a folded thinking row says after `✻ Thought for 2s`: fainter than
+/// that label, as [`aside`], and italic.
+pub fn thinking_text() -> Style {
+    aside().italic()
+}
+
+/// A `##` heading in an answer: bold and magenta, apart from inline code
+/// (cyan), bold text (red) and paths (blue).
+pub fn heading() -> Style {
+    current().fg(Color::Magenta).bold()
+}
+
+/// Bold text in an answer: bold and red; without colours bold only.
+pub fn strong() -> Style {
+    current().fg(Color::Red).bold()
+}
+
+/// A path that a click opens, in a card's title: blue. Without colours
+/// nothing: such a path is underlined then ([`crate::links::underline`]).
+pub fn path_link() -> Style {
+    current().fg(Color::Blue)
+}
+
+/// `Read` under `• Explored`: blue.
+pub fn read() -> Style {
+    current().fg(Color::Blue)
+}
+
 /// What an item of the status bar at the bottom shows, for its colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BarItem {

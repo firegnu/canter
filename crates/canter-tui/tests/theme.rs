@@ -1,5 +1,5 @@
 //! Colours by purpose: `NO_COLOR`, a light background, the failed card's
-//! cross, and how the colour depth and background are worked out.
+//! red dot, and how the colour depth and background are worked out.
 
 use std::collections::HashMap;
 
@@ -141,7 +141,7 @@ fn no_color_draws_no_colours_but_keeps_bold() {
         "the prompt mark stays bold"
     );
     assert!(
-        bold(find(buffer, "Run cargo build", 0)),
+        bold(find(buffer, "Ran cargo build", 0)),
         "the verb stays bold"
     );
 }
@@ -172,15 +172,15 @@ fn on_a_light_background_warnings_are_bold_default_text_and_the_border_stays_yel
 }
 
 #[test]
-fn failed_tool_cards_are_marked_with_a_red_cross() {
+fn failed_tool_cards_are_marked_with_a_red_dot() {
     let mut screen = Screen::new(Theme::default());
     screen.busy_turn();
     let buffer = screen.draw();
-    for text in ["✗ Run cargo test", "✗ Add /work/notes.txt"] {
+    for text in ["• Ran cargo test", "• Add /work/notes.txt"] {
         let cell = find(buffer, text, 0);
         assert_eq!(cell.fg, Color::Red, "{text} is red");
     }
-    let worked = find(buffer, "● Run cargo build", 0);
+    let worked = find(buffer, "• Ran cargo build", 0);
     assert_eq!(
         worked.fg,
         Color::Green,

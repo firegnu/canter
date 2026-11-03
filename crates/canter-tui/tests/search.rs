@@ -418,7 +418,7 @@ fn folded_parts_are_found_only_after_ctrl_o() {
     }}));
     let output: Vec<String> = (1..=20)
         .map(|n| match n {
-            2 => "buried output".to_owned(),
+            10 => "buried output".to_owned(),
             _ => format!("out {n}"),
         })
         .collect();

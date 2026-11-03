@@ -4,6 +4,7 @@
 
 use canter_protocol::{Event, SessionSnapshot};
 use canter_tui::{Action, App, Ui};
+use chrono::TimeZone;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, Cell};
@@ -214,15 +215,25 @@ fn numbered(count: usize, word: &str) -> String {
     (1..=count).map(|n| format!("{word} {n}\n")).collect()
 }
 
-/// While thinking, one grey italic row shows the latest line written; when
-/// it is too long, only its end, after `…`.
+/// Every non-blank cell of `text` is grey and not italic.
+fn grey_upright(buffer: &Buffer, text: &str) -> bool {
+    cells_of(buffer, text)
+        .iter()
+        .filter(|cell| cell.symbol() != " " && !cell.symbol().is_empty())
+        .all(|cell| {
+            cell.modifier.contains(Modifier::DIM) && !cell.modifier.contains(Modifier::ITALIC)
+        })
+}
+
+/// While thinking, one row shows `✻ Thinking…` in grey and the latest line
+/// written, fainter and italic; when it is too long, only its end, after `…`.
 #[test]
 fn thinking_in_progress_shows_the_latest_line_on_one_row() {
     let mut screen = Screen::new(20);
     screen.start_thinking("r1");
     screen.draw();
     assert!(
-        screen.conversation().contains(&"  Thinking…".to_owned()),
+        screen.conversation().contains(&"✻ Thinking…".to_owned()),
         "{:?}",
         screen.conversation()
     );
@@ -231,24 +242,22 @@ fn thinking_in_progress_shows_the_latest_line_on_one_row() {
     screen.think("r1", "the install steps");
     let conversation = screen.conversation();
     assert!(
-        conversation.contains(&"  Thinking… then I change the install steps".to_owned()),
+        conversation.contains(&"✻ Thinking… then I change the install steps".to_owned()),
         "{conversation:?}"
     );
     assert!(!conversation.iter().any(|row| row.contains("first I read")));
     let buffer = screen.draw();
-    assert!(grey_italic(
-        buffer,
-        "Thinking… then I change the install steps"
-    ));
+    assert!(grey_upright(buffer, "✻ Thinking…"));
+    assert!(grey_italic(buffer, "then I change the install steps"));
 
     let long = " and then I run cargo build to check that it still compiles fine";
     screen.think("r1", long);
     let conversation = screen.conversation();
     let row = conversation
         .iter()
-        .find(|row| row.starts_with("  Thinking… "))
+        .find(|row| row.starts_with("✻ Thinking… "))
         .unwrap_or_else(|| panic!("{conversation:?}"));
-    assert!(row.starts_with("  Thinking… …"), "{row:?}");
+    assert!(row.starts_with("✻ Thinking… …"), "{row:?}");
     assert!(row.ends_with("that it still compiles fine"), "{row:?}");
     assert_eq!(row.width(), usize::from(WIDTH), "{row:?}");
     assert_eq!(
@@ -260,8 +269,8 @@ fn thinking_in_progress_shows_the_latest_line_on_one_row() {
     );
 }
 
-/// Finished thinking folds to `Thought: <first line>`, ending with `…` when
-/// more follows. A summary is used when there is one, its leading
+/// Finished thinking folds to `✻ Thought · <first line>`, ending with `…`
+/// when more follows. A summary is used when there is one, its leading
 /// `**title**` without the stars.
 #[test]
 fn finished_thinking_folds_to_its_first_line() {
@@ -275,9 +284,9 @@ fn finished_thinking_folds_to_its_first_line() {
     );
     let conversation = screen.conversation();
     for expected in [
-        "  Thought: Read the README first.…",
-        "  Thought: Only one line.",
-        "  Thought: Planning the change…",
+        "✻ Thought · Read the README first.…",
+        "✻ Thought · Only one line.",
+        "✻ Thought · Planning the change…",
     ] {
         assert!(
             conversation.contains(&expected.to_owned()),
@@ -287,10 +296,11 @@ fn finished_thinking_folds_to_its_first_line() {
     assert!(!conversation.iter().any(|row| row.contains("Then edit")));
     assert!(!conversation.iter().any(|row| row.contains("raw thoughts")));
     let buffer = screen.draw();
-    assert!(grey_italic(buffer, "Thought: Read the README first.…"));
+    assert!(grey_upright(buffer, "✻ Thought"));
+    assert!(grey_italic(buffer, "Read the README first.…"));
 }
 
-/// Ctrl+O shows thinking in full: `Thought`, then the text as markdown,
+/// Ctrl+O shows thinking in full: `✻ Thought`, then the text as markdown,
 /// grey and italic, each row after a grey `┊`. Ctrl+O again folds it.
 #[test]
 fn ctrl_o_shows_thinking_in_full() {
@@ -305,7 +315,7 @@ fn ctrl_o_shows_thinking_in_full() {
     let conversation = screen.conversation();
     let at = conversation
         .iter()
-        .position(|row| row == "  Thought")
+        .position(|row| row == "✻ Thought")
         .unwrap_or_else(|| panic!("{conversation:?}"));
     let body: Vec<&String> = conversation[at + 1..]
         .iter()
@@ -316,17 +326,17 @@ fn ctrl_o_shows_thinking_in_full() {
     assert!(text.contains(&"• check the install steps"), "{body:?}");
     assert!(text.contains(&"• run cargo build"), "markdown: {body:?}");
     assert!(
-        !conversation.iter().any(|row| row.contains("Thought:")),
+        !conversation.iter().any(|row| row.contains("Thought ·")),
         "{conversation:?}"
     );
     assert!(
         conversation[at + 1 + body.len()..]
             .iter()
-            .any(|row| row == "  Done.")
+            .any(|row| row == "• Done.")
     );
 
     let buffer = screen.draw();
-    assert!(grey_italic(buffer, "Thought"));
+    assert!(grey_upright(buffer, "✻ Thought"));
     assert!(grey_italic(buffer, "Read the README first."));
     assert!(grey_italic(buffer, "check the install steps"));
     let bar = cells_of(buffer, "┊")[0];
@@ -335,7 +345,7 @@ fn ctrl_o_shows_thinking_in_full() {
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
     assert!(
-        conversation.contains(&"  Thought: Read the README first.…".to_owned()),
+        conversation.contains(&"✻ Thought · Read the README first.…".to_owned()),
         "{conversation:?}"
     );
     assert!(!conversation.iter().any(|row| row.contains('┊')));
@@ -356,7 +366,8 @@ fn ctrl_o_shows_long_output_and_diffs_in_full_and_folds_them_again() {
     screen.changed("e1", "a.txt", &edit);
     screen.command("c2", "cargo build", &numbered(10, "busy"), "inProgress");
     let folded = screen.conversation();
-    assert!(!folded.iter().any(|row| row.ends_with("done 1")));
+    assert!(folded.iter().any(|row| row == "  └ done 1"));
+    assert!(!folded.iter().any(|row| row.ends_with("done 4")));
     assert!(!folded.iter().any(|row| row.ends_with("busy 1")));
     assert!(folded.iter().any(|row| row.contains("more lines")));
     assert!(!screen.status().contains(DETAILS));
@@ -365,17 +376,19 @@ fn ctrl_o_shows_long_output_and_diffs_in_full_and_folds_them_again() {
     let shown = screen.conversation();
     for n in 1..=20 {
         assert!(
-            shown.iter().any(|row| row == &format!("    ┃ done {n}")),
+            shown.iter().any(|row| row.ends_with(&format!(" done {n}"))),
             "done {n}: {shown:#?}"
         );
     }
     for n in 1..=10 {
-        assert!(shown.iter().any(|row| row == &format!("    ┃ busy {n}")));
+        assert!(shown.iter().any(|row| row.ends_with(&format!(" busy {n}"))));
         assert!(shown.iter().any(|row| row.ends_with(&format!("+ new {n}"))));
         assert!(shown.iter().any(|row| row.ends_with(&format!("- old {n}"))));
     }
     assert!(
-        !shown.iter().any(|row| row.contains("more lines")),
+        !shown
+            .iter()
+            .any(|row| row.contains("more lines") || row.contains("expand")),
         "{shown:#?}"
     );
     assert!(!shown.iter().any(|row| row.contains("showing the last")));
@@ -395,9 +408,10 @@ fn ctrl_o_shows_long_output_and_diffs_in_full_and_folds_them_again() {
     refolded.retain(|row| !row.contains("ctrl+b to run in background"));
     refolded.push(String::new());
     let end = refolded.iter().rposition(|row| !row.is_empty()).unwrap() + 1;
-    refolded[end + 1] = "  ● Changed 1 file  +10 −10".to_owned();
-    refolded[end + 2] = "      a.txt  +10 −10".to_owned();
-    refolded[end + 3] = "  ─ Worked for <1s ─".to_owned();
+    refolded[end + 1] = "• Changed 1 file  +10 −10".to_owned();
+    refolded[end + 2] = "    a.txt  +10 −10".to_owned();
+    let ended = chrono::Local.timestamp_opt(NOW / 1000, 0).unwrap();
+    refolded[end + 3] = format!("  Worked for <1s · {}", ended.format("%H:%M"));
     assert_eq!(screen.conversation(), refolded);
     assert_eq!(screen.status(), "");
 }
@@ -416,9 +430,9 @@ fn ctrl_o_keeps_the_top_item_in_place() {
 
     // Following: the latest output stays right above the status line.
     assert_eq!(screen.ctrl_o(), None);
-    assert_eq!(screen.conversation().last().unwrap(), "  line 40");
+    assert_eq!(screen.conversation().last().unwrap(), "• line 40");
     assert_eq!(screen.ctrl_o(), None);
-    assert_eq!(screen.conversation().last().unwrap(), "  line 40");
+    assert_eq!(screen.conversation().last().unwrap(), "• line 40");
 
     // Scrolled back to a message after the long items.
     for _ in 0..5 {
@@ -429,7 +443,7 @@ fn ctrl_o_keeps_the_top_item_in_place() {
     let conversation = screen.conversation();
     assert_eq!(conversation[0], "› do it");
     let top = conversation[1].clone();
-    assert!(top.starts_with("  line "), "{top:?}");
+    assert!(top.starts_with("• line "), "{top:?}");
     for _ in 0..2 {
         assert_eq!(screen.ctrl_o(), None);
         let conversation = screen.conversation();
@@ -443,20 +457,20 @@ fn ctrl_o_keeps_the_top_item_in_place() {
     screen.wheel(MouseEventKind::ScrollDown);
     let conversation = screen.conversation();
     assert_eq!(conversation[0], "› do it");
-    assert!(conversation[1].starts_with("    ┃"), "{conversation:#?}");
+    assert_eq!(conversation[1], "  └ out 1", "{conversation:#?}");
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
     assert_eq!(conversation[0], "› do it");
     assert!(
-        conversation[1].starts_with("  ● Run cargo test"),
+        conversation[1].starts_with("• Ran cargo test"),
         "{conversation:#?}"
     );
-    assert_eq!(conversation[2], "    ┃ out 1");
+    assert_eq!(conversation[2], "  └ out 1");
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
     assert_eq!(conversation[0], "› do it");
     assert!(
-        conversation[1].starts_with("  ● Run cargo test"),
+        conversation[1].starts_with("• Ran cargo test"),
         "{conversation:#?}"
     );
 }
@@ -474,7 +488,7 @@ fn ctrl_o_works_with_the_approval_box_open() {
         .position(|row| row.starts_with('╭'))
         .expect("the approval box");
     let approval_box = lines[box_top..].to_vec();
-    assert!(!lines[..box_top].iter().any(|row| row == "    ┃ out 1"));
+    assert!(!lines[..box_top].iter().any(|row| row == "    out 8"));
 
     assert_eq!(screen.ctrl_o(), None);
     let lines = screen.lines();
@@ -483,11 +497,7 @@ fn ctrl_o_works_with_the_approval_box_open() {
         .position(|row| row.starts_with('╭'))
         .expect("the approval box");
     assert_eq!(lines[box_top_after..], approval_box[..], "{lines:#?}");
-    assert!(
-        lines[..box_top_after]
-            .iter()
-            .any(|row| row == "    ┃ out 1")
-    );
+    assert!(lines[..box_top_after].iter().any(|row| row == "    out 8"));
     // The status line, cut at this width.
     assert!(
         lines[box_top_after - 1].contains(" · Details shown · Ctrl+O to"),
@@ -496,6 +506,6 @@ fn ctrl_o_works_with_the_approval_box_open() {
 
     assert_eq!(screen.ctrl_o(), None);
     let lines = screen.lines();
-    assert!(!lines.iter().any(|row| row == "    ┃ out 1"));
+    assert!(!lines.iter().any(|row| row == "    out 8"));
     assert_eq!(lines[box_top..], approval_box[..]);
 }

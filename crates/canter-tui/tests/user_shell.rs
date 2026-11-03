@@ -597,8 +597,8 @@ fn user_shell_card_bang_is_magenta_and_agent_card_is_unchanged() {
         );
     }
     let mut ui = Ui::new(TestBackend::new(100, 24), App::new(snapshot, None, 0)).unwrap();
-    let (agent_y, agent_x) = find(&mut ui, "Run git status");
-    let (shell_y, shell_x) = find(&mut ui, "Run ! git status");
+    let (agent_y, agent_x) = find(&mut ui, "Ran git status");
+    let (shell_y, shell_x) = find(&mut ui, "Ran ! git status");
     assert_ne!(agent_y, shell_y);
     let bang = cell(&ui, shell_x + 4, shell_y);
     assert_eq!(bang.symbol(), "!");

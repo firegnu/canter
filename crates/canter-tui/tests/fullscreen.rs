@@ -205,7 +205,7 @@ fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
     let last = usize::from(HEIGHT) - 1;
 
     assert_eq!(lines[0], "› first question", "from the top:\n{shown}");
-    assert_eq!(lines[2], "  short answer", "{shown}");
+    assert_eq!(lines[2], "• short answer", "{shown}");
     assert_eq!(
         lines[last - 1..],
         [" test-model · think high · Always ask", " /work"],
@@ -217,7 +217,7 @@ fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
         lines[last - 2].starts_with('╰'),
         "the input box is right above the info rows:\n{shown}"
     );
-    assert_eq!(lines[4], "  ─ Worked for <1s ─", "{shown}");
+    assert!(lines[4].starts_with("  Worked for <1s · "), "{shown}");
     assert!(
         lines[5..last - 4].iter().all(String::is_empty),
         "blank between:\n{shown}"
@@ -299,7 +299,7 @@ fn a_long_conversation_follows_the_latest_output() {
     // New output scrolls the conversation along.
     screen.say("t1", "m41", "line 41");
     screen.draw();
-    assert_eq!(screen.above_status(), "  line 41");
+    assert_eq!(screen.above_status(), "• line 41");
 }
 
 /// After scrolling up with the wheel, new output does not move the view; the
@@ -341,13 +341,13 @@ fn the_wheel_scrolls_back_and_new_output_does_not_pull_the_view_down() {
         screen.draw();
     }
     let shown = screen_text(&screen.lines());
-    assert_eq!(screen.above_status(), "  line 41", "{shown}");
+    assert_eq!(screen.above_status(), "• line 41", "{shown}");
     assert!(!shown.contains("↓"), "{shown}");
 
     // Following again: more output comes into view.
     screen.say("t1", "m42", "line 42");
     screen.draw();
-    assert_eq!(screen.above_status(), "  line 42");
+    assert_eq!(screen.above_status(), "• line 42");
 }
 
 /// PgUp scrolls a page; new output shows the hint; sending a message follows
@@ -382,7 +382,7 @@ fn page_up_then_sending_a_message_follows_again() {
     );
     screen.draw();
     let shown = screen_text(&screen.lines());
-    assert_eq!(screen.above_status(), "  line 41", "{shown}");
+    assert_eq!(screen.above_status(), "• line 41", "{shown}");
     assert!(!shown.contains("↓"), "{shown}");
 }
 
@@ -407,9 +407,12 @@ fn resizing_rewraps_the_whole_conversation() {
         let text: Vec<&str> = conversation
             .iter()
             .flat_map(|row| row.split_whitespace())
-            .filter(|word| *word != "›")
+            .filter(|word| !matches!(*word, "›" | "•"))
             .collect();
-        let worked = ["─", "Worked", "for", "<1s", "─"];
+        let worked = ["Worked", "for", "<1s", "·"];
+        // The last word is the time the turn ended.
+        let (clock, text) = text.split_last().unwrap();
+        assert_eq!(clock.len(), "11:13".len(), "{clock:?}");
         let expected: Vec<&str> = question
             .split(' ')
             .chain(message.split(' '))
@@ -491,12 +494,12 @@ fn clicking_the_hint_jumps_to_the_bottom_and_follows() {
     screen.click(hint_row());
     screen.draw();
     let shown = screen_text(&screen.lines());
-    assert_eq!(screen.above_status(), "  line 41", "{shown}");
+    assert_eq!(screen.above_status(), "• line 41", "{shown}");
     assert!(!shown.contains("↓"), "{shown}");
 
     screen.say("t1", "m42", "line 42");
     screen.draw();
-    assert_eq!(screen.above_status(), "  line 42");
+    assert_eq!(screen.above_status(), "• line 42");
 }
 
 /// End with nothing typed goes to the bottom and follows again.
@@ -514,7 +517,7 @@ fn end_with_an_empty_input_jumps_to_the_bottom() {
 
     screen.say("t1", "m41", "line 41");
     screen.draw();
-    assert_eq!(screen.above_status(), "  line 41");
+    assert_eq!(screen.above_status(), "• line 41");
 }
 
 /// End with words typed only moves the cursor to the end of the line.

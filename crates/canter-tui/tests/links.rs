@@ -16,7 +16,7 @@ use canter_tui::{Action, App, LinkSystem, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
@@ -436,10 +436,12 @@ fn a_markdown_links_text_and_address_open_the_address() {
     assert_eq!(screen.opened(), browser("https://crates.io/"));
 }
 
-/// Paths in the titles of read, edit and new-file cards, and the new path of
-/// a moved file, are underlined and open in the text editor, as absolute
-/// paths from the session's directory. The mark, the verb and the status
-/// are not links, nor is a deleted file or the old path of a moved one.
+/// Paths in the titles of edit and new-file cards, the new path of a moved
+/// file, and the names under `• Explored`, open in the text editor, as
+/// absolute paths from the session's directory. The card titles' paths are
+/// blue, not underlined; the names read are in the text's colour. The mark,
+/// the verb and the status are not links, nor is a deleted file or the old
+/// path of a moved one.
 #[test]
 fn paths_in_card_titles_open_as_absolute_paths() {
     let dir = workdir();
@@ -464,20 +466,24 @@ fn paths_in_card_titles_open_as_absolute_paths() {
     screen.draw();
     let text = screen.text();
     for title in [
-        "◇ Read src/main.rs  lines 1–2",
-        "● Edit README.md  +1 −1",
-        "● Add new.rs  +1",
-        "● Edit old.rs → moved.rs  +1 −1",
-        "● Delete gone.rs  −1",
+        "• Explored\n  └ Read main.rs\n",
+        "• Edit README.md  +1 −1",
+        "• Add new.rs  +1",
+        "• Edit old.rs → moved.rs  +1 −1",
+        "• Delete gone.rs  −1",
     ] {
         assert!(text.contains(title), "{title:?}:\n{text}");
     }
-    assert_eq!(
-        screen.underlined(),
-        ["src/main.rs", "README.md", "new.rs", "moved.rs"]
-    );
+    assert!(screen.underlined().is_empty(), "{:?}", screen.underlined());
+    let buffer = screen.buffer();
+    for path in ["README.md", "new.rs", "moved.rs"] {
+        assert_eq!(buffer[screen.find(path)].fg, Color::Blue, "{path}");
+    }
+    for text in ["main.rs", "old.rs", "gone.rs"] {
+        assert_eq!(buffer[screen.find(text)].fg, Color::Reset, "{text}");
+    }
 
-    screen.click_and_wait("src/main.rs");
+    screen.click_and_wait("main.rs");
     assert_eq!(screen.opened(), editor(&root.join("src/main.rs")));
     screen.wait_status("Opened");
     assert_eq!(
@@ -493,7 +499,7 @@ fn paths_in_card_titles_open_as_absolute_paths() {
         screen.click_and_wait(text);
         assert_eq!(screen.opened(), editor(&path), "{text}");
     }
-    for text in ["Read", "◇", "lines 1–2", "+1 −1", "gone.rs", "old.rs"] {
+    for text in ["Read", "Explored", "+1 −1", "gone.rs", "old.rs"] {
         screen.now += 1000;
         screen.click_and_wait(text);
         screen.nothing_opened();
@@ -712,7 +718,7 @@ fn over_ssh_a_click_copies_the_link() {
     screen.nothing_opened();
 
     screen.now += 3000;
-    screen.click_and_wait("src/main.rs");
+    screen.click_and_wait("main.rs");
     assert_eq!(
         screen.clipboard(),
         dir.path().join("src/main.rs").to_string_lossy()
