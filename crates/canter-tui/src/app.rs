@@ -3009,6 +3009,29 @@ impl App {
             let cwd = &self.snapshot.settings.cwd;
             return crate::lsp::rows(&turn.items, index, self.details, cwd, width);
         }
+        // A turn's first plan is the whole card; its later updates one row
+        // each, unless Ctrl+O shows everything.
+        if let Item::Plan {
+            plan,
+            status: ItemStatus::Completed,
+            ..
+        } = item
+            && !self.details
+            && let Some(before) = turn.items[..index]
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    Item::Plan {
+                        plan,
+                        status: ItemStatus::Completed,
+                        ..
+                    } => Some(plan),
+                    _ => None,
+                })
+            && let Some(row) = crate::plan::update_row(before, plan, width)
+        {
+            return vec![row];
+        }
         self.render_item(item, done, width)
     }
 
