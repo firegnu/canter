@@ -220,7 +220,7 @@ async fn slow_operations_do_not_block_other_sessions() {
         }
         let reader = if operation == "events_recv" {
             let cursor = test.read(&slow).await.event_seq;
-            let reader = EventReader::new(test.app.clone(), id.clone(), cursor)
+            let reader = EventReader::new(test.app.clone(), id.clone(), cursor, false)
                 .await
                 .map_err(|e| e.0)
                 .unwrap();
@@ -470,8 +470,8 @@ async fn trash_excludes_resume_and_attachment_until_the_directory_has_moved() {
 }
 
 #[tokio::test]
-async fn both_event_attachment_paths_exclude_trash() {
-    for catch_up in [false, true] {
+async fn event_attachment_paths_exclude_trash_only_for_ordinary_clients() {
+    for (catch_up, observe) in [(false, false), (true, false), (false, true), (true, true)] {
         let test = Harness::new().await;
         let url = test.create().await;
         let id = url.rsplit('/').next().unwrap().to_owned();
@@ -484,7 +484,7 @@ async fn both_event_attachment_paths_exclude_trash() {
                 .error_for_status()
                 .unwrap();
             let cursor = test.read(&url).await.event_seq;
-            let reader = EventReader::new(test.app.clone(), id.clone(), cursor)
+            let reader = EventReader::new(test.app.clone(), id.clone(), cursor, observe)
                 .await
                 .map_err(|e| e.0)
                 .unwrap();
@@ -505,7 +505,10 @@ async fn both_event_attachment_paths_exclude_trash() {
                 assert!(reader.recv().await.map_err(|e| e.0).unwrap().is_some());
                 reader
             } else {
-                EventReader::new(app, id, 0).await.map_err(|e| e.0).unwrap()
+                EventReader::new(app, id, 0, observe)
+                    .await
+                    .map_err(|e| e.0)
+                    .unwrap()
             }
         });
         block.reached().await;
@@ -514,8 +517,17 @@ async fn both_event_attachment_paths_exclude_trash() {
         stays_pending(&mut deleting).await;
         drop(block);
         let reader = attaching.await.unwrap();
-        assert_eq!(deleting.await.unwrap().status(), StatusCode::CONFLICT);
-        assert_eq!(test.read(&url).await.session.status, SessionStatus::Idle);
+        assert_eq!(
+            deleting.await.unwrap().status(),
+            if observe {
+                StatusCode::NO_CONTENT
+            } else {
+                StatusCode::CONFLICT
+            }
+        );
+        if !observe {
+            assert_eq!(test.read(&url).await.session.status, SessionStatus::Idle);
+        }
         drop(reader);
         test.stop().await;
     }
@@ -671,7 +683,7 @@ async fn cancelled_readers_keep_exclusion_until_the_blocking_read_finishes() {
             match kind {
                 "snapshot" => read(State(app), ApiPath(id)).await.map(|_| ()),
                 "ledger" => ledger(&app, &id).await.map(|_| ()),
-                _ => EventReader::new(app, id, 0).await.map(|_| ()),
+                _ => EventReader::new(app, id, 0, false).await.map(|_| ()),
             }
             .map_err(|e| e.0)
         });

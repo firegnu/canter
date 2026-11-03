@@ -21,6 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The first two events (settings, idle) are the snapshot; the rest stream in.
     let server = FakeServer::start(&socket, script, 2, Pace::Demo).await?;
     let launch = Launch {
+        session_file: None,
         connected: Connected {
             client: Client::new(&socket)?,
             warning: None,

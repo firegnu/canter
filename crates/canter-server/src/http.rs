@@ -1318,10 +1318,11 @@ struct EventReader {
     pending: VecDeque<Event>,
     subscription: Option<Subscription>,
     _client: Option<canter_core::ClientConnection>,
+    observe: bool,
 }
 
 impl EventReader {
-    async fn new(app: Arc<App>, id: String, cursor: u64) -> Result<Self, ApiError> {
+    async fn new(app: Arc<App>, id: String, cursor: u64, observe: bool) -> Result<Self, ApiError> {
         let operation = app.session_locks.lock(&id).await;
         let (pending, subscription, client) = if let Some(session) = app.opened_session(&id).await {
             // Attach under the per-session lock, so trash cannot move a session
@@ -1332,7 +1333,11 @@ impl EventReader {
             (
                 VecDeque::new(),
                 Some(subscription),
-                session.attach_client().await,
+                if observe {
+                    None
+                } else {
+                    session.attach_client().await
+                },
             )
         } else {
             let events = app.disk_events(&id, 0, Some(operation.clone())).await?;
@@ -1360,6 +1365,7 @@ impl EventReader {
             pending,
             subscription,
             _client: client,
+            observe,
         })
     }
 
@@ -1381,7 +1387,9 @@ impl EventReader {
                 #[cfg(test)]
                 self.app.pauses.hit(&self.id, "subscribe").await;
                 self.subscription = Some(session.subscribe(self.cursor).await?);
-                self._client = session.attach_client().await;
+                if !self.observe {
+                    self._client = session.attach_client().await;
+                }
                 drop(operation);
             } else {
                 self.pending = self
@@ -1410,7 +1418,8 @@ async fn events(
         .transpose()
         .map_err(|_| ApiError::invalid())?;
     let after = resume_after(params.after, last).map_err(ApiError)?;
-    let mut subscription = EventReader::new(app.clone(), params.session, after).await?;
+    let mut subscription =
+        EventReader::new(app.clone(), params.session, after, params.observe).await?;
     let stream = async_stream::stream! {
         let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
         heartbeat.tick().await;

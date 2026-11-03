@@ -82,6 +82,7 @@ impl Canter {
             ("TERM".to_owned(), "xterm-ghostty".to_owned()),
         ]);
         let launch = Launch {
+            session_file: None,
             connector: SocketConnector(socket.clone()),
             connected: Connected {
                 client: Client::new(&socket).unwrap(),

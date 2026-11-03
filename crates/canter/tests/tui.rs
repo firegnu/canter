@@ -585,6 +585,8 @@ async fn add_dir_cli_slash_resume_and_continue_share_persisted_directories() {
     world.stop_server(Signal::SIGTERM).await;
 }
 
+#[path = "support/session_file.rs"]
+mod session_file;
 #[path = "support/statusline.rs"]
 mod statusline;
 #[path = "support/tags.rs"]
@@ -727,6 +729,7 @@ async fn review_requires_the_running_servers_review_feature_before_sending() {
             backend,
             input,
             Launch {
+                session_file: None,
                 connected: Connected {
                     client: Client::new(&socket).unwrap(),
                     warning: None,

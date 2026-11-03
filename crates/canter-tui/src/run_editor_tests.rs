@@ -369,6 +369,7 @@ printf 'written in the editor\n' > "$1"
     env.insert("HOME".into(), home.clone());
     env.insert("CANTER_HOME".into(), format!("{home}/.canter"));
     let launch = Launch {
+        session_file: None,
         connector: SocketConnector(socket.clone()),
         connected: Connected {
             client: Client::new(&socket).unwrap(),

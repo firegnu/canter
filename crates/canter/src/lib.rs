@@ -56,6 +56,7 @@ Usage:
 Options:
   -m, --model <model>  use this model (default: the server's config)
   --add-dir <path>      add a directory to the session (repeatable)
+  --session-file <path> write the current session and server location as JSON
   -r, --resume [id]     resume a session; without an id, pick from a list
   --tag <key=value>     label a new session (repeatable; last value wins)
   --yolo               use permission mode Allow all (never ask); commands still run in the sandbox
@@ -82,6 +83,7 @@ pub enum Command {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ChatArgs {
+    pub session_file: Option<PathBuf>,
     pub tags: BTreeMap<String, String>,
     pub additional_directories: Vec<String>,
     /// Sent as the new session's first message.
@@ -172,6 +174,13 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
             "--yolo" => chat.yolo = true,
+            "--session-file" => {
+                chat.session_file = Some(
+                    args.next_if(|next| !next.starts_with('-'))
+                        .ok_or("--session-file needs a path")?
+                        .into(),
+                );
+            }
             "--tag" => {
                 let tag = args.next().ok_or("--tag needs key=value")?;
                 let (key, value) = tag.split_once('=').ok_or("--tag needs key=value")?;
@@ -296,6 +305,15 @@ pub async fn usage(context: Context) -> Result<String, String> {
 /// Finds the server, starting one in the background when none runs, and
 /// says which session to open.
 pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerConnector>, String> {
+    let session_file = args
+        .session_file
+        .map(|path| {
+            canter_tui::session_file::SessionFile::new(
+                context.cwd.join(path),
+                context.state_dir.clone(),
+            )
+        })
+        .transpose()?;
     let cwd = context
         .cwd
         .to_str()
@@ -334,6 +352,7 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
         },
     };
     Ok(Launch {
+        session_file,
         connected: connected(connection)?,
         connector: ServerConnector {
             state_dir: context.state_dir,

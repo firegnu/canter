@@ -157,6 +157,8 @@ pub enum Open {
 
 /// Everything [`run`] needs.
 pub struct Launch<C> {
+    /// Optional publication of the session, prepared before opening the UI.
+    pub session_file: Option<crate::session_file::SessionFile>,
     pub connector: C,
     /// The first connection.
     pub connected: Connected,
@@ -174,6 +176,8 @@ pub struct Launch<C> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
+    #[error("{0}")]
+    SessionFile(String),
     #[error(transparent)]
     Client(#[from] ClientError),
     #[error("no such session: {0}")]
@@ -352,6 +356,20 @@ impl<W: Write> FrameSync for CrosstermBackend<W> {
 
 impl FrameSync for TestBackend {}
 
+/// A child screen belongs to its main session, including a handoff return.
+async fn publish_session(
+    file: &mut crate::session_file::SessionFile,
+    client: &Client,
+    snapshot: &SessionSnapshot,
+) -> Result<(), RunError> {
+    if let Some(parent) = &snapshot.parent {
+        let main = client.read_session(&parent.session_id).await?.session;
+        file.publish(&main).map_err(RunError::SessionFile)
+    } else {
+        file.publish(snapshot).map_err(RunError::SessionFile)
+    }
+}
+
 /// Runs in the real terminal, taking over the whole screen, until the user
 /// quits; the screen is as it was before once this returns. Returns the
 /// session's id, or `None` when the user closed the session list without
@@ -382,6 +400,7 @@ where
 {
     let mut shutdown = Shutdown::listen()?;
     let Launch {
+        mut session_file,
         connector,
         connected,
         open,
@@ -534,6 +553,9 @@ where
             Open::Continue { .. } => unreachable!("opened as Resume or New above"),
         };
         let snapshot = opened?;
+        if let Some(file) = session_file.as_mut() {
+            publish_session(file, &client, &snapshot).await?;
+        }
         let stream = client
             .subscribe(&snapshot.id, snapshot.last_event_seq)
             .await?;
@@ -592,6 +614,7 @@ where
         sender.clone(),
     ));
     let mut chat = Chat {
+        session_file,
         connector,
         client,
         server: connected.server,
@@ -1394,6 +1417,7 @@ fn terminal_event(app: &mut App, frame: u64, at: i64, event: TermEvent) -> Optio
 /// Carries out what the user asked for, without blocking the screen, except
 /// for switching to another session.
 struct Chat<C> {
+    session_file: Option<crate::session_file::SessionFile>,
     connector: Arc<C>,
     client: Client,
     /// The server process `client` reaches, as [`Connected::server`].
@@ -1876,6 +1900,16 @@ impl<C: Connector> Chat<C> {
         self.sender = sender;
         self.session = snapshot.id.clone();
         self.naming = AutoName::new(&snapshot, false, self.sender.clone());
+        let viewing_child = snapshot
+            .parent
+            .as_ref()
+            .is_some_and(|parent| parent.session_id == ui.app().main_session());
+        let publication = match self.session_file.as_mut() {
+            Some(file) if !viewing_child => {
+                Some(publish_session(file, &self.client, &snapshot).await)
+            }
+            _ => None,
+        };
         let app = App::new(snapshot, self.home.clone(), now_ms())
             .with_client_name(self.client_name.clone())
             .with_welcome(self.version.clone())
@@ -1886,6 +1920,9 @@ impl<C: Connector> Chat<C> {
             .with_steering_from(ui.app())
             .with_input_history_from(ui.app_mut());
         *ui.app_mut() = app;
+        if let Some(Err(error)) = publication {
+            ui.app_mut().warning(&error.to_string());
+        }
         if let Ok(models) = self.client.list_models().await {
             ui.app_mut().set_models(&models);
         }
@@ -2022,6 +2059,11 @@ impl<C: Connector> Chat<C> {
                 self.client = connected.client;
                 self.server = connected.server;
                 app.reconnected();
+                if let Some(file) = &self.session_file
+                    && let Err(error) = file.rewrite()
+                {
+                    app.warning(&error);
+                }
                 if let Some(warning) = connected.warning {
                     app.warning(&warning);
                 }

@@ -204,6 +204,13 @@ fn approval(id: &str, turn: &str, command: &str) -> Value {
 #[tokio::test]
 async fn a_sub_agents_screen_shows_it_with_the_main_sessions_approvals() {
     let mut test = Harness::new().await;
+    let files = tempfile::tempdir().unwrap();
+    let path = files.path().join("binding.json");
+    let mut file =
+        crate::session_file::SessionFile::new(path.clone(), files.path().join("state")).unwrap();
+    file.publish(test.ui.app().snapshot()).unwrap();
+    let original_binding = std::fs::read(&path).unwrap();
+    test.chat.session_file = Some(file);
     let cwd = test.ui.app().snapshot().settings.cwd.clone();
     let mut child = SessionSnapshot::empty("child");
     child.status = SessionStatus::Working;
@@ -302,6 +309,31 @@ async fn a_sub_agents_screen_shows_it_with_the_main_sessions_approvals() {
         }
     );
     test.messages = receiver.unwrap();
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        original_binding,
+        "viewing a child keeps the main session binding"
+    );
+    test.chat.message(
+        &mut test.ui,
+        Message::Reconnected(Connected {
+            client: test.chat.client.clone(),
+            warning: None,
+            server: None,
+        }),
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        original_binding,
+        "reconnecting on a child screen still publishes the main session"
+    );
+    let refreshed = next(&mut test.requests).await;
+    assert_eq!(refreshed.path, "/v1/sessions/test/agents");
+    refreshed.json(json!({ "data": [
+        agent("child", "explorer", "running", json!({})),
+        agent("sib", "general", "running", json!({})),
+    ] }));
+    test.message().await;
     test.ui.draw(0).unwrap();
     let screen = rows(&test);
     let text = screen.join("\n");
@@ -494,6 +526,63 @@ async fn a_sub_agents_screen_shows_it_with_the_main_sessions_approvals() {
     test.message().await;
     assert!(shown(&test).contains("cargo check"));
     assert!(!shown(&test).contains(WAITING));
+    if let Some(pump) = test.chat.main_pump.take() {
+        pump.abort();
+    }
+    test.chat.pump.abort();
+    test.server.abort();
+}
+
+#[tokio::test]
+async fn returning_from_a_child_handoff_restores_its_main_session_file() {
+    let mut test = Harness::new().await;
+    let files = tempfile::tempdir().unwrap();
+    let path = files.path().join("binding.json");
+    let mut file =
+        crate::session_file::SessionFile::new(path.clone(), files.path().join("state")).unwrap();
+    file.publish(test.ui.app().snapshot()).unwrap();
+    test.chat.session_file = Some(file);
+    let mut parent = SessionSnapshot::empty("parent");
+    parent.settings.cwd = "/original/project".into();
+    let mut child = SessionSnapshot::empty("child");
+    child.parent = Some(
+        serde_json::from_value(json!({
+            "sessionId":"parent", "turnId":"t0", "task":"Inspect code"
+        }))
+        .unwrap(),
+    );
+    let Harness {
+        chat, ui, requests, ..
+    } = &mut test;
+    let (receiver, ()) = tokio::join!(chat.return_from_handoff(ui, "child"), async {
+        loop {
+            let request = next(requests).await;
+            match request.path.as_str() {
+                "/v1/sessions/child/resume" => request.json(json!({"session":child,"eventSeq":0})),
+                "/v1/sessions/parent" => request.json(json!({"session":parent,"eventSeq":0})),
+                "/v1/events" => {
+                    let stream = futures_util::stream::pending::<Result<Bytes, io::Error>>();
+                    assert!(
+                        request
+                            .reply
+                            .send(Response::new(Body::from_stream(stream)))
+                            .is_ok()
+                    );
+                }
+                "/v1/models" => request.json(json!({"data":[],"nextCursor":null})),
+                "/v1/sessions/child/skills" => request.json(json!({"data":[]})),
+                "/v1/sessions/parent/agents" => {
+                    request.json(json!({"data":[]}));
+                    break;
+                }
+                path => panic!("unexpected request: {path}"),
+            }
+        }
+    });
+    test.messages = receiver.unwrap();
+    let binding: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(binding["sessionId"], "parent");
+    assert_eq!(binding["cwd"], "/original/project");
     if let Some(pump) = test.chat.main_pump.take() {
         pump.abort();
     }

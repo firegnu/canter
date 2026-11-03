@@ -66,6 +66,26 @@ fn help_lists_version() {
 }
 
 #[test]
+fn session_file_is_an_interactive_option_with_a_required_path() {
+    for prefix in [vec![], vec!["-c"], vec!["--resume", "session-id"]] {
+        let args = prefix
+            .into_iter()
+            .chain(["--session-file", "current session.json"])
+            .map(OsString::from);
+        let Command::Chat(args) = canter::parse(args).unwrap() else {
+            panic!("interactive command")
+        };
+        assert_eq!(
+            args.session_file.unwrap(),
+            std::path::Path::new("current session.json")
+        );
+    }
+    assert!(canter::parse([OsString::from("--session-file")]).is_err());
+    assert!(canter::parse(["exec", "--session-file", "current.json"].map(OsString::from)).is_err());
+    assert!(canter::USAGE.contains("--session-file <path>"));
+}
+
+#[test]
 fn add_dir_parses_repeated_paths_with_new_continue_and_resume() {
     for prefix in [vec![], vec!["-c"], vec!["--resume", "session-id"]] {
         let args = prefix

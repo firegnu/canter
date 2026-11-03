@@ -57,6 +57,7 @@ impl Harness {
         let (sender, messages) = mpsc::unbounded_channel();
         let naming = AutoName::new(&SessionSnapshot::empty("test"), false, sender.clone());
         let chat = Chat {
+            session_file: None,
             connector: Arc::new(SocketConnector(socket.clone())),
             client: Client::new(&socket).unwrap(),
             server: None,

@@ -525,6 +525,14 @@ P2-183（11-02）：子会话一屏中，主会话有未回答的 `ask_user` 或
 
 ## 接 corral、paddock、pony（P2-83，2026-11-03 用户定）
 
+P2-191（11-03）：用户在「终端写一个文件 / 服务端登记每个客户端」中选择「终端写一个文件」。交互式 `canter --session-file <path>` 发布 JSON `{"sessionId":"s-…","cwd":"/absolute/project","stateDir":"/absolute/state"}`，字段名 camelCase，后续只兼容新增；不带选项时不写。会话创建或恢复成功时首次写入；`/new`、`/resume`、分叉、交接及返回时更新，服务端升级重连后同 ID 也重写。进子会话一屏只是查看，保留进入前的会话身份；从子会话回主界面同样不切换身份。每次在目标同目录写临时文件、设 0600、整份改名替换，退出保留；没有会话时不发布文件。启动预检目标能否写入，首次发布失败报英文错误退出；后续失败显示英文错误并继续，下次切换或重连重试。
+
+`stateDir` 是本终端使用的绝对状态目录（`CANTER_HOME`，未设置时为 `$HOME/.canter`），避免读取方必须继承相同环境。公开发现约定：读取 `<stateDir>/server.json` 的 `socketPath`、`protocolVersion`、`version`、`instance`，通过该 Unix socket 请求 `GET /v1/info` 并核对协议和服务端版本；登记文件本身不证明服务端存活。断线后重读登记、重连，不缓存旧进程身份。会话文件仅含 ID、工作目录和状态目录，不含环境、令牌或 API key。
+
+`GET /v1/events?session=<id>&observe=true` 是可选的只看订阅：与普通订阅共用事件、`after` / `Last-Event-ID` 补发、心跳和关闭会话处理，只跳过 `attach_client`，不计入 P2-172 客户端数，不延迟 `SessionEnd(client_exit)`、不触发 `SessionStart(resume)`。缺省或 `observe=false` 保持原行为，终端自己的订阅仍计数。这是 canter HTTP/SSE 的可选扩展，不增加客户端登记或改变核心会话模型。
+
+子会话屏幕沿用界面既有的 `parent.sessionId` 作为主会话身份，cwd 读主会话快照。直接恢复子会话或从交接返回子会话时也据此发布；仅在同一主会话下进入子屏幕时不重写。重连重写保留的主会话身份，不把正在看的子会话 ID 写进去。
+
 依据：调研报告 `docs/调研/P2-83-接corral和paddock调研.md`。报告第 5 节四件，用户：「其他我都没有异议，可以按照你的建议走」；受管理模式做轻还是做全，用户：「做全的，按你的建议走」。照第 1 条，canter 只做通用的公开能力，不写 corral 的名字；corral、paddock、pony 要改的写成需求单直接交用户，由用户放进 ranch、paddock 各自的仓库，canter 仓库不放（第 1 条）。
 
 - **状态从哪来**：corral 订 canter 现有的快照和事件流（报告的做法四最小版），不靠钩子；终端界面照旧开在 corral 的终端里，attach、read、keys、send 不变。订阅和事件翻译放在 corral 里 canter 自己的接入文件，corral 的公共代码只加一个通用挂点（某一家可以带一个盯状态的后台线程，pen 负责起停，升级 pen 后接着订）。
