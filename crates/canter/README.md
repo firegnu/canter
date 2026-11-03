@@ -2,6 +2,28 @@
 
 Run `canter --help` for interactive options and subcommands.
 
+## Close sessions when this terminal exits
+
+`canter --close-on-exit` makes this terminal responsible for every session it
+creates or resumes during this run, including `/new`, `/resume`, `/fork`, handoff
+and return. Switching sessions keeps the previous ones open. On normal exit or
+HUP / TERM, the terminal asks the server to close them all. It exits within five
+seconds of the signal without waiting for cleanup; the server finishes cancelling
+turns, stopping background commands and handling sub-agents through the existing
+session close path. Sessions remain on disk and can be resumed later.
+
+If the terminal crashes, is killed, or loses its independent lease connection,
+the server waits ten seconds for the same terminal run to reconnect, then closes
+its sessions. Other terminals and read-only observers do not prevent this. Once
+cleanup starts, reconnecting cannot undo it; start another terminal to resume.
+
+During `serve --replace` or `upgrade`, the old server closes its sessions as usual.
+The terminal reconnects and claims the sessions it actually opens in the new
+server. Ownership is kept only in memory. The option requires a server advertising
+`managedClients`; update an older server with `canter serve --replace` first.
+Without this option, exiting still leaves sessions running. `canter exec` does
+not accept `--close-on-exit`.
+
 ## Publish the current session
 
 `canter --session-file <path>` writes a JSON file for programs following this

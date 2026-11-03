@@ -59,6 +59,7 @@ Options:
   --session-file <path> write the current session and server location as JSON
   -r, --resume [id]     resume a session; without an id, pick from a list
   --tag <key=value>     label a new session (repeatable; last value wins)
+  --close-on-exit       close every session opened by this terminal when it exits
   --yolo               use permission mode Allow all (never ask); commands still run in the sandbox
   -V, --version        show the version and commit
   -h, --help           show this help
@@ -83,6 +84,7 @@ pub enum Command {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ChatArgs {
+    pub close_on_exit: bool,
     pub session_file: Option<PathBuf>,
     pub tags: BTreeMap<String, String>,
     pub additional_directories: Vec<String>,
@@ -174,6 +176,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
             "--yolo" => chat.yolo = true,
+            "--close-on-exit" => chat.close_on_exit = true,
             "--session-file" => {
                 chat.session_file = Some(
                     args.next_if(|next| !next.starts_with('-'))
@@ -351,9 +354,16 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
             first: args.first,
         },
     };
+    let mut connected = connected(connection)?;
+    if args.close_on_exit {
+        connected.client = connected
+            .client
+            .with_close_on_exit()
+            .map_err(|error| error.to_string())?;
+    }
     Ok(Launch {
         session_file,
-        connected: connected(connection)?,
+        connected,
         connector: ServerConnector {
             state_dir: context.state_dir,
         },

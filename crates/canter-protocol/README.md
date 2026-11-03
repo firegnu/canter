@@ -74,6 +74,48 @@ input 为空，没有 userMessage，clientName 为 background。每批可以有�
 | DELETE SESSION | SessionCloseParams | SessionCloseResponse |
 | POST SESSION_TRASH | 无 | HTTP 204，无响应体 |
 | GET EVENTS | EventsParams | EventsResponse（每个 SSE data 帧） |
+| GET MANAGED_CLIENT | 路径 id，无请求体 | 独立保活 SSE，仅心跳注释 |
+| DELETE MANAGED_CLIENT | 路径 id，无请求体 | HTTP 202，无响应体 |
+
+### Managed terminal lifetime (P2-192)
+
+`info.features` includes `managedClients`. Before opening any managed session,
+connect `GET /v1/managedClients/{id}` with a fresh random ID for this terminal run.
+IDs contain 1–128 ASCII letters, digits, `-` or `_`. The response is
+`text/event-stream` with a heartbeat comment every second (including immediately
+on connection); it has no session events, cursor or replay. Keep consuming it.
+Multiple overlapping connections with the same ID share one lifetime; after the
+last disconnect, a ten-second grace period starts. Reconnect within it to retain
+ownership. Ordinary `/v1/events` streams, including `observe=true`, do not count.
+
+Send `x-canter-managed-client: <id>` with `POST /v1/sessions`,
+`POST /v1/sessions/{id}/resume`, and `POST /v1/sessions/{id}/fork` to claim the
+opened session. A fork claims only its new session. The header is optional and
+does not change any JSON fields. An unknown or exited owner returns `conflict`;
+the lease must be established first. Claims remain across session switches.
+Multiple managed terminals can explicitly claim the same session; any of them
+exiting closes that session, even if ordinary terminals remain attached.
+
+`DELETE /v1/managedClients/{id}` marks the owner exited and immediately returns
+202. It is idempotent (unknown IDs also return 202). The server independently
+closes the claimed instances through the existing session-close path, including
+open requests already accepted but still finishing. Disconnecting the caller
+does not cancel cleanup. The response acknowledges acceptance, not completion;
+watch session events or read snapshots for completion. Grace expiry does the
+same. An exited ID cannot reconnect or claim more sessions in this server.
+Closing a stored instance does not close a later unmanaged resume of that ID.
+
+Ownership and terminal IDs are memory-only; they never enter snapshots, events,
+model context or session storage. Session close uses the existing `client_request`
+reason. P2-172's ordinary subscriber lifecycle is unchanged: if it already emitted
+`SessionEnd(client_exit)`, cleanup does not emit another End. Concurrent expiry
+and client departure emit one End, with the reason of whichever path wins.
+
+On server drain, lease expiry is disarmed and the usual shutdown path takes over.
+After a server replacement, reconnect the lease and claim sessions when opening
+them in the new instance; no ownership or unopened sessions are carried over.
+No new drain/shutdown wait is added. These optional HTTP interfaces are canter
+extensions; they preserve the existing Codex-style session JSON contracts.
 
 协议版本为 `PROTOCOL_VERSION`。每个会话的持久事件序号从 1 开始，空快照的
 `lastEventSeq` 为 0；时间为 Unix 毫秒。单会话命令回复的 `eventSeq` 指向

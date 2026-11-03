@@ -143,10 +143,10 @@ impl Harness {
             self.chat.act(self.ui.app_mut(), action);
         }
     }
-    pub(super) async fn stop(self) {
+    pub(super) async fn stop(mut self) {
         self.server.abort();
         assert!(self.server.await.unwrap_err().is_cancelled());
-        self.chat.pump.await.unwrap();
+        (&mut self.chat.pump).await.unwrap();
     }
 }
 

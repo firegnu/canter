@@ -12,6 +12,9 @@ mod agents;
 #[path = "memory_tests.rs"]
 mod memory;
 
+#[path = "managed_tests.rs"]
+mod managed;
+
 struct Harness {
     app: Arc<App>,
     client: reqwest::Client,
@@ -51,6 +54,7 @@ impl Harness {
             sessions: Default::default(),
             session_locks: Default::default(),
             registry_changed: Default::default(),
+            managed: Default::default(),
             #[cfg(test)]
             pauses: Default::default(),
             draining: Default::default(),

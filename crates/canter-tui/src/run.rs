@@ -389,6 +389,50 @@ pub async fn run<C: Connector>(launch: Launch<C>) -> Result<Option<String>, RunE
 
 /// [`run`] on any backend, with terminal events from `input`.
 pub async fn run_on<B, C>(
+    terminal: Terminal<B>,
+    input: Input,
+    launch: Launch<C>,
+) -> Result<Option<String>, RunError>
+where
+    B: FrameSync,
+    B::Error: std::error::Error + Send + Sync + 'static,
+    C: Connector,
+{
+    let Some(id) = launch.connected.client.managed_id.clone() else {
+        return run_connected(terminal, input, launch).await;
+    };
+    let mut shutdown = Shutdown::listen()?;
+    let managed = crate::managed::Managed::new(launch.connector, id);
+    let watch = managed.watch();
+    let operation = async {
+        let connected = managed.attach(launch.connected).await?;
+        run_connected(
+            terminal,
+            input,
+            Launch {
+                connector: managed.clone(),
+                connected,
+                session_file: launch.session_file,
+                open: launch.open,
+                env: launch.env,
+                client_name: launch.client_name,
+                home: launch.home,
+                version: launch.version,
+            },
+        )
+        .await
+    };
+    let result = tokio::select! {
+        biased;
+        _ = shutdown.wait() => Ok(None),
+        result = operation => result,
+    };
+    drop(watch);
+    managed.close().await;
+    result
+}
+
+async fn run_connected<B, C>(
     mut terminal: Terminal<B>,
     mut input: Input,
     launch: Launch<C>,
@@ -936,7 +980,7 @@ where
     chat.cancel_btw();
     ui.app_mut().stop_status_line().await;
     leave_tab(ui.backend_mut(), &mut tab);
-    result.map(|()| Some(chat.session))
+    result.map(|()| Some(chat.session.clone()))
 }
 
 /// A session's name from its first message: the first non-empty line, cut
@@ -1439,6 +1483,22 @@ struct Chat<C> {
     main_pump: Option<tokio::task::JoinHandle<()>>,
     btw: Option<(usize, tokio::task::JoinHandle<()>)>,
     naming: AutoName,
+}
+
+impl<C> Drop for Chat<C> {
+    fn drop(&mut self) {
+        // Only managed runs can be cancelled by the outer signal deadline.
+        if self.client.managed_id.is_none() {
+            return;
+        }
+        self.pump.abort();
+        if let Some(pump) = &self.main_pump {
+            pump.abort();
+        }
+        if let Some((_, task)) = &self.btw {
+            task.abort();
+        }
+    }
 }
 
 /// Only titles assigned by this terminal are undone. Serialize title updates
