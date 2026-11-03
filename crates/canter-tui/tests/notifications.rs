@@ -164,6 +164,7 @@ impl Canter {
             env.insert((*key).to_owned(), (*value).to_owned());
         }
         let launch = Launch {
+            session_file: None,
             connector: SocketConnector(socket.clone()),
             connected: Connected {
                 client: Client::new(&socket).unwrap(),

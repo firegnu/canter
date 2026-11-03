@@ -585,6 +585,10 @@ pub struct EventsParams {
     #[serde(default)]
     #[ts(type = "number")]
     pub after: u64,
+    /// Observe without joining the session's client lifecycle.
+    #[serde(default, skip_serializing_if = "crate::types::is_false")]
+    #[ts(optional = nullable)]
+    pub observe: bool,
 }
 
 /// One SSE data frame, encoded as the event itself (not a JSON array).

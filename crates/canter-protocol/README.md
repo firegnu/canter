@@ -339,6 +339,12 @@ data 为单行 JSON，内容里的换行保持 JSON 转义；帧末两个换行�
 否则用 `after`（默认 0）；空、负数、非十进制或溢出的 header 返回 invalid_request。
 `resume_after` 实现这一共享规则。心跳可以是 SSE 注释，不占事件序号。
 
+`GET /v1/events?session=<id>&observe=true` 只看事件，不登记为会话客户端。
+缺省或 `observe=false` 仍按普通客户端计数；终端自己的订阅保持普通模式。
+只看订阅与普通订阅的事件内容、补发、15 秒心跳和关闭会话处理相同，
+但不延迟最后一个普通客户端离开后的 `SessionEnd(client_exit)`，
+也不会在连上时触发 `SessionStart(resume)`。订阅存盘会话后，该会话被恢复时仍保持只看。
+
 ## 归并
 
 流式客户端和存盘重放使用 `apply_event_mut(&mut snapshot, &event)` 原地归并，

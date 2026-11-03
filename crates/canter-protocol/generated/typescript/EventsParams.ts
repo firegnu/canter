@@ -3,4 +3,8 @@
 /**
  * GET /v1/events?session={id}&after={seq}. Zero requests the complete history.
  */
-export type EventsParams = { session: string, after: number, };
+export type EventsParams = { session: string, after: number,
+/**
+ * Observe without joining the session's client lifecycle.
+ */
+observe?: boolean, };

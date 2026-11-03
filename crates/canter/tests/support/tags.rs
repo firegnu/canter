@@ -51,6 +51,7 @@ async fn tagged_creation_rejects_servers_without_tags_before_sending() {
             backend,
             input,
             Launch {
+                session_file: None,
                 connected: Connected {
                     client: Client::new(&socket).unwrap(),
                     warning: None,

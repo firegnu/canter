@@ -35,13 +35,17 @@ async fn wait_lines(fixture: &Fixture, name: &str, count: usize) -> Vec<Value> {
 }
 
 async fn connect(fixture: &Fixture, url: &str) -> reqwest::Response {
+    connect_query(fixture, url, "").await
+}
+
+async fn connect_query(fixture: &Fixture, url: &str, query: &str) -> reqwest::Response {
     reqwest::Client::builder()
         .no_proxy()
         .unix_socket(fixture.root.path().join("state/server.sock"))
         .build()
         .unwrap()
         .get(format!(
-            "http://localhost/v1/events?session={}",
+            "http://localhost/v1/events?session={}{query}",
             url.rsplit('/').next().unwrap()
         ))
         .send()
@@ -49,6 +53,59 @@ async fn connect(fixture: &Fixture, url: &str) -> reqwest::Response {
         .unwrap()
         .error_for_status()
         .unwrap()
+}
+
+#[tokio::test]
+async fn observer_receives_events_without_delaying_end_or_resuming_client_lifecycle() {
+    let (mut fixture, url) = fixture().await;
+    let mut client = connect(&fixture, &url).await.bytes_stream().eventsource();
+    let mut observer = connect_query(&fixture, &url, "&observe=true")
+        .await
+        .bytes_stream()
+        .eventsource();
+    let first = client.next().await.unwrap().unwrap();
+    let observed = observer.next().await.unwrap().unwrap();
+    assert_eq!(observed.data, first.data);
+    assert_eq!(observed.id, first.id);
+    fixture
+        .client
+        .patch(&url)
+        .json(&json!({"name":"Observed change"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let observed = tokio::time::timeout(Duration::from_secs(5), observer.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(observed.data, event.data);
+        assert_eq!(observed.id, event.id);
+        if event.data.contains("Observed change") {
+            break;
+        }
+    }
+    drop(client);
+    let ended = wait_lines(&fixture, "ends.jsonl", 1).await;
+    assert_eq!(ended[0]["reason"], "client_exit");
+    let another = connect_query(&fixture, &url, "&observe=true").await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(lines(&fixture, "starts.jsonl").len(), 1);
+    let ordinary = connect(&fixture, &url).await;
+    assert_eq!(
+        wait_lines(&fixture, "starts.jsonl", 2).await[1]["source"],
+        "resume"
+    );
+    drop((ordinary, observer, another));
+    stop(&mut fixture).await;
 }
 
 async fn stop(fixture: &mut Fixture) {

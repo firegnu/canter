@@ -2720,6 +2720,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "observe": {
+          "description": "Observe without joining the session's client lifecycle.",
+          "type": "boolean"
+        },
         "session": {
           "type": "string"
         }
