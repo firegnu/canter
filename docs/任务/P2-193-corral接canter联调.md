@@ -23,3 +23,4 @@
 - paddock 冒烟联调（用户在场，paddock/main 主持）全部通过：新建 canter（`canter --yolo`）、图标、点信任后 starting 转 idle、发话 working 再回 idle、reply 取得到、暂停按钮和菜单 Pause 灰掉、Integrations 显示 Built in、停止时 corral 报 exiting 后消失（这次没剩会话，没出提示）。
 - ranch 托看的两件（`/fork` 之后 corral 报的状态、子 agent 批准框关掉后回到 idle）：用户决定这次不测，留给以后。
 - ranch 指出 canter 协议 README 缺三处（`/v1/info` 字段、子 agent 请求的字段形状、`session.status` error 的含义），要不要开 P2-196 补，待用户定。
+- paddock 补充：派活主流程用 canter 走通。`corral start` 开 `canter --yolo`（带 `--prompt`），在 worktree 里改文件、提交两轮；第二轮用 `corral send` 派，`send --after` 提醒和后台 `corral wait` 按时叫醒主控，reply 取到 DONE。`stop` 返回 `remaining_sessions:null`，paddock 按空处理（ranch CONTRACT 写的是全关了不带这个字段，两者不一致，属 ranch 那边，不挡）。
