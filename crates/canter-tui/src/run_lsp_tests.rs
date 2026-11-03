@@ -71,7 +71,7 @@ async fn lsp_lists_servers_and_a_servers_details_stop_and_retry() {
     ]}));
     test.message().await;
     let shown = rows(&test).join("\n");
-    assert!(has(&test, &[" LSP  2 servers"]), "{shown}");
+    assert!(has(&test, &[" LSP · 2 servers"]), "{shown}");
     assert!(
         has(
             &test,
@@ -112,7 +112,7 @@ async fn lsp_lists_servers_and_a_servers_details_stop_and_retry() {
         "{shown}"
     );
     assert!(
-        has(&test, &[" s stop · r retry · Backspace list"]),
+        has(&test, &[" s stop · r retry · Backspace list · Esc close"]),
         "{shown}"
     );
 
@@ -129,7 +129,7 @@ async fn lsp_lists_servers_and_a_servers_details_stop_and_retry() {
     let shown = rows(&test).join("\n");
     assert!(has(&test, &["the server went away"]), "{shown}");
     assert!(
-        has(&test, &[" s stop · r retry · Backspace list"]),
+        has(&test, &[" s stop · r retry · Backspace list · Esc close"]),
         "{shown}"
     );
 
@@ -177,7 +177,7 @@ async fn lsp_says_when_the_server_is_too_old_or_has_no_servers() {
     list.json(json!({"data":[]}));
     test.message().await;
     let shown = rows(&test).join("\n");
-    assert!(has(&test, &[" LSP  0 servers"]), "{shown}");
+    assert!(has(&test, &[" LSP · 0 servers"]), "{shown}");
     assert!(
         has(&test, &[" No language servers for this session."]),
         "{shown}"

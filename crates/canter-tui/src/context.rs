@@ -1,18 +1,18 @@
-use crate::report::{Part, Report, clean};
+use crate::report::{Part, Report, clean, title};
 use crate::{app::tokens, approval::shorten_home};
 use canter_protocol::{ContextResponse, ContextSectionKind};
-use ratatui::style::Style;
 use ratatui::text::Span;
 
 /// Each line, and the path that ends it (empty when none).
 pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<(String, String)> {
     let window = report.model_context_window;
     let percent = crate::statusline::percent;
-    // Of the window, and of the compaction line when the server says it.
+    // The title's detail: of the window, and of the compaction line when
+    // the server says it.
     let mut lines = vec![match report.context_tokens {
         Some(used) if window > 0 => {
             let mut line = format!(
-                "Context  {}/{} window ({}%)",
+                "{}/{} window ({}%)",
                 tokens(used),
                 tokens(window),
                 percent(window, used).unwrap_or_default()
@@ -24,8 +24,8 @@ pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<(String
             }
             line + " · last request"
         }
-        Some(used) => format!("Context  {} · last request", tokens(used)),
-        None => "Context  no request yet".into(),
+        Some(used) => format!("{} · last request", tokens(used)),
+        None => "no request yet".into(),
     }];
     let mut paths = vec![String::new()];
     for section in &report.prefix {
@@ -93,10 +93,7 @@ pub(crate) fn popup(report: &ContextResponse, home: Option<&str>) -> Report {
     let notes = lines.split_off(lines.len() - 2);
     let sections = lines.split_off(1);
     Report::new(
-        vec![Span::styled(
-            format!(" {}", lines[0].0),
-            Style::new().bold(),
-        )],
+        title("Context", &lines[0].0),
         sections
             .into_iter()
             .map(|(section, path)| {

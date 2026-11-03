@@ -60,25 +60,21 @@ impl View {
                 });
             }
         }
-        Report::new(
-            vec![Span::styled(" Memory", Style::new().bold())],
-            body,
-            Vec::new(),
-        )
-        .keys(if self.confirming {
-            " y confirm · n/Esc cancel"
-        } else if self.list.data.is_empty() {
-            " Esc close"
-        } else {
-            " ↑↓ select · Enter edit · d delete · Esc close"
-        })
-        .focus(focus)
+        Report::new(crate::report::title("Memory", ""), body, Vec::new())
+            .keys(if self.confirming {
+                " y confirm · n/Esc cancel"
+            } else if self.list.data.is_empty() {
+                " Esc close"
+            } else {
+                " ↑↓ select · Enter edit · d delete · Esc close"
+            })
+            .focus(focus)
     }
 }
 
 pub(crate) fn error(error: &str) -> Report {
     Report::new(
-        vec![Span::styled(" Memory", Style::new().bold())],
+        crate::report::title("Memory", ""),
         vec![Part::Wrap {
             indent: 1,
             text: clean(error),

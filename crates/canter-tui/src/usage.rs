@@ -1,6 +1,8 @@
 //! Shared CLI and conversation rendering. Prices and arithmetic stay on the server.
+use crate::report::{Part, Report, title};
 use crate::text::{sanitize, str_width};
 use canter_protocol::{UsageCost, UsageResponse, UsageRow};
+use ratatui::text::Span;
 
 pub(crate) fn dollars(usd: f64) -> String {
     if usd > 0.0 && usd < 0.01 {
@@ -22,7 +24,38 @@ pub(crate) fn cost(value: &UsageCost) -> String {
     }
 }
 
+/// The table and the last turn's cost, token counts in full, for the CLI.
 pub fn format_report(report: &UsageResponse) -> Vec<String> {
+    let mut lines = table(report, |count| count.to_string());
+    lines.extend(last_turn(report));
+    lines
+}
+
+/// `/usage` above the input box until Esc or Enter: the table, token
+/// counts as `/context` writes them (`340k`, `1.2M`), then the last turn's
+/// cost.
+pub(crate) fn popup(report: &UsageResponse) -> Report {
+    Report::new(
+        title("Usage", ""),
+        table(report, crate::app::tokens)
+            .into_iter()
+            .map(|line| Part::Line(vec![Span::raw(format!(" {line}"))]))
+            .collect(),
+        last_turn(report)
+            .into_iter()
+            .map(|line| vec![Span::raw(format!(" {line}"))])
+            .collect(),
+    )
+}
+
+fn last_turn(report: &UsageResponse) -> Option<String> {
+    let last = report.last_turn_cost.as_ref()?;
+    (!report.data.is_empty()).then(|| format!("Last turn: {}", cost(last)))
+}
+
+/// A row for each model (and date), then the total; `count` writes a
+/// token count.
+fn table(report: &UsageResponse, count: impl Fn(u64) -> String) -> Vec<String> {
     if report.data.is_empty() {
         return vec!["No usage recorded.".into()];
     }
@@ -55,14 +88,11 @@ pub fn format_report(report: &UsageResponse) -> Vec<String> {
         lines.push(format!(
             "{date}{name}{}  {:>10}  {:>10}  {:>10}  {}",
             " ".repeat(width.saturating_sub(str_width(&name))),
-            row.cached_input_tokens,
-            row.uncached_input_tokens,
-            row.output_tokens,
+            count(row.cached_input_tokens),
+            count(row.uncached_input_tokens),
+            count(row.output_tokens),
             cost(&row.cost)
         ));
-    }
-    if let Some(last) = &report.last_turn_cost {
-        lines.push(format!("Last turn: {}", cost(last)));
     }
     lines
 }

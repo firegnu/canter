@@ -79,7 +79,7 @@ impl View {
                 _ => unreachable!(),
             };
             return Report::new(
-                vec![Span::styled(" Permissions", Style::new().bold())],
+                crate::report::title("Permissions", ""),
                 vec![Part::Wrap {
                     indent: 1,
                     text: description,
@@ -162,7 +162,7 @@ impl View {
             }
         }
         Report::new(
-            vec![Span::styled(" Permissions", Style::new().bold())],
+            crate::report::title("Permissions", ""),
             body,
             vec![
                 vec![Span::raw(format!(
@@ -186,7 +186,7 @@ impl View {
 
 pub(crate) fn error(error: &str) -> Report {
     Report::new(
-        vec![Span::styled(" Permissions", Style::new().bold())],
+        crate::report::title("Permissions", ""),
         vec![Part::Wrap {
             indent: 1,
             text: format!("Could not read rules: {}", clean(error)),

@@ -221,7 +221,7 @@ async fn files_shows_sections_with_git_words_and_staged_marks() {
     assert_eq!(
         screen.popup(" Files"),
         [
-            " Files  read 2 · changed 2 · git 7",
+            " Files · read 2 · changed 2 · git 7",
             "",
             " Read",
             "   src/app.js",
@@ -281,7 +281,7 @@ async fn files_outside_a_repository_says_so_and_none_for_empty_sections() {
     assert_eq!(
         screen.popup(" Files"),
         [
-            " Files  read 0 · changed 0 · git 0",
+            " Files · read 0 · changed 0 · git 0",
             "",
             " Read",
             "   (none)",
@@ -330,7 +330,7 @@ fn mcp_shows_each_service_with_its_tools_laid_out_in_rows() {
     assert_eq!(
         screen.popup(" MCP"),
         [
-            " MCP  3 services · 10 tools",
+            " MCP · 3 services · 10 tools",
             "",
             " ● context7     connected · 2 tools",
             "   query-docs  resolve-library-id",
@@ -403,7 +403,7 @@ fn skills_shows_global_and_project_sections_with_descriptions_cut_at_two_rows() 
     assert_eq!(
         screen.popup(" Skills"),
         [
-            " Skills  3 · global 2 · project 1",
+            " Skills · 3 · global 2 · project 1",
             "",
             " Global  ~/.agents/skills",
             "   corral",
@@ -543,9 +543,9 @@ fn sandbox_lists_what_it_allows_or_how_to_turn_it_on() {
     screen.ui.app_mut().show_sandbox(&report);
     screen.draw();
     assert_eq!(
-        screen.popup(" Sandbox on"),
+        screen.popup(" Sandbox · on"),
         [
-            " Sandbox on",
+            " Sandbox · on",
             "",
             " Writable: ~/project, ~/extra, /private/tmp/canter-shell-abc, ~/Library/Caches/canter/cargo, ~/Library/Caches/canter/npm",
             " Read-only: .git config and hooks, ~/.cargo, ~/.npm",
@@ -556,16 +556,16 @@ fn sandbox_lists_what_it_allows_or_how_to_turn_it_on() {
             " Esc close",
         ]
     );
-    assert_eq!(screen.style(" Sandbox on").1, Modifier::BOLD);
+    assert_eq!(screen.style(" Sandbox · on").1, Modifier::BOLD);
     screen.key(KeyCode::Esc);
-    assert!(screen.popup(" Sandbox on").is_empty());
+    assert!(screen.popup(" Sandbox · on").is_empty());
     // After switching to Allow all the server reports the network open.
     report.network = true;
     screen.ui.app_mut().show_sandbox(&report);
     screen.draw();
     assert!(
         screen
-            .popup(" Sandbox on")
+            .popup(" Sandbox · on")
             .contains(&" Network: on (Allow all)".to_owned())
     );
 
@@ -577,9 +577,9 @@ fn sandbox_lists_what_it_allows_or_how_to_turn_it_on() {
         .show_sandbox(&SessionSandboxResponse::default());
     screen.draw();
     assert_eq!(
-        screen.popup(" Sandbox off."),
+        screen.popup(" Sandbox · off"),
         [
-            " Sandbox off.",
+            " Sandbox · off",
             "",
             " Set \"sandbox\": true in config.json (or remove the line), then run canter serve --replace.",
             "",

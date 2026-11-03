@@ -94,7 +94,7 @@ pub(crate) fn layout(
     ApprovalBox {
         title: Line::from(vec![
             Span::styled("─ ", theme::warning_border()),
-            Span::styled("Ask user ", theme::warning().bold()),
+            Span::styled("Question ", theme::warning().bold()),
         ]),
         position: (fits && max_scroll > 0).then(|| {
             Line::from(format!(

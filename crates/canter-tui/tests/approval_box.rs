@@ -361,6 +361,13 @@ fn question_keys_follow_the_visible_frame_and_both_300ms_guards() {
     screen.draw();
     assert!(screen.screen().contains("2. PostgreSQL"));
     assert!(screen.dim("PostgreSQL"));
+    // The box is titled for the user, not for the model's tool.
+    assert!(
+        screen.screen().contains("─ Question "),
+        "{}",
+        screen.screen()
+    );
+    assert!(!screen.screen().contains("Ask user"));
     for key in [KeyCode::Enter, KeyCode::Char('2'), KeyCode::Down] {
         screen.wait(ANSWER_GUARD_MS - 1);
         assert_eq!(screen.key(key), None, "guard extends on every key");
@@ -389,7 +396,7 @@ fn question_keys_follow_the_visible_frame_and_both_300ms_guards() {
         })
     );
     screen.draw();
-    assert!(!screen.screen().contains("─ Ask user"));
+    assert!(!screen.screen().contains("─ Question"));
     assert_eq!(screen.key(KeyCode::Char('稿')), None);
     screen.wait(ANSWER_GUARD_MS - 1);
     assert_eq!(

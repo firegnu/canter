@@ -12,7 +12,7 @@ use unicode_width::UnicodeWidthStr;
 
 const SESSION: &str = "s1";
 const WIDTH: u16 = 80;
-const TITLE: &str = " Context  120k/1M window (12%) · last request";
+const TITLE: &str = " Context · 120k/1M window (12%) · last request";
 
 struct Screen {
     ui: Ui<TestBackend>,
@@ -331,6 +331,6 @@ fn the_first_line_names_the_window_and_the_compaction_line() {
     screen.draw();
     assert_eq!(
         screen.rows().iter().find(|row| row.starts_with(" Context")),
-        Some(&" Context  120k/1M window (12%) · compacts at 400k (30%) · last request".to_owned())
+        Some(&" Context · 120k/1M window (12%) · compacts at 400k (30%) · last request".to_owned())
     );
 }

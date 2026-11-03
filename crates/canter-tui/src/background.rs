@@ -9,7 +9,8 @@ use ratatui::{style::Style, text::Span};
 
 pub(crate) fn chooser(commands: &[BackgroundCommand], now: i64) -> Chooser {
     Chooser {
-        title: "Background commands · s stop",
+        title: "Background commands",
+        keys: "↑↓ select · Enter choose · s stop · Esc cancel",
         selected: 0,
         choices: commands
             .iter()
@@ -44,7 +45,7 @@ fn status(command: &BackgroundCommand) -> String {
 }
 pub(crate) fn empty() -> Report {
     Report::new(
-        vec![Span::styled(" Background commands", Style::new().bold())],
+        crate::report::title("Background commands", ""),
         vec![Part::Line(vec![Span::raw(
             " No background commands in this session.",
         )])],
@@ -73,18 +74,12 @@ pub(crate) fn output(output: &BackgroundCommandOutput) -> Report {
             }),
     );
     Report::new(
-        vec![Span::styled(
-            format!(
-                " Background #{} · {}",
-                output.command.id,
-                status(&output.command)
-            ),
-            Style::new().bold(),
-        )],
+        crate::report::title(
+            &format!("Background #{}", output.command.id),
+            &status(&output.command),
+        ),
         body,
-        vec![vec![Span::styled(
-            " s stop · r refresh · Backspace list",
-            theme::secondary(),
-        )]],
+        Vec::new(),
     )
+    .keys(" s stop · r refresh · Backspace list · Esc close")
 }

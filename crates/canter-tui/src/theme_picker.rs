@@ -20,8 +20,9 @@ use crate::statusline::setup::window;
 use crate::text::{spans_width, truncate};
 use crate::theme;
 
-const TITLE: &str = " Theme · code and diff colours";
-const KEYS: &str = " ↑/↓ preview · Enter save · Esc cancel";
+const TITLE: &str = "Theme";
+const ABOUT: &str = "code and diff colours";
+const KEYS: &str = "↑/↓ preview · Enter save · Esc cancel";
 const SIXTEEN: &str = " This terminal shows 16 colours; only terminal applies";
 /// The most rows the list takes.
 const LIST_ROWS: usize = 8;
@@ -108,11 +109,11 @@ impl ThemePicker {
     pub fn rows(&self, width: u16, max: usize) -> Vec<Line<'static>> {
         let width = usize::from(width);
         let cut = |spans: Vec<Span<'static>>, width| Line::from(truncate(spans, width));
-        let mut head = vec![cut(vec![Span::styled(TITLE, Style::new().bold())], width)];
+        let mut head = vec![cut(crate::report::title(TITLE, ABOUT), width)];
         if !highlight::themes_apply() {
             head.push(cut(vec![Span::styled(SIXTEEN, theme::warning())], width));
         }
-        let keys = cut(vec![Span::styled(KEYS, theme::secondary())], width);
+        let keys = cut(vec![crate::report::keys(KEYS)], width);
         let fixed = head.len() + 1;
         let side = width.saturating_sub(GAP) / 2;
         let list_width = width.saturating_sub(GAP + side);

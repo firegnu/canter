@@ -13,6 +13,13 @@ const NOW: i64 = 0;
 
 /// Every command, in the command list's order, with its line.
 const COMMANDS: [(&str, &str); 36] = [
+    ("/add-dir", "Add a directory to this session"),
+    ("/agents", "List sub-agents and open or stop one"),
+    (
+        "/btw",
+        "Ask one question without adding it to the conversation",
+    ),
+    ("/clear", "Start a new session (same as /new)"),
     ("/compact", "Summarize the conversation to free up context"),
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
@@ -20,6 +27,15 @@ const COMMANDS: [(&str, &str); 36] = [
     ("/exit", "Quit canter"),
     ("/export", "Save or copy the conversation as Markdown"),
     ("/files", "List session files and git status"),
+    (
+        "/fork",
+        "Copy completed turns into a new session and switch to it",
+    ),
+    (
+        "/goal",
+        "Set or view a goal; pause, resume, clear, or --budget USD",
+    ),
+    ("/handoff", "Draft a handoff note in a new session"),
     ("/help", "Show available commands"),
     ("/init", "Create or improve AGENTS.md for this project"),
     ("/lsp", "Show language servers"),
@@ -28,39 +44,23 @@ const COMMANDS: [(&str, &str); 36] = [
     ("/mode", "Change the permission mode"),
     ("/model", "Change the model"),
     ("/new", "Start a new session"),
-    (
-        "/fork",
-        "Copy completed turns into a new session and switch to it",
-    ),
-    ("/clear", "Start a new session (same as /new)"),
     ("/permissions", "View and delete command and file rules"),
     ("/plan", "Enter or leave read-only Plan mode"),
-    ("/resume", "Switch to another session"),
+    ("/ps", "List background commands and inspect or stop one"),
     ("/rename", "Rename this session; omit the name to clear it"),
-    ("/sandbox", "Show what the sandbox allows"),
-    ("/skills", "List this session's skills"),
-    ("/think", "Change thinking effort (none, low, high, max)"),
-    ("/usage", "Show this session's token usage and cost"),
-    (
-        "/btw",
-        "Ask one question without adding it to the conversation",
-    ),
-    ("/handoff", "Draft a handoff note in a new session"),
+    ("/resume", "Switch to another session"),
     (
         "/review",
         "Review uncommitted changes or a PR number/URL (read-only)",
     ),
     ("/rewind", "Rewind conversation, files, or both"),
+    ("/sandbox", "Show what the sandbox allows"),
+    ("/skills", "List this session's skills"),
     ("/statusline", "Choose and order what the status line shows"),
-    ("/ps", "List background commands and inspect or stop one"),
-    ("/agents", "List sub-agents and open or stop one"),
     ("/stop", "Stop all background commands in this session"),
     ("/theme", "Choose the code colour theme"),
-    ("/add-dir", "Add a directory to this session"),
-    (
-        "/goal",
-        "Set or view a goal; pause, resume, clear, or --budget USD",
-    ),
+    ("/think", "Change thinking effort (none, low, high, max)"),
+    ("/usage", "Show this session's token usage and cost"),
 ];
 
 const SECTIONS: [&str; 5] = [

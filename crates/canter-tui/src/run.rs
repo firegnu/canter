@@ -444,8 +444,15 @@ where
                 if requested_directories > 0 {
                     require_add_directories(&client).await?;
                 }
-                let Some(opening) =
-                    trust::confirm(&client, &cwd, &mut terminal, &mut input, &mut shutdown).await?
+                let Some(opening) = trust::confirm(
+                    &client,
+                    &cwd,
+                    home.as_deref(),
+                    &mut terminal,
+                    &mut input,
+                    &mut shutdown,
+                )
+                .await?
                 else {
                     return Ok(None);
                 };
@@ -497,9 +504,15 @@ where
                 match id {
                     Some(id) => {
                         let cwd = resume_cwd(&client, &id).await?;
-                        let Some(opening) =
-                            trust::confirm(&client, &cwd, &mut terminal, &mut input, &mut shutdown)
-                                .await?
+                        let Some(opening) = trust::confirm(
+                            &client,
+                            &cwd,
+                            home.as_deref(),
+                            &mut terminal,
+                            &mut input,
+                            &mut shutdown,
+                        )
+                        .await?
                         else {
                             return Ok(None);
                         };

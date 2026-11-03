@@ -7,14 +7,21 @@ Global AGENTS.md、Skills、Project AGENTS.md（每个文件一行）和 Environ
 Environment 是会话打开时固定的目录、仓库根、系统/架构和本地日期/时区。
 各段估算包含标签和段间空行，System prompt 包含消息开销，合计等于整条系统消息的估算。
 其后显示工具、压缩摘要、历史消息和剩余容量；查询沿用已装入的上下文，不重读文件。
-结果在输入框上方弹框显示，不写进对话区：第一行 `Context  24k/128k window (19%) · compacts at 46k (53%) · last request`（旧服务端不给压缩线时只写窗口那半句），中间各段，最后两行说明和 `Esc close`。
+结果在输入框上方弹框显示，不写进对话区：第一行 `Context · 24k/128k window (19%) · compacts at 46k (53%) · last request`（旧服务端不给压缩线时只写窗口那半句），中间各段，最后两行说明和 `Esc close`。
 数字是打开那一刻查到的，开着时不跟着变；Esc 或 Enter 关掉，对话区不留任何一行。
 开着时按键归弹框（Ctrl+C、Ctrl+D 也关掉），输入框里的草稿留着，关掉后接着打。
 窗口放不下时先让对话区让出地方，还放不下就让中间各段跟着 ↑/↓ 滚，上下写 `↑ N more` / `↓ N more`，
 第一行、说明行和 `Esc close` 一直留着。查询失败（比如会话还没打开）照旧在对话区提示一行，不弹框。
 
-`/files`、`/diff`、`/mcp`、`/skills` 的结果也这样弹框，打开、关闭、按键、草稿和放不下时的滚动都和 `/context` 一样。
-第一行是标题（加粗）加灰色的数量摘要，节之间空一行，节标题加粗，次要信息灰色，最后一行 `Esc close`。
+`/files`、`/diff`、`/mcp`、`/skills`、`/usage` 的结果也这样弹框，打开、关闭、按键、草稿和放不下时的滚动都和 `/context` 一样。
+节之间空一行，节标题加粗，次要信息灰色，最后一行 `Esc close`。
+
+输入框上方的弹框和选择框（`/context`、`/diff`、`/files`、`/help`、`/usage`、`/model`、`/think`、`/mode`、`/export`、`/theme`、
+`/statusline`、`/permissions`、`/mcp`、`/lsp`、`/memory`、`/skills`、`/ps`、`/agents`、`/rewind`、`/sandbox`、`/goal`）写法一样（P2-187）：
+第一行是标题，名字加粗，有说明时后面接灰色的 ` · 说明`（比如 `Files · read 2 · changed 1 · git 3`）；按键说明都在最后一行，灰色。
+选择框是标题、各项、按键说明三部分，比如 `/mode` 最后一行 `↑↓ select · Enter choose · Esc cancel`。
+`/agents` 的标题是 `Sub-agents · 3 · 2 running`（没有在跑的只写个数），按键 `↑↓ select · Enter open · s stop · Esc close`。
+提问框（模型用 `ask_user` 问的）边框上的标题是 `Question`；批准框的写法不变。
 
 - `/files`：`Read`、`Changed by canter`、`Git status · <分支>` 三节，空的节写 `(none)`，不在 git 仓库里写 `(not a git repository)`。
   Changed by canter 每行前写 added / modified / deleted，一个文件改过几种用 ` / ` 连起来。
@@ -30,18 +37,21 @@ Environment 是会话打开时固定的目录、仓库根、系统/架构和本�
   `Truncated at 256 KiB; run git diff for the rest`（列表是 `Untracked files truncated at 32 KiB; run git status for the rest`）。
   在后台跑，最多 15 秒，跑完才弹框，界面不卡。不在 git 仓库里写 `Not a git repository`，没有改动写 `No uncommitted changes`，
   git 出错红色写 `git: <出错原因>`。
-- `/mcp`：第一行 `MCP  N services · M tools`。每个服务一行，名字一栏对齐：连上了是绿色 `●` 和灰色的 `connected · N tools`，
+- `/mcp`：第一行 `MCP · N services · M tools`。每个服务一行，名字一栏对齐：连上了是绿色 `●` 和灰色的 `connected · N tools`，
   没连上是红色 `○` 和 `disconnected`，下一行写出错原因。工具只写短名，两个空格隔开，铺满宽度再换行，
   比整行还长的名字单独一行、截断；warnings 灰色写在服务下面。最后一行 `Tools are called as mcp__<service>__<tool>.`；
   没配服务时写 `No MCP services configured.`
-- `/skills`：第一行 `Skills  N · global X · project Y`，按 Global（`~/.agents/skills`）、Project（`.agents/skills`）分节，
+- `/skills`：第一行 `Skills · N · global X · project Y`，按 Global（`~/.agents/skills`）、Project（`.agents/skills`）分节，
   没有的节不写。名字用强调色，不给模型用的在同一行灰色写 `not for model`；描述另起一行，灰色，最多两行，超出用 `…` 截。
   没技能时写原来那四行说明：两个目录放在哪、放好后重新打开会话。
-- `/sandbox`（P2-166）：只看不改，内容向服务端现取（`GET /v1/sessions/{id}/sandbox`），家目录写成 `~`。开着时标题 `Sandbox on`，下面
+- `/sandbox`（P2-166）：只看不改，内容向服务端现取（`GET /v1/sessions/{id}/sandbox`），家目录写成 `~`。开着时标题 `Sandbox · on`，下面
   `Writable:`（cwd、新增目录、会话临时目录、两个缓存）、`Read-only: .git config and hooks, ...`、`No access:`、
   `Network:`（「全部允许」是 `on (Allow all)`，另两档 `off unless approved for one command`，切权限档后重开即变）、
-  `Not sandboxed: ! commands, MCP tools, web_fetch` 各一行，长了折行。关着时标题 `Sandbox off.`，下面一句怎么打开。
+  `Not sandboxed: ! commands, MCP tools, web_fetch` 各一行，长了折行。关着时标题 `Sandbox · off`，下面一句怎么打开。
   服务端没报沙箱状态（旧版）时不弹框，对话里写 `This server does not support /sandbox; run canter serve --replace and retry`。
+- `/usage`：标题 `Usage`，下面是本会话按模型分的表（列和以前一样：Model、Cache hit、Cache miss、Output、Cost (USD)，最后一行 Total），
+  token 数照 `/context` 写成 `340k`、`1.2M`，金额不变；表下面一行 `Last turn: $0.12`。以前直接写进对话、留在那里，P2-187 起改成弹框，
+  Esc 关掉后对话里什么都不留。命令行 `canter usage` 照旧写完整的数。
 
 ## 批准框
 
@@ -113,7 +123,6 @@ Esc 照旧打断本轮，300 毫秒的按键保护照旧。拒绝说明随工具
 
 ```
  Configure status line
- Space toggle · ←/→ move · Enter save · Esc cancel
 
  › [x] model        deepseek-v4-pro
    [x] thinking     think high
@@ -132,6 +141,7 @@ Esc 照旧打断本轮，300 毫秒的按键保护照旧。拒绝说明随工具
  Preview
   deepseek-v4-pro · think high · Always ask · $0.12
   ~/src/canter (main) · (+120,-8) · ███░░░░░░░ 120k/400k (30% to compact) · cache 95% (last 98%)
+ Space toggle · ←/→ move · Enter save · Esc cancel
 ```
 
 - **项**：model、thinking、permission、cost、directory、branch、diff、context、cache、tps、version、session。
@@ -314,7 +324,8 @@ Enter 发送，Shift+Enter 或 Ctrl+J 换行，Ctrl+V 贴图片，Ctrl+O 展开 
 
 ## `/` 命令列表
 
-第一个词以 `/` 开头、还没打空格时，列出名字以所打内容开头的命令。↑↓ 选，Tab 补全；
+第一个词以 `/` 开头、还没打空格时，列出名字以所打内容开头的命令。内置命令按名字的字母顺序排（`/add-dir`、`/agents`、`/btw` …），
+打字过滤后剩下的也按字母顺序；技能接在内置命令后面。`?` 帮助里 `Commands` 一节同样按字母排。↑↓ 选，Tab 补全；
 Enter 在命令名没打完时只补全、不执行，打完整了才执行。Esc 只关列表。
 
 普通消息刚发出、模型还没输出思考、回答或工具调用时按 Esc，会撤回这一轮，消息从对话里消失，
@@ -613,6 +624,11 @@ Enter 在命令名没打完时只补全、不执行，打完整了才执行。Es
   - 展开：先一行 `Thought`（知道用时是 `Thought for 4s`，还在想时是 `Thinking…`），
     下面全文按 markdown 画，整体灰色斜体，每行左边一条灰色 `┊`。用的和收起时同一份：有摘要用摘要，没有用原文。
   - 不能单独展开某一块。
+
+## markdown 标题
+
+模型回答里的标题（`src/markdown.rs`）三档分得开，也和正文里的 `**加粗**` 分得开（P2-187）：`#` 加粗加下划线，
+`##` 加粗、强调色（青色，深浅底都看得清），`###` 及以下加粗斜体；正文加粗只是加粗。`NO_COLOR` 时没有颜色，`##` 和正文加粗看起来一样。
 
 ## markdown 表格
 

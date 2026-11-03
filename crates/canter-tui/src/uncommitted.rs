@@ -6,7 +6,6 @@
 use std::time::Duration;
 
 use canter_protocol::PatchChangeKind;
-use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::diff::Diff;
@@ -34,7 +33,7 @@ pub async fn collect(cwd: &str) -> Changes {
 /// The box for `changes`: a section for each of staged, unstaged and
 /// untracked that has something in it, or why there is nothing to show.
 pub(crate) fn popup(changes: Changes) -> Report {
-    let title = vec![Span::styled(" Diff", Style::new().bold())];
+    let title = crate::report::title("Diff", "");
     let local = match changes.0 {
         Ok(local) => local,
         Err(error) if error.contains("not a git repository") => {

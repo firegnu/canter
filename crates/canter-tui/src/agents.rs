@@ -14,7 +14,7 @@ use crate::theme;
 
 /// The input box's grey text on a sub-agent's screen.
 pub(crate) const PLACEHOLDER: &str = "Message this sub-agent";
-const KEYS: &str = "↑↓ select · enter open · s stop · esc close";
+const KEYS: &str = "↑↓ select · Enter open · s stop · Esc close";
 pub(crate) const NONE: &str = "No sub-agents in this session.";
 
 pub(crate) fn type_label(kind: AgentType) -> &'static str {
@@ -117,12 +117,13 @@ impl Agents {
         })
     }
 
-    /// The open list's title: `▾ 3 sub-agents · 2 running`.
-    fn title(&self) -> String {
-        match self.running() {
-            0 => format!("▾ {}", count(self.list.len())),
-            running => format!("▾ {} · {running} running", count(self.list.len())),
-        }
+    /// The open list's title: `Sub-agents · 3 · 2 running`.
+    fn title(&self) -> Vec<Span<'static>> {
+        let detail = match self.running() {
+            0 => self.list.len().to_string(),
+            running => format!("{} · {running} running", self.list.len()),
+        };
+        crate::report::title("Sub-agents", &detail)
     }
 
     /// What each row of the open list opens: the main session (`None`,
@@ -178,7 +179,7 @@ impl Agents {
             .max()
             .unwrap_or(0);
         let cut = |spans: Vec<Span<'static>>| Line::from(truncate(spans, usize::from(width)));
-        let mut rows = vec![cut(vec![Span::styled(format!("  {}", self.title()), dim)])];
+        let mut rows = vec![cut(self.title())];
         for (index, (mark, name, about)) in labels
             .into_iter()
             .enumerate()
@@ -207,7 +208,7 @@ impl Agents {
             }
             rows.push(cut(spans));
         }
-        rows.push(cut(vec![Span::styled(format!("    {KEYS}"), dim)]));
+        rows.push(cut(vec![crate::report::keys(KEYS)]));
         rows
     }
 }
@@ -215,7 +216,7 @@ impl Agents {
 /// `/agents` in a session without sub-agents.
 pub(crate) fn empty() -> crate::report::Report {
     crate::report::Report::new(
-        vec![Span::styled(" Sub-agents", Style::new().bold())],
+        crate::report::title("Sub-agents", ""),
         vec![crate::report::Part::Line(vec![Span::raw(format!(
             " {NONE}"
         ))])],
@@ -288,7 +289,12 @@ mod tests {
         agents.update(agent("b", AgentStatus::Running));
         agents.update(agent("c", AgentStatus::Completed));
         assert_eq!(agents.row().unwrap(), "▸ 2 sub-agents running · 1 done");
-        assert_eq!(agents.title(), "▾ 3 sub-agents · 2 running");
+        let title: String = agents
+            .title()
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(title, " Sub-agents · 3 · 2 running");
         agents.update(agent("a", AgentStatus::Failed));
         agents.update(agent("b", AgentStatus::Interrupted));
         assert_eq!(agents.row().unwrap(), "▸ 3 sub-agents");

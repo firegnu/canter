@@ -223,7 +223,7 @@ async fn open_terminal_keeps_questions_and_permissions_after_exec_resume() {
         terminal.wait_idle().await;
         read_the_box().await;
         terminal.type_line("Ask me and run a command.").await;
-        terminal.wait_for("─ Ask user").await;
+        terminal.wait_for("─ Question").await;
         read_the_box().await;
         terminal.press(KeyCode::Char('2')).await;
         terminal.wait_for("Run this command?").await;
@@ -1599,7 +1599,7 @@ async fn ask_user_accepts_custom_text_even_with_allow_all() {
     let a = world
         .open(&["--yolo", "Choose storage"], "canter-tui a")
         .await;
-    a.wait_for("Ask user").await;
+    a.wait_for("─ Question").await;
     assert!(a.info().contains("Allow all"));
     read_the_box().await;
     a.press(KeyCode::Down).await;
@@ -1641,12 +1641,12 @@ async fn ask_user_escape_interrupts_and_closes_the_question() {
     let mut world = World::new(vec![ask_reply()]).await;
     world.start_server().await;
     let a = world.open(&["Choose storage"], "canter-tui a").await;
-    a.wait_for("Ask user").await;
+    a.wait_for("─ Question").await;
     a.press(KeyCode::Esc).await;
     a.wait_for("No answer").await;
     a.wait_for("Turn interrupted").await;
     a.wait_idle().await;
-    assert!(!a.screen().contains("─ Ask user"));
+    assert!(!a.screen().contains("─ Question"));
     let snapshot = world.snapshot(&world.only_session().await).await;
     assert!(snapshot.pending_requests.is_empty());
     assert_eq!(snapshot.turns[0].status, TurnStatus::Interrupted);
@@ -1662,7 +1662,7 @@ async fn ask_user_restart_cancels_the_unanswered_request() {
             World::new(vec![ask_reply(), text_reply("Continuing after restart.")]).await;
         world.start_server().await;
         let a = world.open(&["Choose storage"], "canter-tui a").await;
-        a.wait_for("Ask user").await;
+        a.wait_for("─ Question").await;
         let id = world.only_session().await;
         let request = world.snapshot(&id).await.pending_requests[0].id.clone();
         world.stop_server(signal).await;
@@ -1670,7 +1670,7 @@ async fn ask_user_restart_cancels_the_unanswered_request() {
             .await;
         world.start_server().await;
         a.wait_until("question closed after reconnect", |a| {
-            !a.screen().contains("─ Ask user") && !a.status().contains("Reconnecting")
+            !a.screen().contains("─ Question") && !a.status().contains("Reconnecting")
         })
         .await;
         a.wait_for("No answer").await;
@@ -1754,7 +1754,7 @@ async fn ask_user_first_terminal_wins_and_the_other_keeps_its_draft() {
     b.wait_for("› 草稿").await;
     a.type_line("Choose storage").await;
     for terminal in [&a, &b] {
-        terminal.wait_for("Ask user").await;
+        terminal.wait_for("─ Question").await;
     }
     let request = world.snapshot(&id).await.pending_requests[0].id.clone();
     read_the_box().await;
@@ -1788,7 +1788,7 @@ async fn ask_user_first_terminal_wins_and_the_other_keeps_its_draft() {
     let snapshot = world.snapshot(&id).await;
     assert_eq!((snapshot.turns.len(), snapshot.queued_inputs.len()), (1, 0));
     assert!(snapshot.pending_requests.is_empty());
-    assert!(!b.screen().contains("─ Ask user"));
+    assert!(!b.screen().contains("─ Question"));
     assert!(b.screen().contains("› 草稿"));
     assert!(
         b.screen()
@@ -1812,7 +1812,7 @@ async fn ask_user_wrong_and_empty_answers_leave_requests_unchanged() {
     .await;
     world.start_server().await;
     let a = world.open(&["Choose storage"], "canter-tui a").await;
-    a.wait_for("Ask user").await;
+    a.wait_for("─ Question").await;
     let id = world.only_session().await;
     let before = world.snapshot(&id).await;
     let request = &before.pending_requests[0].id;
@@ -1991,7 +1991,7 @@ async fn background_shell_controls_work_through_terminal_and_survive_client_exit
     assert_eq!(a.quit().await, id);
     assert!(world.snapshot(&id).await.background_commands[0].running);
     b.type_line("/ps").await;
-    b.wait_for("Background commands · s stop").await;
+    b.wait_for("Enter choose · s stop · Esc cancel").await;
     b.press(KeyCode::Enter).await;
     b.wait_for("s stop · r refresh").await;
     assert!(b.screen().contains("user-ready"));
@@ -2017,7 +2017,7 @@ async fn background_shell_controls_work_through_terminal_and_survive_client_exit
     b.wait_for("continued after backgrounding").await;
     b.wait_for("▸ 1 background commands").await;
     b.type_line("/stop").await;
-    b.wait_for("Background commands · s stop").await;
+    b.wait_for("Enter choose · s stop · Esc cancel").await;
     assert!(
         world
             .snapshot(&id)
@@ -3244,9 +3244,10 @@ async fn slash_mode_changes_the_permission_mode() {
     world.stop_server(Signal::SIGTERM).await;
 }
 
-/// The user's decision: `/` and Enter, or `/co` and Enter, only complete the
-/// input to `/compact`; nothing is compacted and the model gets no request.
-/// Enter on the whole name compacts.
+/// The user's decision: `/` and Enter only completes the input to the first
+/// command (`/add-dir`, the list being by name), and `/co` and Enter to
+/// `/compact`; nothing is compacted and the model gets no request. Enter on
+/// the whole name compacts.
 #[tokio::test]
 async fn slash_and_enter_only_completes_compact() {
     let mut world = World::new(vec![
@@ -3262,7 +3263,7 @@ async fn slash_and_enter_only_completes_compact() {
     let turns = async || world.snapshot(&id).await.turns.len();
 
     a.type_line("/").await;
-    a.wait_for("│ › /compact").await;
+    a.wait_for("│ › /add-dir").await;
     // Give a wrong compaction every chance to start.
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(turns().await, 1, "/ and Enter compacted");
