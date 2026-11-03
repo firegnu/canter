@@ -365,7 +365,9 @@ fn space_and_arrows_change_the_preview_as_they_go() {
     assert_eq!(screen.picker()[10], " › [x] tps          32.5 tok/s");
     let second = &screen.preview()[1];
     assert!(
-        second.starts_with("  $0.12 · ~/src/canter (main) · 32.5 tok/s · █░░░░░░░░░ 120k/1M (12% of window)"),
+        second.starts_with(
+            "  $0.12 · ~/src/canter (main) · 32.5 tok/s · █░░░░░░░░░ 120k/1M (12% of window)"
+        ),
         "{second}"
     );
 

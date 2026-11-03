@@ -195,9 +195,12 @@ struct Place {
 }
 
 /// A line from the client or server (warning, error, who answered), shown
-/// where the finished part of the conversation ended when it came.
+/// where the finished part of the conversation ended when it came; who
+/// answered an approval, right under its card.
 struct Notice {
     at: Place,
+    /// Right under the card before it, with no blank row between.
+    attached: bool,
     content: NoticeContent,
 }
 
@@ -207,6 +210,14 @@ enum NoticeContent {
 }
 
 impl Notice {
+    fn kind(&self) -> Kind {
+        if self.attached {
+            Kind::Attached
+        } else {
+            Kind::Notice
+        }
+    }
+
     fn rows(&self, width: u16) -> Vec<Row> {
         match &self.content {
             NoticeContent::Btw(answer) => answer.rows(width),
@@ -1102,9 +1113,11 @@ impl App {
                     }
                     match &request.kind {
                         RequestKind::Approval(approval)
-                        | RequestKind::SandboxApproval(approval) => {
-                            Some((approval.tool.clone(), approval.session_prefixes.is_some()))
-                        }
+                        | RequestKind::SandboxApproval(approval) => Some((
+                            approval.tool.clone(),
+                            approval.session_prefixes.is_some(),
+                            approval.item_id.clone(),
+                        )),
                         _ => None,
                     }
                 })
@@ -1263,11 +1276,29 @@ impl App {
                 ..
             } => {
                 self.answered.remove(request_id);
-                if let Some((tool, prefixes)) = open_request
+                if let Some((tool, prefixes, item_id)) = open_request
                     && let Some(notice) =
                         self.resolution_notice(resolution, client_name.as_deref(), &tool, prefixes)
                 {
-                    self.notice(notice);
+                    // Right under the card it answers, when that card is here.
+                    let after =
+                        self.snapshot
+                            .turns
+                            .iter()
+                            .enumerate()
+                            .rev()
+                            .find_map(|(turn, items)| {
+                                let item = items
+                                    .items
+                                    .iter()
+                                    .position(|item| item.id() == Some(item_id.as_str()))?;
+                                Some(Place {
+                                    turn,
+                                    prompt: true,
+                                    item: item + 1,
+                                })
+                            });
+                    self.notice_at(after, notice);
                 }
             }
             EventPayload::Warning { message } => {
@@ -2254,6 +2285,7 @@ impl App {
         answer.handoff = handoff;
         self.notices.push(Notice {
             at,
+            attached: false,
             content: NoticeContent::Btw(answer),
         });
         self.active_btw = Some(id);
@@ -3970,12 +4002,20 @@ impl App {
     /// Puts `line` after everything finished so far, before what is still
     /// in progress.
     fn notice(&mut self, line: LogicalLine) {
+        self.notice_at(None, line);
+    }
+
+    /// A notice at `at` (or later, when that has already passed: notices
+    /// stay in the order they came), or else where the finished part ends.
+    fn notice_at(&mut self, at: Option<Place>, line: LogicalLine) {
         self.extend_history(self.width);
+        let earliest = self
+            .notices
+            .last()
+            .map_or(self.history.end, |last| last.at.max(self.history.end));
         self.notices.push(Notice {
-            at: self
-                .notices
-                .last()
-                .map_or(self.history.end, |last| last.at.max(self.history.end)),
+            at: at.map_or(earliest, |at| at.max(earliest)),
+            attached: at.is_some_and(|at| at >= earliest),
             content: NoticeContent::Line(line),
         });
     }
@@ -4092,7 +4132,7 @@ impl App {
                 if matches!(&notice.content, NoticeContent::Btw(answer) if !answer.done) {
                     return;
                 }
-                let part = (Part::Notice(self.history.notices), Kind::Notice);
+                let part = (Part::Notice(self.history.notices), notice.kind());
                 let history = &mut self.history;
                 push_part(
                     &mut history.rows,
@@ -5361,7 +5401,8 @@ impl App {
         Some(Action::Interrupt { turn_id })
     }
 
-    /// Who answered an approval, for the conversation.
+    /// Who answered an approval, for the conversation; nothing when this
+    /// terminal chose Allow once, which the card going on shows.
     fn resolution_notice(
         &self,
         resolution: &ApprovalResolution,
@@ -5371,6 +5412,10 @@ impl App {
     ) -> Option<LogicalLine> {
         let dim = theme::secondary();
         match resolution {
+            ApprovalResolution::Answered {
+                decision: ApprovalDecision::Accept,
+                ..
+            } if client == Some(self.client_name.as_str()) => None,
             ApprovalResolution::Answered { decision, .. } => {
                 let label = match decision {
                     ApprovalDecision::AcceptForSession if prefixes => {
@@ -5463,7 +5508,7 @@ impl App {
                                   tail: &mut Option<Tail>,
                                   at: Place| {
             while let Some((index, notice)) = notices.next_if(|(_, notice)| notice.at <= at) {
-                let part = (Part::Notice(index), Kind::Notice);
+                let part = (Part::Notice(index), notice.kind());
                 push_part(rows, parts, tail, part, notice.rows(width));
             }
         };
@@ -5525,7 +5570,7 @@ impl App {
         }
         // A btw can follow all turns, including in a session without any turns.
         for (index, notice) in notices {
-            let part = (Part::Notice(index), Kind::Notice);
+            let part = (Part::Notice(index), notice.kind());
             push_part(&mut rows, &mut parts, &mut tail, part, notice.rows(width));
         }
         // Steers go in before the queued messages: into this turn.
@@ -5832,7 +5877,10 @@ impl App {
             return;
         };
         let used = spans_width(&self.bar.draw(values).0[row]) + extra[row];
-        let Some(over) = used.checked_sub(usize::from(width)).filter(|over| *over > 0) else {
+        let Some(over) = used
+            .checked_sub(usize::from(width))
+            .filter(|over| *over > 0)
+        else {
             return;
         };
         let path: String = spans.iter().map(|span| span.content.as_ref()).collect();

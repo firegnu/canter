@@ -1564,7 +1564,10 @@ fn context_lists_categories_measured_usage_and_truncates_narrow_rows() {
             assert!(shown.contains(label), "{label}: {shown}");
         }
         if width == 140 {
-            assert!(shown.contains("420k/1M window (42%) · last request"), "{shown}");
+            assert!(
+                shown.contains("420k/1M window (42%) · last request"),
+                "{shown}"
+            );
             assert!(
                 shown.contains("user 20k · assistant 80k · tool results 290k · images 5k"),
                 "{shown}"

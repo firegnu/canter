@@ -1095,3 +1095,118 @@ fn forwarded_child_approval_shows_its_source_while_parent_is_idle() {
         matches!(screen.key(KeyCode::Char('3')), Some(Action::Resolve { request_id, decision: ApprovalDecision::Decline, .. }) if request_id == "child-request")
     );
 }
+
+impl Screen {
+    /// `request` for item `item` is answered: `resolution` from `client`.
+    fn resolved(&mut self, request: &str, resolution: Value, client: &str) {
+        self.event(json!({
+            "type": "request.resolved", "requestId": request,
+            "resolution": resolution, "clientName": client,
+        }));
+        self.event(json!({ "type": "session.status", "status": "working" }));
+    }
+
+    /// The row index of the first row containing `text`.
+    fn row_of(&self, text: &str) -> usize {
+        self.screen()
+            .lines()
+            .position(|row| row.contains(text))
+            .unwrap_or_else(|| panic!("{text:?} not on screen:\n{}", self.screen()))
+    }
+}
+
+fn answered(decision: &str) -> Value {
+    json!({ "type": "answered", "decision": decision })
+}
+
+/// Allow once chosen in this terminal adds no line; every other answer adds
+/// one, right under the card it answers, even when a later card is already
+/// on screen.
+#[test]
+fn only_allow_once_here_goes_unsaid_and_each_answer_follows_its_card() {
+    let mut screen = Screen::new(100, 120);
+    screen.start_turn("t1");
+    let cases = [
+        ("r1", answered("accept"), "canter-tui", None),
+        (
+            "r2",
+            answered("decline"),
+            "canter-tui",
+            Some("✗ You chose: Decline"),
+        ),
+        (
+            "r3",
+            answered("acceptForSession"),
+            "canter-tui",
+            Some("✓ You chose: Allow for this session (don't ask again for this tool)"),
+        ),
+        (
+            "r4",
+            answered("accept"),
+            "canter-tui b",
+            Some("✓ canter-tui b answered: Allow once"),
+        ),
+        (
+            "r5",
+            answered("cancel"),
+            "canter-tui",
+            Some("✗ You chose: Decline and stop"),
+        ),
+        (
+            "r6",
+            json!({ "type": "cancelled" }),
+            "canter-tui",
+            Some("■ Approval request cancelled"),
+        ),
+        (
+            "r7",
+            json!({ "type": "timedOut" }),
+            "canter-tui",
+            Some("■ Approval request timed out"),
+        ),
+    ];
+    for (request, resolution, client, line) in cases {
+        let command = format!("echo {request}");
+        screen.ask(request, "t1", &command);
+        // Another card started after it while it waited.
+        let later = format!("echo after-{request}");
+        screen.event(json!({
+            "type": "item.started", "turnId": "t1",
+            "item": command_json(&format!("after-{request}"), &later, "inProgress"),
+        }));
+        screen.resolved(request, resolution, client);
+        screen.draw();
+        let text = screen.screen();
+        match line {
+            None => assert!(!text.contains("You chose"), "{text}"),
+            Some(line) => {
+                let card = screen.row_of(&command);
+                let at = screen.row_of(line);
+                assert_eq!(at, card + 1, "{line:?} right under its card:\n{text}");
+                assert!(screen.row_of(&later) > at, "{text}");
+            }
+        }
+        // Both cards finish.
+        for (id, command) in [
+            (format!("item-{request}"), &command),
+            (format!("after-{request}"), &later),
+        ] {
+            screen.event(json!({
+                "type": "item.completed", "turnId": "t1",
+                "item": command_json(&id, command, "completed"),
+            }));
+        }
+    }
+    screen.finish_turn("t1");
+    screen.draw();
+    let text = screen.screen();
+    assert!(!text.contains("You chose: Allow once"), "{text}");
+    // Still right under their cards once the turn is history.
+    for (command, line) in [
+        ("echo r2", "You chose: Decline"),
+        ("echo r6", "Approval request cancelled"),
+        ("echo r7", "Approval request timed out"),
+    ] {
+        assert_eq!(screen.row_of(line), screen.row_of(command) + 1, "{text}");
+    }
+}

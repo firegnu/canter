@@ -159,7 +159,8 @@ fn two_rows_with_usage_in_a_git_repository() {
         screen.bar(),
         [
             " deepseek-flash · think high · Always ask".to_owned(),
-            " ~/canter (main) · ████░░░░░░ 420k/1M (42% of window) · cache 92% (last 99%)".to_owned(),
+            " ~/canter (main) · ████░░░░░░ 420k/1M (42% of window) · cache 92% (last 99%)"
+                .to_owned(),
         ]
     );
 }

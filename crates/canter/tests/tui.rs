@@ -2420,7 +2420,10 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     read_the_box().await;
     terminal.press(KeyCode::Enter).await;
     terminal.wait_for("写好了").await;
-    assert!(terminal.screen().contains("You chose: Allow once"));
+    assert!(
+        !terminal.screen().contains("You chose"),
+        "Allow once shows no line"
+    );
     assert_eq!(
         fs::read_to_string(anywhere.join("env.txt")).unwrap(),
         env_value("canter-tui a"),
@@ -2584,9 +2587,12 @@ async fn the_later_answer_to_an_approval_closes_and_names_the_first() {
 
     let id = world.only_session().await;
     assert!(world.snapshot(&id).await.pending_requests.is_empty());
-    let (winner, loser, label) = if a.screen().contains("You chose: Allow once") {
+    // Allow once chosen here shows no line; a decline says so.
+    let (winner, loser, label) = if b.screen().contains("canter-tui a answered: Allow once") {
+        assert!(!a.screen().contains("You chose"), "{}", a.screen());
         (&a, &b, "canter-tui a answered: Allow once")
     } else {
+        assert!(b.screen().contains("You chose: Decline"), "{}", b.screen());
         (&b, &a, "canter-tui b answered: Decline")
     };
     assert!(
