@@ -871,7 +871,7 @@ async fn resume(
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
-            managed::claim(&app, owner.as_ref(), &id, &session)?;
+            managed::claim(&app, owner.as_ref(), &id, &session).await?;
             return Ok(Json(SessionResumeResponse {
                 session: response.session,
                 event_seq: response.event_seq,
@@ -892,7 +892,7 @@ async fn resume(
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
-            managed::claim(&app, owner.as_ref(), &id, &session)?;
+            managed::claim(&app, owner.as_ref(), &id, &session).await?;
             response
         } else {
             let cwd = app
@@ -925,7 +925,7 @@ async fn resume(
                 session.opening_warning(warning).await?;
             }
             app.register_session(id.clone(), session.clone()).await?;
-            managed::claim(&app, owner.as_ref(), &id, &session)?;
+            managed::claim(&app, owner.as_ref(), &id, &session).await?;
             response
         };
         Ok(Json(SessionResumeResponse {
@@ -986,7 +986,7 @@ async fn fork(
             session.opening_warning(warning).await?;
         }
         app.register_session(id.clone(), session.clone()).await?;
-        managed::claim(&app, owner.as_ref(), &id, &session)?;
+        managed::claim(&app, owner.as_ref(), &id, &session).await?;
         Ok(Json(response))
     })
     .await
@@ -1062,7 +1062,7 @@ async fn create(
         app.pauses.hit(&id, "configure").await;
         app.configure_session(&session, config.revision).await?;
         app.register_session(id.clone(), session.clone()).await?;
-        managed::claim(&app, owner.as_ref(), &id, &session)?;
+        managed::claim(&app, owner.as_ref(), &id, &session).await?;
         drop(operation);
         drop(config);
         if let Some(input) = params.input {

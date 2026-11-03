@@ -20,6 +20,8 @@ impl canter_core::AgentHost for Host {
                     message: "Turn interrupted".into(),
                 });
             }
+            #[cfg(test)]
+            app.pauses.hit(&parent, "agent_execute").await;
             let result: Result<canter_core::AgentToolOutput, ApiError> = async {
                 match command {
                 canter_core::AgentCommand::SpawnAgent { task, kind, name } => {

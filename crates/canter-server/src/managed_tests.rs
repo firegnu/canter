@@ -203,6 +203,191 @@ async fn managed_owner_cannot_close_a_later_unmanaged_resume_of_the_same_id() {
     test.stop().await;
 }
 
+struct ResumedChildModel(std::sync::atomic::AtomicUsize);
+
+impl Model for ResumedChildModel {
+    fn stream(&self, _: Request, cancel: CancellationToken) -> ModelStream<'_> {
+        let request = self.0.fetch_add(1, Ordering::Relaxed);
+        Box::pin(async_stream::stream! {
+            match request {
+                0 | 1 => {
+                    yield Ok(ModelEvent::TextDelta { item_id: "ready".into(), delta: "Ready".into() });
+                    yield Ok(ModelEvent::Finished(FinishReason::Stop));
+                }
+                2 => {
+                    yield Ok(ModelEvent::ToolCall(canter_model::ToolCall {
+                        id: "background".into(), name: "shell".into(),
+                        arguments: json!({"command":"sleep 60", "background":true}).to_string(),
+                    }));
+                    yield Ok(ModelEvent::Finished(FinishReason::ToolCalls));
+                }
+                _ => {
+                    yield Ok(ModelEvent::TextDelta { item_id: "working".into(), delta: "Child is still working".into() });
+                    cancel.cancelled().await;
+                }
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn managed_stale_parent_does_not_interrupt_reopened_parents_child_work() {
+    stale_parent_keeps_child_work(true).await;
+}
+
+#[tokio::test]
+async fn managed_closed_parent_still_registered_does_not_interrupt_child_work() {
+    stale_parent_keeps_child_work(false).await;
+}
+
+async fn stale_parent_keeps_child_work(reopen: bool) {
+    let test = Harness::with_options(
+        Arc::new(ResumedChildModel(Default::default())),
+        CoreOptions {
+            auto_wake_limit: 0,
+            ..CoreOptions::default()
+        },
+    )
+    .await;
+    let connection = lease(&test).await;
+    let parent = agents::parent(&test).await;
+    test.patch(&parent, json!({"approvalPolicy":"allowAll"}))
+        .await;
+    claim(&test, &parent).await;
+    let child = agents::spawn(&test, &parent, "Prepare work").await;
+    agents::idle(&test, &child).await;
+    let removing = (!reopen).then(|| {
+        test.app
+            .pauses
+            .block(parent.rsplit('/').next().unwrap(), "close_remove")
+    });
+    let request = test.client.delete(&parent);
+    let mut deleting = Some(tokio::spawn(async move { request.send().await.unwrap() }));
+    if let Some(removing) = &removing {
+        removing.reached().await;
+    } else {
+        deleting
+            .take()
+            .unwrap()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        test.client
+            .post(format!("{parent}/resume"))
+            .json(&json!({"env":{"HOME":test.root.path().join("home"),"PATH":"/usr/bin:/bin"}}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    }
+    test.client.post(format!("{child}/input"))
+        .json(&json!({"input":[{"type":"text","text":"Continue the child task"}], "clientName":"ordinary"}))
+        .send().await.unwrap().error_for_status().unwrap();
+    let running = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = test.read(&child).await.session;
+            if snapshot.background_commands.iter().any(|command| command.running)
+                && snapshot.turns.last().is_some_and(|turn| turn.items.iter().any(|item| {
+                    matches!(item, Item::AgentMessage { text, .. } if text == "Child is still working")
+                })) {
+                break snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }).await.unwrap();
+    assert_eq!(running.turns.last().unwrap().status, TurnStatus::InProgress);
+    let finished = test
+        .app
+        .pauses
+        .block(parent.rsplit('/').next().unwrap(), "managed_close_done");
+    assert_eq!(
+        test.client.delete(OWNER).send().await.unwrap().status(),
+        StatusCode::ACCEPTED
+    );
+    // Wait for the actual cleanup attempt, not a guessed scheduling delay.
+    finished.reached().await;
+    let after = test.read(&child).await.session;
+    let parent_status = test.read(&parent).await.session.status;
+    drop(finished);
+    drop(removing);
+    if let Some(deleting) = deleting {
+        deleting.await.unwrap().error_for_status().unwrap();
+    }
+    drop(connection);
+    test.stop().await;
+    assert_eq!(
+        parent_status,
+        if reopen {
+            SessionStatus::Idle
+        } else {
+            SessionStatus::Closed
+        }
+    );
+    assert_eq!(
+        after.turns.last().unwrap().id,
+        running.turns.last().unwrap().id
+    );
+    assert_eq!(
+        after.turns.last().unwrap().status,
+        TurnStatus::InProgress,
+        "the stale owner's cleanup must not interrupt the child's new turn"
+    );
+    assert_eq!(
+        after.background_commands, running.background_commands,
+        "the child background command must keep running"
+    );
+}
+
+struct SpawnAfterReady(std::sync::atomic::AtomicUsize);
+
+impl Model for SpawnAfterReady {
+    fn stream(&self, _: Request, _: CancellationToken) -> ModelStream<'_> {
+        let request = self.0.fetch_add(1, Ordering::Relaxed);
+        Box::pin(futures_util::stream::iter(if request == 0 {
+            vec![Ok(ModelEvent::Finished(FinishReason::Stop))]
+        } else {
+            vec![
+                Ok(ModelEvent::ToolCall(canter_model::ToolCall {
+                    id: "spawn".into(), name: "spawn_agent".into(),
+                    arguments: json!({"task":"Inspect the code", "type":"general", "name":"Inspect Local Code"}).to_string(),
+                })),
+                Ok(ModelEvent::Finished(FinishReason::ToolCalls)),
+            ]
+        }))
+    }
+}
+
+#[tokio::test]
+async fn managed_close_finishes_when_an_agent_tool_waits_for_the_session_lock() {
+    let test = Harness::with_model(Arc::new(SpawnAfterReady(Default::default()))).await;
+    let connection = lease(&test).await;
+    let parent = agents::parent(&test).await;
+    claim(&test, &parent).await;
+    let id = parent.rsplit('/').next().unwrap();
+    let tool = test.app.pauses.block(id, "agent_execute");
+    test.client.post(format!("{parent}/input"))
+        .json(&json!({"input":[{"type":"text","text":"Start a sub-agent to inspect the code"}], "clientName":"test"}))
+        .send().await.unwrap().error_for_status().unwrap();
+    tool.reached().await;
+    let closing = test.app.pauses.block(id, "managed_close_locked");
+    assert_eq!(
+        test.client.delete(OWNER).send().await.unwrap().status(),
+        StatusCode::ACCEPTED
+    );
+    closing.reached().await;
+    let finished = test.app.pauses.block(id, "managed_close_done");
+    // The tool passed its cancellation check; now the close owns its session lock.
+    drop(tool);
+    drop(closing);
+    finished.reached().await;
+    drop(finished);
+    closed(&test, &parent).await;
+    drop(connection);
+    test.stop().await;
+}
+
 #[tokio::test]
 async fn managed_cleanup_rejects_reconnect_and_new_turn_while_hook_is_running() {
     // Use the existing close path's slow notification as an observable cleanup barrier.

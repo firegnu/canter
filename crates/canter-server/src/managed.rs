@@ -47,7 +47,7 @@ impl Clients {
     }
 }
 
-pub(super) fn claim(
+pub(super) async fn claim(
     app: &Arc<App>,
     owner: Option<&Arc<StdMutex<Owner>>>,
     id: &str,
@@ -56,12 +56,18 @@ pub(super) fn claim(
     let Some(owner) = owner else {
         return Ok(());
     };
+    let sessions = app.sessions.lock().await;
     let mut owner = owner.lock().unwrap();
     if owner.closed {
         // Opening was accepted before the owner exited. Finish its cleanup too.
         close_sessions(app, [(id.to_owned(), session.clone())]);
         return Err(ended());
     }
+    owner.sessions.retain(|id, session| {
+        sessions
+            .get(id)
+            .is_some_and(|current| current.same_instance(session))
+    });
     owner.sessions.insert(id.to_owned(), session.clone());
     Ok(())
 }
@@ -70,15 +76,35 @@ fn close_sessions(app: &Arc<App>, sessions: impl IntoIterator<Item = (String, Se
     for (id, session) in sessions {
         let app = app.clone();
         tokio::spawn(async move {
-            if app.close_session(id, session).await.is_err() {
+            #[cfg(test)]
+            let closing_id = id.clone();
+            let should_close = {
+                let _operation = app.session_locks.lock(&id).await;
+                // A stale parent's children may already be working in a new turn.
+                let should_close = app
+                    .opened_session(&id)
+                    .await
+                    .is_some_and(|current| current.same_instance(&session))
+                    && session.snapshot().await.session.status != SessionStatus::Closed;
+                #[cfg(test)]
+                if should_close {
+                    app.pauses.hit(&id, "managed_close_locked").await;
+                }
+                should_close
+            };
+            // Like ordinary DELETE, close without the operation lock: an active
+            // turn can need it to finish an agent tool before close can return.
+            if should_close && app.close_session(id, session).await.is_err() {
                 eprintln!("Warning: could not close a managed session; resume it to recover");
             }
+            #[cfg(test)]
+            app.pauses.hit(&closing_id, "managed_close_done").await;
         });
     }
 }
 
-// Registry -> owner is the only lock order. Mark closed before spawning any
-// work, so a reconnect cannot resurrect an expired owner or cancel cleanup.
+// Registry -> owner and sessions -> owner; never await under an owner lock.
+// Mark closed before spawning work so reconnect cannot cancel cleanup.
 fn finish(app: &Arc<App>, owner: &StdMutex<Owner>, generation: Option<u64>) {
     let registry = app.managed.0.lock().unwrap();
     if registry.draining {
