@@ -270,7 +270,11 @@ impl App {
 }
 
 pub(crate) fn router(app: Arc<App>) -> Router {
-    let accounts = account::router(app.home.clone(), app.stopped.clone());
+    let auth = app.reload.as_ref().map_or_else(
+        || crate::model_auth::ModelAuth::new(app.home.clone()),
+        |reload| reload.auth.clone(),
+    );
+    let accounts = account::router(auth, app.stopped.clone());
     router_with_accounts(app, accounts)
 }
 

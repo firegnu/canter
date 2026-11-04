@@ -33,6 +33,7 @@ struct Inner {
     records: Mutex<BTreeMap<String, Arc<Entry>>>,
     logins: Mutex<BTreeMap<String, CancellationToken>>,
     preferences: Mutex<preferences::Preferences>,
+    consent_changes: tokio::sync::watch::Sender<()>,
 }
 
 impl ChatgptAuth {
@@ -63,12 +64,17 @@ impl ChatgptAuth {
                 records: Mutex::new(records),
                 logins: Mutex::new(BTreeMap::new()),
                 preferences: Mutex::new(preferences),
+                consent_changes: tokio::sync::watch::channel(()).0,
             }),
         })
     }
 
     pub fn host_id(&self) -> &str {
         &self.inner.host_id
+    }
+
+    pub(crate) fn consent_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        self.inner.consent_changes.subscribe()
     }
 
     pub async fn records(&self) -> Vec<RecordInfo> {

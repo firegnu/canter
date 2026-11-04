@@ -79,10 +79,24 @@ pub(crate) async fn stream<'a>(
     shared: &'a Shared,
     turn_id: Option<&str>,
     purpose: RequestPurpose,
-    request: Request,
+    mut request: Request,
     context: ContextEstimate,
     cancel: &CancellationToken,
 ) -> TrackedStream<'a> {
+    // Provider output is replayable only in this live conversation's tool loop.
+    // Auxiliary work, later turns and restored turns use portable content.
+    let scope = (purpose == RequestPurpose::Conversation)
+        .then_some(turn_id)
+        .flatten();
+    for message in &mut request.messages {
+        if let canter_model::Message::Assistant { replay, .. } = message
+            && replay
+                .as_ref()
+                .is_some_and(|replay| !replay.belongs_to_scope(scope))
+        {
+            *replay = None;
+        }
+    }
     let trace = if shared.runtime().options.telemetry {
         let state = shared.state.lock().await;
         let settings = &state.journal.snapshot.settings;
@@ -126,10 +140,11 @@ pub(crate) async fn stream<'a>(
     };
     let model = shared.runtime().model.clone();
     let cancel = cancel.clone();
+    let model_context = shared.model_context().await;
     TrackedStream {
         inner: Box::pin(async_stream::stream! {
             use futures_util::StreamExt;
-            let mut stream = model.stream(request, cancel);
+            let mut stream = model.stream_with_context(request, cancel, model_context);
             while let Some(event) = stream.next().await { yield event; }
         }),
         trace,

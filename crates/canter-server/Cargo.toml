@@ -34,6 +34,7 @@ uuid = { version = "=1.26.1", features = ["v4"] }
 jsonwebtoken = { version = "=11.1.0", default-features = false, features = ["aws_lc_rs"] }
 
 [dev-dependencies]
+canter-model = { path = "../canter-model", features = ["test-support"] }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["fmt"] }
 eventsource-stream.workspace = true

@@ -464,6 +464,7 @@ async fn streams_content_tools_and_usage_and_replays_reasoning() {
                 text: "First question".into(),
             },
             Message::Assistant {
+                replay: None,
                 content: vec![
                     AssistantContent::Reasoning {
                         text: "Earlier reasoning without tool calls.".into(),
@@ -478,6 +479,7 @@ async fn streams_content_tools_and_usage_and_replays_reasoning() {
             },
             Message::Unknown,
             Message::Assistant {
+                replay: None,
                 content: vec![
                     AssistantContent::Reasoning {
                         text: "  original\nreasoning".into(),

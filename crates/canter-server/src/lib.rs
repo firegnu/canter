@@ -7,9 +7,12 @@ mod http;
 mod lifecycle;
 #[cfg(test)]
 mod lsp_tests;
+mod model_auth;
 mod reload;
 #[cfg(test)]
 mod reload_tests;
+#[cfg(test)]
+mod responses_tests;
 mod service_env;
 mod session_locks;
 mod startup;
@@ -85,7 +88,8 @@ async fn serve_with_lsp(
         .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
     let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
         .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
-    let model = config.model_client()?;
+    let auth = model_auth::ModelAuth::new(lease.home.clone());
+    let model = config.model_client(Some(auth.clone()))?;
     let options = config.options();
     let lsp = make_lsp(config.lsp.clone()).map_err(|error| ServerError(error.to_string()))?;
     let startup_stop = CancellationToken::new();
@@ -95,6 +99,7 @@ async fn serve_with_lsp(
         model.clone(),
         lsp.clone(),
         startup_stop.clone(),
+        auth,
     ));
     tokio::pin!(connecting);
     let (reload, store) = tokio::select! {

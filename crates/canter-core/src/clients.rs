@@ -6,10 +6,20 @@ use tokio::time::Duration;
 
 const LEAVE_GRACE: Duration = Duration::from_secs(10);
 
-#[derive(Default)]
 pub(crate) struct Clients {
     count: usize,
     generation: u64,
+    foreground: tokio::sync::watch::Sender<bool>,
+}
+
+impl Default for Clients {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            generation: 0,
+            foreground: tokio::sync::watch::channel(false).0,
+        }
+    }
 }
 
 impl Clients {
@@ -29,6 +39,7 @@ impl Session {
         }
         let mut clients = self.shared.clients.lock().unwrap();
         clients.count += 1;
+        clients.foreground.send_replace(true);
         clients.generation += 1;
         if state.hook_session_ended {
             state.hook_session_ended = false;
@@ -53,6 +64,7 @@ impl Drop for ClientConnection {
             if clients.count != 0 {
                 return;
             }
+            clients.foreground.send_replace(false);
             clients.generation += 1;
             clients.generation
         };
@@ -78,6 +90,55 @@ impl Drop for ClientConnection {
                 }
             }
         });
+    }
+}
+
+impl Shared {
+    pub(crate) async fn model_context(&self) -> canter_model::ModelContext {
+        let mut root = self
+            .agent_parent
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        while let Some(parent) = root.as_ref().and_then(|root| {
+            root.agent_parent
+                .read()
+                .unwrap()
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+        }) {
+            root = Some(parent);
+        }
+        let inherited = if let Some(root) = &root {
+            root.state
+                .lock()
+                .await
+                .active
+                .as_ref()
+                .map(|active| active.model_scope.clone())
+        } else {
+            None
+        };
+        let credential_binding = {
+            let mut state = self.state.lock().await;
+            if let Some(active) = state.active.as_mut() {
+                if active.model_scope.get().is_none()
+                    && let Some(scope) = inherited
+                {
+                    active.model_scope = scope;
+                }
+                active.model_scope.clone()
+            } else {
+                inherited.unwrap_or_default()
+            }
+        };
+        let clients = root.as_ref().map_or(&self.clients, |root| &root.clients);
+        let foreground = clients.lock().unwrap().foreground.subscribe();
+        canter_model::ModelContext {
+            foreground,
+            credential_binding,
+        }
     }
 }
 

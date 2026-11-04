@@ -1174,7 +1174,7 @@ async fn completed_assistant_items_already_have_durable_model_history() {
         )
     })
     .await;
-    assert!(history_messages(&store).iter().any(|message| matches!(message, Message::Assistant { content } if content == &vec![AssistantContent::Reasoning { text: "reasoning".into() }, AssistantContent::Text { text: "answer".into() } ])), "item.completed must not precede the assistant history write");
+    assert!(history_messages(&store).iter().any(|message| matches!(message, Message::Assistant { content, .. } if content == &vec![AssistantContent::Reasoning { text: "reasoning".into() }, AssistantContent::Text { text: "answer".into() } ])), "item.completed must not precede the assistant history write");
     finished(&mut events).await;
     session.close().await.unwrap();
 }
@@ -1601,7 +1601,7 @@ async fn failed_automatic_compaction_continues_only_when_the_request_still_fits(
                 assert_eq!(requests[1].options.max_output_tokens, Some(32_768));
                 let continued = requests.last().unwrap();
                 assert!(!continued.tools.is_empty());
-                assert!(continued.messages.iter().any(|message| matches!(message, Message::Assistant { content } if content == &vec![AssistantContent::Text { text: old_reply.clone() }])));
+                assert!(continued.messages.iter().any(|message| matches!(message, Message::Assistant { content, .. } if content == &vec![AssistantContent::Text { text: old_reply.clone() }])));
             } else {
                 assert_eq!(turn.status, TurnStatus::Failed);
                 assert!(

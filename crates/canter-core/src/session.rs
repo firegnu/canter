@@ -103,6 +103,7 @@ pub(crate) struct State {
     plan_tool_calls: u8,
 }
 pub(crate) struct Active {
+    pub model_scope: Arc<tokio::sync::OnceCell<String>>,
     pub pending_prompt: Option<(Vec<UserInput>, Vec<crate::skill_invocation::Snapshot>)>,
     pub prompt_blocked: bool,
     pub configuration_lease: Option<Arc<dyn Send + Sync>>,
@@ -563,7 +564,7 @@ impl State {
         else {
             return Ok(());
         };
-        let Message::Assistant { content } = &self.history[index] else {
+        let Message::Assistant { content, .. } = &self.history[index] else {
             unreachable!()
         };
         let missing: Vec<_> = content.iter().filter_map(|part| {
@@ -2281,6 +2282,7 @@ impl Shared {
         let events = state.journal.append(payloads).await?;
         let (done, receiver) = watch::channel(None);
         state.active = Some(Active {
+            model_scope: Default::default(),
             pending_prompt: check_prompt.then_some((params.input, skills)),
             prompt_blocked: false,
             configuration_lease,

@@ -108,7 +108,7 @@ Task for the new session:
             .iter()
             .rposition(|message| matches!(message, Message::Assistant { .. }))
         {
-            let Message::Assistant { content } = &request.messages[index] else {
+            let Message::Assistant { content, .. } = &request.messages[index] else {
                 unreachable!()
             };
             let missing = content.iter().any(|part| {
@@ -245,6 +245,7 @@ pub(crate) async fn answer(
                     goal_id = shared.charge_goal().await;
                 }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),
+                Some(Ok(ModelEvent::Replay(_))) => {}
                 Some(Ok(ModelEvent::Finished(_))) => break Ok(false),
                 // Definitions stay in the prefix; side requests never execute tools.
                 Some(Ok(event @ (ModelEvent::ToolCall(_) | ModelEvent::ReasoningDelta { .. }))) => {
@@ -298,6 +299,9 @@ pub(crate) async fn answer(
             text: confirmed.clone(),
             interrupted: true,
         });
-        request.messages.push(Message::Assistant { content });
+        request.messages.push(Message::Assistant {
+            content,
+            replay: None,
+        });
     }
 }

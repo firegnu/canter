@@ -85,7 +85,7 @@ fn message(message: &Message) -> Option<Value> {
         Message::ToolResult { tool_call_id, text } => {
             json!({"role": "tool", "tool_call_id": tool_call_id, "content": text})
         }
-        Message::Assistant { content } => {
+        Message::Assistant { content, .. } => {
             let mut text = String::new();
             let mut reasoning = None::<String>;
             let mut tools = Vec::new();

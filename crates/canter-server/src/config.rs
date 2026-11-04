@@ -64,9 +64,11 @@ struct Provider {
     #[serde(default = "default_api")]
     api: String,
     #[serde(default)]
-    base_url: String,
-    #[serde(default)]
-    api_key: String,
+    auth: Option<String>,
+    #[serde(default, deserialize_with = "present_string")]
+    base_url: Option<String>,
+    #[serde(default, deserialize_with = "present_string")]
+    api_key: Option<String>,
     #[serde(default)]
     headers: canter_model::RequestHeaders,
     #[serde(default)]
@@ -83,6 +85,13 @@ struct ProviderModel {
     image: bool,
     #[serde(default)]
     price: Option<canter_core::usage::ModelPrice>,
+}
+
+// Absence is distinct from an explicitly supplied (including null) field.
+fn present_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
 }
 
 fn default_api() -> String {
@@ -247,14 +256,17 @@ impl Config {
         Ok(config)
     }
 
-    pub fn model_client(&self) -> Result<Arc<dyn Model>, ServerError> {
+    pub fn model_client(
+        &self,
+        auth: Option<Arc<crate::model_auth::ModelAuth>>,
+    ) -> Result<Arc<dyn Model>, ServerError> {
         let legacy = self.legacy.then(|| self.legacy_client()).transpose()?;
         let providers = self
             .providers
             .iter()
             .map(|(name, provider)| {
                 provider
-                    .client(self.model_max_retries)
+                    .client(self.model_max_retries, auth.clone())
                     .map(|client| (name.clone(), client))
                     .map_err(|error| ServerError(format!("provider {name}: {error}")))
             })
@@ -295,11 +307,9 @@ impl Config {
         prices.extend(self.prices.clone());
         let official = reqwest::Url::parse("https://api.deepseek.com").expect("official base URL");
         let search_key = std::iter::once((&self.base_url, &self.api_key))
-            .chain(
-                self.providers
-                    .values()
-                    .map(|provider| (&provider.base_url, &provider.api_key)),
-            )
+            .chain(self.providers.values().filter_map(|provider| {
+                Some((provider.base_url.as_ref()?, provider.api_key.as_ref()?))
+            }))
             .find_map(|(url, key)| {
                 (reqwest::Url::parse(url).ok().as_ref() == Some(&official)).then_some(key)
             });
@@ -364,21 +374,47 @@ struct Router {
 impl Model for Router {
     fn stream(
         &self,
+        request: canter_model::Request,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> canter_model::ModelStream<'_> {
+        self.route(request, cancellation, None)
+    }
+
+    fn stream_with_context(
+        &self,
+        request: canter_model::Request,
+        cancellation: tokio_util::sync::CancellationToken,
+        context: canter_model::ModelContext,
+    ) -> canter_model::ModelStream<'_> {
+        self.route(request, cancellation, Some(context))
+    }
+}
+
+impl Router {
+    fn route(
+        &self,
         mut request: canter_model::Request,
         cancellation: tokio_util::sync::CancellationToken,
+        context: Option<canter_model::ModelContext>,
     ) -> canter_model::ModelStream<'_> {
         if let Some((provider, model)) = request.model.split_once('/')
             && let Some(client) = self.providers.get(provider)
         {
             request.model = model.to_owned();
-            return client.stream(request, cancellation);
+            return match context {
+                Some(context) => client.stream_with_context(request, cancellation, context),
+                None => client.stream(request, cancellation),
+            };
         }
         if let Some(client) = &self.legacy
             && (self.providers.is_empty()
                 || !request.model.contains('/')
                 || self.legacy_models.contains(&request.model))
         {
-            return client.stream(request, cancellation);
+            return match context {
+                Some(context) => client.stream_with_context(request, cancellation, context),
+                None => client.stream(request, cancellation),
+            };
         }
         Box::pin(futures_util::stream::once(async {
             Err(canter_model::ModelError {
@@ -393,36 +429,21 @@ impl Model for Router {
 
 impl Provider {
     fn validate(&self) -> Result<(), ServerError> {
-        if self.api != "chat_completions" {
+        if self.api == "responses" {
+            if self.auth.as_deref() != Some("chatgpt") {
+                return Err(ServerError("responses api requires auth: chatgpt".into()));
+            }
+            if self.base_url.is_some() || self.api_key.is_some() {
+                return Err(ServerError(
+                    "responses api does not accept base_url or api_key".into(),
+                ));
+            }
+        } else if self.api == "chat_completions" {
+            self.validate_chat_completions()?;
+        } else {
             return Err(ServerError(
-                "unsupported api; only chat_completions is supported".into(),
+                "unsupported api; use chat_completions or responses".into(),
             ));
-        }
-        let url = reqwest::Url::parse(&self.base_url)
-            .map_err(|_| ServerError("invalid base_url".into()))?;
-        let local = url.host_str().is_some_and(|host| {
-            host == "localhost"
-                || host
-                    .trim_matches(['[', ']'])
-                    .parse::<IpAddr>()
-                    .is_ok_and(|ip| ip.is_loopback())
-        });
-        if !matches!(url.scheme(), "https" | "http")
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(ServerError("invalid base_url".into()));
-        }
-        if url.scheme() == "http" && !local {
-            return Err(ServerError("non-local base_url must use HTTPS".into()));
-        }
-        if self.api_key.trim().is_empty()
-            || reqwest::header::HeaderValue::from_str(&format!("Bearer {}", self.api_key)).is_err()
-        {
-            return Err(ServerError("invalid or missing api_key".into()));
         }
         if self.models.is_empty() {
             return Err(ServerError("models must not be empty".into()));
@@ -449,22 +470,79 @@ impl Provider {
         Ok(())
     }
 
-    fn client(&self, max_retries: u32) -> Result<Arc<dyn Model>, ServerError> {
+    fn validate_chat_completions(&self) -> Result<(), ServerError> {
+        let url = reqwest::Url::parse(self.base_url.as_deref().unwrap_or_default())
+            .map_err(|_| ServerError("invalid base_url".into()))?;
+        let local = url.host_str().is_some_and(|host| {
+            host == "localhost"
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        });
+        if !matches!(url.scheme(), "https" | "http")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(ServerError("invalid base_url".into()));
+        }
+        if url.scheme() == "http" && !local {
+            return Err(ServerError("non-local base_url must use HTTPS".into()));
+        }
+        let api_key = self.api_key.as_deref().unwrap_or_default();
+        if api_key.trim().is_empty()
+            || reqwest::header::HeaderValue::from_str(&format!("Bearer {api_key}")).is_err()
+        {
+            return Err(ServerError("invalid or missing api_key".into()));
+        }
+        Ok(())
+    }
+
+    fn client(
+        &self,
+        max_retries: u32,
+        auth: Option<Arc<crate::model_auth::ModelAuth>>,
+    ) -> Result<Arc<dyn Model>, ServerError> {
         match self.api.as_str() {
-            "chat_completions" => {
-                ChatCompletions::new(&self.base_url, ApiKey::new(self.api_key.clone()))
+            "responses" => {
+                let auth = auth
+                    .ok_or_else(|| ServerError("ChatGPT account service is unavailable".into()))?;
+                #[cfg(test)]
+                let client = match &auth.endpoint {
+                    Some(endpoint) => {
+                        canter_model::Responses::for_test(auth.clone(), endpoint.clone())
+                    }
+                    None => canter_model::Responses::new(auth),
+                };
+                #[cfg(not(test))]
+                let client = canter_model::Responses::new(auth);
+                client
                     .map(|client| {
-                        Arc::new(client.with_headers(self.headers.clone()).with_retry_policy(
-                            canter_model::RetryPolicy {
-                                max_retries,
-                                ..Default::default()
-                            },
-                        )) as Arc<dyn Model>
+                        Arc::new(client.with_retry_policy(canter_model::RetryPolicy {
+                            max_retries,
+                            ..Default::default()
+                        })) as Arc<dyn Model>
                     })
-                    .map_err(|_| ServerError("invalid model config".into()))
+                    .map_err(|_| ServerError("invalid Responses config".into()))
             }
+            "chat_completions" => ChatCompletions::new(
+                self.base_url.as_deref().unwrap_or_default(),
+                ApiKey::new(self.api_key.clone().unwrap_or_default()),
+            )
+            .map(|client| {
+                Arc::new(client.with_headers(self.headers.clone()).with_retry_policy(
+                    canter_model::RetryPolicy {
+                        max_retries,
+                        ..Default::default()
+                    },
+                )) as Arc<dyn Model>
+            })
+            .map_err(|_| ServerError("invalid model config".into())),
             _ => Err(ServerError(
-                "unsupported api; only chat_completions is supported".into(),
+                "unsupported api; use chat_completions or responses".into(),
             )),
         }
     }
@@ -505,6 +583,111 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn responses_rejects_explicit_credentials_and_endpoints_even_empty_or_null() {
+        let root = tempfile::tempdir().unwrap();
+        for key in ["base_url", "api_key"] {
+            for value in [
+                json!(""),
+                serde_json::Value::Null,
+                json!("test-only-private-value"),
+            ] {
+                let mut provider = json!({"api":"responses","auth":"chatgpt","models":{"test":{"context_window":200000}}});
+                provider[key] = value;
+                fs::write(
+                    root.path().join("config.json"),
+                    json!({"model":"chatgpt/test","providers":{"chatgpt":provider}}).to_string(),
+                )
+                .unwrap();
+                assert!(
+                    Config::load(root.path()).is_err(),
+                    "explicit {key} must be rejected"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn responses_requires_chatgpt_auth_with_a_provider_specific_error() {
+        let root = tempfile::tempdir().unwrap();
+        for auth in [
+            None,
+            Some(json!(null)),
+            Some(json!("test-only-invalid-auth")),
+        ] {
+            let mut provider =
+                json!({"api":"responses","models":{"test":{"context_window":200000}}});
+            if let Some(auth) = auth {
+                provider["auth"] = auth;
+            }
+            fs::write(
+                root.path().join("config.json"),
+                json!({"model":"chatgpt/test","providers":{"chatgpt":provider}}).to_string(),
+            )
+            .unwrap();
+            let error = Config::load(root.path())
+                .err()
+                .expect("auth must be chatgpt")
+                .to_string();
+            assert!(error.contains("provider chatgpt") && error.contains("requires auth: chatgpt"));
+            assert!(!error.contains("test-only-invalid-auth"));
+        }
+    }
+
+    #[test]
+    fn responses_uses_chatgpt_auth_without_configured_credentials_or_endpoint() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("config.json"),
+            json!({
+                "model":"chatgpt/test-model",
+                "providers":{"chatgpt":{
+                    "api":"responses", "auth":"chatgpt",
+                    "models":{"test-model":{"context_window":200000,"image":true}}
+                }}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let config = Config::load(root.path()).expect("ChatGPT credentials come from login");
+        assert_eq!(config.models, ["chatgpt/test-model"]);
+        assert_eq!(config.options().image_models, ["chatgpt/test-model"]);
+        assert!(!config.options().prices.contains_key("chatgpt/test-model"));
+    }
+
+    #[tokio::test]
+    async fn responses_routes_to_login_without_falling_back_to_legacy() {
+        use futures_util::StreamExt;
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("config.json"), json!({
+            "model":"chatgpt/test-model","providers":{"chatgpt":{"api":"responses","auth":"chatgpt","models":{"test-model":{"context_window":200000}}}}
+        }).to_string()).unwrap();
+        let config = Config::load(root.path()).unwrap();
+        let client = config
+            .model_client(Some(crate::model_auth::ModelAuth::new(
+                root.path().join("state"),
+            )))
+            .unwrap();
+        let events: Vec<_> = client
+            .stream(
+                canter_model::Request {
+                    model: "chatgpt/test-model".into(),
+                    ..Default::default()
+                },
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .collect()
+            .await;
+        assert_eq!(events.len(), 1);
+        assert!(
+            events[0]
+                .as_ref()
+                .unwrap_err()
+                .to_string()
+                .contains("canter auth login chatgpt")
+        );
+    }
+
+    #[test]
     fn providers_can_supply_the_entire_model_configuration() {
         let root = tempfile::tempdir().unwrap();
         fs::write(
@@ -524,7 +707,7 @@ mod tests {
         let config = Config::load(root.path()).expect("providers replace the legacy fields");
         assert_eq!(config.models, ["one/vendor/model", "two/small"]);
         assert_eq!(config.options().image_models, ["one/vendor/model"]);
-        assert!(config.model_client().is_ok());
+        assert!(config.model_client(None).is_ok());
     }
 
     #[test]
@@ -657,8 +840,8 @@ mod tests {
             // The original direct adapter is the reference, including raw HTTP body bytes.
             for client in [
                 legacy.legacy_client().unwrap(),
-                legacy.model_client().unwrap(),
-                mixed.model_client().unwrap(),
+                legacy.model_client(None).unwrap(),
+                mixed.model_client(None).unwrap(),
             ] {
                 let mut stream =
                     client.stream(request.clone(), tokio_util::sync::CancellationToken::new());
@@ -749,7 +932,7 @@ mod tests {
             },
             Arc::new(ComparedClients {
                 original: config.legacy_client().unwrap(),
-                configured: config.model_client().unwrap(),
+                configured: config.model_client(None).unwrap(),
             }),
             config.options(),
         )

@@ -82,6 +82,7 @@ struct Lease {
 }
 
 pub(crate) struct LiveConfig {
+    pub auth: Arc<crate::model_auth::ModelAuth>,
     home: PathBuf,
     current: RwLock<Arc<Version>>,
     slots: Mutex<Vec<Arc<ServiceSlot>>>,
@@ -101,6 +102,7 @@ impl LiveConfig {
         model: Arc<dyn Model>,
         lsp: Arc<LspService>,
         stop: CancellationToken,
+        auth: Arc<crate::model_auth::ModelAuth>,
     ) -> Arc<Self> {
         let shutdown = stop.child_token();
         let mcp: BTreeMap<_, _> =
@@ -133,6 +135,7 @@ impl LiveConfig {
         let mut options = config.options();
         options.command_rules_path = Some(home.join("rules.json"));
         Arc::new(Self {
+            auth,
             home,
             mcp_lineage: Mutex::new(mcp.clone()),
             current: RwLock::new(Arc::new(Version {
@@ -265,7 +268,7 @@ impl LiveConfig {
     }
 
     async fn install(&self, config: Config) -> Result<(), ServerError> {
-        let model = config.model_client()?;
+        let model = config.model_client(Some(self.auth.clone()))?;
         let mut options = config.options();
         options.command_rules_path = Some(self.home.join("rules.json"));
         let old = self.current.read().unwrap().clone();

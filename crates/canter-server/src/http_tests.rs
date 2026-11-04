@@ -590,6 +590,7 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
     let next = model.0.lock().unwrap().last().unwrap().clone();
     let mut expected_request = previous.clone();
     expected_request.messages.push(Message::Assistant {
+        replay: None,
         content: vec![canter_model::AssistantContent::Text {
             text: "done".into(),
         }],

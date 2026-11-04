@@ -3,26 +3,23 @@ use super::*;
 use crate::chatgpt_auth::{AuthError, ChatgptAuth, RecordInfo, RecordStatus};
 
 struct Accounts {
-    home: PathBuf,
-    auth: Mutex<Option<ChatgptAuth>>,
+    auth: Arc<crate::model_auth::ModelAuth>,
     logins: Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<AccountLoginCompleted>>>>,
     stopped: CancellationToken,
 }
 
 impl Accounts {
     async fn auth(&self) -> Result<ChatgptAuth, ApiError> {
-        let mut auth = self.auth.lock().await;
-        if auth.is_none() {
-            *auth = Some(ChatgptAuth::open(&self.home).map_err(auth_error)?);
-        }
-        Ok(auth.as_ref().unwrap().clone())
+        self.auth.get().await.map_err(auth_error)
     }
 }
 
-pub(super) fn router(home: PathBuf, stopped: CancellationToken) -> Router {
+pub(super) fn router(
+    auth: Arc<crate::model_auth::ModelAuth>,
+    stopped: CancellationToken,
+) -> Router {
     routes(Accounts {
-        home,
-        auth: Mutex::new(None),
+        auth,
         logins: Default::default(),
         stopped,
     })
@@ -31,8 +28,7 @@ pub(super) fn router(home: PathBuf, stopped: CancellationToken) -> Router {
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) fn test_router(home: PathBuf, auth: ChatgptAuth) -> Router {
     routes(Accounts {
-        home,
-        auth: Mutex::new(Some(auth)),
+        auth: crate::model_auth::ModelAuth::with_manager(home, auth),
         logins: Default::default(),
         stopped: CancellationToken::new(),
     })

@@ -46,6 +46,211 @@ impl Model for ScriptModel {
     }
 }
 
+#[tokio::test]
+async fn private_replay_is_saved_and_sent_only_within_the_current_turn() {
+    let temp = tempfile::tempdir().unwrap();
+    let replay: canter_model::Replay = serde_json::from_value(serde_json::json!({
+        "api":"responses","model":"test-model","output":[
+            {"type":"reasoning","id":"r","summary":[],"encrypted_content":"private-replay-test-cipher"}
+        ]
+    })).unwrap();
+    let model = ScriptModel::new(vec![
+        vec![
+            ModelEvent::Replay(replay.clone()),
+            ModelEvent::ToolCall(ToolCall {
+                id: "read-one".into(),
+                name: "read".into(),
+                arguments: r#"{"path":"a.txt"}"#.into(),
+            }),
+            ModelEvent::Finished(FinishReason::ToolCalls),
+        ],
+        vec![
+            ModelEvent::TextDelta {
+                item_id: "text".into(),
+                delta: "Done".into(),
+            },
+            ModelEvent::Finished(FinishReason::Stop),
+        ],
+        vec![ModelEvent::Finished(FinishReason::Stop)],
+        vec![
+            ModelEvent::TextDelta {
+                item_id: "btw".into(),
+                delta: "Private answer".into(),
+            },
+            ModelEvent::Replay(replay.clone()),
+            ModelEvent::Finished(FinishReason::Stop),
+        ],
+        vec![
+            ModelEvent::TextDelta {
+                item_id: "handoff".into(),
+                delta: "Handoff note".into(),
+            },
+            ModelEvent::Replay(replay.clone()),
+            ModelEvent::Finished(FinishReason::Stop),
+        ],
+        vec![
+            ModelEvent::TextDelta {
+                item_id: "summary".into(),
+                delta: "A summary".into(),
+            },
+            ModelEvent::Replay(replay),
+            ModelEvent::Finished(FinishReason::Stop),
+        ],
+        vec![ModelEvent::Finished(FinishReason::Stop)],
+    ]);
+    std::fs::write(temp.path().join("a.txt"), "hello").unwrap();
+    let store = Arc::new(Store::new(temp.path().join("state/sessions")).unwrap());
+    let (session, _) = Session::create(
+        store.clone(),
+        "replay-scope".into(),
+        settings(temp.path()),
+        RuntimeContext {
+            environment: BTreeMap::from([
+                ("HOME".into(), temp.path().to_string_lossy().into_owned()),
+                (
+                    "CANTER_HOME".into(),
+                    temp.path().join("state").to_string_lossy().into_owned(),
+                ),
+            ]),
+            ..Default::default()
+        },
+        model.clone(),
+        CoreOptions {
+            sandbox: false,
+            prompt_suggestions: false,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("Read")).await.unwrap();
+    let public = finished(&mut events).await;
+    assert!(
+        !serde_json::to_string(&public)
+            .unwrap()
+            .contains("private-replay-test-cipher")
+    );
+    let in_turn = model.requests.lock().unwrap()[1].clone();
+    assert!(in_turn.messages.iter().any(|message| matches!(
+        message,
+        Message::Assistant {
+            replay: Some(_),
+            ..
+        }
+    )));
+    let saved = store
+        .model_history::<serde_json::Value>("replay-scope")
+        .unwrap();
+    assert!(
+        serde_json::to_string(&saved)
+            .unwrap()
+            .contains("private-replay-test-cipher")
+    );
+    let estimate_with_replay = session.context().await;
+    session.input(input("Next turn")).await.unwrap();
+    finished(&mut events).await;
+    assert!(
+        model.requests.lock().unwrap()[2]
+            .messages
+            .iter()
+            .all(|message| !matches!(
+                message,
+                Message::Assistant {
+                    replay: Some(_),
+                    ..
+                }
+            ))
+    );
+    assert!(
+        !serde_json::to_string(&estimate_with_replay)
+            .unwrap()
+            .contains("private-replay-test-cipher")
+    );
+    let mut answer = session.btw("A question".into()).await.unwrap();
+    while let Some(event) = answer.recv().await {
+        assert!(
+            !serde_json::to_string(&event)
+                .unwrap()
+                .contains("private-replay-test-cipher")
+        );
+    }
+    let mut handoff = session.handoff(None).await.unwrap();
+    while let Some(event) = handoff.recv().await {
+        assert!(
+            !serde_json::to_string(&event)
+                .unwrap()
+                .contains("private-replay-test-cipher")
+        );
+    }
+    session.compact().await.unwrap();
+    finished(&mut events).await;
+    session.input(input("After compaction")).await.unwrap();
+    finished(&mut events).await;
+    for request in &model.requests.lock().unwrap()[3..] {
+        assert!(request.messages.iter().all(|message| !matches!(
+            message,
+            Message::Assistant {
+                replay: Some(_),
+                ..
+            }
+        )));
+    }
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn context_estimates_do_not_count_private_replay_payloads() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut estimates = Vec::new();
+    for size in [1, 20_000] {
+        let replay = canter_model::Replay::Responses {
+            model: "test".into(),
+            scope: None,
+            output: vec![
+                serde_json::json!({"type":"reasoning","id":"r","summary":[],"encrypted_content":"x".repeat(size)}),
+            ],
+        };
+        let model = ScriptModel::new(vec![vec![
+            ModelEvent::TextDelta {
+                item_id: "m".into(),
+                delta: "Answer".into(),
+            },
+            ModelEvent::Replay(replay),
+            ModelEvent::Finished(FinishReason::Stop),
+        ]]);
+        let (session, _) = Session::create(
+            Arc::new(Store::new(temp.path().join("state/sessions")).unwrap()),
+            format!("estimate-{size}"),
+            settings(temp.path()),
+            RuntimeContext {
+                environment: BTreeMap::from([
+                    ("HOME".into(), temp.path().to_string_lossy().into_owned()),
+                    (
+                        "CANTER_HOME".into(),
+                        temp.path().join("state").to_string_lossy().into_owned(),
+                    ),
+                ]),
+                ..Default::default()
+            },
+            model,
+            CoreOptions {
+                sandbox: false,
+                prompt_suggestions: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let mut events = session.subscribe(0).await.unwrap();
+        session.input(input("Question")).await.unwrap();
+        finished(&mut events).await;
+        estimates.push(session.context().await.messages.assistant);
+        session.close().await.unwrap();
+    }
+    assert_eq!(estimates[0], estimates[1]);
+}
+
 fn assert_request_extension(previous: &Request, next: &Request) {
     assert!(next.messages.len() > previous.messages.len());
     let mut prefix = next.clone();
@@ -942,7 +1147,7 @@ async fn completed_items_survive_disconnect_and_tools_run_once() {
         let requests = model.requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 2);
         assert_request_extension(&requests[0], &requests[1]);
-        assert!(requests[1].messages.iter().any(|message| matches!(message, Message::Assistant { content } if content == &vec![completed.clone()])));
+        assert!(requests[1].messages.iter().any(|message| matches!(message, Message::Assistant { content, .. } if content == &vec![completed.clone()])));
         let history = serde_json::to_string(&requests[1].messages).unwrap();
         assert!(!history.contains("partial answer") && !history.contains("partial thought"));
         if tool {
@@ -1023,7 +1228,7 @@ async fn authentication_error_preserves_partial_reply_for_the_next_turn() {
         .messages
         .iter()
         .find_map(|message| match message {
-            Message::Assistant { content } => Some(content),
+            Message::Assistant { content, .. } => Some(content),
             _ => None,
         })
         .expect("last partial reply must be retained");
@@ -1545,7 +1750,7 @@ async fn user_interrupt_preserves_partial_history_and_normal_item_status_after_r
         .messages
         .iter()
         .find_map(|message| match message {
-            Message::Assistant { content } => Some(content),
+            Message::Assistant { content, .. } => Some(content),
             _ => None,
         })
         .unwrap();
@@ -2247,7 +2452,7 @@ async fn one_turn_runs_multiple_real_tools_and_publishes_the_durable_events() {
         assert_request_extension(&pair[0], &pair[1]);
     }
     assert!(requests[0].messages.iter().any(|message| matches!(message, Message::System { text } if text.contains("Keep edits small.") && text.contains(&*cwd.to_string_lossy()))));
-    assert!(requests[1].messages.iter().any(|message| matches!(message, Message::Assistant { content } if content.contains(&AssistantContent::Reasoning { text: "Inspect and edit.".into() }))));
+    assert!(requests[1].messages.iter().any(|message| matches!(message, Message::Assistant { content, .. } if content.contains(&AssistantContent::Reasoning { text: "Inspect and edit.".into() }))));
     assert!(requests[2].messages.iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "r" && text.contains("1: after"))));
     assert!(requests[3].messages.iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, text } if tool_call_id == "s" && text.contains("isolated"))));
     assert!(!temp.path().join("sessions/s1/private.json").exists());
@@ -2367,6 +2572,7 @@ async fn rewind_after_reopen_uses_filtered_history_boundaries() {
         );
         let mut expected = immediate.clone();
         expected.push(Message::Assistant {
+            replay: None,
             content: vec![AssistantContent::Text {
                 text: "done".into(),
             }],
