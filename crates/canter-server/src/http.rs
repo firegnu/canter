@@ -894,7 +894,7 @@ async fn resume(
             session
                 .set_sandbox_disabled(params.sandbox_disabled, app.metadata().2.sandbox)
                 .await?;
-            let response = session.snapshot().await;
+            let response = session.resume_snapshot().await?;
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
@@ -918,7 +918,7 @@ async fn resume(
             session
                 .set_sandbox_disabled(params.sandbox_disabled, app.metadata().2.sandbox)
                 .await?;
-            let response = session.snapshot().await;
+            let response = session.resume_snapshot().await?;
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
@@ -936,7 +936,7 @@ async fn resume(
             let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
             #[cfg(test)]
             app.pauses.hit(&id, "open").await;
-            let (session, _) = Session::open(
+            let (session, response) = Session::open(
                 app.store.clone(),
                 id.clone(),
                 app.runtime(
@@ -955,7 +955,7 @@ async fn resume(
             session
                 .set_sandbox_disabled(params.sandbox_disabled, config.options.sandbox)
                 .await?;
-            let response = session.snapshot().await;
+            // Keep the opening cursor before warnings emitted by Session::open.
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }

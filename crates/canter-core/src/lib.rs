@@ -82,6 +82,26 @@ impl Default for ModelReasoning {
 }
 
 impl ModelReasoning {
+    pub(crate) fn reset_unsupported(
+        &self,
+        settings: &mut canter_protocol::SessionSettings,
+    ) -> Option<String> {
+        let previous = match settings.reasoning_effort {
+            canter_protocol::ReasoningEffort::Unknown => canter_protocol::ReasoningEffort::High,
+            effort => effort,
+        };
+        if self.supported.contains(&previous) {
+            return None;
+        }
+        settings.reasoning_effort = self.default;
+        Some(format!(
+            "Thinking effort changed from {} to {} for {}.",
+            previous.as_str(),
+            self.default.as_str(),
+            settings.model
+        ))
+    }
+
     pub(crate) fn validate(
         &self,
         model: &str,

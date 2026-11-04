@@ -11,6 +11,121 @@ async fn configured() -> Fixture {
     .await
 }
 
+async fn resume(fixture: &Fixture, url: &str) -> SessionReadResponse {
+    fixture.client.post(format!("{url}/resume"))
+        .json(&json!({"env":{"HOME":fixture.root.path().join("home"),"CANTER_HOME":fixture.root.path().join("state")},"clientName":"test"}))
+        .send().await.unwrap().error_for_status().unwrap().json().await.unwrap()
+}
+
+#[tokio::test]
+async fn resuming_saved_reasoning_keeps_the_correction_warning_after_the_snapshot() {
+    let fixture = configured().await;
+    let store = canter_store::Store::new(fixture.root.path().join("state/sessions")).unwrap();
+    let settings = serde_json::from_value(json!({"cwd":fixture.root.path(),"model":"chatgpt/solver","reasoningEffort":"none","approvalPolicy":"allowAll"})).unwrap();
+    drop(store.create("old-effort", settings, 0).unwrap());
+    let url = "http://localhost/v1/sessions/old-effort";
+    let response = resume(&fixture, url).await;
+    assert_eq!(
+        response.session.settings.reasoning_effort,
+        canter_protocol::ReasoningEffort::Medium
+    );
+    let mut warnings = fixture
+        .warnings_after(url, response.session.last_event_seq)
+        .await;
+    assert_eq!(
+        warnings.next().await,
+        "Thinking effort changed from none to medium for chatgpt/solver."
+    );
+    drop(warnings);
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn resuming_an_open_session_reconciles_reloaded_reasoning() {
+    let mut fixture = configured().await;
+    let url = fixture.create().await;
+    fixture
+        .client
+        .patch(&url)
+        .json(&json!({"model":"chatgpt/solver","reasoningEffort":"xhigh"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fixture.config["providers"]["chatgpt"]["models"]["solver"]["supported_reasoning_efforts"] =
+        json!(["medium", "high"]);
+    fixture.applied("reasoning-reloaded").await;
+    let response = resume(&fixture, &url).await;
+    assert_eq!(
+        response.session.settings.reasoning_effort,
+        canter_protocol::ReasoningEffort::Medium
+    );
+    let mut warnings = fixture
+        .warnings_after(&url, response.session.last_event_seq)
+        .await;
+    assert_eq!(
+        warnings.next().await,
+        "Thinking effort changed from xhigh to medium for chatgpt/solver."
+    );
+    drop(warnings);
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn resuming_during_a_turn_keeps_reasoning_frozen_until_the_next_turn() {
+    let mut fixture = Fixture::new(json!({})).await;
+    fixture.config["providers"] = json!({"local":{
+        "api":"chat_completions","base_url":fixture.config["base_url"],
+        "api_key":"test-only-key","models":{"solver":{
+            "context_window":200000,"supported_reasoning_efforts":["high","max"],
+            "default_reasoning_effort":"high"
+        }}
+    }});
+    fixture.applied("reasoning-initial").await;
+    let url = fixture.create().await;
+    fixture
+        .client
+        .patch(&url)
+        .json(&json!({"model":"local/solver","reasoningEffort":"max"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fixture.input(&url).await;
+    let running = fixture.request().await;
+    assert_eq!(running.body["reasoning_effort"], "max");
+    fixture.config["providers"]["local"]["models"]["solver"]["supported_reasoning_efforts"] =
+        json!(["high"]);
+    fixture.applied("reasoning-next-turn").await;
+    let response = resume(&fixture, &url).await;
+    assert_eq!(
+        response.session.settings.reasoning_effort,
+        canter_protocol::ReasoningEffort::Max
+    );
+    running.tool(
+        "update_plan",
+        json!({"plan":[{"step":"Checked","status":"completed"}]}),
+    );
+    let continuation = fixture.request().await;
+    assert_eq!(continuation.body["reasoning_effort"], "max");
+    continuation.stop();
+    fixture.idle(&url).await;
+    let mut warnings = fixture.warnings_after(&url, response.event_seq).await;
+    fixture.input(&url).await;
+    let next = fixture.request().await;
+    assert_eq!(next.body["reasoning_effort"], "high");
+    assert_eq!(
+        warnings.next().await,
+        "Thinking effort changed from max to high for local/solver."
+    );
+    next.stop();
+    fixture.idle(&url).await;
+    drop(warnings);
+    fixture.shutdown().await;
+}
+
 #[tokio::test]
 async fn model_reasoning_metadata_and_creation_use_configured_defaults() {
     let fixture = configured().await;

@@ -47,6 +47,87 @@ impl Model for ScriptModel {
 }
 
 #[tokio::test]
+async fn switching_models_compares_unknown_reasoning_as_high() {
+    for supports_high in [true, false] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+        let mut saved = settings(temp.path());
+        saved.reasoning_effort = ReasoningEffort::Unknown;
+        drop(store.create("unknown", saved, 0).unwrap());
+        let (session, _) = Session::open(
+            store.clone(),
+            "unknown".into(),
+            RuntimeContext {
+                environment: BTreeMap::from([
+                    ("HOME".into(), temp.path().to_string_lossy().into_owned()),
+                    (
+                        "CANTER_HOME".into(),
+                        temp.path().join("state").to_string_lossy().into_owned(),
+                    ),
+                ]),
+                ..Default::default()
+            },
+            ScriptModel::new(vec![]),
+            CoreOptions {
+                model_reasoning: BTreeMap::from([(
+                    "target".into(),
+                    canter_core::ModelReasoning {
+                        supported: if supports_high {
+                            vec![ReasoningEffort::High, ReasoningEffort::Medium]
+                        } else {
+                            vec![ReasoningEffort::Medium]
+                        },
+                        default: ReasoningEffort::Medium,
+                    },
+                )]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let before = session.snapshot().await;
+        assert_eq!(
+            before.session.settings.reasoning_effort,
+            ReasoningEffort::Unknown
+        );
+        session
+            .update(SessionUpdateParams {
+                model: Some("target".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let effort = session.snapshot().await.session.settings.reasoning_effort;
+        assert_eq!(
+            effort,
+            if supports_high {
+                ReasoningEffort::High
+            } else {
+                ReasoningEffort::Medium
+            }
+        );
+        let warnings: Vec<_> = store
+            .events_after("unknown", before.event_seq)
+            .unwrap()
+            .into_iter()
+            .filter_map(|event| match event.payload {
+                EventPayload::Warning { message } => Some(message),
+                _ => None,
+            })
+            .collect();
+        if supports_high {
+            assert!(warnings.is_empty(), "{warnings:?}");
+        } else {
+            assert_eq!(
+                warnings,
+                ["Thinking effort changed from high to medium for target."]
+            );
+        }
+        session.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn configured_reasoning_reaches_requests_and_telemetry_without_remapping() {
     let temp = tempfile::tempdir().unwrap();
     let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());

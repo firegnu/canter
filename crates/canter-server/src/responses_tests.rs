@@ -16,6 +16,8 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+mod reasoning;
+
 struct Inference {
     endpoint: reqwest::Url,
     requests: tokio::sync::mpsc::UnboundedReceiver<(Value, String)>,

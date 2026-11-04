@@ -1057,12 +1057,16 @@ impl Session {
             close_reason: None,
         });
         state.journal.append(payloads).await?;
+        let reasoning_warning = state.reconcile_reasoning(&options).await?;
         let response = SessionReadResponse {
             session: state.journal.snapshot.clone(),
             event_seq: state.journal.snapshot.last_event_seq,
         };
         let session = Self::from_state(state, tools, model, options, runtime);
         // Keep this warning after the opening client's snapshot cursor.
+        if let Some(message) = reasoning_warning {
+            session.opening_warning(message).await?;
+        }
         session.scratch_warning().await?;
         session.memory_warning().await?;
         session
@@ -1753,31 +1757,26 @@ impl Session {
             ));
         }
         let mut settings = state.journal.snapshot.settings.clone();
-        let previous_effort = settings.reasoning_effort;
         if let Some(model) = params.model {
             settings.model = model;
         }
         let model_changed = settings.model != state.journal.snapshot.settings.model;
         let reasoning = self.shared.next_options().reasoning(&settings.model);
-        let reset_effort = params.reasoning_effort.is_none()
-            && model_changed
-            && !reasoning.supported.contains(&previous_effort);
-        if let Some(effort) = params.reasoning_effort {
+        let effort_notice = if let Some(effort) = params.reasoning_effort {
             reasoning.validate(&settings.model, effort)?;
             settings.reasoning_effort = effort;
-        } else if reset_effort {
-            settings.reasoning_effort = reasoning.default;
-        } else if previous_effort == ReasoningEffort::Unknown {
-            settings.reasoning_effort = ReasoningEffort::High;
-        }
-        let effort_notice = reset_effort.then(|| EventPayload::Warning {
-            message: format!(
-                "Thinking effort changed from {} to {} for {}.",
-                previous_effort.as_str(),
-                settings.reasoning_effort.as_str(),
-                settings.model
-            ),
-        });
+            None
+        } else {
+            let message = if model_changed {
+                reasoning.reset_unsupported(&mut settings)
+            } else {
+                None
+            };
+            if settings.reasoning_effort == ReasoningEffort::Unknown {
+                settings.reasoning_effort = ReasoningEffort::High;
+            }
+            message.map(|message| EventPayload::Warning { message })
+        };
         settings.additional_directories = crate::directories::append(
             settings.cwd.clone(),
             state.directory_home.clone(),
