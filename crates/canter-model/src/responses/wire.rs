@@ -55,7 +55,7 @@ pub(super) fn request_body(request: &Request) -> Value {
         "model":request.model, "input":input, "store":false, "stream":true,
         "reasoning":{"summary":"auto"},
     });
-    if let Some(session_id) = request.session_id.as_deref().filter(|id| !id.is_empty()) {
+    if let Some(session_id) = session_id(request) {
         body["prompt_cache_key"] = json!(session_id.chars().take(64).collect::<String>());
     }
     let tools: Vec<_> = [
@@ -84,6 +84,11 @@ pub(super) fn request_body(request: &Request) -> Value {
         body["tools"] = json!(tools);
     }
     body
+}
+
+/// The conversation id sent as the cache key and the `session-id` header.
+pub(super) fn session_id(request: &Request) -> Option<&str> {
+    request.session_id.as_deref().filter(|id| !id.is_empty())
 }
 
 fn text_message(role: &str, text: &str) -> Value {

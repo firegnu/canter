@@ -110,7 +110,7 @@ impl Responses {
     ) -> ModelStream<'a> {
         Box::pin(async_stream::stream! {
             let body = wire::request_body(request);
-            let mut diagnostic = diagnostics::Diagnostic::new(&body);
+            let mut diagnostic = diagnostics::Diagnostic::new(&body, wire::session_id(request).is_some());
             let mut stream = self.attempt_inner(request, credential, observed, &body, &mut diagnostic);
             let terminal = loop {
                 match stream.next().await {
@@ -138,7 +138,9 @@ impl Responses {
             let mut authorization = credential.authorization().await?;
             authorization.set_sensitive(true);
             diagnostic.sent();
-            let response = self.client.post(self.endpoint.clone()).header("authorization", authorization)
+            let mut post = self.client.post(self.endpoint.clone()).header("authorization", authorization);
+            if let Some(session_id) = wire::session_id(request) { post = post.header("session-id", session_id); }
+            let response = post
                 .json(body).send().await.map_err(error::transport)?;
             if !response.status().is_success() { Err(error::http(response).await)?; return; }
             let mut events = response.bytes_stream().eventsource();
@@ -192,7 +194,7 @@ impl Responses {
                 credential = self.auth.credential(&request, context.as_ref()) => credential,
             };
             if let Err(error) = &credential {
-                let mut diagnostic = diagnostics::Diagnostic::new(&wire::request_body(&request));
+                let mut diagnostic = diagnostics::Diagnostic::new(&wire::request_body(&request), wire::session_id(&request).is_some());
                 diagnostic.finish(Some(&Err(error.clone())));
             }
             let mut credential = credential?;
