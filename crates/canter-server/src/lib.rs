@@ -1,5 +1,6 @@
 //! A local HTTP/SSE daemon. Credentials and client environments are never logged.
 
+pub mod chatgpt_auth;
 mod config;
 mod discovery;
 mod http;
