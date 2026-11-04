@@ -9,7 +9,19 @@ fn event(value: Value) -> String {
     format!("data: {value}\n\n")
 }
 fn complete(output: Value) -> String {
-    event(json!({"type":"response.completed","response":{"status":"completed","output":output}}))
+    let mut stream: String = output
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            event(json!({"type":"response.output_item.done","output_index":index,"item":item}))
+        })
+        .collect();
+    stream.push_str(&event(
+        json!({"type":"response.completed","response":{"status":"completed","output":output}}),
+    ));
+    stream
 }
 fn model(server: &Server) -> Responses {
     Responses::with_endpoint(
@@ -21,6 +33,107 @@ fn model(server: &Server) -> Responses {
         sleep: |_| Box::pin(async {}),
         ..Default::default()
     })
+}
+
+#[tokio::test]
+async fn text_done_succeeds_with_empty_completed_output() {
+    let message = json!({"type":"message","id":"m","role":"assistant","status":"completed","phase":"final_answer","content":[{"type":"output_text","text":"Hello","annotations":[]}]});
+    let server = Server::start(vec![Reply::sse(
+        event(json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"m","content":[]}}))
+            + &event(json!({"type":"response.output_text.delta","output_index":0,"item_id":"m","content_index":0,"delta":"Hello"}))
+            + &event(json!({"type":"response.output_item.done","output_index":0,"item":message}))
+            + &complete(json!([])),
+    )]).await;
+    let events: Vec<_> = model(&server)
+        .stream(Request::default(), CancellationToken::new())
+        .collect()
+        .await;
+    server.stop().await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    assert!(events.iter().any(|event| matches!(event, Ok(ModelEvent::ItemCompleted {content:AssistantContent::Text {text},..}) if text == "Hello")));
+    assert!(events.iter().any(|event| matches!(event, Ok(ModelEvent::Replay(crate::Replay::Responses {output,..})) if output == &vec![message.clone()])));
+    assert_eq!(
+        events.last(),
+        Some(&Ok(ModelEvent::Finished(crate::FinishReason::Stop)))
+    );
+}
+
+#[tokio::test]
+async fn tool_done_succeeds_with_empty_completed_output() {
+    let call = json!({"type":"function_call","id":"f","call_id":"c","namespace":"canter","name":"read","arguments":"{ \"path\" : \"README.md\" }","status":"completed"});
+    let server = Server::start(vec![Reply::sse(
+        event(json!({"type":"response.output_item.done","output_index":0,"item":call}))
+            + &complete(json!([])),
+    )])
+    .await;
+    let events: Vec<_> = model(&server)
+        .stream(
+            Request {
+                tools: vec![ToolDefinition {
+                    name: "read".into(),
+                    description: String::new(),
+                    parameters: json!({}),
+                }],
+                ..Default::default()
+            },
+            CancellationToken::new(),
+        )
+        .collect()
+        .await;
+    server.stop().await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    assert!(events.iter().any(|event| matches!(event, Ok(ModelEvent::ItemCompleted {content:AssistantContent::ToolCall(tool),..}) if tool.id == "c" && tool.name == "read" && tool.arguments == "{ \"path\" : \"README.md\" }")));
+    assert!(events.iter().any(|event| matches!(event, Ok(ModelEvent::Replay(crate::Replay::Responses {output,..})) if output == &vec![call.clone()])));
+    assert_eq!(
+        events.last(),
+        Some(&Ok(ModelEvent::Finished(crate::FinishReason::ToolCalls)))
+    );
+}
+
+#[tokio::test]
+async fn stream_validation_logs_only_local_diagnostics() {
+    const CHILD: &str = "CANTER_RESPONSES_LOG_TEST";
+    if std::env::var_os(CHILD).is_none() {
+        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "responses::edge_tests::stream_validation_logs_only_local_diagnostics",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env(CHILD, "1")
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        assert!(output.status.success());
+        // The daemon redirects stderr to server.log; capture that same sink.
+        let log = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            log.contains("Responses stream: output_item.done at index 2 has no id"),
+            "{log}"
+        );
+        for private in [
+            "private-test-id",
+            "private-test-text",
+            "private-test-cipher",
+            crate::test_support::KEY,
+        ] {
+            assert!(!log.contains(private));
+        }
+        return;
+    }
+    let server = Server::start(vec![Reply::sse(
+        event(json!({"type":"response.output_item.added","output_index":2,"item":{"type":"message","id":"private-test-id","content":[]}}))
+            + &event(json!({"type":"response.output_item.done","output_index":2,"item":{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"private-test-text"}],"encrypted_content":"private-test-cipher"}}))
+            + &complete(json!([])),
+    )]).await;
+    let events: Vec<_> = model(&server)
+        .stream(Request::default(), CancellationToken::new())
+        .collect()
+        .await;
+    server.stop().await;
+    assert_eq!(events, vec![Err(ModelError::new(ErrorKind::Other))]);
 }
 
 #[tokio::test]

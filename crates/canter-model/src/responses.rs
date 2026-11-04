@@ -135,7 +135,7 @@ impl Responses {
                     if finished {
                         yield ModelEvent::Replay(crate::Replay::Responses {
                             model:request.model.clone(), scope:None,
-                            output:wire::replay_output(&event["response"]["output"]),
+                            output:state.replay_output(),
                         });
                     }
                     yield output_event;
@@ -470,7 +470,18 @@ mod tests {
         let message = json!({"type":"message","id":"m1","role":"assistant","status":"completed","phase":"commentary","content":[{"type":"output_text","text":"你好","annotations":[]}]});
         let arguments = "{ \"path\" : \"a\" }";
         let call = json!({"type":"function_call","id":"fc1","call_id":"call1","namespace":"canter","name":"read","arguments":arguments,"status":"completed"});
-        let server = Server::start(vec![Reply::sse(sse(vec![
+        for output in [
+            Some(json!([reasoning, message, call])),
+            Some(json!([])),
+            Some(json!([message])),
+            Some(json!([{"type":"unknown","id":"unrelated"}])),
+            None,
+        ] {
+            let mut response = json!({"status":"completed","usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":60},"output_tokens":30,"output_tokens_details":{"reasoning_tokens":20},"total_tokens":130}});
+            if let Some(output) = output {
+                response["output"] = output;
+            }
+            let server = Server::start(vec![Reply::sse(sse(vec![
             json!({"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"r1","summary":[]}}),
             json!({"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"m1","role":"assistant","content":[]}}),
             json!({"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"fc1","call_id":"call1","namespace":"canter","name":"read","arguments":""}}),
@@ -482,48 +493,58 @@ mod tests {
             json!({"type":"response.output_item.done","output_index":2,"item":call}),
             json!({"type":"response.output_item.done","output_index":0,"item":reasoning}),
             json!({"type":"response.output_item.done","output_index":1,"item":message}),
-            json!({"type":"response.completed","response":{"status":"completed","output":[reasoning,message,call],"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":60},"output_tokens":30,"output_tokens_details":{"reasoning_tokens":20},"total_tokens":130}}}),
+            json!({"type":"response.completed","response":response}),
         ]))]).await;
-        let model = Responses::with_endpoint(
-            Arc::new(Auth),
-            format!("{}responses", server.base_url).parse().unwrap(),
-        )
-        .unwrap();
-        let events: Vec<_> = model
-            .stream(
-                Request {
-                    model: "test-model".into(),
-                    tools: vec![ToolDefinition {
-                        name: "read".into(),
-                        description: "Read".into(),
-                        parameters: json!({}),
-                    }],
-                    ..Default::default()
-                },
-                CancellationToken::new(),
+            let model = Responses::with_endpoint(
+                Arc::new(Auth),
+                format!("{}responses", server.base_url).parse().unwrap(),
             )
-            .collect()
-            .await;
-        server.stop().await;
-        assert!(events.iter().all(Result::is_ok));
-        let text: Vec<_> = events
-            .iter()
-            .filter_map(|event| match event {
-                Ok(ModelEvent::TextDelta { delta, .. }) => Some(delta.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(text, ["你", "好"]);
-        assert!(events.iter().any(
+            .unwrap();
+            let events: Vec<_> = model
+                .stream(
+                    Request {
+                        model: "test-model".into(),
+                        tools: vec![ToolDefinition {
+                            name: "read".into(),
+                            description: "Read".into(),
+                            parameters: json!({}),
+                        }],
+                        ..Default::default()
+                    },
+                    CancellationToken::new(),
+                )
+                .collect()
+                .await;
+            server.stop().await;
+            assert!(events.iter().all(Result::is_ok));
+            let text: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Ok(ModelEvent::TextDelta { delta, .. }) => Some(delta.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(text, ["你", "好"]);
+            assert!(events.iter().any(
             |event| matches!(event, Ok(ModelEvent::ReasoningDelta {delta,..}) if delta == "Check")
         ));
-        assert!(events.iter().any(|event| matches!(event, Ok(ModelEvent::ItemCompleted {content:AssistantContent::ToolCall(call),..}) if call.id == "call1" && call.name == "read" && call.arguments == arguments)));
-        assert!(events.iter().any(|event| matches!(event, Ok(ModelEvent::Usage(usage)) if usage == &Usage {input_tokens:100,output_tokens:30,total_tokens:130,cache_read_tokens:Some(60),cache_miss_tokens:Some(40),reasoning_tokens:Some(20)})));
-        assert_eq!(
-            events.last(),
-            Some(&Ok(ModelEvent::Finished(FinishReason::ToolCalls)))
-        );
-        assert!(!format!("{events:?}").contains("test-only-ciphertext"));
+            assert!(events.iter().any(|event| matches!(event, Ok(ModelEvent::ItemCompleted {content:AssistantContent::ToolCall(call),..}) if call.id == "call1" && call.name == "read" && call.arguments == arguments)));
+            assert!(events.iter().any(|event| matches!(event, Ok(ModelEvent::Usage(usage)) if usage == &Usage {input_tokens:100,output_tokens:30,total_tokens:130,cache_read_tokens:Some(60),cache_miss_tokens:Some(40),reasoning_tokens:Some(20)})));
+            assert_eq!(
+                events.last(),
+                Some(&Ok(ModelEvent::Finished(FinishReason::ToolCalls)))
+            );
+            assert!(!format!("{events:?}").contains("test-only-ciphertext"));
+            assert!(events.iter().any(|event| matches!(event, Ok(ModelEvent::Replay(crate::Replay::Responses {output,..})) if output == &vec![reasoning.clone(), message.clone(), call.clone()])));
+            let completed: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Ok(ModelEvent::ItemCompleted { item_id, .. }) => Some(item_id.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(completed, ["r1:0", "m1:0", "fc1"]);
+        }
     }
 
     #[tokio::test]
@@ -670,7 +691,13 @@ mod tests {
             {"type":"message","id":format!("m{index}"),"role":"assistant","status":"completed","phase":"commentary","content":[{"type":"output_text","text":format!("read {index}"),"annotations":[]}]},
             {"type":"function_call","id":format!("fc{index}"),"call_id":format!("call{index}"),"namespace":"canter","name":"read","arguments":"{ \"path\" : \"a\" }","status":"completed"}
         ])).collect();
-        let replies = outputs.iter().chain(std::iter::once(&json!([]))).map(|output| Reply::sse(sse(vec![json!({"type":"response.completed","response":{"status":"completed","output":output}})]))).collect();
+        let replies = outputs.iter().chain(std::iter::once(&json!([]))).map(|output| {
+            let mut events: Vec<_> = output.as_array().unwrap().iter().enumerate().map(|(index, item)| {
+                json!({"type":"response.output_item.done","output_index":index,"item":item})
+            }).collect();
+            events.push(json!({"type":"response.completed","response":{"status":"completed","output":[]}}));
+            Reply::sse(sse(events))
+        }).collect();
         let server = Server::start(replies).await;
         let model = Responses::with_endpoint(
             Arc::new(Auth),
