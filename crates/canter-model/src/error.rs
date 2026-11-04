@@ -7,6 +7,20 @@ pub enum ErrorKind {
     ContextLength,
     Authentication,
     InvalidRequest,
+    IncompleteResponse,
+    UnsupportedOutput,
+    ChatgptUsageLimit,
+    ChatgptNotEligible,
+    ChatgptUnsupportedCapability,
+    ChatgptRoute,
+    ChatgptAuthorization,
+    ChatgptPermission,
+    ChatgptNotLoggedIn,
+    ChatgptNeedsLogin,
+    ChatgptPlanNotAuthorized,
+    ChatgptCredentials,
+    ChatgptClientConfiguration,
+    ForegroundRequired,
     Other,
 }
 
@@ -21,6 +35,42 @@ impl ErrorKind {
             Self::ContextLength => "context too long",
             Self::Authentication => "authentication failed",
             Self::InvalidRequest => "invalid request",
+            Self::IncompleteResponse => "the response did not complete; no tools were executed",
+            Self::UnsupportedOutput => "this version of canter does not support the model's output",
+            Self::ChatgptUsageLimit => {
+                "ChatGPT usage limit reached. Manage usage: https://chatgpt.com/settings/usage"
+            }
+            Self::ChatgptNotEligible => {
+                "ChatGPT plan usage is unavailable for this account, workspace or policy"
+            }
+            Self::ChatgptUnsupportedCapability => {
+                "ChatGPT does not support a requested parameter, model, input or tool; check the integration"
+            }
+            Self::ChatgptRoute => {
+                "ChatGPT routing is not supported; the integration must use POST https://api.openai.com/v1/responses"
+            }
+            Self::ChatgptAuthorization => {
+                "ChatGPT authorization was not accepted. Check the selected account and run `canter auth login chatgpt` if sign-in is required"
+            }
+            Self::ChatgptPermission => {
+                "ChatGPT permission or serving-region policy prevents this request; check the client and grant configuration"
+            }
+            Self::ChatgptNotLoggedIn => {
+                "no ChatGPT account is signed in. Run `canter auth login chatgpt`"
+            }
+            Self::ChatgptNeedsLogin => {
+                "ChatGPT sign-in has expired or been revoked. Run `canter auth login chatgpt`"
+            }
+            Self::ChatgptPlanNotAuthorized => {
+                "ChatGPT plan usage is not authorized. Run `canter auth login chatgpt` and enable plan usage"
+            }
+            Self::ChatgptCredentials => "cannot read or save local ChatGPT credentials",
+            Self::ChatgptClientConfiguration => {
+                "ChatGPT client configuration is invalid; check the integration before signing in again"
+            }
+            Self::ForegroundRequired => {
+                "a connected session interface is required unless background use has been authorized"
+            }
             Self::Other => "unexpected error",
         }
     }

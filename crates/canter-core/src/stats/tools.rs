@@ -32,7 +32,7 @@ pub(super) fn calls(
         match entry {
             HistoryEntry::TurnBoundary { turn_id } => turn = Some(turn_id.clone()),
             HistoryEntry::Message {
-                message: Message::Assistant { content },
+                message: Message::Assistant { content, .. },
                 ..
             } => {
                 for part in content {

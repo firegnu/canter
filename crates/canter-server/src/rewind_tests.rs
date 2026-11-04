@@ -444,6 +444,7 @@ async fn check_rewind(
         );
         let mut expected = immediate.messages.clone();
         expected.push(Message::Assistant {
+            replay: None,
             content: vec![canter_model::AssistantContent::Text {
                 text: "done".into(),
             }],

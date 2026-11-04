@@ -72,6 +72,7 @@ impl Server {
         let bodies = script.bodies.clone();
         let app = Router::new()
             .route("/v1/chat/completions", post(respond))
+            .route("/v1/responses", post(respond))
             .with_state(script);
         let task = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();

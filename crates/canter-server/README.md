@@ -64,11 +64,30 @@
 }
 ```
 
-`providers` 的每个键是自己起的家名（ASCII 字母、数字、`-_.`），每家独立配置
+`providers` 的每个键是自己起的家名（ASCII 字母、数字、`-_.`）。Chat Completions 每家独立配置
 `base_url`、`api_key`、可选请求头和 `models`。模型对象里的 `context_window` 必填，
 按所用模型填写；`image` 缺省 false，`auto_compact_tokens` 和 `price` 可省略。
 价格单位及 peak/off_peak 规则见下文，未配置价格就记为未知，不继承同名模型的内置价。
-`api` 不写就是 `chat_completions`；当前其它接口类型（包括 `responses`）会报明哪家配置不支持。
+`api` 不写就是 `chat_completions`。GPT 套餐使用 `responses`，在 `providers` 中加入：
+
+```json
+"chatgpt": {
+  "api": "responses",
+  "auth": "chatgpt",
+  "models": {
+    "<model-name>": { "context_window": 0, "image": true }
+  }
+}
+```
+
+`<model-name>` 和窗口 `0` 都是占位，使用前按官方资料填写模型名及窗口（大于 81,920）；本件不预置 GPT 模型。
+然后选择 `chatgpt/<model-name>`。先运行 `canter auth login chatgpt`，多个账号用
+`canter auth use chatgpt <email|序号>` 选择；请求使用这一轮选定账号的登录令牌，401 最多恢复一次。
+`auth` 只接受 `chatgpt`，不得配置 `api_key` 或 `base_url`（空字符串和 null 也拒绝）；
+地址固定为 `https://api.openai.com/v1/responses`，不使用自定义请求头。没有价格时花费为未知。
+请求开启思考摘要，但不发送思考档位。额度用完提示 Manage usage 链接，不自动重试或换家。
+未同意后台使用的账号，在最后一个会话界面断开后暂停新请求；正在运行的工具完成并保存，重连后继续。
+当前轮的工具循环会回传私有输出项；更早轮次、重启及压缩后的历史只发送普通内容（跨边界密文回传留待 P2-210）。
 
 会话和默认 `model` 使用 `<家名>/<模型名>`，在第一个 `/` 分开：例如
 `router/vendor/model` 发给 router 的模型名为 `vendor/model`。

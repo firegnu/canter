@@ -22,6 +22,8 @@ pub enum Message {
     },
     Assistant {
         content: Vec<AssistantContent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replay: Option<Replay>,
     },
     ToolResult {
         tool_call_id: String,
@@ -31,6 +33,44 @@ pub enum Message {
     /// Serialization fails rather than silently discarding the original payload.
     #[serde(other, skip_serializing)]
     Unknown,
+}
+
+/// Provider output belongs only in private history. Debug never prints it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "api", rename_all = "snake_case")]
+pub enum Replay {
+    Responses {
+        model: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        output: Vec<Value>,
+    },
+    #[serde(other, skip_serializing)]
+    Unknown,
+}
+
+impl std::fmt::Debug for Replay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Replay([PRIVATE])")
+    }
+}
+
+impl Replay {
+    pub fn with_scope(mut self, id: &str) -> Self {
+        if let Self::Responses { scope, .. } = &mut self {
+            *scope = Some(id.into());
+        }
+        self
+    }
+
+    pub fn belongs_to_scope(&self, id: Option<&str>) -> bool {
+        match self {
+            Self::Responses {
+                scope: Some(scope), ..
+            } => id == Some(scope.as_str()),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +174,9 @@ pub enum ModelEvent {
     /// emit ItemCompleted directly without this provisional event.
     ToolCall(ToolCall),
     Usage(Usage),
+    /// Private provider output, delivered only after a successful terminal event.
+    /// The core assigns its replay scope before writing model history.
+    Replay(Replay),
     /// Provider-confirmed complete item. IDs are scoped to one attempt.
     ItemCompleted {
         item_id: String,

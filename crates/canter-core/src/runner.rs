@@ -619,6 +619,7 @@ async fn model_response(
     let mut reason = None;
     let mut error = None;
     let mut usage = None;
+    let mut replay = None;
     loop {
         tokio::select! {
             biased;
@@ -626,6 +627,7 @@ async fn model_response(
             _ = timer.tick(), if !pending.is_empty() => flush(shared, &mut pending).await?,
             event = stream.next() => match event {
                 Some(Ok(ModelEvent::Retrying { error, attempt, max_retries, delay })) => {
+                    replay = None;
                     finish_items(turn_id, &response, &mut pending, true);
                     flush(shared, &mut pending).await?;
                     if !response.items.is_empty() {
@@ -640,6 +642,7 @@ async fn model_response(
                     goal_id = shared.charge_goal().await;
                 }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),
+                Some(Ok(ModelEvent::Replay(value))) => replay = Some(value),
                 Some(Ok(ModelEvent::Finished(finish))) => {
                     response.apply(&ModelEvent::Finished(finish.clone()));
                     reason = Some(finish);
@@ -700,12 +703,18 @@ async fn model_response(
         content.clone()
     };
     // Persist history before publishing the final display state.
-    if !history.is_empty() {
+    let replay = replay
+        .filter(|_| reason.is_some() && error.is_none() && !interrupted)
+        .map(|replay| replay.with_scope(turn_id));
+    if !history.is_empty() || replay.is_some() {
         shared
             .state
             .lock()
             .await
-            .message(Message::Assistant { content: history })
+            .message(Message::Assistant {
+                content: history,
+                replay,
+            })
             .await?;
     }
     finish_items(turn_id, &response, &mut pending, !preserve_partial);

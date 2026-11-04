@@ -103,12 +103,16 @@ pub(crate) enum HistoryEntry {
 pub(crate) fn known(message: Message) -> Option<Message> {
     match message {
         Message::Unknown => None,
-        Message::Assistant { mut content } => {
+        Message::Assistant {
+            mut content,
+            replay,
+        } => {
             content.retain(|part| !matches!(part, AssistantContent::Unknown));
-            if content.is_empty() {
+            let replay = replay.filter(|replay| !matches!(replay, canter_model::Replay::Unknown));
+            if content.is_empty() && replay.is_none() {
                 None
             } else {
-                Some(Message::Assistant { content })
+                Some(Message::Assistant { content, replay })
             }
         }
         message => Some(message),
@@ -336,7 +340,7 @@ pub(crate) fn flush_plan_mode_notices(history: &mut Vec<Message>, notices: &mut 
         return;
     }
     if let Some(index) = history.iter().rposition(|message| matches!(message, Message::Assistant { .. }))
-        && let Message::Assistant { content } = &history[index]
+        && let Message::Assistant { content, .. } = &history[index]
         && content.iter().any(|part| match part {
             AssistantContent::ToolCall(call) => !history[index + 1..].iter().any(|message| matches!(message, Message::ToolResult { tool_call_id, .. } if tool_call_id == &call.id)),
             _ => false,
@@ -391,6 +395,17 @@ pub(crate) fn measure_request(request: &canter_model::Request) -> canter_protoco
 }
 
 pub(crate) fn message_tokens(message: &Message) -> u64 {
+    if let Message::Assistant {
+        content,
+        replay: Some(_),
+    } = message
+    {
+        // P2-204 estimates the ordinary view; encrypted replay is not token text.
+        return message_tokens(&Message::Assistant {
+            content: content.clone(),
+            replay: None,
+        });
+    }
     if let Message::UserParts { content } | Message::ToolImages { content } = message {
         return 8 + content
             .iter()

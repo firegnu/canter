@@ -481,7 +481,7 @@ async fn provider_reload_is_atomic_and_frozen_until_the_next_turn() {
     fixture.idle(&url).await;
 
     let mut warnings = fixture.warnings(&url).await;
-    fixture.config["providers"]["two"]["api"] = json!("responses");
+    fixture.config["providers"]["two"]["api"] = json!("unsupported_api");
     fixture.config["providers"]["one"]["api_key"] = json!("test-only-rejected-key");
     fixture.config["providers"]["one"]["headers"] = json!({"x-secret":"test-only-rejected-header"});
     fixture.save();

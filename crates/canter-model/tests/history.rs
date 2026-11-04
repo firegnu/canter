@@ -1,6 +1,21 @@
 use canter_model::{AssistantContent, Message, ToolCall};
 
 #[test]
+fn private_responses_output_roundtrips_without_debug_disclosure() {
+    let value = serde_json::json!({
+        "type":"assistant","content":[{"type":"text","text":"Checking"}],
+        "replay":{"api":"responses","model":"test-model","scope":"turn-1","output":[
+            {"type":"reasoning","id":"r1","summary":[],"encrypted_content":"test-only-encrypted-history"},
+            {"type":"message","id":"m1","role":"assistant","status":"completed","phase":"commentary","content":[{"type":"output_text","text":"Checking","annotations":[]}]},
+            {"type":"function_call","id":"fc1","call_id":"call1","namespace":"canter","name":"read","arguments":"{ \"path\":\"a\" }"}
+        ]}
+    });
+    let message: Message = serde_json::from_value(value.clone()).unwrap();
+    assert!(serde_json::to_value(&message).unwrap() == value);
+    assert!(!format!("{message:?}").contains("test-only-encrypted-history"));
+}
+
+#[test]
 fn history_preserves_raw_content_and_reads_unknown_kinds_without_writing_them() {
     let history = r#"[
         {"type":"system","text":"Be helpful."},
@@ -19,6 +34,7 @@ fn history_preserves_raw_content_and_reads_unknown_kinds_without_writing_them() 
     assert_eq!(
         messages[3],
         Message::Assistant {
+            replay: None,
             content: vec![
                 AssistantContent::Reasoning {
                     text: "  Think\n".into()

@@ -450,7 +450,7 @@ async fn summarize(
                 }
                 transcript.push('\n');
             }
-            Message::Assistant { content } => {
+            Message::Assistant { content, .. } => {
                 for part in content {
                     match part {
                         AssistantContent::Text { text } => {
@@ -682,6 +682,7 @@ async fn summarize(
                         shared.accept_model_output().await;
                         break;
                     }
+                    Some(Ok(ModelEvent::Replay(_))) => {}
                     Some(Err(error)) if error.kind == ErrorKind::ContextLength => {
                         too_large = true;
                         break;
@@ -699,6 +700,7 @@ async fn summarize(
                 confirmed_summary.push_str(&response.text());
                 request.messages.push(Message::Assistant {
                     content: response.completed(),
+                    replay: None,
                 });
                 continue;
             }

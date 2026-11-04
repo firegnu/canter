@@ -49,6 +49,7 @@ impl ChatgptAuth {
         next.info.background_consent = consent;
         self.inner.store.save_record(&next, self.host_id())?;
         *record = next;
+        self.inner.consent_changes.send_replace(());
         Ok(record.info())
     }
 
