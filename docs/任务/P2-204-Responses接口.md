@@ -143,3 +143,11 @@
 **其余编码核对**：重新对照官方 [Function calling](https://developers.openai.com/api/docs/guides/function-calling)、[Migrate to Responses](https://developers.openai.com/api/docs/guides/migrate-to-responses)、[Images and vision](https://developers.openai.com/api/docs/guides/images-vision)、[SIWC Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)，并只读本机 OpenAI SDK 的 Responses 类型和 Codex `rust-v0.163.0` 的 `codex-rs/tools/src/responses_api.rs`、`codex-rs/protocol/src/models.rs`（没有搬代码）。核对了顶层白名单、developer/user、图片、namespace 内函数、普通 function_call/function_call_output，以及 replay 的 message/reasoning/function_call；除上述两处外，没有发现其他已发送字段或形状与契约不符。图片 `detail` 官方明确允许省略并默认 `auto`，保持省略。两条「可以不改」均未改：message/function_call 的密文白名单问题留 P2-210；自定义 headers 继续忽略。
 
 **验证**：命令全部在前台跑完，Cargo 使用本分支独立编译目录。两项请求编码测试及 `two_tool_rounds_replay_order_phase_ciphertext_and_raw_arguments` 共 3 项通过；`cargo nextest run -p canter-model` 全部 33 项通过、0 跳过（含原请求逐字节测试）；`cargo nextest run -p canter-server -E 'test(two_tool_loops_pause_at_last_disconnect_replay_privately_and_resume)'` 1 项通过；`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。未跑 workspace 全套，真实授权/模型调用仍为 0 次，未改主仓库审查文件或用户状态。没有新的待主控决定事项；只在 `p2-204-responses` 提交，未合并或推送。
+
+## 主控审查
+
+- 第一轮看 diff：核心只加了接线（压缩写 `replay: None`、忽略 `ModelEvent::Replay`，`message_tokens` 估算时去掉 replay，runner 只在本轮成功结束时按 turn id 挂 replay），没有按厂商分支；不用 GPT 时请求逐字节不变由旧请求字节测试覆盖。开发问的 `responses` 旧测试值，主控定改成 `unsupported_api`、原断言不动、另加缺 auth 的测试。
+- 交叉审查（Claude Code，`opus[1m]` xhigh）挑出 2 条必须改：namespace 缺必填 `description`、助手历史用了 `input_text`。两条都是真服务器会拒、假服务端测不出的格式问题，交回返工；`b860653` 修好并补了逐字段请求测试，复核「可以合并」。可以不改 1 记进 P2-210，可以不改 2（`headers` 被忽略不报错）记 HANDOFF。
+- 合并后在 main 跑全套：`cargo nextest run --all-targets --no-fail-fast` 1729 过、49 跳过；`cargo test --doc --workspace` 通过；clippy、fmt、diff check 通过。
+- 还没真调：请求格式要等合并以后用户在场的 2 次真调确认。
+- 结果：返工 1 次
