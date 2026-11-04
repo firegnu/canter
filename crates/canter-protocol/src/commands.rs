@@ -28,6 +28,13 @@ pub struct GoalResponse {
 }
 
 pub mod routes {
+    pub const ACCOUNT_READ: &str = "/v1/account/read";
+    pub const ACCOUNT_LOGIN_START: &str = "/v1/account/login/start";
+    pub const ACCOUNT_LOGIN_WAIT: &str = "/v1/account/login/wait";
+    pub const ACCOUNT_LOGIN_CANCEL: &str = "/v1/account/login/cancel";
+    pub const ACCOUNT_SELECT: &str = "/v1/account/select";
+    pub const ACCOUNT_BACKGROUND: &str = "/v1/account/background";
+    pub const ACCOUNT_LOGOUT: &str = "/v1/account/logout";
     pub const MANAGED_CLIENT: &str = "/v1/managedClients/{id}";
     pub const MANAGED_CLIENT_HEADER: &str = "x-canter-managed-client";
     pub const MEMORIES: &str = "/v1/sessions/{id}/memories";

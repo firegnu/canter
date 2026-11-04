@@ -30,6 +30,11 @@ impl ChatgptAuth {
         let existing = match record_id {
             Some(id) => {
                 let entry = self.entry(id).await?;
+                let pending = entry.record.lock().await.pending_revocation.is_some();
+                if pending {
+                    // Best effort before this registration can be overwritten.
+                    self.logout(id).await?;
+                }
                 let record = entry.record.lock().await;
                 Some((record.info.clone(), entry.epoch.load(Ordering::SeqCst)))
             }
@@ -182,6 +187,10 @@ impl ChatgptAuth {
                     client_id: client,
                     email: identity.email,
                     status: tokens.status(),
+                    background_consent: existing
+                        .as_ref()
+                        .is_some_and(|(info, _)| info.background_consent),
+                    pending_revocation: false,
                 };
                 let record = Record {
                     info: info.clone(),

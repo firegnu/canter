@@ -32,6 +32,91 @@ mod support;
 use support::*;
 
 #[tokio::test]
+async fn failed_logout_can_retry_revocation_after_reopening() {
+    let fixture = Fixture::new().await;
+    let record = fixture.login(None).await.unwrap();
+    fixture.fake.state.lock().unwrap().revoke_status = 400;
+    assert_eq!(
+        fixture.auth.logout(&record.id).await.unwrap(),
+        LogoutResult::Pending
+    );
+    let Fixture {
+        auth,
+        fake,
+        root,
+        now,
+    } = fixture;
+    drop(auth);
+    let auth = ChatgptAuth::for_test(
+        &root.path().join("state"),
+        fake.origin.clone(),
+        Arc::new(move || now.load(Ordering::SeqCst)),
+    );
+    assert_eq!(
+        auth.access_token(&record.id).await.err().unwrap().kind,
+        ErrorKind::NotLoggedIn
+    );
+    fake.state.lock().unwrap().revoke_status = 200;
+    assert_eq!(
+        auth.logout(&record.id).await.unwrap(),
+        LogoutResult::Revoked
+    );
+    assert_eq!(fake.state.lock().unwrap().revocations.len(), 2);
+}
+
+#[tokio::test]
+async fn relogin_attempts_pending_revocation_before_replacing_registration() {
+    for status in [200, 400] {
+        let fixture = Fixture::new().await;
+        let record = fixture.login(None).await.unwrap();
+        fixture.fake.state.lock().unwrap().revoke_status = 400;
+        assert_eq!(
+            fixture.auth.logout(&record.id).await.unwrap(),
+            LogoutResult::Pending
+        );
+        assert!(fixture.auth.records().await[0].pending_revocation);
+        fixture.fake.state.lock().unwrap().revoke_status = status;
+        let returned = fixture.login(Some(&record.id)).await.unwrap();
+        assert_eq!(returned.status, RecordStatus::LoggedIn);
+        assert!(!returned.pending_revocation);
+        let state = fixture.fake.state.lock().unwrap();
+        assert_eq!(state.revocations.len(), 2);
+        assert_eq!(state.revocations[1]["token"], "fake-refresh-1");
+    }
+}
+
+#[tokio::test]
+async fn needs_login_logout_has_no_token_to_revoke_and_consent_remains_queryable() {
+    let fixture = Fixture::new().await;
+    let record = fixture.login(None).await.unwrap();
+    fixture.auth.complete_login(&record.id, true).await.unwrap();
+    assert!(fixture.auth.background_consent(&record.id).await.unwrap());
+    fixture.now.store(NOW + 3600, Ordering::SeqCst);
+    fixture.fake.state.lock().unwrap().error = Some((400, "invalid_grant".into()));
+    assert_eq!(
+        fixture
+            .auth
+            .access_token(&record.id)
+            .await
+            .err()
+            .unwrap()
+            .kind,
+        ErrorKind::NeedsLogin
+    );
+    assert_eq!(
+        fixture.auth.records().await[0].status,
+        RecordStatus::NeedsLogin
+    );
+    assert_eq!(
+        fixture.auth.logout(&record.id).await.unwrap(),
+        LogoutResult::NoToken
+    );
+    assert!(!fixture.auth.records().await[0].pending_revocation);
+    assert!(fixture.auth.background_consent(&record.id).await.unwrap());
+    assert!(fixture.fake.state.lock().unwrap().revocations.is_empty());
+}
+
+#[tokio::test]
 async fn initial_login_exchanges_issued_client_and_persists_validated_identity() {
     let fixture = Fixture::new().await;
     let record = fixture.login(None).await.unwrap();
@@ -556,7 +641,7 @@ async fn logout_revokes_and_clears_tokens_but_keeps_binding_and_host() {
     let old_token = fixture.auth.access_token(&record.id).await.unwrap();
     let host = fixture.auth.host_id().to_owned();
     let result = fixture.auth.logout(&record.id).await.unwrap();
-    assert!(result.remote_revoked);
+    assert_eq!(result, LogoutResult::Revoked);
     assert_eq!(fixture.auth.host_id(), host);
     assert_eq!(
         fixture.auth.records().await[0].status,
@@ -602,18 +687,14 @@ async fn logout_revokes_and_clears_tokens_but_keeps_binding_and_host() {
 }
 
 #[tokio::test]
-async fn remote_revocation_failure_is_bounded_and_still_clears_local_tokens() {
+async fn remote_revocation_failure_is_bounded_and_retains_only_pending_revocation() {
     for (status, attempts) in [(503, 3), (400, 1)] {
         let fixture = Fixture::new().await;
         let record = fixture.login(None).await.unwrap();
         fixture.fake.state.lock().unwrap().revoke_status = status;
-        assert!(
-            !fixture
-                .auth
-                .logout(&record.id)
-                .await
-                .unwrap()
-                .remote_revoked
+        assert_eq!(
+            fixture.auth.logout(&record.id).await.unwrap(),
+            LogoutResult::Pending
         );
         assert_eq!(
             fixture.fake.state.lock().unwrap().revocations.len(),
@@ -632,6 +713,7 @@ async fn remote_revocation_failure_is_bounded_and_still_clears_local_tokens() {
             Arc::new(move || now.load(Ordering::SeqCst)),
         );
         assert_eq!(reopened.records().await[0].status, RecordStatus::SignedOut);
+        assert!(reopened.records().await[0].pending_revocation);
         assert_eq!(
             reopened.access_token(&record.id).await.err().unwrap().kind,
             ErrorKind::NotLoggedIn
@@ -674,7 +756,7 @@ async fn logout_blocks_new_requests_and_revokes_inflight_rotation_without_resurr
         refreshing.await.unwrap().err().unwrap().kind,
         ErrorKind::NotLoggedIn
     );
-    assert!(logout.await.unwrap().unwrap().remote_revoked);
+    assert_eq!(logout.await.unwrap().unwrap(), LogoutResult::Revoked);
     assert_eq!(
         fixture.fake.state.lock().unwrap().revocations[0]["token"],
         "fake-refresh-2"
@@ -813,13 +895,9 @@ async fn network_failure_preserves_credentials_and_logout_reports_unconfirmed_re
         ErrorKind::Network
     );
     assert_eq!(std::fs::read(&path).unwrap(), before);
-    assert!(
-        !fixture
-            .auth
-            .logout(&record.id)
-            .await
-            .unwrap()
-            .remote_revoked
+    assert_eq!(
+        fixture.auth.logout(&record.id).await.unwrap(),
+        LogoutResult::Pending
     );
     let after: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert!(after["tokens"].is_null());
@@ -1014,7 +1092,7 @@ async fn logout_revokes_rotated_refresh_token_even_if_new_id_token_is_invalid() 
     .unwrap();
     release.notify_one();
     assert!(refreshing.await.unwrap().is_err());
-    assert!(logout.await.unwrap().unwrap().remote_revoked);
+    assert_eq!(logout.await.unwrap().unwrap(), LogoutResult::Revoked);
     assert_eq!(
         fixture.fake.state.lock().unwrap().revocations[0]["token"],
         "fake-refresh-2"
@@ -1219,7 +1297,7 @@ async fn logout_is_durable_before_revocation_and_signed_out_snapshot_cannot_supp
     );
     assert_eq!(fixture.fake.state.lock().unwrap().grants.len(), 1);
     release.notify_one();
-    assert!(logout.await.unwrap().unwrap().remote_revoked);
+    assert_eq!(logout.await.unwrap().unwrap(), LogoutResult::Revoked);
     let after: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     assert!(after["tokens"].is_null());
     assert!(after["pending_revocation"].is_null());
@@ -1251,7 +1329,7 @@ async fn logout_is_durable_while_waiting_for_inflight_refresh() {
     assert_eq!(stopped["pending_revocation"], "fake-refresh-1");
     release.notify_one();
     assert!(refreshing.await.unwrap().is_err());
-    assert!(logout.await.unwrap().remote_revoked);
+    assert_eq!(logout.await.unwrap(), LogoutResult::Revoked);
     assert_eq!(
         fixture.fake.state.lock().unwrap().revocations[0]["token"],
         "fake-refresh-2"

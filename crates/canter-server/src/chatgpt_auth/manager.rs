@@ -16,13 +16,16 @@ impl ChatgptAuth {
             let mut record = entry.record.lock().await;
             record.sign_out();
             auth.inner.store.save_record(&record, auth.host_id())?;
-            let remote_revoked = match &record.pending_revocation {
-                Some(token) => auth.inner.http.revoke(token, &record.info.client_id).await,
-                None => false,
+            let result = match &record.pending_revocation {
+                Some(token) if auth.inner.http.revoke(token, &record.info.client_id).await => {
+                    record.pending_revocation = None;
+                    LogoutResult::Revoked
+                }
+                Some(_) => LogoutResult::Pending,
+                None => LogoutResult::NoToken,
             };
-            record.pending_revocation = None;
             auth.inner.store.save_record(&record, auth.host_id())?;
-            Ok(LogoutResult { remote_revoked })
+            Ok(result)
         })
         .await
         .map_err(|_| AuthError::from(ErrorKind::InvalidResponse))?

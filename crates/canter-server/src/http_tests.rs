@@ -3,6 +3,191 @@ use canter_model::{FinishReason, ModelEvent, ModelStream, Request};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[tokio::test]
+async fn account_status_lists_empty_accounts_and_rejects_unsupported_provider() {
+    let test = BtwTest::new().await;
+    let response = test
+        .client
+        .post("http://localhost/v1/account/read")
+        .json(&json!({"provider":"chatgpt"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let value: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(value["accounts"], json!([]));
+    assert!(value["currentAccountId"].is_null());
+    let response = test
+        .client
+        .post("http://localhost/v1/account/read")
+        .json(&json!({"provider":"unsupported"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        response
+            .text()
+            .await
+            .unwrap()
+            .contains("Providers: chatgpt")
+    );
+    test.finish().await;
+}
+
+#[tokio::test]
+async fn account_secrets_never_enter_public_records_sessions_sse_or_logs() {
+    use crate::chatgpt_auth::test_support::{CODE, Fake};
+    use eventsource_stream::Eventsource;
+    use futures_util::StreamExt;
+    async fn post(
+        client: &reqwest::Client,
+        route: &str,
+        params: serde_json::Value,
+    ) -> serde_json::Value {
+        let response = client
+            .post(format!("http://localhost/v1/account/{route}"))
+            .json(&params)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        response.json().await.unwrap()
+    }
+    let log = tempfile::NamedTempFile::new().unwrap();
+    let writer = log.reopen().unwrap();
+    let _guard = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.try_clone().unwrap())
+            .finish(),
+    );
+    let fake = Fake::new().await;
+    let test = BtwTest::with_accounts(Some(&fake)).await;
+    let session = test.create().await;
+    let before = test.app.store.events_after(&session, 0).unwrap();
+    let mut secrets = vec![CODE.to_owned()];
+    let mut public = Vec::new();
+    let mut account_id = None;
+    for success in [true, false] {
+        if !success {
+            fake.state.lock().unwrap().error = Some((400, "invalid_grant".into()));
+        }
+        let start = post(
+            &test.client,
+            "login/start",
+            json!({"provider":"chatgpt","accountId":account_id}),
+        )
+        .await;
+        let url = start["authUrl"].as_str().unwrap();
+        secrets.push(url.to_owned());
+        for (name, value) in reqwest::Url::parse(url).unwrap().query_pairs() {
+            if ["state", "nonce", "code_challenge"].contains(&name.as_ref()) {
+                secrets.push(value.into_owned());
+            }
+        }
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .unwrap();
+        let done = post(
+            &test.client,
+            "login/wait",
+            json!({"provider":"chatgpt","loginId":start["loginId"]}),
+        )
+        .await;
+        assert_eq!(done["success"], success);
+        if success {
+            let info = &done["account"];
+            let keys: Vec<_> = info
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(
+                keys,
+                [
+                    "backgroundConsent",
+                    "email",
+                    "id",
+                    "pendingRevocation",
+                    "planAuthorized",
+                    "status"
+                ]
+            );
+            account_id = Some(info["id"].as_str().unwrap().to_owned());
+            let saved: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(test.app.home.join(format!(
+                    "auth/chatgpt/{}.json",
+                    account_id.as_ref().unwrap()
+                )))
+                .unwrap(),
+            )
+            .unwrap();
+            for key in ["access", "refresh", "id"] {
+                secrets.push(saved["tokens"][key].as_str().unwrap().to_owned());
+            }
+        }
+        public.push(done.to_string());
+    }
+    public.push(
+        post(&test.client, "read", json!({"provider":"chatgpt"}))
+            .await
+            .to_string(),
+    );
+    let after = test.app.store.events_after(&session, 0).unwrap();
+    assert_eq!(
+        after, before,
+        "account operations must not append session events"
+    );
+    public.push(serde_json::to_string(&after).unwrap());
+    public.push(
+        test.client
+            .get(test.url(&session))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+    );
+    let response = test
+        .client
+        .get(format!(
+            "http://localhost/v1/events?session={session}&after=0&observe=true"
+        ))
+        .send()
+        .await
+        .unwrap();
+    let mut stream = response.bytes_stream().eventsource();
+    for _ in &before {
+        public.push(
+            tokio::time::timeout(Duration::from_secs(5), stream.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .data,
+        );
+    }
+    drop(stream);
+    test.finish().await;
+    public.push(std::fs::read_to_string(log.path()).unwrap());
+    for secret in secrets {
+        assert!(
+            public.iter().all(|text| !text.contains(&secret)),
+            "OAuth secret escaped its private response/storage boundary"
+        );
+    }
+}
+
 #[path = "rewind_tests.rs"]
 mod rewind;
 
@@ -782,6 +967,9 @@ async fn handoff_requires_idle_conversation_and_excludes_concurrent_work() {
 }
 impl BtwTest {
     async fn new() -> Self {
+        Self::with_accounts(None).await
+    }
+    async fn with_accounts(fake: Option<&crate::chatgpt_auth::test_support::Fake>) -> Self {
         let root = tempfile::Builder::new()
             .prefix("canter-btw-")
             .tempdir_in("/tmp")
@@ -814,7 +1002,13 @@ impl BtwTest {
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
         let stop = CancellationToken::new();
         let shutdown = stop.clone();
-        let router = router(app.clone());
+        let router = match fake {
+            Some(fake) => router_with_accounts(
+                app.clone(),
+                crate::chatgpt_auth::test_support::account_router(&app.home, fake),
+            ),
+            None => router(app.clone()),
+        };
         let server = tokio::spawn(async move {
             axum::serve(listener, router)
                 .with_graceful_shutdown(shutdown.cancelled_owned())

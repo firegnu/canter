@@ -55,6 +55,24 @@ fn open(path: &Path) -> Result<File, AuthError> {
 }
 
 impl Store {
+    pub fn load_preferences(&self) -> Result<super::preferences::Preferences, AuthError> {
+        serde_json::from_value(self.read("host.json")?).map_err(failure)
+    }
+
+    pub fn save_preferences(
+        &self,
+        host: &str,
+        preferences: &super::preferences::Preferences,
+    ) -> Result<(), AuthError> {
+        self.write(
+            "host.json",
+            &serde_json::json!({
+                "ext_agent_host_id": host,
+                "current_record": preferences.current_record,
+                "plan_notice_shown": preferences.plan_notice_shown,
+            }),
+        )
+    }
     pub fn load_records(&self, host: &str) -> Result<Vec<Record>, AuthError> {
         let mut records = Vec::new();
         for entry in fs::read_dir(&self.dir).map_err(failure)? {
@@ -145,7 +163,7 @@ impl Store {
         }));
         self.write(&format!("{}.json", info.id), &json!({
             "version":1, "ext_agent_host_id":host,
-            "record": {"id":info.id,"issuer":info.issuer,"subject":info.subject,"client_id":info.client_id,"email":info.email,"status":status},
+            "record": {"id":info.id,"issuer":info.issuer,"subject":info.subject,"client_id":info.client_id,"email":info.email,"status":status,"background_consent":info.background_consent},
             "tokens":tokens,
             "pending_revocation":record.pending_revocation.as_ref().map(|token| &token.0),
         }))

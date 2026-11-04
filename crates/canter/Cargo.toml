@@ -14,12 +14,14 @@ plist = "=1.10.1"
 canter-tui = { path = "../canter-tui" }
 canter-protocol.workspace = true
 tokio.workspace = true
+serde.workspace = true
+reqwest.workspace = true
 nix = { workspace = true, features = ["term"] }
 
 [dev-dependencies]
+canter-server = { path = "../canter-server", features = ["test-support"] }
 sha2 = "=0.10.9"
 base64 = "=0.23.1"
-reqwest.workspace = true
 axum.workspace = true
 futures-util.workspace = true
 eventsource-stream.workspace = true

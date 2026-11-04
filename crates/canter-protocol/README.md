@@ -47,6 +47,59 @@ input 为空，没有 userMessage，clientName 为 background。每批可以有�
 
 ## HTTP 对照
 
+### Accounts (P2-203)
+
+`info.features` includes `accounts`. Account commands use the local Unix socket;
+every request and successful response includes `provider: "chatgpt"`. Unsupported
+providers return `invalid_request` and `Providers: chatgpt`. These commands do not
+change session settings, events, or SSE replay. All responses use `Cache-Control: no-store`.
+
+| POST path | Request fields besides provider | Response |
+| --- | --- | --- |
+| `/v1/account/login/start` | `accountId?`, `backgroundConsent` (default false) | `loginId`, `authUrl` |
+| `/v1/account/login/wait` | `loginId` | `loginId`, `success`, nullable `error` / `account`, `showPlanNotice` |
+| `/v1/account/login/cancel` | `loginId` | `status: canceled / notFound` |
+| `/v1/account/read` | none | `accounts`, nullable `currentAccountId` |
+| `/v1/account/select` | `account` | same as read |
+| `/v1/account/background` | `enabled` | same as read |
+| `/v1/account/logout` | `account?` (default current) | `account`, `result: revoked / pending / noToken` |
+
+`AccountInfo` has only `id`, nullable `email`, `status` (`loggedIn`,
+`planNotAuthorized`, `needsLogin`, `signedOut`), `planAuthorized`,
+`backgroundConsent`, and `pendingRevocation`. `planAuthorized` reports whether
+the signed-in record currently permits plan use. It is false for unusable records.
+`account` accepts an email, a one-based number from read's stable ID-sorted list,
+or a local record ID. Ambiguous emails fail. Selection remains on a signed-out
+record so logout without a selector can retry its pending revocation.
+
+Start without accountId reuses the current registration if it needs sign-in,
+has signed out, or lacks plan permission; otherwise it creates a new registration.
+Successful sign-in selects the record and persists its explicit background consent.
+Noninteractive CLI sign-in always sends false. This consent is independent of
+OAuth scopes and permission mode; model request policy is outside this change.
+
+The complete authorization URL, including OAuth state, is returned **only by
+login/start to its caller**, for that terminal to open or display. It is never
+retained in completion responses, session events, SSE, or logs. Codes and tokens
+never cross the server boundary. Login IDs are random per-attempt capabilities;
+wait and cancel require the ID received from start. Wait returns one private
+completion result, up to the ten-minute login deadline; the result can be read
+again for 60 seconds after completion. `showPlanNotice` is true for the first
+plan-authorized sign-in on this installation; its marker survives logout/restart.
+
+Logout immediately blocks credential use and preserves registration/host identity.
+`pending` retains only a refresh token for revocation retries, with `signedOut`
+status; `revoked` clears it, and `noToken` means no revocation was needed. A returning
+login first attempts revocation of any old pending token, even if the remote
+service still cannot confirm it, before replacing the registration's credentials.
+
+Reference: Codex app-server v2 `rust-v0.163.0`, independently implemented. The
+login ID, URL, completion fields, and cancellation status follow Codex. Provider,
+record selection, background consent, pending revocation, and the first-plan
+notice are canter extensions. A private HTTP wait response replaces Codex's global
+login-completed notification because canter's SSE streams belong to sessions.
+No API-key, device-code, or externally supplied token login variant is exposed.
+
 `routes` 提供路径常量。`SessionPath` 和 `RequestPath` 对应路径参数；
 表中的 Params 是 JSON 请求体（GET 是查询参数，空 Params 表示无参数）。
 
