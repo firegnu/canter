@@ -35,6 +35,9 @@ mod agent_sessions;
 #[path = "managed.rs"]
 mod managed;
 
+#[path = "account.rs"]
+pub(crate) mod account;
+
 pub(crate) struct App {
     pub reload: Option<Arc<crate::reload::LiveConfig>>,
     pub home: PathBuf,
@@ -267,6 +270,11 @@ impl App {
 }
 
 pub(crate) fn router(app: Arc<App>) -> Router {
+    let accounts = account::router(app.home.clone(), app.stopped.clone());
+    router_with_accounts(app, accounts)
+}
+
+fn router_with_accounts(app: Arc<App>, accounts: Router) -> Router {
     Router::new()
         .route(routes::INFO, get(info))
         .route(routes::RUNNING_TURNS, get(running_turns))
@@ -321,6 +329,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
         .fallback(|| async { ApiError::invalid() })
         .method_not_allowed_fallback(|| async { ApiError::invalid() })
         .with_state(app)
+        .merge(accounts)
 }
 
 async fn goal(
@@ -434,6 +443,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         features: Some(vec![
             "sessionSandbox".into(),
             "managedClients".into(),
+            "accounts".into(),
             "subagentSessions".into(),
             "subagentTools".into(),
             "subagentStop".into(),

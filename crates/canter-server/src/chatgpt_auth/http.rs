@@ -67,7 +67,7 @@ impl Http {
             clock,
         })
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn for_test(origin: String, clock: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
         let url = Url::parse(&origin).unwrap();
         assert_eq!(url.scheme(), "http");

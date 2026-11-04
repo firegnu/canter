@@ -1,5 +1,276 @@
 {
   "$defs": {
+    "AccountBackgroundParams": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "AccountInfo": {
+      "properties": {
+        "backgroundConsent": {
+          "type": "boolean"
+        },
+        "email": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "pendingRevocation": {
+          "type": "boolean"
+        },
+        "planAuthorized": {
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/AccountStatus"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "planAuthorized",
+        "backgroundConsent",
+        "pendingRevocation"
+      ],
+      "type": "object"
+    },
+    "AccountLoginCancelResponse": {
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/AccountLoginCancelStatus"
+        }
+      },
+      "required": [
+        "provider",
+        "status"
+      ],
+      "type": "object"
+    },
+    "AccountLoginCancelStatus": {
+      "enum": [
+        "canceled",
+        "notFound"
+      ],
+      "type": "string"
+    },
+    "AccountLoginCompleted": {
+      "properties": {
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AccountInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "loginId": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "showPlanNotice": {
+          "type": "boolean"
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "provider",
+        "loginId",
+        "success",
+        "showPlanNotice"
+      ],
+      "type": "object"
+    },
+    "AccountLoginParams": {
+      "properties": {
+        "loginId": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "loginId"
+      ],
+      "type": "object"
+    },
+    "AccountLoginStartParams": {
+      "properties": {
+        "accountId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "backgroundConsent": {
+          "default": false,
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "type": "object"
+    },
+    "AccountLoginStartResponse": {
+      "description": "The URL contains ephemeral OAuth state; deliberately not Debug.",
+      "properties": {
+        "authUrl": {
+          "type": "string"
+        },
+        "loginId": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "loginId",
+        "authUrl"
+      ],
+      "type": "object"
+    },
+    "AccountLogoutParams": {
+      "properties": {
+        "account": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "type": "object"
+    },
+    "AccountLogoutResponse": {
+      "properties": {
+        "account": {
+          "$ref": "#/$defs/AccountInfo"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/AccountLogoutResult"
+        }
+      },
+      "required": [
+        "provider",
+        "account",
+        "result"
+      ],
+      "type": "object"
+    },
+    "AccountLogoutResult": {
+      "enum": [
+        "revoked",
+        "pending",
+        "noToken"
+      ],
+      "type": "string"
+    },
+    "AccountReadParams": {
+      "properties": {
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "type": "object"
+    },
+    "AccountReadResponse": {
+      "properties": {
+        "accounts": {
+          "items": {
+            "$ref": "#/$defs/AccountInfo"
+          },
+          "type": "array"
+        },
+        "currentAccountId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "accounts"
+      ],
+      "type": "object"
+    },
+    "AccountSelectParams": {
+      "properties": {
+        "account": {
+          "description": "Email, one-based number in account/read, or a local record ID.",
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "account"
+      ],
+      "type": "object"
+    },
+    "AccountStatus": {
+      "enum": [
+        "loggedIn",
+        "planNotAuthorized",
+        "needsLogin",
+        "signedOut"
+      ],
+      "type": "string"
+    },
     "AgentListResponse": {
       "properties": {
         "data": {

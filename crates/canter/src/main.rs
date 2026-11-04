@@ -71,6 +71,10 @@ async fn run(arguments: Vec<std::ffi::OsString>, parsed: Result<Command, String>
             Ok(context) => canter::stats::run(args, context).await,
             Err(error) => Err(error),
         },
+        Ok(Command::Auth(command)) => match Context::current() {
+            Ok(context) => canter::auth::run(command, context).await,
+            Err(error) => Err(error),
+        },
         Ok(Command::Help) => {
             print!("{USAGE}");
             Ok(())
@@ -80,6 +84,10 @@ async fn run(arguments: Vec<std::ffi::OsString>, parsed: Result<Command, String>
             Ok(())
         }
         Err(message) => {
+            if arguments.first().is_some_and(|arg| arg == "auth") {
+                eprintln!("canter: {message}");
+                return ExitCode::FAILURE;
+            }
             if arguments.first().is_some_and(|arg| arg == "exec") {
                 let json = arguments
                     .iter()

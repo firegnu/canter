@@ -3,7 +3,11 @@
 mod http;
 mod login;
 mod manager;
+mod preferences;
 mod storage;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_support;
 
 use serde::Deserialize;
 use std::{
@@ -28,6 +32,7 @@ struct Inner {
     http: http::Http,
     records: Mutex<BTreeMap<String, Arc<Entry>>>,
     logins: Mutex<BTreeMap<String, CancellationToken>>,
+    preferences: Mutex<preferences::Preferences>,
 }
 
 impl ChatgptAuth {
@@ -39,6 +44,7 @@ impl ChatgptAuth {
     fn with_http(home: &Path, http: http::Http) -> Result<Self, AuthError> {
         let (store, host_id) = storage::Store::open(home)?;
         let saved = store.load_records(&host_id)?;
+        let preferences = store.load_preferences()?;
         if saved
             .iter()
             .any(|record| record.info.issuer != http.issuer())
@@ -56,6 +62,7 @@ impl ChatgptAuth {
                 http,
                 records: Mutex::new(records),
                 logins: Mutex::new(BTreeMap::new()),
+                preferences: Mutex::new(preferences),
             }),
         })
     }
@@ -68,7 +75,7 @@ impl ChatgptAuth {
         let entries: Vec<_> = self.inner.records.lock().await.values().cloned().collect();
         let mut records = Vec::new();
         for entry in entries {
-            records.push(entry.record.lock().await.info.clone());
+            records.push(entry.record.lock().await.info());
         }
         records
     }
@@ -82,8 +89,12 @@ impl ChatgptAuth {
             .cloned()
             .ok_or(ErrorKind::NotLoggedIn.into())
     }
-    #[cfg(test)]
-    fn for_test(home: &Path, origin: String, clock: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn for_test(
+        home: &Path,
+        origin: String,
+        clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Self {
         Self::with_http(home, http::Http::for_test(origin, clock)).unwrap()
     }
 }
@@ -115,6 +126,12 @@ struct Record {
     pending_revocation: Option<Secret>,
 }
 impl Record {
+    fn info(&self) -> RecordInfo {
+        RecordInfo {
+            pending_revocation: self.pending_revocation.is_some(),
+            ..self.info.clone()
+        }
+    }
     fn sign_out(&mut self) {
         self.pending_revocation = self
             .tokens
@@ -209,6 +226,10 @@ pub struct RecordInfo {
     pub client_id: String,
     pub email: Option<String>,
     pub status: RecordStatus,
+    #[serde(default)]
+    pub background_consent: bool,
+    #[serde(skip)]
+    pub pending_revocation: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -220,8 +241,10 @@ pub enum RecordStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LogoutResult {
-    pub remote_revoked: bool,
+pub enum LogoutResult {
+    Revoked,
+    Pending,
+    NoToken,
 }
 
 /// Safe diagnostics only: no response text, URLs, query values or error sources.

@@ -9,6 +9,7 @@ use canter_protocol::{PermissionMode, SessionUpdateParams};
 use canter_tui::client::Client;
 use canter_tui::{CLIENT_NAME, Connected, Connector, Launch, Open};
 
+pub mod auth;
 pub mod deployment;
 pub mod exec;
 pub mod mcp;
@@ -38,6 +39,7 @@ Usage:
   canter rollback [--now]    restore the latest backup and replace the server
                               waits for running turns; --now waits at most 60s
   canter usage               show daily token usage and cost by model
+  canter auth                sign in, select an account, or sign out (chatgpt)
   canter exec [options] [prompt]  run one turn without interaction
   canter exec --resume <id> [prompt]
   canter exec --last [prompt]    continue this directory's latest session
@@ -72,6 +74,7 @@ In a session:
 pub enum Command {
     Serve { replace: bool, foreground: bool },
     Usage,
+    Auth(auth::Command),
     Stats(stats::Args),
     Exec(exec::Args),
     Mcp(mcp::Command),
@@ -131,6 +134,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
     }
     if args.first().map(String::as_str) == Some("mcp") {
         return mcp::parse(&args[1..]).map(Command::Mcp);
+    }
+    if args.first().map(String::as_str) == Some("auth") {
+        return auth::parse(&args[1..]).map(Command::Auth);
     }
     if args.first().map(String::as_str) == Some("exec") {
         if matches!(args.get(1).map(String::as_str), Some("-h" | "--help")) {

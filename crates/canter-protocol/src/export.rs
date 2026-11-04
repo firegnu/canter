@@ -13,6 +13,17 @@ pub fn export_protocol(directory: &Path) -> Result<(), Box<dyn std::error::Error
         ($($ty:ty),+ $(,)?) => {$(export_type::<$ty>(&mut schemas, &config)?;)+};
     }
     export!(
+        AccountReadParams,
+        AccountReadResponse,
+        AccountLoginStartParams,
+        AccountLoginStartResponse,
+        AccountLoginParams,
+        AccountLoginCancelResponse,
+        AccountLoginCompleted,
+        AccountSelectParams,
+        AccountBackgroundParams,
+        AccountLogoutParams,
+        AccountLogoutResponse,
         AgentListResponse,
         FolderTrustParams,
         MemoryListResponse,
