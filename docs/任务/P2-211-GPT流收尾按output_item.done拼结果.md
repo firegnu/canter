@@ -67,3 +67,24 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-11-04，canter/dev-responses-fix。
+
+**做了什么**：SSE 状态按 `output_index` 保存 `response.output_item.done` 的完整条目；收到正常 completed 后核验整批，再发布文字、思考摘要、工具调用和同源的私有 replay。completed 的 output 不再参与核验或取结果，只确认正常结束并读取用量。原有工具执行门槛、失败终态、重试、401 恢复和回传字段白名单不变。流内核对失败时保留原错误种类，向服务端 stderr 写固定英文说明及位置；现有服务启动流程把 stderr 写进 `server.log`，无需改服务端运行时代码。
+
+**验证了什么**：所有命令在前台跑完并等待结束，Cargo 使用本分支独立编译目录。
+
+- 先新增纯文字、一次工具调用两条本机假服务回归测试；`cargo nextest run -p canter-model -E 'test(done_succeeds_with_empty_completed_output)'` 在旧实现上两条均以 `ErrorKind::Other` 失败，文字场景保留了已流出的增量。改为从 done 拼结果后两条通过。
+- 日志测试先确认因缺少诊断而失败，再验证子进程 stderr 含 `Responses stream: output_item.done at index 2 has no id`，不含假服务器的 id、正文、密文或凭证；公开错误仍只有原来的 `Other`。
+- 交错流覆盖 completed output 完整、空数组、缺项、不一致、缺字段五种情况，断言用量、按索引发布的顺序、摘要、文字、原始工具参数以及完整 replay。原有两次工具循环、completed 前不执行工具、failed/incomplete/error/EOF/取消和脱敏断言全部保留；仅为原先只发 completed 的假流补上 done 事件。服务端对应测试只改假服务响应夹具。
+- `cargo nextest run -p canter-model`：36 项通过，0 跳过。
+- `cargo nextest run -p canter-server --no-fail-fast --status-level fail --final-status-level fail`：339 项通过，4 项原有跳过，包含两次工具循环原样回传、公开事件/SSE/日志脱敏和账号恢复测试。
+- `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。
+
+**拿主意的地方**：沿用现有 stderr 到服务端日志的接线，不新增日志依赖或公开错误字段；校验说明只由本机静态文字、静态字段名和数字位置组成，不格式化上游值。只读参考 `/tmp/canter-p2-202-codex-reference` 中 Codex `rust-v0.163.0` 的 `codex-rs/codex-api/src/sse/responses.rs`（`process_responses_event` 及测试），没有搬代码。没有改动既有测试断言，没有需要主控决定的事项。
+
+**没做的事**：真实授权/模型调用为 0 次，没有接触用户真实状态、配置、登录记录或常驻服务；合并后用户在场的两次真调仍由主控安排。未做 P2-210、未改请求格式或其它接口，未跑 workspace 全套测试，未安装、合并或推送；只在本任务分支提交。
+
+**踩过的坑**：没有。

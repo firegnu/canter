@@ -75,11 +75,23 @@ impl Inference {
     }
 }
 fn completed(output: Value) -> (u16, String) {
+    let items: String = output
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            format!(
+                "data: {}\n\n",
+                json!({"type":"response.output_item.done","output_index":index,"item":item})
+            )
+        })
+        .collect();
     (
         200,
         format!(
-            "data: {}\n\n",
-            json!({"type":"response.completed","response":{"status":"completed","output":output}})
+            "{items}data: {}\n\n",
+            json!({"type":"response.completed","response":{"status":"completed","output":[]}})
         ),
     )
 }

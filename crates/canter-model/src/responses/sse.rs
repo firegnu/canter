@@ -17,6 +17,7 @@ struct Item {
     id: String,
     kind: String,
     arguments: String,
+    done: Option<Value>,
 }
 
 pub(super) fn has_output(event: &Value) -> bool {
@@ -54,18 +55,30 @@ impl State {
         tools: &[ToolDefinition],
     ) -> Result<Vec<ModelEvent>, ModelError> {
         let mut events = Vec::new();
-        match string(event, "type")? {
+        let check = Check {
+            location: "event",
+            index: event["output_index"].as_u64(),
+        };
+        match check.string(event, "type")? {
             "response.output_item.added" | "response.output_item.done" => {
-                let index = number(event, "output_index")?;
+                let check = Check {
+                    location: if event["type"] == "response.output_item.done" {
+                        "output_item.done"
+                    } else {
+                        "output_item.added"
+                    },
+                    ..check
+                };
+                let index = check.number(event, "output_index")?;
                 let item = &event["item"];
-                let id = string(item, "id")?;
-                let kind = output_kind(item)?;
+                let id = check.string(item, "id")?;
+                let kind = check.output_kind(item)?;
                 if let Some(previous) = self.items.get(&index) {
                     if previous.id != id || previous.kind != kind {
-                        return Err(invalid());
+                        return Err(check.invalid("item id or type changed"));
                     }
                 } else if self.items.values().any(|item| item.id == id) {
-                    return Err(invalid());
+                    return Err(check.invalid("item id is already used at another index"));
                 }
                 self.items.insert(
                     index,
@@ -73,6 +86,7 @@ impl State {
                         id: id.into(),
                         kind: kind.into(),
                         arguments: item["arguments"].as_str().unwrap_or_default().into(),
+                        done: (event["type"] == "response.output_item.done").then(|| item.clone()),
                     },
                 );
             }
@@ -80,11 +94,11 @@ impl State {
             | "response.refusal.delta"
             | "response.reasoning_summary_text.delta" => {
                 let summary = event["type"] == "response.reasoning_summary_text.delta";
-                let item = self.item(event)?;
+                let item = self.item(event, check)?;
                 if item.kind != if summary { "reasoning" } else { "message" } {
-                    return Err(invalid());
+                    return Err(check.invalid("text delta has the wrong item type"));
                 }
-                let part = number(
+                let part = check.number(
                     event,
                     if summary {
                         "summary_index"
@@ -93,7 +107,7 @@ impl State {
                     },
                 )?;
                 let id = format!("{}:{part}", item.id);
-                let delta = string(event, "delta")?.to_owned();
+                let delta = check.string(event, "delta")?.to_owned();
                 if !delta.is_empty() {
                     events.push(if summary {
                         ModelEvent::ReasoningDelta { item_id: id, delta }
@@ -103,64 +117,65 @@ impl State {
                 }
             }
             "response.function_call_arguments.delta" => {
-                let delta = string(event, "delta")?;
-                let item = self.item(event)?;
+                let delta = check.string(event, "delta")?;
+                let item = self.item(event, check)?;
                 if item.kind != "function_call" {
-                    return Err(invalid());
+                    return Err(check.invalid("arguments delta has the wrong item type"));
                 }
                 item.arguments.push_str(delta);
             }
             "response.function_call_arguments.done" => {
-                let arguments = string(event, "arguments")?;
-                let item = self.item(event)?;
+                let arguments = check.string(event, "arguments")?;
+                let item = self.item(event, check)?;
                 if item.kind != "function_call" {
-                    return Err(invalid());
+                    return Err(check.invalid("arguments done has the wrong item type"));
                 }
                 item.arguments = arguments.into();
             }
             "response.completed" => {
                 let response = &event["response"];
                 if response["status"] != "completed" {
-                    return Err(invalid());
-                }
-                let output = response["output"].as_array().ok_or_else(invalid)?;
-                for (index, item) in &self.items {
-                    let index = usize::try_from(*index).map_err(|_| invalid())?;
-                    if output.get(index).is_none_or(|final_item| {
-                        final_item["id"] != item.id || final_item["type"] != item.kind
-                    }) {
-                        return Err(invalid());
-                    }
+                    return Err(check.invalid("response.completed has an invalid status"));
                 }
                 let mut ids = HashSet::new();
                 let mut calls = HashSet::new();
                 // Validate the entire batch before releasing any complete item.
-                for item in output {
-                    let id = string(item, "id")?;
+                for (index, item) in &self.items {
+                    let check = Check {
+                        location: "output_item.done",
+                        index: Some(*index),
+                    };
+                    let item = item.done.as_ref().ok_or_else(|| {
+                        check.invalid("was not received before response.completed")
+                    })?;
+                    let id = check.string(item, "id")?;
                     if !ids.insert(id) {
-                        return Err(invalid());
+                        return Err(check.invalid("item id is duplicated"));
                     }
                     if item
                         .get("status")
                         .is_some_and(|status| status != "completed")
                     {
-                        return Err(invalid());
+                        return Err(check.invalid("item status is not completed"));
                     }
-                    match output_kind(item)? {
+                    match check.output_kind(item)? {
                         "message" => {
                             if item["role"] != "assistant" || item["status"] != "completed" {
-                                return Err(invalid());
+                                return Err(check.invalid("message role or status is invalid"));
                             }
                             for (index, part) in item["content"]
                                 .as_array()
-                                .ok_or_else(invalid)?
+                                .ok_or_else(|| check.invalid("has no content array"))?
                                 .iter()
                                 .enumerate()
                             {
-                                let text = match string(part, "type")? {
-                                    "output_text" => string(part, "text")?,
-                                    "refusal" => string(part, "refusal")?,
-                                    _ => return Err(ModelError::new(ErrorKind::UnsupportedOutput)),
+                                let text = match check.string(part, "type")? {
+                                    "output_text" => check.string(part, "text")?,
+                                    "refusal" => check.string(part, "refusal")?,
+                                    _ => {
+                                        return Err(check
+                                            .unsupported("message content type is unsupported"));
+                                    }
                                 };
                                 events.push(ModelEvent::ItemCompleted {
                                     item_id: format!("{id}:{index}"),
@@ -171,38 +186,42 @@ impl State {
                         "reasoning" => {
                             for (index, part) in item["summary"]
                                 .as_array()
-                                .ok_or_else(invalid)?
+                                .ok_or_else(|| check.invalid("has no summary array"))?
                                 .iter()
                                 .enumerate()
                             {
                                 if part["type"] != "summary_text" {
-                                    return Err(ModelError::new(ErrorKind::UnsupportedOutput));
+                                    return Err(
+                                        check.unsupported("reasoning summary type is unsupported")
+                                    );
                                 }
                                 events.push(ModelEvent::ItemCompleted {
                                     item_id: format!("{id}:{index}"),
                                     content: AssistantContent::Reasoning {
-                                        text: string(part, "text")?.into(),
+                                        text: check.string(part, "text")?.into(),
                                     },
                                 });
                             }
                         }
                         "function_call" => {
-                            let name = string(item, "name")?;
+                            let name = check.string(item, "name")?;
                             if item["namespace"] != super::wire::namespace(name)
                                 || !tools.iter().any(|tool| tool.name == name)
                             {
-                                return Err(ModelError::new(ErrorKind::UnsupportedOutput));
+                                return Err(check.unsupported(
+                                    "tool name or namespace is not in the request tools",
+                                ));
                             }
-                            let call_id = string(item, "call_id")?;
+                            let call_id = check.string(item, "call_id")?;
                             if !calls.insert(call_id) {
-                                return Err(invalid());
+                                return Err(check.invalid("call_id is duplicated"));
                             }
                             events.push(ModelEvent::ItemCompleted {
                                 item_id: id.into(),
                                 content: AssistantContent::ToolCall(ToolCall {
                                     id: call_id.into(),
                                     name: name.into(),
-                                    arguments: string(item, "arguments")?.into(),
+                                    arguments: check.string(item, "arguments")?.into(),
                                 }),
                             });
                         }
@@ -223,34 +242,79 @@ impl State {
         Ok(events)
     }
 
-    fn item(&mut self, event: &Value) -> Result<&mut Item, ModelError> {
+    pub(super) fn replay_output(&self) -> Vec<Value> {
+        let output = Value::Array(
+            self.items
+                .values()
+                .map(|item| {
+                    item.done
+                        .as_ref()
+                        .expect("validated output_item.done")
+                        .clone()
+                })
+                .collect(),
+        );
+        super::wire::replay_output(&output)
+    }
+
+    fn item(&mut self, event: &Value, check: Check) -> Result<&mut Item, ModelError> {
         let item = self
             .items
-            .get_mut(&number(event, "output_index")?)
-            .ok_or_else(invalid)?;
-        if string(event, "item_id")? != item.id {
-            return Err(invalid());
+            .get_mut(&check.number(event, "output_index")?)
+            .ok_or_else(|| check.invalid("has no preceding output item"))?;
+        if check.string(event, "item_id")? != item.id {
+            return Err(check.invalid("item_id does not match the output item"));
         }
         Ok(item)
     }
 }
 
-fn invalid() -> ModelError {
-    ModelError::new(ErrorKind::Other)
+#[derive(Clone, Copy)]
+struct Check {
+    location: &'static str,
+    index: Option<u64>,
 }
 
-fn string<'a>(value: &'a Value, field: &str) -> Result<&'a str, ModelError> {
-    value[field].as_str().ok_or_else(invalid)
-}
+impl Check {
+    fn invalid(self, reason: &'static str) -> ModelError {
+        self.error(ErrorKind::Other, format_args!("{reason}"))
+    }
 
-fn number(value: &Value, field: &str) -> Result<u64, ModelError> {
-    value[field].as_u64().ok_or_else(invalid)
-}
+    fn unsupported(self, reason: &'static str) -> ModelError {
+        self.error(ErrorKind::UnsupportedOutput, format_args!("{reason}"))
+    }
 
-fn output_kind(item: &Value) -> Result<&str, ModelError> {
-    match string(item, "type")? {
-        kind @ ("message" | "reasoning" | "function_call") => Ok(kind),
-        _ => Err(ModelError::new(ErrorKind::UnsupportedOutput)),
+    // Only local static descriptions/field names and numeric positions reach
+    // stderr (the daemon's server.log). Never format upstream values here.
+    fn error(self, kind: ErrorKind, reason: std::fmt::Arguments<'_>) -> ModelError {
+        if let Some(index) = self.index {
+            eprintln!(
+                "Responses stream: {} at index {index} {reason}",
+                self.location
+            );
+        } else {
+            eprintln!("Responses stream: {} {reason}", self.location);
+        }
+        ModelError::new(kind)
+    }
+
+    fn missing(self, field: &'static str) -> ModelError {
+        self.error(ErrorKind::Other, format_args!("has no {field}"))
+    }
+
+    fn string<'a>(self, value: &'a Value, field: &'static str) -> Result<&'a str, ModelError> {
+        value[field].as_str().ok_or_else(|| self.missing(field))
+    }
+
+    fn number(self, value: &Value, field: &'static str) -> Result<u64, ModelError> {
+        value[field].as_u64().ok_or_else(|| self.missing(field))
+    }
+
+    fn output_kind(self, item: &Value) -> Result<&str, ModelError> {
+        match self.string(item, "type")? {
+            kind @ ("message" | "reasoning" | "function_call") => Ok(kind),
+            _ => Err(self.unsupported("output type is unsupported")),
+        }
     }
 }
 
@@ -275,7 +339,13 @@ pub(super) fn usage(response: &Value) -> Result<Option<Usage>, ModelError> {
     let Some(value) = response.get("usage").filter(|value| !value.is_null()) else {
         return Ok(None);
     };
-    let wire: WireUsage = serde_json::from_value(value.clone()).map_err(|_| invalid())?;
+    let wire: WireUsage = serde_json::from_value(value.clone()).map_err(|_| {
+        Check {
+            location: "usage",
+            index: None,
+        }
+        .invalid("has invalid token counts")
+    })?;
     let cache_read_tokens = wire
         .input_tokens_details
         .and_then(|details| details.cached_tokens);
