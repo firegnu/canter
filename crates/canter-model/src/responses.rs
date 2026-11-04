@@ -349,10 +349,100 @@ mod tests {
                     {"role":"user","content":[{"type":"input_text","text":"look"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}
                 ],
                 "tools":[
-                    {"type":"namespace","name":"canter","tools":[{"type":"function","name":"read","description":"read description","parameters":{"type":"object","properties":{"path":{"type":"string"}}},"strict":false}]},
-                    {"type":"namespace","name":"mcp","tools":[{"type":"function","name":"mcp__local__lookup","description":"mcp__local__lookup description","parameters":{"type":"object","properties":{"path":{"type":"string"}}},"strict":false}]}
+                    {"type":"namespace","name":"canter","description":"Tools in the canter namespace.","tools":[{"type":"function","name":"read","description":"read description","parameters":{"type":"object","properties":{"path":{"type":"string"}}},"strict":false}]},
+                    {"type":"namespace","name":"mcp","description":"Tools in the mcp namespace.","tools":[{"type":"function","name":"mcp__local__lookup","description":"mcp__local__lookup description","parameters":{"type":"object","properties":{"path":{"type":"string"}}},"strict":false}]}
                 ]
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn ordinary_history_uses_output_text_and_keeps_function_call_shapes() {
+        use crate::test_support::{Reply, Server};
+        use crate::{AssistantContent, ToolCall};
+        let server = Server::start(vec![Reply::sse(sse(vec![json!({
+            "type":"response.completed","response":{"status":"completed","output":[]}
+        })]))])
+        .await;
+        let model = Responses::with_endpoint(
+            Arc::new(Auth),
+            format!("{}responses", server.base_url).parse().unwrap(),
+        )
+        .unwrap();
+        let events: Vec<_> = model
+            .stream(
+                Request {
+                    model: "test-model".into(),
+                    messages: vec![
+                        Message::System {
+                            text: "Keep the existing instructions.\n".into(),
+                        },
+                        Message::User {
+                            text: "Read and look up the file.".into(),
+                        },
+                        Message::Assistant {
+                            content: vec![
+                                AssistantContent::Reasoning {
+                                    text: "Earlier ordinary reasoning".into(),
+                                },
+                                AssistantContent::Text {
+                                    text: "I will inspect it.\n".into(),
+                                },
+                                AssistantContent::ToolCall(ToolCall {
+                                    id: "call-read".into(),
+                                    name: "read".into(),
+                                    arguments: "{ \"path\" : \"a.txt\" }".into(),
+                                }),
+                                AssistantContent::ToolCall(ToolCall {
+                                    id: "call-lookup".into(),
+                                    name: "mcp__local__lookup".into(),
+                                    arguments: "{\"name\":\"a.txt\"}".into(),
+                                }),
+                            ],
+                            replay: None,
+                        },
+                        Message::ToolResult {
+                            tool_call_id: "call-read".into(),
+                            text: "1: Contents\n".into(),
+                        },
+                        Message::ToolResult {
+                            tool_call_id: "call-lookup".into(),
+                            text: "{\"found\":true}".into(),
+                        },
+                        Message::Assistant {
+                            content: vec![AssistantContent::Text {
+                                text: "The file was found.".into(),
+                            }],
+                            replay: None,
+                        },
+                        Message::User {
+                            text: "Now explain it.".into(),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                CancellationToken::new(),
+            )
+            .collect()
+            .await;
+        assert!(events.iter().all(Result::is_ok));
+        let body = server.requests.lock().unwrap()[0].clone();
+        server.stop().await;
+        // Literal wire items from the Responses contract, including every key
+        // and the distinction between assistant output and user/developer input.
+        assert_eq!(
+            body["input"],
+            json!([
+                {"role":"developer","content":[{"type":"input_text","text":"Keep the existing instructions.\n"}]},
+                {"role":"user","content":[{"type":"input_text","text":"Read and look up the file."}]},
+                {"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will inspect it.\n"}]},
+                {"type":"function_call","call_id":"call-read","namespace":"canter","name":"read","arguments":"{ \"path\" : \"a.txt\" }"},
+                {"type":"function_call","call_id":"call-lookup","namespace":"mcp","name":"mcp__local__lookup","arguments":"{\"name\":\"a.txt\"}"},
+                {"type":"function_call_output","call_id":"call-read","output":"1: Contents\n"},
+                {"type":"function_call_output","call_id":"call-lookup","output":"{\"found\":true}"},
+                {"type":"message","role":"assistant","content":[{"type":"output_text","text":"The file was found."}]},
+                {"role":"user","content":[{"type":"input_text","text":"Now explain it."}]}
+            ])
         );
     }
 

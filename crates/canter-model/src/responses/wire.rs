@@ -32,9 +32,10 @@ pub(super) fn request_body(request: &Request) -> Value {
                 }
                 for part in content {
                     match part {
-                        AssistantContent::Text { text } => {
-                            input.push(text_message("assistant", text))
-                        }
+                        AssistantContent::Text { text } => input.push(json!({
+                            "type":"message", "role":"assistant",
+                            "content":[{"type":"output_text","text":text}],
+                        })),
                         AssistantContent::ToolCall(call) => input.push(json!({
                             "type":"function_call", "call_id":call.id,
                             "namespace":namespace(&call.name), "name":call.name,
@@ -54,24 +55,28 @@ pub(super) fn request_body(request: &Request) -> Value {
         "model":request.model, "input":input, "store":false, "stream":true,
         "reasoning":{"summary":"auto"},
     });
-    let tools: Vec<_> = ["canter", "mcp"]
-        .into_iter()
-        .filter_map(|group| {
-            let functions: Vec<_> = request
-                .tools
-                .iter()
-                .filter(|tool| namespace(&tool.name) == group)
-                .map(|tool| {
-                    json!({
-                        "type":"function", "name":tool.name, "description":tool.description,
-                        "parameters":tool.parameters, "strict":false,
-                    })
+    let tools: Vec<_> = [
+        ("canter", "Tools in the canter namespace."),
+        ("mcp", "Tools in the mcp namespace."),
+    ]
+    .into_iter()
+    .filter_map(|(group, description)| {
+        let functions: Vec<_> = request
+            .tools
+            .iter()
+            .filter(|tool| namespace(&tool.name) == group)
+            .map(|tool| {
+                json!({
+                    "type":"function", "name":tool.name, "description":tool.description,
+                    "parameters":tool.parameters, "strict":false,
                 })
-                .collect();
-            (!functions.is_empty())
-                .then(|| json!({"type":"namespace","name":group,"tools":functions}))
-        })
-        .collect();
+            })
+            .collect();
+        (!functions.is_empty()).then(
+            || json!({"type":"namespace","name":group,"description":description,"tools":functions}),
+        )
+    })
+    .collect();
     if !tools.is_empty() {
         body["tools"] = json!(tools);
     }

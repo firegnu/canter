@@ -133,3 +133,13 @@
 **没做的事**：真实 OpenAI 授权/推理请求均为 0 次，没有动用户真实账号、配置、会话或常驻服务。合并后用户在场的 2 次真调仍由主控安排。没有做 P2-210 的跨轮/重启/压缩密文回传及密文估算，也没有做 P2-205/206/207、WebSocket、托管工具或服务端压缩。未跑全 workspace 测试；未安装、合并或推送，只在本任务分支提交。
 
 **踩过的坑**：假授权存储直接使用已有临时目录时，目录权限不符合私有存储要求；改用其中独立的 state 目录。`Option<String>` 会把显式 null 当成缺省，故对禁用字段使用只接受字符串的反序列化，区分未写与显式写入。async-stream 宏中的 let-chain 曾触发 edition 解析错误，改成先 match 提取 usage 再判断，兼容编译和 clippy。第一次整组回归被旧测试的“不支持 responses”假设挡住，按任务停止、取得上述主控决定后复跑通过。
+
+### 返工
+
+2026-11-04，已只读主仓库 `docs/任务/P2-204-交叉审查.md` 的「审查意见」和「主控判断」，落实两条必须改：canter、mcp namespace 分别发送固定的 `Tools in the canter namespace.`、`Tools in the mcp namespace.`；普通助手文字发送 `type: message`、`role: assistant` 和 `output_text`，developer、user 仍用 `input_text`。
+
+**请求编码测试**：更新 `request_preserves_prompt_images_and_tools_using_only_allowed_fields` 的完整请求期望值，逐字段要求两个 namespace 的 description；新增 `ordinary_history_uses_output_text_and_keeps_function_call_shapes`，覆盖上一轮助手文字、canter/MCP 工具调用及结果、后续助手文字和新用户消息，完整断言每个 input 项的字段、顺序、call_id 和原始参数/结果字符串。两项均先确认因目标缺陷失败，再修实现后通过。此次暴露的坑是本机假服务不会替官方验证 schema，原测试期望值也遗漏了必填字段；本次按官方契约修正期望，而不是只确认请求成功。
+
+**其余编码核对**：重新对照官方 [Function calling](https://developers.openai.com/api/docs/guides/function-calling)、[Migrate to Responses](https://developers.openai.com/api/docs/guides/migrate-to-responses)、[Images and vision](https://developers.openai.com/api/docs/guides/images-vision)、[SIWC Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)，并只读本机 OpenAI SDK 的 Responses 类型和 Codex `rust-v0.163.0` 的 `codex-rs/tools/src/responses_api.rs`、`codex-rs/protocol/src/models.rs`（没有搬代码）。核对了顶层白名单、developer/user、图片、namespace 内函数、普通 function_call/function_call_output，以及 replay 的 message/reasoning/function_call；除上述两处外，没有发现其他已发送字段或形状与契约不符。图片 `detail` 官方明确允许省略并默认 `auto`，保持省略。两条「可以不改」均未改：message/function_call 的密文白名单问题留 P2-210；自定义 headers 继续忽略。
+
+**验证**：命令全部在前台跑完，Cargo 使用本分支独立编译目录。两项请求编码测试及 `two_tool_rounds_replay_order_phase_ciphertext_and_raw_arguments` 共 3 项通过；`cargo nextest run -p canter-model` 全部 33 项通过、0 跳过（含原请求逐字节测试）；`cargo nextest run -p canter-server -E 'test(two_tool_loops_pause_at_last_disconnect_replay_privately_and_resume)'` 1 项通过；`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。未跑 workspace 全套，真实授权/模型调用仍为 0 次，未改主仓库审查文件或用户状态。没有新的待主控决定事项；只在 `p2-204-responses` 提交，未合并或推送。
