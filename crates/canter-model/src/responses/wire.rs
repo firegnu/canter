@@ -55,6 +55,9 @@ pub(super) fn request_body(request: &Request) -> Value {
         "model":request.model, "input":input, "store":false, "stream":true,
         "reasoning":{"summary":"auto"},
     });
+    if let Some(effort) = &request.options.reasoning_effort {
+        body["reasoning"]["effort"] = json!(effort);
+    }
     if let Some(session_id) = session_id(request) {
         body["prompt_cache_key"] = json!(session_id.chars().take(64).collect::<String>());
     }

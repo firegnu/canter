@@ -47,6 +47,163 @@ impl Model for ScriptModel {
 }
 
 #[tokio::test]
+async fn switching_models_compares_unknown_reasoning_as_high() {
+    for supports_high in [true, false] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+        let mut saved = settings(temp.path());
+        saved.reasoning_effort = ReasoningEffort::Unknown;
+        drop(store.create("unknown", saved, 0).unwrap());
+        let (session, _) = Session::open(
+            store.clone(),
+            "unknown".into(),
+            RuntimeContext {
+                environment: BTreeMap::from([
+                    ("HOME".into(), temp.path().to_string_lossy().into_owned()),
+                    (
+                        "CANTER_HOME".into(),
+                        temp.path().join("state").to_string_lossy().into_owned(),
+                    ),
+                ]),
+                ..Default::default()
+            },
+            ScriptModel::new(vec![]),
+            CoreOptions {
+                model_reasoning: BTreeMap::from([(
+                    "target".into(),
+                    canter_core::ModelReasoning {
+                        supported: if supports_high {
+                            vec![ReasoningEffort::High, ReasoningEffort::Medium]
+                        } else {
+                            vec![ReasoningEffort::Medium]
+                        },
+                        default: ReasoningEffort::Medium,
+                    },
+                )]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let before = session.snapshot().await;
+        assert_eq!(
+            before.session.settings.reasoning_effort,
+            ReasoningEffort::Unknown
+        );
+        session
+            .update(SessionUpdateParams {
+                model: Some("target".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let effort = session.snapshot().await.session.settings.reasoning_effort;
+        assert_eq!(
+            effort,
+            if supports_high {
+                ReasoningEffort::High
+            } else {
+                ReasoningEffort::Medium
+            }
+        );
+        let warnings: Vec<_> = store
+            .events_after("unknown", before.event_seq)
+            .unwrap()
+            .into_iter()
+            .filter_map(|event| match event.payload {
+                EventPayload::Warning { message } => Some(message),
+                _ => None,
+            })
+            .collect();
+        if supports_high {
+            assert!(warnings.is_empty(), "{warnings:?}");
+        } else {
+            assert_eq!(
+                warnings,
+                ["Thinking effort changed from high to medium for target."]
+            );
+        }
+        session.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn configured_reasoning_reaches_requests_and_telemetry_without_remapping() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+    let efforts = [
+        ReasoningEffort::None,
+        ReasoningEffort::Medium,
+        ReasoningEffort::Xhigh,
+    ];
+    let model = ScriptModel::new(
+        efforts
+            .iter()
+            .map(|_| vec![ModelEvent::Finished(FinishReason::Stop)])
+            .collect(),
+    );
+    let mut initial = settings(temp.path());
+    initial.model = "configured".into();
+    initial.reasoning_effort = ReasoningEffort::Medium;
+    let (session, _) = Session::create(
+        store,
+        "efforts".into(),
+        initial,
+        RuntimeContext {
+            environment: BTreeMap::from([
+                ("HOME".into(), temp.path().to_string_lossy().into_owned()),
+                (
+                    "CANTER_HOME".into(),
+                    temp.path().join("state").to_string_lossy().into_owned(),
+                ),
+            ]),
+            ..Default::default()
+        },
+        model.clone(),
+        CoreOptions {
+            model_reasoning: BTreeMap::from([(
+                "configured".into(),
+                canter_core::ModelReasoning {
+                    supported: efforts.to_vec(),
+                    default: ReasoningEffort::Medium,
+                },
+            )]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    for effort in efforts {
+        session
+            .update(SessionUpdateParams {
+                reasoning_effort: Some(effort),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        session.input(input("Think")).await.unwrap();
+        let seen = finished(&mut events).await;
+        let request = model.requests.lock().unwrap().last().unwrap().clone();
+        assert_eq!(
+            request.options.reasoning_effort.as_deref(),
+            Some(effort.as_str())
+        );
+        let recorded = seen
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::TelemetryModelRequest { record } => {
+                    Some(record.settings.reasoning_effort)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(recorded, effort);
+    }
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn private_replay_is_saved_and_sent_only_within_the_current_turn() {
     let temp = tempfile::tempdir().unwrap();
     let replay: canter_model::Replay = serde_json::from_value(serde_json::json!({

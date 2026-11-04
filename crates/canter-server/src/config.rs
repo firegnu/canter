@@ -77,6 +77,10 @@ struct Provider {
 
 #[derive(Clone, Deserialize)]
 struct ProviderModel {
+    #[serde(default = "default_reasoning_efforts")]
+    supported_reasoning_efforts: Vec<canter_protocol::ReasoningEffort>,
+    #[serde(default)]
+    default_reasoning_effort: canter_protocol::ReasoningEffort,
     #[serde(default)]
     context_window: u64,
     #[serde(default)]
@@ -85,6 +89,10 @@ struct ProviderModel {
     image: bool,
     #[serde(default)]
     price: Option<canter_core::usage::ModelPrice>,
+}
+
+fn default_reasoning_efforts() -> Vec<canter_protocol::ReasoningEffort> {
+    canter_protocol::ReasoningEffort::LEGACY.to_vec()
 }
 
 // Absence is distinct from an explicitly supplied (including null) field.
@@ -325,9 +333,17 @@ impl Config {
         });
         let mut image_models = self.image_models.clone();
         let mut model_limits = BTreeMap::new();
+        let mut model_reasoning = BTreeMap::new();
         for (name, provider) in &self.providers {
             for (model, config) in &provider.models {
                 let id = format!("{name}/{model}");
+                model_reasoning.insert(
+                    id.clone(),
+                    canter_core::ModelReasoning {
+                        supported: config.supported_reasoning_efforts.clone(),
+                        default: config.default_reasoning_effort,
+                    },
+                );
                 model_limits.insert(
                     id.clone(),
                     canter_core::ModelLimits {
@@ -358,6 +374,7 @@ impl Config {
             telemetry: self.telemetry,
             image_models,
             model_limits,
+            model_reasoning,
             ..CoreOptions::default()
         }
     }
@@ -460,6 +477,20 @@ impl Provider {
                 Some("auto_compact_tokens must be greater than 0")
             } else if model.price.as_ref().is_some_and(|price| !price.valid()) {
                 Some("price must contain finite, non-negative dollar amounts")
+            } else if model.supported_reasoning_efforts.is_empty()
+                || model
+                    .supported_reasoning_efforts
+                    .contains(&canter_protocol::ReasoningEffort::Unknown)
+                || model.default_reasoning_effort == canter_protocol::ReasoningEffort::Unknown
+            {
+                Some(
+                    "reasoning efforts must be known values and supported_reasoning_efforts must not be empty",
+                )
+            } else if !model
+                .supported_reasoning_efforts
+                .contains(&model.default_reasoning_effort)
+            {
+                Some("default_reasoning_effort must be in supported_reasoning_efforts")
             } else {
                 None
             };
@@ -581,6 +612,35 @@ fn default_image_models() -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn invalid_model_reasoning_configuration_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        for fields in [
+            json!({"supported_reasoning_efforts":["ultra"],"default_reasoning_effort":"ultra"}),
+            json!({"supported_reasoning_efforts":["low","medium"],"default_reasoning_effort":"high"}),
+            json!({"supported_reasoning_efforts":[],"default_reasoning_effort":"high"}),
+            json!({"default_reasoning_effort":"unknown"}),
+        ] {
+            let mut model = json!({"context_window":200000});
+            model
+                .as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            fs::write(root.path().join("config.json"), json!({
+                "model":"chatgpt/test","providers":{"chatgpt":{"api":"responses","auth":"chatgpt","models":{"test":model}}}
+            }).to_string()).unwrap();
+            let error = Config::load(root.path())
+                .err()
+                .expect("invalid reasoning configuration must fail")
+                .to_string();
+            assert!(
+                error.contains("provider chatgpt") && error.contains("model test"),
+                "{error}"
+            );
+            assert!(error.contains("reasoning"), "{error}");
+        }
+    }
 
     #[test]
     fn responses_rejects_explicit_credentials_and_endpoints_even_empty_or_null() {

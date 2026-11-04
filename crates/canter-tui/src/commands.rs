@@ -287,7 +287,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "think",
-        about: "Change thinking effort (none, low, high, max)",
+        about: "Change thinking effort for the current model",
         takes_args: true,
         run: think,
     },
@@ -377,12 +377,16 @@ pub(crate) fn skills(skills: &[canter_protocol::Skill]) -> Report {
 }
 
 fn think(app: &mut App, args: &str) -> Result<Option<Action>, String> {
-    let efforts = [
-        ReasoningEffort::None,
-        ReasoningEffort::Low,
-        ReasoningEffort::High,
-        ReasoningEffort::Max,
-    ];
+    let efforts = app
+        .models()
+        .iter()
+        .find(|model| model.model == app.snapshot().settings.model)
+        .and_then(|model| model.supported_reasoning_efforts.as_deref())
+        .unwrap_or(&ReasoningEffort::LEGACY)
+        .iter()
+        .copied()
+        .filter(|effort| *effort != ReasoningEffort::Unknown)
+        .collect::<Vec<_>>();
     let set = |effort| {
         Action::Update(SessionUpdateParams {
             reasoning_effort: Some(effort),
@@ -421,10 +425,20 @@ fn think(app: &mut App, args: &str) -> Result<Option<Action>, String> {
         Ok(None)
     } else {
         efforts
-            .into_iter()
+            .iter()
+            .copied()
             .find(|effort| effort.as_str() == args)
             .map(|effort| Some(set(effort)))
-            .ok_or_else(|| format!("Unknown thinking effort: {args} (use none, low, high or max)"))
+            .ok_or_else(|| {
+                format!(
+                    "Unknown thinking effort: {args} (use {})",
+                    efforts
+                        .iter()
+                        .map(|effort| effort.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
     }
 }
 

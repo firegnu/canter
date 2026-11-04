@@ -15,6 +15,79 @@ use tokio::{
 const WAIT: Duration = Duration::from_secs(20);
 
 #[tokio::test]
+async fn exec_uses_model_default_and_reports_reasoning_reset_when_switching() {
+    let world = World::new(vec![reply("First."), reply("Again.")], false).await;
+    let path = world.root.path().join("state/config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    config["providers"] = json!({"configured":{
+        "base_url":config["base_url"],"api_key":"test-only",
+        "models":{"solver":{"context_window":200000,
+            "supported_reasoning_efforts":["medium","high","xhigh"],
+            "default_reasoning_effort":"medium"}}
+    }});
+    fs::write(path, config.to_string()).unwrap();
+    let client = world.client().await;
+    tokio::time::timeout(WAIT, async {
+        while !client
+            .list_models()
+            .await
+            .unwrap()
+            .iter()
+            .any(|model| model.id == "configured/solver")
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let output = world
+        .cli(&["exec", "-m", "configured/solver", "hello"], "")
+        .await;
+    assert!(output.status.success(), "{output:?}");
+    let session = client.list_sessions().await.unwrap().remove(0);
+    assert_eq!(
+        client
+            .read_session(&session.id)
+            .await
+            .unwrap()
+            .session
+            .settings
+            .reasoning_effort,
+        canter_protocol::ReasoningEffort::Medium
+    );
+    let output = world
+        .cli(
+            &["exec", "--resume", &session.id, "-m", "fake", "again"],
+            "",
+        )
+        .await;
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("Thinking effort changed from medium to high for fake.")
+    );
+    assert_eq!(
+        client
+            .read_session(&session.id)
+            .await
+            .unwrap()
+            .session
+            .settings
+            .reasoning_effort,
+        canter_protocol::ReasoningEffort::High
+    );
+    assert_eq!(
+        world.requests.lock().unwrap()[0]["reasoning_effort"],
+        "medium"
+    );
+    assert_eq!(
+        world.requests.lock().unwrap()[1]["reasoning_effort"],
+        "high"
+    );
+    world.stop().await;
+}
+
+#[tokio::test]
 async fn exec_stops_compaction_spin_with_a_reason_and_the_existing_interrupt_hook() {
     for json_output in [false, true] {
         let mut replies = Vec::new();

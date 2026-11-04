@@ -40,6 +40,29 @@ pub(crate) struct Runtime {
 }
 
 impl Session {
+    /// Reconcile an idle session with current model capabilities, retaining the
+    /// cursor before the warning so the resuming client receives it.
+    pub async fn resume_snapshot(&self) -> Result<canter_protocol::SessionReadResponse, CoreError> {
+        let mut state = self.shared.state.lock().await;
+        let options = if state.active.is_some() || state.btw.is_some() {
+            self.shared.runtime().options.clone()
+        } else {
+            self.shared.next_options()
+        };
+        let message = state.reconcile_reasoning(&options).await?;
+        let response = canter_protocol::SessionReadResponse {
+            session: state.journal.snapshot.clone(),
+            event_seq: state.journal.snapshot.last_event_seq,
+        };
+        if let Some(message) = message {
+            state
+                .journal
+                .append(vec![canter_protocol::EventPayload::Warning { message }])
+                .await?;
+        }
+        Ok(response)
+    }
+
     /// A new terminal opening replaces the previous opening's sandbox choice.
     /// The environment and saved approval policy stay with the session.
     pub async fn set_sandbox_disabled(
@@ -294,6 +317,12 @@ impl Shared {
                 }])
                 .await?;
         }
+        if let Some(message) = state.reconcile_reasoning(&config.options).await? {
+            state
+                .journal
+                .append(vec![canter_protocol::EventPayload::Warning { message }])
+                .await?;
+        }
         // Keep the queue allocated for private answers already in flight.
         if config.options.telemetry && state.journal.telemetry.is_none() {
             state.journal.telemetry = Some(Default::default());
@@ -311,6 +340,26 @@ impl Shared {
             retired_tools,
         });
         Ok(config.lease)
+    }
+}
+
+impl State {
+    pub(crate) async fn reconcile_reasoning(
+        &mut self,
+        options: &CoreOptions,
+    ) -> Result<Option<String>, CoreError> {
+        let mut settings = self.journal.snapshot.settings.clone();
+        let message = options
+            .reasoning(&settings.model)
+            .reset_unsupported(&mut settings);
+        if message.is_some() {
+            self.journal
+                .append(vec![canter_protocol::EventPayload::SessionUpdated {
+                    settings,
+                }])
+                .await?;
+        }
+        Ok(message)
     }
 }
 

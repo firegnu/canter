@@ -104,6 +104,8 @@ pub(crate) async fn stream<'a>(
             Some(false) => ReasoningEffort::None,
             _ => match request.options.reasoning_effort.as_deref() {
                 Some("low") => ReasoningEffort::Low,
+                Some("medium") => ReasoningEffort::Medium,
+                Some("xhigh") => ReasoningEffort::Xhigh,
                 Some("max") => ReasoningEffort::Max,
                 _ => ReasoningEffort::High,
             },

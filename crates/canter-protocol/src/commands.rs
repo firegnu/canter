@@ -330,6 +330,12 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub supported_reasoning_efforts: Option<Vec<ReasoningEffort>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default_reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// GET /v1/sessions/{id}/skills. Frozen when the session is opened.

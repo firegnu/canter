@@ -843,8 +843,34 @@ impl Session {
         model: Arc<dyn Model>,
         options: CoreOptions,
     ) -> Result<(Self, SessionReadResponse), CoreError> {
-        owned(Self::open_inner(store, id, runtime, model, options, false)).await
+        owned(async move {
+            let (session, response, reasoning_warning) =
+                Self::open_inner(store, id, runtime, model, options, false).await?;
+            if let Some(message) = reasoning_warning {
+                session.opening_warning(message).await?;
+            }
+            Ok((session, response))
+        })
+        .await
     }
+
+    /// Defer the reasoning warning until the caller has applied this opening's
+    /// settings and taken its final snapshot. Other opening warnings stay here.
+    pub async fn open_for_resume(
+        store: Arc<Store>,
+        id: String,
+        runtime: RuntimeContext,
+        model: Arc<dyn Model>,
+        options: CoreOptions,
+    ) -> Result<(Self, Option<String>), CoreError> {
+        owned(async move {
+            let (session, _, reasoning_warning) =
+                Self::open_inner(store, id, runtime, model, options, false).await?;
+            Ok((session, reasoning_warning))
+        })
+        .await
+    }
+
     pub(crate) async fn open_inner(
         store: Arc<Store>,
         id: String,
@@ -852,7 +878,7 @@ impl Session {
         model: Arc<dyn Model>,
         mut options: CoreOptions,
         fresh_fork: bool,
-    ) -> Result<(Self, SessionReadResponse), CoreError> {
+    ) -> Result<(Self, SessionReadResponse, Option<String>), CoreError> {
         validate_options(&options)?;
         let owned_store = store.clone();
         let (writer, entries, events) = tokio::task::spawn_blocking(move || {
@@ -1057,6 +1083,7 @@ impl Session {
             close_reason: None,
         });
         state.journal.append(payloads).await?;
+        let reasoning_warning = state.reconcile_reasoning(&options).await?;
         let response = SessionReadResponse {
             session: state.journal.snapshot.clone(),
             event_seq: state.journal.snapshot.last_event_seq,
@@ -1068,7 +1095,7 @@ impl Session {
         session
             .session_start_hook(if fresh_fork { "startup" } else { "resume" })
             .await;
-        Ok((session, response))
+        Ok((session, response, reasoning_warning))
     }
 
     pub async fn create(
@@ -1094,15 +1121,15 @@ impl Session {
         parent: Option<SessionParent>,
     ) -> Result<(Self, SessionCreateResponse), CoreError> {
         validate_options(&options)?;
-        if settings.model.trim().is_empty()
-            || settings.approval_policy == PermissionMode::Unknown
-            || settings.reasoning_effort == ReasoningEffort::Unknown
-        {
+        if settings.model.trim().is_empty() || settings.approval_policy == PermissionMode::Unknown {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 "invalid session settings",
             ));
         }
+        options
+            .reasoning(&settings.model)
+            .validate(&settings.model, settings.reasoning_effort)?;
         if parent.is_some() {
             runtime.memory_home = None;
         }
@@ -1742,7 +1769,6 @@ impl Session {
             });
         }
         if params.approval_policy == Some(PermissionMode::Unknown)
-            || params.reasoning_effort == Some(ReasoningEffort::Unknown)
             || params
                 .model
                 .as_ref()
@@ -1754,6 +1780,26 @@ impl Session {
             ));
         }
         let mut settings = state.journal.snapshot.settings.clone();
+        if let Some(model) = params.model {
+            settings.model = model;
+        }
+        let model_changed = settings.model != state.journal.snapshot.settings.model;
+        let reasoning = self.shared.next_options().reasoning(&settings.model);
+        let effort_notice = if let Some(effort) = params.reasoning_effort {
+            reasoning.validate(&settings.model, effort)?;
+            settings.reasoning_effort = effort;
+            None
+        } else {
+            let message = if model_changed {
+                reasoning.reset_unsupported(&mut settings)
+            } else {
+                None
+            };
+            if settings.reasoning_effort == ReasoningEffort::Unknown {
+                settings.reasoning_effort = ReasoningEffort::High;
+            }
+            message.map(|message| EventPayload::Warning { message })
+        };
         settings.additional_directories = crate::directories::append(
             settings.cwd.clone(),
             state.directory_home.clone(),
@@ -1769,21 +1815,12 @@ impl Session {
         if let Some(name) = params.name {
             settings.name = (!name.is_empty()).then_some(name);
         }
-        if let Some(model) = params.model {
-            settings.model = model;
-        }
         if let Some(policy) = params.approval_policy {
             settings.approval_policy = policy;
             if settings.plan_mode && params.plan_mode.is_none() {
                 settings.pre_plan_approval_policy = Some(policy);
             }
         }
-        if let Some(effort) = params.reasoning_effort {
-            settings.reasoning_effort = effort;
-        } else if settings.reasoning_effort == ReasoningEffort::Unknown {
-            settings.reasoning_effort = ReasoningEffort::High;
-        }
-        let model_changed = settings.model != state.journal.snapshot.settings.model;
         let events = state
             .journal
             .append(vec![EventPayload::SessionUpdated { settings }])
@@ -1810,6 +1847,9 @@ impl Session {
                     .append(vec![EventPayload::SessionUsage { token_usage }])
                     .await?;
             }
+        }
+        if let Some(notice) = effort_notice {
+            state.journal.append(vec![notice]).await?;
         }
         self.shared.runtime().tools.configure_shell(
             state.approval_policy(),

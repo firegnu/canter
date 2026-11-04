@@ -75,19 +75,33 @@
   "api": "responses",
   "auth": "chatgpt",
   "models": {
-    "<model-name>": { "context_window": 0, "image": true }
+    "<model-name>": {
+      "context_window": 0,
+      "image": true,
+      "supported_reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "default_reasoning_effort": "medium"
+    }
   }
 }
 ```
 
 `<model-name>` 和窗口 `0` 都是占位，使用前按官方资料填写模型名及窗口（大于 81,920）；本件不预置 GPT 模型。
+示例档位对应 gpt-6.1-sol；换模型时按该模型实际支持的档位填写，不自动查询或内置能力表。
 然后选择 `chatgpt/<model-name>`。先运行 `canter auth login chatgpt`，多个账号用
 `canter auth use chatgpt <email|序号>` 选择；请求使用这一轮选定账号的登录令牌，401 最多恢复一次。
 `auth` 只接受 `chatgpt`，不得配置 `api_key` 或 `base_url`（空字符串和 null 也拒绝）；
 地址固定为 `https://api.openai.com/v1/responses`，不使用自定义请求头。没有价格时花费为未知。
-请求开启思考摘要，但不发送思考档位。额度用完提示 Manage usage 链接，不自动重试或换家。
+请求发送所选 `reasoning.effort`，思考摘要保持 `summary:"auto"`。额度用完提示 Manage usage 链接，不自动重试或换家。
 未同意后台使用的账号，在最后一个会话界面断开后暂停新请求；正在运行的工具完成并保存，重连后继续。
 当前轮的工具循环会回传私有输出项；更早轮次、重启及压缩后的历史只发送普通内容（跨边界密文回传留待 P2-210）。
+
+每个模型可选 `supported_reasoning_efforts` 和 `default_reasoning_effort`；各字段省略时分别使用
+`["none","low","high","max"]` 和 `"high"`。档位必须是 `none/low/medium/high/xhigh/max` 之一，
+支持列表不能为空，默认值必须在列表内，否则整份配置报错。未写这些字段的旧单家和各家模型无需改配置。
+新建会话未指定档位时使用模型默认，明确指定不支持的档位时服务端拒绝，并列出支持的档位。
+`/think` 只列当前模型支持的档位；空闲换模型时若当前档位受支持就保留，否则改用目标模型默认，
+并显示 `Thinking effort changed from … to … for ….`，状态栏随服务端设置更新。
+同时提交模型和档位时按目标模型校验，不自动替换明确指定的无效值。旧会话的档位和缺省 high 仍按原样读取。
 
 会话和默认 `model` 使用 `<家名>/<模型名>`，在第一个 `/` 分开：例如
 `router/vendor/model` 发给 router 的模型名为 `vendor/model`。
@@ -97,7 +111,7 @@
 任何一家写坏都会整份保留旧配置并提示；第一次启动写坏则启动失败，错误不回显凭证。
 模型请求失败沿用原来的错误和重试，不自动换家。用量和遥测保留完整模型名。
 
-`GET /v1/models` 的新模型 ID 带家名，额外提供可选 `provider`、`contextWindow`，
+`GET /v1/models` 的新模型 ID 带家名，额外提供可选 `provider`、`contextWindow`、`supportedReasoningEfforts`、`defaultReasoningEffort`，
 图片能力沿用 `inputModalities`；旧客户端仍能读取。终端 `/model` 先选家、再选这家的模型（P2-201）；空闲换模型后紧跟一条只换窗口和压缩线、不记请求的 `session.usage`。
 
 旧单家配置继续有效，无需迁移，也可以保留旧字段并加入 `providers`。

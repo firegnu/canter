@@ -614,6 +614,8 @@ async fn models(State(app): State<Arc<App>>) -> Json<ModelListResponse> {
                     .contains_key(model)
                     .then(|| model.split_once('/').expect("qualified model").0.to_owned()),
                 context_window: Some(options.limits(model).context_window),
+                supported_reasoning_efforts: Some(options.reasoning(model).supported),
+                default_reasoning_effort: Some(options.reasoning(model).default),
                 input_modalities: Some(if options.image_models.contains(model) {
                     vec!["text".into(), "image".into()]
                 } else {
@@ -892,7 +894,7 @@ async fn resume(
             session
                 .set_sandbox_disabled(params.sandbox_disabled, app.metadata().2.sandbox)
                 .await?;
-            let response = session.snapshot().await;
+            let response = session.resume_snapshot().await?;
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
@@ -916,7 +918,7 @@ async fn resume(
             session
                 .set_sandbox_disabled(params.sandbox_disabled, app.metadata().2.sandbox)
                 .await?;
-            let response = session.snapshot().await;
+            let response = session.resume_snapshot().await?;
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
@@ -934,7 +936,7 @@ async fn resume(
             let trust = folder_trust_operation(app.home.clone(), cwd, false).await?;
             #[cfg(test)]
             app.pauses.hit(&id, "open").await;
-            let (session, _) = Session::open(
+            let (session, reasoning_warning) = Session::open_for_resume(
                 app.store.clone(),
                 id.clone(),
                 app.runtime(
@@ -954,6 +956,9 @@ async fn resume(
                 .set_sandbox_disabled(params.sandbox_disabled, config.options.sandbox)
                 .await?;
             let response = session.snapshot().await;
+            if let Some(message) = reasoning_warning {
+                session.opening_warning(message).await?;
+            }
             if let Some(warning) = trust.warning {
                 session.opening_warning(warning).await?;
             }
@@ -1057,6 +1062,14 @@ async fn create(
         let trust = folder_trust_operation(app.home.clone(), params.cwd.clone(), false).await?;
         let id = crate::new_id();
         let operation = app.session_locks.lock(&id).await;
+        let model = if params.model.is_empty() {
+            app.metadata().0
+        } else {
+            params.model
+        };
+        let reasoning_effort = params
+            .reasoning_effort
+            .unwrap_or_else(|| config.options.reasoning(&model).default);
         let settings = SessionSettings {
             tags: params.tags,
             additional_directories: params.additional_directories,
@@ -1067,13 +1080,9 @@ async fn create(
             restricted_mode: None,
             cwd: params.cwd,
             name: params.name,
-            model: if params.model.is_empty() {
-                app.metadata().0
-            } else {
-                params.model
-            },
+            model,
             approval_policy: params.approval_policy,
-            reasoning_effort: params.reasoning_effort.unwrap_or_default(),
+            reasoning_effort,
         };
         app.validate_model(&settings.model)?;
         #[cfg(test)]
