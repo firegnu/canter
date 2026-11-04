@@ -374,7 +374,9 @@ impl Model for Router {
             return client.stream(request, cancellation);
         }
         if let Some(client) = &self.legacy
-            && (!request.model.contains('/') || self.legacy_models.contains(&request.model))
+            && (self.providers.is_empty()
+                || !request.model.contains('/')
+                || self.legacy_models.contains(&request.model))
         {
             return client.stream(request, cancellation);
         }
@@ -670,6 +672,122 @@ mod tests {
                 assert_eq!(routed, baseline);
             }
         }
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn legacy_restored_unlisted_slash_model_keeps_the_original_request_bytes() {
+        use futures_util::StreamExt;
+        struct ComparedClients {
+            original: Arc<dyn Model>,
+            configured: Arc<dyn Model>,
+        }
+        impl Model for ComparedClients {
+            fn stream(
+                &self,
+                request: canter_model::Request,
+                cancellation: tokio_util::sync::CancellationToken,
+            ) -> canter_model::ModelStream<'_> {
+                // Send the same restored-session request through both real adapters;
+                // only the configured adapter's successful events reach the core.
+                Box::pin(
+                    self.original
+                        .stream(request.clone(), cancellation.clone())
+                        .filter_map(|event| async { event.err().map(Err) })
+                        .chain(self.configured.stream(request, cancellation)),
+                )
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let state = root.path().join("state");
+        fs::create_dir(&home).unwrap();
+        fs::create_dir(&state).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (send, mut receive) = tokio::sync::mpsc::unbounded_channel();
+        let router = axum::Router::new().route("/chat/completions", axum::routing::post(
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                let send = send.clone();
+                async move {
+                    send.send((headers, body)).unwrap();
+                    let chunk = json!({"choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"stop"}]});
+                    ([("content-type", "text/event-stream")], format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+                }
+            }
+        ));
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let settings = serde_json::from_value(json!({
+            "cwd":root.path(), "model":"vendor/retired", "approvalPolicy":"allowAll"
+        }))
+        .unwrap();
+        {
+            let store = canter_store::Store::new(state.join("sessions")).unwrap();
+            store.create("legacy", settings, 0).unwrap();
+        }
+        let config_value = json!({
+            "base_url":url, "api_key":"test-only-legacy", "model":"fake", "models":["fake"],
+            "context_window":1048576, "headers":{"x-test":"id {session_id}"},
+            "sandbox":false, "prompt_suggestions":false
+        });
+        fs::write(state.join("config.json"), config_value.to_string()).unwrap();
+        let config = Config::load(&state).unwrap();
+        assert!(!config.models.iter().any(|model| model == "vendor/retired"));
+        let (session, restored) = canter_core::Session::open(
+            Arc::new(canter_store::Store::new(state.join("sessions")).unwrap()),
+            "legacy".into(),
+            canter_core::RuntimeContext {
+                environment: [
+                    ("HOME".into(), home.display().to_string()),
+                    ("CANTER_HOME".into(), state.display().to_string()),
+                ]
+                .into(),
+                ..Default::default()
+            },
+            Arc::new(ComparedClients {
+                original: config.legacy_client().unwrap(),
+                configured: config.model_client().unwrap(),
+            }),
+            config.options(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(restored.session.settings.model, "vendor/retired");
+        let mut events = session.subscribe(restored.event_seq).await.unwrap();
+        session
+            .input(
+                serde_json::from_value(json!({
+                    "input":[{"type":"text","text":"continue"}], "clientName":"test"
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let canter_protocol::EventPayload::TurnCompleted { turn } =
+                    events.recv().await.unwrap().unwrap().payload
+                {
+                    break turn.status;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(status, canter_protocol::TurnStatus::Completed);
+        let baseline = receive.recv().await.unwrap();
+        let routed = receive.recv().await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&routed.1).unwrap()["model"],
+            "vendor/retired"
+        );
+        assert_eq!(routed.0["authorization"], "Bearer test-only-legacy");
+        assert_eq!(routed.0["x-test"], "id legacy");
+        assert_eq!(routed, baseline);
+        session.close().await.unwrap();
         task.abort();
         let _ = task.await;
     }

@@ -465,7 +465,10 @@ async fn removing_a_provider_does_not_send_its_sessions_to_the_legacy_provider()
     let (mut fixture, _, task) = configured().await;
     let url = fixture.create().await;
     select(&fixture, &url, "one/vendor/model").await;
-    fixture.config["providers"] = json!({});
+    fixture.config["providers"]
+        .as_object_mut()
+        .unwrap()
+        .remove("one");
     fixture.applied("providers-removed").await;
     fixture.input(&url).await;
     assert!(
