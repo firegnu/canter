@@ -160,6 +160,9 @@
   - 可以不改：`login/start` 返回前（有待作废令牌、连不上 OpenAI 时最长约一分钟）按 Ctrl+C 没反应；错误提示直接打内部名字，比如 `ChatGPT credentials: Network (HTTP None, code None)`；`status` 的列没对齐。
 - Responses 接口（P2-204，11-04 合并，还没真调）交叉审查「可以不改」、没做的：`"api": "responses"` 这一家写了 `headers` 不报错，直接忽略（README 写了不用自定义请求头；`base_url`、`api_key` 是报配置错）。replay 白名单丢掉 message、function_call 项上的 `encrypted_content`，留给 P2-210 看。
 - GPT 缓存（P2-212 查出、没修的显示问题）：每轮后的「下一句建议」请求会覆盖状态栏的 `last` 缓存率，并计入会话累计；服务端没报 `cached_tokens` 时 `runner.rs` 的 `unwrap_or(0)` 把「不知道」显示成 0%。
+- GPT 思考档位（P2-206，11-04 合并）交叉审查建议改、没做的：
+  - 在配置里删掉某个模型以后，`/new` 退回默认模型时仍带着原来的档位；默认模型不支持这一档时，新建会被拒绝并提示，不会发出错误的请求。
+  - 一轮正在跑时恢复会话，会按这一轮冻结的旧配置核对档位（`crates/canter-core/src/configuration.rs` `resume_snapshot`）。比如热重载给模型新加了 xhigh，这一轮没结束时设了 xhigh，再从另一个终端恢复，会被退回默认档并提示。改法：有一轮或 btw 在跑时不核对，留给下一轮的 `apply_configuration`。
 
 - 协议 README「审查轮」一节还写着 `/v1/info` 的 `features`「本版返回 `["review"]`」，已过时（现在有十几项）；P2-196 开发看到、按范围没动。
 
