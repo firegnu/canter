@@ -412,6 +412,8 @@ fn think(app: &mut App, args: &str) -> Result<Option<Action>, String> {
             .unwrap_or(0);
         app.choose(Chooser {
             title: "Thinking effort",
+            detail: String::new(),
+            back: None,
             keys: CHOOSE,
             choices,
             selected,
@@ -427,6 +429,21 @@ fn think(app: &mut App, args: &str) -> Result<Option<Action>, String> {
 }
 
 pub(crate) fn choose_model(app: &mut App, models: Vec<canter_protocol::Model>) {
+    app.set_models(&models);
+    // Several providers (P2-201): first the provider, then its models. Only
+    // one: straight to its models.
+    if models.iter().any(|model| model.provider.is_some()) {
+        if models
+            .iter()
+            .all(|model| model.provider == models[0].provider)
+        {
+            choose_provider_model(app, models[0].provider.clone());
+        } else {
+            let current = current_provider(app).flatten();
+            choose_provider(app, current);
+        }
+        return;
+    }
     let current = &app.snapshot().settings.model;
     let selected = models
         .iter()
@@ -449,6 +466,131 @@ pub(crate) fn choose_model(app: &mut App, models: Vec<canter_protocol::Model>) {
         .collect();
     app.choose(Chooser {
         title: "Model",
+        detail: String::new(),
+        back: None,
+        keys: CHOOSE,
+        choices,
+        selected,
+    });
+}
+
+/// A model's window as `/model` shows it: `128k context`.
+pub(crate) fn context(window: u64) -> String {
+    format!("{}k context", (window + 500) / 1000)
+}
+
+/// The provider of the model in use, `Some(None)` for one of the models
+/// without a provider; `None` when it is not among the models.
+fn current_provider(app: &App) -> Option<Option<String>> {
+    let current = &app.snapshot().settings.model;
+    app.models()
+        .iter()
+        .find(|model| &model.model == current)
+        .map(|model| model.provider.clone())
+}
+
+/// What `/model` calls the models without a provider: those of the
+/// top-level settings, beside `providers`.
+fn provider_name(provider: Option<&str>) -> String {
+    sanitize(provider.unwrap_or("default"))
+}
+
+/// `/model`, first of two lists: the providers, by name after the models
+/// without one, with `selected` selected.
+pub(crate) fn choose_provider(app: &mut App, selected: Option<String>) {
+    let current = current_provider(app);
+    let mut counts = std::collections::BTreeMap::<Option<String>, usize>::new();
+    for model in app.models() {
+        *counts.entry(model.provider.clone()).or_default() += 1;
+    }
+    let selected = counts
+        .keys()
+        .position(|provider| *provider == selected)
+        .unwrap_or(0);
+    let choices = counts
+        .into_iter()
+        .map(|(provider, count)| {
+            let name = provider_name(provider.as_deref());
+            Choice {
+                label: if current.as_ref() == Some(&provider) {
+                    format!("{name} (current)")
+                } else {
+                    name
+                },
+                about: if count == 1 {
+                    "1 model".into()
+                } else {
+                    format!("{count} models")
+                },
+                action: Action::ProviderModels(provider),
+            }
+        })
+        .collect();
+    app.choose(Chooser {
+        title: "Provider",
+        detail: String::new(),
+        back: None,
+        keys: CHOOSE,
+        choices,
+        selected,
+    });
+}
+
+/// `/model`, the models of `provider` by name without it, each with its
+/// window and whether it takes images. Esc goes back to the providers when
+/// there are others.
+pub(crate) fn choose_provider_model(app: &mut App, provider: Option<String>) {
+    let current = app.snapshot().settings.model.clone();
+    let others = app.models().iter().any(|model| model.provider != provider);
+    let mut models: Vec<(String, &canter_protocol::Model)> = app
+        .models()
+        .iter()
+        .filter(|model| model.provider == provider)
+        .map(|model| {
+            let name = provider
+                .as_ref()
+                .and_then(|provider| model.model.strip_prefix(&format!("{provider}/")))
+                .unwrap_or(&model.display_name);
+            (sanitize(name), model)
+        })
+        .collect();
+    models.sort_by(|a, b| a.0.cmp(&b.0));
+    let selected = models
+        .iter()
+        .position(|(_, model)| model.model == current)
+        .unwrap_or(0);
+    let choices = models
+        .into_iter()
+        .map(|(name, model)| {
+            let images = model
+                .input_modalities
+                .as_ref()
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "image"));
+            let about: Vec<String> = model
+                .context_window
+                .map(context)
+                .into_iter()
+                .chain(images.then(|| "images".to_owned()))
+                .collect();
+            Choice {
+                label: if model.model == current {
+                    format!("{name} (current)")
+                } else {
+                    name
+                },
+                about: about.join(" · "),
+                action: Action::Update(SessionUpdateParams {
+                    model: Some(model.model.clone()),
+                    ..SessionUpdateParams::default()
+                }),
+            }
+        })
+        .collect();
+    let detail = provider_name(provider.as_deref());
+    app.choose(Chooser {
+        title: "Model",
+        detail,
+        back: others.then_some(Action::ModelProviders(provider)),
         keys: CHOOSE,
         choices,
         selected,
@@ -527,6 +669,8 @@ fn mode(app: &mut App, args: &str) -> Result<Option<Action>, String> {
             .unwrap_or(0);
         app.choose(Chooser {
             title: "Permission mode",
+            detail: String::new(),
+            back: None,
             keys: CHOOSE,
             choices,
             selected,
@@ -550,6 +694,8 @@ fn export(app: &mut App, args: &str) -> Result<Option<Action>, String> {
     }
     app.choose(Chooser {
         title: "Export conversation",
+        detail: String::new(),
+        back: None,
         keys: CHOOSE,
         choices: vec![
             Choice {
@@ -616,6 +762,11 @@ pub(crate) fn parse(text: &str) -> Option<(&str, &str)> {
 /// `/mode` alone offers.
 pub(crate) struct Chooser {
     pub title: &'static str,
+    /// Dim after the title and ` · `, when not empty.
+    pub detail: String,
+    /// What Esc does instead of closing, such as going back to the list
+    /// before this one.
+    pub back: Option<Action>,
     /// The last row: [`CHOOSE`], or those keys and more.
     pub keys: &'static str,
     pub choices: Vec<Choice>,
@@ -646,7 +797,7 @@ impl Chooser {
             return choices;
         }
         let width = usize::from(width);
-        let title = Line::from(truncate(title(self.title, ""), width));
+        let title = Line::from(truncate(title(self.title, &self.detail), width));
         let keys = Line::from(truncate(vec![keys(self.keys)], width));
         std::iter::once(title)
             .chain(choices)

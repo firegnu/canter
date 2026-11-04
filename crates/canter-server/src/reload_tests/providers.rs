@@ -331,6 +331,63 @@ async fn smaller_provider_compacts_before_the_next_conversation_request() {
     let _ = task.await;
 }
 
+/// P2-201: an idle switch reports the new model's window and compaction line
+/// at once, as a usage update that records no request, so status bars need
+/// not wait for the next reply; usage, cost and stats stay as they were.
+#[tokio::test]
+async fn idle_switch_reports_the_new_limits_without_counting_a_request() {
+    let (mut fixture, _second, task) = configured().await;
+    let url = fixture.create().await;
+    select(&fixture, &url, "one/vendor/model").await;
+    fixture.input(&url).await;
+    usage_reply(fixture.request().await, 50000);
+    fixture.idle(&url).await;
+    let get = |path: String| {
+        let client = fixture.client.clone();
+        async move {
+            client
+                .get(path)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let usage_before = get(format!("{url}/usage")).await;
+    let stats_before = get(format!("{url}/stats")).await;
+    let before = fixture.snapshot(&url).await.session.token_usage.unwrap();
+    assert_eq!(before.model_context_window, Some(200000));
+
+    select(&fixture, &url, "two/small").await;
+    let after = fixture.snapshot(&url).await.session.token_usage.unwrap();
+    assert_eq!(after.model_context_window, Some(100000));
+    assert_eq!(after.auto_compact_tokens, Some(15000));
+    assert_eq!(after.context_tokens, before.context_tokens);
+    assert_eq!(after.total, before.total);
+    assert_eq!(after.cost, before.cost);
+    assert!(after.request.is_none());
+    assert_eq!(get(format!("{url}/usage")).await, usage_before);
+    assert_eq!(
+        get(format!("{url}/stats")).await["requests"],
+        stats_before["requests"]
+    );
+    // Choosing the model in use again adds nothing.
+    let seq = fixture.snapshot(&url).await.event_seq;
+    select(&fixture, &url, "two/small").await;
+    assert_eq!(
+        fixture.snapshot(&url).await.session.token_usage.unwrap(),
+        after
+    );
+    assert!(fixture.snapshot(&url).await.event_seq <= seq + 1);
+    fixture.shutdown().await;
+    task.abort();
+    let _ = task.await;
+}
+
 #[tokio::test]
 async fn budget_notice_uses_the_selected_providers_compaction_line() {
     let (mut fixture, mut second, task) = configured().await;

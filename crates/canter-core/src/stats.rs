@@ -265,7 +265,9 @@ fn session_report(
                 );
             }
             EventPayload::SessionUsage { token_usage }
-            | EventPayload::SessionBtwUsage { token_usage } => {
+            | EventPayload::SessionBtwUsage { token_usage }
+                if !token_usage.records_no_request() =>
+            {
                 let private = matches!(event.payload, EventPayload::SessionBtwUsage { .. });
                 let charge = token_usage.request.clone().unwrap_or_else(|| {
                     usage::request_charge(

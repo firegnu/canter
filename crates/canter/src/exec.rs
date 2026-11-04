@@ -116,6 +116,14 @@ pub fn startup_error(json: bool, error: &str) -> Result<u8, String> {
     .finish(1, "error", Some(error), None)
 }
 
+/// A model asked for with `-m` that the server does not list says where to
+/// see the configured ones.
+fn model_error(error: canter_tui::client::ClientError) -> String {
+    canter_tui::RunError::Client(error)
+        .with_model_hint()
+        .to_string()
+}
+
 async fn run_inner(
     args: crate::ChatArgs,
     context: crate::Context,
@@ -219,7 +227,7 @@ async fn run_inner(
                 },
             )
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(model_error)?;
         let response = client
             .read_session(&id)
             .await
@@ -243,7 +251,7 @@ async fn run_inner(
                 client_name: "canter-exec".into(),
             })
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(model_error)?;
         (created.session, created.event_seq)
     };
     let id = &snapshot.id;

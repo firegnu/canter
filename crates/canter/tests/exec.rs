@@ -1075,3 +1075,63 @@ async fn exec_reports_tools_and_retries_on_stderr_and_only_the_final_answer_on_s
     assert!(stderr.contains("Tool failed"), "{stderr}");
     world.stop().await;
 }
+
+/// P2-201: `exec -m` takes `<provider>/<model>`; a model never configured
+/// fails as before and says where to see the configured ones.
+#[tokio::test]
+async fn exec_model_takes_a_provider_and_an_unknown_one_points_to_model() {
+    let world = World::new(vec![reply("From two.")], false).await;
+    let path = world.root.path().join("state/config.json");
+    let mut config: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    config["providers"] = json!({"two":{"base_url":config["base_url"],"api_key":"test-only-two",
+        "models":{"small":{"context_window":100000}}}});
+    fs::write(&path, config.to_string()).unwrap();
+    let client = world.client().await;
+    tokio::time::timeout(WAIT, async {
+        while !client
+            .list_models()
+            .await
+            .unwrap()
+            .iter()
+            .any(|model| model.id == "two/small")
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    client
+        .trust_folder(world.root.path().join("project").to_str().unwrap())
+        .await
+        .unwrap();
+    let output = world.cli(&["exec", "-m", "two/small", "hi"], "").await;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "From two.\n");
+    assert_eq!(world.requests.lock().unwrap()[0]["model"], "small");
+    let id = client.list_sessions().await.unwrap()[0].id.clone();
+    assert_eq!(
+        client
+            .read_session(&id)
+            .await
+            .unwrap()
+            .session
+            .settings
+            .model,
+        "two/small"
+    );
+    for args in [
+        vec!["exec", "-m", "nope/x", "hi"],
+        vec!["exec", "--resume", &id, "-m", "nope/x", "hi"],
+    ] {
+        let output = world.cli(&args, "").await;
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("model is not in the configured model list")
+                && stderr.contains(". Run /model to see configured models"),
+            "{stderr}"
+        );
+    }
+    assert_eq!(world.requests.lock().unwrap().len(), 1);
+    world.stop().await;
+}

@@ -50,6 +50,11 @@ impl Tps {
     }
 
     pub fn event(&mut self, event: &Event) {
+        if let EventPayload::SessionUsage { token_usage } = &event.payload
+            && token_usage.records_no_request()
+        {
+            return;
+        }
         if self.incomplete {
             let boundary = match &event.payload {
                 EventPayload::TurnStarted { .. }

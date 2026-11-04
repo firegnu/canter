@@ -40,6 +40,14 @@ pub enum ClientError {
     Protocol(String),
 }
 
+impl ClientError {
+    /// Whether the server refused a model it does not list.
+    pub fn unknown_model(&self) -> bool {
+        matches!(self, Self::Server { code: ErrorCode::InvalidRequest, message, .. }
+            if message == "model is not in the configured model list")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Client {
     http: reqwest::Client,

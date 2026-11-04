@@ -25,6 +25,8 @@ pub(crate) fn choose_turn(app: &mut App, report: RewindListResponse) {
     }
     app.choose(Chooser {
         title: "Rewind before which message?",
+        detail: String::new(),
+        back: None,
         keys: crate::commands::CHOOSE,
         selected: 0,
         choices: report
@@ -46,6 +48,8 @@ pub(crate) fn choose_turn(app: &mut App, report: RewindListResponse) {
 pub(crate) fn choose_mode(app: &mut App, turn: String) {
     app.choose(Chooser {
         title: "What should be rewound?",
+        detail: String::new(),
+        back: None,
         keys: crate::commands::CHOOSE,
         selected: 0,
         choices: [
@@ -114,6 +118,8 @@ pub(crate) fn confirm(
     );
     app.choose(Chooser {
         title: "Confirm rewind?",
+        detail: String::new(),
+        back: None,
         keys: crate::commands::CHOOSE,
         selected: 0,
         choices: vec![Choice {

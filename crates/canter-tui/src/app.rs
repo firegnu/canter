@@ -159,6 +159,11 @@ pub enum Action {
     ReturnFromHandoff(String),
     /// Fetch the available models and offer a choice.
     PickModel,
+    /// `/model` across providers: list the providers, this one selected.
+    ModelProviders(Option<String>),
+    /// `/model` across providers: list this provider's models; `None` is
+    /// the models without a provider.
+    ProviderModels(Option<String>),
     /// Fetch the skills fixed when this session opened.
     ListSkills,
     Usage,
@@ -692,6 +697,8 @@ pub struct App {
     sending_shell: bool,
     shell_wait: bool,
     image_models: Vec<String>,
+    /// What the server last listed, for `/model`.
+    models: Vec<canter_protocol::Model>,
     skills: Vec<canter_protocol::Skill>,
     clipboard: crate::images::Clipboard,
     /// Where copies go: the clipboard, and the terminal in tmux or over SSH.
@@ -739,6 +746,9 @@ pub struct App {
     /// How the last turn ended, for the terminal tab: `Done` or `Failed`
     /// until a key is pressed here. An interrupted turn leaves none.
     turn_mark: Option<crate::tab_title::TabState>,
+    /// The model changed with context in use and no request since: the
+    /// next compaction is to fit it (P2-201).
+    compact_to_fit: bool,
     /// What the user is wanted for since the last frame, for
     /// [`App::take_notifications`].
     notifications: Vec<crate::notify::Notification>,
@@ -1016,6 +1026,7 @@ impl App {
             sending_shell: false,
             shell_wait: false,
             image_models: vec!["deepseek-flash".into()],
+            models: Vec::new(),
             skills: Vec::new(),
             clipboard: crate::images::Clipboard::default(),
             copier: Copier::default(),
@@ -1042,6 +1053,7 @@ impl App {
             working_since: working.then_some(now_ms),
             tips: None,
             turn_mark: None,
+            compact_to_fit: false,
             notifications: Vec::new(),
             reconnecting: None,
             interrupting: None,
@@ -1114,6 +1126,9 @@ impl App {
             }
             return;
         }
+        let switched = self.snapshot.token_usage.is_some()
+            && matches!(&event.payload, EventPayload::SessionUpdated { settings }
+                if settings.model != self.snapshot.settings.model);
         let plan_visible = self.snapshot.settings.plan_enabled != Some(false);
         let open_request = match &event.payload {
             EventPayload::RequestResolved { request_id, .. }
@@ -1150,6 +1165,28 @@ impl App {
             self.history = History::default();
             self.scroll = Scroll::default();
             self.mouse.selection = None;
+        }
+        self.compact_to_fit |= switched;
+        match &event.payload {
+            EventPayload::SessionUsage { token_usage } if !token_usage.records_no_request() => {
+                self.compact_to_fit = false;
+            }
+            EventPayload::ItemStarted {
+                item: Item::ContextCompaction { .. },
+                ..
+            } if self.compact_to_fit => {
+                self.compact_to_fit = false;
+                let window = self
+                    .snapshot
+                    .token_usage
+                    .as_ref()
+                    .and_then(|usage| usage.model_context_window)
+                    .map(|window| format!(" ({})", crate::commands::context(window)))
+                    .unwrap_or_default();
+                let model = sanitize(&self.snapshot.settings.model);
+                self.information(&format!("Compacting to fit {model}{window}"));
+            }
+            _ => {}
         }
         self.retract_drafts.event(event);
         self.steering.event(event);
@@ -1996,7 +2033,8 @@ impl App {
 
     /// Keys while a choice is offered: Up and Down select, Enter chooses
     /// (not right after an approval box closed), Esc, Ctrl+C or Ctrl+D
-    /// cancels, like in the session list. Other keys do nothing. Only keys
+    /// cancels, like in the session list; Esc goes back instead when the
+    /// choice says where. Other keys do nothing. Only keys
     /// pressed while its choices were on screen (`seen`) select or choose;
     /// any key can cancel.
     fn chooser_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
@@ -2022,7 +2060,7 @@ impl App {
                     .nth(chooser.selected)
                     .map(|choice| choice.action);
             }
-            KeyCode::Esc => self.chooser = None,
+            KeyCode::Esc => return self.chooser.take()?.back,
             KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.chooser = None;
             }
@@ -3857,6 +3895,11 @@ impl App {
             })
             .map(|model| model.model.clone())
             .collect();
+        self.models = models.to_vec();
+    }
+
+    pub(crate) fn models(&self) -> &[canter_protocol::Model] {
+        &self.models
     }
 
     /// Replace only the OS clipboard boundary (e.g. for headless clients/tests).
