@@ -3983,3 +3983,116 @@ async fn continue_and_exec_last_skip_child_sessions_after_restart() {
     assert!(world.snapshot("newer-child").await.turns.is_empty());
     world.stop_server(Signal::SIGTERM).await;
 }
+
+fn usage_reply(text: &str, prompt_tokens: u64) -> String {
+    format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices":[{"index":0,"delta":{"content":text},"finish_reason":"stop"}],
+               "usage":{"prompt_tokens":prompt_tokens,"completion_tokens":1,
+                        "total_tokens":prompt_tokens + 1}})
+    )
+}
+
+/// P2-201: with two providers beside the top-level model, `-m` takes a
+/// provider's model, `/model` goes provider first, the status bar follows
+/// the new model at once, and the compaction its smaller window needs says
+/// why. A model never configured says where to look.
+#[tokio::test]
+async fn model_choice_crosses_providers_and_the_status_bar_follows() {
+    let mut world = World::new(vec![
+        usage_reply("first answer", 50_000),
+        text_reply("Summary."),
+        usage_reply("after the switch", 2_000),
+    ])
+    .await;
+    let path = world.path("state/config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    config["providers"] = json!({
+        "big": {"base_url": config["base_url"], "api_key": "test-only-big",
+                "models": {"alpha": {"context_window": 1_048_576}}},
+        "small": {"base_url": config["base_url"], "api_key": "test-only-small",
+                  "models": {"beta": {"context_window": 100_000, "auto_compact_tokens": 15_000},
+                             "gamma": {"context_window": 200_000, "image": true}}},
+    });
+    fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    world.start_server().await;
+
+    let a = world
+        .open(&["-m", "big/alpha", "hello"], "canter-tui a")
+        .await;
+    a.wait_for("first answer").await;
+    a.wait_idle().await;
+    assert!(
+        a.info().starts_with("big/alpha · think high"),
+        "{}",
+        a.info()
+    );
+    assert_eq!(world.requests.lock().unwrap()[0]["model"], "alpha");
+
+    a.type_line("/model").await;
+    a.wait_for(" Provider").await;
+    let screen = a.screen();
+    for row in [
+        "default         3 models",
+        "big (current)   1 model",
+        "small           2 models",
+    ] {
+        assert!(screen.contains(row), "{screen}");
+    }
+    a.press(KeyCode::Down).await;
+    a.press(KeyCode::Enter).await;
+    a.wait_for(" Model · small").await;
+    let screen = a.screen();
+    for row in ["beta    100k context", "gamma   200k context · images"] {
+        assert!(screen.contains(row), "{screen}");
+    }
+    a.press(KeyCode::Esc).await;
+    a.wait_until("back to the providers", |a| {
+        a.screen().contains(" Provider") && !a.screen().contains(" Model · small")
+    })
+    .await;
+    a.press(KeyCode::Enter).await;
+    a.wait_for(" Model · small").await;
+    a.press(KeyCode::Enter).await;
+    // The window and compaction line change before any request.
+    a.wait_until("the status bar follows", |a| {
+        a.info().starts_with("small/beta · think high") && a.info().contains("50k/15k")
+    })
+    .await;
+    assert_eq!(world.requests.lock().unwrap().len(), 1);
+
+    a.type_line("go on").await;
+    a.wait_for("after the switch").await;
+    a.wait_idle().await;
+    let screen = a.screen();
+    let fit = screen
+        .find("Compacting to fit small/beta (100k context)")
+        .unwrap_or_else(|| panic!("{screen}"));
+    assert!(fit < screen.find("Context compacted").unwrap(), "{screen}");
+    {
+        let requests = world.requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(
+            requests[1..]
+                .iter()
+                .all(|request| request["model"] == "beta")
+        );
+    }
+    let id = a.quit().await;
+
+    for args in [vec!["-m", "nope/x"], vec!["--resume", &id, "-m", "nope/x"]] {
+        let terminal = world.open(&args, "canter-tui b").await;
+        let error = tokio::time::timeout(WAIT, terminal.task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("model is not in the configured model list")
+                && error.ends_with(". Run /model to see configured models"),
+            "{error}"
+        );
+    }
+    world.stop_server(Signal::SIGTERM).await;
+}

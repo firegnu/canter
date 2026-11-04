@@ -184,6 +184,20 @@ pub enum RunError {
     NoSession(String),
     #[error("terminal: {0}")]
     Io(#[from] io::Error),
+    /// The model asked for by name (`-m`) is not one the server lists.
+    #[error("{0}. Run /model to see configured models")]
+    UnknownModel(ClientError),
+}
+
+impl RunError {
+    /// Says where to see the configured models when the server does not
+    /// list the one asked for.
+    pub fn with_model_hint(self) -> Self {
+        match self {
+            Self::Client(error) if error.unknown_model() => Self::UnknownModel(error),
+            other => other,
+        }
+    }
 }
 
 /// Terminal events for [`run_on`], from an [`InputSender`]. Each one carries
@@ -606,7 +620,8 @@ where
             .await?;
         Ok(Some((snapshot, stream)))
     }
-    .await;
+    .await
+    .map_err(RunError::with_model_hint);
     let (snapshot, stream) = match opened {
         Ok(Some(opened)) => opened,
         other => {
@@ -777,13 +792,18 @@ where
                 }
                 Some(Action::PickModel) => match chat.client.list_models().await {
                     Ok(models) => {
-                        ui.app_mut().set_models(&models);
                         crate::commands::choose_model(ui.app_mut(), models);
                     }
                     Err(error) => ui
                         .app_mut()
                         .warning(&format!("Could not list models: {error}")),
                 },
+                Some(Action::ModelProviders(selected)) => {
+                    crate::commands::choose_provider(ui.app_mut(), selected)
+                }
+                Some(Action::ProviderModels(provider)) => {
+                    crate::commands::choose_provider_model(ui.app_mut(), provider)
+                }
                 Some(Action::Usage) => match chat.client.usage(Some(&chat.session)).await {
                     Ok(report) => ui.app_mut().show_usage(&report),
                     Err(error) => ui
@@ -2575,6 +2595,8 @@ impl<C: Connector> Chat<C> {
             | Action::PickSession
             | Action::ReturnFromHandoff(_)
             | Action::PickModel
+            | Action::ModelProviders(_)
+            | Action::ProviderModels(_)
             | Action::Usage
             | Action::BackgroundList
             | Action::BackgroundOutput(_)

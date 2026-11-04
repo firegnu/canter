@@ -265,3 +265,179 @@ async fn diff_and_files_have_the_title_first_and_the_keys_last() {
     screen.app().show_files().await;
     screen.check("Files");
 }
+
+impl Screen {
+    /// Presses `code` and does what the terminal does with a `/model` step
+    /// it returns; returns any other action.
+    fn press(&mut self, code: KeyCode) -> Option<crate::Action> {
+        let action = self
+            .ui
+            .app_mut()
+            .handle_key(KeyEvent::new(code, KeyModifiers::NONE), 0);
+        let action = match action {
+            Some(crate::Action::ModelProviders(selected)) => {
+                crate::commands::choose_provider(self.app(), selected);
+                None
+            }
+            Some(crate::Action::ProviderModels(provider)) => {
+                crate::commands::choose_provider_model(self.app(), provider);
+                None
+            }
+            other => other,
+        };
+        self.ui.draw(0).unwrap();
+        action
+    }
+
+    /// The rows of the list open above the input box, keys row included.
+    fn popup(&mut self) -> Vec<String> {
+        self.ui.draw(0).unwrap();
+        let rows = self.rows();
+        let top = box_top(&rows);
+        match rows[..top].iter().rposition(|row| *row == self.status) {
+            Some(status) => rows[status + 1..top].to_vec(),
+            None => Vec::new(),
+        }
+    }
+}
+
+fn model(id: &str, provider: Option<&str>, window: u64, image: bool) -> Value {
+    let kinds = if image {
+        json!(["text", "image"])
+    } else {
+        json!(["text"])
+    };
+    let mut model = json!({ "id": id, "model": id, "displayName": id, "isDefault": false,
+                            "contextWindow": window, "inputModalities": kinds });
+    if let Some(provider) = provider {
+        model["provider"] = json!(provider);
+    }
+    model
+}
+
+/// P2-201: with several providers `/model` lists them first, then the
+/// models of the one chosen; Esc goes back, then closes.
+#[test]
+fn model_choice_goes_through_the_provider_first() {
+    let models = || {
+        from::<Vec<canter_protocol::Model>>(json!([
+            model("fake-model", None, 1_048_576, false),
+            model("two/small", Some("two"), 100_000, false),
+            model("one/vendor/model", Some("one"), 200_000, true),
+            model("two/big", Some("two"), 1_048_576, true),
+        ]))
+    };
+    let mut screen = Screen::new();
+    screen.app().apply_event(
+        &from(
+            json!({ "seq": 1, "sessionId": "s1", "timestamp": 0, "type": "session.updated",
+                      "settings": { "cwd": "/work", "name": null, "model": "one/vendor/model",
+                                    "approvalPolicy": "alwaysAsk" } }),
+        ),
+        0,
+    );
+    crate::commands::choose_model(screen.app(), models());
+    screen.check("Provider");
+    let keys = " ↑↓ select · Enter choose · Esc cancel";
+    assert_eq!(
+        screen.popup(),
+        [
+            " Provider",
+            "   default         1 model",
+            " › one (current)   1 model",
+            "   two             2 models",
+            keys,
+        ]
+    );
+
+    assert_eq!(screen.press(KeyCode::Down), None);
+    assert_eq!(screen.press(KeyCode::Enter), None);
+    screen.check("Model");
+    assert_eq!(
+        screen.popup(),
+        [
+            " Model · two",
+            " › big     1049k context · images",
+            "   small   100k context",
+            keys,
+        ]
+    );
+    // Esc: back to the providers, on the one left.
+    assert_eq!(screen.press(KeyCode::Esc), None);
+    assert_eq!(screen.popup()[3], " › two             2 models");
+    assert_eq!(screen.press(KeyCode::Up), None);
+    assert_eq!(screen.press(KeyCode::Up), None);
+    assert_eq!(screen.press(KeyCode::Enter), None);
+    assert_eq!(
+        screen.popup(),
+        [" Model · default", " › fake-model   1049k context", keys]
+    );
+    assert_eq!(screen.press(KeyCode::Esc), None);
+    assert_eq!(screen.press(KeyCode::Esc), None);
+    assert!(screen.popup().is_empty(), "{:?}", screen.rows());
+
+    // The model in use is marked and selected in its provider's list.
+    crate::commands::choose_model(screen.app(), models());
+    screen.check("Provider");
+    assert_eq!(screen.press(KeyCode::Enter), None);
+    assert_eq!(
+        screen.popup()[..2],
+        [
+            " Model · one",
+            " › vendor/model (current)   200k context · images"
+        ]
+    );
+    assert_eq!(screen.press(KeyCode::Esc), None);
+    assert_eq!(screen.press(KeyCode::Down), None);
+    assert_eq!(screen.press(KeyCode::Enter), None);
+    assert_eq!(screen.press(KeyCode::Down), None);
+    assert_eq!(
+        screen.press(KeyCode::Enter),
+        Some(crate::Action::Update(
+            canter_protocol::SessionUpdateParams {
+                model: Some("two/small".into()),
+                ..Default::default()
+            }
+        ))
+    );
+    assert!(screen.popup().is_empty());
+}
+
+/// Models from one provider only: straight to its models, and Esc closes.
+/// Without providers the list is as it was before P2-201.
+#[test]
+fn model_choice_with_one_provider_skips_the_provider_list() {
+    let mut screen = Screen::new();
+    crate::commands::choose_model(
+        screen.app(),
+        from(json!([
+            model("go/b", Some("go"), 200_000, false),
+            model("go/a", Some("go"), 1_048_576, true),
+        ])),
+    );
+    screen.check("Model");
+    assert_eq!(
+        screen.popup()[..3],
+        [
+            " Model · go",
+            " › a   1049k context · images",
+            "   b   200k context"
+        ]
+    );
+    assert_eq!(screen.press(KeyCode::Esc), None);
+    assert!(screen.popup().is_empty());
+
+    crate::commands::choose_model(
+        screen.app(),
+        from(json!([
+            model("deepseek-v4-pro", None, 1_048_576, false),
+            model("deepseek-flash", None, 1_048_576, true),
+        ])),
+    );
+    assert_eq!(
+        screen.popup()[..3],
+        [" Model", " › deepseek-v4-pro", "   deepseek-flash"]
+    );
+    assert_eq!(screen.press(KeyCode::Esc), None);
+    assert!(screen.popup().is_empty());
+}

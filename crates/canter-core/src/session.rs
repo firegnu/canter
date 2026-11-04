@@ -1794,6 +1794,21 @@ impl Session {
                 .options
                 .limits(&state.journal.snapshot.settings.model);
             *self.shared.runtime.write().unwrap() = Arc::new(runtime);
+            // Status bars read the window and compaction line from the last
+            // usage: bring the new model's at once, with no request in it.
+            if let Some(usage) = state.journal.snapshot.token_usage.clone() {
+                let token_usage = TokenUsage {
+                    request: None,
+                    last: TokenUsageBreakdown::default(),
+                    model_context_window: Some(self.shared.runtime().limits.context_window),
+                    auto_compact_tokens: Some(crate::compaction::input_limit(&self.shared)),
+                    ..usage
+                };
+                state
+                    .journal
+                    .append(vec![EventPayload::SessionUsage { token_usage }])
+                    .await?;
+            }
         }
         self.shared.runtime().tools.configure_shell(
             state.approval_policy(),

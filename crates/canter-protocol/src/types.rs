@@ -1070,6 +1070,15 @@ pub struct TokenUsage {
     pub auto_compact_tokens: Option<u64>,
 }
 
+impl TokenUsage {
+    /// A usage update that records no model request: after an idle model
+    /// change it only brings the new window and compaction line (P2-201).
+    /// Usage, cost and stats leave it out.
+    pub fn records_no_request(&self) -> bool {
+        self.request.is_none() && self.last == TokenUsageBreakdown::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestCharge {

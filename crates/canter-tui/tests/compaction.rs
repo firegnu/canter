@@ -302,3 +302,67 @@ fn completed_compaction_lists_restored_and_referenced_files_below_the_card() {
     assert_eq!(rows[index + 2].trim(), "Referenced file /other/large.rs");
     assert_eq!(rows[index + 3].trim(), "Read empty.txt (0 lines)");
 }
+
+fn usage(request: bool, context: u64, window: u64, line: u64) -> Value {
+    let counts = |n: u64| {
+        json!({ "inputTokens": n, "cachedInputTokens": 0, "outputTokens": 0,
+                "reasoningOutputTokens": 0, "totalTokens": n })
+    };
+    let mut usage = json!({
+        "total": counts(context), "last": counts(if request { context } else { 0 }),
+        "contextTokens": context, "modelContextWindow": window, "autoCompactTokens": line,
+    });
+    if request {
+        usage["request"] = json!({ "model": "test-model", "startedAt": 0, "costUsd": null });
+    }
+    json!({ "type": "session.usage", "tokenUsage": usage })
+}
+
+fn switch(screen: &mut Screen, model: &str) {
+    screen.event(json!({
+        "type": "session.updated",
+        "settings": { "cwd": "/work", "name": null, "model": model, "approvalPolicy": "alwaysAsk" },
+    }));
+}
+
+/// P2-201: the first compaction after changing to a model with a smaller
+/// window says why, above the compaction; later ones do not.
+#[test]
+fn compacting_to_fit_a_new_model_says_so_once() {
+    const FIT: &str = "Compacting to fit two/small (100k context)";
+    let mut screen = Screen::new();
+    screen.event(usage(true, 50_000, 200_000, 150_000));
+    switch(&mut screen, "two/small");
+    screen.event(usage(false, 50_000, 100_000, 15_000));
+    screen.event(json!({ "type": "turn.started", "turn": turn("inProgress") }));
+    screen.event(json!({ "type": "session.status", "status": "working" }));
+    screen.event(json!({ "type": "item.started", "turnId": "t1", "item": compaction("") }));
+    screen.draw_at(NOW);
+    let fit = screen.row_of(FIT);
+    assert!(fit < screen.row_of(COMPACTING.trim()), "{}", screen.text());
+    screen.complete("the summary");
+    screen.event(usage(true, 2_000, 100_000, 15_000));
+    screen.event(json!({ "type": "item.started", "turnId": "t1", "item": compaction("") }));
+    screen.draw_at(NOW);
+    assert_eq!(
+        screen.text().matches("Compacting to fit").count(),
+        1,
+        "{}",
+        screen.text()
+    );
+
+    // A model change followed by a reply, not a compaction: nothing said.
+    let mut screen = Screen::new();
+    screen.event(usage(true, 50_000, 200_000, 150_000));
+    switch(&mut screen, "two/small");
+    screen.event(usage(false, 50_000, 100_000, 15_000));
+    screen.event(usage(true, 60_000, 100_000, 15_000));
+    screen.event(json!({ "type": "turn.started", "turn": turn("inProgress") }));
+    screen.event(json!({ "type": "item.started", "turnId": "t1", "item": compaction("") }));
+    screen.draw_at(NOW);
+    assert!(
+        !screen.text().contains("Compacting to fit"),
+        "{}",
+        screen.text()
+    );
+}

@@ -10,6 +10,8 @@ use ratatui::{style::Style, text::Span};
 pub(crate) fn chooser(commands: &[BackgroundCommand], now: i64) -> Chooser {
     Chooser {
         title: "Background commands",
+        detail: String::new(),
+        back: None,
         keys: "↑↓ select · Enter choose · s stop · Esc cancel",
         selected: 0,
         choices: commands

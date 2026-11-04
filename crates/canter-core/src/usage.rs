@@ -124,7 +124,9 @@ impl Ledger {
                     turn_id = None;
                 }
                 EventPayload::SessionUsage { token_usage }
-                | EventPayload::SessionBtwUsage { token_usage } => {
+                | EventPayload::SessionBtwUsage { token_usage }
+                    if !token_usage.records_no_request() =>
+                {
                     let charge = token_usage.request.clone().unwrap_or_else(|| {
                         request_charge(prices, &model, event.timestamp, &token_usage.last)
                     });
