@@ -10,6 +10,10 @@ use tokio_util::sync::CancellationToken;
 use crate::{ErrorKind, Model, ModelContext, ModelError, ModelEvent, ModelStream, Request};
 
 #[cfg(test)]
+#[path = "responses/cache_tests.rs"]
+mod cache_tests;
+mod diagnostics;
+#[cfg(test)]
 #[path = "responses/edge_tests.rs"]
 mod edge_tests;
 mod error;
@@ -104,11 +108,38 @@ impl Responses {
         credential: &'a mut dyn ResponsesCredential,
         observed: &'a mut bool,
     ) -> ModelStream<'a> {
+        Box::pin(async_stream::stream! {
+            let body = wire::request_body(request);
+            let mut diagnostic = diagnostics::Diagnostic::new(&body);
+            let mut stream = self.attempt_inner(request, credential, observed, &body, &mut diagnostic);
+            let terminal = loop {
+                match stream.next().await {
+                    Some(event) if event.is_err() || matches!(event, Ok(ModelEvent::Finished(_))) => break Some(event),
+                    Some(event) => yield event,
+                    None => break None,
+                }
+            };
+            drop(stream);
+            diagnostic.finish(terminal.as_ref());
+            drop(diagnostic);
+            if let Some(event) = terminal { yield event; }
+        })
+    }
+
+    fn attempt_inner<'a>(
+        &'a self,
+        request: &'a Request,
+        credential: &'a mut dyn ResponsesCredential,
+        observed: &'a mut bool,
+        body: &'a Value,
+        diagnostic: &'a mut diagnostics::Diagnostic,
+    ) -> ModelStream<'a> {
         Box::pin(async_stream::try_stream! {
             let mut authorization = credential.authorization().await?;
             authorization.set_sensitive(true);
+            diagnostic.sent();
             let response = self.client.post(self.endpoint.clone()).header("authorization", authorization)
-                .json(&wire::request_body(request)).send().await.map_err(error::transport)?;
+                .json(body).send().await.map_err(error::transport)?;
             if !response.status().is_success() { Err(error::http(response).await)?; return; }
             let mut events = response.bytes_stream().eventsource();
             let mut state = sse::State::default();
@@ -119,6 +150,7 @@ impl Responses {
                         _ => ModelError::new(ErrorKind::Other),
                     })?;
                 let event: Value = serde_json::from_str(&event.data).map_err(|_| ModelError::new(ErrorKind::Other))?;
+                diagnostic.observe(&event);
                 // Even provisional function arguments count as output, although
                 // they cannot enter the public execution path until completed.
                 *observed |= sse::has_output(&event);
@@ -154,11 +186,16 @@ impl Responses {
         context: Option<ModelContext>,
     ) -> ModelStream<'_> {
         Box::pin(async_stream::try_stream! {
-            let mut credential = tokio::select! {
+            let credential = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return,
                 credential = self.auth.credential(&request, context.as_ref()) => credential,
-            }?;
+            };
+            if let Err(error) = &credential {
+                let mut diagnostic = diagnostics::Diagnostic::new(&wire::request_body(&request));
+                diagnostic.finish(Some(&Err(error.clone())));
+            }
+            let mut credential = credential?;
             let limit = request.options.max_retries.map_or(self.retry.max_retries, |limit| limit.min(self.retry.max_retries));
             let mut retries = 0;
             let mut recovered = false;
