@@ -145,6 +145,7 @@
 ## 已知没修的问题
 
 - 几家同时配（P2-200、P2-201）以后，订阅（opencode go、Kimi Code 等）没有按 token 的价格：状态栏花费显示 `unknown`，和有价格的混用时显示 `$X+?`；`/goal` 的美元预算（P2-109）算不到订阅的请求，用订阅跑长任务时拦不住原地打转烧额度。缓存命中靠服务商报 `cached_tokens` 或 DeepSeek 的字段，不报的家显示 0%。11-04 主控提了两个方向（配置里标订阅、花费显示 `plan` 并按家列 token；`/goal` 能按 token 设预算），用户：「没事，你考虑到这些事情就好了」，没开任务。
+- 界面里跨家选模型（P2-201）开发记下、主控没让改的：`/model` 第二层说明栏的窗口按十进制（1048576 显示 `1049k`，不是 `1024k`）；第二层按键行仍写 `Esc cancel`，实际按 Esc 是回第一层；某一家正好叫 `default` 时第一层会有两行 `default`（`crates/canter-tui/src/commands.rs`）。
 - 几家同时配（P2-200）交叉审查建议改、没做的（第 2 条状态栏并进 P2-201）：
   - 混用写法时，旧顶层 `models` 里的名字前缀可能和家名撞上（比如旧顶层接 OpenRouter 有 `deepseek/deepseek-v3.2`，又配了一家叫 `deepseek`）：`/v1/models` 把它显示成旧单家的，实际按家名发给了那一家。改法：`load` 里对旧 `models` 每项做和默认模型一样的检查（`crates/canter-server/src/config.rs`）。
   - 父会话一轮结束、子 agent 还在跑时，父会话能换模型；子 agent 继续用派出时的模型和那一家（key 和地址配对，不串）。改法：换模型时按 `running_agents` 拒绝，或 DESIGN 写明子 agent 一直用派出时的模型。
