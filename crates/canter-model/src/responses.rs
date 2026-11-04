@@ -336,6 +336,7 @@ mod tests {
         .unwrap();
         let prompt = "Fixed core.\n\n<project_instructions path=\"a\">\n unchanged  \n</project_instructions>";
         let request = Request {
+            session_id: Some("test-session".into()),
             model: "test-model".into(),
             messages: vec![
                 Message::System {
@@ -368,7 +369,6 @@ mod tests {
                 max_output_tokens: Some(123),
                 max_retries: Some(0),
             },
-            ..Default::default()
         };
         let _: Vec<_> = model
             .stream(request, CancellationToken::new())
@@ -380,6 +380,7 @@ mod tests {
             body,
             json!({
                 "model":"test-model", "store":false, "stream":true,
+                "prompt_cache_key":"test-session",
                 "reasoning":{"summary":"auto"},
                 "input":[
                     {"role":"developer","content":[{"type":"input_text","text":prompt}]},

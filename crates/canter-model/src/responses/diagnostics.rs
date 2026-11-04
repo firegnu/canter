@@ -77,6 +77,7 @@ impl Diagnostic {
             "request":previous.sequence + 1,
             "started_unix_ms":unix_ms(), "sent_unix_ms":"missing",
             "model_hash":fingerprint(&bytes(&body["model"])),
+            "prompt_cache_key_present":body.get("prompt_cache_key").is_some(),
             "input_count":input.len(), "previous_request":"missing",
             "input_prefix_equal":"missing", "first_different_item":"missing",
             "tools_hash":fingerprint(&tools), "tools_equal":"missing",

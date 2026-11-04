@@ -9,6 +9,37 @@ fn event(value: Value) -> String {
     format!("data: {value}\n\n")
 }
 
+#[test]
+fn prompt_cache_key_truncates_at_64_unicode_characters() {
+    for (session_id, expected) in [
+        ("a".repeat(65), "a".repeat(64)),
+        (
+            format!("{}界🦀尾", "a".repeat(62)),
+            format!("{}界🦀", "a".repeat(62)),
+        ),
+        ("界".repeat(64), "界".repeat(64)),
+    ] {
+        let body = wire::request_body(&Request {
+            session_id: Some(session_id),
+            ..Default::default()
+        });
+        let key = body["prompt_cache_key"].as_str().unwrap();
+        assert_eq!(key, expected);
+        assert_eq!(key.chars().count(), 64);
+    }
+}
+
+#[test]
+fn prompt_cache_key_is_omitted_without_a_session_id() {
+    for session_id in [None, Some(String::new())] {
+        let body = wire::request_body(&Request {
+            session_id,
+            ..Default::default()
+        });
+        assert!(body.get("prompt_cache_key").is_none());
+    }
+}
+
 #[tokio::test]
 async fn cache_diagnostics_cover_failures_retries_and_cancellation() {
     const CHILD: &str = "CANTER_CACHE_FAILURE_TEST";
@@ -49,6 +80,7 @@ async fn cache_diagnostics_cover_failures_retries_and_cancellation() {
             "ChatgptNotLoggedIn",
         ]) {
             assert_eq!(row["error_kind"], kind);
+            assert_eq!(row["prompt_cache_key_present"], false);
         }
         assert_eq!(rows[0]["outcome"], "failure");
         assert_eq!(rows[1]["outcome"], "success");
@@ -185,6 +217,7 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
             for (index, row) in rows.iter().enumerate() {
                 assert_eq!(row["request"], index + 1);
                 assert_eq!(row["outcome"], "success");
+                assert_eq!(row["prompt_cache_key_present"], true);
                 assert!(row["sent_unix_ms"].as_u64().unwrap() > 0);
                 assert!(row["elapsed_ms"].is_number());
                 assert_eq!(row["model_hash"], rows[0]["model_hash"]);
@@ -245,6 +278,7 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
                 "private-model",
                 "private-developer",
                 "private-tool",
+                "private-session",
                 crate::test_support::KEY,
             ] {
                 assert!(!log.contains(private), "leaked fixture marker");
@@ -291,6 +325,7 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
     }
     let server = Server::start(replies).await;
     let mut request = Request {
+        session_id: Some("private-session".into()),
         model: "private-model".into(),
         messages: vec![
             Message::System {
@@ -348,6 +383,10 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
             });
         }
     }
-    assert_eq!(server.requests.lock().unwrap().len(), 3);
+    let bodies = server.requests.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 3);
+    for body in bodies {
+        assert_eq!(body["prompt_cache_key"], "private-session");
+    }
     server.stop().await;
 }
