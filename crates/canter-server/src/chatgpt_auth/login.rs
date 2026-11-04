@@ -145,14 +145,17 @@ impl ChatgptAuth {
                 let tokens = auth
                     .inner
                     .http
-                    .tokens(&[
-                        ("grant_type", "authorization_code"),
-                        ("client_id", &client),
-                        ("code", &code),
-                        ("code_verifier", &verifier),
-                        ("redirect_uri", &redirect),
-                        ("resource", http::RESOURCE),
-                    ])
+                    .tokens(
+                        &[
+                            ("grant_type", "authorization_code"),
+                            ("client_id", &client),
+                            ("code", &code),
+                            ("code_verifier", &verifier),
+                            ("redirect_uri", &redirect),
+                            ("resource", http::RESOURCE),
+                        ],
+                        None,
+                    )
                     .await?;
                 let identity = auth
                     .inner
@@ -183,6 +186,7 @@ impl ChatgptAuth {
                 let record = Record {
                     info: info.clone(),
                     tokens: Some(tokens),
+                    pending_revocation: None,
                 };
                 if let Some((_, epoch)) = existing {
                     let entry = auth.entry(&info.id).await?;

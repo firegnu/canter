@@ -1,6 +1,6 @@
 //! The only module that serializes credentials. No secret-bearing type is
 //! generally serializable or printable, including the on-disk representations.
-use super::{AuthError, ErrorKind, Record, RecordInfo, RecordStatus, TokenSet};
+use super::{AuthError, ErrorKind, Record, RecordInfo, RecordStatus, Secret, TokenSet};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -56,13 +56,6 @@ fn open(path: &Path) -> Result<File, AuthError> {
 
 impl Store {
     pub fn load_records(&self, host: &str) -> Result<Vec<Record>, AuthError> {
-        #[derive(serde::Deserialize)]
-        struct Stored {
-            version: u32,
-            ext_agent_host_id: String,
-            record: RecordInfo,
-            tokens: Option<TokenSet>,
-        }
         let mut records = Vec::new();
         for entry in fs::read_dir(&self.dir).map_err(failure)? {
             let entry = entry.map_err(failure)?;
@@ -73,39 +66,67 @@ impl Store {
             }
             check(&fs::symlink_metadata(entry.path()).map_err(failure)?, false)?;
             let id = name.strip_suffix(".json").ok_or(ErrorKind::Storage)?;
-            let uuid = uuid::Uuid::parse_str(id).map_err(failure)?;
-            if uuid.get_version_num() != 4 || uuid.to_string() != id {
-                return Err(ErrorKind::Storage.into());
-            }
-            let stored: Stored = serde_json::from_value(self.read(name)?).map_err(failure)?;
-            if stored.version != 1
-                || stored.ext_agent_host_id != host
-                || stored.record.id != id
-                || stored.record.subject.is_empty()
-                || stored.record.client_id.is_empty()
-                || stored.record.client_id == "dynamic_agent_client"
-                || records
-                    .iter()
-                    .any(|record: &Record| record.info.client_id == stored.record.client_id)
-                || stored.tokens.as_ref().is_some_and(|tokens| {
-                    tokens.access.0.is_empty()
-                        || tokens.received_at.checked_add(tokens.expires_in).is_none()
-                        || tokens.status() != stored.record.status
-                })
-                || (stored.tokens.is_none()
-                    && !matches!(
-                        stored.record.status,
-                        RecordStatus::NeedsLogin | RecordStatus::SignedOut
-                    ))
+            let record = self.load_record(id, host)?;
+            if records
+                .iter()
+                .any(|existing: &Record| existing.info.client_id == record.info.client_id)
             {
                 return Err(ErrorKind::Storage.into());
             }
-            records.push(Record {
-                info: stored.record,
-                tokens: stored.tokens,
-            });
+            records.push(record);
         }
         Ok(records)
+    }
+
+    fn load_record(&self, id: &str, host: &str) -> Result<Record, AuthError> {
+        #[derive(serde::Deserialize)]
+        struct Stored {
+            version: u32,
+            ext_agent_host_id: String,
+            record: RecordInfo,
+            tokens: Option<TokenSet>,
+            pending_revocation: Option<Secret>,
+        }
+        let uuid = uuid::Uuid::parse_str(id).map_err(failure)?;
+        if uuid.get_version_num() != 4 || uuid.to_string() != id {
+            return Err(ErrorKind::Storage.into());
+        }
+        let stored: Stored =
+            serde_json::from_value(self.read(&format!("{id}.json"))?).map_err(failure)?;
+        if stored.version != 1
+            || stored.ext_agent_host_id != host
+            || stored.record.id != id
+            || stored.record.subject.is_empty()
+            || stored.record.client_id.is_empty()
+            || stored.record.client_id == "dynamic_agent_client"
+            || (stored.pending_revocation.is_some()
+                && stored.record.status != RecordStatus::SignedOut)
+            || stored.tokens.as_ref().is_some_and(|tokens| {
+                tokens.access.0.is_empty()
+                    || tokens.received_at.checked_add(tokens.expires_in).is_none()
+                    || tokens.status() != stored.record.status
+            })
+            || (stored.tokens.is_none()
+                && !matches!(
+                    stored.record.status,
+                    RecordStatus::NeedsLogin | RecordStatus::SignedOut
+                ))
+        {
+            return Err(ErrorKind::Storage.into());
+        }
+        Ok(Record {
+            info: stored.record,
+            tokens: stored.tokens,
+            pending_revocation: stored.pending_revocation,
+        })
+    }
+
+    pub fn begin_logout(&self, id: &str, host: &str) -> Result<(), AuthError> {
+        // The caller holds the publication lock, so this durable snapshot cannot
+        // race with a refresh/login publication while waiting for the async lock.
+        let mut record = self.load_record(id, host)?;
+        record.sign_out();
+        self.save_record(&record, host)
     }
 
     pub fn save_record(&self, record: &Record, host: &str) -> Result<(), AuthError> {
@@ -126,6 +147,7 @@ impl Store {
             "version":1, "ext_agent_host_id":host,
             "record": {"id":info.id,"issuer":info.issuer,"subject":info.subject,"client_id":info.client_id,"email":info.email,"status":status},
             "tokens":tokens,
+            "pending_revocation":record.pending_revocation.as_ref().map(|token| &token.0),
         }))
     }
 

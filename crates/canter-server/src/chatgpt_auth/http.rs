@@ -37,7 +37,7 @@ struct TokenResponse {
     id_token: Option<Secret>,
     token_type: String,
     expires_in: u64,
-    scope: String,
+    scope: Option<String>,
     earliest_refresh_at: Option<serde_json::Value>,
 }
 
@@ -108,7 +108,11 @@ impl Http {
         self.trusted_url(&discovery.revocation_endpoint)?;
         Ok(discovery)
     }
-    pub async fn tokens(&self, form: &[(&str, &str)]) -> Result<TokenSet, AuthError> {
+    pub async fn tokens(
+        &self,
+        form: &[(&str, &str)],
+        previous: Option<&TokenSet>,
+    ) -> Result<TokenSet, AuthError> {
         let response: TokenResponse = self
             .json(
                 self.client
@@ -126,15 +130,18 @@ impl Http {
         received_at
             .checked_add(response.expires_in)
             .ok_or(ErrorKind::InvalidResponse)?;
+        let scopes = match response.scope {
+            Some(scope) => scope.split_ascii_whitespace().map(str::to_owned).collect(),
+            None => previous.ok_or(ErrorKind::InvalidResponse)?.scopes.clone(),
+        };
         Ok(TokenSet {
             access: response.access_token,
-            refresh: response.refresh_token.filter(|value| !value.0.is_empty()),
+            refresh: response
+                .refresh_token
+                .filter(|value| !value.0.is_empty())
+                .or_else(|| previous.and_then(|tokens| tokens.refresh.clone())),
             id: response.id_token,
-            scopes: response
-                .scope
-                .split_ascii_whitespace()
-                .map(str::to_owned)
-                .collect(),
+            scopes,
             received_at,
             expires_in: response.expires_in,
             earliest_refresh_at: response.earliest_refresh_at,
@@ -242,8 +249,8 @@ impl Http {
         let now = (self.clock)();
         if identity.sub.is_empty()
             || identity.exp <= now
-            || identity.iat > now.saturating_add(5)
-            || identity.nbf.is_some_and(|nbf| nbf > now.saturating_add(5))
+            || identity.iat > now.saturating_add(60)
+            || identity.nbf.is_some_and(|nbf| nbf > now.saturating_add(60))
             || nonce.is_some_and(|nonce| identity.nonce.as_deref() != Some(nonce))
         {
             return Err(invalid());

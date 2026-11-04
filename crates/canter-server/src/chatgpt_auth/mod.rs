@@ -112,6 +112,17 @@ impl Entry {
 struct Record {
     info: RecordInfo,
     tokens: Option<TokenSet>,
+    pending_revocation: Option<Secret>,
+}
+impl Record {
+    fn sign_out(&mut self) {
+        self.pending_revocation = self
+            .tokens
+            .take()
+            .and_then(|tokens| tokens.refresh)
+            .or(self.pending_revocation.take());
+        self.info.status = RecordStatus::SignedOut;
+    }
 }
 #[derive(Clone, Deserialize)]
 #[serde(transparent)]

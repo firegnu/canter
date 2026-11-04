@@ -902,6 +902,13 @@ async fn redaction_process() {
     }
     let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
     let state = crate::state_directory().unwrap();
+    let file = std::fs::File::create(home.join("auth-test.log")).unwrap();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_ansi(false)
+        .with_writer(move || file.try_clone().unwrap())
+        .try_init()
+        .unwrap();
     let fake = Fake::new().await;
     let clock = fake.state.lock().unwrap().now.clone();
     let now = clock.clone();
@@ -925,12 +932,36 @@ async fn redaction_process() {
         &std::fs::read(state.join(format!("auth/chatgpt/{}.json", record.id))).unwrap(),
     )
     .unwrap();
+    fake.state.lock().unwrap().error = Some((400, "invalid_grant".into()));
+    let failed_attempt = auth.start_login(Some(&record.id)).await.unwrap();
+    let failed_authorization_url = failed_attempt.authorization_url().to_owned();
+    let failed_state = reqwest::Url::parse(&failed_authorization_url)
+        .unwrap()
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .unwrap()
+        .1
+        .to_string();
+    fake.callback(&failed_attempt).await;
+    let error = failed_attempt.wait().await.unwrap_err();
+    assert_eq!(error.kind, ErrorKind::NeedsLogin);
+    assert_eq!(error.status, Some(400));
+    assert_eq!(
+        fake.state.lock().unwrap().grants[1]["grant_type"],
+        "authorization_code"
+    );
+    assert!(std::error::Error::source(&error).is_none());
+    println!("{error:?}");
+    eprintln!("{error}");
+    tracing::error!(?error, "authorization code exchange failed");
     let secrets = serde_json::json!([
         "fake-access-1",
         "fake-refresh-1",
         CODE,
         authorization_url,
         state_secret,
+        failed_authorization_url,
+        failed_state,
         stored["tokens"]["id"]
     ]);
     std::fs::write(
@@ -938,13 +969,6 @@ async fn redaction_process() {
         serde_json::to_vec(&secrets).unwrap(),
     )
     .unwrap();
-    let file = std::fs::File::create(home.join("auth-test.log")).unwrap();
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .with_ansi(false)
-        .with_writer(move || file.try_clone().unwrap())
-        .try_init()
-        .unwrap();
     now.store(NOW + 3600, Ordering::SeqCst);
     for (status, code) in [
         (503, "temporarily_unavailable"),
@@ -995,4 +1019,383 @@ async fn logout_revokes_rotated_refresh_token_even_if_new_id_token_is_invalid() 
         fixture.fake.state.lock().unwrap().revocations[0]["token"],
         "fake-refresh-2"
     );
+}
+
+#[tokio::test]
+async fn refresh_keeps_rotated_credentials_when_identity_discovery_or_jwks_is_unavailable() {
+    for endpoint in ["discovery", "jwks"] {
+        let fixture = Fixture::new().await;
+        let record = fixture.login(None).await.unwrap();
+        let path = fixture
+            .root
+            .path()
+            .join(format!("state/auth/chatgpt/{}.json", record.id));
+        let before: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        fixture.now.store(NOW + 3600, Ordering::SeqCst);
+        {
+            let mut state = fixture.fake.state.lock().unwrap();
+            if endpoint == "discovery" {
+                state.discovery_status = 503;
+            } else {
+                state.jwks_status = 503;
+            }
+            state.scopes = format!("{SCOPES} extra_scope");
+            state.earliest = Some(serde_json::json!(NOW + 4000));
+        }
+        let result = fixture.auth.access_token(&record.id).await;
+        let after: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(after["tokens"]["refresh"], "fake-refresh-2", "{endpoint}");
+        assert_eq!(after["tokens"]["access"], "fake-access-2");
+        assert_eq!(after["tokens"]["id"], before["tokens"]["id"]);
+        assert_eq!(after["tokens"]["received_at"], NOW + 3600);
+        assert_eq!(after["tokens"]["expires_in"], 3600);
+        assert_eq!(after["tokens"]["earliest_refresh_at"], NOW + 4000);
+        assert!(
+            after["tokens"]["scopes"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("extra_scope"))
+        );
+        assert_eq!(
+            result.unwrap().authorization_header().unwrap(),
+            "Bearer fake-access-2"
+        );
+        let Fixture {
+            auth,
+            fake,
+            root,
+            now,
+        } = fixture;
+        drop(auth);
+        {
+            let mut state = fake.state.lock().unwrap();
+            state.discovery_status = 200;
+            state.jwks_status = 200;
+        }
+        now.store(NOW + 7200, Ordering::SeqCst);
+        let reopened = ChatgptAuth::for_test(
+            &root.path().join("state"),
+            fake.origin.clone(),
+            Arc::new(move || now.load(Ordering::SeqCst)),
+        );
+        reopened.access_token(&record.id).await.unwrap();
+        assert_eq!(
+            fake.state.lock().unwrap().grants[2]["refresh_token"],
+            "fake-refresh-2"
+        );
+        let final_record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_ne!(final_record["tokens"]["id"], before["tokens"]["id"]);
+    }
+}
+
+#[tokio::test]
+async fn invalid_refreshed_identity_revokes_new_refresh_and_persists_needs_login() {
+    for (bad, revoke_status) in [
+        ("signature", 200),
+        ("issuer", 200),
+        ("audience", 200),
+        ("expired", 200),
+        ("subject", 200),
+        ("signature", 503),
+    ] {
+        let fixture = Fixture::new().await;
+        let record = fixture.login(None).await.unwrap();
+        let old_token = fixture.auth.access_token(&record.id).await.unwrap();
+        fixture.now.store(NOW + 3600, Ordering::SeqCst);
+        {
+            let mut state = fixture.fake.state.lock().unwrap();
+            if bad == "subject" {
+                state.subject = "different-subject".into();
+            } else {
+                state.bad_claim = Some(bad);
+            }
+            state.revoke_status = revoke_status;
+        }
+        let error = fixture.auth.access_token(&record.id).await.err().unwrap();
+        assert_eq!(
+            error.kind,
+            if bad == "subject" {
+                ErrorKind::IdentityMismatch
+            } else {
+                ErrorKind::InvalidIdToken
+            }
+        );
+        let stored: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                fixture
+                    .root
+                    .path()
+                    .join(format!("state/auth/chatgpt/{}.json", record.id)),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored["record"]["status"], "needs_login", "{bad}");
+        assert!(stored["tokens"].is_null());
+        assert!(old_token.authorization_header().is_err());
+        {
+            let state = fixture.fake.state.lock().unwrap();
+            assert_eq!(
+                state.revocations.len(),
+                if revoke_status == 200 { 1 } else { 3 }
+            );
+            assert!(
+                state
+                    .revocations
+                    .iter()
+                    .all(|form| form["token"] == "fake-refresh-2")
+            );
+        }
+        let Fixture {
+            auth,
+            fake,
+            root,
+            now,
+        } = fixture;
+        drop(auth);
+        let reopened = ChatgptAuth::for_test(
+            &root.path().join("state"),
+            fake.origin.clone(),
+            Arc::new(move || now.load(Ordering::SeqCst)),
+        );
+        assert_eq!(
+            reopened.access_token(&record.id).await.err().unwrap().kind,
+            ErrorKind::NeedsLogin
+        );
+        assert_eq!(reopened.records().await[0].subject, record.subject);
+    }
+}
+
+#[tokio::test]
+async fn logout_is_durable_before_revocation_and_signed_out_snapshot_cannot_supply_tokens() {
+    let fixture = Fixture::new().await;
+    let record = fixture.login(None).await.unwrap();
+    let release = Arc::new(tokio::sync::Notify::new());
+    fixture.fake.state.lock().unwrap().revoke_release = Some(release.clone());
+    let started = fixture.fake.state.lock().unwrap().revoke_started.clone();
+    let auth = fixture.auth.clone();
+    let id = record.id.clone();
+    let logout = tokio::spawn(async move { auth.logout(&id).await });
+    tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+        .await
+        .unwrap();
+    let path = fixture
+        .root
+        .path()
+        .join(format!("state/auth/chatgpt/{}.json", record.id));
+    let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(stored["record"]["status"], "signed_out");
+    assert!(stored["tokens"].is_null());
+    assert_eq!(stored["pending_revocation"], "fake-refresh-1");
+
+    // Open the actual on-disk snapshot in an isolated directory, as after a
+    // process stop while revocation is still waiting on its HTTP response.
+    let snapshot = tempfile::tempdir().unwrap();
+    let snapshot_home = snapshot.path().join("state");
+    drop(ChatgptAuth::for_test(
+        &snapshot_home,
+        fixture.fake.origin.clone(),
+        Arc::new(|| NOW),
+    ));
+    for name in ["host.json".to_owned(), format!("{}.json", record.id)] {
+        std::fs::copy(
+            fixture.root.path().join("state/auth/chatgpt").join(&name),
+            snapshot_home.join("auth/chatgpt").join(name),
+        )
+        .unwrap();
+    }
+    let reopened = ChatgptAuth::for_test(
+        &snapshot_home,
+        fixture.fake.origin.clone(),
+        Arc::new(|| NOW),
+    );
+    assert_eq!(reopened.records().await[0].status, RecordStatus::SignedOut);
+    assert_eq!(
+        reopened.access_token(&record.id).await.err().unwrap().kind,
+        ErrorKind::NotLoggedIn
+    );
+    assert_eq!(fixture.fake.state.lock().unwrap().grants.len(), 1);
+    release.notify_one();
+    assert!(logout.await.unwrap().unwrap().remote_revoked);
+    let after: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert!(after["tokens"].is_null());
+    assert!(after["pending_revocation"].is_null());
+}
+
+#[tokio::test]
+async fn logout_is_durable_while_waiting_for_inflight_refresh() {
+    let fixture = Fixture::new().await;
+    let record = fixture.login(None).await.unwrap();
+    fixture.now.store(NOW + 3600, Ordering::SeqCst);
+    let release = Arc::new(tokio::sync::Notify::new());
+    fixture.fake.state.lock().unwrap().refresh_release = Some(release.clone());
+    let started = fixture.fake.state.lock().unwrap().refresh_started.clone();
+    let auth = fixture.auth.clone();
+    let id = record.id.clone();
+    let refreshing = tokio::spawn(async move { auth.access_token(&id).await });
+    started.notified().await;
+    let logout = fixture.auth.logout(&record.id);
+    tokio::pin!(logout);
+    assert!(futures_util::poll!(&mut logout).is_pending());
+    let path = fixture
+        .root
+        .path()
+        .join(format!("state/auth/chatgpt/{}.json", record.id));
+    let stopped: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(stopped["record"]["status"], "signed_out");
+    assert!(stopped["tokens"].is_null());
+    assert_eq!(stopped["pending_revocation"], "fake-refresh-1");
+    release.notify_one();
+    assert!(refreshing.await.unwrap().is_err());
+    assert!(logout.await.unwrap().remote_revoked);
+    assert_eq!(
+        fixture.fake.state.lock().unwrap().revocations[0]["token"],
+        "fake-refresh-2"
+    );
+}
+
+#[tokio::test]
+async fn logout_reports_storage_failure_before_revocation_and_when_clearing_pending_token() {
+    let fixture = Fixture::new().await;
+    let record = fixture.login(None).await.unwrap();
+    let path = fixture
+        .root
+        .path()
+        .join(format!("state/auth/chatgpt/{}.json", record.id));
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        fixture.auth.logout(&record.id).await.unwrap_err().kind,
+        ErrorKind::Storage
+    );
+    assert!(fixture.fake.state.lock().unwrap().revocations.is_empty());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let release = Arc::new(tokio::sync::Notify::new());
+    fixture.fake.state.lock().unwrap().revoke_release = Some(release.clone());
+    let started = fixture.fake.state.lock().unwrap().revoke_started.clone();
+    let auth = fixture.auth.clone();
+    let id = record.id.clone();
+    let logout = tokio::spawn(async move { auth.logout(&id).await });
+    started.notified().await;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    release.notify_one();
+    assert_eq!(logout.await.unwrap().unwrap_err().kind, ErrorKind::Storage);
+    let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(stored["record"]["status"], "signed_out");
+    assert!(stored["tokens"].is_null());
+    assert_eq!(
+        fixture
+            .auth
+            .access_token(&record.id)
+            .await
+            .err()
+            .unwrap()
+            .kind,
+        ErrorKind::NotLoggedIn
+    );
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[tokio::test]
+async fn identity_allows_sixty_seconds_of_iat_and_nbf_skew_but_no_more() {
+    for claim in ["iat", "nbf"] {
+        for offset in [60, 61] {
+            let fixture = Fixture::new().await;
+            {
+                let mut state = fixture.fake.state.lock().unwrap();
+                if claim == "iat" {
+                    state.future_iat = offset;
+                } else {
+                    state.future_nbf = Some(offset);
+                }
+            }
+            let result = fixture.login(None).await;
+            if offset == 60 {
+                assert_eq!(result.unwrap().status, RecordStatus::LoggedIn, "{claim}");
+            } else {
+                assert_eq!(
+                    result.unwrap_err().kind,
+                    ErrorKind::InvalidIdToken,
+                    "{claim}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn refresh_preserves_omitted_scope_and_refresh_token_across_reopening() {
+    for (omit_scope, omit_refresh) in [(true, false), (false, true), (true, true)] {
+        let fixture = Fixture::new().await;
+        fixture.fake.state.lock().unwrap().scopes = format!("{SCOPES} original_scope");
+        let record = fixture.login(None).await.unwrap();
+        {
+            let mut state = fixture.fake.state.lock().unwrap();
+            state.omit_refresh_scope = omit_scope;
+            state.omit_refresh_token = omit_refresh;
+            state.scopes = format!("{SCOPES} replacement_scope");
+        }
+        fixture.now.store(NOW + 3600, Ordering::SeqCst);
+        let token = fixture.auth.access_token(&record.id).await.unwrap();
+        assert_eq!(
+            token.authorization_header().unwrap(),
+            "Bearer fake-access-2"
+        );
+        let stored: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                fixture
+                    .root
+                    .path()
+                    .join(format!("state/auth/chatgpt/{}.json", record.id)),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let expected_scope = if omit_scope {
+            "original_scope"
+        } else {
+            "replacement_scope"
+        };
+        let expected_refresh = if omit_refresh {
+            "fake-refresh-1"
+        } else {
+            "fake-refresh-2"
+        };
+        assert_eq!(
+            stored["tokens"]["scopes"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap(),
+            expected_scope
+        );
+        assert_eq!(stored["tokens"]["refresh"], expected_refresh);
+        assert_eq!(stored["tokens"]["received_at"], NOW + 3600);
+        assert_eq!(stored["tokens"]["expires_in"], 3600);
+        drop(token);
+        drop(fixture.auth);
+        let clock = fixture.now.clone();
+        let reopened = ChatgptAuth::for_test(
+            &fixture.root.path().join("state"),
+            fixture.fake.origin.clone(),
+            Arc::new(move || clock.load(Ordering::SeqCst)),
+        );
+        fixture.now.store(NOW + 7200, Ordering::SeqCst);
+        assert_eq!(
+            reopened
+                .access_token(&record.id)
+                .await
+                .unwrap()
+                .authorization_header()
+                .unwrap(),
+            "Bearer fake-access-3"
+        );
+        assert_eq!(
+            fixture.fake.state.lock().unwrap().grants[2]["refresh_token"],
+            expected_refresh
+        );
+    }
 }

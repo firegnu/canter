@@ -9,20 +9,18 @@ impl ChatgptAuth {
             let _publish = entry.publish.lock().unwrap();
             entry.blocked.store(true, Ordering::SeqCst);
             entry.epoch.fetch_add(1, Ordering::SeqCst);
+            self.inner.store.begin_logout(record_id, self.host_id())?;
         }
         let auth = self.clone();
         tokio::spawn(async move {
             let mut record = entry.record.lock().await;
-            let remote_revoked = match record
-                .tokens
-                .as_ref()
-                .and_then(|tokens| tokens.refresh.as_ref())
-            {
+            record.sign_out();
+            auth.inner.store.save_record(&record, auth.host_id())?;
+            let remote_revoked = match &record.pending_revocation {
                 Some(token) => auth.inner.http.revoke(token, &record.info.client_id).await,
                 None => false,
             };
-            record.tokens = None;
-            record.info.status = RecordStatus::SignedOut;
+            record.pending_revocation = None;
             auth.inner.store.save_record(&record, auth.host_id())?;
             Ok(LogoutResult { remote_revoked })
         })
@@ -114,12 +112,15 @@ impl ChatgptAuth {
                 let fresh = self
                     .inner
                     .http
-                    .tokens(&[
-                        ("grant_type", "refresh_token"),
-                        ("client_id", &record.info.client_id),
-                        ("refresh_token", &refresh.0),
-                        ("resource", http::RESOURCE),
-                    ])
+                    .tokens(
+                        &[
+                            ("grant_type", "refresh_token"),
+                            ("client_id", &record.info.client_id),
+                            ("refresh_token", &refresh.0),
+                            ("resource", http::RESOURCE),
+                        ],
+                        Some(&tokens),
+                    )
                     .await;
                 let mut fresh = match fresh {
                     Ok(tokens) => tokens,
@@ -130,10 +131,6 @@ impl ChatgptAuth {
                         return Err(error);
                     }
                 };
-                // Rotation is mandatory for a successful refresh response.
-                if fresh.refresh.is_none() {
-                    return Err(ErrorKind::InvalidResponse.into());
-                }
                 let identity_result = if let Some(id) = &fresh.id {
                     self.inner
                         .http
@@ -150,14 +147,44 @@ impl ChatgptAuth {
                     fresh.id = tokens.id.clone();
                     Ok(())
                 };
+                let identity_result = match identity_result {
+                    Err(error) if error.kind == ErrorKind::Network => {
+                        // Rotation already succeeded. Keep the last verified ID
+                        // token until a later refresh can validate its replacement.
+                        fresh.id = tokens.id.clone();
+                        Ok(())
+                    }
+                    result => result,
+                };
+                if let Err(error) = identity_result {
+                    {
+                        let _publish = entry.publish.lock().unwrap();
+                        if entry.blocked.load(Ordering::SeqCst) {
+                            record.tokens = Some(fresh);
+                            record.sign_out();
+                            self.inner.store.save_record(&record, self.host_id())?;
+                            return Err(ErrorKind::NotLoggedIn.into());
+                        }
+                    }
+                    if let Some(refresh) = &fresh.refresh {
+                        let _ = self
+                            .inner
+                            .http
+                            .revoke(refresh, &record.info.client_id)
+                            .await;
+                    }
+                    self.invalidate(&entry, &mut record)?;
+                    return Err(error);
+                }
                 let _publish = entry.publish.lock().unwrap();
                 if entry.blocked.load(Ordering::SeqCst) {
-                    // Only the waiting logout can use this rotated token, to revoke
-                    // the newest session. It is never published to disk or callers.
+                    // Persist only the newest refresh token for the waiting
+                    // logout. Access/ID tokens never become usable again.
                     record.tokens = Some(fresh);
+                    record.sign_out();
+                    self.inner.store.save_record(&record, self.host_id())?;
                     return Err(ErrorKind::NotLoggedIn.into());
                 }
-                identity_result?;
                 let mut replacement = record.clone();
                 replacement.info.status = fresh.status();
                 replacement.tokens = Some(fresh);
@@ -197,7 +224,12 @@ impl ChatgptAuth {
         let _publish = entry.publish.lock().unwrap();
         let mut replacement = record.clone();
         replacement.tokens = None;
-        replacement.info.status = RecordStatus::NeedsLogin;
+        replacement.pending_revocation = None;
+        replacement.info.status = if entry.blocked.load(Ordering::SeqCst) {
+            RecordStatus::SignedOut
+        } else {
+            RecordStatus::NeedsLogin
+        };
         let saved = self.inner.store.save_record(&replacement, self.host_id());
         // Even a storage failure must stop use of a known-invalid token set.
         *record = replacement;

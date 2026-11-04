@@ -41,6 +41,8 @@ pub struct Settings {
     pub client_id: String,
     pub subject: String,
     pub scopes: String,
+    pub omit_refresh_scope: bool,
+    pub omit_refresh_token: bool,
     pub earliest: Option<Value>,
     pub authorize: Vec<Params>,
     pub grants: Vec<Params>,
@@ -48,11 +50,17 @@ pub struct Settings {
     pub callback_override: Params,
     pub omit_client: bool,
     pub bad_claim: Option<&'static str>,
+    pub future_iat: u64,
+    pub future_nbf: Option<u64>,
     pub error: Option<(u16, String)>,
     pub revoke_status: u16,
     pub discovery_override: Option<Value>,
+    pub discovery_status: u16,
+    pub jwks_status: u16,
     pub refresh_started: Arc<tokio::sync::Notify>,
     pub refresh_release: Option<Arc<tokio::sync::Notify>>,
+    pub revoke_started: Arc<tokio::sync::Notify>,
+    pub revoke_release: Option<Arc<tokio::sync::Notify>>,
 }
 impl Fake {
     pub async fn stop(&self) {
@@ -86,6 +94,8 @@ impl Fake {
             client_id: "oaiapp_test-one".into(),
             subject: "test-subject".into(),
             scopes: SCOPES.into(),
+            omit_refresh_scope: false,
+            omit_refresh_token: false,
             earliest: None,
             authorize: Vec::new(),
             grants: Vec::new(),
@@ -93,11 +103,17 @@ impl Fake {
             callback_override: Params::new(),
             omit_client: false,
             bad_claim: None,
+            future_iat: 0,
+            future_nbf: None,
             error: None,
             revoke_status: 200,
             discovery_override: None,
+            discovery_status: 200,
+            jwks_status: 200,
             refresh_started: Arc::new(tokio::sync::Notify::new()),
             refresh_release: None,
+            revoke_started: Arc::new(tokio::sync::Notify::new()),
+            revoke_release: None,
         }));
         let app = Router::new()
             .route("/api/accounts/authorize", get(authorize))
@@ -149,12 +165,18 @@ async fn authorize(
     state.authorize.push(query);
     Redirect::temporary(url.as_str())
 }
-async fn discovery(State(state): State<Arc<Mutex<Settings>>>) -> Json<Value> {
+async fn discovery(State(state): State<Arc<Mutex<Settings>>>) -> axum::response::Response {
     let state = state.lock().unwrap();
-    Json(state.discovery_override.clone().unwrap_or_else(|| json!({"issuer":state.origin,"jwks_uri":format!("{}/.well-known/jwks.json",state.origin),"revocation_endpoint":format!("{}/revoke",state.origin)})))
+    (axum::http::StatusCode::from_u16(state.discovery_status).unwrap(),
+        Json(state.discovery_override.clone().unwrap_or_else(|| json!({"issuer":state.origin,"jwks_uri":format!("{}/.well-known/jwks.json",state.origin),"revocation_endpoint":format!("{}/revoke",state.origin)})))).into_response()
 }
-async fn serve_jwks(State(state): State<Arc<Mutex<Settings>>>) -> Json<Value> {
-    Json(state.lock().unwrap().jwks.clone())
+async fn serve_jwks(State(state): State<Arc<Mutex<Settings>>>) -> axum::response::Response {
+    let state = state.lock().unwrap();
+    (
+        axum::http::StatusCode::from_u16(state.jwks_status).unwrap(),
+        Json(state.jwks.clone()),
+    )
+        .into_response()
 }
 async fn token(
     State(state): State<Arc<Mutex<Settings>>>,
@@ -175,7 +197,8 @@ async fn token(
     }
     let state = state.lock().unwrap();
     if let Some((status, code)) = &state.error {
-        let mut response = (axum::http::StatusCode::from_u16(*status).unwrap(), Json(json!({"error":code,"error_description":format!("fake-access-1 fake-refresh-1 {CODE}")}))).into_response();
+        let login_state = &state.authorize.last().unwrap()["state"];
+        let mut response = (axum::http::StatusCode::from_u16(*status).unwrap(), Json(json!({"error":code,"error_description":format!("fake-access-1 fake-refresh-1 {CODE} {login_state}")}))).into_response();
         if *status == 302 {
             response.headers_mut().insert(
                 "location",
@@ -189,6 +212,10 @@ async fn token(
     let attempt = state.authorize.last().unwrap();
     let now = state.now.load(Ordering::SeqCst);
     let mut claims = json!({"iss":state.origin,"aud":form["client_id"],"sub":state.subject,"exp":now+3600,"iat":now,"nonce":attempt["nonce"],"email":"same@example.test"});
+    claims["iat"] = json!(now + state.future_iat);
+    if let Some(offset) = state.future_nbf {
+        claims["nbf"] = json!(now + offset);
+    }
     match state.bad_claim {
         Some("issuer") => claims["iss"] = json!("https://wrong.example.test"),
         Some("audience") => claims["aud"] = json!("other-client"),
@@ -209,6 +236,14 @@ async fn token(
     }
     let number = state.grants.len();
     let mut result = json!({"access_token":format!("fake-access-{number}"),"refresh_token":format!("fake-refresh-{number}"),"id_token":id,"token_type":"Bearer","expires_in":3600,"scope":state.scopes});
+    if form["grant_type"] == "refresh_token" {
+        if state.omit_refresh_scope {
+            result.as_object_mut().unwrap().remove("scope");
+        }
+        if state.omit_refresh_token {
+            result.as_object_mut().unwrap().remove("refresh_token");
+        }
+    }
     if let Some(earliest) = &state.earliest {
         result["earliest_refresh_at"] = earliest.clone();
     }
@@ -218,8 +253,16 @@ async fn revoke(
     State(state): State<Arc<Mutex<Settings>>>,
     Form(form): Form<Params>,
 ) -> axum::response::Response {
-    let mut state = state.lock().unwrap();
-    state.revocations.push(form);
+    let pause = {
+        let mut state = state.lock().unwrap();
+        state.revocations.push(form);
+        state.revoke_started.notify_one();
+        state.revoke_release.clone()
+    };
+    if let Some(pause) = pause {
+        pause.notified().await;
+    }
+    let state = state.lock().unwrap();
     (
         axum::http::StatusCode::from_u16(state.revoke_status).unwrap(),
         "",
