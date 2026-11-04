@@ -10,7 +10,23 @@
 
 ## 要做的
 
+照 `docs/调研/P2-33-第二个模型方案.md` 做。11-04 用户答了 §7 四个问题，都选推荐（记进 DESIGN 第 6 条）：只支持本机；登录时同意后关掉终端接着做；空闲时能和别家同会话切；做 apply_patch。
+
+按方案 §8 分 7 件，一件做完再派下一件（第 1 件多提供方已由 P2-200、P2-201 做掉）：
+
+1. P2-202 GPT 登录凭证（§8 第 2 件）
+2. P2-203 GPT 登录命令和账号状态（第 3 件）
+3. P2-204 Responses 接口（第 4 件）
+4. P2-205 apply_patch（第 5 件）
+5. P2-206 GPT 模型目录、思考档位和套餐用量（第 6 件）
+6. P2-207 GPT 和别家同会话切换（第 7 件）
+7. P2-208 GPT 接入收口和现场验证（第 8 件，唯一要用户在场真调的一件）
+
+11-04 主控重读官方开发文档（Quickstart、Registration and sign-in、Preview limitations），和 10-26 方案一致：开源流程用 `dynamic_agent_client` 换 client id，PKCE S256，回调只用 `127.0.0.1`，凭证本机 0600，`store: false`、不带 `previous_response_id`，工具要放 namespace 或 `additional_tools`。条款原文页（openai.com/policies）自动读取被拦（403），P2-208 收口前由用户在浏览器里看或再核对一次。
+
 ## 怎么算做完
+
+7 件都合并，P2-208 现场验证通过。
 
 ## 主控记下的（10-27）
 
