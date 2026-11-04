@@ -95,3 +95,8 @@
 - 重跑 `canter-model`、`canter-server`：375 过、4 跳过，和开发说的一致。合并后 main 全套 1732 过、49 跳过，doc、clippy、fmt、diff check 通过。
 - 还没真调；等用户装新版、在场再真调 2 次。
 - 结果：一次过
+
+## 用户真调（11-04 合并以后）
+
+- 用户装好后在 canter-test-rust 用 `chatgpt/gpt-6.1-sol` 真调 3 轮，都正常：自我介绍（↑8.71k ↓39）；读 README.md（一次工具调用后接着回答，↑17.9k ↓219）；读 TODO.md（一次工具调用，列出 12 项并画表）。P2-204 的请求格式、流解析、同一轮工具回传在真服务器上走通。
+- 留意：前两轮都显示 `0% cached`（读 README 那轮的第二次请求带着第一次的前缀也是 0）。canter 不发 `prompt_cache_key`；OpenAI Prompt caching 文档说缓存默认开、GPT-5.6 起不需要这个键。原因还没查清（订阅线路不报 `cached_tokens`、连续请求太快缓存还没写好、或前缀不稳），先看用户接着用时会不会命中。
