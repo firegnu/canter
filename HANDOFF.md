@@ -159,6 +159,7 @@
   - 记录按随机 UUID 排序，新登录一个账号可能让已有账号的序号整体变掉，照记住的序号 `use`、`logout` 会选到别的账号。改法：按加入顺序排（`chatgpt_auth/mod.rs`、`crates/canter-server/src/account.rs`）。
   - 可以不改：`login/start` 返回前（有待作废令牌、连不上 OpenAI 时最长约一分钟）按 Ctrl+C 没反应；错误提示直接打内部名字，比如 `ChatGPT credentials: Network (HTTP None, code None)`；`status` 的列没对齐。
 - Responses 接口（P2-204，11-04 合并，还没真调）交叉审查「可以不改」、没做的：`"api": "responses"` 这一家写了 `headers` 不报错，直接忽略（README 写了不用自定义请求头；`base_url`、`api_key` 是报配置错）。replay 白名单丢掉 message、function_call 项上的 `encrypted_content`，留给 P2-210 看。
+- GPT 缓存（P2-212 查出、没修的显示问题）：每轮后的「下一句建议」请求会覆盖状态栏的 `last` 缓存率，并计入会话累计；服务端没报 `cached_tokens` 时 `runner.rs` 的 `unwrap_or(0)` 把「不知道」显示成 0%。
 
 - 协议 README「审查轮」一节还写着 `/v1/info` 的 `features`「本版返回 `["review"]`」，已过时（现在有十几项）；P2-196 开发看到、按范围没动。
 
