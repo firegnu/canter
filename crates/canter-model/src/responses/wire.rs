@@ -55,6 +55,9 @@ pub(super) fn request_body(request: &Request) -> Value {
         "model":request.model, "input":input, "store":false, "stream":true,
         "reasoning":{"summary":"auto"},
     });
+    if let Some(session_id) = request.session_id.as_deref().filter(|id| !id.is_empty()) {
+        body["prompt_cache_key"] = json!(session_id.chars().take(64).collect::<String>());
+    }
     let tools: Vec<_> = [
         ("canter", "Tools in the canter namespace."),
         ("mcp", "Tools in the mcp namespace."),
