@@ -151,3 +151,11 @@
 - 合并后在 main 跑全套：`cargo nextest run --all-targets --no-fail-fast` 1729 过、49 跳过；`cargo test --doc --workspace` 通过；clippy、fmt、diff check 通过。
 - 还没真调：请求格式要等合并以后用户在场的 2 次真调确认。
 - 结果：返工 1 次
+
+## 用户真调（11-04 合并以后）
+
+- 用户 `canter upgrade` 装 `88bf2d8`、`canter auth login chatgpt` 登录，在 canter-test-rust 用 `chatgpt/gpt-6.1-sol`（配置里窗口写 272000）真调 2 次，都失败：
+  - 普通问答：文字正常流出、用量记到（↑8.7k ↓42），最后报 `Model request failed: unexpected error`。
+  - 读 README.md：没出文字（↓19，像是工具调用），同样报 `unexpected error`，工具没执行。
+- 服务端日志没有细节（错误只留种类，不留原文）。看代码：用量来自 `response.completed`，之后 `sse.rs` 拿 `response.output` 和流里 `output_item.added/done` 记下的条目按位置核对 id、类型，对不上就是 `ErrorKind::Other`。Codex `rust-v0.163.0` `codex-rs/codex-api/src/sse/responses.rs` 只用 `output_item.done` 拼结果，不读 `response.completed` 的 output（它的测试里 output 是 `[]`）。主控推测订阅这条线路的 `response.completed` 不带完整 output，没有原文证实。
+- 真调次数：2 次（`observed` 已为真，没有自动重试）。
