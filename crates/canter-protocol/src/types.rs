@@ -39,19 +39,25 @@ pub enum SessionCloseReason {
 pub enum ReasoningEffort {
     None,
     Low,
+    Medium,
     #[default]
     High,
+    Xhigh,
     Max,
     #[serde(other)]
     Unknown,
 }
 
 impl ReasoningEffort {
+    pub const LEGACY: [Self; 4] = [Self::None, Self::Low, Self::High, Self::Max];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Low => "low",
+            Self::Medium => "medium",
             Self::High => "high",
+            Self::Xhigh => "xhigh",
             Self::Max => "max",
             Self::Unknown => "unknown",
         }

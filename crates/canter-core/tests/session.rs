@@ -47,6 +47,82 @@ impl Model for ScriptModel {
 }
 
 #[tokio::test]
+async fn configured_reasoning_reaches_requests_and_telemetry_without_remapping() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(temp.path().join("sessions")).unwrap());
+    let efforts = [
+        ReasoningEffort::None,
+        ReasoningEffort::Medium,
+        ReasoningEffort::Xhigh,
+    ];
+    let model = ScriptModel::new(
+        efforts
+            .iter()
+            .map(|_| vec![ModelEvent::Finished(FinishReason::Stop)])
+            .collect(),
+    );
+    let mut initial = settings(temp.path());
+    initial.model = "configured".into();
+    initial.reasoning_effort = ReasoningEffort::Medium;
+    let (session, _) = Session::create(
+        store,
+        "efforts".into(),
+        initial,
+        RuntimeContext {
+            environment: BTreeMap::from([
+                ("HOME".into(), temp.path().to_string_lossy().into_owned()),
+                (
+                    "CANTER_HOME".into(),
+                    temp.path().join("state").to_string_lossy().into_owned(),
+                ),
+            ]),
+            ..Default::default()
+        },
+        model.clone(),
+        CoreOptions {
+            model_reasoning: BTreeMap::from([(
+                "configured".into(),
+                canter_core::ModelReasoning {
+                    supported: efforts.to_vec(),
+                    default: ReasoningEffort::Medium,
+                },
+            )]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    for effort in efforts {
+        session
+            .update(SessionUpdateParams {
+                reasoning_effort: Some(effort),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        session.input(input("Think")).await.unwrap();
+        let seen = finished(&mut events).await;
+        let request = model.requests.lock().unwrap().last().unwrap().clone();
+        assert_eq!(
+            request.options.reasoning_effort.as_deref(),
+            Some(effort.as_str())
+        );
+        let recorded = seen
+            .iter()
+            .find_map(|event| match &event.payload {
+                EventPayload::TelemetryModelRequest { record } => {
+                    Some(record.settings.reasoning_effort)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(recorded, effort);
+    }
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn private_replay_is_saved_and_sent_only_within_the_current_turn() {
     let temp = tempfile::tempdir().unwrap();
     let replay: canter_model::Replay = serde_json::from_value(serde_json::json!({

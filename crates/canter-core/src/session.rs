@@ -1094,15 +1094,15 @@ impl Session {
         parent: Option<SessionParent>,
     ) -> Result<(Self, SessionCreateResponse), CoreError> {
         validate_options(&options)?;
-        if settings.model.trim().is_empty()
-            || settings.approval_policy == PermissionMode::Unknown
-            || settings.reasoning_effort == ReasoningEffort::Unknown
-        {
+        if settings.model.trim().is_empty() || settings.approval_policy == PermissionMode::Unknown {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 "invalid session settings",
             ));
         }
+        options
+            .reasoning(&settings.model)
+            .validate(&settings.model, settings.reasoning_effort)?;
         if parent.is_some() {
             runtime.memory_home = None;
         }
@@ -1742,7 +1742,6 @@ impl Session {
             });
         }
         if params.approval_policy == Some(PermissionMode::Unknown)
-            || params.reasoning_effort == Some(ReasoningEffort::Unknown)
             || params
                 .model
                 .as_ref()
@@ -1754,6 +1753,31 @@ impl Session {
             ));
         }
         let mut settings = state.journal.snapshot.settings.clone();
+        let previous_effort = settings.reasoning_effort;
+        if let Some(model) = params.model {
+            settings.model = model;
+        }
+        let model_changed = settings.model != state.journal.snapshot.settings.model;
+        let reasoning = self.shared.next_options().reasoning(&settings.model);
+        let reset_effort = params.reasoning_effort.is_none()
+            && model_changed
+            && !reasoning.supported.contains(&previous_effort);
+        if let Some(effort) = params.reasoning_effort {
+            reasoning.validate(&settings.model, effort)?;
+            settings.reasoning_effort = effort;
+        } else if reset_effort {
+            settings.reasoning_effort = reasoning.default;
+        } else if previous_effort == ReasoningEffort::Unknown {
+            settings.reasoning_effort = ReasoningEffort::High;
+        }
+        let effort_notice = reset_effort.then(|| EventPayload::Warning {
+            message: format!(
+                "Thinking effort changed from {} to {} for {}.",
+                previous_effort.as_str(),
+                settings.reasoning_effort.as_str(),
+                settings.model
+            ),
+        });
         settings.additional_directories = crate::directories::append(
             settings.cwd.clone(),
             state.directory_home.clone(),
@@ -1769,21 +1793,12 @@ impl Session {
         if let Some(name) = params.name {
             settings.name = (!name.is_empty()).then_some(name);
         }
-        if let Some(model) = params.model {
-            settings.model = model;
-        }
         if let Some(policy) = params.approval_policy {
             settings.approval_policy = policy;
             if settings.plan_mode && params.plan_mode.is_none() {
                 settings.pre_plan_approval_policy = Some(policy);
             }
         }
-        if let Some(effort) = params.reasoning_effort {
-            settings.reasoning_effort = effort;
-        } else if settings.reasoning_effort == ReasoningEffort::Unknown {
-            settings.reasoning_effort = ReasoningEffort::High;
-        }
-        let model_changed = settings.model != state.journal.snapshot.settings.model;
         let events = state
             .journal
             .append(vec![EventPayload::SessionUpdated { settings }])
@@ -1810,6 +1825,9 @@ impl Session {
                     .append(vec![EventPayload::SessionUsage { token_usage }])
                     .await?;
             }
+        }
+        if let Some(notice) = effort_notice {
+            state.journal.append(vec![notice]).await?;
         }
         self.shared.runtime().tools.configure_shell(
             state.approval_policy(),

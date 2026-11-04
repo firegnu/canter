@@ -544,8 +544,7 @@ pub(crate) fn request(
         options: RequestOptions {
             max_retries: None,
             thinking: Some(effort != canter_protocol::ReasoningEffort::None),
-            reasoning_effort: (effort != canter_protocol::ReasoningEffort::None)
-                .then(|| effort.as_str().to_owned()),
+            reasoning_effort: Some(effort.as_str().to_owned()),
             max_output_tokens: Some(max_output_tokens),
         },
     }

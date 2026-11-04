@@ -9,6 +9,7 @@ use std::{fs, process::Stdio};
 use tokio::sync::{mpsc, oneshot};
 mod hooks;
 mod providers;
+mod reasoning;
 mod yolo;
 
 #[tokio::test]

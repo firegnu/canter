@@ -430,7 +430,7 @@ const COMMANDS: [(&str, &str); 36] = [
     ("/statusline", "Choose and order what the status line shows"),
     ("/stop", "Stop all background commands in this session"),
     ("/theme", "Choose the code colour theme"),
-    ("/think", "Change thinking effort (none, low, high, max)"),
+    ("/think", "Change thinking effort for the current model"),
     ("/usage", "Show this session's token usage and cost"),
 ];
 

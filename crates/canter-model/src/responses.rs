@@ -383,7 +383,7 @@ mod tests {
             json!({
                 "model":"test-model", "store":false, "stream":true,
                 "prompt_cache_key":"test-session",
-                "reasoning":{"summary":"auto"},
+                "reasoning":{"summary":"auto","effort":"max"},
                 "input":[
                     {"role":"developer","content":[{"type":"input_text","text":prompt}]},
                     {"role":"user","content":[{"type":"input_text","text":"look"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}
@@ -394,6 +394,37 @@ mod tests {
                 ]
             })
         );
+    }
+
+    #[tokio::test]
+    async fn request_sends_each_configured_reasoning_effort() {
+        use crate::test_support::{Reply, Server};
+        for effort in ["none", "low", "medium", "high", "xhigh", "max"] {
+            let server = Server::start(vec![Reply::sse(sse(vec![json!({
+                "type":"response.completed","response":{"status":"completed","output":[]}
+            })]))])
+            .await;
+            let model = Responses::with_endpoint(
+                Arc::new(Auth),
+                format!("{}responses", server.base_url).parse().unwrap(),
+            )
+            .unwrap();
+            let request = Request {
+                options: crate::RequestOptions {
+                    reasoning_effort: Some(effort.into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let events: Vec<_> = model
+                .stream(request, CancellationToken::new())
+                .collect()
+                .await;
+            assert!(events.iter().all(Result::is_ok));
+            let body = server.requests.lock().unwrap()[0].clone();
+            server.stop().await;
+            assert_eq!(body["reasoning"], json!({"summary":"auto","effort":effort}));
+        }
     }
 
     #[tokio::test]

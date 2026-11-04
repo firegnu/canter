@@ -144,6 +144,68 @@ async fn file_exists(path: &std::path::Path) {
 }
 
 #[tokio::test]
+async fn configured_efforts_reach_responses_through_the_session_and_router() {
+    let root = tempfile::tempdir_in("/tmp").unwrap();
+    let home = root.path().join("state");
+    let fake = Fake::new().await;
+    let (auth, _) = login(&home, &fake, true).await;
+    let mut inference = Inference::new(vec![completed(json!([])); 3]).await;
+    let value = json!({
+        "model":"configured/solver","prompt_suggestions":false,"sandbox":false,
+        "providers":{"configured":{"api":"responses","auth":"chatgpt","models":{
+            "solver":{"context_window":200000,"supported_reasoning_efforts":["medium","high","xhigh"],"default_reasoning_effort":"medium"}
+        }}}
+    });
+    // The route name is arbitrary: reasoning capabilities must come from config.
+    std::fs::write(home.join("config.json"), value.to_string()).unwrap();
+    let config = Config::load(&home).unwrap();
+    let model = config
+        .model_client(Some(ModelAuth::for_test(
+            home.clone(),
+            auth,
+            inference.endpoint.clone(),
+        )))
+        .unwrap();
+    let store = Arc::new(canter_store::Store::new(home.join("sessions")).unwrap());
+    let settings: SessionSettings = serde_json::from_value(json!({"cwd":root.path(),"model":"configured/solver","reasoningEffort":"medium","approvalPolicy":"allowAll"})).unwrap();
+    let (session, _) = Session::create(
+        store,
+        "efforts".into(),
+        settings,
+        RuntimeContext {
+            environment: BTreeMap::from([
+                (
+                    "HOME".into(),
+                    root.path().join("home").to_string_lossy().into_owned(),
+                ),
+                ("CANTER_HOME".into(), home.to_string_lossy().into_owned()),
+            ]),
+            ..Default::default()
+        },
+        model,
+        config.options(),
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    for effort in ["medium", "high", "xhigh"] {
+        session
+            .update(serde_json::from_value(json!({"reasoningEffort":effort})).unwrap())
+            .await
+            .unwrap();
+        session.input(input()).await.unwrap();
+        let (body, _) = inference.next().await;
+        assert_eq!(body["model"], "solver");
+        assert_eq!(body["reasoning"], json!({"summary":"auto","effort":effort}));
+        let seen = finished(&mut events).await;
+        assert!(
+            matches!(&seen.last().unwrap().payload, EventPayload::TurnCompleted { turn } if turn.status == TurnStatus::Completed)
+        );
+    }
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn two_tool_loops_pause_at_last_disconnect_replay_privately_and_resume() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::Builder::new()

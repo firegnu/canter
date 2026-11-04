@@ -67,6 +67,46 @@ pub struct ModelLimits {
 }
 
 #[derive(Clone, Debug)]
+pub struct ModelReasoning {
+    pub supported: Vec<canter_protocol::ReasoningEffort>,
+    pub default: canter_protocol::ReasoningEffort,
+}
+
+impl Default for ModelReasoning {
+    fn default() -> Self {
+        Self {
+            supported: canter_protocol::ReasoningEffort::LEGACY.to_vec(),
+            default: canter_protocol::ReasoningEffort::High,
+        }
+    }
+}
+
+impl ModelReasoning {
+    pub(crate) fn validate(
+        &self,
+        model: &str,
+        effort: canter_protocol::ReasoningEffort,
+    ) -> Result<(), CoreError> {
+        if effort != canter_protocol::ReasoningEffort::Unknown && self.supported.contains(&effort) {
+            return Ok(());
+        }
+        Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            &format!(
+                "Thinking effort '{}' is not supported by model '{}'. Supported efforts: {}.",
+                effort.as_str(),
+                model,
+                self.supported
+                    .iter()
+                    .map(|effort| effort.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ))
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct CoreOptions {
     /// Embedded callers opt in; config.json enables suggestions by default.
     pub prompt_suggestions: bool,
@@ -90,6 +130,7 @@ pub struct CoreOptions {
     pub image_models: Vec<String>,
     /// Per-model limits; names absent here retain the legacy global limits.
     pub model_limits: std::collections::BTreeMap<String, ModelLimits>,
+    pub model_reasoning: BTreeMap<String, ModelReasoning>,
     pub prices: usage::PriceBook,
     /// Clock at the model-request boundary; replaceable for deterministic replay tests.
     pub request_time: fn() -> i64,
@@ -120,6 +161,7 @@ impl Default for CoreOptions {
             auto_compact_tokens: None,
             image_models: vec!["deepseek-flash".into()],
             model_limits: Default::default(),
+            model_reasoning: Default::default(),
             prices: usage::builtin_prices(),
             request_time: journal::now,
             web_fetch_timeout: std::time::Duration::from_secs(30),
@@ -131,6 +173,10 @@ impl Default for CoreOptions {
 }
 
 impl CoreOptions {
+    pub fn reasoning(&self, model: &str) -> ModelReasoning {
+        self.model_reasoning.get(model).cloned().unwrap_or_default()
+    }
+
     pub fn limits(&self, model: &str) -> ModelLimits {
         self.model_limits
             .get(model)

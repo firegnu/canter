@@ -281,8 +281,11 @@ PATCH 的 `name: ""` 清空会话名（快照中为 null），用于手动清名
 创建请求不实现 Debug，调用方也不得记录其请求体。
 `reasoningEffort` 选用 Codex v2 创建/恢复/派生会话回复中的名字；Codex 的设置对象和
 改设置参数用 `effort`。canter 统一使用明确表示推理强度的 `reasoningEffort`，
-取值为 DeepSeek 的 `none`、`low`、`high`、`max`。
-创建时省略/null 默认 `high`；旧设置中缺少该字段按 `high` 读取。PATCH 省略/null 不改，
+取值为 `none`、`low`、`medium`、`high`、`xhigh`、`max`，旧客户端把新值读作 Unknown。
+`GET /v1/models` 可选的 `supportedReasoningEfforts` 和 `defaultReasoningEffort` 提供逐模型的支持列表和默认值；
+字段缺省时仍为 `none/low/high/max` 和 `high`。创建时省略/null 使用模型默认；旧设置中缺少该字段仍按 `high` 读取。
+服务端拒绝明确指定但当前模型不支持的档位；PATCH 换模型时若未指定档位且原档位不受目标支持，
+改用目标默认，通过 `session.updated` 和既有 warning 事件提示。其余 PATCH 省略/null 不改，
 修改后由下一次模型请求使用；摘要请求仍固定关思考。新字段在 TypeScript 中可选。
 例外：旧存盘的未知档位在运行和终端显示时按 `high`，PATCH 没带档位时也写成 `high`，
 不把解码兜底值 `unknown` 写回；此规则不改变权限模式的 Unknown 处理。

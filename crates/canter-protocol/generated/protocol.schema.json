@@ -4285,6 +4285,16 @@
             "null"
           ]
         },
+        "defaultReasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "displayName": {
           "type": "string"
         },
@@ -4309,6 +4319,15 @@
         "provider": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "supportedReasoningEfforts": {
+          "items": {
+            "$ref": "#/$defs/ReasoningEffort"
+          },
+          "type": [
+            "array",
             "null"
           ]
         }
@@ -4610,7 +4629,9 @@
       "enum": [
         "none",
         "low",
+        "medium",
         "high",
+        "xhigh",
         "max",
         "unknown"
       ],
