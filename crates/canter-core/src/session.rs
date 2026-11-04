@@ -843,8 +843,34 @@ impl Session {
         model: Arc<dyn Model>,
         options: CoreOptions,
     ) -> Result<(Self, SessionReadResponse), CoreError> {
-        owned(Self::open_inner(store, id, runtime, model, options, false)).await
+        owned(async move {
+            let (session, response, reasoning_warning) =
+                Self::open_inner(store, id, runtime, model, options, false).await?;
+            if let Some(message) = reasoning_warning {
+                session.opening_warning(message).await?;
+            }
+            Ok((session, response))
+        })
+        .await
     }
+
+    /// Defer the reasoning warning until the caller has applied this opening's
+    /// settings and taken its final snapshot. Other opening warnings stay here.
+    pub async fn open_for_resume(
+        store: Arc<Store>,
+        id: String,
+        runtime: RuntimeContext,
+        model: Arc<dyn Model>,
+        options: CoreOptions,
+    ) -> Result<(Self, Option<String>), CoreError> {
+        owned(async move {
+            let (session, _, reasoning_warning) =
+                Self::open_inner(store, id, runtime, model, options, false).await?;
+            Ok((session, reasoning_warning))
+        })
+        .await
+    }
+
     pub(crate) async fn open_inner(
         store: Arc<Store>,
         id: String,
@@ -852,7 +878,7 @@ impl Session {
         model: Arc<dyn Model>,
         mut options: CoreOptions,
         fresh_fork: bool,
-    ) -> Result<(Self, SessionReadResponse), CoreError> {
+    ) -> Result<(Self, SessionReadResponse, Option<String>), CoreError> {
         validate_options(&options)?;
         let owned_store = store.clone();
         let (writer, entries, events) = tokio::task::spawn_blocking(move || {
@@ -1064,15 +1090,12 @@ impl Session {
         };
         let session = Self::from_state(state, tools, model, options, runtime);
         // Keep this warning after the opening client's snapshot cursor.
-        if let Some(message) = reasoning_warning {
-            session.opening_warning(message).await?;
-        }
         session.scratch_warning().await?;
         session.memory_warning().await?;
         session
             .session_start_hook(if fresh_fork { "startup" } else { "resume" })
             .await;
-        Ok((session, response))
+        Ok((session, response, reasoning_warning))
     }
 
     pub async fn create(

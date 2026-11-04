@@ -259,7 +259,16 @@ impl ForkSnapshot {
             })
             .await
             .map_err(|_| CoreError::internal())??;
-            match Session::open_inner(store, id, runtime, model, options, true).await {
+            let opened = async {
+                let (session, response, reasoning_warning) =
+                    Session::open_inner(store, id, runtime, model, options, true).await?;
+                if let Some(message) = reasoning_warning {
+                    session.opening_warning(message).await?;
+                }
+                Ok((session, response))
+            }
+            .await;
+            match opened {
                 Ok((session, response)) => Ok((
                     session,
                     SessionCreateResponse {
