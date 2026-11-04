@@ -31,6 +31,7 @@ pub trait ConfigurationSource: Send + Sync {
 pub(crate) struct Runtime {
     pub revision: Option<u64>,
     pub options: CoreOptions,
+    pub limits: crate::ModelLimits,
     pub model: Arc<dyn Model>,
     pub tools: Tools,
     pub context: RuntimeContext,
@@ -301,6 +302,9 @@ impl Shared {
         *self.runtime.write().unwrap() = Arc::new(Runtime {
             revision: config.revision,
             model: config.model,
+            limits: config
+                .options
+                .limits(&state.journal.snapshot.settings.model),
             options: config.options,
             tools,
             context,

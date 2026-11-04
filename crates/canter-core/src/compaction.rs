@@ -77,13 +77,13 @@ Use exactly these headings, in this order:"#;
 pub(crate) fn input_limit(shared: &Shared) -> u64 {
     let window = shared
         .runtime()
-        .options
+        .limits
         .context_window
         .saturating_sub(u64::from(shared.runtime().options.max_output_tokens))
         .saturating_sub(RESERVE);
     shared
         .runtime()
-        .options
+        .limits
         .auto_compact_tokens
         .map_or(window, |tokens| tokens.min(window))
 }
@@ -395,7 +395,7 @@ async fn summarize(
     });
     let mut prefix_request = (context::request_tokens(&prefix_request)
         .saturating_add(u64::from(shared.runtime().options.max_output_tokens))
-        <= shared.runtime().options.context_window)
+        <= shared.runtime().limits.context_window)
         .then_some(prefix_request);
     let mut transcript = String::new();
     let mut images = Vec::new();
@@ -514,7 +514,7 @@ async fn summarize(
             });
             let budget = shared
                 .runtime()
-                .options
+                .limits
                 .context_window
                 .saturating_sub(u64::from(output_limit))
                 .saturating_sub(RESERVE)
@@ -537,7 +537,7 @@ async fn summarize(
                     text: format!("{header}{}{FOOTER}", &remaining[..end]),
                 });
                 if context::request_tokens(&request) + u64::from(output_limit) + RESERVE
-                    <= shared.runtime().options.context_window
+                    <= shared.runtime().limits.context_window
                 {
                     break;
                 }

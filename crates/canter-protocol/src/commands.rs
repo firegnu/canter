@@ -317,6 +317,12 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub input_modalities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_window: Option<u64>,
 }
 
 /// GET /v1/sessions/{id}/skills. Frozen when the session is opened.

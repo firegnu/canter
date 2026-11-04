@@ -61,6 +61,12 @@ pub struct RuntimeContext {
 }
 
 #[derive(Clone, Debug)]
+pub struct ModelLimits {
+    pub context_window: u64,
+    pub auto_compact_tokens: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
 pub struct CoreOptions {
     /// Embedded callers opt in; config.json enables suggestions by default.
     pub prompt_suggestions: bool,
@@ -82,6 +88,8 @@ pub struct CoreOptions {
     /// window's own line, when lower than it.
     pub auto_compact_tokens: Option<u64>,
     pub image_models: Vec<String>,
+    /// Per-model limits; names absent here retain the legacy global limits.
+    pub model_limits: std::collections::BTreeMap<String, ModelLimits>,
     pub prices: usage::PriceBook,
     /// Clock at the model-request boundary; replaceable for deterministic replay tests.
     pub request_time: fn() -> i64,
@@ -111,6 +119,7 @@ impl Default for CoreOptions {
             max_output_tokens: 65_536,
             auto_compact_tokens: None,
             image_models: vec!["deepseek-flash".into()],
+            model_limits: Default::default(),
             prices: usage::builtin_prices(),
             request_time: journal::now,
             web_fetch_timeout: std::time::Duration::from_secs(30),
@@ -118,6 +127,18 @@ impl Default for CoreOptions {
             lsp_inline_wait: std::time::Duration::from_millis(500),
             lsp_delivery_window: std::time::Duration::from_secs(60),
         }
+    }
+}
+
+impl CoreOptions {
+    pub fn limits(&self, model: &str) -> ModelLimits {
+        self.model_limits
+            .get(model)
+            .cloned()
+            .unwrap_or(ModelLimits {
+                context_window: self.context_window,
+                auto_compact_tokens: self.auto_compact_tokens,
+            })
     }
 }
 
