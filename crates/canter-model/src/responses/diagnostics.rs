@@ -53,7 +53,7 @@ pub(super) struct Diagnostic {
 }
 
 impl Diagnostic {
-    pub(super) fn new(body: &Value) -> Self {
+    pub(super) fn new(body: &Value, session_header: bool) -> Self {
         let input: Vec<_> = body["input"]
             .as_array()
             .expect("request input array")
@@ -78,6 +78,7 @@ impl Diagnostic {
             "started_unix_ms":unix_ms(), "sent_unix_ms":"missing",
             "model_hash":fingerprint(&bytes(&body["model"])),
             "prompt_cache_key_present":body.get("prompt_cache_key").is_some(),
+            "session_header_present":session_header,
             "input_count":input.len(), "previous_request":"missing",
             "input_prefix_equal":"missing", "first_different_item":"missing",
             "tools_hash":fingerprint(&tools), "tools_equal":"missing",

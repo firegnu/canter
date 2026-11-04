@@ -81,6 +81,7 @@ async fn cache_diagnostics_cover_failures_retries_and_cancellation() {
         ]) {
             assert_eq!(row["error_kind"], kind);
             assert_eq!(row["prompt_cache_key_present"], false);
+            assert_eq!(row["session_header_present"], false);
         }
         assert_eq!(rows[0]["outcome"], "failure");
         assert_eq!(rows[1]["outcome"], "success");
@@ -157,6 +158,14 @@ async fn cache_diagnostics_cover_failures_retries_and_cancellation() {
         assert!(events.last().unwrap().is_err());
     }
     assert_eq!(server.requests.lock().unwrap().len(), 7);
+    assert!(
+        server
+            .headers
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|headers| !headers.contains_key("session-id"))
+    );
     server.stop().await;
 }
 
@@ -218,6 +227,7 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
                 assert_eq!(row["request"], index + 1);
                 assert_eq!(row["outcome"], "success");
                 assert_eq!(row["prompt_cache_key_present"], true);
+                assert_eq!(row["session_header_present"], true);
                 assert!(row["sent_unix_ms"].as_u64().unwrap() > 0);
                 assert!(row["elapsed_ms"].is_number());
                 assert_eq!(row["model_hash"], rows[0]["model_hash"]);
@@ -387,6 +397,11 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
     assert_eq!(bodies.len(), 3);
     for body in bodies {
         assert_eq!(body["prompt_cache_key"], "private-session");
+    }
+    let headers = server.headers.lock().unwrap().clone();
+    assert_eq!(headers.len(), 3);
+    for headers in headers {
+        assert_eq!(headers["session-id"], "private-session");
     }
     server.stop().await;
 }
