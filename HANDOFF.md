@@ -150,6 +150,11 @@
   - 混用写法时，旧顶层 `models` 里的名字前缀可能和家名撞上（比如旧顶层接 OpenRouter 有 `deepseek/deepseek-v3.2`，又配了一家叫 `deepseek`）：`/v1/models` 把它显示成旧单家的，实际按家名发给了那一家。改法：`load` 里对旧 `models` 每项做和默认模型一样的检查（`crates/canter-server/src/config.rs`）。
   - 父会话一轮结束、子 agent 还在跑时，父会话能换模型；子 agent 继续用派出时的模型和那一家（key 和地址配对，不串）。改法：换模型时按 `running_agents` 拒绝，或 DESIGN 写明子 agent 一直用派出时的模型。
   - 路由认不出家名（比如删掉一家后打开它的旧会话）时只回无状态码的 `InvalidRequest`，用户看到 "invalid request"，不知道去改配置。改法：给一句 `model X is not configured` 之类的英文提示。
+- GPT 登录凭证（P2-202，11-04 合并，还没接命令和界面，用户用不到）交叉审查建议改、没做的：
+  - 刷新后校验新 ID token 时，取 discovery 或 JWKS 除网络错和 5xx 以外的失败（403、404 拦截页、正文不是 JSON、issuer 对不上）也按「ID token 无效」处理：刚轮换的新 refresh token 被主动作废，要重新登录。和 DESIGN 第 6 条写的「确实不符时才作废」对不上。改法：只有 `InvalidIdToken`、`IdentityMismatch` 走作废分支，其余按网络错整组落盘（`crates/canter-server/src/chatgpt_auth/manager.rs`）。
+  - 崩溃留下的 `.tmp*` 临时文件（0600，里面有令牌）不会自动清掉。
+  - P2-203 真登录时留意（审查「可以不改」）：回调地址收到第一个 `state` 不对的请求就判这次登录失败（本机进程能打断登录，Codex 是回 400 接着等）；`CANTER_HOME` 本身是符号链接、或 `auth/chatgpt/` 里有 `.DS_Store` 这类不认识的文件时整个凭证目录打不开；HTTP 客户端写了 `no_proxy`，要靠代理才能连 OpenAI 时会连不上。
+  - `earliest_refresh_at` 官方没写格式，暂按 Unix 秒、只在令牌没过期时挡、看不懂就忽略（主控 11-04 定），P2-203 真登录时核对真实响应。
 
 - 协议 README「审查轮」一节还写着 `/v1/info` 的 `features`「本版返回 `["review"]`」，已过时（现在有十几项）；P2-196 开发看到、按范围没动。
 
