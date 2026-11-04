@@ -595,6 +595,11 @@ async fn models(State(app): State<Arc<App>>) -> Json<ModelListResponse> {
                 model: model.clone(),
                 display_name: model.clone(),
                 is_default: model == &default_model,
+                provider: options
+                    .model_limits
+                    .contains_key(model)
+                    .then(|| model.split_once('/').expect("qualified model").0.to_owned()),
+                context_window: Some(options.limits(model).context_window),
                 input_modalities: Some(if options.image_models.contains(model) {
                     vec!["text".into(), "image".into()]
                 } else {

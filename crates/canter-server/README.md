@@ -30,7 +30,59 @@
   input_history.lock     几个终端写输入历史时轮流用的文件锁
 ```
 
-用户先创建 `config.json` 并设为 0600，例如：
+用户先创建 `config.json` 并设为 0600。可以同时配几家（P2-200），例如：
+
+```json
+{
+  "model": "go/deepseek-v4.1-flash",
+  "providers": {
+    "go": {
+      "api": "chat_completions",
+      "base_url": "https://opencode.ai/inference/go/openai/v1",
+      "api_key": "<go-key>",
+      "headers": { "x-opencode-session": "{session_id}" },
+      "models": {
+        "deepseek-v4.1-flash": { "context_window": 1048576, "image": false }
+      }
+    },
+    "deepseek": {
+      "base_url": "https://api.deepseek.com",
+      "api_key": "<deepseek-key>",
+      "models": {
+        "deepseek-flash": {
+          "context_window": 1048576,
+          "auto_compact_tokens": 400000,
+          "image": true,
+          "price": {
+            "peak": { "cache_hit": 0.006, "cache_miss": 0.30, "output": 1.20 },
+            "off_peak": { "cache_hit": 0.003, "cache_miss": 0.15, "output": 0.60 }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`providers` 的每个键是自己起的家名（ASCII 字母、数字、`-_.`），每家独立配置
+`base_url`、`api_key`、可选请求头和 `models`。模型对象里的 `context_window` 必填，
+按所用模型填写；`image` 缺省 false，`auto_compact_tokens` 和 `price` 可省略。
+价格单位及 peak/off_peak 规则见下文，未配置价格就记为未知，不继承同名模型的内置价。
+`api` 不写就是 `chat_completions`；当前其它接口类型（包括 `responses`）会报明哪家配置不支持。
+
+会话和默认 `model` 使用 `<家名>/<模型名>`，在第一个 `/` 分开：例如
+`router/vendor/model` 发给 router 的模型名为 `vendor/model`。
+同一服务端可同时运行不同家的会话；空闲时可以经会话 PATCH 换家，历史照原样发送，
+超过新模型的压缩线时先压缩。子 agent、压缩、顺口问、交接、审查和提示建议沿用发起会话的模型。
+窗口、压缩线、图片能力、价格、凭证和请求头在每轮开始时冻结，保存配置后下一轮生效。
+任何一家写坏都会整份保留旧配置并提示；第一次启动写坏则启动失败，错误不回显凭证。
+模型请求失败沿用原来的错误和重试，不自动换家。用量和遥测保留完整模型名。
+
+`GET /v1/models` 的新模型 ID 带家名，额外提供可选 `provider`、`contextWindow`，
+图片能力沿用 `inputModalities`；旧客户端仍能读取。终端跨家选择界面的调整在 P2-201。
+
+旧单家配置继续有效，无需迁移，也可以保留旧字段并加入 `providers`。
+未带家名的旧模型仍用旧地址、key 和请求头，请求内容不变。旧配置例子：
 
 ```json
 {
@@ -44,7 +96,7 @@
 ```
 
 启动时收紧已有配置权限；缺失或无效时用不含配置内容的错误退出。配置格式为 JSON，
-`base_url`、`model`、`context_window`、`api_key` 必填；窗口必须大于 81,920
+旧单家写法的 `base_url`、`model`、`context_window`、`api_key` 必填；每个窗口必须大于 81,920
 （核心的输出预留 65,536 加压缩余量 16,384）。
 
 `headers` 是可选的额外模型请求头，JSON 对象的名字和值都必须是字符串。
@@ -67,14 +119,16 @@
 }
 ```
 
-一次只连一家，几家同时配置和跨家切换放第三期。接这个地址时不提供 `web_search`，
-因为 P2-106 只认官网 DeepSeek 地址；`web_fetch` 仍按原规则提供。
+只配这个地址时不提供 `web_search`；同时配了 DeepSeek 官方根地址时，所有模型都可用
+`web_search`，搜索使用 DeepSeek 的 key 和额度，不带模型的额外请求头。
+如果配置了多个官方根地址，优先旧顶层配置，否则按家名字典序取第一个。
+`web_fetch` 仍按原规则提供。
 
 `auto_compact_tokens` 是可选的正整数：上下文占用超过它就自动压缩（压缩后保留多少用户原话也按它算）；
-不写时压缩线是窗口减输出预留再减 16,384，比这条线大时也按这条线。和窗口一样启动时读，改了重启服务端生效；
+不写时压缩线是窗口减输出预留再减 16,384，比这条线大时也按这条线。和窗口一样自动重读，下一轮生效；
 写 0 报错退出。生效的压缩线随用量发给客户端（`TokenUsage.autoCompactTokens`）。
 `model_max_retries` 是可选整数，默认 10，范围 0～100（不含首次请求，0 禁用重试）；
-服务端启动时读取，修改后重启生效。限流、5xx/过载、网络和超时共用模型层重试；
+服务端自动重读，下一轮生效。限流、5xx/过载、网络和超时共用模型层重试；
 退避从 0.5 秒翻倍、最多 32 秒并带抖动，`Retry-After` 优先、最多 60 秒。Esc 可取消等待。
 `prompt_suggestions` 是可选布尔值，默认 `true`。正常交互轮结束后用同一模型生成下一句输入建议，
 用量计入会话花费；空会话从最近 git 提交生成免费示例。设为 `false` 同时关闭两种建议，
@@ -105,7 +159,7 @@ Enter 只发送已接受的文字。连续 20 条未采用后每四轮生成一�
 终端粘贴图片路径会生成可删除的占位；macOS 的 Ctrl+V 通过系统 `osascript` 调用
 AppKit，只读取剪贴板已有的 PNG 表示，不转换格式。临时截图文件在本终端退出／换会话时清理。
 非本机 `http://` 地址被拒绝，本机仅接受 localhost 或 loopback IP；模型客户端禁用代理和跳转。
-模型、key、窗口在服务端启动时读取，修改后需显式重启。
+模型、key、窗口在服务端启动时读取，修改后自动重读、下一轮生效。
 `sandbox` 是可选布尔开关，默认 `true`，服务端自动重读、下一轮生效。模型 shell 默认在 macOS
 Seatbelt 中运行，`false` 恢复原执行行为。交互和 exec 的 `--yolo` 同时选择 Allow all 并强制
 关闭沙箱，不受配置重读影响；不带它时按配置。豁免跟随这次打开会话的客户端，包括派生会话和
@@ -178,7 +232,7 @@ btw 已收到的用量计入本会话和跨会话汇总（取消后也记），�
 
 每个覆盖项的 `peak` 三档必填，金额必须非负且有限。`off_peak` 可省略：省略时全天
 使用该项的 `peak`，不会继承内置非高峰价。省略整个 `prices` 就只使用内置价；
-价格配置不会增加可用模型。与其他配置一样，修改需显式重启服务端才生效。
+价格配置不会增加可用模型。与其他配置一样，修改后自动重读、下一轮生效。
 
 每次请求的实际模型、发出时间和金额随用量事件存盘；没单价的请求记为未知，
 之后改价格也不改变已记的金额或未知记录。旧事件缺少请求记账字段时，汇总按当前
@@ -406,9 +460,9 @@ MCP 没有添加资源、提示词模板、采样或 elicitation 能力；网页
 
 ## 网页抓取（P2-13）
 
-内置 `web_search {query, count?}` 仅在 `base_url` 为 `https://api.deepseek.com` 根地址
-（末尾 `/` 可省略）时提供，使用现有 `api_key` 调官方 `/v1/tools/search`，不加配置项。
-工具紧接 web_fetch，打开会话时固定；其它提供方的工具列表和提示词保持原样。
+内置 `web_search {query, count?}` 在任意一家的 `base_url` 为 `https://api.deepseek.com` 根地址
+（末尾 `/` 可省略）时提供给所有模型，使用这家 `api_key` 调官方 `/v1/tools/search`，不加搜索配置项。
+工具紧接 web_fetch，每轮开始时固定；没配置官方地址就不提供。
 默认 10 条、最多 20 条，查询最多 128 个 Unicode 字符；按执行批准，可放行本会话全部搜索。
 请求不自动重试；总超时 30 秒、响应上限 5 MiB；错误正文不返回客户端或模型，402 提示充值。
 审查轮拒绝，计划模式沿用普通批准；Esc 可以取消。凭证只留服务端内存，不入公开选项或存盘。

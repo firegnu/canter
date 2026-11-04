@@ -1171,6 +1171,7 @@ impl Session {
             .background()
             .restore(&state.journal.snapshot.background_commands);
         let lifetime = CancellationToken::new();
+        let limits = options.limits(&state.journal.snapshot.settings.model);
         let shared = Arc::new(Shared {
             agent_parent: Default::default(),
             agent_host: Default::default(),
@@ -1183,6 +1184,7 @@ impl Session {
                 model,
                 tools,
                 options,
+                limits,
                 context,
                 retired_tools: Vec::new(),
             })),
@@ -1711,6 +1713,17 @@ impl Session {
     ) -> Result<SessionUpdateResponse, CoreError> {
         let mut state = self.shared.state.lock().await;
         state.available()?;
+        if params
+            .model
+            .as_ref()
+            .is_some_and(|model| model != &state.journal.snapshot.settings.model)
+            && (state.active.is_some() || state.btw.is_some())
+        {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "cannot change model while a turn or private answer is active",
+            ));
+        }
         // Automatic names and their undo must not overwrite a manual rename
         // that arrived after the terminal's snapshot.
         if params.expected_name.as_ref().is_some_and(|expected| {
@@ -1769,10 +1782,19 @@ impl Session {
         } else if settings.reasoning_effort == ReasoningEffort::Unknown {
             settings.reasoning_effort = ReasoningEffort::High;
         }
+        let model_changed = settings.model != state.journal.snapshot.settings.model;
         let events = state
             .journal
             .append(vec![EventPayload::SessionUpdated { settings }])
             .await?;
+        if model_changed {
+            state.suggestions.cancel();
+            let mut runtime = (*self.shared.runtime()).clone();
+            runtime.limits = runtime
+                .options
+                .limits(&state.journal.snapshot.settings.model);
+            *self.shared.runtime.write().unwrap() = Arc::new(runtime);
+        }
         self.shared.runtime().tools.configure_shell(
             state.approval_policy(),
             &state.journal.snapshot.settings.additional_directories,

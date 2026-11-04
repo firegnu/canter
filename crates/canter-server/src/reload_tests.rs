@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::{fs, process::Stdio};
 use tokio::sync::{mpsc, oneshot};
 mod hooks;
+mod providers;
 mod yolo;
 
 #[tokio::test]

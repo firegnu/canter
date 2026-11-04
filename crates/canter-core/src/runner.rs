@@ -402,7 +402,7 @@ async fn conversation(
                     estimated.max(actual.saturating_add(estimated.saturating_sub(before)))
                 });
         let fits = occupancy.saturating_add(u64::from(shared.runtime().options.max_output_tokens))
-            <= shared.runtime().options.context_window;
+            <= shared.runtime().limits.context_window;
         if !summary
             && occupancy > compaction::input_limit(shared)
             && !compacted
@@ -843,7 +843,7 @@ pub(crate) async fn record_usage(
         last: last.clone(),
         context_tokens,
         model_context_window: if in_turn {
-            Some(shared.runtime().options.context_window)
+            Some(shared.runtime().limits.context_window)
         } else {
             state
                 .journal

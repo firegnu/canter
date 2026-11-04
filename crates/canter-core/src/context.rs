@@ -589,10 +589,10 @@ impl crate::Session {
             free_tokens: self
                 .shared
                 .runtime()
-                .options
+                .limits
                 .context_window
                 .saturating_sub(estimated_tokens),
-            model_context_window: self.shared.runtime().options.context_window,
+            model_context_window: self.shared.runtime().limits.context_window,
             context_tokens: state
                 .journal
                 .snapshot

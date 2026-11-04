@@ -2,6 +2,19 @@ use canter_protocol::{Event, EventPayload, Item, SessionSnapshot, SessionStatus,
 use serde_json::json;
 
 #[test]
+fn model_provider_metadata_is_optional_and_round_trips() {
+    let old = json!({"id":"legacy","model":"legacy","displayName":"legacy","isDefault":true});
+    let parsed: canter_protocol::Model = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(parsed.provider, None);
+    assert_eq!(parsed.context_window, None);
+    assert_eq!(serde_json::to_value(parsed).unwrap(), old);
+    let current = json!({"id":"one/vendor/model","model":"one/vendor/model","displayName":"one/vendor/model",
+        "isDefault":false,"provider":"one","contextWindow":200000,"inputModalities":["text","image"]});
+    let parsed: canter_protocol::Model = serde_json::from_value(current.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), current);
+}
+
+#[test]
 fn web_search_results_round_trip_and_legacy_clients_skip_the_item() {
     #[derive(serde::Deserialize)]
     #[serde(tag = "type")]
