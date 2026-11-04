@@ -153,8 +153,7 @@
 - GPT 登录凭证（P2-202，11-04 合并，还没接命令和界面，用户用不到）交叉审查建议改、没做的：
   - 刷新后校验新 ID token 时，取 discovery 或 JWKS 除网络错和 5xx 以外的失败（403、404 拦截页、正文不是 JSON、issuer 对不上）也按「ID token 无效」处理：刚轮换的新 refresh token 被主动作废，要重新登录。和 DESIGN 第 6 条写的「确实不符时才作废」对不上。改法：只有 `InvalidIdToken`、`IdentityMismatch` 走作废分支，其余按网络错整组落盘（`crates/canter-server/src/chatgpt_auth/manager.rs`）。
   - 崩溃留下的 `.tmp*` 临时文件（0600，里面有令牌）不会自动清掉。
-  - P2-203 真登录时留意（审查「可以不改」）：回调地址收到第一个 `state` 不对的请求就判这次登录失败（本机进程能打断登录，Codex 是回 400 接着等）；`CANTER_HOME` 本身是符号链接、或 `auth/chatgpt/` 里有 `.DS_Store` 这类不认识的文件时整个凭证目录打不开；HTTP 客户端写了 `no_proxy`，要靠代理才能连 OpenAI 时会连不上。
-  - `earliest_refresh_at` 官方没写格式，暂按 Unix 秒、只在令牌没过期时挡、看不懂就忽略（主控 11-04 定），P2-203 真登录时核对真实响应。
+  - P2-203 真登录时留意（审查「可以不改」）：回调地址收到第一个 `state` 不对的请求就判这次登录失败（本机进程能打断登录，Codex 是回 400 接着等）；`CANTER_HOME` 本身是符号链接、或 `auth/chatgpt/` 里有 `.DS_Store` 这类不认识的文件时整个凭证目录打不开；HTTP 客户端写了 `no_proxy`，要靠代理环境变量才能连 OpenAI 时会连不上（11-04 用户真登录没用代理环境变量，走通了）。
 - GPT 登录命令（P2-203，11-04 合并）交叉审查建议改、没做的：
   - 当前账号退出或要重新登录以后，`canter auth login chatgpt` 一定复用这条记录的注册，换不了另一个 ChatGPT 账号（浏览器里登别的账号会报 `IdentityMismatch`），命令行里也没有新建注册的办法，只能手动删 `~/.canter/auth/chatgpt/` 里的文件。改法：不带 accountId 时一律新建注册、换回来的身份和已有记录相同就当复登那条；或者给 `login` 加一个新建的选项（命令形状要问用户）。至少换成看得懂的英文提示。真登录时顺带看：当前账号已登录时再登同一个人，真服务器给新 client id 还是同一个。
   - 记录按随机 UUID 排序，新登录一个账号可能让已有账号的序号整体变掉，照记住的序号 `use`、`logout` 会选到别的账号。改法：按加入顺序排（`chatgpt_auth/mod.rs`、`crates/canter-server/src/account.rs`）。
