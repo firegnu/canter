@@ -70,7 +70,7 @@ async fn stats_cli_lists_selects_and_exports_offline_reports_and_rejects_old_ser
     for directory in ["home", "state/sessions/s1", "state/sessions/older", "bin"] {
         fs::create_dir_all(root.path().join(directory)).unwrap();
     }
-    fs::write(root.path().join("state/config.json"), r#"{"base_url":"http://127.0.0.1:9","api_key":"test-only","model":"fake-model","context_window":1048576}"#).unwrap();
+    fs::write(root.path().join("state/config.json"), r#"{"base_url":"http://127.0.0.1:9","api_key":"test-only","model":"fake-model","context_window":1048576,"session_retention_days":0}"#).unwrap();
     let settings = json!({"cwd":"/work/<example>","model":"fake-model","name":null,"approvalPolicy":"allowAll","tags":{"task":"<script>alert(1)</script>"}});
     let mut events = vec![json!({"type":"session.updated","settings":settings})];
     events.push(json!({"type":"turn.started","turn":{"id":"t1","status":"inProgress","items":[],"input":[{"type":"text","text":"Inspect telemetry safely"}],"clientName":"test","error":null,"usage":null}}));

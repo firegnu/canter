@@ -15,6 +15,9 @@ mod memory;
 #[path = "managed_tests.rs"]
 mod managed;
 
+#[path = "cleanup_tests.rs"]
+mod cleanup;
+
 struct Harness {
     app: Arc<App>,
     client: reqwest::Client,

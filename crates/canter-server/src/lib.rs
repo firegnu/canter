@@ -170,6 +170,7 @@ async fn serve_with_lsp(
         "canter server ready · {version} · pid {}",
         std::process::id()
     );
+    http::cleanup::start(Arc::downgrade(&app));
     let shutdown = app.clone();
     let watcher = reload.watch(Arc::downgrade(&app));
     let home = lease.home.clone();

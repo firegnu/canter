@@ -32,6 +32,9 @@ mod tests;
 #[path = "agent_sessions.rs"]
 mod agent_sessions;
 
+#[path = "cleanup.rs"]
+pub(crate) mod cleanup;
+
 #[path = "managed.rs"]
 mod managed;
 
@@ -780,32 +783,106 @@ async fn session_stats(
     Ok(Json(report))
 }
 
+fn add_ledger(
+    ledger: canter_core::usage::Ledger,
+    rows: &mut BTreeMap<(String, String), UsageRow>,
+    report: &mut UsageResponse,
+) -> Result<(), ApiError> {
+    for (timestamp, record) in ledger.records {
+        let date = chrono::DateTime::from_timestamp_millis(timestamp)
+            .ok_or_else(ApiError::internal)?
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string();
+        let model = record.model.clone().unwrap_or_default();
+        let row = rows
+            .entry((date.clone(), model.clone()))
+            .or_insert_with(|| UsageRow {
+                date: Some(date),
+                model: Some(model),
+                ..UsageRow::default()
+            });
+        row.add(&record);
+        report.total.add(&record);
+    }
+    Ok(())
+}
+
+async fn trash_ledgers(app: &App) -> Result<Vec<(String, canter_core::usage::Ledger)>, ApiError> {
+    let home = app.home.clone();
+    let prices = app.metadata().2.prices;
+    tokio::task::spawn_blocking(move || -> Result<_, canter_store::StoreError> {
+        let root = home.join("trash");
+        if !root.exists() {
+            return Ok(Vec::new());
+        }
+        let store = Store::new(root)?;
+        let mut ledgers = Vec::new();
+        for session in store.list_all()? {
+            let events = match store.events_after(&session.id, 0) {
+                Ok(events) => events,
+                Err(canter_store::StoreError::Io(error))
+                    if error.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            if !events.is_empty() {
+                ledgers.push((
+                    session.id,
+                    canter_core::usage::Ledger::replay(&events, &prices),
+                ));
+            }
+        }
+        Ok(ledgers)
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
+    .map_err(CoreError::from)
+    .map_err(ApiError::from)
+}
+
 async fn usage(State(app): State<Arc<App>>) -> Result<Json<UsageResponse>, ApiError> {
     let store = app.store.clone();
     let sessions = tokio::task::spawn_blocking(move || store.list_all())
         .await
         .map_err(|_| ApiError::internal())?
         .map_err(CoreError::from)?;
+    let mut live = std::collections::HashSet::new();
     let mut rows = BTreeMap::<(String, String), UsageRow>::new();
     let mut report = UsageResponse::default();
     for session in sessions {
-        for (timestamp, record) in ledger(&app, &session.id).await?.records {
-            let date = chrono::DateTime::from_timestamp_millis(timestamp)
-                .ok_or_else(ApiError::internal)?
-                .with_timezone(&chrono::Local)
-                .format("%Y-%m-%d")
-                .to_string();
-            let model = record.model.clone().unwrap_or_default();
-            let row = rows
-                .entry((date.clone(), model.clone()))
-                .or_insert_with(|| UsageRow {
-                    date: Some(date),
-                    model: Some(model),
-                    ..UsageRow::default()
-                });
-            row.add(&record);
-            report.total.add(&record);
+        let session_ledger = match ledger(&app, &session.id).await {
+            Ok(ledger) => ledger,
+            Err(error) if error.0.code == ErrorCode::SessionNotFound => continue,
+            Err(error) => return Err(error),
+        };
+        live.insert(session.id);
+        add_ledger(session_ledger, &mut rows, &mut report)?;
+    }
+    for (id, ledger) in trash_ledgers(&app).await? {
+        if live.insert(id) {
+            add_ledger(ledger, &mut rows, &mut report)?;
         }
+    }
+    let home = app.home.clone();
+    let archived = tokio::task::spawn_blocking(move || cleanup::archived_rows(&home, &live))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(|_| ApiError::internal())?;
+    for record in archived {
+        let date = record.date.clone().unwrap_or_default();
+        let model = record.model.clone().unwrap_or_default();
+        let row = rows
+            .entry((date.clone(), model.clone()))
+            .or_insert_with(|| UsageRow {
+                date: Some(date),
+                model: Some(model),
+                ..UsageRow::default()
+            });
+        row.add(&record);
+        report.total.add(&record);
     }
     report.data = rows.into_values().collect();
     Ok(Json(report))

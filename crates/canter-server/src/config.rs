@@ -35,6 +35,8 @@ pub(crate) struct Config {
     context_window: u64,
     #[serde(default)]
     auto_compact_tokens: Option<u64>,
+    #[serde(default = "default_session_retention_days")]
+    pub session_retention_days: u32,
     #[serde(default = "default_auto_wake_limit")]
     auto_wake_limit: u32,
     #[serde(default = "default_goal_budget_usd")]
@@ -617,6 +619,9 @@ fn default_sandbox() -> bool {
 
 fn default_models() -> Vec<String> {
     vec!["deepseek-flash".into(), "deepseek-v4-pro".into()]
+}
+fn default_session_retention_days() -> u32 {
+    30
 }
 fn default_auto_wake_limit() -> u32 {
     10
@@ -1236,6 +1241,26 @@ mod tests {
         );
         for value in [json!(-1), json!(1.5), json!("10")] {
             assert!(load(json!({"model_max_retries":value})).is_err());
+        }
+    }
+
+    #[test]
+    fn session_retention_defaults_to_thirty_days_and_accepts_zero() {
+        assert_eq!(load(json!({})).unwrap().session_retention_days, 30);
+        assert_eq!(
+            load(json!({"session_retention_days": 7}))
+                .unwrap()
+                .session_retention_days,
+            7
+        );
+        assert_eq!(
+            load(json!({"session_retention_days": 0}))
+                .unwrap()
+                .session_retention_days,
+            0
+        );
+        for value in [json!(-1), json!(1.5), json!("30"), json!(null)] {
+            assert!(load(json!({"session_retention_days":value})).is_err());
         }
     }
 
