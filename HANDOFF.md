@@ -163,6 +163,16 @@
 - GPT 思考档位（P2-206，11-04 合并）交叉审查建议改、没做的：
   - 在配置里删掉某个模型以后，`/new` 退回默认模型时仍带着原来的档位；默认模型不支持这一档时，新建会被拒绝并提示，不会发出错误的请求。
   - 一轮正在跑时恢复会话，会按这一轮冻结的旧配置核对档位（`crates/canter-core/src/configuration.rs` `resume_snapshot`）。比如热重载给模型新加了 xhigh，这一轮没结束时设了 xhigh，再从另一个终端恢复，会被退回默认档并提示。改法：有一轮或 btw 在跑时不核对，留给下一轮的 `apply_configuration`。
+- GPT 模型目录（P2-216，11-05 合并，还没真调）主控和交叉审查记下、没做的（用户试用后再定要不要另开一件）：
+  - 取目录失败的原因全被吞掉（`model_catalog.rs` `fetch` 的 `map_err(|_| ())`），服务端日志没有任何记录，真调失败时分不出网络、401 还是回复读不懂。
+  - 「切到未核实模型」的提示只在 TUI 里拼（`crates/canter-tui/src/app.rs` `unverified_warning`），128000、medium 在客户端又写了一遍；`canter exec` 和以后的桌面、网页客户端没有这条提示。
+  - 资料按整个模型覆盖、不是按字段：配置里手写了这个模型（哪怕只写了窗口），目录带来的档位就不用了，落到 P2-206 的旧四档默认（`apply` 里 `model_limits.contains_key` 就跳过）。
+  - 当前账号变成 `NeedsLogin` 时目录模型从 `/model` 里整个消失，不是标旧显示上次的。
+  - 不用 ChatGPT 的人启动时、每次打开 `/model` 也会打开 ChatGPT 登录存储，建出 `auth/chatgpt/`；登录过但配置里删了 GPT 这一家时照样后台取目录。改法：`catalog_provider()` 为 None 时不调 `auth.get()`。
+  - 别家有同名模型时会被当成目录模型显示（`details()` 只按 `/` 后的 slug 找，不核对家名）。
+  - README 说「目录里有了的模型不用再手写」，但 GPT 这一家仍必须手写至少一个模型（`models must not be empty`）。
+  - 历史目录资料 `known` 退出账号后内存里不清，各账号混在一起用（只影响恢复已从目录消失的模型时用谁的资料）。
+  - 复核建议改：给子会话 PATCH 换模型时，`session.rs` 换上 `next_options` 会把继承来的沙箱值换成配置里的值（`apply_configuration` 专门保留了它）。TUI 和 agent 工具目前都不会这么做。改法：换模型时保留原 `sandbox`。
 
 - 协议 README「审查轮」一节还写着 `/v1/info` 的 `features`「本版返回 `["review"]`」，已过时（现在有十几项）；P2-196 开发看到、按范围没动。
 
