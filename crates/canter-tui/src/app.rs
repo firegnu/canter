@@ -5026,16 +5026,7 @@ impl App {
         let Some((matches, selected)) = self.command_list() else {
             return self.mention_rows(width, max);
         };
-        let names: Vec<String> = matches
-            .iter()
-            .map(|command| format!("/{}", command.name))
-            .collect();
-        let entries: Vec<(&str, &str)> = names
-            .iter()
-            .zip(&matches)
-            .map(|(name, command)| (name.as_str(), command.about.as_str()))
-            .collect();
-        commands::list_rows(&entries, selected, width, max)
+        commands::command_rows(&matches, selected, width, max)
     }
 
     pub(crate) fn take_suggestion_origin(&mut self) -> bool {

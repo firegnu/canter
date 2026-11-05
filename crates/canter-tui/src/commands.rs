@@ -5,7 +5,7 @@
 //! A first word (after any leading blanks) that starts with `/` and has no
 //! other `/` in it is a command; one like `/tmp/a.txt` is a message.
 
-use canter_protocol::{PermissionMode, ReasoningEffort, SessionUpdateParams, Skill};
+use canter_protocol::{PermissionMode, ReasoningEffort, SessionUpdateParams, Skill, SkillSource};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
@@ -782,6 +782,8 @@ pub(crate) fn typing(text: &str) -> Option<&str> {
 pub(crate) struct Completion {
     pub name: String,
     pub about: String,
+    /// Where a skill comes from; None for a builtin.
+    pub skill: Option<SkillSource>,
 }
 
 /// Builtins first, then session skills; a builtin owns its name.
@@ -792,6 +794,7 @@ pub(crate) fn matching(typed: &str, skills: &[Skill]) -> Vec<Completion> {
         .map(|command| Completion {
             name: command.name.into(),
             about: command.about.into(),
+            skill: None,
         })
         .chain(
             skills
@@ -799,10 +802,147 @@ pub(crate) fn matching(typed: &str, skills: &[Skill]) -> Vec<Completion> {
                 .filter(|skill| skill.name.starts_with(typed) && find(&skill.name).is_none())
                 .map(|skill| Completion {
                     name: skill.name.clone(),
-                    about: format!("skill · {}", clean(&skill.description)),
+                    about: clean(&skill.description)
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    skill: Some(skill.source),
                 }),
         )
         .collect()
+}
+
+/// Rows the command list takes at most, titles and keys included.
+pub(crate) const COMMAND_ROWS: usize = 12;
+
+/// The keys of the command list, before which entry is selected.
+const COMPLETE: &str = "↑↓ select · Tab complete · Enter run";
+
+/// A row of the command list: a group's title or an entry.
+enum CommandRow {
+    Title(&'static str),
+    Entry(usize),
+}
+
+/// The command list above the input box: builtins under `Commands`, then
+/// skills under `Skills` with where each comes from, each group aligned on
+/// its own; last the keys and which entry is selected. At most
+/// [`COMMAND_ROWS`] and `max` rows; when not all fit, the selected entry's
+/// group title is on top and the selected entry in view. Nothing when not
+/// even one entry fits.
+pub(crate) fn command_rows(
+    matches: &[Completion],
+    selected: usize,
+    width: u16,
+    max: usize,
+) -> Vec<Line<'static>> {
+    let room = max.min(COMMAND_ROWS).saturating_sub(1);
+    if room < 2 || matches.is_empty() {
+        return Vec::new();
+    }
+    let builtins = matches
+        .iter()
+        .take_while(|entry| entry.skill.is_none())
+        .count();
+    let groups = [
+        ("Commands", 0..builtins),
+        ("Skills", builtins..matches.len()),
+    ];
+    let mut all = Vec::new();
+    for (name, range) in groups.iter().filter(|(_, range)| !range.is_empty()) {
+        all.push(CommandRow::Title(name));
+        all.extend(range.clone().map(CommandRow::Entry));
+    }
+    let shown: Vec<&CommandRow> = if all.len() <= room {
+        all.iter().collect()
+    } else {
+        let (name, range) = groups
+            .iter()
+            .find(|(_, range)| range.contains(&selected))
+            .expect("the selected entry is in a group");
+        let title = all
+            .iter()
+            .position(|row| matches!(row, CommandRow::Title(title) if title == name))
+            .expect("a group with entries has a title");
+        let mut window: Vec<&CommandRow> = all[title + 1..]
+            .iter()
+            .skip(first_shown(selected - range.start, room - 1))
+            .take(room - 1)
+            .collect();
+        // A title with none of its entries under it says nothing.
+        if matches!(window.last(), Some(CommandRow::Title(_))) {
+            window.pop();
+        }
+        std::iter::once(&all[title]).chain(window).collect()
+    };
+    let width = usize::from(width);
+    let names: Vec<String> = matches
+        .iter()
+        .map(|entry| format!("/{}", entry.name))
+        .collect();
+    let column = |range: &std::ops::Range<usize>| {
+        names[range.clone()]
+            .iter()
+            .map(|name| str_width(name))
+            .max()
+            .unwrap_or(0)
+    };
+    let name_width = [column(&groups[0].1), column(&groups[1].1)];
+    let source_width = matches[builtins..]
+        .iter()
+        .filter_map(|entry| entry.skill.map(source_label))
+        .map(str_width)
+        .max()
+        .unwrap_or(0);
+    let mut rows: Vec<Line<'static>> = shown
+        .into_iter()
+        .map(|row| {
+            let index = match row {
+                CommandRow::Title(name) => return Line::from(truncate(title(name, ""), width)),
+                CommandRow::Entry(index) => *index,
+            };
+            let entry = &matches[index];
+            let name = &names[index];
+            let pad = name_width[usize::from(index >= builtins)] - str_width(name) + 3;
+            let padded = format!("{name}{}", " ".repeat(pad));
+            let mut spans = if index == selected {
+                vec![
+                    Span::styled(" › ", theme::accent().bold()),
+                    Span::styled(padded, Style::new().bold()),
+                ]
+            } else {
+                vec![Span::raw("   "), Span::raw(padded)]
+            };
+            if let Some(source) = entry.skill {
+                let label = source_label(source);
+                let pad = source_width - str_width(label) + 2;
+                spans.push(Span::styled(
+                    format!("{label}{}", " ".repeat(pad)),
+                    theme::secondary(),
+                ));
+            }
+            spans.push(Span::styled(entry.about.clone(), theme::secondary()));
+            Line::from(truncate(spans, width))
+        })
+        .collect();
+    rows.push(Line::from(truncate(
+        vec![keys(&format!(
+            "{COMPLETE} · {}/{}",
+            selected + 1,
+            matches.len()
+        ))],
+        width,
+    )));
+    rows
+}
+
+/// A skill's source as the command list names it.
+fn source_label(source: SkillSource) -> &'static str {
+    match source {
+        SkillSource::Global => "global",
+        SkillSource::Project => "project",
+        SkillSource::Unknown => "other",
+    }
 }
 
 /// A command's name and the text after it, when the first word is one.
