@@ -35,7 +35,7 @@ const BAND: f32 = 2.0;
 
 /// `verb` (such as `Thinking…`, or `Running ` with its space) with the light
 /// where it is at `now_ms`; only bold without colours.
-pub(crate) fn working(verb: &'static str, now_ms: i64) -> Vec<Span<'static>> {
+pub(crate) fn working(verb: &str, now_ms: i64) -> Vec<Span<'_>> {
     let word = verb.trim_end();
     if theme::shimmer() == Shimmer::Off {
         let mut spans = vec![Span::styled(word, theme::working())];
@@ -47,7 +47,7 @@ pub(crate) fn working(verb: &'static str, now_ms: i64) -> Vec<Span<'static>> {
     let letters = word.chars().count() as f32;
     let period = letters + 2.0 * PAD;
     let at = now_ms.rem_euclid(SWEEP_MS) as f32 / SWEEP_MS as f32 * period - PAD;
-    let mut spans: Vec<Span<'static>> = word
+    let mut spans: Vec<Span<'_>> = word
         .chars()
         .enumerate()
         .map(|(i, letter)| {

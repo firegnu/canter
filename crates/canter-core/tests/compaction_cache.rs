@@ -131,6 +131,225 @@ async fn finished(events: &mut Subscription) {
 }
 
 #[tokio::test]
+async fn manual_compaction_items_report_context_estimates_without_telemetry() {
+    let fixture = Fixture::new(
+        vec![answer("Earlier answer."), answer("Summary.")],
+        CoreOptions {
+            telemetry: false,
+            ..Default::default()
+        },
+    )
+    .await;
+    fixture.send("Keep these words.").await;
+    let before = fixture.session.context().await.estimated_tokens;
+    fixture.compact().await;
+    let after = fixture.session.context().await.estimated_tokens;
+    let events: Vec<_> = fixture
+        .store
+        .events_after("cache", 0)
+        .unwrap()
+        .into_iter()
+        .map(|event| serde_json::to_value(event).unwrap())
+        .collect();
+    let started = events
+        .iter()
+        .find(|event| {
+            event["type"] == "item.started" && event["item"]["type"] == "contextCompaction"
+        })
+        .unwrap();
+    assert_eq!(started["item"]["beforeTokens"], before);
+    assert!(started["item"].get("afterTokens").is_none());
+    assert!(started["item"].get("part").is_none());
+    let completed = events
+        .iter()
+        .find(|event| {
+            event["type"] == "item.completed" && event["item"]["type"] == "contextCompaction"
+        })
+        .unwrap();
+    assert_eq!(completed["item"]["beforeTokens"], before);
+    assert_eq!(completed["item"]["afterTokens"], after);
+    assert!(completed["item"].get("part").is_none());
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn automatic_compaction_items_match_context_while_model_responses_are_held() {
+    // Hold each HTTP response so /context observes exactly the start and end
+    // of compaction, before the ordinary reply adds anything to the history.
+    let (send, mut receive) = tokio::sync::mpsc::unbounded_channel();
+    let app = axum::Router::new().route(
+        "/v1/chat/completions",
+        axum::routing::post(move || {
+            let send = send.clone();
+            async move {
+                let (release, response) = tokio::sync::oneshot::channel::<String>();
+                send.send(release).unwrap();
+                (
+                    [("content-type", "text/event-stream")],
+                    response.await.unwrap(),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(root.path().join("sessions")).unwrap());
+    {
+        let settings = serde_json::from_value(
+            json!({"cwd":root.path(),"name":null,"model":"fake","approvalPolicy":"allowAll"}),
+        )
+        .unwrap();
+        let mut writer = store.create("auto", settings, 1).unwrap();
+        writer.append_model_history(&json!({"type":"message","message":{"type":"user","text":"Keep these words."},"user_input":true})).unwrap();
+        writer.append_model_history(&json!({"type":"message","message":{"type":"assistant","content":[{"type":"text","text":"old output ".repeat(16_000)}]}})).unwrap();
+    }
+    let (session, _) = Session::open(
+        store.clone(),
+        "auto".into(),
+        RuntimeContext {
+            environment: [
+                (
+                    "HOME".into(),
+                    root.path().join("home").display().to_string(),
+                ),
+                (
+                    "CANTER_HOME".into(),
+                    root.path().join("state").display().to_string(),
+                ),
+            ]
+            .into(),
+            ..Default::default()
+        },
+        Arc::new(ChatCompletions::new(&base_url, ApiKey::new(KEY)).unwrap()),
+        CoreOptions {
+            auto_compact_tokens: Some(30_000),
+            telemetry: false,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(serde_json::from_value(json!({"input":[{"type":"text","text":"Continue."}],"mode":"queue","clientName":"test"})).unwrap()).await.unwrap();
+    let summary = tokio::time::timeout(Duration::from_secs(10), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let before = session.context().await.estimated_tokens;
+    let snapshot = session.snapshot().await.session;
+    let item = snapshot
+        .turns
+        .last()
+        .unwrap()
+        .items
+        .iter()
+        .find(|item| matches!(item, Item::ContextCompaction { .. }))
+        .unwrap();
+    let item = serde_json::to_value(item).unwrap();
+    assert_eq!(item["beforeTokens"], before);
+    assert!(item.get("afterTokens").is_none());
+    summary.send(answer("Summary.").body).unwrap();
+    let ordinary = tokio::time::timeout(Duration::from_secs(10), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let after = session.context().await.estimated_tokens;
+    let completed = store
+        .events_after("auto", 0)
+        .unwrap()
+        .into_iter()
+        .find_map(|event| match event.payload {
+            EventPayload::ItemCompleted {
+                item: item @ Item::ContextCompaction { .. },
+                ..
+            } => Some(serde_json::to_value(item).unwrap()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(completed["beforeTokens"], before);
+    assert_eq!(completed["afterTokens"], after);
+    assert!(after < before);
+    assert!(completed.get("part").is_none());
+    ordinary.send(answer("Continuing.").body).unwrap();
+    finished(&mut events).await;
+    session.close().await.unwrap();
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn failed_and_interrupted_compactions_do_not_report_after_tokens() {
+    for interrupted in [false, true] {
+        let replies = if interrupted {
+            let mut held = Reply::sse("");
+            held.hang = true;
+            vec![held]
+        } else {
+            vec![
+                context_too_long(),
+                reply(json!({"content":"Incomplete summary"}), "length"),
+            ]
+        };
+        let fixture = Fixture::with_history(replies, CoreOptions::default(), &[
+            json!({"type":"message","message":{"type":"user","text":"Keep these words."},"user_input":true}),
+        ]).await;
+        let before = fixture.session.context().await.estimated_tokens;
+        let mut events = fixture.events().await;
+        let response = fixture.session.compact().await.unwrap();
+        let seen = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut seen = Vec::new();
+            loop {
+                let event = events.recv().await.unwrap().unwrap();
+                if interrupted
+                    && matches!(
+                        event.payload,
+                        EventPayload::ItemStarted {
+                            item: Item::ContextCompaction { .. },
+                            ..
+                        }
+                    )
+                {
+                    fixture
+                        .session
+                        .interrupt(
+                            serde_json::from_value(json!({"turnId":response.turn_id})).unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                }
+                let done = matches!(event.payload, EventPayload::TurnCompleted { .. });
+                seen.push(serde_json::to_value(event).unwrap());
+                if done {
+                    break seen;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let completed = seen
+            .iter()
+            .find(|event| {
+                event["type"] == "item.completed" && event["item"]["type"] == "contextCompaction"
+            })
+            .unwrap();
+        assert_eq!(completed["item"]["beforeTokens"], before);
+        assert!(completed["item"].get("afterTokens").is_none());
+        assert_eq!(
+            completed["item"]["summary"],
+            "Compaction did not finish; the original context is kept."
+        );
+        // Ending an interrupted turn appends its existing interruption notice.
+        // The original history stays intact and no summary replaces it.
+        let history = fixture.store.model_history::<Value>("cache").unwrap();
+        assert_eq!(history[0]["message"]["text"], "Keep these words.");
+        assert!(history.iter().all(|entry| entry["type"] != "compaction"));
+        fixture.close().await;
+    }
+}
+
+#[tokio::test]
 async fn session_id_survives_compaction_and_reopening_with_a_fresh_store() {
     for fallback in [false, true] {
         let mut replies = vec![answer("Before compaction.")];
@@ -411,6 +630,56 @@ fn context_too_long() -> Reply {
         retry_after: None,
         hang: false,
     }
+}
+
+#[tokio::test]
+async fn compaction_parts_advance_after_success_and_not_on_oversized_retries() {
+    let mut replies = vec![
+        context_too_long(),
+        answer("Chunk summary."),
+        context_too_long(),
+    ];
+    replies.extend((0..32).map(|_| answer("Chunk summary.")));
+    let fixture = Fixture::with_history(replies, CoreOptions {
+        context_window: 32_000,
+        max_output_tokens: 8192,
+        ..Default::default()
+    }, &[
+        json!({"type":"message","message":{"type":"user","text":"Keep these words."},"user_input":true}),
+        json!({"type":"message","message":{"type":"assistant","content":[{"type":"text","text":"old output ".repeat(20_000)}]}}),
+    ]).await;
+    fixture.compact().await;
+    let requests = fixture.server.requests.lock().unwrap().len();
+    let events: Vec<_> = fixture
+        .store
+        .events_after("cache", 0)
+        .unwrap()
+        .into_iter()
+        .map(|event| serde_json::to_value(event).unwrap())
+        .collect();
+    let parts: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event["type"] == "item.delta" && event["delta"]["type"] == "contextCompaction"
+        })
+        .map(|event| {
+            assert_eq!(
+                event["delta"].as_object().unwrap().len(),
+                2,
+                "only the known part is sent"
+            );
+            event["delta"]["part"].as_u64().unwrap()
+        })
+        .collect();
+    assert!(
+        requests > 4,
+        "multiple successful chunks plus two rejected attempts"
+    );
+    assert_eq!(parts, (2..=(requests - 2) as u64).collect::<Vec<_>>());
+    let snapshot = serde_json::to_value(fixture.session.snapshot().await.session).unwrap();
+    let completed = &snapshot["turns"].as_array().unwrap().last().unwrap()["items"][0];
+    assert_eq!(completed["part"], (requests - 2) as u64);
+    fixture.close().await;
 }
 
 #[tokio::test]

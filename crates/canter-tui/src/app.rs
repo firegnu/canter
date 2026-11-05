@@ -5877,7 +5877,7 @@ impl App {
     /// it is: a command and the command, or compacting. `None` otherwise,
     /// and while nothing is in progress, such as while waiting for the
     /// model; then the line has the turn's playful word ([`App::turn_word`]).
-    fn doing(&self) -> Option<(&'static str, Option<String>)> {
+    fn doing(&self) -> Option<(String, Option<String>)> {
         let turn = self
             .snapshot
             .turns
@@ -5889,9 +5889,13 @@ impl App {
             .find(|&index| !self.item_done(turn, index))?;
         Some(match &turn.items[index] {
             Item::CommandExecution { command, .. } => {
-                ("Running ", Some(cells::command_line(command)))
+                ("Running ".into(), Some(cells::command_line(command)))
             }
-            Item::ContextCompaction { .. } => ("Compacting context…", None),
+            Item::ContextCompaction {
+                before_tokens,
+                part,
+                ..
+            } => (cells::compacting(*before_tokens, *part), None),
             _ => return None,
         })
     }
@@ -5972,8 +5976,8 @@ impl App {
                 let spinner = format!(" {frame} ");
                 let word = self.turn_word();
                 let (verb, command) = match self.doing() {
-                    Some((_, Some(_))) if command_above => (word, None),
-                    doing => doing.unwrap_or((word, None)),
+                    Some((_, Some(_))) if command_above => (word.to_owned(), None),
+                    doing => doing.unwrap_or_else(|| (word.to_owned(), None)),
                 };
                 let mut numbers = format!(" · {elapsed}");
                 let keys = format!(" · Esc to interrupt{steer}");
@@ -5981,7 +5985,7 @@ impl App {
                 // those sent before those received, while the time still
                 // fits.
                 let before = str_width(&spinner)
-                    + str_width(verb)
+                    + str_width(&verb)
                     + command
                         .as_deref()
                         .map_or(0, |command| str_width(command).min(MIN_COMMAND))
@@ -5998,9 +6002,13 @@ impl App {
                     }
                 }
                 let used =
-                    str_width(&spinner) + str_width(verb) + str_width(&numbers) + str_width(&keys);
+                    str_width(&spinner) + str_width(&verb) + str_width(&numbers) + str_width(&keys);
                 let mut spans = vec![Span::styled(spinner, theme::working())];
-                spans.extend(shimmer::working(verb, now_ms));
+                spans.extend(
+                    shimmer::working(&verb, now_ms)
+                        .into_iter()
+                        .map(|span| Span::styled(span.content.into_owned(), span.style)),
+                );
                 if let Some(command) = command {
                     let fits = room.saturating_sub(used).max(MIN_COMMAND);
                     spans.extend(truncate(vec![Span::raw(command)], fits));

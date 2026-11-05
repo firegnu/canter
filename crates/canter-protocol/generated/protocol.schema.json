@@ -3906,8 +3906,33 @@
         },
         {
           "properties": {
+            "afterTokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "beforeTokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "id": {
               "type": "string"
+            },
+            "part": {
+              "description": "Current transcript chunk, starting at 2; absent for a single chunk.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "restoredFiles": {
               "items": {
@@ -4053,6 +4078,24 @@
           "required": [
             "type",
             "delta"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "part": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "contextCompaction",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "part"
           ],
           "type": "object"
         },

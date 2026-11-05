@@ -731,6 +731,16 @@ pub enum Item {
     ContextCompaction {
         id: String,
         summary: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        before_tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        after_tokens: Option<u64>,
+        /// Current transcript chunk, starting at 2; absent for a single chunk.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        part: Option<u32>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         #[ts(optional = nullable)]
         restored_files: Vec<RestoredFile>,
