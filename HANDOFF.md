@@ -130,7 +130,7 @@
 ## 机器和环境
 
 - 参考源码只读克隆在 `/tmp/r49-src/`：`codex`（`rust-v0.163.0`）、`pi`（`v1.4.0`）、`opencode`（`v2.1.3`）。`/tmp` 重启会清空，丢了照这三个标签重新 `git clone --depth 1 --branch <标签>`（地址见调研报告「本地读的源码」）。
-- 编译目录：`../canter-worktrees/.target/<子目录>`，主仓库用 `main`。
+- 编译目录：`../canter-worktrees/.target/<子目录>`，主仓库用 `main`。cargo 不删旧的测试程序，`main` 会越攒越大：11-05 攒到 81G（30 万个文件），用户发现硬盘掉得快，主控 `cargo clean` 清掉（腾出 86G），连同 10-31 审查 P2-173 没清的两个 `review-p2-173-*` 目录（5.8G）。之后每件活收尾时看一眼 `du -sh ../canter-worktrees/.target/main`，超过 20G 就 `cargo clean`（只是缓存，下次编译慢一点）。
 - 测试用 cargo-nextest（10-26 用 Homebrew 装的 0.9.149，`/opt/homebrew/bin/cargo-nextest`）。
 - 开 agent：`corral start` 单独一条运行，前后不用 `&&`、`;`、`|` 接别的命令，一次只开一个；建 worktree、`corral wait`、取结果都另起一条（用户的放行规则 `Bash(corral start:*)` 只认单独的 `corral start`，串起来会被自动权限检查以「Create Unsafe Agents」拦下；corral-dispatch 技能第 4 节，ranch f4a9a29，10-28）。单独一条仍被拦，再把命令给用户用 `!` 运行。
 
