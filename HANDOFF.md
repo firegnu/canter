@@ -173,6 +173,12 @@
   - README 说「目录里有了的模型不用再手写」，但 GPT 这一家仍必须手写至少一个模型（`models must not be empty`）。
   - 历史目录资料 `known` 退出账号后内存里不清，各账号混在一起用（只影响恢复已从目录消失的模型时用谁的资料）。
   - 复核建议改：给子会话 PATCH 换模型时，`session.rs` 换上 `next_options` 会把继承来的沙箱值换成配置里的值（`apply_configuration` 专门保留了它）。TUI 和 agent 工具目前都不会这么做。改法：换模型时保留原 `sandbox`。
+- GPT 加密思考回传（P2-210，11-05 合并，还没真调）交叉审查建议改、没做的（真调后再定）：
+  - 被拒后能不能自动重发，看 GPT 怎么报：只认 HTTP 错误和不带用量的流内错误；如果 GPT 用 `response.failed` 附带用量来报 `invalid_encrypted_content`，就不会去掉密文重发，用户直接看到 `ChatGPT rejected encrypted history`，也不记被拒，之后每轮再被拒。真调碰到被拒时看 `server.log`。改法：被拒判断只看有没有模型输出，不把终止事件上的用量算作输出（`crates/canter-model/src/responses.rs` 的 `observed`）。
+  - fork 两种情况会丢掉被拒记录：从还没结束的那一轮 fork、源会话做过回退。新会话第一次请求会再被拒一次、自动重发，不会失败（`crates/canter-core/src/fork.rs`）。
+  - `canter-model/tests/streaming.rs` 的 `responses_replay_metadata_never_changes_chat_completions_bytes` 没和不带 replay 的请求比，是空转测试；结论由别的逐字节测试保证。
+  - 可以不改：一轮工具循环中途被拒，这一轮剩下的请求都只发普通文字；没有轮次标识的 replay 被拒后记不下来（正常路径到不了）；同一 ChatGPT 账号退出重登算不同账号，之前的 replay 只发普通文字。
+
 - GPT 套餐用量显示（P2-217，11-05 合并，还没真调）没做的：
   - 只用 GPT 跑 `/goal` 时，目标花费显示 `goal $0.00/$5.00`（以前是 `$0.00+?`），和「不把套餐显示成 $0.00」对不上；服务端写进对话的 `Goal … · $0.00 / $5.00` 也一样。改法：`crates/canter-tui/src/goal.rs` 的 `bar` 在 `cost.chatgpt_plan` 时补 ` + ChatGPT plan`；发给模型的 goal 提示（`core/src/goal.rs:104`）是 prompt，不动。
   - 状态栏 Cost 项另写一份金额格式，没复用 `usage::cost`，两处都用格式化后的文字是否等于 `"$0.00"` 判断别家有没有花钱（`app.rs`、`usage.rs`）。核心选项名 `chatgpt_plan_providers` 带 ChatGPT。
