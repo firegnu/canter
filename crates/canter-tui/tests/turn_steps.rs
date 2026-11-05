@@ -322,6 +322,29 @@ fn thinking_shows_its_latest_line_then_folds_with_its_time() {
     assert!(rows.iter().any(|row| row.ends_with("Then the code.")));
 }
 
+#[test]
+fn thinking_without_summary_keeps_one_line_when_folded_or_expanded() {
+    let mut screen = Screen::new(WIDTH);
+    let item = json!({ "type": "reasoning", "id": "r1", "summary": [], "content": [] });
+    screen.started(item.clone());
+    assert_eq!(screen.rows(), ["✻ Thinking…"]);
+    screen.now += 3000;
+    screen.event(json!({
+        "type": "item.delta", "turnId": "t1", "itemId": "r1",
+        "delta": { "type": "reasoningContent", "contentIndex": 0, "delta": "" },
+    }));
+    screen.completed(item);
+    for _ in 0..2 {
+        assert_eq!(screen.rows(), ["✻ Thought for 3s · no summary"]);
+        let buffer = screen.draw();
+        assert_eq!(cell(buffer, "✻ Thought for 3s").fg, Color::Magenta);
+        let text = cell(buffer, "no summary");
+        assert_eq!(text.fg, Color::DarkGray);
+        assert!(text.modifier.contains(Modifier::DIM | Modifier::ITALIC));
+        screen.ctrl_o();
+    }
+}
+
 /// A thought with no time is `✻ Thought`; a long one is cut with `…`.
 #[test]
 fn a_thought_without_a_time_is_thought_and_is_cut_to_the_width() {

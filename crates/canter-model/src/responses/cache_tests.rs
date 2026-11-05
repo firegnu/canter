@@ -153,6 +153,13 @@ async fn cache_diagnostics_cover_failures_retries_and_cancellation() {
     }
     let cancellation = CancellationToken::new();
     let mut stream = model.stream(Request::default(), cancellation.clone());
+    assert_eq!(
+        stream.next().await,
+        Some(Ok(ModelEvent::ReasoningDelta {
+            item_id: "private-id:0".into(),
+            delta: String::new(),
+        }))
+    );
     assert!(matches!(
         stream.next().await,
         Some(Ok(ModelEvent::TextDelta { .. }))

@@ -12,6 +12,8 @@ pub(crate) struct ReceivedItem {
     pub id: String,
     pub content: AssistantContent,
     pub complete: bool,
+    /// Empty reasoning deltas create a display clock, not model content.
+    pub display_only: bool,
 }
 
 impl Response {
@@ -50,9 +52,21 @@ impl Response {
             }
             _ => return None,
         };
+        let display_only =
+            matches!(event, ModelEvent::ReasoningDelta { delta, .. } if delta.is_empty());
         if let Some(index) = self.items.iter().position(|item| item.model_id == model_id) {
+            // History retains the order in which real content first arrived,
+            // even when a display-only start preceded another item's text.
+            let index = if self.items[index].display_only && !display_only {
+                let item = self.items.remove(index);
+                self.items.push(item);
+                self.items.len() - 1
+            } else {
+                index
+            };
             let item = &mut self.items[index];
             if !item.complete {
+                item.display_only &= display_only;
                 match (&mut item.content, content) {
                     (
                         AssistantContent::Text { text } | AssistantContent::Reasoning { text },
@@ -70,6 +84,7 @@ impl Response {
                 id: crate::session::id("model"),
                 content,
                 complete,
+                display_only,
             });
             Some((self.items.last().unwrap(), true))
         }
@@ -78,7 +93,7 @@ impl Response {
     pub fn completed(&self) -> Vec<AssistantContent> {
         self.items
             .iter()
-            .filter(|item| item.complete)
+            .filter(|item| item.complete && !item.display_only)
             .map(|item| item.content.clone())
             .collect()
     }
