@@ -75,7 +75,7 @@
 
 ## 合并以后（用户和主控做）
 
-- 用户装好新版，在 canter-test-rust 用 GPT 真调：让它用一个补丁改两个文件、新建一个文件、删一个文件，看批准框、改动列表、`/rewind`；再切回 DeepSeek 确认工具是 write/edit。主控看日志，次数和结果记进本文件。
+- 用户装好新版，在 canter-test-rust 用 GPT 真调：让它用一个补丁改两个文件、新建一个文件、删一个文件，看批准框、改动列表、`/rewind`；再切回 DeepSeek 确认工具是 write/edit。（11-05 交叉审查建议 7：切回 DeepSeek 放在同一个会话里做，看历史里的补丁调用会不会被拒。）主控看日志，次数和结果记进本文件。
 
 ## 做完
 
@@ -125,3 +125,13 @@
 - write/edit 的批准框文件行恢复 main 的原文；Create/Delete/Move 动作前缀只用于 apply_patch。新增断言固定 write 新建文件仍显示 `foo.txt  +1`，apply_patch 才显示 `Create foo.txt  +1`。
 
 定向验证：canter-tools 的 apply_patch 7 项、file_rules 14 项，canter-core 的 Responses custom patch 集成测试，canter-tui 的新批准框单元测试均通过。随后运行 Clippy、fmt 和 diff 检查；不跑全套。
+
+## 主控审查
+
+2026-11-05，canter/main。开发：Kimi Code 默认 k3.1-pro（canter/dev-apply-patch-1），派出 15:07 → DONE 16:19，约 72 分钟，中途没停下问；返工 16:29 → 16:38，约 9 分钟。用户在它窗口里有过三次输入（15:58、16:06、16:36）。交叉审查：Claude Code opus[1m] / high（canter/review-apply-patch-1），一轮加一次复核。
+- 主控看 diff：范围和完成记录对得上；015 fixture 改成「一个都不写」同意（用户定的是先全部检查、对不上一个都不写）。
+- 交叉审查必须改 1 条：一个补丁里先碰到「询问」规则的路径就不再查后面「禁止」规则的路径，询问模式下点同意会写进被禁止的文件（漏查路径，权限）。连同建议 2（发给 OpenAI 的 grammar 多了来源注释，改成和 Codex 逐字节一致）、建议 3（write 新建文件的批准框多了 `Create`，恢复原样）一起交回；复核：可以合并。
+- 建议 4～8 没改，记进 HANDOFF。
+- 合并前全套（返工后的 `6fd92f6`）1824 项全过、49 跳过，文档测试通过。代码质量：搬来的部分保持 Codex 原样、来源写全；接入部分改动集中，单文件路径和原逻辑等价。
+
+结果：返工 1 次

@@ -399,3 +399,9 @@
   - 被拦的空轮、`!命令` 轮、手动压缩轮结束时也触发 Stop（`last_assistant_message` 为空串）。
   - 被 UserPromptSubmit 拦下时界面留一个空轮（照主控定的退路）。
   - 格式化钩子改了刚写的文件时会提示模型；但 `cargo fmt` 顺带改了别的文件，模型不知道，试用时留意改文件常不常报 `oldText not found`。
+- P2-205 apply_patch 交叉审查的建议改（11-05 没改，合并后看用户试用再定）：
+  - 批准框显示模型写的路径，不是解析后的实际路径（`approval.rs` `patch_body` 用 `change.path`，write/edit 优先显示 `resolvedPath`）；符号链接时看不出真正的目标。
+  - 改名到已存在的文件时，批准框看不出目标原内容会被覆盖（备份里有，`/rewind` 能退）。
+  - hook 收到的 `tool_input` 是 null（补丁是纯文本），按 `write|edit` 配的 PreToolUse hook 拦不到 apply_patch；要拦得在 matcher 里加 `apply_patch`，且拿不到补丁内容。
+  - 换到别的模型后，历史里的补丁调用按普通函数调用发出、参数是补丁原文不是 JSON，DeepSeek 等会不会拒没查证；P2-207 做跨家转换时一并处理。
+  - 写到一半失败时，已改的文件不进终端的改动文件列表（`canter-tui/src/files.rs` 只算 Completed）。
