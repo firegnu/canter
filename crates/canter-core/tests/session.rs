@@ -204,7 +204,7 @@ async fn configured_reasoning_reaches_requests_and_telemetry_without_remapping()
 }
 
 #[tokio::test]
-async fn private_replay_is_saved_and_sent_only_within_the_current_turn() {
+async fn private_replay_is_saved_until_provider_scoping_or_compaction_removes_it() {
     let temp = tempfile::tempdir().unwrap();
     let replay: canter_model::Replay = serde_json::from_value(serde_json::json!({
         "api":"responses","model":"test-model","output":[
@@ -311,13 +311,15 @@ async fn private_replay_is_saved_and_sent_only_within_the_current_turn() {
         model.requests.lock().unwrap()[2]
             .messages
             .iter()
-            .all(|message| !matches!(
-                message,
-                Message::Assistant {
-                    replay: Some(_),
-                    ..
-                }
-            ))
+            .any(|message| {
+                matches!(
+                    message,
+                    Message::Assistant {
+                        replay: Some(_),
+                        ..
+                    }
+                )
+            })
     );
     assert!(
         !serde_json::to_string(&estimate_with_replay)
@@ -344,14 +346,26 @@ async fn private_replay_is_saved_and_sent_only_within_the_current_turn() {
     finished(&mut events).await;
     session.input(input("After compaction")).await.unwrap();
     finished(&mut events).await;
-    for request in &model.requests.lock().unwrap()[3..] {
-        assert!(request.messages.iter().all(|message| !matches!(
-            message,
-            Message::Assistant {
-                replay: Some(_),
-                ..
-            }
-        )));
+    {
+        let requests = model.requests.lock().unwrap();
+        for request in &requests[3..=5] {
+            assert!(request.messages.iter().any(|message| matches!(
+                message,
+                Message::Assistant {
+                    replay: Some(_),
+                    ..
+                }
+            )));
+        }
+        for request in &requests[6..] {
+            assert!(request.messages.iter().all(|message| !matches!(
+                message,
+                Message::Assistant {
+                    replay: Some(_),
+                    ..
+                }
+            )));
+        }
     }
     session.close().await.unwrap();
 }
@@ -364,6 +378,7 @@ async fn context_estimates_do_not_count_private_replay_payloads() {
         let replay = canter_model::Replay::Responses {
             model: "test".into(),
             scope: None,
+            account: None,
             output: vec![
                 serde_json::json!({"type":"reasoning","id":"r","summary":[],"encrypted_content":"x".repeat(size)}),
             ],

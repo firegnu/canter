@@ -19,10 +19,14 @@ fn prompt_cache_key_truncates_at_64_unicode_characters() {
         ),
         ("界".repeat(64), "界".repeat(64)),
     ] {
-        let body = wire::request_body(&Request {
-            session_id: Some(session_id),
-            ..Default::default()
-        });
+        let body = wire::request_body(
+            &Request {
+                session_id: Some(session_id),
+                ..Default::default()
+            },
+            "test-account-fingerprint",
+            true,
+        );
         let key = body["prompt_cache_key"].as_str().unwrap();
         assert_eq!(key, expected);
         assert_eq!(key.chars().count(), 64);
@@ -32,10 +36,14 @@ fn prompt_cache_key_truncates_at_64_unicode_characters() {
 #[test]
 fn prompt_cache_key_is_omitted_without_a_session_id() {
     for session_id in [None, Some(String::new())] {
-        let body = wire::request_body(&Request {
-            session_id,
-            ..Default::default()
-        });
+        let body = wire::request_body(
+            &Request {
+                session_id,
+                ..Default::default()
+            },
+            "test-account-fingerprint",
+            true,
+        );
         assert!(body.get("prompt_cache_key").is_none());
     }
 }
@@ -195,6 +203,9 @@ impl ResponsesCredential for FailingAuth {
     }
     fn recover_unauthorized(&mut self) -> BoxFuture<'_, Result<(), ModelError>> {
         Box::pin(async { Err(ModelError::new(ErrorKind::Authentication)) })
+    }
+    fn replay_account(&self) -> String {
+        "test-account-fingerprint".into()
     }
 }
 

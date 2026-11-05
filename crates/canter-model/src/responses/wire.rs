@@ -11,45 +11,10 @@ pub(super) fn namespace(name: &str) -> &'static str {
 }
 
 /// SIWC accepts a smaller contract than the general Responses API.
-pub(super) fn request_body(request: &Request) -> Value {
+pub(super) fn request_body(request: &Request, account: &str, allow_replay: bool) -> Value {
     let mut input = Vec::new();
     for message in &request.messages {
-        match message {
-            Message::System { text } => input.push(text_message("developer", text)),
-            Message::User { text } => input.push(text_message("user", text)),
-            Message::UserParts { content } | Message::ToolImages { content } => {
-                input.push(json!({"role":"user", "content":content.iter().map(|part| match part {
-                    UserContent::Text { text } => json!({"type":"input_text","text":text}),
-                    UserContent::Image { data_url, .. } => json!({"type":"input_image","image_url":data_url}),
-                }).collect::<Vec<_>>()}));
-            }
-            Message::Assistant { content, replay } => {
-                if let Some(Replay::Responses { model, output, .. }) = replay
-                    && model == &request.model
-                {
-                    input.extend(output.iter().cloned());
-                    continue;
-                }
-                for part in content {
-                    match part {
-                        AssistantContent::Text { text } => input.push(json!({
-                            "type":"message", "role":"assistant",
-                            "content":[{"type":"output_text","text":text}],
-                        })),
-                        AssistantContent::ToolCall(call) => input.push(json!({
-                            "type":"function_call", "call_id":call.id,
-                            "namespace":namespace(&call.name), "name":call.name,
-                            "arguments":call.arguments,
-                        })),
-                        AssistantContent::Reasoning { .. } | AssistantContent::Unknown => {}
-                    }
-                }
-            }
-            Message::ToolResult { tool_call_id, text } => input.push(json!({
-                "type":"function_call_output", "call_id":tool_call_id, "output":text,
-            })),
-            Message::Unknown => {}
-        }
+        append_input(&mut input, message, &request.model, account, allow_replay);
     }
     let mut body = json!({
         "model":request.model, "input":input, "store":false, "stream":true,
@@ -89,9 +54,78 @@ pub(super) fn request_body(request: &Request) -> Value {
     body
 }
 
+fn append_input(
+    input: &mut Vec<Value>,
+    message: &Message,
+    model: &str,
+    account: &str,
+    allow_replay: bool,
+) {
+    match message {
+        Message::System { text } => input.push(text_message("developer", text)),
+        Message::User { text } => input.push(text_message("user", text)),
+        Message::UserParts { content } | Message::ToolImages { content } => {
+            input.push(json!({"role":"user", "content":content.iter().map(|part| match part {
+                UserContent::Text { text } => json!({"type":"input_text","text":text}),
+                UserContent::Image { data_url, .. } => json!({"type":"input_image","image_url":data_url}),
+            }).collect::<Vec<_>>()}));
+        }
+        Message::Assistant { content, replay } => {
+            if allow_replay
+                && let Some(Replay::Responses { output, .. }) = replay
+                    .as_ref()
+                    .filter(|replay| replay.belongs_to(model, account))
+            {
+                input.extend(output.iter().cloned());
+                return;
+            }
+            for part in content {
+                match part {
+                    AssistantContent::Text { text } => input.push(json!({
+                        "type":"message", "role":"assistant",
+                        "content":[{"type":"output_text","text":text}],
+                    })),
+                    AssistantContent::ToolCall(call) => input.push(json!({
+                        "type":"function_call", "call_id":call.id,
+                        "namespace":namespace(&call.name), "name":call.name,
+                        "arguments":call.arguments,
+                    })),
+                    AssistantContent::Reasoning { .. } | AssistantContent::Unknown => {}
+                }
+            }
+        }
+        Message::ToolResult { tool_call_id, text } => input.push(json!({
+            "type":"function_call_output", "call_id":tool_call_id, "output":text,
+        })),
+        Message::Unknown => {}
+    }
+}
+
 /// The conversation id sent as the cache key and the `session-id` header.
 pub(super) fn session_id(request: &Request) -> Option<&str> {
     request.session_id.as_deref().filter(|id| !id.is_empty())
+}
+
+pub(super) fn replay_scopes(request: &Request, account: &str) -> Vec<String> {
+    request
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::Assistant {
+                replay: Some(replay),
+                ..
+            } if replay.belongs_to(&request.model, account) => {
+                Some(replay.scope().unwrap_or_default().to_owned())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+pub(super) fn has_replay(request: &Request, account: &str) -> bool {
+    request.messages.iter().any(|message| {
+        matches!(message, Message::Assistant { replay:Some(replay), .. } if replay.belongs_to(&request.model, account))
+    })
 }
 
 fn text_message(role: &str, text: &str) -> Value {

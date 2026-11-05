@@ -1,5 +1,5 @@
 use crate::session::Shared;
-use canter_model::{AssistantContent, ModelEvent, ModelStream, Request};
+use canter_model::{AssistantContent, ModelError, ModelEvent, ModelStream, Request};
 use canter_protocol::{
     CompactionTrigger, ContextEstimate, EventPayload, ModelRequestOutcome, ModelRequestTelemetry,
     ReasoningEffort, RequestPurpose, RequestSettings,
@@ -83,18 +83,20 @@ pub(crate) async fn stream<'a>(
     context: ContextEstimate,
     cancel: &CancellationToken,
 ) -> TrackedStream<'a> {
-    // Provider output is replayable only in this live conversation's tool loop.
-    // Auxiliary work, later turns and restored turns use portable content.
-    let scope = (purpose == RequestPurpose::Conversation)
-        .then_some(turn_id)
-        .flatten();
-    for message in &mut request.messages {
-        if let canter_model::Message::Assistant { replay, .. } = message
-            && replay
-                .as_ref()
-                .is_some_and(|replay| !replay.belongs_to_scope(scope))
-        {
-            *replay = None;
+    {
+        let state = shared.state.lock().await;
+        if !state.rejected_replays.is_empty() {
+            for message in &mut request.messages {
+                if let canter_model::Message::Assistant { replay, .. } = message
+                    && replay.as_ref().is_some_and(|replay| {
+                        replay
+                            .scope()
+                            .is_some_and(|scope| state.rejected_replays.contains(scope))
+                    })
+                {
+                    *replay = None;
+                }
+            }
         }
     }
     let trace = if shared.runtime().options.telemetry {
@@ -147,7 +149,22 @@ pub(crate) async fn stream<'a>(
         inner: Box::pin(async_stream::stream! {
             use futures_util::StreamExt;
             let mut stream = model.stream_with_context(request, cancel, model_context);
-            while let Some(event) = stream.next().await { yield event; }
+            while let Some(event) = stream.next().await {
+                if let Ok(ModelEvent::ReplayRejected { scopes }) = &event {
+                    let result = shared.state.lock().await.reject_replay(scopes).await;
+                    if result.is_err() {
+                        yield Err(ModelError {
+                            kind: canter_model::ErrorKind::Other,
+                            status: None,
+                            retry_after: None,
+                            retries: 0,
+                        });
+                        return;
+                    }
+                    continue;
+                }
+                yield event;
+            }
         }),
         trace,
         ended: false,

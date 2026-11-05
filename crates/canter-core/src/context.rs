@@ -88,6 +88,9 @@ pub(crate) enum HistoryEntry {
     CompactionRequest {
         messages: Vec<Message>,
     },
+    ReplayRejected {
+        scopes: Vec<String>,
+    },
     Compaction {
         summary: String,
         messages: Vec<Message>,
@@ -129,6 +132,7 @@ pub(crate) struct Restored {
     pub prefix: Vec<Message>,
     pub segments: Option<Vec<Segment>>,
     pub history: Vec<Message>,
+    pub rejected_replays: std::collections::HashSet<String>,
     pub users: Vec<Message>,
     pub summary_index: Option<usize>,
     pub plan_mode_notices: Vec<Message>,
@@ -170,6 +174,7 @@ pub(crate) fn restore(
     let mut diagnostic_notices = std::collections::BTreeSet::new();
     let mut restored_file_notices = std::collections::BTreeSet::new();
     let mut context_budget_notices = BTreeMap::new();
+    let mut rejected_replays = std::collections::HashSet::new();
     for entry in entries {
         match entry {
             HistoryEntry::ContextBudgetNotice { message, threshold } => {
@@ -290,11 +295,23 @@ pub(crate) fn restore(
                 };
             }
             HistoryEntry::CompactionRequest { .. } => {}
+            HistoryEntry::ReplayRejected { scopes } => rejected_replays.extend(scopes),
             HistoryEntry::AgentResultDelivered { .. } => {}
             HistoryEntry::Unknown => {}
         }
         flush_tool_images(&mut history, &mut users, &mut tool_images);
         flush_plan_mode_notices(&mut history, &mut plan_mode_notices);
+    }
+    for message in &mut history {
+        if let Message::Assistant { replay, .. } = message
+            && replay.as_ref().is_some_and(|replay| {
+                replay
+                    .scope()
+                    .is_some_and(|scope| rejected_replays.contains(scope))
+            })
+        {
+            *replay = None;
+        }
     }
     Restored {
         acknowledged_agent_results,
@@ -306,6 +323,7 @@ pub(crate) fn restore(
         prefix,
         segments,
         history,
+        rejected_replays,
         users,
         summary_index,
         plan_mode_notices,
