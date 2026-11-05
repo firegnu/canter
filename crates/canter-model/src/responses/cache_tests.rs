@@ -88,6 +88,10 @@ async fn cache_diagnostics_cover_failures_retries_and_cancellation() {
         assert_eq!(rows[1]["input_prefix_equal"], true);
         assert_eq!(rows[2]["usage"]["input_tokens"], 100);
         assert_eq!(rows[5]["usage"]["input_tokens"], "invalid");
+        assert_eq!(
+            rows[5]["usage"]["output_tokens_details.reasoning_tokens"],
+            "invalid"
+        );
         assert_eq!(rows[6]["outcome"], "cancelled");
         assert_eq!(rows[6]["done"][0]["type"], "reasoning");
         assert_eq!(rows[7]["sent_unix_ms"], "missing");
@@ -111,7 +115,7 @@ async fn cache_diagnostics_cover_failures_retries_and_cancellation() {
         Reply::sse(event(json!({"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"private-error"},"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}))),
         Reply::sse(event(json!({"type":"response.incomplete","response":{"error":{"message":"private-error"}}}))),
         Reply::sse(""),
-        Reply::sse(event(json!({"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":"private-error","output_tokens":10,"total_tokens":110}}}))),
+        Reply::sse(event(json!({"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":"private-error","output_tokens":10,"total_tokens":110,"output_tokens_details":{"reasoning_tokens":"private-error"}}}}))),
         Reply {hang:true,..Reply::sse(
             event(json!({"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"private-id","summary":[],"encrypted_content":"private-cipher"}}))
             + &event(json!({"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"private-id-message","content":[]}}))
@@ -228,6 +232,10 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
                 assert_eq!(row["outcome"], "success");
                 assert_eq!(row["prompt_cache_key_present"], true);
                 assert_eq!(row["session_header_present"], true);
+                assert_eq!(
+                    row["reasoning.effort"],
+                    if index == 0 { "missing" } else { "high" }
+                );
                 assert!(row["sent_unix_ms"].as_u64().unwrap() > 0);
                 assert!(row["elapsed_ms"].is_number());
                 assert_eq!(row["model_hash"], rows[0]["model_hash"]);
@@ -257,6 +265,18 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
             assert_eq!(rows[1]["usage"]["input_tokens_details.cached_tokens"], 0);
             assert_eq!(rows[2]["usage"]["input_tokens_details.cached_tokens"], 80);
             assert_eq!(
+                rows[0]["usage"]["output_tokens_details.reasoning_tokens"],
+                "missing"
+            );
+            assert_eq!(
+                rows[1]["usage"]["output_tokens_details.reasoning_tokens"],
+                0
+            );
+            assert_eq!(
+                rows[2]["usage"]["output_tokens_details.reasoning_tokens"],
+                7
+            );
+            assert_eq!(
                 rows[0]["usage"]["input_tokens_details.cache_write_tokens"],
                 "missing"
             );
@@ -271,12 +291,20 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
             assert_eq!(
                 rows[0]["done"],
                 json!([
-                    {"index":0,"type":"reasoning","encrypted_content":true},
+                    {"index":0,"type":"reasoning","encrypted_content":true,"summary_count":0,"summary_chars":0},
                     {"index":1,"type":"message","encrypted_content":true},
                     {"index":2,"type":"function_call","encrypted_content":true,"encrypted_function_args":true}
                 ])
             );
             assert_eq!(rows[0]["completed"], json!([]));
+            assert_eq!(
+                rows[1]["done"][0]["summary_count"],
+                if mode == "tools" { 2 } else { 1 }
+            );
+            assert_eq!(
+                rows[1]["done"][0]["summary_chars"],
+                if mode == "tools" { 35 } else { 18 }
+            );
             assert_eq!(rows[1]["completed"], rows[1]["done"]);
             assert_eq!(rows[2]["completed"][0]["encrypted_content"], false);
             for private in [
@@ -289,6 +317,9 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
                 "private-developer",
                 "private-tool",
                 "private-session",
+                "private-summary",
+                "界🦀",
+                "尾",
                 crate::test_support::KEY,
             ] {
                 assert!(!log.contains(private), "leaked fixture marker");
@@ -301,6 +332,17 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
     let call = json!({"type":"function_call","id":"private-id-f","call_id":"private-call","namespace":"canter","name":"read","arguments":"{\"path\":\"private-arguments\"}","encrypted_content":"private-cipher-f","encrypted_function_args":"private-cipher-args"});
     let mut replies = Vec::new();
     for index in 0..3 {
+        let mut reasoning = reasoning.clone();
+        if index == 1 {
+            reasoning["summary"] = json!([
+                {"type":"summary_text","text":"private-summary-界🦀"}
+            ]);
+            if mode == "tools" {
+                reasoning["summary"].as_array_mut().unwrap().push(json!(
+                    {"type":"summary_text","text":"private-summary-尾"}
+                ));
+            }
+        }
         let items = if index < 2 {
             vec![reasoning.clone(), message.clone(), call.clone()]
         } else {
@@ -317,6 +359,7 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
         if index > 0 {
             usage["input_tokens_details"] =
                 json!({"cached_tokens":if index == 1 {0} else {80},"cache_write_tokens":0});
+            usage["output_tokens_details"] = json!({"reasoning_tokens":if index == 1 {0} else {7}});
         }
         if index == 2 {
             usage["cache_write_tokens"] = json!(20);
@@ -354,6 +397,7 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
     };
     for index in 0..3 {
         if index == 1 {
+            request.options.reasoning_effort = Some("high".into());
             if mode == "tools" {
                 request.tools[0].description.push('!');
             }
@@ -395,8 +439,13 @@ async fn cache_diagnostics_cover_tool_round_and_redact_content() {
     }
     let bodies = server.requests.lock().unwrap().clone();
     assert_eq!(bodies.len(), 3);
-    for body in bodies {
+    for (index, body) in bodies.into_iter().enumerate() {
         assert_eq!(body["prompt_cache_key"], "private-session");
+        if index == 0 {
+            assert!(body["reasoning"].get("effort").is_none());
+        } else {
+            assert_eq!(body["reasoning"]["effort"], "high");
+        }
     }
     let headers = server.headers.lock().unwrap().clone();
     assert_eq!(headers.len(), 3);

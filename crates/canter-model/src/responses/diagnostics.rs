@@ -79,6 +79,12 @@ impl Diagnostic {
             "model_hash":fingerprint(&bytes(&body["model"])),
             "prompt_cache_key_present":body.get("prompt_cache_key").is_some(),
             "session_header_present":session_header,
+            "reasoning.effort":match body["reasoning"].get("effort") {
+                None => "missing",
+                Some(value) => value.as_str()
+                    .filter(|effort| matches!(*effort, "none" | "low" | "medium" | "high" | "xhigh" | "max"))
+                    .unwrap_or("invalid"),
+            },
             "input_count":input.len(), "previous_request":"missing",
             "input_prefix_equal":"missing", "first_different_item":"missing",
             "tools_hash":fingerprint(&tools), "tools_equal":"missing",
@@ -187,6 +193,18 @@ fn metadata(index: u64, item: &Value) -> Value {
     if kind == "function_call" {
         result["encrypted_function_args"] = json!(item.get("encrypted_function_args").is_some());
     }
+    if kind == "reasoning"
+        && let Some(summary) = item["summary"].as_array()
+    {
+        result["summary_count"] = json!(summary.len());
+        result["summary_chars"] = json!(
+            summary
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .map(|text| text.chars().count())
+                .sum::<usize>()
+        );
+    }
     result
 }
 
@@ -202,6 +220,7 @@ fn usage(value: &Value) -> Value {
     let mut result = json!({
         "input_tokens":count(value.get("input_tokens")),
         "output_tokens":count(value.get("output_tokens")),
+        "output_tokens_details.reasoning_tokens":count(value["output_tokens_details"].get("reasoning_tokens")),
         "input_tokens_details.cached_tokens":count(value["input_tokens_details"].get("cached_tokens")),
     });
     // Only local field names are printed, including when a server sends an
