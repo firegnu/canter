@@ -36,3 +36,8 @@
 - **apply_patch 跟这件一起做**：DESIGN 第 6、10 条已定，接 OpenAI 时搬 Codex 的 `apply-patch`。GPT 模型习惯用补丁一次增、改、删多个文件：Codex 模型清单里 11 个模型都开 `apply_patch`（freeform），opencode 只给 GPT 模型 `patch`（P2-88 报告 [C9]、[O7]）。
 - 搬代码照 CLAUDE.md：文件开头注明来源（项目、版本标签、原文件），保留许可证声明，按 Apache-2.0 维护 `NOTICE`。
 - 分解时要定：只给 GPT 模型还是都给；和现有 `write`、`edit` 的批准、改动记录（P2-54）、撤销（P2-23）怎么接。
+
+## 剩下几件交给谁（11-05）
+
+- 用户 11-05：「我接下来会在这个难度程度下的task分别随机分给codex和kimi，我要根据这些来评估模型质量以及修正我corral的dispatch的分活逻辑。」主控建议轮流分、由主控记数，用户：「可以，就按这个轮流分」。条件：Codex 用 gpt-6-astra / high，Kimi 用默认 k3.1-pro，交叉审查都交 Claude Code opus[1m] / high。
+- 排法：P2-216 Kimi、P2-217 Kimi、P2-210 Codex、P2-205 Codex、P2-207 Kimi；P2-208 以验证为主，交 Codex，不算对比样本。写任务文件时照这个排、给用户看过再派，用户可以改。
