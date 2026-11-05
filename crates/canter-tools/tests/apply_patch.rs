@@ -1,4 +1,4 @@
-use canter_protocol::{Item, PatchChangeKind, PermissionMode};
+use canter_protocol::{ApprovalDecision, Item, PatchChangeKind, PermissionMode};
 use canter_tools::{
     CommandHandle, Executor, FileReader, LocalExecutor, PermissionCheck, PermissionGate,
     PreparedCall, Tool, ToolOutcome, Tools,
@@ -172,6 +172,43 @@ async fn outside_workspace_and_plan_mode_follow_existing_write_rules() {
     assert!(tools.find("write").is_none() && tools.find("edit").is_none());
     assert!(tools.find("apply_patch").is_some());
     assert!(!outside.path().join("new.txt").exists());
+}
+
+#[tokio::test]
+async fn forbidden_rule_after_prompt_rule_blocks_the_whole_patch_and_accept() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("README.md"), "old\n").unwrap();
+    std::fs::create_dir(temp.path().join("secrets")).unwrap();
+    let rules = temp.path().join("rules.json");
+    std::fs::write(
+        rules,
+        r#"{"rules":[],"fileRules":[
+            {"pattern":"*.md","decision":"prompt"},
+            {"pattern":"secrets/**","decision":"forbidden"}
+        ]}"#,
+    )
+    .unwrap();
+    let tools = tools(&temp);
+    let patch = "*** Begin Patch\n*** Update File: README.md\n@@\n-old\n+new\n*** Add File: secrets/x\n+secret\n*** End Patch";
+    let cancel = CancellationToken::new();
+    let call = tools
+        .prepare(Tool::ApplyPatch, "rules", patch, &cancel)
+        .await
+        .unwrap();
+    let mut gate = PermissionGate::default().with_rules_file(temp.path().join("rules.json"));
+    assert!(matches!(
+        gate.evaluate(&call, PermissionMode::AlwaysAsk),
+        PermissionCheck::Forbidden { .. }
+    ));
+    assert!(matches!(
+        gate.resolve(&call, ApprovalDecision::Accept, None),
+        Ok(PermissionCheck::Forbidden { .. })
+    ));
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("README.md")).unwrap(),
+        "old\n"
+    );
+    assert!(!temp.path().join("secrets/x").exists());
 }
 
 #[tokio::test]

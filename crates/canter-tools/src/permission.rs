@@ -205,27 +205,44 @@ impl PermissionGate {
         ) {
             return None;
         }
-        for (requested, path) in call.prepared_paths() {
-            let decision = self.read_rules(true, |rules| {
-                rules.file_decision(
-                    std::path::Path::new(requested),
-                    path,
-                    call.executor.cwd(),
-                    call.executor.home(),
-                )
+        let decisions: Vec<_> = call
+            .prepared_paths()
+            .into_iter()
+            .map(|(requested, path)| {
+                self.read_rules(true, |rules| {
+                    rules.file_decision(
+                        std::path::Path::new(requested),
+                        path,
+                        call.executor.cwd(),
+                        call.executor.home(),
+                    )
+                })
+            })
+            .collect();
+        if decisions.iter().any(|decision| {
+            matches!(
+                decision,
+                Ok(Some(canter_protocol::FileRuleDecision::Forbidden))
+            )
+        }) {
+            return Some(PermissionCheck::Forbidden {
+                reason: "File blocked by the user's rules.json. Do not try another way to access this file.".into(),
             });
-            match decision {
-                Ok(Some(canter_protocol::FileRuleDecision::Forbidden)) => return Some(PermissionCheck::Forbidden {
-                    reason: "File blocked by the user's rules.json. Do not try another way to access this file.".into(),
-                }),
-                Err(()) if mode == PermissionMode::AllowAll => return Some(PermissionCheck::Forbidden {
-                    reason: "File access blocked because the user's rules.json could not be read or evaluated. Do not try another way to access this file; the user must fix the rules first.".into(),
-                }),
-                Err(()) | Ok(Some(canter_protocol::FileRuleDecision::Prompt)) if mode != PermissionMode::AllowAll => {
-                    return Some(self.ask(call, false))
-                }
-                _ => {}
-            }
+        }
+        if mode == PermissionMode::AllowAll && decisions.iter().any(Result::is_err) {
+            return Some(PermissionCheck::Forbidden {
+                reason: "File access blocked because the user's rules.json could not be read or evaluated. Do not try another way to access this file; the user must fix the rules first.".into(),
+            });
+        }
+        if mode != PermissionMode::AllowAll
+            && decisions.iter().any(|decision| {
+                matches!(
+                    decision,
+                    Err(()) | Ok(Some(canter_protocol::FileRuleDecision::Prompt))
+                )
+            })
+        {
+            return Some(self.ask(call, false));
         }
         None
     }

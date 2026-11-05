@@ -14,6 +14,9 @@ use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
+// This file is byte-for-byte from openai/codex, tag rust-v0.163.0, commit
+// 83086188ae0614bd882818ff1aa23f3194962012,
+// codex-rs/core/assets/tools/apply_patch.lark. Licensed under Apache-2.0.
 pub const GRAMMAR: &str = include_str!("apply_patch.lark");
 
 pub struct PreparedPath {

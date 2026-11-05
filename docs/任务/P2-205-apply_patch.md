@@ -115,3 +115,13 @@
 
 - 多文件 PostToolUse 改造最初把既有单文件提示改成了绝对路径，服务端回归测试发现后已恢复原有相对路径输出，最终完整服务端测试通过。
 - 本机假服务会校验测试 Authorization 头；初次集成测试用了不同的占位值导致重试，改用共享测试常量后通过。
+
+### 返工
+
+2026-11-05，按交叉审查只改指定的三条：
+
+- `file_rules` 先计算补丁所有路径的规则结果，再优先处理 Forbidden 和 Allow all 下不可读的规则，最后才处理 Prompt，避免前一个 Prompt 掩盖后一个 Forbidden。新增回归测试覆盖“前 Prompt、后 Forbidden”：初次检查及 `resolve(Accept)` 都禁止，不弹批准框且不写任何文件。
+- `apply_patch.lark` 移除来源注释，与 Codex 原文件 `diff` 无差异；来源说明移到 `mod.rs`。Responses 集成测试断言实际发送的 grammar definition 不含来源、提交号和许可证注释。
+- write/edit 的批准框文件行恢复 main 的原文；Create/Delete/Move 动作前缀只用于 apply_patch。新增断言固定 write 新建文件仍显示 `foo.txt  +1`，apply_patch 才显示 `Create foo.txt  +1`。
+
+定向验证：canter-tools 的 apply_patch 7 项、file_rules 14 项，canter-core 的 Responses custom patch 集成测试，canter-tui 的新批准框单元测试均通过。随后运行 Clippy、fmt 和 diff 检查；不跑全套。

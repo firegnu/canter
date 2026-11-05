@@ -438,6 +438,7 @@ fn patch_body(
             &change.diff,
             cwd,
             width,
+            true,
         ));
     }
     if rows.is_empty() {
@@ -457,7 +458,14 @@ fn change_body(
     let text = |key: &str| approval.arguments.get(key).and_then(Value::as_str);
     // The tools resolve the path; the resolved one is what really gets written.
     let path = text("resolvedPath").or(text("path")).unwrap_or_default();
-    change_rows(path, kind, text("diff").unwrap_or_default(), cwd, width)
+    change_rows(
+        path,
+        kind,
+        text("diff").unwrap_or_default(),
+        cwd,
+        width,
+        false,
+    )
 }
 
 fn change_rows(
@@ -466,20 +474,24 @@ fn change_rows(
     diff: &str,
     cwd: &str,
     width: u16,
+    show_action: bool,
 ) -> Vec<Line<'static>> {
     let diff = Diff::parse(&visible(diff), kind, path);
     let added = Span::styled(format!("+{}", diff.added()), theme::success());
     let removed = Span::styled(format!("−{}", diff.removed()), theme::failure());
-    let target = match kind {
-        PatchChangeKind::Update {
-            move_path: Some(destination),
-        } => format!(
+    let target = match (show_action, kind) {
+        (
+            true,
+            PatchChangeKind::Update {
+                move_path: Some(destination),
+            },
+        ) => format!(
             "Move {} → {}",
             display_path(path, cwd),
             display_path(destination, cwd)
         ),
-        PatchChangeKind::Add => format!("Create {}", display_path(path, cwd)),
-        PatchChangeKind::Delete => format!("Delete {}", display_path(path, cwd)),
+        (true, PatchChangeKind::Add) => format!("Create {}", display_path(path, cwd)),
+        (true, PatchChangeKind::Delete) => format!("Delete {}", display_path(path, cwd)),
         _ => display_path(path, cwd),
     };
     let mut header = vec![Span::styled(target, Style::new().bold()), Span::raw("  ")];
@@ -519,4 +531,39 @@ pub(crate) fn shorten_home(path: &str, home: Option<&str>) -> String {
         return format!("~{rest}");
     }
     path.to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_add_keeps_the_legacy_file_header_while_patch_add_is_labelled() {
+        let mut approval: ApprovalRequest = serde_json::from_value(serde_json::json!({
+            "itemId":"write-1",
+            "tool":"write",
+            "arguments":{"path":"foo.txt","diff":"+new\n"},
+            "availableDecisions":["accept"]
+        }))
+        .unwrap();
+        let rows = change_body(&approval, &PatchChangeKind::Add, "/workspace", 80);
+        let text = rows[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(text, "foo.txt  +1");
+
+        approval.tool = "apply_patch".into();
+        approval.arguments["changes"] = serde_json::json!([{
+            "path":"foo.txt", "kind":{"type":"add"}, "diff":"+new\n"
+        }]);
+        let rows = patch_body(&approval, None, "/workspace", 80);
+        let text = rows[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(text, "Create foo.txt  +1");
+    }
 }

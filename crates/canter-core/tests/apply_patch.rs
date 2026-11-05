@@ -307,6 +307,15 @@ async fn responses_custom_patch_has_one_approval_replays_and_rewinds_every_chang
             .iter()
             .all(|tool| tool["name"] != "write" && tool["name"] != "edit")
     );
+    let definition = tools
+        .iter()
+        .find(|tool| tool["name"] == "apply_patch")
+        .unwrap()["format"]["definition"]
+        .as_str()
+        .unwrap();
+    assert!(!definition.contains("Derived from openai/codex"));
+    assert!(!definition.contains("83086188ae0614bd882818ff1aa23f3194962012"));
+    assert!(!definition.contains("Licensed under Apache-2.0"));
     let input = requests[1]["input"].as_array().unwrap();
     assert!(input.contains(&call));
     assert!(input.iter().any(|item| {

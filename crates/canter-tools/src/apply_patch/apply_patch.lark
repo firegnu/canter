@@ -1,7 +1,3 @@
-// Derived from openai/codex, tag rust-v0.163.0, commit
-// 83086188ae0614bd882818ff1aa23f3194962012, codex-rs/core/assets/tools/apply_patch.lark.
-// Licensed under Apache-2.0. Local change: attribution comments only.
-
 start: begin_patch hunk+ end_patch
 begin_patch: "*** Begin Patch" LF
 end_patch: "*** End Patch" LF?
