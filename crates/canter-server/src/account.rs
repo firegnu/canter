@@ -160,6 +160,7 @@ async fn select(
     let auth = accounts.auth().await?;
     let record = resolve(&auth, Some(&params.account)).await?;
     auth.select(&record.id).await.map_err(auth_error)?;
+    accounts.auth.catalog().account_changed(auth.clone()).await;
     Ok(Json(snapshot(&auth).await))
 }
 
@@ -190,6 +191,7 @@ async fn logout(
         crate::chatgpt_auth::LogoutResult::Pending => AccountLogoutResult::Pending,
         crate::chatgpt_auth::LogoutResult::NoToken => AccountLogoutResult::NoToken,
     };
+    accounts.auth.catalog().logout(&auth, &record.id).await;
     Ok(Json(AccountLogoutResponse {
         provider: params.provider,
         account: public_record(resolve(&auth, Some(&record.id)).await?),
@@ -237,6 +239,7 @@ async fn start(
         .insert(login_id.clone(), receiver);
     let weak = Arc::downgrade(&accounts);
     let stopped = accounts.stopped.clone();
+    let catalog = accounts.auth.catalog().clone();
     tokio::spawn(async move {
         let result = tokio::select! {
             biased;
@@ -245,8 +248,13 @@ async fn start(
         };
         let result = match result {
             Ok(record) => {
-                auth.complete_login(&record.id, params.background_consent)
-                    .await
+                let result = auth
+                    .complete_login(&record.id, params.background_consent)
+                    .await;
+                if result.is_ok() {
+                    catalog.account_changed(auth.clone()).await;
+                }
+                result
             }
             Err(error) => Err(error),
         };

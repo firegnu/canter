@@ -410,3 +410,32 @@ fn mcp_search_round_trips_and_legacy_clients_skip_the_item() {
         matches!(serde_json::from_value::<LegacyItem>(json!({"type":"agentMessage","text":"continued"})).unwrap(), LegacyItem::AgentMessage { text } if text == "continued")
     );
 }
+
+#[test]
+fn model_catalog_fields_are_optional_and_ignored_by_legacy_clients() {
+    #[derive(serde::Deserialize)]
+    struct LegacyList {
+        data: Vec<LegacyModel>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct LegacyModel {
+        model: String,
+        display_name: String,
+    }
+    let value = json!({
+        "data":[{"id":"chatgpt/new","model":"chatgpt/new","displayName":"New","isDefault":false,
+            "verified":false,"missingCapabilities":["contextWindow"],"fromCatalog":true}],
+        "nextCursor":null,
+        "catalogs":[{"provider":"chatgpt","stale":true,"refreshFailed":true,"fetchedAt":123}]
+    });
+    let parsed: canter_protocol::ModelListResponse = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(parsed.data[0].verified, Some(false));
+    assert_eq!(parsed.catalogs.unwrap()[0].fetched_at, Some(123));
+    let legacy: LegacyList = serde_json::from_value(value).unwrap();
+    assert_eq!(legacy.data[0].model, "chatgpt/new");
+    assert_eq!(legacy.data[0].display_name, "New");
+    let old: canter_protocol::ModelListResponse =
+        serde_json::from_value(json!({"data":[],"nextCursor":null})).unwrap();
+    assert_eq!(old.catalogs, None);
+}

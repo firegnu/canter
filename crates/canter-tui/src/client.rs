@@ -462,12 +462,10 @@ impl Client {
             .data)
     }
 
-    /// GET /v1/models: the server's configured model list.
-    pub async fn list_models(&self) -> Result<Vec<canter_protocol::Model>, ClientError> {
+    /// GET /v1/models: the server's configured and account model catalogs.
+    pub async fn list_models(&self) -> Result<canter_protocol::ModelListResponse, ClientError> {
         let response = self.http.get(url(routes::MODELS, &[])).send().await?;
-        Ok(decode::<canter_protocol::ModelListResponse>(response)
-            .await?
-            .data)
+        decode::<canter_protocol::ModelListResponse>(response).await
     }
 
     /// Builds a client for the server listening on `socket`. Does not connect yet.

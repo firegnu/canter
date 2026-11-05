@@ -156,11 +156,41 @@ impl LiveConfig {
 
     pub fn metadata(&self) -> (String, Vec<String>, CoreOptions) {
         let version = self.current.read().unwrap();
-        (
-            version.config.model.clone(),
+        let (models, options) = self.auth.catalog().apply(
+            version.config.catalog_provider(),
             version.config.models.clone(),
             version.options.clone(),
-        )
+        );
+        (version.config.model.clone(), models, options)
+    }
+
+    pub fn catalog_provider(&self) -> Option<String> {
+        self.current
+            .read()
+            .unwrap()
+            .config
+            .catalog_provider()
+            .map(str::to_owned)
+    }
+
+    pub fn configured_model(&self, model: &str) -> bool {
+        self.current
+            .read()
+            .unwrap()
+            .config
+            .models
+            .contains(&model.to_owned())
+    }
+
+    fn catalog_options(&self, version: &Version) -> CoreOptions {
+        self.auth
+            .catalog()
+            .apply(
+                version.config.catalog_provider(),
+                version.config.models.clone(),
+                version.options.clone(),
+            )
+            .1
     }
 
     pub fn mcp_status(&self) -> Vec<canter_protocol::McpServerStatus> {
@@ -408,7 +438,7 @@ impl ConfigurationSource for LiveConfig {
         let ready = services.len() == version.mcp.len() && lsp.is_some();
         Configuration {
             revision: ready.then_some(version.revision),
-            options: version.options.clone(),
+            options: self.catalog_options(&version),
             model: version.model.clone(),
             mcp_tools: Registry::snapshot_all(
                 &services
@@ -428,7 +458,8 @@ impl ConfigurationSource for LiveConfig {
     }
 
     fn options(&self) -> CoreOptions {
-        self.current.read().unwrap().options.clone()
+        let version = self.current.read().unwrap();
+        self.catalog_options(&version)
     }
 
     fn acquire(&self) -> futures_util::future::BoxFuture<'_, Result<Configuration, CoreError>> {
@@ -467,7 +498,7 @@ impl ConfigurationSource for LiveConfig {
                 }
                 return Ok(Configuration {
                     revision: Some(version.revision),
-                    options: version.options.clone(),
+                    options: self.catalog_options(&version),
                     model: version.model.clone(),
                     mcp_tools,
                     lsp,

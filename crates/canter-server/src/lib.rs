@@ -8,6 +8,7 @@ mod lifecycle;
 #[cfg(test)]
 mod lsp_tests;
 mod model_auth;
+mod model_catalog;
 mod reload;
 #[cfg(test)]
 mod reload_tests;
@@ -92,6 +93,9 @@ async fn serve_with_lsp(
     let model = config.model_client(Some(auth.clone()))?;
     let options = config.options();
     let lsp = make_lsp(config.lsp.clone()).map_err(|error| ServerError(error.to_string()))?;
+    if let Ok(manager) = auth.get().await {
+        auth.catalog().start(manager);
+    }
     let startup_stop = CancellationToken::new();
     let connecting = summaries.finish_with(reload::LiveConfig::connect(
         lease.home.clone(),

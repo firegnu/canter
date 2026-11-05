@@ -261,3 +261,21 @@ async fn switching_model_resets_only_unsupported_reasoning_and_reports_the_chang
     drop(warnings);
     fixture.shutdown().await;
 }
+
+#[tokio::test]
+async fn models_endpoint_reports_verification_and_catalog_source_compatibly() {
+    let fixture = configured().await;
+    let models: Value = fixture
+        .client
+        .get("http://localhost/v1/models")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(models["data"][0]["verified"], true);
+    assert_eq!(models["data"][0]["fromCatalog"], false);
+    assert!(models.get("catalogs").is_none());
+    fixture.shutdown().await;
+}

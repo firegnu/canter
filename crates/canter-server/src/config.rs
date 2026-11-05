@@ -310,6 +310,15 @@ impl Config {
             .map_err(|_| ServerError("invalid model config".into()))
     }
 
+    pub fn catalog_provider(&self) -> Option<&str> {
+        self.providers
+            .iter()
+            .find(|(_, provider)| {
+                provider.api == "responses" && provider.auth.as_deref() == Some("chatgpt")
+            })
+            .map(|(name, _)| name.as_str())
+    }
+
     pub fn options(&self) -> CoreOptions {
         let mut prices = canter_core::usage::builtin_prices();
         prices.extend(self.prices.clone());

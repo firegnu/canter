@@ -32,6 +32,7 @@ async fn exec_uses_model_default_and_reports_reasoning_reset_when_switching() {
             .list_models()
             .await
             .unwrap()
+            .data
             .iter()
             .any(|model| model.id == "configured/solver")
         {
@@ -1165,6 +1166,7 @@ async fn exec_model_takes_a_provider_and_an_unknown_one_points_to_model() {
             .list_models()
             .await
             .unwrap()
+            .data
             .iter()
             .any(|model| model.id == "two/small")
         {
