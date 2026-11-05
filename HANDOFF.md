@@ -173,6 +173,10 @@
   - README 说「目录里有了的模型不用再手写」，但 GPT 这一家仍必须手写至少一个模型（`models must not be empty`）。
   - 历史目录资料 `known` 退出账号后内存里不清，各账号混在一起用（只影响恢复已从目录消失的模型时用谁的资料）。
   - 复核建议改：给子会话 PATCH 换模型时，`session.rs` 换上 `next_options` 会把继承来的沙箱值换成配置里的值（`apply_configuration` 专门保留了它）。TUI 和 agent 工具目前都不会这么做。改法：换模型时保留原 `sandbox`。
+- GPT 套餐用量显示（P2-217，11-05 合并，还没真调）没做的：
+  - 只用 GPT 跑 `/goal` 时，目标花费显示 `goal $0.00/$5.00`（以前是 `$0.00+?`），和「不把套餐显示成 $0.00」对不上；服务端写进对话的 `Goal … · $0.00 / $5.00` 也一样。改法：`crates/canter-tui/src/goal.rs` 的 `bar` 在 `cost.chatgpt_plan` 时补 ` + ChatGPT plan`；发给模型的 goal 提示（`core/src/goal.rs:104`）是 prompt，不动。
+  - 状态栏 Cost 项另写一份金额格式，没复用 `usage::cost`，两处都用格式化后的文字是否等于 `"$0.00"` 判断别家有没有花钱（`app.rs`、`usage.rs`）。核心选项名 `chatgpt_plan_providers` 带 ChatGPT。
+  - 可以不改：别家的新请求存盘多了 `"billingKind":"tokenMetered"`（显示不变）；跨升级的会话同一模型新旧记录混在一起时显示 `unknown + ChatGPT plan` / `$0.00+? + ChatGPT plan`。
 
 - 协议 README「审查轮」一节还写着 `/v1/info` 的 `features`「本版返回 `["review"]`」，已过时（现在有十几项）；P2-196 开发看到、按范围没动。
 
@@ -183,7 +187,7 @@
   - 可以不改：每次受管运行在服务端内存里留一个空墓碑；协议 README 新加的一节是英文；升级时排空先关了会话，服务端日志会误报一句 `could not close a managed session`。
 
 - 界面美化第三件（P2-188，11-03 合并，没装）：MCP、网页抓取、子 agent 卡片的内容仍挂在 `┃` 后面，没换成 `└`；标题左移两格后，这些内容比标题文字多缩两格。读文件等批准时和 `Explored` 同时出现的情况没有专门的测试。
-- 测试 `canter-core::suggestions no_example_for_non_git_empty_git_disabled_or_timed_out_git`（P2-102 加的）在 P2-188 合并前全套里失败一次（4.6s），单独重跑 3.2s 通过；像负载高时 git 超时的余量不够，再失败时看这个测试里超时和等待的时间。 11-03 又出现两次：P2-190 开发时、P2-191 合并前全套（5.1s），都是单独重跑通过，那两件都没改 canter-core。 11-03 P2-192 合并前全套又失败一次（5.0s），单独重跑通过；这次看到报错是 `crates/canter-core/tests/suggestions.rs:375` 的 `pid.parse().unwrap()` 遇到空字符串（`ParseIntError { kind: Empty }`）：测试读 `git-pid` 时文件已建好、PID 还没写进去，是测试自己的竞争，不是功能问题；修法是读到空内容就接着等。 11-03 P2-198 开发时又出现一次（改动 crate 测试并行跑时），原样单独复跑通过。 11-04 P2-202、P2-203 合并前全套各失败一次，都是单独重跑通过；几乎每次合并都碰上，值得另开一件小活照上面的修法修掉测试。 11-04 P2-214 合并前全套又失败一次（4.99s），单独复跑通过。
+- 测试 `canter-core::suggestions no_example_for_non_git_empty_git_disabled_or_timed_out_git`（P2-102 加的）在 P2-188 合并前全套里失败一次（4.6s），单独重跑 3.2s 通过；像负载高时 git 超时的余量不够，再失败时看这个测试里超时和等待的时间。 11-03 又出现两次：P2-190 开发时、P2-191 合并前全套（5.1s），都是单独重跑通过，那两件都没改 canter-core。 11-03 P2-192 合并前全套又失败一次（5.0s），单独重跑通过；这次看到报错是 `crates/canter-core/tests/suggestions.rs:375` 的 `pid.parse().unwrap()` 遇到空字符串（`ParseIntError { kind: Empty }`）：测试读 `git-pid` 时文件已建好、PID 还没写进去，是测试自己的竞争，不是功能问题；修法是读到空内容就接着等。 11-03 P2-198 开发时又出现一次（改动 crate 测试并行跑时），原样单独复跑通过。 11-04 P2-202、P2-203 合并前全套各失败一次，都是单独重跑通过；几乎每次合并都碰上，值得另开一件小活照上面的修法修掉测试。 11-04 P2-214 合并前全套又失败一次（4.99s），单独复跑通过。 11-05 P2-217 合并前全套又失败一次，单独复跑通过。
 - 界面美化第二件（P2-187，11-03 合并，没装）：`NO_COLOR` 下 `##` 标题没有颜色，和正文加粗分不开；开发看到没改的：`/rewind` 确认前的预览还写进对话，`/goal` 弹框正文没有左边一格缩进。
 - 界面美化（P2-79，11-03 合并，没装）主控审查建议改：`crates/canter-tui/src/cells.rs` 新加的 `Retry` 插在 `agent_message` 的文档注释和函数之间，`app.rs` 新加的 `waited` 插在 `open_request` 的文档注释和函数之间，两处文档注释挂错了函数。开发记下的：最后失败时重试总结行和报错有点重复；同时多个批准框时结果行不一定紧贴它的卡片；`/statusline` 预览不缩目录，80 列下预览第二行末尾会被截掉几个字。
 - 预测下一个 prompt（P2-102，11-02 合并，没装）交叉审查没改的（用户定只修第 1 条受限模式和 git 加固）：
