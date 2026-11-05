@@ -18,6 +18,7 @@ pub(super) fn classified(body: &Value, status: Option<u16>) -> ModelError {
         "chatpass_v2_scope_not_authorized" | "chatpass_v2_invalid_authorization_context" => {
             (ErrorKind::ChatgptPermission, Some(403))
         }
+        "invalid_encrypted_content" => (ErrorKind::ChatgptEncryptedContent, Some(400)),
         "subscription_sharing_usage_unavailable" | "subscription_sharing_user_unavailable" => {
             (ErrorKind::Server, Some(503))
         }

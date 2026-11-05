@@ -9,7 +9,7 @@ use canter_protocol::*;
 use canter_store::Store;
 use canter_tools::{LocalExecutor, PermissionGate, Tools};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -81,6 +81,7 @@ pub(crate) struct State {
     pub prefix_sections: Vec<ContextSection>,
     pub summary_index: Option<usize>,
     pub history: Vec<Message>,
+    pub rejected_replays: HashSet<String>,
     pub plan_mode_notices: Vec<Message>,
     pub tool_images: Vec<canter_model::UserContent>,
     /// Recent user inputs and tool-origin attachments, sharing the retention budget.
@@ -238,6 +239,7 @@ impl State {
             prefix_sections: Vec::new(),
             summary_index: None,
             history: Vec::new(),
+            rejected_replays: Default::default(),
             plan_mode_notices: Vec::new(),
             tool_images: Vec::new(),
             user_messages: Vec::new(),
@@ -473,6 +475,37 @@ impl State {
         crate::context::flush_plan_mode_notices(&mut self.history, &mut self.plan_mode_notices);
         Ok(())
     }
+    pub async fn reject_replay(&mut self, scopes: &[String]) -> Result<(), CoreError> {
+        let mut scopes: Vec<_> = scopes
+            .iter()
+            .filter(|scope| !scope.is_empty() && !self.rejected_replays.contains(*scope))
+            .cloned()
+            .collect();
+        scopes.sort();
+        scopes.dedup();
+        if scopes.is_empty() {
+            return Ok(());
+        }
+        self.journal
+            .record(HistoryEntry::ReplayRejected {
+                scopes: scopes.clone(),
+            })
+            .await?;
+        self.rejected_replays.extend(scopes);
+        for message in &mut self.history {
+            if let Message::Assistant { replay, .. } = message
+                && replay.as_ref().is_some_and(|replay| {
+                    replay
+                        .scope()
+                        .is_some_and(|scope| self.rejected_replays.contains(scope))
+                })
+            {
+                *replay = None;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn tool_result(
         &mut self,
         call: &ToolCall,
@@ -931,6 +964,7 @@ impl Session {
         state.restored_file_notices = restored.restored_file_notices;
         state.prefix_segments = restored.segments;
         state.history = restored.history;
+        state.rejected_replays = restored.rejected_replays;
         state.lsp_delivery.notices = restored.diagnostic_notices;
         state.context_budget_notices = restored.context_budget_notices;
         state.plan_mode_notices = restored.plan_mode_notices;

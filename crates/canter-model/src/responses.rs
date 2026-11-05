@@ -33,6 +33,7 @@ pub trait ResponsesAuth: Send + Sync {
 pub trait ResponsesCredential: Send {
     fn authorization(&mut self) -> BoxFuture<'_, Result<HeaderValue, ModelError>>;
     fn recover_unauthorized(&mut self) -> BoxFuture<'_, Result<(), ModelError>>;
+    fn replay_account(&self) -> String;
 }
 
 pub struct Responses {
@@ -107,11 +108,13 @@ impl Responses {
         request: &'a Request,
         credential: &'a mut dyn ResponsesCredential,
         observed: &'a mut bool,
+        account: &'a str,
+        allow_replay: bool,
     ) -> ModelStream<'a> {
         Box::pin(async_stream::stream! {
-            let body = wire::request_body(request);
+            let body = wire::request_body(request, account, allow_replay);
             let mut diagnostic = diagnostics::Diagnostic::new(&body, wire::session_id(request).is_some());
-            let mut stream = self.attempt_inner(request, credential, observed, &body, &mut diagnostic);
+            let mut stream = self.attempt_inner(request, credential, observed, &body, &mut diagnostic, account);
             let terminal = loop {
                 match stream.next().await {
                     Some(event) if event.is_err() || matches!(event, Ok(ModelEvent::Finished(_))) => break Some(event),
@@ -133,6 +136,7 @@ impl Responses {
         observed: &'a mut bool,
         body: &'a Value,
         diagnostic: &'a mut diagnostics::Diagnostic,
+        account: &'a str,
     ) -> ModelStream<'a> {
         Box::pin(async_stream::try_stream! {
             let mut authorization = credential.authorization().await?;
@@ -168,7 +172,7 @@ impl Responses {
                     let finished = matches!(output_event, ModelEvent::Finished(_));
                     if finished {
                         yield ModelEvent::Replay(crate::Replay::Responses {
-                            model:request.model.clone(), scope:None,
+                            model:request.model.clone(), scope:None, account:Some(account.into()),
                             output:state.replay_output(),
                         });
                     }
@@ -194,16 +198,18 @@ impl Responses {
                 credential = self.auth.credential(&request, context.as_ref()) => credential,
             };
             if let Err(error) = &credential {
-                let mut diagnostic = diagnostics::Diagnostic::new(&wire::request_body(&request), wire::session_id(&request).is_some());
+                let mut diagnostic = diagnostics::Diagnostic::new(&wire::request_body(&request, "", false), wire::session_id(&request).is_some());
                 diagnostic.finish(Some(&Err(error.clone())));
             }
             let mut credential = credential?;
+            let account = credential.replay_account();
             let limit = request.options.max_retries.map_or(self.retry.max_retries, |limit| limit.min(self.retry.max_retries));
             let mut retries = 0;
             let mut recovered = false;
+            let mut allow_replay = true;
             loop {
                 let mut observed = false;
-                let mut attempt = self.attempt(&request, &mut *credential, &mut observed);
+                let mut attempt = self.attempt(&request, &mut *credential, &mut observed, &account, allow_replay);
                 let mut failure = loop {
                     let event = tokio::select! {
                         biased;
@@ -221,6 +227,16 @@ impl Responses {
                     }
                 };
                 drop(attempt);
+                if !observed
+                    && allow_replay
+                    && failure.kind == ErrorKind::ChatgptEncryptedContent
+                    && wire::has_replay(&request, &account)
+                {
+                    allow_replay = false;
+                    eprintln!("Responses replay: encrypted content was rejected; retrying with portable history");
+                    yield ModelEvent::ReplayRejected { scopes:wire::replay_scopes(&request, &account) };
+                    continue;
+                }
                 if !observed && failure.status == Some(401) && !recovered {
                     recovered = true;
                     tokio::select! {
@@ -291,6 +307,9 @@ mod tests {
         fn recover_unauthorized(&mut self) -> BoxFuture<'_, Result<(), ModelError>> {
             Box::pin(async { Err(ModelError::new(ErrorKind::Authentication)) })
         }
+        fn replay_account(&self) -> String {
+            "test-account-fingerprint".into()
+        }
     }
 
     #[tokio::test]
@@ -340,6 +359,7 @@ mod tests {
         let request = Request {
             session_id: Some("test-session".into()),
             model: "test-model".into(),
+            replay_history: Vec::new(),
             messages: vec![
                 Message::System {
                     text: prompt.into(),
@@ -817,6 +837,11 @@ mod tests {
         }
         let bodies = server.requests.lock().unwrap().clone();
         server.stop().await;
+        let first_input = bodies[0]["input"].as_array().unwrap();
+        assert_eq!(
+            &bodies[1]["input"].as_array().unwrap()[..first_input.len()],
+            first_input
+        );
         let input = bodies[2]["input"].as_array().unwrap();
         assert!(input[1..4] == outputs[0].as_array().unwrap()[..]);
         assert!(input[5..8] == outputs[1].as_array().unwrap()[..]);
@@ -828,5 +853,164 @@ mod tests {
             input[8],
             json!({"type":"function_call_output","call_id":"call1","output":"result 1"})
         );
+    }
+
+    #[test]
+    fn replay_requires_the_same_model_and_current_account() {
+        let native = json!({"type":"reasoning","id":"saved-r","summary":[],"encrypted_content":"test-only-saved-cipher"});
+        for (saved_model, saved_account, model, account, native_expected) in [
+            (
+                "test-model",
+                Some("account-a"),
+                "test-model",
+                "account-a",
+                true,
+            ),
+            (
+                "other-model",
+                Some("account-a"),
+                "test-model",
+                "account-a",
+                false,
+            ),
+            (
+                "test-model",
+                Some("account-b"),
+                "test-model",
+                "account-a",
+                false,
+            ),
+            ("test-model", None, "test-model", "account-a", false),
+        ] {
+            let request = Request {
+                model: model.into(),
+                messages: vec![
+                    Message::User {
+                        text: "Continue".into(),
+                    },
+                    Message::Assistant {
+                        content: vec![crate::AssistantContent::Text {
+                            text: "Portable".into(),
+                        }],
+                        replay: Some(crate::Replay::Responses {
+                            model: saved_model.into(),
+                            scope: Some("saved-turn".into()),
+                            account: saved_account.map(Into::into),
+                            output: vec![native.clone()],
+                        }),
+                    },
+                ],
+                ..Default::default()
+            };
+            let body = wire::request_body(&request, account, true);
+            assert_eq!(
+                body["input"][1],
+                if native_expected {
+                    native.clone()
+                } else {
+                    json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"Portable"}]})
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_encrypted_content_retries_once_with_portable_history_and_safe_logs() {
+        const CHILD: &str = "CANTER_ENCRYPTED_REPLAY_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "responses::tests::invalid_encrypted_content_retries_once_with_portable_history_and_safe_logs",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env(CHILD, "1")
+                .kill_on_drop(true)
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let log = String::from_utf8(output.stderr).unwrap();
+            assert!(log.contains(
+                "Responses replay: encrypted content was rejected; retrying with portable history"
+            ));
+            assert!(!log.contains("private-replay-ciphertext"));
+            assert!(!log.contains("private-rejection-detail"));
+            return;
+        }
+        use crate::test_support::{Reply, Server};
+        for reject_again in [false, true] {
+            let rejection = Reply {
+                status: reqwest::StatusCode::BAD_REQUEST,
+                body: json!({"error":{"code":"invalid_encrypted_content","message":"private-rejection-detail private-replay-ciphertext"}}).to_string(),
+                retry_after: None,
+                hang: false,
+            };
+            let server = Server::start(vec![
+                rejection,
+                if reject_again {
+                    Reply {
+                        status: reqwest::StatusCode::BAD_REQUEST,
+                        body: json!({"error":{"code":"invalid_encrypted_content","message":"private-rejection-detail"}}).to_string(),
+                        retry_after: None,
+                        hang: false,
+                    }
+                } else {
+                    Reply::sse("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n")
+                },
+            ])
+            .await;
+            let model = Responses::with_endpoint(
+                Arc::new(Auth),
+                format!("{}responses", server.base_url).parse().unwrap(),
+            )
+            .unwrap();
+            let request = Request {
+                model: "test-model".into(),
+                messages: vec![Message::Assistant {
+                    content: vec![crate::AssistantContent::Text {
+                        text: "Portable".into(),
+                    }],
+                    replay: Some(crate::Replay::Responses {
+                        model: "test-model".into(),
+                        scope: Some("saved-turn".into()),
+                        account: Some("test-account-fingerprint".into()),
+                        output: vec![
+                            json!({"type":"reasoning","id":"saved-r","summary":[],"encrypted_content":"private-replay-ciphertext"}),
+                        ],
+                    }),
+                }],
+                ..Default::default()
+            };
+            let events: Vec<_> = model
+                .stream(request, CancellationToken::new())
+                .collect()
+                .await;
+            assert!(events.iter().any(|event| matches!(event, Ok(ModelEvent::ReplayRejected { scopes }) if scopes.as_slice() == ["saved-turn"])));
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Ok(ModelEvent::ReplayRejected { .. })))
+                    .count(),
+                1
+            );
+            assert_eq!(events.last().is_some_and(Result::is_ok), !reject_again);
+            assert!(!format!("{events:?}").contains("private-replay-ciphertext"));
+            assert!(!format!("{events:?}").contains("private-rejection-detail"));
+            let bodies = server.requests.lock().unwrap().clone();
+            server.stop().await;
+            assert_eq!(bodies.len(), 2);
+            assert!(bodies[0].to_string().contains("private-replay-ciphertext"));
+            assert!(!bodies[1].to_string().contains("private-replay-ciphertext"));
+            assert_eq!(
+                bodies[1]["input"][0],
+                json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"Portable"}]})
+            );
+        }
     }
 }

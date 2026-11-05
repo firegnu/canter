@@ -90,9 +90,16 @@ impl ResponsesAuth for ModelAuth {
                 selected().await?
             };
             let consent_changes = auth.consent_changes();
+            let replay_account = {
+                use base64::Engine;
+                let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, auth.host_id().as_bytes());
+                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(ring::hmac::sign(&key, record.as_bytes()).as_ref())
+            };
             Ok(Box::new(Credential {
                 auth,
                 record,
+                replay_account,
                 context: context.cloned(),
                 consent_changes,
                 token: None,
@@ -104,6 +111,7 @@ impl ResponsesAuth for ModelAuth {
 struct Credential {
     auth: ChatgptAuth,
     record: String,
+    replay_account: String,
     context: Option<ModelContext>,
     consent_changes: tokio::sync::watch::Receiver<()>,
     token: Option<crate::chatgpt_auth::AccessToken>,
@@ -173,6 +181,10 @@ impl ResponsesCredential for Credential {
             );
             Ok(())
         })
+    }
+
+    fn replay_account(&self) -> String {
+        self.replay_account.clone()
     }
 }
 

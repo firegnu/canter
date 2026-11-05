@@ -456,6 +456,7 @@ async fn streams_content_tools_and_usage_and_replays_reasoning() {
     let request = Request {
         session_id: None,
         model: "caller-model".into(),
+        replay_history: Vec::new(),
         messages: vec![
             Message::System {
                 text: "Be helpful.".into(),
@@ -851,4 +852,50 @@ async fn fragmented_invalid_arguments_are_preserved_and_truncated_calls_are_not_
         assert_eq!(events, expected_events);
         server.stop().await;
     }
+}
+
+#[tokio::test]
+async fn responses_replay_metadata_never_changes_chat_completions_bytes() {
+    let server = Server::start(vec![Reply::sse(STOP), Reply::sse(STOP), Reply::sse(STOP)]).await;
+    let client = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
+    let mut request = request();
+    request.messages.push(Message::Assistant {
+        content: vec![AssistantContent::Text {
+            text: "Portable answer".into(),
+        }],
+        replay: Some(canter_model::Replay::Responses {
+            model: "test-model".into(),
+            scope: Some("old-turn".into()),
+            account: Some("anonymous-account".into()),
+            output: vec![json!({"type":"reasoning","id":"r","summary":[],"encrypted_content":"private-cipher"})],
+        }),
+    });
+    let events: Vec<_> = client
+        .stream(request.clone(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok));
+    request.replay_history = request.messages.clone();
+    request.messages.push(Message::User {
+        text: "Summary request".into(),
+    });
+    let events: Vec<_> = client
+        .stream(request.clone(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok));
+    let without_metadata = Request {
+        replay_history: Vec::new(),
+        ..request
+    };
+    let events: Vec<_> = client
+        .stream(without_metadata, CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok));
+    let bodies = server.bodies.lock().unwrap().clone();
+    server.stop().await;
+    assert_eq!(bodies.len(), 3);
+    assert_eq!(bodies[1], bodies[2]);
+    assert!(!bodies[1].is_empty());
 }

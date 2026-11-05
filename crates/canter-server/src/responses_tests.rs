@@ -17,6 +17,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 mod reasoning;
+mod replay;
 
 struct Inference {
     endpoint: reqwest::Url,
@@ -241,7 +242,7 @@ async fn two_tool_loops_pause_at_last_disconnect_replay_privately_and_resume() {
             .finish(),
     );
     let fake = Fake::new().await;
-    let (auth, _) = login(&home, &fake, false).await;
+    let (auth, account) = login(&home, &fake, false).await;
     let outputs:Vec<Value>=(0..2).map(|i| json!([
         {"type":"reasoning","id":format!("r{i}"),"summary":[],"encrypted_content":format!("private-test-cipher-{i}")},
         {"type":"message","id":format!("m{i}"),"role":"assistant","status":"completed","phase":"commentary","content":[{"type":"output_text","text":"Working","annotations":[]}]},
@@ -250,6 +251,8 @@ async fn two_tool_loops_pause_at_last_disconnect_replay_privately_and_resume() {
     let mut inference = Inference::new(vec![
         completed(outputs[0].clone()),
         completed(outputs[1].clone()),
+        completed(json!([])),
+        (400, json!({"error":{"code":"invalid_encrypted_content","message":"private-test-error-body"}}).to_string()),
         completed(json!([])),
         completed(json!([])),
     ])
@@ -393,23 +396,58 @@ async fn two_tool_loops_pause_at_last_disconnect_replay_privately_and_resume() {
     assert!(
         !public.contains("private-test-cipher-")
             && !public.contains(token1.strip_prefix("Bearer ").unwrap())
+            && !public.contains(&account)
+            && !public.contains("private-test-error-body")
     );
-    // Reopening is outside the live turn: stored ciphertext is never replayed.
     drop(resumed);
     session.close().await.unwrap();
     drop(session);
-    let (session, _) = Session::open(store, "responses".into(), runtime, model, config.options())
-        .await
-        .unwrap();
-    let _attached = session.attach_client().await.unwrap();
+    let (session, _) = Session::open(
+        store.clone(),
+        "responses".into(),
+        runtime.clone(),
+        model.clone(),
+        config.options(),
+    )
+    .await
+    .unwrap();
+    let attached = session.attach_client().await.unwrap();
     let mut events = session
         .subscribe(session.snapshot().await.session.last_event_seq)
         .await
         .unwrap();
     session.input(input()).await.unwrap();
     let (after_restart, _) = inference.next().await;
-    assert!(!after_restart.to_string().contains("private-test-cipher-"));
+    assert!(after_restart.to_string().contains("private-test-cipher-"));
+    let (fallback, _) = inference.next().await;
+    assert!(!fallback.to_string().contains("private-test-cipher-"));
     finished(&mut events).await;
+    drop(attached);
+    session.close().await.unwrap();
+    drop(session);
+
+    let (session, _) = Session::open(
+        store.clone(),
+        "responses".into(),
+        runtime,
+        model,
+        config.options(),
+    )
+    .await
+    .unwrap();
+    let _attached = session.attach_client().await.unwrap();
+    let mut events = session
+        .subscribe(session.snapshot().await.session.last_event_seq)
+        .await
+        .unwrap();
+    session.input(input()).await.unwrap();
+    let (next_turn, _) = inference.next().await;
+    assert!(!next_turn.to_string().contains("private-test-cipher-"));
+    assert!(inference.requests.try_recv().is_err());
+    finished(&mut events).await;
+    let saved =
+        std::fs::read_to_string(home.join("sessions/responses/model-history.jsonl")).unwrap();
+    assert!(saved.contains("replay_rejected") && !saved.contains(&account));
     session.close().await.unwrap();
     fake.stop().await;
 }

@@ -15,6 +15,7 @@ pub enum ErrorKind {
     ChatgptRoute,
     ChatgptAuthorization,
     ChatgptPermission,
+    ChatgptEncryptedContent,
     ChatgptNotLoggedIn,
     ChatgptNeedsLogin,
     ChatgptPlanNotAuthorized,
@@ -55,6 +56,7 @@ impl ErrorKind {
             Self::ChatgptPermission => {
                 "ChatGPT permission or serving-region policy prevents this request; check the client and grant configuration"
             }
+            Self::ChatgptEncryptedContent => "ChatGPT rejected encrypted history",
             Self::ChatgptNotLoggedIn => {
                 "no ChatGPT account is signed in. Run `canter auth login chatgpt`"
             }

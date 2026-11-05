@@ -43,6 +43,8 @@ pub enum Replay {
         model: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scope: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<String>,
         output: Vec<Value>,
     },
     #[serde(other, skip_serializing)]
@@ -63,12 +65,21 @@ impl Replay {
         self
     }
 
-    pub fn belongs_to_scope(&self, id: Option<&str>) -> bool {
+    pub fn belongs_to(&self, model: &str, account: &str) -> bool {
         match self {
             Self::Responses {
-                scope: Some(scope), ..
-            } => id == Some(scope.as_str()),
+                model: saved,
+                account: Some(saved_account),
+                ..
+            } => saved == model && saved_account == account,
             _ => false,
+        }
+    }
+
+    pub fn scope(&self) -> Option<&str> {
+        match self {
+            Self::Responses { scope, .. } => scope.as_deref(),
+            _ => None,
         }
     }
 }
@@ -127,6 +138,9 @@ pub struct Request {
     pub session_id: Option<String>,
     pub model: String,
     pub messages: Vec<Message>,
+    /// Native history used only by Responses transcript compaction.
+    #[serde(skip)]
+    pub replay_history: Vec<Message>,
     pub tools: Vec<ToolDefinition>,
     pub options: RequestOptions,
 }
@@ -177,6 +191,10 @@ pub enum ModelEvent {
     /// Private provider output, delivered only after a successful terminal event.
     /// The core assigns its replay scope before writing model history.
     Replay(Replay),
+    /// The provider rejected this request's saved output; core durably disables it.
+    ReplayRejected {
+        scopes: Vec<String>,
+    },
     /// Provider-confirmed complete item. IDs are scoped to one attempt.
     ItemCompleted {
         item_id: String,

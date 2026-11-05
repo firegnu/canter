@@ -245,7 +245,7 @@ pub(crate) async fn answer(
                     goal_id = shared.charge_goal().await;
                 }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),
-                Some(Ok(ModelEvent::Replay(_))) => {}
+                Some(Ok(ModelEvent::Replay(_) | ModelEvent::ReplayRejected { .. })) => {}
                 Some(Ok(ModelEvent::Finished(_))) => break Ok(false),
                 // Definitions stay in the prefix; side requests never execute tools.
                 Some(Ok(event @ (ModelEvent::ToolCall(_) | ModelEvent::ReasoningDelta { .. }))) => {

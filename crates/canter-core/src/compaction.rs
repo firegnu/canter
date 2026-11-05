@@ -494,6 +494,7 @@ async fn summarize(
             session_id: session_id.clone(),
             model: model.clone(),
             messages: prefix.clone(),
+            replay_history: history.clone(),
             tools: Vec::new(),
             options: RequestOptions {
                 max_retries: None,
