@@ -73,7 +73,7 @@ fn init_sends_the_prompt_as_an_ordinary_message() {
     let mut screen = Screen::new();
     screen.type_text("/init");
     screen.draw();
-    let shown = screen.above_box(1).join("\n");
+    let shown = screen.command_list(1).join("\n");
     assert!(shown.contains("/init"), "{shown}");
     assert!(
         shown.contains("Create or improve AGENTS.md for this project"),
@@ -96,8 +96,8 @@ fn skill_commands_share_completion_and_builtin_names_win() {
     let shown = screen.text();
     assert!(
         shown.contains("/example")
-            && shown.contains("Inspect this project")
-            && shown.contains("skill · Inspect this project"),
+            && shown.contains("project  Inspect this project")
+            && !shown.contains("skill ·"),
         "{shown}"
     );
     assert!(shown.contains("/exit") && shown.contains("/export"));
@@ -598,6 +598,18 @@ impl Screen {
         lines[top.saturating_sub(count)..top].to_vec()
     }
 
+    /// The `count` rows of the command list above its keys row, which is
+    /// right above the input box.
+    fn command_list(&self, count: usize) -> Vec<String> {
+        let rows = self.above_box(count + 1);
+        assert!(
+            rows[count].starts_with(" ↑↓ select · Tab complete · Enter run · "),
+            "no command list keys:\n{}",
+            self.text()
+        );
+        rows[..count].to_vec()
+    }
+
     /// The first of the two info rows at the bottom: model, thinking and
     /// permission mode.
     fn mode_row(&self) -> String {
@@ -715,36 +727,57 @@ fn skills_empty_screen_explains_both_directories() {
     assert!(shown.contains("reopen the session"), "{shown}");
 }
 
-/// A `/` as the first character lists every command with a line about it,
-/// right above the input box, the first one selected. What follows the `/`
-/// narrows the list; deleting the `/` closes it.
+/// A `/` as the first character lists the commands with a line about each,
+/// right above the input box under a `Commands` title, the first one
+/// selected; at most 12 rows, keys last. Down goes through every command by
+/// name. What follows the `/` narrows the list; deleting the `/` closes it.
 #[test]
 fn a_slash_lists_the_commands_above_the_input_box() {
-    // Leave room for the whole command list.
-    let mut screen = Screen::sized(WIDTH, COMMANDS.len() as u16 + 6);
+    let mut screen = Screen::new();
     screen.type_text("/");
     screen.draw();
-    let list = screen.above_box(COMMANDS.len());
     let shown = screen.text();
-    for (row, (name, about)) in list.iter().zip(COMMANDS) {
+    let list = screen.command_list(11);
+    assert_eq!(list[0], " Commands", "{shown}");
+    assert!(list[1].starts_with(" › /add-dir"), "{shown}");
+    assert!(list[2].starts_with("   /agents"), "{shown}");
+    assert!(
+        !screen.above_box(13)[0].starts_with("   /"),
+        "at most 12 rows:\n{shown}"
+    );
+    for (index, (name, about)) in COMMANDS.iter().enumerate() {
+        screen.draw();
+        let shown = screen.text();
+        let list = screen.command_list(11);
+        assert_eq!(list[0], " Commands", "{shown}");
+        let row = list
+            .iter()
+            .find(|row| row.starts_with(" › "))
+            .unwrap_or_else(|| panic!("{name} not in view:\n{shown}"));
         assert!(
-            row.contains(name) && row.contains(about),
+            row.contains(&format!("{name} ")) && row.contains(about),
             "{name} on {row:?}:\n{shown}"
         );
+        assert!(
+            screen.above_box(1)[0].ends_with(&format!(" · {}/{}", index + 1, COMMANDS.len())),
+            "{shown}"
+        );
+        assert_eq!(screen.key(KeyCode::Down), None);
     }
-    assert!(list[0].starts_with(" › /add-dir"), "{shown}");
-    assert!(list[1].starts_with("   /agents"), "{shown}");
     let names: Vec<&str> = COMMANDS.iter().map(|(name, _)| *name).collect();
     let mut sorted = names.clone();
     sorted.sort_unstable();
     assert_eq!(names, sorted, "the list is by name");
 
-    screen.type_text("e");
+    let mut screen = Screen::new();
+    screen.type_text("/e");
     screen.draw();
     let shown = screen.text();
-    let left = screen.above_box(2);
+    let left = screen.command_list(3);
     assert!(
-        left[0].starts_with(" › /exit") && left[1].starts_with("   /export"),
+        left[0] == " Commands"
+            && left[1].starts_with(" › /exit")
+            && left[2].starts_with("   /export"),
         "only /exit and /export are left:\n{shown}"
     );
     assert!(!shown.contains("/compact"), "{shown}");
@@ -753,6 +786,142 @@ fn a_slash_lists_the_commands_above_the_input_box() {
     assert_eq!(screen.key(KeyCode::Backspace), None);
     screen.draw();
     assert!(screen.no_list(), "{}", screen.text());
+}
+
+/// A screen with `skills` in the session, the `/skills` report closed.
+fn with_skills(skills: Value) -> Screen {
+    let mut screen = Screen::new();
+    let skills = serde_json::from_value(skills).unwrap();
+    screen.ui.app_mut().show_skills(skills);
+    screen.draw();
+    screen.key(KeyCode::Esc);
+    screen
+}
+
+/// Commands and skills each under a title, each aligned on its own; a skill
+/// says where it comes from and its description on one row, cut with `…`.
+#[test]
+fn commands_and_skills_are_two_groups_each_aligned() {
+    let long = "Write a failing test before changing the implementation, then make it pass";
+    let mut screen = with_skills(json!([
+        {"name":"example","description":"Inspect\n  this project","path":"/w/SKILL.md","source":"project","modelInvocation":true},
+        {"name":"exotic","description":"From somewhere else","path":"/x/SKILL.md","source":"plugin","modelInvocation":true},
+        {"name":"extra-long-skill-name","description":long,"path":"/h/SKILL.md","source":"global","modelInvocation":true}
+    ]));
+    screen.type_text("/ex");
+    screen.draw();
+    let shown = screen.text();
+    let list = screen.command_list(7);
+    assert_eq!(
+        list[..6],
+        [
+            " Commands",
+            " › /exit     Quit canter",
+            "   /export   Save or copy the conversation as Markdown",
+            " Skills",
+            "   /example                 project  Inspect this project",
+            "   /exotic                  other    From somewhere else",
+        ],
+        "{shown}"
+    );
+    assert!(
+        list[6].starts_with("   /extra-long-skill-name   global   Write a failing test")
+            && list[6].ends_with('…')
+            && list[6].width() == usize::from(WIDTH),
+        "{shown}"
+    );
+    assert_eq!(
+        screen.above_box(1)[0],
+        " ↑↓ select · Tab complete · Enter run · 1/5"
+    );
+}
+
+/// A group with nothing matching has no title either.
+#[test]
+fn a_group_with_no_match_has_no_title() {
+    let mut screen = with_skills(json!([
+        {"name":"example","description":"Inspect this project","path":"/w/SKILL.md","source":"project","modelInvocation":true}
+    ]));
+    screen.type_text("/exa");
+    screen.draw();
+    let shown = screen.text();
+    assert_eq!(
+        screen.command_list(2),
+        [" Skills", " › /example   project  Inspect this project"],
+        "{shown}"
+    );
+    assert!(!shown.contains(" Commands"), "{shown}");
+
+    let mut screen = with_skills(json!([
+        {"name":"example","description":"Inspect this project","path":"/w/SKILL.md","source":"project","modelInvocation":true}
+    ]));
+    screen.type_text("/exi");
+    screen.draw();
+    let shown = screen.text();
+    assert_eq!(
+        screen.command_list(2),
+        [" Commands", " › /exit   Quit canter"],
+        "{shown}"
+    );
+    assert!(!shown.contains(" Skills"), "{shown}");
+}
+
+/// More than 12 rows scroll: in the middle of the skills, the `Skills`
+/// title is on top and the selected skill in view; the keys row counts
+/// commands and skills together.
+#[test]
+fn a_long_list_scrolls_with_the_group_title_on_top() {
+    let skills: Vec<Value> = (1..=15)
+        .map(|n| {
+            json!({"name":format!("zz-{n:02}"),"description":format!("Skill {n}"),"path":"/h/SKILL.md","source":"global","modelInvocation":true})
+        })
+        .collect();
+    let mut screen = with_skills(Value::Array(skills));
+    let total = COMMANDS.len() + 15;
+    screen.type_text("/");
+    for _ in 0..COMMANDS.len() + 7 {
+        assert_eq!(screen.key(KeyCode::Down), None);
+    }
+    screen.draw();
+    let shown = screen.text();
+    let list = screen.command_list(11);
+    assert_eq!(list[0], " Skills", "{shown}");
+    assert!(
+        list.iter()
+            .any(|row| row.starts_with(" › /zz-08   global  Skill 8")),
+        "{shown}"
+    );
+    assert!(!list.iter().any(|row| row.contains("/usage")), "{shown}");
+    assert!(
+        !screen.above_box(13)[0].starts_with("   /"),
+        "at most 12 rows:\n{shown}"
+    );
+    assert_eq!(
+        screen.above_box(1)[0],
+        format!(
+            " ↑↓ select · Tab complete · Enter run · {}/{total}",
+            COMMANDS.len() + 8
+        ),
+        "{shown}"
+    );
+
+    // Back up into the commands: their title is on top again.
+    for _ in 0..8 {
+        assert_eq!(screen.key(KeyCode::Up), None);
+    }
+    screen.draw();
+    let shown = screen.text();
+    let list = screen.command_list(11);
+    assert_eq!(list[0], " Commands", "{shown}");
+    assert!(list[10].starts_with(" › /usage"), "{shown}");
+    assert_eq!(
+        screen.above_box(1)[0],
+        format!(
+            " ↑↓ select · Tab complete · Enter run · {}/{total}",
+            COMMANDS.len()
+        ),
+        "{shown}"
+    );
 }
 
 /// What is typed narrows the list; what is left stays by name.
@@ -766,7 +935,7 @@ fn a_narrowed_list_stays_by_name() {
         screen.type_text(typed);
         screen.draw();
         let shown = screen.text();
-        let rows = screen.above_box(left.len());
+        let rows = screen.command_list(left.len());
         for (row, name) in rows.iter().zip(left) {
             assert_eq!(
                 row.split_whitespace().find(|word| word.starts_with('/')),
@@ -781,8 +950,7 @@ fn a_narrowed_list_stays_by_name() {
 /// full, completes the input to the selected command; Enter then runs it.
 #[test]
 fn up_down_tab_and_enter_work_on_the_list() {
-    // The whole list, as above.
-    let mut screen = Screen::sized(WIDTH, COMMANDS.len() as u16 + 6);
+    let mut screen = Screen::new();
     screen.type_text("/");
     screen.draw();
     assert_eq!(screen.key(KeyCode::Down), None);
@@ -791,7 +959,7 @@ fn up_down_tab_and_enter_work_on_the_list() {
     screen.draw();
     let shown = screen.text();
     assert!(
-        screen.above_box(COMMANDS.len())[1].starts_with(" › /agents"),
+        screen.command_list(11)[2].starts_with(" › /agents"),
         "{shown}"
     );
 
@@ -1264,7 +1432,7 @@ fn the_list_shows_after_leading_blanks() {
     screen.type_text(" /co");
     screen.draw();
     assert!(
-        screen.above_box(3)[0].starts_with(" › /compact"),
+        screen.command_list(3)[0].starts_with(" › /compact"),
         "{}",
         screen.text()
     );
