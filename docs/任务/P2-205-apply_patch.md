@@ -1,15 +1,14 @@
 # 任务：第二期-28.4 - apply_patch
 
-2026-11-05，主控建。canter/main 交给 canter/dev-apply-patch（Codex，gpt-6-astra / high）；交叉审查交 Claude Code（opus[1m] / high）。
-路由：碰要害 / 交叉审查要 / 影响面：碰要害（路由：重（置信 0.98）、要、碰要害；用户 11-05 定对比任务 Codex 用 high、审查用 Claude high，不用读表的 xhigh）
+2026-11-05，主控建。canter/main 交给 canter/dev-apply-patch（Kimi Code，默认 k3.1-pro；用户 11-05：「依旧派kimi吧」，原排 Codex high）；交叉审查交 Claude Code（opus[1m] / high）。
+路由：碰要害 / 交叉审查要 / 影响面：碰要害（路由：重（置信 0.98）、要、碰要害；用户 11-05 改派 Kimi，对比任务审查用 Claude high，不用读表的 review-codex）
 类型：功能变更
 提示：围绕已确认的使用目标完成变更，优先沿用现有机制。
 你是被委派的 agent：照本文件做，不要再开别的 agent。
 依据：P2-80 接 GPT 订阅按 `docs/调研/P2-33-第二个模型方案.md` §8 分件，这是第 5 件：搬 Codex 的 apply_patch，接上批准、只读、保护路径、改动记录和撤销，只给支持它的模型。
 依赖：P2-204、P2-210、P2-216
-对比样本：第 4 件，Kimi 3 件 / Codex 1 件
+对比样本：第 4 件，Kimi 4 件 / Codex 0 件
 执行：派出
-待用户：看过任务文件再派
 
 ## 用户原话
 

@@ -42,3 +42,4 @@
 - 用户 11-05：「我接下来会在这个难度程度下的task分别随机分给codex和kimi，我要根据这些来评估模型质量以及修正我corral的dispatch的分活逻辑。」主控建议轮流分、由主控记数，用户：「可以，就按这个轮流分」。条件：Codex 用 gpt-6-astra / high，Kimi 用默认 k3.1-pro，交叉审查都交 Claude Code opus[1m] / high。
 - 排法：P2-216 Kimi、P2-217 Kimi、P2-210 Codex、P2-205 Codex、P2-207 Kimi；P2-208 以验证为主，交 Codex，不算对比样本。写任务文件时照这个排、给用户看过再派，用户可以改。
 - 11-05 用户把 P2-210 改交 Kimi：「这个任务还是请kimi做吧，涉及到codex会话压缩之类的，我担心codex会拒绝。」之后 Kimi 3 件、Codex 0 件，主控把剩下两件对比样本都排给 Codex：P2-205 Codex、P2-207 Codex（P2-208 照旧 Codex、不计）；用户可以改。
+- 11-05 用户把 P2-205 也改交 Kimi：「依旧派kimi吧」。之后 Kimi 4 件、Codex 0 件；主控建议 P2-207 排 Codex（P2-208 照旧 Codex、不计），用户可以改。
