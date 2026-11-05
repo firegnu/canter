@@ -9,6 +9,10 @@ mod lifecycle;
 mod lsp_tests;
 mod model_auth;
 mod model_catalog;
+#[cfg(test)]
+#[allow(dead_code)] // Shared fake server also records request timing for retry tests.
+#[path = "../../canter-model/tests/support/mod.rs"]
+mod model_test_server;
 mod reload;
 #[cfg(test)]
 mod reload_tests;

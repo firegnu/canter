@@ -80,7 +80,7 @@ async fn fixture(inference: &Inference, suggestions: bool, window: u64) -> (Fixt
     )
 }
 
-async fn side_finished(stream: &mut canter_core::BtwStream) {
+pub(super) async fn side_finished(stream: &mut canter_core::BtwStream) {
     tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(event) = stream.recv().await {
             match event {

@@ -2,6 +2,7 @@
 
 mod chat_completions;
 mod error;
+mod history;
 mod responses;
 mod retry;
 mod types;
@@ -33,6 +34,12 @@ pub struct ModelContext {
 }
 
 pub trait Model: Send + Sync {
+    /// Provenance for partial history, with no account or native replay output.
+    /// Available before streaming, including when the caller cancels the stream.
+    fn history_origin(&self, _model: &str) -> Option<Replay> {
+        None
+    }
+
     /// Poll to make progress. Dropping the stream drops the in-flight request.
     /// Cancellation ends the stream without further events (including errors).
     fn stream(&self, request: Request, cancellation: CancellationToken) -> ModelStream<'_>;

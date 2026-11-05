@@ -513,7 +513,7 @@ impl State {
                         .is_some_and(|scope| self.rejected_replays.contains(scope))
                 })
             {
-                *replay = None;
+                crate::context::discard_replay(message);
             }
         }
         Ok(())

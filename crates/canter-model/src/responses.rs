@@ -265,6 +265,15 @@ impl Responses {
 }
 
 impl Model for Responses {
+    fn history_origin(&self, model: &str) -> Option<crate::Replay> {
+        Some(crate::Replay::Responses {
+            model: model.into(),
+            scope: None,
+            account: None,
+            output: Vec::new(),
+        })
+    }
+
     fn stream(&self, request: Request, cancellation: CancellationToken) -> ModelStream<'_> {
         self.stream_inner(request, cancellation, None)
     }
@@ -1026,6 +1035,144 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[tokio::test]
+    async fn native_replay_request_bytes_stay_unchanged_without_current_patch_tools() {
+        use crate::test_support::{Reply, Server};
+        use crate::{AssistantContent, Replay, ToolCall};
+        let server = Server::start(vec![Reply::sse(sse(vec![json!({
+            "type":"response.completed","response":{"status":"completed","output":[]}
+        })]))])
+        .await;
+        let model = Responses::with_endpoint(
+            Arc::new(Auth),
+            format!("{}responses", server.base_url).parse().unwrap(),
+        )
+        .unwrap();
+        let call = json!({"type":"custom_tool_call","id":"saved-call","call_id":"patch","name":"apply_patch","namespace":"canter","input":"old patch","status":"completed"});
+        let reasoning = json!({"type":"reasoning","id":"saved-reasoning","summary":[],"encrypted_content":"test-only-byte-cipher"});
+        let request = Request {
+            model: "test-model".into(),
+            messages: vec![
+                Message::System {
+                    text: "Fixed prompt\n  unchanged ".into(),
+                },
+                Message::Assistant {
+                    content: vec![AssistantContent::ToolCall(ToolCall {
+                        id: "patch".into(),
+                        name: "apply_patch".into(),
+                        arguments: "old patch".into(),
+                    })],
+                    replay: Some(Replay::Responses {
+                        model: "test-model".into(),
+                        account: Some("test-account-fingerprint".into()),
+                        scope: Some("turn".into()),
+                        output: vec![reasoning.clone(), call.clone()],
+                    }),
+                },
+                Message::ToolResult {
+                    tool_call_id: "patch".into(),
+                    text: "old result".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let events: Vec<_> = model
+            .stream(request, CancellationToken::new())
+            .collect()
+            .await;
+        assert!(events.iter().all(Result::is_ok));
+        // P2-210 replay eligibility is independent of the current tool list.
+        assert_eq!(server.bodies.lock().unwrap()[0].as_ref(), serde_json::to_vec(&json!({
+            "model":"test-model","stream":true,"store":false,"reasoning":{"summary":"auto"},
+            "input":[
+                {"role":"developer","content":[{"type":"input_text","text":"Fixed prompt\n  unchanged "}]},
+                reasoning, call,
+                {"type":"function_call_output","call_id":"patch","output":"old result"}
+            ]
+        })).unwrap());
+        server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn source_only_marker_preserves_responses_bytes_and_never_retries_replay() {
+        use crate::test_support::{Reply, Server};
+        use crate::{AssistantContent, Replay};
+        let stop = sse(vec![
+            json!({"type":"response.completed","response":{"status":"completed","output":[]}}),
+        ]);
+        let server = Server::start(vec![
+            Reply::sse(stop.clone()),
+            Reply::sse(stop),
+            Reply {
+                status: axum::http::StatusCode::BAD_REQUEST,
+                body: json!({"error":{"code":"invalid_encrypted_content"}}).to_string(),
+                retry_after: None,
+                hang: false,
+            },
+        ])
+        .await;
+        let model = Responses::with_endpoint(
+            Arc::new(Auth),
+            format!("{}responses", server.base_url).parse().unwrap(),
+        )
+        .unwrap();
+        let mut request = Request {
+            model: "test-model".into(),
+            messages: vec![Message::Assistant {
+                content: vec![
+                    AssistantContent::Reasoning {
+                        text: "Partial summary".into(),
+                    },
+                    AssistantContent::Text {
+                        text: "Partial answer".into(),
+                    },
+                ],
+                replay: None,
+            }],
+            ..Default::default()
+        };
+        let baseline: Vec<_> = model
+            .stream(request.clone(), CancellationToken::new())
+            .collect()
+            .await;
+        assert!(baseline.iter().all(Result::is_ok));
+        let Message::Assistant { replay, .. } = &mut request.messages[0] else {
+            unreachable!()
+        };
+        *replay = Some(Replay::Responses {
+            model: "test-model".into(),
+            scope: Some("turn".into()),
+            account: None,
+            output: Vec::new(),
+        });
+        let marked: Vec<_> = model
+            .stream(request.clone(), CancellationToken::new())
+            .collect()
+            .await;
+        assert!(marked.iter().all(Result::is_ok));
+        let rejected: Vec<_> = model
+            .stream(request, CancellationToken::new())
+            .collect()
+            .await;
+        assert!(rejected.last().is_some_and(Result::is_err));
+        assert!(!rejected.iter().any(|event| matches!(
+            event,
+            Ok(ModelEvent::ReplayRejected { .. } | ModelEvent::Retrying { .. })
+        )));
+        {
+            let bodies = server.bodies.lock().unwrap();
+            assert_eq!(bodies.len(), 3);
+            assert_eq!(bodies[0], bodies[1]);
+            assert_eq!(bodies[1], bodies[2]);
+            assert!(
+                std::str::from_utf8(&bodies[1])
+                    .unwrap()
+                    .contains("Partial answer")
+            );
+        }
+        server.stop().await;
     }
 
     #[tokio::test]

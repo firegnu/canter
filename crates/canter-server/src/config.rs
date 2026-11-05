@@ -404,6 +404,11 @@ struct Router {
 }
 
 impl Model for Router {
+    fn history_origin(&self, model: &str) -> Option<canter_model::Replay> {
+        let (client, model) = self.resolve(model)?;
+        client.history_origin(model)
+    }
+
     fn stream(
         &self,
         request: canter_model::Request,
@@ -423,26 +428,30 @@ impl Model for Router {
 }
 
 impl Router {
+    fn resolve<'a>(&self, model: &'a str) -> Option<(&Arc<dyn Model>, &'a str)> {
+        if let Some((provider, wire_model)) = model.split_once('/')
+            && let Some(client) = self.providers.get(provider)
+        {
+            return Some((client, wire_model));
+        }
+        self.legacy
+            .as_ref()
+            .filter(|_| {
+                self.providers.is_empty()
+                    || !model.contains('/')
+                    || self.legacy_models.contains(model)
+            })
+            .map(|client| (client, model))
+    }
+
     fn route(
         &self,
         mut request: canter_model::Request,
         cancellation: tokio_util::sync::CancellationToken,
         context: Option<canter_model::ModelContext>,
     ) -> canter_model::ModelStream<'_> {
-        if let Some((provider, model)) = request.model.split_once('/')
-            && let Some(client) = self.providers.get(provider)
-        {
+        if let Some((client, model)) = self.resolve(&request.model) {
             request.model = model.to_owned();
-            return match context {
-                Some(context) => client.stream_with_context(request, cancellation, context),
-                None => client.stream(request, cancellation),
-            };
-        }
-        if let Some(client) = &self.legacy
-            && (self.providers.is_empty()
-                || !request.model.contains('/')
-                || self.legacy_models.contains(&request.model))
-        {
             return match context {
                 Some(context) => client.stream_with_context(request, cancellation, context),
                 None => client.stream(request, cancellation),

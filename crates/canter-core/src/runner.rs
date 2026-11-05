@@ -600,6 +600,7 @@ async fn model_response(
     let estimated = context.total();
     let request = crate::images::prepare(shared, request).await?;
     let model = request.model.clone();
+    let origin = shared.runtime().model.history_origin(&model);
     let mut started_at = (shared.runtime().options.request_time)();
     let mut goal_id = shared.charge_goal().await;
     let mut stream = crate::telemetry::stream(
@@ -705,6 +706,7 @@ async fn model_response(
     // Persist history before publishing the final display state.
     let replay = replay
         .filter(|_| reason.is_some() && error.is_none() && !interrupted)
+        .or(if history.is_empty() { None } else { origin })
         .map(|replay| replay.with_scope(turn_id));
     if !history.is_empty() || replay.is_some() {
         shared

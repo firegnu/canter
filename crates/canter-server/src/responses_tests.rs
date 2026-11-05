@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 mod reasoning;
 mod replay;
+mod switching;
 
 struct Inference {
     endpoint: reqwest::Url,
@@ -36,6 +37,14 @@ impl Inference {
     }
 
     async fn with_catalog(replies: Vec<(u16, String)>, catalog: Value) -> Self {
+        Self::with_streaming_catalog(replies, catalog, false).await
+    }
+
+    async fn with_streaming_catalog(
+        replies: Vec<(u16, String)>,
+        catalog: Value,
+        hang: bool,
+    ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/v1/responses", listener.local_addr().unwrap())
             .parse()
@@ -60,6 +69,16 @@ impl Inference {
                                 .unwrap()
                                 .pop_front()
                                 .expect("unexpected inference");
+                            let body = if hang {
+                                axum::body::Body::from_stream(
+                                    futures_util::stream::iter([
+                                        Ok::<_, std::convert::Infallible>(body),
+                                    ])
+                                    .chain(futures_util::stream::pending()),
+                                )
+                            } else {
+                                axum::body::Body::from(body)
+                            };
                             (
                                 axum::http::StatusCode::from_u16(status).unwrap(),
                                 [("content-type", "text/event-stream")],

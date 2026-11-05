@@ -25,6 +25,65 @@ fn request() -> Request {
 }
 
 #[tokio::test]
+async fn switching_preserves_unknown_reasoning_and_reused_ordinary_call_ids() {
+    let server = Server::start(vec![Reply::sse(STOP)]).await;
+    let model = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
+    let request = Request {
+        model: "test-model".into(),
+        messages: vec![
+            Message::Assistant {
+                content: vec![AssistantContent::ToolCall(ToolCall {
+                    id: "reused".into(),
+                    name: "apply_patch".into(),
+                    arguments: "old patch".into(),
+                })],
+                replay: None,
+            },
+            Message::ToolResult {
+                tool_call_id: "reused".into(),
+                text: "old patch result".into(),
+            },
+            Message::User {
+                text: "Now read".into(),
+            },
+            Message::Assistant {
+                content: vec![
+                    AssistantContent::Reasoning {
+                        text: "Native or legacy unknown reasoning".into(),
+                    },
+                    AssistantContent::ToolCall(ToolCall {
+                        id: "reused".into(),
+                        name: "read".into(),
+                        arguments: "{\"path\":\"a\"}".into(),
+                    }),
+                ],
+                replay: None,
+            },
+            Message::ToolResult {
+                tool_call_id: "reused".into(),
+                text: "file contents".into(),
+            },
+        ],
+        ..Default::default()
+    };
+    let events: Vec<_> = model
+        .stream(request, CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok));
+    let body = server.requests.lock().unwrap()[0].clone();
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(
+        &messages[messages.len() - 2..],
+        &[
+            json!({"role":"assistant","content":"","reasoning_content":"Native or legacy unknown reasoning","tool_calls":[{"id":"reused","type":"function","function":{"name":"read","arguments":"{\"path\":\"a\"}"}}]}),
+            json!({"role":"tool","tool_call_id":"reused","content":"file contents"}),
+        ]
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn default_request_only_adds_canter_user_agent_and_preserves_body_bytes() {
     let server = Server::start(vec![Reply::sse(STOP)]).await;
     let model = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
