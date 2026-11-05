@@ -1996,3 +1996,26 @@ fn mcp_status_and_approval_show_server_tool_arguments_and_escape_interrupts() {
     assert!(screen.text().contains("Allow MCP local / echo?"));
     assert!(screen.text().contains("hello"));
 }
+
+#[test]
+fn usage_popup_shows_mixed_plan_cost_last_turn_and_usage_link() {
+    let mut screen = Screen::sized(WIDTH, 30);
+    let report = serde_json::from_value(json!({
+        "data":[
+            {"model":"subscription/gpt","cachedInputTokens":40,"uncachedInputTokens":60,"outputTokens":5,"cost":{"usd":0.0,"unknown":false,"chatgptPlan":true}},
+            {"model":"metered/unknown","cachedInputTokens":20,"uncachedInputTokens":30,"outputTokens":4,"cost":{"usd":0.12,"unknown":true}}
+        ],
+        "total":{"cachedInputTokens":60,"uncachedInputTokens":90,"outputTokens":9,"cost":{"usd":0.12,"unknown":true,"chatgptPlan":true}},
+        "lastTurnCost":{"usd":0.0,"unknown":false,"chatgptPlan":true}
+    }))
+    .unwrap();
+    screen.ui.app_mut().show_usage(&report);
+    screen.draw();
+    let shown = screen.text();
+    assert!(shown.contains("$0.12+? + ChatGPT plan"), "{shown}");
+    assert!(shown.contains("Last turn: ChatGPT plan"), "{shown}");
+    assert!(
+        shown.contains("ChatGPT plan usage: https://chatgpt.com/settings/usage"),
+        "{shown}"
+    );
+}

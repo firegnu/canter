@@ -378,6 +378,12 @@ impl Config {
             auto_wake_limit: self.auto_wake_limit,
             goal_budget_usd: self.goal_budget_usd,
             prices,
+            chatgpt_plan_providers: self
+                .providers
+                .iter()
+                .filter(|(_, provider)| provider.auth.as_deref() == Some("chatgpt"))
+                .map(|(name, _)| name.clone())
+                .collect(),
             context_window: self.context_window,
             auto_compact_tokens: self.auto_compact_tokens,
             telemetry: self.telemetry,

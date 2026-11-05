@@ -50,8 +50,10 @@ Environment 是会话打开时固定的目录、仓库根、系统/架构和本�
   `Not sandboxed: ! commands, MCP tools, web_fetch` 各一行，长了折行。关着时标题 `Sandbox · off`，下面一句怎么打开。
   服务端没报沙箱状态（旧版）时不弹框，对话里写 `This server does not support /sandbox; run canter serve --replace and retry`。
 - `/usage`：标题 `Usage`，下面是本会话按模型分的表（列和以前一样：Model、Cache hit、Cache miss、Output、Cost (USD)，最后一行 Total），
-  token 数照 `/context` 写成 `340k`、`1.2M`，金额不变；表下面一行 `Last turn: $0.12`。以前直接写进对话、留在那里，P2-187 起改成弹框，
-  Esc 关掉后对话里什么都不留。命令行 `canter usage` 照旧写完整的数。
+  token 数照 `/context` 写成 `340k`、`1.2M`。只用 ChatGPT 套餐时 Cost 写 `ChatGPT plan`，混合时写 `$0.12 + ChatGPT plan`，
+  别家有未知金额时写 `$0.12+? + ChatGPT plan`；有套餐用量时表下加 `ChatGPT plan usage: https://chatgpt.com/settings/usage`，
+  再写 `Last turn: …`。以前直接写进对话、留在那里，P2-187 起改成弹框，Esc 关掉后对话里什么都不留。
+  命令行 `canter usage` 写完整的数，套餐写法和链接相同；只用别家时输出不变。
 
 ## 批准框
 

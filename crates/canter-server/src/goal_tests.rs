@@ -177,9 +177,10 @@ impl Fixture {
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
         std::fs::write(root.path().join("state/config.json"), config.to_string()).unwrap();
-        let mut options = crate::config::Config::load(&root.path().join("state"))
-            .unwrap()
-            .options();
+        let config = crate::config::Config::load(&root.path().join("state")).unwrap();
+        let default_model = config.model.clone();
+        let models = config.models.clone();
+        let mut options = config.options();
         options.goal_question_timeout = timeout;
         let requests = Arc::new(SyncMutex::new(Vec::new()));
         let replies = Arc::new(SyncMutex::new(VecDeque::<Value>::new()));
@@ -226,8 +227,8 @@ impl Fixture {
             home: root.path().join("state"),
             store: Arc::new(Store::new(root.path().join("state/sessions")).unwrap()),
             model: Arc::new(model),
-            default_model: "fake".into(),
-            models: vec!["fake".into()],
+            default_model,
+            models,
             options,
             mcp: Default::default(),
             lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
@@ -277,7 +278,7 @@ impl Fixture {
     }
 
     async fn create(&self) -> String {
-        let value: Value = self.client.post("http://localhost/v1/sessions").json(&json!({"cwd":self.root.path().join("project"),"env":self.env(),"model":"fake","clientName":"test","approvalPolicy":"allowAll"})).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+        let value: Value = self.client.post("http://localhost/v1/sessions").json(&json!({"cwd":self.root.path().join("project"),"env":self.env(),"model":self.app.default_model,"clientName":"test","approvalPolicy":"allowAll"})).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
         format!(
             "http://localhost/v1/sessions/{}",
             value["session"]["id"].as_str().unwrap()
@@ -1239,5 +1240,98 @@ async fn goal_cannot_start_or_resume_during_server_shutdown() {
         .unwrap();
     assert_eq!(resuming.status(), StatusCode::CONFLICT);
     assert_eq!(fixture.snapshot(&url).await["goal"]["status"], "paused");
+    fixture.close().await;
+}
+
+fn plan_config() -> Value {
+    json!({
+        "model":"subscription/fake",
+        "providers":{
+            "subscription":{
+                "api":"chat_completions","auth":"chatgpt","base_url":"http://127.0.0.1:1/v1","api_key":"test-key",
+                "models":{"fake":{"context_window":1048576}}
+            },
+            "metered":{
+                "api":"chat_completions","base_url":"http://127.0.0.1:1/v1","api_key":"test-key",
+                "models":{"fake":{"context_window":1048576,"price":{"peak":{"cache_hit":0,"cache_miss":0,"output":1000000}}}}
+            }
+        }
+    })
+}
+
+#[tokio::test]
+async fn chatgpt_plan_usage_does_not_stop_zero_or_dollar_budget_goals() {
+    for budget in [0.0, 1.0] {
+        let fixture = Fixture::new(plan_config()).await;
+        let url = fixture.create().await;
+        fixture.respond(vec![
+            charged(reply("plan progress"), 1),
+            charged(call("update_goal", json!({"status":"complete"})), 1),
+            charged(reply("done"), 1),
+        ]);
+        fixture
+            .set(
+                &url,
+                json!({"objective":"Finish plan work","budgetUsd":budget}),
+            )
+            .await;
+        let snapshot = fixture
+            .until(&url, |s| {
+                s["goal"]["status"] == "complete" && s["status"] == "idle"
+            })
+            .await;
+        assert_eq!(snapshot["goal"]["cost"]["usd"], 0.0);
+        assert_eq!(snapshot["goal"]["cost"]["unknown"], false);
+        assert_eq!(snapshot["goal"]["cost"]["chatgptPlan"], true);
+        assert_eq!(snapshot["turns"].as_array().unwrap().len(), 2);
+        fixture.close().await;
+    }
+}
+
+#[tokio::test]
+async fn metered_spending_after_plan_usage_still_limits_the_goal() {
+    let fixture = Fixture::new(plan_config()).await;
+    let url = fixture.create().await;
+    fixture.respond(vec![charged(reply("plan progress"), 1)]);
+    fixture
+        .set(
+            &url,
+            json!({"objective":"Mix plan and metered work","budgetUsd":1.0}),
+        )
+        .await;
+    let plan = fixture
+        .until(&url, |s| s["goal"]["cost"]["chatgptPlan"] == true)
+        .await;
+    assert_eq!(plan["goal"]["status"], "active");
+    assert_eq!(plan["goal"]["cost"]["usd"], 0.0);
+    assert_eq!(plan["goal"]["cost"]["unknown"], false);
+    fixture.action(&url, "pause").await;
+    fixture
+        .until(&url, |s| {
+            s["status"] == "idle" && s["goal"]["status"] == "paused"
+        })
+        .await;
+    fixture
+        .client
+        .patch(&url)
+        .json(&json!({"model":"metered/fake"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fixture.respond(vec![
+        charged(reply("metered progress"), 1),
+        charged(reply("budget summary"), 0),
+    ]);
+    fixture.action(&url, "resume").await;
+    let snapshot = fixture
+        .until(&url, |s| {
+            s["goal"]["status"] == "budgetLimited" && s["status"] == "idle"
+        })
+        .await;
+    assert_eq!(snapshot["goal"]["cost"]["usd"], 1.0);
+    assert_eq!(snapshot["goal"]["cost"]["unknown"], false);
+    assert_eq!(snapshot["goal"]["cost"]["chatgptPlan"], true);
     fixture.close().await;
 }

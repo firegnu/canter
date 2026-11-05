@@ -314,15 +314,19 @@ GET 不重新扫描，不发事件；修改技能在下次打开会话时才生�
 `GET /v1/usage` 按本机时区日期、模型汇总所有会话；`GET /v1/sessions/{id}/usage`
 按模型汇总一个会话，不要求 resume。两者返回 `UsageResponse { data, total, lastTurnCost? }`。
 每行有 `date?`、`model?`、`cachedInputTokens`、`uncachedInputTokens`、`outputTokens`
-和 `cost: { usd, unknown }`，其中 usd 是已知金额合计，unknown 表示含至少一笔未知金额。
+和 `cost: { usd, unknown, chatgptPlan? }`，其中 usd 是已知金额合计，unknown 表示含至少一笔未知金额，
+chatgptPlan 为 true 表示还含有 ChatGPT 套餐 token；缺省为 false，不影响原有美元字段。
 单会话行没有 date，合计没有 date/model；lastTurnCost 只在单会话存在已结束轮时提供。
 
-`TokenUsage` 新增可选 `request: { model, startedAt, costUsd }` 和 `cost`。
-request 是一次请求的已记金额，startedAt 是请求发出时刻（Unix 毫秒）；costUsd 可以是 null，
-表示未知，不能视为零或以后补价。整个 request 缺失才是旧事件：服务端按当前单价、
-事件 timestamp 和此前最近一次 session.updated 的模型补算，不写回文件。
-cost 对应该 TokenUsage.total 的金额：session.usage 中是会话累计，Turn.usage 中是该轮累计。
-客户端显示服务端给出的金额，不取价、不自行估算；旧客户端可以忽略这两个字段。
+`TokenUsage` 新增可选 `request: { model, startedAt, costUsd, billingKind? }` 和 `cost`。
+request 是一次请求的已记金额，startedAt 是请求发出时刻（Unix 毫秒）；billingKind 为
+`tokenMetered` 或 `chatgptPlan`，旧记录省略。套餐请求的 costUsd 为 null，但不计美元也不算未知；
+按 token 计价的旧记录或新记录中，costUsd 为 null 仍表示未知，不能视为零或以后补价。
+整个 request 缺失才是旧事件：服务端按当前单价、事件 timestamp 和此前最近一次 session.updated
+的模型补算，不写回文件。cost 对应该 TokenUsage.total 的金额：session.usage 中是会话累计，
+Turn.usage 中是该轮累计，含可选 chatgptPlan 标记。客户端显示服务端给出的金额，不取价、不自行估算；
+旧客户端可以忽略这些字段，新客户端读旧服务端和旧存盘时按缺省 false 处理。
+状态栏脚本的 JSON 在有套餐用量时增加可选 `chatgptPlan: true`，原 cost 字段含义不变。
 `TokenUsage` 另有可选 `autoCompactTokens`：生效的自动压缩线（上下文占用超过它就压缩，见服务端的
 `auto_compact_tokens`），供客户端显示离压缩还剩多少；旧事件没有这个字段，旧客户端可以忽略。
 

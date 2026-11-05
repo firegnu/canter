@@ -666,6 +666,14 @@
       ],
       "type": "object"
     },
+    "BillingKind": {
+      "enum": [
+        "tokenMetered",
+        "chatgptPlan",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "BtwEvent": {
       "oneOf": [
         {
@@ -4695,6 +4703,17 @@
     },
     "RequestCharge": {
       "properties": {
+        "billingKind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BillingKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent in old records, which retain their costUsd semantics."
+        },
         "costUsd": {
           "format": "double",
           "type": [
@@ -6828,7 +6847,7 @@
               "type": "null"
             }
           ],
-          "description": "Absent in old events; present with a null cost for an unpriced request."
+          "description": "Absent in old events; costUsd is null for unpriced or ChatGPT plan requests."
         },
         "total": {
           "$ref": "#/$defs/TokenUsageBreakdown"
@@ -7021,6 +7040,9 @@
     },
     "UsageCost": {
       "properties": {
+        "chatgptPlan": {
+          "type": "boolean"
+        },
         "unknown": {
           "type": "boolean"
         },

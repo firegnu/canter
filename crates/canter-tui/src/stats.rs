@@ -173,6 +173,21 @@ fn overview(report: &StatsResponse) -> Vec<String> {
             "Usage (with sub-agents): {}",
             usage_summary(o.usage_with_sub_agents.as_ref())
         ));
+        if o.usage
+            .as_ref()
+            .is_some_and(|usage| usage.total.cost.chatgpt_plan)
+            || o.usage_with_sub_agents
+                .as_ref()
+                .is_some_and(|usage| usage.cost.chatgpt_plan)
+            || report.sub_agents.iter().any(|agent| {
+                agent
+                    .usage
+                    .as_ref()
+                    .is_some_and(|usage| usage.cost.chatgpt_plan)
+            })
+        {
+            lines.push(crate::usage::PLAN_USAGE.into());
+        }
     } else if let Some(usage) = &o.usage {
         lines.extend(crate::usage::format_report(usage));
     } else {

@@ -84,6 +84,12 @@ async fn stats_cli_lists_selects_and_exports_offline_reports_and_rejects_old_ser
             events.push(json!({"type":"telemetry.compaction","turnId":"t1","itemId":"c1","trigger":"manual","method":"prefix","estimated":true,"beforeTokens":100,"afterTokens":50,"beforeMessages":4,"afterMessages":2,"removedMessages":2,"succeeded":true}));
         }
     }
+    let counts = json!({"inputTokens":100,"cachedInputTokens":40,"outputTokens":5,"reasoningOutputTokens":0,"totalTokens":105});
+    events.push(json!({"type":"session.usage","tokenUsage":{
+        "request":{"requestId":"r0","model":"subscription/gpt","startedAt":2000,"costUsd":null,"billingKind":"chatgptPlan"},
+        "last":counts,"total":counts,"contextTokens":105,"modelContextWindow":200000,
+        "cost":{"usd":0.0,"unknown":false,"chatgptPlan":true}
+    }}));
     let mut file = fs::File::create(root.path().join("state/sessions/s1/events.jsonl")).unwrap();
     for (index, mut event) in events.into_iter().enumerate() {
         event["sessionId"] = json!("s1");
@@ -137,6 +143,14 @@ async fn stats_cli_lists_selects_and_exports_offline_reports_and_rejects_old_ser
     })
     .await
     .unwrap();
+    let usage = succeeded(cli(root.path(), &["usage"]).await);
+    for expected in [
+        "subscription/gpt",
+        "ChatGPT plan",
+        "ChatGPT plan usage: https://chatgpt.com/settings/usage",
+    ] {
+        assert!(usage.contains(expected), "missing {expected}: {usage}");
+    }
     let list: Value =
         serde_json::from_str(&succeeded(cli(root.path(), &["stats", "--json"]).await)).unwrap();
     assert_eq!(list["data"][0]["sessionId"], "s1");
@@ -171,6 +185,13 @@ async fn stats_cli_lists_selects_and_exports_offline_reports_and_rejects_old_ser
     let path = Path::new(html_path.trim());
     assert!(path.starts_with(root.path().join("state/stats")));
     let html = fs::read_to_string(path).unwrap();
+    for output in [&table, &html] {
+        assert!(output.contains("ChatGPT plan"), "{output}");
+        assert!(
+            output.contains("ChatGPT plan usage: https://chatgpt.com/settings/usage"),
+            "{output}"
+        );
+    }
     for text in [
         "<svg",
         "<polygon",

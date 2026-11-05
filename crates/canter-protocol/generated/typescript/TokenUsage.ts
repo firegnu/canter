@@ -5,7 +5,7 @@ import type { UsageCost } from "./UsageCost";
 
 export type TokenUsage = {
 /**
- * Absent in old events; present with a null cost for an unpriced request.
+ * Absent in old events; costUsd is null for unpriced or ChatGPT plan requests.
  */
 request?: RequestCharge, cost?: UsageCost, total: TokenUsageBreakdown, last: TokenUsageBreakdown,
 /**
