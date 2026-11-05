@@ -230,6 +230,100 @@ fn sse(events: Vec<Value>) -> String {
 }
 
 #[tokio::test]
+async fn responses_reasoning_without_summary_is_display_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let reasoning = json!({
+        "type":"reasoning", "id":"r1", "summary":[],
+        "encrypted_content":"test-only-ciphertext"
+    });
+    let server = Server::start(vec![
+        Reply::sse(sse(vec![
+            json!({"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"r1","summary":[]}}),
+            json!({"type":"response.output_item.done","output_index":0,"item":reasoning}),
+            json!({"type":"response.completed","response":{"status":"completed","output":[reasoning],"usage":{"input_tokens":10,"output_tokens":52,"total_tokens":62,"output_tokens_details":{"reasoning_tokens":52}}}}),
+        ])),
+        Reply::sse(sse(vec![json!({
+            "type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":0,"total_tokens":10,"output_tokens_details":{"reasoning_tokens":0}}}
+        })])),
+    ])
+    .await;
+    let model = Responses::for_test(
+        Arc::new(Auth),
+        format!("{}responses", server.base_url).parse().unwrap(),
+    )
+    .unwrap();
+    let (store, session) = create(
+        temp.path(),
+        Arc::new(model),
+        PermissionMode::AlwaysAsk,
+        false,
+    )
+    .await;
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input(None)).await.unwrap();
+    assert_eq!(finished(&mut events).await, TurnStatus::Completed);
+
+    let snapshot = session.snapshot().await;
+    let thoughts: Vec<_> = snapshot.session.turns[0]
+        .items
+        .iter()
+        .filter(|item| matches!(item, Item::Reasoning { .. }))
+        .collect();
+    assert_eq!(
+        thoughts.len(),
+        1,
+        "reasoning without a summary must be visible"
+    );
+    let Item::Reasoning {
+        id,
+        summary,
+        content,
+        duration_ms,
+        status,
+    } = thoughts[0]
+    else {
+        unreachable!()
+    };
+    assert!(summary.is_empty() && content.iter().all(String::is_empty));
+    assert!(duration_ms.is_some());
+    assert!(status.is_none());
+    let recorded = store.events_after("apply-patch", 0).unwrap();
+    assert!(recorded.iter().any(|event| matches!(&event.payload,
+        EventPayload::ItemStarted { item: Item::Reasoning { id: started, summary, content, .. }, .. }
+        if started == id && summary.is_empty() && content.is_empty()
+    )));
+    assert!(recorded.iter().any(|event| matches!(&event.payload,
+        EventPayload::ItemCompleted { item: Item::Reasoning { id: completed, .. }, .. }
+        if completed == id
+    )));
+    let history = store.model_history::<Value>("apply-patch").unwrap();
+    let assistant = history
+        .iter()
+        .find(|entry| entry["message"]["type"] == "assistant")
+        .unwrap();
+    assert_eq!(assistant["message"]["content"], json!([]));
+    assert_eq!(assistant["message"]["replay"]["output"], json!([reasoning]));
+
+    session.input(input(None)).await.unwrap();
+    assert_eq!(finished(&mut events).await, TurnStatus::Completed);
+    assert!(
+        !session.snapshot().await.session.turns[1]
+            .items
+            .iter()
+            .any(|item| matches!(item, Item::Reasoning { .. }))
+    );
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]["input"]
+            .as_array()
+            .unwrap()
+            .contains(&reasoning)
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn responses_custom_patch_has_one_approval_replays_and_rewinds_every_change() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");

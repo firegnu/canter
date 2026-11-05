@@ -631,8 +631,10 @@ async fn model_response(
                     replay = None;
                     finish_items(turn_id, &response, &mut pending, true);
                     flush(shared, &mut pending).await?;
-                    if !response.items.is_empty() {
+                    if response.items.iter().any(|item| !item.display_only) {
                         last_nonempty_response = std::mem::take(&mut response);
+                    } else {
+                        response = crate::response::Response::default();
                     }
                     if let Some(usage) = usage.take() {
                         record_usage(shared, usage, None, &model, started_at, true, goal_id.as_deref(), request_id.as_deref()).await?;
@@ -650,7 +652,7 @@ async fn model_response(
                     break;
                 }
                 Some(Ok(event)) => {
-                    if matches!(&event, ModelEvent::TextDelta { delta, .. } | ModelEvent::ReasoningDelta { delta, .. } if delta.is_empty()) { continue; }
+                    if matches!(&event, ModelEvent::TextDelta { delta, .. } if delta.is_empty()) { continue; }
                     if response.items.is_empty() && !shared.accept_model_output().await { break; }
                     if let Some((item, new)) = response.apply(&event) {
                         if new && let Some(mut display) = item.display(false) {
@@ -691,13 +693,15 @@ async fn model_response(
             .as_ref()
             .is_some_and(|error| !error.is_retryable() || content.is_empty());
     // Empty failed retries may recover the last partial output, but Esc must not.
-    if !interrupted && preserve_partial && response.items.is_empty() {
+    if !interrupted && preserve_partial && response.items.iter().all(|item| item.display_only) {
+        finish_items(turn_id, &response, &mut pending, true);
         response = last_nonempty_response;
     }
     let history = if preserve_partial {
         response
             .items
             .iter()
+            .filter(|item| !item.display_only)
             .map(|item| item.content.clone())
             .collect()
     } else {

@@ -890,10 +890,10 @@ fn reasoning(
             2,
         )]
     };
+    if finished && text.trim().is_empty() {
+        return row(" · ", "no summary".into());
+    }
     if details {
-        if finished && text.trim().is_empty() {
-            return Vec::new();
-        }
         let style = theme::thinking();
         let mut rows = row("", String::new());
         let bar = || Span::styled("  ┊ ", theme::secondary());

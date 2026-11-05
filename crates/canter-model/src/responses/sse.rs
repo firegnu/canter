@@ -81,6 +81,18 @@ impl State {
                 } else if self.items.values().any(|item| item.id == id) {
                     return Err(check.invalid("item id is already used at another index"));
                 }
+                // Start the first summary slot before any summary arrives. An
+                // empty delta at done also lets the display clock include work
+                // that produced no summary; neither delta is model history.
+                if kind == "reasoning"
+                    && (event["type"] == "response.output_item.added"
+                        || item["summary"].as_array().is_some_and(Vec::is_empty))
+                {
+                    events.push(ModelEvent::ReasoningDelta {
+                        item_id: format!("{id}:0"),
+                        delta: String::new(),
+                    });
+                }
                 self.items.insert(
                     index,
                     Item {
