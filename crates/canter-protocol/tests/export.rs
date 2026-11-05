@@ -90,6 +90,7 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
         "Model",
         "ModelListParams",
         "ModelListResponse",
+        "ModelCatalogStatus",
         "CommandRule",
         "CommandRuleDecision",
         "CommandRuleListResponse",

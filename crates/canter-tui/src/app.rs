@@ -699,6 +699,8 @@ pub struct App {
     image_models: Vec<String>,
     /// What the server last listed, for `/model`.
     models: Vec<canter_protocol::Model>,
+    catalogs: Vec<canter_protocol::ModelCatalogStatus>,
+    unverified_warnings: HashSet<String>,
     skills: Vec<canter_protocol::Skill>,
     clipboard: crate::images::Clipboard,
     /// Where copies go: the clipboard, and the terminal in tmux or over SSH.
@@ -1027,6 +1029,8 @@ impl App {
             shell_wait: false,
             image_models: vec!["deepseek-flash".into()],
             models: Vec::new(),
+            catalogs: Vec::new(),
+            unverified_warnings: HashSet::new(),
             skills: Vec::new(),
             clipboard: crate::images::Clipboard::default(),
             copier: Copier::default(),
@@ -3896,6 +3900,51 @@ impl App {
             .map(|model| model.model.clone())
             .collect();
         self.models = models.to_vec();
+    }
+
+    pub fn set_model_list(&mut self, list: canter_protocol::ModelListResponse) {
+        self.catalogs = list.catalogs.unwrap_or_default();
+        self.set_models(&list.data);
+    }
+
+    pub(crate) fn catalog(
+        &self,
+        provider: Option<&str>,
+    ) -> Option<&canter_protocol::ModelCatalogStatus> {
+        self.catalogs
+            .iter()
+            .find(|catalog| Some(catalog.provider.as_str()) == provider)
+    }
+
+    pub(crate) fn unverified_warning(&mut self, id: &str) -> Option<String> {
+        let model = self.models.iter().find(|model| model.model == id)?.clone();
+        if model.verified != Some(false) || !self.unverified_warnings.insert(id.into()) {
+            return None;
+        }
+        let missing = model.missing_capabilities.as_deref().unwrap_or(&[]);
+        let details: Vec<&str> = missing
+            .iter()
+            .filter_map(|capability| match capability.as_str() {
+                "contextWindow" => Some("a 128000-token context window"),
+                "imageInput" => Some("no image input"),
+                "reasoningEffort" => Some("medium thinking effort"),
+                _ => None,
+            })
+            .collect();
+        let details = match details.as_slice() {
+            [] => "conservative model defaults".into(),
+            [only] => (*only).into(),
+            [first, second] => format!("{first} and {second}"),
+            _ => format!(
+                "{}, and {}",
+                details[..details.len() - 1].join(", "),
+                details[details.len() - 1]
+            ),
+        };
+        Some(format!(
+            "Model details for {} are unverified: using {details}.",
+            model.display_name
+        ))
     }
 
     pub(crate) fn models(&self) -> &[canter_protocol::Model] {

@@ -639,7 +639,7 @@ where
         .with_tips(&env)
         .with_input_history(&env);
     match client.list_models().await {
-        Ok(models) => app.set_models(&models),
+        Ok(models) => app.set_model_list(models),
         Err(error) => app.warning(&format!("Could not read image capabilities: {error}")),
     }
     match client.list_skills(&session).await {
@@ -792,7 +792,9 @@ where
                 }
                 Some(Action::PickModel) => match chat.client.list_models().await {
                     Ok(models) => {
-                        crate::commands::choose_model(ui.app_mut(), models);
+                        let data = models.data.clone();
+                        ui.app_mut().set_model_list(models);
+                        crate::commands::choose_model(ui.app_mut(), data);
                     }
                     Err(error) => ui
                         .app_mut()
@@ -1426,7 +1428,7 @@ enum Message {
         input: Vec<UserInput>,
     },
     ImageSendFailed(String),
-    Models(Vec<canter_protocol::Model>),
+    Models(canter_protocol::ModelListResponse),
     Skills(Vec<canter_protocol::Skill>),
     Server(Box<Event>),
     SendFailed {
@@ -2008,7 +2010,7 @@ impl<C: Connector> Chat<C> {
             ui.app_mut().warning(&error.to_string());
         }
         if let Ok(models) = self.client.list_models().await {
-            ui.app_mut().set_models(&models);
+            ui.app_mut().set_model_list(models);
         }
         match self.client.list_skills(&self.session).await {
             Ok(skills) => ui.app_mut().set_skills(skills),
@@ -2115,7 +2117,7 @@ impl<C: Connector> Chat<C> {
                 app.input_sent(event_seq, input);
             }
             Message::ImageSendFailed(error) => app.image_send_failed(&error),
-            Message::Models(models) => app.set_models(&models),
+            Message::Models(models) => app.set_model_list(models),
             Message::Skills(skills) => app.set_skills(skills),
             Message::Server(event) => {
                 if let canter_protocol::EventPayload::TurnRetracted { turn_id } = &event.payload {
@@ -2564,6 +2566,12 @@ impl<C: Connector> Chat<C> {
                 });
             }
             Action::Update(params) => {
+                if let Some(model) = params.model.as_deref()
+                    && model != app.snapshot().settings.model
+                    && let Some(warning) = app.unverified_warning(model)
+                {
+                    app.warning(&warning);
+                }
                 if params.name.is_some() {
                     self.naming.eligible = false;
                     self.naming.turn = None;

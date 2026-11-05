@@ -10,11 +10,13 @@ pub(crate) struct ModelAuth {
     pub endpoint: Option<reqwest::Url>,
     home: PathBuf,
     manager: Mutex<Option<ChatgptAuth>>,
+    catalog: Arc<crate::model_catalog::ModelCatalog>,
 }
 
 impl ModelAuth {
     pub fn new(home: PathBuf) -> Arc<Self> {
         Arc::new(Self {
+            catalog: crate::model_catalog::ModelCatalog::new(home.clone(), None),
             home,
             manager: Mutex::new(None),
             #[cfg(test)]
@@ -25,11 +27,22 @@ impl ModelAuth {
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_manager(home: PathBuf, manager: ChatgptAuth) -> Arc<Self> {
         Arc::new(Self {
+            catalog: crate::model_catalog::ModelCatalog::new(
+                home.clone(),
+                Some(
+                    reqwest::Url::parse("http://127.0.0.1:9/v1/models")
+                        .expect("isolated test catalog URL"),
+                ),
+            ),
             home,
             manager: Mutex::new(Some(manager)),
             #[cfg(test)]
             endpoint: None,
         })
+    }
+
+    pub fn catalog(&self) -> &Arc<crate::model_catalog::ModelCatalog> {
+        &self.catalog
     }
 
     pub async fn get(&self) -> Result<ChatgptAuth, AuthError> {
@@ -42,7 +55,11 @@ impl ModelAuth {
 
     #[cfg(test)]
     pub fn for_test(home: PathBuf, manager: ChatgptAuth, endpoint: reqwest::Url) -> Arc<Self> {
+        let mut catalog_endpoint = endpoint.clone();
+        catalog_endpoint.set_path("/v1/models");
+        catalog_endpoint.set_query(None);
         Arc::new(Self {
+            catalog: crate::model_catalog::ModelCatalog::new(home.clone(), Some(catalog_endpoint)),
             home,
             manager: Mutex::new(Some(manager)),
             endpoint: Some(endpoint),

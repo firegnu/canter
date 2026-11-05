@@ -116,3 +116,22 @@ fn status_and_switch_notice_display_server_confirmed_reasoning() {
         "{shown}"
     );
 }
+
+#[test]
+fn unverified_model_offers_only_medium_and_explains_the_fallback() {
+    let mut model_app = app();
+    model_app.set_models(&serde_json::from_value::<Vec<_>>(json!([{
+        "id":"configured/solver","model":"configured/solver","displayName":"Solver","isDefault":true,
+        "supportedReasoningEfforts":["medium"],"defaultReasoningEffort":"medium",
+        "verified":false,"missingCapabilities":["reasoningEffort"]
+    }])).unwrap());
+    let mut ui = Ui::new(TestBackend::new(120, 30), model_app).unwrap();
+    assert!(enter(ui.app_mut(), "/think").is_none());
+    let shown = screen(&mut ui);
+    assert!(shown.contains("medium (current)"), "{shown}");
+    assert!(shown.contains("unverified for this model"), "{shown}");
+    assert!(!shown.contains("high"), "{shown}");
+    let mut command = app();
+    command.set_models(ui.app().models());
+    assert!(enter(&mut command, "/think high").is_none());
+}

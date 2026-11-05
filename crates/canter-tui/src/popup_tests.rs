@@ -441,3 +441,34 @@ fn model_choice_with_one_provider_skips_the_provider_list() {
     assert_eq!(screen.press(KeyCode::Esc), None);
     assert!(screen.popup().is_empty());
 }
+
+#[test]
+fn account_catalog_preserves_order_marks_unverified_and_warns_once() {
+    let mut first = model("chatgpt/zed", Some("chatgpt"), 128000, false);
+    first["displayName"] = json!("Zed");
+    first["fromCatalog"] = json!(true);
+    first["verified"] = json!(false);
+    first["missingCapabilities"] = json!(["contextWindow", "reasoningEffort", "imageInput"]);
+    let mut second = model("chatgpt/alpha", Some("chatgpt"), 200000, true);
+    second["displayName"] = json!("Alpha");
+    second["fromCatalog"] = json!(true);
+    second["verified"] = json!(true);
+    let mut screen = Screen::new();
+    screen.app().set_model_list(from(json!({
+        "data":[first, second],"nextCursor":null,
+        "catalogs":[{"provider":"chatgpt","stale":false,"refreshFailed":true}]
+    })));
+    let models = screen.app().models().to_vec();
+    crate::commands::choose_model(screen.app(), models);
+    let popup = screen.popup();
+    assert_eq!(popup[0], " Model · chatgpt · Could not load ChatGPT models");
+    assert!(popup[1].contains("Zed (unverified)"), "{popup:?}");
+    assert!(popup[2].contains("Alpha"), "{popup:?}");
+    let warning = screen.app().unverified_warning("chatgpt/zed").unwrap();
+    assert_eq!(
+        warning,
+        "Model details for Zed are unverified: using a 128000-token context window, medium thinking effort, and no image input."
+    );
+    assert!(screen.app().unverified_warning("chatgpt/zed").is_none());
+    assert!(screen.app().unverified_warning("chatgpt/alpha").is_none());
+}

@@ -4298,6 +4298,12 @@
         "displayName": {
           "type": "string"
         },
+        "fromCatalog": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "id": {
           "type": "string"
         },
@@ -4312,6 +4318,15 @@
         },
         "isDefault": {
           "type": "boolean"
+        },
+        "missingCapabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "model": {
           "type": "string"
@@ -4330,6 +4345,12 @@
             "array",
             "null"
           ]
+        },
+        "verified": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
@@ -4340,12 +4361,47 @@
       ],
       "type": "object"
     },
+    "ModelCatalogStatus": {
+      "properties": {
+        "fetchedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        },
+        "refreshFailed": {
+          "type": "boolean"
+        },
+        "stale": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "provider",
+        "stale",
+        "refreshFailed"
+      ],
+      "type": "object"
+    },
     "ModelListParams": {
       "type": "object"
     },
     "ModelListResponse": {
       "description": "GET /v1/models. The configured catalog is returned in full.",
       "properties": {
+        "catalogs": {
+          "items": {
+            "$ref": "#/$defs/ModelCatalogStatus"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "data": {
           "items": {
             "$ref": "#/$defs/Model"

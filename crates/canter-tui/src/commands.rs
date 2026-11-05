@@ -377,10 +377,18 @@ pub(crate) fn skills(skills: &[canter_protocol::Skill]) -> Report {
 }
 
 fn think(app: &mut App, args: &str) -> Result<Option<Action>, String> {
-    let efforts = app
+    let model = app
         .models()
         .iter()
-        .find(|model| model.model == app.snapshot().settings.model)
+        .find(|model| model.model == app.snapshot().settings.model);
+    let unverified = model.is_some_and(|model| {
+        model.verified == Some(false)
+            && model
+                .missing_capabilities
+                .as_ref()
+                .is_some_and(|missing| missing.iter().any(|item| item == "reasoningEffort"))
+    });
+    let efforts = model
         .and_then(|model| model.supported_reasoning_efforts.as_deref())
         .unwrap_or(&ReasoningEffort::LEGACY)
         .iter()
@@ -416,7 +424,11 @@ fn think(app: &mut App, args: &str) -> Result<Option<Action>, String> {
             .unwrap_or(0);
         app.choose(Chooser {
             title: "Thinking effort",
-            detail: String::new(),
+            detail: if unverified {
+                "unverified for this model; medium is the conservative default".into()
+            } else {
+                String::new()
+            },
             back: None,
             keys: CHOOSE,
             choices,
@@ -561,14 +573,23 @@ pub(crate) fn choose_provider_model(app: &mut App, provider: Option<String>) {
         .iter()
         .filter(|model| model.provider == provider)
         .map(|model| {
-            let name = provider
-                .as_ref()
-                .and_then(|provider| model.model.strip_prefix(&format!("{provider}/")))
-                .unwrap_or(&model.display_name);
+            let name = if model.from_catalog == Some(true) {
+                &model.display_name
+            } else {
+                provider
+                    .as_ref()
+                    .and_then(|provider| model.model.strip_prefix(&format!("{provider}/")))
+                    .unwrap_or(&model.display_name)
+            };
             (sanitize(name), model)
         })
         .collect();
-    models.sort_by(|a, b| a.0.cmp(&b.0));
+    if !models
+        .iter()
+        .any(|(_, model)| model.from_catalog == Some(true))
+    {
+        models.sort_by(|a, b| a.0.cmp(&b.0));
+    }
     let selected = models
         .iter()
         .position(|(_, model)| model.model == current)
@@ -586,12 +607,15 @@ pub(crate) fn choose_provider_model(app: &mut App, provider: Option<String>) {
                 .into_iter()
                 .chain(images.then(|| "images".to_owned()))
                 .collect();
+            let mut label = name;
+            if model.verified == Some(false) {
+                label.push_str(" (unverified)");
+            }
+            if model.model == current {
+                label.push_str(" (current)");
+            }
             Choice {
-                label: if model.model == current {
-                    format!("{name} (current)")
-                } else {
-                    name
-                },
+                label,
                 about: about.join(" · "),
                 action: Action::Update(SessionUpdateParams {
                     model: Some(model.model.clone()),
@@ -600,7 +624,23 @@ pub(crate) fn choose_provider_model(app: &mut App, provider: Option<String>) {
             }
         })
         .collect();
-    let detail = provider_name(provider.as_deref());
+    let mut detail = provider_name(provider.as_deref());
+    if let Some(catalog) = app.catalog(provider.as_deref())
+        && catalog.refresh_failed
+    {
+        if let Some(fetched_at) = catalog.fetched_at {
+            let local = chrono::DateTime::from_timestamp_millis(fetched_at)
+                .map(|time| time.with_timezone(&chrono::Local));
+            if let Some(local) = local {
+                detail.push_str(&format!(
+                    " · models from {}, refresh failed",
+                    local.format("%Y-%m-%d %H:%M:%S")
+                ));
+            }
+        } else {
+            detail.push_str(" · Could not load ChatGPT models");
+        }
+    }
     app.choose(Chooser {
         title: "Model",
         detail,

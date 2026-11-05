@@ -85,6 +85,7 @@ pub(crate) struct LiveConfig {
     pub auth: Arc<crate::model_auth::ModelAuth>,
     home: PathBuf,
     current: RwLock<Arc<Version>>,
+    revisions: std::sync::Mutex<(u64, u64, u64)>,
     slots: Mutex<Vec<Arc<ServiceSlot>>>,
     // Retain pending removals too: removing then re-adding the same name must
     // still wait for the old process to finish shutting down.
@@ -146,6 +147,7 @@ impl LiveConfig {
                 mcp,
                 lsp,
             })),
+            revisions: Default::default(),
             slots: Mutex::new(slots),
             workers: Mutex::new(Vec::new()),
             stop: CancellationToken::new(),
@@ -156,11 +158,49 @@ impl LiveConfig {
 
     pub fn metadata(&self) -> (String, Vec<String>, CoreOptions) {
         let version = self.current.read().unwrap();
-        (
-            version.config.model.clone(),
+        let (models, options) = self.auth.catalog().apply(
+            version.config.catalog_provider(),
             version.config.models.clone(),
             version.options.clone(),
-        )
+        );
+        (version.config.model.clone(), models, options)
+    }
+
+    pub fn catalog_provider(&self) -> Option<String> {
+        self.current
+            .read()
+            .unwrap()
+            .config
+            .catalog_provider()
+            .map(str::to_owned)
+    }
+
+    pub fn configured_model(&self, model: &str) -> bool {
+        self.current
+            .read()
+            .unwrap()
+            .config
+            .models
+            .contains(&model.to_owned())
+    }
+
+    fn catalog_options(&self, version: &Version) -> (CoreOptions, u64) {
+        let (_, options, revision) = self.auth.catalog().apply_versioned(
+            version.config.catalog_provider(),
+            version.config.models.clone(),
+            version.options.clone(),
+        );
+        (options, revision)
+    }
+
+    fn revision(&self, version: &Version, catalog: u64) -> u64 {
+        let mut revisions = self.revisions.lock().unwrap();
+        if (revisions.0, revisions.1) != (version.revision, catalog) {
+            revisions.0 = version.revision;
+            revisions.1 = catalog;
+            revisions.2 = revisions.2.wrapping_add(1);
+        }
+        revisions.2
     }
 
     pub fn mcp_status(&self) -> Vec<canter_protocol::McpServerStatus> {
@@ -406,9 +446,11 @@ impl ConfigurationSource for LiveConfig {
             .collect();
         let lsp = version.lsp.ready.borrow().clone();
         let ready = services.len() == version.mcp.len() && lsp.is_some();
+        let (options, catalog) = self.catalog_options(&version);
+        let revision = self.revision(&version, catalog);
         Configuration {
-            revision: ready.then_some(version.revision),
-            options: version.options.clone(),
+            revision: ready.then_some(revision),
+            options,
             model: version.model.clone(),
             mcp_tools: Registry::snapshot_all(
                 &services
@@ -428,7 +470,8 @@ impl ConfigurationSource for LiveConfig {
     }
 
     fn options(&self) -> CoreOptions {
-        self.current.read().unwrap().options.clone()
+        let version = self.current.read().unwrap();
+        self.catalog_options(&version).0
     }
 
     fn acquire(&self) -> futures_util::future::BoxFuture<'_, Result<Configuration, CoreError>> {
@@ -465,9 +508,11 @@ impl ConfigurationSource for LiveConfig {
                 if !Arc::ptr_eq(&version, &self.current.read().unwrap()) {
                     continue;
                 }
+                let (options, catalog) = self.catalog_options(&version);
+                let revision = self.revision(&version, catalog);
                 return Ok(Configuration {
-                    revision: Some(version.revision),
-                    options: version.options.clone(),
+                    revision: Some(revision),
+                    options,
                     model: version.model.clone(),
                     mcp_tools,
                     lsp,

@@ -600,30 +600,64 @@ async fn delete_file_rule(
 }
 
 async fn models(State(app): State<Arc<App>>) -> Json<ModelListResponse> {
+    if let Some(reload) = &app.reload
+        && let Ok(auth) = reload.auth.get().await
+    {
+        reload.auth.catalog().refresh_stale(auth);
+    }
     let (default_model, models, options) = app.metadata();
+    let catalogs = app.reload.as_ref().and_then(|reload| {
+        let provider = reload.catalog_provider()?;
+        reload.auth.catalog().status(&provider)
+    });
     Json(ModelListResponse {
         data: models
             .iter()
-            .map(|model| canter_protocol::Model {
-                id: model.clone(),
-                model: model.clone(),
-                display_name: model.clone(),
-                is_default: model == &default_model,
-                provider: options
-                    .model_limits
-                    .contains_key(model)
-                    .then(|| model.split_once('/').expect("qualified model").0.to_owned()),
-                context_window: Some(options.limits(model).context_window),
-                supported_reasoning_efforts: Some(options.reasoning(model).supported),
-                default_reasoning_effort: Some(options.reasoning(model).default),
-                input_modalities: Some(if options.image_models.contains(model) {
-                    vec!["text".into(), "image".into()]
+            .map(|model| {
+                let details = app
+                    .reload
+                    .as_ref()
+                    .and_then(|reload| reload.auth.catalog().details(model));
+                let configured = app
+                    .reload
+                    .as_ref()
+                    .is_none_or(|reload| reload.configured_model(model));
+                let missing = if configured {
+                    Vec::new()
                 } else {
-                    vec!["text".into()]
-                }),
+                    details
+                        .as_ref()
+                        .map(|(_, missing)| missing.clone())
+                        .unwrap_or_default()
+                };
+                canter_protocol::Model {
+                    id: model.clone(),
+                    model: model.clone(),
+                    display_name: details
+                        .as_ref()
+                        .map(|(name, _)| name.clone())
+                        .unwrap_or_else(|| model.clone()),
+                    is_default: model == &default_model,
+                    provider: options
+                        .model_limits
+                        .contains_key(model)
+                        .then(|| model.split_once('/').expect("qualified model").0.to_owned()),
+                    context_window: Some(options.limits(model).context_window),
+                    supported_reasoning_efforts: Some(options.reasoning(model).supported),
+                    default_reasoning_effort: Some(options.reasoning(model).default),
+                    input_modalities: Some(if options.image_models.contains(model) {
+                        vec!["text".into(), "image".into()]
+                    } else {
+                        vec!["text".into()]
+                    }),
+                    verified: Some(missing.is_empty()),
+                    missing_capabilities: (!missing.is_empty()).then_some(missing),
+                    from_catalog: Some(details.is_some()),
+                }
             })
             .collect(),
         next_cursor: None,
+        catalogs: catalogs.map(|status| vec![status]),
     })
 }
 

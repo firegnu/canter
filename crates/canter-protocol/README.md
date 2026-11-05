@@ -295,13 +295,13 @@ PATCH 没带档位时将 Unknown 写成 `high`；换模型时先按有效值判�
 创建和 PATCH 的模型必须在可用列表内，否则返回 `invalid_request`，设置和事件序号不变；
 恢复旧会话不检查其已存模型是否仍在列表中。
 
-`GET /v1/models` 一次返回配置的全部可用模型，回复结构参考 Codex v2 `model/list`：
+`GET /v1/models` 一次返回配置和当前 ChatGPT 账号目录中的全部可用模型，回复结构参考 Codex v2 `model/list`：
 `{ "data": [{ "id": "deepseek-flash", "model": "deepseek-flash", "displayName": "deepseek-flash", "isDefault": true }], "nextCursor": null }`。
-条目的 id、model、displayName 都是配置中的模型名；isDefault 标记默认模型。
+手写条目的 id、model、displayName 都是配置中的模型名；目录条目用路由名作为 id/model、目录 display_name 作为 displayName；isDefault 标记默认模型。
 可选的 `inputModalities` 字段说明是否收图：`["text", "image"]` 或 `["text"]`。
 旧回复不带该字段时，终端默认只有 deepseek-flash 收图。
-本机配置列表无需分页，只提供模型名和默认标记；省掉的 Codex 模型字段和查询参数
-及理由逐项记在 DESIGN 第 8 条。
+`verified`、`missingCapabilities`、`fromCatalog` 和顶层 `catalogs` 均为可选的新目录元数据；旧客户端忽略。
+本机列表无需分页；省掉的 Codex 模型字段和查询参数及理由逐项记在 DESIGN 第 8 条。
 
 `GET /v1/sessions/{id}/skills` 返回打开会话时固定的技能，按名字排序，一次全部返回：
 `{ "data": [{ "name": "tdd", "description": "Test-first development", "path": "/work/.agents/skills/tdd/SKILL.md", "source": "project", "modelInvocation": true }] }`。

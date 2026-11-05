@@ -16,6 +16,7 @@
   config.json            模型配置；只从此文件读取 key
   config.lock            MCP 配置命令的写锁
   mcp-auth/              MCP OAuth 凭证（0600）及每个服务的续期/登录/退出锁
+  models/chatgpt/         按账号分开的 GPT 模型目录缓存（文件 0600，不含令牌）
   server.lock            整个服务期持有的文件锁；不删除锁文件
   server.json            pid、version、protocolVersion、socketPath、instance
   server.sock            HTTP + SSE
@@ -85,8 +86,8 @@
 }
 ```
 
-`<model-name>` 和窗口 `0` 都是占位，使用前按官方资料填写模型名及窗口（大于 81,920）；本件不预置 GPT 模型。
-示例档位对应 gpt-6.1-sol；换模型时按该模型实际支持的档位填写，不自动查询或内置能力表。
+`<model-name>` 和窗口 `0` 都是占位，使用前按官方资料填写模型名及窗口（大于 81,920）；不预置 GPT 模型。
+登录后自动读取账号可用的模型目录；目录里有了的模型不用再手写，手写的会覆盖目录的资料。示例档位对应 gpt-6.1-sol；换模型时按该模型实际支持的档位填写，不内置能力表。
 然后选择 `chatgpt/<model-name>`。先运行 `canter auth login chatgpt`，多个账号用
 `canter auth use chatgpt <email|序号>` 选择；请求使用这一轮选定账号的登录令牌，401 最多恢复一次。
 `auth` 只接受 `chatgpt`，不得配置 `api_key` 或 `base_url`（空字符串和 null 也拒绝）；

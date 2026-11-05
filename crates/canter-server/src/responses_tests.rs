@@ -4,7 +4,7 @@ use crate::{
     config::Config,
     model_auth::ModelAuth,
 };
-use canter_core::{RuntimeContext, Session};
+use canter_core::{ConfigurationSource, RuntimeContext, Session};
 use canter_model::{ModelContext, ModelEvent, Request};
 use canter_protocol::*;
 use futures_util::StreamExt;
@@ -20,6 +20,7 @@ mod reasoning;
 
 struct Inference {
     endpoint: reqwest::Url,
+    catalog: Arc<Mutex<Value>>,
     requests: tokio::sync::mpsc::UnboundedReceiver<(Value, String)>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -30,41 +31,56 @@ impl Drop for Inference {
 }
 impl Inference {
     async fn new(replies: Vec<(u16, String)>) -> Self {
+        Self::with_catalog(replies, json!({"models":[]})).await
+    }
+
+    async fn with_catalog(replies: Vec<(u16, String)>, catalog: Value) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/v1/responses", listener.local_addr().unwrap())
             .parse()
             .unwrap();
         let (sender, requests) = tokio::sync::mpsc::unbounded_channel();
         let replies = Arc::new(Mutex::new(VecDeque::from(replies)));
-        let app = axum::Router::new().route(
-            "/v1/responses",
-            axum::routing::post(
-                move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<Value>| {
-                    let replies = replies.clone();
-                    let sender = sender.clone();
-                    async move {
-                        sender
-                            .send((body, headers["authorization"].to_str().unwrap().to_owned()))
-                            .unwrap();
-                        let (status, body) = replies
-                            .lock()
-                            .unwrap()
-                            .pop_front()
-                            .expect("unexpected inference");
-                        (
-                            axum::http::StatusCode::from_u16(status).unwrap(),
-                            [("content-type", "text/event-stream")],
-                            body,
-                        )
-                    }
-                },
-            ),
-        );
+        let catalog = Arc::new(Mutex::new(catalog));
+        let route_catalog = catalog.clone();
+        let app = axum::Router::new()
+            .route(
+                "/v1/responses",
+                axum::routing::post(
+                    move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<Value>| {
+                        let replies = replies.clone();
+                        let sender = sender.clone();
+                        async move {
+                            sender
+                                .send((body, headers["authorization"].to_str().unwrap().to_owned()))
+                                .unwrap();
+                            let (status, body) = replies
+                                .lock()
+                                .unwrap()
+                                .pop_front()
+                                .expect("unexpected inference");
+                            (
+                                axum::http::StatusCode::from_u16(status).unwrap(),
+                                [("content-type", "text/event-stream")],
+                                body,
+                            )
+                        }
+                    },
+                ),
+            )
+            .route(
+                "/v1/models",
+                axum::routing::get(move || {
+                    let catalog = route_catalog.clone();
+                    async move { axum::Json(catalog.lock().unwrap().clone()) }
+                }),
+            );
         let task = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
         Self {
             endpoint,
+            catalog,
             requests,
             task,
         }
@@ -576,5 +592,183 @@ async fn disconnect_also_gates_retries_and_waiting_requests_can_be_cancelled() {
     cancel.cancel();
     assert!(stream.next().await.is_none());
     assert!(inference.requests.try_recv().is_err());
+    fake.stop().await;
+}
+
+#[tokio::test]
+async fn unverified_catalog_model_uses_medium_and_retired_model_restores_with_last_details() {
+    let root = tempfile::tempdir_in("/tmp").unwrap();
+    let home = root.path().join("state");
+    let fake = Fake::new().await;
+    let (auth, _) = login(&home, &fake, true).await;
+    let mut inference = Inference::with_catalog(
+        vec![completed(json!([])), completed(json!([]))],
+        json!({"models":[{"slug":"discovered","display_name":"Discovered","visibility":"list"}]}),
+    )
+    .await;
+    let source = ModelAuth::for_test(home.clone(), auth.clone(), inference.endpoint.clone());
+    source.catalog().account_changed(auth).await;
+    let config = config(&home);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (models, _) = source.catalog().apply(
+                config.catalog_provider(),
+                config.models.clone(),
+                config.options(),
+            );
+            if models.contains(&"chatgpt/discovered".into()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let (_, options) = source.catalog().apply(
+        config.catalog_provider(),
+        config.models.clone(),
+        config.options(),
+    );
+    assert_eq!(options.limits("chatgpt/discovered").context_window, 128000);
+    assert!(!options.image_models.contains(&"chatgpt/discovered".into()));
+    let model = config.model_client(Some(source.clone())).unwrap();
+    let store = Arc::new(canter_store::Store::new(home.join("sessions")).unwrap());
+    let runtime = RuntimeContext {
+        environment: BTreeMap::from([
+            ("HOME".into(), root.path().to_string_lossy().into_owned()),
+            ("CANTER_HOME".into(), home.to_string_lossy().into_owned()),
+        ]),
+        ..Default::default()
+    };
+    let settings: SessionSettings = serde_json::from_value(json!({
+        "cwd":root.path(),"model":"chatgpt/discovered","approvalPolicy":"allowAll",
+        "reasoningEffort":"medium"
+    }))
+    .unwrap();
+    let (session, _) = Session::create(
+        store.clone(),
+        "catalog".into(),
+        settings,
+        runtime.clone(),
+        model.clone(),
+        options,
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input()).await.unwrap();
+    let (body, _) = inference.next().await;
+    assert_eq!(body["model"], "discovered");
+    assert_eq!(
+        body["reasoning"],
+        json!({"summary":"auto","effort":"medium"})
+    );
+    finished(&mut events).await;
+    session.close().await.unwrap();
+    drop(session);
+
+    *inference.catalog.lock().unwrap() = json!({"models":[]});
+    source
+        .catalog()
+        .account_changed(source.get().await.unwrap())
+        .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (models, _) = source.catalog().apply(
+                config.catalog_provider(),
+                config.models.clone(),
+                config.options(),
+            );
+            if !models.contains(&"chatgpt/discovered".into()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let (models, options) = source.catalog().apply(
+        config.catalog_provider(),
+        config.models.clone(),
+        config.options(),
+    );
+    assert!(!models.contains(&"chatgpt/discovered".into()));
+    assert_eq!(options.limits("chatgpt/discovered").context_window, 128000);
+    let (session, _) = Session::open(store, "catalog".into(), runtime, model, options)
+        .await
+        .unwrap();
+    let mut events = session
+        .subscribe(session.snapshot().await.session.last_event_seq)
+        .await
+        .unwrap();
+    session.input(input()).await.unwrap();
+    let (body, _) = inference.next().await;
+    assert_eq!(body["model"], "discovered");
+    assert_eq!(
+        body["reasoning"],
+        json!({"summary":"auto","effort":"medium"})
+    );
+    finished(&mut events).await;
+    session.close().await.unwrap();
+    fake.stop().await;
+}
+
+#[tokio::test]
+async fn catalog_arrival_revises_an_already_open_session_before_model_switch() {
+    let root = tempfile::tempdir_in("/tmp").unwrap();
+    let home = root.path().join("state");
+    let fake = Fake::new().await;
+    let (auth, _) = login(&home, &fake, true).await;
+    let inference = Inference::with_catalog(Vec::new(), json!({"models":[]})).await;
+    let source = ModelAuth::for_test(home.clone(), auth.clone(), inference.endpoint.clone());
+    let config = config(&home);
+    let model = config.model_client(Some(source.clone())).unwrap();
+    let stop = CancellationToken::new();
+    let reload = crate::reload::LiveConfig::connect(
+        home.clone(),
+        config.clone(),
+        model.clone(),
+        canter_tools::lsp::LspService::new(Default::default()).unwrap(),
+        stop,
+        source.clone(),
+    )
+    .await;
+    let configuration = reload.snapshot();
+    let store = Arc::new(canter_store::Store::new(home.join("sessions")).unwrap());
+    let settings: SessionSettings = serde_json::from_value(json!({
+        "cwd":root.path(),"model":"chatgpt/test-model","approvalPolicy":"allowAll",
+        "reasoningEffort":"high"
+    }))
+    .unwrap();
+    let (session, _) = Session::create(
+        store,
+        "catalog-revision".into(),
+        settings,
+        RuntimeContext::default(),
+        model,
+        configuration.options.clone(),
+    )
+    .await
+    .unwrap();
+    session.set_configuration_source(reload.clone(), configuration.revision);
+
+    *inference.catalog.lock().unwrap() = json!({"models":[{
+        "slug":"late","display_name":"Late","visibility":"list"
+    }]});
+    source.catalog().account_changed(auth).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !reload.metadata().1.contains(&"chatgpt/late".into()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    session
+        .update(serde_json::from_value(json!({"model":"chatgpt/late"})).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(session.context().await.model_context_window, 128000);
+    session.close().await.unwrap();
+    reload.shutdown().await;
     fake.stop().await;
 }

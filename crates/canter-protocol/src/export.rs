@@ -45,6 +45,7 @@ pub fn export_protocol(directory: &Path) -> Result<(), Box<dyn std::error::Error
         RunningTurnsResponse,
         ModelListParams,
         ModelListResponse,
+        ModelCatalogStatus,
         UsageResponse,
         StatsListParams,
         StatsListResponse,
