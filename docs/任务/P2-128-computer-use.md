@@ -1,4 +1,4 @@
-# 任务：第二期-29.8 - 网页测试（Playwright MCP）
+# 任务：第二期-29.8 - 网页测试（Playwright MCP）computer use探索
 
 2026-10-29，用户在看板上新建（原标题「第三期 - computer use」，内容空）。11-05 用户定：先做网页测试，移到第二期；桌面程序的 computer use 留第三期。
 依据：用户要 canter 像 Claude Code 那样测网页，自己点、自己看。Claude Code 用的是 Playwright 插件（背后是 `npx @playwright/mcp`）；canter 已有 MCP（P2-12）和 MCP 返回截图给模型看（P2-130），只要在配置里加一项，不用写代码。
