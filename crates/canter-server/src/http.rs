@@ -32,6 +32,9 @@ mod tests;
 #[path = "agent_sessions.rs"]
 mod agent_sessions;
 
+#[path = "cleanup.rs"]
+pub(crate) mod cleanup;
+
 #[path = "managed.rs"]
 mod managed;
 
@@ -786,10 +789,17 @@ async fn usage(State(app): State<Arc<App>>) -> Result<Json<UsageResponse>, ApiEr
         .await
         .map_err(|_| ApiError::internal())?
         .map_err(CoreError::from)?;
+    let mut live = std::collections::HashSet::new();
     let mut rows = BTreeMap::<(String, String), UsageRow>::new();
     let mut report = UsageResponse::default();
     for session in sessions {
-        for (timestamp, record) in ledger(&app, &session.id).await?.records {
+        let session_ledger = match ledger(&app, &session.id).await {
+            Ok(ledger) => ledger,
+            Err(error) if error.0.code == ErrorCode::SessionNotFound => continue,
+            Err(error) => return Err(error),
+        };
+        live.insert(session.id);
+        for (timestamp, record) in session_ledger.records {
             let date = chrono::DateTime::from_timestamp_millis(timestamp)
                 .ok_or_else(ApiError::internal)?
                 .with_timezone(&chrono::Local)
@@ -806,6 +816,24 @@ async fn usage(State(app): State<Arc<App>>) -> Result<Json<UsageResponse>, ApiEr
             row.add(&record);
             report.total.add(&record);
         }
+    }
+    let home = app.home.clone();
+    let archived = tokio::task::spawn_blocking(move || cleanup::archived_rows(&home, &live))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(|_| ApiError::internal())?;
+    for record in archived {
+        let date = record.date.clone().unwrap_or_default();
+        let model = record.model.clone().unwrap_or_default();
+        let row = rows
+            .entry((date.clone(), model.clone()))
+            .or_insert_with(|| UsageRow {
+                date: Some(date),
+                model: Some(model),
+                ..UsageRow::default()
+            });
+        row.add(&record);
+        report.total.add(&record);
     }
     report.data = rows.into_values().collect();
     Ok(Json(report))

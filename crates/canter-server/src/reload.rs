@@ -166,6 +166,10 @@ impl LiveConfig {
         (version.config.model.clone(), models, options)
     }
 
+    pub fn session_retention_days(&self) -> u32 {
+        self.current.read().unwrap().config.session_retention_days
+    }
+
     pub fn catalog_provider(&self) -> Option<String> {
         self.current
             .read()

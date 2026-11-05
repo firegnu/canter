@@ -172,6 +172,7 @@ fn root_read_failure_during_warmup_is_retried_later() {
 async fn initialization_skips_broken_and_empty_histories() {
     let temp = tempfile::tempdir().unwrap();
     write_config(temp.path());
+    assert!(!temp.path().join("usage-archive.jsonl").exists());
     let source = Store::new(temp.path().join("sessions")).unwrap();
     let writer = source.create("s1", settings(), 1).unwrap();
     for (id, bytes) in [

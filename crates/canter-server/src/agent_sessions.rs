@@ -392,7 +392,15 @@ impl Family {
         self.0.len()
     }
 
-    async fn guards(
+    pub(super) fn ids(&self) -> Vec<String> {
+        self.0.iter().map(|member| member.id.clone()).collect()
+    }
+
+    pub(super) fn has_opened_session(&self) -> bool {
+        self.0.iter().any(|member| member.session.is_some())
+    }
+
+    pub(super) async fn guards(
         &self,
         app: &App,
     ) -> Result<Vec<(usize, canter_core::SessionMaintenance)>, ApiError> {
