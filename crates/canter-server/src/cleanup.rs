@@ -1,14 +1,26 @@
 use super::*;
 use serde::{Deserialize, Serialize};
-use std::{io::Write, os::unix::fs::OpenOptionsExt, path::Path};
+use std::{
+    io::{Read, Seek, SeekFrom, Write},
+    os::unix::fs::OpenOptionsExt,
+    path::Path,
+};
 
 const DAY_MS: i64 = 86_400_000;
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ArchiveRecord {
     session_id: String,
     event_seq: u64,
     rows: Vec<UsageRow>,
+}
+
+fn is_family_root(session: &SessionSummary, by_id: &HashMap<String, SessionSummary>) -> bool {
+    session
+        .parent
+        .as_ref()
+        .is_none_or(|parent| !by_id.contains_key(&parent.session_id))
 }
 
 pub(crate) async fn cleanup_at(app: &Arc<App>, retention_days: u32, now: i64) {
@@ -34,20 +46,40 @@ pub(crate) async fn cleanup_at(app: &Arc<App>, retention_days: u32, now: i64) {
         .collect::<HashMap<_, _>>();
     for root in sessions
         .iter()
-        .filter(|session| session.parent.is_none() && session.updated_at < cutoff)
+        .filter(|session| is_family_root(session, &by_id) && session.updated_at < cutoff)
     {
         let operation = app.session_locks.lock(&root.id).await;
         let family = match agent_sessions::Family::lock(app, &root.id, operation).await {
             Ok(family) => family,
             Err(_) => continue,
         };
+        #[cfg(test)]
+        app.pauses.hit(&root.id, "cleanup_locked").await;
         let ids = family.ids();
-        if family.has_opened_session()
-            || ids
-                .iter()
-                .filter_map(|id| by_id.get(id))
-                .any(|session| session.updated_at >= cutoff)
-        {
+        if family.has_opened_session() {
+            continue;
+        }
+        let store = app.store.clone();
+        let current = match tokio::task::spawn_blocking(move || store.list_all()).await {
+            Ok(Ok(sessions)) => sessions,
+            Ok(Err(error)) => {
+                eprintln!("Warning: could not reread sessions for cleanup: {error}");
+                continue;
+            }
+            Err(_) => {
+                eprintln!("Warning: could not reread sessions for cleanup");
+                continue;
+            }
+        };
+        let current_by_id = current
+            .into_iter()
+            .map(|session| (session.id.clone(), session))
+            .collect::<HashMap<_, _>>();
+        if ids.iter().any(|id| {
+            current_by_id
+                .get(id)
+                .is_none_or(|session| session.updated_at >= cutoff)
+        }) {
             continue;
         }
         let guards = match family.guards(app).await {
@@ -64,7 +96,7 @@ pub(crate) async fn cleanup_at(app: &Arc<App>, retention_days: u32, now: i64) {
         let prices = app.metadata().2.prices;
         let mut archived = true;
         for id in &ids {
-            let Some(summary) = by_id.get(id) else {
+            let Some(summary) = current_by_id.get(id) else {
                 archived = false;
                 break;
             };
@@ -81,6 +113,7 @@ pub(crate) async fn cleanup_at(app: &Arc<App>, retention_days: u32, now: i64) {
             let directory = app.store.session_dir(id).unwrap();
             if let Err(error) = std::fs::remove_dir_all(directory) {
                 eprintln!("Warning: could not delete expired session {id}: {error}");
+                break;
             }
         }
         app.registry_changed.notify_waiters();
@@ -113,7 +146,7 @@ async fn cleanup_trash(app: &Arc<App>, cutoff: i64) {
         .collect::<HashMap<_, _>>();
     for root in sessions
         .iter()
-        .filter(|session| session.parent.is_none() && session.updated_at < cutoff)
+        .filter(|session| is_family_root(session, &by_id) && session.updated_at < cutoff)
     {
         let mut ids = vec![root.id.clone()];
         let mut index = 0;
@@ -131,13 +164,6 @@ async fn cleanup_trash(app: &Arc<App>, cutoff: i64) {
             }
             index += 1;
         }
-        if ids
-            .iter()
-            .filter_map(|id| by_id.get(id))
-            .any(|session| session.updated_at >= cutoff)
-        {
-            continue;
-        }
         let mut operations = Vec::new();
         for id in &ids {
             operations.push(app.session_locks.lock(id).await);
@@ -148,10 +174,28 @@ async fn cleanup_trash(app: &Arc<App>, cutoff: i64) {
         {
             continue;
         }
+        let current = match store.list_all() {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                eprintln!("Warning: could not reread trash for cleanup: {error}");
+                continue;
+            }
+        };
+        let current_by_id = current
+            .into_iter()
+            .map(|session| (session.id.clone(), session))
+            .collect::<HashMap<_, _>>();
+        if ids.iter().any(|id| {
+            current_by_id
+                .get(id)
+                .is_none_or(|session| session.updated_at >= cutoff)
+        }) {
+            continue;
+        }
         let prices = app.metadata().2.prices;
         let mut archived = true;
         for id in &ids {
-            let Some(summary) = by_id.get(id) else {
+            let Some(summary) = current_by_id.get(id) else {
                 archived = false;
                 break;
             };
@@ -167,6 +211,7 @@ async fn cleanup_trash(app: &Arc<App>, cutoff: i64) {
         for id in ids.iter().rev() {
             if let Err(error) = std::fs::remove_dir_all(store.session_dir(id).unwrap()) {
                 eprintln!("Warning: could not delete expired trashed session {id}: {error}");
+                break;
             }
         }
         drop(operations);
@@ -242,6 +287,7 @@ fn archive(
     let path = home.join("usage-archive.jsonl");
     let mut file = std::fs::OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .mode(0o600)
         .open(&path)
@@ -249,6 +295,16 @@ fn archive(
     use std::os::unix::fs::PermissionsExt;
     file.set_permissions(std::fs::Permissions::from_mode(0o600))
         .map_err(|error| error.to_string())?;
+    if file.metadata().map_err(|error| error.to_string())?.len() > 0 {
+        file.seek(SeekFrom::End(-1))
+            .map_err(|error| error.to_string())?;
+        let mut last = [0];
+        file.read_exact(&mut last)
+            .map_err(|error| error.to_string())?;
+        if last[0] != b'\n' {
+            file.write_all(b"\n").map_err(|error| error.to_string())?;
+        }
+    }
     file.write_all(&encoded)
         .map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())
@@ -261,10 +317,19 @@ fn read_archive(home: &Path) -> Result<BTreeMap<String, ArchiveRecord>, String> 
         Err(error) => return Err(error.to_string()),
     };
     let mut sessions = BTreeMap::new();
-    for line in contents.lines() {
-        let record: ArchiveRecord =
-            serde_json::from_str(line).map_err(|error| error.to_string())?;
-        sessions.insert(record.session_id.clone(), record);
+    for (index, line) in contents.lines().enumerate() {
+        match serde_json::from_str(line) {
+            Ok(record) => {
+                let record: ArchiveRecord = record;
+                sessions.insert(record.session_id.clone(), record);
+            }
+            Err(error) => {
+                eprintln!(
+                    "Warning: could not parse usage archive line {}: {error}",
+                    index + 1
+                );
+            }
+        }
     }
     Ok(sessions)
 }
