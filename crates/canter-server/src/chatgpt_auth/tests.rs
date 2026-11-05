@@ -32,7 +32,7 @@ mod support;
 use support::*;
 
 #[tokio::test]
-async fn failed_logout_can_retry_revocation_after_reopening() {
+async fn legacy_pending_revocation_is_retried_and_cleared_after_reopening() {
     let fixture = Fixture::new().await;
     let record = fixture.login(None).await.unwrap();
     fixture.fake.state.lock().unwrap().revoke_status = 400;
@@ -40,6 +40,14 @@ async fn failed_logout_can_retry_revocation_after_reopening() {
         fixture.auth.logout(&record.id).await.unwrap(),
         LogoutResult::Pending
     );
+    let path = fixture
+        .root
+        .path()
+        .join(format!("state/auth/chatgpt/{}.json", record.id));
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    stored["pending_revocation"] = serde_json::json!("fake-refresh-1");
+    std::fs::write(path, serde_json::to_vec(&stored).unwrap()).unwrap();
     let Fixture {
         auth,
         fake,
@@ -52,6 +60,7 @@ async fn failed_logout_can_retry_revocation_after_reopening() {
         fake.origin.clone(),
         Arc::new(move || now.load(Ordering::SeqCst)),
     );
+    assert!(auth.records().await[0].pending_revocation);
     assert_eq!(
         auth.access_token(&record.id).await.err().unwrap().kind,
         ErrorKind::NotLoggedIn
@@ -62,6 +71,7 @@ async fn failed_logout_can_retry_revocation_after_reopening() {
         LogoutResult::Revoked
     );
     assert_eq!(fake.state.lock().unwrap().revocations.len(), 2);
+    assert!(!auth.records().await[0].pending_revocation);
 }
 
 #[tokio::test]
@@ -74,12 +84,34 @@ async fn relogin_attempts_pending_revocation_before_replacing_registration() {
             fixture.auth.logout(&record.id).await.unwrap(),
             LogoutResult::Pending
         );
-        assert!(fixture.auth.records().await[0].pending_revocation);
-        fixture.fake.state.lock().unwrap().revoke_status = status;
-        let returned = fixture.login(Some(&record.id)).await.unwrap();
+        assert!(!fixture.auth.records().await[0].pending_revocation);
+        let path = fixture
+            .root
+            .path()
+            .join(format!("state/auth/chatgpt/{}.json", record.id));
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        stored["pending_revocation"] = serde_json::json!("fake-refresh-1");
+        std::fs::write(path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let Fixture {
+            auth,
+            fake,
+            root,
+            now,
+        } = fixture;
+        drop(auth);
+        let auth = ChatgptAuth::for_test(
+            &root.path().join("state"),
+            fake.origin.clone(),
+            Arc::new(move || now.load(Ordering::SeqCst)),
+        );
+        fake.state.lock().unwrap().revoke_status = status;
+        let attempt = auth.start_login(Some(&record.id)).await.unwrap();
+        fake.callback(&attempt).await;
+        let returned = attempt.wait().await.unwrap();
         assert_eq!(returned.status, RecordStatus::LoggedIn);
         assert!(!returned.pending_revocation);
-        let state = fixture.fake.state.lock().unwrap();
+        let state = fake.state.lock().unwrap();
         assert_eq!(state.revocations.len(), 2);
         assert_eq!(state.revocations[1]["token"], "fake-refresh-1");
     }
@@ -687,7 +719,7 @@ async fn logout_revokes_and_clears_tokens_but_keeps_binding_and_host() {
 }
 
 #[tokio::test]
-async fn remote_revocation_failure_is_bounded_and_retains_only_pending_revocation() {
+async fn remote_revocation_failure_is_bounded_and_clears_all_local_tokens() {
     for (status, attempts) in [(503, 3), (400, 1)] {
         let fixture = Fixture::new().await;
         let record = fixture.login(None).await.unwrap();
@@ -700,6 +732,15 @@ async fn remote_revocation_failure_is_bounded_and_retains_only_pending_revocatio
             fixture.fake.state.lock().unwrap().revocations.len(),
             attempts
         );
+        assert!(!fixture.auth.records().await[0].pending_revocation);
+        let path = fixture
+            .root
+            .path()
+            .join(format!("state/auth/chatgpt/{}.json", record.id));
+        let stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(stored["tokens"].is_null());
+        assert!(stored["pending_revocation"].is_null());
         let Fixture {
             auth,
             fake,
@@ -713,7 +754,7 @@ async fn remote_revocation_failure_is_bounded_and_retains_only_pending_revocatio
             Arc::new(move || now.load(Ordering::SeqCst)),
         );
         assert_eq!(reopened.records().await[0].status, RecordStatus::SignedOut);
-        assert!(reopened.records().await[0].pending_revocation);
+        assert!(!reopened.records().await[0].pending_revocation);
         assert_eq!(
             reopened.access_token(&record.id).await.err().unwrap().kind,
             ErrorKind::NotLoggedIn
@@ -1101,7 +1142,16 @@ async fn logout_revokes_rotated_refresh_token_even_if_new_id_token_is_invalid() 
 
 #[tokio::test]
 async fn refresh_keeps_rotated_credentials_when_identity_discovery_or_jwks_is_unavailable() {
-    for endpoint in ["discovery", "jwks"] {
+    for (endpoint, status, non_json) in [
+        ("discovery", 503, false),
+        ("discovery", 403, false),
+        ("discovery", 404, false),
+        ("discovery", 200, true),
+        ("jwks", 503, false),
+        ("jwks", 403, false),
+        ("jwks", 404, false),
+        ("jwks", 200, true),
+    ] {
         let fixture = Fixture::new().await;
         let record = fixture.login(None).await.unwrap();
         let path = fixture
@@ -1114,9 +1164,11 @@ async fn refresh_keeps_rotated_credentials_when_identity_discovery_or_jwks_is_un
         {
             let mut state = fixture.fake.state.lock().unwrap();
             if endpoint == "discovery" {
-                state.discovery_status = 503;
+                state.discovery_status = status;
+                state.discovery_body = non_json.then_some("not-json");
             } else {
-                state.jwks_status = 503;
+                state.jwks_status = status;
+                state.jwks_body = non_json.then_some("not-json");
             }
             state.scopes = format!("{SCOPES} extra_scope");
             state.earliest = Some(serde_json::json!(NOW + 4000));
@@ -1150,7 +1202,9 @@ async fn refresh_keeps_rotated_credentials_when_identity_discovery_or_jwks_is_un
         {
             let mut state = fake.state.lock().unwrap();
             state.discovery_status = 200;
+            state.discovery_body = None;
             state.jwks_status = 200;
+            state.jwks_body = None;
         }
         now.store(NOW + 7200, Ordering::SeqCst);
         let reopened = ChatgptAuth::for_test(

@@ -17,11 +17,15 @@ impl ChatgptAuth {
             record.sign_out();
             auth.inner.store.save_record(&record, auth.host_id())?;
             let result = match &record.pending_revocation {
-                Some(token) if auth.inner.http.revoke(token, &record.info.client_id).await => {
+                Some(token) => {
+                    let revoked = auth.inner.http.revoke(token, &record.info.client_id).await;
                     record.pending_revocation = None;
-                    LogoutResult::Revoked
+                    if revoked {
+                        LogoutResult::Revoked
+                    } else {
+                        LogoutResult::Pending
+                    }
                 }
-                Some(_) => LogoutResult::Pending,
                 None => LogoutResult::NoToken,
             };
             auth.inner.store.save_record(&record, auth.host_id())?;
@@ -151,7 +155,12 @@ impl ChatgptAuth {
                     Ok(())
                 };
                 let identity_result = match identity_result {
-                    Err(error) if error.kind == ErrorKind::Network => {
+                    Err(error)
+                        if !matches!(
+                            error.kind,
+                            ErrorKind::InvalidIdToken | ErrorKind::IdentityMismatch
+                        ) =>
+                    {
                         // Rotation already succeeded. Keep the last verified ID
                         // token until a later refresh can validate its replacement.
                         fresh.id = tokens.id.clone();
