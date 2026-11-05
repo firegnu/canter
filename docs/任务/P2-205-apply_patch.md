@@ -135,3 +135,15 @@
 - 合并前全套（返工后的 `6fd92f6`）1824 项全过、49 跳过，文档测试通过。代码质量：搬来的部分保持 Codex 原样、来源写全；接入部分改动集中，单文件路径和原逻辑等价。
 
 结果：返工 1 次
+
+## 用户试用
+
+2026-11-05，用户装好 `c9867df` 后在 canter-test-rust 试（会话 `s-1793868728754315000-13199-1`）。新版服务端 16:51 重拉目录，8 个 GPT 模型的 `apply_patch_tool_type` 都是 `freeform`。
+- gpt-6.1-sol、Allow all：一个补丁改 README.md、Cargo.toml，新建 notes/patch-test.md，删 TODO.md，一次写好；日志里 GPT 输出 `custom_tool_call`，后续请求前缀接上。
+- 切到 Always ask：改名加改 README.md 的补丁只弹一个 `Apply this patch?` 框，改名单独一行 `Move … → …`，批准后写好。
+- 同一会话 `/model` 切到 opencode-go/deepseek-v4.1-flash，用 `edit` 改 README.md，历史里带着两次补丁调用也没被拒（交叉审查建议 7 实测没出问题）。
+- `/rewind` 这次没手动试。
+- 真调：GPT 11 次（其中 3 次是输入框建议的后台请求：1 次网络失败、2 次取消），DeepSeek 1 轮。
+- 思考：两轮档位都发了 high；第一轮 5 次请求里 2 次有思考（20、14 token，各 1 段摘要），第二轮 4 次全是 0，是模型没想，不是界面没显示。
+- 缓存：第一轮补丁结果交回 GPT 的那次请求命中 0，下一次只接到补丁之前；只这一次，先记着，后面多用再看日志。
+- 用户：「都对着呢」。

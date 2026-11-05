@@ -405,3 +405,4 @@
   - hook 收到的 `tool_input` 是 null（补丁是纯文本），按 `write|edit` 配的 PreToolUse hook 拦不到 apply_patch；要拦得在 matcher 里加 `apply_patch`，且拿不到补丁内容。
   - 换到别的模型后，历史里的补丁调用按普通函数调用发出、参数是补丁原文不是 JSON，DeepSeek 等会不会拒没查证；P2-207 做跨家转换时一并处理。
   - 写到一半失败时，已改的文件不进终端的改动文件列表（`canter-tui/src/files.rs` 只算 Completed）。
+  - 11-05 用户试用：改名的卡片写成 `Edit a → b`，用 `Move` 更准（只是文字）。补丁结果交回 GPT 的那次请求缓存命中 0（只见过一次），后面多用再看日志。
