@@ -67,7 +67,9 @@ pub struct Settings {
     pub revoke_status: u16,
     pub discovery_override: Option<Value>,
     pub discovery_status: u16,
+    pub discovery_body: Option<&'static str>,
     pub jwks_status: u16,
+    pub jwks_body: Option<&'static str>,
     pub refresh_started: Arc<tokio::sync::Notify>,
     pub refresh_release: Option<Arc<tokio::sync::Notify>>,
     pub revoke_started: Arc<tokio::sync::Notify>,
@@ -120,7 +122,9 @@ impl Fake {
             revoke_status: 200,
             discovery_override: None,
             discovery_status: 200,
+            discovery_body: None,
             jwks_status: 200,
+            jwks_body: None,
             refresh_started: Arc::new(tokio::sync::Notify::new()),
             refresh_release: None,
             revoke_started: Arc::new(tokio::sync::Notify::new()),
@@ -178,16 +182,20 @@ async fn authorize(
 }
 async fn discovery(State(state): State<Arc<Mutex<Settings>>>) -> axum::response::Response {
     let state = state.lock().unwrap();
-    (axum::http::StatusCode::from_u16(state.discovery_status).unwrap(),
+    let status = axum::http::StatusCode::from_u16(state.discovery_status).unwrap();
+    if let Some(body) = state.discovery_body {
+        return (status, body).into_response();
+    }
+    (status,
         Json(state.discovery_override.clone().unwrap_or_else(|| json!({"issuer":state.origin,"jwks_uri":format!("{}/.well-known/jwks.json",state.origin),"revocation_endpoint":format!("{}/revoke",state.origin)})))).into_response()
 }
 async fn serve_jwks(State(state): State<Arc<Mutex<Settings>>>) -> axum::response::Response {
     let state = state.lock().unwrap();
-    (
-        axum::http::StatusCode::from_u16(state.jwks_status).unwrap(),
-        Json(state.jwks.clone()),
-    )
-        .into_response()
+    let status = axum::http::StatusCode::from_u16(state.jwks_status).unwrap();
+    if let Some(body) = state.jwks_body {
+        return (status, body).into_response();
+    }
+    (status, Json(state.jwks.clone())).into_response()
 }
 async fn token(
     State(state): State<Arc<Mutex<Settings>>>,

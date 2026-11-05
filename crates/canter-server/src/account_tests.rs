@@ -122,12 +122,12 @@ async fn account_selection_background_and_three_logout_results() {
     test.fake.state.lock().unwrap().revoke_status = 400;
     let pending = test.post("logout", json!({"provider":"chatgpt"})).await;
     assert_eq!(pending["result"], "pending");
-    assert_eq!(pending["account"]["pendingRevocation"], true);
+    assert_eq!(pending["account"]["pendingRevocation"], false);
     assert_eq!(pending["account"]["status"], "signedOut");
     test.fake.state.lock().unwrap().revoke_status = 200;
     assert_eq!(
         test.post("logout", json!({"provider":"chatgpt"})).await["result"],
-        "revoked"
+        "noToken"
     );
     assert_eq!(
         test.post("logout", json!({"provider":"chatgpt"})).await["result"],

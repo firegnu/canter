@@ -48,6 +48,36 @@ pub(super) fn classified(body: &Value, status: Option<u16>) -> ModelError {
     }
 }
 
+fn field(value: Option<&str>) -> &str {
+    match value {
+        Some(value)
+            if !value.is_empty()
+                && value.len() <= 128
+                && value.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')
+                }) =>
+        {
+            value
+        }
+        Some(_) => "<redacted>",
+        None => "<missing>",
+    }
+}
+
+pub(super) fn log(body: &Value, status: Option<u16>, request_id: Option<&str>) {
+    let error = body
+        .get("error")
+        .filter(|error| error.is_object())
+        .unwrap_or(body);
+    eprintln!(
+        "Responses error: status={} code={} param={} request_id={}",
+        status.map_or_else(|| "<missing>".into(), |status| status.to_string()),
+        field(error["code"].as_str()),
+        field(error["param"].as_str()),
+        field(request_id)
+    );
+}
+
 pub(super) async fn http(mut response: reqwest::Response) -> ModelError {
     let status = response.status().as_u16();
     let retry_after = response
@@ -55,8 +85,14 @@ pub(super) async fn http(mut response: reqwest::Response) -> ModelError {
         .get("retry-after")
         .and_then(|value| value.to_str().ok())
         .and_then(crate::retry::parse_retry_after);
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     // Error bodies can contain credentials echoed by the remote server.
-    // Bound inspection, classify known codes, and discard every remote string.
+    // Bound inspection, classify known codes, and discard every remote string
+    // except the individually validated diagnostic fields.
     let mut bytes = Vec::new();
     while let Ok(Some(chunk)) = response.chunk().await {
         if bytes.len() + chunk.len() > 65_536 {
@@ -65,6 +101,7 @@ pub(super) async fn http(mut response: reqwest::Response) -> ModelError {
         bytes.extend_from_slice(&chunk);
     }
     let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    log(&body, Some(status), request_id.as_deref());
     let mut error = classified(&body, Some(status));
     error.retry_after = retry_after;
     error

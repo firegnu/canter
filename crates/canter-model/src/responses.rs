@@ -147,6 +147,9 @@ impl Responses {
             let response = post
                 .json(body).send().await.map_err(error::transport)?;
             if !response.status().is_success() { Err(error::http(response).await)?; return; }
+            let status = response.status().as_u16();
+            let request_id = response.headers().get("x-request-id")
+                .and_then(|value| value.to_str().ok()).map(str::to_owned);
             let mut events = response.bytes_stream().eventsource();
             let mut state = sse::State::default();
             loop {
@@ -157,6 +160,11 @@ impl Responses {
                     })?;
                 let event: Value = serde_json::from_str(&event.data).map_err(|_| ModelError::new(ErrorKind::Other))?;
                 diagnostic.observe(&event);
+                match event["type"].as_str() {
+                    Some("response.failed") => error::log(&event["response"], Some(status), request_id.as_deref()),
+                    Some("error") => error::log(&event, Some(status), request_id.as_deref()),
+                    _ => {}
+                }
                 // Even provisional function arguments count as output, although
                 // they cannot enter the public execution path until completed.
                 *observed |= sse::has_output(&event);
@@ -1273,5 +1281,172 @@ mod tests {
                 json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"Portable"}]})
             );
         }
+    }
+
+    #[tokio::test]
+    async fn errors_log_only_bounded_structured_diagnostics() {
+        const CHILD: &str = "CANTER_RESPONSES_ERROR_LOG_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "responses::tests::errors_log_only_bounded_structured_diagnostics",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env(CHILD, "1")
+                .kill_on_drop(true)
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let log = String::from_utf8(output.stderr).unwrap();
+            let lines: Vec<_> = log
+                .lines()
+                .filter(|line| line.starts_with("Responses error:"))
+                .collect();
+            assert_eq!(lines.len(), 6, "{log}");
+            assert!(lines[0].contains("status=400"));
+            assert!(lines[0].contains("code=invalid_request_error"));
+            assert!(lines[0].contains("param=input"));
+            assert!(lines[0].contains("request_id=req_http-1"));
+            assert!(lines[1].contains("status=200"));
+            assert!(lines[1].contains("code=server_error"));
+            assert!(lines[1].contains("param=response.input"));
+            assert!(lines[1].contains("request_id=req_stream-1"));
+            assert!(lines[2].contains("status=200"));
+            assert!(lines[2].contains("code=rate_limit_exceeded"));
+            assert!(lines[2].contains("param=input"));
+            assert!(lines[2].contains("request_id=req_event-1"));
+            for line in &lines[3..] {
+                assert!(line.contains("code=<redacted>"), "{line}");
+                assert!(line.contains("param=<redacted>"), "{line}");
+                assert!(line.contains("request_id=<redacted>"), "{line}");
+            }
+            for private in [
+                "test-only-message-credential",
+                "test-only-detail-credential",
+                "test-only-body-credential",
+                "bad code",
+                "bad param",
+                "bad request",
+                &"c".repeat(129),
+                &"p".repeat(129),
+                &"r".repeat(129),
+            ] {
+                assert!(!log.contains(private), "{log}");
+            }
+            return;
+        }
+
+        async fn run(status: axum::http::StatusCode, value: Value, request_id: Option<String>) {
+            use axum::response::IntoResponse;
+            let body = if status == axum::http::StatusCode::OK {
+                format!("data: {value}\n\n")
+            } else {
+                value.to_string()
+            };
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}/v1/responses", listener.local_addr().unwrap());
+            let app = Router::new().route(
+                "/v1/responses",
+                post(move || {
+                    let body = body.clone();
+                    let request_id = request_id.clone();
+                    async move {
+                        let mut response = (status, body).into_response();
+                        if let Some(request_id) = request_id {
+                            response.headers_mut().insert(
+                                "x-request-id",
+                                HeaderValue::from_str(&request_id).unwrap(),
+                            );
+                        }
+                        response
+                    }
+                }),
+            );
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            let model =
+                Responses::with_endpoint(Arc::new(Auth), endpoint.parse().unwrap()).unwrap();
+            let events: Vec<_> = model
+                .stream(
+                    Request {
+                        options: crate::RequestOptions {
+                            max_retries: Some(0),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    CancellationToken::new(),
+                )
+                .collect()
+                .await;
+            server.abort();
+            let _ = server.await;
+            assert!(events.last().is_some_and(Result::is_err));
+            assert!(!format!("{events:?}").contains("test-only-message-credential"));
+            assert!(!format!("{events:?}").contains("test-only-detail-credential"));
+            assert!(!format!("{events:?}").contains("test-only-body-credential"));
+        }
+
+        let private = json!({
+            "message":"test-only-message-credential",
+            "detail":"test-only-detail-credential"
+        });
+        let mut http = json!({"error":{"code":"invalid_request_error","param":"input"}});
+        http["error"]["message"] = private["message"].clone();
+        http["error"]["detail"] = private["detail"].clone();
+        http["detail"] = json!("test-only-body-credential");
+        run(
+            axum::http::StatusCode::BAD_REQUEST,
+            http,
+            Some("req_http-1".into()),
+        )
+        .await;
+        run(
+            axum::http::StatusCode::OK,
+            json!({"type":"response.failed","response":{"error":{
+                "code":"server_error","param":"response.input",
+                "message":"test-only-message-credential","detail":"test-only-detail-credential"
+            }}}),
+            Some("req_stream-1".into()),
+        )
+        .await;
+        run(
+            axum::http::StatusCode::OK,
+            json!({"type":"error","code":"rate_limit_exceeded","param":"input",
+                "message":"test-only-message-credential","detail":"test-only-detail-credential"}),
+            Some("req_event-1".into()),
+        )
+        .await;
+        run(
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"error":{"code":"c".repeat(129),"param":"bad param",
+                "message":"test-only-message-credential","detail":"test-only-detail-credential"}}),
+            Some("bad request".into()),
+        )
+        .await;
+        run(
+            axum::http::StatusCode::OK,
+            json!({"type":"response.failed","response":{"error":{
+                "code":"bad code","param":"p".repeat(129),
+                "message":"test-only-message-credential","detail":"test-only-detail-credential"
+            }}}),
+            Some("r".repeat(129)),
+        )
+        .await;
+        run(
+            axum::http::StatusCode::OK,
+            json!({"type":"error","code":"bad code","param":"bad param",
+                "message":"test-only-message-credential","detail":"test-only-detail-credential"}),
+            Some("bad request".into()),
+        )
+        .await;
     }
 }

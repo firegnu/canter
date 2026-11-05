@@ -182,13 +182,8 @@ pub async fn run(command: Command, context: crate::Context) -> Result<(), String
                     println!("Signed out {name} on this Mac. No token needed revocation.")
                 }
                 AccountLogoutResult::Pending => {
-                    let retry = if account.is_some() {
-                        format!("canter auth logout chatgpt {}", result.account.id)
-                    } else {
-                        "canter auth logout chatgpt".into()
-                    };
                     println!(
-                        "Signed out {name} on this Mac. OpenAI did not confirm\nthe revocation. Run `{retry}` again to retry."
+                        "Signed out {name} on this Mac. OpenAI did not confirm\nthe revocation. You can disconnect canter in ChatGPT Settings."
                     );
                 }
             }

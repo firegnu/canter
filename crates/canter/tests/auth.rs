@@ -199,8 +199,11 @@ async fn cli_login_status_switch_background_and_logout_use_socket() {
     test.fake.state.lock().unwrap().revoke_status = 400;
     let pending = test.run(&["auth", "logout", "chatgpt"]).await;
     assert!(pending.contains("OpenAI did not confirm"));
+    assert!(pending.contains("disconnect canter in ChatGPT Settings"));
+    assert!(!pending.contains("again to retry"));
     assert!(
-        test.run(&["auth", "status"])
+        !test
+            .run(&["auth", "status"])
             .await
             .contains("revocation pending")
     );
@@ -208,7 +211,7 @@ async fn cli_login_status_switch_background_and_logout_use_socket() {
     assert!(
         test.run(&["auth", "logout", "chatgpt"])
             .await
-            .contains("Access revoked.")
+            .contains("No token needed revocation.")
     );
     assert!(
         test.run(&["auth", "logout", "chatgpt"])
