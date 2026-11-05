@@ -81,3 +81,13 @@
 **没做的事**：真实模型与授权请求 0 次；未读取用户真实状态、配置或登录记录，未操作正在运行的服务端。未改请求构造、请求头、回传白名单、用量统计、界面或 Chat Completions；未跑 workspace 全套，未安装、合并或推送，只在本任务分支提交。
 
 **踩过的坑**：clippy 将带合法档位模式的匹配提示为 `manual_unwrap_or`；直接采用其 `unwrap_or` 建议会丢掉档位过滤，因此改用 `filter` 保留合法档位限制，再 `unwrap_or("invalid")`，检查通过。首次格式检查提示新增断言的换行差异，格式化本次修改的两个 Rust 文件后通过。
+
+## 主控审查
+
+2026-11-05，canter/main。开发：Codex gpt-6-astra / high（canter/dev-gpt-reasoning-log-1），开工时停下问一次「要改现有完整相等断言」，主控同意只补字段；从派出到 DONE 约 5 分钟。
+- diff 只动 `responses/diagnostics.rs` 和 `cache_tests.rs`，没碰请求、用量统计、界面和别家。档位名单和 `ReasoningEffort` 的发送值一致，其它值记 `invalid`，不打印任意字符串；摘要只记段数和字符数，测试断言日志里没有摘要原文。
+- 「要做成什么」1～3 都能从日志那一行看出来；验收的断言都在。
+- 合并前全套：`cargo nextest run --all-targets` 1785 项全过（49 跳过），`cargo test --doc --workspace` 通过。
+- 代码质量：改动小、贴着 P2-213 的写法；clippy 建议会丢掉档位过滤，它看出来改用 `filter` 保住，处理得对。
+
+结果：一次过
