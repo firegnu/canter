@@ -507,6 +507,7 @@ async fn streams_content_tools_and_usage_and_replays_reasoning() {
             reasoning_effort: None,
             max_output_tokens: Some(128),
         },
+        custom_tools: Default::default(),
     };
     let events: Vec<_> = tokio::time::timeout(
         Duration::from_secs(5),

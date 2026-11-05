@@ -57,7 +57,10 @@ pub(crate) fn core(tools: &[ToolDefinition]) -> String {
     let has = |name: &str| names.contains(&name);
     let has_mcp = has("mcp_call") || names.iter().any(|name| name.starts_with("mcp__"));
     let approval = join_present([
-        ("file changes", has("write") || has("edit")),
+        (
+            "file changes",
+            has("write") || has("edit") || has("apply_patch"),
+        ),
         ("commands that aren't read-only", has("shell")),
         ("web fetches", has("web_fetch")),
         ("web searches", has("web_search")),

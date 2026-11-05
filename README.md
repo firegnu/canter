@@ -42,7 +42,7 @@ The turn ends when the model stops asking for tools. canter is that loop, plus a
 - Models:
   - ChatGPT, through "Sign in with ChatGPT", using your own plan.
   - DeepSeek, with your own API key.
-- Tools: read, write, edit files, run shell commands.
+- Tools: read files, apply patches on supported ChatGPT models or write/edit files on other models, and run shell commands.
 - Permissions:
   - allow everything, ask every time, or allow for this session;
   - Esc stops an active `/btw` answer or `/handoff` generation first; otherwise it interrupts the current turn.

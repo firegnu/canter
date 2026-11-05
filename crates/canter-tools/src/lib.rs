@@ -1,4 +1,5 @@
 //! Session tools and a replaceable executor. This crate emits no protocol events.
+pub mod apply_patch;
 mod executor;
 mod guardian;
 pub mod lsp;
@@ -51,6 +52,7 @@ pub enum Tool {
     Read,
     Write,
     Edit,
+    ApplyPatch,
     Shell,
     ShellOutput,
     ShellStop,
@@ -96,11 +98,13 @@ impl Tool {
         Self::Monitor,
     ];
 
+    pub const APPLY_PATCH: [Self; 1] = [Self::ApplyPatch];
     pub const MCP: [Self; 2] = [Self::McpSearch, Self::McpCall];
 
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
+            .chain(Self::APPLY_PATCH)
             .chain(Self::MCP)
             .find(|tool| tool.name() == name)
     }
@@ -110,6 +114,7 @@ impl Tool {
             Self::Read => "read",
             Self::Write => "write",
             Self::Edit => "edit",
+            Self::ApplyPatch => "apply_patch",
             Self::Shell => "shell",
             Self::ShellOutput => "shell_output",
             Self::ShellStop => "shell_stop",
@@ -130,7 +135,7 @@ impl Tool {
             Self::Read | Self::ShellOutput | Self::ShellStop | Self::Monitor | Self::McpSearch => {
                 Risk::Read
             }
-            Self::Write | Self::Edit => Risk::Write,
+            Self::Write | Self::Edit | Self::ApplyPatch => Risk::Write,
             Self::Shell | Self::Mcp | Self::McpCall | Self::WebFetch | Self::WebSearch => {
                 Risk::Execute
             }
@@ -236,6 +241,14 @@ impl Tool {
                 name: self.name(),
                 description: r#"Run a command with /bin/sh -c in the session's working directory and environment. Each call starts a new shell, so cd, variables, and other shell state don't carry over to the next call. There is no terminal and no input: use non-interactive commands. Foreground timeout: 120 seconds by default, at most 600 (timeoutMs); output keeps its beginning and end. Set background=true for development servers, file watchers, or long tests: returns after about one second with an integer id, initial output and running/exited status. Background commands have no timeoutMs deadline and belong to the session, surviving client disconnects and session switches. Read new output with shell_output and stop the entire process group with shell_stop when finished. At most 8 background commands may run per session; each retains the last 1 MiB of output. The user can also move a running foreground command to the background with Ctrl+B. When a shell exits, its remaining process group is stopped. Results include exit status, so never add commands to print it. Background execution follows the same approval and Plan-mode read-only rules as foreground execution."#.into(),
                 parameters: json!({"type":"object","properties":{"command":{"type":"string","minLength":1},"background":{"type":"boolean","default":false},"timeoutMs":{"type":"integer","minimum":1,"maximum":MAX_SHELL_TIMEOUT_MS,"default":DEFAULT_SHELL_TIMEOUT_MS}},"required":["command"],"additionalProperties":false}),
+                risk: self.risk(),
+            };
+        }
+        if self == Self::ApplyPatch {
+            return ToolDefinition {
+                name: self.name(),
+                description: "Edit UTF-8 files with a patch containing *** Begin Patch and *** End Patch. This is a FREEFORM tool: pass the patch directly, not JSON. Supports Add File, Delete File, Update File, and Move to. All paths and diffs are checked before one approval request; changes are then written file by file.".into(),
+                parameters: Value::Null,
                 risk: self.risk(),
             };
         }
@@ -462,6 +475,7 @@ enum Action {
         change: FileUpdateChange,
         summary: String,
     },
+    Patch(apply_patch::PreparedPatch),
     Shell(shell::ShellArgs),
 }
 
@@ -473,6 +487,7 @@ pub struct PreparedCall {
     raw_arguments: String,
     arguments: Value,
     resolved_path: Option<std::path::PathBuf>,
+    committed_paths: std::sync::Mutex<Vec<std::path::PathBuf>>,
     action: Action,
 }
 
@@ -480,6 +495,7 @@ pub struct FileCheckpoint<'a> {
     pub path: &'a std::path::Path,
     pub original: Option<&'a [u8]>,
     pub content: &'a [u8],
+    pub deleted: bool,
 }
 
 impl PreparedCall {
@@ -589,6 +605,11 @@ impl PreparedCall {
                 changes: vec![change.clone()],
                 status,
             },
+            Action::Patch(patch) => Item::FileChange {
+                id: self.id.clone(),
+                changes: patch.changes(),
+                status,
+            },
             Action::Shell(args) => Item::CommandExecution {
                 id: self.id.clone(),
                 source: Default::default(),
@@ -620,9 +641,38 @@ impl PreparedCall {
                 path: self.resolved_path.as_deref()?,
                 original: original.as_deref(),
                 content: content.as_bytes(),
+                deleted: false,
             }),
             _ => None,
         }
+    }
+    pub fn file_checkpoints(&self) -> Vec<FileCheckpoint<'_>> {
+        match &self.action {
+            Action::Patch(patch) => patch
+                .operations
+                .iter()
+                .flat_map(apply_patch::Operation::checkpoints)
+                .collect(),
+            _ => self.file_checkpoint().into_iter().collect(),
+        }
+    }
+    pub(crate) fn prepared_paths(&self) -> Vec<(&str, &std::path::Path)> {
+        match &self.action {
+            Action::Patch(patch) => patch
+                .paths
+                .iter()
+                .map(|path| (path.requested.as_str(), path.resolved.as_path()))
+                .collect(),
+            _ => self
+                .resolved_path
+                .as_deref()
+                .and_then(|resolved| Some((self.arguments["path"].as_str()?, resolved)))
+                .into_iter()
+                .collect(),
+        }
+    }
+    pub fn committed_paths(&self) -> Vec<std::path::PathBuf> {
+        self.committed_paths.lock().unwrap().clone()
     }
     /// Interactions are awaited by the session, never passed to the permission gate.
     pub fn user_input_request(&self) -> Option<UserInputRequest> {
@@ -649,6 +699,7 @@ pub struct Tools {
     lsp: Option<lsp::LspSession>,
     background: Arc<BackgroundCommands>,
     plan_enabled: bool,
+    apply_patch: bool,
     executor: Arc<dyn Executor>,
     mcp: Vec<mcp::McpTool>,
     mcp_tool_search: bool,
@@ -659,6 +710,10 @@ pub struct Tools {
 impl Tools {
     pub fn with_telemetry(mut self, enabled: bool) -> Self {
         self.telemetry = enabled;
+        self
+    }
+    pub fn with_apply_patch(mut self, enabled: bool) -> Self {
+        self.apply_patch = enabled;
         self
     }
     pub fn configure_shell(&self, mode: canter_protocol::PermissionMode, directories: &[String]) {
@@ -868,6 +923,7 @@ impl Tools {
             lsp: None,
             background: Arc::new(BackgroundCommands::default()),
             plan_enabled: true,
+            apply_patch: false,
             executor,
             mcp: Vec::new(),
             mcp_tool_search: true,
@@ -915,6 +971,11 @@ impl Tools {
             return None;
         }
         if name == "update_plan" && !self.plan_enabled {
+            return None;
+        }
+        if (name == "apply_patch" && !self.apply_patch)
+            || (self.apply_patch && matches!(name, "write" | "edit"))
+        {
             return None;
         }
         Tool::from_name(name).or_else(|| {
@@ -966,6 +1027,7 @@ impl Tools {
             raw_arguments: raw_arguments.into(),
             arguments: arguments.clone(),
             resolved_path: None,
+            committed_paths: Default::default(),
             action: Action::Mcp(tool.clone()),
         };
         let error = if wrapper {
@@ -993,6 +1055,39 @@ impl Tools {
         cancel: &CancellationToken,
     ) -> Result<PreparedCall, ToolOutput> {
         let id = id.into();
+        if tool == Tool::ApplyPatch {
+            let patch = apply_patch::prepare(self.executor.clone(), raw_arguments, cancel)
+                .await
+                .map_err(|message| {
+                    tool_error(
+                        tool,
+                        id.clone(),
+                        &json!({"patch":raw_arguments}),
+                        message,
+                        if cancel.is_cancelled() {
+                            ToolOutcome::Cancelled
+                        } else {
+                            ToolOutcome::Failed
+                        },
+                        self.executor.cwd(),
+                    )
+                })?;
+            let arguments = json!({
+                "patch":raw_arguments,
+                "changes":patch.changes(),
+                "resolvedPaths":patch.paths.iter().map(|path| &path.resolved).collect::<Vec<_>>(),
+            });
+            return Ok(PreparedCall {
+                executor: self.executor.clone(),
+                tool,
+                id,
+                raw_arguments: raw_arguments.into(),
+                arguments,
+                resolved_path: None,
+                committed_paths: Default::default(),
+                action: Action::Patch(patch),
+            });
+        }
         let mut arguments = serde_json::from_str::<Value>(raw_arguments).map_err(|e| {
             tool_error(
                 tool,
@@ -1063,6 +1158,7 @@ impl Tools {
             raw_arguments: raw_arguments.into(),
             arguments,
             resolved_path,
+            committed_paths: Default::default(),
             action,
         })
     }
@@ -1157,6 +1253,7 @@ impl Tools {
                 })
             }
             Tool::Mcp | Tool::McpCall => Err("prepare an MCP tool by its qualified name".into()),
+            Tool::ApplyPatch => Err("apply_patch requires freeform patch text".into()),
 
             Tool::AskUser => {
                 let args: AskUserArgs = parse(arguments)?;
@@ -1593,6 +1690,52 @@ impl Tools {
                     ),
                 }
             }
+            Action::Patch(patch) => {
+                let result = apply_patch::execute(self.executor.as_ref(), patch, cancel).await;
+                *call.committed_paths.lock().unwrap() = result.committed;
+                let committed = call.committed_paths();
+                let outcome = if result.error.is_none() {
+                    ToolOutcome::Completed
+                } else if cancel.is_cancelled() {
+                    ToolOutcome::Cancelled
+                } else {
+                    ToolOutcome::Failed
+                };
+                let mut item = call.item(if outcome == ToolOutcome::Completed {
+                    ItemStatus::Completed
+                } else {
+                    ItemStatus::Failed
+                });
+                if result.error.is_some()
+                    && let Item::FileChange { changes, .. } = &mut item
+                {
+                    let prepared_changes = std::mem::take(changes);
+                    *changes = patch
+                        .operations
+                        .iter()
+                        .zip(prepared_changes)
+                        .filter_map(|(operation, change)| {
+                            let touched = std::iter::once(&operation.source)
+                                .chain(operation.destination.as_ref())
+                                .any(|file| committed.contains(&file.resolved));
+                            touched.then_some(change)
+                        })
+                        .collect();
+                }
+                ToolOutput {
+                    output_size: Default::default(),
+                    change_ticket: self.lsp.as_ref().and_then(|lsp| {
+                        committed
+                            .iter()
+                            .map(|path| Box::new(lsp.changed(path)))
+                            .next_back()
+                    }),
+                    images: Vec::new(),
+                    text: result.text,
+                    item,
+                    outcome,
+                }
+            }
             Action::Shell(args) => {
                 shell::run(
                     self.executor.clone(),
@@ -2017,7 +2160,7 @@ fn tool_error(
             content: String::new(),
             status: ItemStatus::Failed,
         },
-        Tool::Write | Tool::Edit => Item::FileChange {
+        Tool::Write | Tool::Edit | Tool::ApplyPatch => Item::FileChange {
             id,
             changes: arguments["path"]
                 .as_str()

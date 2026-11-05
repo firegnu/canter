@@ -69,6 +69,7 @@ P2-130 在 read 的说明中补充了看图能力、图片格式和 8 MiB 上限
 | read | `path`, 可选 `startLine`（默认 1）、`lineCount`（默认 2000） | 带行号的 UTF-8 文本或 JPEG/PNG/GIF/WebP 图片，`fileRead` |
 | write | `path`, `content` | 整文件写，创建父目录；`fileChange` 和 unified diff |
 | edit | `path`, `edits: [{oldText, newText}]` | 一次替换多处；`fileChange` 和 unified diff |
+| apply_patch | 自由文本补丁 | 一次准备新增、修改、删除和改名；逐文件执行，`fileChange` 包含全部 diff |
 | shell | `command`, 可选 `timeoutMs`、`background`（默认 false） | 前台结果或后台编号、状态、初始输出；`commandExecution` |
 | shell_output | `id`（会话内小整数） | 上次模型读取后的新输出及状态；`backgroundCommandAction` |
 | shell_stop | `id` | 停整个进程组，返回剩余输出及状态；`backgroundCommandAction` |
@@ -79,7 +80,7 @@ P2-130 在 read 的说明中补充了看图能力、图片格式和 8 MiB 上限
 | update_plan | 可选 `explanation`，`plan: [{step, status}]` | 整份替换清单，回 `Plan updated`；客户端项目 `plan` |
 | submit_plan | `plan`（完整 Markdown） | 计划模式中等待用户批准；客户端项目 `planProposal` |
 
-`Tool::ALL` 固定按 read/write/edit/shell/ask_user/web_fetch/web_search/update_plan/submit_plan/shell_output/shell_stop/monitor 排列；会话用 `Tools::find` 滤掉未配置的 web_search 和关闭的 update_plan，保证会话每次请求的工具前缀稳定。
+`Tool::ALL` 固定按 read/write/edit/shell/ask_user/web_fetch/web_search/update_plan/submit_plan/shell_output/shell_stop/monitor 排列；会话用 `Tools::find` 滤掉未配置的 web_search 和关闭的 update_plan，保证会话每次请求的工具前缀稳定。apply_patch 单独列在 `Tool::APPLY_PATCH`；只有 `Tools::with_apply_patch(true)` 时追加到工具清单并隐藏 write/edit，避免改变其它会话的既有前缀。它先解析并预检全部路径、原文和 diff，一次批准后再复查；逐文件写入，中途失败保留已改内容并报告，不自动回滚。
 
 `web_search::SearchProvider` 是搜索后端接口，返回统一 `WebSearchResult`，错误必须不含凭证。
 `WebSearch` 负责 30 秒总超时、取消和统一输出；DeepSeek 适配在 `web_search/deepseek.rs`，
@@ -390,7 +391,7 @@ shell 和 LSP 共用 `process` 内部启动锁、进程组和 guardian 所有权
 
 会话通过 `service.session(context, protected_paths)` 创建 `LspSession` 并由 `Tools::with_lsp` 持有。
 只有成功文件修改才调用 `changed(path)`；返回的 `ChangeTicket::wait(Duration)` 允许调用方决定等待预算。
-write/edit 的票据放在内部 `ToolOutput.change_ticket`，等待超时或丢弃票据不取消实例启动。
+write/edit 的票据放在内部 `ToolOutput.change_ticket`；apply_patch 通知每个实际改动的路径，并保留最后一个票据供既有内联诊断流程等待。等待超时或丢弃票据不取消实例启动。
 `session.subscribe().recv()` 接收后续批次，`session.diagnostics().await` 读取当前缓存；两者和票据等待均在
 交付前重新核对实例代数、文档版本和磁盘摘要。`DiagnosticBatch.id` 可供 P2-134 去重，`source` 区分整表
 push 与 pull provider；空表替换该来源的诊断。`Freshness::VersionUnconfirmed` 表示无版本推送，即使空表也

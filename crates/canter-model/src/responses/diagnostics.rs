@@ -187,6 +187,7 @@ fn metadata(index: u64, item: &Value) -> Value {
         Some("reasoning") => "reasoning",
         Some("message") => "message",
         Some("function_call") => "function_call",
+        Some("custom_tool_call") => "custom_tool_call",
         _ => "unknown",
     };
     let mut result = json!({"index":index,"type":kind,"encrypted_content":item.get("encrypted_content").is_some()});

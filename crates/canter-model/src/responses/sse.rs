@@ -4,8 +4,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
-    AssistantContent, ErrorKind, FinishReason, ModelError, ModelEvent, ToolCall, ToolDefinition,
-    Usage,
+    AssistantContent, ErrorKind, FinishReason, ModelError, ModelEvent, Request, ToolCall, Usage,
 };
 
 #[derive(Default)]
@@ -26,21 +25,23 @@ pub(super) fn has_output(event: &Value) -> bool {
             "response.output_text.delta"
             | "response.refusal.delta"
             | "response.reasoning_summary_text.delta"
-            | "response.function_call_arguments.delta",
+            | "response.function_call_arguments.delta"
+            | "response.custom_tool_call_input.delta",
         ) => event["delta"].as_str().is_some_and(|text| !text.is_empty()),
         Some(
             "response.output_item.done"
             | "response.output_text.done"
             | "response.refusal.done"
             | "response.reasoning_summary_text.done"
-            | "response.function_call_arguments.done",
+            | "response.function_call_arguments.done"
+            | "response.custom_tool_call_input.done",
         ) => true,
         Some("response.output_item.added") => {
             let item = &event["item"];
             ["content", "summary"]
                 .iter()
                 .any(|key| item[key].as_array().is_some_and(|parts| !parts.is_empty()))
-                || ["arguments", "encrypted_content"]
+                || ["arguments", "input", "encrypted_content"]
                     .iter()
                     .any(|key| item[key].as_str().is_some_and(|text| !text.is_empty()))
         }
@@ -52,7 +53,7 @@ impl State {
     pub(super) fn accept(
         &mut self,
         event: &Value,
-        tools: &[ToolDefinition],
+        request: &Request,
     ) -> Result<Vec<ModelEvent>, ModelError> {
         let mut events = Vec::new();
         let check = Check {
@@ -85,7 +86,14 @@ impl State {
                     Item {
                         id: id.into(),
                         kind: kind.into(),
-                        arguments: item["arguments"].as_str().unwrap_or_default().into(),
+                        arguments: item[if kind == "custom_tool_call" {
+                            "input"
+                        } else {
+                            "arguments"
+                        }]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
                         done: (event["type"] == "response.output_item.done").then(|| item.clone()),
                     },
                 );
@@ -116,18 +124,32 @@ impl State {
                     });
                 }
             }
-            "response.function_call_arguments.delta" => {
+            "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
+                let custom = event["type"] == "response.custom_tool_call_input.delta";
                 let delta = check.string(event, "delta")?;
                 let item = self.item(event, check)?;
-                if item.kind != "function_call" {
+                if item.kind
+                    != if custom {
+                        "custom_tool_call"
+                    } else {
+                        "function_call"
+                    }
+                {
                     return Err(check.invalid("arguments delta has the wrong item type"));
                 }
                 item.arguments.push_str(delta);
             }
-            "response.function_call_arguments.done" => {
-                let arguments = check.string(event, "arguments")?;
+            "response.function_call_arguments.done" | "response.custom_tool_call_input.done" => {
+                let custom = event["type"] == "response.custom_tool_call_input.done";
+                let arguments = check.string(event, if custom { "input" } else { "arguments" })?;
                 let item = self.item(event, check)?;
-                if item.kind != "function_call" {
+                if item.kind
+                    != if custom {
+                        "custom_tool_call"
+                    } else {
+                        "function_call"
+                    }
+                {
                     return Err(check.invalid("arguments done has the wrong item type"));
                 }
                 item.arguments = arguments.into();
@@ -203,11 +225,15 @@ impl State {
                                 });
                             }
                         }
-                        "function_call" => {
+                        kind @ ("function_call" | "custom_tool_call") => {
+                            let custom = kind == "custom_tool_call";
                             let name = check.string(item, "name")?;
-                            if item["namespace"] != super::wire::namespace(name)
-                                || !tools.iter().any(|tool| tool.name == name)
-                            {
+                            let known = if custom {
+                                request.custom_tools.contains_key(name)
+                            } else {
+                                request.tools.iter().any(|tool| tool.name == name)
+                            };
+                            if item["namespace"] != super::wire::namespace(name) || !known {
                                 return Err(check.unsupported(
                                     "tool name or namespace is not in the request tools",
                                 ));
@@ -221,7 +247,9 @@ impl State {
                                 content: AssistantContent::ToolCall(ToolCall {
                                     id: call_id.into(),
                                     name: name.into(),
-                                    arguments: check.string(item, "arguments")?.into(),
+                                    arguments: check
+                                        .string(item, if custom { "input" } else { "arguments" })?
+                                        .into(),
                                 }),
                             });
                         }
@@ -312,7 +340,7 @@ impl Check {
 
     fn output_kind(self, item: &Value) -> Result<&str, ModelError> {
         match self.string(item, "type")? {
-            kind @ ("message" | "reasoning" | "function_call") => Ok(kind),
+            kind @ ("message" | "reasoning" | "function_call" | "custom_tool_call") => Ok(kind),
             _ => Err(self.unsupported("output type is unsupported")),
         }
     }

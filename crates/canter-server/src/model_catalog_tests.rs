@@ -474,3 +474,49 @@ async fn activation_cannot_leave_a_new_account_stuck_behind_an_old_refresh() {
     assert!(!catalog.state.read().unwrap().refreshing);
     fake.stop().await;
 }
+
+#[test]
+fn apply_patch_capability_comes_only_from_the_catalog_even_for_configured_models() {
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = ModelCatalog::new(temp.path().to_owned(), None);
+    for (slug, capability) in [
+        ("freeform", Some("freeform")),
+        ("missing", None),
+        ("unknown", Some("grammar")),
+    ] {
+        let mut value = json!({"slug":slug,"visibility":"list"});
+        if let Some(capability) = capability {
+            value["apply_patch_tool_type"] = capability.into();
+        }
+        let model = parse_model(&value).unwrap();
+        catalog
+            .state
+            .write()
+            .unwrap()
+            .known
+            .insert(slug.into(), model);
+    }
+    let mut options = CoreOptions::default();
+    options.model_limits.insert(
+        "chatgpt/freeform".into(),
+        ModelLimits {
+            context_window: 200_000,
+            auto_compact_tokens: None,
+        },
+    );
+    let (models, options) = catalog.apply(
+        Some("chatgpt"),
+        vec!["chatgpt/freeform".into(), "other/model".into()],
+        options,
+    );
+    assert!(models.contains(&"chatgpt/freeform".into()));
+    assert!(models.contains(&"other/model".into()));
+    assert_eq!(
+        options.apply_patch_models,
+        ["chatgpt/freeform".to_owned()].into()
+    );
+    assert_eq!(
+        options.model_limits["chatgpt/freeform"].context_window,
+        200_000
+    );
+}

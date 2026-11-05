@@ -14,7 +14,7 @@ pub(super) fn namespace(name: &str) -> &'static str {
 pub(super) fn request_body(request: &Request, account: &str, allow_replay: bool) -> Value {
     let mut input = Vec::new();
     for message in &request.messages {
-        append_input(&mut input, message, &request.model, account, allow_replay);
+        append_input(&mut input, message, request, account, allow_replay);
     }
     let mut body = json!({
         "model":request.model, "input":input, "store":false, "stream":true,
@@ -32,19 +32,26 @@ pub(super) fn request_body(request: &Request, account: &str, allow_replay: bool)
     ]
     .into_iter()
     .filter_map(|(group, description)| {
-        let functions: Vec<_> = request
+        let tools: Vec<_> = request
             .tools
             .iter()
             .filter(|tool| namespace(&tool.name) == group)
             .map(|tool| {
-                json!({
-                    "type":"function", "name":tool.name, "description":tool.description,
-                    "parameters":tool.parameters, "strict":false,
-                })
+                if let Some(grammar) = request.custom_tools.get(&tool.name) {
+                    json!({
+                        "type":"custom", "name":tool.name, "description":tool.description,
+                        "format":{"type":"grammar","syntax":"lark","definition":grammar},
+                    })
+                } else {
+                    json!({
+                        "type":"function", "name":tool.name, "description":tool.description,
+                        "parameters":tool.parameters, "strict":false,
+                    })
+                }
             })
             .collect();
-        (!functions.is_empty()).then(
-            || json!({"type":"namespace","name":group,"description":description,"tools":functions}),
+        (!tools.is_empty()).then(
+            || json!({"type":"namespace","name":group,"description":description,"tools":tools}),
         )
     })
     .collect();
@@ -57,7 +64,7 @@ pub(super) fn request_body(request: &Request, account: &str, allow_replay: bool)
 fn append_input(
     input: &mut Vec<Value>,
     message: &Message,
-    model: &str,
+    request: &Request,
     account: &str,
     allow_replay: bool,
 ) {
@@ -74,7 +81,7 @@ fn append_input(
             if allow_replay
                 && let Some(Replay::Responses { output, .. }) = replay
                     .as_ref()
-                    .filter(|replay| replay.belongs_to(model, account))
+                    .filter(|replay| replay.belongs_to(&request.model, account))
             {
                 input.extend(output.iter().cloned());
                 return;
@@ -85,6 +92,15 @@ fn append_input(
                         "type":"message", "role":"assistant",
                         "content":[{"type":"output_text","text":text}],
                     })),
+                    AssistantContent::ToolCall(call)
+                        if request.custom_tools.contains_key(&call.name) =>
+                    {
+                        input.push(json!({
+                            "type":"custom_tool_call", "call_id":call.id,
+                            "namespace":namespace(&call.name), "name":call.name,
+                            "input":call.arguments,
+                        }))
+                    }
                     AssistantContent::ToolCall(call) => input.push(json!({
                         "type":"function_call", "call_id":call.id,
                         "namespace":namespace(&call.name), "name":call.name,
@@ -94,9 +110,15 @@ fn append_input(
                 }
             }
         }
-        Message::ToolResult { tool_call_id, text } => input.push(json!({
-            "type":"function_call_output", "call_id":tool_call_id, "output":text,
-        })),
+        Message::ToolResult { tool_call_id, text } => {
+            let custom = request.messages.iter().any(|message| {
+                matches!(message, Message::Assistant { content, .. } if content.iter().any(|part| matches!(part, AssistantContent::ToolCall(call) if &call.id == tool_call_id && request.custom_tools.contains_key(&call.name))))
+            });
+            input.push(json!({
+                "type":if custom { "custom_tool_call_output" } else { "function_call_output" },
+                "call_id":tool_call_id, "output":text,
+            }));
+        }
         Message::Unknown => {}
     }
 }
@@ -159,6 +181,19 @@ pub(super) fn replay_output(output: &Value) -> Vec<Value> {
                             "namespace",
                             "name",
                             "arguments",
+                            "status",
+                        ],
+                        None,
+                        &[],
+                    ),
+                    Some("custom_tool_call") => (
+                        &[
+                            "type",
+                            "id",
+                            "call_id",
+                            "namespace",
+                            "name",
+                            "input",
                             "status",
                         ],
                         None,

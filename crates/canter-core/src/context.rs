@@ -559,6 +559,12 @@ pub(crate) fn request(
         model: state.journal.snapshot.settings.model.clone(),
         messages: state.prefix.iter().chain(&state.history).cloned().collect(),
         tools: state.tool_definitions.clone(),
+        custom_tools: state
+            .tool_definitions
+            .iter()
+            .filter(|tool| tool.name == canter_tools::Tool::ApplyPatch.name())
+            .map(|tool| (tool.name.clone(), canter_tools::apply_patch::GRAMMAR.into()))
+            .collect(),
         options: RequestOptions {
             max_retries: None,
             thinking: Some(effort != canter_protocol::ReasoningEffort::None),
