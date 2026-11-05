@@ -147,6 +147,80 @@ fn compaction(summary: &str) -> Value {
     json!({ "type": "contextCompaction", "id": "k1", "summary": summary })
 }
 
+#[test]
+fn compaction_numbers_update_in_the_card_and_status_then_show_the_result() {
+    let mut screen = Screen::compacting();
+    let mut item = compaction("");
+    item["beforeTokens"] = json!(152_000);
+    screen.event(json!({"type":"item.started", "turnId":"t1", "item":item}));
+    screen.draw_at(NOW);
+    assert!(
+        screen
+            .conversation()
+            .iter()
+            .any(|row| row == "  ── Compacting context… 152k tokens ──"),
+        "{}",
+        screen.text()
+    );
+    assert!(
+        screen.status().contains("Compacting context… 152k tokens"),
+        "{}",
+        screen.text()
+    );
+    assert!(!screen.text().contains("part"));
+    for part in [2, 3] {
+        screen.event(json!({"type":"item.delta", "turnId":"t1", "itemId":"k1",
+            "delta":{"type":"contextCompaction", "part":part}}));
+        screen.draw_at(NOW);
+        let text = format!("Compacting context… 152k tokens · part {part}");
+        assert!(
+            screen
+                .conversation()
+                .iter()
+                .any(|row| row == &format!("  ── {text} ──")),
+            "{}",
+            screen.text()
+        );
+        assert!(screen.status().contains(&text), "{}", screen.text());
+    }
+    let mut item = compaction("Summary.");
+    item["beforeTokens"] = json!(152_000);
+    item["afterTokens"] = json!(9_000);
+    item["part"] = json!(3);
+    screen.event(json!({"type":"item.completed", "turnId":"t1", "item":item}));
+    screen.draw_at(NOW);
+    assert!(
+        screen
+            .conversation()
+            .iter()
+            .any(|row| row == "  ── Context compacted · 152k → 9k tokens ──"),
+        "{}",
+        screen.text()
+    );
+    assert!(!screen.status().contains("Compacting"));
+    assert!(!screen.text().contains("part"));
+}
+
+#[test]
+fn failed_compaction_with_numbers_keeps_the_existing_message() {
+    for completed in [true, false] {
+        let mut screen = Screen::compacting();
+        let mut item = compaction(if completed { KEPT } else { "" });
+        item["beforeTokens"] = json!(152_000);
+        item["part"] = json!(2);
+        screen.event(json!({"type":if completed {"item.completed"} else {"item.started"}, "turnId":"t1", "item":item}));
+        screen.end_turn("interrupted");
+        screen.draw_at(NOW);
+        assert!(
+            screen.conversation().iter().any(|row| row == NOT_FINISHED),
+            "{}",
+            screen.text()
+        );
+        assert!(!screen.status().contains("Compacting"));
+        assert!(!screen.text().contains("152k"));
+    }
+}
+
 fn row(buffer: &Buffer, y: u16) -> String {
     let mut row = String::new();
     let mut x = 0;

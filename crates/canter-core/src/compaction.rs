@@ -141,21 +141,37 @@ pub(crate) async fn compact(
     let item_id = id("compaction");
     let mut before = None;
     let mut method = "transcript";
-    shared
-        .state
-        .lock()
-        .await
+    let mut part = 1;
+    let mut state = shared.state.lock().await;
+    let before_tokens = context::request_tokens(&context::request(
+        &state,
+        shared.runtime().options.max_output_tokens,
+    ));
+    state
         .journal
         .append(vec![EventPayload::ItemStarted {
             turn_id: turn_id.into(),
             item: Item::ContextCompaction {
                 id: item_id.clone(),
                 summary: String::new(),
+                before_tokens: Some(before_tokens),
+                after_tokens: None,
+                part: None,
                 restored_files: Vec::new(),
             },
         }])
         .await?;
-    let result = summarize(shared, turn_id, cancel, &mut before, &mut method).await;
+    drop(state);
+    let result = summarize(
+        shared,
+        turn_id,
+        cancel,
+        &mut before,
+        &mut method,
+        &item_id,
+        &mut part,
+    )
+    .await;
     let files = if result.is_ok() && !cancel.is_cancelled() {
         crate::restore_files::collect(shared, cancel).await
     } else {
@@ -242,6 +258,10 @@ pub(crate) async fn compact(
             for message in notices {
                 state.background_notice(message).await?;
             }
+            let after_tokens = context::request_tokens(&context::request(
+                &state,
+                shared.runtime().options.max_output_tokens,
+            ));
             if let Some((before, before_messages)) = before {
                 let after = context::request(&state, shared.runtime().options.max_output_tokens);
                 let after_messages = state.history.len();
@@ -269,6 +289,9 @@ pub(crate) async fn compact(
                     item: Item::ContextCompaction {
                         id: item_id,
                         summary,
+                        before_tokens: Some(before_tokens),
+                        after_tokens: Some(after_tokens),
+                        part: (part > 1).then_some(part),
                         restored_files,
                     },
                 }])
@@ -331,6 +354,9 @@ pub(crate) async fn compact(
                     item: Item::ContextCompaction {
                         id: item_id,
                         summary: COMPACTION_FAILED_SUMMARY.into(),
+                        before_tokens: Some(before_tokens),
+                        after_tokens: None,
+                        part: (part > 1).then_some(part),
                         restored_files: Vec::new(),
                     },
                 }])
@@ -346,6 +372,8 @@ async fn summarize(
     cancel: &CancellationToken,
     before: &mut Option<(Request, usize)>,
     method: &mut &'static str,
+    item_id: &str,
+    part: &mut u32,
 ) -> Result<(String, Vec<Message>, usize), CoreError> {
     let (
         mut prefix_request,
@@ -480,6 +508,19 @@ async fn summarize(
                 ErrorCode::Conflict,
                 "compaction interrupted",
             ));
+        }
+        if *part > 1 {
+            shared
+                .state
+                .lock()
+                .await
+                .journal
+                .append(vec![EventPayload::ItemDelta {
+                    turn_id: turn_id.into(),
+                    item_id: item_id.into(),
+                    delta: canter_protocol::ItemDelta::ContextCompaction { part: *part },
+                }])
+                .await?;
         }
         let mut header = format!("{PROMPT}\n\n{SECTIONS}\n\n{RULES}\n\n");
         if !summary.is_empty() {
@@ -747,6 +788,7 @@ async fn summarize(
         if remaining.is_empty() {
             break;
         }
+        *part += 1;
     }
     let mut summary_message = format!("[Context summary]\n{summary}");
     if let Some(plan) = plan {

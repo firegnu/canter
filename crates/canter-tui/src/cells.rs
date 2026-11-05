@@ -440,11 +440,14 @@ pub(crate) fn item(
         Item::ContextCompaction {
             summary,
             restored_files,
+            before_tokens,
+            after_tokens,
+            part,
             ..
         } => {
             let mut rows = vec![Row::text_from(
                 Line::from(Span::styled(
-                    compaction_line(summary, finished),
+                    compaction_line(summary, finished, *before_tokens, *after_tokens, *part),
                     theme::secondary(),
                 )),
                 2,
@@ -786,14 +789,37 @@ const COMPACTION_KEPT: &str = "Compaction did not finish; the original context i
 /// The line for a compaction: still going, compacted, or not finished. A
 /// finished one with no summary never got completed (its turn ended
 /// first); a summary that compacted is never empty.
-fn compaction_line(summary: &str, finished: bool) -> &'static str {
+fn compaction_line(
+    summary: &str,
+    finished: bool,
+    before_tokens: Option<u64>,
+    after_tokens: Option<u64>,
+    part: Option<u32>,
+) -> String {
     if !finished {
-        "  ── Compacting context… ──"
+        format!("  ── {} ──", compacting(before_tokens, part))
     } else if summary.is_empty() || summary == COMPACTION_KEPT {
-        "  ── Compaction did not finish; the original context is kept ──"
+        "  ── Compaction did not finish; the original context is kept ──".into()
+    } else if let (Some(before), Some(after)) = (before_tokens, after_tokens) {
+        format!(
+            "  ── Context compacted · {} → {} tokens ──",
+            crate::app::tokens(before),
+            crate::app::tokens(after)
+        )
     } else {
-        "  ── Context compacted ──"
+        "  ── Context compacted ──".into()
     }
+}
+
+pub(crate) fn compacting(before_tokens: Option<u64>, part: Option<u32>) -> String {
+    let mut text = "Compacting context…".to_owned();
+    if let Some(before) = before_tokens {
+        text += &format!(" {} tokens", crate::app::tokens(before));
+    }
+    if let Some(part) = part.filter(|part| *part > 1) {
+        text += &format!(" · part {part}");
+    }
+    text
 }
 
 /// An item of one line of `text`, `• ` and all in `style`.

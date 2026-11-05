@@ -88,7 +88,8 @@ pub fn validate_event(snapshot: &SessionSnapshot, event: &Event) -> Result<(), R
             if let Some(item) = turn.items.iter().find(|item| item.id() == Some(item_id)) {
                 let valid = match (item, delta) {
                     (Item::AgentMessage { .. }, ItemDelta::AgentMessage { .. })
-                    | (Item::CommandExecution { .. }, ItemDelta::CommandExecution { .. }) => true,
+                    | (Item::CommandExecution { .. }, ItemDelta::CommandExecution { .. })
+                    | (Item::ContextCompaction { .. }, ItemDelta::ContextCompaction { .. }) => true,
                     (
                         Item::Reasoning { summary, .. },
                         ItemDelta::ReasoningSummary { summary_index, .. },
@@ -296,6 +297,9 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
                     .find(|item| item.id() == Some(item_id))
                 {
                     match (item, delta) {
+                        (Item::ContextCompaction { part, .. }, ItemDelta::ContextCompaction { part: current }) => {
+                            *part = Some(*current);
+                        }
                         (Item::AgentMessage { text, .. }, ItemDelta::AgentMessage { delta }) => {
                             text.push_str(delta)
                         }

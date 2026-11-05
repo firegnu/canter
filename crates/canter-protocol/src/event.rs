@@ -229,6 +229,9 @@ pub enum ItemDelta {
     CommandExecution {
         delta: String,
     },
+    ContextCompaction {
+        part: u32,
+    },
     #[serde(other)]
     Unknown,
 }
