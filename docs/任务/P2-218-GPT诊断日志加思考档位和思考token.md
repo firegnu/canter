@@ -58,3 +58,26 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-11-05，canter/dev-gpt-reasoning-log。
+
+**做了什么**：只修改 Responses 的 `diagnostics.rs` 和 `cache_tests.rs`，为每行 `Responses cache: {...}` 增加三项诊断。
+
+- 顶层 `reasoning.effort` 读取实际请求体，缺字段记 `missing`，合法档位原样记 `none` / `low` / `medium` / `high` / `xhigh` / `max`；其它值记 `invalid`，不打印任意字符串。
+- `usage.output_tokens_details.reasoning_tokens` 沿用已有数字字段的规则，区分 `missing`、非负整数（含 0）和 `invalid`，不参与用量统计。
+- reasoning 条目的元数据增加 `summary_count`、`summary_chars`，按摘要数组段数和各段文字的 Unicode 字符数（Rust `chars()`，不是 UTF-8 字节数）求和。空数组记 0、0；沿用原有条目位置与排序，`done` 和 `completed` 共用这份元数据，不记录摘要文字。
+
+**验证了什么**：命令均在前台运行并等待退出，Cargo 全程使用本分支独立编译目录。按档位、思考 token、摘要三步先加断言，各自确认旧实现因缺少目标字段失败，再实现到通过。
+
+- 现有假服务端诊断测试覆盖请求未发档位与发送 `high`，并核对实际收到的请求体；思考 token 缺字段、0、7、非数字各有断言。
+- 保留 `done` 的完整相等断言，只在 reasoning 预期对象增加两个字段；空摘要为 0 段、0 字符，一段为 18 字符，两段合计 35 字符。样本含中文和 emoji，日志断言排除摘要原文，原有正文、参数、id、密文、令牌等保密断言全部保留。
+- `cargo nextest run -p canter-model`：41 项通过、0 跳过。clippy 写法调整后再运行两项 `cache_diagnostics` 测试，均通过。
+- `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。
+
+**拿主意的地方**：主控确认「保留完整相等断言，在 reasoning 的预期对象里补上新字段（摘要为空时段数 0、字符数 0），再补一段、两段摘要的验证。只加字段、不放宽别的断言」。已按此执行，没有待主控决定的事项。
+
+**没做的事**：真实模型与授权请求 0 次；未读取用户真实状态、配置或登录记录，未操作正在运行的服务端。未改请求构造、请求头、回传白名单、用量统计、界面或 Chat Completions；未跑 workspace 全套，未安装、合并或推送，只在本任务分支提交。
+
+**踩过的坑**：clippy 将带合法档位模式的匹配提示为 `manual_unwrap_or`；直接采用其 `unwrap_or` 建议会丢掉档位过滤，因此改用 `filter` 保留合法档位限制，再 `unwrap_or("invalid")`，检查通过。首次格式检查提示新增断言的换行差异，格式化本次修改的两个 Rust 文件后通过。
