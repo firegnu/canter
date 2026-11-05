@@ -13,13 +13,7 @@ pub(super) fn namespace(name: &str) -> &'static str {
 /// SIWC accepts a smaller contract than the general Responses API.
 pub(super) fn request_body(request: &Request, account: &str, allow_replay: bool) -> Value {
     let mut input = Vec::new();
-    let replay_at = request.messages.len().checked_sub(1);
-    for (index, message) in request.messages.iter().enumerate() {
-        if Some(index) == replay_at {
-            for message in &request.replay_history {
-                append_input(&mut input, message, &request.model, account, allow_replay);
-            }
-        }
+    for message in &request.messages {
         append_input(&mut input, message, &request.model, account, allow_replay);
     }
     let mut body = json!({
@@ -116,7 +110,6 @@ pub(super) fn replay_scopes(request: &Request, account: &str) -> Vec<String> {
     request
         .messages
         .iter()
-        .chain(&request.replay_history)
         .filter_map(|message| match message {
             Message::Assistant {
                 replay: Some(replay),
@@ -130,13 +123,9 @@ pub(super) fn replay_scopes(request: &Request, account: &str) -> Vec<String> {
 }
 
 pub(super) fn has_replay(request: &Request, account: &str) -> bool {
-    request
-        .messages
-        .iter()
-        .chain(&request.replay_history)
-        .any(|message| {
-            matches!(message, Message::Assistant { replay:Some(replay), .. } if replay.belongs_to(&request.model, account))
-        })
+    request.messages.iter().any(|message| {
+        matches!(message, Message::Assistant { replay:Some(replay), .. } if replay.belongs_to(&request.model, account))
+    })
 }
 
 fn text_message(role: &str, text: &str) -> Value {

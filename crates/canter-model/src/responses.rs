@@ -359,7 +359,6 @@ mod tests {
         let request = Request {
             session_id: Some("test-session".into()),
             model: "test-model".into(),
-            replay_history: Vec::new(),
             messages: vec![
                 Message::System {
                     text: prompt.into(),

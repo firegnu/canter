@@ -558,7 +558,6 @@ pub(crate) fn request(
         session_id: Some(state.journal.snapshot.id.clone()),
         model: state.journal.snapshot.settings.model.clone(),
         messages: state.prefix.iter().chain(&state.history).cloned().collect(),
-        replay_history: Vec::new(),
         tools: state.tool_definitions.clone(),
         options: RequestOptions {
             max_retries: None,

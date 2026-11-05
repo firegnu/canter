@@ -138,9 +138,6 @@ pub struct Request {
     pub session_id: Option<String>,
     pub model: String,
     pub messages: Vec<Message>,
-    /// Native history used only by Responses transcript compaction.
-    #[serde(skip)]
-    pub replay_history: Vec<Message>,
     pub tools: Vec<ToolDefinition>,
     pub options: RequestOptions,
 }

@@ -128,7 +128,7 @@ async fn prefix_compaction_replays_native_history_then_drops_it() {
 }
 
 #[tokio::test]
-async fn transcript_compaction_also_replays_native_history() {
+async fn transcript_compaction_uses_only_portable_text() {
     let ciphertext = "private-transcript-ciphertext";
     let mut output = vec![
         json!({"type":"reasoning","id":"reasoning-replay","summary":[],"encrypted_content":ciphertext}),
@@ -148,8 +148,11 @@ async fn transcript_compaction_also_replays_native_history() {
     session.input(input()).await.unwrap();
     inference.next().await;
     let (compaction, _) = inference.next().await;
-    assert!(compaction.to_string().contains(ciphertext));
+    assert!(!compaction.to_string().contains(ciphertext));
     assert!(compaction.to_string().contains("<transcript>"));
+    assert!(compaction["input"].as_array().unwrap().iter().all(|item| {
+        item.get("role").is_some() && item["type"] != "reasoning" && item["type"] != "function_call"
+    }));
     let (after, _) = inference.next().await;
     assert!(!after.to_string().contains(ciphertext));
     let seen = finished(&mut events).await;

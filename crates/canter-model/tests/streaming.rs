@@ -456,7 +456,6 @@ async fn streams_content_tools_and_usage_and_replays_reasoning() {
     let request = Request {
         session_id: None,
         model: "caller-model".into(),
-        replay_history: Vec::new(),
         messages: vec![
             Message::System {
                 text: "Be helpful.".into(),
@@ -875,7 +874,6 @@ async fn responses_replay_metadata_never_changes_chat_completions_bytes() {
         .collect()
         .await;
     assert!(events.iter().all(Result::is_ok));
-    request.replay_history = request.messages.clone();
     request.messages.push(Message::User {
         text: "Summary request".into(),
     });
@@ -884,12 +882,8 @@ async fn responses_replay_metadata_never_changes_chat_completions_bytes() {
         .collect()
         .await;
     assert!(events.iter().all(Result::is_ok));
-    let without_metadata = Request {
-        replay_history: Vec::new(),
-        ..request
-    };
     let events: Vec<_> = client
-        .stream(without_metadata, CancellationToken::new())
+        .stream(request, CancellationToken::new())
         .collect()
         .await;
     assert!(events.iter().all(Result::is_ok));

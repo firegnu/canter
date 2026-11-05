@@ -86,11 +86,7 @@ pub(crate) async fn stream<'a>(
     {
         let state = shared.state.lock().await;
         if !state.rejected_replays.is_empty() {
-            for message in request
-                .messages
-                .iter_mut()
-                .chain(&mut request.replay_history)
-            {
+            for message in &mut request.messages {
                 if let canter_model::Message::Assistant { replay, .. } = message
                     && replay.as_ref().is_some_and(|replay| {
                         replay
