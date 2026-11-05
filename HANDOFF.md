@@ -4,6 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
+- 11-05 用户同意，删了 `~/.canter` 根目录 51 个 11-01 以前手动留的旧程序（`canter-<提交号>`，1.5G）。下面写 `cp -p ~/.canter/canter-<提交号>` 的老退回办法都用不了了；现在只能 `canter rollback` 退到 `~/.canter/backups/` 里留着的几版。
+
 - 11-03 装 main `16fb98c`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 16fb98c`，服务端 pid 86706；11-02 第六十一次之后今天还装过 `467547e`、`55806f6`、`79e4572`、`327dd4c`，HANDOFF 没逐次记，备份都在 `~/.canter/backups/`。比 `55806f6` 多 P2-190 钩子用会话环境、P2-191 `--session-file` 和只看订阅、P2-192 `--close-on-exit`、P2-194 干活那一行醒目和每轮用时 / token、P2-195 卡片按类型上色）。用户试用：「看起来感官不错」。配置没改，仍是 opencode go。
 - 退回上一版 `327dd4c`：`canter rollback`。存盘格式没变。
 - 11-02 第六十一次装 main `c5b7faf`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · c5b7faf`，服务端 pid 2209；比上一版多 P2-102：每轮结束后输入框灰字建议下一句，Tab / → 放进输入框，Enter 才发；空会话给 git 示例，受限模式不给；`config.json` 的 `prompt_suggestions` 默认开，用户配置里没写）。配置没改，仍是 opencode go。
