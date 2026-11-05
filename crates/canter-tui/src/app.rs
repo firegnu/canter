@@ -952,7 +952,7 @@ impl App {
             crate::statusline::percent(input, used).and_then(|n| u64::try_from(n).ok())
         };
         let cost = usage.and_then(|usage| usage.cost.as_ref());
-        serde_json::json!({
+        let mut input = serde_json::json!({
             "version": self.welcome,
             "sessionId": self.snapshot.id,
             "sessionName": settings.name,
@@ -984,7 +984,11 @@ impl App {
             "gitDiff": self.git_diff_lines().map(|(added, removed)| {
                 serde_json::json!({"added": added, "removed": removed})
             }),
-        })
+        });
+        if cost.is_some_and(|cost| cost.chatgpt_plan) {
+            input["chatgptPlan"] = serde_json::Value::Bool(true);
+        }
+        input
     }
 
     /// `home` shortens paths in the info rows to `~`.
@@ -6185,12 +6189,21 @@ impl App {
             bar::Item::Cost => usage
                 .and_then(|usage| usage.cost.as_ref())
                 .and_then(|cost| {
+                    let metered = format!(
+                        "{}{}",
+                        crate::usage::dollars(cost.usd),
+                        if cost.unknown { "+?" } else { "" }
+                    );
                     coloured(
-                        format!(
-                            "{}{}",
-                            crate::usage::dollars(cost.usd),
-                            if cost.unknown { "+?" } else { "" }
-                        ),
+                        if cost.chatgpt_plan {
+                            if metered == "$0.00" {
+                                "ChatGPT plan".into()
+                            } else {
+                                format!("{metered} + ChatGPT plan")
+                            }
+                        } else {
+                            metered
+                        },
                         BarItem::Cost,
                     )
                 }),

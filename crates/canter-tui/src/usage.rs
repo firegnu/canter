@@ -13,7 +13,7 @@ pub(crate) fn dollars(usd: f64) -> String {
 }
 
 pub(crate) fn cost(value: &UsageCost) -> String {
-    if value.unknown && value.usd == 0.0 {
+    let metered = if value.unknown && value.usd == 0.0 {
         "unknown".into()
     } else {
         format!(
@@ -21,8 +21,19 @@ pub(crate) fn cost(value: &UsageCost) -> String {
             dollars(value.usd),
             if value.unknown { "+?" } else { "" }
         )
+    };
+    if value.chatgpt_plan {
+        if metered == "$0.00" {
+            "ChatGPT plan".into()
+        } else {
+            format!("{metered} + ChatGPT plan")
+        }
+    } else {
+        metered
     }
 }
+
+pub(crate) const PLAN_USAGE: &str = "ChatGPT plan usage: https://chatgpt.com/settings/usage";
 
 /// The table and the last turn's cost, token counts in full, for the CLI.
 pub fn format_report(report: &UsageResponse) -> Vec<String> {
@@ -93,6 +104,9 @@ fn table(report: &UsageResponse, count: impl Fn(u64) -> String) -> Vec<String> {
             count(row.output_tokens),
             cost(&row.cost)
         ));
+    }
+    if report.total.cost.chatgpt_plan {
+        lines.push(PLAN_USAGE.into());
     }
     lines
 }

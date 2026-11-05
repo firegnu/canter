@@ -9,6 +9,7 @@ fn report() -> StatsResponse {
         cost: UsageCost {
             usd: 0.25,
             unknown: false,
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -83,5 +84,55 @@ fn stats_preserve_unknown_values_child_parent_line_and_ordinary_output() {
         assert!(!output.contains("Sub-agents"));
         assert!(!output.contains("Usage (with sub-agents)"));
         assert!(output.contains("Cache hit"));
+    }
+}
+
+#[test]
+fn stats_show_plan_rows_totals_subagents_and_usage_link_in_text_and_html() {
+    let mut without_children = report();
+    without_children.sub_agents.clear();
+    without_children.overview.usage_with_sub_agents = None;
+    let plan = UsageRow {
+        model: Some("subscription/gpt".into()),
+        cost: UsageCost {
+            usd: 0.0,
+            unknown: false,
+            chatgpt_plan: true,
+        },
+        ..Default::default()
+    };
+    without_children.overview.usage = Some(UsageResponse {
+        data: vec![plan.clone()],
+        total: plan.clone(),
+        ..Default::default()
+    });
+    for output in [
+        format_report(&without_children),
+        html_report(&without_children),
+    ] {
+        assert!(output.contains("ChatGPT plan"));
+        assert!(output.contains("ChatGPT plan usage: https://chatgpt.com/settings/usage"));
+        assert!(!output.contains("$0.00"));
+    }
+
+    let mut with_children = report();
+    with_children.sub_agents[0].usage = Some(plan.clone());
+    with_children.overview.usage_with_sub_agents = Some(UsageRow {
+        cached_input_tokens: 70,
+        uncached_input_tokens: 30,
+        output_tokens: 20,
+        cost: UsageCost {
+            usd: 0.25,
+            unknown: false,
+            chatgpt_plan: true,
+        },
+        ..Default::default()
+    });
+    for output in [format_report(&with_children), html_report(&with_children)] {
+        assert!(output.contains(
+            "Usage (with sub-agents): in 100 (cached 70) · out 20 · $0.25 + ChatGPT plan"
+        ));
+        assert!(output.contains("ChatGPT plan usage: https://chatgpt.com/settings/usage"));
+        assert_eq!(output.matches("ChatGPT plan usage:").count(), 1);
     }
 }

@@ -439,3 +439,47 @@ fn model_catalog_fields_are_optional_and_ignored_by_legacy_clients() {
         serde_json::from_value(json!({"data":[],"nextCursor":null})).unwrap();
     assert_eq!(old.catalogs, None);
 }
+
+#[test]
+fn plan_billing_fields_are_optional_and_legacy_readers_keep_dollar_semantics() {
+    #[derive(serde::Deserialize)]
+    struct LegacyCost {
+        usd: f64,
+        unknown: bool,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct LegacyCharge {
+        cost_usd: Option<f64>,
+    }
+
+    let charge = canter_protocol::RequestCharge {
+        request_id: None,
+        model: "subscription/gpt".into(),
+        started_at: 1,
+        cost_usd: None,
+        billing_kind: Some(canter_protocol::BillingKind::ChatgptPlan),
+    };
+    let value = serde_json::to_value(&charge).unwrap();
+    assert_eq!(value["billingKind"], "chatgptPlan");
+    let legacy: LegacyCharge = serde_json::from_value(value).unwrap();
+    assert_eq!(legacy.cost_usd, None);
+
+    let old = json!({"model":"chatgpt/gpt","startedAt":1,"costUsd":null});
+    let charge: canter_protocol::RequestCharge = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(charge.billing_kind, None);
+    assert_eq!(serde_json::to_value(charge).unwrap(), old);
+
+    let cost = canter_protocol::UsageCost {
+        usd: 0.0,
+        unknown: false,
+        chatgpt_plan: true,
+    };
+    let legacy: LegacyCost = serde_json::from_value(serde_json::to_value(cost).unwrap()).unwrap();
+    assert_eq!(legacy.usd, 0.0);
+    assert!(!legacy.unknown);
+    let old = json!({"usd":0.12,"unknown":true});
+    let cost: canter_protocol::UsageCost = serde_json::from_value(old.clone()).unwrap();
+    assert!(!cost.chatgpt_plan);
+    assert_eq!(serde_json::to_value(cost).unwrap(), old);
+}

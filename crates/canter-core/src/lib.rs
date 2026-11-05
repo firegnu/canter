@@ -152,6 +152,8 @@ pub struct CoreOptions {
     pub model_limits: std::collections::BTreeMap<String, ModelLimits>,
     pub model_reasoning: BTreeMap<String, ModelReasoning>,
     pub prices: usage::PriceBook,
+    /// Providers whose configured auth charges requests to the ChatGPT plan.
+    pub chatgpt_plan_providers: std::collections::BTreeSet<String>,
     /// Clock at the model-request boundary; replaceable for deterministic replay tests.
     pub request_time: fn() -> i64,
     /// Total time for one web_fetch (30 seconds); replaceable so tests need not wait.
@@ -183,6 +185,7 @@ impl Default for CoreOptions {
             model_limits: Default::default(),
             model_reasoning: Default::default(),
             prices: usage::builtin_prices(),
+            chatgpt_plan_providers: Default::default(),
             request_time: journal::now,
             web_fetch_timeout: std::time::Duration::from_secs(30),
             web_search: None,

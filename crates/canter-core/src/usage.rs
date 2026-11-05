@@ -83,20 +83,41 @@ pub fn request_charge(
     started_at: i64,
     tokens: &TokenUsageBreakdown,
 ) -> RequestCharge {
+    request_charge_with_billing(prices, model, started_at, tokens, BillingKind::TokenMetered)
+}
+
+pub fn request_charge_with_billing(
+    prices: &PriceBook,
+    model: &str,
+    started_at: i64,
+    tokens: &TokenUsageBreakdown,
+    billing_kind: BillingKind,
+) -> RequestCharge {
     RequestCharge {
         request_id: None,
         model: model.into(),
         started_at,
-        cost_usd: prices
-            .get(model)
-            .map(|price| price.charge(started_at, tokens)),
+        cost_usd: (billing_kind != BillingKind::ChatgptPlan)
+            .then(|| {
+                prices
+                    .get(model)
+                    .map(|price| price.charge(started_at, tokens))
+            })
+            .flatten(),
+        billing_kind: Some(billing_kind),
     }
 }
 
 pub fn cost(charge: &RequestCharge) -> UsageCost {
+    let chatgpt_plan = charge.billing_kind == Some(BillingKind::ChatgptPlan);
     UsageCost {
-        usd: charge.cost_usd.unwrap_or(0.0),
-        unknown: charge.cost_usd.is_none(),
+        usd: if chatgpt_plan {
+            0.0
+        } else {
+            charge.cost_usd.unwrap_or(0.0)
+        },
+        unknown: !chatgpt_plan && charge.cost_usd.is_none(),
+        chatgpt_plan,
     }
 }
 

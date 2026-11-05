@@ -833,8 +833,23 @@ pub(crate) async fn record_usage(
             .as_ref()
             .map_or(0, |usage| usage.context_tokens)
     };
-    let mut request =
-        crate::usage::request_charge(&shared.runtime().options.prices, model, started_at, &last);
+    let runtime = shared.runtime();
+    let options = &runtime.options;
+    let billing_kind = if model
+        .split_once('/')
+        .is_some_and(|(provider, _)| options.chatgpt_plan_providers.contains(provider))
+    {
+        BillingKind::ChatgptPlan
+    } else {
+        BillingKind::TokenMetered
+    };
+    let mut request = crate::usage::request_charge_with_billing(
+        &options.prices,
+        model,
+        started_at,
+        &last,
+        billing_kind,
+    );
     request.request_id = request_id.map(Into::into);
     let charge = crate::usage::cost(&request);
     let mut cost = state

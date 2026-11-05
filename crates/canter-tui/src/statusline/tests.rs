@@ -687,3 +687,33 @@ async fn config_command_gets_the_sandbox_switch_the_server_reports() {
         );
     }
 }
+
+#[tokio::test]
+async fn config_command_adds_an_optional_plan_marker_without_changing_cost() {
+    let mut screen = Screen::new("cat > input.json\nprintf configured");
+    let home = screen.root.path().to_str().unwrap().to_owned();
+    let env = BTreeMap::from([
+        ("HOME".into(), home.clone()),
+        ("CANTER_HOME".into(), home.clone()),
+    ]);
+    fs::write(
+        screen.root.path().join("config.json"),
+        json!({"statusLine":"sh ./status.sh"}).to_string(),
+    )
+    .unwrap();
+    let mut snapshot = screen.ui.app().snapshot().clone();
+    snapshot.token_usage = Some(serde_json::from_value::<TokenUsage>(json!({
+        "contextTokens":100,"modelContextWindow":200000,
+        "total":{"inputTokens":100,"cachedInputTokens":90,"outputTokens":10,"reasoningOutputTokens":0,"totalTokens":110},
+        "last":{"inputTokens":100,"cachedInputTokens":90,"outputTokens":10,"reasoningOutputTokens":0,"totalTokens":110},
+        "cost":{"usd":0.12,"unknown":true,"chatgptPlan":true}
+    }))
+    .unwrap());
+    *screen.ui.app_mut() =
+        App::new(snapshot, Some(home.clone()), 0).with_status_line(super::load(&env), env);
+    assert_eq!(screen.wait_for("configured").await, ["configured", ""]);
+    let input = fs::read_to_string(screen.root.path().join("input.json")).unwrap();
+    let input: Value = serde_json::from_str(&input).unwrap();
+    assert_eq!(input["chatgptPlan"], true);
+    assert_eq!(input["cost"], json!({"usd":0.12,"unknown":true}));
+}

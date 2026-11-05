@@ -1055,7 +1055,7 @@ pub enum ApprovalResolution {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
-    /// Absent in old events; present with a null cost for an unpriced request.
+    /// Absent in old events; costUsd is null for unpriced or ChatGPT plan requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub request: Option<RequestCharge>,
@@ -1085,6 +1085,15 @@ impl TokenUsage {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum BillingKind {
+    TokenMetered,
+    ChatgptPlan,
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestCharge {
@@ -1095,18 +1104,27 @@ pub struct RequestCharge {
     #[ts(type = "number")]
     pub started_at: i64,
     pub cost_usd: Option<f64>,
+    /// Absent in old records, which retain their costUsd semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub billing_kind: Option<BillingKind>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageCost {
     pub usd: f64,
     pub unknown: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
+    pub chatgpt_plan: bool,
 }
 
 impl UsageCost {
     pub fn add(&mut self, other: &Self) {
         self.usd += other.usd;
         self.unknown |= other.unknown;
+        self.chatgpt_plan |= other.chatgpt_plan;
     }
 }
 

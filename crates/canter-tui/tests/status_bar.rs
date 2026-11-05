@@ -735,3 +735,26 @@ fn a_long_directory_on_the_first_row_is_shortened_the_same_way() {
         ]
     );
 }
+
+#[test]
+fn session_cost_distinguishes_plan_only_mixed_and_mixed_unknown() {
+    let (home, dir) = repo();
+    let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
+    for (usd, unknown, expected) in [
+        (0.0, false, "ChatGPT plan"),
+        (0.12, false, "$0.12 + ChatGPT plan"),
+        (0.12, true, "$0.12+? + ChatGPT plan"),
+        (0.0, true, "$0.00+? + ChatGPT plan"),
+    ] {
+        let counts = json!({"inputTokens":100,"cachedInputTokens":90,"outputTokens":10,
+            "reasoningOutputTokens":0,"totalTokens":110});
+        screen.event(json!({"type":"session.usage","tokenUsage":{
+            "total":counts,"last":counts,"contextTokens":110,"modelContextWindow":1000000,
+            "cost":{"usd":usd,"unknown":unknown,"chatgptPlan":true}}}));
+        assert!(
+            screen.bar()[0].ends_with(expected),
+            "{} did not end with {expected}",
+            screen.bar()[0]
+        );
+    }
+}
