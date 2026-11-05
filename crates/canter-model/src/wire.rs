@@ -5,10 +5,18 @@ use std::collections::HashSet;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{AssistantContent, Message, Request, ToolCall, Usage, UserContent};
+use crate::{AssistantContent, Message, Replay, Request, ToolCall, Usage, UserContent};
 
 pub(crate) fn request_body(request: &Request) -> Value {
-    let messages = normalize_tool_pairs(request.messages.iter().filter_map(message).collect());
+    let patches_as_text = !request.custom_tools.contains_key("apply_patch");
+    let messages = normalize_tool_pairs(
+        crate::history::messages_with_patch_outputs(request)
+            .filter_map(|(entry, historical_output)| {
+                message(entry, patches_as_text, historical_output)
+                    .map(|message| (message, historical_output))
+            })
+            .collect(),
+    );
     let mut body = json!({
         "model": request.model, "messages": messages,
         "stream": true, "stream_options": {"include_usage": true}
@@ -34,10 +42,10 @@ pub(crate) fn request_body(request: &Request) -> Value {
     body
 }
 
-fn normalize_tool_pairs(messages: Vec<Value>) -> Vec<Value> {
+fn normalize_tool_pairs(messages: Vec<(Value, bool)>) -> Vec<Value> {
     let mut messages = messages.into_iter().peekable();
     let mut normalized = Vec::new();
-    while let Some(message) = messages.next() {
+    while let Some((message, _)) = messages.next() {
         if message["role"] == "tool" {
             continue;
         }
@@ -52,7 +60,14 @@ fn normalize_tool_pairs(messages: Vec<Value>) -> Vec<Value> {
         normalized.push(message);
         // Tool results must immediately follow their assistant's call batch.
         // Unknown messages were already skipped; keep only matching results.
-        while let Some(result) = messages.next_if(|message| message["role"] == "tool") {
+        let mut historical_outputs = Vec::new();
+        while let Some((result, historical_output)) = messages
+            .next_if(|(message, historical_output)| message["role"] == "tool" || *historical_output)
+        {
+            if historical_output {
+                historical_outputs.push(result);
+                continue;
+            }
             if result["tool_call_id"]
                 .as_str()
                 .is_some_and(|id| missing.remove(id))
@@ -68,11 +83,13 @@ fn normalize_tool_pairs(messages: Vec<Value>) -> Vec<Value> {
                 }));
             }
         }
+        // A text record cannot interrupt the remaining function call/result batch.
+        normalized.extend(historical_outputs);
     }
     normalized
 }
 
-fn message(message: &Message) -> Option<Value> {
+fn message(message: &Message, patches_as_text: bool, historical_output: bool) -> Option<Value> {
     Some(match message {
         Message::System { text } => json!({"role": "system", "content": text}),
         Message::User { text } => json!({"role": "user", "content": text}),
@@ -82,10 +99,13 @@ fn message(message: &Message) -> Option<Value> {
             UserContent::Image { data_url, .. } => json!({"type": "image_url", "image_url": {"url": data_url}}),
         }).collect::<Vec<_>>()})
         }
+        Message::ToolResult { tool_call_id, text } if historical_output => {
+            json!({"role":"user", "content":crate::history::patch_output_text(tool_call_id, text)})
+        }
         Message::ToolResult { tool_call_id, text } => {
             json!({"role": "tool", "tool_call_id": tool_call_id, "content": text})
         }
-        Message::Assistant { content, .. } => {
+        Message::Assistant { content, replay } => {
             let mut text = String::new();
             let mut reasoning = None::<String>;
             let mut tools = Vec::new();
@@ -98,11 +118,18 @@ fn message(message: &Message) -> Option<Value> {
             for part in content {
                 match part {
                     AssistantContent::Text { text: delta } => text.push_str(delta),
-                    AssistantContent::Reasoning { text } => {
+                    AssistantContent::Reasoning { text }
+                        if !matches!(replay, Some(Replay::Responses { .. })) =>
+                    {
                         reasoning.get_or_insert_default().push_str(text)
                     }
+                    AssistantContent::ToolCall(call)
+                        if patches_as_text && call.name == "apply_patch" =>
+                    {
+                        text.push_str(&crate::history::patch_call_text(call));
+                    }
                     AssistantContent::ToolCall(call) => tools.push(tool_call(call)),
-                    AssistantContent::Unknown => {}
+                    AssistantContent::Reasoning { .. } | AssistantContent::Unknown => {}
                 }
             }
             let mut message = json!({"role": "assistant", "content": text});

@@ -1,8 +1,6 @@
 use super::*;
 
-#[allow(dead_code)] // Shared fake server also records request timing for retry tests.
-#[path = "../../canter-model/tests/support/mod.rs"]
-mod model_server;
+use crate::model_test_server as model_server;
 
 pub(super) async fn harness(hold_child: bool) -> (Harness, model_server::Server) {
     let replies = (0..8).map(|index| {

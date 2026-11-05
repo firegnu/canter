@@ -13,8 +13,24 @@ pub(super) fn namespace(name: &str) -> &'static str {
 /// SIWC accepts a smaller contract than the general Responses API.
 pub(super) fn request_body(request: &Request, account: &str, allow_replay: bool) -> Value {
     let mut input = Vec::new();
-    for message in &request.messages {
-        append_input(&mut input, message, request, account, allow_replay);
+    let mut replaying_batch = false;
+    for (message, historical_output) in crate::history::messages_with_patch_outputs(request) {
+        if let Message::Assistant { replay, .. } = message {
+            replaying_batch = allow_replay
+                && replay
+                    .as_ref()
+                    .is_some_and(|replay| replay.belongs_to(&request.model, account));
+        }
+        // Keep P2-210's native replay and its results together, even when an
+        // auxiliary/read-only request has no current patch tool definition.
+        append_input(
+            &mut input,
+            message,
+            request,
+            account,
+            allow_replay,
+            historical_output && !replaying_batch,
+        );
     }
     let mut body = json!({
         "model":request.model, "input":input, "store":false, "stream":true,
@@ -67,6 +83,7 @@ fn append_input(
     request: &Request,
     account: &str,
     allow_replay: bool,
+    historical_output: bool,
 ) {
     match message {
         Message::System { text } => input.push(text_message("developer", text)),
@@ -93,6 +110,15 @@ fn append_input(
                         "content":[{"type":"output_text","text":text}],
                     })),
                     AssistantContent::ToolCall(call)
+                        if call.name == "apply_patch"
+                            && !request.custom_tools.contains_key("apply_patch") =>
+                    {
+                        input.push(json!({
+                            "type":"message", "role":"assistant",
+                            "content":[{"type":"output_text","text":crate::history::patch_call_text(call)}],
+                        }));
+                    }
+                    AssistantContent::ToolCall(call)
                         if request.custom_tools.contains_key(&call.name) =>
                     {
                         input.push(json!({
@@ -109,6 +135,12 @@ fn append_input(
                     AssistantContent::Reasoning { .. } | AssistantContent::Unknown => {}
                 }
             }
+        }
+        Message::ToolResult { tool_call_id, text } if historical_output => {
+            input.push(text_message(
+                "user",
+                &crate::history::patch_output_text(tool_call_id, text),
+            ));
         }
         Message::ToolResult { tool_call_id, text } => {
             let custom = request.messages.iter().any(|message| {

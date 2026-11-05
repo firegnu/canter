@@ -94,7 +94,7 @@ pub(crate) async fn stream<'a>(
                             .is_some_and(|scope| state.rejected_replays.contains(scope))
                     })
                 {
-                    *replay = None;
+                    crate::context::discard_replay(message);
                 }
             }
         }

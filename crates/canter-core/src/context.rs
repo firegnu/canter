@@ -310,7 +310,7 @@ pub(crate) fn restore(
                     .is_some_and(|scope| rejected_replays.contains(scope))
             })
         {
-            *replay = None;
+            discard_replay(message);
         }
     }
     Restored {
@@ -328,6 +328,17 @@ pub(crate) fn restore(
         summary_index,
         plan_mode_notices,
         tool_images,
+    }
+}
+
+/// Drop rejected output only from the request view. Remove the summary while
+/// its origin is still known, so a later Chat Completions turn cannot reuse it.
+pub(crate) fn discard_replay(message: &mut Message) {
+    if let Message::Assistant { content, replay } = message {
+        if matches!(replay, Some(canter_model::Replay::Responses { .. })) {
+            content.retain(|part| !matches!(part, AssistantContent::Reasoning { .. }));
+        }
+        *replay = None;
     }
 }
 

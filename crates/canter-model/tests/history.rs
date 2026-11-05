@@ -1,6 +1,33 @@
 use canter_model::{AssistantContent, Message, ToolCall};
 
 #[test]
+fn source_only_marker_uses_existing_history_format_and_never_matches_an_account() {
+    // This fixture uses only fields already readable before P2-207 (and omits
+    // account, as P2-204 records did). Also run this test against the base commit.
+    let value = serde_json::json!({
+        "type":"assistant","content":[
+            {"type":"reasoning","text":"Partial summary"},
+            {"type":"text","text":"Partial answer"}
+        ],
+        "replay":{"api":"responses","model":"test-model","scope":"turn-1","output":[]}
+    });
+    let message: Message = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&message).unwrap(), value);
+    let Message::Assistant {
+        replay: Some(replay),
+        ..
+    } = message
+    else {
+        panic!("missing origin")
+    };
+    for model in ["test-model", "other-model", ""] {
+        for account in ["test-account-fingerprint", "other-account", ""] {
+            assert!(!replay.belongs_to(model, account));
+        }
+    }
+}
+
+#[test]
 fn private_responses_output_roundtrips_without_debug_disclosure() {
     let value = serde_json::json!({
         "type":"assistant","content":[{"type":"text","text":"Checking"}],
