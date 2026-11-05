@@ -1784,7 +1784,8 @@ impl Session {
             settings.model = model;
         }
         let model_changed = settings.model != state.journal.snapshot.settings.model;
-        let reasoning = self.shared.next_options().reasoning(&settings.model);
+        let next_options = self.shared.next_options();
+        let reasoning = next_options.reasoning(&settings.model);
         let effort_notice = if let Some(effort) = params.reasoning_effort {
             reasoning.validate(&settings.model, effort)?;
             settings.reasoning_effort = effort;
@@ -1828,6 +1829,7 @@ impl Session {
         if model_changed {
             state.suggestions.cancel();
             let mut runtime = (*self.shared.runtime()).clone();
+            runtime.options = next_options;
             runtime.limits = runtime
                 .options
                 .limits(&state.journal.snapshot.settings.model);

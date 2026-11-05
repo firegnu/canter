@@ -19,7 +19,7 @@ mod tests;
 const REFRESH_AFTER: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_CONTEXT_WINDOW: u64 = 128_000;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CatalogModel {
     slug: String,
@@ -124,10 +124,29 @@ impl CachedCatalog {
     }
 }
 
+#[cfg(test)]
+#[derive(Default)]
+struct Pause {
+    armed: std::sync::atomic::AtomicBool,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+impl Pause {
+    async fn wait(&self) {
+        if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+    }
+}
+
 #[derive(Default)]
 struct State {
     account: Option<String>,
     generation: u64,
+    revision: u64,
     models: Vec<CatalogModel>,
     known: BTreeMap<String, CatalogModel>,
     caches: BTreeMap<String, CachedCatalog>,
@@ -141,6 +160,9 @@ pub(crate) struct ModelCatalog {
     endpoint: reqwest::Url,
     client: reqwest::Client,
     state: RwLock<State>,
+    activation: tokio::sync::Mutex<()>,
+    #[cfg(test)]
+    pause_after_activate: Pause,
 }
 
 impl ModelCatalog {
@@ -167,6 +189,9 @@ impl ModelCatalog {
             endpoint,
             client,
             state: RwLock::new(state),
+            activation: Default::default(),
+            #[cfg(test)]
+            pause_after_activate: Pause::default(),
         })
     }
 
@@ -185,6 +210,7 @@ impl ModelCatalog {
             state.caches.remove(account);
             if state.account.as_deref() == Some(account) {
                 state.generation = state.generation.wrapping_add(1);
+                state.revision = state.revision.wrapping_add(1);
                 state.account = None;
                 state.models.clear();
                 state.fetched_at = None;
@@ -206,12 +232,23 @@ impl ModelCatalog {
         &self,
         provider: Option<&str>,
         models: Vec<String>,
-        mut options: CoreOptions,
+        options: CoreOptions,
     ) -> (Vec<String>, CoreOptions) {
-        let Some(provider) = provider else {
-            return (models, options);
-        };
+        let (models, options, _) = self.apply_versioned(provider, models, options);
+        (models, options)
+    }
+
+    pub fn apply_versioned(
+        &self,
+        provider: Option<&str>,
+        models: Vec<String>,
+        mut options: CoreOptions,
+    ) -> (Vec<String>, CoreOptions, u64) {
         let state = self.state.read().unwrap();
+        let revision = state.revision;
+        let Some(provider) = provider else {
+            return (models, options, revision);
+        };
         let prefix = format!("{provider}/");
         let (configured, mut models): (Vec<_>, Vec<_>) = models
             .into_iter()
@@ -254,7 +291,7 @@ impl ModelCatalog {
                 options.image_models.push(id);
             }
         }
-        (models, options)
+        (models, options, revision)
     }
 
     pub fn details(&self, id: &str) -> Option<(String, Vec<String>)> {
@@ -279,11 +316,18 @@ impl ModelCatalog {
     fn spawn_refresh(self: &Arc<Self>, auth: ChatgptAuth, force: bool) {
         let catalog = self.clone();
         tokio::spawn(async move {
-            let Some(account) = catalog.activate(&auth).await else {
+            let Some((account, activation_generation)) = catalog.activate(&auth).await else {
                 return;
             };
+            #[cfg(test)]
+            catalog.pause_after_activate.wait().await;
             let generation = {
                 let mut state = catalog.state.write().unwrap();
+                if state.generation != activation_generation
+                    || state.account.as_deref() != Some(&account)
+                {
+                    return;
+                }
                 if state.refreshing {
                     return;
                 }
@@ -299,6 +343,9 @@ impl ModelCatalog {
             let result = catalog.fetch(&auth, &account).await;
             let mut state = catalog.state.write().unwrap();
             if state.generation != generation || state.account.as_deref() != Some(&account) {
+                if state.generation == generation {
+                    state.refreshing = false;
+                }
                 return;
             }
             state.refreshing = false;
@@ -309,6 +356,15 @@ impl ModelCatalog {
                     if save_cache(&cache_dir(&catalog.home), &account, &cache).is_err() {
                         state.refresh_failed = true;
                         return;
+                    }
+                    let changed = state.models != cache.models
+                        || cache
+                            .models
+                            .iter()
+                            .chain(&cache.known_models)
+                            .any(|model| state.known.get(&model.slug) != Some(model));
+                    if changed {
+                        state.revision = state.revision.wrapping_add(1);
                     }
                     for model in cache.models.iter().chain(&cache.known_models) {
                         state.known.insert(model.slug.clone(), model.clone());
@@ -323,7 +379,8 @@ impl ModelCatalog {
         });
     }
 
-    async fn activate(&self, auth: &ChatgptAuth) -> Option<String> {
+    async fn activate(&self, auth: &ChatgptAuth) -> Option<(String, u64)> {
+        let _activation = self.activation.lock().await;
         let current = auth.current_record().await;
         let account = match current {
             Some(account)
@@ -337,9 +394,10 @@ impl ModelCatalog {
         };
         let mut state = self.state.write().unwrap();
         if state.account == account {
-            return account;
+            return account.map(|account| (account, state.generation));
         }
         state.generation = state.generation.wrapping_add(1);
+        state.revision = state.revision.wrapping_add(1);
         state.account = account.clone();
         state.models.clear();
         state.fetched_at = None;
@@ -353,7 +411,7 @@ impl ModelCatalog {
             state.models = cache.models;
             state.fetched_at = Some(cache.fetched_at);
         }
-        account
+        account.map(|account| (account, state.generation))
     }
 
     async fn fetch(&self, auth: &ChatgptAuth, account: &str) -> Result<Vec<CatalogModel>, ()> {

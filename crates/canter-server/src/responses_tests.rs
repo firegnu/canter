@@ -4,7 +4,7 @@ use crate::{
     config::Config,
     model_auth::ModelAuth,
 };
-use canter_core::{RuntimeContext, Session};
+use canter_core::{ConfigurationSource, RuntimeContext, Session};
 use canter_model::{ModelContext, ModelEvent, Request};
 use canter_protocol::*;
 use futures_util::StreamExt;
@@ -710,5 +710,65 @@ async fn unverified_catalog_model_uses_medium_and_retired_model_restores_with_la
     );
     finished(&mut events).await;
     session.close().await.unwrap();
+    fake.stop().await;
+}
+
+#[tokio::test]
+async fn catalog_arrival_revises_an_already_open_session_before_model_switch() {
+    let root = tempfile::tempdir_in("/tmp").unwrap();
+    let home = root.path().join("state");
+    let fake = Fake::new().await;
+    let (auth, _) = login(&home, &fake, true).await;
+    let inference = Inference::with_catalog(Vec::new(), json!({"models":[]})).await;
+    let source = ModelAuth::for_test(home.clone(), auth.clone(), inference.endpoint.clone());
+    let config = config(&home);
+    let model = config.model_client(Some(source.clone())).unwrap();
+    let stop = CancellationToken::new();
+    let reload = crate::reload::LiveConfig::connect(
+        home.clone(),
+        config.clone(),
+        model.clone(),
+        canter_tools::lsp::LspService::new(Default::default()).unwrap(),
+        stop,
+        source.clone(),
+    )
+    .await;
+    let configuration = reload.snapshot();
+    let store = Arc::new(canter_store::Store::new(home.join("sessions")).unwrap());
+    let settings: SessionSettings = serde_json::from_value(json!({
+        "cwd":root.path(),"model":"chatgpt/test-model","approvalPolicy":"allowAll",
+        "reasoningEffort":"high"
+    }))
+    .unwrap();
+    let (session, _) = Session::create(
+        store,
+        "catalog-revision".into(),
+        settings,
+        RuntimeContext::default(),
+        model,
+        configuration.options.clone(),
+    )
+    .await
+    .unwrap();
+    session.set_configuration_source(reload.clone(), configuration.revision);
+
+    *inference.catalog.lock().unwrap() = json!({"models":[{
+        "slug":"late","display_name":"Late","visibility":"list"
+    }]});
+    source.catalog().account_changed(auth).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !reload.metadata().1.contains(&"chatgpt/late".into()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    session
+        .update(serde_json::from_value(json!({"model":"chatgpt/late"})).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(session.context().await.model_context_window, 128000);
+    session.close().await.unwrap();
+    reload.shutdown().await;
     fake.stop().await;
 }

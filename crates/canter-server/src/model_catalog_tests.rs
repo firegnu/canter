@@ -236,7 +236,10 @@ async fn parsing_precedence_defaults_cache_and_restart() {
     );
     drop(catalog);
     let restarted = ModelCatalog::new(home.clone(), Some(server.endpoint.clone()));
-    assert_eq!(restarted.activate(&auth).await, Some(account));
+    assert_eq!(
+        restarted.activate(&auth).await.map(|(account, _)| account),
+        Some(account)
+    );
     let (models, options) = restarted.apply(Some("chatgpt"), Vec::new(), CoreOptions::default());
     assert_eq!(models.len(), 4);
     assert_eq!(options.limits("chatgpt/second").context_window, 128000);
@@ -429,6 +432,45 @@ async fn opening_a_stale_catalog_refreshes_in_the_background() {
     catalog.refresh_stale(auth);
     server.next().await;
     until(|| catalog.details("chatgpt/refreshed").is_some()).await;
+    assert!(!catalog.state.read().unwrap().refreshing);
+    fake.stop().await;
+}
+
+#[tokio::test]
+async fn activation_cannot_leave_a_new_account_stuck_behind_an_old_refresh() {
+    let root = tempfile::tempdir_in("/tmp").unwrap();
+    let home = root.path().join("state");
+    let fake = Fake::new().await;
+    let (auth, first) = login(&home, &fake).await;
+    fake.state.lock().unwrap().client_id = "second-test-client".into();
+    let attempt = auth.start_login(None).await.unwrap();
+    assert!(fake.callback(&attempt).await.status().is_success());
+    let second = attempt.wait().await.unwrap();
+    auth.complete_login(&second.id, true).await.unwrap();
+    auth.select(&first).await.unwrap();
+    let server = CatalogServer::new(vec![ok(json!({"models":[bare("new-account")]}))]).await;
+    let catalog = ModelCatalog::new(home, Some(server.endpoint.clone()));
+    catalog
+        .pause_after_activate
+        .armed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    catalog.spawn_refresh(auth.clone(), true);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        catalog.pause_after_activate.entered.notified(),
+    )
+    .await
+    .unwrap();
+
+    auth.select(&second.id).await.unwrap();
+    assert_eq!(
+        catalog.activate(&auth).await.map(|(account, _)| account),
+        Some(second.id.clone())
+    );
+    catalog.pause_after_activate.release.notify_one();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    catalog.account_changed(auth.clone()).await;
+    until(|| catalog.details("chatgpt/new-account").is_some()).await;
     assert!(!catalog.state.read().unwrap().refreshing);
     fake.stop().await;
 }
