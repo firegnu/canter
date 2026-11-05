@@ -392,6 +392,19 @@ impl State {
                     parameters: def.parameters,
                 }
             })
+            .chain(
+                canter_tools::Tool::APPLY_PATCH
+                    .into_iter()
+                    .filter(|tool| tools.find(tool.name()).is_some())
+                    .map(|tool| {
+                        let def = tools.definition(tool);
+                        canter_model::ToolDefinition {
+                            name: def.name.into(),
+                            description: def.description.into(),
+                            parameters: def.parameters,
+                        }
+                    }),
+            )
             .chain(crate::goal::definitions())
             .chain(crate::agent_tools::definitions())
             .chain(
@@ -943,6 +956,7 @@ impl Session {
         let tools = executor(
             writer.snapshot().settings.cwd.clone(),
             store.session_dir(&writer.snapshot().id)?,
+            writer.snapshot().settings.model.clone(),
             runtime.clone(),
             &options,
         )
@@ -1193,6 +1207,7 @@ impl Session {
         let tools = executor(
             cwd,
             store.session_dir(&writer.snapshot().id)?,
+            writer.snapshot().settings.model.clone(),
             runtime.clone(),
             &options,
         )
@@ -1867,6 +1882,13 @@ impl Session {
             runtime.limits = runtime
                 .options
                 .limits(&state.journal.snapshot.settings.model);
+            runtime.tools = runtime.tools.clone().with_apply_patch(
+                runtime
+                    .options
+                    .apply_patch_models
+                    .contains(&state.journal.snapshot.settings.model),
+            );
+            state.refresh_tools(&runtime.tools).await?;
             *self.shared.runtime.write().unwrap() = Arc::new(runtime);
             // Status bars read the window and compaction line from the last
             // usage: bring the new model's at once, with no request in it.
@@ -2171,6 +2193,7 @@ pub(crate) async fn owned<T: Send + 'static>(
 async fn executor(
     cwd: String,
     session_directory: std::path::PathBuf,
+    model: String,
     runtime: RuntimeContext,
     options: &CoreOptions,
 ) -> Result<Tools, CoreError> {
@@ -2216,6 +2239,7 @@ async fn executor(
             ))
             .with_telemetry(options.telemetry)
             .with_plan_enabled(options.plan_enabled)
+            .with_apply_patch(options.apply_patch_models.contains(&model))
             .with_web_search(options.web_search)
             .with_mcp(runtime.mcp_tools)
             .with_mcp_tool_search(options.mcp_tool_search)

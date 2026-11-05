@@ -80,3 +80,38 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+### 做了什么
+
+- 从 openai/codex `rust-v0.163.0`（完整提交 `83086188ae0614bd882818ff1aa23f3194962012`）迁入 apply_patch 的语法、解析、匹配、变更逻辑、Lark grammar 和 24 个场景 fixtures；新增 `NOTICE` 及逐文件来源说明，本地执行仍走 canter 的 Executor。
+- 只有目录项 `apply_patch_tool_type == "freeform"` 的模型启用 apply_patch，并隐藏 write/edit；config 同名模型也按目录。新建、恢复、热重载和换模型都更新工具与请求 grammar。
+- Responses 接入 custom 工具、`custom_tool_call` 增量事件、`custom_tool_call_output` 和白名单 replay；诊断只记类型，不记补丁输入或密文。其它接口不写 custom 字段。
+- 补丁支持新增、修改、删除、改名；全部路径和原文在批准前预检、批准后复查，一个批准框展示所有 diff，并标出删除和改名。写入逐文件进行，部分失败如实报告且不自动回滚。
+- 每个实际变更文件分别记录 rewind 备份，删除和改名源支持“预期不存在”的比较；部分失败只保留已写路径的备份。改动项目、used files、PostToolUse 和 LSP 通知覆盖多文件。
+
+### 验证了什么
+
+- `cargo nextest run -p canter-model`：45 通过；包括 custom 工具定义、流式调用、结果类型和同模型同账号 replay，以及既有字节兼容测试。
+- `cargo nextest run -p canter-tools`：206 通过、22 跳过；迁入 fixtures、格式/上下文/重复路径预检、保护路径、工作区外、Plan、批准后原文变化和第二次写失败均通过。
+- `cargo nextest run -p canter-core`：246 通过、23 跳过；新增本机假 Responses 服务的真实 Core 工具循环，覆盖一次批准、增删改移动、custom 结果与 replay、全部 `/rewind`、部分失败后只回滚已写文件、审查/Plan 拒绝及换模型。
+- `cargo nextest run -p canter-server`：366 通过、4 跳过；目录 freeform、缺字段、未知值和 config 同名模型行为通过。
+- `cargo nextest run -p canter-tui`：679 通过；`cargo nextest run -p canter`：208 通过。
+- `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。所有命令均在前台完成，未跑 workspace 全套测试。
+
+### 拿主意的地方
+
+- `Request` 增加不序列化的 `custom_tools` 映射，避免给所有 ToolDefinition 构造点加字段，也保证 Chat Completions 字节不变；ToolCall 沿用统一结构，由当前 custom 工具表决定 Responses 的结果类型。
+- 上游 015 fixture 用第二个操作引用缺失文件来制造中途失败，与本件“全部预检，失败一个都不写”冲突。本地删除其 `expected/created.txt`，并在 fixtures README 说明；真正的第二文件写失败另用故障注入 Executor 和 Core 权限故障测试覆盖。此项请主控复核。
+- 部分失败的 FileChange 只保留实际已提交路径的 diff；改名目标写成功但源删除失败时保留目标和源的实际状态，不伪装成完整改名。
+
+### 没做的事
+
+- 未连接真实 OpenAI/OAuth 服务，未碰用户真实 `~/.canter` 或运行中的服务；未做 P2-207 跨家历史转换。
+- 未做跨文件原子事务、自动回滚或补丁重放；未合并 main、未推送。真实模型和终端人工验收留待合并后按上文执行。
+
+### 踩过的坑
+
+- 多文件 PostToolUse 改造最初把既有单文件提示改成了绝对路径，服务端回归测试发现后已恢复原有相对路径输出，最终完整服务端测试通过。
+- 本机假服务会校验测试 Authorization 头；初次集成测试用了不同的占位值导致重试，改用共享测试常量后通过。

@@ -139,6 +139,9 @@ pub struct Request {
     pub model: String,
     pub messages: Vec<Message>,
     pub tools: Vec<ToolDefinition>,
+    /// Freeform Lark grammars by tool name; local metadata, never serialized as history.
+    #[serde(skip)]
+    pub custom_tools: std::collections::BTreeMap<String, String>,
     pub options: RequestOptions,
 }
 

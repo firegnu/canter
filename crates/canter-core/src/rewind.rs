@@ -127,67 +127,69 @@ impl State {
         &mut self,
         turn_id: &str,
         call: &canter_tools::PreparedCall,
-    ) -> Result<Option<String>, CoreError> {
-        let Some(file) = call.file_checkpoint() else {
-            return Ok(None);
-        };
-        let mut checkpoint = FileChange {
-            id: id("change"),
-            turn_id: turn_id.into(),
-            path: file.path.to_string_lossy().into_owned(),
-            before: None,
-            after: None,
-            after_bytes: None,
-            unavailable: None,
-            inactive: false,
-        };
-        if file.path.to_str().is_none() {
-            checkpoint.unavailable = Some("file path cannot be recorded as UTF-8".into());
-        } else {
-            if file
-                .original
-                .is_some_and(|bytes| bytes.len() > MAX_FILE_BYTES)
-            {
-                checkpoint.unavailable =
-                    Some("original file exceeds the 1 MiB checkpoint limit".into());
-            }
-            let store = self.journal.store.clone();
-            let session = self.journal.snapshot.id.clone();
-            let original = file
-                .original
-                .filter(|bytes| bytes.len() <= MAX_FILE_BYTES)
-                .map(ToOwned::to_owned);
-            let content = if file.content.len() > MAX_FILE_BYTES {
-                checkpoint.after_bytes = Some(file.content.len() as u64);
-                None
-            } else {
-                Some(file.content.to_vec())
+    ) -> Result<Vec<(std::path::PathBuf, String)>, CoreError> {
+        let mut recorded = Vec::new();
+        for file in call.file_checkpoints() {
+            let mut checkpoint = FileChange {
+                id: id("change"),
+                turn_id: turn_id.into(),
+                path: file.path.to_string_lossy().into_owned(),
+                before: None,
+                after: None,
+                after_bytes: None,
+                unavailable: None,
+                inactive: false,
             };
-            let (before, after) = tokio::task::spawn_blocking(move || {
-                Ok::<_, CoreError>((
-                    original
-                        .as_deref()
-                        .map(|bytes| store.save_rewind(&session, bytes))
-                        .transpose()?,
-                    content
-                        .as_deref()
-                        .map(|bytes| store.save_rewind(&session, bytes))
-                        .transpose()?,
-                ))
-            })
-            .await
-            .map_err(|_| CoreError::internal())??;
-            checkpoint.before = before;
-            checkpoint.after = after;
+            if file.path.to_str().is_none() {
+                checkpoint.unavailable = Some("file path cannot be recorded as UTF-8".into());
+            } else {
+                if file
+                    .original
+                    .is_some_and(|bytes| bytes.len() > MAX_FILE_BYTES)
+                {
+                    checkpoint.unavailable =
+                        Some("original file exceeds the 1 MiB checkpoint limit".into());
+                }
+                let store = self.journal.store.clone();
+                let session = self.journal.snapshot.id.clone();
+                let original = file
+                    .original
+                    .filter(|bytes| bytes.len() <= MAX_FILE_BYTES)
+                    .map(ToOwned::to_owned);
+                let content = if file.deleted {
+                    None
+                } else if file.content.len() > MAX_FILE_BYTES {
+                    checkpoint.after_bytes = Some(file.content.len() as u64);
+                    None
+                } else {
+                    Some(file.content.to_vec())
+                };
+                let (before, after) = tokio::task::spawn_blocking(move || {
+                    Ok::<_, CoreError>((
+                        original
+                            .as_deref()
+                            .map(|bytes| store.save_rewind(&session, bytes))
+                            .transpose()?,
+                        content
+                            .as_deref()
+                            .map(|bytes| store.save_rewind(&session, bytes))
+                            .transpose()?,
+                    ))
+                })
+                .await
+                .map_err(|_| CoreError::internal())??;
+                checkpoint.before = before;
+                checkpoint.after = after;
+            }
+            self.journal
+                .record(HistoryEntry::FileCheckpoint {
+                    checkpoint: checkpoint.clone(),
+                })
+                .await?;
+            recorded.push((file.path.to_owned(), checkpoint.id.clone()));
+            self.rewind.changes.push(checkpoint);
         }
-        self.journal
-            .record(HistoryEntry::FileCheckpoint {
-                checkpoint: checkpoint.clone(),
-            })
-            .await?;
-        let id = checkpoint.id.clone();
-        self.rewind.changes.push(checkpoint);
-        Ok(Some(id))
+        Ok(recorded)
     }
     pub async fn abort_checkpoint(&mut self, id: String) -> Result<(), CoreError> {
         self.journal
@@ -302,23 +304,17 @@ async fn plan(state: &State, boundary: &Boundary) -> Result<Vec<PlannedFile>, Co
                         {
                             return Ok((before, false, true));
                         }
-                        let expected = backup(
-                            &store,
-                            &session,
-                            last.after
-                                .as_deref()
-                                .ok_or("missing written-content checkpoint")?,
-                        )?;
+                        let expected = last
+                            .after
+                            .as_deref()
+                            .map(|name| backup(&store, &session, name))
+                            .transpose()?;
                         let current = match read_bounded(Path::new(&path)) {
                             Ok(bytes) => Some(bytes),
                             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                             Err(error) => return Err(error.to_string()),
                         };
-                        Ok((
-                            before,
-                            current.as_deref() != Some(expected.as_slice()),
-                            false,
-                        ))
+                        Ok((before, current != expected, false))
                     })();
                     match result {
                         Ok((original, external, unknown)) => {

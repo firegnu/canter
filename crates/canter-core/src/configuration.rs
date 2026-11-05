@@ -233,6 +233,12 @@ impl Shared {
             .clone()
             .with_telemetry(config.options.telemetry)
             .with_plan_enabled(config.options.plan_enabled)
+            .with_apply_patch(
+                config
+                    .options
+                    .apply_patch_models
+                    .contains(&state.journal.snapshot.settings.model),
+            )
             .with_mcp(context.mcp_tools.clone())
             .with_mcp_tool_search(config.options.mcp_tool_search)
             .with_web_search(config.options.web_search.clone())

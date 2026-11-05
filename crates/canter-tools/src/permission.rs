@@ -146,51 +146,52 @@ impl PermissionGate {
     }
 
     fn outside_directories(&self, call: &PreparedCall) -> bool {
-        if !matches!(call.tool, Tool::Write | Tool::Edit)
+        if !matches!(call.tool, Tool::Write | Tool::Edit | Tool::ApplyPatch)
             || self.scratch_write(call)
             || self.memory_write(call)
         {
             return false;
         }
-        let Some(path) = &call.resolved_path else {
+        let paths = call.prepared_paths();
+        if paths.is_empty() {
             return true;
-        };
-        !call
-            .executor
-            .cwd()
-            .canonicalize()
-            .is_ok_and(|cwd| path.starts_with(cwd))
-            && !self
-                .additional_directories
-                .iter()
-                .any(|root| path.starts_with(root))
+        }
+        let cwd = call.executor.cwd().canonicalize().ok();
+        paths.into_iter().any(|(_, path)| {
+            !cwd.as_ref().is_some_and(|cwd| path.starts_with(cwd))
+                && !self
+                    .additional_directories
+                    .iter()
+                    .any(|root| path.starts_with(root))
+        })
     }
 
     fn scratch_write(&self, call: &PreparedCall) -> bool {
-        call.executor.sandbox_enabled()
-            && matches!(call.tool, Tool::Write | Tool::Edit)
-            && call
-                .executor
-                .scratch_directory()
-                .and_then(|scratch| scratch.path())
-                .is_some_and(|root| {
-                    call.resolved_path
-                        .as_ref()
-                        .is_some_and(|path| path.starts_with(root))
-                })
+        if !call.executor.sandbox_enabled()
+            || !matches!(call.tool, Tool::Write | Tool::Edit | Tool::ApplyPatch)
+        {
+            return false;
+        }
+        let paths = call.prepared_paths();
+        call.executor
+            .scratch_directory()
+            .and_then(|scratch| scratch.path())
+            .is_some_and(|root| {
+                !paths.is_empty() && paths.into_iter().all(|(_, path)| path.starts_with(&root))
+            })
     }
 
     fn memory_write(&self, call: &PreparedCall) -> bool {
-        matches!(call.tool, Tool::Write | Tool::Edit)
-            && call
-                .executor
-                .memory()
-                .and_then(|memory| memory.roots().ok().flatten())
-                .is_some_and(|roots| {
-                    call.resolved_path
-                        .as_ref()
-                        .is_some_and(|path| roots.contains(path))
-                })
+        if !matches!(call.tool, Tool::Write | Tool::Edit | Tool::ApplyPatch) {
+            return false;
+        }
+        let paths = call.prepared_paths();
+        call.executor
+            .memory()
+            .and_then(|memory| memory.roots().ok().flatten())
+            .is_some_and(|roots| {
+                !paths.is_empty() && paths.into_iter().all(|(_, path)| roots.contains(path))
+            })
     }
 
     fn file_rules<'a>(
@@ -198,26 +199,35 @@ impl PermissionGate {
         call: &'a PreparedCall,
         mode: PermissionMode,
     ) -> Option<PermissionCheck<'a>> {
-        if !matches!(call.tool, Tool::Read | Tool::Write | Tool::Edit) {
+        if !matches!(
+            call.tool,
+            Tool::Read | Tool::Write | Tool::Edit | Tool::ApplyPatch
+        ) {
             return None;
         }
-        let path = call.resolved_path.as_deref()?;
-        let requested = std::path::Path::new(call.arguments["path"].as_str()?);
-        let decision = self.read_rules(true, |rules| {
-            rules.file_decision(requested, path, call.executor.cwd(), call.executor.home())
-        });
-        match decision {
-            Ok(Some(canter_protocol::FileRuleDecision::Forbidden)) => Some(PermissionCheck::Forbidden {
-                reason: "File blocked by the user's rules.json. Do not try another way to access this file.".into(),
-            }),
-            Err(()) if mode == PermissionMode::AllowAll => Some(PermissionCheck::Forbidden {
-                reason: "File access blocked because the user's rules.json could not be read or evaluated. Do not try another way to access this file; the user must fix the rules first.".into(),
-            }),
-            Err(()) | Ok(Some(canter_protocol::FileRuleDecision::Prompt)) if mode != PermissionMode::AllowAll => {
-                Some(self.ask(call, false))
+        for (requested, path) in call.prepared_paths() {
+            let decision = self.read_rules(true, |rules| {
+                rules.file_decision(
+                    std::path::Path::new(requested),
+                    path,
+                    call.executor.cwd(),
+                    call.executor.home(),
+                )
+            });
+            match decision {
+                Ok(Some(canter_protocol::FileRuleDecision::Forbidden)) => return Some(PermissionCheck::Forbidden {
+                    reason: "File blocked by the user's rules.json. Do not try another way to access this file.".into(),
+                }),
+                Err(()) if mode == PermissionMode::AllowAll => return Some(PermissionCheck::Forbidden {
+                    reason: "File access blocked because the user's rules.json could not be read or evaluated. Do not try another way to access this file; the user must fix the rules first.".into(),
+                }),
+                Err(()) | Ok(Some(canter_protocol::FileRuleDecision::Prompt)) if mode != PermissionMode::AllowAll => {
+                    return Some(self.ask(call, false))
+                }
+                _ => {}
             }
-            _ => None,
         }
+        None
     }
     /// Planning restrictions precede grants and ordinary permission decisions.
     pub fn evaluate_plan<'a>(
@@ -261,6 +271,7 @@ impl PermissionGate {
             }
             Tool::Write
             | Tool::Edit
+            | Tool::ApplyPatch
             | Tool::Shell
             | Tool::AskUser
             | Tool::Mcp

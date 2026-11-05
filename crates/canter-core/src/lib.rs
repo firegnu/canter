@@ -148,6 +148,8 @@ pub struct CoreOptions {
     /// window's own line, when lower than it.
     pub auto_compact_tokens: Option<u64>,
     pub image_models: Vec<String>,
+    /// Models whose verified catalog entry supports the freeform patch tool.
+    pub apply_patch_models: std::collections::BTreeSet<String>,
     /// Per-model limits; names absent here retain the legacy global limits.
     pub model_limits: std::collections::BTreeMap<String, ModelLimits>,
     pub model_reasoning: BTreeMap<String, ModelReasoning>,
@@ -182,6 +184,7 @@ impl Default for CoreOptions {
             max_output_tokens: 65_536,
             auto_compact_tokens: None,
             image_models: vec!["deepseek-flash".into()],
+            apply_patch_models: Default::default(),
             model_limits: Default::default(),
             model_reasoning: Default::default(),
             prices: usage::builtin_prices(),

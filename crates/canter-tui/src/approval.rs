@@ -133,6 +133,10 @@ pub(crate) fn layout(
             };
             (title.to_owned(), change_body(approval, &kind, cwd, inner))
         }
+        "apply_patch" => (
+            "Apply this patch?".to_owned(),
+            patch_body(approval, item, cwd, inner),
+        ),
         _ if matches!(item, Some(Item::McpToolCall { .. })) => {
             let Some(Item::McpToolCall { server, tool, .. }) = item else {
                 unreachable!()
@@ -413,6 +417,36 @@ fn shell_body(
     rows
 }
 
+fn patch_body(
+    approval: &ApprovalRequest,
+    item: Option<&Item>,
+    cwd: &str,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let changes = match item {
+        Some(Item::FileChange { changes, .. }) if !changes.is_empty() => changes.clone(),
+        _ => serde_json::from_value(approval.arguments["changes"].clone()).unwrap_or_default(),
+    };
+    let mut rows = Vec::new();
+    for change in changes {
+        if !rows.is_empty() {
+            rows.push(Line::default());
+        }
+        rows.extend(change_rows(
+            &change.path,
+            &change.kind,
+            &change.diff,
+            cwd,
+            width,
+        ));
+    }
+    if rows.is_empty() {
+        json_body(&approval.arguments, width)
+    } else {
+        rows
+    }
+}
+
 /// The target file with its line counts, then the diff.
 fn change_body(
     approval: &ApprovalRequest,
@@ -423,14 +457,32 @@ fn change_body(
     let text = |key: &str| approval.arguments.get(key).and_then(Value::as_str);
     // The tools resolve the path; the resolved one is what really gets written.
     let path = text("resolvedPath").or(text("path")).unwrap_or_default();
-    let diff = Diff::parse(&visible(text("diff").unwrap_or_default()), kind, path);
+    change_rows(path, kind, text("diff").unwrap_or_default(), cwd, width)
+}
+
+fn change_rows(
+    path: &str,
+    kind: &PatchChangeKind,
+    diff: &str,
+    cwd: &str,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let diff = Diff::parse(&visible(diff), kind, path);
     let added = Span::styled(format!("+{}", diff.added()), theme::success());
     let removed = Span::styled(format!("−{}", diff.removed()), theme::failure());
-    let mut header = vec![
-        Span::styled(display_path(path, cwd), Style::new().bold()),
-        Span::raw("  "),
-    ];
-    // Same counts as the item's card: a new file only adds, a deleted one only removes.
+    let target = match kind {
+        PatchChangeKind::Update {
+            move_path: Some(destination),
+        } => format!(
+            "Move {} → {}",
+            display_path(path, cwd),
+            display_path(destination, cwd)
+        ),
+        PatchChangeKind::Add => format!("Create {}", display_path(path, cwd)),
+        PatchChangeKind::Delete => format!("Delete {}", display_path(path, cwd)),
+        _ => display_path(path, cwd),
+    };
+    let mut header = vec![Span::styled(target, Style::new().bold()), Span::raw("  ")];
     match kind {
         PatchChangeKind::Add => header.push(added),
         PatchChangeKind::Delete => header.push(removed),

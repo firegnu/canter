@@ -1031,7 +1031,7 @@ async fn execute(
             .runtime()
             .tools
             .blocked_in_plan_mode(&call.name, id("tool"), &call.arguments))
-    } else if review && matches!(tool, Tool::Write | Tool::Edit) {
+    } else if review && matches!(tool, Tool::Write | Tool::Edit | Tool::ApplyPatch) {
         Err(ToolOutput {
             output_size: Default::default(),
             change_ticket: None,
@@ -1052,7 +1052,7 @@ async fn execute(
             .await
     };
     let mut executed = false;
-    let mut written_path = None;
+    let mut written_paths = Vec::new();
     let mut changed_file = false;
     let mut output = match prepared {
         Err(mut output) => {
@@ -1166,7 +1166,7 @@ async fn execute(
                 }
                 Some(PermissionCheck::Execute(permit)) => {
                     executed = true;
-                    let checkpoint = shared
+                    let checkpoints = shared
                         .state
                         .lock()
                         .await
@@ -1202,54 +1202,70 @@ async fn execute(
                         });
                     }
                     flush(shared, &mut pending).await?;
-                    if output.outcome != ToolOutcome::Completed
-                        && let Some(id) = checkpoint
-                    {
-                        shared.state.lock().await.abort_checkpoint(id).await?;
+                    let committed = prepared.committed_paths();
+                    for (path, id) in checkpoints {
+                        let keep = if prepared.tool() == Tool::ApplyPatch {
+                            committed.contains(&path)
+                        } else {
+                            output.outcome == ToolOutcome::Completed
+                        };
+                        if !keep {
+                            shared.state.lock().await.abort_checkpoint(id).await?;
+                        }
                     }
-                    if output.outcome == ToolOutcome::Completed {
-                        written_path = prepared.file_checkpoint().map(|file| file.path.to_owned());
-                        changed_file = prepared
+                    if prepared.tool() == Tool::ApplyPatch {
+                        written_paths = committed;
+                    } else if output.outcome == ToolOutcome::Completed {
+                        written_paths = prepared
                             .file_checkpoint()
-                            .is_some_and(|file| file.original != Some(file.content));
+                            .map(|file| vec![file.path.to_owned()])
+                            .unwrap_or_default();
                     }
+                    changed_file = prepared.file_checkpoints().iter().any(|file| {
+                        written_paths.iter().any(|path| path == file.path)
+                            && (file.deleted || file.original != Some(file.content))
+                    });
                     output
                 }
             }
         }
     };
-    let before_hook = if let Some(path) = written_path
-        && !shared.runtime().context.restricted_mode
+    let mut before_hook = Vec::new();
+    if !shared.runtime().context.restricted_mode
         && shared
             .runtime()
             .options
             .hooks
             .matches(crate::hooks::Event::PostToolUse, &call.name)
     {
-        tokio::fs::read(&path).await.ok().map(|bytes| (path, bytes))
-    } else {
-        None
-    };
+        for path in written_paths {
+            if let Ok(bytes) = tokio::fs::read(&path).await {
+                before_hook.push((path, bytes));
+            }
+        }
+    }
     if executed && let Some(reason) = crate::hooks::run(shared, crate::hooks::Event::PostToolUse,
         serde_json::json!({"tool_name":call.name,"tool_input":serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap_or_default(),"tool_response":output.text}), cancel).await? {
         output.text.push_str(&format!("\n\nPostToolUse hook: {reason}"));
     }
-    let hook_changed_file = if let Some((path, before)) = before_hook {
-        match tokio::fs::read(path).await {
+    let mut hook_changed_files = Vec::new();
+    for (path, before) in before_hook {
+        let changed = match tokio::fs::read(&path).await {
             Ok(after) => after != before,
             Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        };
+        if changed {
+            hook_changed_files.push(path);
         }
-    } else {
-        false
-    };
+    }
     let diagnostic_items = crate::lsp::inline(shared, turn_id, &mut output).await;
-    if hook_changed_file
-        && let Item::FileChange { changes, .. } = &output.item
-        && let Some(change) = changes.first()
-    {
+    for path in hook_changed_files {
+        let display = match &output.item {
+            Item::FileChange { changes, .. } if changes.len() == 1 => changes[0].path.clone(),
+            _ => path.display().to_string(),
+        };
         output.text.push_str(&format!(
-            "\n{} was changed by a PostToolUse hook after this call; read it again before editing it.",
-            change.path
+            "\n{display} was changed by a PostToolUse hook after this call; read it again before editing it."
         ));
     }
     shared.sync_background().await?;
@@ -1316,13 +1332,19 @@ async fn execute(
         state.used_files.push((turn_id.into(), path.clone()));
     }
     if let Item::FileChange {
-        changes,
-        status: ItemStatus::Completed,
-        ..
+        changes, status, ..
     } = &output.item
+        && (*status == ItemStatus::Completed
+            || (call.name == "apply_patch" && *status == ItemStatus::Failed))
     {
         for change in changes {
             state.used_files.push((turn_id.into(), change.path.clone()));
+            if let PatchChangeKind::Update {
+                move_path: Some(path),
+            } = &change.kind
+            {
+                state.used_files.push((turn_id.into(), path.clone()));
+            }
         }
     }
     state

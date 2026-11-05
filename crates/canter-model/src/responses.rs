@@ -168,7 +168,7 @@ impl Responses {
                     *observed = true;
                     yield ModelEvent::Usage(usage);
                 }
-                for output_event in state.accept(&event, &request.tools)? {
+                for output_event in state.accept(&event, request)? {
                     let finished = matches!(output_event, ModelEvent::Finished(_));
                     if finished {
                         yield ModelEvent::Replay(crate::Replay::Responses {
@@ -390,6 +390,7 @@ mod tests {
                 max_output_tokens: Some(123),
                 max_retries: Some(0),
             },
+            custom_tools: Default::default(),
         };
         let _: Vec<_> = model
             .stream(request, CancellationToken::new())
@@ -534,6 +535,120 @@ mod tests {
                 {"role":"user","content":[{"type":"input_text","text":"Now explain it."}]}
             ])
         );
+    }
+
+    #[tokio::test]
+    async fn custom_tool_calls_stream_and_replay_with_custom_results() {
+        use crate::test_support::{Reply, Server};
+        use crate::{AssistantContent, ToolCall, ToolDefinition};
+
+        let patch = "*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** End Patch";
+        let call = json!({
+            "type":"custom_tool_call", "id":"ct1", "call_id":"call-patch",
+            "namespace":"canter", "name":"apply_patch", "input":patch,
+            "status":"completed"
+        });
+        let server = Server::start(vec![
+            Reply::sse(sse(vec![
+                json!({"type":"response.output_item.added","output_index":0,"item":{"type":"custom_tool_call","id":"ct1","call_id":"call-patch","namespace":"canter","name":"apply_patch","input":""}}),
+                json!({"type":"response.custom_tool_call_input.delta","output_index":0,"item_id":"ct1","delta":"*** Begin Patch\n"}),
+                json!({"type":"response.custom_tool_call_input.done","output_index":0,"item_id":"ct1","input":patch}),
+                json!({"type":"response.output_item.done","output_index":0,"item":call}),
+                json!({"type":"response.completed","response":{"status":"completed","output":[call]}}),
+            ])),
+            Reply::sse(sse(vec![json!({
+                "type":"response.completed","response":{"status":"completed","output":[]}
+            })])),
+        ])
+        .await;
+        let model = Responses::with_endpoint(
+            Arc::new(Auth),
+            format!("{}responses", server.base_url).parse().unwrap(),
+        )
+        .unwrap();
+        let request = Request {
+            model: "test-model".into(),
+            tools: vec![ToolDefinition {
+                name: "apply_patch".into(),
+                description: "Apply a patch".into(),
+                parameters: json!({}),
+            }],
+            custom_tools: [("apply_patch".into(), "start := \"*** Begin Patch\"".into())].into(),
+            ..Default::default()
+        };
+        let events: Vec<_> = model
+            .stream(request.clone(), CancellationToken::new())
+            .collect()
+            .await;
+        assert!(events.iter().all(Result::is_ok));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Ok(ModelEvent::ItemCompleted {
+                content: AssistantContent::ToolCall(ToolCall { id, name, arguments }), ..
+            }) if id == "call-patch" && name == "apply_patch" && arguments == patch
+        )));
+        let replay = events
+            .iter()
+            .find_map(|event| match event {
+                Ok(ModelEvent::Replay(replay)) => Some(replay.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            replay,
+            crate::Replay::Responses {
+                model: "test-model".into(),
+                scope: None,
+                account: Some("test-account-fingerprint".into()),
+                output: vec![call.clone()],
+            }
+        );
+        assert_eq!(
+            server.requests.lock().unwrap()[0]["tools"],
+            json!([{
+                "type":"namespace", "name":"canter", "description":"Tools in the canter namespace.",
+                "tools":[{
+                    "type":"custom", "name":"apply_patch", "description":"Apply a patch",
+                    "format":{"type":"grammar","syntax":"lark","definition":"start := \"*** Begin Patch\""}
+                }]
+            }])
+        );
+
+        let _: Vec<_> = model
+            .stream(
+                Request {
+                    messages: vec![
+                        Message::User {
+                            text: "Patch it".into(),
+                        },
+                        Message::Assistant {
+                            content: vec![AssistantContent::ToolCall(ToolCall {
+                                id: "call-patch".into(),
+                                name: "apply_patch".into(),
+                                arguments: patch.into(),
+                            })],
+                            replay: Some(replay),
+                        },
+                        Message::ToolResult {
+                            tool_call_id: "call-patch".into(),
+                            text: "Updated a.txt".into(),
+                        },
+                    ],
+                    ..request
+                },
+                CancellationToken::new(),
+            )
+            .collect()
+            .await;
+        assert_eq!(
+            server.requests.lock().unwrap()[1]["input"],
+            json!([
+                {"role":"user","content":[{"type":"input_text","text":"Patch it"}]},
+                call,
+                {"type":"custom_tool_call_output","call_id":"call-patch","output":"Updated a.txt"}
+            ])
+        );
+        server.stop().await;
     }
 
     fn sse(events: Vec<Value>) -> String {

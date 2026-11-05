@@ -542,6 +542,7 @@ async fn summarize(
                 reasoning_effort: None,
                 max_output_tokens: Some(output_limit),
             },
+            custom_tools: Default::default(),
         });
         let mut end = remaining.len();
         if !use_prefix {

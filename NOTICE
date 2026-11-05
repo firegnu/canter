@@ -1,0 +1,12 @@
+canter
+Copyright 2026 canter contributors
+
+This product includes apply_patch parsing, text matching, grammar, and test fixture code/data derived from OpenAI Codex.
+Copyright 2025 OpenAI
+
+Source: https://github.com/openai/codex
+Version: rust-v0.163.0
+Commit: 83086188ae0614bd882818ff1aa23f3194962012
+License: Apache License 2.0
+
+The Codex NOTICE also contains a Ratatui attribution; no Ratatui code was copied from Codex for this apply_patch integration, so that unrelated attribution is not reproduced here.

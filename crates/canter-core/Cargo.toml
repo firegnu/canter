@@ -25,4 +25,5 @@ regex-automata = "=0.4.18"
 
 [dev-dependencies]
 axum.workspace = true
+canter-model = { path = "../canter-model", features = ["test-support"] }
 tempfile.workspace = true

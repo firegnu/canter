@@ -32,6 +32,8 @@ struct CatalogModel {
     default_reasoning_effort: Option<ReasoningEffort>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     input_modalities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    apply_patch_tool_type: Option<String>,
 }
 
 impl CatalogModel {
@@ -43,6 +45,7 @@ impl CatalogModel {
             self.display_name = self.slug.clone();
         }
         self.context_window = self.context_window.filter(|window| *window > 81_920);
+        self.apply_patch_tool_type = self.apply_patch_tool_type.filter(|kind| kind == "freeform");
         if let Some(efforts) = &mut self.supported_reasoning_efforts {
             efforts.retain(|effort| *effort != ReasoningEffort::Unknown);
             efforts.dedup();
@@ -265,30 +268,32 @@ impl ModelCatalog {
         models.extend(merged);
         for model in state.known.values() {
             let id = format!("{provider}/{}", model.slug);
-            if options.model_limits.contains_key(&id) {
-                continue;
+            if model.apply_patch_tool_type.as_deref() == Some("freeform") {
+                options.apply_patch_models.insert(id.clone());
             }
-            options.model_limits.insert(
-                id.clone(),
-                ModelLimits {
-                    context_window: model.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW),
-                    auto_compact_tokens: None,
-                },
-            );
-            options.model_reasoning.insert(
-                id.clone(),
-                model.reasoning().unwrap_or_else(|| ModelReasoning {
-                    supported: vec![ReasoningEffort::Medium],
-                    default: ReasoningEffort::Medium,
-                }),
-            );
-            if model
-                .input_modalities
-                .as_ref()
-                .is_some_and(|modalities| modalities.iter().any(|kind| kind == "image"))
-                && !options.image_models.contains(&id)
-            {
-                options.image_models.push(id);
+            if !options.model_limits.contains_key(&id) {
+                options.model_limits.insert(
+                    id.clone(),
+                    ModelLimits {
+                        context_window: model.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW),
+                        auto_compact_tokens: None,
+                    },
+                );
+                options.model_reasoning.insert(
+                    id.clone(),
+                    model.reasoning().unwrap_or_else(|| ModelReasoning {
+                        supported: vec![ReasoningEffort::Medium],
+                        default: ReasoningEffort::Medium,
+                    }),
+                );
+                if model
+                    .input_modalities
+                    .as_ref()
+                    .is_some_and(|modalities| modalities.iter().any(|kind| kind == "image"))
+                    && !options.image_models.contains(&id)
+                {
+                    options.image_models.push(id.clone());
+                }
             }
         }
         (models, options, revision)
@@ -494,6 +499,10 @@ fn parse_model(value: &serde_json::Value) -> Option<CatalogModel> {
         supported_reasoning_efforts,
         default_reasoning_effort,
         input_modalities,
+        apply_patch_tool_type: object
+            .get("apply_patch_tool_type")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
     }
     .normalized()
 }

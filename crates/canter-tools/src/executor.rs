@@ -100,6 +100,16 @@ pub trait Executor: Send + Sync {
         content: &[u8],
         cancel: &CancellationToken,
     ) -> io::Result<()>;
+    /// Delete a file only if its bytes still match the approved snapshot.
+    async fn delete_file(
+        &self,
+        path: &Path,
+        original: &[u8],
+        cancel: &CancellationToken,
+    ) -> io::Result<()> {
+        let _ = (path, original, cancel);
+        Err(io::Error::other("delete is not supported by this executor"))
+    }
     async fn spawn(&self, command: &str, cancel: &CancellationToken) -> io::Result<CommandHandle>;
     async fn spawn_with_sandbox_request(
         &self,
@@ -566,6 +576,30 @@ impl Executor for LocalExecutor {
             check_cancel(&cancel)?;
             temp.persist(path).map_err(|e| e.error)?;
             Ok(())
+        })
+        .await
+        .map_err(io::Error::other)?
+    }
+
+    async fn delete_file(
+        &self,
+        path: &Path,
+        original: &[u8],
+        cancel: &CancellationToken,
+    ) -> io::Result<()> {
+        let path = self.resolve_write_path(path, cancel).await?;
+        let original = original.to_vec();
+        let cancel = cancel.clone();
+        tokio::task::spawn_blocking(move || {
+            check_cancel(&cancel)?;
+            let current = std::fs::read(&path)?;
+            if current != original {
+                return Err(io::Error::other(
+                    "file changed since preparation; read it again and prepare a new call",
+                ));
+            }
+            check_cancel(&cancel)?;
+            std::fs::remove_file(path)
         })
         .await
         .map_err(io::Error::other)?
