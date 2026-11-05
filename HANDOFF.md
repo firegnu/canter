@@ -153,13 +153,18 @@
   - 父会话一轮结束、子 agent 还在跑时，父会话能换模型；子 agent 继续用派出时的模型和那一家（key 和地址配对，不串）。改法：换模型时按 `running_agents` 拒绝，或 DESIGN 写明子 agent 一直用派出时的模型。
   - 路由认不出家名（比如删掉一家后打开它的旧会话）时只回无状态码的 `InvalidRequest`，用户看到 "invalid request"，不知道去改配置。改法：给一句 `model X is not configured` 之类的英文提示。
 - GPT 登录凭证（P2-202，11-04 合并，还没接命令和界面，用户用不到）交叉审查建议改、没做的：
-  - 刷新后校验新 ID token 时，取 discovery 或 JWKS 除网络错和 5xx 以外的失败（403、404 拦截页、正文不是 JSON、issuer 对不上）也按「ID token 无效」处理：刚轮换的新 refresh token 被主动作废，要重新登录。和 DESIGN 第 6 条写的「确实不符时才作废」对不上。改法：只有 `InvalidIdToken`、`IdentityMismatch` 走作废分支，其余按网络错整组落盘（`crates/canter-server/src/chatgpt_auth/manager.rs`）。
+  - （11-05 排进 P2-229）刷新后校验新 ID token 时，取 discovery 或 JWKS 除网络错和 5xx 以外的失败（403、404 拦截页、正文不是 JSON、issuer 对不上）也按「ID token 无效」处理：刚轮换的新 refresh token 被主动作废，要重新登录。和 DESIGN 第 6 条写的「确实不符时才作废」对不上。改法：只有 `InvalidIdToken`、`IdentityMismatch` 走作废分支，其余按网络错整组落盘（`crates/canter-server/src/chatgpt_auth/manager.rs`）。
   - 崩溃留下的 `.tmp*` 临时文件（0600，里面有令牌）不会自动清掉。
   - P2-203 真登录时留意（审查「可以不改」）：回调地址收到第一个 `state` 不对的请求就判这次登录失败（本机进程能打断登录，Codex 是回 400 接着等）；`CANTER_HOME` 本身是符号链接、或 `auth/chatgpt/` 里有 `.DS_Store` 这类不认识的文件时整个凭证目录打不开；HTTP 客户端写了 `no_proxy`，要靠代理环境变量才能连 OpenAI 时会连不上（11-04 用户真登录没用代理环境变量，走通了）。
 - GPT 登录命令（P2-203，11-04 合并）交叉审查建议改、没做的：
   - 当前账号退出或要重新登录以后，`canter auth login chatgpt` 一定复用这条记录的注册，换不了另一个 ChatGPT 账号（浏览器里登别的账号会报 `IdentityMismatch`），命令行里也没有新建注册的办法，只能手动删 `~/.canter/auth/chatgpt/` 里的文件。改法：不带 accountId 时一律新建注册、换回来的身份和已有记录相同就当复登那条；或者给 `login` 加一个新建的选项（命令形状要问用户）。至少换成看得懂的英文提示。真登录时顺带看：当前账号已登录时再登同一个人，真服务器给新 client id 还是同一个。
   - 记录按随机 UUID 排序，新登录一个账号可能让已有账号的序号整体变掉，照记住的序号 `use`、`logout` 会选到别的账号。改法：按加入顺序排（`chatgpt_auth/mod.rs`、`crates/canter-server/src/account.rs`）。
   - 可以不改：`login/start` 返回前（有待作废令牌、连不上 OpenAI 时最长约一分钟）按 Ctrl+C 没反应；错误提示直接打内部名字，比如 `ChatGPT credentials: Network (HTTP None, code None)`；`status` 的列没对齐。
+- GPT 接入对照官方文档（P2-208 前半，11-05 Codex 核对，详见 P2-208 任务文件「文档核对」差异第 2～5 条）和官方要求不一样、用户 11-05 同意先不改的（差异第 1、6、7 条进 P2-229）：
+  - 套餐提示：官方希望输入框或选模型附近常驻显示「正在用套餐」和 Usage 链接，首次说明能由用户确认关掉；现在首次只打印说明，状态栏要等第一笔请求后才显示套餐用量，切到别家后仍显示历史套餐用量。
+  - 套餐权限被拒后没有专门的重新授权：官方要求用已保存的 client id 带 `prompt=consent` 重走，canter 的普通复登可能跳过同意页。
+  - 新注册换令牌失败（invalid_grant）后，再登会重新动态注册，官方要求复用这次拿到的 client id。
+  - 账号序号会变、同邮箱分不清、没有新建注册的入口：见上面 P2-203 两条。
 - Responses 接口（P2-204，11-04 合并，还没真调）交叉审查「可以不改」、没做的：`"api": "responses"` 这一家写了 `headers` 不报错，直接忽略（README 写了不用自定义请求头；`base_url`、`api_key` 是报配置错）。replay 白名单丢掉 message、function_call 项上的 `encrypted_content`，留给 P2-210 看。
 - GPT 缓存（P2-212 查出、没修的显示问题）：每轮后的「下一句建议」请求会覆盖状态栏的 `last` 缓存率，并计入会话累计；服务端没报 `cached_tokens` 时 `runner.rs` 的 `unwrap_or(0)` 把「不知道」显示成 0%。
 - GPT 思考档位（P2-206，11-04 合并）交叉审查建议改、没做的：
