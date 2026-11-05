@@ -164,7 +164,6 @@
   - 套餐权限被拒后没有专门的重新授权：官方要求用已保存的 client id 带 `prompt=consent` 重走，canter 的普通复登可能跳过同意页。
   - 新注册换令牌失败（invalid_grant）后，再登会重新动态注册，官方要求复用这次拿到的 client id。
   - 账号序号会变、同邮箱分不清、没有新建注册的入口：见上面 P2-203 两条。
-- GPT 思考摘要（P2-219 试用时看到）：折叠的思考行把摘要第一行原样显示，GPT 摘要标题自带 markdown 加粗，屏幕上是 `✻ Thought for 9s · **Reviewing concurrency risks**`，两边的 `**` 露在外面。改法：折叠行去掉行内 markdown 标记，或按 markdown 渲染这一行（`crates/canter-tui/src/cells.rs` `reasoning`）。
 - GPT 登录和报错补齐（P2-229，11-05 合并）交叉审查建议改、没做的：
   - 退出先把 refresh token 记成待作废落盘，再去远程作废（最坏约一分钟）；这段时间服务端被杀，盘上会留着这枚 refresh token，直到再跑 logout 或复登。`auth status` 显示 `revocation pending`，但已不提示怎么清。改法：服务端启动时对 `signed_out` 且带待作废令牌的记录尽力作废一次后清掉，或 `auth status` 看到时提示再跑 logout（`chatgpt_auth/manager.rs` `logout`、`storage.rs` `begin_logout`）。
   - 可以不改：JWKS 取到了、但里面没有 ID token 的 `kid` 时按令牌无效清登录；OpenAI 轮换密钥时有可能误清。旧版 CLI 连新服务端时退出仍提示「再跑一次 logout」，照做无害。流里报错的那行日志 `status` 总是 200（流本身的 HTTP 状态）。

@@ -323,6 +323,30 @@ fn thinking_shows_its_latest_line_then_folds_with_its_time() {
 }
 
 #[test]
+fn folded_thinking_hides_the_bold_markers_of_a_gpt_summary_title() {
+    // GPT summaries arrive as reasoning content whose first line is a bold title.
+    let mut screen = Screen::new(WIDTH);
+    screen.started(json!({ "type": "reasoning", "id": "r1", "summary": [], "content": [] }));
+    screen.now += 2000;
+    screen.event(json!({
+        "type": "item.delta", "turnId": "t1", "itemId": "r1",
+        "delta": {
+            "type": "reasoningContent", "contentIndex": 0,
+            "delta": "**Reviewing concurrency risks**",
+        },
+    }));
+    assert_eq!(screen.rows(), ["✻ Thinking… Reviewing concurrency risks"]);
+    screen.completed(json!({
+        "type": "reasoning", "id": "r1", "summary": [],
+        "content": ["**Reviewing concurrency risks**\n\nTwo savers can race."],
+    }));
+    assert_eq!(
+        screen.rows(),
+        ["✻ Thought for 2s · Reviewing concurrency risks…"]
+    );
+}
+
+#[test]
 fn thinking_without_summary_keeps_one_line_when_folded_or_expanded() {
     let mut screen = Screen::new(WIDTH);
     let item = json!({ "type": "reasoning", "id": "r1", "summary": [], "content": [] });

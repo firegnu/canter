@@ -916,15 +916,18 @@ fn reasoning(
         }
         return rows;
     }
+    // The folded row is plain text: bold markers (GPT summary titles) would
+    // show as literal `**`.
     if !finished {
         let Some(latest) = lines.next_back() else {
             return row("", String::new());
         };
+        let latest = latest.replace("**", "");
         let room = usize::from(width).saturating_sub(str_width(&label) + 1);
-        let shown = if str_width(latest) <= room {
-            latest.to_owned()
+        let shown = if str_width(&latest) <= room {
+            latest
         } else {
-            format!("…{}", tail(latest, room.saturating_sub(1)).trim_start())
+            format!("…{}", tail(&latest, room.saturating_sub(1)).trim_start())
         };
         return row(" ", shown);
     }
@@ -932,11 +935,12 @@ fn reasoning(
         return Vec::new();
     };
     // A summary starts with its title in bold: the title alone is the row.
+    // GPT summaries arrive as content, so this does not depend on `summary`.
     let (first, rest) = match first
         .strip_prefix("**")
         .and_then(|after| after.split_once("**"))
     {
-        Some((title, rest)) if summarized && !title.trim().is_empty() => (title.trim(), rest),
+        Some((title, rest)) if !title.trim().is_empty() => (title.trim(), rest),
         _ => (first, ""),
     };
     let more = if !rest.trim().is_empty() || lines.next().is_some() {
@@ -944,7 +948,7 @@ fn reasoning(
     } else {
         ""
     };
-    row(" · ", format!("{first}{more}"))
+    row(" · ", format!("{}{more}", first.replace("**", "")))
 }
 
 /// The end of `text` that fits in `width` columns.
