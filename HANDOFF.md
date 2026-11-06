@@ -418,3 +418,7 @@
   - 切到目录里不是 freeform 的 GPT、补丁和普通调用混在一批时，Responses 请求里补丁结果夹在 `function_call` 和它的结果之间，订阅接口会不会拒没查证。
   - GPT 的消息发给 DeepSeek、Kimi 时不再带思考；按「切换只在空闲时」推断不会被拒，官方 DeepSeek、Kimi 没实测。
 - 自定义子 agent 角色（P2-223，11-06 合并）交叉审查「可以不改」、没做的：子 agent 卡片和导出里显示模型在 `spawn_agent` 里原样填的类型名（屏幕上控制字符已滤掉，导出的 Markdown 里可能出现很长或很怪的名字；改法：TUI 对 `Custom` 套 `visible()`）；`/roles` 的 Custom 一节标题写死 `~/.canter/agents`，改过 `CANTER_HOME` 时不一致；写错的角色那一行仍显示 `inherits model · can edit`。
+- doctor 自检（P2-224，11-06 合并）交叉审查建议改、没做的（用户试用后再定）：
+  - Chat Completions 那家查模型列表时没带配置里的 `headers`（`crates/canter-server/src/doctor.rs` `provider`）。靠自定义头鉴权的网关会被误报成 key 无效；用户的 opencode-go 配了 headers（P2-185 按会话标记，不是鉴权），试用时留意它会不会被误报。改法：照真实请求带上这家的请求头，值设 sensitive。
+  - MCP 还在启动或热重载握手时报 fail「is not connected」，按「判断不了报 skip」应报 skip（`doctor.rs` `mcp`）；改法：按 slot 的明确状态判断，别匹配错误文字。
+  - 可以不改：服务端版本借 `build.rs` 带上提交号（以后终端和服务端提交不同时会出现 `still using the old server` 提示；合并后第一次升级会提示一次；canter-server 每次 git 暂存或提交都重编），更小的做法是用 `serve()` 运行时拿到的 CLI 版本；`canter doctor` 连不上服务端时不显示具体原因；离线读整份 `server.log`。
