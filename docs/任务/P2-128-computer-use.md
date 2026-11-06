@@ -49,3 +49,7 @@
 3. 安全：能点屏幕上任何东西，现有沙箱管不到，批准规则要重新设计（碰要害）。
 
 建议到时候先用现成的 macOS computer-use MCP 加 GPT 试模型点不点得准，点得准再考虑做进 canter 内置工具。
+
+## 进展
+
+- 11-06 主控按用户选定（`0.0.83`、`--isolated` 每次空白浏览器、主控来加）在 `~/.canter/config.json` 加了 `playwright`，写法同 `everything`（同一个 npx 和 env）；改前备份为 `config.json.bak-20261106-before-playwright`。服务端热加载后 `/v1/mcp` 报 `playwright connected`，25 个工具。还没真调模型试。
