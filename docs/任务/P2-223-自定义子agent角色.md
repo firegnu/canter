@@ -122,3 +122,5 @@
 - 第 2 条：在现有计划模式测试后半段关闭父会话计划模式并设 `allowAll`，再派 `tools: read, shell` 的只读角色，让假模型调用 `touch forbidden-readonly-shell`。确认子会话继承 `allowAll` 且没有开启计划模式、shell 在工具定义内，但写调用仍被拒绝，文件未生成。没有增加测试矩阵或修改权限执行逻辑。
 - 验证：先运行坏角色测试，确认旧实现返回 `error: None` 而非预期模型未配置错误（RED）；修复后通过。最终 `cargo nextest run -p canter-core --test roles` 8/8 通过；server 定向运行 `roles_endpoint_lists_builtins_and_custom_roles` 和 `custom_role_routes_to_responses_and_missing_login_fails_without_fallback`，2/2 通过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。均使用 `.target/agent-roles`，命令在前台跑完，未重跑五包全量，真实 API 调用 0 次。
 - 返工中的调整：shell 拒绝沿用现有只读路径的 `Plan mode: shell is not allowed`，不是普通批准拒绝的 `Tool call declined.`；测试按实际拒绝原因断言，并保留文件未生成、非计划模式和 allowAll 的检查。没有新的待主控决定事项。
+- 交叉审查（Claude Code opus[1m] / high）：必须改 1 条（角色写的模型只查了家、没查模型本身配没配，派出后窗口、档位、价格走全局退路），建议改 1 条（只读角色在 allowAll 下拒写缺测试），一起交回；可以不改 3 条记进 HANDOFF。返工约 15 分钟（`4da11cb`），复核可以合并，无新问题。
+- 结果：返工 1 次
