@@ -1,7 +1,7 @@
 # 任务：第二期-29.2 - 自定义子agent角色
 
 2026-11-06，canter/main 交给 canter/dev-agent-roles（Codex，`gpt-6-astra` / high）。
-路由：中 / 交叉审查要 / 影响面：碰要害（子 agent 的权限和模型路由）。交叉审查按 11-05 起的对比条件交 Claude Code `opus[1m]` / high。
+路由：重 / 交叉审查要 / 影响面：碰要害（路由：重（置信 0.98）、要、碰要害）。表里碰要害格是 xhigh，按 11-05 用户定的对比条件用 high。交叉审查按 11-05 起的对比条件交 Claude Code `opus[1m]` / high。
 类型：功能变更
 依据：子 agent（P2-78、P2-177～P2-180）现在只有内置的 explorer、general 两种角色，写死在协议里（`crates/canter-protocol/src/types.rs` `AgentType`），子会话一律用主会话的模型和档位。本件让用户在 `~/.canter/agents/` 里自己写角色。
 提示：围绕已确认的使用目标完成变更，优先沿用现有机制。
