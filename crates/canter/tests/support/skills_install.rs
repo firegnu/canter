@@ -27,10 +27,10 @@ async fn install(root: &Path, force: bool) -> String {
 }
 
 #[tokio::test]
-async fn skills_install_creates_three_embedded_skills() {
+async fn skills_install_creates_four_embedded_skills() {
     let root = tempfile::tempdir().unwrap();
     let output = install(root.path(), false).await;
-    for name in ["docx", "pptx", "xlsx"] {
+    for name in ["docx", "pptx", "web-testing", "xlsx"] {
         assert!(output.contains(&format!("Installed {name}\n")), "{output}");
         let path = root
             .path()
@@ -41,7 +41,7 @@ async fn skills_install_creates_three_embedded_skills() {
                 .contains(&format!("name: {name}\n"))
         );
     }
-    assert_eq!(output.lines().count(), 4);
+    assert_eq!(output.lines().count(), 5);
     assert!(output.contains("Available in new sessions."));
     assert!(!root.path().join("state").exists());
     assert!(canter::USAGE.contains("canter skills install [--force]"));
@@ -50,11 +50,11 @@ async fn skills_install_creates_three_embedded_skills() {
 #[tokio::test]
 async fn skills_install_skips_existing_directory() {
     let root = tempfile::tempdir().unwrap();
-    let directory = root.path().join("home/.agents/skills/docx");
+    let directory = root.path().join("home/.agents/skills/web-testing");
     fs::create_dir_all(&directory).unwrap();
     fs::write(directory.join("custom.txt"), "keep").unwrap();
     let output = install(root.path(), false).await;
-    assert!(output.contains("Skipped docx (already exists; use --force to overwrite)"));
+    assert!(output.contains("Skipped web-testing (already exists; use --force to overwrite)"));
     assert!(!directory.join("SKILL.md").exists());
     fs::write(directory.join("SKILL.md"), "user skill").unwrap();
     install(root.path(), false).await;
@@ -71,17 +71,17 @@ async fn skills_install_skips_existing_directory() {
 #[tokio::test]
 async fn skills_install_force_overwrites_bundled_file() {
     let root = tempfile::tempdir().unwrap();
-    let directory = root.path().join("home/.agents/skills/docx");
+    let directory = root.path().join("home/.agents/skills/web-testing");
     fs::create_dir_all(&directory).unwrap();
     fs::write(directory.join("SKILL.md"), "old skill").unwrap();
     fs::write(directory.join("custom.txt"), "keep").unwrap();
     let output = install(root.path(), true).await;
-    assert!(output.contains("Overwritten docx\n"), "{output}");
+    assert!(output.contains("Overwritten web-testing\n"), "{output}");
     assert!(output.contains("Installed pptx\n"), "{output}");
     assert!(
         fs::read_to_string(directory.join("SKILL.md"))
             .unwrap()
-            .contains("name: docx\n")
+            .contains("name: web-testing\n")
     );
     assert_eq!(
         fs::read_to_string(directory.join("custom.txt")).unwrap(),
@@ -98,10 +98,11 @@ async fn skills_install_is_recognized_by_session_loader() {
         .await;
     let skills = fixture.skills(&created.session.id).await;
     let data = skills["data"].as_array().unwrap();
-    assert_eq!(data.len(), 3);
+    assert_eq!(data.len(), 4);
     for (skill, (name, description)) in data.iter().zip([
         ("docx", "Read, create, and edit Word documents (.docx), including tables, comments, and formatting; convert legacy .doc files before editing."),
         ("pptx", "Read, create, and edit PowerPoint presentations (.pptx), including slide text, tables, speaker notes, and layout; convert legacy .ppt files first."),
+        ("web-testing", "Verify and debug websites and frontends, including elements, interaction logic, visual appearance, console errors, and network activity; choose headless Playwright scripts or interactive Playwright MCP as appropriate."),
         ("xlsx", "Read, analyze, create, and edit Excel workbooks (.xlsx), including formulas, tables, comments, and formatting; convert legacy .xls files before editing."),
     ]) {
         assert_eq!(skill["name"], name);

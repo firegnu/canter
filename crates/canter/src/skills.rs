@@ -1,9 +1,13 @@
 //! Installs embedded skills without starting or contacting the server.
 use std::{fs, io, io::Write, path::PathBuf};
 
-const BUNDLED: [(&str, &str); 3] = [
+const BUNDLED: [(&str, &str); 4] = [
     ("docx", include_str!("../skills/docx/SKILL.md")),
     ("pptx", include_str!("../skills/pptx/SKILL.md")),
+    (
+        "web-testing",
+        include_str!("../skills/web-testing/SKILL.md"),
+    ),
     ("xlsx", include_str!("../skills/xlsx/SKILL.md")),
 ];
 

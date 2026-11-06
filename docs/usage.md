@@ -334,7 +334,7 @@ By default it waits for running turns, goals and background work to finish befor
 | `--json` | Print the list or report as JSON. |
 | `--html` | Print one session's report as HTML; needs a session number, ID or `--last`. |
 | `canter doctor` | Check configuration, sign-in, providers, MCP and sandbox. It prints `ok`, `fail` or `skip` per check, with a reason and fix under failures, and exits non-zero when any check fails. It never starts, replaces or repairs the server and supports no `--fix`. When no compatible server is reachable, it runs local checks and marks server-dependent checks `skip`. |
-| `canter skills install [--force]` | Copy the bundled `docx`, `pptx` and `xlsx` skills to `~/.agents/skills/`. Existing skill directories are skipped unless `--force` is given, which overwrites only `SKILL.md` and keeps other files. Applies to new sessions. |
+| `canter skills install [--force]` | Copy the bundled `docx`, `pptx`, `web-testing` and `xlsx` skills to `~/.agents/skills/`. Existing skill directories are skipped unless `--force` is given, which overwrites only `SKILL.md` and keeps other files. Applies to new sessions. Browser scripts cannot run while the sandbox is enabled: use `canter --yolo` for a session that needs headless scripts, or use Playwright MCP instead. |
 
 ### Authentication
 
@@ -748,7 +748,7 @@ Instructions for the model.
 
 `/skills` lists the skills frozen when the session opened, grouped by source. Type `/<skill-name> [text]` to invoke one; the full `SKILL.md` is read at that point and inserted into the model request, while the visible conversation keeps only the skill name and your text. Changing a skill file affects later messages that invoke it, not a skill invocation already sent. Reopen the session to pick up a new skill in the list.
 
-`canter skills install` copies the bundled `docx`, `pptx` and `xlsx` skills to `~/.agents/skills/`. `--force` overwrites only their `SKILL.md` files. The bundled skills teach the model to inspect and write Office files with available local tools; canter itself adds no Office parser libraries.
+`canter skills install` copies the bundled `docx`, `pptx`, `web-testing` and `xlsx` skills to `~/.agents/skills/`. `--force` overwrites only their `SKILL.md` files. The document skills teach the model to inspect and write Office files with available local tools; canter itself adds no Office parser libraries. The web-testing skill teaches the model to choose between headless Playwright scripts and Playwright MCP. Browser scripts cannot run while the sandbox is enabled: use `canter --yolo` for a session that needs headless scripts, or use Playwright MCP instead.
 
 ## Sub-agents and roles
 
