@@ -100,3 +100,5 @@
 - 范围：新加 `GET /v1/doctor`、`canter doctor`、`/doctor`，LSP 没查，没加 `--fix`、`--json`；`/mcp`、`/sandbox`、`/roles` 没改。界面新增文字都是英文。对现有代码的改动是为 doctor 拆出只读入口：`roles::inspect`、`Config::load_read_only`（不改 config.json 权限）、`ModelCatalog::check`（不写目录缓存）、`ModelAuth::existing`。
 - 主控注意到一处超出 doctor 的改动，交交叉审查表态：新加 `crates/canter-server/build.rs` 借 `canter/src/version.rs` 把服务端 `VERSION` 从 `0.1.0` 改成带提交的 `0.1.0 · <sha>`。这同时改了 `server.json`、`/v1/info` 的 `serverVersion`，以及 `discovery.rs` 现有的版本提示（以前包版本一样就不提示，以后提交不同就提示 `still using the old server`）；另外 canter-server 以后每次 git 暂存或提交都会重编。
 - 核对：doctor 相关测试（server、canter、tui）20 条重跑全过；全套留到合并前。
+- 交叉审查（Claude Code opus[1m] / high）：可以合并，必须改 0 条；建议改 2 条（查模型列表没带配置的 headers、MCP 还在启动时报 fail 不报 skip）和可以不改 3 条（含服务端版本带提交，审查者认为可接受）都记进 HANDOFF，不交回。
+- 结果：一次过
