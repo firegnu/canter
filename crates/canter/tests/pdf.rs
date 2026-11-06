@@ -112,7 +112,8 @@ async fn pdf_scanned_pages_are_listed_with_model_appropriate_guidance() {
             "{}",
             output.text
         );
-        assert_eq!(output.text.contains("page"), images, "{}", output.text);
+        assert!(output.text.starts_with("PDF: 3 pages\n"), "{}", output.text);
+        assert_eq!(output.text.contains("page=N"), images, "{}", output.text);
         assert!(output.images.is_empty());
     }
 }
@@ -130,6 +131,7 @@ async fn pdf_text_has_page_numbers_and_is_detected_by_content() {
     .unwrap();
     let output = read(&tools(&dir), json!({"path":"document.bin"})).await;
     assert_eq!(output.outcome, ToolOutcome::Completed, "{}", output.text);
+    assert!(output.text.starts_with("PDF: 2 pages\n"), "{}", output.text);
     assert!(output.text.contains("Page 1"), "{}", output.text);
     assert!(output.text.contains("Page 2"), "{}", output.text);
     assert!(
@@ -242,6 +244,8 @@ async fn pdf_line_pagination_continues_without_losing_text() {
         first.text
     );
     let rest = read(&tools, json!({"path":"pages.pdf","startLine":4})).await;
+    assert!(first.text.starts_with("PDF: 3 pages\n"), "{}", first.text);
+    assert!(rest.text.starts_with("PDF: 3 pages\n"), "{}", rest.text);
     let all = read(&tools, json!({"path":"pages.pdf"})).await;
     let numbered = |text: &str| {
         text.lines()
@@ -277,6 +281,7 @@ async fn pdf_chinese_text_is_extracted_correctly() {
     let output = read(&tools(&dir), json!({"path":"chinese.pdf"})).await;
     assert_eq!(output.outcome, ToolOutcome::Completed, "{}", output.text);
     assert!(output.text.contains("中文测试"), "{}", output.text);
+    assert!(output.text.starts_with("PDF: 1 page\n"), "{}", output.text);
 }
 
 #[tokio::test]

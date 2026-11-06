@@ -1847,7 +1847,12 @@ impl Tools {
                     .map_err(std::io::Error::other)?;
                 return Ok((image.explanation(), vec![image], OutputSize::default()));
             }
-            let mut text = converted.text;
+            let pages = converted.page_count;
+            let mut text = format!(
+                "PDF: {pages} page{}\n{}",
+                if pages == 1 { "" } else { "s" },
+                converted.text
+            );
             if !converted.pages_needing_ocr.is_empty() {
                 let pages = converted
                     .pages_needing_ocr
