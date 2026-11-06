@@ -613,7 +613,7 @@ struct DrawnBackground {
     choices: (usize, Vec<u64>),
 }
 
-/// The sub-agents row (`▸ 2 sub-agents running`), or the open `/agents`
+/// The sub-agents row (`● 2 sub-agents running`), or the open `/agents`
 /// list's title in its place, as a frame drew them.
 #[derive(Debug, Default, Clone, PartialEq)]
 struct DrawnAgents {
@@ -2740,8 +2740,9 @@ impl App {
         self.agents.list = list;
     }
 
-    /// `/agents`: the list just read, open above the input box, the main
-    /// session first on a sub-agent's screen. With no sub-agent, says so.
+    /// `/agents`: the list just read, open above the input box under the
+    /// main session, which a sub-agent's screen selects first and the main
+    /// session's own screen does not. With no sub-agent, says so.
     pub(crate) fn show_agents(&mut self, list: Vec<AgentSummary>) {
         self.agents.list = list;
         if self.agents.list.is_empty() && self.snapshot.parent.is_none() {
@@ -2753,7 +2754,7 @@ impl App {
         self.setup = None;
         self.report = None;
         self.close_theme_picker();
-        self.agents.selected = Some(0);
+        self.agents.selected = Some(usize::from(self.snapshot.parent.is_none()));
     }
 
     /// A sub-agent's entry changed: the stop just asked for, or what the
@@ -2846,20 +2847,21 @@ impl App {
     }
 
     /// Keys while `/agents` is open: Up and Down select, Enter opens the
-    /// session selected, `s` stops the sub-agent selected when it runs;
-    /// Esc, Ctrl+C or Ctrl+D closes the list.
+    /// session selected (or closes the list on the one on screen), `s`
+    /// stops the sub-agent selected when it runs; Esc, Ctrl+C or Ctrl+D
+    /// closes the list.
     fn agents_key(&mut self, key: KeyEvent, seen: bool, send_guarded: bool) -> Option<Action> {
         let main = self
             .snapshot
             .parent
             .as_ref()
             .map(|parent| parent.session_id.clone());
-        let targets = self.agents.targets(main.as_deref());
+        let targets = self.agents.targets();
         let last = targets.len().saturating_sub(1);
         let selected = self.agents.selected?.min(last);
         let target = targets.get(selected).map(|target| match target {
             Some(agent) => (agent.id.clone(), agent.status == AgentStatus::Running),
-            None => (main.clone().unwrap_or_default(), false),
+            None => (self.main_session().to_owned(), false),
         });
         match key.code {
             KeyCode::Up if seen => self.agents.selected = Some(selected.saturating_sub(1)),
@@ -2893,12 +2895,7 @@ impl App {
         let Some(selected) = self.agents.selected else {
             return Vec::new();
         };
-        let main = self
-            .snapshot
-            .parent
-            .as_ref()
-            .map(|parent| parent.session_id.as_str());
-        let targets = self.agents.targets(main);
+        let targets = self.agents.targets();
         let selected = selected.min(targets.len().saturating_sub(1));
         targets
             .into_iter()
@@ -4722,10 +4719,9 @@ impl App {
             plan.extend(steps);
         }
         if let Some(row) = &agent_row {
-            plan.push(Line::from(truncate(
-                vec![Span::styled(format!("  {row}"), theme::secondary())],
-                usize::from(width),
-            )));
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(row.iter().cloned());
+            plan.push(Line::from(truncate(spans, usize::from(width))));
         }
 
         self.edge_scroll(now_ms);
@@ -5087,7 +5083,18 @@ impl App {
                 .parent
                 .as_ref()
                 .map(|parent| parent.session_id.as_str());
-            return self.agents.rows(main, width, max, now_ms);
+            let main_name = match main {
+                Some(main) => self.agents.main_name(main),
+                None => crate::report::clean(
+                    self.snapshot
+                        .settings
+                        .name
+                        .as_deref()
+                        .unwrap_or(&self.snapshot.id),
+                ),
+            };
+            let here = main.map(|_| self.snapshot.id.as_str());
+            return self.agents.rows(&main_name, here, width, max, now_ms);
         }
         if let Some(chooser) = &self.chooser {
             return chooser.rows(width, max);

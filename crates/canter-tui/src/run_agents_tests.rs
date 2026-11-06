@@ -95,7 +95,10 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     // Right above the input box, live while the session is idle.
     let screen = rows(&test);
     let top = screen.iter().rposition(|row| row.starts_with('╭')).unwrap();
-    assert_eq!(screen[top - 1].trim(), "▸ 2 sub-agents running · 1 done");
+    assert_eq!(
+        screen[top - 1].trim(),
+        "● 2 sub-agents running · 1 done · click or /agents"
+    );
     let click = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 4,
@@ -109,15 +112,22 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
 
     open_list(&mut test, "test", json!([a, b, c])).await;
     let text = shown(&test);
-    assert!(has(&test, &[" Sub-agents · 3 · 2 running"]), "{text}");
-    assert!(!text.contains("▸ 2 sub-agents"), "{text}");
     assert!(
-        has(&test, &["› ● agent-a", "explorer · running 42s"]),
+        has(&test, &["╭─ Sub-agents · 2 running · 1 done ─"]),
         "{text}"
     );
-    assert!(has(&test, &["● agent-b", "general · running"]), "{text}");
+    assert!(!text.contains("sub-agents running"), "{text}");
+    assert!(has(&test, &["│   Main session · test (here)"]), "{text}");
     assert!(
-        has(&test, &["✓ agent-c", "general · completed 2m 13s"]),
+        has(&test, &["│ › ├ ● agent-a  explorer  running  42s"]),
+        "{text}"
+    );
+    assert!(
+        has(&test, &["│   ├ ● agent-b  general   running  42s"]),
+        "{text}"
+    );
+    assert!(
+        has(&test, &["│   └ ✓ agent-c  general   done     2m 13s"]),
         "{text}"
     );
     assert!(
@@ -142,10 +152,13 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     test.message().await;
     let text = shown(&test);
     assert!(
-        has(&test, &["■ agent-a", "explorer · stopped by you 5s"]),
+        has(&test, &["├ ■ agent-a  explorer  stopped by you  5s"]),
         "{text}"
     );
-    assert!(has(&test, &[" Sub-agents · 3 · 1 running"]), "{text}");
+    assert!(
+        has(&test, &["╭─ Sub-agents · 1 running · 2 done ─"]),
+        "{text}"
+    );
     // Not running any more: `s` does nothing.
     assert_eq!(press(&mut test, KeyCode::Char('s')), None);
     press(&mut test, KeyCode::Down);
@@ -159,18 +172,128 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     assert!(
         rows(&test)
             .iter()
-            .any(|row| row.starts_with("╭─ Sub-agents · 3 ─")),
+            .any(|row| row.starts_with("╭─ Sub-agents · 3 done ─")),
         "{text}"
     );
-    assert!(has(&test, &["✗ agent-b", "general · failed 9s"]), "{text}");
+    assert!(
+        has(&test, &["├ ✗ agent-b  general   failed          9s"]),
+        "{text}"
+    );
     assert_eq!(press(&mut test, KeyCode::Up), None);
     assert_eq!(
         press(&mut test, KeyCode::Enter),
         Some(Action::OpenAgent("b".into()))
     );
     let text = shown(&test);
-    assert!(has(&test, &["▸ 3 sub-agents"]), "{text}");
+    assert!(has(&test, &["○ 3 sub-agents · click or /agents"]), "{text}");
     assert!(!text.contains("▾"), "{text}");
+    test.stop().await;
+}
+
+/// The cell at the start of `text` in the first row showing it.
+fn cell(test: &Harness, text: &str) -> ratatui::buffer::Cell {
+    let (y, row) = rows(test)
+        .into_iter()
+        .enumerate()
+        .find(|(_, row)| row.contains(text))
+        .unwrap_or_else(|| panic!("{text} not in\n{}", shown(test)));
+    let x = crate::text::str_width(&row[..row.find(text).unwrap()]);
+    test.ui.backend().buffer()[(x as u16, y as u16)].clone()
+}
+
+fn row_of(test: &Harness, text: &str) -> u16 {
+    rows(test)
+        .iter()
+        .position(|row| row.contains(text))
+        .unwrap() as u16
+}
+
+#[tokio::test]
+async fn the_list_hangs_the_sub_agents_under_the_main_session() {
+    use ratatui::style::{Color, Modifier};
+    let mut test = Harness::new().await;
+    let mut settings = test.ui.app().snapshot().settings.clone();
+    settings.name = Some(
+        "Use the reviewer sub-agent to review the code in src that parses dates and durations, then report back"
+            .into(),
+    );
+    test.event(EventPayload::SessionUpdated { settings });
+    let a = agent("a", "reviewer", "running", json!({ "startedAt": -125_000 }));
+    let b = agent(
+        "b",
+        "explorer",
+        "completed",
+        json!({ "durationMs": 41_000 }),
+    );
+    let c = agent("c", "general", "failed", json!({ "durationMs": 12_000 }));
+    for entry in [&a, &b, &c] {
+        test.event(payload(json!({ "type": "agent.updated", "agent": entry })));
+    }
+    // The row under the status line: a coloured mark, a dim way to open.
+    let row = "● 1 sub-agent running · 2 done · click or /agents";
+    assert!(has(&test, &[row]), "{}", shown(&test));
+    assert_eq!(cell(&test, row).fg, Color::Cyan);
+    assert!(cell(&test, "click or").modifier.contains(Modifier::DIM));
+
+    open_list(&mut test, "test", json!([a, b, c])).await;
+    let text = shown(&test);
+    assert!(
+        has(&test, &["╭─ Sub-agents · 1 running · 2 done ─"]),
+        "{text}"
+    );
+    // The main session on top, dim and cut short, here; not selected.
+    assert!(
+        has(
+            &test,
+            &["│   Main session · Use the reviewer sub-agent", "… (here)"]
+        ),
+        "{text}"
+    );
+    let main = cell(&test, "Main session");
+    assert!(main.modifier.contains(Modifier::DIM), "{main:?}");
+    assert!(!main.modifier.contains(Modifier::BOLD), "{main:?}");
+    // The sub-agents hang under it, in four columns.
+    assert!(
+        has(&test, &["│ › ├ ● agent-a  reviewer  running  2m 05s"]),
+        "{text}"
+    );
+    assert!(
+        has(&test, &["│   ├ ✓ agent-b  explorer  done     41s"]),
+        "{text}"
+    );
+    assert!(
+        has(&test, &["│   └ ✗ agent-c  general   failed   12s"]),
+        "{text}"
+    );
+    assert!(cell(&test, "├ ✓").modifier.contains(Modifier::DIM));
+    assert!(cell(&test, "reviewer").modifier.contains(Modifier::DIM));
+    assert_eq!(cell(&test, "running  2m").fg, Color::Cyan);
+    assert_eq!(cell(&test, "2m 05s").fg, Color::Cyan);
+    assert_eq!(cell(&test, "done     41s").fg, Color::Green);
+    assert_eq!(cell(&test, "41s").fg, Color::Green);
+    assert_eq!(cell(&test, "failed   12s").fg, Color::Red);
+    assert!(!text.contains("completed"), "{text}");
+
+    // Enter on the main session closes the list: it is the one on screen.
+    assert_eq!(press(&mut test, KeyCode::Up), None);
+    assert!(has(&test, &["│ › Main session · "]), "{}", shown(&test));
+    assert_eq!(press(&mut test, KeyCode::Char('s')), None);
+    assert_eq!(press(&mut test, KeyCode::Enter), None);
+    assert!(has(&test, &[row]), "{}", shown(&test));
+    assert!(!shown(&test).contains("Main session"));
+
+    // So does a click on it.
+    open_list(&mut test, "test", json!([a, b, c])).await;
+    assert!(has(&test, &["│ › ├ ● agent-a"]), "{}", shown(&test));
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 6,
+        row: row_of(&test, "Main session"),
+        modifiers: KeyModifiers::NONE,
+    };
+    assert_eq!(test.ui.app_mut().handle_mouse(click), None);
+    test.ui.draw(0).unwrap();
+    assert!(has(&test, &[row]), "{}", shown(&test));
     test.stop().await;
 }
 
@@ -415,12 +538,17 @@ async fn a_sub_agents_screen_shows_it_with_the_main_sessions_approvals() {
     )
     .await;
     let text = shown(&test);
-    assert!(has(&test, &["› ← Main session · Refactor locks"]), "{text}");
+    assert!(has(&test, &["╭─ Sub-agents · 2 running ─"]), "{text}");
+    assert!(has(&test, &["│ › Main session · Refactor locks"]), "{text}");
+    assert!(!text.contains("←"), "{text}");
     assert!(
-        has(&test, &["● agent-child", "explorer · running"]),
+        has(&test, &["│   ├ ● agent-child (here)  explorer  running"]),
         "{text}"
     );
-    assert!(has(&test, &["● agent-sib", "general · running"]), "{text}");
+    assert!(
+        has(&test, &["│   └ ● agent-sib           general   running"]),
+        "{text}"
+    );
     assert_eq!(
         press(&mut test, KeyCode::Enter),
         Some(Action::OpenAgent("test".into()))
