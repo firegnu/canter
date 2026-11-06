@@ -422,3 +422,8 @@
   - MCP 还在启动或热重载握手时报 fail「is not connected」，按「判断不了报 skip」应报 skip（`doctor.rs` `mcp`）；改法：按 slot 的明确状态判断，别匹配错误文字。
   - 可以不改：服务端版本借 `build.rs` 带上提交号（以后终端和服务端提交不同时会出现 `still using the old server` 提示；合并后第一次升级会提示一次；canter-server 每次 git 暂存或提交都重编），更小的做法是用 `serve()` 运行时拿到的 CLI 版本；`canter doctor` 连不上服务端时不显示具体原因；离线读整份 `server.log`。
 - `canter mcp add/remove` 改完配置仍打印 `Takes effect in new sessions after canter serve --replace`（`crates/canter/src/mcp.rs` `RESTART`，测试 `crates/canter/tests/mcp_cli.rs` 照这句断言）。P2-154 以后服务端自动读新配置，不用重启；11-06 用户删 `fs` 后没重启，`canter doctor` 已看不到它。改法：换成说明会自动生效的英文提示，测试一起改。
+- 读 PDF（P2-226，11-06 合并）交叉审查建议改、没做的（用户试用后再定）：
+  - 开着沙箱时，read 起的 `pdftoppm`（C 写的 poppler，解析模型指定的任意 PDF）和文字转换子进程都在沙箱外跑（`crates/canter-tools/src/pdf.rs` `run`）。权限检查没被绕过（子进程拿不到路径），只是恶意 PDF 打穿 poppler 时不受沙箱约束；改法：沙箱开着时两个转换进程套最严的配置（不可写、不联网）。
+  - `pdftoppm` 按服务端进程的 PATH 找，不是会话环境的 PATH（`pdf.rs` `Converter::default`）；服务端从不含 `/opt/homebrew/bin` 的环境拉起时，装了 poppler 也会提示 `brew install poppler`。
+  - 页面图超过 8 MiB 直接报错，没有降分辨率再试（`pdf.rs` `render`，现在 `-scale-to 2400`）；照片多的页可能看不了。
+  - 可以不改：要页面图前先跑一遍完整文字转换拿页数，最坏 60 秒、库解析不了的 PDF 也要不到图；扫描页提示写 `OCR needed`，但库对字很少的页也会报，页码多时一长串；服务端和转换子进程之间的 JSON 没有版本号；新加的超时分类对所有 read 生效。
