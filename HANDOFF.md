@@ -422,3 +422,4 @@
   - Chat Completions 那家查模型列表时没带配置里的 `headers`（`crates/canter-server/src/doctor.rs` `provider`）。靠自定义头鉴权的网关会被误报成 key 无效；用户的 opencode-go 配了 headers（P2-185 按会话标记，不是鉴权），试用时留意它会不会被误报。改法：照真实请求带上这家的请求头，值设 sensitive。
   - MCP 还在启动或热重载握手时报 fail「is not connected」，按「判断不了报 skip」应报 skip（`doctor.rs` `mcp`）；改法：按 slot 的明确状态判断，别匹配错误文字。
   - 可以不改：服务端版本借 `build.rs` 带上提交号（以后终端和服务端提交不同时会出现 `still using the old server` 提示；合并后第一次升级会提示一次；canter-server 每次 git 暂存或提交都重编），更小的做法是用 `serve()` 运行时拿到的 CLI 版本；`canter doctor` 连不上服务端时不显示具体原因；离线读整份 `server.log`。
+- `canter mcp add/remove` 改完配置仍打印 `Takes effect in new sessions after canter serve --replace`（`crates/canter/src/mcp.rs` `RESTART`，测试 `crates/canter/tests/mcp_cli.rs` 照这句断言）。P2-154 以后服务端自动读新配置，不用重启；11-06 用户删 `fs` 后没重启，`canter doctor` 已看不到它。改法：换成说明会自动生效的英文提示，测试一起改。
