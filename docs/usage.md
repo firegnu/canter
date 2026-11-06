@@ -60,6 +60,7 @@ Set `CANTER_HOME` to use another absolute state directory; all files below then 
 | Path | Contents |
 | --- | --- |
 | `config.json` | Model providers, provider keys, prices, hooks, MCP servers and global switches. |
+| `last_model.json`, `last_model.lock` | Last model and thinking effort chosen with `/model` or `/think`, used when a new session leaves the model empty; stores `model`, `reasoning_effort` and `config_model`, plus the lock that serializes writes. |
 | `auth/chatgpt/` | ChatGPT sign-in records: host ID, accounts, tokens and per-account consent (directory 0700, files 0600). |
 | `rules.json` | Permanent command and file rules written by approvals or `/permissions`. |
 | `trusted_folders.json` | Canonical repository roots the user trusted. |
@@ -104,7 +105,7 @@ There are two ways to describe providers. The legacy form configures one Chat Co
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `model` | required | The default model. In a providers-only configuration, write `<provider>/<model>`; the first `/` separates them and the model name itself may contain `/`. |
+| `model` | required | The fallback default model. A new session without an explicit model uses the last `/model` or `/think` selection when it is still available; otherwise this model. Changing this value clears the remembered selection. In a providers-only configuration, write `<provider>/<model>`; the first `/` separates them and the model name itself may contain `/`. |
 | `providers` | `{}` | Named providers. See below. |
 | `models` | legacy only | Models offered by the legacy endpoint; defaults to `["deepseek-flash", "deepseek-v4-pro"]`. The default model is added at the front if missing. Ignored when the configuration has only `providers`. |
 | `image_models` | legacy only | Models that accept images; defaults to `["deepseek-flash"]`. An empty list disables image input. Ignored when the configuration has only `providers`. |
@@ -152,7 +153,7 @@ Each model object accepts:
 | `auto_compact_tokens` | window minus 65536 minus 16384 | Per-model automatic compaction line, positive. |
 | `price` | unknown | USD per million tokens, in the same shape as `prices`. Unknown cost is shown as `unknown` or `+?`, never guessed. |
 | `supported_reasoning_efforts` | `["none", "low", "high", "max"]` | Thinking levels the model accepts. |
-| `default_reasoning_effort` | `"high"` | Level used when a new session does not choose one. Must be in the supported list. |
+| `default_reasoning_effort` | `"high"` | Level used when this model is chosen for a new session without an explicit or remembered effort. Must be in the supported list. |
 
 Thinking level names are `none`, `low`, `medium`, `high`, `xhigh` and `max`. An empty list, an unknown name, or a default outside the list makes the whole configuration invalid.
 
@@ -254,6 +255,8 @@ Override or add a price under `prices`, keyed by the full model name:
 
 The server watches `config.json`, merges rapid saves, and validates the new file with the same rules as at startup. A valid change is picked up at the next turn boundary: model, credentials, headers, windows, compaction lines, prices, sandbox, telemetry, hooks, MCP and LSP settings, and the tool-list switches `plan_enabled` and `mcp_tool_search`. A turn already running keeps the old configuration. A bad file is rejected whole and the last valid configuration stays active, with a warning event. The socket and listening address do not change.
 
+Changing `model` in `config.json` also clears the selection remembered from `/model` and `/think`, so the new configured model wins; changing any other setting does not clear it. At startup canter compares the remembered selection's `config_model` with the current configured model and clears it if they differ.
+
 `tui.json` is not hot-reloaded: a terminal reads it when it starts. `statusLine` in `config.json` is also read by the terminal at startup.
 
 ## Command line
@@ -281,7 +284,7 @@ canter mcp <subcommand>
 | Option | Meaning |
 | --- | --- |
 | `prompt` | Text after the options is sent as the first message of a new session. Not allowed with `--resume` or `--continue`. |
-| `-m`, `--model <model>` | Use this model for the session instead of the configured default. |
+| `-m`, `--model <model>` | Use this model for the session instead of the remembered or configured default. `-m` does not change the remembered selection. |
 | `--add-dir <path>` | Add a directory to the session. Repeatable. |
 | `--tag <key=value>` | Label a new session. Repeatable; the last value for a key wins. Not allowed when resuming. |
 | `-r`, `--resume [id]` | Resume a session. Without an id, open the session picker. |
@@ -484,11 +487,13 @@ The review turn is read-only regardless of permission mode or session grants: fi
 
 Switching is allowed while the session is idle. The conversation history is sent as-is to the new model; if it exceeds the new model's compaction line, canter compacts first. A model is never switched automatically.
 
-A session started with `canter` and no `-m` uses `model` from `config.json`. `/new` reuses the current session's model, thinking effort and permission mode; `/fork` inherits them from the source session; `/handoff` copies them into the new session.
+Changing the model with `/model`, or the effort with `/think`, records the session's resulting model and thinking effort for future sessions. Only an update that actually changes one of them is recorded, and only from a non-sub-agent session. An explicit `-m` (including `canter --resume -m`, `canter -c -m` and `canter exec --resume -m`), creating a session, opening an existing session, renaming it and starting a sub-agent do not change what is remembered. When several sessions make a valid choice, the last one wins.
+
+A session created without an explicit model (a fresh `canter`, or a client that leaves the model empty) uses the remembered pair. If the remembered model is no longer available — including from the signed-in ChatGPT catalog — canter uses `model` from `config.json` and that model's default effort. If only the remembered effort is unsupported by the chosen model, that model's default effort is used. An explicit `-m` uses that model and its default effort, not the remembered effort; an explicit thinking effort still wins. A missing, unreadable or malformed `last_model.json` counts as no selection; an unreadable or malformed file also logs one server-side line. `/new` keeps the current session's model, thinking effort and permission mode; `/fork` inherits them from the source session; `/handoff` copies them into the new session.
 
 ### Thinking effort
 
-`/think` lists the levels the current model supports; `/think <level>` sets one directly. A session created without an explicit effort, such as the first `canter` launch, uses the model's `default_reasoning_effort`. If the current level is not supported after a model switch, canter uses the new model's default and shows a warning. An explicitly requested unsupported level is rejected rather than replaced.
+`/think` lists the levels the current model supports; `/think <level>` sets one directly, and the change is remembered for future sessions. A new session uses the remembered effort when the chosen model supports it; otherwise it uses the model's `default_reasoning_effort`. If the current level is not supported after a model switch, canter uses the new model's default and shows a warning. An explicitly requested unsupported level is rejected rather than replaced.
 
 The status line shows the server's current setting. For Chat Completions providers, canter leaves the provider-specific spelling to the adapter; for ChatGPT it sends the selected `reasoning.effort`.
 
@@ -684,6 +689,33 @@ MCP servers are configured in canter's own `config.json` under `mcp_servers`, or
 
 MCP tools appear as `mcp__<server>__<tool>` when listed directly; the model normally sees `mcp_search` and `mcp_call`. Every MCP call is treated as execution and follows the normal approval rules. A session grant covers one server and tool. Review turns deny MCP calls without asking.
 
+### Playwright for web testing
+
+The Playwright MCP server drives a real Chromium browser, so the model can open a page, click, fill in forms and check the result without a built-in browser tool. Add it to `mcp_servers`:
+
+```json
+{
+  "mcp_servers": {
+    "playwright": {
+      "transport": "stdio",
+      "command": "/path/to/npx",
+      "args": ["-y", "@playwright/mcp@0.0.83", "--isolated"],
+      "env": {
+        "PATH": "/path/to/node/bin:/usr/local/bin:/usr/bin:/bin",
+        "HOME": "/path/to/home"
+      }
+    }
+  }
+}
+```
+
+- Pin a specific version (`0.0.83` is the version tested here); do not use `@latest`, so the tools and behavior do not change under you.
+- `--isolated` starts a blank browser profile each time. It has none of your normal Chrome login state or cookies.
+- The server starts `npx`, and `npx` needs `node`. The stdio child environment is cleared and then receives only a few base variables plus `env`, so put the directory containing `node` in `PATH` and set `HOME` as shown.
+- After saving the configuration, open a new session (or let a running server pick it up at the next turn). `/mcp` should show `playwright connected` and its tools.
+- In the asking permission modes, every Playwright tool needs approval on its first use. You can choose to allow that tool for the session; the grant is per tool, so one approval does not allow the other Playwright tools.
+- Models that cannot see images can still use it: Playwright reads the page structure, such as buttons, fields and text. When the model asks for a screenshot, only models that accept image input can see it.
+
 For OAuth services:
 
 ```sh
@@ -864,7 +896,7 @@ printf 'review this diff' | canter exec -
 canter exec --json "run the checks"
 ```
 
-Options: `-m`/`--model`, `--add-dir`, `--tag key=value` (new sessions only), `--yolo`, `--resume <id>`, `--last`, `--json`. A prompt may be omitted or `-`, which reads stdin. If a prompt is given and stdin is a pipe, the stdin text is appended inside a `<stdin>` block.
+Options: `-m`/`--model`, `--add-dir`, `--tag key=value` (new sessions only), `--yolo`, `--resume <id>`, `--last`, `--json`. A prompt may be omitted or `-`, which reads stdin. If a prompt is given and stdin is a pipe, the stdin text is appended inside a `<stdin>` block. Without `-m`, a new exec session uses the model and effort remembered from `/model` and `/think`; `-m` applies to this run only and is not remembered.
 
 The default permission mode is `ask-for-execution`, with the sandbox as configured. Approvals that would need a person are automatically declined with a reason, `ask_user` receives `No one is available. Use your own judgment and continue.`, and the model is told to proceed. `--yolo` uses `allow-all` and disables the sandbox for this run. If the server has `sandbox: false`, exec still runs and warns that commands needing approval will be declined.
 

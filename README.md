@@ -96,6 +96,8 @@ Create `~/.canter/config.json` with at least one provider. A minimal DeepSeek se
 
 To use a ChatGPT plan instead, add a `responses` provider, set the model to `chatgpt/<model>`, then run `canter auth login chatgpt`. The usage guide has complete examples for [providers](docs/usage.md#provider-objects), [ChatGPT](docs/usage.md#chatgpt) and [prices](docs/usage.md#prices).
 
+The server remembers the model and thinking effort you last chose with `/model` or `/think`; a newly started `canter` session uses them unless you pass `-m`. `config.json`'s `model` is the fallback when nothing is remembered or the remembered model is unavailable, and changing it clears the remembered selection. `-m` applies to that run only.
+
 Then run canter in a project directory:
 
 ```sh
