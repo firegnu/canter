@@ -24,6 +24,8 @@ mod mcp;
 mod mcp_oauth;
 #[path = "support/plan.rs"]
 mod plan;
+#[path = "support/skills_install.rs"]
+mod skills_install;
 #[path = "support/tool_images.rs"]
 mod tool_images;
 
