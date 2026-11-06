@@ -18,6 +18,9 @@ mod managed;
 #[path = "cleanup_tests.rs"]
 mod cleanup;
 
+#[path = "session_search_tests.rs"]
+mod search;
+
 #[tokio::test]
 async fn roles_endpoint_lists_builtins_and_custom_roles() {
     let test = Harness::new().await;

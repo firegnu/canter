@@ -32,6 +32,7 @@ mod git;
 mod goal;
 mod help;
 mod highlight;
+mod history_search;
 mod images;
 mod input;
 mod input_history;

@@ -33,6 +33,9 @@ mod tests;
 #[path = "doctor_tests.rs"]
 mod doctor_tests;
 
+#[path = "session_search.rs"]
+mod session_search;
+
 #[path = "agent_sessions.rs"]
 mod agent_sessions;
 
@@ -307,6 +310,7 @@ fn router_with_accounts(app: Arc<App>, accounts: Router) -> Router {
         .route(routes::STATS, get(stats_list))
         .route(routes::SESSION_STATS, get(session_stats))
         .route(routes::SESSIONS, post(create).get(list))
+        .route(routes::SESSION_SEARCH, get(search_sessions))
         .route(
             routes::MANAGED_CLIENT,
             get(managed::connect).delete(managed::close),
@@ -471,6 +475,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
             "sessionFork".into(),
             "conditionalName".into(),
             "sessionTrash".into(),
+            "sessionSearch".into(),
             "folderTrust".into(),
             "nonInteractiveInput".into(),
             "review".into(),
@@ -680,6 +685,22 @@ async fn list(state: State<Arc<App>>) -> Result<Json<SessionListResponse>, ApiEr
     Ok(Json(SessionListResponse {
         data: info(state).await?.0.sessions,
     }))
+}
+
+async fn search_sessions(
+    State(app): State<Arc<App>>,
+    params: Result<Query<SessionSearchParams>, QueryRejection>,
+) -> Result<Json<SessionSearchResponse>, ApiError> {
+    let Query(params) = params.map_err(|_| ApiError::invalid())?;
+    let cancelled = CancellationToken::new();
+    let _cancel_on_drop = cancelled.clone().drop_guard();
+    let store = app.store.clone();
+    let data =
+        tokio::task::spawn_blocking(move || session_search::search(&store, &params, &cancelled))
+            .await
+            .map_err(|_| ApiError::internal())?
+            .map_err(CoreError::from)?;
+    Ok(Json(SessionSearchResponse { data }))
 }
 
 async fn agents(

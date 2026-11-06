@@ -332,3 +332,104 @@ async fn manual_rename_uses_patch_and_updates_the_visible_session() {
         test.stop().await;
     }
 }
+
+#[tokio::test]
+async fn shared_resume_search_replaces_pending_queries_and_old_servers_keep_the_list() {
+    for old in [false, true] {
+        let mut test = Harness::new().await;
+        let client = test.chat.client.clone();
+        let (keys, mut input) = input();
+        let mut terminal = Terminal::new(TestBackend::new(150, 22)).unwrap();
+        let mut shutdown = Shutdown::listen().unwrap();
+        let mut tab = TabTitle::new(&BTreeMap::new());
+        let original = canter_protocol::SessionSummary {
+            agent_status: None,
+            parent: None,
+            id: "original".into(),
+            cwd: "/work".into(),
+            name: Some("Original session".into()),
+            status: SessionStatus::Idle,
+            updated_at: 1,
+            last_event_seq: 1,
+        };
+        let picker = Picker::new(vec![original.clone()], "/work".into(), None);
+        let drive = async {
+            while keys.frames() == 0 {
+                tokio::task::yield_now().await;
+            }
+            keys.send(TermEvent::Key(KeyEvent::from(KeyCode::Char('/'))));
+            keys.send(TermEvent::Paste("Sandbox default".into()));
+            let info = test.request().await;
+            assert_eq!(info.path, "/v1/info");
+            let frame = keys.frames();
+            info.json(json!({"serverVersion":"test","protocolVersion":1,"sessions":[],"features":if old {vec![]} else {vec!["sessionSearch"]}}));
+            if old {
+                while keys.frames() <= frame {
+                    tokio::task::yield_now().await;
+                }
+            } else {
+                let stale = test.request().await;
+                assert_eq!(stale.path, "/v1/sessions/search");
+                // The pending response must not block Tab or a replacement request.
+                keys.send(TermEvent::Key(KeyEvent::from(KeyCode::Tab)));
+                let info = test.request().await;
+                assert_eq!(info.path, "/v1/info");
+                info.json(json!({"serverVersion":"test","protocolVersion":1,"sessions":[],"features":["sessionSearch"]}));
+                let fresh = test.request().await;
+                assert_eq!(fresh.path, "/v1/sessions/search");
+                let frame = keys.frames();
+                use axum::response::IntoResponse;
+                // A cancelled HTTP request may already have dropped its receiver.
+                let _ = stale.reply.send(axum::Json(json!({"data":[{"session":original,"snippet":{"source":"userMessage","text":"stale result"}}]})).into_response());
+                let mut found = original.clone();
+                found.id = "found".into();
+                fresh.json(json!({"data":[{"session":found,"snippet":{"source":"agentMessage","text":"Sandbox uses the default"}}]}));
+                while keys.frames() <= frame {
+                    tokio::task::yield_now().await;
+                }
+            }
+            keys.send(TermEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        };
+        let picked = pick(
+            &mut terminal,
+            &mut input,
+            picker,
+            &client,
+            &mut shutdown,
+            (&mut tab, "work"),
+        );
+        let ((), picked) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(drive, picked)
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            picked.unwrap(),
+            Pick::Open(if old { "original" } else { "found" }.into())
+        );
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        if old {
+            assert!(
+                screen.contains("does not support session search")
+                    && screen.contains("canter upgrade")
+                    && screen.contains("Original session"),
+                "{screen}"
+            );
+        } else {
+            assert!(
+                screen.contains("all directories")
+                    && screen.contains("canter: Sandbox uses the default")
+                    && !screen.contains("stale result"),
+                "{screen}"
+            );
+        }
+        assert!(test.requests.try_recv().is_err());
+        test.stop().await;
+    }
+}

@@ -1226,9 +1226,29 @@ where
     B: FrameSync,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    let mut requested = None;
+    let mut searching: Option<
+        futures_util::future::BoxFuture<
+            'static,
+            Result<canter_protocol::SessionSearchResponse, ClientError>,
+        >,
+    > = None;
     loop {
         if shutdown.requested() {
             return Ok(Pick::Exit);
+        }
+        let params = picker.search_params();
+        if params != requested {
+            requested = params.clone();
+            let client = client.clone();
+            // Dropping the previous future cancels its request. Only the
+            // current query can supply results, even after leaving search.
+            searching = params.map(|params| {
+                Box::pin(async move {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    client.search_sessions(&params).await
+                }) as futures_util::future::BoxFuture<'static, _>
+            });
         }
         terminal
             .backend_mut()
@@ -1250,11 +1270,16 @@ where
                 .map_err(terminal_error)?;
         }
         input.frame_on_screen();
-        // The list changes only with its own keys, so every key is for this frame.
+        // Keys keep flowing while the latest search request is pending.
         let event = tokio::select! {
             biased;
             _ = shutdown.wait() => return Ok(Pick::Exit),
             event = input.recv() => event,
+            result = async { searching.as_mut().unwrap().await }, if searching.is_some() => {
+                searching = None;
+                picker.search_finished(result.map(|response| response.data).map_err(|error| error.to_string()));
+                continue;
+            }
         };
         match event {
             None => return Ok(Pick::Exit),
@@ -1275,6 +1300,7 @@ where
                     }
                 }
             }
+            Some((_, _, TermEvent::Paste(text))) => picker.paste(&text),
             Some(_) => {}
         }
     }

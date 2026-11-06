@@ -5201,6 +5201,28 @@
       },
       "type": "object"
     },
+    "SearchSnippet": {
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/SearchSource"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "text"
+      ],
+      "type": "object"
+    },
+    "SearchSource": {
+      "enum": [
+        "userMessage",
+        "agentMessage"
+      ],
+      "type": "string"
+    },
     "SessionBtwParams": {
       "description": "An ephemeral question. Its response stream is private to this HTTP caller.",
       "properties": {
@@ -5713,6 +5735,57 @@
       },
       "required": [
         "enabled"
+      ],
+      "type": "object"
+    },
+    "SessionSearchParams": {
+      "properties": {
+        "cwd": {
+          "description": "Exact working directory; absent means every directory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SessionSearchResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/SessionSearchResult"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
+    "SessionSearchResult": {
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/SessionSummary"
+        },
+        "snippet": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SearchSnippet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session"
       ],
       "type": "object"
     },
