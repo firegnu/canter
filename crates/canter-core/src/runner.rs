@@ -1183,7 +1183,16 @@ async fn execute(
                         let _ = sender.send(text.to_owned());
                     };
                     let runtime = shared.runtime();
-                    let execute = runtime.tools.execute(permit, cancel, &mut on_output);
+                    let accepts_images = runtime
+                        .options
+                        .image_models
+                        .contains(&shared.state.lock().await.journal.snapshot.settings.model);
+                    let execute = runtime.tools.execute_with_images(
+                        permit,
+                        cancel,
+                        &mut on_output,
+                        accepts_images,
+                    );
                     tokio::pin!(execute);
                     let mut pending = Vec::new();
                     let mut timer = tokio::time::interval(Duration::from_millis(20));

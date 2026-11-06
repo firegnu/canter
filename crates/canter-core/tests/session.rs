@@ -47,6 +47,74 @@ impl Model for ScriptModel {
 }
 
 #[tokio::test]
+async fn pdf_support_keeps_plain_text_read_requests_unchanged() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("plain.txt"),
+        "ordinary text\nsecond line\n",
+    )
+    .unwrap();
+    let call = ToolCall {
+        id: "read-plain".into(),
+        name: "read".into(),
+        arguments: r#"{"path":"plain.txt"}"#.into(),
+    };
+    let model = ScriptModel::new(vec![
+        vec![
+            ModelEvent::ToolCall(call.clone()),
+            ModelEvent::Finished(FinishReason::ToolCalls),
+        ],
+        vec![ModelEvent::Finished(FinishReason::Stop)],
+    ]);
+    let store = Arc::new(Store::new(temp.path().join("state/sessions")).unwrap());
+    let (session, _) = Session::create(
+        store,
+        "plain-read".into(),
+        settings(temp.path()),
+        RuntimeContext {
+            environment: BTreeMap::from([
+                ("HOME".into(), temp.path().display().to_string()),
+                (
+                    "CANTER_HOME".into(),
+                    temp.path().join("state").display().to_string(),
+                ),
+            ]),
+            ..Default::default()
+        },
+        model.clone(),
+        CoreOptions {
+            sandbox: false,
+            prompt_suggestions: false,
+            image_models: vec!["fake".into()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut events = session.subscribe(0).await.unwrap();
+    session.input(input("Read plain.txt.")).await.unwrap();
+    finished(&mut events).await;
+    {
+        let requests = model.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        let mut expected = requests[0].clone();
+        // The pre-PDF plain-text history contract: only these two entries append.
+        expected.messages.extend([
+            Message::Assistant {
+                content: vec![AssistantContent::ToolCall(call)],
+                replay: None,
+            },
+            Message::ToolResult {
+                tool_call_id: "read-plain".into(),
+                text: "1: ordinary text\n2: second line\n".into(),
+            },
+        ]);
+        assert_eq!(requests[1], expected);
+    }
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn switching_models_compares_unknown_reasoning_as_high() {
     for supports_high in [true, false] {
         let temp = tempfile::tempdir().unwrap();

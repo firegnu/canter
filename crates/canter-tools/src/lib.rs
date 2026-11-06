@@ -5,6 +5,7 @@ mod guardian;
 pub mod lsp;
 pub mod mcp;
 mod output;
+pub mod pdf;
 mod process;
 pub use output::MAX_CLIENT_OUTPUT_BYTES;
 pub use output::truncate_model_output;
@@ -270,11 +271,12 @@ impl Tool {
         }
         ToolDefinition {
             name: self.name(),
-            description: r#"Read a UTF-8 text file. Each returned line starts with its 1-based line number and ": " (for example "12: fn main() {"); that prefix is not part of the file. One call returns at most 2000 lines and 64 KiB; when more remains, the result ends with the startLine to continue from. Use startLine and lineCount to read part of a large file. Relative paths start from the session's working directory. JPEG, PNG, GIF and WebP images up to 8 MiB are attached for you to see; startLine and lineCount do not apply to images. Other binary and non-UTF-8 files are rejected, and canter's state directory is always refused. Read a file before editing it, and when you need several files, read them in parallel in one reply."#.into(),
+            description: r#"Read a UTF-8 text file. Each returned line starts with its 1-based line number and ": " (for example "12: fn main() {"); that prefix is not part of the file. One call returns at most 2000 lines and 64 KiB; when more remains, the result ends with the startLine to continue from. Use startLine and lineCount to read part of a large file. Relative paths start from the session's working directory. JPEG, PNG, GIF and WebP images up to 8 MiB are attached for you to see; startLine and lineCount do not apply to images. PDF files up to 50 MiB are detected by content and converted to text with page markers; startLine and lineCount apply to that text. Pages needing OCR are listed without attaching images. Set page to a 1-based PDF page number to view any page as a PNG, including charts or scanned pages; this requires an image-capable model and local pdftoppm (brew install poppler). Text extraction does not require poppler. Each conversion has a 30 second timeout; page images obey the 8 MiB limit. Other binary and non-UTF-8 files are rejected, and canter's state directory is always refused. Read a file before editing it, and when you need several files, read them in parallel in one reply."#.into(),
             parameters: json!({"type":"object", "properties": {
                 "path":{"type":"string", "minLength":1},
                 "startLine":{"type":"integer", "minimum":1, "maximum":u32::MAX, "default":1},
-                "lineCount":{"type":"integer", "minimum":1, "maximum":u32::MAX, "default":MAX_READ_LINES}
+                "lineCount":{"type":"integer", "minimum":1, "maximum":u32::MAX, "default":MAX_READ_LINES},
+                "page":{"type":"integer", "minimum":1, "maximum":u32::MAX, "description":"PDF only: return this page as an image instead of text."}
             }, "required":["path"], "additionalProperties":false}),
             risk: self.risk(),
         }
@@ -353,6 +355,7 @@ impl ToolImage {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ReadArgs {
     path: String,
+    page: Option<u32>,
     #[serde(default = "first_line")]
     start_line: u32,
     #[serde(default = "max_lines")]
@@ -704,6 +707,7 @@ pub struct Tools {
     mcp: Vec<mcp::McpTool>,
     mcp_tool_search: bool,
     web_fetch_timeout: std::time::Duration,
+    pdf: pdf::Converter,
     web_search: Option<web_search::WebSearch>,
 }
 
@@ -928,6 +932,7 @@ impl Tools {
             mcp: Vec::new(),
             mcp_tool_search: true,
             web_fetch_timeout: web_fetch::DEFAULT_TIMEOUT,
+            pdf: pdf::Converter::default(),
             web_search: None,
         }
     }
@@ -935,6 +940,23 @@ impl Tools {
     /// Only tests shorten it; the server always uses the 30 second default.
     pub fn with_web_fetch_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.web_fetch_timeout = timeout;
+        self
+    }
+
+    /// Override the PDF worker host and renderer (also used by isolated tests).
+    pub fn with_pdf_commands(
+        mut self,
+        worker: std::path::PathBuf,
+        renderer: std::path::PathBuf,
+    ) -> Self {
+        self.pdf.worker = Some(worker);
+        self.pdf.renderer = renderer;
+        self
+    }
+
+    /// Production uses the default 30 second conversion deadline.
+    pub fn with_pdf_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.pdf.timeout = timeout;
         self
     }
 
@@ -1278,6 +1300,9 @@ impl Tools {
                 if read.start_line == 0 || read.line_count == 0 {
                     return Err("startLine and lineCount must be positive".into());
                 }
+                if read.page == Some(0) {
+                    return Err("page must be positive (1-based)".into());
+                }
                 Ok(Action::Read(read))
             }
             Tool::Write => {
@@ -1399,6 +1424,18 @@ impl Tools {
         permit: ExecutionPermit<'_>,
         cancel: &CancellationToken,
         on_output: &mut (dyn FnMut(&str) + Send),
+    ) -> ToolOutput {
+        self.execute_with_images(permit, cancel, on_output, false)
+            .await
+    }
+
+    /// Image capability for this invocation; tool definitions stay model-independent.
+    pub async fn execute_with_images(
+        &self,
+        permit: ExecutionPermit<'_>,
+        cancel: &CancellationToken,
+        on_output: &mut (dyn FnMut(&str) + Send),
+        accepts_images: bool,
     ) -> ToolOutput {
         let call = permit.into_call();
         if !Arc::ptr_eq(&call.executor, &self.executor) {
@@ -1599,7 +1636,7 @@ impl Tools {
                 let result = tokio::select! {
                     biased;
                     _ = cancel.cancelled() => Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "tool cancelled")),
-                    result = self.read(read, call.resolved_path.as_deref().unwrap_or_else(|| read.path.as_ref()), cancel) => result,
+                    result = self.read(read, call.resolved_path.as_deref().unwrap_or_else(|| read.path.as_ref()), cancel, accepts_images) => result,
                 };
                 match result {
                     Ok((text, images, mut output_size)) => {
@@ -1634,6 +1671,8 @@ impl Tools {
                         error.to_string(),
                         if cancel.is_cancelled() {
                             ToolOutcome::Cancelled
+                        } else if error.kind() == std::io::ErrorKind::TimedOut {
+                            ToolOutcome::TimedOut
                         } else {
                             ToolOutcome::Failed
                         },
@@ -1756,6 +1795,7 @@ impl Tools {
         args: &ReadArgs,
         path: &std::path::Path,
         cancel: &CancellationToken,
+        accepts_images: bool,
     ) -> std::io::Result<(String, Vec<ToolImage>, OutputSize)> {
         let mut reader = BufReader::new(self.executor.open_file(path, cancel).await?);
         // Inspect the same opened file that will be read, preserving executor checks.
@@ -1772,7 +1812,67 @@ impl Tools {
             reader.consume(length);
         }
         let image = canter_protocol::image_mime_type(&header).is_some();
+        let is_pdf = header.starts_with(b"%PDF-");
         let mut reader = BufReader::new(std::io::Cursor::new(header).chain(reader));
+        if args.page.is_some() && !is_pdf {
+            return Err(std::io::Error::other("page is only valid for PDF files"));
+        }
+        if is_pdf {
+            let mut bytes = Vec::new();
+            let mut bounded = (&mut reader).take(pdf::MAX_PDF_BYTES + 1);
+            tokio::select! {
+                _ = cancel.cancelled() => return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "PDF read cancelled")),
+                result = bounded.read_to_end(&mut bytes) => { result?; }
+            }
+            if bytes.len() as u64 > pdf::MAX_PDF_BYTES {
+                return Err(std::io::Error::other("PDF exceeds the 50 MiB limit"));
+            }
+            if args.page.is_some() && !accepts_images {
+                return Ok(("The current model does not support images; read this PDF without page to extract text.".into(), Vec::new(), OutputSize::default()));
+            }
+            let converted = self.pdf.extract(&bytes, args, cancel).await?;
+            if let Some(page) = args.page {
+                if page > converted.page_count {
+                    return Err(std::io::Error::other(format!(
+                        "PDF page {page} is out of range; the document has {} pages.",
+                        converted.page_count
+                    )));
+                }
+                let bytes = self.pdf.render(&bytes, page, cancel).await?;
+                let name = std::path::Path::new(&args.path)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let image = ToolImage::new(bytes, format!("{name}-page{page}.png"))
+                    .map_err(std::io::Error::other)?;
+                return Ok((image.explanation(), vec![image], OutputSize::default()));
+            }
+            let mut text = converted.text;
+            if !converted.pages_needing_ocr.is_empty() {
+                let pages = converted
+                    .pages_needing_ocr
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                text.push_str(&format!(
+                    "\nPages with no extractable text (OCR needed): {pages}."
+                ));
+                if accepts_images {
+                    text.push_str(
+                        " Use read with the same path and page=N to view one page as an image.",
+                    );
+                }
+            }
+            return Ok((
+                text,
+                Vec::new(),
+                OutputSize {
+                    truncated: converted.truncated,
+                    ..Default::default()
+                },
+            ));
+        }
         if image {
             let mut bytes = Vec::new();
             reader
@@ -1789,6 +1889,14 @@ impl Tools {
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
             return Ok((image.explanation(), vec![image], OutputSize::default()));
         }
+        Self::read_text(reader, args, cancel).await
+    }
+
+    async fn read_text(
+        mut reader: impl tokio::io::AsyncBufRead + Unpin,
+        args: &ReadArgs,
+        cancel: &CancellationToken,
+    ) -> std::io::Result<(String, Vec<ToolImage>, OutputSize)> {
         let mut text = String::new();
         let mut line_number = 1u64;
         let mut output_size = OutputSize::default();

@@ -29,3 +29,4 @@ sse-stream = "=0.2.6"
 notify = "=8.2.1"
 tree-sitter = "=0.25.10"
 tree-sitter-bash = "=0.25.1"
+pdf-inspector = { version = "=1.25.2", default-features = false }
