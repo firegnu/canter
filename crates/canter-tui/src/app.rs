@@ -72,6 +72,10 @@ const EDGE_SCROLL_MS: i64 = 50;
 /// The info rows at the bottom: model, thinking and permission mode; then
 /// directory and branch, context use and cache hits.
 const INFO_ROWS: u16 = 2;
+/// How to open a row under the info rows, at its end (P2-240).
+pub(crate) const TO_VIEW: &str = " · ↓ to view";
+/// In its place while ↓ has the row selected.
+const SELECTED_KEYS: &str = " · Enter to open · ↑ back";
 /// Changes of what is on screen kept for keys still waiting to be handled.
 const SHOWN_KEPT: usize = 8;
 /// After `/handoff`, how long after the first Esc a second one goes back.
@@ -586,6 +590,8 @@ struct Shown {
     background: DrawnBackground,
     /// The sub-agents row and the `/agents` list, for a click on them.
     agents: DrawnAgents,
+    /// The rows under the info rows, top to bottom, for ↓ to select.
+    footer: Vec<Footer>,
     /// The waiting hint below the sub-agent header was on screen.
     main_waiting: bool,
     /// The prompt on the top row, for a click on it.
@@ -599,6 +605,15 @@ struct DrawnSticky {
     view: (usize, u16),
     /// The prompt's first row: a click puts it at the top of the view.
     row: usize,
+}
+
+/// A row under the info rows (P2-240).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Footer {
+    /// `▸ N background commands`: opens `/ps`.
+    Background,
+    /// The sub-agents row: opens `/agents`.
+    Agents,
 }
 
 /// `▸ N background commands` and the `/ps` list as a frame drew them.
@@ -726,6 +741,10 @@ pub struct App {
     choosers: u64,
     /// The number of the `/ps` list or log page opened last.
     background_list: Option<u64>,
+    /// The number of the `/agents` report opened last, saying there are none.
+    agents_empty: Option<u64>,
+    /// The row under the info rows ↓ selected from the input box.
+    footer_selected: Option<Footer>,
     /// The main session's sub-agents, and `/agents` while it is open.
     agents: crate::agents::Agents,
     /// How many times a command name was completed in the input box.
@@ -1056,6 +1075,8 @@ impl App {
             chooser: None,
             choosers: 0,
             background_list: None,
+            agents_empty: None,
+            footer_selected: None,
             agents: Default::default(),
             completions: 0,
             notices: Vec::new(),
@@ -1579,6 +1600,9 @@ impl App {
             }
             return self.chooser_key(key, seen, send_guarded);
         }
+        if let Some(action) = self.footer_key(key, &shown) {
+            return action;
+        }
         if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.open_search();
             return None;
@@ -1750,13 +1774,21 @@ impl App {
                     self.input.vertical(-1, width);
                 }
             }
+            // With the cursor on the last row and nothing newer to go to, ↓
+            // selects the first row under the info rows (P2-240).
             KeyCode::Down => {
                 let width = self.input_width();
                 if !self
                     .input_history
                     .down(&self.snapshot.settings.cwd, &mut self.input)
                 {
-                    self.input.vertical(1, width);
+                    let layout = self.input.layout(width);
+                    match shown.footer.first() {
+                        Some(row) if layout.cursor.0 + 1 >= layout.rows.len() => {
+                            self.footer_selected = Some(*row);
+                        }
+                        _ => self.input.vertical(1, width),
+                    }
                 }
             }
             KeyCode::Home => self.input.home(),
@@ -2734,19 +2766,21 @@ impl App {
             .map_or(&self.snapshot.id, |parent| &parent.session_id)
     }
 
-    /// The main session's sub-agents as just read, for the row above the
-    /// input box.
+    /// The main session's sub-agents as just read, for the row under the
+    /// info rows.
     pub(crate) fn set_agents(&mut self, list: Vec<AgentSummary>) {
         self.agents.list = list;
     }
 
-    /// `/agents`: the list just read, open above the input box under the
-    /// main session, which a sub-agent's screen selects first and the main
-    /// session's own screen does not. With no sub-agent, says so.
+    /// `/agents`: the list just read, open under the info rows, the
+    /// sub-agents hanging under the main session, which a sub-agent's
+    /// screen selects first and the main session's own screen does not.
+    /// With no sub-agent, says so.
     pub(crate) fn show_agents(&mut self, list: Vec<AgentSummary>) {
         self.agents.list = list;
         if self.agents.list.is_empty() && self.snapshot.parent.is_none() {
             self.open_report(crate::agents::empty());
+            self.agents_empty = Some(self.choosers);
             return;
         }
         self.choosers += 1;
@@ -3020,9 +3054,45 @@ impl App {
         Some(action)
     }
 
-    /// Whether the `/ps` list or a command's log is open above the input box.
+    /// Whether the `/ps` list or a command's log is open under the info rows.
     fn background_open(&self) -> bool {
         self.choosing() && self.background_list == Some(self.choosers)
+    }
+
+    /// Whether `/agents` or `/ps` (or a command's log) is open under the
+    /// info rows, with the input box grey above them (P2-240).
+    fn footer_open(&self) -> bool {
+        self.agents.selected.is_some()
+            || self.background_open()
+            || (self.report.is_some() && self.agents_empty == Some(self.choosers))
+    }
+
+    /// Keys while ↓ has a row under the info rows selected: ↑ and ↓ move
+    /// between the rows `shown` drew, ↑ on the first going back to the
+    /// input box; Enter, or ↓ on the last, opens the row's list; Esc only
+    /// leaves the row. `None` for other keys, which leave the row and act
+    /// as in the input box.
+    fn footer_key(&mut self, key: KeyEvent, shown: &Shown) -> Option<Option<Action>> {
+        let selected = self.footer_selected.take()?;
+        let at = shown.footer.iter().position(|row| *row == selected)?;
+        if !key.modifiers.is_empty() {
+            return None;
+        }
+        match key.code {
+            KeyCode::Up => self.footer_selected = at.checked_sub(1).map(|at| shown.footer[at]),
+            KeyCode::Down if at + 1 < shown.footer.len() => {
+                self.footer_selected = Some(shown.footer[at + 1]);
+            }
+            KeyCode::Down | KeyCode::Enter => {
+                return Some(Some(match selected {
+                    Footer::Background => Action::BackgroundList,
+                    Footer::Agents => Action::AgentList,
+                }));
+            }
+            KeyCode::Esc => {}
+            _ => return None,
+        }
+        Some(None)
     }
 
     /// The ids of the commands the open `/ps` list shows in `rows` rows;
@@ -4614,6 +4684,7 @@ impl App {
             input: None,
             background: DrawnBackground::default(),
             agents: DrawnAgents::default(),
+            footer: Vec::new(),
             main_waiting: false,
             sticky: None,
         };
@@ -4647,15 +4718,24 @@ impl App {
             self.drawing.main_waiting = height > 2 && width > 0;
         }
         let header_rows = header.len();
-        // A choice, `/statusline`, `/theme`, `/agents` or a report takes the
+        // `/agents` and `/ps` open under the info rows, with the input box
+        // grey above them (P2-240).
+        let footer_open = matches!(bottom, Bottom::Input { .. }) && self.footer_open();
+        // Any other choice, `/statusline`, `/theme` or a report takes the
         // input box's place, in a box of its own; when not even that fits,
         // the input box stays.
-        let panel = matches!(bottom, Bottom::Input { .. }) && self.choosing();
+        let panel = matches!(bottom, Bottom::Input { .. }) && self.choosing() && !footer_open;
         // Commands and paths are only for the input box.
         let list = match bottom {
             Bottom::Input { .. } if panel => self.list_view(
                 width.saturating_sub(PANEL_CHROME),
                 usize::from(height.saturating_sub(1 + INFO_ROWS)).saturating_sub(header_rows),
+                now_ms,
+            ),
+            Bottom::Input { .. } if footer_open => self.list_view(
+                width.saturating_sub(PANEL_CHROME),
+                usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height()))
+                    .saturating_sub(header_rows),
                 now_ms,
             ),
             Bottom::Input { .. } => self.list_view(
@@ -4668,61 +4748,82 @@ impl App {
         };
         // The rows the list or the panel takes, title and keys included.
         let opened = list.len();
-        let (bottom, list) = if panel && opened > 0 {
-            (Bottom::panel(list), Vec::new())
+        let (bottom, list, footer_box) = if panel && opened > 0 {
+            (Bottom::panel(list), Vec::new(), None)
+        } else if footer_open && opened > 0 {
+            (bottom.grey(), Vec::new(), Some(Bottom::panel(list)))
         } else {
-            (bottom, list)
+            (bottom, list, None)
         };
+        let footer_box_height = footer_box.as_ref().map_or(0, Bottom::height);
         // The choice offered is on screen when any of its choices fit.
         self.drawing.chooser = (self.choosing() && opened > 0).then_some(self.choosers);
 
-        let plan_room = usize::from(height.saturating_sub(3 + INFO_ROWS + bottom.height()))
-            .saturating_sub(list.len() + header_rows);
+        let plan_room =
+            usize::from(height.saturating_sub(3 + INFO_ROWS + bottom.height() + footer_box_height))
+                .saturating_sub(list.len() + header_rows);
         let background_count = self
             .snapshot
             .background_commands
             .iter()
             .filter(|command| command.running)
             .count();
-        let mut plan = Vec::new();
-        let background_row = background_count > 0 && plan_room > 0;
+        // Under the info rows: the background commands row, then the
+        // sub-agents row, whose list opens in its place.
+        let mut footer = Vec::new();
         let background_open = self.background_open() && opened > 0;
-        if background_row {
+        if background_count > 0 && plan_room > 0 {
             let mark = if background_open { '▾' } else { '▸' };
-            plan.push(Line::from(truncate(
-                vec![Span::styled(
-                    format!("  {mark} {background_count} background commands"),
-                    theme::secondary(),
-                )],
-                usize::from(width),
-            )));
+            footer.push((
+                Footer::Background,
+                vec![
+                    Span::styled(
+                        format!("{mark} {background_count} background commands"),
+                        theme::secondary(),
+                    ),
+                    Span::styled(TO_VIEW, theme::secondary()),
+                ],
+            ));
         }
-        // The sub-agents row goes last, so `/agents` opens in its place.
         let agents_open = self.agents.selected.is_some() && opened > 0;
-        let agent_row = self
+        if let Some(row) = self
             .agents
             .row()
-            .filter(|_| !agents_open && plan_room > plan.len());
+            .filter(|_| !agents_open && plan_room > footer.len())
+        {
+            footer.push((Footer::Agents, row));
+        }
+        // ↓ selects them only from the bare input box.
+        let selectable = matches!(bottom, Bottom::Input { .. })
+            && !self.choosing()
+            && self.search.is_none()
+            && self.history_search.is_none();
+        if !selectable
+            || !footer
+                .iter()
+                .any(|(row, _)| Some(*row) == self.footer_selected)
+        {
+            self.footer_selected = None;
+        }
+        self.drawing.footer = footer.iter().map(|(row, _)| *row).collect();
+        let footer: Vec<Line<'static>> = footer
+            .into_iter()
+            .map(|(row, spans)| footer_line(spans, self.footer_selected == Some(row), width))
+            .collect();
         // While working, the plan's steps hang under the status line, then
         // the tip; with a blank row above the status line.
         let working = self.snapshot.status == SessionStatus::Working && self.search.is_none();
         let steps = crate::plan::pinned(
             &self.snapshot,
             width,
-            plan_room.saturating_sub(plan.len() + usize::from(agent_row.is_some())),
+            plan_room.saturating_sub(footer.len()),
             working,
         );
-        let mut hung = Vec::new();
-        if working {
-            hung = steps;
+        let (plan, mut hung) = if working {
+            (Vec::new(), steps)
         } else {
-            plan.extend(steps);
-        }
-        if let Some(row) = &agent_row {
-            let mut spans = vec![Span::raw("  ")];
-            spans.extend(row.iter().cloned());
-            plan.push(Line::from(truncate(spans, usize::from(width))));
-        }
+            (steps, Vec::new())
+        };
 
         self.edge_scroll(now_ms);
         self.extend_history(width);
@@ -4742,8 +4843,9 @@ impl App {
 
         let lead = lead(history, &live);
         let total = history.len() + live.len() - lead;
-        let room = usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height()))
-            .saturating_sub(list.len() + plan.len() + hung.len() + header_rows);
+        let room =
+            usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height() + footer_box_height))
+                .saturating_sub(list.len() + plan.len() + hung.len() + header_rows + footer.len());
         // Only under the status line of a turn that started here, with the
         // bare input box below; it goes first when rows run short.
         let tip_lead = if hung.is_empty() { HUNG } else { UNDER_HUNG };
@@ -4752,6 +4854,7 @@ impl App {
                 if working
                     && matches!(bottom, Bottom::Input { .. })
                     && list.is_empty()
+                    && footer_box.is_none()
                     && room > 2 =>
             {
                 tips.line(turn, width, tip_lead)
@@ -4839,34 +4942,47 @@ impl App {
             rows: input_rows,
         });
         // Under the header and the conversation: the hint, the blank row,
-        // the command row, the status line and the rows hung under it; the
-        // list starts with its title.
-        let background_top = header_rows
+        // the command row, the status line, the rows hung under it, plan,
+        // list, the box and the info rows; then the rows under them, and
+        // the open list's top border.
+        let footer_top = header_rows
             + area
             + usize::from(hint.is_some())
             + usize::from(gap)
             + usize::from(command.is_some())
             + 1
-            + hung.len();
+            + hung.len()
+            + plan.len()
+            + list.len()
+            + usize::from(bottom.height())
+            + usize::from(INFO_ROWS);
+        let footer_row = |wanted: Footer| {
+            self.drawing
+                .footer
+                .iter()
+                .position(|row| *row == wanted)
+                .map(|at| footer_top + at)
+        };
+        let box_top = footer_top + footer.len();
+        let background_row = footer_row(Footer::Background);
+        let agent_row = footer_row(Footer::Agents);
         self.drawing.background = DrawnBackground {
-            row: background_row.then_some(background_top),
+            row: background_row,
             open: background_open,
             choices: (
-                background_top + plan.len() + 1,
+                box_top + 1,
                 self.background_choices(opened.saturating_sub(1)),
             ),
         };
-        // The sub-agents row is the last of the plan rows; the open list's
-        // title is the row under them.
-        let agents_top = background_top + plan.len();
+        // The open list's title is in the sub-agents row's place.
         self.drawing.agents = DrawnAgents {
             row: if agents_open {
-                Some(agents_top)
+                Some(box_top)
             } else {
-                agent_row.as_ref().map(|_| agents_top - 1)
+                agent_row
             },
             open: agents_open,
-            choices: (agents_top + 1, self.agent_choices(opened.saturating_sub(2))),
+            choices: (box_top + 1, self.agent_choices(opened.saturating_sub(2))),
         };
         let starts = starts(&self.history, live_parts, lead);
         let rows = Rows {
@@ -5033,6 +5149,7 @@ impl App {
                     // Tab sends what is typed only when no list above takes it.
                     let steer = list.is_empty()
                         && matches!(bottom, Bottom::Input { .. })
+                        && footer_box.is_none()
                         && self.drawing.turn.is_some()
                         && self.steerable();
                     self.status_line(now_ms, width, steer, command.is_some())
@@ -5044,6 +5161,8 @@ impl App {
             list,
             bottom,
             info,
+            footer,
+            footer_box,
         };
         // Shift+Tab uses the mode of this frame under the bare input box.
         // Custom output, or items without it on the first row, need not
@@ -5057,7 +5176,7 @@ impl App {
             && !self.choosing()
             && self.command_list().is_none()
             && self.mention_list().is_none();
-        let mode_drawn = view.below() - (INFO_ROWS - 1) <= height;
+        let mode_drawn = view.below() - (INFO_ROWS - 1) - view.under_info() <= height;
         self.drawing.mode = (bare_input && (mode_in_full || self.mode_elsewhere()) && mode_drawn)
             .then_some(self.snapshot.settings.approval_policy);
         view
@@ -5233,6 +5352,7 @@ impl App {
                 rows,
                 cursor,
                 shell,
+                grey: false,
             },
             shown.collect(),
         )
@@ -6445,6 +6565,11 @@ pub(crate) struct View {
     list: Vec<Line<'static>>,
     bottom: Bottom,
     info: [Line<'static>; 2],
+    /// Under the info rows: the background commands row and the
+    /// sub-agents row (P2-240).
+    footer: Vec<Line<'static>>,
+    /// `/agents` or `/ps`, open under them: a [`Bottom::Panel`].
+    footer_box: Option<Bottom>,
 }
 
 /// The input box, or the approval box in its place.
@@ -6455,10 +6580,14 @@ enum Bottom {
         cursor: (u16, u16),
         /// The draft is a `!` command: the border is red.
         shell: bool,
+        /// A list is open under the info rows: the box is grey and has no
+        /// cursor.
+        grey: bool,
     },
     Approval(ApprovalBox),
-    /// A choice, `/statusline`, `/theme`, `/agents` or a report: its title
-    /// on the top border, its keys on the bottom one.
+    /// A choice, `/statusline`, `/theme` or a report: its title on the
+    /// top border, its keys on the bottom one. `/agents` and `/ps` too,
+    /// under the info rows.
     Panel {
         title: Line<'static>,
         rows: Vec<Line<'static>>,
@@ -6478,6 +6607,35 @@ impl Bottom {
         Bottom::Panel { title, rows, keys }
     }
 
+    /// The input box grey, with every row dim, while a list is open
+    /// under the info rows.
+    fn grey(self) -> Self {
+        match self {
+            Bottom::Input {
+                rows,
+                cursor,
+                shell,
+                ..
+            } => Bottom::Input {
+                rows: rows
+                    .into_iter()
+                    .map(|line| {
+                        Line::from(
+                            line.spans
+                                .into_iter()
+                                .map(|span| Span::styled(span.content, theme::secondary()))
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect(),
+                cursor,
+                shell,
+                grey: true,
+            },
+            other => other,
+        }
+    }
+
     /// Rows inside the border, plus the border.
     fn height(&self) -> u16 {
         let rows = match self {
@@ -6491,7 +6649,7 @@ impl Bottom {
 impl View {
     /// Rows under the conversation: the hint, the blank row, the command
     /// row, the status line, the rows hung under it, the plan rows, the
-    /// list, the box and the info rows.
+    /// list, the box, the info rows and what is under them.
     fn below(&self) -> u16 {
         u16::from(self.hint.is_some())
             + 1
@@ -6502,6 +6660,13 @@ impl View {
             + self.list.len() as u16
             + self.bottom.height()
             + INFO_ROWS
+            + self.under_info()
+    }
+
+    /// Rows under the info rows: the background commands and sub-agents
+    /// rows, and the list open under them.
+    fn under_info(&self) -> u16 {
+        self.footer.len() as u16 + self.footer_box.as_ref().map_or(0, Bottom::height)
     }
 
     /// The conversation fills the rows the status line, the box and the info
@@ -6541,14 +6706,28 @@ impl View {
         frame.render_widget(Paragraph::new(self.list), row(list));
         let boxed = row(self.bottom.height());
         let info = row(INFO_ROWS);
-        match self.bottom {
+        let footer = row(self.footer.len() as u16);
+        let footer_box = row(self.footer_box.as_ref().map_or(0, Bottom::height));
+        self.bottom.draw(frame, boxed);
+        frame.render_widget(Paragraph::new(Vec::from(self.info)), info);
+        frame.render_widget(Paragraph::new(self.footer), footer);
+        if let Some(open) = self.footer_box {
+            open.draw(frame, footer_box);
+        }
+    }
+}
+
+impl Bottom {
+    fn draw(self, frame: &mut Frame, boxed: Rect) {
+        match self {
             Bottom::Input {
                 rows,
                 cursor,
                 shell,
+                grey,
             } => {
                 let block = Block::bordered().border_type(BorderType::Rounded);
-                let block = if shell {
+                let block = if shell && !grey {
                     // On the bottom border, so it takes no row.
                     block
                         .border_style(theme::shell())
@@ -6558,7 +6737,7 @@ impl View {
                 };
                 frame.render_widget(Paragraph::new(rows).block(block), boxed);
                 let cursor = Position::new(boxed.x + cursor.0, boxed.y + cursor.1);
-                if boxed.contains(cursor) {
+                if !grey && boxed.contains(cursor) {
                     frame.set_cursor_position(cursor);
                 }
             }
@@ -6589,8 +6768,22 @@ impl View {
                 frame.render_widget(Paragraph::new(rows).block(block), boxed);
             }
         }
-        frame.render_widget(Paragraph::new(Vec::from(self.info)), info);
     }
+}
+
+/// A row under the info rows: `spans`, the last saying how to open it;
+/// while ↓ has it selected, reversed, with Enter and ↑ in place of that.
+fn footer_line(mut spans: Vec<Span<'static>>, selected: bool, width: u16) -> Line<'static> {
+    if selected {
+        spans.pop();
+        for span in &mut spans {
+            span.style = span.style.add_modifier(Modifier::REVERSED);
+        }
+        spans.push(Span::styled(SELECTED_KEYS, theme::secondary()));
+    }
+    let mut line = vec![Span::raw("  ")];
+    line.extend(spans);
+    Line::from(truncate(line, usize::from(width)))
 }
 
 /// Nothing is above the conversation, so it starts without the first
@@ -6921,3 +7114,7 @@ pub(crate) fn format_elapsed(ms: i64) -> String {
         format!("{}m {:02}s", seconds / 60, seconds % 60)
     }
 }
+
+#[cfg(test)]
+#[path = "footer_tests.rs"]
+mod footer_tests;

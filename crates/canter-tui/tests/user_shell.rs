@@ -191,7 +191,13 @@ fn background_count_and_unfinished_plan_both_have_pinned_rows() {
     let shown = text(&mut ui);
     let lines: Vec<_> = shown.lines().collect();
     let input = lines.iter().position(|line| line.starts_with('╭')).unwrap();
-    assert!(lines[input - 2].contains("▸ 1 background commands"));
+    let bottom = input
+        + lines[input..]
+            .iter()
+            .position(|line| line.starts_with('╰'))
+            .unwrap();
+    // The count under the two info rows (P2-240), the plan above the box.
+    assert!(lines[bottom + 3].contains("▸ 1 background commands · ↓ to view"));
     assert!(lines[input - 1].contains("Verify background commands"));
 }
 
