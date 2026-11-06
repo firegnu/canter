@@ -150,7 +150,9 @@ impl Fixture {
                 "{}",
                 fs::read_to_string(directory.join("server.log")).unwrap()
             );
-            directory.join("instance").exists()
+            // fs::write creates the file before writing the PID; wait until it is complete.
+            fs::read_to_string(directory.join("instance"))
+                .is_ok_and(|pid| pid.parse::<u32>().is_ok())
                 && fs::read_to_string(directory.join("server.log"))
                     .unwrap()
                     .contains("canter server ready")
