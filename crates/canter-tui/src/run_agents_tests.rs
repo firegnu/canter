@@ -1,5 +1,5 @@
 //! Sub-agents on screen against a local HTTP server (P2-179): the row
-//! above the input box, `/agents` and `s` to stop, a sub-agent's screen
+//! under the info rows (P2-240), `/agents` and `s` to stop, a sub-agent's screen
 //! with the main session's approvals, and the tool cards.
 
 use super::retract_tests::Harness;
@@ -92,17 +92,17 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     for entry in [&a, &b, &c] {
         test.event(payload(json!({ "type": "agent.updated", "agent": entry })));
     }
-    // Right above the input box, live while the session is idle.
+    // Under the two info rows (P2-240), live while the session is idle.
     let screen = rows(&test);
-    let top = screen.iter().rposition(|row| row.starts_with('╭')).unwrap();
+    let bottom = screen.iter().rposition(|row| row.starts_with('╰')).unwrap();
     assert_eq!(
-        screen[top - 1].trim(),
-        "● 2 sub-agents running · 1 done · click or /agents"
+        screen[bottom + 3].trim(),
+        "● 2 sub-agents running · 1 done · ↓ to view"
     );
     let click = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 4,
-        row: (top - 1) as u16,
+        row: (bottom + 3) as u16,
         modifiers: KeyModifiers::NONE,
     };
     assert_eq!(
@@ -185,7 +185,7 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
         Some(Action::OpenAgent("b".into()))
     );
     let text = shown(&test);
-    assert!(has(&test, &["○ 3 sub-agents · click or /agents"]), "{text}");
+    assert!(has(&test, &["○ 3 sub-agents · ↓ to view"]), "{text}");
     assert!(!text.contains("▾"), "{text}");
     test.stop().await;
 }
@@ -229,11 +229,11 @@ async fn the_list_hangs_the_sub_agents_under_the_main_session() {
     for entry in [&a, &b, &c] {
         test.event(payload(json!({ "type": "agent.updated", "agent": entry })));
     }
-    // The row under the status line: a coloured mark, a dim way to open.
-    let row = "● 1 sub-agent running · 2 done · click or /agents";
+    // The row under the info rows: a coloured mark, a dim way to open.
+    let row = "● 1 sub-agent running · 2 done · ↓ to view";
     assert!(has(&test, &[row]), "{}", shown(&test));
     assert_eq!(cell(&test, row).fg, Color::Cyan);
-    assert!(cell(&test, "click or").modifier.contains(Modifier::DIM));
+    assert!(cell(&test, "↓ to view").modifier.contains(Modifier::DIM));
 
     open_list(&mut test, "test", json!([a, b, c])).await;
     let text = shown(&test);

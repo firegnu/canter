@@ -1,4 +1,4 @@
-//! Sub-agents on screen (P2-179): the row above the input box and the
+//! Sub-agents on screen (P2-179): the row under the info rows and the
 //! `/agents` list it opens, the two rows on top of a sub-agent's screen,
 //! and the words cards use for an agent's type and status.
 
@@ -62,7 +62,7 @@ pub(crate) struct Agents {
     pub list: Vec<AgentSummary>,
     /// On a sub-agent's screen: the main session, as its events left it.
     pub main: Option<SessionSnapshot>,
-    /// While `/agents` is open above the input box: the row selected.
+    /// While `/agents` is open under the info rows: the row selected.
     pub selected: Option<usize>,
 }
 
@@ -103,8 +103,8 @@ impl Agents {
             .count()
     }
 
-    /// `● 2 sub-agents running · 1 done · click or /agents`, or
-    /// `○ 3 sub-agents · click or /agents` when none runs; `None` without
+    /// `● 2 sub-agents running · 1 done · ↓ to view`, or
+    /// `○ 3 sub-agents · ↓ to view` when none runs; `None` without
     /// any.
     pub fn row(&self) -> Option<Vec<Span<'static>>> {
         if self.list.is_empty() {
@@ -125,7 +125,7 @@ impl Agents {
         if running > 0 && done > 0 {
             spans.push(Span::raw(format!(" · {done} done")));
         }
-        spans.push(Span::styled(" · click or /agents", theme::secondary()));
+        spans.push(Span::styled(crate::app::TO_VIEW, theme::secondary()));
         Some(spans)
     }
 
@@ -418,28 +418,25 @@ mod tests {
         assert_eq!(agents.row(), None);
         agents.update(agent("a", AgentStatus::Running));
         let row = agents.row().unwrap();
-        assert_eq!(text(&row), "● 1 sub-agent running · click or /agents");
+        assert_eq!(text(&row), "● 1 sub-agent running · ↓ to view");
         assert_eq!(row[0].style, theme::accent());
         assert_eq!(row.last().unwrap().style, theme::secondary());
         agents.update(agent("b", AgentStatus::Running));
         agents.update(agent("c", AgentStatus::Completed));
         assert_eq!(
             text(&agents.row().unwrap()),
-            "● 2 sub-agents running · 1 done · click or /agents"
+            "● 2 sub-agents running · 1 done · ↓ to view"
         );
         assert_eq!(text(&agents.title()), " Sub-agents · 2 running · 1 done");
         agents.update(agent("a", AgentStatus::Failed));
         agents.update(agent("b", AgentStatus::Interrupted));
         let row = agents.row().unwrap();
-        assert_eq!(text(&row), "○ 3 sub-agents · click or /agents");
+        assert_eq!(text(&row), "○ 3 sub-agents · ↓ to view");
         assert_eq!(row[0].style, theme::secondary());
         assert_eq!(text(&agents.title()), " Sub-agents · 3 done");
         assert_eq!(agents.list.len(), 3, "an update replaces the entry");
         agents.list.truncate(1);
-        assert_eq!(
-            text(&agents.row().unwrap()),
-            "○ 1 sub-agent · click or /agents"
-        );
+        assert_eq!(text(&agents.row().unwrap()), "○ 1 sub-agent · ↓ to view");
         agents.update(agent("d", AgentStatus::Running));
         assert_eq!(text(&agents.title()), " Sub-agents · 1 running · 1 done");
     }

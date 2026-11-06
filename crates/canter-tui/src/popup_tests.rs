@@ -1,7 +1,7 @@
 //! Every list and report in the input box's place (P2-187, P2-238): its
 //! title is on the top border, ` Name` in bold, then maybe ` · ` and a dim
 //! detail; its keys are on the bottom border, dim, and no row before it has
-//! keys.
+//! keys. `/agents` and `/ps` open the same way under the info rows (P2-240).
 
 use canter_protocol::SessionSnapshot;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -118,15 +118,44 @@ impl Screen {
     /// Checks the panel open in the input box's place: `name` is its
     /// title, on the top border; its keys are on the bottom border.
     fn check(&mut self, name: &str) {
+        self.check_at(name, false);
+    }
+
+    /// Checks `/agents` or `/ps` open under the two info rows (P2-240),
+    /// the input box still under the status line.
+    fn check_under_info(&mut self, name: &str) {
+        self.check_at(name, true);
+    }
+
+    fn check_at(&mut self, name: &str, under_info: bool) {
         self.ui.draw(0).unwrap();
         let rows = self.rows();
         let shown = rows.join("\n");
         let top = box_top(&rows);
-        assert_eq!(
-            rows[top - 1],
-            self.status,
-            "{name}: not under the status line:\n{shown}"
-        );
+        if under_info {
+            let input = rows.iter().position(|row| row.starts_with('╭')).unwrap();
+            assert_eq!(
+                rows[input - 1],
+                self.status,
+                "{name}: input box not under the status line:\n{shown}"
+            );
+            let input_bottom = input
+                + rows[input..]
+                    .iter()
+                    .position(|row| row.starts_with('╰'))
+                    .unwrap();
+            assert_eq!(
+                top,
+                input_bottom + 3,
+                "{name}: not under the info rows:\n{shown}"
+            );
+        } else {
+            assert_eq!(
+                rows[top - 1],
+                self.status,
+                "{name}: not under the status line:\n{shown}"
+            );
+        }
         let last = box_bottom(&rows);
         let popup = &rows[top..=last];
         let (first, title) = (top, &rows[top]);
@@ -223,15 +252,15 @@ fn choices_have_the_title_first_and_the_keys_last() {
     screen
         .app()
         .show_background(&from(json!({ "data": [command] })), 0);
-    screen.check("Background commands");
+    screen.check_under_info("Background commands");
     screen.app().show_background_output(&from(
         json!({ "command": command, "output": "ready", "skippedBytes": 0 }),
     ));
-    screen.check("Background #1");
+    screen.check_under_info("Background #1");
     screen
         .app()
         .show_background(&from(json!({ "data": [] })), 0);
-    screen.check("Background commands");
+    screen.check_under_info("Background commands");
 
     let mut screen = Screen::new();
     let agent = |id: &str, status: &str| {
@@ -243,9 +272,9 @@ fn choices_have_the_title_first_and_the_keys_last() {
         agent("a1", "running"),
         agent("a2", "completed")
     ])));
-    screen.check("Sub-agents");
+    screen.check_under_info("Sub-agents");
     screen.app().show_agents(Vec::new());
-    screen.check("Sub-agents");
+    screen.check_under_info("Sub-agents");
 }
 
 #[test]

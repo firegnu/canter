@@ -1042,17 +1042,19 @@ impl Terminal {
     fn status(&self) -> String {
         let screen = self.screen();
         let lines: Vec<&str> = screen.lines().collect();
-        match lines.iter().rposition(|line| line.starts_with('╭')) {
-            Some(top) if top > 0 => {
-                // The sub-agents row (P2-179) goes between it and the box.
-                let mut top = top - 1;
-                let line = lines[top].trim();
-                if top > 0 && line.ends_with(" · click or /agents") && line.contains(" sub-agent")
-                {
-                    top -= 1;
-                }
-                lines[top].trim().to_owned()
-            }
+        let mut boxes = lines
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, line)| line.starts_with('╭'));
+        let mut top = boxes.next().map(|(top, _)| top);
+        // `/agents` and `/ps` open under the info rows (P2-240): the box
+        // that ends on the last row; the input box is the one above it.
+        if lines.last().is_some_and(|line| line.starts_with('╰')) {
+            top = boxes.next().map(|(top, _)| top);
+        }
+        match top {
+            Some(top) if top > 0 => lines[top - 1].trim().to_owned(),
             _ => "（还没画出来）".to_owned(),
         }
     }
