@@ -370,11 +370,11 @@ async fn no_example_for_non_git_empty_git_disabled_or_timed_out_git() {
         if kind == "slow" {
             tokio::time::timeout(Duration::from_secs(4), async {
                 loop {
+                    // The script creates git-pid before writing to it; an empty read means not yet written.
                     if let Ok(pid) = std::fs::read_to_string(f.root.path().join("git-pid"))
-                        && nix::sys::signal::kill(
-                            nix::unistd::Pid::from_raw(pid.parse().unwrap()),
-                            None,
-                        ) == Err(nix::errno::Errno::ESRCH)
+                        && let Ok(pid) = pid.parse()
+                        && nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
+                            == Err(nix::errno::Errno::ESRCH)
                     {
                         break;
                     }
