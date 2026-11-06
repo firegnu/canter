@@ -93,3 +93,10 @@
 - 拿主意的地方：按任务授权将逐 provider 总超时定为 5 秒、整次总时限定为 8 秒；沙箱只运行最小 Seatbelt `/usr/bin/true` 探测；不可判定一律 `skip`。rules 的既有错误可能带 pattern 原文，doctor 边界改为只保留字段序号或 JSON 行列，不改原 `/permissions` 行为。没有需要主控另行决定的取舍。
 - 没做的事：不查 LSP，不加 `--fix` 或 JSON 输出，不真调模型或真实接口，不改 README，不合并 main、不推送。未修改上述既有 suggestions 测试的 `git-pid` 空文件读取竞态。
 - 踩过的坑：TUI 旧服务端提示会被弹框自动换行，测试改为规范化空白后匹配；新增 `/doctor` 后同步更新两处硬编码命令清单及帮助弹框测试高度。整包并行测试触发上述 suggestions 竞态，使用 `--no-fail-fast` 收齐结果并单独复跑确认，没有放宽或删除该测试。
+
+## 主控审查
+
+- 谁做：canter/dev-doctor-1，Kimi（`kimi --auto`，k3.1-pro）；用时约 92 分钟（corral 开起到 DONE），中途没停下问。
+- 范围：新加 `GET /v1/doctor`、`canter doctor`、`/doctor`，LSP 没查，没加 `--fix`、`--json`；`/mcp`、`/sandbox`、`/roles` 没改。界面新增文字都是英文。对现有代码的改动是为 doctor 拆出只读入口：`roles::inspect`、`Config::load_read_only`（不改 config.json 权限）、`ModelCatalog::check`（不写目录缓存）、`ModelAuth::existing`。
+- 主控注意到一处超出 doctor 的改动，交交叉审查表态：新加 `crates/canter-server/build.rs` 借 `canter/src/version.rs` 把服务端 `VERSION` 从 `0.1.0` 改成带提交的 `0.1.0 · <sha>`。这同时改了 `server.json`、`/v1/info` 的 `serverVersion`，以及 `discovery.rs` 现有的版本提示（以前包版本一样就不提示，以后提交不同就提示 `still using the old server`）；另外 canter-server 以后每次 git 暂存或提交都会重编。
+- 核对：doctor 相关测试（server、canter、tui）20 条重跑全过；全套留到合并前。
