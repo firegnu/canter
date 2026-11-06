@@ -103,114 +103,241 @@ impl Agents {
             .count()
     }
 
-    /// `▸ 2 sub-agents running · 1 done`, or `▸ 3 sub-agents` when none
-    /// runs; `None` without any.
-    pub fn row(&self) -> Option<String> {
+    /// `● 2 sub-agents running · 1 done · click or /agents`, or
+    /// `○ 3 sub-agents · click or /agents` when none runs; `None` without
+    /// any.
+    pub fn row(&self) -> Option<Vec<Span<'static>>> {
         if self.list.is_empty() {
             return None;
         }
         let running = self.running();
         let done = self.list.len() - running;
-        Some(match (running, done) {
-            (0, _) => format!("▸ {}", count(done)),
-            (_, 0) => format!("▸ {} running", count(running)),
-            _ => format!("▸ {} running · {done} done", count(running)),
-        })
-    }
-
-    /// The open list's title: `Sub-agents · 3 · 2 running`.
-    fn title(&self) -> Vec<Span<'static>> {
-        let detail = match self.running() {
-            0 => self.list.len().to_string(),
-            running => format!("{} · {running} running", self.list.len()),
+        let mut spans = match running {
+            0 => vec![
+                Span::styled("○ ", theme::secondary()),
+                Span::raw(count(done)),
+            ],
+            _ => vec![
+                Span::styled("● ", theme::accent()),
+                Span::raw(format!("{} running", count(running))),
+            ],
         };
-        crate::report::title("Sub-agents", &detail)
+        if running > 0 && done > 0 {
+            spans.push(Span::raw(format!(" · {done} done")));
+        }
+        spans.push(Span::styled(" · click or /agents", theme::secondary()));
+        Some(spans)
     }
 
-    /// What each row of the open list opens: the main session (`None`,
-    /// first on a sub-agent's screen), then each sub-agent.
-    pub fn targets(&self, main: Option<&str>) -> Vec<Option<&AgentSummary>> {
-        main.map(|_| None)
-            .into_iter()
+    /// The open list's title: `Sub-agents · 2 running · 1 done`, leaving
+    /// out a count of none.
+    fn title(&self) -> Vec<Span<'static>> {
+        let running = self.running();
+        let done = self.list.len() - running;
+        let mut detail = Vec::new();
+        if running > 0 {
+            detail.push(format!("{running} running"));
+        }
+        if done > 0 {
+            detail.push(format!("{done} done"));
+        }
+        crate::report::title("Sub-agents", &detail.join(" · "))
+    }
+
+    /// What each row of the open list opens: the main session (`None`)
+    /// first, then each sub-agent.
+    pub fn targets(&self) -> Vec<Option<&AgentSummary>> {
+        std::iter::once(None)
             .chain(self.list.iter().map(Some))
             .collect()
     }
 
-    /// The open list in at most `max` rows: the title, a row for each
-    /// target ([`Agents::targets`]) keeping the one selected in view, and
-    /// the keys. Nothing when not even one target fits. `main` is the main
-    /// session's id on a sub-agent's screen.
-    pub fn rows(&self, main: Option<&str>, width: u16, max: usize, now: i64) -> Vec<Line<'static>> {
-        let targets = self.targets(main);
+    /// The open list in at most `max` rows: the title, the main session
+    /// called `main_name` with the sub-agents hanging under it (a row for
+    /// each of [`Agents::targets`], keeping the one selected in view), and
+    /// the keys. Nothing when not even one target fits. `here` is the
+    /// sub-agent on screen, `None` on the main session's screen.
+    pub fn rows(
+        &self,
+        main_name: &str,
+        here: Option<&str>,
+        width: u16,
+        max: usize,
+        now: i64,
+    ) -> Vec<Line<'static>> {
+        let targets = self.targets();
         let room = max.saturating_sub(2).min(targets.len());
         if room == 0 {
             return Vec::new();
         }
         let selected = self.selected.unwrap_or(0).min(targets.len() - 1);
-        let dim = theme::secondary();
-        let labels: Vec<(Span<'static>, String, String)> = targets
-            .iter()
-            .map(|target| match target {
-                None => (
-                    Span::raw(""),
-                    format!(
-                        "← Main session · {}",
-                        self.main_name(main.unwrap_or_default())
-                    ),
-                    String::new(),
-                ),
-                Some(agent) => {
-                    let mut about = format!(
-                        "{} · {}",
-                        type_label(&agent.agent_type),
-                        status_label(agent.status, agent.stopped_by_user)
-                    );
-                    if let Some(time) = elapsed(agent, now) {
-                        about.push(' ');
-                        about.push_str(&time);
-                    }
-                    (mark(agent.status), clean(&agent.name), about)
-                }
-            })
-            .collect();
-        let name_width = labels
-            .iter()
-            .filter(|(_, _, about)| !about.is_empty())
-            .map(|(mark, name, _)| str_width(&mark.content) + str_width(name))
-            .max()
-            .unwrap_or(0);
-        let cut = |spans: Vec<Span<'static>>| Line::from(truncate(spans, usize::from(width)));
+        let width = usize::from(width);
+        let tree = Tree::new(&self.list, here, width, now);
+        let cut = |spans: Vec<Span<'static>>| Line::from(truncate(spans, width));
         let mut rows = vec![cut(self.title())];
-        for (index, (mark, name, about)) in labels
+        for (index, target) in targets
             .into_iter()
             .enumerate()
             .skip(first_shown(selected, room))
             .take(room)
         {
             let chosen = index == selected;
-            let pad = (name_width + 3).saturating_sub(str_width(&mark.content) + str_width(&name));
             let mut spans = vec![if chosen {
-                Span::styled("  › ", theme::accent().bold())
+                Span::styled(" › ", theme::accent().bold())
             } else {
-                Span::raw("    ")
+                Span::raw("   ")
             }];
-            spans.push(mark);
-            spans.push(Span::styled(
-                name,
+            spans.extend(match target {
+                None => main_row(main_name, here.is_none(), chosen, width),
+                Some(_) => tree.row(index - 1, chosen),
+            });
+            rows.push(cut(spans));
+        }
+        rows.push(cut(vec![crate::report::keys(KEYS)]));
+        rows
+    }
+}
+
+/// Columns before a row's text in the open list: ` › ` or blanks.
+const LEAD: usize = 3;
+/// The fewest columns the names give way to before the row is cut.
+const MIN_NAME: usize = 12;
+const HERE: &str = " (here)";
+
+/// The main session's row in the open list: `Main session · <name>`,
+/// dim, the name cut to fit; `(here)` on its own screen.
+fn main_row(name: &str, here: bool, chosen: bool, width: usize) -> Vec<Span<'static>> {
+    let style = if chosen {
+        theme::secondary().bold()
+    } else {
+        theme::secondary()
+    };
+    let label = "Main session · ";
+    let suffix = if here { HERE } else { "" };
+    let room = width.saturating_sub(LEAD + str_width(label) + str_width(suffix));
+    let mut spans = vec![Span::styled(label, style)];
+    spans.extend(truncate(vec![Span::styled(name.to_owned(), style)], room));
+    if here {
+        spans.push(Span::styled(HERE, theme::secondary()));
+    }
+    spans
+}
+
+/// The sub-agents' rows in the open list, hanging under the main session:
+/// mark and name, type, status and time in columns.
+struct Tree {
+    agents: Vec<Branch>,
+    /// The names' column, `(here)` included, and the type's and status's.
+    name: usize,
+    kind: usize,
+    status: usize,
+}
+
+struct Branch {
+    mark: Span<'static>,
+    name: String,
+    here: bool,
+    kind: String,
+    status: &'static str,
+    time: String,
+    style: Style,
+    last: bool,
+}
+
+impl Tree {
+    /// Names are cut before anything else when `width` is short.
+    fn new(list: &[AgentSummary], here: Option<&str>, width: usize, now: i64) -> Self {
+        let agents: Vec<Branch> = list
+            .iter()
+            .enumerate()
+            .map(|(index, agent)| Branch {
+                mark: mark(agent.status),
+                name: clean(&agent.name),
+                here: here == Some(agent.id.as_str()),
+                kind: type_label(&agent.agent_type).to_owned(),
+                status: match agent.status {
+                    AgentStatus::Completed => "done",
+                    status => status_label(status, agent.stopped_by_user),
+                },
+                time: elapsed(agent, now).unwrap_or_default(),
+                style: status_style(agent.status),
+                last: index + 1 == list.len(),
+            })
+            .collect();
+        let widest = |of: &dyn Fn(&Branch) -> usize| agents.iter().map(of).max().unwrap_or(0);
+        let named = widest(&|branch| str_width(&branch.name) + branch.here_width());
+        let kind = widest(&|branch| str_width(&branch.kind));
+        let status = widest(&|branch| str_width(branch.status));
+        let time = widest(&|branch| str_width(&branch.time));
+        // The tree line and the mark, then two columns before each of the rest.
+        let rest = LEAD + 4 + 2 + kind + 2 + status + if time > 0 { 2 + time } else { 0 };
+        let name = named.min(width.saturating_sub(rest).max(MIN_NAME));
+        Self {
+            agents,
+            name,
+            kind,
+            status,
+        }
+    }
+
+    /// The row of the `index`th sub-agent, after its lead.
+    fn row(&self, index: usize, chosen: bool) -> Vec<Span<'static>> {
+        let branch = &self.agents[index];
+        let dim = theme::secondary();
+        let line = if branch.last { "└ " } else { "├ " };
+        let name = truncate(
+            vec![Span::styled(
+                branch.name.clone(),
                 if chosen {
                     Style::new().bold()
                 } else {
                     Style::new()
                 },
-            ));
-            if !about.is_empty() {
-                spans.push(Span::raw(" ".repeat(pad)));
-                spans.push(Span::styled(about, dim));
-            }
-            rows.push(cut(spans));
+            )],
+            self.name.saturating_sub(branch.here_width()),
+        );
+        let shown = crate::text::spans_width(&name) + branch.here_width();
+        let mut spans = vec![Span::styled(line, dim), branch.mark.clone()];
+        spans.extend(name);
+        if branch.here {
+            spans.push(Span::styled(HERE, dim));
         }
-        rows.push(cut(vec![crate::report::keys(KEYS)]));
-        rows
+        spans.push(Span::raw(" ".repeat(self.name.saturating_sub(shown) + 2)));
+        spans.push(Span::styled(pad(&branch.kind, self.kind), dim));
+        spans.push(Span::raw("  "));
+        if branch.time.is_empty() {
+            spans.push(Span::styled(branch.status, branch.style));
+        } else {
+            spans.push(Span::styled(pad(branch.status, self.status), branch.style));
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(branch.time.clone(), branch.style));
+        }
+        spans
+    }
+}
+
+impl Branch {
+    fn here_width(&self) -> usize {
+        if self.here { str_width(HERE) } else { 0 }
+    }
+}
+
+/// `text` with blanks after it to `width` columns.
+fn pad(text: &str, width: usize) -> String {
+    format!(
+        "{text}{}",
+        " ".repeat(width.saturating_sub(str_width(text)))
+    )
+}
+
+/// A status word and time in the list: the accent while running, green
+/// done, red failed, dim otherwise.
+fn status_style(status: AgentStatus) -> Style {
+    match status {
+        AgentStatus::Running => theme::accent(),
+        AgentStatus::Completed => theme::success(),
+        AgentStatus::Failed => theme::failure(),
+        AgentStatus::Interrupted | AgentStatus::Closed | AgentStatus::Unknown => theme::secondary(),
     }
 }
 
@@ -281,26 +408,83 @@ mod tests {
         .unwrap()
     }
 
+    fn text(spans: &[Span]) -> String {
+        spans.iter().map(|span| span.content.as_ref()).collect()
+    }
+
     #[test]
     fn the_row_counts_running_and_done_agents() {
         let mut agents = Agents::default();
         assert_eq!(agents.row(), None);
         agents.update(agent("a", AgentStatus::Running));
-        assert_eq!(agents.row().unwrap(), "▸ 1 sub-agent running");
+        let row = agents.row().unwrap();
+        assert_eq!(text(&row), "● 1 sub-agent running · click or /agents");
+        assert_eq!(row[0].style, theme::accent());
+        assert_eq!(row.last().unwrap().style, theme::secondary());
         agents.update(agent("b", AgentStatus::Running));
         agents.update(agent("c", AgentStatus::Completed));
-        assert_eq!(agents.row().unwrap(), "▸ 2 sub-agents running · 1 done");
-        let title: String = agents
-            .title()
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert_eq!(title, " Sub-agents · 3 · 2 running");
+        assert_eq!(
+            text(&agents.row().unwrap()),
+            "● 2 sub-agents running · 1 done · click or /agents"
+        );
+        assert_eq!(text(&agents.title()), " Sub-agents · 2 running · 1 done");
         agents.update(agent("a", AgentStatus::Failed));
         agents.update(agent("b", AgentStatus::Interrupted));
-        assert_eq!(agents.row().unwrap(), "▸ 3 sub-agents");
+        let row = agents.row().unwrap();
+        assert_eq!(text(&row), "○ 3 sub-agents · click or /agents");
+        assert_eq!(row[0].style, theme::secondary());
+        assert_eq!(text(&agents.title()), " Sub-agents · 3 done");
         assert_eq!(agents.list.len(), 3, "an update replaces the entry");
         agents.list.truncate(1);
-        assert_eq!(agents.row().unwrap(), "▸ 1 sub-agent");
+        assert_eq!(
+            text(&agents.row().unwrap()),
+            "○ 1 sub-agent · click or /agents"
+        );
+        agents.update(agent("d", AgentStatus::Running));
+        assert_eq!(text(&agents.title()), " Sub-agents · 1 running · 1 done");
+    }
+
+    /// The text of each row the list draws.
+    fn drawn(agents: &Agents, here: Option<&str>, width: u16) -> Vec<String> {
+        agents
+            .rows("Main", here, width, 10, 0)
+            .iter()
+            .map(|line| text(&line.spans))
+            .collect()
+    }
+
+    #[test]
+    fn a_narrow_list_cuts_the_names_first() {
+        let mut agents = Agents::default();
+        let mut long = agent("a", AgentStatus::Running);
+        long.name = "Review date and duration parsing".into();
+        agents.update(long);
+        agents.update(agent("b", AgentStatus::Completed));
+        agents.selected = Some(1);
+        // Wide enough: the names are whole.
+        let wide = drawn(&agents, Some("a"), 80);
+        assert_eq!(
+            wide[2],
+            " › ├ ● Review date and duration parsing (here)  explorer  running  0s"
+        );
+        assert_eq!(
+            wide[3],
+            format!("   └ ✓ agent-b{}  explorer  done     2s", " ".repeat(32))
+        );
+        // Narrower: only the names give way.
+        let narrow = drawn(&agents, Some("a"), 50);
+        assert_eq!(
+            narrow[2],
+            " › ├ ● Review date … (here)  explorer  running  0s"
+        );
+        assert_eq!(
+            narrow[3],
+            format!("   └ ✓ agent-b{}  explorer  done     2s", " ".repeat(13))
+        );
+        assert!(narrow.iter().all(|row| str_width(row) <= 50), "{narrow:?}");
+        // Narrower still: the names keep a few columns, the row is cut.
+        let tiny = drawn(&agents, Some("a"), 30);
+        assert!(tiny.iter().all(|row| str_width(row) <= 30), "{tiny:?}");
+        assert!(tiny[2].starts_with(" › ├ ● Revi"), "{tiny:?}");
     }
 }

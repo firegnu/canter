@@ -1047,7 +1047,8 @@ impl Terminal {
                 // The sub-agents row (P2-179) goes between it and the box.
                 let mut top = top - 1;
                 let line = lines[top].trim();
-                if top > 0 && line.starts_with("▸ ") && line.contains(" sub-agent") {
+                if top > 0 && line.ends_with(" · click or /agents") && line.contains(" sub-agent")
+                {
                     top -= 1;
                 }
                 lines[top].trim().to_owned()
