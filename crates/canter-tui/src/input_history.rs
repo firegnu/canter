@@ -5,7 +5,7 @@
 //! canter opens. Sent from this terminal, a message comes back as it was,
 //! folded pastes and images too; read from the file, as text only.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -41,6 +41,8 @@ struct Entry {
     shown: String,
     /// Sent from this terminal: the draft with its pastes and images.
     draft: Option<InputBox>,
+    ts: i64,
+    text: String,
 }
 
 /// One line of the file.
@@ -80,8 +82,10 @@ impl InputHistory {
             match parsed {
                 Some(line) if !line.text.is_empty() => history.entries.push(Entry {
                     cwd: line.cwd,
+                    text: line.text.clone(),
                     shown: line.text,
                     draft: None,
+                    ts: line.ts,
                 }),
                 Some(_) => {}
                 None => history.warning = Some(DAMAGED),
@@ -120,8 +124,10 @@ impl InputHistory {
         }
         self.entries.push(Entry {
             cwd: cwd.to_owned(),
+            text: draft.text_only(),
             shown: shown.to_owned(),
             draft: Some(draft.clone()),
+            ts: now_secs,
         });
         let extra = self.entries.len().saturating_sub(MAX_ENTRIES);
         self.entries.drain(..extra);
@@ -216,7 +222,52 @@ impl InputHistory {
         })
     }
 
-    fn show(&mut self, i: usize, input: &mut InputBox) {
+    pub(crate) fn search_matches(&self, cwd: &str, all: bool, query: &str) -> Vec<usize> {
+        let query = canter_protocol::SearchQuery::new(query);
+        let mut matches: Vec<_> = (0..self.entries.len())
+            .filter(|&i| {
+                (all || self.entries[i].cwd == cwd) && query.matches(&self.entries[i].text)
+            })
+            .collect();
+        matches.sort_by_key(|&i| std::cmp::Reverse((self.entries[i].ts, i)));
+        let mut seen = HashSet::new();
+        matches.retain(|&i| seen.insert(self.entries[i].text.as_str()));
+        matches
+    }
+
+    pub(crate) fn search_row(
+        &self,
+        index: usize,
+        selected: bool,
+        width: u16,
+    ) -> ratatui::text::Line<'static> {
+        use chrono::TimeZone;
+        use ratatui::text::{Line, Span};
+        let entry = &self.entries[index];
+        let date = chrono::Local
+            .timestamp_opt(entry.ts, 0)
+            .single()
+            .map(|date| date.format("%m-%d").to_string())
+            .unwrap_or_else(|| "-----".into());
+        let text = crate::text::sanitize(&entry.text)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let marker = if selected { " › " } else { "   " };
+        Line::from(crate::text::truncate(
+            vec![Span::styled(
+                format!("{marker}{date}  {text}"),
+                if selected {
+                    crate::theme::accent()
+                } else {
+                    ratatui::style::Style::default()
+                },
+            )],
+            usize::from(width),
+        ))
+    }
+
+    pub(crate) fn show(&mut self, i: usize, input: &mut InputBox) {
         let entry = &self.entries[i];
         match &entry.draft {
             Some(draft) => input.recall(draft),

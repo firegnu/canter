@@ -52,6 +52,7 @@ pub mod routes {
     pub const SESSION_STATS: &str = "/v1/sessions/{id}/stats";
     pub const SESSION_USAGE: &str = "/v1/sessions/{id}/usage";
     pub const SESSIONS: &str = "/v1/sessions";
+    pub const SESSION_SEARCH: &str = "/v1/sessions/search";
     pub const SESSION: &str = "/v1/sessions/{id}";
     pub const SESSION_TRASH: &str = "/v1/sessions/{id}/trash";
     pub const SESSION_FORK: &str = "/v1/sessions/{id}/fork";

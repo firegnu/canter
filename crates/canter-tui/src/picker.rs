@@ -1,7 +1,9 @@
 //! The session list for `canter --resume` without an id: this directory's
 //! sessions first, most recently updated on top; Tab shows every directory.
 
-use canter_protocol::{SessionStatus, SessionSummary};
+use canter_protocol::{
+    SearchSource, SessionSearchParams, SessionSearchResult, SessionStatus, SessionSummary,
+};
 use chrono::{Local, TimeZone};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
@@ -40,6 +42,16 @@ pub struct Picker {
     selected: usize,
     confirm: Option<String>,
     error: Option<String>,
+    search: Option<SessionSearch>,
+}
+
+#[derive(Default)]
+struct SessionSearch {
+    query: crate::input::InputBox,
+    all: bool,
+    selected: usize,
+    results: Vec<SessionSearchResult>,
+    pending: bool,
 }
 
 impl Picker {
@@ -54,6 +66,7 @@ impl Picker {
             selected: 0,
             confirm: None,
             error: None,
+            search: None,
         }
     }
 
@@ -80,8 +93,61 @@ impl Picker {
             }
             return None;
         }
+        if let Some(search) = &mut self.search {
+            let before = search.query.text().to_owned();
+            match key.code {
+                KeyCode::Esc => {
+                    self.search = None;
+                    return None;
+                }
+                KeyCode::Up => search.selected = search.selected.saturating_sub(1),
+                KeyCode::Down => {
+                    search.selected =
+                        (search.selected + 1).min(search.results.len().saturating_sub(1))
+                }
+                KeyCode::Enter if !search.pending => {
+                    return search
+                        .results
+                        .get(search.selected)
+                        .map(|row| Pick::Open(row.session.id.clone()));
+                }
+                KeyCode::Tab => {
+                    search.all = !search.all;
+                    search.pending = true;
+                }
+                KeyCode::Char(c)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    search.query.insert(c.encode_utf8(&mut [0; 4]))
+                }
+                KeyCode::Backspace => search.query.backspace(),
+                KeyCode::Delete => search.query.delete(),
+                KeyCode::Left => search.query.left(),
+                KeyCode::Right => search.query.right(),
+                KeyCode::Home => search.query.home(),
+                KeyCode::End => search.query.end(),
+                _ => {}
+            }
+            if search.query.text() != before {
+                search.pending = true;
+            }
+            if search.pending {
+                search.results.clear();
+                search.selected = 0;
+            }
+            return None;
+        }
         let shown = self.shown().len();
         match key.code {
+            KeyCode::Char('/') if key.modifiers.is_empty() => {
+                self.error = None;
+                self.search = Some(SessionSearch {
+                    pending: true,
+                    ..Default::default()
+                });
+            }
             KeyCode::Up => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down => self.selected = (self.selected + 1).min(shown.saturating_sub(1)),
             KeyCode::Tab => {
@@ -113,6 +179,43 @@ impl Picker {
         self.error = None;
     }
 
+    pub(crate) fn paste(&mut self, text: &str) {
+        if let Some(search) = &mut self.search {
+            let before = search.query.text().to_owned();
+            search
+                .query
+                .insert(&text.split_whitespace().collect::<Vec<_>>().join(" "));
+            if search.query.text() != before {
+                search.pending = true;
+                search.selected = 0;
+                search.results.clear();
+            }
+        }
+    }
+
+    pub(crate) fn search_params(&self) -> Option<SessionSearchParams> {
+        self.search.as_ref().map(|search| SessionSearchParams {
+            query: search.query.text().to_owned(),
+            cwd: (!search.all).then(|| self.cwd.clone()),
+        })
+    }
+
+    pub(crate) fn search_finished(&mut self, result: Result<Vec<SessionSearchResult>, String>) {
+        match result {
+            Ok(results) => {
+                if let Some(search) = &mut self.search {
+                    search.results = results;
+                    search.selected = 0;
+                    search.pending = false;
+                }
+            }
+            Err(error) => {
+                self.search = None;
+                self.error = Some(error);
+            }
+        }
+    }
+
     pub fn deletion_failed(&mut self, error: String) {
         self.error = Some(error);
     }
@@ -131,6 +234,9 @@ impl Picker {
 
     /// Lays the list out for a screen of `width` × `height`.
     pub(crate) fn view(&self, width: u16, height: u16) -> PickerView {
+        if let Some(search) = &self.search {
+            return self.search_view(search, width, height);
+        }
         let shown = self.shown();
         let inner = usize::from(width.saturating_sub(2));
         let notice = if self.confirm.is_some() {
@@ -168,7 +274,106 @@ impl Picker {
             format!("   {tab} · Enter open · d delete · Esc cancel"),
             theme::secondary(),
         )));
-        PickerView { rows }
+        PickerView {
+            rows,
+            title: "Which session to resume?".into(),
+            cursor: None,
+        }
+    }
+
+    fn search_view(&self, search: &SessionSearch, width: u16, height: u16) -> PickerView {
+        let inner = usize::from(width.saturating_sub(2));
+        let scope = if search.all {
+            "all directories"
+        } else {
+            "this directory"
+        };
+        let mut rows = vec![Line::from(truncate(
+            vec![Span::styled(
+                format!(" Sessions  {scope} · search: {}", search.query.text()),
+                theme::accent(),
+            )],
+            inner,
+        ))];
+        let room = usize::from(height.saturating_sub(6) / 2).min(MAX_ROWS);
+        let first = (search.selected + 1).saturating_sub(room);
+        if search.pending || search.results.is_empty() {
+            rows.push(Line::from(Span::styled(
+                if search.pending {
+                    "   Searching…"
+                } else {
+                    "   No matching sessions"
+                },
+                theme::secondary(),
+            )));
+        }
+        for (index, result) in search.results.iter().enumerate().skip(first).take(room) {
+            let selected = index == search.selected;
+            let session = &result.session;
+            let directory = fit_path(
+                &shorten_home(&sanitize(&session.cwd), self.home.as_deref()),
+                DIRECTORY_COLUMNS - 2,
+            );
+            let marker = if selected { " › " } else { "   " };
+            let name = session.name.as_deref().unwrap_or("(unnamed session)");
+            rows.push(Line::from(truncate(
+                vec![Span::styled(
+                    format!(
+                        "{marker}{}  {directory}  {}",
+                        format_time(session.updated_at),
+                        sanitize(name).replace('\n', " ")
+                    ),
+                    if selected {
+                        theme::accent().bold()
+                    } else {
+                        Style::new()
+                    },
+                )],
+                inner,
+            )));
+            let snippet = result
+                .snippet
+                .as_ref()
+                .map(|snippet| {
+                    format!(
+                        "       {}{}",
+                        match snippet.source {
+                            SearchSource::UserMessage => "you: ",
+                            SearchSource::AgentMessage => "canter: ",
+                        },
+                        sanitize(&snippet.text).replace('\n', " ")
+                    )
+                })
+                .unwrap_or_default();
+            rows.push(Line::from(truncate(
+                vec![Span::styled(snippet, theme::secondary())],
+                inner,
+            )));
+        }
+        rows.push(Line::default());
+        let layout = search
+            .query
+            .layout(usize::from(width.saturating_sub(6)).max(1));
+        let range = &layout.rows[layout.cursor.0];
+        let cursor = Some((4 + layout.cursor.1 as u16, 1 + rows.len() as u16));
+        rows.push(Line::from(format!(
+            " / {}",
+            &search.query.text()[range.clone()]
+        )));
+        let scope = if search.all {
+            "this directory"
+        } else {
+            "all directories"
+        };
+        rows.push(Line::from(Span::styled(
+            format!("   ↑↓ select · Enter open · Tab {scope} · Esc back"),
+            theme::secondary(),
+        )));
+        PickerView {
+            rows,
+            title: String::new(),
+            cursor,
+        }
     }
 
     fn row(&self, session: &SessionSummary, selected: bool, width: usize) -> Line<'static> {
@@ -202,6 +407,8 @@ impl Picker {
 /// The list's content, laid out for one frame.
 pub(crate) struct PickerView {
     rows: Vec<Line<'static>>,
+    title: String,
+    cursor: Option<(u16, u16)>,
 }
 
 impl PickerView {
@@ -215,13 +422,19 @@ impl PickerView {
             .border_style(border)
             .title_top(Line::from(vec![
                 Span::styled("─ ", border),
-                Span::styled("Which session to resume?", Style::new().bold()),
+                Span::styled(self.title, Style::new().bold()),
                 Span::raw(" "),
             ]));
         frame.render_widget(
             Paragraph::new(self.rows).block(block),
             Rect { height, ..area },
         );
+        if let Some((x, y)) = self.cursor {
+            let position = ratatui::layout::Position::new(area.x + x, area.y + y);
+            if area.contains(position) {
+                frame.set_cursor_position(position);
+            }
+        }
     }
 }
 
@@ -255,6 +468,47 @@ fn pad(text: &str, columns: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slash_searches_escape_restores_the_list_and_d_still_deletes() {
+        let mut picker = Picker::new(
+            vec![SessionSummary {
+                agent_status: None,
+                parent: None,
+                id: "s1".into(),
+                cwd: "/work".into(),
+                name: Some("Original session".into()),
+                status: SessionStatus::Idle,
+                updated_at: 1,
+                last_event_seq: 1,
+            }],
+            "/work".into(),
+            None,
+        );
+        assert_eq!(picker.handle_key(KeyEvent::from(KeyCode::Char('/'))), None);
+        let text: String = picker
+            .view(120, 20)
+            .rows
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(
+            text.contains("search:") && text.contains("Searching"),
+            "{text}"
+        );
+        picker.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(picker.handle_key(KeyEvent::from(KeyCode::Esc)), None);
+        assert_eq!(
+            picker.handle_key(KeyEvent::from(KeyCode::Enter)),
+            Some(Pick::Open("s1".into()))
+        );
+        picker.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(
+            picker.handle_key(KeyEvent::from(KeyCode::Char('y'))),
+            Some(Pick::Trash("s1".into()))
+        );
+    }
 
     #[test]
     fn deletion_requires_confirmation_and_ctrl_d_still_cancels() {

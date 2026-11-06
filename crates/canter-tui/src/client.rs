@@ -584,6 +584,31 @@ impl Client {
         Ok(decode::<SessionListResponse>(response).await?.data)
     }
 
+    /// Read-only content search, with a useful message for older servers.
+    pub async fn search_sessions(
+        &self,
+        params: &canter_protocol::SessionSearchParams,
+    ) -> Result<canter_protocol::SessionSearchResponse, ClientError> {
+        if !self
+            .info()
+            .await?
+            .features
+            .unwrap_or_default()
+            .iter()
+            .any(|feature| feature == "sessionSearch")
+        {
+            return Err(ClientError::Protocol(
+                "This server does not support session search; run canter upgrade and retry".into(),
+            ));
+        }
+        let mut target = url(routes::SESSION_SEARCH, &[]);
+        target.query_pairs_mut().append_pair("query", &params.query);
+        if let Some(cwd) = &params.cwd {
+            target.query_pairs_mut().append_pair("cwd", cwd);
+        }
+        decode(self.http.get(target).send().await?).await
+    }
+
     /// POST /v1/sessions: a new session. The body carries the environment,
     /// so it is never logged.
     pub async fn create_session(

@@ -14,7 +14,9 @@ pub use stats::*;
 pub use telemetry::*;
 mod lsp;
 mod memory;
+mod search;
 pub use memory::*;
+pub use search::*;
 mod types;
 pub use lsp::*;
 

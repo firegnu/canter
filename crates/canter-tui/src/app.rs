@@ -714,6 +714,7 @@ pub struct App {
     opener: Opener,
     mouse: Mouse,
     search: Option<Search>,
+    history_search: Option<crate::history_search::HistorySearch>,
     commands: CommandList,
     mentions: MentionList,
     /// A choice offered above the input box, such as `/mode` alone.
@@ -1046,6 +1047,7 @@ impl App {
             opener: Opener::default(),
             mouse: Mouse::default(),
             search: None,
+            history_search: None,
             commands: CommandList::default(),
             mentions: MentionList::default(),
             chooser: None,
@@ -1504,6 +1506,20 @@ impl App {
             }
         }
         // A choice offered meanwhile takes the keys until it closes.
+        if shown.approval.is_none()
+            && !self.choosing()
+            && let Some(search) = &mut self.history_search
+        {
+            if search.key(
+                key,
+                &mut self.input_history,
+                &self.snapshot.settings.cwd,
+                &mut self.input,
+            ) {
+                self.history_search = None;
+            }
+            return None;
+        }
         if self.search.is_some() && shown.approval.is_none() && !self.choosing() {
             self.search_key(key);
             return None;
@@ -1562,6 +1578,15 @@ impl App {
         }
         if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.open_search();
+            return None;
+        }
+        if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if self.command_list().is_none()
+                && self.mention_list().is_none()
+                && self.open_request().is_none()
+            {
+                self.history_search = Some(Default::default());
+            }
             return None;
         }
         if let Some((matches, selected)) = self.command_list() {
@@ -3482,7 +3507,11 @@ impl App {
     /// while searching or a choice is open, and when that frame drew no
     /// draft or one that is not in the box now, or at another width.
     fn input_click(&self, (x, y): (u16, u16), frame: u64) -> Option<(Range<usize>, usize)> {
-        if self.search.is_some() || self.choosing() || frame > self.latest_frame {
+        if self.search.is_some()
+            || self.history_search.is_some()
+            || self.choosing()
+            || frame > self.latest_frame
+        {
             return None;
         }
         let (_, shown) = self.shown.iter().rev().find(|(since, _)| *since <= frame)?;
@@ -3890,6 +3919,13 @@ impl App {
             let mut pasted = InputBox::default();
             pasted.insert(text);
             custom.push_str(&pasted.text().replace('\n', " "));
+            return;
+        }
+        if !self.choosing()
+            && self.open_request().is_none()
+            && let Some(search) = &mut self.history_search
+        {
+            search.paste(text);
             return;
         }
         if !self.choosing()
@@ -4763,8 +4799,10 @@ impl App {
         // The rows above the hint: the conversation, and the prompt row on
         // top of it when that shows.
         let area = room.saturating_sub(usize::from(hint.is_some()));
-        let draft_shown =
-            matches!(bottom, Bottom::Input { .. }) && self.search.is_none() && !self.choosing();
+        let draft_shown = matches!(bottom, Bottom::Input { .. })
+            && self.search.is_none()
+            && self.history_search.is_none()
+            && !self.choosing();
         self.drawing.input = draft_shown.then(|| DrawnInput {
             width,
             text: self.input.text().to_owned(),
@@ -5001,6 +5039,7 @@ impl App {
         // bottom, so it is drawn when the rows down to it fit.
         let bare_input = matches!(view.bottom, Bottom::Input { .. })
             && self.search.is_none()
+            && self.history_search.is_none()
             && !self.choosing()
             && self.command_list().is_none()
             && self.mention_list().is_none();
@@ -5045,6 +5084,9 @@ impl App {
             return report.rows(width, max);
         }
         // The lists are for the draft, which is put away while searching.
+        if let Some(search) = &self.history_search {
+            return search.rows(&self.input_history, &self.snapshot.settings.cwd, width, max);
+        }
         if self.search.is_some() {
             return Vec::new();
         }
@@ -5071,6 +5113,7 @@ impl App {
             && !self.choosing()
             && self.search.is_none()
             && self.command_list().is_none()
+            && self.history_search.is_none()
             && self.active_btw.is_none()
         {
             Some(suggestion)
@@ -5091,9 +5134,17 @@ impl App {
         // A `!` command, by the rule Enter runs it by, is in shell mode: the
         // `!` is the prompt, not in the text (see `InputBox::start`), and
         // the border and the hint below are magenta.
-        let shell = self.search.is_none() && self.input.full_text().trim_start().starts_with('!');
+        let shell = self.search.is_none()
+            && self.history_search.is_none()
+            && self.input.full_text().trim_start().starts_with('!');
         // While searching, the words searched for in place of the draft.
         let (input, prompt, prompt_style, placeholder) = match &self.search {
+            _ if self.history_search.is_some() => (
+                &self.history_search.as_ref().unwrap().query,
+                "search: ",
+                theme::accent(),
+                "",
+            ),
             Some(search) => (&search.query, FIND, theme::accent(), ""),
             None if shell => (&self.input, "! ", theme::shell(), ""),
             None if self.snapshot.parent.is_some() => (
@@ -5149,6 +5200,9 @@ impl App {
             1 + (layout.cursor.0 - first) as u16,
         );
         let shown = layout.rows[first..].iter().take(MAX_INPUT_ROWS).cloned();
+        if let Some(search) = &self.history_search {
+            rows.push(search.hint());
+        }
         (
             Bottom::Input {
                 rows,
