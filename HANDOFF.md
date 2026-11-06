@@ -428,3 +428,4 @@
   - 页面图超过 8 MiB 直接报错，没有降分辨率再试（`pdf.rs` `render`，现在 `-scale-to 2400`）；照片多的页可能看不了。
   - 可以不改：要页面图前先跑一遍完整文字转换拿页数，最坏 60 秒、库解析不了的 PDF 也要不到图；扫描页提示写 `OCR needed`，但库对字很少的页也会报，页码多时一长串；服务端和转换子进程之间的 JSON 没有版本号；新加的超时分类对所有 read 生效。
 - 记住上次模型（P2-234，11-06 合并）主控审查记下的：改模型或档位的 PATCH 会持全局 `last_model` 锁直到 `session.update` 完成（`crates/canter-server/src/http.rs` `update`），这期间新建会话和 `GET /v1/models` 要等。平时改设置很快碰不到；那个会话的状态锁被别的操作长时间占着时，新建会话会跟着等。改法：只在 `rememberSelection` 为真时取锁，或改完设置后再取锁写记录。
+- 网页测试技能（P2-237，11-06 合并）主控审查记下的：`crates/canter/skills/web-testing/SKILL.md` 里没有浏览器 MCP 时让模型提示「按 `docs/usage.md` 的 MCP 一节配置」，这是 canter 仓库里的文件，模型在别的项目里读不到，只能原样转告。改法：写成 canter 使用说明的 GitHub 地址，或直接给出最小配置片段。
