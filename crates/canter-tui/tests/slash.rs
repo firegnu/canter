@@ -17,6 +17,39 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 #[test]
+fn model_and_think_commands_explicitly_remember_the_selection() {
+    for command in ["/model local/selected", "/think low", "/think"] {
+        let mut screen = Screen::new();
+        let action = screen.enter(command);
+        let action = if command == "/think" {
+            screen.draw();
+            screen.key(KeyCode::Down);
+            screen.draw();
+            screen.key(KeyCode::Enter)
+        } else {
+            action
+        };
+        let Some(Action::Update(params)) = action else {
+            panic!("expected a settings update for {command}");
+        };
+        assert_eq!(
+            serde_json::to_value(params).unwrap()["rememberSelection"],
+            true
+        );
+    }
+    let mut screen = Screen::new();
+    let Some(Action::Update(params)) = screen.enter("/rename example") else {
+        panic!("expected rename update");
+    };
+    assert!(
+        serde_json::to_value(params)
+            .unwrap()
+            .get("rememberSelection")
+            .is_none()
+    );
+}
+
+#[test]
 fn memory_is_listed_and_takes_no_arguments() {
     let mut screen = Screen::new();
     screen.type_text("/memory");

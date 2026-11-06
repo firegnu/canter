@@ -3,7 +3,6 @@
 2026-10-29，用户在看板上新建（原标题「第三期 - computer use」，内容空）。11-05 用户定：先做网页测试，移到第二期；桌面程序的 computer use 留第三期。
 依据：用户要 canter 像 Claude Code 那样测网页，自己点、自己看。Claude Code 用的是 Playwright 插件（背后是 `npx @playwright/mcp`）；canter 已有 MCP（P2-12）和 MCP 返回截图给模型看（P2-130），只要在配置里加一项，不用写代码。
 执行：主控（不派 agent，用户试用）
-待用户：找时间试 Playwright MCP，试完定要不要写进使用说明（P2-228）
 
 ## 用户原话
 
@@ -49,3 +48,12 @@
 3. 安全：能点屏幕上任何东西，现有沙箱管不到，批准规则要重新设计（碰要害）。
 
 建议到时候先用现成的 macOS computer-use MCP 加 GPT 试模型点不点得准，点得准再考虑做进 canter 内置工具。
+
+## 进展
+
+- 11-06 主控按用户选定（`0.0.83`、`--isolated` 每次空白浏览器、主控来加）在 `~/.canter/config.json` 加了 `playwright`，写法同 `everything`（同一个 npx 和 env）；改前备份为 `config.json.bak-20261106-before-playwright`。服务端热加载后 `/v1/mcp` 报 `playwright connected`，25 个工具。还没真调模型试。
+- 11-06 用户按主控给的四个测试试完（example.com 打开和点链接、the-internet 登录退出、TodoMVC 加三条勾一条查计数、换 GPT 再跑一遍加截图看图），DeepSeek 和 GPT 各一轮，共四五次对话。用户：「全部都测试了，效果非常好。」
+
+## 结论
+
+好用，本件收尾，不另做功能。配置写法（固定版本、`--isolated`、`env` 里给 PATH、每个工具第一次要批准）由 P2-228 写进 `docs/usage.md`，主控在 P2-234 那条通知里一并交给 omp。桌面程序的 computer use 仍留第三期。

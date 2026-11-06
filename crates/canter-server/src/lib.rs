@@ -4,6 +4,7 @@ pub mod chatgpt_auth;
 mod config;
 mod discovery;
 mod http;
+mod last_model;
 mod lifecycle;
 #[cfg(test)]
 mod lsp_tests;
