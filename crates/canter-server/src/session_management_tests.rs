@@ -18,6 +18,45 @@ mod managed;
 #[path = "cleanup_tests.rs"]
 mod cleanup;
 
+#[tokio::test]
+async fn roles_endpoint_lists_builtins_and_custom_roles() {
+    let test = Harness::new().await;
+    let url = test.create().await;
+    let response = test
+        .client
+        .get(format!("{url}/roles"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["data"][0]["name"], "explorer");
+    assert_eq!(body["data"][1]["name"], "general");
+    std::fs::create_dir(test.app.home.join("agents")).unwrap();
+    std::fs::write(
+        test.app.home.join("agents/reviewer.md"),
+        "---\nname: reviewer\ndescription: Review changes.\ntools: read\n---\nInspect code.",
+    )
+    .unwrap();
+    let body: serde_json::Value = test
+        .client
+        .get(format!("{url}/roles"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["data"][2]["name"], "reviewer");
+    assert_eq!(body["data"][2]["readOnly"], true);
+    assert_eq!(
+        body["directory"],
+        test.app.home.join("agents").to_str().unwrap()
+    );
+}
+
 struct Harness {
     app: Arc<App>,
     client: reqwest::Client,

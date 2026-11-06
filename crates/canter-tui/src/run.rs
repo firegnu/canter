@@ -983,6 +983,12 @@ where
                         .app_mut()
                         .warning(&format!("Could not list skills: {error}")),
                 },
+                Some(Action::ListRoles) => match chat.client.list_roles(&chat.session).await {
+                    Ok(roles) => ui.app_mut().show_roles(&roles),
+                    Err(error) => ui
+                        .app_mut()
+                        .warning(&format!("Could not list roles: {error}")),
+                },
                 Some(action) => chat.act(ui.app_mut(), action),
             }
         }
@@ -2622,6 +2628,7 @@ impl<C: Connector> Chat<C> {
             | Action::DeleteFileRule(_)
             | Action::Files
             | Action::ListSkills
+            | Action::ListRoles
             | Action::ExternalEditor
             | Action::ResolvePlan { .. } => {}
         }

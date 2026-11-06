@@ -12,7 +12,7 @@ const SESSION: &str = "s1";
 const NOW: i64 = 0;
 
 /// Every command, in the command list's order, with its line.
-const COMMANDS: [(&str, &str); 36] = [
+const COMMANDS: [(&str, &str); 37] = [
     ("/add-dir", "Add a directory to this session"),
     ("/agents", "List sub-agents and open or stop one"),
     (
@@ -54,6 +54,7 @@ const COMMANDS: [(&str, &str); 36] = [
         "Review uncommitted changes or a PR number/URL (read-only)",
     ),
     ("/rewind", "Rewind conversation, files, or both"),
+    ("/roles", "List built-in and custom sub-agent roles"),
     ("/sandbox", "Show what the sandbox allows"),
     ("/skills", "List this session's skills"),
     ("/statusline", "Choose and order what the status line shows"),

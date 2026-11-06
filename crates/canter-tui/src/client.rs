@@ -447,6 +447,15 @@ impl Client {
         .await
     }
 
+    /// GET /v1/sessions/{id}/roles: available roles and per-file errors.
+    pub async fn list_roles(
+        &self,
+        session: &str,
+    ) -> Result<canter_protocol::AgentRoleListResponse, ClientError> {
+        let response = self.http.get(url(routes::ROLES, &[session])).send().await?;
+        decode(response).await
+    }
+
     /// GET /v1/sessions/{id}/skills: the session's fixed skill list.
     pub async fn list_skills(
         &self,

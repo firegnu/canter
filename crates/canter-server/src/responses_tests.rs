@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 mod reasoning;
 mod replay;
+mod roles;
 mod switching;
 
 struct Inference {

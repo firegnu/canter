@@ -166,6 +166,7 @@ pub enum Action {
     ProviderModels(Option<String>),
     /// Fetch the skills fixed when this session opened.
     ListSkills,
+    ListRoles,
     Usage,
     Context,
     /// `/sandbox`: read what the sandbox allows from the server.
@@ -2263,6 +2264,10 @@ impl App {
     pub fn show_skills(&mut self, skills: Vec<canter_protocol::Skill>) {
         self.open_report(commands::skills(&skills));
         self.set_skills(skills);
+    }
+
+    pub fn show_roles(&mut self, roles: &canter_protocol::AgentRoleListResponse) {
+        self.open_report(commands::roles(roles));
     }
 
     pub fn set_skills(&mut self, skills: Vec<canter_protocol::Skill>) {

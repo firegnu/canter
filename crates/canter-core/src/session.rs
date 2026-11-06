@@ -53,6 +53,8 @@ pub(crate) struct AgentPolicy {
 }
 
 pub(crate) struct State {
+    pub roles: Vec<crate::roles::Role>,
+    pub agent_role: Option<crate::roles::Snapshot>,
     pub agent_forwarding: bool,
     pub suppressed_agent_turns: std::collections::HashSet<String>,
     pub acknowledged_agent_results: std::collections::HashSet<String>,
@@ -124,6 +126,9 @@ pub(crate) struct Active {
 }
 impl State {
     pub(crate) fn readonly_agent(&self) -> bool {
+        if let Some(role) = &self.agent_role {
+            return role.read_only;
+        }
         self.journal
             .snapshot
             .parent
@@ -136,6 +141,18 @@ impl State {
             return true;
         }
         if name == "ask_user" || crate::agent_tools::is_tool(name) {
+            return false;
+        }
+        if let Some(role) = &self.agent_role {
+            return role.tools.iter().any(|tool| tool == name);
+        }
+        if self
+            .journal
+            .snapshot
+            .parent
+            .as_ref()
+            .is_some_and(|parent| matches!(parent.agent_type, AgentType::Custom(_)))
+        {
             return false;
         }
         if !self.readonly_agent() {
@@ -208,6 +225,8 @@ impl State {
     }
     fn new(journal: Journal) -> Self {
         Self {
+            roles: Vec::new(),
+            agent_role: None,
             agent_children: Vec::new(),
             agent_forwarding: false,
             suppressed_agent_turns: Default::default(),
@@ -332,7 +351,7 @@ impl State {
                 .iter_mut()
                 .find(|segment| segment.kind == crate::prompt::SegmentKind::Core)
         {
-            core.text.push_str(crate::agent_tools::PROMPT);
+            self.append_role_prompt(&mut core.text);
         }
         if !fresh_fork {
             segments.extend(crate::memory::segments(tools).await);
@@ -406,7 +425,7 @@ impl State {
                     }),
             )
             .chain(crate::goal::definitions())
-            .chain(crate::agent_tools::definitions())
+            .chain(crate::agent_tools::definitions_for_roles(&self.roles))
             .chain(
                 canter_tools::Tool::MCP
                     .into_iter()
@@ -444,7 +463,7 @@ impl State {
         {
             core.text = crate::prompt::core(&self.tool_definitions);
             if self.journal.snapshot.parent.is_some() {
-                core.text.push_str(crate::agent_tools::PROMPT);
+                self.append_role_prompt(&mut core.text);
             }
         }
         segments.retain(|segment| segment.kind != crate::prompt::SegmentKind::McpCatalog);
@@ -962,6 +981,26 @@ impl Session {
         )
         .await?;
         let mut state = State::new(Journal::new(store, writer, options.telemetry));
+        if state.journal.snapshot.parent.is_some() {
+            state.agent_role = entries.iter().find_map(|entry| match entry {
+                HistoryEntry::AgentRole { role } => Some(role.clone()),
+                _ => None,
+            });
+            if let Some(source) = &state.journal.snapshot.parent
+                && let AgentType::Custom(name) = &source.agent_type
+                && state
+                    .agent_role
+                    .as_ref()
+                    .is_none_or(|role| role.name != *name)
+            {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "Saved agent role is unavailable",
+                ));
+            }
+        } else {
+            state.roles = crate::roles::load(&options, &tools).await?;
+        }
         state.fork_notice = entries.iter().rev().find_map(|entry| match entry {
             HistoryEntry::ForkNotice { message } => Some(message.clone()),
             _ => None,
@@ -1166,7 +1205,7 @@ impl Session {
         mut runtime: RuntimeContext,
         model: Arc<dyn Model>,
         options: CoreOptions,
-        parent: Option<SessionParent>,
+        parent: Option<(SessionParent, Option<crate::roles::Snapshot>)>,
     ) -> Result<(Self, SessionCreateResponse), CoreError> {
         validate_options(&options)?;
         if settings.model.trim().is_empty() || settings.approval_policy == PermissionMode::Unknown {
@@ -1198,6 +1237,10 @@ impl Session {
         settings.restricted_mode = Some(runtime.restricted_mode);
         settings.plan_enabled = Some(options.plan_enabled);
         let owned_store = store.clone();
+        let (parent, agent_role) = match parent {
+            Some((parent, role)) => (Some(parent), role),
+            None => (None, None),
+        };
         let writer = tokio::task::spawn_blocking(move || match parent {
             Some(parent) => owned_store.create_child(&id, settings, parent, now()),
             None => owned_store.create(&id, settings, now()),
@@ -1220,6 +1263,15 @@ impl Session {
             }])
             .await?;
         let mut state = State::new(journal);
+        if let Some(role) = agent_role {
+            state
+                .journal
+                .record(HistoryEntry::AgentRole { role: role.clone() })
+                .await?;
+            state.agent_role = Some(role);
+        } else if state.journal.snapshot.parent.is_none() {
+            state.roles = crate::roles::load(&options, &tools).await?;
+        }
         state
             .initialize_prefix(home, canter_home, &tools, false)
             .await?;

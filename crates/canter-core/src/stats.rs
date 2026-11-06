@@ -114,7 +114,7 @@ pub fn report(
         report.sub_agents.push(StatsSubAgent {
             id: child.id,
             name: snapshot.settings.name,
-            agent_type: parent.agent_type,
+            agent_type: parent.agent_type.clone(),
             status: snapshot
                 .agent
                 .as_ref()

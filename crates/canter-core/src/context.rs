@@ -11,6 +11,9 @@ const MAX_INSTRUCTION_BYTES: u64 = 64 * 1024;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum HistoryEntry {
+    AgentRole {
+        role: crate::roles::Snapshot,
+    },
     TurnBoundary {
         turn_id: String,
     },
@@ -297,7 +300,7 @@ pub(crate) fn restore(
             HistoryEntry::CompactionRequest { .. } => {}
             HistoryEntry::ReplayRejected { scopes } => rejected_replays.extend(scopes),
             HistoryEntry::AgentResultDelivered { .. } => {}
-            HistoryEntry::Unknown => {}
+            HistoryEntry::Unknown | HistoryEntry::AgentRole { .. } => {}
         }
         flush_tool_images(&mut history, &mut users, &mut tool_images);
         flush_plan_mode_notices(&mut history, &mut plan_mode_notices);

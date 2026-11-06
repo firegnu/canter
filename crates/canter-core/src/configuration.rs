@@ -20,6 +20,14 @@ pub struct Configuration {
 }
 
 pub trait ConfigurationSource: Send + Sync {
+    /// Check local authorization without starting an inference request.
+    fn validate_agent_model(
+        &self,
+        _model: String,
+        _options: CoreOptions,
+    ) -> BoxFuture<'_, Result<(), CoreError>> {
+        Box::pin(async { Ok(()) })
+    }
     /// Latest options and currently ready services, without waiting for a handover.
     fn snapshot(&self) -> Configuration;
     /// Wait for a complete snapshot, keeping its services leased to the caller.
@@ -166,11 +174,19 @@ impl Shared {
         state: &mut State,
     ) -> Result<Option<Arc<dyn Send + Sync>>, CoreError> {
         let Some(source) = self.configuration.get() else {
+            let runtime = self.runtime();
+            state
+                .refresh_roles(&runtime.options, &runtime.tools)
+                .await?;
             return Ok(None);
         };
         let config = source.snapshot();
         let ready = config.revision.is_some();
         let lease = self.apply_configuration(state, config).await?;
+        let runtime = self.runtime();
+        state
+            .refresh_roles(&runtime.options, &runtime.tools)
+            .await?;
         Ok(ready.then_some(lease))
     }
 
@@ -205,6 +221,10 @@ impl Shared {
             return Ok(());
         }
         let lease = self.apply_configuration(&mut state, config).await?;
+        let runtime = self.runtime();
+        state
+            .refresh_roles(&runtime.options, &runtime.tools)
+            .await?;
         state
             .active
             .as_mut()
@@ -355,6 +375,12 @@ impl State {
         options: &CoreOptions,
     ) -> Result<Option<String>, CoreError> {
         let mut settings = self.journal.snapshot.settings.clone();
+        if self.agent_role.is_some() {
+            options
+                .reasoning(&settings.model)
+                .validate(&settings.model, settings.reasoning_effort)?;
+            return Ok(None);
+        }
         let message = options
             .reasoning(&settings.model)
             .reset_unsupported(&mut settings);

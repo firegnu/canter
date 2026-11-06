@@ -40,6 +40,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - **GPT 套餐用量（P2-217，11-05）**：`auth: "chatgpt"` 的 provider 所发请求记为 ChatGPT 套餐，token 照常累计，不算美元、不记未知金额，也不计入 `/goal` 的美元预算；别家的已知美元和未知金额规则不变。只用套餐时写 `ChatGPT plan`，混合时写 `$0.12 + ChatGPT plan`，别家还有未知金额时写 `$0.12+? + ChatGPT plan`；`/usage`、`canter usage`、`canter stats` 的套餐行写 `ChatGPT plan`，有套餐用量的表下写 `ChatGPT plan usage: https://chatgpt.com/settings/usage`。不查或推算套餐剩余额度。已经记成未知金额的旧 GPT 请求不回改、不补认，仍按未知处理。
 7. **名字和仓库**：`canter`（马的「慢跑」步法），仓库 `github.com/firegnu/canter`，公开，Apache-2.0。用户：「开源，repo就放在github上」。
 8. **协议：结构照 Codex，传输和类型 canter 自己定（报告 §5.7 的 C）**。2026-10-24 在 canter 仓库定的，用户：「好，就用 C，改 DESIGN」。
+   - **自定义子 agent 角色（P2-223，11-06）**：`parent.agentType`、列表、卡片、钩子、统计和导出的角色改为名字字符串，保留 `explorer`、`general` 的旧值和缺省 general；旧客户端把新名字读成 Unknown，仍能打开会话。增加只读 `GET /v1/sessions/{id}/roles`，返回 `{data:[{name,description,model?,effort?,readOnly,builtIn,error?}],directory}`；`features` 增加 `agentRoles`。`/roles` 在输入框上方列内置及自定义角色，`/agents` 不变。不同于 Codex 的 TOML 配置层和 Claude Code 的多级角色目录，canter 只读全局 Markdown 文件，只允许下述五个字段，不覆盖内置角色，不提供角色编辑界面。
    - **无摘要思考（P2-219，11-05）**：Responses 的 `reasoning` 条目复用既有 `reasoning` 项目和 `item.started/delta/completed`，没有摘要时文字为空，不加协议字段或事件类型；内部以空思考增量通知开始及无摘要结束，沿用 reducer 的计时算法。显示占位不进入模型历史，真实摘要与原生 replay 照旧；没有 `reasoning` 条目时不产生思考项目。旧存盘不补项目，旧客户端按已有空思考项目的显示规则读取。
    - **模型档位（P2-206，11-04）**：`ReasoningEffort` 增加 `medium`、`xhigh`，保留 `Unknown`；旧客户端按既有 unknown 规则读取新值，旧会话省略档位仍读作 high。`GET /v1/models` 的每条模型增加可选 `supportedReasoningEfforts` 和 `defaultReasoningEffort`，新服务端给出有效列表和默认，新客户端连旧服务端时沿用旧四档。字段名参考方案 §3 的 Codex 模型能力结构；当时由配置提供能力，P2-216 起也可由账号目录提供。换模型导致的自动换档复用 `session.updated` 与既有 warning 事件，不增加会话字段。
    - **模型目录（P2-216，11-05）**：`GET /v1/models` 每条模型增加可选 `verified`、`missingCapabilities`（值 `contextWindow/reasoningEffort/imageInput`）和 `fromCatalog`；回复增加可选 `catalogs: [{provider,stale,refreshFailed,fetchedAt?}]`，`fetchedAt` 为 Unix 毫秒，旧客户端忽略全部新字段。对照 Codex `model/list` 的 `Model`，`id/model/displayName/isDefault`、能力字段和 `data/nextCursor` 含义不变；canter 的核实标记与缺失项用于实现未核实模型仍可选择及精确提示，`fromCatalog` 用于保留账号目录顺序而不改变手写模型原来的排序，`catalogs` 用于按家表达旧目录与刷新失败。这些账号缓存状态和资料来源是 canter 扩展，因为 Codex 的 `Model` 不表达本任务需要的逐字段未核实原因及按账号失败状态；不增加分页或隐藏模型参数。
@@ -149,6 +150,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - canter 的状态目录和配置文件是 read、write、edit 工具的受保护路径，模型读写都拒绝（P1-3 交叉审查后主控定）；shell 拦不住。
    - 只读 shell 命令不弹批准框（P1-9，2026-10-24 用户定：白名单判断；碰状态目录按路径拦，写明挡不全）。「每次问」「只问执行」两种模式下，白名单里的命令（列目录、看文件、搜索、git 查看类，组合命令每段都要在白名单里）直接跑；命令里写出的路径落在受保护路径里（不分大小写）、递归搜索的起点是状态目录或它的上级、git 配置里有会起程序或联网的设置，都照旧问。细节见 `crates/canter-tools/README.md`。已知限制：这不是沙箱，`$HOME/.canter` 这类变量写法一律问但环境变量不追踪，符号链接、硬链接、文件系统别名、执行期间的路径变化、程序内部的隐式读取都挡不全，sort 处理大输入时会在 TMPDIR 写自己的临时文件（P1-12）；要挡全得等套墙。
 15. **状态目录**（主控定，P1-5 合并时写入）：`~/.canter/`，可用环境变量 `CANTER_HOME` 改成别的绝对路径（测试靠它隔离）。目录 0700，里面的文件 0600。布局见 `crates/canter-server/README.md`：`config.json`（模型地址、模型名、上下文窗口、API key；可选的 `auto_compact_tokens` 把自动压缩线调低，P2-113，10-28 用户：「我觉得达到1M上下文再压缩会对召回有影响，例如claude code我就调整到了400k就会触发压缩」，照 Codex 的 `model_auto_compact_token_limit`：不写时和原来一样是窗口减输出上限减 16384，写了用它、比原来的线大时按原来的线，压缩后保留多少用户原话也跟着它，压缩请求本身能用多大照旧按窗口；和窗口一样由服务端自动重新读取，下一轮生效（P2-154））、`server.lock`（一台机器一个服务端，以它为准判断服务端在不在）、`server.json`（登记）、`server.sock`、`server.log`、`startup.lock`（客户端后台起服务端时串行）、升级交接用的 `replace.lock` / `replace.json`，会话在 `sessions/<id>/`。服务端只听这个 unix socket，不开 TCP。升级要显式 `canter serve --replace`，新的等旧的手上在跑的轮跑完，最多 60 秒，超时的轮记为被打断。
+   - 自定义子 agent 角色（P2-223）：`agents/*.md` 为全局角色文件，跟随服务端的 CANTER_HOME；Markdown 开头 YAML 只接收 name、description、tools、model、effort，正文为额外提示词，单文件最多 64 KiB。新派发使用主会话本轮读取的目录快照，单个坏文件只禁用自身。派出后有效角色保存在子会话 `model-history.jsonl` 的 `agent_role` 记录中，与模型、档位及权限限制一同恢复；文件变化不修改已有子会话。完整格式、生效时间和失败规则见「自定义角色（P2-223）」。
    - 会话保留（P2-222）：`config.json` 的 `session_retention_days` 缺省 30，0 永不删，热重载规矩不变。自动删除只碰 `sessions/<id>/` 和 `trash/<id>/`，其他状态目录项不动；删除前的按天、按模型用量摘要追加到 `usage-archive.jsonl`（0600），具体行为和格式见第 8 条。
    - 几家同时配（P2-200）：config.json 可只写 providers 和默认 model，无需旧的全局地址、key 或窗口；每个模型的窗口和压缩线独立校验，窗口仍须大于 81920。旧顶层字段继续按原规则读取，providers 不继承旧家凭证、请求头、图片或价格；新增的家和模型、能力及凭证均在下一轮生效。
    - MCP 配置（P2-12）：只读 canter 自己状态目录中的 `config.json`，不读 Codex、Claude Code 的配置（10-27 用户定，P2-127 补记）。可选 `mcp_servers` 对象按服务名登记；每项用 `transport: "stdio"` 加 `command`、可选 `args` / `env`，或 `transport: "http"` 加 `url`、可选 `headers`。stdio 清空环境后，只复制服务端已有的 HOME、PATH、USER、LOGNAME、SHELL、TMPDIR、LANG、LC_ALL，再叠加配置的 env，不继承 CANTER_HOME。HTTP 仅允许本机明文，其余必须 HTTPS，不走代理；环境变量和请求头不写入会话文件或公开接口，脱敏候选跳过上述 8 个基础环境变量的配置值，其它 env 和全部请求头的配置值及其空白分段仅在长度至少 8 字节时替换。每项可选 `startup_timeout_sec`（连接、初始化和列工具，默认 10）、`tool_timeout_sec`（单次调用，默认 120），整数秒 1～86400（10-26 为测试提速加，名字照 Codex）。未配置时保持现有行为。P2-162 增加布尔 `mcp_tool_search`，默认 true；false 退回原来的全量 MCP 工具定义，不加搜索工具或清单。与 plan_enabled 一样由服务端自动重新读取，已加载会话下一轮生效（P2-154）。
@@ -536,11 +538,34 @@ P2-172（11-01 用户决定）：客户端挂在会话上指有一条订阅该�
 
 ## 子 agent 的子会话（P2-177）
 
+### 自定义角色（P2-223）
+
+全局文件放在 `<CANTER_HOME>/agents/*.md`，默认 `~/.canter/agents/`（补第 15 条状态目录）。不递归、不读项目目录。文件使用 YAML front matter，其后正文为额外提示词，接在原子 agent 身份说明之后。例如：
+
+```markdown
+---
+name: reviewer
+description: Review recent changes for bugs.
+tools: read, shell
+model: provider/model
+effort: high
+---
+Report issues that cause incorrect behavior.
+```
+
+`name`、`description` 必填；名字为 1～64 个 ASCII 小写字母、数字或 `-`，首字符是字母，保留 explorer、general 和 unknown。其余字段可省略，未知字段和非法值均使该文件不可用。工具为逗号分隔的 canter 模型工具名，只能取 general 的工具，不开放 ask_user 和四个子 agent 工具；省略时取派出时 general 的工具集合。`effort` 沿用 ReasoningEffort 的 none、low、medium、high、xhigh、max，并须由目标模型支持；model 是 `<家名>/<模型名>`。都省略时继承父会话的模型与档位，只给 model 时用目标模型的默认档位，只给 effort 时在父模型上校验。
+
+主会话创建、打开及每轮准备时读取一次目录；轮内的描述和可派发角色固定，只有文件或配置实际变化才更新工具定义，普通模型往返不重读。主会话的 `/roles` 在运行中列本轮快照，空闲时读当前文件；子会话没有派发目录快照，显式 `/roles` 只列当前目录，不改变自身角色。读不了、格式错、重名（所有同名文件均禁用）、撞内置、未知工具或未配提供方的角色单独列为不可用，附英文原因，不影响其它角色或启动。派出时再校验档位、模型可用性及所列工具是否由目标模型提供，失败返回英文错误，不自动换模型或放宽权限。没有角色文件时不改变原提示词、工具说明及历史字节。
+
+11-06 主控决定 A：派出时把角色名字、有效工具集合、额外提示词、模型、档位和只读分类保存到子会话私有历史。已有子会话继续运行、关闭后重开都用这份快照，不重读角色文件；修改或删除只影响后续新派发。理由是权限不会因改文件在中途变化，也与已有子 agent 保留派出时模型的行为一致。存盘快照缺失或不可识别时拒绝使用该自定义角色，不能回落 general。内置角色沿用原机制。
+
+工具全在 explorer 集合内的角色按 explorer 执行（shell 仍受只读命令检查），可以自主派发，也可在计划模式或审查轮派发及继续；其余按 general，只在用户或适用 AGENTS.md 明确委派时派发。授权要求写在工具说明中，沿用原 general 的约束方式。角色只能限制工具，沙箱、批准档位、放行规则、文件规则、文件夹信任、父目标预算及最多四个、一层子 agent 的限制均继承原机制。模型路由、窗口、压缩线、图片、工具能力及计费沿用子会话模型，花费仍计入父目标。
+
 P2-178（2026-11-02 主控决定 A）：`canter exec` 保持单轮语义，不因子 agent 完成而自动开下一轮。主 agent 要在 exec 当轮拿结果，使用 `wait_agent`；轮后到达的子 agent 结果保留到主会话下一次输入（包括 `exec --resume` 或交互打开后输入）再交给模型。交互主会话空闲时仍按 P2-101 的合并窗口叫醒，忙时附到下一次模型请求。
 
 子 agent 在同一服务端里运行，是 `<CANTER_HOME>/sessions/<id>/` 中带父会话标记的普通会话；复用存盘、读取、压缩、遥测和事件订阅。核心提供从父会话创建并用任务启动首轮的接口，之后用普通输入继续，用普通关闭取消运行中的轮。创建关联父会话当时的轮，不复制父会话的对话。
 
-模型、思考档位、沙箱、工作目录、新增目录、受限打开和内存环境变量取创建时父会话的有效值；父会话重新打开已关掉的子 agent 时，沙箱按父会话当时的实际状态，仍在内存里的子 agent 不变（P2-198）；环境变量仍不存盘、不公开。P2-178 改权限档位：每次检查读取父会话当前的有效档位，包括 exec 的当轮覆盖；父会话未打开时用其最后持久化的档位，重新打开后接回实时档位。返工确认：已经运行的通用子 agent 每次权限检查也实时跟随父会话的计划模式和当前审查轮；任一个开启时按 `evaluate_plan` 收紧为只读，待批准调用在批准返回后同样重查，仍允许子会话自己的 `update_plan`。父会话退出只读状态后，后续检查恢复通用权限；父会话未打开时沿用最后持久化的计划模式，没有活动审查轮。通过同一实时权限快照传递，保持父后子锁顺序。放行规则沿用全局 `rules.json`，与普通会话一样每次权限检查实时读取，不做规则快照。会话级临时批准不继承；子批准上的「本会话允许」只作用于子会话，「以后都允许」仍写全局规则。每个子会话有自己的临时目录。
+模型、思考档位默认取创建时父会话的有效值，自定义角色可按 P2-223 覆盖；沙箱、工作目录、新增目录、受限打开和内存环境变量取创建时父会话的有效值；父会话重新打开已关掉的子 agent 时，沙箱按父会话当时的实际状态，仍在内存里的子 agent 不变（P2-198）；环境变量仍不存盘、不公开。P2-178 改权限档位：每次检查读取父会话当前的有效档位，包括 exec 的当轮覆盖；父会话未打开时用其最后持久化的档位，重新打开后接回实时档位。返工确认：已经运行的通用子 agent 每次权限检查也实时跟随父会话的计划模式和当前审查轮；任一个开启时按 `evaluate_plan` 收紧为只读，待批准调用在批准返回后同样重查，仍允许子会话自己的 `update_plan`。父会话退出只读状态后，后续检查恢复通用权限；父会话未打开时沿用最后持久化的计划模式，没有活动审查轮。通过同一实时权限快照传递，保持父后子锁顺序。放行规则沿用全局 `rules.json`，与普通会话一样每次权限检查实时读取，不做规则快照。会话级临时批准不继承；子批准上的「本会话允许」只作用于子会话，「以后都允许」仍写全局规则。每个子会话有自己的临时目录。
 
 子会话状态跟随最近一轮普通 agent 工作：在跑、做完、失败、被关、中断；做完时取这一轮最后一条最终回复作为结果，下一轮清除旧结果。手动压缩、`!命令` 和回退记录轮不改变最近工作的状态和结果；关闭空闲已完成的子会话保留结果。状态与结果由存盘事件恢复。服务端重启将未完成的子会话标成中断，不自动续跑，不需要恢复环境变量或发模型请求；先按摘要筛选 running，再逐个打开，单个打开或写入失败只记录警告、跳过。正常结束的子会话保持结果。
 
@@ -550,7 +575,7 @@ P2-178（2026-11-02 主控决定 A）：`canter exec` 保持单轮语义，不�
 
 P2-178 的四个模型工具：`spawn_agent {task,type,name}` 立即返回 ID 和短名；`wait_agent {ids,timeoutMs}` 等任一个完成、失败、关闭、中断或超时后返回每一个的状态和可用结果，默认 30 秒、最长 600 秒；`send_input {id,message}` 交互主会话中忙时排队，空闲或中断时开新轮；`canter exec` 下须先用 `wait_agent` 等正在运行的子 agent 停下，再 `send_input`，本次只澄清英文工具说明，不改排队和当轮参数行为；`close_agent {id}` 取消当前轮并停其后台命令，保留已有完成结果。最终回复经现有工具输出的 32 KiB 首尾截断后交回主 agent。没有 `resume_agent`、fork 式子 agent 或收件箱。
 
-`explorer` 使用计划模式的只读工具，去掉 ask_user、submit_plan，允许 mcp_search，禁止 mcp_call；`general` 使用全部工具但去掉四个子 agent 工具和 ask_user。两种都能 update_plan，清单属于各自会话。最多同时跑 4 个，未停的后台工作也占用名额；只有一层，子 agent 不能再开子 agent。主会话计划模式和审查轮只许开或继续 explorer。英文工具说明要求先自己列计划、关键路径自己做；explorer 可以自主开来查代码、找资料、节省主上下文，general 仅在用户或 AGENTS.md 明确要求子 agent、委派或并行时开，「仔细查」「深入分析」不算授权；给 general 的任务须明确文件归属、共享仓库、不得改回别人改动。
+`explorer` 使用计划模式的只读工具，去掉 ask_user、submit_plan，允许 mcp_search，禁止 mcp_call；`general` 使用全部工具但去掉四个子 agent 工具和 ask_user。两种都能 update_plan，清单属于各自会话。最多同时跑 4 个，未停的后台工作也占用名额；只有一层，子 agent 不能再开子 agent。主会话计划模式和审查轮只许开或继续 explorer 及 P2-223 的只读自定义角色。英文工具说明要求先自己列计划、关键路径自己做；explorer 可以自主开来查代码、找资料、节省主上下文，general 仅在用户或 AGENTS.md 明确要求子 agent、委派或并行时开，「仔细查」「深入分析」不算授权；给 general 的任务须明确文件归属、共享仓库、不得改回别人改动。
 
 子会话正常装入 AGENTS.md 和技能；系统提示说明子 agent 身份、最终回复交回父 agent、不向用户提问、把问题或阻碍写进最终回复。不装入记忆段、不开放记忆读写；配置刷新和重开保持此限制。explorer 压缩或回退后仍保留自己的清单，不补入要求 ask_user、禁用 update_plan、最后 submit_plan 的普通计划流程指令。批准复用现有框和回答方式，主界面多显示 `Requested by sub-agent <name>`，拒绝只拒本次调用，子 agent 继续；exec 子会话沿用父轮的自动批准处理。
 

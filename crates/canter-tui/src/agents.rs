@@ -17,11 +17,12 @@ pub(crate) const PLACEHOLDER: &str = "Message this sub-agent";
 const KEYS: &str = "↑↓ select · Enter open · s stop · Esc close";
 pub(crate) const NONE: &str = "No sub-agents in this session.";
 
-pub(crate) fn type_label(kind: AgentType) -> &'static str {
+pub(crate) fn type_label(kind: &AgentType) -> &str {
     match kind {
         AgentType::Explorer => "explorer",
         AgentType::General => "general",
         AgentType::Unknown => "agent",
+        AgentType::Custom(name) => name,
     }
 }
 
@@ -161,7 +162,7 @@ impl Agents {
                 Some(agent) => {
                     let mut about = format!(
                         "{} · {}",
-                        type_label(agent.agent_type),
+                        type_label(&agent.agent_type),
                         status_label(agent.status, agent.stopped_by_user)
                     );
                     if let Some(time) = elapsed(agent, now) {
@@ -256,7 +257,7 @@ pub(crate) fn header(
             Span::styled(name, Style::new().bold()),
             Span::raw(format!(
                 " · {} · {}",
-                type_label(parent.agent_type),
+                type_label(&parent.agent_type),
                 status_label(status, stopped)
             )),
         ]),

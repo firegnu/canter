@@ -13,6 +13,52 @@ use crate::{App, Ui};
 
 const WIDTH: u16 = 100;
 
+#[test]
+fn roles_command_is_registered() {
+    let command = crate::commands::find("roles").expect("/roles should be available");
+    assert_eq!(command.about, "List built-in and custom sub-agent roles");
+    let mut screen = Screen::new();
+    screen.app().show_roles(&from(json!({"directory":"/isolated/state/agents","data":[
+        {"name":"explorer","description":"Read-only lookup.","readOnly":true,"builtIn":true},
+        {"name":"general","description":"Independent work.","readOnly":false,"builtIn":true},
+        {"name":"reviewer","description":"Review recent changes.","model":"solver/worker","readOnly":true,"builtIn":false},
+        {"name":"broken","description":"Unavailable role.","readOnly":false,"builtIn":false,"error":"Unknown tool: absent"}
+    ]})));
+    screen.check("Roles");
+    let rows = screen.rows();
+    let shown = rows.join("\n");
+    for text in [
+        "4 · 3 available · 1 unavailable",
+        "Built-in",
+        "Custom",
+        "~/.canter/agents",
+        "inherits model",
+        "solver/worker",
+        "read-only",
+        "can edit",
+        "Review recent changes.",
+        "Unknown tool: absent",
+    ] {
+        assert!(shown.contains(text), "missing {text}: {shown}");
+    }
+    let row = rows.iter().position(|row| row.contains("broken")).unwrap();
+    let column = rows[row].find("broken").unwrap();
+    assert_eq!(
+        screen.ui.backend().buffer()[(column as u16, row as u16)].fg,
+        theme::failure().fg.unwrap()
+    );
+    screen.app().show_roles(&from(
+        json!({"directory":"/isolated/state/agents","data":[]}),
+    ));
+    screen.check("Roles");
+    assert!(
+        screen
+            .rows()
+            .join("\n")
+            .contains("Add roles as ~/.canter/agents/<name>.md")
+    );
+}
+
 struct Screen {
     ui: Ui<TestBackend>,
     /// The status line, the row the lists open under.

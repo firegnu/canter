@@ -161,6 +161,7 @@ impl App {
                 .map_err(|error| ApiError::new(ErrorCode::InvalidRequest, &error.to_string()))?;
         let mut options = self.options.clone();
         options.command_rules_path = Some(self.home.join("rules.json"));
+        options.agent_roles_directory = Some(self.home.join("agents"));
         if let Some((plan_enabled, mcp_tool_search)) = enabled {
             options.plan_enabled = plan_enabled;
             options.mcp_tool_search = mcp_tool_search;
@@ -311,6 +312,7 @@ fn router_with_accounts(app: Arc<App>, accounts: Router) -> Router {
         .route(routes::GOAL_PAUSE, post(pause_goal))
         .route(routes::GOAL_RESUME, post(resume_goal))
         .route(routes::SKILLS, get(skills))
+        .route(routes::ROLES, get(roles))
         .route(routes::CONTEXT, get(context))
         .route(routes::SANDBOX, get(sandbox))
         .route(routes::BTW, post(btw))
@@ -453,6 +455,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
             "accounts".into(),
             "subagentSessions".into(),
             "subagentTools".into(),
+            "agentRoles".into(),
             "subagentStop".into(),
             "memory".into(),
             "runningTurns".into(),
@@ -907,6 +910,13 @@ async fn skills(
     ApiPath(id): ApiPath<String>,
 ) -> Result<Json<SkillListResponse>, ApiError> {
     Ok(Json(app.session(&id).await?.skills().await))
+}
+
+async fn roles(
+    State(app): State<Arc<App>>,
+    ApiPath(id): ApiPath<String>,
+) -> Result<Json<AgentRoleListResponse>, ApiError> {
+    Ok(Json(app.session(&id).await?.roles().await?))
 }
 
 async fn btw(

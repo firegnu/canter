@@ -296,14 +296,69 @@ pub struct SessionParent {
     pub task: String,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(from = "String", into = "String")]
+#[schemars(with = "String")]
+#[ts(as = "String")]
 pub enum AgentType {
     Explorer,
     #[default]
     General,
-    #[serde(other)]
     Unknown,
+    Custom(String),
+}
+
+impl AgentType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Explorer => "explorer",
+            Self::General => "general",
+            Self::Unknown => "unknown",
+            Self::Custom(name) => name,
+        }
+    }
+}
+
+impl From<String> for AgentType {
+    fn from(name: String) -> Self {
+        match name.as_str() {
+            "explorer" => Self::Explorer,
+            "general" => Self::General,
+            "unknown" => Self::Unknown,
+            _ => Self::Custom(name),
+        }
+    }
+}
+
+impl From<AgentType> for String {
+    fn from(kind: AgentType) -> Self {
+        kind.as_str().to_owned()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRole {
+    pub name: String,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<ReasoningEffort>,
+    pub read_only: bool,
+    pub built_in: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRoleListResponse {
+    pub data: Vec<AgentRole>,
+    pub directory: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -382,7 +437,7 @@ impl AgentSummary {
                 .name
                 .clone()
                 .unwrap_or_else(|| snapshot.id.clone()),
-            agent_type: parent.agent_type,
+            agent_type: parent.agent_type.clone(),
             stopped_by_user: agent.stopped_by_user,
             started_at: turn
                 .and_then(|turn| turn.started_at)

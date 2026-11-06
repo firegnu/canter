@@ -1,6 +1,36 @@
 use canter_protocol::*;
 use serde_json::{Value, json};
 
+#[test]
+fn role_names_round_trip_and_old_clients_accept_custom_names() {
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    enum LegacyAgentType {
+        Explorer,
+        General,
+        #[serde(other)]
+        Unknown,
+    }
+    for name in ["explorer", "general", "reviewer"] {
+        let role: AgentType = serde_json::from_value(json!(name)).unwrap();
+        assert_eq!(serde_json::to_value(role).unwrap(), name);
+        let parent: SessionParent = serde_json::from_value(
+            json!({"sessionId":"p","turnId":"t","task":"Inspect","agentType":name}),
+        )
+        .unwrap();
+        let restored: SessionParent =
+            serde_json::from_value(serde_json::to_value(&parent).unwrap()).unwrap();
+        assert_eq!(restored, parent);
+    }
+    assert_eq!(
+        serde_json::from_value::<LegacyAgentType>(json!("reviewer")).unwrap(),
+        LegacyAgentType::Unknown
+    );
+    let old: SessionParent =
+        serde_json::from_value(json!({"sessionId":"p","turnId":"t","task":"Inspect"})).unwrap();
+    assert_eq!(old.agent_type, AgentType::General);
+}
+
 fn apply(snapshot: &mut SessionSnapshot, payload: Value) {
     let mut value = json!({"seq": snapshot.last_event_seq + 1,
         "sessionId": snapshot.id, "timestamp": 1000 + snapshot.last_event_seq});

@@ -1670,7 +1670,11 @@ fn agent_tool(item: &Item, details: bool, width: u16) -> Vec<Row> {
     let (verb, object) = match tool {
         CollabAgentTool::SpawnAgent => {
             let agent = agents.first();
-            let kind = agent.map_or("agent", |agent| crate::agents::type_label(agent.agent_type));
+            let kind = agent
+                .map_or("agent", |agent| {
+                    crate::agents::type_label(&agent.agent_type)
+                })
+                .to_owned();
             let mut object = vec![Span::raw(kind)];
             if let Some(agent) = agent.filter(|agent| !agent.name.is_empty()) {
                 object.push(Span::raw(" · "));

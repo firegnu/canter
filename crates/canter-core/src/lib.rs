@@ -22,6 +22,7 @@ mod prompt;
 mod response;
 mod restore_files;
 mod rewind;
+mod roles;
 mod runner;
 mod running;
 mod session;
@@ -128,6 +129,9 @@ impl ModelReasoning {
 
 #[derive(Clone, Debug)]
 pub struct CoreOptions {
+    /// Server-owned directory; embedded callers opt in with an isolated path.
+    pub agent_roles_directory: Option<PathBuf>,
+    pub agent_role_providers: std::collections::BTreeSet<String>,
     /// Embedded callers opt in; config.json enables suggestions by default.
     pub prompt_suggestions: bool,
     pub hooks: hooks::Hooks,
@@ -170,6 +174,8 @@ pub struct CoreOptions {
 impl Default for CoreOptions {
     fn default() -> Self {
         Self {
+            agent_roles_directory: None,
+            agent_role_providers: Default::default(),
             prompt_suggestions: false,
             hooks: Default::default(),
             telemetry: true,
