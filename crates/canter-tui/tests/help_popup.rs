@@ -12,7 +12,7 @@ const SESSION: &str = "s1";
 const NOW: i64 = 0;
 
 /// Every command, in the command list's order, with its line.
-const COMMANDS: [(&str, &str); 37] = [
+const COMMANDS: [(&str, &str); 38] = [
     ("/add-dir", "Add a directory to this session"),
     ("/agents", "List sub-agents and open or stop one"),
     (
@@ -24,6 +24,10 @@ const COMMANDS: [(&str, &str); 37] = [
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
     ("/diff", "Show uncommitted git changes"),
+    (
+        "/doctor",
+        "Check configuration, sign-in, providers, MCP and sandbox",
+    ),
     ("/exit", "Quit canter"),
     ("/export", "Save or copy the conversation as Markdown"),
     ("/files", "List session files and git status"),

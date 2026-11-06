@@ -29,6 +29,10 @@ use tokio_util::sync::CancellationToken;
 #[path = "http_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "doctor_tests.rs"]
+mod doctor_tests;
+
 #[path = "agent_sessions.rs"]
 mod agent_sessions;
 
@@ -40,6 +44,9 @@ mod managed;
 
 #[path = "account.rs"]
 pub(crate) mod account;
+
+#[path = "doctor.rs"]
+pub(crate) mod doctor;
 
 pub(crate) struct App {
     pub reload: Option<Arc<crate::reload::LiveConfig>>,
@@ -285,6 +292,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
 fn router_with_accounts(app: Arc<App>, accounts: Router) -> Router {
     Router::new()
         .route(routes::INFO, get(info))
+        .route(routes::DOCTOR, get(doctor::handle))
         .route(routes::RUNNING_TURNS, get(running_turns))
         .route(routes::FOLDER_TRUST, get(folder_trust).post(trust_folder))
         .route(routes::MCP, get(mcp))
@@ -453,6 +461,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
             "sessionSandbox".into(),
             "managedClients".into(),
             "accounts".into(),
+            "doctor".into(),
             "subagentSessions".into(),
             "subagentTools".into(),
             "agentRoles".into(),

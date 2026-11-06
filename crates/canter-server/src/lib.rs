@@ -24,6 +24,7 @@ mod startup;
 mod trust;
 
 pub use discovery::{Connection, discover, ensure_server, replace_server};
+pub use http::doctor::offline as doctor_offline;
 pub use lifecycle::{Registration, UPGRADE_GRACE};
 pub use service_env::service_environment;
 
@@ -39,7 +40,7 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const VERSION: &str = env!("CANTER_VERSION");
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]

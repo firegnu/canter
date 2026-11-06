@@ -89,6 +89,10 @@ mod goal_tests;
 mod lsp_tests;
 
 #[cfg(test)]
+#[path = "run_doctor_tests.rs"]
+mod doctor_tests;
+
+#[cfg(test)]
 #[path = "run_session_management_tests.rs"]
 mod session_management_tests;
 
@@ -1403,6 +1407,7 @@ fn leave_tab<B: FrameSync>(backend: &mut B, tab: &mut TabTitle) {
 
 /// What the background tasks tell the screen.
 enum Message {
+    Doctor(Result<canter_protocol::DoctorResponse, String>),
     /// `/lsp`: the servers, or `None` when the server has no `lsp` feature.
     LanguageServers(Result<Option<Vec<canter_protocol::LanguageServer>>, String>),
     /// What a stop or retry from `/lsp` returned.
@@ -2070,6 +2075,7 @@ impl<C: Connector> Chat<C> {
     fn message<B: Backend>(&mut self, ui: &mut Ui<B>, message: Message) -> bool {
         let app = ui.app_mut();
         match message {
+            Message::Doctor(result) => app.show_doctor(result),
             Message::Goal {
                 response,
                 show,
@@ -2188,6 +2194,17 @@ impl<C: Connector> Chat<C> {
         let sender = self.sender.clone();
         let lsp_retry = matches!(action, Action::LanguageServerRetry(_));
         match action {
+            Action::Doctor => {
+                app.start_doctor();
+                let version = self.version.clone();
+                tokio::spawn(async move {
+                    let result = client
+                        .doctor(&version)
+                        .await
+                        .map_err(|error| error.to_string());
+                    let _ = sender.send(Message::Doctor(result));
+                });
+            }
             Action::Goal(command) => {
                 let starting = matches!(
                     command,

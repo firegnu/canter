@@ -252,6 +252,33 @@ impl Client {
         decode(self.http.get(url(routes::INFO, &[])).send().await?).await
     }
 
+    pub async fn doctor(
+        &self,
+        client_version: &str,
+    ) -> Result<canter_protocol::DoctorResponse, ClientError> {
+        if !self
+            .info()
+            .await?
+            .features
+            .unwrap_or_default()
+            .iter()
+            .any(|feature| feature == "doctor")
+        {
+            return Err(ClientError::Protocol(
+                "This server is too old for /doctor; run canter serve --replace and retry".into(),
+            ));
+        }
+        let mut endpoint = url(routes::DOCTOR, &[]);
+        endpoint
+            .query_pairs_mut()
+            .append_pair("clientVersion", client_version)
+            .append_pair(
+                "clientProtocolVersion",
+                &canter_protocol::PROTOCOL_VERSION.to_string(),
+            );
+        decode(self.http.get(endpoint).send().await?).await
+    }
+
     pub async fn trash_session(&self, session: &str) -> Result<(), ClientError> {
         if !self
             .info()

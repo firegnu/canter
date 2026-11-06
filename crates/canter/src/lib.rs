@@ -11,6 +11,7 @@ use canter_tui::{CLIENT_NAME, Connected, Connector, Launch, Open};
 
 pub mod auth;
 pub mod deployment;
+pub mod doctor;
 pub mod exec;
 pub mod mcp;
 pub mod service;
@@ -39,6 +40,7 @@ Usage:
   canter rollback [--now]    restore the latest backup and replace the server
                               waits for running turns; --now waits at most 60s
   canter usage               show daily token usage and cost by model
+  canter doctor              check configuration, sign-in, providers, MCP and sandbox
   canter auth                sign in, select an account, or sign out (chatgpt)
   canter exec [options] [prompt]  run one turn without interaction
   canter exec --resume <id> [prompt]
@@ -74,6 +76,7 @@ In a session:
 pub enum Command {
     Serve { replace: bool, foreground: bool },
     Usage,
+    Doctor,
     Auth(auth::Command),
     Stats(stats::Args),
     Exec(exec::Args),
@@ -146,6 +149,13 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
     }
     if args.first().map(String::as_str) == Some("stats") {
         return stats::parse(&args[1..]).map(Command::Stats);
+    }
+    if args.first().map(String::as_str) == Some("doctor") {
+        return if args.len() == 1 {
+            Ok(Command::Doctor)
+        } else {
+            Err("doctor does not accept arguments".into())
+        };
     }
     if args.first().map(String::as_str) == Some("usage") {
         return if args.len() == 1 {
