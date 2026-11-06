@@ -19,6 +19,7 @@ reqwest.workspace = true
 nix = { workspace = true, features = ["term"] }
 
 [dev-dependencies]
+tokio-util.workspace = true
 canter-server = { path = "../canter-server", features = ["test-support"] }
 sha2 = "=0.10.9"
 base64 = "=0.23.1"
