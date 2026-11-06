@@ -279,6 +279,30 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
     assert!(item_ts.contains("exitCode: number | null"));
     let patch_ts =
         fs::read_to_string(temp.path().join("typescript/SessionUpdateParams.ts")).unwrap();
+    assert!(patch_ts.contains("rememberSelection?: boolean"));
+    let patch = &definitions["SessionUpdateParams"];
+    assert_eq!(patch["properties"]["rememberSelection"]["type"], "boolean");
+    assert!(
+        patch["required"]
+            .as_array()
+            .is_none_or(|fields| fields.iter().all(|field| field != "rememberSelection"))
+    );
+    for (input, expected) in [
+        (serde_json::json!({}), None),
+        (serde_json::json!({"rememberSelection":false}), None),
+        (
+            serde_json::json!({"rememberSelection":true}),
+            Some(serde_json::json!(true)),
+        ),
+    ] {
+        let params: canter_protocol::SessionUpdateParams = serde_json::from_value(input).unwrap();
+        assert_eq!(
+            serde_json::to_value(params)
+                .unwrap()
+                .get("rememberSelection"),
+            expected.as_ref()
+        );
+    }
     assert!(
         patch_ts.contains("name?: string | null"),
         "PATCH fields must be optional in TypeScript too"

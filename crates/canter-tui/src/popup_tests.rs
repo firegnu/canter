@@ -442,6 +442,7 @@ fn model_choice_goes_through_the_provider_first() {
         Some(crate::Action::Update(
             canter_protocol::SessionUpdateParams {
                 model: Some("two/small".into()),
+                remember_selection: true,
                 ..Default::default()
             }
         ))

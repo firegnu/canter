@@ -6168,6 +6168,10 @@
               "type": "null"
             }
           ]
+        },
+        "rememberSelection": {
+          "description": "Remember an actual model/effort change as the default for new sessions.",
+          "type": "boolean"
         }
       },
       "type": "object"

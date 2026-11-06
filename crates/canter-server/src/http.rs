@@ -132,6 +132,22 @@ impl App {
         )
     }
 
+    async fn model_defaults(&self) -> ((String, ReasoningEffort), Vec<String>, CoreOptions) {
+        let selection = match &self.reload {
+            Some(reload) => Some(reload.last_model.lock().await),
+            None => None,
+        };
+        let (configured, models, options) = self.metadata();
+        let defaults = match selection {
+            Some(selection) => selection.resolve(configured, &models, &options),
+            None => {
+                let effort = options.reasoning(&configured).default;
+                (configured, effort)
+            }
+        };
+        (defaults, models, options)
+    }
+
     async fn configuration(&self) -> Result<canter_core::Configuration, ApiError> {
         if let Some(reload) = &self.reload {
             use canter_core::ConfigurationSource;
@@ -625,7 +641,7 @@ async fn models(State(app): State<Arc<App>>) -> Json<ModelListResponse> {
     {
         reload.auth.catalog().refresh_stale(auth);
     }
-    let (default_model, models, options) = app.metadata();
+    let ((default_model, _), models, options) = app.model_defaults().await;
     let catalogs = app.reload.as_ref().and_then(|reload| {
         let provider = reload.catalog_provider()?;
         reload.auth.catalog().status(&provider)
@@ -1213,14 +1229,13 @@ async fn create(
         let trust = folder_trust_operation(app.home.clone(), params.cwd.clone(), false).await?;
         let id = crate::new_id();
         let operation = app.session_locks.lock(&id).await;
-        let model = if params.model.is_empty() {
-            app.metadata().0
+        let (model, default_effort) = if params.model.is_empty() {
+            app.model_defaults().await.0
         } else {
-            params.model
+            let effort = config.options.reasoning(&params.model).default;
+            (params.model, effort)
         };
-        let reasoning_effort = params
-            .reasoning_effort
-            .unwrap_or_else(|| config.options.reasoning(&model).default);
+        let reasoning_effort = params.reasoning_effort.unwrap_or(default_effort);
         let settings = SessionSettings {
             tags: params.tags,
             additional_directories: params.additional_directories,
@@ -1432,14 +1447,43 @@ async fn update(
     params: Result<Json<SessionUpdateParams>, JsonRejection>,
 ) -> Result<Json<SessionUpdateResponse>, ApiError> {
     let params = body(params)?;
-    if let Some(model) = &params.model {
-        app.validate_model(model)?;
-    }
-    let draining = app.draining.read().await;
-    if *draining {
-        return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
-    }
-    Ok(Json(app.session(&id).await?.update(params).await?))
+    // Persist an accepted choice even if its HTTP caller disconnects during the update.
+    tokio::spawn(async move {
+        let draining = app.draining.read().await;
+        if *draining {
+            return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));
+        }
+        let session = app.session(&id).await?;
+        let changes_selection = params.model.is_some() || params.reasoning_effort.is_some();
+        let mut selection = match &app.reload {
+            Some(reload) if changes_selection => Some(reload.last_model.lock().await),
+            _ => None,
+        };
+        if let Some(model) = &params.model {
+            app.validate_model(model)?;
+        }
+        let before = if params.remember_selection && selection.is_some() {
+            Some(session.snapshot().await.session)
+        } else {
+            None
+        };
+        let response = session.update(params).await?;
+        if let (Some(selection), Some(before)) = (&mut selection, before)
+            && before.parent.is_none()
+        {
+            let after = session.snapshot().await.session.settings;
+            if (before.settings.model, before.settings.reasoning_effort)
+                != (after.model.clone(), after.reasoning_effort)
+            {
+                selection
+                    .remember(&app.home, app.metadata().0, &after)
+                    .await;
+            }
+        }
+        Ok(Json(response))
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
 }
 
 async fn close(

@@ -9,6 +9,10 @@ import type { ReasoningEffort } from "./ReasoningEffort";
  */
 export type SessionUpdateParams = {
 /**
+ * Remember an actual model/effort change as the default for new sessions.
+ */
+rememberSelection?: boolean,
+/**
  * Compare before applying the update; empty means unnamed. Omitted is unconditional.
  */
 expectedName?: string | null,

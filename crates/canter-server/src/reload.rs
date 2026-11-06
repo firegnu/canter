@@ -83,6 +83,7 @@ struct Lease {
 
 pub(crate) struct LiveConfig {
     pub auth: Arc<crate::model_auth::ModelAuth>,
+    pub last_model: Mutex<crate::last_model::LastModel>,
     home: PathBuf,
     current: RwLock<Arc<Version>>,
     revisions: std::sync::Mutex<(u64, u64, u64)>,
@@ -136,8 +137,10 @@ impl LiveConfig {
         let mut options = config.options();
         options.command_rules_path = Some(home.join("rules.json"));
         options.agent_roles_directory = Some(home.join("agents"));
+        let last_model = crate::last_model::LastModel::load(&home, &config.model).await;
         Arc::new(Self {
             auth,
+            last_model: Mutex::new(last_model),
             home,
             mcp_lineage: Mutex::new(mcp.clone()),
             current: RwLock::new(Arc::new(Version {
@@ -354,7 +357,14 @@ impl LiveConfig {
             mcp,
             lsp,
         });
-        *self.current.write().unwrap() = next.clone();
+        {
+            // Publish the configured default and invalidate the previous choice together.
+            let mut selection = self.last_model.lock().await;
+            if old.config.model != next.config.model {
+                selection.clear(&self.home).await;
+            }
+            *self.current.write().unwrap() = next.clone();
+        }
         drop(lineage);
         let mut workers = self.workers.lock().await;
         workers.retain(|worker| !worker.is_finished());
