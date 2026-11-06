@@ -599,6 +599,10 @@ pub struct RequestResolveResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(optional_fields = nullable)]
 pub struct SessionUpdateParams {
+    /// Remember an actual model/effort change as the default for new sessions.
+    #[serde(default, skip_serializing_if = "crate::types::is_false")]
+    #[ts(optional = nullable)]
+    pub remember_selection: bool,
     /// Compare before applying the update; empty means unnamed. Omitted is unconditional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_name: Option<String>,

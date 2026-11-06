@@ -185,6 +185,7 @@ pub(crate) const COMMANDS: &[Command] = &[
             } else {
                 Action::Update(SessionUpdateParams {
                     model: Some(args.to_owned()),
+                    remember_selection: true,
                     ..SessionUpdateParams::default()
                 })
             }))
@@ -593,6 +594,7 @@ fn think(app: &mut App, args: &str) -> Result<Option<Action>, String> {
     let set = |effort| {
         Action::Update(SessionUpdateParams {
             reasoning_effort: Some(effort),
+            remember_selection: true,
             ..SessionUpdateParams::default()
         })
     };
@@ -681,6 +683,7 @@ pub(crate) fn choose_model(app: &mut App, models: Vec<canter_protocol::Model>) {
             about: String::new(),
             action: Action::Update(SessionUpdateParams {
                 model: Some(model.model),
+                remember_selection: true,
                 ..SessionUpdateParams::default()
             }),
         })
@@ -814,6 +817,7 @@ pub(crate) fn choose_provider_model(app: &mut App, provider: Option<String>) {
                 about: about.join(" · "),
                 action: Action::Update(SessionUpdateParams {
                     model: Some(model.model.clone()),
+                    remember_selection: true,
                     ..SessionUpdateParams::default()
                 }),
             }
