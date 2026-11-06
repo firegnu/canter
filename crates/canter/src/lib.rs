@@ -42,7 +42,7 @@ Usage:
                               waits for running turns; --now waits at most 60s
   canter usage               show daily token usage and cost by model
   canter doctor              check configuration, sign-in, providers, MCP and sandbox
-  canter skills install [--force]  install bundled document skills; --force overwrites
+  canter skills install [--force]  install bundled skills; --force overwrites
   canter auth                sign in, select an account, or sign out (chatgpt)
   canter exec [options] [prompt]  run one turn without interaction
   canter exec --resume <id> [prompt]
