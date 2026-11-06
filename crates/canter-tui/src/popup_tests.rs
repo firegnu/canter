@@ -1,6 +1,7 @@
-//! Every list and report above the input box (P2-187): its first row is its
-//! title, ` Name` in bold, then maybe ` · ` and a dim detail; its last row
-//! is its keys, dim, and no row before it has keys.
+//! Every list and report in the input box's place (P2-187, P2-238): its
+//! title is on the top border, ` Name` in bold, then maybe ` · ` and a dim
+//! detail; its keys are on the bottom border, dim, and no row before it has
+//! keys.
 
 use canter_protocol::SessionSnapshot;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -114,51 +115,55 @@ impl Screen {
             .collect()
     }
 
-    /// Checks the list or report open above the input box: `name` is its
-    /// title, the last row its keys.
+    /// Checks the panel open in the input box's place: `name` is its
+    /// title, on the top border; its keys are on the bottom border.
     fn check(&mut self, name: &str) {
         self.ui.draw(0).unwrap();
         let rows = self.rows();
         let shown = rows.join("\n");
         let top = box_top(&rows);
-        let status = rows[..top]
-            .iter()
-            .rposition(|row| *row == self.status)
-            .unwrap_or_else(|| panic!("{name}: no status line:\n{shown}"));
-        let popup = &rows[status + 1..top];
-        assert!(popup.len() >= 2, "{name}: nothing open:\n{shown}");
-        let (first, last) = (status + 1, top - 1);
-        let title = &rows[first];
+        assert_eq!(
+            rows[top - 1],
+            self.status,
+            "{name}: not under the status line:\n{shown}"
+        );
+        let last = box_bottom(&rows);
+        let popup = &rows[top..=last];
+        let (first, title) = (top, &rows[top]);
         let buffer = self.ui.backend().buffer();
         let cell = |x: usize, y: usize| &buffer[(x as u16, y as u16)];
-        // ` Name`, bold, then nothing or ` · ` and a dim detail.
+        // `╭─`, ` Name`, bold, then nothing or ` · ` and a dim detail.
+        let title = title
+            .strip_prefix("╭─")
+            .unwrap_or_else(|| panic!("{name}: nothing open:\n{shown}"));
         assert!(
             title.starts_with(&format!(" {name}")),
             "{name}: first row {title:?}:\n{shown}"
         );
         assert!(
-            cell(1, first).modifier.contains(Modifier::BOLD),
+            cell(3, first).modifier.contains(Modifier::BOLD),
             "{name}: title not bold:\n{shown}"
         );
         let rest = &title[1 + name.len()..];
-        if !rest.is_empty() {
+        if !rest.starts_with(" ─") {
             assert!(rest.starts_with(" · "), "{name}: {title:?}");
-            let dot = 1 + name.chars().count() + 1;
+            let dot = 2 + 1 + name.chars().count() + 1;
             assert!(
                 cell(dot, first).modifier.contains(Modifier::DIM),
                 "{name}: detail not dim:\n{shown}"
             );
         }
-        // Keys on the last row only, all dim.
+        // Keys on the bottom border only, all dim.
         assert!(
-            rows[last].contains("Esc"),
+            rows[last].contains("Esc") && rows[last].ends_with(" ─╯"),
             "{name}: last row {:?}:\n{shown}",
             rows[last]
         );
         for x in 0..usize::from(WIDTH) {
             let cell = cell(x, last);
             assert!(
-                cell.symbol() == " " || cell.modifier.contains(Modifier::DIM),
+                matches!(cell.symbol(), " " | "─" | "╰" | "╯")
+                    || cell.modifier.contains(Modifier::DIM),
                 "{name}: keys not dim:\n{shown}"
             );
         }
@@ -172,6 +177,10 @@ impl Screen {
 
 fn box_top(rows: &[String]) -> usize {
     rows.iter().rposition(|row| row.starts_with('╭')).unwrap()
+}
+
+fn box_bottom(rows: &[String]) -> usize {
+    rows.iter().rposition(|row| row.starts_with('╰')).unwrap()
 }
 
 fn from<T: serde::de::DeserializeOwned>(value: Value) -> T {
@@ -335,15 +344,26 @@ impl Screen {
         action
     }
 
-    /// The rows of the list open above the input box, keys row included.
+    /// The rows of the panel open in the input box's place, without its
+    /// border: the title, the rows in it, then the keys.
     fn popup(&mut self) -> Vec<String> {
         self.ui.draw(0).unwrap();
         let rows = self.rows();
-        let top = box_top(&rows);
-        match rows[..top].iter().rposition(|row| *row == self.status) {
-            Some(status) => rows[status + 1..top].to_vec(),
-            None => Vec::new(),
-        }
+        let (top, last) = (box_top(&rows), box_bottom(&rows));
+        let Some(title) = rows[top]
+            .strip_prefix("╭─")
+            .filter(|title| title.starts_with(' '))
+        else {
+            return Vec::new();
+        };
+        let border = |row: &str| row.trim_end_matches(['─', '╮', '╯']).trim_end().to_owned();
+        let mut popup = vec![border(title)];
+        popup.extend(rows[top + 1..last].iter().map(|row| {
+            let row = row.strip_prefix('│').unwrap_or(row);
+            row.strip_suffix('│').unwrap_or(row).trim_end().to_owned()
+        }));
+        popup.push(border(rows[last].trim_start_matches(['╰', '─'])));
+        popup
     }
 }
 
@@ -518,4 +538,107 @@ fn account_catalog_preserves_order_marks_unverified_and_warns_once() {
     );
     assert!(screen.app().unverified_warning("chatgpt/zed").is_none());
     assert!(screen.app().unverified_warning("chatgpt/alpha").is_none());
+}
+
+/// P2-238: a panel open takes the input box's place, in a rounded box in
+/// the accent colour, its title on the top border and its keys on the
+/// bottom one; Esc brings the input box and the draft back. The lists for
+/// what is typed stay above the input box, without a box.
+#[test]
+fn panels_take_the_input_box_place() {
+    let mut screen = Screen::new();
+    for c in "draft".chars() {
+        screen.key(KeyCode::Char(c));
+    }
+    let accent = theme::accent().fg.unwrap();
+    let panel = |screen: &mut Screen, title: &str, keys: &str| {
+        let rows = screen.rows();
+        let shown = rows.join("\n");
+        let tops: Vec<usize> = (0..rows.len())
+            .filter(|&y| rows[y].starts_with('╭'))
+            .collect();
+        assert_eq!(tops.len(), 1, "one box only:\n{shown}");
+        let top = tops[0];
+        let bottom = (top..rows.len())
+            .find(|&y| rows[y].starts_with('╰'))
+            .unwrap_or_else(|| panic!("no bottom border:\n{shown}"));
+        assert!(
+            rows[top].starts_with(&format!("╭─ {title}")) && rows[top].ends_with("─╮"),
+            "title on the top border: {:?}\n{shown}",
+            rows[top]
+        );
+        assert!(
+            rows[bottom].ends_with(&format!(" {keys} ─╯")),
+            "keys on the bottom border: {:?}\n{shown}",
+            rows[bottom]
+        );
+        for row in &rows[top + 1..bottom] {
+            assert!(
+                row.starts_with('│') && row.ends_with('│'),
+                "{row:?}\n{shown}"
+            );
+        }
+        let buffer = screen.ui.backend().buffer();
+        for (x, y) in [(0, top), (0, bottom), (WIDTH - 1, top + 1)] {
+            assert_eq!(buffer[(x, y as u16)].fg, accent, "border colour:\n{shown}");
+        }
+        assert!(!shown.contains("draft"), "input box shown:\n{shown}");
+        // The info rows stay under it.
+        assert_eq!(bottom + 3, rows.len(), "{shown}");
+    };
+    let input = |screen: &mut Screen, draft: &str| {
+        let rows = screen.rows();
+        let shown = rows.join("\n");
+        let top = box_top(&rows);
+        let row = rows[top + 1]
+            .strip_suffix('│')
+            .unwrap_or_else(|| panic!("{shown}"));
+        assert_eq!(row.trim_end(), format!("│ › {draft}"), "{shown}");
+        let buffer = screen.ui.backend().buffer();
+        assert_ne!(buffer[(0, top as u16)].fg, accent, "{shown}");
+        assert!(!shown.contains("Esc close"), "{shown}");
+    };
+
+    screen.app().show_mcp(&from(json!({ "data": [
+        { "name": "docs", "connected": true, "error": null, "warnings": [],
+          "tools": [{ "name": "mcp__docs__query", "tool": "query" }] },
+    ] })));
+    screen.ui.draw(0).unwrap();
+    panel(&mut screen, "MCP · 1 service · 1 tool", "Esc close");
+    assert!(screen.rows().join("\n").contains("│ ● docs"));
+    screen.key(KeyCode::Esc);
+    input(&mut screen, "draft");
+
+    crate::commands::choose_model(
+        screen.app(),
+        from(json!([
+            model("go/b", Some("go"), 200_000, false),
+            model("go/a", Some("go"), 1_048_576, true),
+        ])),
+    );
+    screen.ui.draw(0).unwrap();
+    panel(
+        &mut screen,
+        "Model · go",
+        "↑↓ select · Enter choose · Esc cancel",
+    );
+    assert!(screen.rows().join("\n").contains("│ › a   1049k context"));
+    screen.key(KeyCode::Esc);
+    input(&mut screen, "draft");
+
+    // The command list stays above the input box, without a box.
+    for _ in 0.."draft".len() {
+        screen.key(KeyCode::Backspace);
+    }
+    screen.key(KeyCode::Char('/'));
+    let rows = screen.rows();
+    let shown = rows.join("\n");
+    let top = box_top(&rows);
+    assert_eq!(rows.iter().filter(|row| row.starts_with('╭')).count(), 1);
+    assert!(rows[top + 1].starts_with("│ › /"), "{shown}");
+    assert!(
+        rows[..top].iter().any(|row| row.contains("/add-dir")),
+        "{shown}"
+    );
+    assert!(!rows[..top].iter().any(|row| row.contains('│')), "{shown}");
 }

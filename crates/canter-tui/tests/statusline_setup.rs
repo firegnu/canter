@@ -215,23 +215,20 @@ impl Screen {
         [rows[n - 2].clone(), rows[n - 1].clone()]
     }
 
-    /// The rows of the picker above the input box; empty while it is closed.
+    /// The rows of the picker in the input box's place, title to keys; empty
+    /// while it is closed.
     fn picker(&self) -> Vec<String> {
-        let rows = self.rows();
-        match rows.iter().position(|row| row == TITLE) {
-            Some(start) => rows[start..self.box_top()].to_vec(),
-            None => Vec::new(),
+        let picker = panel(&self.rows());
+        if picker.first().is_some_and(|title| title == TITLE) {
+            picker
+        } else {
+            Vec::new()
         }
     }
 
     /// The status line, right above the picker or the input box.
     fn status(&self) -> String {
-        let rows = self.rows();
-        let below = rows
-            .iter()
-            .position(|row| row == TITLE)
-            .unwrap_or_else(|| self.box_top());
-        rows[below - 1].clone()
+        self.rows()[self.box_top() - 1].clone()
     }
 
     fn preview(&self) -> [String; 2] {
@@ -305,7 +302,7 @@ fn statusline_shows_every_item_with_its_value_and_a_preview() {
             "",
             " Preview",
             "  deepseek-v4-pro · think high · Always ask · $0.12",
-            "  ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12% of window) · cache 95% (last 98…",
+            "  ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12% of window) · cache 95% (last…",
             KEYS,
         ]
     );
@@ -330,7 +327,7 @@ fn space_and_arrows_change_the_preview_as_they_go() {
         screen.preview(),
         [
             "  think high · Always ask · $0.12",
-            "  ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12% of window) · cache 95% (last 98…",
+            "  ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12% of window) · cache 95% (last…",
         ]
     );
 
@@ -350,7 +347,7 @@ fn space_and_arrows_change_the_preview_as_they_go() {
         screen.preview(),
         [
             "  think high · deepseek-v4-pro · Always ask",
-            "  $0.12 · ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12% of window) · cache 95% …",
+            "  $0.12 · ~/src/canter (main) · █░░░░░░░░░ 120k/1M (12% of window) · cache 9…",
         ]
     );
 
@@ -365,11 +362,9 @@ fn space_and_arrows_change_the_preview_as_they_go() {
     ]);
     assert_eq!(screen.picker()[9], " › [x] tps          32.5 tok/s");
     let second = &screen.preview()[1];
-    assert!(
-        second.starts_with(
-            "  $0.12 · ~/src/canter (main) · 32.5 tok/s · █░░░░░░░░░ 120k/1M (12% of window)"
-        ),
-        "{second}"
+    assert_eq!(
+        second,
+        "  $0.12 · ~/src/canter (main) · 32.5 tok/s · █░░░░░░░░░ 120k/1M (12% of wind…"
     );
 
     // At the end, the line leaves line 2 empty.
@@ -611,8 +606,8 @@ fn with_permission_hidden_shift_tab_says_the_new_mode() {
 fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
     let home = Home::new();
     let mut screen = home.open(None);
-    // 12 rows above the input box: 5 for the list.
-    screen.resize(18);
+    // 12 rows for the box in the input box's place: 5 for the list.
+    screen.resize(15);
     screen.enter("/statusline");
     let preview = [
         "",
@@ -690,7 +685,7 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
     );
 
     // Fewer than three rows left for the list: the preview folds away.
-    screen.resize(15);
+    screen.resize(12);
     assert_eq!(
         screen.picker(),
         [
@@ -804,4 +799,25 @@ fn hidden_items_keep_their_colours_in_the_list() {
         (Some(Color::Reset), true)
     );
     assert_eq!(style("session", "会话名字"), (Some(Color::Reset), true));
+}
+
+/// The panel in the input box's place, without its border: the title from
+/// the top border, the rows in it, then the keys from the bottom border;
+/// empty when the box at the bottom is the input box.
+fn panel(rows: &[String]) -> Vec<String> {
+    let Some(top) = rows.iter().rposition(|row| row.starts_with("╭─ ")) else {
+        return Vec::new();
+    };
+    if rows[top + 1..].iter().any(|row| row.starts_with('╭')) {
+        return Vec::new();
+    }
+    let last = rows.iter().rposition(|row| row.starts_with('╰')).unwrap();
+    let border = |row: &str| row.trim_end_matches(['─', '╮', '╯']).trim_end().to_owned();
+    let mut panel = vec![border(&rows[top]["╭─".len()..])];
+    panel.extend(rows[top + 1..last].iter().map(|row| {
+        let row = row.strip_prefix('│').unwrap_or(row);
+        row.strip_suffix('│').unwrap_or(row).trim_end().to_owned()
+    }));
+    panel.push(border(rows[last].trim_start_matches(['╰', '─'])));
+    panel
 }

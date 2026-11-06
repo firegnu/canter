@@ -1,4 +1,4 @@
-//! `/files`, `/mcp` and `/skills`: the result in a box above the input box,
+//! `/files`, `/mcp` and `/skills`: the result in a box in the input box's place,
 //! as `/context`'s, not in the conversation; in sections, coloured.
 
 use std::path::Path;
@@ -96,13 +96,14 @@ impl Screen {
             .expect("input box")
     }
 
-    /// The rows from the one starting with `title` down to the input box;
-    /// empty while closed.
+    /// The rows of the box in the input box's place whose title starts with
+    /// `title`, title to keys; empty while closed.
     fn popup(&self, title: &str) -> Vec<String> {
-        let rows = self.rows();
-        match rows.iter().position(|row| row.starts_with(title)) {
-            Some(start) => rows[start..self.box_top()].to_vec(),
-            None => Vec::new(),
+        let popup = panel(&self.rows());
+        if popup.first().is_some_and(|first| first.starts_with(title)) {
+            popup
+        } else {
+            Vec::new()
         }
     }
 
@@ -245,10 +246,8 @@ async fn files_shows_sections_with_git_words_and_staged_marks() {
         ]
     );
     let rows = screen.rows();
-    let title = rows
-        .iter()
-        .position(|row| row.starts_with(" Files"))
-        .unwrap();
+    let title = screen.box_top();
+    assert!(rows[title].starts_with("╭─ Files"), "{rows:#?}");
     assert!(
         rows[..title].iter().all(|row| !row.contains("Git status")),
         "{rows:#?}"
@@ -322,7 +321,8 @@ fn mcp_report() -> McpListResponse {
 
 #[test]
 fn mcp_shows_each_service_with_its_tools_laid_out_in_rows() {
-    let mut screen = Screen::new(60, 30, "/work", None);
+    // 60 columns in the box, past its border and margin.
+    let mut screen = Screen::new(63, 30, "/work", None);
     assert_eq!(screen.enter("/mcp"), Some(Action::Mcp));
     screen.ui.app_mut().show_mcp(&mcp_report());
     screen.draw();
@@ -384,7 +384,8 @@ fn mcp_shows_the_login_command_for_an_unauthorized_service() {
 
 #[test]
 fn skills_shows_global_and_project_sections_with_descriptions_cut_at_two_rows() {
-    let mut screen = Screen::new(60, 30, "/work", None);
+    // 60 columns in the box, past its border and margin.
+    let mut screen = Screen::new(63, 30, "/work", None);
     assert_eq!(screen.enter("/skills"), Some(Action::ListSkills));
     let skills: Vec<Skill> = serde_json::from_value(json!([
         { "name": "corral", "source": "global", "modelInvocation": true,
@@ -501,7 +502,8 @@ fn sandbox_lists_what_it_allows_or_how_to_turn_it_on() {
     use canter_protocol::SessionSandboxResponse;
 
     let sandboxed = |enabled: Option<bool>| {
-        let mut screen = Screen::new(120, 30, "/Users/me/project", Some("/Users/me"));
+        // 120 columns in the box, past its border and margin.
+        let mut screen = Screen::new(123, 30, "/Users/me/project", Some("/Users/me"));
         let mut settings = json!({
             "cwd": "/Users/me/project", "name": null, "model": "test-model",
             "approvalPolicy": "askForExecution",
@@ -598,4 +600,25 @@ fn sandbox_lists_what_it_allows_or_how_to_turn_it_on() {
         "{rows:#?}"
     );
     assert!(rows.iter().all(|row| !row.contains("Sandbox")), "{rows:#?}");
+}
+
+/// The panel in the input box's place, without its border: the title from
+/// the top border, the rows in it, then the keys from the bottom border;
+/// empty when the box at the bottom is the input box.
+fn panel(rows: &[String]) -> Vec<String> {
+    let Some(top) = rows.iter().rposition(|row| row.starts_with("╭─ ")) else {
+        return Vec::new();
+    };
+    if rows[top + 1..].iter().any(|row| row.starts_with('╭')) {
+        return Vec::new();
+    }
+    let last = rows.iter().rposition(|row| row.starts_with('╰')).unwrap();
+    let border = |row: &str| row.trim_end_matches(['─', '╮', '╯']).trim_end().to_owned();
+    let mut panel = vec![border(&rows[top]["╭─".len()..])];
+    panel.extend(rows[top + 1..last].iter().map(|row| {
+        let row = row.strip_prefix('│').unwrap_or(row);
+        row.strip_suffix('│').unwrap_or(row).trim_end().to_owned()
+    }));
+    panel.push(border(rows[last].trim_start_matches(['╰', '─'])));
+    panel
 }

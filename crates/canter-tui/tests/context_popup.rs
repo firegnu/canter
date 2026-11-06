@@ -1,4 +1,4 @@
-//! `/context`: the result in a box above the input box, not in the
+//! `/context`: the result in a box in the input box's place, not in the
 //! conversation. Esc or Enter closes it and leaves the conversation as it
 //! was; the draft stays. In a short window the section rows scroll with
 //! Up and Down.
@@ -110,13 +110,9 @@ impl Screen {
             .expect("input box")
     }
 
-    /// The rows from the title down to the input box; empty while closed.
+    /// The panel in the input box's place, title to keys; empty while closed.
     fn popup(&self) -> Vec<String> {
-        let rows = self.rows();
-        match rows.iter().position(|row| row == TITLE) {
-            Some(start) => rows[start..self.box_top()].to_vec(),
-            None => Vec::new(),
-        }
+        panel(&self.rows())
     }
 
     /// The input box's first row, without the border.
@@ -153,7 +149,7 @@ const SECTIONS: [&str; 8] = [
     "   Environment                  80",
     "   Tools (6)                    3k",
     "   Compaction summary           2k",
-    "   Messages (42)              110k  user 8k · assistant 31k · tool results 70k …",
+    "   Messages (42)              110k  user 8k · assistant 31k · tool results 7…",
     "   Free                       880k",
 ];
 
@@ -180,10 +176,10 @@ fn context_opens_above_the_input_box_and_not_in_the_conversation() {
     let mut expected = shown(&SECTIONS);
     // The second note and the messages row are wider than the window.
     expected[12] =
-        " Currently loaded context; queued input and future tool results are not include…".into();
+        " Currently loaded context; queued input and future tool results are not incl…".into();
     assert_eq!(screen.popup(), expected);
     let rows = screen.rows();
-    let start = rows.iter().position(|row| row == TITLE).unwrap();
+    let start = screen.box_top();
     assert!(
         rows[..start]
             .iter()
@@ -214,10 +210,11 @@ fn the_draft_stays_while_it_is_open_and_after() {
     screen.type_text("half typed");
     screen.ui.app_mut().show_context(&report());
     screen.draw();
-    assert_eq!(screen.input(), "› half typed");
+    // The box takes the input box's place.
+    assert!(!screen.rows().join("\n").contains("half typed"));
     // Keys go to the box while it is open.
     screen.type_text("xy");
-    assert_eq!(screen.input(), "› half typed");
+    assert!(!screen.rows().join("\n").contains("half typed"));
     assert_eq!(screen.key(KeyCode::Esc), None);
     assert!(screen.popup().is_empty());
     screen.type_text(" more");
@@ -226,8 +223,8 @@ fn the_draft_stays_while_it_is_open_and_after() {
 
 #[test]
 fn in_a_short_window_the_sections_scroll_and_the_rest_stays() {
-    // 11 rows above the input box: 5 for the sections.
-    let mut screen = Screen::new(17);
+    // 11 rows for the box in the input box's place: 5 for the sections.
+    let mut screen = Screen::new(14);
     screen.open();
     let popup = screen.popup();
     let check = |popup: Vec<String>, sections: &[&str]| {
@@ -330,7 +327,28 @@ fn the_first_line_names_the_window_and_the_compaction_line() {
     screen.ui.app_mut().show_context(&report);
     screen.draw();
     assert_eq!(
-        screen.rows().iter().find(|row| row.starts_with(" Context")),
-        Some(&" Context · 120k/1M window (12%) · compacts at 400k (30%) · last request".to_owned())
+        screen.popup()[0],
+        " Context · 120k/1M window (12%) · compacts at 400k (30%) · last request"
     );
+}
+
+/// The panel in the input box's place, without its border: the title from
+/// the top border, the rows in it, then the keys from the bottom border;
+/// empty when the box at the bottom is the input box.
+fn panel(rows: &[String]) -> Vec<String> {
+    let Some(top) = rows.iter().rposition(|row| row.starts_with("╭─ ")) else {
+        return Vec::new();
+    };
+    if rows[top + 1..].iter().any(|row| row.starts_with('╭')) {
+        return Vec::new();
+    }
+    let last = rows.iter().rposition(|row| row.starts_with('╰')).unwrap();
+    let border = |row: &str| row.trim_end_matches(['─', '╮', '╯']).trim_end().to_owned();
+    let mut panel = vec![border(&rows[top]["╭─".len()..])];
+    panel.extend(rows[top + 1..last].iter().map(|row| {
+        let row = row.strip_prefix('│').unwrap_or(row);
+        row.strip_suffix('│').unwrap_or(row).trim_end().to_owned()
+    }));
+    panel.push(border(rows[last].trim_start_matches(['╰', '─'])));
+    panel
 }

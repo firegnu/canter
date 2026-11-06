@@ -1,5 +1,5 @@
 //! `?` in the empty input box and `/help`: the shortcuts and the commands in
-//! a box above the input box, as `/context`'s, not in the conversation.
+//! a box in the input box's place, as `/context`'s, not in the conversation.
 
 use canter_protocol::{Event, SessionSnapshot};
 use canter_tui::{ANSWER_GUARD_MS, Action, App, Ui};
@@ -158,13 +158,14 @@ impl Screen {
             .expect("input box")
     }
 
-    /// The rows from the ` Help` title down to the input box; empty while
-    /// closed.
+    /// The rows of the ` Help` box in the input box's place, title to keys;
+    /// empty while closed.
     fn help(&self) -> Vec<String> {
-        let rows = self.rows();
-        match rows.iter().position(|row| row == " Help") {
-            Some(start) => rows[start..self.box_top()].to_vec(),
-            None => Vec::new(),
+        let help = panel(&self.rows());
+        if help.first().is_some_and(|title| title == " Help") {
+            help
+        } else {
+            Vec::new()
         }
     }
 
@@ -206,15 +207,15 @@ fn a_question_mark_in_the_empty_input_box_opens_the_help() {
     let help = screen.help();
     assert!(!help.is_empty(), "{}", screen.text());
     assert_eq!(help.last().map(String::as_str), Some(" Esc close"));
+    // Esc closes it, as /context's.
+    screen.key(KeyCode::Esc);
+    assert!(screen.help().is_empty(), "{}", screen.text());
     // Not typed: the input box is still empty.
     assert!(
         screen.input().contains("Type a message"),
         "{}",
         screen.text()
     );
-    // Esc closes it, as /context's.
-    screen.key(KeyCode::Esc);
-    assert!(screen.help().is_empty(), "{}", screen.text());
 }
 
 #[test]
@@ -410,4 +411,25 @@ fn a_short_window_scrolls_the_help() {
         help.iter().any(|row| row.contains("/statusline")),
         "{help:#?}"
     );
+}
+
+/// The panel in the input box's place, without its border: the title from
+/// the top border, the rows in it, then the keys from the bottom border;
+/// empty when the box at the bottom is the input box.
+fn panel(rows: &[String]) -> Vec<String> {
+    let Some(top) = rows.iter().rposition(|row| row.starts_with("╭─ ")) else {
+        return Vec::new();
+    };
+    if rows[top + 1..].iter().any(|row| row.starts_with('╭')) {
+        return Vec::new();
+    }
+    let last = rows.iter().rposition(|row| row.starts_with('╰')).unwrap();
+    let border = |row: &str| row.trim_end_matches(['─', '╮', '╯']).trim_end().to_owned();
+    let mut panel = vec![border(&rows[top]["╭─".len()..])];
+    panel.extend(rows[top + 1..last].iter().map(|row| {
+        let row = row.strip_prefix('│').unwrap_or(row);
+        row.strip_suffix('│').unwrap_or(row).trim_end().to_owned()
+    }));
+    panel.push(border(rows[last].trim_start_matches(['╰', '─'])));
+    panel
 }

@@ -1,5 +1,5 @@
 //! `/diff`: the uncommitted changes of the session's git repository in a box
-//! above the input box, as `/context`'s: staged and unstaged diffs drawn as
+//! in the input box's place, as `/context`'s: staged and unstaged diffs drawn as
 //! the conversation draws them, and the untracked files by name.
 
 use canter_protocol::SessionSnapshot;
@@ -33,15 +33,16 @@ impl Screen {
         self.ui.app_mut().show_diff(changes);
         self.draw();
         let lines = self.lines();
-        let top = lines
-            .iter()
-            .position(|row| row.starts_with(" Diff"))
-            .unwrap_or_else(|| panic!("no Diff box:\n{}", lines.join("\n")));
-        let end = lines
-            .iter()
-            .position(|row| row.contains("Esc close"))
-            .unwrap();
-        lines[top..=end].to_vec()
+        let shown = panel(&lines);
+        assert!(
+            shown
+                .first()
+                .is_some_and(|title| title.starts_with(" Diff"))
+                && shown.last().is_some_and(|keys| keys.contains("Esc close")),
+            "no Diff box:\n{}",
+            lines.join("\n")
+        );
+        shown
     }
 
     fn enter(&mut self, text: &str) -> Option<Action> {
@@ -201,4 +202,25 @@ async fn configured_filters_and_fsmonitor_are_not_run() {
     assert!(shown.contains("1 + staged"), "{shown}");
     assert!(!repo.join("forbidden-marker").exists());
     assert!(!repo.join("forbidden-filter").exists());
+}
+
+/// The panel in the input box's place, without its border: the title from
+/// the top border, the rows in it, then the keys from the bottom border;
+/// empty when the box at the bottom is the input box.
+fn panel(rows: &[String]) -> Vec<String> {
+    let Some(top) = rows.iter().rposition(|row| row.starts_with("╭─ ")) else {
+        return Vec::new();
+    };
+    if rows[top + 1..].iter().any(|row| row.starts_with('╭')) {
+        return Vec::new();
+    }
+    let last = rows.iter().rposition(|row| row.starts_with('╰')).unwrap();
+    let border = |row: &str| row.trim_end_matches(['─', '╮', '╯']).trim_end().to_owned();
+    let mut panel = vec![border(&rows[top]["╭─".len()..])];
+    panel.extend(rows[top + 1..last].iter().map(|row| {
+        let row = row.strip_prefix('│').unwrap_or(row);
+        row.strip_suffix('│').unwrap_or(row).trim_end().to_owned()
+    }));
+    panel.push(border(rows[last].trim_start_matches(['╰', '─'])));
+    panel
 }

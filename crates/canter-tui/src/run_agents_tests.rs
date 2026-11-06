@@ -157,7 +157,9 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     test.event(payload(json!({ "type": "agent.updated", "agent": b })));
     let text = shown(&test);
     assert!(
-        rows(&test).iter().any(|row| row.trim() == "Sub-agents · 3"),
+        rows(&test)
+            .iter()
+            .any(|row| row.starts_with("╭─ Sub-agents · 3 ─")),
         "{text}"
     );
     assert!(has(&test, &["✗ agent-b", "general · failed 9s"]), "{text}");

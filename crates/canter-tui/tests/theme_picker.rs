@@ -193,17 +193,14 @@ impl Screen {
             .collect()
     }
 
-    /// The rows of the picker, from its title to the input box.
+    /// The rows of the picker in the input box's place, title to keys.
     fn picker(&self) -> Vec<String> {
-        let rows = self.rows();
-        let Some(start) = rows.iter().position(|row| row == TITLE) else {
-            return Vec::new();
-        };
-        let end = rows
-            .iter()
-            .rposition(|row| row.starts_with('╭'))
-            .expect("input box");
-        rows[start..end].to_vec()
+        let picker = panel(&self.rows());
+        if picker.first().is_some_and(|title| title == TITLE) {
+            picker
+        } else {
+            Vec::new()
+        }
     }
 
     /// The selected row of the picker: its name and what follows it, up
@@ -471,4 +468,25 @@ fn with_16_colours_only_terminal_applies() {
     assert_eq!(screen.code_colours(), terminal);
     let later = home.open(sixteen, WIDE);
     assert_eq!(later.code_colours(), terminal);
+}
+
+/// The panel in the input box's place, without its border: the title from
+/// the top border, the rows in it, then the keys from the bottom border;
+/// empty when the box at the bottom is the input box.
+fn panel(rows: &[String]) -> Vec<String> {
+    let Some(top) = rows.iter().rposition(|row| row.starts_with("╭─ ")) else {
+        return Vec::new();
+    };
+    if rows[top + 1..].iter().any(|row| row.starts_with('╭')) {
+        return Vec::new();
+    }
+    let last = rows.iter().rposition(|row| row.starts_with('╰')).unwrap();
+    let border = |row: &str| row.trim_end_matches(['─', '╮', '╯']).trim_end().to_owned();
+    let mut panel = vec![border(&rows[top]["╭─".len()..])];
+    panel.extend(rows[top + 1..last].iter().map(|row| {
+        let row = row.strip_prefix('│').unwrap_or(row);
+        row.strip_suffix('│').unwrap_or(row).trim_end().to_owned()
+    }));
+    panel.push(border(rows[last].trim_start_matches(['╰', '─'])));
+    panel
 }

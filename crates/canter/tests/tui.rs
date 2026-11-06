@@ -2198,7 +2198,8 @@ async fn unknown_effort_shows_and_selects_high_and_new_uses_the_default() {
     assert!(
         a.screen()
             .lines()
-            .any(|line| line.starts_with(" › high (current)")),
+            // In the box in the input box's place (P2-238).
+            .any(|line| line.starts_with("│ › high (current)")),
         "{}",
         a.screen()
     );
