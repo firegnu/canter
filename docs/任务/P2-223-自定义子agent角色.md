@@ -113,3 +113,12 @@
 - 范围：动了 protocol、core、server、tui 和 DESIGN，`/agents` 没动，没做项目角色、编辑界面、插件角色；「不要做」没碰。界面新增文字都是英文。
 - 看了派子 agent 的路径：自定义角色先校验模型、档位、工具，再存快照；只读的判断是工具全在 explorer 那套之内；子会话执行时按快照的工具清单拦，快照丢了的自定义子会话一个工具都不给。
 - 核对：新增角色测试 core/protocol 28 条、server/tui 3 条重跑全过；全套留到合并前。没写角色时请求逐字节不变的基线是在 main `2a6d466` 上录的，只归一化了临时路径、项目哈希、日期和平台。
+
+### 交叉审查返工（2026-11-06）
+
+按主控要求只处理审查意见第 1、2 条；主仓库 `docs/任务/P2-223-交叉审查.md` 只读，第 3～5 条未改。
+
+- 第 1 条：`roles::load` 对显式 `model` 增加 `options.model_limits` 存在性检查；提供方已配而模型未配时，列为不可用，返回 `Model is not configured: <model>`。派出前使用当前 runtime 的同一份 options 再检查，失败立即返回，不创建子会话、不发请求、不回落模型。DESIGN 同步说明未配置模型也不可用。快照重开测试给 `saved/original`、`saved/changed` 补齐模型 limits；坏角色测试新增 `configured/typo`，同时断言不可用、派不出、请求数不增加。
+- 第 2 条：在现有计划模式测试后半段关闭父会话计划模式并设 `allowAll`，再派 `tools: read, shell` 的只读角色，让假模型调用 `touch forbidden-readonly-shell`。确认子会话继承 `allowAll` 且没有开启计划模式、shell 在工具定义内，但写调用仍被拒绝，文件未生成。没有增加测试矩阵或修改权限执行逻辑。
+- 验证：先运行坏角色测试，确认旧实现返回 `error: None` 而非预期模型未配置错误（RED）；修复后通过。最终 `cargo nextest run -p canter-core --test roles` 8/8 通过；server 定向运行 `roles_endpoint_lists_builtins_and_custom_roles` 和 `custom_role_routes_to_responses_and_missing_login_fails_without_fallback`，2/2 通过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。均使用 `.target/agent-roles`，命令在前台跑完，未重跑五包全量，真实 API 调用 0 次。
+- 返工中的调整：shell 拒绝沿用现有只读路径的 `Plan mode: shell is not allowed`，不是普通批准拒绝的 `Tool call declined.`；测试按实际拒绝原因断言，并保留文件未生成、非计划模式和 allowAll 的检查。没有新的待主控决定事项。

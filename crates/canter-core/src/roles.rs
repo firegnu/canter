@@ -96,8 +96,13 @@ pub(crate) async fn load(options: &CoreOptions, tools: &Tools) -> Result<Vec<Rol
                 .split_once('/')
                 .map(|(provider, _)| provider)
                 .unwrap_or_default();
-            (!options.agent_role_providers.contains(provider))
-                .then(|| format!("Provider is not configured: {provider}"))
+            if !options.agent_role_providers.contains(provider) {
+                Some(format!("Provider is not configured: {provider}"))
+            } else if !options.model_limits.contains_key(model) {
+                Some(format!("Model is not configured: {model}"))
+            } else {
+                None
+            }
         } else {
             None
         };

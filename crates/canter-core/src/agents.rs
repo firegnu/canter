@@ -618,6 +618,9 @@ impl Session {
             let mut settings = state.journal.snapshot.settings.clone();
             let role_snapshot = if let Some(role) = role {
                 if let Some(model) = role.summary.model {
+                    if !runtime.options.model_limits.contains_key(&model) {
+                        return Err(CoreError::new(ErrorCode::InvalidRequest, &format!("Model is not configured: {model}")));
+                    }
                     settings.model = model;
                     settings.reasoning_effort = runtime.options.reasoning(&settings.model).default;
                 }

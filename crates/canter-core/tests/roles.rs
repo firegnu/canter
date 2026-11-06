@@ -254,7 +254,13 @@ async fn plan_mode_accepts_readonly_roles_and_refuses_editing_roles() {
         "writer.md",
         "---\nname: writer\ndescription: Write code.\ntools: read, write\n---\nImplement.",
     );
-    let fake = Server::start(vec![complete(), complete()]).await;
+    let fake = Server::start(vec![
+        complete(),
+        complete(),
+        tool_call("shell", json!({"command":"touch forbidden-readonly-shell"})),
+        complete(),
+    ])
+    .await;
     let session = parent(root.path(), &fake).await;
     session
         .update(serde_json::from_value(json!({"planMode":true})).unwrap())
@@ -269,6 +275,44 @@ async fn plan_mode_accepts_readonly_roles_and_refuses_editing_roles() {
         .expect("editing role must fail");
     assert_eq!(error.code, ErrorCode::InvalidRequest);
     assert_eq!(fake.requests.lock().unwrap().len(), 2);
+
+    // The role itself must reject writes even without the parent's plan restriction.
+    session
+        .update(
+            serde_json::from_value(json!({"planMode":false,"approvalPolicy":"allowAll"})).unwrap(),
+        )
+        .await
+        .unwrap();
+    let reader = spawn(&session, "lookup", "unrestricted-parent-reader")
+        .await
+        .unwrap();
+    let snapshot = idle(&reader).await;
+    assert_eq!(snapshot.status, SessionStatus::Idle);
+    assert!(!snapshot.settings.plan_mode);
+    assert_eq!(snapshot.settings.approval_policy, PermissionMode::AllowAll);
+    assert!(!root.path().join("work/forbidden-readonly-shell").exists());
+    let requests = fake.requests.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    assert!(
+        requests[2]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["function"]["name"] == "shell")
+    );
+    let result = requests[3]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "tool")
+        .unwrap();
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("Plan mode: shell is not allowed."),
+        "{result}"
+    );
 }
 
 #[tokio::test]
@@ -342,6 +386,10 @@ async fn invalid_roles_are_listed_without_disabling_a_valid_role() {
             "provider.md",
             "---\nname: bad-provider\ndescription: Missing provider.\nmodel: missing/worker\n---\nBad",
         ),
+        (
+            "model.md",
+            "---\nname: bad-model\ndescription: Missing model.\nmodel: configured/typo\n---\nBad",
+        ),
     ] {
         role_file(root.path(), file, text);
     }
@@ -351,8 +399,26 @@ async fn invalid_roles_are_listed_without_disabling_a_valid_role() {
     )
     .unwrap();
     let fake = Server::start(vec![complete(), complete()]).await;
-    let session = parent(root.path(), &fake).await;
+    let session = parent_with_options(
+        root.path(),
+        &fake,
+        CoreOptions {
+            agent_role_providers: ["configured".into()].into(),
+            ..Default::default()
+        },
+    )
+    .await;
     let roles = session.roles().await.unwrap();
+    assert_eq!(
+        roles
+            .data
+            .iter()
+            .find(|role| role.name == "bad-model")
+            .unwrap()
+            .error
+            .as_deref(),
+        Some("Model is not configured: configured/typo")
+    );
     assert_eq!(
         roles
             .data
@@ -367,7 +433,7 @@ async fn invalid_roles_are_listed_without_disabling_a_valid_role() {
             .iter()
             .filter(|role| role.error.is_some())
             .count(),
-        7
+        8
     );
     say(&session, "Delegate inspection").await;
     let child = spawn(&session, "valid", "valid").await.unwrap();
@@ -375,6 +441,16 @@ async fn invalid_roles_are_listed_without_disabling_a_valid_role() {
     for name in ["duplicate", "bad-tool", "bad-provider"] {
         assert!(spawn(&session, name, name).await.is_err());
     }
+    let error = spawn(&session, "bad-model", "bad-model")
+        .await
+        .err()
+        .expect("unconfigured model must not spawn");
+    assert_eq!(error.message, "Model is not configured: configured/typo");
+    assert_eq!(
+        fake.requests.lock().unwrap().len(),
+        2,
+        "invalid roles must not send requests"
+    );
 }
 
 #[tokio::test]
@@ -391,6 +467,18 @@ async fn files_refresh_next_turn_but_existing_child_keeps_snapshot_after_reopen(
         &fake,
         CoreOptions {
             agent_role_providers: ["saved".into()].into(),
+            model_limits: ["saved/original", "saved/changed"]
+                .into_iter()
+                .map(|model| {
+                    (
+                        model.into(),
+                        canter_core::ModelLimits {
+                            context_window: 200_000,
+                            auto_compact_tokens: Some(100_000),
+                        },
+                    )
+                })
+                .collect(),
             ..Default::default()
         },
     )
