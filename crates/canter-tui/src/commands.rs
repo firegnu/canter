@@ -91,6 +91,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::Diff)),
     },
     Command {
+        name: "doctor",
+        about: "Check configuration, sign-in, providers, MCP and sandbox",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::Doctor)),
+    },
+    Command {
         name: "exit",
         about: "Quit canter",
         takes_args: false,
@@ -304,6 +310,116 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::Usage)),
     },
 ];
+
+pub(crate) fn doctor_loading() -> Report {
+    Report::new(
+        title("Doctor", "checking"),
+        vec![Part::Line(vec![Span::styled(
+            " Checking configuration, sign-in, providers, MCP and sandbox…",
+            theme::secondary(),
+        )])],
+        Vec::new(),
+    )
+}
+
+pub(crate) fn doctor(result: Result<canter_protocol::DoctorResponse, String>) -> Report {
+    let response = match result {
+        Ok(response) => response,
+        Err(error) => {
+            return Report::new(
+                title("Doctor", "unavailable"),
+                vec![Part::Wrap {
+                    indent: 1,
+                    text: clean(&error),
+                    style: theme::failure(),
+                    rows: usize::MAX,
+                }],
+                Vec::new(),
+            );
+        }
+    };
+    let failures = response
+        .data
+        .iter()
+        .filter(|check| check.status == canter_protocol::DoctorStatus::Fail)
+        .count();
+    let skipped = response
+        .data
+        .iter()
+        .filter(|check| check.status == canter_protocol::DoctorStatus::Skip)
+        .count();
+    let heading = title(
+        "Doctor",
+        &format!(
+            "{} checks · {failures} problem{} · {skipped} skipped",
+            response.data.len(),
+            if failures == 1 { "" } else { "s" }
+        ),
+    );
+    let mut body = Vec::new();
+    for (categories, name) in [
+        (
+            &[canter_protocol::DoctorCategory::Configuration][..],
+            "Configuration",
+        ),
+        (&[canter_protocol::DoctorCategory::Version][..], "Version"),
+        (
+            &[
+                canter_protocol::DoctorCategory::Authentication,
+                canter_protocol::DoctorCategory::Provider,
+            ][..],
+            "Sign-in and models",
+        ),
+        (&[canter_protocol::DoctorCategory::Mcp][..], "MCP"),
+        (&[canter_protocol::DoctorCategory::Sandbox][..], "Sandbox"),
+    ] {
+        let mut checks = response
+            .data
+            .iter()
+            .filter(|check| categories.contains(&check.category))
+            .peekable();
+        if checks.peek().is_none() {
+            continue;
+        }
+        if !body.is_empty() {
+            body.push(Part::blank());
+        }
+        body.push(Part::Line(vec![Span::styled(
+            format!(" {name}"),
+            Style::new().bold(),
+        )]));
+        for check in checks {
+            let (label, style) = match check.status {
+                canter_protocol::DoctorStatus::Ok => ("ok", theme::success()),
+                canter_protocol::DoctorStatus::Fail => ("fail", theme::failure()),
+                canter_protocol::DoctorStatus::Skip => ("skip", theme::secondary()),
+            };
+            body.push(Part::Line(vec![
+                Span::raw("   "),
+                Span::styled(label, style),
+                Span::raw(" "),
+                Span::raw(clean(&check.name)),
+            ]));
+            if let Some(reason) = &check.reason {
+                body.push(Part::Wrap {
+                    indent: 7,
+                    text: clean(reason),
+                    style,
+                    rows: usize::MAX,
+                });
+            }
+            if let Some(fix) = &check.fix {
+                body.push(Part::Wrap {
+                    indent: 7,
+                    text: clean(fix),
+                    style,
+                    rows: usize::MAX,
+                });
+            }
+        }
+    }
+    Report::new(heading, body, Vec::new())
+}
 
 pub(crate) fn roles(roles: &canter_protocol::AgentRoleListResponse) -> Report {
     let unavailable = roles

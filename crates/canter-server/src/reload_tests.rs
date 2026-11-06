@@ -933,6 +933,59 @@ async fn invalid_json_keeps_the_old_config_reports_location_and_recovers_over_ss
 }
 
 #[tokio::test]
+async fn doctor_reports_a_failed_hot_reload_without_replacing_the_active_config() {
+    let fixture = Fixture::new(json!({})).await;
+    let report = || async {
+        let mut url = reqwest::Url::parse("http://localhost/v1/doctor").unwrap();
+        url.query_pairs_mut()
+            .append_pair("clientVersion", crate::VERSION)
+            .append_pair(
+                "clientProtocolVersion",
+                &canter_protocol::PROTOCOL_VERSION.to_string(),
+            );
+        fixture
+            .client
+            .get(url)
+            .send()
+            .await
+            .unwrap()
+            .json::<canter_protocol::DoctorResponse>()
+            .await
+            .unwrap()
+    };
+    let initial = report().await;
+    assert!(initial.data.iter().any(|check| {
+        check.id == "config.active" && check.status == canter_protocol::DoctorStatus::Ok
+    }));
+    fs::write(fixture.path(), "[").unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let report = report().await;
+            if let Some(check) = report.data.iter().find(|check| check.id == "config.active")
+                && check.status == canter_protocol::DoctorStatus::Fail
+            {
+                assert!(
+                    check
+                        .reason
+                        .as_ref()
+                        .unwrap()
+                        .contains("Keeping the previous configuration")
+                );
+                assert!(report.data.iter().any(|check| {
+                    check.id == "provider.default"
+                        && check.status != canter_protocol::DoctorStatus::Fail
+                }));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn missing_or_renamed_config_keeps_the_previous_settings_and_recovers() {
     let mut fixture = Fixture::new(json!({})).await;
     let url = fixture.create().await;

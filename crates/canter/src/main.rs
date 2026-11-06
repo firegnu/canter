@@ -67,6 +67,18 @@ async fn run(arguments: Vec<std::ffi::OsString>, parsed: Result<Command, String>
                 .map(|report| print!("{report}")),
             Err(error) => Err(error),
         },
+        Ok(Command::Doctor) => match Context::current() {
+            Ok(context) => {
+                return match canter::doctor::run(context).await {
+                    Ok(code) => ExitCode::from(code),
+                    Err(error) => {
+                        eprintln!("canter: {error}");
+                        ExitCode::FAILURE
+                    }
+                };
+            }
+            Err(error) => Err(error),
+        },
         Ok(Command::Stats(args)) => match Context::current() {
             Ok(context) => canter::stats::run(args, context).await,
             Err(error) => Err(error),

@@ -22,7 +22,7 @@ mod prompt;
 mod response;
 mod restore_files;
 mod rewind;
-mod roles;
+pub mod roles;
 mod runner;
 mod running;
 mod session;

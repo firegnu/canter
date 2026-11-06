@@ -186,6 +186,7 @@ pub enum Action {
     Files,
     /// Collect the uncommitted git changes and show them.
     Diff,
+    Doctor,
     Review(String),
     /// Compact this session's context.
     Compact,
@@ -671,6 +672,7 @@ pub struct App {
     theme_missing: Option<String>,
     /// `/context`, `/files`, `/mcp` or `/skills`, open above the input box.
     report: Option<crate::report::Report>,
+    doctor_open: bool,
     background_view: Option<u64>,
     /// `/lsp`, and the report it was open as: open while that is open.
     lsp: Option<(u64, crate::lsp::View)>,
@@ -1020,6 +1022,7 @@ impl App {
             themes_dir: None,
             theme_missing: None,
             report: None,
+            doctor_open: false,
             background_view: None,
             lsp: None,
             permissions: None,
@@ -2236,6 +2239,9 @@ impl App {
             }
             _ => {}
         }
+        if self.report.is_none() {
+            self.doctor_open = false;
+        }
         None
     }
 
@@ -2474,6 +2480,19 @@ impl App {
         self.open_report(crate::commands::mcp(report));
     }
 
+    pub fn start_doctor(&mut self) {
+        self.open_report(crate::commands::doctor_loading());
+        self.doctor_open = true;
+    }
+
+    pub fn show_doctor(&mut self, result: Result<canter_protocol::DoctorResponse, String>) {
+        if !self.doctor_open {
+            return;
+        }
+        self.open_report(crate::commands::doctor(result));
+        self.doctor_open = true;
+    }
+
     /// `/memory`: the server supplies the list; the editor opens a selected file.
     pub fn show_memories(&mut self, result: Result<canter_protocol::MemoryListResponse, String>) {
         match result {
@@ -2650,6 +2669,7 @@ impl App {
     /// Opens `report` above the input box, numbered like a choice.
     fn open_report(&mut self, report: crate::report::Report) {
         self.background_view = None;
+        self.doctor_open = false;
         self.choosers += 1;
         self.agents.selected = None;
         self.chooser = None;

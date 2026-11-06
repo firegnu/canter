@@ -180,6 +180,10 @@ impl LiveConfig {
             .map(str::to_owned)
     }
 
+    pub fn doctor_config(&self) -> Config {
+        self.current.read().unwrap().config.clone()
+    }
+
     pub fn configured_model(&self, model: &str) -> bool {
         self.current
             .read()

@@ -53,6 +53,10 @@ impl ModelAuth {
         Ok(manager.as_ref().unwrap().clone())
     }
 
+    pub async fn existing(&self) -> Option<ChatgptAuth> {
+        self.manager.lock().await.clone()
+    }
+
     #[cfg(test)]
     pub fn for_test(home: PathBuf, manager: ChatgptAuth, endpoint: reqwest::Url) -> Arc<Self> {
         let mut catalog_endpoint = endpoint.clone();

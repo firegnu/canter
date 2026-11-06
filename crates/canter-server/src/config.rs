@@ -61,6 +61,17 @@ pub(crate) struct Config {
     hooks: canter_core::hooks::Hooks,
 }
 
+pub(crate) enum DoctorProvider {
+    ChatCompletions {
+        name: String,
+        base_url: String,
+        api_key: String,
+    },
+    Chatgpt {
+        name: String,
+    },
+}
+
 #[derive(Clone, Deserialize)]
 struct Provider {
     #[serde(default = "default_api")]
@@ -133,12 +144,22 @@ impl Config {
     }
 
     pub fn load(home: &Path) -> Result<Self, ServerError> {
+        Self::load_impl(home, true)
+    }
+
+    pub fn load_read_only(home: &Path) -> Result<Self, ServerError> {
+        Self::load_impl(home, false)
+    }
+
+    fn load_impl(home: &Path, fix_permissions: bool) -> Result<Self, ServerError> {
         let path = home.join("config.json");
         let mut file = fs::File::open(path).map_err(|_| {
             ServerError("cannot read config.json; configure a model and API key first".into())
         })?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|_| ServerError("cannot set config.json permissions to 0600".into()))?;
+        if fix_permissions {
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|_| ServerError("cannot set config.json permissions to 0600".into()))?;
+        }
         let mut contents = Vec::new();
         std::io::Read::read_to_end(&mut file, &mut contents)
             .map_err(|_| ServerError("cannot read config.json".into()))?;
@@ -319,6 +340,29 @@ impl Config {
                 provider.api == "responses" && provider.auth.as_deref() == Some("chatgpt")
             })
             .map(|(name, _)| name.as_str())
+    }
+
+    pub fn doctor_providers(&self) -> Vec<DoctorProvider> {
+        let mut providers = Vec::new();
+        if self.legacy {
+            providers.push(DoctorProvider::ChatCompletions {
+                name: "default".into(),
+                base_url: self.base_url.clone(),
+                api_key: self.api_key.clone(),
+            });
+        }
+        providers.extend(self.providers.iter().map(|(name, provider)| {
+            if provider.api == "responses" {
+                DoctorProvider::Chatgpt { name: name.clone() }
+            } else {
+                DoctorProvider::ChatCompletions {
+                    name: name.clone(),
+                    base_url: provider.base_url.clone().unwrap_or_default(),
+                    api_key: provider.api_key.clone().unwrap_or_default(),
+                }
+            }
+        }));
+        providers
     }
 
     pub fn options(&self) -> CoreOptions {

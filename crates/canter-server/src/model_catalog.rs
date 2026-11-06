@@ -158,6 +158,14 @@ struct State {
     refreshing: bool,
 }
 
+pub(crate) enum CatalogCheckError {
+    Auth(crate::chatgpt_auth::AuthError),
+    Timeout,
+    Network,
+    Status(u16),
+    InvalidResponse,
+}
+
 pub(crate) struct ModelCatalog {
     home: PathBuf,
     endpoint: reqwest::Url,
@@ -417,6 +425,41 @@ impl ModelCatalog {
             state.fetched_at = Some(cache.fetched_at);
         }
         account.map(|account| (account, state.generation))
+    }
+
+    pub async fn check(&self, auth: &ChatgptAuth, account: &str) -> Result<(), CatalogCheckError> {
+        let token = auth
+            .access_token(account)
+            .await
+            .map_err(CatalogCheckError::Auth)?;
+        let header = token
+            .authorization_header()
+            .map_err(CatalogCheckError::Auth)?;
+        let response = self
+            .client
+            .get(self.endpoint.clone())
+            .header(reqwest::header::AUTHORIZATION, header)
+            .send()
+            .await
+            .map_err(|error| {
+                if error.is_timeout() {
+                    CatalogCheckError::Timeout
+                } else {
+                    CatalogCheckError::Network
+                }
+            })?;
+        if !response.status().is_success() {
+            return Err(CatalogCheckError::Status(response.status().as_u16()));
+        }
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|_| CatalogCheckError::InvalidResponse)?;
+        if value.get("models").is_some_and(serde_json::Value::is_array) {
+            Ok(())
+        } else {
+            Err(CatalogCheckError::InvalidResponse)
+        }
     }
 
     async fn fetch(&self, auth: &ChatgptAuth, account: &str) -> Result<Vec<CatalogModel>, ()> {

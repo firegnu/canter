@@ -383,7 +383,7 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order (by name), with what the list says about it.
-const COMMANDS: [(&str, &str); 37] = [
+const COMMANDS: [(&str, &str); 38] = [
     ("/add-dir", "Add a directory to this session"),
     ("/agents", "List sub-agents and open or stop one"),
     (
@@ -395,6 +395,10 @@ const COMMANDS: [(&str, &str); 37] = [
     ("/context", "Show context contents and token estimates"),
     ("/copy", "Copy the last answer, or code block N of it"),
     ("/diff", "Show uncommitted git changes"),
+    (
+        "/doctor",
+        "Check configuration, sign-in, providers, MCP and sandbox",
+    ),
     ("/exit", "Quit canter"),
     ("/export", "Save or copy the conversation as Markdown"),
     ("/files", "List session files and git status"),
@@ -1122,7 +1126,7 @@ fn usage_opens_above_the_input_box_with_short_token_counts() {
 #[test]
 fn help_shows_the_commands_in_a_box() {
     // The shortcut sections come first: tall enough for the whole box.
-    let mut screen = Screen::sized(WIDTH, 108);
+    let mut screen = Screen::sized(WIDTH, 110);
     assert_eq!(screen.enter("/help"), None);
     screen.draw();
     let shown = screen.text();

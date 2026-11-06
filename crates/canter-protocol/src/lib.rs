@@ -4,6 +4,8 @@
 //! of Codex app-server v2 at rust-v0.163.0; no upstream code is copied.
 
 mod account;
+mod doctor;
+pub use doctor::*;
 mod event;
 pub use account::*;
 mod stats;

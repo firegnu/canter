@@ -60,22 +60,46 @@ pub(crate) fn general_tools(tools: &Tools) -> Vec<String> {
         .collect()
 }
 
-fn known_tool(name: &str, tools: &Tools) -> bool {
+fn known_tool(name: &str, mcp_tools: &[crate::mcp::McpTool]) -> bool {
     name != "ask_user"
         && (Tool::from_name(name).is_some()
             || crate::goal::definitions()
                 .iter()
                 .any(|tool| tool.name == name)
-            || tools.mcp_tools().iter().any(|tool| tool.name == name))
+            || mcp_tools.iter().any(|tool| tool.name == name))
 }
 
 pub(crate) async fn load(options: &CoreOptions, tools: &Tools) -> Result<Vec<Role>, CoreError> {
     let Some(directory) = options.agent_roles_directory.clone() else {
         return Ok(Vec::new());
     };
-    let mut roles = tokio::task::spawn_blocking(move || read_directory(&directory))
+    let roles = tokio::task::spawn_blocking(move || read_directory(&directory))
         .await
         .map_err(|_| CoreError::internal())?;
+    Ok(validate(roles, options, tools.mcp_tools()))
+}
+
+pub async fn inspect(
+    options: &CoreOptions,
+    mcp_tools: &[crate::mcp::McpTool],
+) -> Result<Vec<AgentRole>, CoreError> {
+    let Some(directory) = options.agent_roles_directory.clone() else {
+        return Ok(Vec::new());
+    };
+    let roles = tokio::task::spawn_blocking(move || read_directory(&directory))
+        .await
+        .map_err(|_| CoreError::internal())?;
+    Ok(validate(roles, options, mcp_tools)
+        .into_iter()
+        .map(|role| role.summary)
+        .collect())
+}
+
+fn validate(
+    mut roles: Vec<Role>,
+    options: &CoreOptions,
+    mcp_tools: &[crate::mcp::McpTool],
+) -> Vec<Role> {
     let mut counts = BTreeMap::new();
     for role in &roles {
         *counts.entry(role.summary.name.clone()).or_insert(0) += 1;
@@ -88,7 +112,7 @@ pub(crate) async fn load(options: &CoreOptions, tools: &Tools) -> Result<Vec<Rol
         } else if let Some(name) = role
             .tools
             .as_ref()
-            .and_then(|names| names.iter().find(|name| !known_tool(name, tools)))
+            .and_then(|names| names.iter().find(|name| !known_tool(name, mcp_tools)))
         {
             Some(format!("Unknown or forbidden tool: {name}"))
         } else if let Some(model) = &role.summary.model {
@@ -110,7 +134,7 @@ pub(crate) async fn load(options: &CoreOptions, tools: &Tools) -> Result<Vec<Rol
             role.summary.error = error;
         }
     }
-    Ok(roles)
+    roles
 }
 
 fn unavailable(name: String, error: &str) -> Role {
