@@ -48,6 +48,9 @@ async fn run(arguments: Vec<std::ffi::OsString>, parsed: Result<Command, String>
             canter::service::run(command).map(|output| print!("{output}"))
         }
         Ok(Command::Deployment(command)) => canter::deployment::run(command).await,
+        Ok(Command::Skills { force }) => canter::skills::install(force)
+            .map(|output| print!("{output}"))
+            .map_err(|error| error.to_string()),
         Ok(Command::Exec(args)) => {
             let result = match Context::current() {
                 Ok(context) => canter::exec::run(args, context).await,

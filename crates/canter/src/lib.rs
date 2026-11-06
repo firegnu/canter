@@ -15,6 +15,7 @@ pub mod doctor;
 pub mod exec;
 pub mod mcp;
 pub mod service;
+pub mod skills;
 pub mod stats;
 
 #[cfg(test)]
@@ -41,6 +42,7 @@ Usage:
                               waits for running turns; --now waits at most 60s
   canter usage               show daily token usage and cost by model
   canter doctor              check configuration, sign-in, providers, MCP and sandbox
+  canter skills install [--force]  install bundled document skills; --force overwrites
   canter auth                sign in, select an account, or sign out (chatgpt)
   canter exec [options] [prompt]  run one turn without interaction
   canter exec --resume <id> [prompt]
@@ -82,6 +84,7 @@ pub enum Command {
     Exec(exec::Args),
     Mcp(mcp::Command),
     Service(service::Command),
+    Skills { force: bool },
     Deployment(deployment::Command),
     Chat(ChatArgs),
     Help,
@@ -137,6 +140,19 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
     }
     if args.first().map(String::as_str) == Some("mcp") {
         return mcp::parse(&args[1..]).map(Command::Mcp);
+    }
+    if args.first().map(String::as_str) == Some("skills") {
+        return match args[1..]
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            ["install"] => Ok(Command::Skills { force: false }),
+            ["install", "--force"] => Ok(Command::Skills { force: true }),
+            ["--help" | "-h"] => Ok(Command::Help),
+            _ => Err("use canter skills install [--force]".into()),
+        };
     }
     if args.first().map(String::as_str) == Some("auth") {
         return auth::parse(&args[1..]).map(Command::Auth);
