@@ -2,7 +2,7 @@
 
 A coding agent written in Rust: one resident server per machine, many clients.
 
-> **Status: in daily use by its author on macOS. There are no prebuilt releases; build it from source.** A full user guide is still to come. The decisions and the reasoning behind them are in [`docs/DESIGN.md`](docs/DESIGN.md). The research report that led to them is in [`docs/调研/R49-自研agent调研.md`](docs/调研/R49-自研agent调研.md). Both documents are in Chinese.
+> **Status: in daily use by its author on macOS. There are no prebuilt releases; build it from source.** The complete usage guide is [`docs/usage.md`](docs/usage.md). The decisions and the reasoning behind them are in [`docs/DESIGN.md`](docs/DESIGN.md). The research report that led to them is in [`docs/调研/R49-自研agent调研.md`](docs/调研/R49-自研agent调研.md). The design and research documents are in Chinese.
 
 ## What it is
 
@@ -38,42 +38,81 @@ The turn ends when the model stops asking for tools. canter is that loop, plus a
 
 ## Features
 
-- Resident server with a full-screen terminal client. The client reconnects and resumes after a server restart.
-- Models:
-  - ChatGPT, through "Sign in with ChatGPT", using your own plan.
-  - DeepSeek and other OpenAI-compatible Chat Completions providers, with your own API key or plan. Several providers can be configured and switched within a session.
-- Tools: read files, apply patches on supported ChatGPT models or write/edit files on other models, and run shell commands.
-- Permissions:
-  - allow everything, ask every time, or allow for this session;
-  - Esc stops an active `/btw` answer or `/handoff` generation first; otherwise it interrupts the current turn.
-- Sessions are saved and can be resumed. Context is compacted manually or automatically when it gets too long.
-- Reads `AGENTS.md`.
-- `/context` shows the loaded context by category, token estimates, remaining window space and the last model-reported usage. `/files` lists files read or changed by session tools and the working directory's git status. Shell edits appear in git status, not in the session's changed-file list. Both commands are read-only.
-- `/review` reviews staged and unstaged changes plus the untracked-file list. `/review 123` or `/review https://github.com/owner/repo/pull/123` uses `gh` to read the PR without checking it out. The review runs as a queued turn in this conversation; only its title is shown as the prompt, and the answer stays in history. During that turn, file changes and shell commands outside the existing read-only whitelist are denied regardless of permission mode or session grants. Diff content is capped at 256 KiB with statistics and a truncation notice; collection times out after 15 seconds. Empty changes or collection errors send no message.
-  The client checks the running server's `review` capability first; if it is missing, no review input is sent and the client asks you to run `canter serve --replace`. Untracked-file names keep their own bounded section ahead of truncated diffs. PR metadata and all collected content are enclosed in explicit untrusted-data markers.
-- `/btw <question>` asks one question using the current context, even while the main turn runs. Its answer streams in gray in this terminal only; neither the question nor the answer enters saved history. Usage counts toward session cost, while context occupancy stays unchanged. Only one btw answer can run per session at a time.
-- `/handoff [direction]` writes a self-contained note from the current context, opens a new session with the same directory, model, thinking effort and permission mode, and places the note in the input box. Edit it and press Enter to send; it is never sent automatically. Changed your mind? Before sending anything in the new session, press Esc twice (within about 2 seconds; the first shows `Esc again to return to the original session`) to go back to the original session and drop the note; the empty new session stays in `/resume`. Requires an idle conversation with no btw answer running. Esc cancels generation, and errors leave you in the original session. Usage is charged to the original session, which stays available through `/resume`.
-
-Also available: MCP servers, skills, sub-agents, memory, hooks, plan mode, a sandbox, background commands and `/goal`. Planned: a GPUI desktop app and a web client.
+- **Resident server and terminal client.** One server per machine, many clients, with a full-screen terminal interface that reconnects and resumes after a server restart.
+- **Models.** Several providers at once:
+  - ChatGPT through "Sign in with ChatGPT", using your own plan.
+  - DeepSeek and other OpenAI-compatible Chat Completions providers, with your own key or plan.
+  - Switch provider and model while a session is idle; choose per-model context windows, image support, thinking levels and prices.
+- **Tools.** Read files, images and PDFs; write or edit files; apply patches on supported ChatGPT models; run shell commands in the foreground or background; fetch web pages and search the web.
+- **Permissions and sandbox.** Three permission modes, per-call and permanent rules, a macOS Seatbelt sandbox for model commands, and per-repository folder trust.
+- **Sessions.** Saved and resumable; forked or rewound; searched across; moved to a trash; cleaned automatically after a configurable retention period. Context is compacted manually or automatically.
+- **Project knowledge.** Reads `AGENTS.md`, skills and global and project memories.
+- **Automation.** Hooks, MCP servers (stdio, HTTP and OAuth), sub-agents with custom roles, plan mode, goals and background commands.
+- **Inspection.** `/context` shows loaded context by category, token estimates, remaining space and the last measured usage. `/files` lists files read or changed by tools plus Git status. `/review` reviews uncommitted changes or a GitHub PR as a read-only turn.
+- **Side questions and handoff.** `/btw` asks one question without saving it to history; `/handoff` drafts a note in a new session.
+- **Command line.** `canter exec` for one non-interactive turn, `canter stats` for session reports, `canter usage` for daily token and cost totals, and `canter doctor` for configuration, sign-in, provider, MCP and sandbox checks.
 
 ## Install
 
-canter is a Cargo workspace on Rust stable. Install it from a clone:
+canter is a Cargo workspace on Rust stable. It is currently used on macOS.
 
 ```sh
+git clone https://github.com/firegnu/canter.git
+cd canter
 cargo install --locked --path crates/canter
 ```
 
-Then run `canter` in a project directory. The first client starts the server in the background. Other commands:
+`canter upgrade`, `canter rollback` and the optional login service are built in:
 
 ```sh
-canter --help                 # all commands
-canter auth login chatgpt     # sign in with your ChatGPT plan
-canter upgrade                # rebuild from the clone, back up, install and replace the server
-canter rollback               # restore the previous build
+canter upgrade              # rebuild from the source checkout, back up and install, then replace the server
+canter rollback             # restore the previous build and replace the server
+canter service install      # macOS: start one server at login; save this terminal's PATH and HOME
 ```
 
-Settings live in `~/.canter/config.json` (set `CANTER_HOME` to use another directory). Until the user guide is written, the options are described in `docs/DESIGN.md`.
+`canter upgrade [directory]` builds the current code from the checkout recorded at install time, or from a directory you pass. Both commands keep the five newest backups in `~/.canter/backups`. `service install` does not start or stop the server; it only writes the login item. See [`docs/usage.md`](docs/usage.md#server-and-service) for the exact wait and rollback behavior.
+
+## Start using it
+
+Create `~/.canter/config.json` with at least one provider. A minimal DeepSeek setup:
+
+```json
+{
+  "model": "deepseek/deepseek-flash",
+  "providers": {
+    "deepseek": {
+      "base_url": "https://api.deepseek.com",
+      "api_key": "YOUR_DEEPSEEK_API_KEY",
+      "models": {
+        "deepseek-flash": {
+          "context_window": 1048576,
+          "image": true
+        }
+      }
+    }
+  }
+}
+```
+
+To use a ChatGPT plan instead, add a `responses` provider, set the model to `chatgpt/<model>`, then run `canter auth login chatgpt`. The usage guide has complete examples for [providers](docs/usage.md#provider-objects), [ChatGPT](docs/usage.md#chatgpt) and [prices](docs/usage.md#prices).
+
+The server remembers the model and thinking effort you last chose with `/model` or `/think`; a newly started `canter` session uses them unless you pass `-m`. `config.json`'s `model` is the fallback when nothing is remembered or the remembered model is unavailable, and changing it clears the remembered selection. `-m` applies to that run only.
+
+Then run canter in a project directory:
+
+```sh
+cd ~/code/my-project
+canter
+```
+
+The first client starts the server in the background and opens a session. Before opening a folder canter has not seen, the terminal asks `Trust this folder?`; choose `Trust and continue` or `Open restricted`. Trust is recorded per Git repository root in `trusted_folders.json`. `canter exec` opens an untrusted folder restricted and never asks.
+
+Settings live in `~/.canter/config.json`. Most changes are picked up at the next turn without restarting the server. Set `CANTER_HOME` to use another absolute state directory.
+
+## Documentation
+
+- [`docs/usage.md`](docs/usage.md): configuration, command line, terminal commands and keys, models, permissions, sandbox, tools, hooks, MCP, skills, sub-agents, memory, plan mode, goals, sessions, `canter exec`, statistics and doctor.
+- [`docs/DESIGN.md`](docs/DESIGN.md): the decisions and their reasons (Chinese).
 
 ## Development
 
