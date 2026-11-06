@@ -581,9 +581,9 @@ fn agent_tool(item: &Item, feedback: Option<&str>) -> (String, String) {
     let done = *status == ItemStatus::Completed;
     let mut summary = match tool {
         CollabAgentTool::SpawnAgent => {
-            let kind = agents
-                .first()
-                .map_or("agent", |agent| crate::agents::type_label(agent.agent_type));
+            let kind = agents.first().map_or("agent", |agent| {
+                crate::agents::type_label(&agent.agent_type)
+            });
             let verb = if done { "Spawned" } else { "Spawn" };
             match names.as_str() {
                 "" => format!("{verb} {kind}"),

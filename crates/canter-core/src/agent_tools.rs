@@ -76,6 +76,40 @@ pub(crate) fn definitions() -> [ToolDefinition; 4] {
     ]
 }
 
+pub(crate) fn definitions_for_roles(roles: &[crate::roles::Role]) -> [ToolDefinition; 4] {
+    let mut definitions = definitions();
+    let available: Vec<_> = roles
+        .iter()
+        .filter(|role| role.summary.error.is_none())
+        .collect();
+    if available.is_empty() {
+        return definitions;
+    }
+    let spawn = &mut definitions[0];
+    spawn.description = "Start a sub-agent with a fresh conversation; returns its id and short name immediately. Choose the role by its description, or use the role explicitly named by the user. Read-only roles may be started on your own. Roles that can edit require explicit sub-agent, delegation, or parallel-work instructions from the user or applicable AGENTS.md, including standing instructions such as delegating tests to a test-writer. Requests to investigate carefully or analyze deeply do not authorize editing roles. Make your own plan first; do work blocking your next step yourself and delegate independent work. Give editing agents explicit file or module ownership and tell them that others share the repository: do not revert others' edits. At most four agents may run at once; children cannot spawn agents. Plan mode and review rounds allow only read-only roles. Roles inherit your model and effort unless configured otherwise. Available roles:\n- explorer (read-only): Read-only code lookup or research.\n- general (can edit): Independent work, including file changes, when explicitly delegated.".into();
+    let names = spawn.parameters["properties"]["type"]["enum"]
+        .as_array_mut()
+        .expect("role enum");
+    for role in available {
+        names.push(json!(role.summary.name));
+        spawn.description.push_str(&format!(
+            "\n- {} ({}): {}",
+            role.summary.name,
+            if role.summary.read_only {
+                "read-only"
+            } else {
+                "can edit"
+            },
+            role.summary
+                .description
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
+    }
+    definitions
+}
+
 impl crate::Session {
     pub fn set_agent_host(&self, host: Arc<dyn AgentHost>) {
         let _ = self.shared.agent_host.set(host);
@@ -137,7 +171,7 @@ async fn card(
         (_, Ok(AgentCommand::SpawnAgent { kind, .. })) => vec![CollabAgent {
             id: String::new(),
             name: String::new(),
-            agent_type: *kind,
+            agent_type: kind.clone(),
             status: None,
             result: None,
         }],

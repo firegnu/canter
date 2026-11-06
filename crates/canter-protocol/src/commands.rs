@@ -61,6 +61,7 @@ pub mod routes {
     pub const GOAL_PAUSE: &str = "/v1/sessions/{id}/goal/pause";
     pub const GOAL_RESUME: &str = "/v1/sessions/{id}/goal/resume";
     pub const SKILLS: &str = "/v1/sessions/{id}/skills";
+    pub const ROLES: &str = "/v1/sessions/{id}/roles";
     pub const MCP: &str = "/v1/mcp";
     pub const CONTEXT: &str = "/v1/sessions/{id}/context";
     pub const SANDBOX: &str = "/v1/sessions/{id}/sandbox";

@@ -57,6 +57,7 @@ pub fn export_protocol(directory: &Path) -> Result<(), Box<dyn std::error::Error
         CommandRuleDeleteResponse,
         SkillListParams,
         SkillListResponse,
+        AgentRoleListResponse,
         SessionCreateParams,
         SessionCreateResponse,
         SessionListParams,

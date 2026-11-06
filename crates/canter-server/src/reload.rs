@@ -135,6 +135,7 @@ impl LiveConfig {
             .collect();
         let mut options = config.options();
         options.command_rules_path = Some(home.join("rules.json"));
+        options.agent_roles_directory = Some(home.join("agents"));
         Arc::new(Self {
             auth,
             home,
@@ -315,6 +316,7 @@ impl LiveConfig {
         let model = config.model_client(Some(self.auth.clone()))?;
         let mut options = config.options();
         options.command_rules_path = Some(self.home.join("rules.json"));
+        options.agent_roles_directory = Some(self.home.join("agents"));
         let old = self.current.read().unwrap().clone();
         let mut mcp = BTreeMap::new();
         let mut lineage = self.mcp_lineage.lock().await;
@@ -431,6 +433,52 @@ impl LiveConfig {
 }
 
 impl ConfigurationSource for LiveConfig {
+    fn validate_agent_model(
+        &self,
+        model: String,
+        options: CoreOptions,
+    ) -> futures_util::future::BoxFuture<'_, Result<(), CoreError>> {
+        Box::pin(async move {
+            // Routing and capabilities are the parent's frozen generation. Only
+            // credential availability is checked against current local state.
+            let Some((provider, _)) = model.split_once('/') else {
+                return Ok(());
+            };
+            if !options.chatgpt_plan_providers.contains(provider) {
+                return Ok(());
+            }
+            let unavailable = |message: &str| CoreError {
+                code: canter_protocol::ErrorCode::InvalidRequest,
+                message: message.into(),
+            };
+            let auth = self
+                .auth
+                .get()
+                .await
+                .map_err(|_| unavailable("Could not read ChatGPT login state"))?;
+            let current = auth.current_record().await.ok_or_else(|| {
+                unavailable("ChatGPT is not logged in; log in before spawning this role")
+            })?;
+            let record = auth
+                .records()
+                .await
+                .into_iter()
+                .find(|record| record.id == current)
+                .ok_or_else(|| {
+                    unavailable("ChatGPT is not logged in; log in before spawning this role")
+                })?;
+            match record.status {
+                crate::chatgpt_auth::RecordStatus::LoggedIn => Ok(()),
+                crate::chatgpt_auth::RecordStatus::PlanNotAuthorized => Err(unavailable(
+                    "ChatGPT plan access is not authorized for this role",
+                )),
+                _ => Err(unavailable(
+                    "ChatGPT is not logged in; log in before spawning this role",
+                )),
+            }
+        })
+    }
+
     fn snapshot(&self) -> Configuration {
         // Pin the published slots while taking the ready subset. This snapshot
         // is also used to open a session or answer privately during a handover.

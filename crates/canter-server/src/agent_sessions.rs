@@ -302,7 +302,7 @@ fn collab_agent(snapshot: &SessionSnapshot, with_result: bool) -> CollabAgent {
         agent_type: snapshot
             .parent
             .as_ref()
-            .map(|parent| parent.agent_type)
+            .map(|parent| parent.agent_type.clone())
             .unwrap_or_default(),
         status: snapshot.agent.as_ref().map(|agent| agent.status),
         result: snapshot

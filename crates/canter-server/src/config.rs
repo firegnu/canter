@@ -371,6 +371,7 @@ impl Config {
             }
         }
         CoreOptions {
+            agent_role_providers: self.providers.keys().cloned().collect(),
             prompt_suggestions: self.prompt_suggestions,
             hooks: self.hooks.clone(),
             plan_enabled: self.plan_enabled,

@@ -485,10 +485,7 @@ impl Session {
                 "Agent does not belong to this session",
             ));
         }
-        if snapshot
-            .parent
-            .as_ref()
-            .is_some_and(|source| source.agent_type == AgentType::General)
+        if !child.shared.state.lock().await.readonly_agent()
             && (parent.journal.snapshot.settings.plan_mode
                 || parent
                     .active
@@ -497,7 +494,15 @@ impl Session {
         {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
-                "Plan mode and review rounds allow only explorer agents",
+                if snapshot
+                    .parent
+                    .as_ref()
+                    .is_some_and(|source| matches!(source.agent_type, AgentType::Custom(_)))
+                {
+                    "Plan mode and review rounds allow only read-only roles"
+                } else {
+                    "Plan mode and review rounds allow only explorer agents"
+                },
             ));
         }
         if snapshot
@@ -575,13 +580,18 @@ impl Session {
                     ErrorCode::InvalidRequest, "Sub-agents cannot spawn other agents",
                 ));
             }
-            if kind == AgentType::Unknown
-                || (kind == AgentType::General
+            let role = state.role(&kind)?;
+            let readonly = role.as_ref().map_or(kind == AgentType::Explorer, |role| role.summary.read_only);
+            if !readonly
                     && (state.journal.snapshot.settings.plan_mode
-                        || state.active.as_ref().is_some_and(|active| active.turn.review.is_some())))
+                        || state.active.as_ref().is_some_and(|active| active.turn.review.is_some()))
             {
                 return Err(CoreError::new(
-                    ErrorCode::InvalidRequest, "Plan mode and review rounds allow only explorer agents",
+                    ErrorCode::InvalidRequest, if role.is_some() {
+                        "Plan mode and review rounds allow only read-only roles"
+                    } else {
+                        "Plan mode and review rounds allow only explorer agents"
+                    },
                 ));
             }
             state.agent_children.retain(|child| child.strong_count() > 0);
@@ -606,6 +616,30 @@ impl Session {
             };
             let runtime = parent.shared.runtime();
             let mut settings = state.journal.snapshot.settings.clone();
+            let role_snapshot = if let Some(role) = role {
+                if let Some(model) = role.summary.model {
+                    if !runtime.options.model_limits.contains_key(&model) {
+                        return Err(CoreError::new(ErrorCode::InvalidRequest, &format!("Model is not configured: {model}")));
+                    }
+                    settings.model = model;
+                    settings.reasoning_effort = runtime.options.reasoning(&settings.model).default;
+                }
+                if let Some(effort) = role.summary.effort { settings.reasoning_effort = effort; }
+                runtime.options.reasoning(&settings.model).validate(&settings.model, settings.reasoning_effort)?;
+                if let Some(config) = parent.shared.configuration.get() {
+                    config.validate_agent_model(settings.model.clone(), runtime.options.clone()).await?;
+                }
+                let tools = runtime.tools.clone().with_apply_patch(runtime.options.apply_patch_models.contains(&settings.model));
+                let available = crate::roles::general_tools(&tools);
+                if let Some(name) = role.tools.as_ref().and_then(|names| names.iter().find(|name| !available.contains(name))) {
+                    return Err(CoreError::new(ErrorCode::InvalidRequest, &format!("Tool is not available for this role's model: {name}")));
+                }
+                Some(crate::roles::Snapshot {
+                    name: role.summary.name, tools: role.tools.unwrap_or(available),
+                    prompt: role.prompt, model: settings.model.clone(), effort: settings.reasoning_effort,
+                    read_only: role.summary.read_only,
+                })
+            } else { None };
             let base = agent_name(name.as_deref(), &task);
             let store = state.journal.store.clone();
             let siblings = tokio::task::spawn_blocking(move || store.list_all()).await
@@ -629,7 +663,7 @@ impl Session {
                 runtime.context.clone(),
                 runtime.model.clone(),
                 runtime.options.clone(),
-                Some(source),
+                Some((source, role_snapshot)),
             )
             .await?;
             state.agent_children.push(std::sync::Arc::downgrade(&child.shared));
@@ -791,7 +825,7 @@ async fn watch_agent(parent: &Session, child: &Session) -> Result<(), CoreError>
                             agent_type: snapshot
                                 .parent
                                 .as_ref()
-                                .map(|parent| parent.agent_type)
+                                .map(|parent| parent.agent_type.clone())
                                 .unwrap_or_default(),
                             status: Some(agent.status),
                             result: None,

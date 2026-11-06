@@ -243,6 +243,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::RewindList)),
     },
     Command {
+        name: "roles",
+        about: "List built-in and custom sub-agent roles",
+        takes_args: false,
+        run: |_, _| Ok(Some(Action::ListRoles)),
+    },
+    Command {
         name: "sandbox",
         about: "Show what the sandbox allows",
         takes_args: false,
@@ -298,6 +304,79 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: |_, _| Ok(Some(Action::Usage)),
     },
 ];
+
+pub(crate) fn roles(roles: &canter_protocol::AgentRoleListResponse) -> Report {
+    let unavailable = roles
+        .data
+        .iter()
+        .filter(|role| role.error.is_some())
+        .count();
+    let title = title(
+        "Roles",
+        &format!(
+            "{} · {} available · {unavailable} unavailable",
+            roles.data.len(),
+            roles.data.len() - unavailable
+        ),
+    );
+    let mut body = Vec::new();
+    for (built_in, heading) in [(true, "Built-in"), (false, "Custom")] {
+        if !body.is_empty() {
+            body.push(Part::blank());
+        }
+        let mut spans = vec![Span::styled(format!(" {heading}"), Style::new().bold())];
+        if !built_in {
+            spans.push(Span::styled("  ~/.canter/agents", theme::secondary()));
+        }
+        body.push(Part::Line(spans));
+        let mut found = false;
+        for role in roles.data.iter().filter(|role| role.built_in == built_in) {
+            found = true;
+            body.push(Part::Line(vec![
+                Span::raw("   "),
+                Span::styled(
+                    clean(&role.name),
+                    if role.error.is_some() {
+                        theme::failure()
+                    } else {
+                        theme::accent()
+                    },
+                ),
+                Span::styled(
+                    format!(
+                        "  {} · {}",
+                        clean(role.model.as_deref().unwrap_or("inherits model")),
+                        if role.read_only {
+                            "read-only"
+                        } else {
+                            "can edit"
+                        }
+                    ),
+                    theme::secondary(),
+                ),
+            ]));
+            if let Some(error) = &role.error {
+                body.push(Part::Line(vec![Span::styled(
+                    format!("     {}", clean(error)),
+                    theme::failure(),
+                )]));
+            }
+            if !role.description.is_empty() {
+                body.push(Part::Line(vec![Span::styled(
+                    format!("     {}", clean(&role.description)),
+                    theme::secondary(),
+                )]));
+            }
+        }
+        if !built_in && !found {
+            body.push(Part::Line(vec![Span::styled(
+                "   Add roles as ~/.canter/agents/<name>.md",
+                theme::secondary(),
+            )]));
+        }
+    }
+    Report::new(title, body, Vec::new())
+}
 
 /// `/skills`: global and project skills, each a section; every skill's
 /// name, then its description in at most two rows.

@@ -383,7 +383,7 @@ fn review_command_dispatches_and_hides_assembled_prompt() {
 }
 
 /// Every command, in the list's order (by name), with what the list says about it.
-const COMMANDS: [(&str, &str); 36] = [
+const COMMANDS: [(&str, &str); 37] = [
     ("/add-dir", "Add a directory to this session"),
     ("/agents", "List sub-agents and open or stop one"),
     (
@@ -425,6 +425,7 @@ const COMMANDS: [(&str, &str); 36] = [
         "Review uncommitted changes or a PR number/URL (read-only)",
     ),
     ("/rewind", "Rewind conversation, files, or both"),
+    ("/roles", "List built-in and custom sub-agent roles"),
     ("/sandbox", "Show what the sandbox allows"),
     ("/skills", "List this session's skills"),
     ("/statusline", "Choose and order what the status line shows"),
@@ -1121,7 +1122,7 @@ fn usage_opens_above_the_input_box_with_short_token_counts() {
 #[test]
 fn help_shows_the_commands_in_a_box() {
     // The shortcut sections come first: tall enough for the whole box.
-    let mut screen = Screen::sized(WIDTH, 107);
+    let mut screen = Screen::sized(WIDTH, 108);
     assert_eq!(screen.enter("/help"), None);
     screen.draw();
     let shown = screen.text();

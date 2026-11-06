@@ -318,6 +318,69 @@
       ],
       "type": "object"
     },
+    "AgentRole": {
+      "properties": {
+        "builtIn": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "string"
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "readOnly",
+        "builtIn"
+      ],
+      "type": "object"
+    },
+    "AgentRoleListResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/AgentRole"
+          },
+          "type": "array"
+        },
+        "directory": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "directory"
+      ],
+      "type": "object"
+    },
     "AgentState": {
       "properties": {
         "result": {
@@ -353,8 +416,8 @@
     "AgentSummary": {
       "properties": {
         "agentType": {
-          "$ref": "#/$defs/AgentType",
-          "default": "general"
+          "default": "general",
+          "type": "string"
         },
         "createdAt": {
           "format": "int64",
@@ -413,14 +476,6 @@
         "updatedAt"
       ],
       "type": "object"
-    },
-    "AgentType": {
-      "enum": [
-        "explorer",
-        "general",
-        "unknown"
-      ],
-      "type": "string"
     },
     "ApprovalDecision": {
       "enum": [
@@ -787,8 +842,8 @@
       "description": "P2-179: a sub-agent named on a `collabAgentToolCall` card or a\n`backgroundEvent` that delivered its result, as last known.",
       "properties": {
         "agentType": {
-          "$ref": "#/$defs/AgentType",
-          "default": "general"
+          "default": "general",
+          "type": "string"
         },
         "id": {
           "type": "string"
@@ -5475,8 +5530,8 @@
     "SessionParent": {
       "properties": {
         "agentType": {
-          "$ref": "#/$defs/AgentType",
-          "default": "general"
+          "default": "general",
+          "type": "string"
         },
         "sessionId": {
           "type": "string"
@@ -6641,7 +6696,7 @@
     "StatsSubAgent": {
       "properties": {
         "agentType": {
-          "$ref": "#/$defs/AgentType"
+          "type": "string"
         },
         "durationMs": {
           "format": "uint64",
