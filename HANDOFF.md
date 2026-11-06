@@ -417,3 +417,4 @@
   - 只用 DeepSeek/Kimi 的会话里，模型如果调了没提供给它的 `apply_patch`，这条也会被转成文字（只按名字判断），请求和以前不同；平常碰不到。
   - 切到目录里不是 freeform 的 GPT、补丁和普通调用混在一批时，Responses 请求里补丁结果夹在 `function_call` 和它的结果之间，订阅接口会不会拒没查证。
   - GPT 的消息发给 DeepSeek、Kimi 时不再带思考；按「切换只在空闲时」推断不会被拒，官方 DeepSeek、Kimi 没实测。
+- 自定义子 agent 角色（P2-223，11-06 合并）交叉审查「可以不改」、没做的：子 agent 卡片和导出里显示模型在 `spawn_agent` 里原样填的类型名（屏幕上控制字符已滤掉，导出的 Markdown 里可能出现很长或很怪的名字；改法：TUI 对 `Custom` 套 `visible()`）；`/roles` 的 Custom 一节标题写死 `~/.canter/agents`，改过 `CANTER_HOME` 时不一致；写错的角色那一行仍显示 `inherits model · can edit`。
