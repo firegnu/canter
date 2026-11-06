@@ -224,6 +224,8 @@ fn up_goes_on_past_recalled_commands_without_their_list() {
     assert_eq!(enter(&mut ui), None);
     let shown = screen(&mut ui);
     assert!(shown.contains("Send, or run the command"), "{shown}");
+    // The help takes the input box's place; it comes back empty.
+    key(&mut ui, KeyCode::Esc);
     assert_eq!(input_row(&mut ui), "");
 }
 

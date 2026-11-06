@@ -91,6 +91,10 @@ async fn doctor_shows_grouped_results_after_the_background_check() {
     ] {
         assert!(shown.contains(expected), "missing {expected}: {shown}");
     }
+    // The results take the input box's place; the draft comes back after.
+    test.key(KeyCode::Esc);
+    test.ui.draw(0).unwrap();
+    let shown = rows(&test).join("\n");
     assert!(shown.contains("still responsive"), "{shown}");
     test.stop().await;
 }
@@ -121,7 +125,12 @@ async fn doctor_tells_the_user_when_the_server_is_too_old() {
     open(&mut test, json!([])).await;
     test.message().await;
     let shown = rows(&test).join("\n");
-    let normalized = shown.split_whitespace().collect::<Vec<_>>().join(" ");
+    // The text without the borders of the box it is in.
+    let normalized = shown
+        .split_whitespace()
+        .filter(|word| *word != "│")
+        .collect::<Vec<_>>()
+        .join(" ");
     assert!(
         normalized
             .contains("This server is too old for /doctor; run canter serve --replace and retry"),

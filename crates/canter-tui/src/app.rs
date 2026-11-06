@@ -22,7 +22,7 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
 
 use crate::approval::{self, ApprovalBox, shorten_home};
 use crate::cells;
@@ -50,6 +50,9 @@ const MENTION_ROWS: usize = 10;
 /// Border, padding and the `› ` prompt on the left; padding and border on the right.
 const INPUT_LEFT: u16 = 4;
 const INPUT_CHROME: u16 = 6;
+/// A panel's border on each side and a column before the right one; its rows
+/// start with their own blank column.
+const PANEL_CHROME: u16 = 3;
 pub(crate) const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Columns of a running command the status line keeps however narrow the window.
 const MIN_COMMAND: usize = 12;
@@ -4647,18 +4650,34 @@ impl App {
             self.drawing.main_waiting = height > 2 && width > 0;
         }
         let header_rows = header.len();
+        // A choice, `/statusline`, `/theme`, `/agents` or a report takes the
+        // input box's place, in a box of its own; when not even that fits,
+        // the input box stays.
+        let panel = matches!(bottom, Bottom::Input { .. }) && self.choosing();
         // Commands and paths are only for the input box.
         let list = match bottom {
+            Bottom::Input { .. } if panel => self.list_view(
+                width.saturating_sub(PANEL_CHROME),
+                usize::from(height.saturating_sub(1 + INFO_ROWS)).saturating_sub(header_rows),
+                now_ms,
+            ),
             Bottom::Input { .. } => self.list_view(
                 width,
                 usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height()))
                     .saturating_sub(header_rows),
                 now_ms,
             ),
-            Bottom::Approval(_) => Vec::new(),
+            Bottom::Approval(_) | Bottom::Panel { .. } => Vec::new(),
+        };
+        // The rows the list or the panel takes, title and keys included.
+        let opened = list.len();
+        let (bottom, list) = if panel && opened > 0 {
+            (Bottom::panel(list), Vec::new())
+        } else {
+            (bottom, list)
         };
         // The choice offered is on screen when any of its choices fit.
-        self.drawing.chooser = (self.choosing() && !list.is_empty()).then_some(self.choosers);
+        self.drawing.chooser = (self.choosing() && opened > 0).then_some(self.choosers);
 
         let plan_room = usize::from(height.saturating_sub(3 + INFO_ROWS + bottom.height()))
             .saturating_sub(list.len() + header_rows);
@@ -4670,7 +4689,7 @@ impl App {
             .count();
         let mut plan = Vec::new();
         let background_row = background_count > 0 && plan_room > 0;
-        let background_open = self.background_open() && !list.is_empty();
+        let background_open = self.background_open() && opened > 0;
         if background_row {
             let mark = if background_open { '▾' } else { '▸' };
             plan.push(Line::from(truncate(
@@ -4682,7 +4701,7 @@ impl App {
             )));
         }
         // The sub-agents row goes last, so `/agents` opens in its place.
-        let agents_open = self.agents.selected.is_some() && !list.is_empty();
+        let agents_open = self.agents.selected.is_some() && opened > 0;
         let agent_row = self
             .agents
             .row()
@@ -4787,7 +4806,9 @@ impl App {
             // End goes to the bottom from the input box, not from the
             // approval box or the search box.
             let how = match bottom {
-                Bottom::Input { .. } if self.search.is_none() => " · click or End",
+                Bottom::Input { .. } | Bottom::Panel { .. } if self.search.is_none() => {
+                    " · click or End"
+                }
                 _ => " · click",
             };
             Line::from(vec![
@@ -4836,7 +4857,7 @@ impl App {
             open: background_open,
             choices: (
                 background_top + plan.len() + 1,
-                self.background_choices(list.len().saturating_sub(1)),
+                self.background_choices(opened.saturating_sub(1)),
             ),
         };
         // The sub-agents row is the last of the plan rows; the open list's
@@ -4849,10 +4870,7 @@ impl App {
                 agent_row.as_ref().map(|_| agents_top - 1)
             },
             open: agents_open,
-            choices: (
-                agents_top + 1,
-                self.agent_choices(list.len().saturating_sub(2)),
-            ),
+            choices: (agents_top + 1, self.agent_choices(opened.saturating_sub(2))),
         };
         let starts = starts(&self.history, live_parts, lead);
         let rows = Rows {
@@ -6432,13 +6450,31 @@ enum Bottom {
         shell: bool,
     },
     Approval(ApprovalBox),
+    /// A choice, `/statusline`, `/theme`, `/agents` or a report: its title
+    /// on the top border, its keys on the bottom one.
+    Panel {
+        title: Line<'static>,
+        rows: Vec<Line<'static>>,
+        keys: Line<'static>,
+    },
 }
 
 impl Bottom {
+    /// The panel of a list's rows: the first is its title, the last its keys.
+    fn panel(mut rows: Vec<Line<'static>>) -> Self {
+        let keys = rows.pop().unwrap_or_default();
+        let title = if rows.is_empty() {
+            Line::default()
+        } else {
+            rows.remove(0)
+        };
+        Bottom::Panel { title, rows, keys }
+    }
+
     /// Rows inside the border, plus the border.
     fn height(&self) -> u16 {
         let rows = match self {
-            Bottom::Input { rows, .. } => rows.len(),
+            Bottom::Input { rows, .. } | Bottom::Panel { rows, .. } => rows.len(),
             Bottom::Approval(laid) => laid.rows.len(),
         };
         rows as u16 + 2
@@ -6529,6 +6565,21 @@ impl View {
                     block = block.title_top(position);
                 }
                 frame.render_widget(Paragraph::new(laid.rows).block(block), boxed);
+            }
+            Bottom::Panel { title, rows, keys } => {
+                let border = theme::accent();
+                let mut top = vec![Span::styled("─", border)];
+                top.extend(title.spans);
+                top.push(Span::raw(" "));
+                let mut bottom = keys.spans;
+                bottom.extend([Span::raw(" "), Span::styled("─", border)]);
+                let block = Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .border_style(border)
+                    .padding(Padding::right(1))
+                    .title_top(Line::from(top))
+                    .title_bottom(Line::from(bottom).right_aligned());
+                frame.render_widget(Paragraph::new(rows).block(block), boxed);
             }
         }
         frame.render_widget(Paragraph::new(Vec::from(self.info)), info);

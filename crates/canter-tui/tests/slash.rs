@@ -636,6 +636,12 @@ impl Screen {
         lines[top.saturating_sub(count)..top].to_vec()
     }
 
+    /// The panel in the input box's place, title to keys, without its
+    /// border; empty while the input box shows.
+    fn panel(&self) -> Vec<String> {
+        panel(&self.lines())
+    }
+
     /// The `count` rows of the command list above its keys row, which is
     /// right above the input box.
     fn command_list(&self, count: usize) -> Vec<String> {
@@ -711,8 +717,9 @@ fn rows(buffer: &Buffer) -> Vec<String> {
 
 #[test]
 fn skills_show_names_by_source_with_manual_marker_and_descriptions_below() {
+    // 90 and 40 columns in the box, past its border and margin.
     for width in [90, 40] {
-        let mut screen = Screen::sized(width, HEIGHT);
+        let mut screen = Screen::sized(width + 3, HEIGHT);
         assert_eq!(screen.enter("/skills"), Some(Action::ListSkills));
         let skills = serde_json::from_value(json!([
             {"name":"manual", "description":"Review all interface states", "source":"global", "path":"/home/.agents/skills/manual/SKILL.md", "modelInvocation":false},
@@ -720,7 +727,7 @@ fn skills_show_names_by_source_with_manual_marker_and_descriptions_below() {
         ])).unwrap();
         screen.ui.app_mut().show_skills(skills);
         screen.draw();
-        let lines = screen.lines();
+        let lines = screen.panel();
         let global = lines
             .iter()
             .position(|line| line == " Global  ~/.agents/skills")
@@ -1123,7 +1130,7 @@ fn usage_opens_above_the_input_box_with_short_token_counts() {
     screen.ui.app_mut().show_usage(&report);
     screen.draw();
     let shown = screen.text();
-    let popup = screen.above_box(9);
+    let popup = screen.panel();
     let words: Vec<Vec<&str>> = popup
         .iter()
         .map(|row| row.split_whitespace().collect())
@@ -1163,20 +1170,23 @@ fn help_shows_the_commands_in_a_box() {
     assert_eq!(screen.enter("/help"), None);
     screen.draw();
     let shown = screen.text();
-    let box_top = screen.lines().iter().rposition(|row| row.starts_with('╭'));
-    let title = screen.lines().iter().position(|row| row == " Help");
-    assert!(title.is_some(), "{shown}");
+    let help = screen.panel();
+    assert_eq!(help.first().map(String::as_str), Some(" Help"), "{shown}");
     for (name, about) in COMMANDS {
-        let row = screen
-            .lines()
-            .iter()
-            .position(|row| row.contains(name) && row.contains(about));
         assert!(
-            row.is_some_and(|row| Some(row) > title && Some(row) < box_top),
+            help[1..]
+                .iter()
+                .any(|row| row.contains(name) && row.contains(about)),
             "{name} in the box:\n{shown}"
         );
     }
-    assert!(screen.input().contains("Type a message"), "{shown}");
+    assert_eq!(screen.key(KeyCode::Esc), None);
+    screen.draw();
+    assert!(
+        screen.input().contains("Type a message"),
+        "{}",
+        screen.text()
+    );
 }
 
 /// A first word that starts with `/` and has no other `/` is a command; an
@@ -1227,7 +1237,7 @@ fn mode_alone_offers_the_three_modes() {
     assert_eq!(screen.enter("/mode"), None);
     screen.draw();
     let shown = screen.text();
-    let choices = screen.above_box(4);
+    let choices = screen.panel()[1..].to_vec();
     assert!(choices[0].contains("always-ask"), "{shown}");
     assert!(
         choices[1].starts_with(" › ask-for-execution (current)"),
@@ -1332,7 +1342,7 @@ fn keys_queued_before_the_mode_choice_shows_do_not_choose() {
     let shown = screen.text();
     assert!(shown.contains("Permission mode"), "{shown}");
     assert!(
-        screen.above_box(4)[0].starts_with(" › always-ask (current)"),
+        screen.panel()[1].starts_with(" › always-ask (current)"),
         "the Downs were dropped:\n{shown}"
     );
     // On screen now: keys choose.
@@ -1440,15 +1450,16 @@ fn enter_before_the_completion_shows_does_not_run_it() {
 }
 
 /// Cross review 5: the modes say that read-only commands run without
-/// asking, in full at 80 columns.
+/// asking, in full at 82 columns. Since P2-238 the box the user chose takes
+/// 3 columns, so at 80 columns the longest one loses its last few letters.
 #[test]
 fn the_modes_say_read_only_commands_do_not_ask() {
     for mode in ["alwaysAsk", "askForExecution", "allowAll"] {
-        let mut screen = Screen::new();
+        let mut screen = Screen::sized(82, HEIGHT);
         screen.settings(mode);
         assert_eq!(screen.enter("/mode"), None);
         screen.draw();
-        let choices = screen.above_box(4);
+        let choices = screen.panel()[1..].to_vec();
         let shown = screen.text();
         assert!(
             choices[0].ends_with("Ask before edits and non-read-only commands"),
@@ -1756,7 +1767,7 @@ async fn files_lists_deduplicated_history_and_isolated_git_status() {
     screen.draw();
     assert!(
         screen
-            .lines()
+            .panel()
             .iter()
             .any(|line| line.contains("Edits made") && line.ends_with('…')),
         "{}",
@@ -1823,7 +1834,7 @@ fn context_lists_categories_measured_usage_and_truncates_narrow_rows() {
         } else {
             assert!(
                 screen
-                    .lines()
+                    .panel()
                     .iter()
                     .any(|line| line.contains("Messages (34)") && line.ends_with('…')),
                 "{shown}"
@@ -2172,14 +2183,14 @@ fn mcp_status_and_approval_show_server_tool_arguments_and_escape_interrupts() {
     ]})).unwrap();
     screen.ui.app_mut().show_mcp(&report);
     screen.draw();
-    let text = screen.text();
+    let text = screen.panel().join("\n");
     for expected in [
         " ● local    connected · 1 tool\n   echo\n",
         " ○ remote   disconnected\n   connection timed out\n",
     ] {
         assert!(text.contains(expected), "{text}");
     }
-    // The result is in a box above the input box, which takes the keys.
+    // The result is in a box in the input box's place, which takes the keys.
     assert_eq!(screen.key(KeyCode::Esc), None);
     screen.draw();
     assert!(!screen.text().contains("remote"));
@@ -2224,4 +2235,25 @@ fn usage_popup_shows_mixed_plan_cost_last_turn_and_usage_link() {
         shown.contains("ChatGPT plan usage: https://chatgpt.com/settings/usage"),
         "{shown}"
     );
+}
+
+/// The panel in the input box's place, without its border: the title from
+/// the top border, the rows in it, then the keys from the bottom border;
+/// empty when the box at the bottom is the input box.
+fn panel(rows: &[String]) -> Vec<String> {
+    let Some(top) = rows.iter().rposition(|row| row.starts_with("╭─ ")) else {
+        return Vec::new();
+    };
+    if rows[top + 1..].iter().any(|row| row.starts_with('╭')) {
+        return Vec::new();
+    }
+    let last = rows.iter().rposition(|row| row.starts_with('╰')).unwrap();
+    let border = |row: &str| row.trim_end_matches(['─', '╮', '╯']).trim_end().to_owned();
+    let mut panel = vec![border(&rows[top]["╭─".len()..])];
+    panel.extend(rows[top + 1..last].iter().map(|row| {
+        let row = row.strip_prefix('│').unwrap_or(row);
+        row.strip_suffix('│').unwrap_or(row).trim_end().to_owned()
+    }));
+    panel.push(border(rows[last].trim_start_matches(['╰', '─'])));
+    panel
 }
