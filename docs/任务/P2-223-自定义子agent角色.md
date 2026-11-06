@@ -106,3 +106,10 @@
 - **任务指定检查**：前台跑完 `cargo nextest run -p canter-protocol -p canter-core -p canter-server -p canter-tui -p canter --no-fail-fast --status-level fail --final-status-level fail`，最终整轮 1590 项执行、1589 通过、1 失败、27 跳过；唯一失败是未修改的 `lsp_tests::sigkill_of_server_removes_lsp_process_group` 读取空 PID 文件，单独原样重跑通过（上一整轮也通过）。本任务新增测试及修复后的 TUI 回归均通过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。全部使用任务独立编译目录，没有跑额外 workspace 全套或真实模型接口。
 - **踩过的坑**：字节基线含随机 scratch、项目哈希和 macOS `/private` 路径别名，补齐纯环境归一化后稳定比较。首次包回归发现协议生成物遗漏，使用现有导出程序更新；新增命令暴露了排序、旧清单数量和整页帮助高度问题，修正后 69 项通过。两次包回归分别撞到既有 suggestions 的 git PID 和 LSP instance PID 文件“已创建但未写完”的竞态，均原样单独重跑通过，没有改这两处测试。自查发现显式列出目标模型不提供的工具会产生空工具子会话，先补失败断言，再改为派出前报错。
 - **没做的事和参考**：按范围不做项目角色、角色编辑界面、插件角色或嵌套派发；未改 README，未改 DeepSeek 等现有提供方测试，未触碰用户真实 `~/.canter`，未安装、合并或推送。只参考 Claude Code 文档 <https://code.claude.com/docs/en/sub-agents> 和 `/tmp/codex-p2-205` 的 `rust-v0.163.0` 源码 `codex-rs/core/src/agent/role.rs`、`codex-rs/agent-roles/src/agent_role_config.rs`，没有搬代码。模型和登录测试均使用隔离目录与本机假服务端，真实 API 调用 **0 次**。
+
+## 主控审查
+
+- 谁做：canter/dev-agent-roles-1，Codex `gpt-6-astra` / high；用时约 40 分钟（corral 开起到 DONE），中途停下问 1 次（角色文件改了或删了，已派出的子会话怎么办），主控定 A：派出时存快照，之后不重读文件。
+- 范围：动了 protocol、core、server、tui 和 DESIGN，`/agents` 没动，没做项目角色、编辑界面、插件角色；「不要做」没碰。界面新增文字都是英文。
+- 看了派子 agent 的路径：自定义角色先校验模型、档位、工具，再存快照；只读的判断是工具全在 explorer 那套之内；子会话执行时按快照的工具清单拦，快照丢了的自定义子会话一个工具都不给。
+- 核对：新增角色测试 core/protocol 28 条、server/tui 3 条重跑全过；全套留到合并前。没写角色时请求逐字节不变的基线是在 main `2a6d466` 上录的，只归一化了临时路径、项目哈希、日期和平台。
