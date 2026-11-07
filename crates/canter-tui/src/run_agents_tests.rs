@@ -95,10 +95,9 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     // Under the two info rows (P2-240), live while the session is idle.
     let screen = rows(&test);
     let bottom = screen.iter().rposition(|row| row.starts_with('╰')).unwrap();
-    let row = screen[bottom + 3].trim();
-    assert!(
-        row.starts_with("● 2 sub-agents running · 1 done ") && row.ends_with("↓ view"),
-        "{row:?}"
+    assert_eq!(
+        screen[bottom + 3].trim(),
+        "● 2 sub-agents running · 1 done · ↓ to view"
     );
     let click = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -186,7 +185,7 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
         Some(Action::OpenAgent("b".into()))
     );
     let text = shown(&test);
-    assert!(has(&test, &["○ 3 sub-agents", "↓ view"]), "{text}");
+    assert!(has(&test, &["○ 3 sub-agents · ↓ to view"]), "{text}");
     assert!(!text.contains("▾"), "{text}");
     test.stop().await;
 }
@@ -231,10 +230,10 @@ async fn the_list_hangs_the_sub_agents_under_the_main_session() {
         test.event(payload(json!({ "type": "agent.updated", "agent": entry })));
     }
     // The row under the info rows: a coloured mark, a dim way to open.
-    let row = "● 1 sub-agent running · 2 done";
+    let row = "● 1 sub-agent running · 2 done · ↓ to view";
     assert!(has(&test, &[row]), "{}", shown(&test));
     assert_eq!(cell(&test, row).fg, Color::Cyan);
-    assert!(cell(&test, "↓ view").modifier.contains(Modifier::DIM));
+    assert!(cell(&test, "↓ to view").modifier.contains(Modifier::DIM));
 
     open_list(&mut test, "test", json!([a, b, c])).await;
     let text = shown(&test);

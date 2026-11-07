@@ -1,7 +1,7 @@
 //! `/statusline`: a list above the input box, like a choice such as `/mode`
 //! alone, to pick what the rows at the bottom show. Each item with what it
-//! says now, in the order the rows show them, which is fixed (P2-243); a
-//! preview of both rows below. With a status command in `config.json`, a switch on top
+//! says now, in the order the rows show them, which is fixed (P2-245); a
+//! preview of the rows below. With a status command in `config.json`, a switch on top
 //! chooses between it and the items.
 //!
 //! Follows Codex `rust-v0.163.0` (`codex-rs/tui/src/bottom_pane/
@@ -86,7 +86,7 @@ impl Setup {
             ]));
         }
         let preview = match &self.script {
-            Some(command) if self.bar.use_script => [
+            Some(command) if self.bar.use_script => vec![
                 vec![Span::styled(
                     format!(
                         "  From the statusLine script: {}",
@@ -98,13 +98,11 @@ impl Setup {
             ],
             _ => self.bar.rows(values, width, Vec::new()).rows,
         };
-        let [first, second] = preview.map(cut);
         let mut tail = vec![
             Line::default(),
             cut(vec![Span::styled(" Preview", Style::new().bold())]),
-            first,
-            second,
         ];
+        tail.extend(preview.into_iter().map(cut));
         let entries = self.entries(values);
         let mut room = max.saturating_sub(head.len() + tail.len() + 1);
         if room < entries.len() && room < 3 {

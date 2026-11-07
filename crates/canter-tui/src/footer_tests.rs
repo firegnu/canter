@@ -1,7 +1,7 @@
 //! The sub-agents row, the background commands row and the goal row under
-//! the info rows (P2-240, P2-243): ↓ from the input box selects the first
-//! two, Enter opens their list under the info rows, the input box stays,
-//! grey, and Esc closes it.
+//! the info rows (P2-240, P2-243, P2-245): ↓ from the input box selects the
+//! first two, Enter opens their list under the info rows, the input box
+//! stays, grey, and Esc closes it.
 
 use super::*;
 use crate::Ui;
@@ -12,22 +12,17 @@ use serde_json::json;
 const BACKGROUND: &str = "▸ 1 background commands";
 const AGENTS: &str = "● 1 sub-agent running · 2 done";
 const WIDTH: u16 = 100;
+/// The info rows on these screens: with no usage yet, no second row.
+const INFO_ROWS: usize = 2;
 
-/// A row under the info rows as [`footer`] gives it: `text`, then `hint`
-/// on the right, a column before the edge.
-fn row(text: &str, hint: &str) -> String {
-    let pad = usize::from(WIDTH) - 2 - text.chars().count() - hint.chars().count();
-    format!("{text}{}{hint}", " ".repeat(pad))
-}
-
-/// The row as it shows when not selected.
+/// The row as it shows when not selected: how to open it at its end.
 fn shown(text: &str) -> String {
-    row(text, "↓ view")
+    format!("{text} · ↓ to view")
 }
 
 /// The row as it shows while ↓ has it selected.
 fn selected(text: &str) -> String {
-    row(text, "Enter open")
+    format!("{text} · Enter to open · ↑ back")
 }
 
 /// Both rows, neither selected.
@@ -109,7 +104,7 @@ fn press_with(ui: &mut Ui<TestBackend>, code: KeyCode, modifiers: KeyModifiers) 
 /// The rows under the two info rows.
 fn footer(ui: &Ui<TestBackend>) -> Vec<String> {
     let (_, bottom) = input_box(ui);
-    rows(ui)[bottom + 1 + INFO_ROWS as usize..]
+    rows(ui)[bottom + 1 + INFO_ROWS..]
         .iter()
         .map(|row| row.trim().to_owned())
         .collect()
@@ -136,10 +131,11 @@ fn the_rows_sit_under_the_info_rows_and_not_above_the_input_box() {
         assert!(!row.contains("sub-agent"), "{shown}");
     }
     assert!(!shown.contains("click or /agents"), "{shown}");
-    // The hint is dim, a column before the edge.
+    // The hint is dim, in the row right after it, a space in like the info
+    // rows (P2-245).
     let y = rows.iter().position(|row| row.contains(AGENTS)).unwrap();
-    let x = rows[y].chars().count() - "↓ view".chars().count();
-    assert_eq!(x, usize::from(WIDTH) - 1 - "↓ view".chars().count());
+    assert_eq!(rows[y], format!(" {AGENTS} · ↓ to view"));
+    let x = 1 + AGENTS.chars().count() + " · ".chars().count();
     assert!(
         ui.backend().buffer()[(x as u16, y as u16)]
             .modifier
@@ -155,7 +151,7 @@ fn without_sub_agents_commands_or_a_goal_there_are_no_rows() {
     ui.draw(0).unwrap();
     let rows = rows(&ui);
     let (_, bottom) = input_box(&ui);
-    assert_eq!(rows.len(), bottom + 1 + usize::from(INFO_ROWS), "{rows:#?}");
+    assert_eq!(rows.len(), bottom + 1 + INFO_ROWS, "{rows:#?}");
 }
 
 #[test]
@@ -169,7 +165,7 @@ fn down_selects_the_rows_and_up_goes_back_to_the_input_box() {
         footer(&ui)
     );
     assert!(reversed(&ui, "1 sub-agent"));
-    assert!(!reversed(&ui, "Enter open"));
+    assert!(!reversed(&ui, "Enter to open"));
 
     assert_eq!(press(&mut ui, KeyCode::Down), None);
     assert_eq!(footer(&ui), [shown(AGENTS), selected(BACKGROUND)]);

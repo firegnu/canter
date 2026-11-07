@@ -21,7 +21,7 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat high   Always ask
+ deepseek-chat · think high · Always ask
  ~/canter
 == 第 21 条事件后，屏幕 ==
 
@@ -46,7 +46,7 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat high   Always ask
+ deepseek-chat · think high · Always ask
  ~/canter
 == 第 23 条事件后，屏幕 ==
 
@@ -71,7 +71,7 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat high   Always ask
+ deepseek-chat · think high · Always ask
  ~/canter
 == 第 29 条事件后，屏幕 ==
     13   ```sh
@@ -96,7 +96,7 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat high   Always ask
+ deepseek-chat · think high · Always ask
  ~/canter
 == 发了「你好」之后，屏幕 ==
   改了什么
@@ -121,7 +121,7 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat high   Always ask
+ deepseek-chat · think high · Always ask
  ~/canter
 == 发了「你好」之后，往上翻到顶 ==
         ▄▄█▄▄█▄    canter 0.1.0 · 37489fe
@@ -146,5 +146,5 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat high   Always ask
+ deepseek-chat · think high · Always ask
  ~/canter

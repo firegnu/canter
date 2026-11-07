@@ -67,7 +67,7 @@ fn think_accepts_supported_new_efforts_and_explains_model_specific_options() {
 #[test]
 fn status_and_switch_notice_display_server_confirmed_reasoning() {
     let mut ui = Ui::new(TestBackend::new(100, 30), app()).unwrap();
-    assert!(screen(&mut ui).contains("configured/solver medium   "));
+    assert!(screen(&mut ui).contains("think medium"));
     let mut settings = ui.app().snapshot().settings.clone();
     settings.reasoning_effort = ReasoningEffort::Xhigh;
     ui.app_mut().apply_event(
@@ -79,7 +79,7 @@ fn status_and_switch_notice_display_server_confirmed_reasoning() {
         },
         0,
     );
-    assert!(screen(&mut ui).contains("configured/solver xhigh   "));
+    assert!(screen(&mut ui).contains("think xhigh"));
     let mut settings = ui.app().snapshot().settings.clone();
     settings.model = "legacy".into();
     settings.reasoning_effort = ReasoningEffort::High;
@@ -104,7 +104,7 @@ fn status_and_switch_notice_display_server_confirmed_reasoning() {
         0,
     );
     let shown = screen(&mut ui);
-    assert!(shown.contains("legacy high   "), "{shown}");
+    assert!(shown.contains("think high"), "{shown}");
     assert!(
         shown.contains("Thinking effort changed from xhigh to high for legacy."),
         "{shown}"

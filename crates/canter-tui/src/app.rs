@@ -2,7 +2,7 @@
 //! and draws the whole terminal: the conversation from the top, following the
 //! latest output unless scrolled back, then the status line, the command list
 //! while a `/` command is typed, the input box (or the approval box) and the
-//! two info rows at the bottom.
+//! info rows at the bottom.
 
 use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
@@ -69,13 +69,10 @@ const MULTI_CLICK_MS: i64 = 400;
 /// While a drag holds at the top or bottom edge, the conversation scrolls a
 /// row this often (ms).
 const EDGE_SCROLL_MS: i64 = 50;
-/// The info rows at the bottom: model, thinking, permission mode, context
-/// use, cache hits and cost; then directory, branch and lines changed.
-const INFO_ROWS: u16 = 2;
-/// How to open a row under the info rows, on its right (P2-240, P2-243).
-const TO_VIEW: &str = "↓ view";
+/// How to open a row under the info rows, at its end (P2-240, P2-245).
+const TO_VIEW: &str = " · ↓ to view";
 /// In its place while ↓ has the row selected.
-const SELECTED_KEYS: &str = "Enter open";
+const SELECTED_KEYS: &str = " · Enter to open · ↑ back";
 /// Changes of what is on screen kept for keys still waiting to be handled.
 const SHOWN_KEPT: usize = 8;
 /// After `/handoff`, how long after the first Esc a second one goes back.
@@ -4583,8 +4580,11 @@ impl App {
                 now_ms + crate::copy::FAILED_MS,
             );
         }
+        // Two or three rows, or a status command's (P2-245).
+        let (info, mode_in_full) = self.info_rows(width, now_ms);
+        let info_rows = info.len() as u16;
         // Leave the status line, the info rows, the hint and one row of the conversation.
-        let box_height = height.saturating_sub(3 + INFO_ROWS);
+        let box_height = height.saturating_sub(3 + info_rows);
         let approval = self.open_request().map(|request| {
             let (selected, scroll) = if self.approval.request == request.id {
                 (self.approval.selected, self.approval.scroll)
@@ -4727,18 +4727,18 @@ impl App {
         let list = match bottom {
             Bottom::Input { .. } if panel => self.list_view(
                 width.saturating_sub(PANEL_CHROME),
-                usize::from(height.saturating_sub(1 + INFO_ROWS)).saturating_sub(header_rows),
+                usize::from(height.saturating_sub(1 + info_rows)).saturating_sub(header_rows),
                 now_ms,
             ),
             Bottom::Input { .. } if footer_open => self.list_view(
                 width.saturating_sub(PANEL_CHROME),
-                usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height()))
+                usize::from(height.saturating_sub(1 + info_rows + bottom.height()))
                     .saturating_sub(header_rows),
                 now_ms,
             ),
             Bottom::Input { .. } => self.list_view(
                 width,
-                usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height()))
+                usize::from(height.saturating_sub(1 + info_rows + bottom.height()))
                     .saturating_sub(header_rows),
                 now_ms,
             ),
@@ -4758,7 +4758,7 @@ impl App {
         self.drawing.chooser = (self.choosing() && opened > 0).then_some(self.choosers);
 
         let plan_room =
-            usize::from(height.saturating_sub(3 + INFO_ROWS + bottom.height() + footer_box_height))
+            usize::from(height.saturating_sub(3 + info_rows + bottom.height() + footer_box_height))
                 .saturating_sub(list.len() + header_rows);
         let background_count = self
             .snapshot
@@ -4843,7 +4843,7 @@ impl App {
         let lead = lead(history, &live);
         let total = history.len() + live.len() - lead;
         let room =
-            usize::from(height.saturating_sub(1 + INFO_ROWS + bottom.height() + footer_box_height))
+            usize::from(height.saturating_sub(1 + info_rows + bottom.height() + footer_box_height))
                 .saturating_sub(list.len() + plan.len() + hung.len() + header_rows + footer.len());
         // Only under the status line of a turn that started here, with the
         // bare input box below; it goes first when rows run short.
@@ -4954,7 +4954,7 @@ impl App {
             + plan.len()
             + list.len()
             + usize::from(bottom.height())
-            + usize::from(INFO_ROWS);
+            + usize::from(info_rows);
         let footer_row = |wanted: Footer| {
             self.drawing
                 .footer
@@ -5133,7 +5133,6 @@ impl App {
             })
             .collect();
         let found = current.map(|current| (current, hits.len()));
-        let (info, mode_in_full) = self.info_rows(width, now_ms);
         let view = View {
             header,
             plan,
@@ -5175,7 +5174,7 @@ impl App {
             && !self.choosing()
             && self.command_list().is_none()
             && self.mention_list().is_none();
-        let mode_drawn = view.below() - (INFO_ROWS - 1) - view.under_info() <= height;
+        let mode_drawn = view.below() - info_rows.saturating_sub(1) - view.under_info() <= height;
         self.drawing.mode = (bare_input && (mode_in_full || self.mode_elsewhere()) && mode_drawn)
             .then_some(self.snapshot.settings.approval_policy);
         view
@@ -6225,19 +6224,6 @@ impl App {
                         numbers += &tokens;
                     }
                 }
-                // While the model writes, its speed after them, when it
-                // fits too (P2-243).
-                if let Some(rate) = self
-                    .tps
-                    .live(now_ms)
-                    .filter(|_| self.bar.shows(bar::Item::Tps))
-                {
-                    let speed = format!(" · {} tok/s", speed(rate));
-                    let start = before - str_width(&numbers);
-                    if start + str_width(&numbers) + str_width(&speed) <= room {
-                        numbers += &speed;
-                    }
-                }
                 let used =
                     str_width(&spinner) + str_width(&verb) + str_width(&numbers) + str_width(&keys);
                 let mut spans = vec![Span::styled(spinner, theme::working())];
@@ -6297,15 +6283,16 @@ impl App {
         (line, self.snapshot.status == SessionStatus::Working)
     }
 
-    /// The items `/statusline` chose, where each always goes (P2-243): on
+    /// The items `/statusline` chose, where each always goes (P2-245): on
     /// the first row model, thinking level, permission mode (Allow all in
-    /// red) and sandbox, and on the right context use as a bar full at the
-    /// compaction line, cache hits and cost; on the second the directory
-    /// with its git branch and the lines changed since the last commit.
+    /// red), sandbox and cost; on the second context use as a bar full at
+    /// the compaction line, cache hits, speed, version and session name; on
+    /// the third the directory with its git branch and the lines changed
+    /// since the last commit. A status command's output takes their place.
     /// Also whether the first row shows all of the permission mode.
-    fn info_rows(&mut self, width: u16, now_ms: i64) -> ([Line<'static>; 2], bool) {
+    fn info_rows(&mut self, width: u16, now_ms: i64) -> (Vec<Line<'static>>, bool) {
         if let Some(rows) = self.status_line.as_mut().and_then(|line| line.rows(width)) {
-            return (rows, false);
+            return (Vec::from(rows), false);
         }
         let failed = self.status_line.as_ref().is_some_and(|line| line.failed);
         let end = if failed {
@@ -6315,21 +6302,16 @@ impl App {
         };
         let values = self.bar_values(now_ms);
         let laid = self.bar.rows(&values, usize::from(width), end);
-        let kept: String = laid.rows[0]
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
         (
-            laid.rows.map(Line::from),
-            laid.through_mode
-                .is_some_and(|through| kept.starts_with(&through)),
+            laid.rows.into_iter().map(Line::from).collect(),
+            laid.mode_in_full,
         )
     }
 
-    /// What each item of the rows at the bottom says now; `None` for what is
-    /// not known (yet). Only what needs attention has a colour: Allow all
-    /// and the sandbox off in red, the context bar by the room left, the
-    /// branch and the lines changed; the rest as text or dim (P2-243).
+    /// What each item of the rows at the bottom says now, each in its colour
+    /// and the words around it dim; `None` for what is not known (yet). The
+    /// numbers on the second row take the same columns however many digits
+    /// they have, so what follows them stays put (P2-245).
     fn bar_values(&self, now_ms: i64) -> bar::Values {
         use theme::BarItem;
         let settings = &self.snapshot.settings;
@@ -6337,25 +6319,20 @@ impl App {
         let percent = crate::statusline::percent;
         let percent_left = crate::statusline::percent_left;
         let dim = |text: String| Some(vec![Span::styled(text, theme::secondary())]);
-        let plain = |text: String| Some(vec![Span::raw(text)]);
+        let coloured =
+            |text: String, item: BarItem| Some(vec![Span::styled(text, theme::bar_item(item))]);
         bar::Item::ALL.map(|item| match item {
-            // The provider before the first `/` dim.
-            bar::Item::Model => {
-                let model = sanitize(&settings.model);
-                match model.split_once('/') {
-                    Some((provider, name)) if !provider.is_empty() && !name.is_empty() => {
-                        Some(vec![
-                            Span::styled(format!("{provider}/"), theme::secondary()),
-                            Span::raw(name.to_owned()),
-                        ])
+            bar::Item::Model => coloured(sanitize(&settings.model), BarItem::Model),
+            bar::Item::Thinking => coloured(
+                format!(
+                    "think {}",
+                    match settings.reasoning_effort {
+                        canter_protocol::ReasoningEffort::Unknown => "high",
+                        effort => effort.as_str(),
                     }
-                    _ => plain(model),
-                }
-            }
-            bar::Item::Thinking => dim(match settings.reasoning_effort {
-                canter_protocol::ReasoningEffort::Unknown => "high".to_owned(),
-                effort => effort.as_str().to_owned(),
-            }),
+                ),
+                BarItem::Thinking,
+            ),
             bar::Item::Permission => {
                 let mut spans = if settings.plan_mode {
                     plan_mode_spans(after_plan(settings))
@@ -6377,26 +6354,27 @@ impl App {
                         crate::usage::dollars(cost.usd),
                         if cost.unknown { "+?" } else { "" }
                     );
-                    plain(if cost.chatgpt_plan {
-                        if metered == "$0.00" {
-                            "ChatGPT plan".into()
+                    coloured(
+                        if cost.chatgpt_plan {
+                            if metered == "$0.00" {
+                                "ChatGPT plan".into()
+                            } else {
+                                format!("{metered} + ChatGPT plan")
+                            }
                         } else {
-                            format!("{metered} + ChatGPT plan")
-                        }
-                    } else {
-                        metered
-                    })
+                            metered
+                        },
+                        BarItem::Cost,
+                    )
                 }),
-            bar::Item::Directory => Some(vec![Span::styled(
+            bar::Item::Directory => coloured(
                 shorten_home(&sanitize(&settings.cwd), self.home.as_deref()),
-                Style::new().bold(),
-            )]),
-            bar::Item::Branch => self.branch.as_ref().map(|branch| {
-                vec![Span::styled(
-                    sanitize(branch),
-                    theme::bar_item(BarItem::Branch),
-                )]
-            }),
+                BarItem::Directory,
+            ),
+            bar::Item::Branch => self
+                .branch
+                .as_ref()
+                .and_then(|branch| coloured(format!("({})", sanitize(branch)), BarItem::Branch)),
             // Nothing while nothing changed.
             bar::Item::Diff => {
                 self.git_diff_lines()
@@ -6410,9 +6388,14 @@ impl App {
                     })
             }
             // Ten cells, full at the compaction line, or else at the window;
-            // past it full, and the percent says how far past.
+            // past it full, and the percent says how far past. The words
+            // after the percent say which. The tokens used take four
+            // columns, as `999k` and `1.5M` do.
             bar::Item::Context => usage.and_then(|usage| {
-                let full = usage.auto_compact_tokens.or(usage.model_context_window)?;
+                let (full, of) = match usage.auto_compact_tokens {
+                    Some(line) => (line, " to compact)"),
+                    None => (usage.model_context_window?, " of window)"),
+                };
                 let used = usage.context_tokens;
                 let percent = percent(full, used)?;
                 let cells = ((u128::from(used) * 10 + u128::from(full) / 2) / u128::from(full))
@@ -6421,21 +6404,36 @@ impl App {
                 Some(vec![
                     Span::styled("█".repeat(cells), room),
                     Span::styled("░".repeat(10 - cells), theme::secondary()),
-                    Span::raw(format!(" {}", bar::percent(percent))),
+                    Span::styled(
+                        format!(" {:>4}/{} (", tokens(used), tokens(full)),
+                        theme::secondary(),
+                    ),
+                    Span::styled(bar::percent(percent), room),
+                    Span::styled(of, theme::secondary()),
                 ])
             }),
-            // The whole session's (P2-243).
             bar::Item::Cache => usage.and_then(|usage| {
-                let total = percent(usage.total.input_tokens, usage.total.cached_input_tokens)?;
-                Some(vec![
-                    Span::styled("cache", theme::secondary()),
-                    Span::raw(format!(" {}", bar::percent(total))),
-                ])
+                let total = percent(usage.total.input_tokens, usage.total.cached_input_tokens);
+                let last = percent(usage.last.input_tokens, usage.last.cached_input_tokens);
+                if total.is_none() && last.is_none() {
+                    return None;
+                }
+                let number = |n| Span::styled(bar::percent(n), theme::bar_item(BarItem::Number));
+                let mut spans = vec![Span::styled("cache", theme::secondary())];
+                if let Some(total) = total {
+                    spans.push(Span::styled(" ", theme::secondary()));
+                    spans.push(number(total));
+                }
+                if let Some(last) = last {
+                    spans.push(Span::styled(" (last ", theme::secondary()));
+                    spans.push(number(last));
+                    spans.push(Span::styled(")", theme::secondary()));
+                }
+                Some(spans)
             }),
-            // As the line saying what the turn does shows it.
             bar::Item::Tps => self.tps.rate(now_ms).map(|rate| {
                 vec![
-                    Span::raw(speed(rate)),
+                    Span::styled(speed(rate), theme::bar_item(BarItem::Number)),
                     Span::styled(" tok/s", theme::secondary()),
                 ]
             }),
@@ -6509,7 +6507,9 @@ pub(crate) struct View {
     /// The command list or a choice, right above the input box.
     list: Vec<Line<'static>>,
     bottom: Bottom,
-    info: [Line<'static>; 2],
+    /// The info rows: up to three, a row with nothing to show left out; or a
+    /// status command's two (P2-245).
+    info: Vec<Line<'static>>,
     /// Under the info rows: the background commands row and the
     /// sub-agents row (P2-240).
     footer: Vec<Line<'static>>,
@@ -6604,7 +6604,7 @@ impl View {
             + self.plan.len() as u16
             + self.list.len() as u16
             + self.bottom.height()
-            + INFO_ROWS
+            + self.info.len() as u16
             + self.under_info()
     }
 
@@ -6650,11 +6650,11 @@ impl View {
         frame.render_widget(Paragraph::new(self.plan), row(plan_height));
         frame.render_widget(Paragraph::new(self.list), row(list));
         let boxed = row(self.bottom.height());
-        let info = row(INFO_ROWS);
+        let info = row(self.info.len() as u16);
         let footer = row(self.footer.len() as u16);
         let footer_box = row(self.footer_box.as_ref().map_or(0, Bottom::height));
         self.bottom.draw(frame, boxed);
-        frame.render_widget(Paragraph::new(Vec::from(self.info)), info);
+        frame.render_widget(Paragraph::new(self.info), info);
         frame.render_widget(Paragraph::new(self.footer), footer);
         if let Some(open) = self.footer_box {
             open.draw(frame, footer_box);
@@ -6716,24 +6716,22 @@ impl Bottom {
     }
 }
 
-/// A row under the info rows: `spans`, then on the right, dim, how to open
-/// it; while ↓ has it selected, reversed, with Enter in place of that. In
-/// a window too narrow for both, `spans` is cut first.
+/// A row under the info rows: `spans`, then how to open it, dim, in the row
+/// (P2-245); while ↓ has it selected, reversed, with Enter and ↑ in place
+/// of that. In a window too narrow for both, the keys go first, whole.
 fn footer_line(mut spans: Vec<Span<'static>>, selected: bool, width: u16) -> Line<'static> {
-    let hint = if selected { SELECTED_KEYS } else { TO_VIEW };
+    let keys = if selected { SELECTED_KEYS } else { TO_VIEW };
     if selected {
         for span in &mut spans {
             span.style = span.style.add_modifier(Modifier::REVERSED);
         }
     }
     let width = usize::from(width);
-    // A space before, at least two between and one after.
-    let room = width.saturating_sub(str_width(hint) + 4);
     let mut line = vec![Span::raw(" ")];
-    line.extend(truncate(spans, room));
-    let pad = width.saturating_sub(spans_width(&line) + str_width(hint) + 1);
-    line.push(Span::raw(" ".repeat(pad)));
-    line.push(Span::styled(hint, theme::secondary()));
+    line.extend(spans);
+    if spans_width(&line) + str_width(keys) <= width {
+        line.push(Span::styled(keys, theme::secondary()));
+    }
     Line::from(truncate(line, width))
 }
 
