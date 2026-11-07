@@ -197,7 +197,8 @@ fn background_count_and_unfinished_plan_both_have_pinned_rows() {
             .position(|line| line.starts_with('╰'))
             .unwrap();
     // The count under the two info rows (P2-240), the plan above the box.
-    assert!(lines[bottom + 3].contains("▸ 1 background commands · ↓ to view"));
+    assert!(lines[bottom + 3].contains("▸ 1 background commands"));
+    assert!(lines[bottom + 3].trim_end().ends_with("↓ view"));
     assert!(lines[input - 1].contains("Verify background commands"));
 }
 

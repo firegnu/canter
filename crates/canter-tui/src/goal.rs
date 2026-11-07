@@ -56,7 +56,25 @@ pub(crate) fn status(status: GoalStatus) -> &'static str {
     }
 }
 
+/// `goal $0.12/$5.00`, with the state after `goal` when it is not active.
 pub(crate) fn bar(goal: &SessionGoal) -> String {
+    let (head, budget) = parts(goal);
+    format!("{head}/{budget}")
+}
+
+/// The goal's row under the info rows (P2-243): `◎ goal $0.12 / $5.00`,
+/// saying what [`bar`] says.
+pub(crate) fn row(goal: &SessionGoal) -> Vec<Span<'static>> {
+    let (head, budget) = parts(goal);
+    vec![
+        Span::styled(" ◎ ", theme::secondary()),
+        Span::raw(head),
+        Span::styled(format!(" / {budget}"), theme::secondary()),
+    ]
+}
+
+/// `goal $0.12`, with the state when it is not active; and the budget.
+fn parts(goal: &SessionGoal) -> (String, String) {
     let budget = if goal.budget_usd == 0.0 {
         "unlimited".into()
     } else {
@@ -67,11 +85,12 @@ pub(crate) fn bar(goal: &SessionGoal) -> String {
     } else {
         format!(" {}", status(goal.status))
     };
-    format!(
-        "goal{state} ${:.2}{}/{budget}",
+    let head = format!(
+        "goal{state} ${:.2}{}",
         goal.cost.usd,
         if goal.cost.unknown { "+?" } else { "" }
-    )
+    );
+    (head, budget)
 }
 
 pub(crate) fn popup(goal: Option<&SessionGoal>) -> Report {

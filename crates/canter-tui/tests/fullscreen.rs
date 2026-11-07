@@ -220,7 +220,7 @@ fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
     assert_eq!(lines[2], "● short answer", "{shown}");
     assert_eq!(
         lines[last - 1..],
-        [" test-model · think high · Always ask", " /work"],
+        [" test-model high   Always ask", " /work"],
         "the info rows are the bottom rows:\n{shown}"
     );
     assert!(lines[last - 4].starts_with('╭'), "{shown}");
@@ -237,20 +237,21 @@ fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
 }
 
 #[test]
-fn info_line_shows_total_and_last_cache_hit_rates_only_with_input_usage() {
+fn info_row_shows_the_total_cache_hit_rate_only_with_input_usage() {
     let mut screen = Screen::new();
     screen.resize(100, HEIGHT);
     screen.draw();
-    let last = usize::from(HEIGHT) - 1;
-    let base = " /work";
-    assert_eq!(screen.lines()[last], base);
+    let row = usize::from(HEIGHT) - 2;
+    let base = " test-model high   Always ask";
+    assert_eq!(screen.lines()[row], base);
 
-    for (total_input, total_cached, last_input, last_cached, suffix) in [
-        (1000, 924, 100, 99, " · cache 92% (last 99%)"),
-        (3, 2, 3, 1, " · cache 67% (last 33%)"),
-        (100, 0, 10, 0, " · cache 0% (last 0%)"),
-        (100, 92, 0, 0, " · cache 92%"),
-        (0, 0, 100, 99, " · cache (last 99%)"),
+    // The whole session's rate only (P2-243).
+    for (total_input, total_cached, last_input, last_cached, cache) in [
+        (1000, 924, 100, 99, "cache  92%"),
+        (3, 2, 3, 1, "cache  67%"),
+        (100, 0, 10, 0, "cache   0%"),
+        (100, 92, 0, 0, "cache  92%"),
+        (0, 0, 100, 99, ""),
         (0, 0, 0, 0, ""),
     ] {
         let counts = |input, cached| {
@@ -268,24 +269,24 @@ fn info_line_shows_total_and_last_cache_hit_rates_only_with_input_usage() {
             },
         }));
         screen.draw();
-        assert_eq!(screen.lines()[last], format!("{base}{suffix}"));
-        // The percentages cyan, the words around them dim.
+        if cache.is_empty() {
+            assert_eq!(screen.lines()[row], base);
+            continue;
+        }
+        let start = 100 - 1 - cache.width();
+        let expected = format!("{base}{}{cache}", " ".repeat(start - base.width()));
+        assert_eq!(screen.lines()[row], expected);
+        // The word dim, the percent as text.
         let buffer = screen.ui.backend().buffer();
-        for x in base.width() as u16..(base.width() + suffix.width()) as u16 {
-            let cell = &buffer[(x, HEIGHT - 1)];
-            let number = cell
-                .symbol()
-                .chars()
-                .all(|c| c.is_ascii_digit() || c == '%');
-            if number {
-                assert_eq!(cell.style().fg, Some(Color::Cyan), "column {x}");
-            } else {
-                assert_eq!(cell.style().fg, Some(Color::Reset), "column {x}");
-                assert!(
-                    cell.style().add_modifier.contains(Modifier::DIM),
-                    "column {x}"
-                );
-            }
+        for x in start as u16..(start + cache.width()) as u16 {
+            let style = buffer[(x, HEIGHT - 2)].style();
+            assert_eq!(style.fg, Some(Color::Reset), "column {x}");
+            let word = usize::from(x) < start + "cache".len();
+            assert_eq!(
+                style.add_modifier.contains(Modifier::DIM),
+                word,
+                "column {x}"
+            );
         }
     }
 }

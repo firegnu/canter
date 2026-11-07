@@ -103,9 +103,8 @@ impl Agents {
             .count()
     }
 
-    /// `● 2 sub-agents running · 1 done · ↓ to view`, or
-    /// `○ 3 sub-agents · ↓ to view` when none runs; `None` without
-    /// any.
+    /// `● 2 sub-agents running · 1 done`, or `○ 3 sub-agents` when none
+    /// runs; `None` without any.
     pub fn row(&self) -> Option<Vec<Span<'static>>> {
         if self.list.is_empty() {
             return None;
@@ -125,7 +124,6 @@ impl Agents {
         if running > 0 && done > 0 {
             spans.push(Span::raw(format!(" · {done} done")));
         }
-        spans.push(Span::styled(crate::app::TO_VIEW, theme::secondary()));
         Some(spans)
     }
 
@@ -418,25 +416,24 @@ mod tests {
         assert_eq!(agents.row(), None);
         agents.update(agent("a", AgentStatus::Running));
         let row = agents.row().unwrap();
-        assert_eq!(text(&row), "● 1 sub-agent running · ↓ to view");
+        assert_eq!(text(&row), "● 1 sub-agent running");
         assert_eq!(row[0].style, theme::accent());
-        assert_eq!(row.last().unwrap().style, theme::secondary());
         agents.update(agent("b", AgentStatus::Running));
         agents.update(agent("c", AgentStatus::Completed));
         assert_eq!(
             text(&agents.row().unwrap()),
-            "● 2 sub-agents running · 1 done · ↓ to view"
+            "● 2 sub-agents running · 1 done"
         );
         assert_eq!(text(&agents.title()), " Sub-agents · 2 running · 1 done");
         agents.update(agent("a", AgentStatus::Failed));
         agents.update(agent("b", AgentStatus::Interrupted));
         let row = agents.row().unwrap();
-        assert_eq!(text(&row), "○ 3 sub-agents · ↓ to view");
+        assert_eq!(text(&row), "○ 3 sub-agents");
         assert_eq!(row[0].style, theme::secondary());
         assert_eq!(text(&agents.title()), " Sub-agents · 3 done");
         assert_eq!(agents.list.len(), 3, "an update replaces the entry");
         agents.list.truncate(1);
-        assert_eq!(text(&agents.row().unwrap()), "○ 1 sub-agent · ↓ to view");
+        assert_eq!(text(&agents.row().unwrap()), "○ 1 sub-agent");
         agents.update(agent("d", AgentStatus::Running));
         assert_eq!(text(&agents.title()), " Sub-agents · 1 running · 1 done");
     }

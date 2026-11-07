@@ -49,6 +49,14 @@ impl Tps {
             .map_or(self.last, |output| output.rate(now))
     }
 
+    /// The rate while the model is writing a response, and only then.
+    pub fn live(&self, now: i64) -> Option<f64> {
+        self.current
+            .as_ref()
+            .filter(|output| output.end.is_none())
+            .and_then(|output| output.rate(now))
+    }
+
     pub fn event(&mut self, event: &Event) {
         if let EventPayload::SessionUsage { token_usage } = &event.payload
             && token_usage.records_no_request()

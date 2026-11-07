@@ -425,7 +425,7 @@ async fn new_handoff_and_plan_inherit_directories_and_skip_deleted_ones() {
                 terminal.type_line("/plan").await;
                 terminal
                     .wait_until("Plan status", |t| {
-                        t.info().contains(" · Plan (then Always ask) ·")
+                        t.info().contains("   Plan (then Always ask) ·")
                     })
                     .await;
                 terminal.type_line("Plan this change.").await;
@@ -1100,8 +1100,8 @@ impl Terminal {
             .expect("a session was open")
     }
 
-    /// The two bottom rows, joined by ` · `: model, thinking and permission
-    /// mode, then directory, context use and cache hits.
+    /// The two bottom rows, joined by ` · `: model, thinking, permission
+    /// mode, context use, cache hits and cost, then directory and branch.
     fn info(&self) -> String {
         let screen = self.screen();
         let lines: Vec<&str> = screen.lines().collect();
@@ -1870,12 +1870,11 @@ async fn slash_think_and_model_apply_to_the_next_request_and_info_line() {
     a.wait_idle().await;
 
     a.type_line("/think max").await;
-    a.wait_until("think max", |a| a.info().contains("think max"))
+    a.wait_until("think max", |a| a.info().contains(" max   "))
         .await;
     a.type_line("/model deepseek-v4-pro").await;
     a.wait_until("new model and effort", |a| {
-        a.info()
-            .starts_with("deepseek-v4-pro · think max · Always ask")
+        a.info().starts_with("deepseek-v4-pro max   Always ask")
     })
     .await;
     a.type_line("第二句").await;
@@ -2075,14 +2074,14 @@ async fn thinking_none_low_and_compaction_preserve_their_wire_options() {
     for (effort, prompt, answer) in [("none", "第二句", "回答二"), ("low", "第三句", "回答三")]
     {
         a.type_line(&format!("/think {effort}")).await;
-        a.wait_until(effort, |a| a.info().contains(&format!("think {effort}")))
+        a.wait_until(effort, |a| a.info().contains(&format!(" {effort}   ")))
             .await;
         a.type_line(prompt).await;
         a.wait_for(answer).await;
         a.wait_idle().await;
     }
     a.type_line("/think max").await;
-    a.wait_until("think max", |a| a.info().contains("think max"))
+    a.wait_until("think max", |a| a.info().contains(" max   "))
         .await;
     a.type_line("/compact").await;
     a.wait_for("Context compacted").await;
@@ -2192,11 +2191,7 @@ async fn unknown_effort_shows_and_selects_high_and_new_uses_the_default() {
 
     let a = world.open(&["--resume", &old], "canter-tui a").await;
     a.wait_idle().await;
-    assert!(
-        a.info().starts_with("fake-model · think high"),
-        "{}",
-        a.info()
-    );
+    assert!(a.info().starts_with("fake-model high"), "{}", a.info());
     a.type_line("/think").await;
     a.wait_for("Thinking effort").await;
     assert!(
@@ -2212,11 +2207,7 @@ async fn unknown_effort_shows_and_selects_high_and_new_uses_the_default() {
     a.type_line("/new").await;
     a.wait_until("new session", |a| !a.screen().contains("原会话问题"))
         .await;
-    assert!(
-        a.info().starts_with("fake-model · think high"),
-        "{}",
-        a.info()
-    );
+    assert!(a.info().starts_with("fake-model high"), "{}", a.info());
     let new = a.quit().await;
     assert_ne!(new, old);
     assert_eq!(
@@ -2243,7 +2234,7 @@ async fn new_session_retries_with_default_model_when_previous_model_was_removed(
     a.wait_for("原会话回答").await;
     a.wait_idle().await;
     a.type_line("/think max").await;
-    a.wait_until("think max", |a| a.info().contains("think max"))
+    a.wait_until("think max", |a| a.info().contains(" max   "))
         .await;
     let old = a.quit().await;
     let old_settings = world.snapshot(&old).await.settings;
@@ -2266,7 +2257,7 @@ async fn new_session_retries_with_default_model_when_previous_model_was_removed(
         a.screen()
     );
     assert!(
-        a.info().starts_with("fake-model · think max · Allow all"),
+        a.info().starts_with("fake-model max   Allow all"),
         "{}",
         a.info()
     );
@@ -2321,7 +2312,7 @@ async fn legacy_session_without_effort_and_with_unlisted_model_can_resume() {
     world.start_server().await;
     let a = world.open(&["--resume", &id], "canter-tui a").await;
     a.wait_until("legacy model, default high", |a| {
-        a.info().starts_with("legacy-model · think high")
+        a.info().starts_with("legacy-model high")
     })
     .await;
     a.type_line("继续").await;
@@ -2360,14 +2351,14 @@ async fn think_and_model_choosers_only_accept_keys_after_their_frame_is_shown() 
             "Thinking effort",
             "high (current)",
             1,
-            "fake-model · think max",
+            "fake-model max",
         ),
         (
             "/model",
             "Model",
             "fake-model (current)",
             2,
-            "deepseek-v4-pro · think max",
+            "deepseek-v4-pro max",
         ),
     ] {
         let before = world.snapshot(&id).await.last_event_seq;
@@ -2422,7 +2413,7 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
         .wait_until("the info rows", |terminal| {
             terminal
                 .info()
-                .starts_with("fake-model · think high · Always ask · Sandbox on · /tmp/canter-tui-")
+                .starts_with("fake-model high   Always ask · Sandbox on · /tmp/canter-tui-")
         })
         .await;
     assert!(terminal.screen().contains("somewhere/else/deep"));
@@ -2972,16 +2963,15 @@ async fn slash_new_opens_a_new_session_in_this_terminal() {
     let old = world.only_session().await;
 
     a.type_line("/think max").await;
-    a.wait_until("think max", |a| a.info().contains("think max"))
+    a.wait_until("think max", |a| a.info().contains(" max   "))
         .await;
 
     a.type_line("/new").await;
     a.wait_until("the new session", |a| !a.screen().contains("第一句"))
         .await;
     assert!(
-        a.info().starts_with(
-            "deepseek-v4-pro · think max · Allow all · Sandbox off · /tmp/canter-tui-"
-        ),
+        a.info()
+            .starts_with("deepseek-v4-pro max   Allow all · Sandbox off · /tmp/canter-tui-"),
         "{}",
         a.screen()
     );
@@ -3257,7 +3247,7 @@ async fn slash_mode_changes_the_permission_mode() {
     let a = world.open(&[], "canter-tui a").await;
     a.wait_idle().await;
     assert!(
-        a.info().starts_with("fake-model · think high · Always ask"),
+        a.info().starts_with("fake-model high   Always ask"),
         "{}",
         a.info()
     );
@@ -3266,7 +3256,7 @@ async fn slash_mode_changes_the_permission_mode() {
 
     a.type_line("/mode allow-all").await;
     a.wait_until("Allow all", |a| {
-        a.info().starts_with("fake-model · think high · Allow all")
+        a.info().starts_with("fake-model high   Allow all")
     })
     .await;
     assert_eq!(mode().await, PermissionMode::AllowAll);
@@ -3277,7 +3267,7 @@ async fn slash_mode_changes_the_permission_mode() {
     a.press(KeyCode::Up).await;
     a.press(KeyCode::Enter).await;
     a.wait_until("Always ask", |a| {
-        a.info().starts_with("fake-model · think high · Always ask")
+        a.info().starts_with("fake-model high   Always ask")
     })
     .await;
     assert_eq!(mode().await, PermissionMode::AlwaysAsk);
@@ -3285,7 +3275,7 @@ async fn slash_mode_changes_the_permission_mode() {
     a.type_line("/mode yolo").await;
     a.wait_for("Unknown mode: yolo").await;
     assert_eq!(mode().await, PermissionMode::AlwaysAsk);
-    assert!(a.info().starts_with("fake-model · think high · Always ask"));
+    assert!(a.info().starts_with("fake-model high   Always ask"));
     // The first Ctrl+C clears the draft left in the input box.
     a.press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
         .await;
@@ -3343,8 +3333,7 @@ async fn shift_tab_cycles_the_permission_mode() {
     let a = world.open(&["--yolo"], "canter-tui a").await;
     a.wait_idle().await;
     assert!(
-        a.info()
-            .starts_with("fake-model · think high · Allow all ·"),
+        a.info().starts_with("fake-model high   Allow all ·"),
         "{}",
         a.info()
     );
@@ -3359,7 +3348,7 @@ async fn shift_tab_cycles_the_permission_mode() {
         (PermissionMode::AlwaysAsk, "Always ask"),
     ] {
         a.press_with(KeyCode::BackTab, KeyModifiers::SHIFT).await;
-        let info = format!("fake-model · think high · {shown} ·");
+        let info = format!("fake-model high   {shown} ·");
         a.wait_until(shown, |a| a.info().starts_with(&info)).await;
         assert_eq!(world.snapshot(&id).await.settings.approval_policy, mode);
         assert_eq!(
@@ -3407,11 +3396,11 @@ async fn shift_tab_pressed_on_the_session_list_changes_nothing() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let mode = async || world.snapshot(&id).await.settings.approval_policy;
     assert_eq!(mode().await, PermissionMode::AlwaysAsk);
-    assert!(a.info().contains("· Always ask ·"), "{}", a.info());
+    assert!(a.info().contains("   Always ask ·"), "{}", a.info());
 
     a.press_with(KeyCode::BackTab, KeyModifiers::SHIFT).await;
     a.wait_until("Ask for execution", |a| {
-        a.info().contains("· Ask for execution ·")
+        a.info().contains("   Ask for execution ·")
     })
     .await;
     assert_eq!(mode().await, PermissionMode::AskForExecution);
@@ -3439,7 +3428,7 @@ async fn handoff_opens_matching_session_with_an_editable_unsent_note() {
     a.wait_idle().await;
     let original = world.only_session().await;
     a.type_line("/think low").await;
-    a.wait_until("think low", |a| a.info().contains("think low"))
+    a.wait_until("think low", |a| a.info().contains(" low   "))
         .await;
     let before = world.snapshot(&original).await;
     a.type_line("/handoff 继续实现").await;
@@ -3779,7 +3768,7 @@ async fn plan_approval_implements_in_place_or_starts_the_plan_in_a_fresh_session
         terminal.type_line("/plan").await;
         terminal
             .wait_until("Plan status", |t| {
-                t.info().contains(" · Plan (then Always ask) ·")
+                t.info().contains("   Plan (then Always ask) ·")
             })
             .await;
         terminal.type_line("Plan this change.").await;
@@ -4027,11 +4016,7 @@ async fn model_choice_crosses_providers_and_the_status_bar_follows() {
         .await;
     a.wait_for("first answer").await;
     a.wait_idle().await;
-    assert!(
-        a.info().starts_with("big/alpha · think high"),
-        "{}",
-        a.info()
-    );
+    assert!(a.info().starts_with("big/alpha high"), "{}", a.info());
     assert_eq!(world.requests.lock().unwrap()[0]["model"], "alpha");
 
     a.type_line("/model").await;
@@ -4061,7 +4046,7 @@ async fn model_choice_crosses_providers_and_the_status_bar_follows() {
     a.press(KeyCode::Enter).await;
     // The window and compaction line change before any request.
     a.wait_until("the status bar follows", |a| {
-        a.info().starts_with("small/beta · think high") && a.info().contains("50k/15k")
+        a.info().starts_with("small/beta high") && a.info().contains("██████████")
     })
     .await;
     assert_eq!(world.requests.lock().unwrap().len(), 1);
