@@ -262,6 +262,7 @@ impl Shared {
             .with_mcp(context.mcp_tools.clone())
             .with_mcp_tool_search(config.options.mcp_tool_search)
             .with_web_search(config.options.web_search.clone())
+            .with_file_rules(config.options.command_rules_path.clone())
             .with_web_fetch_timeout(config.options.web_fetch_timeout);
         let mut retired_tools = old.retired_tools.clone();
         if !old

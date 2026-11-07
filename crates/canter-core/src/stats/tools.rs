@@ -150,6 +150,7 @@ fn family(name: &str) -> &str {
 fn name(item: &Item) -> Option<String> {
     Some(match item {
         Item::FileRead { .. } => "read".into(),
+        Item::AstGrep { .. } => "ast_grep".into(),
         Item::FileChange { .. } => "write/edit".into(),
         Item::CommandExecution {
             source: ExecCommandSource::Agent,
@@ -171,6 +172,7 @@ fn name(item: &Item) -> Option<String> {
 fn status(item: &Item) -> Option<ItemStatus> {
     match item {
         Item::FileRead { status, .. }
+        | Item::AstGrep { status, .. }
         | Item::FileChange { status, .. }
         | Item::CommandExecution { status, .. }
         | Item::WebFetch { status, .. }

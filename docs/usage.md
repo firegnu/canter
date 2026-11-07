@@ -596,6 +596,7 @@ The model sees only tools that the current provider and configuration support. T
 | Tool | Purpose |
 | --- | --- |
 | `read` | Read a UTF-8 text file with line numbers, at most 2000 lines and 64 KiB per call. Reads images by content; reads PDF text, or one PDF page as an image with `page` (page images require `pdftoppm` from Poppler). |
+| `ast_grep` | Search code by syntax structure with one ast-grep pattern, such as `$X.unwrap()`, so comments and strings do not match. Languages: Rust, Python, TypeScript (including `.tsx`), JavaScript (including `.jsx`, `.mjs`, `.cjs`). Directories skip `.gitignore` entries; at most 50 matches per page, with `offset` for the next page. |
 | `write` | Create or replace a whole UTF-8 file; creates missing parent directories. |
 | `edit` | Replace exact text in an existing UTF-8 file. All edits in one call succeed or nothing is written. |
 | `apply_patch` | Apply a freeform `*** Begin Patch` patch. Offered only when the model's catalog entry supports the freeform patch tool; other models use `write` and `edit`. |
@@ -620,6 +621,8 @@ The model sees only tools that the current provider and configuration support. T
 When MCP tools are present and `mcp_tool_search` is true (the default), the model gets `mcp_search` and `mcp_call` instead of every MCP tool definition. With `false`, all MCP tools are listed directly. Tool definitions follow configuration reloads at the next turn boundary.
 
 `web_fetch` and `web_search` are treated as execution: the asking modes prompt, `allow-all` runs them, and review turns deny them. Session grants for `web_fetch` cover one canonical host and port; search grants cover the session's searches.
+
+`ast_grep` is read-only and available in every permission mode, in Plan mode, in review turns and to read-only sub-agents. Its path follows the same `rules.json` file rules and canter private-file refusal as `read`; a directory search applies those rules to every file, follows symlinks the same way, and skips files that are blocked, need approval or cannot be read, reporting how many were skipped.
 
 ## Hooks
 

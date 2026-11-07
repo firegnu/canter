@@ -201,7 +201,7 @@ impl PermissionGate {
     ) -> Option<PermissionCheck<'a>> {
         if !matches!(
             call.tool,
-            Tool::Read | Tool::Write | Tool::Edit | Tool::ApplyPatch
+            Tool::Read | Tool::AstGrep | Tool::Write | Tool::Edit | Tool::ApplyPatch
         ) {
             return None;
         }
@@ -253,7 +253,7 @@ impl PermissionGate {
         mode: PermissionMode,
     ) -> PermissionCheck<'a> {
         match call.tool {
-            Tool::Read => self.evaluate(call, mode),
+            Tool::Read | Tool::AstGrep => self.evaluate(call, mode),
             Tool::AskUser
             | Tool::SubmitPlan
             | Tool::ShellOutput
@@ -277,7 +277,7 @@ impl PermissionGate {
         mode: PermissionMode,
     ) -> PermissionCheck<'a> {
         match call.tool {
-            Tool::Read => self.evaluate(call, mode),
+            Tool::Read | Tool::AstGrep => self.evaluate(call, mode),
             Tool::UpdatePlan
             | Tool::ShellOutput
             | Tool::ShellStop

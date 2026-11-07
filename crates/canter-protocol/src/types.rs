@@ -600,6 +600,16 @@ pub struct WebSearchResult {
     pub summary: String,
 }
 
+/// One syntax-structure match; line and column are one-based.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AstGrepMatch {
+    pub path: String,
+    pub line: u32,
+    pub column: u32,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(
     tag = "type",
@@ -718,6 +728,18 @@ pub enum Item {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional, type = "number")]
         duration_ms: Option<u64>,
+    },
+    /// Structural code search; `matches` is the current page, `totalMatches` all found.
+    AstGrep {
+        id: String,
+        pattern: String,
+        matches: Vec<AstGrepMatch>,
+        #[ts(type = "number")]
+        total_matches: u64,
+        status: ItemStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        error: Option<String>,
     },
     /// Provider-independent search results; only search is supported, so there is no action.
     WebSearch {
@@ -912,6 +934,7 @@ impl Item {
             | Self::McpToolSearch { id, .. }
             | Self::WebFetch { id, .. }
             | Self::WebSearch { id, .. }
+            | Self::AstGrep { id, .. }
             | Self::CommandExecution { id, .. }
             | Self::FileChange { id, .. }
             | Self::FileRead { id, .. }

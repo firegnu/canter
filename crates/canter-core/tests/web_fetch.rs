@@ -272,6 +272,7 @@ async fn model_fetches_html_as_markdown_and_continues_with_a_fixed_tool_list() {
             names,
             [
                 "read",
+                "ast_grep",
                 "write",
                 "edit",
                 "shell",

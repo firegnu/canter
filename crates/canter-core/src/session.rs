@@ -2293,6 +2293,7 @@ async fn executor(
             .with_plan_enabled(options.plan_enabled)
             .with_apply_patch(options.apply_patch_models.contains(&model))
             .with_web_search(options.web_search)
+            .with_file_rules(options.command_rules_path.clone())
             .with_mcp(runtime.mcp_tools)
             .with_mcp_tool_search(options.mcp_tool_search)
             .with_web_fetch_timeout(options.web_fetch_timeout);
@@ -2499,6 +2500,7 @@ pub(crate) fn interrupted_turn(mut turn: Turn) -> Vec<EventPayload> {
             | Item::McpToolSearch { status, .. }
             | Item::WebFetch { status, .. }
             | Item::WebSearch { status, .. }
+            | Item::AstGrep { status, .. }
             | Item::CommandExecution { status, .. }
             | Item::FileChange { status, .. }
             | Item::FileRead { status, .. }

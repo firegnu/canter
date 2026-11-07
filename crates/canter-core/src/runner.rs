@@ -1080,6 +1080,10 @@ async fn execute(
                         *status = ItemStatus::Declined;
                         *error = Some(output.text.clone());
                     }
+                    Item::AstGrep { status, error, .. } => {
+                        *status = ItemStatus::Declined;
+                        *error = Some(output.text.clone());
+                    }
                     _ => {}
                 }
             }
@@ -1105,6 +1109,7 @@ async fn execute(
                         | Item::McpToolCall { status, .. }
                         | Item::WebFetch { status, .. }
                         | Item::FileRead { status, .. }
+                        | Item::AstGrep { status, .. }
                         | Item::FileChange { status, .. }
                         | Item::CommandExecution { status, .. } => *status = ItemStatus::Failed,
                         _ => unreachable!("prepared tool item"),

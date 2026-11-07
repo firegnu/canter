@@ -337,6 +337,29 @@ fn web_search_empty_and_failed_cards_show_english_status_and_error() {
     }
 }
 
+#[test]
+fn ast_grep_card_shows_pattern_page_count_and_expanded_matches() {
+    let mut screen = Screen::new(45);
+    screen.completed(json!({"type":"astGrep","id":"a1","pattern":"$X.unwrap()","totalMatches":42,"status":"completed","matches":[
+        {"path":"src/main.rs","line":12,"column":5,"text":"value.unwrap()"},
+        {"path":"src/lib.rs","line":3,"column":9,"text":"x.unwrap()\n  .unwrap()"}
+    ]}));
+    let rows = screen.conversation();
+    let rows = card(&rows, "• AST search $X.unwrap()");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].ends_with("2 matches"), "{rows:?}");
+    assert_eq!(screen.ctrl_o(), None);
+    let text = screen.conversation().join("\n");
+    for part in [
+        "src/main.rs:12:5",
+        "value.unwrap()",
+        "src/lib.rs:3:9",
+        ".unwrap()",
+    ] {
+        assert!(text.contains(part), "{text}");
+    }
+}
+
 /// A failed command keeps its last 10 lines, in the default colour, after
 /// `… N lines above (Ctrl+O to expand)`; one that worked keeps its first 3,
 /// grey, then `+ N lines (Ctrl+O to expand)`. A folded diff's line still

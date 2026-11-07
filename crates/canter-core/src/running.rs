@@ -96,6 +96,10 @@ fn turn_activity(turn: &Turn) -> String {
                 status: ItemStatus::InProgress,
                 ..
             } => Some("Fetching a web page"),
+            Item::AstGrep {
+                status: ItemStatus::InProgress,
+                ..
+            } => Some("Searching code by structure"),
             Item::McpToolCall {
                 status: ItemStatus::InProgress,
                 ..

@@ -1550,6 +1550,7 @@ async fn ask_user_second_option_returns_to_the_model_and_continues() {
             names,
             [
                 "read",
+                "ast_grep",
                 "write",
                 "edit",
                 "shell",
