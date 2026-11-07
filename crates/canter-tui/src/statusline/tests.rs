@@ -398,7 +398,7 @@ async fn failures_keep_previous_output_and_first_failure_marks_default_in_red() 
     loop {
         let rows = screen.bar();
         if rows[0].ends_with("statusline error") {
-            assert!(rows[0].starts_with(" test-model · think high · Always ask"));
+            assert!(rows[0].starts_with(" ◆ test-model · ◐ think high · Always ask"));
             assert_eq!(rows[1], " ~");
             let buffer = screen.ui.backend().buffer();
             let x = (0..80)

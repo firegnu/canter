@@ -295,18 +295,21 @@ pub fn thought() -> Style {
 /// What an item of the status bar at the bottom shows, for its colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BarItem {
-    /// Cyan.
+    /// The `◆` before the model: cyan.
     Model,
-    /// Magenta.
+    /// The `◐` before the thinking level: magenta.
     Thinking,
-    /// Yellow.
+    /// The `$` of the cost: yellow.
     Cost,
     /// Blue.
     Directory,
-    /// Green.
+    /// The branch with its `⑂`: green.
     Branch,
-    /// The cache hit percentages and the tokens a second: cyan.
+    /// The `⟳` before the cache hits, their percentages and the tokens a
+    /// second: cyan.
     Number,
+    /// The `↯` before the tokens a second: yellow.
+    Speed,
     /// The lines added since the last commit: green.
     Added,
     /// The lines removed since the last commit: red.
@@ -319,16 +322,33 @@ pub fn bar_item(item: BarItem) -> Style {
     bar(match item {
         BarItem::Model | BarItem::Number => Color::Cyan,
         BarItem::Thinking => Color::Magenta,
-        BarItem::Cost => Color::Yellow,
+        BarItem::Cost | BarItem::Speed => Color::Yellow,
         BarItem::Directory => Color::Blue,
         BarItem::Branch | BarItem::Added => Color::Green,
         BarItem::Removed => Color::Red,
     })
 }
 
-/// The context bar and its percent on the status bar, by how much room is
-/// left before automatic compaction (`left`, 0 to 100): 50% or more green, 20% or
-/// more yellow, less red. Without colours dim.
+/// The model's name, the cost and the token counts on the status bar: the
+/// terminal's own colour, bold (P2-246).
+pub fn bar_value() -> Style {
+    Style::new().bold()
+}
+
+/// A number on the second row of the status bar in its colour (`style`, as
+/// [`bar_item`] or [`bar_room`] give it), bold. Without colours bold only,
+/// not dim as well.
+pub fn bar_number(style: Style) -> Style {
+    match current().depth {
+        Depth::None => bar_value(),
+        _ => style.bold(),
+    }
+}
+
+/// The context bar's percent on the status bar, by how much room is left
+/// before automatic compaction (`left`, 0 to 100), and each used cell of
+/// the bar, by the room left where it ends: 50% or more green, 20% or more
+/// yellow, less red. Without colours dim.
 pub fn bar_room(left: u64) -> Style {
     bar(match left {
         50.. => Color::Green,

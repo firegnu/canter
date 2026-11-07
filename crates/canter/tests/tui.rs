@@ -1345,14 +1345,18 @@ async fn image_history_survives_source_deletion_model_switch_compaction_and_rest
     terminal.wait_idle().await;
     terminal.type_line("/model deepseek-v4-pro").await;
     terminal
-        .wait_until("pro selected", |t| t.info().starts_with("deepseek-v4-pro"))
+        .wait_until("pro selected", |t| {
+            t.info().starts_with("◆ deepseek-v4-pro")
+        })
         .await;
     terminal.type_line("继续文字").await;
     terminal.wait_for("image reply 3").await;
     terminal.wait_idle().await;
     terminal.type_line("/model deepseek-flash").await;
     terminal
-        .wait_until("flash selected", |t| t.info().starts_with("deepseek-flash"))
+        .wait_until("flash selected", |t| {
+            t.info().starts_with("◆ deepseek-flash")
+        })
         .await;
     terminal.type_line("再看图片").await;
     terminal.wait_for("image reply 4").await;
@@ -1489,7 +1493,9 @@ async fn configured_image_models_control_attachments_and_history_fallback() {
     terminal.wait_idle().await;
     terminal.type_line("/model deepseek-flash").await;
     terminal
-        .wait_until("flash selected", |t| t.info().starts_with("deepseek-flash"))
+        .wait_until("flash selected", |t| {
+            t.info().starts_with("◆ deepseek-flash")
+        })
         .await;
     terminal
         .keys
@@ -1880,7 +1886,7 @@ async fn slash_think_and_model_apply_to_the_next_request_and_info_line() {
     a.type_line("/model deepseek-v4-pro").await;
     a.wait_until("new model and effort", |a| {
         a.info()
-            .starts_with("deepseek-v4-pro · think max · Always ask")
+            .starts_with("◆ deepseek-v4-pro · ◐ think max · Always ask")
     })
     .await;
     a.type_line("第二句").await;
@@ -2198,7 +2204,7 @@ async fn unknown_effort_shows_and_selects_high_and_new_uses_the_default() {
     let a = world.open(&["--resume", &old], "canter-tui a").await;
     a.wait_idle().await;
     assert!(
-        a.info().starts_with("fake-model · think high"),
+        a.info().starts_with("◆ fake-model · ◐ think high"),
         "{}",
         a.info()
     );
@@ -2218,7 +2224,7 @@ async fn unknown_effort_shows_and_selects_high_and_new_uses_the_default() {
     a.wait_until("new session", |a| !a.screen().contains("原会话问题"))
         .await;
     assert!(
-        a.info().starts_with("fake-model · think high"),
+        a.info().starts_with("◆ fake-model · ◐ think high"),
         "{}",
         a.info()
     );
@@ -2271,7 +2277,8 @@ async fn new_session_retries_with_default_model_when_previous_model_was_removed(
         a.screen()
     );
     assert!(
-        a.info().starts_with("fake-model · think max · Allow all"),
+        a.info()
+            .starts_with("◆ fake-model · ◐ think max · ▲ Allow all"),
         "{}",
         a.info()
     );
@@ -2326,7 +2333,7 @@ async fn legacy_session_without_effort_and_with_unlisted_model_can_resume() {
     world.start_server().await;
     let a = world.open(&["--resume", &id], "canter-tui a").await;
     a.wait_until("legacy model, default high", |a| {
-        a.info().starts_with("legacy-model · think high")
+        a.info().starts_with("◆ legacy-model · ◐ think high")
     })
     .await;
     a.type_line("继续").await;
@@ -2365,14 +2372,14 @@ async fn think_and_model_choosers_only_accept_keys_after_their_frame_is_shown() 
             "Thinking effort",
             "high (current)",
             1,
-            "fake-model · think max",
+            "◆ fake-model · ◐ think max",
         ),
         (
             "/model",
             "Model",
             "fake-model (current)",
             2,
-            "deepseek-v4-pro · think max",
+            "◆ deepseek-v4-pro · ◐ think max",
         ),
     ] {
         let before = world.snapshot(&id).await.last_event_seq;
@@ -2425,9 +2432,9 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     // The info rows: default model, asking each time, this directory.
     terminal
         .wait_until("the info rows", |terminal| {
-            terminal
-                .info()
-                .starts_with("fake-model · think high · Always ask · Sandbox on · /tmp/canter-tui-")
+            terminal.info().starts_with(
+                "◆ fake-model · ◐ think high · Always ask · Sandbox on · /tmp/canter-tui-",
+            )
         })
         .await;
     assert!(terminal.screen().contains("somewhere/else/deep"));
@@ -2985,7 +2992,7 @@ async fn slash_new_opens_a_new_session_in_this_terminal() {
         .await;
     assert!(
         a.info().starts_with(
-            "deepseek-v4-pro · think max · Allow all · Sandbox off · /tmp/canter-tui-"
+            "◆ deepseek-v4-pro · ◐ think max · ▲ Allow all · ▲ Sandbox off · /tmp/canter-tui-"
         ),
         "{}",
         a.screen()
@@ -3262,7 +3269,8 @@ async fn slash_mode_changes_the_permission_mode() {
     let a = world.open(&[], "canter-tui a").await;
     a.wait_idle().await;
     assert!(
-        a.info().starts_with("fake-model · think high · Always ask"),
+        a.info()
+            .starts_with("◆ fake-model · ◐ think high · Always ask"),
         "{}",
         a.info()
     );
@@ -3271,7 +3279,8 @@ async fn slash_mode_changes_the_permission_mode() {
 
     a.type_line("/mode allow-all").await;
     a.wait_until("Allow all", |a| {
-        a.info().starts_with("fake-model · think high · Allow all")
+        a.info()
+            .starts_with("◆ fake-model · ◐ think high · ▲ Allow all")
     })
     .await;
     assert_eq!(mode().await, PermissionMode::AllowAll);
@@ -3282,7 +3291,8 @@ async fn slash_mode_changes_the_permission_mode() {
     a.press(KeyCode::Up).await;
     a.press(KeyCode::Enter).await;
     a.wait_until("Always ask", |a| {
-        a.info().starts_with("fake-model · think high · Always ask")
+        a.info()
+            .starts_with("◆ fake-model · ◐ think high · Always ask")
     })
     .await;
     assert_eq!(mode().await, PermissionMode::AlwaysAsk);
@@ -3290,7 +3300,10 @@ async fn slash_mode_changes_the_permission_mode() {
     a.type_line("/mode yolo").await;
     a.wait_for("Unknown mode: yolo").await;
     assert_eq!(mode().await, PermissionMode::AlwaysAsk);
-    assert!(a.info().starts_with("fake-model · think high · Always ask"));
+    assert!(
+        a.info()
+            .starts_with("◆ fake-model · ◐ think high · Always ask")
+    );
     // The first Ctrl+C clears the draft left in the input box.
     a.press_with(KeyCode::Char('c'), KeyModifiers::CONTROL)
         .await;
@@ -3349,7 +3362,7 @@ async fn shift_tab_cycles_the_permission_mode() {
     a.wait_idle().await;
     assert!(
         a.info()
-            .starts_with("fake-model · think high · Allow all ·"),
+            .starts_with("◆ fake-model · ◐ think high · ▲ Allow all ·"),
         "{}",
         a.info()
     );
@@ -3359,12 +3372,12 @@ async fn shift_tab_cycles_the_permission_mode() {
         (PermissionMode::AllowAll, "Plan (then Allow all)"),
         (PermissionMode::AlwaysAsk, "Always ask"),
         (PermissionMode::AskForExecution, "Ask for execution"),
-        (PermissionMode::AllowAll, "Allow all"),
+        (PermissionMode::AllowAll, "▲ Allow all"),
         (PermissionMode::AllowAll, "Plan (then Allow all)"),
         (PermissionMode::AlwaysAsk, "Always ask"),
     ] {
         a.press_with(KeyCode::BackTab, KeyModifiers::SHIFT).await;
-        let info = format!("fake-model · think high · {shown} ·");
+        let info = format!("◆ fake-model · ◐ think high · {shown} ·");
         a.wait_until(shown, |a| a.info().starts_with(&info)).await;
         assert_eq!(world.snapshot(&id).await.settings.approval_policy, mode);
         assert_eq!(
@@ -4033,7 +4046,7 @@ async fn model_choice_crosses_providers_and_the_status_bar_follows() {
     a.wait_for("first answer").await;
     a.wait_idle().await;
     assert!(
-        a.info().starts_with("big/alpha · think high"),
+        a.info().starts_with("◆ big/alpha · ◐ think high"),
         "{}",
         a.info()
     );
@@ -4066,7 +4079,7 @@ async fn model_choice_crosses_providers_and_the_status_bar_follows() {
     a.press(KeyCode::Enter).await;
     // The window and compaction line change before any request.
     a.wait_until("the status bar follows", |a| {
-        a.info().starts_with("small/beta · think high") && a.info().contains("50k/15k")
+        a.info().starts_with("◆ small/beta · ◐ think high") && a.info().contains("50k/15k")
     })
     .await;
     assert_eq!(world.requests.lock().unwrap().len(), 1);

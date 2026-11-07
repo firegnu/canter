@@ -6311,7 +6311,8 @@ impl App {
     /// What each item of the rows at the bottom says now, each in its colour
     /// and the words around it dim; `None` for what is not known (yet). The
     /// numbers on the second row take the same columns however many digits
-    /// they have, so what follows them stays put (P2-245).
+    /// they have, so what follows them stays put (P2-245). Items start with
+    /// a mark in their colour, dangerous settings with a red `▲` (P2-246).
     fn bar_values(&self, now_ms: i64) -> bar::Values {
         use theme::BarItem;
         let settings = &self.snapshot.settings;
@@ -6321,24 +6322,33 @@ impl App {
         let dim = |text: String| Some(vec![Span::styled(text, theme::secondary())]);
         let coloured =
             |text: String, item: BarItem| Some(vec![Span::styled(text, theme::bar_item(item))]);
+        let mark = |mark: &'static str, item: BarItem| Span::styled(mark, theme::bar_item(item));
         bar::Item::ALL.map(|item| match item {
-            bar::Item::Model => coloured(sanitize(&settings.model), BarItem::Model),
-            bar::Item::Thinking => coloured(
-                format!(
+            bar::Item::Model => Some(vec![
+                mark("◆ ", BarItem::Model),
+                Span::styled(sanitize(&settings.model), theme::bar_value()),
+            ]),
+            bar::Item::Thinking => Some(vec![
+                mark("◐ ", BarItem::Thinking),
+                Span::raw(format!(
                     "think {}",
                     match settings.reasoning_effort {
                         canter_protocol::ReasoningEffort::Unknown => "high",
                         effort => effort.as_str(),
                     }
-                ),
-                BarItem::Thinking,
-            ),
+                )),
+            ]),
             bar::Item::Permission => {
                 let mut spans = if settings.plan_mode {
                     plan_mode_spans(after_plan(settings))
                 } else {
                     let (mode, style) = mode_label(settings.approval_policy);
-                    vec![Span::styled(mode, style)]
+                    let danger = if settings.approval_policy == PermissionMode::AllowAll {
+                        bar::DANGER
+                    } else {
+                        ""
+                    };
+                    vec![Span::styled(format!("{danger}{mode}"), style)]
                 };
                 // Servers that do not say leave it out: never shown as on.
                 if let Some(enabled) = settings.sandbox_enabled {
@@ -6354,18 +6364,24 @@ impl App {
                         crate::usage::dollars(cost.usd),
                         if cost.unknown { "+?" } else { "" }
                     );
-                    coloured(
-                        if cost.chatgpt_plan {
-                            if metered == "$0.00" {
-                                "ChatGPT plan".into()
-                            } else {
-                                format!("{metered} + ChatGPT plan")
-                            }
-                        } else {
-                            metered
-                        },
-                        BarItem::Cost,
-                    )
+                    if cost.chatgpt_plan && metered == "$0.00" {
+                        return coloured("ChatGPT plan".into(), BarItem::Cost);
+                    }
+                    // The `$` yellow, the amount around it bold.
+                    let (before, after) = metered.split_once('$').unwrap_or(("", &metered));
+                    let mut spans = Vec::new();
+                    if !before.is_empty() {
+                        spans.push(Span::styled(before.to_owned(), theme::bar_value()));
+                    }
+                    spans.push(Span::styled("$", theme::bar_item(BarItem::Cost)));
+                    spans.push(Span::styled(after.to_owned(), theme::bar_value()));
+                    if cost.chatgpt_plan {
+                        spans.push(Span::styled(
+                            " + ChatGPT plan",
+                            theme::bar_item(BarItem::Cost),
+                        ));
+                    }
+                    Some(spans)
                 }),
             bar::Item::Directory => coloured(
                 shorten_home(&sanitize(&settings.cwd), self.home.as_deref()),
@@ -6374,23 +6390,29 @@ impl App {
             bar::Item::Branch => self
                 .branch
                 .as_ref()
-                .and_then(|branch| coloured(format!("({})", sanitize(branch)), BarItem::Branch)),
-            // Nothing while nothing changed.
+                .and_then(|branch| coloured(format!("⑂ {}", sanitize(branch)), BarItem::Branch)),
+            // Nothing while nothing changed; a count of 0 dim.
             bar::Item::Diff => {
                 self.git_diff_lines()
                     .filter(|&lines| lines != (0, 0))
                     .map(|(added, removed)| {
+                        let style = |count: u64, item| match count {
+                            0 => theme::secondary(),
+                            _ => theme::bar_item(item),
+                        };
                         vec![
-                            Span::styled(format!("+{added}"), theme::bar_item(BarItem::Added)),
+                            Span::styled(format!("+{added}"), style(added, BarItem::Added)),
                             Span::raw(" "),
-                            Span::styled(format!("−{removed}"), theme::bar_item(BarItem::Removed)),
+                            Span::styled(format!("−{removed}"), style(removed, BarItem::Removed)),
                         ]
                     })
             }
             // Ten cells, full at the compaction line, or else at the window;
             // past it full, and the percent says how far past. The words
             // after the percent say which. The tokens used take four
-            // columns, as `999k` and `1.5M` do.
+            // columns, as `999k` and `1.5M` do. Each used cell is coloured
+            // by the room left where it ends, so the bar goes from green to
+            // yellow to red as it fills (P2-246).
             bar::Item::Context => usage.and_then(|usage| {
                 let (full, of) = match usage.auto_compact_tokens {
                     Some(line) => (line, " to compact)"),
@@ -6401,16 +6423,21 @@ impl App {
                 let cells = ((u128::from(used) * 10 + u128::from(full) / 2) / u128::from(full))
                     .min(10) as usize;
                 let room = theme::bar_room(percent_left(full, used)?);
-                Some(vec![
-                    Span::styled("█".repeat(cells), room),
-                    Span::styled("░".repeat(10 - cells), theme::secondary()),
+                let mut spans: Vec<Span<'static>> = (1..=cells as u64)
+                    .map(|cell| Span::styled("●", theme::bar_room(100 - cell * 10)))
+                    .collect();
+                spans.extend([
+                    Span::styled("○".repeat(10 - cells), theme::secondary()),
+                    Span::styled(" ", theme::secondary()),
                     Span::styled(
-                        format!(" {:>4}/{} (", tokens(used), tokens(full)),
-                        theme::secondary(),
+                        format!("{:>4}/{}", tokens(used), tokens(full)),
+                        theme::bar_value(),
                     ),
-                    Span::styled(bar::percent(percent), room),
+                    Span::styled(" (", theme::secondary()),
+                    Span::styled(bar::percent(percent), theme::bar_number(room)),
                     Span::styled(of, theme::secondary()),
-                ])
+                ]);
+                Some(spans)
             }),
             bar::Item::Cache => usage.and_then(|usage| {
                 let total = percent(usage.total.input_tokens, usage.total.cached_input_tokens);
@@ -6418,8 +6445,16 @@ impl App {
                 if total.is_none() && last.is_none() {
                     return None;
                 }
-                let number = |n| Span::styled(bar::percent(n), theme::bar_item(BarItem::Number));
-                let mut spans = vec![Span::styled("cache", theme::secondary())];
+                let number = |n| {
+                    Span::styled(
+                        bar::percent(n),
+                        theme::bar_number(theme::bar_item(BarItem::Number)),
+                    )
+                };
+                let mut spans = vec![
+                    mark("⟳ ", BarItem::Number),
+                    Span::styled("cache", theme::secondary()),
+                ];
                 if let Some(total) = total {
                     spans.push(Span::styled(" ", theme::secondary()));
                     spans.push(number(total));
@@ -6433,7 +6468,11 @@ impl App {
             }),
             bar::Item::Tps => self.tps.rate(now_ms).map(|rate| {
                 vec![
-                    Span::styled(speed(rate), theme::bar_item(BarItem::Number)),
+                    mark("↯ ", BarItem::Speed),
+                    Span::styled(
+                        speed(rate),
+                        theme::bar_number(theme::bar_item(BarItem::Number)),
+                    ),
                     Span::styled(" tok/s", theme::secondary()),
                 ]
             }),

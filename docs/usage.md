@@ -871,14 +871,15 @@ When a file is written by `write` or `edit`, canter waits up to 500 ms for diagn
 Without a custom status command, canter draws three status rows under the input box:
 
 ```text
- opencode-go/deepseek-v4.1-flash · think high · Ask for execution · Sandbox on · $0.03
- ██░░░░░░░░  48k/400k ( 12% to compact) · cache  95% (last  99%) ·  41 tok/s
- ~/Developer/personal_projs/canter (main) · +250 −6
+ ◆ opencode-go/deepseek-v4.1-flash · ◐ think high · ▲ Allow all · ▲ Sandbox off · $0.03
+ ●○○○○○○○○○  48k/400k ( 12% to compact) · ⟳ cache  95% (last  99%) · ↯  41 tok/s
+ ~/Developer/personal_projs/canter ⑂ main · +250 −0
 ```
 
-- First row: the model, the thinking effort, the permission mode, the sandbox state and the session's cost. `Allow all` and `Sandbox off` are red.
-- Second row: context use as a bar that is full at the auto-compaction line (`of window` when the server does not send the line), the cache hit rate for the session and for the last request, then the speed, the version and the session name when they are turned on. The bar and its percent are green, yellow or red by the room left. The numbers keep their width, so a changing number does not move what follows it. The row is left out while it has nothing to show, such as in a new session.
-- Third row: the working directory, the git branch, and the lines added and removed since the last commit (left out when nothing changed). Numbers changing above never move it.
+- First row: the model, the thinking effort, the permission mode, the sandbox state and the session's cost. Dangerous settings, `Allow all` and `Sandbox off`, are red with a `▲` before them; the others are grey and have no mark.
+- Second row: context use as a bar that is full at the auto-compaction line (`of window` when the server does not send the line), the cache hit rate for the session and for the last request, then the speed, the version and the session name when they are turned on. The bar's used cells go from green to yellow to red along it, by the room left where each ends; its percent is green, yellow or red by the room left. The numbers keep their width, so a changing number does not move what follows it. The row is left out while it has nothing to show, such as in a new session.
+- Third row: the working directory, the git branch after `⑂`, and the lines added and removed since the last commit (left out when nothing changed; a count of 0 is grey). Numbers changing above never move it.
+- Items start with a small coloured mark: `◆` model, `◐` thinking effort, `⟳` cache, `↯` speed, `⑂` branch. The model, the cost and the numbers are bold; the words around them are grey.
 - Items are separated by ` · ` and keep their places. When the window is too narrow, each row drops whole items from its end; a long directory is shortened in the middle (`~/…/src/canter`), and the lines changed show only when they fit.
 - The speed (`tps`) is in whole tokens a second: the text so far over the time from its first to its latest token, so it holds while the model waits, and the server's token count once the request ends. It changes at most once a second, and between responses shows the last one's.
 
