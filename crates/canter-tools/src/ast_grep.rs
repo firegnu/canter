@@ -235,6 +235,9 @@ pub(crate) async fn run(
     cancel: &CancellationToken,
 ) -> Run {
     let cwd = executor.cwd().to_path_buf();
+    // The executor resolves the searched path, so walked matches carry the real
+    // directory while the session keeps the spelling it was opened with.
+    let real_cwd = crate::executor::resolve_target(&cwd, &[]).ok();
     let home = executor.home().map(Path::to_path_buf);
     let rules = match rules_file {
         Some(path) => match crate::rules::Rules::read_for_file_tools(path) {
@@ -324,11 +327,11 @@ pub(crate) async fn run(
             unparsed += 1;
             continue;
         };
-        let display = display(&path, &cwd);
+        let shown = display(&path, &cwd, real_cwd.as_deref());
         for (line, column, text) in found {
             if seen >= prepared.args.offset && page.len() < MAX_MATCHES {
                 page.push(AstGrepMatch {
-                    path: display.clone(),
+                    path: shown.clone(),
                     line,
                     column,
                     text: preview(&text),
@@ -463,11 +466,12 @@ fn preview(text: &str) -> String {
     shown
 }
 
-fn display(path: &Path, cwd: &Path) -> String {
-    path.strip_prefix(cwd)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .into_owned()
+fn display(path: &Path, cwd: &Path, real_cwd: Option<&Path>) -> String {
+    let relative = path
+        .strip_prefix(cwd)
+        .ok()
+        .or_else(|| real_cwd.and_then(|cwd| path.strip_prefix(cwd).ok()));
+    relative.unwrap_or(path).to_string_lossy().into_owned()
 }
 
 /// One file's matches in position order, or None when its syntax tree has

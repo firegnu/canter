@@ -122,3 +122,10 @@
 ### 参考了 omp 哪里，有没有搬代码
 
 看 `/tmp/oh-my-pi/crates/pi-ast/src/language/mod.rs`（语言适配和 expando 字符）、`search/mod.rs`（遍历、分页、错误报告）、`ops.rs`（模式编译与匹配），以及 `packages/coding-agent/src/prompts/tools/ast-grep.md` 的说明写法。没有搬代码：语言枚举、遍历、渲染、权限和协议都照 canter 现有结构自己写。
+
+## 返工（主控审查）
+
+- 问题：主控在普通终端跑 `canter-tools` 全套时，`ast_grep` 的 `finds_calls_by_structure_in_every_supported_language` 和 `matches_page_at_fifty_and_report_the_total_and_next_offset` 失败，结果里显示成 `/private/var/...` 绝对路径。原因是 macOS 的临时目录 `/var/folders/...` 本身是符号链接：会话目录（`executor.cwd()`）是 `/var/...`，而 `call.resolved_path` 和执行器算出的真实路径是 `/private/var/...`，`display()` 只拿原写法 `strip_prefix` 去不掉。我这边没发现，是因为 canter 终端的 `TMPDIR` 已经是 `/private/tmp/...`。
+- 改法：`ast_grep.rs` 的 `run` 里另外算一份真实会话目录（复用 `crate::executor::resolve_target(&cwd, &[])`，和 `rules.rs` 解析文件规则前缀同一个函数），`display()` 依次试原写法和真实路径两种前缀，都不匹配才显示原样；权限判断没动，路径规则和私有文件过滤照旧。
+- 新增回归测试 `session_directory_through_a_symlink_still_shows_relative_paths`：在临时目录里建 `linked-cwd` 指向 `real`，把 `linked-cwd` 当会话目录搜，要求结果是 `sample.rs:1:1` 而不是绝对路径。先确认改之前会失败（实际得到 `/private/tmp/.../real/sample.rs`），改后通过。
+- 验证：`cargo nextest run -p canter-tools --test ast_grep` 12 个全过；另外用指向真实目录的 `TMPDIR` 符号链接（复现主控环境）再跑一遍，12 个也全过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。

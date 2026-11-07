@@ -338,6 +338,24 @@ async fn unreadable_file_rules_fail_instead_of_searching_everything() {
 }
 
 #[tokio::test]
+async fn session_directory_through_a_symlink_still_shows_relative_paths() {
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), "real/sample.rs", "value.unwrap();\n");
+    std::os::unix::fs::symlink(root.path().join("real"), root.path().join("linked-cwd")).unwrap();
+    // The session directory keeps the symlink spelling; the executor walks the
+    // real directory, so matches must still be shown relative to the session.
+    let output = search(
+        &tools(&root.path().join("linked-cwd")),
+        json!({ "pattern": "$X.unwrap()" }),
+    )
+    .await;
+    assert_eq!(output.outcome, ToolOutcome::Completed, "{}", output.text);
+    assert!(output.text.contains("sample.rs:1:1"), "{}", output.text);
+    assert!(!output.text.contains("linked-cwd"), "{}", output.text);
+    assert_eq!(item(&output)["matches"][0]["path"], "sample.rs");
+}
+
+#[tokio::test]
 async fn plan_and_review_rounds_can_search_with_file_rules() {
     let root = tempfile::tempdir().unwrap();
     write(root.path(), "kept.rs", "value.unwrap();\n");
