@@ -33,7 +33,17 @@ pub(crate) fn lines(report: &ContextResponse, home: Option<&str>) -> Vec<(String
             ContextSectionKind::System => "System prompt".into(),
             ContextSectionKind::ModelFamily => "Model notes".into(),
             ContextSectionKind::GlobalInstructions => "Global AGENTS.md".into(),
-            ContextSectionKind::ProjectInstructions => "Project AGENTS.md".into(),
+            ContextSectionKind::ProjectInstructions => {
+                // The file a project layer actually read: AGENTS.md, or the
+                // CLAUDE.md the layer fell back to.
+                let file = section
+                    .path
+                    .as_deref()
+                    .and_then(|path| std::path::Path::new(path).file_name())
+                    .map(|file| file.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "instructions".into());
+                format!("Project {file}")
+            }
             ContextSectionKind::Skills => format!("Skills ({})", report.skill_count),
             ContextSectionKind::Environment => "Environment".into(),
             ContextSectionKind::Memory => "Memory".into(),

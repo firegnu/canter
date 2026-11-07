@@ -143,7 +143,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "init",
-        about: "Create or improve AGENTS.md for this project",
+        about: "Create or improve AGENTS.md or CLAUDE.md for this project",
         takes_args: false,
         run: |_, _| {
             Ok(Some(Action::Send(
