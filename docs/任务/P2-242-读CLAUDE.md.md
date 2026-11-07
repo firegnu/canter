@@ -64,6 +64,14 @@
 ## 不要做
 
 - 不读 `AGENTS.override.md`、`AGENTS.MD`、`CLAUDE.MD`、`CLAUDE.local.md`、`.claude/` 目录里的任何东西；不展开 `@路径`。
+
+## 完成记录
+
+- 做了什么：`prefix()`（`crates/canter-core/src/context.rs`）项目层每层先取 `AGENTS.md`，不存在时改取同层的 `CLAUDE.md`；全局仍只取 `<CANTER_HOME>/AGENTS.md`。`/context` 的段标题（`crates/canter-tui/src/context.rs`）改成从段的 `path` 取文件名，照实写 `Project AGENTS.md` / `Project CLAUDE.md`，全局照旧；`path` 是 prefix 实际读到的文件，系统提示词不用改。`/init`（`assets/init_prompt.md`、`commands.rs` 的 about）：有 `AGENTS.md` 改进它，只有 `CLAUDE.md` 就改进它、不新建 `AGENTS.md`，两个都没有才新建。文档改了 `docs/usage.md` 两处和 `docs/DESIGN.md` 第 20 条补一条。任务文件要求的验证照做（核心四条针对性测试 + 两个 crate nextest 全量 + clippy + fmt + git diff --check）。
+- 验证了什么：`cargo nextest run -p canter-core -p canter-tui` 971 个全过（含新增的四个 prefix 测试和 /context 的 `Project CLAUDE.md` 标题断言）；先写测试确认两个新行为测试在旧代码上失败（RED）；`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`（先 fix 过一次缩进）、`git diff --check` 都干净。
+- 拿主意的地方：①层选择「有 `AGENTS.md`」用 `Path::exists()`（目录或不可读的情况照旧走读文件报警告的路，不退化去读 `CLAUDE.md`）；②`/context` 里项目段没有 `path` 时标题写 `Project instructions`（正常不会出现，只是不让用行崩）；③`/init` 的一句话说明写成 `Create or improve AGENTS.md or CLAUDE.md for this project`：第一版带 「when no AGENTS.md exists」在 `?` 帮助框 100 列宽下被截断，该测试要求整行配得上，选了缩短说法（更长的原样写进了 `/init` 提示词正文和 usage.md）。
+- 没做的事：没改 `agent_tools.rs`、状态栏相关文件（留给 P2-243）；没全局读、没展开 `@路径`；没合并、没推送。
+- 踩过的坑：`/init` 说明过字被帮助框截断（已上）；另一个是在同层两文件并存的测试里预期元组类型不匹配的编译错，改闭包返回 `&str` 即好，属笔误不是真坑。
 - 不改子 agent 工具说明（`agent_tools.rs`）、信任提示、`--add-dir` 的规矩（加进来的目录照旧不读说明文件）。
 - 不改系统提示词的分段顺序和包法（DESIGN 第 17、20 条），只改读哪个文件。
 - 不动底部状态栏那些文件（见「在哪里干活」）。

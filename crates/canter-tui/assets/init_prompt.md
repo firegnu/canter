@@ -1,8 +1,8 @@
-Create or improve AGENTS.md in this session's working directory as a practical contributor guide to this repository.
+Create or improve this repository's instructions file (AGENTS.md, or CLAUDE.md when no AGENTS.md exists) in this session's working directory as a practical contributor guide to this repository.
 
 Read the repository before editing: inspect its layout, existing documentation and instructions, build configuration, tests, and recent Git history. Base the guide on what you find; do not invent commands or project rules.
 
-If AGENTS.md exists, read it first. Preserve the user's content and conventions, fill gaps, and correct outdated information with targeted edits. Do not replace or rewrite the whole file. If it is missing, create it.
+If AGENTS.md exists, read it first. Preserve the user's content and conventions, fill gaps, and correct outdated information with targeted edits. Do not replace or rewrite the whole file. If AGENTS.md is missing but CLAUDE.md exists, improve CLAUDE.md in this session's working directory in the same way and do not create AGENTS.md. If neither exists, create AGENTS.md.
 
 Organize the guide with Markdown headings covering the topics that apply here:
 

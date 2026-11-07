@@ -41,7 +41,10 @@ const COMMANDS: [(&str, &str); 38] = [
     ),
     ("/handoff", "Draft a handoff note in a new session"),
     ("/help", "Show available commands"),
-    ("/init", "Create or improve AGENTS.md for this project"),
+    (
+        "/init",
+        "Create or improve AGENTS.md or CLAUDE.md for this project",
+    ),
     ("/lsp", "Show language servers"),
     ("/mcp", "Show MCP connections and tools"),
     ("/memory", "View, edit, and delete memories"),

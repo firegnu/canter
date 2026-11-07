@@ -109,7 +109,7 @@ fn init_sends_the_prompt_as_an_ordinary_message() {
     let shown = screen.command_list(1).join("\n");
     assert!(shown.contains("/init"), "{shown}");
     assert!(
-        shown.contains("Create or improve AGENTS.md for this project"),
+        shown.contains("Create or improve AGENTS.md or CLAUDE.md for this project"),
         "{shown}"
     );
 }
@@ -445,7 +445,10 @@ const COMMANDS: [(&str, &str); 38] = [
     ),
     ("/handoff", "Draft a handoff note in a new session"),
     ("/help", "Show available commands"),
-    ("/init", "Create or improve AGENTS.md for this project"),
+    (
+        "/init",
+        "Create or improve AGENTS.md or CLAUDE.md for this project",
+    ),
     ("/lsp", "Show language servers"),
     ("/mcp", "Show MCP connections and tools"),
     ("/memory", "View, edit, and delete memories"),
@@ -1793,6 +1796,7 @@ fn context_lists_categories_measured_usage_and_truncates_narrow_rows() {
             {"kind":"globalInstructions","path":"/home/test/.canter/AGENTS.md","tokens":1000},
             {"kind":"skills","path":null,"tokens":1000},
             {"kind":"projectInstructions","path":"/project/AGENTS.md","tokens":2000},
+            {"kind":"projectInstructions","path":"/project/CLAUDE.md","tokens":300},
             {"kind":"environment","path":null,"tokens":200}
         ],
         "skillCount":5,"toolCount":9,"toolTokens":4000,"compactionTokens":12000,
@@ -1809,6 +1813,7 @@ fn context_lists_categories_measured_usage_and_truncates_narrow_rows() {
             "Model notes",
             "Global AGENTS.md",
             "Project AGENTS.md",
+            "Project CLAUDE.md",
             "Skills (5)",
             "Environment",
             "Tools (9)",

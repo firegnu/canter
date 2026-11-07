@@ -487,9 +487,18 @@ pub(crate) async fn prefix(
         }];
         let mut warnings = Vec::new();
         let global = canter_home.map(|dir| ("Global", dir.join("AGENTS.md")));
-        let project = paths
-            .into_iter()
-            .map(|dir| ("Project", dir.join("AGENTS.md")));
+        // A layer with an AGENTS.md keeps the two files from repeating; Claude
+        // Code's @path imports are leftovers of a foreign syntax, so CLAUDE.md
+        // content enters the prompt unchanged.
+        let project = paths.into_iter().map(|dir| {
+            let agents = dir.join("AGENTS.md");
+            let path = if agents.exists() {
+                agents
+            } else {
+                dir.join("CLAUDE.md")
+            };
+            ("Project", path)
+        });
         for (scope, path) in global.into_iter().chain(project) {
             let instructions = (|| -> std::io::Result<String> {
                 let mut bytes = Vec::new();
@@ -678,6 +687,141 @@ mod tests {
                 Ok(ModelEvent::Finished(FinishReason::Stop)),
             ]))
         }
+    }
+
+    #[tokio::test]
+    async fn project_layers_fall_back_to_claude_md_without_agents_md() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let cwd = repo.join("sub");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(repo.join("CLAUDE.md"), "claude root").unwrap();
+        let instructions = || async {
+            super::prefix(
+                cwd.to_string_lossy().into_owned(),
+                None,
+                None,
+                Vec::new(),
+                None,
+            )
+            .await
+            .unwrap()
+            .0
+        };
+        let segments = instructions().await;
+        let project: Vec<(&str, &str)> = segments
+            .iter()
+            .filter(|segment| matches!(segment.kind, SegmentKind::ProjectInstructions))
+            .map(|segment| {
+                (
+                    std::path::Path::new(segment.path.as_deref().unwrap())
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap(),
+                    segment.text.trim(),
+                )
+            })
+            .collect();
+        assert_eq!(project, [("CLAUDE.md", "claude root")]);
+    }
+
+    #[tokio::test]
+    async fn a_layer_with_agents_md_skips_its_claude_md() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let cwd = repo.join("sub");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(repo.join("AGENTS.md"), "agents root").unwrap();
+        std::fs::write(repo.join("CLAUDE.md"), "claude root").unwrap();
+        let segments = super::prefix(
+            cwd.to_string_lossy().into_owned(),
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(
+            segments
+                .iter()
+                .filter(|segment| matches!(segment.kind, SegmentKind::ProjectInstructions))
+                .map(|segment| segment.path.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            [repo.join("AGENTS.md").to_string_lossy().into_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn layers_keep_order_when_one_has_claude_and_another_agents() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let cwd = repo.join("sub");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(repo.join("AGENTS.md"), "agents root").unwrap();
+        std::fs::write(cwd.join("CLAUDE.md"), "claude sub").unwrap();
+        let segments = super::prefix(
+            cwd.to_string_lossy().into_owned(),
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(
+            segments
+                .iter()
+                .filter(|segment| matches!(segment.kind, SegmentKind::ProjectInstructions))
+                .map(|segment| (
+                    std::path::Path::new(segment.path.as_deref().unwrap())
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap(),
+                    segment.text.as_str(),
+                ))
+                .collect::<Vec<_>>(),
+            [("AGENTS.md", "agents root"), ("CLAUDE.md", "claude sub")]
+        );
+    }
+
+    #[tokio::test]
+    async fn global_instructions_never_read_claude_md() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("canter");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("AGENTS.md"), "global agents").unwrap();
+        std::fs::write(home.join("CLAUDE.md"), "global claude").unwrap();
+        let segments = super::prefix(
+            temp.path().to_string_lossy().into_owned(),
+            None,
+            Some(home),
+            Vec::new(),
+            None,
+        )
+        .await
+        .unwrap()
+        .0;
+        let global: Vec<&str> = segments
+            .iter()
+            .filter(|segment| matches!(segment.kind, SegmentKind::GlobalInstructions))
+            .map(|segment| segment.path.as_deref().unwrap())
+            .collect();
+        assert_eq!(global.len(), 1);
+        assert!(global[0].ends_with("AGENTS.md"), "{}", global[0]);
+        assert!(
+            !segments
+                .iter()
+                .any(|segment| segment.text == "global claude"),
+            "read the global CLAUDE.md"
+        );
     }
 
     #[tokio::test]

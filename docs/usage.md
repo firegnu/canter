@@ -91,7 +91,7 @@ Set `CANTER_HOME` to use another absolute state directory; all files below then 
 canter reads instructions when a session opens:
 
 - Global: `<CANTER_HOME>/AGENTS.md`.
-- Project: `AGENTS.md` at the Git repository root, then in each directory from the root down to the session's working directory.
+- Project: in each directory from the Git repository root down to the session's working directory, canter reads `AGENTS.md`; a directory without `AGENTS.md` but with `CLAUDE.md` works too, reading its `CLAUDE.md` instead. A directory that has both is read as `AGENTS.md` only. Claude Code's `@path` imports inside `CLAUDE.md` are kept as plain text.
 
 Each file is limited to 64 KiB. Edits apply to new sessions; a session already open keeps the instructions it started with. Restricted sessions still load global and project instructions and skills.
 
@@ -422,7 +422,7 @@ Commands are typed at the start of the input. A word after `/` is a command only
 | `/goal` | `[--budget USD] <objective>`, `pause`, `resume`, `clear` | Set, view or control a goal. See [Goals](#goals). |
 | `/handoff` | `[direction]` | Write a self-contained note from the current context into a new session's input box. See [Handoff](#handoff). |
 | `/help` | | Show the shortcuts and commands. |
-| `/init` | | Ask the model to create or improve `AGENTS.md` for this project. |
+| `/init` | | Ask the model to create or improve `AGENTS.md`, or `CLAUDE.md` when no `AGENTS.md` exists, for this project. |
 | `/lsp` | | Show language servers and their state. |
 | `/mcp` | | Show MCP connections and tools. |
 | `/memory` | | View, edit and delete global and project memories. |
