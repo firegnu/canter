@@ -433,3 +433,4 @@
   - 按 Esc 只是不再等，已经开始的解析和匹配在后台线程里跑完才停（`spawn_blocking` 不能中途取消），大文件上会多占一阵 CPU。
   - 读文件和结果没有大小上限：整份读进内存再解析，一个文件的全部匹配都复制下来再分页，每条预览只限三行、不限字节；碰到提交进仓库的压缩 JS、大生成文件会占不少内存，协议里的 `matches[].text` 也不截断。
   - 「跳过了几个文件」「几个文件有语法错误没搜」「某语言模式解析不了」只写给模型，终端卡片和导出看不到，卡片也只显示本页条数、不显示总数（`crates/canter-tui/src/cells.rs`、`export.rs` 没用 `total_matches`）。
+- canter 命令环境里 `canter-tools::guardian concurrent_commands_do_not_inherit_each_others_pipes` 失败（spawn 报 NotFound），普通终端通过（P2-241、P2-244 开发时都碰到，原因没查）。canter 派的 agent 跑 canter 自己的测试时会看到这条失败，不是改动引入的。
