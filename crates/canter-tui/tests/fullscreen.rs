@@ -204,7 +204,7 @@ fn screen_text(lines: &[String]) -> String {
 }
 
 /// Less than a screen: the conversation starts on the top row, the input box
-/// sits right above the two info rows at the bottom, blank rows between.
+/// sits right above the info rows at the bottom, blank rows between.
 #[test]
 fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
     let mut screen = Screen::new();
@@ -218,9 +218,10 @@ fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
 
     assert_eq!(lines[0], "› first question", "from the top:\n{shown}");
     assert_eq!(lines[2], "● short answer", "{shown}");
+    // Without usage, no second row (P2-245).
     assert_eq!(
         lines[last - 1..],
-        [" test-model high   Always ask", " /work"],
+        [" test-model · think high · Always ask", " /work"],
         "the info rows are the bottom rows:\n{shown}"
     );
     assert!(lines[last - 4].starts_with('╭'), "{shown}");
@@ -236,22 +237,22 @@ fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
     );
 }
 
+/// The cache hits on the second row (P2-245), each percent in four columns.
 #[test]
-fn info_row_shows_the_total_cache_hit_rate_only_with_input_usage() {
+fn info_row_shows_total_and_last_cache_hit_rates_only_with_input_usage() {
     let mut screen = Screen::new();
     screen.resize(100, HEIGHT);
     screen.draw();
-    let row = usize::from(HEIGHT) - 2;
-    let base = " test-model high   Always ask";
-    assert_eq!(screen.lines()[row], base);
+    let last = usize::from(HEIGHT) - 1;
+    let first = " test-model · think high · Always ask";
+    assert_eq!(screen.lines()[last - 1..], [first, " /work"]);
 
-    // The whole session's rate only (P2-243).
     for (total_input, total_cached, last_input, last_cached, cache) in [
-        (1000, 924, 100, 99, "cache  92%"),
-        (3, 2, 3, 1, "cache  67%"),
-        (100, 0, 10, 0, "cache   0%"),
+        (1000, 924, 100, 99, "cache  92% (last  99%)"),
+        (3, 2, 3, 1, "cache  67% (last  33%)"),
+        (100, 0, 10, 0, "cache   0% (last   0%)"),
         (100, 92, 0, 0, "cache  92%"),
-        (0, 0, 100, 99, ""),
+        (0, 0, 100, 99, "cache (last  99%)"),
         (0, 0, 0, 0, ""),
     ] {
         let counts = |input, cached| {
@@ -270,23 +271,33 @@ fn info_row_shows_the_total_cache_hit_rate_only_with_input_usage() {
         }));
         screen.draw();
         if cache.is_empty() {
-            assert_eq!(screen.lines()[row], base);
+            assert_eq!(screen.lines()[last - 1..], [first, " /work"]);
             continue;
         }
-        let start = 100 - 1 - cache.width();
-        let expected = format!("{base}{}{cache}", " ".repeat(start - base.width()));
-        assert_eq!(screen.lines()[row], expected);
-        // The word dim, the percent as text.
+        assert_eq!(
+            screen.lines()[last - 2..],
+            [first.to_owned(), format!(" {cache}"), " /work".to_owned()]
+        );
+        // The percentages cyan, the words around them dim.
         let buffer = screen.ui.backend().buffer();
-        for x in start as u16..(start + cache.width()) as u16 {
-            let style = buffer[(x, HEIGHT - 2)].style();
-            assert_eq!(style.fg, Some(Color::Reset), "column {x}");
-            let word = usize::from(x) < start + "cache".len();
-            assert_eq!(
-                style.add_modifier.contains(Modifier::DIM),
-                word,
-                "column {x}"
-            );
+        for x in 1..=cache.width() as u16 {
+            let cell = &buffer[(x, HEIGHT - 2)];
+            if cell.symbol() == " " {
+                continue;
+            }
+            let number = cell
+                .symbol()
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '%');
+            if number {
+                assert_eq!(cell.style().fg, Some(Color::Cyan), "column {x}");
+            } else {
+                assert_eq!(cell.style().fg, Some(Color::Reset), "column {x}");
+                assert!(
+                    cell.style().add_modifier.contains(Modifier::DIM),
+                    "column {x}"
+                );
+            }
         }
     }
 }

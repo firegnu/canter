@@ -287,7 +287,7 @@ async fn manual_rename_uses_patch_and_updates_the_visible_session() {
         test.ui.app_mut().handle_paste("/statusline");
         test.key(KeyCode::Enter);
         test.ui.draw(0).unwrap();
-        for _ in 0..9 {
+        for _ in 0..8 {
             test.key(KeyCode::Down);
             test.ui.draw(0).unwrap();
         }

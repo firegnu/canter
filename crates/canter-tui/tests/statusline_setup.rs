@@ -1,5 +1,5 @@
 //! `/statusline`: which items the status bar shows, saved in `tui.json`;
-//! where each goes is fixed (P2-243). Homes, `CANTER_HOME` and git repositories
+//! where each goes is fixed (P2-245). Homes, `CANTER_HOME` and git repositories
 //! are temporary directories, never the user's.
 
 use std::collections::BTreeMap;
@@ -208,11 +208,12 @@ impl Screen {
             .expect("input box")
     }
 
-    /// The two rows at the bottom.
-    fn bar(&self) -> [String; 2] {
+    /// The info rows at the bottom, under the input box or the picker in
+    /// its place.
+    fn bar(&self) -> Vec<String> {
         let rows = self.rows();
-        let n = rows.len();
-        [rows[n - 2].clone(), rows[n - 1].clone()]
+        let bottom = rows.iter().rposition(|row| row.starts_with('╰')).unwrap();
+        rows[bottom + 1..].to_vec()
     }
 
     /// The rows of the picker in the input box's place, title to keys; empty
@@ -231,10 +232,11 @@ impl Screen {
         self.rows()[self.box_top() - 1].clone()
     }
 
-    fn preview(&self) -> [String; 2] {
+    /// The rows under ` Preview`, down to the keys.
+    fn preview(&self) -> Vec<String> {
         let picker = self.picker();
         let at = picker.iter().position(|row| row == " Preview").unwrap();
-        [picker[at + 1].clone(), picker[at + 2].clone()]
+        picker[at + 1..picker.len() - 1].to_vec()
     }
 
     async fn wait_for(&mut self, first: &str) {
@@ -266,20 +268,14 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(out.status.success(), "git {args:?}: {out:?}");
 }
 
-/// `left`, then `right` ending a column before the edge of `width`.
-fn spread(left: &str, right: &str, width: u16) -> String {
-    let pad = usize::from(width) - 1 - left.width() - right.width();
-    format!("{left}{}{right}", " ".repeat(pad))
-}
+/// The first row after [`Screen::work`].
+const FIRST: &str = " deepseek-v4-pro · think high · Always ask · $0.12";
+/// The second row after [`Screen::work`].
+const USAGE: &str = " █░░░░░░░░░ 120k/1M ( 12% of window) · cache  95% (last  98%)";
+const DIRECTORY: &str = " ~/src/canter (main)";
 
-/// The first row's left part after [`Screen::work`], and its right part.
-const LEFT: &str = " deepseek-v4-pro high   Always ask";
-const RIGHT: &str = "█░░░░░░░░░  12%   cache  95%   $0.12";
-/// The rows inside the panel are this much narrower than the window.
-const PANEL: u16 = WIDTH - 3;
-
-fn default_bar() -> [String; 2] {
-    [spread(LEFT, RIGHT, WIDTH), " ~/src/canter  main".to_owned()]
+fn default_bar() -> [&'static str; 3] {
+    [FIRST, USAGE, DIRECTORY]
 }
 
 #[test]
@@ -292,28 +288,28 @@ fn statusline_shows_every_item_with_its_value_and_a_preview() {
     screen.work();
     assert_eq!(screen.bar(), default_bar());
     assert_eq!(screen.enter("/statusline"), None);
-    let preview = spread(LEFT, RIGHT, PANEL);
     assert_eq!(
         screen.picker(),
         [
             TITLE,
             "",
             " › [x] model        deepseek-v4-pro",
-            "   [x] thinking     high",
+            "   [x] thinking     think high",
             "   [x] permission   Always ask",
-            "   [x] context      █░░░░░░░░░  12%",
-            "   [x] cache        cache  95%",
             "   [x] cost         $0.12",
-            "   [x] directory    ~/src/canter",
-            "   [x] branch       main",
-            "   [x] diff",
-            "   [ ] session      会话名字",
-            "   [ ] version      0.1.0 · a3b8fe7",
+            "   [x] context      █░░░░░░░░░ 120k/1M ( 12% of window)",
+            "   [x] cache        cache  95% (last  98%)",
             "   [ ] tps           33 tok/s",
+            "   [ ] version      0.1.0 · a3b8fe7",
+            "   [ ] session      会话名字",
+            "   [x] directory    ~/src/canter",
+            "   [x] branch       (main)",
+            "   [x] diff",
             "",
             " Preview",
-            &preview,
-            " ~/src/canter  main",
+            FIRST,
+            USAGE,
+            DIRECTORY,
             KEYS,
         ]
     );
@@ -338,31 +334,26 @@ fn space_changes_the_preview_as_it_goes_and_nothing_moves() {
     assert_eq!(screen.picker()[2], " › [ ] model        deepseek-v4-pro");
     assert_eq!(
         screen.preview(),
-        [
-            spread(" high   Always ask", RIGHT, PANEL),
-            " ~/src/canter  main".to_owned(),
-        ]
+        [" think high · Always ask · $0.12", USAGE, DIRECTORY]
     );
 
     // Back on; Right and Left leave the list as it is.
     screen.keys(&[KeyCode::Char(' '), KeyCode::Right, KeyCode::Left]);
     assert_eq!(screen.picker()[2], " › [x] model        deepseek-v4-pro");
-    assert_eq!(screen.picker()[3], "   [x] thinking     high");
-    assert_eq!(screen.preview()[0], spread(LEFT, RIGHT, PANEL));
+    assert_eq!(screen.picker()[3], "   [x] thinking     think high");
+    assert_eq!(screen.preview(), default_bar());
 
-    // The session name on the right of the second row.
-    screen.keys(&[KeyCode::Down; 9]);
-    assert_eq!(screen.picker()[11], " › [ ] session      会话名字");
+    // The session name at the end of the second row.
+    screen.keys(&[KeyCode::Down; 8]);
+    assert_eq!(screen.picker()[10], " › [ ] session      会话名字");
     screen.key(KeyCode::Char(' '));
-    assert_eq!(
-        screen.preview()[1],
-        spread(" ~/src/canter  main", "会话名字", PANEL)
-    );
+    assert_eq!(screen.preview()[1], format!("{USAGE} · 会话名字"));
 
-    // The speed is not on these rows: it shows where the turn does.
-    screen.keys(&[KeyCode::Down, KeyCode::Down, KeyCode::Char(' ')]);
-    assert_eq!(screen.picker()[13], " › [x] tps           33 tok/s");
-    assert_eq!(screen.preview()[0], spread(LEFT, RIGHT, PANEL));
+    // The speed before it; in the panel, narrower than the window, the
+    // session name then no longer fits and goes, whole.
+    screen.keys(&[KeyCode::Up, KeyCode::Up, KeyCode::Char(' ')]);
+    assert_eq!(screen.picker()[8], " › [x] tps           33 tok/s");
+    assert_eq!(screen.preview()[1], format!("{USAGE} ·  33 tok/s"));
 
     // None of it is saved or shown below yet.
     assert_eq!(screen.bar(), default_bar());
@@ -375,22 +366,19 @@ fn enter_saves_tui_json_0600_and_the_bar_changes_at_once() {
         let mut screen = home.open(None);
         assert_eq!(
             screen.bar(),
-            [" test-model high   Always ask", " ~/src/canter  main"]
+            [" test-model · think high · Always ask", DIRECTORY]
         );
         screen.enter("/statusline");
-        // Model off; version on, on the right of the second row.
+        // Model off; version on, on the second row.
         screen.key(KeyCode::Char(' '));
-        screen.keys(&[KeyCode::Down; 10]);
+        screen.keys(&[KeyCode::Down; 7]);
         screen.key(KeyCode::Char(' '));
         assert_eq!(screen.key(KeyCode::Enter), None);
 
         assert!(screen.picker().is_empty(), "closed");
         assert_eq!(
             screen.bar(),
-            [
-                " high   Always ask".to_owned(),
-                spread(" ~/src/canter  main", "0.1.0 · a3b8fe7", WIDTH),
-            ]
+            [" think high · Always ask", " 0.1.0 · a3b8fe7", DIRECTORY]
         );
         let path = home.tui_json();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
@@ -420,20 +408,14 @@ fn a_terminal_opened_later_reads_the_same_settings_back() {
     screen.enter("/statusline");
     // Thinking off and the session name on.
     screen.keys(&[KeyCode::Down, KeyCode::Char(' ')]);
-    screen.keys(&[KeyCode::Down; 8]);
+    screen.keys(&[KeyCode::Down; 7]);
     screen.keys(&[KeyCode::Char(' '), KeyCode::Enter]);
     let bar = screen.bar();
-    assert_eq!(
-        bar,
-        [
-            " test-model   Always ask".to_owned(),
-            spread(" ~/src/canter  main", "会话名字", WIDTH),
-        ]
-    );
+    assert_eq!(bar, [" test-model · Always ask", " 会话名字", DIRECTORY]);
     screen.enter("/statusline");
     let picker = screen.picker();
-    assert_eq!(picker[3], "   [ ] thinking     high");
-    assert_eq!(picker[11], "   [x] session      会话名字");
+    assert_eq!(picker[3], "   [ ] thinking     think high");
+    assert_eq!(picker[10], "   [x] session      会话名字");
 
     let mut again = home.open(None);
     assert_eq!(again.bar(), bar);
@@ -458,7 +440,7 @@ fn esc_closes_without_saving() {
 
 #[test]
 fn an_unreadable_tui_json_means_the_defaults_and_unknown_items_are_skipped() {
-    let default = [" test-model high   Always ask", " ~/src/canter  main"];
+    let default = [" test-model · think high · Always ask", DIRECTORY];
     let unreadable: [&dyn Fn(&Path); 3] = [
         &|path| std::fs::write(path, "{").unwrap(),
         &|path| std::fs::write(path, r#"{"statusLine":{"items":"model"}}"#).unwrap(),
@@ -504,7 +486,7 @@ async fn with_a_script_a_switch_on_top_chooses_the_script_or_the_items() {
     let runs = || {
         std::fs::read_to_string(home.cwd.join("runs.txt")).map_or(0, |text| text.lines().count())
     };
-    let first = " test-model high   Always ask";
+    let first = " test-model · think high · Always ask";
 
     let mut screen = home.open(Some("sh ./status.sh"));
     screen.wait_for("custom").await;
@@ -562,7 +544,7 @@ fn with_permission_hidden_shift_tab_says_the_new_mode() {
         KeyCode::Char(' '),
         KeyCode::Enter,
     ]);
-    assert_eq!(screen.bar()[0], " test-model high");
+    assert_eq!(screen.bar()[0], " test-model · think high");
     let before = screen.status();
     assert_eq!(
         screen.press(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
@@ -587,8 +569,8 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
     let preview = [
         "",
         " Preview",
-        " test-model high   Always ask",
-        " ~/src/canter  main",
+        " test-model · think high · Always ask",
+        DIRECTORY,
         KEYS,
     ];
     let shown = |list: &[&str]| -> Vec<String> {
@@ -603,9 +585,9 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
         screen.picker(),
         shown(&[
             " › [x] model        test-model",
-            "   [x] thinking     high",
+            "   [x] thinking     think high",
             "   [x] permission   Always ask",
-            "   [x] context",
+            "   [x] cost",
             "   ↓ 8 more",
         ])
     );
@@ -616,8 +598,8 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
         shown(&[
             "   ↑ 2 more",
             "   [x] permission   Always ask",
-            "   [x] context",
-            " › [x] cache",
+            "   [x] cost",
+            " › [x] context",
             "   ↓ 7 more",
         ])
     );
@@ -627,10 +609,10 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
         screen.picker(),
         shown(&[
             "   ↑ 8 more",
-            "   [x] diff",
             "   [ ] session      会话名字",
-            "   [ ] version      0.1.0 · a3b8fe7",
-            " › [ ] tps",
+            "   [x] directory    ~/src/canter",
+            "   [x] branch       (main)",
+            " › [x] diff",
         ])
     );
 
@@ -642,11 +624,11 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
             TITLE,
             "",
             "   ↑ 7 more",
-            "   [x] branch       main",
-            "   [x] diff",
-            "   [ ] session      会话名字",
             "   [ ] version      0.1.0 · a3b8fe7",
-            " › [ ] tps",
+            "   [ ] session      会话名字",
+            "   [x] directory    ~/src/canter",
+            "   [x] branch       (main)",
+            " › [x] diff",
             KEYS,
         ]
     );
@@ -686,36 +668,29 @@ fn a_tui_json_saved_with_compact_and_before_diff_gets_diff_until_turned_off() {
             }}),
         );
         screen.draw();
-        let second = if branch {
-            " ~/src/canter  main"
-        } else {
-            " ~/src/canter"
-        };
+        let directory = if branch { DIRECTORY } else { " ~/src/canter" };
         assert_eq!(
             screen.bar(),
             [
-                spread(
-                    " test-model high   Always ask",
-                    "███░░░░░░░  30%   cache  95%   $0.12",
-                    WIDTH
-                ),
-                second.to_owned(),
+                " test-model · think high · Always ask · $0.12",
+                " ███░░░░░░░ 120k/400k ( 30% to compact) · cache  95% (last  98%)",
+                directory,
             ]
         );
         screen.enter("/statusline");
         let mark = if branch { 'x' } else { ' ' };
         let picker = screen.picker();
         assert_eq!(
-            picker[5..7],
+            picker[6..8],
             [
-                "   [x] context      ███░░░░░░░  30%",
-                "   [x] cache        cache  95%",
+                "   [x] context      ███░░░░░░░ 120k/400k ( 30% to compact)",
+                "   [x] cache        cache  95% (last  98%)",
             ]
         );
         assert_eq!(
-            picker[9..11],
+            picker[12..14],
             [
-                format!("   [{mark}] branch       main"),
+                format!("   [{mark}] branch       (main)"),
                 "   [x] diff".to_owned(),
             ]
         );
@@ -728,12 +703,12 @@ fn a_tui_json_saved_with_compact_and_before_diff_gets_diff_until_turned_off() {
     // Turned off and saved, it stays off.
     let mut screen = home.open(None);
     screen.enter("/statusline");
-    screen.keys(&[KeyCode::Down; 8]);
-    assert_eq!(screen.picker()[10], " › [x] diff");
+    screen.keys(&[KeyCode::Down; 11]);
+    assert_eq!(screen.picker()[13], " › [x] diff");
     screen.keys(&[KeyCode::Char(' '), KeyCode::Enter]);
     let mut again = home.open(None);
     again.enter("/statusline");
-    assert_eq!(again.picker()[10], "   [ ] diff");
+    assert_eq!(again.picker()[13], "   [ ] diff");
 }
 
 #[test]
@@ -753,7 +728,7 @@ fn hidden_items_keep_their_colours_in_the_list() {
         let style = buffer[(x, y as u16)].style();
         (style.fg, style.add_modifier.contains(Modifier::DIM))
     };
-    assert_eq!(style("tps", "33"), (Some(Color::Reset), false));
+    assert_eq!(style("tps", "33"), (Some(Color::Cyan), false));
     assert_eq!(style("tps", " tok/s"), (Some(Color::Reset), true));
     assert_eq!(
         style("version", "0.1.0 · a3b8fe7"),

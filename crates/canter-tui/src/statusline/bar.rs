@@ -1,10 +1,11 @@
-//! What the two rows at the bottom show when no status command draws them
-//! (P2-243): which items, as `/statusline` sets it, kept in `tui.json`
+//! What the rows at the bottom show when no status command draws them
+//! (P2-245): which items, as `/statusline` sets it, kept in `tui.json`
 //! beside `config.json`, which the terminal never writes; and where each
-//! goes, which is fixed. The first row has the model, thinking level,
-//! permission mode and sandbox on the left and context, cache and cost on
-//! the right; the second the directory, branch and lines changed, with the
-//! session name and version on the right.
+//! goes, which is fixed. All on the left between ` · `: the first row has
+//! the model, thinking level, permission mode, sandbox and cost; the second
+//! context, cache, speed, version and session name; the third the
+//! directory, branch and lines changed alone, so numbers changing above
+//! never move it.
 
 use std::io;
 use std::path::Path;
@@ -50,21 +51,20 @@ impl Item {
         Item::Session,
     ];
 
-    /// As `/statusline` lists them: as the rows show them, left to right,
-    /// then the speed, which shows on the line saying what the turn does.
+    /// As `/statusline` lists them: as the rows show them, left to right.
     pub const LISTED: [Item; 12] = [
         Item::Model,
         Item::Thinking,
         Item::Permission,
+        Item::Cost,
         Item::Context,
         Item::Cache,
-        Item::Cost,
+        Item::Tps,
+        Item::Version,
+        Item::Session,
         Item::Directory,
         Item::Branch,
         Item::Diff,
-        Item::Session,
-        Item::Version,
-        Item::Tps,
     ];
 
     /// As `/statusline` lists it and `tui.json` keeps it.
@@ -116,16 +116,14 @@ pub(crate) type Values = [Option<Vec<Span<'static>>>; 12];
 
 const SANDBOX_ON: &str = "Sandbox on";
 const SANDBOX_OFF: &str = "Sandbox off";
-/// Between the groups of a row, and between the items on the right.
-const GAP: &str = "   ";
-/// Between the directory, the branch and the lines changed.
-const NEAR: &str = "  ";
+/// Between the items of a row.
+const DOT: &str = " · ";
 
 /// What the permission item adds after the mode when the server says whether
 /// the sandbox is on: ` · Sandbox on`, or `Sandbox off` in red as `Allow all`.
 pub(crate) fn sandbox(enabled: bool) -> [Span<'static>; 2] {
     [
-        Span::styled(" · ", theme::secondary()),
+        Span::styled(DOT, theme::secondary()),
         if enabled {
             Span::styled(SANDBOX_ON, theme::secondary())
         } else {
@@ -140,12 +138,13 @@ pub(crate) fn percent(percent: u128) -> String {
     format!("{:>4}", format!("{percent}%"))
 }
 
-/// The two rows, each no wider than `width`, with `end` (such as a status
-/// command's error) at the end of the first; and the first row's text
-/// through the end of the permission mode, when it shows.
+/// The rows drawn, each no wider than `width`: the first, with `end` (such
+/// as a status command's error) at its end; the second and the directory's
+/// when anything on them fits. Also whether the first shows all of the
+/// permission mode.
 pub(crate) struct Rows {
-    pub rows: [Vec<Span<'static>>; 2],
-    pub through_mode: Option<String>,
+    pub rows: Vec<Vec<Span<'static>>>,
+    pub mode_in_full: bool,
 }
 
 impl Bar {
@@ -157,157 +156,130 @@ impl Bar {
         values[item as usize].as_ref().filter(|_| self.shows(item))
     }
 
+    /// Where each item goes is fixed (P2-245): model, thinking level,
+    /// permission mode, sandbox and cost on the first row; context, cache,
+    /// speed, version and session name on the second; the directory with
+    /// its branch and the lines changed on the third.
     pub fn rows(&self, values: &Values, width: usize, end: Vec<Span<'static>>) -> Rows {
-        let (first, through_mode) = self.first_row(values, width, end);
-        Rows {
-            rows: [first, self.second_row(values, width)],
-            through_mode,
-        }
+        let (first, mode_in_full) = self.first_row(values, width, end);
+        let mut rows = vec![first];
+        let usage: Vec<&[Span<'static>]> = [
+            Item::Context,
+            Item::Cache,
+            Item::Tps,
+            Item::Version,
+            Item::Session,
+        ]
+        .into_iter()
+        .filter_map(|item| self.value(values, item).map(Vec::as_slice))
+        .collect();
+        let (usage, _) = fitting(&usage, width);
+        rows.extend(usage);
+        rows.extend(self.directory_row(values, width));
+        Rows { rows, mode_in_full }
     }
 
-    /// Model and thinking level, then the permission mode and sandbox; on
-    /// the right context, cache and cost, which go whole from the right,
-    /// cache first, when they do not fit. Then the sandbox goes, all of it,
-    /// and past that the row is cut at its end.
+    /// The items that fit, from the first; the first cut at its end when
+    /// not even it fits, so the row is never empty while something shows.
     fn first_row(
         &self,
         values: &Values,
         width: usize,
         end: Vec<Span<'static>>,
-    ) -> (Vec<Span<'static>>, Option<String>) {
-        let mut left = vec![Span::raw(" ")];
-        if let Some(model) = self.value(values, Item::Model) {
-            left.extend(model.iter().cloned());
+    ) -> (Vec<Span<'static>>, bool) {
+        let mut items: Vec<&[Span<'static>]> = Vec::new();
+        for item in [Item::Model, Item::Thinking] {
+            items.extend(self.value(values, item).map(Vec::as_slice));
         }
-        if let Some(thinking) = self.value(values, Item::Thinking) {
-            if left.len() > 1 {
-                left.push(Span::raw(" "));
-            }
-            left.extend(thinking.iter().cloned());
-        }
-        let mut through_mode = None;
-        let mut sandbox_at = None;
+        let mut mode_at = None;
         if let Some(value) = self.value(values, Item::Permission) {
-            if left.len() > 1 {
-                left.push(Span::raw(GAP));
-            }
-            // The mode alone decides whether its shortcuts show.
+            // The sandbox state goes on its own: in full or not at all.
             let sandbox = value.len() > 2
                 && value
                     .last()
                     .is_some_and(|span| [SANDBOX_ON, SANDBOX_OFF].contains(&span.content.as_ref()));
-            let mode = if sandbox {
-                value.len() - 2
-            } else {
-                value.len()
-            };
-            left.extend(value[..mode].iter().cloned());
-            through_mode = Some(text(&left));
+            mode_at = Some(items.len());
             if sandbox {
-                sandbox_at = Some(left.len()..left.len() + 2);
-                left.extend(value[mode..].iter().cloned());
+                let (mode, sandbox) = value.split_at(value.len() - 2);
+                items.push(mode);
+                items.push(&sandbox[1..]);
+            } else {
+                items.push(value);
             }
         }
+        items.extend(self.value(values, Item::Cost).map(Vec::as_slice));
         let room = width.saturating_sub(spans_width(&end));
-        let mut right: Vec<(Item, &Vec<Span<'static>>)> = [Item::Context, Item::Cache, Item::Cost]
-            .into_iter()
-            .filter_map(|item| Some((item, self.value(values, item)?)))
-            .collect();
-        // A column after the right ones, unless something comes after them.
-        let margin = usize::from(end.is_empty());
-        let right_width = |right: &[(Item, &Vec<Span<'static>>)]| {
-            right
-                .iter()
-                .map(|(_, spans)| spans_width(spans))
-                .sum::<usize>()
-                + GAP.len() * right.len().saturating_sub(1)
+        let (row, kept) = fitting(&items, room);
+        let mut row = match (row, items.first()) {
+            (Some(row), _) => row,
+            (None, Some(first)) => {
+                let mut row = vec![Span::raw(" ")];
+                row.extend(first.iter().cloned());
+                truncate(row, room)
+            }
+            (None, None) => vec![Span::raw(" ")],
         };
-        for gone in [Item::Cache, Item::Cost, Item::Context] {
-            if right.is_empty()
-                || spans_width(&left) + GAP.len() + right_width(&right) + margin <= room
-            {
-                break;
-            }
-            right.retain(|(item, _)| *item != gone);
-        }
-        let mut row = left;
-        if right.is_empty() {
-            // The sandbox state shows in full or not at all: a cut
-            // `Sandbox o…` would not say which.
-            if let Some(range) = sandbox_at
-                && spans_width(&row) > room
-            {
-                row.drain(range);
-            }
-            row = truncate(row, room);
-        } else {
-            let pad = room - margin - spans_width(&row) - right_width(&right);
-            row.push(Span::raw(" ".repeat(pad)));
-            for (at, (_, spans)) in right.iter().enumerate() {
-                if at > 0 {
-                    row.push(Span::raw(GAP));
-                }
-                row.extend(spans.iter().cloned());
-            }
-        }
         row.extend(end);
-        (truncate(row, width), through_mode)
+        (
+            truncate(row, width),
+            mode_at.is_some_and(|mode| mode < kept),
+        )
     }
 
-    /// The directory, then its branch and the lines changed; the session
-    /// name and version on the right. The directory's room depends only on
-    /// `width` and the branch: when it does not fit, directories in its
-    /// middle go, as the welcome header shows it, down to `…/<last part>`.
-    /// What comes after the branch shows only when it fits whole.
-    fn second_row(&self, values: &Values, width: usize) -> Vec<Span<'static>> {
+    /// The directory, then its branch, then ` · ` and the lines changed.
+    /// The directory's room depends only on `width` and the branch: when it
+    /// does not fit, directories in its middle go, as the welcome header
+    /// shows it, down to `…/<last part>`. The lines changed show only when
+    /// they fit whole. `None` when nothing on it shows.
+    fn directory_row(&self, values: &Values, width: usize) -> Option<Vec<Span<'static>>> {
         let branch = self.value(values, Item::Branch);
         let mut row = vec![Span::raw(" ")];
         if let Some(spans) = self.value(values, Item::Directory) {
             let path = text(spans);
             let style = spans.first().map_or_else(Style::default, |span| span.style);
-            let room = width
-                .saturating_sub(1 + branch.map_or(0, |branch| NEAR.len() + spans_width(branch)));
+            let room = width.saturating_sub(1 + branch.map_or(0, |branch| 1 + spans_width(branch)));
             let last = path.trim_end_matches('/').rsplit('/').next().unwrap_or("");
             let least = str_width(&path).min(str_width(last) + str_width("…/"));
             row.push(Span::styled(fit_path(&path, room.max(least)), style));
         }
         if let Some(branch) = branch {
             if row.len() > 1 {
-                row.push(Span::raw(NEAR));
+                row.push(Span::raw(" "));
             }
             row.extend(branch.iter().cloned());
         }
         if let Some(diff) = self.value(values, Item::Diff) {
-            let gap = if row.len() > 1 { NEAR } else { "" };
-            if spans_width(&row) + gap.len() + spans_width(diff) <= width {
-                row.push(Span::raw(gap));
+            let gap = if row.len() > 1 { DOT } else { "" };
+            if spans_width(&row) + str_width(gap) + spans_width(diff) <= width {
+                row.push(Span::styled(gap, theme::secondary()));
                 row.extend(diff.iter().cloned());
             }
         }
-        let mut right: Vec<&Vec<Span<'static>>> = [Item::Session, Item::Version]
-            .into_iter()
-            .filter_map(|item| self.value(values, item))
-            .collect();
-        while !right.is_empty() {
-            let used = right.iter().map(|spans| spans_width(spans)).sum::<usize>()
-                + GAP.len() * right.len();
-            if spans_width(&row) + used < width {
-                row.push(Span::raw(
-                    " ".repeat(width - 1 - spans_width(&row) - used + GAP.len()),
-                ));
-                for (at, spans) in right.iter().enumerate() {
-                    if at > 0 {
-                        row.push(Span::raw(GAP));
-                    }
-                    row.extend(spans.iter().cloned());
-                }
-                break;
-            }
-            right.pop();
-        }
-        truncate(row, width)
+        (row.len() > 1).then(|| truncate(row, width))
     }
+}
 
+/// After a space, as many of `items` as fit in `width` from the first,
+/// between ` · `, so the ones that do not go whole from the end (P2-245);
+/// `None` when not even the first fits. Also how many fit.
+fn fitting(items: &[&[Span<'static>]], width: usize) -> (Option<Vec<Span<'static>>>, usize) {
+    let mut row = vec![Span::raw(" ")];
+    let mut kept = 0;
+    for item in items {
+        let gap = if kept > 0 { DOT } else { "" };
+        if spans_width(&row) + str_width(gap) + spans_width(item) > width {
+            break;
+        }
+        if kept > 0 {
+            row.push(Span::styled(DOT, theme::secondary()));
+        }
+        row.extend(item.iter().cloned());
+        kept += 1;
+    }
+    ((kept > 0).then_some(row), kept)
+}
+
+impl Bar {
     /// Reads what [`Bar::to_json`] wrote, or what was written when the
     /// order was the user's: only whether each item shows counts, the first
     /// time it is listed. Entries it does not know (such as `compact`, which

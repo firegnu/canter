@@ -1277,7 +1277,10 @@ fn mode_with_an_unknown_name_only_says_so() {
     screen.draw();
     let shown = screen.text();
     assert!(shown.contains("Unknown mode: yolo"), "{shown}");
-    assert!(shown.contains("test-model high   Always ask"), "{shown}");
+    assert!(
+        shown.contains("test-model · think high · Always ask"),
+        "{shown}"
+    );
 }
 
 /// While the approval box is open, `/` does not open the list.
@@ -1507,7 +1510,7 @@ fn shift_tab_on_an_unchanged_screen_moves_one_mode() {
     screen.draw();
     let shown = screen.text();
     assert!(
-        shown.contains("test-model high   Ask for execution"),
+        shown.contains("test-model · think high · Ask for execution"),
         "{shown}"
     );
     assert_eq!(screen.shift_tab(), set_mode(PermissionMode::AllowAll));
@@ -1608,10 +1611,10 @@ fn shift_tab_works_while_the_model_answers() {
 /// still cut off: it never moves on to Allow all from modes not seen.
 #[test]
 fn shift_tab_does_nothing_while_the_mode_is_cut_off() {
-    let mut screen = Screen::sized(18, 12);
+    let mut screen = Screen::sized(24, 12);
     screen.draw();
     let info = screen.mode_row();
-    assert!(info.starts_with(" test-model high"), "{}", screen.text());
+    assert!(info.starts_with(" test-model · think"), "{}", screen.text());
     assert!(!info.contains("Always ask"), "the mode is cut off: {info}");
     assert_eq!(screen.shift_tab(), None, "no mode on screen: {info}");
 
@@ -1630,7 +1633,7 @@ fn shift_tab_needs_the_first_info_row_drawn() {
     screen.draw();
     let shown = screen.text();
     assert!(
-        screen.lines()[4].contains("test-model high   Always ask"),
+        screen.lines()[4].contains("test-model · think high · Always ask"),
         "{shown}"
     );
     assert!(!shown.contains("/work"), "the second row is cut: {shown}");

@@ -167,8 +167,15 @@ async fn tps_estimates_streamed_text_then_uses_actual_tokens_for_each_request() 
         json!({"type":"item.delta","turnId":"t1","itemId":"m2",
         "delta":{"type":"agentMessage","delta":"abc"}}),
     );
-    screen.now = 12_500;
-    wait_tps(&mut screen, 2.0).await;
+    screen.event(
+        12_500,
+        json!({"type":"item.delta","turnId":"t1","itemId":"m2",
+        "delta":{"type":"agentMessage","delta":"abcdef"}}),
+    );
+    // ceil(9 / 3) = 3 tokens from the first text to the latest, half a
+    // second; the time since does not count (P2-245).
+    screen.now = 13_000;
+    wait_tps(&mut screen, 6.0).await;
     screen.event(
         14_000,
         json!({"type":"item.completed","turnId":"t1","item":{
@@ -243,10 +250,15 @@ async fn tps_is_null_for_a_request_already_streaming_when_the_terminal_opens() {
     screen.event(
         7000,
         json!({"type":"item.delta","turnId":"t1","itemId":"m2",
-        "delta":{"type":"agentMessage","delta":"abcdef"}}),
+        "delta":{"type":"agentMessage","delta":"abc"}}),
+    );
+    screen.event(
+        7500,
+        json!({"type":"item.delta","turnId":"t1","itemId":"m2",
+        "delta":{"type":"agentMessage","delta":"abc"}}),
     );
     screen.now = 8000;
-    wait_tps(&mut screen, 2.0).await;
+    wait_tps(&mut screen, 4.0).await;
 }
 
 fn usage(output: u64) -> Value {
@@ -386,7 +398,7 @@ async fn failures_keep_previous_output_and_first_failure_marks_default_in_red() 
     loop {
         let rows = screen.bar();
         if rows[0].ends_with("statusline error") {
-            assert!(rows[0].starts_with(" test-model high   Always ask"));
+            assert!(rows[0].starts_with(" test-model · think high · Always ask"));
             assert_eq!(rows[1], " ~");
             let buffer = screen.ui.backend().buffer();
             let x = (0..80)

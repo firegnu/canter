@@ -868,21 +868,23 @@ When a file is written by `write` or `edit`, canter waits up to 500 ms for diagn
 
 ## Status line
 
-Without a custom status command, canter draws two status rows under the input box:
+Without a custom status command, canter draws three status rows under the input box:
 
 ```text
- opencode-go/deepseek-v4.1-flash high   Ask for execution · Sandbox on        ██░░░░░░░░  12%   cache  95%   $0.03
- ~/Developer/personal_projs/canter  main  +250 −6
+ opencode-go/deepseek-v4.1-flash · think high · Ask for execution · Sandbox on · $0.03
+ ██░░░░░░░░  48k/400k ( 12% to compact) · cache  95% (last  99%) ·  41 tok/s
+ ~/Developer/personal_projs/canter (main) · +250 −6
 ```
 
-- First row: the model (the provider prefix dim), the thinking effort, the permission mode and the sandbox state on the left; on the right, context use as a bar that is full at the auto-compaction line with its percent, the session's cache hit rate and its cost. `Allow all` and `Sandbox off` are red; the bar is green, yellow or red by the room left.
-- Second row: the working directory, the git branch, and the lines added and removed since the last commit (left out when nothing changed). The session name and version, when turned on, go on the right.
-- Each item has a fixed place, and numbers keep their width, so a changing number does not move the rest. When the window is too narrow, `cache` goes first, then the cost, then the context; a long directory is shortened in the middle (`~/…/src/canter`); the lines changed show only when they fit.
-- While the model writes, the `tps` item shows the speed on the working line, for example `·  59 tok/s`.
+- First row: the model, the thinking effort, the permission mode, the sandbox state and the session's cost. `Allow all` and `Sandbox off` are red.
+- Second row: context use as a bar that is full at the auto-compaction line (`of window` when the server does not send the line), the cache hit rate for the session and for the last request, then the speed, the version and the session name when they are turned on. The bar and its percent are green, yellow or red by the room left. The numbers keep their width, so a changing number does not move what follows it. The row is left out while it has nothing to show, such as in a new session.
+- Third row: the working directory, the git branch, and the lines added and removed since the last commit (left out when nothing changed). Numbers changing above never move it.
+- Items are separated by ` · ` and keep their places. When the window is too narrow, each row drops whole items from its end; a long directory is shortened in the middle (`~/…/src/canter`), and the lines changed show only when they fit.
+- The speed (`tps`) is in whole tokens a second: the text so far over the time from its first to its latest token, so it holds while the model waits, and the server's token count once the request ends. It changes at most once a second, and between responses shows the last one's.
 
-Under the two rows, a row each for sub-agents, background commands and the current goal (`◎ goal $0.12 / $5.00`) appear when there are any. ↓ from the input box selects the sub-agents or background commands row, and Enter opens its list.
+Under the three rows, a row each for sub-agents, background commands and the current goal (`◎ goal $0.12 / $5.00`) appear when there are any. ↓ from the input box selects the sub-agents or background commands row (`· ↓ to view`), and Enter opens its list.
 
-`/statusline` chooses which items appear; their places are fixed. The result is saved in `tui.json` under `statusLine`. Available items are `model`, `thinking`, `permission`, `context`, `cache`, `cost`, `directory`, `branch`, `diff`, `session`, `version` and `tps` (`session`, `version` and `tps` are off by default).
+`/statusline` chooses which items appear; their places are fixed. The result is saved in `tui.json` under `statusLine`. Available items are `model`, `thinking`, `permission`, `cost`, `context`, `cache`, `tps`, `version`, `session`, `directory`, `branch` and `diff` (`tps`, `version` and `session` are off by default).
 
 For a fully custom status line, add a terminal-only `statusLine` string to `config.json`:
 
@@ -890,7 +892,7 @@ For a fully custom status line, add a terminal-only `statusLine` string to `conf
 { "statusLine": "~/bin/my-status" }
 ```
 
-canter runs it as `/bin/sh -c <command>` and writes a JSON object to stdin whenever the display changes (at most about every 300 ms). The first two output lines become the status rows, and the sub-agent, background command and goal rows stay under them; ANSI styling is allowed. The command is read when the terminal starts and is not hot-reloaded. `/statusline` can switch between the script and the built-in items; `useScript` in `tui.json` records the choice.
+canter runs it as `/bin/sh -c <command>` and writes a JSON object to stdin whenever the display changes (at most about every 300 ms). The first two output lines take the place of the status rows, and the sub-agent, background command and goal rows stay under them; ANSI styling is allowed. The command is read when the terminal starts and is not hot-reloaded. `/statusline` can switch between the script and the built-in items; `useScript` in `tui.json` records the choice.
 
 Other `tui.json` settings:
 
