@@ -77,7 +77,7 @@ impl Sandbox {
             crate::executor::resolve_target(path, &protected)?;
             std::fs::create_dir_all(path)?;
         }
-        if let Some(path) = scratch.path() {
+        if let Some(path) = scratch.resolved_path() {
             crate::executor::resolve_target(&path, &protected)?;
         }
         Ok(Self {
@@ -167,7 +167,7 @@ impl Sandbox {
         environment: &BTreeMap<String, String>,
         scope: &Scope,
     ) -> io::Result<tokio::process::Command> {
-        let temporary = self.scratch.path();
+        let temporary = self.scratch.resolved_path();
         if let Some(path) = &temporary {
             if path.canonicalize()? != *path {
                 return Err(io::Error::other("session scratch directory changed"));

@@ -773,7 +773,7 @@ async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp()
         for name in ["home", "project", "extra", "state"] {
             std::fs::create_dir(temp.path().join(name)).unwrap();
         }
-        let command = serde_json::json!({"command":"printf '%s' \"$TMPDIR\" > temp-path; printf written > ../extra/result"}).to_string();
+        let command = serde_json::json!({"command":"printf '%s' \"$TMPDIR\" > temp-path; printf scratch > \"$TMPDIR/inside\"; printf written > ../extra/result"}).to_string();
         let model = ScriptModel::new(vec![
             vec![
                 call("first", "shell", &command),
@@ -859,6 +859,13 @@ async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp()
         );
         let temporary = std::fs::read_to_string(temp.path().join("project/temp-path")).unwrap();
         assert!(std::path::Path::new(&temporary).is_dir());
+        // Commands see the /tmp spelling, which follows the system link like a user's shell.
+        assert!(temporary.starts_with("/tmp/canter-shell-"), "{temporary}");
+        assert_ne!(
+            std::path::Path::new(&temporary).canonicalize().unwrap(),
+            std::path::Path::new(&temporary),
+            "{temporary}"
+        );
         let digest = temporary.rsplit('-').next().unwrap();
         assert_eq!(digest.len(), 16);
         assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
@@ -891,6 +898,11 @@ async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp()
                 std::fs::read_to_string(std::path::Path::new(&temporary).join("throwaway"))
                     .unwrap(),
                 "temporary"
+            );
+            assert_eq!(
+                std::fs::read_to_string(std::path::Path::new(&temporary).join("inside")).unwrap(),
+                "scratch",
+                "a command must be able to write $TMPDIR with sandbox={sandbox}"
             );
             let scope = session.sandbox().await;
             assert_eq!(scope.enabled, sandbox);

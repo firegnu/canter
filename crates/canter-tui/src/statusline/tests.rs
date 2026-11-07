@@ -532,7 +532,13 @@ async fn config_command_gets_only_public_json_and_terminal_environment() {
             "tps":null, "gitDiff":null
         })
     );
-    assert!(!input.contains("private"));
+    for secret in [
+        "test-only-private-config-key",
+        "test-only-private-mcp-key",
+        "SECRET",
+    ] {
+        assert!(!input.contains(secret), "statusLine input leaked {secret}");
+    }
     assert_eq!(
         fs::read_to_string(screen.root.path().join("env.txt")).unwrap(),
         format!("inherited:{home}:{home}")

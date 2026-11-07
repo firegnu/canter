@@ -10,6 +10,7 @@ use std::{
 pub struct ScratchDirectory {
     directory: Mutex<Option<tempfile::TempDir>>,
     path: Option<PathBuf>,
+    resolved: Option<PathBuf>,
     warning: Option<String>,
 }
 
@@ -26,7 +27,7 @@ impl ScratchDirectory {
                 Sha256::digest(session_directory.as_os_str().as_encoded_bytes())
             );
             let name = format!("canter-shell-{owner}-{}", &digest[..16]);
-            path = path.canonicalize()?.join(&name);
+            path = Path::new("/tmp").join(&name);
             match std::fs::symlink_metadata(&path) {
                 Ok(metadata) => {
                     if !metadata.is_dir()
@@ -63,18 +64,21 @@ impl ScratchDirectory {
 
     fn from_result(path: &Path, result: io::Result<tempfile::TempDir>) -> Self {
         let result = result.and_then(|directory| {
-            let path = directory.path().canonicalize()?;
-            Ok((directory, path))
+            let path = directory.path().to_path_buf();
+            let resolved = path.canonicalize()?;
+            Ok((directory, path, resolved))
         });
         match result {
-            Ok((directory, path)) => Self {
+            Ok((directory, path, resolved)) => Self {
                 directory: Mutex::new(Some(directory)),
                 path: Some(path),
+                resolved: Some(resolved),
                 warning: None,
             },
             Err(error) => Self {
                 directory: Mutex::new(None),
                 path: None,
+                resolved: None,
                 warning: Some(format!(
                     "Scratch directory unavailable at {}: {error}",
                     path.display()
@@ -83,12 +87,25 @@ impl ScratchDirectory {
         }
     }
 
+    /// The spelling given to commands and the model: `/tmp/...`, which follows
+    /// the system link to the real directory exactly as a user's terminal does.
     pub fn path(&self) -> Option<PathBuf> {
         self.directory
             .lock()
             .unwrap()
             .as_ref()
             .and(self.path.as_ref())
+            .cloned()
+    }
+
+    /// The canonical directory behind [`Self::path`]; sandbox and permission
+    /// checks compare resolved file paths against this one.
+    pub(crate) fn resolved_path(&self) -> Option<PathBuf> {
+        self.directory
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and(self.resolved.as_ref())
             .cloned()
     }
 
