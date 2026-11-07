@@ -185,6 +185,112 @@ async fn invalid_patterns_fail_before_approval_with_the_parser_reason() {
 }
 
 #[tokio::test]
+async fn patterns_that_tree_sitter_recovers_with_errors_are_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), "one.tsx", "const value = 123;\n");
+    let tools = tools(root.path());
+    for arguments in [
+        json!({"pattern":"123+","lang":"tsx"}),
+        json!({"pattern":"123+"}),
+    ] {
+        let error = tools
+            .prepare(
+                Tool::from_name("ast_grep").unwrap(),
+                "ast",
+                &arguments.to_string(),
+                &CancellationToken::new(),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.outcome, ToolOutcome::Failed);
+        assert!(
+            error.text.contains("Invalid ast-grep pattern"),
+            "{} {}",
+            arguments,
+            error.text
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_explicitly_approved_file_is_searched_even_when_a_prompt_rule_matches() {
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), "asked.rs", "value.unwrap();\n");
+    let rules = root.path().join("rules.json");
+    std::fs::write(
+        &rules,
+        json!({"rules":[],"fileRules":[{"pattern":"asked.rs","decision":"prompt"}]}).to_string(),
+    )
+    .unwrap();
+    let tools = tools_with(root.path(), Vec::new(), Some(&rules));
+    let call = tools
+        .prepare(
+            Tool::from_name("ast_grep").unwrap(),
+            "ast",
+            &json!({"pattern":"$X.unwrap()","path":"asked.rs"}).to_string(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let permit = match PermissionGate::default()
+        .with_rules_file(rules)
+        .evaluate(&call, PermissionMode::AllowAll)
+    {
+        PermissionCheck::Execute(permit) => permit,
+        other => panic!("an approved single file must be searchable: {other:?}"),
+    };
+    let output = tools
+        .execute(permit, &CancellationToken::new(), &mut |_| {})
+        .await;
+    assert_eq!(output.outcome, ToolOutcome::Completed, "{}", output.text);
+    assert!(output.text.contains("asked.rs:1:1"), "{}", output.text);
+}
+
+#[tokio::test]
+async fn non_object_arguments_fail_and_a_null_path_uses_the_session_directory() {
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), "one.rs", "value.unwrap();\n");
+    let tools = tools(root.path());
+    for arguments in [json!(["$X.unwrap()"]), json!("$X.unwrap()")] {
+        let error = tools
+            .prepare(
+                Tool::from_name("ast_grep").unwrap(),
+                "ast",
+                &arguments.to_string(),
+                &CancellationToken::new(),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.outcome, ToolOutcome::Failed);
+        assert!(error.text.contains("Invalid arguments"), "{}", error.text);
+    }
+    let call = tools
+        .prepare(
+            Tool::from_name("ast_grep").unwrap(),
+            "ast",
+            &json!({"pattern":"$X.unwrap()","path":null}).to_string(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let resolved = std::fs::canonicalize(root.path()).unwrap();
+    assert_eq!(call.resolved_path(), Some(resolved.as_path()));
+    let output = tools
+        .execute(
+            match PermissionGate::default().evaluate(&call, PermissionMode::AllowAll) {
+                PermissionCheck::Execute(permit) => permit,
+                other => panic!("{other:?}"),
+            },
+            &CancellationToken::new(),
+            &mut |_| {},
+        )
+        .await;
+    assert!(output.text.contains("one.rs:1:1"), "{}", output.text);
+}
+
+#[tokio::test]
 async fn matches_page_at_fifty_and_report_the_total_and_next_offset() {
     let root = tempfile::tempdir().unwrap();
     write(root.path(), "many.rs", &"value.unwrap();\n".repeat(55));

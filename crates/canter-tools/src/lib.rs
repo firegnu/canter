@@ -1158,9 +1158,13 @@ impl Tools {
                 self.executor.cwd(),
             )
         })?;
-        if tool == Tool::AstGrep && arguments.get("path").is_none() {
+        if tool == Tool::AstGrep
+            && arguments.is_object()
+            && matches!(arguments.get("path"), None | Some(Value::Null))
+        {
             // The working directory is the default root; give it to path rules
-            // and to the approval request like any other path.
+            // and to the approval request like any other path. An omitted path
+            // and an explicit null take the same branch.
             arguments["path"] = json!(self.executor.cwd().to_string_lossy());
         }
         let result = tokio::select! {

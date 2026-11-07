@@ -3,7 +3,7 @@
 use crate::ToolOutcome;
 use crate::executor::Executor;
 use ast_grep_core::{
-    Language,
+    Doc, Language,
     matcher::{Pattern, PatternBuilder, PatternError},
     tree_sitter::{LanguageExt, StrDoc, TSLanguage},
 };
@@ -131,7 +131,16 @@ impl Language for AstLang {
     }
 
     fn build_pattern(&self, builder: &PatternBuilder) -> Result<Pattern, PatternError> {
-        builder.build(|source| StrDoc::try_new(source, *self))
+        builder.build(|source| {
+            let doc = StrDoc::try_new(source, *self)?;
+            // tree-sitter recovers a tree for broken input. An ERROR node means
+            // the pattern is not valid here; recoverable missing tokens (like
+            // the semicolon Rust expression patterns omit) stay acceptable.
+            if has_error_node(doc.root_node()) {
+                return Err("tree-sitter reports an ERROR node".into());
+            }
+            Ok(doc)
+        })
     }
 }
 
@@ -145,6 +154,15 @@ impl LanguageExt for AstLang {
             Self::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
         }
     }
+}
+
+fn has_error_node(node: tree_sitter::Node) -> bool {
+    if node.is_error() {
+        return true;
+    }
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.children(&mut cursor).collect();
+    children.into_iter().any(has_error_node)
 }
 
 #[derive(Deserialize)]
@@ -257,6 +275,9 @@ pub(crate) async fn run(
     if walk_errors > 0 && files.is_empty() {
         return failed(format!("ast_grep could not read {}.", root.display()));
     }
+    // The gate already checked an explicitly named file, including a prompt rule
+    // the user approved; only files found inside a directory need re-checking.
+    let approved_root = std::fs::metadata(root).is_ok_and(|metadata| metadata.is_file());
 
     let mut page = Vec::new();
     let mut total = 0u64;
@@ -280,7 +301,9 @@ pub(crate) async fn run(
                 continue;
             }
         };
-        if let Some(rules) = &rules {
+        if let Some(rules) = &rules
+            && !(approved_root && path.as_path() == root)
+        {
             match rules.file_decision(&path, &resolved, &cwd, home.as_deref()) {
                 Ok(None) => {}
                 Ok(Some(_)) | Err(_) => {
@@ -289,7 +312,9 @@ pub(crate) async fn run(
                 }
             }
         }
-        let mut reader = match executor.open_file(&path, cancel).await {
+        // Read the path the rules were applied to, as read does, so a link
+        // cannot select a different target between the check and the open.
+        let mut reader = match executor.open_file(&resolved, cancel).await {
             Ok(reader) => reader,
             Err(_) => {
                 skipped += 1;

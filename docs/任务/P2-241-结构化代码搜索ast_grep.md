@@ -83,7 +83,7 @@
 
 ### 做了什么
 
-- 新只读工具 `ast_grep`：`crates/canter-tools/src/ast_grep.rs` 实现参数解析和模式编译、目录遍历（复用已有的 `ignore`，照 `.gitignore`，不跟随符号链接）、逐文件过执行器和私有文件检查及 `rules.json`、解析匹配、分页、跳过与语法错误说明；`lib.rs` 接入 `Tool::AstGrep`（插在 `read` 后）、`Action::AstGrep`、工具定义、`prepare`/`execute`、`Tools.file_rules`；`permission.rs` 走 `read` 同一套 `evaluate` 和文件规则，计划模式 `evaluate_plan`、审查轮 `evaluate_review` 放行。
+- 新只读工具 `ast_grep`：`crates/canter-tools/src/ast_grep.rs` 实现参数解析和模式编译、目录遍历（复用已有的 `ignore`，照 `.gitignore`，不递归跟随目录符号链接，文件链接照 `read` 的规则检查后读取）、逐文件过执行器和私有文件检查及 `rules.json`、解析匹配、分页、跳过与语法错误说明；`lib.rs` 接入 `Tool::AstGrep`（插在 `read` 后）、`Action::AstGrep`、工具定义、`prepare`/`execute`、`Tools.file_rules`；`permission.rs` 走 `read` 同一套 `evaluate` 和文件规则，计划模式 `evaluate_plan`、审查轮 `evaluate_review` 放行。
 - 依赖：`ast-grep-core = 0.40.0`、`tree-sitter-rust =0.24.2`、`tree-sitter-python =0.25.0`、`tree-sitter-javascript =0.25.0`、`tree-sitter-typescript =0.23.2`；`cargo tree -i tree-sitter` 确认仍只有 `tree-sitter v0.25.10` 一份。
 - 协议：新增 `AstGrepMatch` 和 `Item::AstGrep`（序列化为 `astGrep`），重新生成 `generated/`，加兼容性测试（旧客户端按 Unknown 跳过）；终端卡片、导出、`canter exec`、统计、系统提示词 `SEARCH_BULLET`、`roles.rs` 的 `explorer_tool`，以及 `session.rs` / `configuration.rs` 传 `command_rules_path` 都接上。
 - 文档：`docs/usage.md` 工具表加一行并补只读和文件规则说明；`docs/DESIGN.md` 加「结构化搜索（P2-241）」条目。
@@ -129,3 +129,16 @@
 - 改法：`ast_grep.rs` 的 `run` 里另外算一份真实会话目录（复用 `crate::executor::resolve_target(&cwd, &[])`，和 `rules.rs` 解析文件规则前缀同一个函数），`display()` 依次试原写法和真实路径两种前缀，都不匹配才显示原样；权限判断没动，路径规则和私有文件过滤照旧。
 - 新增回归测试 `session_directory_through_a_symlink_still_shows_relative_paths`：在临时目录里建 `linked-cwd` 指向 `real`，把 `linked-cwd` 当会话目录搜，要求结果是 `sample.rs:1:1` 而不是绝对路径。先确认改之前会失败（实际得到 `/private/tmp/.../real/sample.rs`），改后通过。
 - 验证：`cargo nextest run -p canter-tools --test ast_grep` 12 个全过；另外用指向真实目录的 `TMPDIR` 符号链接（复现主控环境）再跑一遍，12 个也全过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。
+
+## 返工（交叉审查）
+
+主控按 `docs/任务/P2-241-交叉审查.md` 定了第 1、2、3、6 条同轮改，第 4、5、7 条（取消后台解析、读入和预览大小上限、卡片/导出显示跳过说明与总数）本件不做。
+
+- 第 1 条：逐个文件的读取改用已经过私有文件和 `rules.json` 检查的 `resolved` 路径（`executor.open_file(&resolved)`），和 `read` 一样不再按原路径重新解析；`file_decision` 照旧同时看 requested 和 resolved 两种写法。
+- 第 2 条：`AstLang::build_pattern` 里在解析模式后递归找 ERROR 节点，找到就算这个语言模式错误；所有候选语言都这样时整次报错。可恢复的缺失 token 不算失败（否则 Rust 的 `$X.unwrap()` 会因 tree-sitter 补的 MISSING 分号被拒，工具主要用法就废了）。
+- 第 3 条：`run` 先看搜索根是不是单个文件；是的话它已经过权限闸门批准，执行时不再按 `rules.json` 重判，目录里的成员照旧跳过 prompt 和 forbidden。
+- 第 6 条：`lib.rs` 补默认 `path` 前先确认参数是 JSON 对象，不是对象就正常走 `Invalid arguments` 失败（之前数组会让 `serde_json` 在赋值处 panic）；`path: null` 和省略一样补成会话目录，同样进根路径规则检查。
+- 新增测试：`patterns_that_tree_sitter_recovers_with_errors_are_rejected`（`123+` 在 TSX 和未给 `lang` 时都报模式错误）、`an_explicitly_approved_file_is_searched_even_when_a_prompt_rule_matches`、`non_object_arguments_fail_and_a_null_path_uses_the_session_directory`。三个都先确认改之前会失败（分别是 `prepare` 成功、文件被当成跳过、`serde_json` panic），改后通过。
+- 完成记录和 DESIGN 里的「不跟随符号链接」改成准确的说法：不递归跟随目录符号链接；文件符号链接照 `read` 的规则检查后读取（测试里公开文件的链接一直要求能出结果）。
+- 验证：`cargo nextest run -p canter-tools --test ast_grep` 15 个全过，另用符号链接 `TMPDIR` 再跑一遍也全过；`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。
+- 踩过的坑：一开始直接把整棵树的 `has_error()`（含 MISSING）当模式错误，结果 Rust 的 `$X.unwrap()` 全被拒——tree-sitter-rust 会给表达式语句补一个 MISSING 分号，而 ast-grep 自己的 `is_single_node` 也特意容忍末尾缺失节点；改成只把 ERROR 节点算错。
