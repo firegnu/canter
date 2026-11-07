@@ -487,7 +487,7 @@ fn ctrl_o_keeps_the_top_item_in_place() {
     let conversation = screen.conversation();
     assert_eq!(conversation[0], "› do it");
     assert!(
-        conversation[1].starts_with("• Ran cargo test"),
+        conversation[1].starts_with("✓ Ran cargo test"),
         "{conversation:#?}"
     );
     assert_eq!(conversation[2], "  └ out 1");
@@ -495,7 +495,7 @@ fn ctrl_o_keeps_the_top_item_in_place() {
     let conversation = screen.conversation();
     assert_eq!(conversation[0], "› do it");
     assert!(
-        conversation[1].starts_with("• Ran cargo test"),
+        conversation[1].starts_with("✓ Ran cargo test"),
         "{conversation:#?}"
     );
 }

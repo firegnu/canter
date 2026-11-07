@@ -258,7 +258,7 @@ fn a_sent_message_is_on_its_background_with_a_row_of_it_above_and_below() {
                 "  另外顺手把版本号也改一下",
                 "",
                 "",
-                "• Explored",
+                "✓ Explored",
                 "  └ Read README.md",
             ],
             "{theme:?}"
@@ -312,7 +312,7 @@ fn no_background_with_16_colours_or_an_unknown_background() {
                 "› 把 README 里的安装步骤改成 cargo install",
                 "  另外顺手把版本号也改一下",
                 "",
-                "• Explored",
+                "✓ Explored",
                 "  └ Read README.md",
             ],
             "{theme:?}"

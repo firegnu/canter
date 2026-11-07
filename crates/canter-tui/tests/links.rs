@@ -437,7 +437,7 @@ fn a_markdown_links_text_and_address_open_the_address() {
 }
 
 /// Paths in the titles of edit and new-file cards, the new path of a moved
-/// file, and the names under `• Explored`, open in the text editor, as
+/// file, and the names under `✓ Explored`, open in the text editor, as
 /// absolute paths from the session's directory. The card titles' paths are
 /// blue, not underlined; the names read are in the text's colour. The mark,
 /// the verb and the status are not links, nor is a deleted file or the old
@@ -466,11 +466,11 @@ fn paths_in_card_titles_open_as_absolute_paths() {
     screen.draw();
     let text = screen.text();
     for title in [
-        "• Explored\n  └ Read main.rs\n",
-        "• Edit README.md  +1 −1",
-        "• Add new.rs  +1",
-        "• Edit old.rs → moved.rs  +1 −1",
-        "• Delete gone.rs  −1",
+        "✓ Explored\n  └ Read main.rs\n",
+        "✓ Edit README.md  +1 −1",
+        "✓ Add new.rs  +1",
+        "✓ Edit old.rs → moved.rs  +1 −1",
+        "✓ Delete gone.rs  −1",
     ] {
         assert!(text.contains(title), "{title:?}:\n{text}");
     }

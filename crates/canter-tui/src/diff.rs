@@ -131,7 +131,8 @@ impl Diff {
     }
 
     /// Rows `width` columns wide, each starting with `indent`. With a
-    /// `limit`, at most that many lines, then `… N more lines · Ctrl+O`.
+    /// `limit`, at most that many lines, then ` ⋯ N more lines · Ctrl+O to
+    /// expand ` ([`crate::cells::more_lines`]).
     pub(crate) fn rows(&self, indent: &str, width: u16, limit: Option<usize>) -> Vec<Row> {
         let all = self.lines.len();
         let mut shown = limit.map_or(all, |limit| limit.min(all));
@@ -173,10 +174,7 @@ impl Diff {
         if hidden > 0 {
             rows.push(Row::marks(Line::from(vec![
                 Span::raw(indent.to_owned()),
-                Span::styled(
-                    format!("{:>digits$} {hidden} more lines · Ctrl+O", "…"),
-                    theme::secondary(),
-                ),
+                crate::cells::more_lines(hidden),
             ])));
         }
         rows

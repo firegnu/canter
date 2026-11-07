@@ -171,20 +171,22 @@ fn on_a_light_background_warnings_are_bold_default_text_and_the_border_stays_yel
     );
 }
 
+/// A failed card is marked with a red `✗` (P2-247), one that worked with a
+/// `✓` in its kind's colour.
 #[test]
-fn failed_tool_cards_are_marked_with_a_red_dot() {
+fn failed_tool_cards_are_marked_with_a_red_cross() {
     let mut screen = Screen::new(Theme::default());
     screen.busy_turn();
     let buffer = screen.draw();
-    for text in ["• Ran cargo test", "• Add /work/notes.txt"] {
+    for text in ["✗ Ran cargo test", "✗ Add /work/notes.txt"] {
         let cell = find(buffer, text, 0);
         assert_eq!(cell.fg, Color::Red, "{text} is red");
     }
-    let worked = find(buffer, "• Ran cargo build", 0);
+    let worked = find(buffer, "✓ Ran cargo build", 0);
     assert_eq!(
         worked.fg,
         Color::Green,
-        "a command that worked keeps its dot"
+        "a command that worked has a green check"
     );
 }
 

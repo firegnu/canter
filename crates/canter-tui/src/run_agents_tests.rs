@@ -837,23 +837,26 @@ async fn the_four_sub_agent_tools_have_their_own_cards() {
         ));
     }
     let text = shown(&test);
-    assert!(has(&test, &["• Spawned explorer · agent-a"]), "{text}");
+    assert!(has(&test, &["✓ Spawned explorer · agent-a"]), "{text}");
     assert!(bold(&test, "Spawned explorer", "agent-a"), "{text}");
     assert!(has(&test, &["    └ Trace how locks are taken …"]), "{text}");
     assert!(
-        has(&test, &["• Waiting for agent-a, agent-b, agent-c · 31s"]),
+        has(&test, &["✓ Waiting for agent-a, agent-b, agent-c · 31s"]),
         "{text}"
     );
     assert!(has(&test, &["└ ✓ agent-a completed"]), "{text}");
     assert!(has(&test, &["┃ Locks are taken parent first"]), "{text}");
-    assert!(has(&test, &["… 2 more lines · Ctrl+O"]), "{text}");
+    assert!(
+        has(&test, &["┃  ⋯ 2 more lines · Ctrl+O to expand"]),
+        "{text}"
+    );
     assert!(!text.contains("line 5"), "{text}");
     assert!(has(&test, &["└ ● agent-b still running"]), "{text}");
     assert!(has(&test, &["└ ■ agent-c interrupted"]), "{text}");
-    assert!(has(&test, &["• Sent to agent-b"]), "{text}");
+    assert!(has(&test, &["✓ Sent to agent-b"]), "{text}");
     assert!(has(&test, &["    └ Also check the lexer …"]), "{text}");
-    assert!(has(&test, &["• Closed agent-c"]), "{text}");
-    assert!(has(&test, &["• Spawn general", "failed"]), "{text}");
+    assert!(has(&test, &["✓ Closed agent-c"]), "{text}");
+    assert!(has(&test, &["✗ Spawn general", "failed"]), "{text}");
     assert!(
         has(&test, &["┃ At most four agents may run at once"]),
         "{text}"
