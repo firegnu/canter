@@ -190,8 +190,10 @@ fn outline(rows: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Tool cards in a row are one block (P2-247): no blank row between them;
+/// one between them and the answers around them.
 #[test]
-fn a_blank_row_separates_messages_cards_and_thinking_and_reads_in_a_row_are_one_block() {
+fn a_blank_row_separates_messages_and_thinking_and_tool_cards_in_a_row_are_one_block() {
     let mut screen = Screen::new(WIDTH, 40);
     screen.thought("r1", "Look at the files first.");
     screen.say("m1", "Reading two files.");
@@ -214,14 +216,12 @@ fn a_blank_row_separates_messages_cards_and_thinking_and_reads_in_a_row_are_one_
             "",
             "● Reading two",
             "",
-            "• Explored",
+            "✓ Explored",
             "└ Read a.txt,",
-            "",
-            "• Edit a.txt",
+            "✓ Edit a.txt",
             "1 - old",
             "1 + new",
-            "",
-            "• Ran cargo",
+            "✓ Ran cargo",
             "└ ok",
             "",
             "● Done.",
@@ -312,7 +312,7 @@ fn blank_rows_stay_put_when_a_part_finishes() {
     assert_eq!(outline(&second[..reading.len()]), outline(&reading));
     assert_eq!(
         outline(&second[reading.len()..]),
-        ["", "• Explored", "└ Read a.txt"]
+        ["", "✓ Explored", "└ Read a.txt"]
     );
     let last = second.len() - 1;
     assert_eq!(writing[..last], second[..last]);

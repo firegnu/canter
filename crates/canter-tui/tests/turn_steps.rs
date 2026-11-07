@@ -1,6 +1,6 @@
-//! How the steps of a turn look, laid out the Codex way: `•` before the
-//! answer and every tool card, thinking as `✻ Thought for 2s · …`, reads in a
-//! row merged into `• Explored`, commands as `Run` / `Running` / `Ran` with
+//! How the steps of a turn look, laid out the Codex way: `●` before the
+//! answer, `✓`, `✗` or `•` before every tool card, thinking as
+//! `✻ Thought for 2s · …`, reads in a row merged into `✓ Explored`, commands as `Run` / `Running` / `Ran` with
 //! their output after `  └ `, headings and bold in colours of their own,
 //! paths in card titles coloured instead of underlined, and the turn's end as
 //! `Worked for 31s · 11:13`.
@@ -194,7 +194,8 @@ fn clock(ms: i64) -> String {
 // §1
 
 /// The answer starts with a bold `● `, its later rows indent 2; tool cards
-/// start with `•`, a command's mark and verb in the colour of how it went.
+/// start with `✓` once they worked, `✗` once they failed, `•` while they
+/// run; a command's mark and verb in the colour of how it went.
 /// The prompt keeps `›`.
 #[test]
 fn the_answer_and_tool_cards_start_with_a_bullet() {
@@ -229,16 +230,16 @@ fn the_answer_and_tool_cards_start_with_a_bullet() {
         [
             "● First row.",
             "  Second row.",
-            "• Ran cargo build",
-            "• Ran cargo test  exit 1",
+            "✓ Ran cargo build",
+            "✗ Ran cargo test · exit 1",
             "• Running sleep 9",
             "      Ctrl+B to run in background",
         ]
     );
     let buffer = screen.draw();
-    assert_eq!(cell(buffer, "• Ran cargo build").fg, Color::Green);
-    assert_eq!(cell(buffer, "• Ran cargo test").fg, Color::Red);
-    for cell in letters(&cells(buffer, "• Ran")) {
+    assert_eq!(cell(buffer, "✓ Ran cargo build").fg, Color::Green);
+    assert_eq!(cell(buffer, "✗ Ran cargo test").fg, Color::Red);
+    for cell in letters(&cells(buffer, "✓ Ran")) {
         assert_eq!(
             cell.fg,
             Color::Green,
@@ -250,7 +251,7 @@ fn the_answer_and_tool_cards_start_with_a_bullet() {
             .modifier
             .contains(Modifier::BOLD)
     );
-    let failed = cells(buffer, "• Ran cargo test");
+    let failed = cells(buffer, "✗ Ran cargo test");
     for cell in letters(&failed[..5]) {
         assert_eq!(
             cell.fg,
@@ -388,7 +389,7 @@ fn a_thought_without_a_time_is_thought_and_is_cut_to_the_width() {
 
 // §3
 
-/// Reads in a row are one block, growing as each read ends: `• Explored`,
+/// Reads in a row are one block, growing as each read ends: `✓ Explored`,
 /// then `  └ Read ` and the file names. The mark and `Explored` are cyan,
 /// `Read` is blue, the names in the body colour without an underline, the
 /// commas dim.
@@ -398,16 +399,16 @@ fn reads_in_a_row_are_one_explored_block_that_grows() {
     screen.read("r1", "/work/src/app.rs", "inProgress");
     assert_eq!(screen.rows(), Vec::<String>::new());
     screen.read("r1", "/work/src/app.rs", "completed");
-    assert_eq!(screen.rows(), ["• Explored", "  └ Read app.rs"]);
+    assert_eq!(screen.rows(), ["✓ Explored", "  └ Read app.rs"]);
     screen.read("r2", "/work/README.md", "completed");
     screen.read("r3", "/work/src/cells.rs", "completed");
     assert_eq!(
         screen.rows(),
-        ["• Explored", "  └ Read app.rs, README.md, cells.rs"]
+        ["✓ Explored", "  └ Read app.rs, README.md, cells.rs"]
     );
     let buffer = screen.draw();
     assert!(cell(buffer, "Explored").modifier.contains(Modifier::BOLD));
-    for cell in letters(&cells(buffer, "• Explored")) {
+    for cell in letters(&cells(buffer, "✓ Explored")) {
         assert_eq!(cell.fg, Color::Cyan, "the mark and title are cyan");
     }
     assert_eq!(cell(buffer, "Read app.rs").fg, Color::Blue);
@@ -444,19 +445,19 @@ fn reads_split_by_other_steps_failures_on_their_own_and_same_names_told_apart() 
     assert_eq!(
         screen.rows(),
         [
-            "• Explored",
+            "✓ Explored",
             "  └ Read a/mod.rs, b/mod.rs",
             "✻ Thought · Now the lib.",
-            "• Explored",
+            "✓ Explored",
             "  └ Read lib.rs",
-            "• Ran cat notes.txt",
-            "• Read missing.rs  failed",
-            "• Explored",
+            "✓ Ran cat notes.txt",
+            "✗ Read missing.rs · failed",
+            "✓ Explored",
             "  └ Read notes.txt",
         ]
     );
     let buffer = screen.draw();
-    assert_eq!(cell(buffer, "• Read missing.rs").fg, Color::Red);
+    assert_eq!(cell(buffer, "✗ Read missing.rs").fg, Color::Red);
 }
 
 /// A long list wraps under the first name; Ctrl+O shows a row per file
@@ -477,7 +478,7 @@ fn a_long_list_wraps_under_the_names_and_ctrl_o_shows_every_file() {
     assert_eq!(
         screen.rows(),
         [
-            "• Explored",
+            "✓ Explored",
             "  └ Read alpha.rs, bravo.rs, charlie.rs,",
             "         delta.rs, echo.rs",
         ]
@@ -486,7 +487,7 @@ fn a_long_list_wraps_under_the_names_and_ctrl_o_shows_every_file() {
     assert_eq!(
         screen.rows(),
         [
-            "• Explored",
+            "✓ Explored",
             "  └ Read src/alpha.rs  lines 1–2",
             "    Read src/bravo.rs  lines 1–2",
             "    Read src/charlie.rs  lines 1–2",
@@ -532,7 +533,7 @@ fn a_command_is_run_then_running_then_ran() {
     let rows = screen.rows();
     assert_eq!(rows[0], "• Running cargo test", "{rows:?}");
     assert_eq!(
-        rows[1], "  └ … 2 lines above (Ctrl+O to expand)",
+        rows[1], "  └  ⋯ 2 lines above · Ctrl+O to expand",
         "{rows:?}"
     );
     assert_eq!(
@@ -558,11 +559,11 @@ fn a_command_is_run_then_running_then_ran() {
     assert_eq!(
         screen.rows(),
         [
-            "• Ran cargo test  12.3s",
+            "✓ Ran cargo test · 12.3s",
             "  └ out 1",
             "    out 2",
             "    out 3",
-            "    + 4 lines (Ctrl+O to expand)",
+            "     ⋯ 4 more lines · Ctrl+O to expand",
         ]
     );
     let buffer = screen.draw();
@@ -573,8 +574,8 @@ fn a_command_is_run_then_running_then_ran() {
     assert_eq!(rows[7], "    out 7");
 }
 
-/// Failed: the last lines after `… N lines above`, `exit N` in red. One
-/// line more is `+ 1 line`; no output, no `└`; under 1s no time.
+/// Failed: the last lines after ` ⋯ N lines above `, `exit N` red and bold.
+/// One line more is ` ⋯ 1 more line `; no output, no `└`; under 1s no time.
 #[test]
 fn failures_keep_their_last_lines_and_the_status_follows_the_rules() {
     let mut screen = Screen::new(WIDTH);
@@ -596,24 +597,25 @@ fn failures_keep_their_last_lines_and_the_status_follows_the_rules() {
     ));
     screen.completed(command("c3", "true", "", "completed", json!(0), json!(800)));
     let mut expected = vec![
-        "• Ran make  exit 2".to_owned(),
-        "  └ … 2 lines above (Ctrl+O to expand)".to_owned(),
+        "✗ Ran make · exit 2".to_owned(),
+        "  └  ⋯ 2 lines above · Ctrl+O to expand".to_owned(),
     ];
     expected.extend((3..=12).map(|n| format!("    out {n}")));
     expected.extend(
         [
-            "• Ran ls",
+            "✓ Ran ls",
             "  └ out 1",
             "    out 2",
             "    out 3",
-            "    + 1 line (Ctrl+O to expand)",
-            "• Ran true",
+            "     ⋯ 1 more line · Ctrl+O to expand",
+            "✓ Ran true",
         ]
         .map(str::to_owned),
     );
     assert_eq!(screen.rows(), expected);
     let buffer = screen.draw();
     assert_eq!(cell(buffer, "exit 2").fg, Color::Red);
+    assert!(cell(buffer, "exit 2").modifier.contains(Modifier::BOLD));
     assert!(cell(buffer, "└").modifier.contains(Modifier::DIM));
 }
 
@@ -637,10 +639,10 @@ fn a_wrapped_command_puts_its_status_on_the_next_row() {
     assert_eq!(
         screen.rows(),
         [
-            "• Ran cargo test --workspace",
+            "✗ Ran cargo test --workspace",
             "      --all-targets --no-fail-fast",
             "      exit 101 · 1.5s",
-            "• Fetch https://example.com/a  failed",
+            "✗ Fetch https://example.com/a · failed",
         ]
     );
 }
@@ -746,7 +748,7 @@ fn an_edit_is_orange() {
         let mut screen = Screen::themed(Theme { depth, background }, WIDTH);
         screen.completed(edit("completed"));
         let buffer = screen.draw();
-        for cell in letters(&cells(buffer, "• Edit")) {
+        for cell in letters(&cells(buffer, "✓ Edit")) {
             assert_eq!(cell.fg, orange, "{depth:?} {background:?}");
         }
         assert!(cell(buffer, "Edit").modifier.contains(Modifier::BOLD));
@@ -795,10 +797,10 @@ fn without_colours_titles_are_only_bold() {
         assert!(cell.modifier.contains(Modifier::BOLD), "{title}");
     }
     for mark in [
-        "• Explored",
-        "• Edit",
-        "• Ran cargo build",
-        "• Ran cargo test",
+        "✓ Explored",
+        "✓ Edit",
+        "✓ Ran cargo build",
+        "✗ Ran cargo test",
     ] {
         assert_eq!(cell(buffer, mark).fg, Color::Reset, "{mark}");
     }

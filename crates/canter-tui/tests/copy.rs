@@ -424,8 +424,8 @@ fn part_of_a_row_and_a_card_title_copy_only_their_text() {
         "exitCode": 0, "durationMs": 1200,
     }}));
     screen.draw();
-    let title = screen.find("• Ran cargo test");
-    assert!(screen.lines()[title.1 as usize].ends_with("cargo test  1.2s"));
+    let title = screen.find("✓ Ran cargo test");
+    assert!(screen.lines()[title.1 as usize].ends_with("cargo test · 1.2s"));
     let end = screen.find_end("  ok");
     screen.select(title, end);
     screen.draw();
@@ -1032,11 +1032,11 @@ fn a_card_title_with_emoji_copies_without_the_status() {
         "durationMs": 1200,
     }}));
     screen.draw();
-    let at = screen.find("• Ran");
+    let at = screen.find("✓ Ran");
     let row = screen.lines()[usize::from(at.1)].clone();
-    assert!(row.ends_with("abcdefghijkl  1.2s"), "{}", screen.text());
-    let title = row.trim_start_matches("• ");
-    let title = title.trim_end_matches("1.2s").trim_end().to_owned();
+    assert!(row.ends_with("abcdefghijkl · 1.2s"), "{}", screen.text());
+    let title = row.trim_start_matches("✓ ");
+    let title = title.trim_end_matches(" · 1.2s").to_owned();
     screen.select(at, (39, at.1));
     assert_eq!(screen.clipboard(), title, "{}", screen.text());
     screen.draw();
@@ -1116,7 +1116,7 @@ fn a_wrapped_command_copies_as_one_line() {
         "durationMs": 1200,
     }}));
     screen.draw();
-    let title = screen.find("• Ran echo arg01");
+    let title = screen.find("✓ Ran echo arg01");
     assert_eq!(
         screen.lines()[usize::from(title.1) + 1],
         "      arg09 arg10 arg11 arg12"

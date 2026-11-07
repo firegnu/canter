@@ -1,4 +1,4 @@
-//! Tool cards: `• Verb object` with the status two columns after it,
+//! Tool cards: `✓ Verb object` with the status after a grey ` · `,
 //! output after `    ┃ `, a command's under `  └ `. A command wraps under
 //! where it starts and is coloured as Bash. MCP calls keep the first lines
 //! of their result, web fetches show only notes, failed commands keep their
@@ -178,11 +178,11 @@ fn mcp_card_shows_arguments_and_the_first_lines_of_its_result() {
     let long = "x".repeat(200);
     screen.mcp("m2", json!({ "query": long }), "one\n", "completed");
     let conversation = screen.conversation();
-    let rows = card(&conversation, "• Call github/search_issues  {\"limit\"");
+    let rows = card(&conversation, "✓ Call github/search_issues  {\"limit\"");
     assert_eq!(
         rows,
         [
-            "• Call github/search_issues  {\"limit\":3,\"query\":\"diff render\"}",
+            "✓ Call github/search_issues  {\"limit\":3,\"query\":\"diff render\"}",
             "    ┃ issue 1",
             "    ┃ issue 2",
             "    ┃ issue 3",
@@ -191,13 +191,13 @@ fn mcp_card_shows_arguments_and_the_first_lines_of_its_result() {
     );
     let long_row = conversation
         .iter()
-        .find(|row| row.starts_with("• Call github/search_issues  {\"query\":\"xxx"))
+        .find(|row| row.starts_with("✓ Call github/search_issues  {\"query\":\"xxx"))
         .unwrap_or_else(|| panic!("{conversation:#?}"));
     assert_eq!(long_row.width(), usize::from(WIDTH), "cut to fit");
 
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
-    let rows = card(&conversation, "• Call github/search_issues  {\"limit\"");
+    let rows = card(&conversation, "✓ Call github/search_issues  {\"limit\"");
     let expected: Vec<String> = (1..=7).map(|n| format!("    ┃ issue {n}")).collect();
     assert_eq!(rows[1..], expected[..]);
 }
@@ -216,18 +216,18 @@ fn web_fetch_shows_only_its_title_and_size() {
         "completed",
     );
     let conversation = screen.conversation();
-    let rows = card(&conversation, "• Fetch https://docs.example/page");
+    let rows = card(&conversation, "✓ Fetch https://docs.example/page");
     assert_eq!(rows.len(), 1, "{conversation:#?}");
-    assert_eq!(rows[0], "• Fetch https://docs.example/page  18.4 KB");
-    let small = card(&conversation, "• Fetch https://docs.example/small");
-    assert_eq!(small, ["• Fetch https://docs.example/small  12 B"]);
+    assert_eq!(rows[0], "✓ Fetch https://docs.example/page · 18.4 KB");
+    let small = card(&conversation, "✓ Fetch https://docs.example/small");
+    assert_eq!(small, ["✓ Fetch https://docs.example/small · 12 B"]);
     assert!(!conversation.iter().any(|row| row.contains("Docs")));
 
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
-    let rows = card(&conversation, "• Fetch https://docs.example/page");
+    let rows = card(&conversation, "✓ Fetch https://docs.example/page");
     assert_eq!(rows[1], "    ┃ # Docs");
-    let small = card(&conversation, "• Fetch https://docs.example/small");
+    let small = card(&conversation, "✓ Fetch https://docs.example/small");
     assert_eq!(small[1..], ["    ┃ hello world"]);
 }
 
@@ -255,44 +255,47 @@ fn web_fetch_shows_redirects_and_omitted_content_as_their_line() {
         "completed",
     );
     let conversation = screen.conversation();
-    let redirect = card(&conversation, "• Fetch https://example.com/old");
-    assert!(redirect[0].ends_with("  redirect"), "{redirect:?}");
+    let redirect = card(&conversation, "✓ Fetch https://example.com/old");
+    assert!(redirect[0].ends_with(" · redirect"), "{redirect:?}");
     assert_eq!(
         redirect[1..],
         ["    ┃ Redirected to https://example.org/new"]
     );
     assert_eq!(
-        card(&conversation, "• Fetch https://example.com/a.png"),
+        card(&conversation, "✓ Fetch https://example.com/a.png"),
         [
-            "• Fetch https://example.com/a.png",
+            "✓ Fetch https://example.com/a.png",
             "    ┃ [Content omitted: image/png, 20480 bytes]",
         ]
     );
     assert_eq!(
-        card(&conversation, "• Fetch https://example.com/big"),
+        card(&conversation, "✓ Fetch https://example.com/big"),
         [
-            "• Fetch https://example.com/big",
+            "✓ Fetch https://example.com/big",
             "    ┃ Download exceeds 10485760 bytes; content omitted.",
         ]
     );
 }
 
-/// A failed fetch: a red `•`, a red `failed` after it, and the reason below in red.
+/// A failed fetch: a red `✗`, a bold red `failed` after it, and the reason below in red.
 #[test]
 fn failed_web_fetch_shows_its_reason_in_red() {
     let mut screen = Screen::new(30);
     let reason = "web_fetch request failed (connection or TLS error)";
     screen.fetch("w1", "http://localhost:9/", reason, "failed");
     let conversation = screen.conversation();
-    let rows = card(&conversation, "• Fetch http://localhost:9/");
-    assert_eq!(rows[0], "• Fetch http://localhost:9/  failed");
+    let rows = card(&conversation, "✗ Fetch http://localhost:9/");
+    assert_eq!(rows[0], "✗ Fetch http://localhost:9/ · failed");
     assert_eq!(rows[1..], [format!("    ┃ {reason}")]);
     let buffer = screen.draw();
-    assert_eq!(cells_of(buffer, "• Fetch")[0].fg, Color::Red);
+    assert_eq!(cells_of(buffer, "✗ Fetch")[0].fg, Color::Red);
     for text in ["failed", reason] {
         for cell in letters(&cells_of(buffer, text)) {
             assert_eq!(cell.fg, Color::Red, "{text:?}");
         }
+    }
+    for cell in letters(&cells_of(buffer, "· failed")[2..]) {
+        assert!(cell.modifier.contains(Modifier::BOLD), "the status is bold");
     }
 }
 
@@ -304,7 +307,7 @@ fn web_search_card_shows_query_count_and_expanded_titles_and_urls() {
         {"title":"Reference","url":"https://doc.rust-lang.org/reference/","summary":"Language details"}
     ]}));
     let rows = screen.conversation();
-    let rows = card(&rows, "• Search Rust docs");
+    let rows = card(&rows, "✓ Search Rust docs");
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(rows[0].ends_with("2 results"), "{rows:?}");
     assert_eq!(screen.ctrl_o(), None);
@@ -345,7 +348,7 @@ fn ast_grep_card_shows_pattern_page_count_and_expanded_matches() {
         {"path":"src/lib.rs","line":3,"column":9,"text":"x.unwrap()\n  .unwrap()"}
     ]}));
     let rows = screen.conversation();
-    let rows = card(&rows, "• AST search $X.unwrap()");
+    let rows = card(&rows, "✓ AST search $X.unwrap()");
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(rows[0].ends_with("2 matches"), "{rows:?}");
     assert_eq!(screen.ctrl_o(), None);
@@ -361,9 +364,9 @@ fn ast_grep_card_shows_pattern_page_count_and_expanded_matches() {
 }
 
 /// A failed command keeps its last 10 lines, in the default colour, after
-/// `… N lines above (Ctrl+O to expand)`; one that worked keeps its first 3,
-/// grey, then `+ N lines (Ctrl+O to expand)`. A folded diff's line still
-/// says `· Ctrl+O`.
+/// ` ⋯ N lines above · Ctrl+O to expand `; one that worked keeps its first
+/// 3, grey, then ` ⋯ N more lines · Ctrl+O to expand `. A folded diff's
+/// line still says `· Ctrl+O`.
 #[test]
 fn failed_command_keeps_ten_lines_in_the_default_colour() {
     let mut screen = Screen::new(50);
@@ -375,18 +378,18 @@ fn failed_command_keeps_ten_lines_in_the_default_colour() {
             "diff": format!("--- a/a.txt\n+++ b/a.txt\n@@ -1,0 +1,20 @@\n{}", numbered(20, "+new")) }],
     }));
     let conversation = screen.conversation();
-    let failed = card(&conversation, "• Ran cargo clippy");
-    let mut expected = vec!["  └ … 5 lines above (Ctrl+O to expand)".to_owned()];
+    let failed = card(&conversation, "✗ Ran cargo clippy");
+    let mut expected = vec!["  └  ⋯ 5 lines above · Ctrl+O to expand".to_owned()];
     expected.extend((6..=15).map(|n| format!("    error {n}")));
     assert_eq!(failed[1..], expected[..]);
-    let worked = card(&conversation, "• Ran cargo test");
+    let worked = card(&conversation, "✓ Ran cargo test");
     assert_eq!(
         worked[1..],
         [
             "  └ ok 1",
             "    ok 2",
             "    ok 3",
-            "    + 5 lines (Ctrl+O to expand)",
+            "     ⋯ 5 more lines · Ctrl+O to expand",
         ]
     );
     assert!(
@@ -410,7 +413,7 @@ fn failed_command_keeps_ten_lines_in_the_default_colour() {
 /// `•` and `No matches`, no `exit 1`. Only a whole `rg` or `grep` call
 /// with exit code 1 and no output counts: another command's exit code 1, a
 /// search that printed something, and a search combined with other commands
-/// keep the red `•` and `exit 1`.
+/// keep the red `✗` and `exit 1`.
 #[test]
 fn a_search_that_finds_nothing_says_no_matches_in_grey() {
     let mut screen = Screen::new(40);
@@ -424,36 +427,40 @@ fn a_search_that_finds_nothing_says_no_matches_in_grey() {
     let conversation = screen.conversation();
 
     for title in [
-        "• Ran rg missing src  ",
-        "• Ran grep -rn missing .  ",
-        "• Ran rg \"a|b\"  ",
+        "• Ran rg missing src · ",
+        "• Ran grep -rn missing . · ",
+        "• Ran rg \"a|b\" · ",
     ] {
         let rows = card(&conversation, title);
         assert_eq!(rows.len(), 1, "{title:?}: {conversation:#?}");
         assert_eq!(rows[0], format!("{title}No matches · 1.2s"));
     }
     for title in [
-        "• Ran diff a.txt b.txt  ",
-        "• Ran rg missing | wc -l  ",
-        "• Ran rg missing && echo done  ",
-        "• Ran rg missing src  exit",
+        "✗ Ran diff a.txt b.txt · ",
+        "✗ Ran rg missing | wc -l · ",
+        "✗ Ran rg missing && echo done · ",
+        "✗ Ran rg missing src · exit",
     ] {
         let rows = card(&conversation, title);
-        assert!(rows[0].ends_with("  exit 1 · 1.2s"), "{title:?}: {rows:?}");
+        assert!(rows[0].ends_with(" · exit 1 · 1.2s"), "{title:?}: {rows:?}");
     }
 
     let buffer = screen.draw();
     assert_ne!(
-        cells_of(buffer, "• Ran rg missing src  No")[0].fg,
+        cells_of(buffer, "• Ran rg missing src · No")[0].fg,
         Color::Red
     );
-    assert_eq!(cells_of(buffer, "• Ran diff")[0].fg, Color::Red);
+    assert_eq!(cells_of(buffer, "✗ Ran diff")[0].fg, Color::Red);
     for cell in letters(&cells_of(buffer, "No matches")) {
         assert!(cell.modifier.contains(Modifier::DIM), "grey");
         assert_eq!(cell.fg, Color::Reset);
     }
     for cell in letters(&cells_of(buffer, "exit 1")) {
         assert_eq!(cell.fg, Color::Red);
+        assert!(cell.modifier.contains(Modifier::BOLD), "bold");
+    }
+    for cell in letters(&cells_of(buffer, "· No matches")[..1]) {
+        assert!(cell.modifier.contains(Modifier::DIM), "the ` · ` is grey");
     }
 }
 
@@ -479,7 +486,7 @@ fn ctrl_o_shows_whole_commands_and_at_most_500_lines_of_output() {
     let conversation = screen.conversation();
     let at = conversation
         .iter()
-        .position(|row| row == "• Ran cargo build \\")
+        .position(|row| row == "✓ Ran cargo build \\")
         .unwrap_or_else(|| panic!("{conversation:#?}"));
     // A command of several rows has its status on a row of its own.
     assert_eq!(
@@ -491,7 +498,7 @@ fn ctrl_o_shows_whole_commands_and_at_most_500_lines_of_output() {
     expected.extend((2..=20).map(|n| format!("    small {n}")));
     assert_eq!(small[1..], expected[..]);
 
-    let long = card(&conversation, "• Ran cargo test");
+    let long = card(&conversation, "✓ Ran cargo test");
     let mut expected = vec!["  └ line 1".to_owned()];
     expected.extend((2..=250).map(|n| format!("    line {n}")));
     expected.push("    … 700 lines not shown".into());
@@ -503,9 +510,9 @@ fn ctrl_o_shows_whole_commands_and_at_most_500_lines_of_output() {
     );
 }
 
-/// A file that could not be read is a row of its own: a red `•` and a red
-/// `failed`, its verb red too; one that was read goes under `• Explored`,
-/// its `•` and title cyan.
+/// A file that could not be read is a row of its own: a red `✗` and a red
+/// `failed`, its verb red too; one that was read goes under `✓ Explored`,
+/// its `✓` and title cyan.
 #[test]
 fn failed_file_read_shows_a_red_mark() {
     let mut screen = Screen::new(30);
@@ -520,24 +527,23 @@ fn failed_file_read_shows_a_red_mark() {
     }
     let conversation = screen.conversation();
     assert_eq!(
-        conversation[2..7],
+        conversation[2..6],
         [
-            "• Read src/theme.rs  failed",
-            "",
-            "• Explored",
+            "✗ Read src/theme.rs · failed",
+            "✓ Explored",
             "  └ Read cells.rs",
             "",
         ]
     );
     let buffer = screen.draw();
-    assert_eq!(cells_of(buffer, "• Read src/theme.rs")[0].fg, Color::Red);
+    assert_eq!(cells_of(buffer, "✗ Read src/theme.rs")[0].fg, Color::Red);
     for cell in letters(&cells_of(buffer, "failed")) {
         assert_eq!(cell.fg, Color::Red);
     }
-    for cell in letters(&cells_of(buffer, "• Read src/theme.rs")[..6]) {
+    for cell in letters(&cells_of(buffer, "✗ Read src/theme.rs")[..6]) {
         assert_eq!(cell.fg, Color::Red, "the mark and verb are red");
     }
-    for cell in letters(&cells_of(buffer, "• Explored")) {
+    for cell in letters(&cells_of(buffer, "✓ Explored")) {
         assert_eq!(cell.fg, Color::Cyan, "the mark and title are cyan");
     }
 }
@@ -566,9 +572,9 @@ fn a_long_command_wraps_under_its_start_and_folds_past_five_rows() {
     let conversation = screen.conversation();
     let at = conversation
         .iter()
-        .position(|row| row.starts_with("• Ran echo"))
+        .position(|row| row.starts_with("✓ Ran echo"))
         .unwrap_or_else(|| panic!("{conversation:#?}"));
-    let first = format!("• Ran {}", args(11));
+    let first = format!("✓ Ran {}", args(11));
     assert_eq!(
         conversation[at..at + 9],
         [
@@ -617,9 +623,9 @@ fn each_line_of_a_command_wraps_and_counts_toward_the_fold() {
     let conversation = screen.conversation();
     let at = conversation
         .iter()
-        .position(|row| row.starts_with("• Ran cat <<'EOF'"))
+        .position(|row| row.starts_with("✓ Ran cat <<'EOF'"))
         .unwrap_or_else(|| panic!("{conversation:#?}"));
-    assert_eq!(conversation[at], "• Ran cat <<'EOF'");
+    assert_eq!(conversation[at], "✓ Ran cat <<'EOF'");
     let first_args: Vec<String> = (1..=11).map(|n| format!("arg{n:02}")).collect();
     assert_eq!(
         conversation[at + 1..at + 7],
@@ -637,7 +643,7 @@ fn each_line_of_a_command_wraps_and_counts_toward_the_fold() {
     let conversation = screen.conversation();
     let at = conversation
         .iter()
-        .position(|row| row.starts_with("• Ran cat <<'EOF'"))
+        .position(|row| row.starts_with("✓ Ran cat <<'EOF'"))
         .unwrap();
     assert_eq!(
         conversation[at + 4..at + 8],
@@ -766,7 +772,8 @@ fn command_output_is_grey_unless_the_command_failed() {
 
 /// Other cards' output follows a thick bar: grey on a card that worked, is
 /// running or was declined, red on one that failed. A command's output
-/// hangs under a grey `└` either way. The text keeps its colours.
+/// hangs under a `└` either way. The `┃` and `└` are a step fainter than
+/// grey (P2-247): dark grey and dim. The text keeps its colours.
 #[test]
 fn the_output_bar_is_red_when_the_card_failed() {
     let mut screen = Screen::new(60);
@@ -779,19 +786,19 @@ fn the_output_bar_is_red_when_the_card_failed() {
     let bar = cells_of(buffer, "┃ mcp worked")[0];
     assert_eq!(bar.symbol(), "┃");
     assert!(bar.modifier.contains(Modifier::DIM), "grey");
-    assert_ne!(bar.fg, Color::Red);
+    assert_eq!(bar.fg, Color::DarkGray, "fainter than grey");
     for text in ["┃ mcp broke", "┃ fetch broke"] {
         let bar = cells_of(buffer, text)[0];
         assert_eq!(bar.symbol(), "┃");
         assert_eq!(bar.fg, Color::Red, "{text:?}");
     }
-    for text in ["└ fine", "└ … 5 lines above"] {
+    for text in ["└ fine", "└  ⋯ 5 lines above"] {
         let branch = cells_of(buffer, text)[0];
         assert_eq!(branch.symbol(), "└");
         assert!(branch.modifier.contains(Modifier::DIM), "{text:?} grey");
-        assert_ne!(branch.fg, Color::Red, "{text:?}");
+        assert_eq!(branch.fg, Color::DarkGray, "{text:?} fainter than grey");
     }
-    for cell in letters(&cells_of(buffer, "… 5 lines above (Ctrl+O to expand)")) {
+    for cell in letters(&cells_of(buffer, "⋯ 5 lines above · Ctrl+O to expand")) {
         assert!(cell.modifier.contains(Modifier::DIM), "the note stays grey");
     }
 }
@@ -854,8 +861,8 @@ fn cards_outside_the_sandbox_say_so_only_while_it_is_on() {
                     "{start:?}: {rows:#?}"
                 );
             }
-            assert!(card("! git push").ends_with("Ran ! git push  1.2s · not sandboxed"));
-            assert!(card("! sleep 60").ends_with("Running ! sleep 60  not sandboxed"));
+            assert!(card("! git push").ends_with("Ran ! git push · 1.2s · not sandboxed"));
+            assert!(card("! sleep 60").ends_with("Running ! sleep 60 · not sandboxed"));
             assert!(card("Fetch https://example.com/").ends_with("4 B · not sandboxed"));
             assert!(!card("Ran cargo test").contains("sandboxed"));
             // Grey like the rest of the status on the right.
@@ -874,4 +881,121 @@ fn cards_outside_the_sandbox_say_so_only_while_it_is_on() {
             );
         }
     }
+}
+
+/// A command still running, declined or finding nothing keeps its `•`
+/// (P2-247); one that worked has a `✓`, one that failed a `✗`.
+#[test]
+fn only_finished_cards_have_a_check_or_a_cross() {
+    let mut screen = Screen::new(30);
+    screen.command("ok", "cargo test", "", 0);
+    screen.command("bad", "cargo clippy", "", 1);
+    screen.command("none", "rg TODO src", "", 1);
+    screen.completed(json!({
+        "type": "commandExecution", "id": "no", "command": "rm -rf target", "cwd": "/work",
+        "status": "declined", "aggregatedOutput": "",
+    }));
+    screen.event(json!({ "type": "item.started", "turnId": "t1", "item": {
+        "type": "commandExecution", "id": "live", "command": "cargo build", "cwd": "/work",
+        "status": "inProgress", "aggregatedOutput": "",
+    }}));
+    let rows = screen.conversation();
+    for title in [
+        "✓ Ran cargo test · 1.2s",
+        "✗ Ran cargo clippy · exit 1 · 1.2s",
+        "• Ran rg TODO src · No matches · 1.2s",
+        "• Run rm -rf target · declined",
+        "• Running cargo build",
+    ] {
+        assert!(rows.iter().any(|row| row == title), "{title:?}: {rows:#?}");
+    }
+}
+
+/// What says a command's output is folded is a chip (P2-247): on the sent
+/// message's grey when the terminal can show a background, plain with 16
+/// colours.
+#[test]
+fn the_fold_note_is_on_a_background_when_one_can_be_shown() {
+    for (theme, background) in [
+        (
+            Theme {
+                depth: Depth::TrueColor,
+                background: Background::Dark,
+            },
+            Color::Rgb(0x2d, 0x2e, 0x33),
+        ),
+        (Theme::default(), Color::Reset),
+    ] {
+        canter_tui::theme::set(theme);
+        let mut screen = Screen::new(30);
+        screen.command("ok", "cargo test", &numbered(8, "ok"), 0);
+        screen.command("bad", "cargo clippy", &numbered(12, "error"), 1);
+        let buffer = screen.draw();
+        for text in [
+            " ⋯ 5 more lines · Ctrl+O to expand ",
+            " ⋯ 2 lines above · Ctrl+O to expand ",
+        ] {
+            for cell in cells_of(buffer, text) {
+                assert_eq!(cell.bg, background, "{theme:?} {text:?}");
+            }
+        }
+        assert_eq!(cells_of(buffer, "└ ok 1")[0].bg, Color::Reset);
+    }
+    canter_tui::theme::set(Theme::default());
+}
+
+/// In a command's output, lines that look like a diff's are coloured as a
+/// file change's (P2-247): after a line starting `@@ `, lines starting `+`
+/// or `-` but not `+++` or `---`; anywhere, a number, a space, `+` or `-`
+/// and a space. Other lines, such as `ls -l`'s `-rw-r--r--`, keep the
+/// output's colour.
+#[test]
+fn lines_that_look_like_a_diff_are_coloured_as_one() {
+    canter_tui::theme::set(Theme {
+        depth: Depth::TrueColor,
+        background: Background::Dark,
+    });
+    let green = (Color::Green, Color::Rgb(0x21, 0x3a, 0x2b));
+    let red = (Color::Red, Color::Rgb(0x4a, 0x22, 0x1d));
+    let grey = (Color::DarkGray, Color::Reset);
+    let plain = (Color::Reset, Color::Reset);
+    let mut screen = Screen::new(40);
+    screen.command(
+        "ls",
+        "ls -l",
+        "-rw-r--r-- 1 me staff 12 a.txt\n+plus before any hunk\n",
+        0,
+    );
+    // A failed command keeps its last 10 lines, in the default colour.
+    screen.command(
+        "diff",
+        "git diff --exit-code",
+        "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old line\n+new line\n context line\n",
+        1,
+    );
+    screen.command(
+        "nl",
+        "nl -ba a.txt",
+        "  12 + added text\n  13 - removed text\n14 +no space after\n",
+        0,
+    );
+    let buffer = screen.draw();
+    for (text, (fg, bg)) in [
+        ("-rw-r--r--", grey),
+        ("+plus before any hunk", grey),
+        ("--- a/a.txt", plain),
+        ("+++ b/a.txt", plain),
+        ("@@ -1 +1 @@", plain),
+        ("-old line", red),
+        ("+new line", green),
+        (" context line", plain),
+        ("12 + added text", green),
+        ("13 - removed text", red),
+        ("14 +no space after", grey),
+    ] {
+        for cell in letters(&cells_of(buffer, text)) {
+            assert_eq!((cell.fg, cell.bg), (fg, bg), "{text:?}");
+        }
+    }
+    canter_tui::theme::set(Theme::default());
 }

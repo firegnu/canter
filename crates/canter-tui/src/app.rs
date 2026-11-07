@@ -260,8 +260,10 @@ enum Part {
 /// What a part of the conversation is, for the blank rows between parts.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Kind {
-    /// A file read: reads in a row are not kept apart.
-    Read,
+    /// A tool card (a command, a read, a file change, a fetch, a search, an
+    /// MCP call, a sub-agent tool): cards in a row are not kept apart
+    /// (P2-247).
+    Tool,
     /// Any other item, or a turn's prompt.
     Item,
     /// A notice: notices in a row, such as a command's report, are one block.
@@ -286,8 +288,8 @@ struct Tail {
 }
 
 /// Appends a part's rows, after a blank row between it and the part before,
-/// except between two of the same kind other than [`Kind::Item`] (reads,
-/// notices or queued messages in a row). Parts that end or start with a
+/// except between two of the same kind other than [`Kind::Item`] (tool
+/// cards, notices or queued messages in a row). Parts that end or start with a
 /// blank row (a prompt) get none. Empty parts are left out.
 fn push_part(
     rows: &mut Vec<Row>,
@@ -4470,12 +4472,18 @@ impl App {
             .get(at.turn)
             .and_then(|turn| turn.items.get(at.item))
         {
-            // Reads that failed or were declined, each on a row of its own.
-            Some(Item::FileRead { .. })
-                if cells::reads_around(&self.snapshot.turns[at.turn].items, at.item).is_none() =>
-            {
-                Kind::Read
-            }
+            Some(
+                Item::CommandExecution { .. }
+                | Item::FileChange { .. }
+                | Item::FileRead { .. }
+                | Item::McpToolCall { .. }
+                | Item::McpToolSearch { .. }
+                | Item::BackgroundCommandAction { .. }
+                | Item::WebFetch { .. }
+                | Item::WebSearch { .. }
+                | Item::AstGrep { .. }
+                | Item::CollabAgentToolCall { .. },
+            ) => Kind::Tool,
             Some(Item::Diagnostics { .. }) => {
                 if crate::lsp::inline(&self.snapshot.turns[at.turn].items, at.item) {
                     Kind::Attached

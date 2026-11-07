@@ -218,7 +218,7 @@ fn row(buffer: &Buffer, y: u16) -> String {
 
 /// In a narrow window a read's row keeps the file name and `lines 1–2`:
 /// the directories in the middle go, more of them the narrower it is. A
-/// file read shows its path under `• Explored` with Ctrl+O; one that could
+/// file read shows its path under `✓ Explored` with Ctrl+O; one that could
 /// not be read shows it on a row of its own.
 #[test]
 fn a_read_card_keeps_the_file_name_and_its_lines() {
@@ -233,7 +233,7 @@ fn a_read_card_keeps_the_file_name_and_its_lines() {
         "{text}"
     );
     assert!(
-        text.contains("• Read crates/…/src/cells.rs  failed\n"),
+        text.contains("✗ Read crates/…/src/cells.rs · failed\n"),
         "{text}"
     );
 
@@ -258,7 +258,7 @@ fn a_moved_files_card_shortens_both_paths() {
     screen.draw();
     let text = screen.text();
     assert!(
-        text.contains("• Edit crates/…/old_name.rs → crates/…/new_name.rs  +1 −1\n"),
+        text.contains("✓ Edit crates/…/old_name.rs → crates/…/new_name.rs  +1 −1\n"),
         "{text}"
     );
 }

@@ -231,6 +231,18 @@ pub fn aside() -> Style {
     current().fg(Color::DarkGray).add_modifier(Modifier::DIM)
 }
 
+/// The `└` and `┃` before a card's output: fainter than the output, as
+/// [`aside`] (P2-247). Without colours dim, as before.
+pub fn guide() -> Style {
+    aside()
+}
+
+/// The background of a folded card's `⋯ N more lines · Ctrl+O to expand`,
+/// the sent message's grey ([`user_bg`]), when one can be shown (P2-247).
+pub fn fold_bg() -> Option<Color> {
+    user_bg()
+}
+
 /// What a folded thinking row says after `✻ Thought for 2s`: fainter than
 /// that label, as [`aside`], and italic.
 pub fn thinking_text() -> Style {

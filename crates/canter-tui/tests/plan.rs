@@ -250,7 +250,10 @@ fn proposals_fold_expand_replay_and_export_the_full_plan_and_decision() {
         let folded = screen.lines();
         assert!(folded.join("\n").contains(label));
         assert!(!folded.join("\n").contains("Implementation step 13"));
-        assert!(folded.join("\n").contains("Ctrl+O"));
+        assert!(
+            folded.contains(&"   ⋯ 6 more lines · Ctrl+O to expand".to_owned()),
+            "{folded:#?}"
+        );
         let saved = serde_json::to_value(screen.ui.app().snapshot()).unwrap();
         let mut resumed = Screen {
             ui: Ui::new(

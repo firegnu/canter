@@ -214,7 +214,7 @@ fn theme(depth: Depth, background: Background) -> Theme {
 fn history_shows_line_numbers_and_a_gap_between_hunks() {
     let mut screen = Screen::new(Theme::default(), 30);
     screen.changed("c1", "src/lib.rs", update(), DIFF);
-    let rows = screen.rows_after("• Edit src/lib.rs  +2 −3", HISTORY_ROWS.len());
+    let rows = screen.rows_after("✓ Edit src/lib.rs  +2 −3", HISTORY_ROWS.len());
     assert_eq!(rows, HISTORY_ROWS);
     assert!(
         screen.lines().iter().all(|line| !line.contains("@@")),
@@ -372,19 +372,19 @@ fn history_shortens_long_changes() {
     screen.changed("c2", "b.txt", json!({ "type": "add" }), &add);
     screen.changed("c3", "c.txt", json!({ "type": "delete" }), &delete);
 
-    let rows = screen.rows_after("• Edit a.txt  +10 −10", 13);
+    let rows = screen.rows_after("✓ Edit a.txt  +10 −10", 13);
     assert_eq!(rows[0], "     1 - old 1");
     assert_eq!(rows[9], "    10 - old 10");
     assert_eq!(rows[10], "     1 + new 1");
     assert_eq!(rows[11], "     2 + new 2");
     assert_eq!(rows[12].trim(), "… 8 more lines · Ctrl+O");
 
-    let rows = screen.rows_after("• Add b.txt  +10", 7);
+    let rows = screen.rows_after("✓ Add b.txt  +10", 7);
     assert_eq!(rows[0], "     1 + line 1");
     assert_eq!(rows[5], "     6 + line 6");
     assert_eq!(rows[6].trim(), "… 4 more lines · Ctrl+O");
 
-    let rows = screen.rows_after("• Delete c.txt  −4", 1);
+    let rows = screen.rows_after("✓ Delete c.txt  −4", 1);
     assert!(
         !rows[0].contains("gone"),
         "a deleted file shows only its title: {rows:?}"
@@ -692,7 +692,7 @@ fn hunks_are_parted_by_a_dotted_line_naming_their_function() {
     ] {
         let mut screen = Screen::new(look, 30);
         screen.changed("c1", "src/table.rs", update(), RUST_DIFF);
-        let rows = screen.rows_after("• Edit src/table.rs  +2 −2", 10);
+        let rows = screen.rows_after("✓ Edit src/table.rs  +2 −2", 10);
         let name = "fn push_cells(&mut self, alignments: &[Alignment], widths: &[usize], cells";
         let gap = format!("        ⋯ {}…", &name[..usize::from(WIDTH) - 11]);
         assert_eq!(rows[6], gap, "{look:?}: cut to the window");

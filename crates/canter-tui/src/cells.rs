@@ -51,6 +51,8 @@ const ARROW: &str = " → ";
 const ADD_LINES: usize = 6;
 /// Where a card's diff lines start: under the text of its command output.
 const DIFF_INDENT: &str = "    ";
+/// Between a card's title and its status.
+const STATUS_SEPARATOR: &str = " · ";
 
 /// A blank row, `› ` and the text, then another blank row. `source` names the
 /// client that sent it when that was not this terminal.
@@ -236,7 +238,7 @@ pub(crate) fn item(
             let label =
                 command_id.map_or_else(|| "Auto wake".into(), |id| format!("Background #{id}"));
             let mut rows = vec![title(
-                done(theme::accent()),
+                (dot(theme::accent()), theme::accent().bold()),
                 "Event ",
                 vec![Span::raw(label)],
                 Vec::new(),
@@ -298,10 +300,14 @@ pub(crate) fn item(
             if !details && body.len() > 8 {
                 let count = body.len() - 8;
                 body.truncate(8);
-                body.extend(wrap_all(
-                    &agent_message(&format!("… {count} more lines · Ctrl+O to expand"), width),
-                    width,
-                ));
+                // A copy keeps the note, without the spaces around it.
+                let chip = fold_chip(&format!("⋯ {count} more lines · Ctrl+O to expand"));
+                let start = 3;
+                let end = 2 + str_width(&chip.content) - 1;
+                body.push(Row {
+                    text: Some(start..end),
+                    ..Row::marks(Line::from(vec![Span::raw("  "), chip]))
+                });
             }
             rows.extend(body);
             if let Some(feedback) = answer
@@ -1025,9 +1031,10 @@ fn path_span(path: &str, cwd: &str) -> Span<'static> {
     }
 }
 
-/// What a read row says after its path: how it went, the lines read
-/// (`lines 1–37`), or an image's format and size.
-fn read_detail(item: &Item) -> Option<Span<'static>> {
+/// What a read row says after its path: how it went, after a grey ` · `;
+/// or the lines read (`lines 1–37`) or an image's format and size, after
+/// two spaces.
+fn read_detail(item: &Item) -> Vec<Span<'static>> {
     let Item::FileRead {
         start_line,
         content,
@@ -1036,7 +1043,7 @@ fn read_detail(item: &Item) -> Option<Span<'static>> {
         ..
     } = item
     else {
-        return None;
+        return Vec::new();
     };
     let dim = theme::secondary();
     let image = content_items.iter().find_map(|item| match item {
@@ -1048,10 +1055,10 @@ fn read_detail(item: &Item) -> Option<Span<'static>> {
         _ => None,
     });
     let lines = content.lines().count() as u32;
-    Some(match status {
-        ItemStatus::InProgress => return None,
-        ItemStatus::Failed => Span::styled("  failed", theme::failure()),
-        ItemStatus::Declined => Span::styled("  declined", dim),
+    vec![match status {
+        ItemStatus::InProgress => return Vec::new(),
+        ItemStatus::Failed => return vec![status_separator(), failure_status("failed")],
+        ItemStatus::Declined => return vec![status_separator(), Span::styled("declined", dim)],
         _ if image.is_some() => Span::styled(format!("  {}", image.unwrap_or_default()), dim),
         _ if lines == 0 => Span::styled("  empty", dim),
         _ if lines == 1 => Span::styled(format!("  line {start_line}"), dim),
@@ -1059,7 +1066,7 @@ fn read_detail(item: &Item) -> Option<Span<'static>> {
             format!("  lines {start_line}–{}", start_line + lines - 1),
             dim,
         ),
-    })
+    }]
 }
 
 /// `Read <path>  lines 1–37` after `lead`, the path a link, fitted to
@@ -1161,17 +1168,15 @@ pub(crate) fn explored(
         return Some(Vec::new());
     }
     let dim = theme::secondary();
+    let (mark, verb) = self::done(theme::explored());
     let mut rows = vec![Row::text_from(
-        Line::from(vec![
-            dot(theme::explored()),
-            Span::styled("Explored", theme::explored().bold()),
-        ]),
+        Line::from(vec![mark, Span::styled("Explored", verb)]),
         2,
     )];
     if details {
         for (at, item) in done.iter().enumerate() {
             let lead = if at == 0 {
-                vec![Span::raw("  "), Span::styled("└ ", dim)]
+                vec![Span::raw("  "), Span::styled("└ ", theme::guide())]
             } else {
                 vec![Span::raw("    ")]
             };
@@ -1204,7 +1209,7 @@ pub(crate) fn explored(
     let line = LogicalLine {
         indent: vec![
             Span::raw("  "),
-            Span::styled("└ ", dim),
+            Span::styled("└ ", theme::guide()),
             Span::styled("Read ", theme::read()),
         ],
         hang: vec![Span::raw(" ".repeat(9))],
@@ -1321,7 +1326,7 @@ pub(crate) fn waiting(
                     change,
                     &diff,
                     plain(theme::secondary()),
-                    None,
+                    Vec::new(),
                     cwd,
                     usize::from(width),
                 );
@@ -1340,19 +1345,20 @@ fn file_change(
     width: u16,
 ) -> Vec<Row> {
     let diff = Diff::parse(&sanitize(&change.diff), &change.kind, &change.path);
-    let (mark, suffix) = match status {
+    let (mark, status) = match status {
         ItemStatus::Blocked => (
             plain(theme::warning()),
-            Some(Span::styled("  blocked (Plan mode)", theme::warning())),
+            Some(Span::styled("blocked (Plan mode)", theme::warning())),
         ),
         ItemStatus::InProgress => (plain(theme::secondary()), None),
-        ItemStatus::Failed => (failed(), Some(Span::styled("  failed", theme::failure()))),
+        ItemStatus::Failed => (failed(), Some(failure_status("failed"))),
         ItemStatus::Declined => (
             plain(theme::secondary()),
-            Some(Span::styled("  declined", theme::secondary())),
+            Some(Span::styled("declined", theme::secondary())),
         ),
         _ => (done(theme::edited()), None),
     };
+    let suffix = status.map_or_else(Vec::new, |status| vec![status_separator(), status]);
     let (header, links) = change_header(change, &diff, mark, suffix, cwd, usize::from(width));
     let mut rows = vec![cut_row(header, links, width)];
     let limit = match &change.kind {
@@ -1365,15 +1371,15 @@ fn file_change(
     rows
 }
 
-/// `● 改 path  +a −r` and `suffix`: a file change's title, its paths
-/// shortened to fit in `width` columns ([`fit_path_spans`]), and the link
-/// on its path as drawn: the file as it is after the change, so none for a
-/// deleted file, and the new path of a moved one.
+/// `✓ Edit path  +a −r` and `suffix` (` · ` and a status): a file change's
+/// title, its paths shortened to fit in `width` columns ([`fit_path_spans`]),
+/// and the link on its path as drawn: the file as it is after the change, so
+/// none for a deleted file, and the new path of a moved one.
 fn change_header(
     change: &FileUpdateChange,
     diff: &Diff,
     (bullet, verb_style): Mark,
-    suffix: Option<Span<'static>>,
+    suffix: Vec<Span<'static>>,
     cwd: &str,
     width: usize,
 ) -> (Vec<Span<'static>>, Vec<(Range<usize>, Target)>) {
@@ -1525,11 +1531,8 @@ fn command_card(
         ),
         _ if searched_nothing => (plain(dim), vec![Span::styled("No matches", dim)]),
         (_, Some(0)) => (done(theme::success()), Vec::new()),
-        (_, Some(code)) => (
-            failed(),
-            vec![Span::styled(format!("exit {code}"), theme::failure())],
-        ),
-        (ItemStatus::Failed, None) => (failed(), vec![Span::styled("failed", theme::failure())]),
+        (_, Some(code)) => (failed(), vec![failure_status(format!("exit {code}"))]),
+        (ItemStatus::Failed, None) => (failed(), vec![failure_status("failed")]),
         (_, None) => (done(theme::success()), Vec::new()),
     };
     // How long it took, from a second on.
@@ -1576,12 +1579,13 @@ fn not_sandboxed(right: &mut Vec<Span<'static>>) {
     right.push(Span::styled("not sandboxed", dim));
 }
 
-/// The bar before a card's output: red when the card failed, else grey.
+/// The bar before a card's output: red when the card failed, else a
+/// grey fainter than the output ([`theme::guide`]).
 fn bar(failed: bool) -> Style {
     if failed {
         theme::failure()
     } else {
-        theme::secondary()
+        theme::guide()
     }
 }
 
@@ -1713,7 +1717,7 @@ fn agent_tool(item: &Item, details: bool, width: u16) -> Vec<Row> {
     };
     let mut rows = vec![title(mark, verb, object, right, None, width)];
     let branch = |spans: Vec<Span<'static>>| {
-        let mut line = vec![Span::raw("    "), Span::styled("└ ", dim)];
+        let mut line = vec![Span::raw("    "), Span::styled("└ ", theme::guide())];
         line.extend(spans);
         Row::text_from(Line::from(truncate(line, usize::from(width))), 6)
     };
@@ -1938,7 +1942,7 @@ fn status_marks(status: ItemStatus, kind: Style) -> (Mark, Vec<Span<'static>>) {
         ),
         ItemStatus::InProgress => (plain(dim), vec![Span::styled("running", dim)]),
         ItemStatus::Declined => (plain(dim), vec![Span::styled("declined", dim)]),
-        ItemStatus::Failed => (failed(), vec![Span::styled("failed", theme::failure())]),
+        ItemStatus::Failed => (failed(), vec![failure_status("failed")]),
         _ => (done(kind), Vec::new()),
     }
 }
@@ -1960,8 +1964,10 @@ enum Gutter {
     /// what is folded.
     Bar(Style),
     /// A command's: `  └ ` on the first row, four spaces on the others;
-    /// `+ N lines (Ctrl+O to expand)` after the first lines, `… N lines
-    /// above (Ctrl+O to expand)` before the last ones.
+    /// ` ⋯ N more lines · Ctrl+O to expand ` after the first lines,
+    /// ` ⋯ N lines above · Ctrl+O to expand ` before the last ones, each on
+    /// a background ([`fold_chip`]). Lines that look like a diff's are
+    /// coloured as one ([`diff_like`]).
     Branch,
 }
 
@@ -1976,6 +1982,8 @@ fn lines_rows(output: &str, fold: Fold, style: Style, gutter: Gutter, width: u16
     enum Shown {
         Line(usize),
         Note(String),
+        /// A note on a background: [`fold_chip`].
+        Chip(String),
     }
     let dim = theme::secondary();
     let output = sanitize(output);
@@ -1985,39 +1993,44 @@ fn lines_rows(output: &str, fold: Fold, style: Style, gutter: Gutter, width: u16
     }
     let all = lines.len();
     let branch = matches!(gutter, Gutter::Branch);
-    let counted = |count: usize| {
-        if count == 1 {
-            "1 line".to_owned()
-        } else {
-            format!("{count} lines")
-        }
-    };
+    let lines_word = |count: usize| if count == 1 { "line" } else { "lines" };
     // What is folded after the first lines, and before the last ones.
     let after = |hidden: usize| {
         if branch {
-            format!("+ {} (Ctrl+O to expand)", counted(hidden))
+            Shown::Chip(format!(
+                "⋯ {hidden} more {} · Ctrl+O to expand",
+                lines_word(hidden)
+            ))
         } else {
-            format!("… {hidden} more lines · Ctrl+O")
+            Shown::Note(format!("… {hidden} more lines · Ctrl+O"))
         }
     };
     let before = |hidden: usize| {
         if branch {
-            format!("… {} above (Ctrl+O to expand)", counted(hidden))
+            Shown::Chip(format!(
+                "⋯ {hidden} {} above · Ctrl+O to expand",
+                lines_word(hidden)
+            ))
         } else {
-            format!("… {hidden} more lines · Ctrl+O")
+            Shown::Note(format!("… {hidden} more lines · Ctrl+O"))
         }
+    };
+    let diff = if branch {
+        diff_like(&lines)
+    } else {
+        Vec::new()
     };
     let mut shown = Vec::new();
     match fold {
         Fold::Head(keep) => {
             shown.extend((0..all.min(keep)).map(Shown::Line));
             if all > keep {
-                shown.push(Shown::Note(after(all - keep)));
+                shown.push(after(all - keep));
             }
         }
         Fold::Tail(keep) => {
             if all > keep {
-                shown.push(Shown::Note(before(all - keep)));
+                shown.push(before(all - keep));
             }
             shown.extend((all.saturating_sub(keep)..all).map(Shown::Line));
         }
@@ -2038,14 +2051,20 @@ fn lines_rows(output: &str, fold: Fold, style: Style, gutter: Gutter, width: u16
         .map(|(at, shown)| {
             let lead = match gutter {
                 Gutter::Bar(bar) => Span::styled(GUTTER, bar),
-                Gutter::Branch if at == 0 => Span::styled(BRANCH, dim),
+                Gutter::Branch if at == 0 => Span::styled(BRANCH, theme::guide()),
                 Gutter::Branch => Span::raw(" ".repeat(str_width(BRANCH))),
             };
             let from = str_width(&lead.content);
             match shown {
                 Shown::Line(source) => {
                     let spans = truncate(
-                        vec![lead, Span::styled(lines[source].to_owned(), style)],
+                        vec![
+                            lead,
+                            Span::styled(
+                                lines[source].to_owned(),
+                                diff.get(source).copied().flatten().unwrap_or(style),
+                            ),
+                        ],
                         usize::from(width),
                     );
                     Row {
@@ -2054,6 +2073,64 @@ fn lines_rows(output: &str, fold: Fold, style: Style, gutter: Gutter, width: u16
                     }
                 }
                 Shown::Note(text) => Row::marks(Line::from(vec![lead, Span::styled(text, dim)])),
+                Shown::Chip(text) => Row::marks(Line::from(vec![lead, fold_chip(&text)])),
+            }
+        })
+        .collect()
+}
+
+/// What says a card is folded, ` ⋯ 63 more lines · Ctrl+O to expand `:
+/// dim, a space either side, on [`theme::fold_bg`] when the terminal can
+/// show it.
+fn fold_chip(text: &str) -> Span<'static> {
+    let style = theme::secondary();
+    let style = match theme::fold_bg() {
+        Some(color) => style.bg(color),
+        None => style,
+    };
+    Span::styled(format!(" {text} "), style)
+}
+
+/// The colour of each of a command's output lines that looks like a line
+/// of a diff, `None` for the others: once a line starting `@@ ` has come,
+/// a line starting `+` or `-` (not `+++` or `---`); and anywhere, a line
+/// starting, after any spaces, with a number, a space, `+` or `-` and a
+/// space. Added lines green on light green, removed ones red on light red,
+/// as a file change's diff.
+fn diff_like(lines: &[&str]) -> Vec<Option<Style>> {
+    let on = |style: Style, background: Option<Color>| match background {
+        Some(color) => style.bg(color),
+        None => style,
+    };
+    let added = on(theme::diff_added(), theme::diff_added_bg());
+    let removed = on(theme::diff_removed(), theme::diff_removed_bg());
+    let mut hunk = false;
+    lines
+        .iter()
+        .map(|line| {
+            if line.starts_with("@@ ") {
+                hunk = true;
+                return None;
+            }
+            if hunk {
+                if line.starts_with('+') && !line.starts_with("+++") {
+                    return Some(added);
+                }
+                if line.starts_with('-') && !line.starts_with("---") {
+                    return Some(removed);
+                }
+            }
+            let rest = line.trim_start_matches(' ');
+            let after = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+            if after.len() == rest.len() {
+                return None;
+            }
+            if after.starts_with(" + ") {
+                Some(added)
+            } else if after.starts_with(" - ") {
+                Some(removed)
+            } else {
+                None
             }
         })
         .collect()
@@ -2110,7 +2187,8 @@ fn command_title(
     first.extend(rows[0].line.spans.drain(1..));
     let first_width = spans_width(&first);
     let status_width = spans_width(&status);
-    let same_row = rows.len() == 1 && first_width + 2 + status_width <= usize::from(width);
+    let same_row = rows.len() == 1
+        && first_width + str_width(STATUS_SEPARATOR) + status_width <= usize::from(width);
     let (line, left) = if same_row || status.is_empty() {
         after_title(first, status.clone(), usize::from(width))
     } else {
@@ -2200,10 +2278,10 @@ fn dot(style: Style) -> Span<'static> {
 /// A card's mark and the style of the verb after it.
 type Mark = (Span<'static>, Style);
 
-/// A finished card's mark and verb, both in `style` (the colour of its
-/// kind, or red when it failed), the verb bold.
+/// A finished card's mark and verb: `✓` and the verb in `style`, the
+/// colour of its kind, the verb bold.
 fn done(style: Style) -> Mark {
-    (dot(style), style.bold())
+    (Span::styled("✓ ", style), style.bold())
 }
 
 /// A mark in `style` and the verb plainly bold: a card still going,
@@ -2212,14 +2290,26 @@ fn plain(style: Style) -> Mark {
     (dot(style), Style::new().bold())
 }
 
-/// A failed card's mark and verb: red.
+/// A failed card's mark and verb: a red `✗` and the verb red and bold.
 fn failed() -> Mark {
-    done(theme::failure())
+    let style = theme::failure();
+    (Span::styled("✗ ", style), style.bold())
 }
 
-/// `left`, then two spaces and `right` (a card's status); the left side is
-/// cut to leave room for it. Also returns where the left side ends as drawn
-/// (`usize::MAX` when `right` was left out, the window being too narrow).
+/// A failed card's status, such as `exit 1` or `failed`: red and bold.
+fn failure_status(text: impl Into<String>) -> Span<'static> {
+    Span::styled(text.into(), theme::failure().bold())
+}
+
+/// Between a card's title and its status: a grey ` · `.
+fn status_separator() -> Span<'static> {
+    Span::styled(STATUS_SEPARATOR, theme::secondary())
+}
+
+/// `left`, then a grey ` · ` and `right` (a card's status); the left side
+/// is cut to leave room for it. Also returns where the left side ends as
+/// drawn (`usize::MAX` when `right` was left out, the window being too
+/// narrow).
 fn after_title(
     left: Vec<Span<'static>>,
     right: Vec<Span<'static>>,
@@ -2231,19 +2321,19 @@ fn after_title(
     }
     let mut spans = truncate(left, room);
     let left_end = drawn_width(&spans);
-    spans.push(Span::raw("  "));
+    spans.push(status_separator());
     spans.extend(right);
     (Line::from(spans), left_end)
 }
 
 /// The columns [`after_title`] leaves the left side: all of `width` when
-/// `right` is left out, otherwise up to two columns before it.
+/// `right` is left out, otherwise up to the ` · ` before it.
 fn left_room(right: &[Span<'static>], width: usize) -> usize {
     let right_width = spans_width(right);
     if right.is_empty() || width < right_width + 12 {
         width
     } else {
-        width - right_width - 2
+        width - right_width - str_width(STATUS_SEPARATOR)
     }
 }
 
