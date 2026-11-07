@@ -1158,10 +1158,19 @@ impl Tools {
                 self.executor.cwd(),
             )
         })?;
-        if tool == Tool::AstGrep
-            && arguments.is_object()
-            && matches!(arguments.get("path"), None | Some(Value::Null))
-        {
+        // serde also accepts a struct from a sequence, so a type check has to
+        // happen here: an array must not skip the default path and root rules.
+        if tool == Tool::AstGrep && !arguments.is_object() {
+            return Err(tool_error(
+                tool,
+                id,
+                &arguments,
+                "Invalid arguments: ast_grep arguments must be a JSON object".into(),
+                ToolOutcome::Failed,
+                self.executor.cwd(),
+            ));
+        }
+        if tool == Tool::AstGrep && matches!(arguments.get("path"), None | Some(Value::Null)) {
             // The working directory is the default root; give it to path rules
             // and to the approval request like any other path. An omitted path
             // and an explicit null take the same branch.

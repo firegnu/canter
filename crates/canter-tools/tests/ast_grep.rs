@@ -252,7 +252,11 @@ async fn non_object_arguments_fail_and_a_null_path_uses_the_session_directory() 
     let root = tempfile::tempdir().unwrap();
     write(root.path(), "one.rs", "value.unwrap();\n");
     let tools = tools(root.path());
-    for arguments in [json!(["$X.unwrap()"]), json!("$X.unwrap()")] {
+    for arguments in [
+        json!(["$X.unwrap()"]),
+        json!(["$X.unwrap()", null, null, 0]),
+        json!("$X.unwrap()"),
+    ] {
         let error = tools
             .prepare(
                 Tool::from_name("ast_grep").unwrap(),
