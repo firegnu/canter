@@ -1392,7 +1392,7 @@ impl Tools {
                     }
                     let start = before
                         .find(&replacement.old_text)
-                        .ok_or_else(|| format!("edit {}: oldText not found", index + 1))?;
+                        .ok_or_else(|| edit_not_found(index + 1, before, &replacement.old_text))?;
                     // Advance one character, not the match length: aaa contains aa twice.
                     let next = start
                         + replacement
@@ -2402,5 +2402,107 @@ fn tool_error(
         item,
         text,
         outcome,
+    }
+}
+
+/// How much of an unmatched edit's nearest text an error message shows.
+const HINT_MAX_LINES: usize = 6;
+const HINT_MAX_LINE_CHARS: usize = 240;
+
+fn edit_not_found(index: usize, before: &str, old_text: &str) -> String {
+    let mut message = format!("edit {index}: oldText not found");
+    if let Some(hint) = edit_hint(before, old_text) {
+        message.push_str(&hint);
+    }
+    message
+}
+
+/// The file lines closest to an unmatched oldText and one sentence on how they
+/// differ. Only whitespace-level differences qualify: text that differs in
+/// content is not close enough to show without guessing.
+fn edit_hint(before: &str, old_text: &str) -> Option<String> {
+    let file_lines: Vec<&str> = before.split('\n').map(without_carriage_return).collect();
+    let old_lines: Vec<&str> = old_text.split('\n').map(without_carriage_return).collect();
+    let count = old_lines.len() - usize::from(old_text.ends_with('\n'));
+    if count == 0 || count > file_lines.len() {
+        return None;
+    }
+    let old_lines = &old_lines[..count];
+    let start = (0..=file_lines.len() - count).find(|&start| {
+        file_lines[start..start + count]
+            .iter()
+            .zip(old_lines)
+            .all(|(line, old)| line.trim() == old.trim())
+    })?;
+    let matched = &file_lines[start..start + count];
+
+    let mut leading = false;
+    let mut trailing = false;
+    for (line, old) in matched.iter().zip(old_lines) {
+        if line == old {
+            continue;
+        }
+        if line.trim_end() == old.trim_end() {
+            trailing = true;
+        } else if line.trim_start() == old.trim_start() {
+            leading = true;
+        } else {
+            leading = true;
+            trailing = true;
+        }
+    }
+    let mut differences = Vec::new();
+    if leading {
+        differences.push("leading indentation");
+    }
+    if trailing {
+        differences.push("trailing whitespace");
+    }
+    if old_text.contains('\n') && before.contains("\r\n") != old_text.contains("\r\n") {
+        differences.push("line endings (CRLF vs LF)");
+    }
+    if differences.is_empty() {
+        return None;
+    }
+
+    let first_difference = matched
+        .iter()
+        .zip(old_lines)
+        .position(|(line, old)| line != old)
+        .unwrap_or(0);
+    let from = first_difference
+        .saturating_sub(HINT_MAX_LINES / 2)
+        .min(count.saturating_sub(HINT_MAX_LINES));
+    let to = (from + HINT_MAX_LINES).min(count);
+    let range = if count == 1 {
+        format!("line {}", start + 1)
+    } else {
+        format!("lines {}-{}", start + 1, start + count)
+    };
+    let showing = if from > 0 || to < count {
+        format!(", showing lines {}-{}", start + from + 1, start + to)
+    } else {
+        String::new()
+    };
+    let mut hint = format!("\nClosest text, {range}{showing}:");
+    for (offset, line) in matched[from..to].iter().enumerate() {
+        let line = hint_line(line);
+        hint.push_str(&format!("\n{}: {line}", start + from + offset + 1));
+    }
+    hint.push_str(&format!(
+        "\nThey differ only in {}.",
+        differences.join(" and ")
+    ));
+    Some(hint)
+}
+
+fn without_carriage_return(line: &str) -> &str {
+    line.strip_suffix('\r').unwrap_or(line)
+}
+
+fn hint_line(line: &str) -> std::borrow::Cow<'_, str> {
+    match line.char_indices().nth(HINT_MAX_LINE_CHARS) {
+        Some((offset, _)) => format!("{}…", &line[..offset]).into(),
+        None => line.into(),
     }
 }

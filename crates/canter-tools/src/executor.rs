@@ -246,9 +246,11 @@ impl LocalExecutor {
         };
         if let Some(path) = self.scratch.path() {
             launch.env("TMPDIR", &path);
-            if sandboxed {
-                launch.env("TMPPREFIX", path.join("zsh"));
-            }
+        }
+        // The sandbox profile names the resolved directory, so zsh's own temp
+        // prefix keeps the resolved spelling too.
+        if sandboxed && let Some(path) = self.scratch.resolved_path() {
+            launch.env("TMPPREFIX", path.join("zsh"));
         }
         launch
             .args(["-c", command])

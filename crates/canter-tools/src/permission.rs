@@ -175,7 +175,7 @@ impl PermissionGate {
         let paths = call.prepared_paths();
         call.executor
             .scratch_directory()
-            .and_then(|scratch| scratch.path())
+            .and_then(|scratch| scratch.resolved_path())
             .is_some_and(|root| {
                 !paths.is_empty() && paths.into_iter().all(|(_, path)| path.starts_with(&root))
             })

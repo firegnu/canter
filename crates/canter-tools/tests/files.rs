@@ -598,6 +598,64 @@ async fn edit_validates_all_replacements_against_the_original_before_writing() {
 }
 
 #[tokio::test]
+async fn edit_not_found_shows_the_closest_text_and_the_difference() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools(&dir);
+    let cancel = CancellationToken::new();
+    let cases: [(&str, &str, &[&str]); 3] = [
+        (
+            "alpha\n  indented = 1;\n",
+            "    indented = 1;",
+            &["line 2", "2:   indented = 1;", "leading indentation"],
+        ),
+        (
+            "alpha\ntrimmed = 1;\n",
+            "trimmed = 1;  ",
+            &["line 2", "2: trimmed = 1;", "trailing whitespace"],
+        ),
+        (
+            "alpha\r\nbeta\r\n",
+            "alpha\nbeta",
+            &["lines 1-2", "1: alpha", "2: beta", "line endings"],
+        ),
+    ];
+    for (content, old_text, expected) in cases {
+        std::fs::write(dir.path().join("notes"), content).unwrap();
+        let raw =
+            serde_json::json!({"path":"notes","edits":[{"oldText":old_text,"newText":"changed"}]})
+                .to_string();
+        let error = match tools.prepare(Tool::Edit, "e1", &raw, &cancel).await {
+            Err(error) => error,
+            Ok(_) => panic!("unmatched edit should be rejected"),
+        };
+        assert!(
+            error.text.contains("edit 1: oldText not found"),
+            "{}",
+            error.text
+        );
+        for needle in expected {
+            assert!(
+                error.text.contains(needle),
+                "missing {needle}: {}",
+                error.text
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("notes")).unwrap(),
+            content
+        );
+    }
+    // Text that differs in content gets no invented candidate.
+    std::fs::write(dir.path().join("notes"), "alpha\nbeta\n").unwrap();
+    let raw = r#"{"path":"notes","edits":[{"oldText":"gamma delta","newText":"changed"}]}"#;
+    let error = match tools.prepare(Tool::Edit, "e1", raw, &cancel).await {
+        Err(error) => error,
+        Ok(_) => panic!("unmatched edit should be rejected"),
+    };
+    assert_eq!(error.text, "edit 1: oldText not found");
+}
+
+#[tokio::test]
 async fn invalid_json_or_missing_fields_never_mutate_files() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("notes");
