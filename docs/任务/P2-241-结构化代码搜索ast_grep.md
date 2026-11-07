@@ -78,3 +78,47 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。另写参考了 omp 哪些地方、有没有搬代码。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+### 做了什么
+
+- 新只读工具 `ast_grep`：`crates/canter-tools/src/ast_grep.rs` 实现参数解析和模式编译、目录遍历（复用已有的 `ignore`，照 `.gitignore`，不跟随符号链接）、逐文件过执行器和私有文件检查及 `rules.json`、解析匹配、分页、跳过与语法错误说明；`lib.rs` 接入 `Tool::AstGrep`（插在 `read` 后）、`Action::AstGrep`、工具定义、`prepare`/`execute`、`Tools.file_rules`；`permission.rs` 走 `read` 同一套 `evaluate` 和文件规则，计划模式 `evaluate_plan`、审查轮 `evaluate_review` 放行。
+- 依赖：`ast-grep-core = 0.40.0`、`tree-sitter-rust =0.24.2`、`tree-sitter-python =0.25.0`、`tree-sitter-javascript =0.25.0`、`tree-sitter-typescript =0.23.2`；`cargo tree -i tree-sitter` 确认仍只有 `tree-sitter v0.25.10` 一份。
+- 协议：新增 `AstGrepMatch` 和 `Item::AstGrep`（序列化为 `astGrep`），重新生成 `generated/`，加兼容性测试（旧客户端按 Unknown 跳过）；终端卡片、导出、`canter exec`、统计、系统提示词 `SEARCH_BULLET`、`roles.rs` 的 `explorer_tool`，以及 `session.rs` / `configuration.rs` 传 `command_rules_path` 都接上。
+- 文档：`docs/usage.md` 工具表加一行并补只读和文件规则说明；`docs/DESIGN.md` 加「结构化搜索（P2-241）」条目。
+
+### 验证了什么
+
+- 针对性测试 `crates/canter-tools/tests/ast_grep.rs` 11 个全过：五种语言按结构找 `.unwrap()`、注释和字符串里的同样文字不误报、`.gitignore`、二进制和未知扩展名、50 条分页与 `offset` 越界、模式错误、某语言模式解析不了、语法错误文件计数、`rules.json` 拒绝和要问的文件加私有文件加指向私有文件的符号链接均不出现也不读、`rules.json` 不可读时直接失败、计划模式与审查轮、取消。
+- `cargo nextest run -p canter-tools`：218 tests，217 passed，1 failed；失败的是 `guardian concurrent_commands_do_not_inherit_each_others_pipes`（`Os { code: 2, NotFound }`），在 main 上同样失败，属本机环境问题。
+- `canter-protocol` 55 passed；`canter-core` 256 passed；`canter-server` 417 passed；`canter` 228 passed；`canter-tui` 704 tests，703 passed，1 failed：`statusline::tests::config_command_gets_only_public_json_and_terminal_environment`（本机 `TMPDIR=/private/tmp/...` 里带 `private`），main 同样失败。新增的 `tool_cards` 20 个（含 ast_grep 卡片）单独跑过。
+- `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过；`cargo fmt` 重排过新文件，之后又重跑了上面两个针对性测试。
+- 因工具列表变化更新的逐字节期望：`crates/canter-core/tests/data/core_deepseek.txt`（提示词快照）、`crates/canter-core/tests/fixtures/p2-223-main-requests.jsonl`、`crates/canter-core/tests/sandbox-disabled-request.json`、`crates/canter/tests/fixtures/no_mcp_request.json`（请求体里多一条 `ast_grep` 工具定义）；工具名列表加 `ast_grep` 的有 `tests/web_fetch.rs`、`tests/web_search.rs`、`crates/canter/tests/support/mcp.rs`、`crates/canter/tests/tui.rs`。
+
+### 拿主意的地方
+
+- 依赖版本：`ast-grep-core` 0.41 及以后要 tree-sitter 0.26/0.27，0.51 还要 rust 1.90（workspace 是 1.89），所以停在 0.40.0（依赖 `tree-sitter ^0.25.4`，配得上 `=0.25.10`）。
+- 语言映射：`.ts`/`.mts`/`.cts` 按 TypeScript、`.tsx` 按 TSX 语法、`.js`/`.jsx`/`.mjs`/`.cjs` 按 JavaScript；`lang=typescript` 同时选 `.ts` 和 `.tsx`，`lang=tsx` 只选 `.tsx`。
+- 没给 `lang` 时把模式对五种语法各编译一次，有一种能编译就不算整体错误；编译不了的语言的文件只计数并在末尾说明，不把整次搜索判错。
+- 没给 `path` 时在 `prepare` 里把会话目录写进 `arguments["path"]`，让路径规则和批准参数与显式给 `path` 时一致（`write`/`edit` 也是这样做的）。
+- 目录里被规则挡住或读不了的文件只报个数（`Skipped N files that file rules block, require approval for, or that could not be read.`），不列路径；语法树有错的文件也只报个数。二进制、非 UTF-8、未知扩展名静默跳过，不计入跳过数（和 `rg` 一样）。
+- `offset` 按条跨文件累计；结果按路径、行、列排序，每条只留前三行（多行再写 `… (N more lines)`）。
+
+### 没做的事
+
+- 不做 `ast_edit`，不加列表外的语言，不改 `rg`、`read` 的路径规则和别的工具的行为。
+- 没加 `ast_grep` 专用的配置项、批准或沙箱行为，权限完全复用 `read`。
+
+### 踩过的坑
+
+- `tree-sitter` 配版比预计窄：`ast-grep-core` 0.41+ 要 0.26、0.50 要 0.27、0.51 要 rust 1.90，只有 0.40.0 配得上现有的 `=0.25.10`；语法包也得挑依赖 0.25 的那几个版本。
+- 同一个模式不是每种语言都能编译（例如 `$X.unwrap(` 在有的语法里仍是合法节点），所以模式错误必须按语言分别判断和说明，不能一个结论了事。
+- `ast_grep` 插在 `read` 后面，`crates/canter/tests/support/mcp.rs` 里按位置取工具的地方从 `tools[18]` 变 `tools[19]`，20 个工具的注释也要同步改。
+- 逐字节 fixture 不能靠手改：按测试提示临时改测试写盘、再恢复测试代码才得到正确内容。
+- 中途误跑过一次 `python3` 的临时命令（只读、无副作用），发现后一律改用 Rust 测试和 shell 完成。
+- 两个预存在失败（`canter-tools` 的 guardian、`canter-tui` 的 statusline）与本件无关，不要当成本次回归。
+
+### 参考了 omp 哪里，有没有搬代码
+
+看 `/tmp/oh-my-pi/crates/pi-ast/src/language/mod.rs`（语言适配和 expando 字符）、`search/mod.rs`（遍历、分页、错误报告）、`ops.rs`（模式编译与匹配），以及 `packages/coding-agent/src/prompts/tools/ast-grep.md` 的说明写法。没有搬代码：语言枚举、遍历、渲染、权限和协议都照 canter 现有结构自己写。
