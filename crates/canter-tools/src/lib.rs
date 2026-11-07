@@ -1,5 +1,6 @@
 //! Session tools and a replaceable executor. This crate emits no protocol events.
 pub mod apply_patch;
+pub(crate) mod ast_grep;
 mod executor;
 mod guardian;
 pub mod lsp;
@@ -51,6 +52,7 @@ pub fn split_background_command(command: &str) -> (&str, bool) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tool {
     Read,
+    AstGrep,
     Write,
     Edit,
     ApplyPatch,
@@ -84,8 +86,9 @@ pub struct ToolDefinition {
 }
 
 impl Tool {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Read,
+        Self::AstGrep,
         Self::Write,
         Self::Edit,
         Self::Shell,
@@ -113,6 +116,7 @@ impl Tool {
     pub fn name(self) -> &'static str {
         match self {
             Self::Read => "read",
+            Self::AstGrep => "ast_grep",
             Self::Write => "write",
             Self::Edit => "edit",
             Self::ApplyPatch => "apply_patch",
@@ -133,9 +137,12 @@ impl Tool {
 
     pub fn risk(self) -> Risk {
         match self {
-            Self::Read | Self::ShellOutput | Self::ShellStop | Self::Monitor | Self::McpSearch => {
-                Risk::Read
-            }
+            Self::Read
+            | Self::AstGrep
+            | Self::ShellOutput
+            | Self::ShellStop
+            | Self::Monitor
+            | Self::McpSearch => Risk::Read,
             Self::Write | Self::Edit | Self::ApplyPatch => Risk::Write,
             Self::Shell | Self::Mcp | Self::McpCall | Self::WebFetch | Self::WebSearch => {
                 Risk::Execute
@@ -162,6 +169,19 @@ impl Tool {
             };
         }
 
+        if self == Self::AstGrep {
+            return ToolDefinition {
+                name: self.name(),
+                description: "Search code by syntax structure with one ast-grep pattern, for example `$X.unwrap()`; text in comments and strings is not matched. Languages: Rust, Python, TypeScript (including .tsx), JavaScript (including .jsx, .mjs, .cjs). path defaults to the session directory. Directories skip .gitignore entries, binary files and files of other languages; lang restricts the search. Returns up to 50 matches sorted by path and line, each as path:line:column and the matched code; when more exist, the result gives the total and the offset of the next page. An invalid pattern fails with the parser's reason.".into(),
+                parameters: json!({"type":"object","properties":{
+                    "pattern":{"type":"string","minLength":1},
+                    "path":{"type":"string","minLength":1},
+                    "lang":{"type":"string","enum":["rust","python","typescript","tsx","javascript"]},
+                    "offset":{"type":"integer","minimum":0,"default":0}
+                },"required":["pattern"],"additionalProperties":false}),
+                risk: self.risk(),
+            };
+        }
         if self == Self::WebSearch {
             return ToolDefinition {
                 name: self.name(),
@@ -471,6 +491,7 @@ enum Action {
     },
     AskUser(AskUserArgs),
     Read(ReadArgs),
+    AstGrep(ast_grep::Prepared),
     Change {
         path: String,
         original: Option<Vec<u8>>,
@@ -603,6 +624,14 @@ impl PreparedCall {
                 content: String::new(),
                 status,
             },
+            Action::AstGrep(prepared) => Item::AstGrep {
+                id: self.id.clone(),
+                pattern: prepared.args.pattern.clone(),
+                matches: Vec::new(),
+                total_matches: 0,
+                status,
+                error: None,
+            },
             Action::Change { change, .. } => Item::FileChange {
                 id: self.id.clone(),
                 changes: vec![change.clone()],
@@ -709,6 +738,7 @@ pub struct Tools {
     web_fetch_timeout: std::time::Duration,
     pdf: pdf::Converter,
     web_search: Option<web_search::WebSearch>,
+    file_rules: Option<std::path::PathBuf>,
 }
 
 impl Tools {
@@ -790,6 +820,7 @@ impl Tools {
         match self.find(name) {
             Some(
                 Tool::Read
+                | Tool::AstGrep
                 | Tool::WebFetch
                 | Tool::WebSearch
                 | Tool::AskUser
@@ -934,6 +965,7 @@ impl Tools {
             web_fetch_timeout: web_fetch::DEFAULT_TIMEOUT,
             pdf: pdf::Converter::default(),
             web_search: None,
+            file_rules: None,
         }
     }
 
@@ -966,6 +998,12 @@ impl Tools {
     }
     pub fn with_web_search(mut self, search: Option<web_search::WebSearch>) -> Self {
         self.web_search = search;
+        self
+    }
+    /// The server's global rules file, so a directory search can apply the same
+    /// file rules to every file it reads. The gate checks the search path itself.
+    pub fn with_file_rules(mut self, path: Option<std::path::PathBuf>) -> Self {
+        self.file_rules = path;
         self
     }
     pub fn with_mcp_tool_search(mut self, enabled: bool) -> Self {
@@ -1120,6 +1158,11 @@ impl Tools {
                 self.executor.cwd(),
             )
         })?;
+        if tool == Tool::AstGrep && arguments.get("path").is_none() {
+            // The working directory is the default root; give it to path rules
+            // and to the approval request like any other path.
+            arguments["path"] = json!(self.executor.cwd().to_string_lossy());
+        }
         let result = tokio::select! {
             biased;
             _ = cancel.cancelled() => Err("tool cancelled".to_owned()),
@@ -1305,6 +1348,7 @@ impl Tools {
                 }
                 Ok(Action::Read(read))
             }
+            Tool::AstGrep => ast_grep::prepare(arguments).map(Action::AstGrep),
             Tool::Write => {
                 let write: WriteArgs = parse(arguments)?;
                 validate_path(&write.path)?;
@@ -1677,6 +1721,39 @@ impl Tools {
                             ToolOutcome::Failed
                         },
                     ),
+                }
+            }
+            Action::AstGrep(prepared) => {
+                let root = call
+                    .resolved_path
+                    .as_deref()
+                    .unwrap_or_else(|| self.executor.cwd());
+                let run = ast_grep::run(
+                    self.executor.clone(),
+                    prepared,
+                    root,
+                    self.file_rules.as_deref(),
+                    cancel,
+                )
+                .await;
+                ToolOutput {
+                    output_size: run.original_bytes.into(),
+                    change_ticket: None,
+                    images: Vec::new(),
+                    text: run.text,
+                    outcome: run.outcome,
+                    item: Item::AstGrep {
+                        id: call.id.clone(),
+                        pattern: prepared.args.pattern.clone(),
+                        matches: run.matches,
+                        total_matches: run.total,
+                        status: if run.outcome == ToolOutcome::Completed {
+                            ItemStatus::Completed
+                        } else {
+                            ItemStatus::Failed
+                        },
+                        error: run.error,
+                    },
                 }
             }
             Action::Change {
@@ -2261,6 +2338,14 @@ fn tool_error(
             question: arguments["question"].as_str().unwrap_or_default().into(),
             answer: None,
             status: ItemStatus::Failed,
+        },
+        Tool::AstGrep => Item::AstGrep {
+            id,
+            pattern: arguments["pattern"].as_str().unwrap_or_default().into(),
+            matches: Vec::new(),
+            total_matches: 0,
+            status: ItemStatus::Failed,
+            error: Some(text.clone()),
         },
         Tool::Read => Item::FileRead {
             content_items: Vec::new(),

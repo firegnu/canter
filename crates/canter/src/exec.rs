@@ -403,6 +403,7 @@ fn progress(event: &EventPayload) {
                 ..
             } => Some(format!("Tool failed: shell (exit code {exit_code:?})")),
             Item::FileRead { status, .. }
+            | Item::AstGrep { status, .. }
             | Item::FileChange { status, .. }
             | Item::McpToolCall { status, .. }
             | Item::McpToolSearch { status, .. }
@@ -432,6 +433,7 @@ fn progress(event: &EventPayload) {
             Item::McpToolSearch { query, .. } => Some(format!("mcp_search: {query}")),
             Item::WebFetch { url, .. } => Some(format!("web_fetch: {url}")),
             Item::WebSearch { query, .. } => Some(format!("web_search: {query}")),
+            Item::AstGrep { pattern, .. } => Some(format!("ast_grep: {pattern}")),
             Item::UserInput { question, .. } => {
                 Some(format!("ask_user: {question} (no one is available)"))
             }

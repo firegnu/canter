@@ -47,6 +47,38 @@ fn web_search_results_round_trip_and_legacy_clients_skip_the_item() {
 }
 
 #[test]
+fn ast_grep_matches_round_trip_and_legacy_clients_skip_the_item() {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type")]
+    enum LegacyItem {
+        #[serde(rename = "agentMessage")]
+        Message { text: String },
+        #[serde(other)]
+        Unknown,
+    }
+    let item = json!({"type":"astGrep","id":"ast-1","pattern":"$X.unwrap()",
+        "matches":[{"path":"src/main.rs","line":12,"column":5,"text":"value.unwrap()"},
+            {"path":"src/lib.rs","line":3,"column":9,"text":"x.unwrap()"}],
+        "totalMatches":42,"status":"completed"});
+    let parsed: Item = serde_json::from_value(item.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), item);
+    assert_eq!(parsed.id(), Some("ast-1"));
+    assert!(matches!(
+        serde_json::from_value::<LegacyItem>(item).unwrap(),
+        LegacyItem::Unknown
+    ));
+    let message: LegacyItem =
+        serde_json::from_value(json!({"type":"agentMessage","id":"next","text":"continued"}))
+            .unwrap();
+    assert!(matches!(message, LegacyItem::Message { text } if text == "continued"));
+    let failed = json!({"type":"astGrep","id":"ast-2","pattern":"$X.unwrap(","matches":[],"totalMatches":0,"status":"failed","error":"Invalid ast-grep pattern"});
+    assert_eq!(
+        serde_json::to_value(serde_json::from_value::<Item>(failed.clone()).unwrap()).unwrap(),
+        failed
+    );
+}
+
+#[test]
 fn goals_are_optional_in_old_sessions_and_unknown_to_legacy_clients() {
     #[derive(serde::Deserialize)]
     #[serde(tag = "type")]

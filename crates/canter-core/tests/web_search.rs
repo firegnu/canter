@@ -540,6 +540,7 @@ async fn web_search_is_absent_from_unconfigured_session_requests() {
             names,
             [
                 "read",
+                "ast_grep",
                 "write",
                 "edit",
                 "shell",

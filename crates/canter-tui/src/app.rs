@@ -5866,6 +5866,7 @@ impl App {
             | Item::McpToolSearch { status, .. }
             | Item::WebFetch { status, .. }
             | Item::WebSearch { status, .. }
+            | Item::AstGrep { status, .. }
             | Item::CommandExecution { status, .. }
             | Item::FileChange { status, .. }
             | Item::FileRead { status, .. } => Some(*status),

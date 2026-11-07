@@ -28,6 +28,7 @@ pub(crate) fn explorer_tool(name: &str) -> bool {
     matches!(
         name,
         "read"
+            | "ast_grep"
             | "shell"
             | "web_fetch"
             | "web_search"

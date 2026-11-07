@@ -363,6 +363,37 @@ impl Body {
                 self.block(assistant, &tool(&summary, &tools.join("\n"), ""));
             }
 
+            Item::AstGrep {
+                pattern,
+                matches,
+                status,
+                error,
+                ..
+            } => {
+                let summary = format!(
+                    "Searched AST {} · {} match{} · {}",
+                    code_span(&one_line(pattern, LINE_CHARS)),
+                    matches.len(),
+                    if matches.len() == 1 { "" } else { "es" },
+                    outcome(*status, feedback)
+                );
+                let details = error.clone().unwrap_or_else(|| {
+                    matches
+                        .iter()
+                        .map(|matched| {
+                            format!(
+                                "{}:{}:{}\n  {}",
+                                matched.path,
+                                matched.line,
+                                matched.column,
+                                matched.text.replace('\n', "\n  ")
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                });
+                self.block(assistant, &tool(&summary, &details, ""));
+            }
             Item::WebSearch {
                 query,
                 results,

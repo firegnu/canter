@@ -642,6 +642,34 @@
         }
       ]
     },
+    "AstGrepMatch": {
+      "description": "One syntax-structure match; line and column are one-based.",
+      "properties": {
+        "column": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "line": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "line",
+        "column",
+        "text"
+      ],
+      "type": "object"
+    },
     "BackgroundCommand": {
       "properties": {
         "command": {
@@ -3696,6 +3724,50 @@
             "id",
             "summary",
             "content"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Structural code search; `matches` is the current page, `totalMatches` all found.",
+          "properties": {
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "matches": {
+              "items": {
+                "$ref": "#/$defs/AstGrepMatch"
+              },
+              "type": "array"
+            },
+            "pattern": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "totalMatches": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "astGrep",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "pattern",
+            "matches",
+            "totalMatches",
+            "status"
           ],
           "type": "object"
         },

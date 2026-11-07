@@ -372,6 +372,13 @@ pub(crate) fn item(
             rows
         }
 
+        Item::AstGrep {
+            pattern,
+            matches,
+            status,
+            error,
+            ..
+        } => ast_grep(pattern, matches, *status, error.as_deref(), details, width),
         Item::WebSearch {
             query,
             results,
@@ -513,6 +520,9 @@ pub(crate) fn item(
                 status: ItemStatus::Declined,
                 ..
             } | Item::WebSearch {
+                status: ItemStatus::Declined,
+                ..
+            } | Item::AstGrep {
                 status: ItemStatus::Declined,
                 ..
             } | Item::McpToolCall {
@@ -1841,6 +1851,71 @@ fn web_search(
             })
             .collect::<Vec<_>>()
             .join("\n");
+        rows.extend(output_rows(
+            &text,
+            Fold::Details,
+            theme::secondary(),
+            bar(false),
+            width,
+        ));
+    }
+    rows
+}
+
+/// `● AST search <pattern>` and the number of matches on this page; details
+/// list each `path:line:column` and the matched code.
+fn ast_grep(
+    pattern: &str,
+    matches: &[canter_protocol::AstGrepMatch],
+    status: ItemStatus,
+    error: Option<&str>,
+    details: bool,
+    width: u16,
+) -> Vec<Row> {
+    let (mark, mut right) = status_marks(status, theme::explored());
+    if status == ItemStatus::Completed {
+        right = vec![Span::styled(
+            format!(
+                "{} match{}",
+                matches.len(),
+                if matches.len() == 1 { "" } else { "es" }
+            ),
+            theme::secondary(),
+        )];
+    }
+    let mut rows = vec![title(
+        mark,
+        "AST search ",
+        vec![Span::raw(first_line(pattern))],
+        right,
+        None,
+        width,
+    )];
+    if let Some(error) = error {
+        rows.extend(output_rows(
+            error,
+            Fold::Details,
+            theme::failure(),
+            bar(true),
+            width,
+        ));
+    }
+    if details && !matches.is_empty() {
+        let mut text = String::new();
+        for matched in matches {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&format!(
+                "{}:{}:{}\n",
+                matched.path, matched.line, matched.column
+            ));
+            for line in matched.text.lines() {
+                text.push_str("  ");
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
         rows.extend(output_rows(
             &text,
             Fold::Details,
