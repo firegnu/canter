@@ -846,7 +846,10 @@ async fn the_four_sub_agent_tools_have_their_own_cards() {
     );
     assert!(has(&test, &["└ ✓ agent-a completed"]), "{text}");
     assert!(has(&test, &["┃ Locks are taken parent first"]), "{text}");
-    assert!(has(&test, &["… 2 more lines · Ctrl+O"]), "{text}");
+    assert!(
+        has(&test, &["┃  ⋯ 2 more lines · Ctrl+O to expand"]),
+        "{text}"
+    );
     assert!(!text.contains("line 5"), "{text}");
     assert!(has(&test, &["└ ● agent-b still running"]), "{text}");
     assert!(has(&test, &["└ ■ agent-c interrupted"]), "{text}");

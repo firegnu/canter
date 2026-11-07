@@ -301,7 +301,7 @@ pub(crate) fn item(
                 let count = body.len() - 8;
                 body.truncate(8);
                 // A copy keeps the note, without the spaces around it.
-                let chip = fold_chip(&format!("⋯ {count} more lines · Ctrl+O to expand"));
+                let chip = more_lines(count);
                 let start = 3;
                 let end = 2 + str_width(&chip.content) - 1;
                 body.push(Row {
@@ -1960,14 +1960,14 @@ enum Fold {
 
 /// What output rows start with.
 enum Gutter {
-    /// `    ┃ ` in the style given, and `… N more lines · Ctrl+O` for
-    /// what is folded.
+    /// `    ┃ ` in the style given, and ` ⋯ N more lines · Ctrl+O to expand `
+    /// for what is folded ([`more_lines`]).
     Bar(Style),
     /// A command's: `  └ ` on the first row, four spaces on the others;
     /// ` ⋯ N more lines · Ctrl+O to expand ` after the first lines,
-    /// ` ⋯ N lines above · Ctrl+O to expand ` before the last ones, each on
-    /// a background ([`fold_chip`]). Lines that look like a diff's are
-    /// coloured as one ([`diff_like`]).
+    /// ` ⋯ N lines above · Ctrl+O to expand ` before the last ones
+    /// ([`more_lines`], [`lines_above`]). Lines that look like a diff's
+    /// are coloured as one ([`diff_like`]).
     Branch,
 }
 
@@ -1982,8 +1982,8 @@ fn lines_rows(output: &str, fold: Fold, style: Style, gutter: Gutter, width: u16
     enum Shown {
         Line(usize),
         Note(String),
-        /// A note on a background: [`fold_chip`].
-        Chip(String),
+        /// What is folded: [`more_lines`], [`lines_above`].
+        Chip(Span<'static>),
     }
     let dim = theme::secondary();
     let output = sanitize(output);
@@ -1993,28 +1993,6 @@ fn lines_rows(output: &str, fold: Fold, style: Style, gutter: Gutter, width: u16
     }
     let all = lines.len();
     let branch = matches!(gutter, Gutter::Branch);
-    let lines_word = |count: usize| if count == 1 { "line" } else { "lines" };
-    // What is folded after the first lines, and before the last ones.
-    let after = |hidden: usize| {
-        if branch {
-            Shown::Chip(format!(
-                "⋯ {hidden} more {} · Ctrl+O to expand",
-                lines_word(hidden)
-            ))
-        } else {
-            Shown::Note(format!("… {hidden} more lines · Ctrl+O"))
-        }
-    };
-    let before = |hidden: usize| {
-        if branch {
-            Shown::Chip(format!(
-                "⋯ {hidden} {} above · Ctrl+O to expand",
-                lines_word(hidden)
-            ))
-        } else {
-            Shown::Note(format!("… {hidden} more lines · Ctrl+O"))
-        }
-    };
     let diff = if branch {
         diff_like(&lines)
     } else {
@@ -2025,12 +2003,12 @@ fn lines_rows(output: &str, fold: Fold, style: Style, gutter: Gutter, width: u16
         Fold::Head(keep) => {
             shown.extend((0..all.min(keep)).map(Shown::Line));
             if all > keep {
-                shown.push(after(all - keep));
+                shown.push(Shown::Chip(more_lines(all - keep)));
             }
         }
         Fold::Tail(keep) => {
             if all > keep {
-                shown.push(before(all - keep));
+                shown.push(Shown::Chip(lines_above(all - keep)));
             }
             shown.extend((all.saturating_sub(keep)..all).map(Shown::Line));
         }
@@ -2073,15 +2051,36 @@ fn lines_rows(output: &str, fold: Fold, style: Style, gutter: Gutter, width: u16
                     }
                 }
                 Shown::Note(text) => Row::marks(Line::from(vec![lead, Span::styled(text, dim)])),
-                Shown::Chip(text) => Row::marks(Line::from(vec![lead, fold_chip(&text)])),
+                Shown::Chip(chip) => Row::marks(Line::from(vec![lead, chip])),
             }
         })
         .collect()
 }
 
-/// What says a card is folded, ` ⋯ 63 more lines · Ctrl+O to expand `:
-/// dim, a space either side, on [`theme::fold_bg`] when the terminal can
-/// show it.
+/// What says a card is folded after the lines it shows (P2-247):
+/// ` ⋯ 63 more lines · Ctrl+O to expand ` ([`fold_chip`]).
+pub(crate) fn more_lines(hidden: usize) -> Span<'static> {
+    fold_chip(&format!(
+        "⋯ {hidden} more {} · Ctrl+O to expand",
+        lines_word(hidden)
+    ))
+}
+
+/// What says a card is folded before the lines it shows (P2-247):
+/// ` ⋯ 2 lines above · Ctrl+O to expand ` ([`fold_chip`]).
+fn lines_above(hidden: usize) -> Span<'static> {
+    fold_chip(&format!(
+        "⋯ {hidden} {} above · Ctrl+O to expand",
+        lines_word(hidden)
+    ))
+}
+
+fn lines_word(count: usize) -> &'static str {
+    if count == 1 { "line" } else { "lines" }
+}
+
+/// `text` as a chip: dim, a space either side, on [`theme::fold_bg`] when
+/// the terminal can show it.
 fn fold_chip(text: &str) -> Span<'static> {
     let style = theme::secondary();
     let style = match theme::fold_bg() {
@@ -2199,10 +2198,7 @@ fn command_title(
         let hidden = rows.len() - COMMAND_ROWS;
         rows.truncate(COMMAND_ROWS);
         let mut spans = hang();
-        spans.push(Span::styled(
-            format!("… {hidden} more lines · Ctrl+O"),
-            theme::secondary(),
-        ));
+        spans.push(more_lines(hidden));
         rows.push(Row::marks(Line::from(spans)));
     }
     if !same_row && !status.is_empty() {

@@ -165,7 +165,8 @@ fn card(conversation: &[String], title: &str) -> Vec<String> {
 }
 
 /// `● Call server/tool` and the arguments on one row, the first 3 lines of
-/// the result, then `… N more lines · Ctrl+O`; Ctrl+O shows all of it.
+/// the result, then ` ⋯ N more lines · Ctrl+O to expand `; Ctrl+O shows
+/// all of it.
 #[test]
 fn mcp_card_shows_arguments_and_the_first_lines_of_its_result() {
     let mut screen = Screen::new(40);
@@ -186,7 +187,7 @@ fn mcp_card_shows_arguments_and_the_first_lines_of_its_result() {
             "    ┃ issue 1",
             "    ┃ issue 2",
             "    ┃ issue 3",
-            "    ┃ … 4 more lines · Ctrl+O",
+            "    ┃  ⋯ 4 more lines · Ctrl+O to expand",
         ]
     );
     let long_row = conversation
@@ -365,8 +366,8 @@ fn ast_grep_card_shows_pattern_page_count_and_expanded_matches() {
 
 /// A failed command keeps its last 10 lines, in the default colour, after
 /// ` ⋯ N lines above · Ctrl+O to expand `; one that worked keeps its first
-/// 3, grey, then ` ⋯ N more lines · Ctrl+O to expand `. A folded diff's
-/// line still says `· Ctrl+O`.
+/// 3, grey, then ` ⋯ N more lines · Ctrl+O to expand `. A folded diff
+/// says so the same way (P2-247).
 #[test]
 fn failed_command_keeps_ten_lines_in_the_default_colour() {
     let mut screen = Screen::new(50);
@@ -395,7 +396,7 @@ fn failed_command_keeps_ten_lines_in_the_default_colour() {
     assert!(
         conversation
             .iter()
-            .any(|row| row.trim() == "… 8 more lines · Ctrl+O"),
+            .any(|row| row == "     ⋯ 8 more lines · Ctrl+O to expand"),
         "the diff's fold: {conversation:#?}"
     );
 
@@ -583,7 +584,7 @@ fn a_long_command_wraps_under_its_start_and_folds_past_five_rows() {
             arg_row(24, 35),
             arg_row(36, 47),
             arg_row(48, 59),
-            "      … 2 more lines · Ctrl+O".to_owned(),
+            "       ⋯ 2 more lines · Ctrl+O to expand".to_owned(),
             "      1.2s".to_owned(),
             "  └ done".to_owned(),
             String::new(),
@@ -634,7 +635,7 @@ fn each_line_of_a_command_wraps_and_counts_toward_the_fold() {
             arg_row(12, 20),
             "      EOF".to_owned(),
             "      wc -l notes.txt".to_owned(),
-            "      … 2 more lines · Ctrl+O".to_owned(),
+            "       ⋯ 2 more lines · Ctrl+O to expand".to_owned(),
             "      1.2s".to_owned(),
         ]
     );
@@ -998,4 +999,119 @@ fn lines_that_look_like_a_diff_are_coloured_as_one() {
         }
     }
     canter_tui::theme::set(Theme::default());
+}
+
+/// Every card's fold row is the same chip (P2-247), not only a command's: a
+/// fetch's failure reason and a background command's output keep their
+/// first 3 lines, then ` ⋯ N more lines · Ctrl+O to expand ` after the
+/// `┃`, on the background when one can be shown. Searches, background
+/// commands and fetches are tool cards: `✓`/`✗`, ` · ` before the status,
+/// no blank row between them.
+#[test]
+fn other_cards_fold_into_the_same_chip() {
+    canter_tui::theme::set(Theme {
+        depth: Depth::TrueColor,
+        background: Background::Dark,
+    });
+    let mut screen = Screen::new(40);
+    screen.fetch(
+        "w1",
+        "http://localhost:9/",
+        &numbered(5, "reason"),
+        "failed",
+    );
+    screen.completed(json!({
+        "type": "backgroundCommandAction", "id": "b1", "commandId": 3,
+        "action": "output", "result": numbered(7, "built"), "status": "completed",
+    }));
+    screen.completed(json!({
+        "type": "mcpToolSearch", "id": "s1", "query": "issue",
+        "tools": ["mcp__github__search_issues"], "status": "completed",
+    }));
+    let conversation = screen.conversation();
+    let fetch = card(&conversation, "✗ Fetch http://localhost:9/ · failed");
+    assert_eq!(
+        fetch[1..],
+        [
+            "    ┃ reason 1",
+            "    ┃ reason 2",
+            "    ┃ reason 3",
+            "    ┃  ⋯ 2 more lines · Ctrl+O to expand",
+        ]
+    );
+    let background = card(&conversation, "✓ Call shell_output #3");
+    assert_eq!(background[4], "    ┃  ⋯ 4 more lines · Ctrl+O to expand");
+    let at = conversation
+        .iter()
+        .position(|row| row.starts_with("✓ Call shell_output #3"))
+        .unwrap();
+    assert_eq!(conversation[at - 1], fetch[4], "no blank row between cards");
+    assert_eq!(
+        conversation[at + 5],
+        "✓ Searched MCP tools \"issue\" · 1 found"
+    );
+    let buffer = screen.draw();
+    for text in [
+        " ⋯ 2 more lines · Ctrl+O to expand ",
+        " ⋯ 4 more lines · Ctrl+O to expand ",
+    ] {
+        for cell in cells_of(buffer, text) {
+            assert_eq!(cell.bg, Color::Rgb(0x2d, 0x2e, 0x33), "{text:?}");
+        }
+    }
+    canter_tui::theme::set(Theme::default());
+}
+
+/// One `apply_patch` (GPT's way of changing files) that changes several
+/// files is one item with a card for each file (P2-247): each `✓` and
+/// orange, its `+N −N` two spaces after the path; a failed one `✗`, red,
+/// with ` · failed`; no blank rows between them.
+#[test]
+fn one_patch_changing_several_files_has_a_card_for_each() {
+    let mut screen = Screen::new(40);
+    let change = |path: &str| {
+        json!({
+            "path": path, "kind": { "type": "update", "movePath": null },
+            "diff": "@@ -1 +1 @@\n-old\n+new\n",
+        })
+    };
+    screen.completed(json!({
+        "type": "fileChange", "id": "p1", "status": "completed",
+        "changes": [change("/work/src/a.rs"), change("/work/src/b.rs")],
+    }));
+    screen.completed(json!({
+        "type": "fileChange", "id": "p2", "status": "failed",
+        "changes": [change("/work/src/c.rs"), change("/work/src/d.rs")],
+    }));
+    let rows: Vec<String> = screen
+        .conversation()
+        .into_iter()
+        .filter(|row| row.contains(" Edit "))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            "✓ Edit src/a.rs  +1 −1",
+            "✓ Edit src/b.rs  +1 −1",
+            "✗ Edit src/c.rs  +1 −1 · failed",
+            "✗ Edit src/d.rs  +1 −1 · failed",
+        ]
+    );
+    let conversation = screen.conversation();
+    let first = conversation
+        .iter()
+        .position(|row| row == "✓ Edit src/a.rs  +1 −1")
+        .unwrap();
+    let last = conversation
+        .iter()
+        .position(|row| row == "✗ Edit src/d.rs  +1 −1 · failed")
+        .unwrap();
+    assert!(
+        conversation[first..last].iter().all(|row| !row.is_empty()),
+        "{conversation:#?}"
+    );
+    let buffer = screen.draw();
+    // 16 colours: the edit orange is yellow.
+    assert_eq!(cells_of(buffer, "✓ Edit src/b.rs")[0].fg, Color::Yellow);
+    assert_eq!(cells_of(buffer, "✗ Edit src/c.rs")[0].fg, Color::Red);
 }
