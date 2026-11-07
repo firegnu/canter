@@ -221,7 +221,7 @@ fn a_short_conversation_starts_at_the_top_with_the_input_box_at_the_bottom() {
     // Without usage, no second row (P2-245).
     assert_eq!(
         lines[last - 1..],
-        [" test-model · think high · Always ask", " /work"],
+        [" ◆ test-model · ◐ think high · Always ask", " /work"],
         "the info rows are the bottom rows:\n{shown}"
     );
     assert!(lines[last - 4].starts_with('╭'), "{shown}");
@@ -244,15 +244,15 @@ fn info_row_shows_total_and_last_cache_hit_rates_only_with_input_usage() {
     screen.resize(100, HEIGHT);
     screen.draw();
     let last = usize::from(HEIGHT) - 1;
-    let first = " test-model · think high · Always ask";
+    let first = " ◆ test-model · ◐ think high · Always ask";
     assert_eq!(screen.lines()[last - 1..], [first, " /work"]);
 
     for (total_input, total_cached, last_input, last_cached, cache) in [
-        (1000, 924, 100, 99, "cache  92% (last  99%)"),
-        (3, 2, 3, 1, "cache  67% (last  33%)"),
-        (100, 0, 10, 0, "cache   0% (last   0%)"),
-        (100, 92, 0, 0, "cache  92%"),
-        (0, 0, 100, 99, "cache (last  99%)"),
+        (1000, 924, 100, 99, "⟳ cache  92% (last  99%)"),
+        (3, 2, 3, 1, "⟳ cache  67% (last  33%)"),
+        (100, 0, 10, 0, "⟳ cache   0% (last   0%)"),
+        (100, 92, 0, 0, "⟳ cache  92%"),
+        (0, 0, 100, 99, "⟳ cache (last  99%)"),
         (0, 0, 0, 0, ""),
     ] {
         let counts = |input, cached| {
@@ -278,7 +278,8 @@ fn info_row_shows_total_and_last_cache_hit_rates_only_with_input_usage() {
             screen.lines()[last - 2..],
             [first.to_owned(), format!(" {cache}"), " /work".to_owned()]
         );
-        // The percentages cyan, the words around them dim.
+        // The `⟳` cyan, the percentages cyan and bold, the words around
+        // them dim.
         let buffer = screen.ui.backend().buffer();
         for x in 1..=cache.width() as u16 {
             let cell = &buffer[(x, HEIGHT - 2)];
@@ -289,8 +290,14 @@ fn info_row_shows_total_and_last_cache_hit_rates_only_with_input_usage() {
                 .symbol()
                 .chars()
                 .all(|c| c.is_ascii_digit() || c == '%');
-            if number {
+            if cell.symbol() == "⟳" {
                 assert_eq!(cell.style().fg, Some(Color::Cyan), "column {x}");
+            } else if number {
+                assert_eq!(cell.style().fg, Some(Color::Cyan), "column {x}");
+                assert!(
+                    cell.style().add_modifier.contains(Modifier::BOLD),
+                    "column {x}"
+                );
             } else {
                 assert_eq!(cell.style().fg, Some(Color::Reset), "column {x}");
                 assert!(

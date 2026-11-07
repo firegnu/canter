@@ -269,10 +269,10 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 /// The first row after [`Screen::work`].
-const FIRST: &str = " deepseek-v4-pro · think high · Always ask · $0.12";
+const FIRST: &str = " ◆ deepseek-v4-pro · ◐ think high · Always ask · $0.12";
 /// The second row after [`Screen::work`].
-const USAGE: &str = " █░░░░░░░░░ 120k/1M ( 12% of window) · cache  95% (last  98%)";
-const DIRECTORY: &str = " ~/src/canter (main)";
+const USAGE: &str = " ●○○○○○○○○○ 120k/1M ( 12% of window) · ⟳ cache  95% (last  98%)";
+const DIRECTORY: &str = " ~/src/canter ⑂ main";
 
 fn default_bar() -> [&'static str; 3] {
     [FIRST, USAGE, DIRECTORY]
@@ -293,17 +293,17 @@ fn statusline_shows_every_item_with_its_value_and_a_preview() {
         [
             TITLE,
             "",
-            " › [x] model        deepseek-v4-pro",
-            "   [x] thinking     think high",
+            " › [x] model        ◆ deepseek-v4-pro",
+            "   [x] thinking     ◐ think high",
             "   [x] permission   Always ask",
             "   [x] cost         $0.12",
-            "   [x] context      █░░░░░░░░░ 120k/1M ( 12% of window)",
-            "   [x] cache        cache  95% (last  98%)",
-            "   [ ] tps           33 tok/s",
+            "   [x] context      ●○○○○○○○○○ 120k/1M ( 12% of window)",
+            "   [x] cache        ⟳ cache  95% (last  98%)",
+            "   [ ] tps          ↯  33 tok/s",
             "   [ ] version      0.1.0 · a3b8fe7",
             "   [ ] session      会话名字",
             "   [x] directory    ~/src/canter",
-            "   [x] branch       (main)",
+            "   [x] branch       ⑂ main",
             "   [x] diff",
             "",
             " Preview",
@@ -331,16 +331,16 @@ fn space_changes_the_preview_as_it_goes_and_nothing_moves() {
     screen.enter("/statusline");
 
     screen.key(KeyCode::Char(' '));
-    assert_eq!(screen.picker()[2], " › [ ] model        deepseek-v4-pro");
+    assert_eq!(screen.picker()[2], " › [ ] model        ◆ deepseek-v4-pro");
     assert_eq!(
         screen.preview(),
-        [" think high · Always ask · $0.12", USAGE, DIRECTORY]
+        [" ◐ think high · Always ask · $0.12", USAGE, DIRECTORY]
     );
 
     // Back on; Right and Left leave the list as it is.
     screen.keys(&[KeyCode::Char(' '), KeyCode::Right, KeyCode::Left]);
-    assert_eq!(screen.picker()[2], " › [x] model        deepseek-v4-pro");
-    assert_eq!(screen.picker()[3], "   [x] thinking     think high");
+    assert_eq!(screen.picker()[2], " › [x] model        ◆ deepseek-v4-pro");
+    assert_eq!(screen.picker()[3], "   [x] thinking     ◐ think high");
     assert_eq!(screen.preview(), default_bar());
 
     // The session name at the end of the second row.
@@ -352,8 +352,8 @@ fn space_changes_the_preview_as_it_goes_and_nothing_moves() {
     // The speed before it; in the panel, narrower than the window, the
     // session name then no longer fits and goes, whole.
     screen.keys(&[KeyCode::Up, KeyCode::Up, KeyCode::Char(' ')]);
-    assert_eq!(screen.picker()[8], " › [x] tps           33 tok/s");
-    assert_eq!(screen.preview()[1], format!("{USAGE} ·  33 tok/s"));
+    assert_eq!(screen.picker()[8], " › [x] tps          ↯  33 tok/s");
+    assert_eq!(screen.preview()[1], format!("{USAGE} · ↯  33 tok/s"));
 
     // None of it is saved or shown below yet.
     assert_eq!(screen.bar(), default_bar());
@@ -366,7 +366,7 @@ fn enter_saves_tui_json_0600_and_the_bar_changes_at_once() {
         let mut screen = home.open(None);
         assert_eq!(
             screen.bar(),
-            [" test-model · think high · Always ask", DIRECTORY]
+            [" ◆ test-model · ◐ think high · Always ask", DIRECTORY]
         );
         screen.enter("/statusline");
         // Model off; version on, on the second row.
@@ -378,7 +378,7 @@ fn enter_saves_tui_json_0600_and_the_bar_changes_at_once() {
         assert!(screen.picker().is_empty(), "closed");
         assert_eq!(
             screen.bar(),
-            [" think high · Always ask", " 0.1.0 · a3b8fe7", DIRECTORY]
+            [" ◐ think high · Always ask", " 0.1.0 · a3b8fe7", DIRECTORY]
         );
         let path = home.tui_json();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
@@ -411,10 +411,10 @@ fn a_terminal_opened_later_reads_the_same_settings_back() {
     screen.keys(&[KeyCode::Down; 7]);
     screen.keys(&[KeyCode::Char(' '), KeyCode::Enter]);
     let bar = screen.bar();
-    assert_eq!(bar, [" test-model · Always ask", " 会话名字", DIRECTORY]);
+    assert_eq!(bar, [" ◆ test-model · Always ask", " 会话名字", DIRECTORY]);
     screen.enter("/statusline");
     let picker = screen.picker();
-    assert_eq!(picker[3], "   [ ] thinking     think high");
+    assert_eq!(picker[3], "   [ ] thinking     ◐ think high");
     assert_eq!(picker[10], "   [x] session      会话名字");
 
     let mut again = home.open(None);
@@ -435,12 +435,12 @@ fn esc_closes_without_saving() {
     assert_eq!(screen.bar(), bar);
     assert!(!home.tui_json().exists());
     screen.enter("/statusline");
-    assert_eq!(screen.picker()[2], " › [x] model        test-model");
+    assert_eq!(screen.picker()[2], " › [x] model        ◆ test-model");
 }
 
 #[test]
 fn an_unreadable_tui_json_means_the_defaults_and_unknown_items_are_skipped() {
-    let default = [" test-model · think high · Always ask", DIRECTORY];
+    let default = [" ◆ test-model · ◐ think high · Always ask", DIRECTORY];
     let unreadable: [&dyn Fn(&Path); 3] = [
         &|path| std::fs::write(path, "{").unwrap(),
         &|path| std::fs::write(path, r#"{"statusLine":{"items":"model"}}"#).unwrap(),
@@ -457,7 +457,7 @@ fn an_unreadable_tui_json_means_the_defaults_and_unknown_items_are_skipped() {
         screen.draw();
         assert!(!screen.status().contains("tui.json"), "{}", screen.status());
         screen.enter("/statusline");
-        assert_eq!(screen.picker()[2], " › [x] model        test-model");
+        assert_eq!(screen.picker()[2], " › [x] model        ◆ test-model");
     }
 
     let home = Home::new();
@@ -471,7 +471,7 @@ fn an_unreadable_tui_json_means_the_defaults_and_unknown_items_are_skipped() {
     )
     .unwrap();
     let screen = home.open(None);
-    assert_eq!(screen.bar(), [" test-model", " ~/src/canter"]);
+    assert_eq!(screen.bar(), [" ◆ test-model", " ~/src/canter"]);
     assert!(!screen.status().contains("tui.json"), "{}", screen.status());
 }
 
@@ -486,7 +486,7 @@ async fn with_a_script_a_switch_on_top_chooses_the_script_or_the_items() {
     let runs = || {
         std::fs::read_to_string(home.cwd.join("runs.txt")).map_or(0, |text| text.lines().count())
     };
-    let first = " test-model · think high · Always ask";
+    let first = " ◆ test-model · ◐ think high · Always ask";
 
     let mut screen = home.open(Some("sh ./status.sh"));
     screen.wait_for("custom").await;
@@ -494,7 +494,7 @@ async fn with_a_script_a_switch_on_top_chooses_the_script_or_the_items() {
     let picker = screen.picker();
     assert_eq!(picker[2], " › [x] Use statusLine script");
     assert!(picker[3].starts_with("   ───"), "{picker:?}");
-    assert_eq!(picker[4], "   [x] model        test-model");
+    assert_eq!(picker[4], "   [x] model        ◆ test-model");
     assert!(
         screen.preview()[0].contains("statusLine script"),
         "{picker:?}"
@@ -544,7 +544,7 @@ fn with_permission_hidden_shift_tab_says_the_new_mode() {
         KeyCode::Char(' '),
         KeyCode::Enter,
     ]);
-    assert_eq!(screen.bar()[0], " test-model · think high");
+    assert_eq!(screen.bar()[0], " ◆ test-model · ◐ think high");
     let before = screen.status();
     assert_eq!(
         screen.press(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
@@ -569,7 +569,7 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
     let preview = [
         "",
         " Preview",
-        " test-model · think high · Always ask",
+        " ◆ test-model · ◐ think high · Always ask",
         DIRECTORY,
         KEYS,
     ];
@@ -584,8 +584,8 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
     assert_eq!(
         screen.picker(),
         shown(&[
-            " › [x] model        test-model",
-            "   [x] thinking     think high",
+            " › [x] model        ◆ test-model",
+            "   [x] thinking     ◐ think high",
             "   [x] permission   Always ask",
             "   [x] cost",
             "   ↓ 8 more",
@@ -611,7 +611,7 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
             "   ↑ 8 more",
             "   [ ] session      会话名字",
             "   [x] directory    ~/src/canter",
-            "   [x] branch       (main)",
+            "   [x] branch       ⑂ main",
             " › [x] diff",
         ])
     );
@@ -627,7 +627,7 @@ fn in_a_short_window_the_list_follows_the_cursor_and_the_preview_stays() {
             "   [ ] version      0.1.0 · a3b8fe7",
             "   [ ] session      会话名字",
             "   [x] directory    ~/src/canter",
-            "   [x] branch       (main)",
+            "   [x] branch       ⑂ main",
             " › [x] diff",
             KEYS,
         ]
@@ -672,8 +672,8 @@ fn a_tui_json_saved_with_compact_and_before_diff_gets_diff_until_turned_off() {
         assert_eq!(
             screen.bar(),
             [
-                " test-model · think high · Always ask · $0.12",
-                " ███░░░░░░░ 120k/400k ( 30% to compact) · cache  95% (last  98%)",
+                " ◆ test-model · ◐ think high · Always ask · $0.12",
+                " ●●●○○○○○○○ 120k/400k ( 30% to compact) · ⟳ cache  95% (last  98%)",
                 directory,
             ]
         );
@@ -683,14 +683,14 @@ fn a_tui_json_saved_with_compact_and_before_diff_gets_diff_until_turned_off() {
         assert_eq!(
             picker[6..8],
             [
-                "   [x] context      ███░░░░░░░ 120k/400k ( 30% to compact)",
-                "   [x] cache        cache  95% (last  98%)",
+                "   [x] context      ●●●○○○○○○○ 120k/400k ( 30% to compact)",
+                "   [x] cache        ⟳ cache  95% (last  98%)",
             ]
         );
         assert_eq!(
             picker[12..14],
             [
-                format!("   [{mark}] branch       (main)"),
+                format!("   [{mark}] branch       ⑂ main"),
                 "   [x] diff".to_owned(),
             ]
         );

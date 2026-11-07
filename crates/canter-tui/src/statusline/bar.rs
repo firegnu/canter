@@ -114,13 +114,17 @@ impl Default for Bar {
 /// has nothing to say, and it is left out.
 pub(crate) type Values = [Option<Vec<Span<'static>>>; 12];
 
+/// Before a dangerous setting, `Allow all` or `Sandbox off`, in its red
+/// (P2-246).
+pub(crate) const DANGER: &str = "▲ ";
 const SANDBOX_ON: &str = "Sandbox on";
-const SANDBOX_OFF: &str = "Sandbox off";
+const SANDBOX_OFF: &str = "▲ Sandbox off";
 /// Between the items of a row.
 const DOT: &str = " · ";
 
 /// What the permission item adds after the mode when the server says whether
-/// the sandbox is on: ` · Sandbox on`, or `Sandbox off` in red as `Allow all`.
+/// the sandbox is on: ` · Sandbox on`, or `▲ Sandbox off` in red as
+/// `▲ Allow all`.
 pub(crate) fn sandbox(enabled: bool) -> [Span<'static>; 2] {
     [
         Span::styled(DOT, theme::secondary()),
