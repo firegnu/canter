@@ -1,7 +1,8 @@
-//! The two-row status bar at the bottom of the screen: model, thinking level
-//! and permission mode on the first row; directory with its git branch,
-//! context use and cache hit rates on the second. Git repositories are made
-//! in temporary directories, never the user's.
+//! The two-row status bar at the bottom of the screen (P2-243): model,
+//! thinking level, permission mode and sandbox on the first row, with context
+//! use, cache hits and cost on its right; directory, git branch and lines
+//! changed on the second. Git repositories are made in temporary
+//! directories, never the user's.
 
 use std::path::Path;
 use std::process::Command;
@@ -150,6 +151,15 @@ fn commit(dir: &Path) {
     git(dir, &["commit", "-q", "--allow-empty", "-m", "first"]);
 }
 
+/// The first row of the default items with `deepseek-flash` in Always ask.
+const LEFT: &str = " deepseek-flash high   Always ask";
+
+/// `left`, then `right` ending a column before the edge of `width`.
+fn spread(left: &str, right: &str, width: u16) -> String {
+    let pad = usize::from(width) - 1 - left.width() - right.width();
+    format!("{left}{}{right}", " ".repeat(pad))
+}
+
 #[test]
 fn two_rows_with_usage_in_a_git_repository() {
     let (home, dir) = repo();
@@ -158,15 +168,77 @@ fn two_rows_with_usage_in_a_git_repository() {
     assert_eq!(
         screen.bar(),
         [
-            " deepseek-flash · think high · Always ask".to_owned(),
-            " ~/canter (main) · ████░░░░░░ 420k/1M (42% of window) · cache 92% (last 99%)"
-                .to_owned(),
+            spread(LEFT, "████░░░░░░  42%   cache  92%", WIDTH),
+            " ~/canter  main".to_owned(),
+        ]
+    );
+}
+
+/// The rows as the user chose them (P2-243), in a wide window: the
+/// provider dim before the model, Allow all and the sandbox off in red.
+#[test]
+fn a_wide_window_shows_every_item_where_it_goes() {
+    let (home, dir) = repo();
+    let mut screen = Screen::new(&dir, home.path(), PermissionMode::AllowAll);
+    let mut settings = sandbox_settings(&dir, "allowAll", false, false);
+    settings["settings"]["model"] = json!("opencode-go/deepseek-v4.1-flash");
+    screen.event(settings);
+    screen.usage_with_cache(232_000, 400_000, 980, 0.12);
+    screen.resize(120);
+    let left = " opencode-go/deepseek-v4.1-flash high   Allow all · Sandbox off";
+    assert_eq!(
+        screen.bar(),
+        [
+            spread(left, "██████░░░░  58%   cache  98%   $0.12", 120),
+            " ~/canter  main".to_owned(),
+        ]
+    );
+    let grey = (Some(Color::Reset), true);
+    let plain = (Some(Color::Reset), false);
+    let red = (Some(Color::Red), false);
+    assert_eq!(screen.style_of(0, "opencode-go/"), grey);
+    assert_eq!(screen.style_of(0, "deepseek-v4.1-flash"), plain);
+    assert_eq!(screen.style_of(0, "high"), grey);
+    assert_eq!(screen.style_of(0, "Allow all"), red);
+    assert_eq!(screen.style_of(0, "Sandbox off"), red);
+    assert_eq!(screen.style_of(0, "██████"), (Some(Color::Yellow), false));
+    assert_eq!(screen.style_of(0, " 58%"), plain);
+    assert_eq!(screen.style_of(0, "cache"), grey);
+    assert_eq!(screen.style_of(0, " 98%"), plain);
+    assert_eq!(screen.style_of(0, "$0.12"), plain);
+}
+
+/// Too narrow for all of it: cache goes first, then the cost, then the
+/// context, each whole; then the first row is cut at its end.
+#[test]
+fn a_narrow_window_drops_the_items_on_the_right_whole_from_the_right() {
+    let (home, dir) = repo();
+    let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
+    screen.usage_with_line(420_000, 1_000_000, Some(1_000_000));
+    for (width, right) in [
+        (73, "████░░░░░░  42%   cache  92%   $0.12"),
+        (72, "████░░░░░░  42%   $0.12"),
+        (60, "████░░░░░░  42%   $0.12"),
+        (59, "████░░░░░░  42%"),
+        (52, "████░░░░░░  42%"),
+    ] {
+        screen.resize(width);
+        assert_eq!(screen.bar()[0], spread(LEFT, right, width), "width {width}");
+    }
+    screen.resize(51);
+    assert_eq!(screen.bar()[0], LEFT);
+    screen.resize(24);
+    assert_eq!(
+        screen.bar(),
+        [
+            " deepseek-flash high   …".to_owned(),
+            " ~/canter  main".to_owned(),
         ]
     );
 }
 
 #[test]
-fn session_cost_is_shown_after_the_permission_mode() {
+fn session_cost_is_on_the_right_after_cache() {
     let (home, dir) = repo();
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
     assert!(!screen.bar()[0].contains('$'));
@@ -184,7 +256,11 @@ fn session_cost_is_shown_after_the_permission_mode() {
             "cost":{"usd":usd,"unknown":unknown}}}));
         assert_eq!(
             screen.bar()[0],
-            format!(" deepseek-flash · think high · Always ask · {expected}")
+            spread(
+                LEFT,
+                &format!("░░░░░░░░░░   0%   cache  90%   {expected}"),
+                WIDTH
+            )
         );
     }
 }
@@ -195,7 +271,14 @@ fn allow_all_is_red_and_nothing_else_is() {
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AllowAll);
     screen.usage(Some(1_000_000));
     let [first, second] = screen.bar();
-    assert_eq!(first, " deepseek-flash · think high · Allow all");
+    assert_eq!(
+        first,
+        spread(
+            " deepseek-flash high   Allow all",
+            "████░░░░░░  42%   cache  92%",
+            WIDTH
+        )
+    );
     let buffer = screen.ui.backend().buffer();
     let y = HEIGHT - 2;
     let start = first[..first.find("Allow all").unwrap()].width() as u16;
@@ -215,16 +298,13 @@ fn allow_all_is_red_and_nothing_else_is() {
 }
 
 #[test]
-fn outside_a_git_repository_there_are_no_brackets() {
+fn outside_a_git_repository_the_directory_is_alone() {
     let home = TempDir::new().unwrap();
     let dir = home.path().join("plain");
     std::fs::create_dir(&dir).unwrap();
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
     screen.usage(Some(1_000_000));
-    assert_eq!(
-        screen.bar()[1],
-        " ~/plain · ████░░░░░░ 420k/1M (42% of window) · cache 92% (last 99%)"
-    );
+    assert_eq!(screen.bar()[1], " ~/plain");
 }
 
 #[test]
@@ -234,7 +314,7 @@ fn a_detached_head_shows_the_short_commit() {
     git(&dir, &["checkout", "-q", "--detach"]);
     let sha = git(&dir, &["rev-parse", "HEAD"]);
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
-    assert_eq!(screen.bar()[1], format!(" ~/canter ({})", &sha[..7]));
+    assert_eq!(screen.bar()[1], format!(" ~/canter  {}", &sha[..7]));
 }
 
 #[test]
@@ -258,34 +338,23 @@ fn a_worktree_shows_its_own_branch() {
     let inner = worktree.join("src");
     std::fs::create_dir(&inner).unwrap();
     let mut screen = Screen::new(&inner, home.path(), PermissionMode::AlwaysAsk);
-    assert_eq!(screen.bar()[1], " ~/wt/src (feature/x)");
+    assert_eq!(screen.bar()[1], " ~/wt/src  feature/x");
 }
 
 #[test]
-fn without_usage_or_window_there_is_no_ctx() {
+fn without_usage_or_window_there_is_no_context() {
     let (home, dir) = repo();
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
-    assert_eq!(screen.bar()[1], " ~/canter (main)", "no usage yet");
-    screen.usage(None);
-    assert_eq!(
-        screen.bar()[1],
-        " ~/canter (main) · cache 92% (last 99%)",
-        "window unknown"
-    );
-}
-
-#[test]
-fn a_narrow_window_cuts_each_row_on_its_own() {
-    let (home, dir) = repo();
-    let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
-    screen.usage(Some(1_000_000));
-    screen.resize(24);
     assert_eq!(
         screen.bar(),
-        [
-            " deepseek-flash · think…".to_owned(),
-            " ~/canter (main) · ████…".to_owned(),
-        ]
+        [LEFT.to_owned(), " ~/canter  main".to_owned()],
+        "no usage yet"
+    );
+    screen.usage(None);
+    assert_eq!(
+        screen.bar()[0],
+        spread(LEFT, "cache  92%", WIDTH),
+        "window unknown"
     );
 }
 
@@ -294,22 +363,32 @@ fn the_branch_is_read_again_when_a_turn_ends() {
     let (home, dir) = repo();
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
     screen.turn("inProgress");
-    assert_eq!(screen.bar()[1], " ~/canter (main)");
+    assert_eq!(screen.bar()[1], " ~/canter  main");
 
     git(&dir, &["symbolic-ref", "HEAD", "refs/heads/other"]);
     assert_eq!(
         screen.bar()[1],
-        " ~/canter (main)",
+        " ~/canter  main",
         "not read again every frame"
     );
     screen.turn("completed");
-    assert_eq!(screen.bar()[1], " ~/canter (other)");
+    assert_eq!(screen.bar()[1], " ~/canter  other");
 }
 
 impl Screen {
     /// `used` of a `window` context, with the compaction line at `line` when
     /// the server sends one; cost and cache hits as in [`Screen::usage`].
     fn usage_with_line(&mut self, used: u64, window: u64, line: Option<u64>) {
+        self.usage_of(used, window, line, 924, 0.12);
+    }
+
+    /// `used` of a context compacted at `line`, `cached` of 1000 input
+    /// tokens from the cache, and `usd` spent.
+    fn usage_with_cache(&mut self, used: u64, line: u64, cached: u64, usd: f64) {
+        self.usage_of(used, 1_000_000, Some(line), cached, usd);
+    }
+
+    fn usage_of(&mut self, used: u64, window: u64, line: Option<u64>, cached: u64, usd: f64) {
         let counts = |input: u64, cached: u64| {
             json!({
                 "inputTokens": input, "cachedInputTokens": cached,
@@ -317,10 +396,10 @@ impl Screen {
             })
         };
         let mut usage = json!({
-            "total": counts(1000, 924),
+            "total": counts(1000, cached),
             "last": counts(100, 99),
             "contextTokens": used, "modelContextWindow": window,
-            "cost": { "usd": 0.12, "unknown": false },
+            "cost": { "usd": usd, "unknown": false },
         });
         if let Some(line) = line {
             usage["autoCompactTokens"] = json!(line);
@@ -350,94 +429,90 @@ impl Screen {
         );
         styles[0]
     }
+
+    /// Every row of the screen drawn at `now`.
+    fn screen_at(&mut self, now: i64) -> Vec<String> {
+        self.ui.draw(now).unwrap();
+        rows(self.ui.backend().buffer())
+    }
 }
 
 #[test]
 fn context_is_a_bar_that_is_full_at_the_compaction_line() {
     let (home, dir) = repo();
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
-    // Ten cells and the percent of the line in use, both rounded; past the
-    // line the bar stays full and the percent says how far past.
+    // Ten cells and the percent of the line in use, both rounded, the
+    // percent in four columns; past the line the bar stays full and the
+    // percent says how far past.
     for (used, expected) in [
-        (0, "░░░░░░░░░░ 0/400k (0% to compact)"),
-        (120_000, "███░░░░░░░ 120k/400k (30% to compact)"),
-        (184_000, "█████░░░░░ 184k/400k (46% to compact)"),
-        (400_000, "██████████ 400k/400k (100% to compact)"),
-        (420_000, "██████████ 420k/400k (105% to compact)"),
+        (0, "░░░░░░░░░░   0%"),
+        (120_000, "███░░░░░░░  30%"),
+        (184_000, "█████░░░░░  46%"),
+        (400_000, "██████████ 100%"),
+        (420_000, "██████████ 105%"),
     ] {
         screen.usage_with_line(used, 1_000_000, Some(400_000));
         assert_eq!(
-            screen.bar()[1],
-            format!(" ~/canter (main) · {expected} · cache 92% (last 99%)"),
+            screen.bar()[0],
+            spread(LEFT, &format!("{expected}   cache  92%   $0.12"), WIDTH),
             "{used} used"
         );
     }
     // An older server sends no line: full is the window.
     screen.usage_with_line(420_000, 1_000_000, None);
     assert_eq!(
-        screen.bar()[1],
-        " ~/canter (main) · ████░░░░░░ 420k/1M (42% of window) · cache 92% (last 99%)"
+        screen.bar()[0],
+        spread(LEFT, "████░░░░░░  42%   cache  92%   $0.12", WIDTH)
     );
 }
 
 #[test]
-fn each_item_has_its_colour_and_the_bar_turns_with_the_room_left() {
+fn only_what_needs_attention_has_a_colour_and_the_bar_turns_with_the_room_left() {
     let (home, dir) = repo();
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
     screen.usage_with_line(400_000, 1_000_000, Some(1_000_000));
     let colour = |color| (Some(color), false);
     let grey = (Some(Color::Reset), true);
-    assert_eq!(screen.style_of(0, "deepseek-flash"), colour(Color::Cyan));
-    assert_eq!(screen.style_of(0, "think high"), colour(Color::Magenta));
+    let plain = (Some(Color::Reset), false);
+    assert_eq!(screen.style_of(0, "deepseek-flash"), plain);
+    assert_eq!(screen.style_of(0, "high"), grey);
     assert_eq!(screen.style_of(0, "Always ask"), grey);
-    assert_eq!(screen.style_of(0, "$0.12"), colour(Color::Yellow));
-    assert_eq!(screen.style_of(0, " · "), grey);
-    assert_eq!(screen.style_of(1, "~/canter"), colour(Color::Blue));
-    assert_eq!(screen.style_of(1, "(main)"), colour(Color::Green));
-    assert_eq!(screen.style_of(1, "░░░░░░"), grey);
-    assert_eq!(screen.style_of(1, " 400k/1M ("), grey);
-    assert_eq!(screen.style_of(1, ") · cache "), grey);
-    assert_eq!(screen.style_of(1, "92%"), colour(Color::Cyan));
-    assert_eq!(screen.style_of(1, " (last "), grey);
-    assert_eq!(screen.style_of(1, "99%"), colour(Color::Cyan));
+    assert_eq!(screen.style_of(0, "░░░░░░"), grey);
+    assert_eq!(screen.style_of(0, " 40%"), plain);
+    assert_eq!(screen.style_of(0, "cache"), grey);
+    assert_eq!(screen.style_of(0, " 92%"), plain);
+    assert_eq!(screen.style_of(0, "$0.12"), plain);
+    assert_eq!(screen.style_of(1, "~/canter"), plain);
+    assert_eq!(screen.style_of(1, "main"), colour(Color::Green));
 
-    // The cells in use and the percent by the room left before the line.
-    for (used, cells, percent, color) in [
-        (400_000, "████", "40%", Color::Green),
-        (700_000, "███████", "70%", Color::Yellow),
-        (900_000, "█████████", "90%", Color::Red),
+    // The cells in use by the room left before the line.
+    for (used, cells, color) in [
+        (400_000, "████", Color::Green),
+        (700_000, "███████", Color::Yellow),
+        (900_000, "█████████", Color::Red),
     ] {
         screen.usage_with_line(used, 1_000_000, Some(1_000_000));
-        assert_eq!(screen.style_of(1, cells), colour(color), "{used}");
-        assert_eq!(screen.style_of(1, percent), colour(color), "{used}");
-        assert_eq!(screen.style_of(1, "░"), grey, "{used}");
+        assert_eq!(screen.style_of(0, cells), colour(color), "{used}");
+        assert_eq!(screen.style_of(0, "░"), grey, "{used}");
     }
     // Without a line, by the room left in the window.
     screen.usage_with_line(420_000, 450_000, None);
-    assert_eq!(screen.style_of(1, "█████████"), colour(Color::Red));
-    assert_eq!(screen.style_of(1, "93%"), colour(Color::Red));
+    assert_eq!(screen.style_of(0, "█████████"), colour(Color::Red));
     screen.usage_with_line(420_000, 1_000_000, None);
-    assert_eq!(screen.style_of(1, "████"), colour(Color::Green));
-    assert_eq!(screen.style_of(1, "42%"), colour(Color::Green));
+    assert_eq!(screen.style_of(0, "████"), colour(Color::Green));
 
-    // NO_COLOR: grey as before, no colours; the cells still tell how much.
+    // NO_COLOR: no colours, the cells and the branch grey; the cells still
+    // tell how much.
     theme::set(Theme {
         depth: Depth::None,
         ..Theme::default()
     });
     screen.usage_with_line(900_000, 1_000_000, Some(1_000_000));
     assert_eq!(
-        screen.bar()[1],
-        " ~/canter (main) · █████████░ 900k/1M (90% to compact) · cache 92% (last 99%)"
+        screen.bar()[0],
+        spread(LEFT, "█████████░  90%   cache  92%   $0.12", WIDTH)
     );
-    for (row, text) in [
-        (0, "deepseek-flash"),
-        (0, "$0.12"),
-        (1, "(main)"),
-        (1, "█████████"),
-        (1, "90%"),
-        (1, "92%"),
-    ] {
+    for (row, text) in [(0, "█████████"), (1, "main")] {
         assert_eq!(screen.style_of(row, text), grey, "{text}");
     }
     theme::set(Theme::default());
@@ -470,9 +545,8 @@ async fn the_branch_is_followed_by_the_lines_changed_since_the_last_commit() {
     git(&dir, &["add", "."]);
     commit(&dir);
     let mut screen = Screen::with_git_diff(&dir, home.path());
-    screen
-        .wait_for_second_row(" ~/canter (main) · (+0,-0)")
-        .await;
+    // Nothing changed: nothing after the branch.
+    screen.wait_for_second_row(" ~/canter  main").await;
 
     // Not staged: one line changed and two added. Staged: one line changed.
     std::fs::write(dir.join("a.txt"), "1\nTWO\n3\n4\n5\n6\n7\n").unwrap();
@@ -482,16 +556,11 @@ async fn the_branch_is_followed_by_the_lines_changed_since_the_last_commit() {
     std::fs::write(dir.join("image.bin"), b"\0\x03\x04other\0\n\n").unwrap();
     std::fs::write(dir.join("new.txt"), "a\nb\nc\n").unwrap();
     screen.turn("completed");
-    screen
-        .wait_for_second_row(" ~/canter (main) · (+4,-2)")
-        .await;
+    screen.wait_for_second_row(" ~/canter  main  +4 −2").await;
 
     let colour = |color| (Some(color), false);
-    let grey = (Some(Color::Reset), true);
-    assert_eq!(screen.style_of(1, " · ("), grey);
     assert_eq!(screen.style_of(1, "+4"), colour(Color::Green));
-    assert_eq!(screen.style_of(1, ","), grey);
-    assert_eq!(screen.style_of(1, "-2"), colour(Color::Red));
+    assert_eq!(screen.style_of(1, "−2"), colour(Color::Red));
 }
 
 #[tokio::test]
@@ -501,9 +570,109 @@ async fn before_the_first_commit_the_staged_lines_count() {
     git(&dir, &["add", "a.txt"]);
     std::fs::write(dir.join("a.txt"), "1\n2\n3\n4\n").unwrap();
     let mut screen = Screen::with_git_diff(&dir, home.path());
+    screen.wait_for_second_row(" ~/canter  main  +3 −0").await;
+}
+
+/// Numbers that change their number of digits move nothing else: not the
+/// first row's left part, not the context and cache, not the directory.
+#[tokio::test]
+async fn numbers_changing_width_move_neither_the_left_nor_the_directory() {
+    let (home, dir) = repo();
+    std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+    git(&dir, &["add", "."]);
+    commit(&dir);
+    std::fs::write(dir.join("a.txt"), "y\n").unwrap();
+    let mut screen = Screen::with_git_diff(&dir, home.path());
+    screen.usage_with_line(36_000, 1_000_000, Some(400_000));
+    screen.wait_for_second_row(" ~/canter  main  +1 −1").await;
+    let first = screen.bar()[0].clone();
+    let cache = |row: &str| row[..row.find("cache").unwrap()].width();
+    for used in [232_000, 400_000, 4_000_000] {
+        screen.usage_with_line(used, 1_000_000, Some(400_000));
+        let [now, second] = screen.bar();
+        assert!(now.starts_with(&format!("{LEFT}  ")), "{now:?}");
+        assert_eq!(cache(&now), cache(&first), "{now:?}");
+        assert_eq!(now.width(), first.width(), "{now:?}");
+        assert_eq!(second, " ~/canter  main  +1 −1");
+    }
+    // A longer cost moves the right items left, never the left part.
+    screen.usage_of(232_000, 1_000_000, Some(400_000), 924, 10.12);
+    assert!(screen.bar()[0].starts_with(&format!("{LEFT}  ")));
+    // More digits in the lines changed: the directory and branch stay.
+    std::fs::write(dir.join("a.txt"), "y\n".repeat(1000)).unwrap();
+    screen.turn("completed");
     screen
-        .wait_for_second_row(" ~/canter (main) · (+3,-0)")
+        .wait_for_second_row(" ~/canter  main  +1000 −1")
         .await;
+}
+
+/// The speed is on the line saying what the turn does, while the model
+/// writes and when `/statusline` shows it: in whole tokens a second, three
+/// columns wide, so what follows stays put.
+#[test]
+fn the_speed_is_on_the_working_line_while_the_model_writes() {
+    let (home, dir) = repo();
+    let canter_home = home.path().join("canter-home");
+    std::fs::create_dir(&canter_home).unwrap();
+    std::fs::write(
+        canter_home.join("tui.json"),
+        json!({"statusLine": {"items": [{"name": "tps", "show": true}]}}).to_string(),
+    )
+    .unwrap();
+    let env = std::collections::BTreeMap::from([(
+        "CANTER_HOME".to_owned(),
+        canter_home.to_str().unwrap().to_owned(),
+    )]);
+    let app = app(&dir, home.path(), PermissionMode::AlwaysAsk).with_status_line(None, env);
+    let mut screen = Screen::of(app);
+    screen.turn("inProgress");
+    screen.event(json!({"type": "session.status", "status": "working"}));
+    screen.event(json!({"type": "item.started", "turnId": "t1",
+        "item": {"type": "agentMessage", "id": "m1", "text": ""}}));
+    let working = |rows: &[String]| {
+        rows.iter()
+            .find(|row| row.contains("Esc to interrupt"))
+            .cloned()
+            .unwrap_or_else(|| panic!("{rows:#?}"))
+    };
+    assert!(!working(&screen.screen_at(1000)).contains("tok/s"));
+    // 177 bytes: 59 tokens, from the first text on.
+    screen.event(json!({"type": "item.delta", "turnId": "t1", "itemId": "m1",
+        "delta": {"type": "agentMessage", "delta": "a".repeat(177)}}));
+    let mut info = None;
+    for (now, speed) in [(371, "159"), (1000, " 59"), (6_500, "  9")] {
+        let rows = screen.screen_at(now);
+        let line = working(&rows);
+        assert!(
+            line.contains(&format!(" · {speed} tok/s · Esc to interrupt")),
+            "{line:?}"
+        );
+        let bottom = rows[rows.len() - 2..].to_vec();
+        assert_eq!(*info.get_or_insert(bottom.clone()), bottom, "{now}");
+    }
+    // The response done, it goes.
+    screen.event(json!({"type": "item.completed", "turnId": "t1",
+        "item": {"type": "agentMessage", "id": "m1", "text": "a".repeat(177)}}));
+    assert!(!working(&screen.screen_at(20_000)).contains("tok/s"));
+}
+
+/// The speed is not shown until `/statusline` turns it on.
+#[test]
+fn the_speed_is_off_by_default() {
+    let (home, dir) = repo();
+    let mut screen = Screen::new(&dir, home.path(), PermissionMode::AlwaysAsk);
+    screen.turn("inProgress");
+    screen.event(json!({"type": "session.status", "status": "working"}));
+    screen.event(json!({"type": "item.started", "turnId": "t1",
+        "item": {"type": "agentMessage", "id": "m1", "text": ""}}));
+    screen.event(json!({"type": "item.delta", "turnId": "t1", "itemId": "m1",
+        "delta": {"type": "agentMessage", "delta": "a".repeat(177)}}));
+    let rows = screen.screen_at(1000);
+    assert!(
+        rows.iter().any(|row| row.contains("Esc to interrupt")),
+        "{rows:#?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains("tok/s")), "{rows:#?}");
 }
 
 /// In Plan the permission item also names the mode `/plan` leaves Plan for,
@@ -531,7 +700,7 @@ fn plan_names_the_mode_it_leaves_for() {
     screen.event(settings("alwaysAsk", true));
     assert_eq!(
         screen.bar()[0],
-        " deepseek-flash · think high · Plan (then Always ask)"
+        " deepseek-flash high   Plan (then Always ask)"
     );
     assert_eq!(screen.style_of(0, "Plan"), colour(Color::Magenta));
     assert_eq!(screen.style_of(0, " (then "), grey);
@@ -554,7 +723,7 @@ fn plan_names_the_mode_it_leaves_for() {
     screen.event(settings("allowAll", true));
     assert_eq!(
         screen.bar()[0],
-        " deepseek-flash · think high · Plan (then Allow all)"
+        " deepseek-flash high   Plan (then Allow all)"
     );
     assert_eq!(screen.style_of(0, "Plan"), colour(Color::Magenta));
     assert_eq!(screen.style_of(0, "Allow all"), colour(Color::Red));
@@ -562,7 +731,7 @@ fn plan_names_the_mode_it_leaves_for() {
 
     // Out of Plan, the mode alone as before.
     screen.event(settings("allowAll", false));
-    assert_eq!(screen.bar()[0], " deepseek-flash · think high · Allow all");
+    assert_eq!(screen.bar()[0], " deepseek-flash high   Allow all");
     assert_eq!(screen.style_of(0, "Allow all"), colour(Color::Red));
 }
 
@@ -583,29 +752,26 @@ fn the_sandbox_state_follows_the_mode_red_when_off_and_absent_from_older_servers
     let (home, dir) = repo();
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AskForExecution);
     // An older server does not say: nothing, never `Sandbox on`.
-    assert_eq!(
-        screen.bar()[0],
-        " deepseek-flash · think high · Ask for execution"
-    );
+    assert_eq!(screen.bar()[0], " deepseek-flash high   Ask for execution");
     let grey = (Some(Color::Reset), true);
     screen.event(sandbox_settings(&dir, "askForExecution", false, true));
     assert_eq!(
         screen.bar()[0],
-        " deepseek-flash · think high · Ask for execution · Sandbox on"
+        " deepseek-flash high   Ask for execution · Sandbox on"
     );
     assert_eq!(screen.style_of(0, "Sandbox on"), grey);
     screen.event(sandbox_settings(&dir, "allowAll", false, false));
     assert_eq!(
         screen.bar()[0],
-        " deepseek-flash · think high · Allow all · Sandbox off"
+        " deepseek-flash high   Allow all · Sandbox off"
     );
     assert_eq!(screen.style_of(0, "Sandbox off"), (Some(Color::Red), false));
     screen.event(sandbox_settings(&dir, "alwaysAsk", true, true));
     assert_eq!(
         screen.bar()[0],
-        " deepseek-flash · think high · Plan (then Always ask) · Sandbox on"
+        " deepseek-flash high   Plan (then Always ask) · Sandbox on"
     );
-    // Cost still comes after it.
+    // Cost goes on the right.
     screen.event(sandbox_settings(&dir, "alwaysAsk", false, true));
     screen.event(json!({
         "type": "session.usage",
@@ -618,7 +784,11 @@ fn the_sandbox_state_follows_the_mode_red_when_off_and_absent_from_older_servers
     }));
     assert_eq!(
         screen.bar()[0],
-        " deepseek-flash · think high · Always ask · Sandbox on · $0.31"
+        spread(
+            " deepseek-flash high   Always ask · Sandbox on",
+            "cache   0%   $0.31",
+            WIDTH
+        )
     );
 }
 
@@ -631,14 +801,14 @@ fn a_narrow_window_leaves_the_sandbox_state_out_rather_than_cut_it() {
     let (home, dir) = repo();
     let mut screen = Screen::new(&dir, home.path(), PermissionMode::AskForExecution);
     screen.event(sandbox_settings(&dir, "askForExecution", false, true));
-    let full = " deepseek-flash · think high · Ask for execution · Sandbox on";
+    let full = " deepseek-flash high   Ask for execution · Sandbox on";
     screen.resize(full.width() as u16);
     assert_eq!(screen.bar()[0], full);
-    for width in [full.width() as u16 - 1, 50] {
+    for width in [full.width() as u16 - 1, 40] {
         screen.resize(width);
         assert_eq!(
             screen.bar()[0],
-            " deepseek-flash · think high · Ask for execution",
+            " deepseek-flash high   Ask for execution",
             "width {width}"
         );
     }
@@ -656,7 +826,8 @@ fn a_narrow_window_leaves_the_sandbox_state_out_rather_than_cut_it() {
     );
 }
 
-/// `~/work/<30 a>/src/canter`, a git repository on `main` with one commit.
+/// `~/work/<30 a>/src/canter`, a git repository on `main` with one commit
+/// and one line changed since.
 fn long_repo() -> (TempDir, std::path::PathBuf) {
     let home = TempDir::new().unwrap();
     let dir = home
@@ -667,54 +838,61 @@ fn long_repo() -> (TempDir, std::path::PathBuf) {
         .join("canter");
     std::fs::create_dir_all(&dir).unwrap();
     git(&dir, &["init", "-q", "-b", "main"]);
+    std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+    git(&dir, &["add", "."]);
     commit(&dir);
+    std::fs::write(dir.join("a.txt"), "y\n").unwrap();
     (home, dir)
 }
 
-/// A long directory loses directories in the middle, as the welcome header
-/// shows it, so the branch, diff and context after it on the row still
-/// show; it keeps its last part, and only past that is the row cut at its
-/// end.
+/// How wide the directory can be depends only on the window and the
+/// branch: the lines changed show only when they fit after it. When it does
+/// not fit it loses directories in the middle, as the welcome header shows
+/// it, down to its last part; only past that is the row cut at its end.
 #[tokio::test]
 async fn a_long_directory_is_shortened_in_the_middle_before_the_row_is_cut() {
     let (home, dir) = long_repo();
     let mut screen = Screen::with_git_diff(&dir, home.path());
-    screen.usage(Some(1_000_000));
-    let tail = " (main) · (+0,-0) · ████░░░░░░ 420k/1M (42% of window) · cache 92% (last 99%)";
-    screen.resize(100);
-    screen
-        .wait_for_second_row(&format!(" ~/…/src/canter{tail}"))
-        .await;
-    // Room for all of it: as it was.
-    let full = format!(" ~/work/{}/src/canter{tail}", "a".repeat(30));
+    let path = format!(" ~/work/{}/src/canter", "a".repeat(30));
+    let full = format!("{path}  main  +1 −1");
     screen.resize(full.width() as u16);
-    assert_eq!(screen.bar()[1], full);
-    // One column less: only the directory gives, a directory at a time.
+    screen.wait_for_second_row(&full).await;
+    // One column less: the lines changed go; the directory stays whole.
     screen.resize(full.width() as u16 - 1);
+    assert_eq!(screen.bar()[1], format!("{path}  main"));
+    let exact = format!("{path}  main").width() as u16;
+    screen.resize(exact);
+    assert_eq!(screen.bar()[1], format!("{path}  main"));
+    // Then a directory at a time.
+    screen.resize(exact - 1);
     assert_eq!(
         screen.bar()[1],
-        format!(" ~/…/{}/src/canter{tail}", "a".repeat(30))
+        format!(" ~/…/{}/src/canter  main", "a".repeat(30))
     );
+    screen.resize(20);
+    assert_eq!(screen.bar()[1], " ~/…/canter  main");
     // Not even the last part leaves room: the row is cut at its end.
-    screen.resize(60);
+    screen.resize(12);
     let second = screen.bar()[1].clone();
     assert!(
-        second.starts_with(" …/canter (main) · (+0,-0) · ████") && second.ends_with('…'),
+        second.starts_with(" …/canter") && second.ends_with('…'),
         "{second:?}"
     );
-    assert_eq!(second.width(), 60);
+    assert_eq!(second.width(), 12);
 }
 
+/// A `tui.json` saved when the order was the user's: only which items show
+/// counts, those not listed hidden; they go where they always go now.
 #[test]
-fn a_long_directory_on_the_first_row_is_shortened_the_same_way() {
-    let (home, dir) = long_repo();
+fn a_tui_json_saved_with_its_own_order_keeps_only_what_shows() {
+    let (home, dir) = repo();
     let canter_home = home.path().join("canter-home");
     std::fs::create_dir(&canter_home).unwrap();
     std::fs::write(
         canter_home.join("tui.json"),
         json!({"statusLine": {"items": [
             {"name": "directory"}, {"name": "branch"}, {"name": "model"}, {"name": "line2"},
-            {"name": "context"},
+            {"name": "context"}, {"name": "cache", "show": false},
         ]}})
         .to_string(),
     )
@@ -726,12 +904,11 @@ fn a_long_directory_on_the_first_row_is_shortened_the_same_way() {
     let app = app(&dir, home.path(), PermissionMode::AlwaysAsk).with_status_line(None, env);
     let mut screen = Screen::of(app);
     screen.usage(Some(1_000_000));
-    screen.resize(50);
     assert_eq!(
         screen.bar(),
         [
-            " ~/…/src/canter (main) · deepseek-flash".to_owned(),
-            " ████░░░░░░ 420k/1M (42% of window)".to_owned(),
+            spread(" deepseek-flash", "████░░░░░░  42%", WIDTH),
+            " ~/canter  main".to_owned(),
         ]
     );
 }

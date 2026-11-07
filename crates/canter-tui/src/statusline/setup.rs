@@ -1,7 +1,7 @@
 //! `/statusline`: a list above the input box, like a choice such as `/mode`
 //! alone, to pick what the rows at the bottom show. Each item with what it
-//! says now; a line 2 entry that moves like the items; a preview of both
-//! rows below. With a status command in `config.json`, a switch on top
+//! says now, in the order the rows show them, which is fixed (P2-243); a
+//! preview of both rows below. With a status command in `config.json`, a switch on top
 //! chooses between it and the items.
 //!
 //! Follows Codex `rust-v0.163.0` (`codex-rs/tui/src/bottom_pane/
@@ -11,12 +11,12 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::bar::{Bar, Entry, Values};
+use super::bar::{Bar, Item, Values};
 use crate::text::{sanitize, truncate};
 use crate::theme;
 
 const TITLE: &str = "Configure status line";
-const KEYS: &str = "Space toggle · ←/→ move · Enter save · Esc cancel";
+const KEYS: &str = "Space toggle · Enter save · Esc cancel";
 const SWITCH: &str = "[x] Use statusLine script";
 /// Item names are padded to the longest, `permission`, and three spaces.
 const NAME_WIDTH: usize = "permission".len() + 3;
@@ -49,7 +49,7 @@ impl Setup {
     }
 
     pub fn down(&mut self) {
-        self.selected = (self.selected + 1).min(self.switch() + self.bar.entries.len() - 1);
+        self.selected = (self.selected + 1).min(self.switch() + Item::LISTED.len() - 1);
     }
 
     /// Space: the switch or the selected item on or off.
@@ -57,30 +57,9 @@ impl Setup {
         match self.selected.checked_sub(self.switch()) {
             None => self.bar.use_script = !self.bar.use_script,
             Some(index) => {
-                if let Entry::Item(_, shown) = &mut self.bar.entries[index] {
-                    *shown = !*shown;
-                }
+                let shown = &mut self.bar.shown[Item::LISTED[index] as usize];
+                *shown = !*shown;
             }
-        }
-    }
-
-    /// Left and Right: the selected entry one place earlier or later; the
-    /// switch stays on top.
-    pub fn shift(&mut self, later: bool) {
-        let Some(index) = self.selected.checked_sub(self.switch()) else {
-            return;
-        };
-        let to = if later {
-            index + 1
-        } else {
-            match index.checked_sub(1) {
-                Some(to) => to,
-                None => return,
-            }
-        };
-        if to < self.bar.entries.len() {
-            self.bar.entries.swap(index, to);
-            self.selected = self.switch() + to;
         }
     }
 
@@ -117,12 +96,7 @@ impl Setup {
                 )],
                 Vec::new(),
             ],
-            _ => self.bar.draw(values).0.map(|mut spans| {
-                if !spans.is_empty() {
-                    spans.insert(0, Span::raw(" "));
-                }
-                spans
-            }),
+            _ => self.bar.rows(values, width, Vec::new()).rows,
         };
         let [first, second] = preview.map(cut);
         let mut tail = vec![
@@ -151,24 +125,19 @@ impl Setup {
     /// A row for each entry, not cut to any width.
     fn entries(&self, values: &Values) -> Vec<Vec<Span<'static>>> {
         let at = self.selected.checked_sub(self.switch());
-        self.bar
-            .entries
+        Item::LISTED
             .iter()
             .enumerate()
-            .map(|(index, entry)| {
+            .map(|(index, &item)| {
                 let chosen = at == Some(index);
-                match *entry {
-                    Entry::Item(item, shown) => {
-                        let mark = if shown { 'x' } else { ' ' };
-                        let value = values[item as usize].as_ref();
-                        let name = match value {
-                            Some(_) => format!("{:NAME_WIDTH$}", item.name()),
-                            None => item.name().to_owned(),
-                        };
-                        row(format!("[{mark}] {name}"), value, chosen)
-                    }
-                    Entry::Line2 => row("─── line 2 ───".to_owned(), None, chosen),
-                }
+                let shown = self.bar.shows(item);
+                let mark = if shown { 'x' } else { ' ' };
+                let value = values[item as usize].as_ref();
+                let name = match value {
+                    Some(_) => format!("{:NAME_WIDTH$}", item.name()),
+                    None => item.name().to_owned(),
+                };
+                row(format!("[{mark}] {name}"), value, chosen)
             })
             .collect()
     }

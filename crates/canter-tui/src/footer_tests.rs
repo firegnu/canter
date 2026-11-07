@@ -1,6 +1,7 @@
-//! The background commands row and the sub-agents row under the info rows
-//! (P2-240): ↓ from the input box selects them, Enter opens their list
-//! under the info rows, the input box stays, grey, and Esc closes it.
+//! The sub-agents row, the background commands row and the goal row under
+//! the info rows (P2-240, P2-243): ↓ from the input box selects the first
+//! two, Enter opens their list under the info rows, the input box stays,
+//! grey, and Esc closes it.
 
 use super::*;
 use crate::Ui;
@@ -8,9 +9,31 @@ use ratatui::backend::TestBackend;
 use ratatui::style::Modifier;
 use serde_json::json;
 
-const BACKGROUND: &str = "▸ 1 background commands · ↓ to view";
-const AGENTS: &str = "● 1 sub-agent running · 2 done · ↓ to view";
-const SELECTED: &str = " · Enter to open · ↑ back";
+const BACKGROUND: &str = "▸ 1 background commands";
+const AGENTS: &str = "● 1 sub-agent running · 2 done";
+const WIDTH: u16 = 100;
+
+/// A row under the info rows as [`footer`] gives it: `text`, then `hint`
+/// on the right, a column before the edge.
+fn row(text: &str, hint: &str) -> String {
+    let pad = usize::from(WIDTH) - 2 - text.chars().count() - hint.chars().count();
+    format!("{text}{}{hint}", " ".repeat(pad))
+}
+
+/// The row as it shows when not selected.
+fn shown(text: &str) -> String {
+    row(text, "↓ view")
+}
+
+/// The row as it shows while ↓ has it selected.
+fn selected(text: &str) -> String {
+    row(text, "Enter open")
+}
+
+/// Both rows, neither selected.
+fn both() -> [String; 2] {
+    [shown(AGENTS), shown(BACKGROUND)]
+}
 
 fn agent(id: &str, status: &str) -> AgentSummary {
     serde_json::from_value(json!({
@@ -41,7 +64,7 @@ fn screen() -> Ui<TestBackend> {
         .push(serde_json::from_value(command()).unwrap());
     let mut app = App::new(snapshot, None, 0);
     app.set_agents(agents());
-    let mut ui = Ui::new(TestBackend::new(100, 30), app).unwrap();
+    let mut ui = Ui::new(TestBackend::new(WIDTH, 30), app).unwrap();
     ui.draw(0).unwrap();
     ui
 }
@@ -107,45 +130,68 @@ fn the_rows_sit_under_the_info_rows_and_not_above_the_input_box() {
     let rows = rows(&ui);
     let shown = rows.join("\n");
     let (top, _) = input_box(&ui);
-    assert_eq!(footer(&ui)[..2], [BACKGROUND, AGENTS], "{shown}");
+    assert_eq!(footer(&ui), both(), "{shown}");
     for row in &rows[..top] {
         assert!(!row.contains("background commands"), "{shown}");
         assert!(!row.contains("sub-agent"), "{shown}");
     }
     assert!(!shown.contains("click or /agents"), "{shown}");
+    // The hint is dim, a column before the edge.
+    let y = rows.iter().position(|row| row.contains(AGENTS)).unwrap();
+    let x = rows[y].chars().count() - "↓ view".chars().count();
+    assert_eq!(x, usize::from(WIDTH) - 1 - "↓ view".chars().count());
+    assert!(
+        ui.backend().buffer()[(x as u16, y as u16)]
+            .modifier
+            .contains(Modifier::DIM)
+    );
+}
+
+#[test]
+fn without_sub_agents_commands_or_a_goal_there_are_no_rows() {
+    let mut app = App::new(SessionSnapshot::empty("s1"), None, 0);
+    app.snapshot.status = SessionStatus::Idle;
+    let mut ui = Ui::new(TestBackend::new(WIDTH, 30), app).unwrap();
+    ui.draw(0).unwrap();
+    let rows = rows(&ui);
+    let (_, bottom) = input_box(&ui);
+    assert_eq!(rows.len(), bottom + 1 + usize::from(INFO_ROWS), "{rows:#?}");
 }
 
 #[test]
 fn down_selects_the_rows_and_up_goes_back_to_the_input_box() {
     let mut ui = screen();
     assert_eq!(press(&mut ui, KeyCode::Down), None);
-    let text = format!("1 background commands{SELECTED}");
-    assert!(footer(&ui)[0].ends_with(&text), "{:?}", footer(&ui));
-    assert!(reversed(&ui, "1 background"));
-    assert_eq!(footer(&ui)[1], AGENTS);
+    assert_eq!(
+        footer(&ui),
+        [selected(AGENTS), shown(BACKGROUND)],
+        "{:?}",
+        footer(&ui)
+    );
+    assert!(reversed(&ui, "1 sub-agent"));
+    assert!(!reversed(&ui, "Enter open"));
 
     assert_eq!(press(&mut ui, KeyCode::Down), None);
-    assert_eq!(footer(&ui)[0], BACKGROUND);
-    assert!(footer(&ui)[1].ends_with(&format!("2 done{SELECTED}")));
-    assert!(reversed(&ui, "1 sub-agent"));
-    assert!(!reversed(&ui, "1 background"));
+    assert_eq!(footer(&ui), [shown(AGENTS), selected(BACKGROUND)]);
+    assert!(reversed(&ui, "1 background"));
+    assert!(!reversed(&ui, "1 sub-agent"));
 
     assert_eq!(press(&mut ui, KeyCode::Up), None);
-    assert!(reversed(&ui, "1 background"));
+    assert!(reversed(&ui, "1 sub-agent"));
     assert_eq!(press(&mut ui, KeyCode::Up), None);
-    assert_eq!(footer(&ui)[..2], [BACKGROUND, AGENTS]);
-    assert!(!reversed(&ui, "1 background"));
+    assert_eq!(footer(&ui), both());
+    assert!(!reversed(&ui, "1 sub-agent"));
 
     // Enter opens the row selected; ↓ on the last row too.
     press(&mut ui, KeyCode::Down);
-    assert_eq!(press(&mut ui, KeyCode::Enter), Some(Action::BackgroundList));
-    assert_eq!(footer(&ui)[..2], [BACKGROUND, AGENTS]);
-    press(&mut ui, KeyCode::Down);
-    press(&mut ui, KeyCode::Down);
-    assert_eq!(press(&mut ui, KeyCode::Down), Some(Action::AgentList));
-    press(&mut ui, KeyCode::Down);
-    press(&mut ui, KeyCode::Down);
     assert_eq!(press(&mut ui, KeyCode::Enter), Some(Action::AgentList));
+    assert_eq!(footer(&ui), both());
+    press(&mut ui, KeyCode::Down);
+    press(&mut ui, KeyCode::Down);
+    assert_eq!(press(&mut ui, KeyCode::Down), Some(Action::BackgroundList));
+    press(&mut ui, KeyCode::Down);
+    press(&mut ui, KeyCode::Down);
+    assert_eq!(press(&mut ui, KeyCode::Enter), Some(Action::BackgroundList));
 }
 
 #[test]
@@ -154,13 +200,13 @@ fn typing_or_esc_leaves_the_row() {
     press(&mut ui, KeyCode::Down);
     assert_eq!(press(&mut ui, KeyCode::Char('h')), None);
     assert_eq!(ui.app().input.text(), "h");
-    assert_eq!(footer(&ui)[..2], [BACKGROUND, AGENTS]);
+    assert_eq!(footer(&ui), both());
 
     press(&mut ui, KeyCode::Backspace);
     press(&mut ui, KeyCode::Down);
-    assert!(reversed(&ui, "1 background"));
+    assert!(reversed(&ui, "1 sub-agent"));
     assert_eq!(press(&mut ui, KeyCode::Esc), None);
-    assert_eq!(footer(&ui)[..2], [BACKGROUND, AGENTS]);
+    assert_eq!(footer(&ui), both());
 }
 
 #[test]
@@ -174,9 +220,9 @@ fn down_keeps_moving_the_cursor_going_through_history_and_the_lists() {
     assert_eq!(ui.app().input.cursor(), 1);
     press(&mut ui, KeyCode::Down);
     assert_eq!(ui.app().input.cursor(), 3);
-    assert_eq!(footer(&ui)[..2], [BACKGROUND, AGENTS]);
+    assert_eq!(footer(&ui), both());
     press(&mut ui, KeyCode::Down);
-    assert!(reversed(&ui, "1 background"));
+    assert!(reversed(&ui, "1 sub-agent"));
     press(&mut ui, KeyCode::Up);
 
     // A message recalled goes back to the newest first.
@@ -191,9 +237,9 @@ fn down_keeps_moving_the_cursor_going_through_history_and_the_lists() {
     assert_eq!(ui.app().input.text(), "first");
     press(&mut ui, KeyCode::Down);
     assert_eq!(ui.app().input.text(), "");
-    assert_eq!(footer(&ui)[..2], [BACKGROUND, AGENTS]);
+    assert_eq!(footer(&ui), both());
     press(&mut ui, KeyCode::Down);
-    assert!(reversed(&ui, "1 background"));
+    assert!(reversed(&ui, "1 sub-agent"));
     press(&mut ui, KeyCode::Up);
 
     // The command list takes ↓.
@@ -201,7 +247,7 @@ fn down_keeps_moving_the_cursor_going_through_history_and_the_lists() {
     assert!(ui.app().command_list().is_some());
     press(&mut ui, KeyCode::Down);
     assert_eq!(ui.app().command_list().unwrap().1, 1);
-    assert_eq!(footer(&ui)[..2], [BACKGROUND, AGENTS]);
+    assert_eq!(footer(&ui), both());
 }
 
 /// The input box is grey: its border, its prompt (cyan otherwise) and its
@@ -224,31 +270,30 @@ fn the_sub_agents_list_opens_under_the_info_rows_and_esc_keeps_the_draft() {
     press(&mut ui, KeyCode::Char('h'));
     press(&mut ui, KeyCode::Char('i'));
     press(&mut ui, KeyCode::Down);
-    press(&mut ui, KeyCode::Down);
     assert_eq!(press(&mut ui, KeyCode::Enter), Some(Action::AgentList));
     // What the main loop does with it.
     ui.app_mut().show_agents(agents());
     ui.draw(0).unwrap();
-    let shown = rows(&ui).join("\n");
+    let shown_rows = rows(&ui).join("\n");
     let (top, _) = input_box(&ui);
-    assert!(rows(&ui)[top + 1].contains("› hi"), "{shown}");
-    assert!(grey(&ui), "{shown}");
+    assert!(rows(&ui)[top + 1].contains("› hi"), "{shown_rows}");
+    assert!(grey(&ui), "{shown_rows}");
     let below = footer(&ui);
-    assert_eq!(below[0], BACKGROUND, "{shown}");
+    assert_eq!(below[0], shown(BACKGROUND), "{shown_rows}");
     assert!(
         below[1].starts_with("╭─ Sub-agents · 1 running · 2 done ─"),
-        "{shown}"
+        "{shown_rows}"
     );
     assert!(
         below.iter().any(|row| row.contains("├ ● agent-a")),
-        "{shown}"
+        "{shown_rows}"
     );
     assert!(
         below
             .last()
             .unwrap()
             .contains("↑↓ select · Enter open · s stop · Esc close"),
-        "{shown}"
+        "{shown_rows}"
     );
     // Keys go to the list.
     press(&mut ui, KeyCode::Char('x'));
@@ -257,26 +302,30 @@ fn the_sub_agents_list_opens_under_the_info_rows_and_esc_keeps_the_draft() {
     assert_eq!(press(&mut ui, KeyCode::Esc), None);
     assert_eq!(ui.app().input.text(), "hi");
     assert!(!grey(&ui));
-    assert_eq!(footer(&ui)[..2], [BACKGROUND, AGENTS]);
+    assert_eq!(footer(&ui), both());
 }
 
 #[test]
 fn the_ps_list_opens_under_the_info_rows() {
     let mut ui = screen();
     press(&mut ui, KeyCode::Down);
+    press(&mut ui, KeyCode::Down);
     assert_eq!(press(&mut ui, KeyCode::Enter), Some(Action::BackgroundList));
     let list = serde_json::from_value(json!({ "data": [command()] })).unwrap();
     ui.app_mut().show_background(&list, 5000);
     ui.draw(0).unwrap();
-    let shown = rows(&ui).join("\n");
-    assert!(grey(&ui), "{shown}");
+    let shown_rows = rows(&ui).join("\n");
+    assert!(grey(&ui), "{shown_rows}");
     let below = footer(&ui);
-    assert_eq!(below[0], "▾ 1 background commands · ↓ to view", "{shown}");
-    assert_eq!(below[1], AGENTS, "{shown}");
-    assert!(below[2].starts_with("╭─ Background commands"), "{shown}");
+    assert_eq!(below[0], shown(AGENTS), "{shown_rows}");
+    assert_eq!(below[1], shown("▾ 1 background commands"), "{shown_rows}");
+    assert!(
+        below[2].starts_with("╭─ Background commands"),
+        "{shown_rows}"
+    );
     assert!(
         below.iter().any(|row| row.contains("#1 npm run dev")),
-        "{shown}"
+        "{shown_rows}"
     );
 
     // The command's log opens there too.
@@ -290,17 +339,17 @@ fn the_ps_list_opens_under_the_info_rows() {
     .unwrap();
     ui.app_mut().show_background_output(&output);
     ui.draw(0).unwrap();
-    let shown = rows(&ui).join("\n");
+    let shown_rows = rows(&ui).join("\n");
     let below = footer(&ui);
-    assert!(below[2].starts_with("╭─ Background #1"), "{shown}");
+    assert!(below[2].starts_with("╭─ Background #1"), "{shown_rows}");
     assert!(
         below.iter().any(|row| row.contains("server ready")),
-        "{shown}"
+        "{shown_rows}"
     );
-    assert!(grey(&ui), "{shown}");
+    assert!(grey(&ui), "{shown_rows}");
     assert_eq!(press(&mut ui, KeyCode::Esc), None);
     assert!(!grey(&ui));
-    assert_eq!(footer(&ui)[..2], [BACKGROUND, AGENTS]);
+    assert_eq!(footer(&ui), both());
 }
 
 #[test]
@@ -308,8 +357,53 @@ fn other_panels_still_take_the_input_box_place() {
     let mut ui = screen();
     ui.app_mut().show_sandbox(&Default::default());
     ui.draw(0).unwrap();
-    let shown = rows(&ui).join("\n");
+    let shown_rows = rows(&ui).join("\n");
     let (top, _) = input_box(&ui);
-    assert!(rows(&ui)[top].starts_with("╭─ Sandbox"), "{shown}");
-    assert_eq!(footer(&ui)[..2], [BACKGROUND, AGENTS], "{shown}");
+    assert!(rows(&ui)[top].starts_with("╭─ Sandbox"), "{shown_rows}");
+    assert_eq!(footer(&ui), both(), "{shown_rows}");
+}
+
+fn goal(status: &str, budget: f64) -> canter_protocol::SessionGoal {
+    serde_json::from_value(json!({
+        "id": "g1", "objective": "Finish", "status": status, "budgetUsd": budget,
+        "cost": {"usd": 0.12, "unknown": false}, "createdAt": 0, "updatedAt": 0,
+    }))
+    .unwrap()
+}
+
+/// The goal has a row of its own, last; ↓ does not select it, and the
+/// first info row no longer starts with it.
+#[test]
+fn the_goal_is_a_row_of_its_own_that_down_skips() {
+    let mut ui = screen();
+    ui.app_mut().snapshot.goal = Some(goal("active", 5.0));
+    ui.draw(0).unwrap();
+    let all = rows(&ui);
+    let shown_rows = all.join("\n");
+    assert_eq!(
+        footer(&ui),
+        [
+            shown(AGENTS),
+            shown(BACKGROUND),
+            "◎ goal $0.12 / $5.00".to_owned()
+        ],
+        "{shown_rows}"
+    );
+    let (_, bottom) = input_box(&ui);
+    assert!(!all[bottom + 1].contains("goal"), "{shown_rows}");
+    let y = all.iter().position(|row| row.contains("◎ goal")).unwrap();
+    let buffer = ui.backend().buffer();
+    assert!(buffer[(1, y as u16)].modifier.contains(Modifier::DIM));
+    assert!(!buffer[(3, y as u16)].modifier.contains(Modifier::DIM));
+
+    press(&mut ui, KeyCode::Down);
+    press(&mut ui, KeyCode::Down);
+    assert!(reversed(&ui, "1 background"));
+    assert!(!reversed(&ui, "◎ goal"));
+    assert_eq!(press(&mut ui, KeyCode::Down), Some(Action::BackgroundList));
+
+    // Not active: its state after `goal`; no budget: unlimited.
+    ui.app_mut().snapshot.goal = Some(goal("paused", 0.0));
+    ui.draw(0).unwrap();
+    assert_eq!(footer(&ui)[2], "◎ goal paused $0.12 / unlimited");
 }

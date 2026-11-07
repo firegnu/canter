@@ -439,7 +439,7 @@ Commands are typed at the start of the input. A word after `/` is a command only
 | `/roles` | | List built-in and custom sub-agent roles. See [Sub-agents and roles](#sub-agents-and-roles). |
 | `/sandbox` | | Show what the sandbox allows. Read-only. |
 | `/skills` | | List this session's skills, grouped by global and project. |
-| `/statusline` | | Choose and order the status line items. Saved to `tui.json`. |
+| `/statusline` | | Choose which status line items appear. Saved to `tui.json`. |
 | `/stop` | | Stop all background commands in this session. |
 | `/theme` | | Choose the code colour theme. Saved to `tui.json`. |
 | `/think` | `[none\|low\|medium\|high\|xhigh\|max]` | Change the thinking effort for the current model. See [Models](#models). |
@@ -868,7 +868,21 @@ When a file is written by `write` or `edit`, canter waits up to 500 ms for diagn
 
 ## Status line
 
-Without a custom status command, canter draws two status rows. `/statusline` chooses which items appear, in which order, and where the second row starts; the result is saved in `tui.json` under `statusLine`. Available items are `model`, `thinking`, `permission`, `cost`, `directory`, `branch`, `diff`, `context`, `cache`, `tps`, `version` and `session`.
+Without a custom status command, canter draws two status rows under the input box:
+
+```text
+ opencode-go/deepseek-v4.1-flash high   Ask for execution · Sandbox on        ██░░░░░░░░  12%   cache  95%   $0.03
+ ~/Developer/personal_projs/canter  main  +250 −6
+```
+
+- First row: the model (the provider prefix dim), the thinking effort, the permission mode and the sandbox state on the left; on the right, context use as a bar that is full at the auto-compaction line with its percent, the session's cache hit rate and its cost. `Allow all` and `Sandbox off` are red; the bar is green, yellow or red by the room left.
+- Second row: the working directory, the git branch, and the lines added and removed since the last commit (left out when nothing changed). The session name and version, when turned on, go on the right.
+- Each item has a fixed place, and numbers keep their width, so a changing number does not move the rest. When the window is too narrow, `cache` goes first, then the cost, then the context; a long directory is shortened in the middle (`~/…/src/canter`); the lines changed show only when they fit.
+- While the model writes, the `tps` item shows the speed on the working line, for example `·  59 tok/s`.
+
+Under the two rows, a row each for sub-agents, background commands and the current goal (`◎ goal $0.12 / $5.00`) appear when there are any. ↓ from the input box selects the sub-agents or background commands row, and Enter opens its list.
+
+`/statusline` chooses which items appear; their places are fixed. The result is saved in `tui.json` under `statusLine`. Available items are `model`, `thinking`, `permission`, `context`, `cache`, `cost`, `directory`, `branch`, `diff`, `session`, `version` and `tps` (`session`, `version` and `tps` are off by default).
 
 For a fully custom status line, add a terminal-only `statusLine` string to `config.json`:
 
@@ -876,7 +890,7 @@ For a fully custom status line, add a terminal-only `statusLine` string to `conf
 { "statusLine": "~/bin/my-status" }
 ```
 
-canter runs it as `/bin/sh -c <command>` and writes a JSON object to stdin whenever the display changes (at most about every 300 ms). The first two output lines become the status rows; ANSI styling is allowed. The command is read when the terminal starts and is not hot-reloaded. `/statusline` can switch between the script and the built-in items; `useScript` in `tui.json` records the choice.
+canter runs it as `/bin/sh -c <command>` and writes a JSON object to stdin whenever the display changes (at most about every 300 ms). The first two output lines become the status rows, and the sub-agent, background command and goal rows stay under them; ANSI styling is allowed. The command is read when the terminal starts and is not hot-reloaded. `/statusline` can switch between the script and the built-in items; `useScript` in `tui.json` records the choice.
 
 Other `tui.json` settings:
 
