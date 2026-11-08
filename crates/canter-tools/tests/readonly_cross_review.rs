@@ -432,3 +432,97 @@ async fn recursive_content_searches_cannot_start_above_protected_paths() {
     check(&tools, "rg api_key ../state", true).await;
     check(&tools, "rg api_key ../State-backup", false).await;
 }
+
+#[tokio::test]
+async fn output_can_be_discarded_but_not_written_to_files() {
+    let fixture = Fixture::new();
+    write(&fixture.cwd.join("src/a.rs"), "fn a() {}\n");
+    let tools = fixture.tools(&fixture.cwd);
+    for command in [
+        "rg api_key src 2>/dev/null",
+        "rg api_key src 2> /dev/null | head -20",
+        "ls src 2>&1 | head",
+        "ls src >/dev/null",
+        "git status --short 2>/dev/null",
+    ] {
+        check(&tools, command, false).await;
+    }
+    for command in [
+        "ls > out.txt",
+        "ls 2>out.txt",
+        "ls >>/dev/null",
+        "ls 2>&3",
+        "ls 1>&3",
+        "ls 2>/dev/nullx",
+        "ls \"2\">/dev/null",
+        "cat < src/a.rs",
+        "cat ../.canter/config.json 2>/dev/null",
+    ] {
+        check(&tools, command, true).await;
+    }
+}
+
+#[tokio::test]
+async fn globs_in_the_last_path_component_are_checked_against_every_match() {
+    let fixture = Fixture::new();
+    write(&fixture.cwd.join("src/a.rs"), "fn a() {}\n");
+    write(&fixture.cwd.join("src/b.rs"), "fn b() {}\n");
+    let tools = fixture.tools(&fixture.cwd);
+    for command in [
+        "rg -n api_key src/*.rs",
+        "ls src/*.rs",
+        "cat src/?.rs",
+        "cd src && rg api_key *.rs",
+        "wc -l src/*",
+    ] {
+        check(&tools, command, false).await;
+    }
+    for command in [
+        // A match inside the protected state directory.
+        "cat ../.canter/*",
+        "cat ../.can*/config.json",
+        // The home directory holds .canter; hidden names are checked too.
+        "ls ../*",
+        "ls src/[ab].rs",
+        "ls src/*/",
+        "ls missing/*.rs",
+        "s*",
+        "cd s* && ls",
+    ] {
+        check(&tools, command, true).await;
+    }
+    // A matching name that looks like an option could change what rg runs.
+    write(&fixture.cwd.join("src/--pre=touch"), "");
+    check(&tools, "rg api_key src/*", false).await;
+    check(&tools, "cd src && rg api_key *", true).await;
+    // `.*` can match `..` in some shells and climb out of the directory.
+    check(&tools, "cat src/.*", true).await;
+}
+
+#[tokio::test]
+async fn git_dash_c_is_checked_like_changing_into_that_repository() {
+    let fixture = Fixture::new();
+    let other = fixture.home.join("other");
+    std::fs::create_dir_all(other.join(".git/objects")).unwrap();
+    std::fs::create_dir(other.join(".git/refs")).unwrap();
+    write(&other.join(".git/HEAD"), "ref: refs/heads/main\n");
+    let tools = fixture.tools(&fixture.cwd);
+    for command in [
+        "git -C ../other log --oneline -3",
+        "git -C ../other status --short",
+        "git -C .. -C other diff",
+    ] {
+        check(&tools, command, false).await;
+    }
+    for command in [
+        "git -C ../.canter log",
+        "git -C",
+        "git -C -p log",
+        "git -C ../other diff -- ../.canter",
+    ] {
+        check(&tools, command, true).await;
+    }
+    // The other repository's own configuration can run programs.
+    write(&other.join(".git/config"), "[core]\nfsmonitor = ./hook\n");
+    check(&tools, "git -C ../other status --short", true).await;
+}

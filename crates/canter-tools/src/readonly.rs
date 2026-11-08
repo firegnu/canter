@@ -54,17 +54,15 @@ fn check(
                 continue;
             }
             let allowed = |word: &str| path_allowed(word, &cwd, home, protected, false);
-            let recursive_allowed = |word: &str| {
-                !word.contains(['*', '?', '[', ']'])
-                    && !word.starts_with(':')
-                    && path_allowed(word, &cwd, home, protected, true)
-            };
             if !allowed(".") {
                 return false;
             }
             let mut new_cwd = cwd.clone();
             for command in pipeline {
                 if command.words[0] == "cd" {
+                    if !command.globs.is_empty() {
+                        return false;
+                    }
                     let [_, target] = command.words.as_slice() else {
                         return false;
                     };
@@ -87,14 +85,50 @@ fn check(
                         new_cwd = target;
                     }
                 } else {
-                    let readonly = readonly_command(&command.words, &allowed, &recursive_allowed)
-                        && (command.words[0] != "git"
-                            || git::configuration_is_safe(&cwd, environment));
+                    let Some(mut words) = expand_globs(command, &cwd) else {
+                        return false;
+                    };
+                    // `git -C dir` reads that repository and resolves its paths there,
+                    // so check it as if the command ran after `cd dir`.
+                    let mut here = cwd.clone();
+                    while !extended && words[0] == "git" && words.get(1).is_some_and(|w| w == "-C")
+                    {
+                        let Some(target) = words.get(2) else {
+                            return false;
+                        };
+                        if target.is_empty()
+                            || target.starts_with('-')
+                            || !path_allowed(target, &here, home, protected, false)
+                        {
+                            return false;
+                        }
+                        let target = normalize(&here.join(target));
+                        let resolved = target.canonicalize().unwrap_or_else(|_| target.clone());
+                        let Some(target_str) = resolved.to_str() else {
+                            return false;
+                        };
+                        if !path_allowed(target_str, &here, home, protected, false) {
+                            return false;
+                        }
+                        here = target;
+                        words.drain(1..3);
+                    }
+                    let allowed = |word: &str| path_allowed(word, &here, home, protected, false);
+                    let recursive_allowed = |word: &str| {
+                        !word.contains(['*', '?', '[', ']'])
+                            && !word.starts_with(':')
+                            && path_allowed(word, &here, home, protected, true)
+                    };
+                    if !allowed(".") {
+                        return false;
+                    }
+                    let readonly = readonly_command(&words, &allowed, &recursive_allowed)
+                        && (words[0] != "git" || git::configuration_is_safe(&here, environment));
                     // Preserve path checks (including recursive search roots) before explicit grants.
-                    let path_safe = command.words.iter().all(|word| allowed(word))
-                        && (!readonly_command(&command.words, &|_| true, &|_| true)
-                            || readonly_command(&command.words, &allowed, &recursive_allowed));
-                    if !(readonly || path_safe && allowed_prefix(&command.words)) {
+                    let path_safe = words.iter().all(|word| allowed(word))
+                        && (!readonly_command(&words, &|_| true, &|_| true)
+                            || readonly_command(&words, &allowed, &recursive_allowed));
+                    if !(readonly || path_safe && allowed_prefix(&words)) {
                         return false;
                     }
                 }
@@ -111,6 +145,68 @@ fn check(
         previous = pipeline.last().and_then(|command| command.next);
     }
     true
+}
+
+/// Expands `*` and `?` in a word's last path component the way the shell would,
+/// but also matching hidden names, so every file the shell could pass is checked.
+fn expand_globs(command: &Command, cwd: &Path) -> Option<Vec<String>> {
+    if command.globs.contains(&0) {
+        return None;
+    }
+    let mut expanded = Vec::with_capacity(command.words.len());
+    for (index, word) in command.words.iter().enumerate() {
+        if !command.globs.contains(&index) {
+            expanded.push(word.clone());
+            continue;
+        }
+        let (dir, pattern) = word.split_at(word.rfind('/').map_or(0, |at| at + 1));
+        // `.*` can also match `..` in some shells.
+        if pattern.is_empty() || pattern.starts_with('.') || dir.contains(['*', '?']) {
+            return None;
+        }
+        let mut matches = Vec::new();
+        for entry in std::fs::read_dir(cwd.join(dir)).ok()? {
+            let name = entry.ok()?.file_name();
+            let name = name.to_str()?;
+            if wildcard_matches(pattern, name) {
+                matches.push(format!("{dir}{name}"));
+            }
+        }
+        // Without a match zsh refuses to run the command; a name that looks like an
+        // option could change what the program does.
+        if matches.is_empty()
+            || matches.len() > 1000
+            || matches.iter().any(|path| path.starts_with('-'))
+        {
+            return None;
+        }
+        matches.sort();
+        expanded.extend(matches);
+    }
+    Some(expanded)
+}
+
+fn wildcard_matches(pattern: &str, name: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let name: Vec<char> = name.chars().collect();
+    let (mut p, mut n) = (0, 0);
+    let mut star = None;
+    while n < name.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == name[n]) {
+            p += 1;
+            n += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            star = Some((p, n));
+            p += 1;
+        } else if let Some((star_p, star_n)) = star {
+            p = star_p + 1;
+            n = star_n + 1;
+            star = Some((star_p, star_n + 1));
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|ch| *ch == '*')
 }
 
 fn readonly_command(
@@ -633,13 +729,17 @@ enum Separator {
 
 pub(crate) struct Command {
     pub(crate) words: Vec<String>,
+    /// Indexes of words with an unquoted `*` or `?` (readonly mode only).
+    globs: Vec<usize>,
     next: Option<Separator>,
 }
 
 fn push_word(
     words: &mut Vec<String>,
+    globs: &mut Vec<usize>,
     word: &mut String,
     tilde: &mut bool,
+    glob: &mut bool,
     home: Option<&Path>,
 ) -> Option<()> {
     let mut value = std::mem::take(word);
@@ -649,6 +749,9 @@ fn push_word(
             .join(value[1..].trim_start_matches('/'))
             .to_str()?
             .to_owned();
+    }
+    if std::mem::take(glob) {
+        globs.push(words.len());
     }
     words.push(value);
     Some(())
@@ -692,7 +795,11 @@ pub(crate) fn scan_commands(
         }
     } else {
         if !words.is_empty() {
-            commands.push(Command { words, next: None });
+            commands.push(Command {
+                words,
+                globs: Vec::new(),
+                next: None,
+            });
         }
         // Recover later literal segments after a simple variable, without trying
         // to interpret nested substitutions, groups or their command bodies.
@@ -743,6 +850,8 @@ fn literal_segments(source: &str) -> Option<Vec<&str>> {
     Some(parts)
 }
 
+// Policy mode keeps treating globs as unknown syntax; only the readonly check
+// expands them (see `expand_globs`).
 fn scan_into(
     source: &str,
     home: Option<&Path>,
@@ -752,9 +861,13 @@ fn scan_into(
 ) -> Option<()> {
     let mut word = String::new();
     let mut started = false;
+    let mut quoted = false;
     let mut tilde = false;
+    let mut glob = false;
+    let mut globs = Vec::new();
     let mut quote = None;
     let mut chars = source.chars().peekable();
+    let boundary = |ch: &char| matches!(ch, ' ' | '\t' | '\n' | '&' | '|' | ';');
     while let Some(ch) = chars.next() {
         if matches!(ch, '\r' | '\0' | '$' | '`') || ch == '\n' && (!extended || quote.is_some()) {
             return None;
@@ -775,6 +888,7 @@ fn scan_into(
             }
             word.push(next);
             started = true;
+            quoted = true;
         } else if let Some(delimiter) = quote {
             if ch == delimiter {
                 quote = None;
@@ -786,17 +900,20 @@ fn scan_into(
                 '\'' | '"' => {
                     quote = Some(ch);
                     started = true;
+                    quoted = true;
                 }
                 ' ' | '\t' => {
                     if started {
-                        push_word(words, &mut word, &mut tilde, home)?;
+                        push_word(words, &mut globs, &mut word, &mut tilde, &mut glob, home)?;
                         started = false;
+                        quoted = false;
                     }
                 }
                 '&' | '|' | ';' | '\n' => {
                     if started {
-                        push_word(words, &mut word, &mut tilde, home)?;
+                        push_word(words, &mut globs, &mut word, &mut tilde, &mut glob, home)?;
                         started = false;
+                        quoted = false;
                     }
                     if words.is_empty() {
                         if extended && ch == '\n' {
@@ -826,14 +943,53 @@ fn scan_into(
                     };
                     commands.push(Command {
                         words: std::mem::take(words),
+                        globs: std::mem::take(&mut globs),
                         next: Some(separator),
                     });
                 }
-                '<' | '>' | '(' | ')' | '{' | '}' | '#' => {
+                // Only discarding output or joining stdout and stderr: `>/dev/null`,
+                // `2>/dev/null`, `2>&1`, `>&2`. Anything that could write a file stays unknown.
+                '>' => {
+                    let fd = if !started {
+                        '1'
+                    } else if !quoted && (word == "1" || word == "2") {
+                        word.chars().next()?
+                    } else {
+                        return None;
+                    };
+                    word.clear();
+                    started = false;
+                    tilde = false;
+                    glob = false;
+                    if chars.next_if_eq(&'&').is_some() {
+                        let target = chars.next()?;
+                        if !matches!((fd, target), ('2', '1') | ('1', '2')) {
+                            return None;
+                        }
+                    } else {
+                        while chars.next_if(|ch| matches!(ch, ' ' | '\t')).is_some() {}
+                        let mut target = String::new();
+                        while let Some(ch) = chars.next_if(|ch| !boundary(ch)) {
+                            target.push(ch);
+                        }
+                        if target != "/dev/null" {
+                            return None;
+                        }
+                    }
+                    if chars.peek().is_some_and(|ch| !boundary(ch)) {
+                        return None;
+                    }
+                }
+                '<' | '(' | ')' | '{' | '}' | '#' => {
                     if started {
-                        push_word(words, &mut word, &mut tilde, home)?;
+                        push_word(words, &mut globs, &mut word, &mut tilde, &mut glob, home)?;
                     }
                     return None;
+                }
+                '*' | '?' if !extended => {
+                    word.push(ch);
+                    started = true;
+                    glob = true;
                 }
                 '*' | '?' | '[' | ']' => return None,
                 _ => {
@@ -855,7 +1011,7 @@ fn scan_into(
         return None;
     }
     if started {
-        push_word(words, &mut word, &mut tilde, home)?;
+        push_word(words, &mut globs, &mut word, &mut tilde, &mut glob, home)?;
     }
     if words.is_empty() {
         if extended
@@ -872,6 +1028,7 @@ fn scan_into(
     }
     commands.push(Command {
         words: std::mem::take(words),
+        globs,
         next: None,
     });
     Some(())

@@ -542,13 +542,15 @@ fn plan_mode_shell_hint_names_commands_that_pass_the_read_only_check() {
         "rg --heading timeout src",
         "rg --sort path timeout src",
         "rg --sort=path timeout src",
+        "ls src 2>/dev/null",
+        "rg timeout src 2>&1",
     ] {
         assert!(check(command), "{command}");
     }
     for command in [
-        "ls src 2>/dev/null",
-        "rg timeout src 2>&1",
-        "rg timeout src/*.rs",
+        "ls > out.txt",
+        "rg -rn timeout src",
+        "rg timeout missing/*.rs",
     ] {
         assert!(!check(command), "{command}");
     }
@@ -559,6 +561,6 @@ fn plan_mode_shell_hint_names_commands_that_pass_the_read_only_check() {
         hint.contains("rg, ls, cat, head, sed -n or git log"),
         "{hint}"
     );
-    assert!(hint.contains("rg -g '*.rs'"), "{hint}");
+    assert!(hint.contains("its -r means --replace"), "{hint}");
     assert!(!hint.contains("ask_user"), "{hint}");
 }
