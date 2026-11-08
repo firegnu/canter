@@ -912,6 +912,68 @@ async fn model_spawn_needs_a_depth_and_the_child_hears_it_after_the_task() {
     fake.stop().await;
 }
 
+/// P2-255, 11-08: the depth sentence is research talk, so a child that can
+/// edit gets the model's task alone; its list entry still shows the depth.
+#[tokio::test]
+async fn an_editing_child_gets_its_task_without_the_depth_sentence() {
+    let task = "Fix the parser error";
+    let mut replies = vec![model_server::Reply::sse(format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"general","type":"function","function":{"name":"spawn_agent","arguments":json!({"task":task,"type":"general","name":"Fix parser errors","depth":"medium"}).to_string()}}]},"finish_reason":"tool_calls"}]})
+    ))];
+    replies.extend((0..8).map(|_| model_server::Reply::sse(format!("data: {}\n\ndata: [DONE]\n\n", json!({"choices":[{"index":0,"delta":{"content":"Fix finished"},"finish_reason":"stop"}]})))));
+    let fake = model_server::Server::start(replies).await;
+    let model = canter_model::ChatCompletions::new(
+        &fake.base_url,
+        canter_model::ApiKey::new(model_server::KEY),
+    )
+    .unwrap();
+    let test = Harness::with_model(Arc::new(model)).await;
+    let url = parent(&test).await;
+    let agents: AgentListResponse = test
+        .client
+        .get(format!("{url}/agents"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(agents.data.len(), 1);
+    let listed = &agents.data[0];
+    assert_eq!(listed.depth, Some(AgentDepth::Medium));
+    idle(
+        &test,
+        &format!("http://localhost/v1/sessions/{}", listed.id),
+    )
+    .await;
+    let heard: Vec<_> = fake
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| {
+            request["messages"]
+                .to_string()
+                .contains("You are a sub-agent")
+        })
+        .map(|request| {
+            request["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .rfind(|message| message["role"] == "user")
+                .unwrap()["content"]
+                .clone()
+        })
+        .collect();
+    assert_eq!(heard, [json!(task)]);
+    test.stop().await;
+    fake.stop().await;
+}
+
 #[tokio::test]
 async fn fifth_running_agent_is_rejected_but_finished_agents_release_the_slot() {
     let mut replies = vec![model_server::Reply::sse(

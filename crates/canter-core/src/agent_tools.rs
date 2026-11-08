@@ -147,8 +147,8 @@ fn parse(call: &ToolCall) -> Result<AgentCommand, CoreError> {
     Ok(command)
 }
 
-/// P2-255: the task a child gets: the model's, then a sentence on how deep
-/// to look.
+/// P2-255: the task a read-only child gets: the model's, then a sentence on
+/// how deep to look. A child that can edit gets the model's task alone.
 pub(crate) fn with_depth(task: &str, depth: AgentDepth) -> String {
     let said = match depth {
         AgentDepth::Quick => "Depth: quick. Find the main places, report them, and stop.",

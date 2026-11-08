@@ -679,9 +679,11 @@ impl Session {
                 child.shared.lifetime.child_token(),
             );
             // The parent link keeps the model's task alone, for the list (P2-255).
+            // Only a read-only child hears the depth: the sentence is research
+            // talk, and after "fix X" it could stop an editing child short.
             let first = match depth {
-                Some(depth) => crate::agent_tools::with_depth(&task, depth),
-                None => task,
+                Some(depth) if readonly => crate::agent_tools::with_depth(&task, depth),
+                _ => task,
             };
             child
                 .input_with_prompt_hook(SessionInputParams {
