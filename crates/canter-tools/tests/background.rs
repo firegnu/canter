@@ -519,3 +519,36 @@ async fn plan_mode_keeps_shell_whitelist_and_allows_background_management() {
     }
     assert!(!dir.path().join("forbidden").exists());
 }
+
+#[test]
+fn plan_mode_shell_hint_names_commands_that_pass_the_read_only_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools(&dir);
+    let check = |command: &str| {
+        tools.allowed_in_plan_mode(
+            "shell",
+            &serde_json::json!({ "command": command }).to_string(),
+        )
+    };
+    for command in [
+        "rg -n timeout src | head -50",
+        "ls src",
+        "cat README.md",
+        "head -n 5 README.md",
+        "sed -n 1,20p README.md",
+        "git log --oneline -3",
+    ] {
+        assert!(check(command), "{command}");
+    }
+    for command in ["ls src 2>/dev/null", "rg timeout src 2>&1"] {
+        assert!(!check(command), "{command}");
+    }
+    let hint = tools
+        .blocked_in_plan_mode("shell", "id".into(), r#"{"command":"ls 2>/dev/null"}"#)
+        .text;
+    assert!(
+        hint.contains("rg, ls, cat, head, sed -n or git log"),
+        "{hint}"
+    );
+    assert!(!hint.contains("ask_user"), "{hint}");
+}

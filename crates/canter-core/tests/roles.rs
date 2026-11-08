@@ -306,11 +306,15 @@ async fn plan_mode_accepts_readonly_roles_and_refuses_editing_roles() {
         .iter()
         .find(|message| message["role"] == "tool")
         .unwrap();
+    let text = result["content"].as_str().unwrap();
     assert!(
-        result["content"]
-            .as_str()
-            .unwrap()
-            .starts_with("Plan mode: shell is not allowed."),
+        text.starts_with(
+            "This shell command is not read-only, so it did not run. Read-only commands still work"
+        ),
+        "{result}"
+    );
+    assert!(
+        !text.contains("ask_user") && !text.contains("submit_plan"),
         "{result}"
     );
 }

@@ -525,7 +525,8 @@ async fn plan_mode_blocks_mutation_without_approval_and_preserves_read_tools() {
                 _ => None,
             })
             .take(4)
-            .all(|text| text.contains("Plan mode"))
+            .all(|text| text.contains("Plan mode")
+                || text.starts_with("This shell command is not read-only, so it did not run."))
     );
     assert!(!fixture.store.events_after("s1", 0).unwrap().is_empty());
 }
