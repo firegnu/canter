@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2-255 子 agent 列表加深度和任务</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --fg: #1f1f1f; --muted: #6b6b6b; --card: #ffffff; --line: #e2e0d8;
+    --term: #16181d; --tfg: #d7dae0; --dim: #7c818c; --cyan: #56b6c2; --green: #98c379;
+    --yellow: #e5c07b; --red: #e06c75; --magenta: #c678dd; --blue: #61afef; --accent: #b4532a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111214; --fg: #e6e6e6; --muted: #9a9a9a; --card: #1b1c1f; --line: #2c2d31; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.65 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  .q { font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 18px; margin-top: 12px; }
+  .opt { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .opt.rec { border: 2px solid var(--accent); }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px;
+    background: var(--accent); color: #fff; margin-left: 6px; vertical-align: 2px; }
+  .opt h3 { margin: 0 0 8px; font-size: 16px; }
+  .opt p, .opt ul { margin: 8px 0 0; font-size: 14px; }
+  .opt ul { padding-left: 20px; }
+  pre.t { background: var(--term); color: var(--tfg); border-radius: 8px; padding: 12px 14px; margin: 0;
+    font: 13px/1.5 "SF Mono", Menlo, monospace; overflow-x: auto; white-space: pre; }
+  .d { color: var(--dim); } .c { color: var(--cyan); } .g { color: var(--green); } .y { color: var(--yellow); }
+  .r { color: var(--red); } .m { color: var(--magenta); } .b { color: var(--blue); }
+  .sel { background: #2c313c; }
+  .note { font-size: 13px; color: var(--muted); }
+  .summary { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; }
+  .summary ol { margin: 6px 0 0; padding-left: 22px; }
+  code { font: 13px "SF Mono", Menlo, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <h1>P2-255 Sub-agents 框加「深度」「任务」· 线框</h1>
+  <p class="sub">4 个问题，每题列出可选样子，橙框是主控的推荐。界面上的字都是英文；任务内容是模型写的，所以这里是中文。例子用 11-08 测试时那两个子 agent。</p>
+
+  <div class="summary">
+    <b>主控的推荐，一句话版</b>
+    <ol>
+      <li>深度、任务各占一列，排在类型后面、时间后面；一个子 agent 仍是一行。</li>
+      <li>终端窄时先缩任务列，太窄就整列不显示；深度列一直在。</li>
+      <li>任务全文用弹框盖在对话区上面，Esc 只关弹框。</li>
+      <li>选中一行按 <code>t</code> 或点任务那一列打开弹框；Enter 照旧打开子 agent 的会话。</li>
+    </ol>
+  </div>
+
+  <!-- Q1 -->
+  <h2>1. 深度和任务在列表里怎么摆</h2>
+  <p class="q">平时展开 Sub-agents 框时看到什么？</p>
+  <div class="grid">
+    <div class="opt rec">
+      <h3>A. 各占一列，一个子 agent 一行<span class="tag">推荐</span></h3>
+<pre class="t"><span class="c">╭ Sub-agents</span> <span class="d">· 1 running · 1 done</span> <span class="c">────────────────────────────────────────────────╮</span>
+   <span class="d">Main session · 对比 /tmp/codex 和 /tmp/pi-mono 这两个项目是怎么处理…      (here)</span>
+<span class="sel"> <span class="c">›</span> <span class="d">├</span> <span class="c">●</span> <b>codex tool timeout study</b>  <span class="d">explorer</span>  <span class="y">medium</span>  <span class="c">running  8m 52s</span>  <span class="d">只研究 /tmp/codex 这…</span> </span>
+   <span class="d">└</span> <span class="g">✓</span> pi-mono timeout study     <span class="d">explorer</span>  <span class="y">medium</span>  <span class="g">done     4m 30s</span>  <span class="d">只研究 /tmp/pi-mono…</span>
+<span class="c">╰─────────────────────────── ↑↓ select · Enter open · t task · s stop · Esc close ╯</span></pre>
+      <ul>
+        <li>就是你说的「加一列深度、再加一列任务」。行数不变，框不变高。</li>
+        <li>任务列只放第一行，放不下就截断，用 <code>…</code> 结尾。</li>
+        <li>深度颜色：quick 灰、medium 黄、thorough 品红，一眼分得出。以前开的子 agent 没有深度，显示灰色 <code>—</code>。</li>
+      </ul>
+    </div>
+    <div class="opt">
+      <h3>B. 深度并进类型，任务另起一行</h3>
+<pre class="t"><span class="c">╭ Sub-agents</span> <span class="d">· 1 running · 1 done</span> <span class="c">──────────────────────────────────╮</span>
+   <span class="d">Main session · 对比 /tmp/codex 和 /tmp/pi-mono …       (here)</span>
+<span class="sel"> <span class="c">›</span> <span class="d">├</span> <span class="c">●</span> <b>codex tool timeout study</b>  <span class="d">explorer ·</span> <span class="y">medium</span>  <span class="c">running 8m 52s</span> </span>
+<span class="sel">   <span class="d">│   只研究 /tmp/codex 这个项目（Rust 里的 codex CLI…）是如何…</span>        </span>
+   <span class="d">└</span> <span class="g">✓</span> pi-mono timeout study     <span class="d">explorer ·</span> <span class="y">medium</span>  <span class="g">done    4m 30s</span>
+   <span class="d">    只研究 /tmp/pi-mono 这个项目（一个 monorepo，里面应该有…</span>
+<span class="c">╰──────────────────── ↑↓ select · Enter open · t task · s stop · Esc close ╯</span></pre>
+      <ul>
+        <li>任务能多显示一些字。</li>
+        <li>每个子 agent 占两行，4 个就是 8 行，框明显变高、挤对话区。</li>
+        <li>不是你说的「加列」。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Q2 -->
+  <h2>2. 终端窄的时候</h2>
+  <p class="q">放不下时先让谁？（下面是约 80 列宽的终端）</p>
+  <div class="grid">
+    <div class="opt rec">
+      <h3>A. 先缩任务列，太窄就整列不显示<span class="tag">推荐</span></h3>
+<pre class="t"><span class="c">╭ Sub-agents</span> <span class="d">· 1 running · 1 done</span> <span class="c">──────────────────────╮</span>
+   <span class="d">Main session · 对比 /tmp/codex 和 /tmp/p… (here)</span>
+<span class="sel"> <span class="c">›</span> <span class="d">├</span> <span class="c">●</span> <b>codex tool timeout study</b>  <span class="d">explorer</span>  <span class="y">medium</span>  <span class="c">running  8m 52s</span> </span>
+   <span class="d">└</span> <span class="g">✓</span> pi-mono timeout study     <span class="d">explorer</span>  <span class="y">medium</span>  <span class="g">done     4m 30s</span>
+<span class="c">╰──────── ↑↓ select · Enter open · t task · s stop · Esc close ╯</span></pre>
+      <ul>
+        <li>任务列剩不到 10 列就不显示，<code>t</code> 照样能打开弹框看全文。</li>
+        <li>名字、类型、深度、状态、时间都完整，和现在的列表一样好认。</li>
+        <li>再窄才照现在的规矩缩名字（最少留 12 列）。</li>
+      </ul>
+    </div>
+    <div class="opt">
+      <h3>B. 任务列一直留着，先缩名字</h3>
+<pre class="t"><span class="c">╭ Sub-agents</span> <span class="d">· 1 running · 1 done</span> <span class="c">──────────────────────╮</span>
+   <span class="d">Main session · 对比 /tmp/codex 和 /tmp/p… (here)</span>
+<span class="sel"> <span class="c">›</span> <span class="d">├</span> <span class="c">●</span> <b>codex tool t…</b>  <span class="d">explorer</span>  <span class="y">medium</span>  <span class="c">running  8m 52s</span>  <span class="d">只研究 /tm…</span> </span>
+   <span class="d">└</span> <span class="g">✓</span> pi-mono time…  <span class="d">explorer</span>  <span class="y">medium</span>  <span class="g">done     4m 30s</span>  <span class="d">只研究 /tm…</span>
+<span class="c">╰──────── ↑↓ select · Enter open · t task · s stop · Esc close ╯</span></pre>
+      <ul>
+        <li>窄的时候也能看到任务开头几个字。</li>
+        <li>名字和任务都被截得很短，两样都看不清。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Q3 -->
+  <h2>3. 任务全文的弹框放哪</h2>
+  <p class="q">按 <code>t</code> 或点任务列之后呢？</p>
+  <div class="grid">
+    <div class="opt rec">
+      <h3>A. 盖在对话区上面<span class="tag">推荐</span></h3>
+<pre class="t"> <span class="d">● 现在已经让两个只读 explorer 分别调查了：</span>
+ <span class="d">  • codex：查找 timeout/deadline/kill 等关键词…</span>
+     <span class="c">╭ Task · <b>codex tool timeout study</b> · <span class="y">medium</span> ───────────────╮</span>
+     <span class="c">│</span> 只研究 /tmp/codex 这个项目（Rust 里的 codex CLI，如果  <span class="c">│</span>
+     <span class="c">│</span> 目录结构不同请先看清仓库布局）是如何处理「工具调用超时」 <span class="c">│</span>
+     <span class="c">│</span> 的。不要看 /tmp/pi-mono。                               <span class="c">│</span>
+     <span class="c">│</span>                                                         <span class="c">│</span>
+     <span class="c">│</span> 要回答三个问题，每条给出 file:line 证据：                <span class="c">│</span>
+     <span class="c">│</span> 1. 涉及哪些文件/模块（超时配置、执行工具的地方…）。      <span class="c">│</span>
+     <span class="c">│</span> 2. 默认超时是多少、单位是什么、从哪里配置…               <span class="c">│</span>
+     <span class="c">│</span> <span class="d">⋯ 6 more lines</span>                                          <span class="c">│</span>
+     <span class="c">╰────────────────────────────────── ↑↓ scroll · Esc close ╯</span>
+
+<span class="c">╭ Sub-agents</span> <span class="d">· 1 running · 1 done</span> <span class="c">──────────────────────────────────────╮</span>
+<span class="sel"> <span class="c">›</span> <span class="d">├</span> <span class="c">●</span> <b>codex tool timeout study</b>  <span class="d">explorer</span>  <span class="y">medium</span>  <span class="c">running  8m 52s</span> </span>
+   <span class="d">└</span> <span class="g">✓</span> pi-mono timeout study     <span class="d">explorer</span>  <span class="y">medium</span>  <span class="g">done     4m 30s</span></pre>
+      <ul>
+        <li>就是你说的「点击之后使用对话框展开」。弹框宽、能放下长任务，下面的列表还看得到。</li>
+        <li>Esc 或再按 <code>t</code> 只关弹框，回到列表、选中的还是这一行；<b>不打断主会话，不停子 agent</b>。</li>
+        <li>主会话照常在后面跑，弹框开着时新内容照样进对话区。</li>
+      </ul>
+    </div>
+    <div class="opt">
+      <h3>B. 在 Sub-agents 框里原地展开</h3>
+<pre class="t"><span class="c">╭ Sub-agents</span> <span class="d">· 1 running · 1 done</span> <span class="c">──────────────────────────────────────╮</span>
+<span class="sel"> <span class="c">›</span> <span class="d">├</span> <span class="c">●</span> <b>codex tool timeout study</b>  <span class="d">explorer</span>  <span class="y">medium</span>  <span class="c">running  8m 52s</span> </span>
+   <span class="d">│   只研究 /tmp/codex 这个项目（Rust 里的 codex CLI，如果目录结构不同</span>
+   <span class="d">│   请先看清仓库布局）是如何处理「工具调用超时」的。不要看 /tmp/pi-mono。</span>
+   <span class="d">│   要回答三个问题，每条给出 file:line 证据：</span>
+   <span class="d">│   1. 涉及哪些文件/模块…</span>
+   <span class="d">│   ⋯ 8 more lines</span>
+   <span class="d">└</span> <span class="g">✓</span> pi-mono timeout study     <span class="d">explorer</span>  <span class="y">medium</span>  <span class="g">done     4m 30s</span>
+<span class="c">╰──────────────────── ↑↓ select · Enter open · t task · s stop · Esc close ╯</span></pre>
+      <ul>
+        <li>不另开窗口，看完收起来就行。</li>
+        <li>框会变得很高，把对话区挤小；长任务看不全，要在框里再滚。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Q4 -->
+  <h2>4. 用什么键打开</h2>
+  <p class="q">现在 Enter 是「打开子 agent 的会话」，点一行也是。</p>
+  <div class="grid">
+    <div class="opt rec">
+      <h3>A. 新加 <code>t</code>，点任务列也行；Enter 不变<span class="tag">推荐</span></h3>
+<pre class="t"><span class="c">╰────────── ↑↓ select · Enter open · <b>t task</b> · s stop · Esc close ╯</span></pre>
+      <ul>
+        <li>你已经习惯的 Enter、点一行打开会话都不变。</li>
+        <li>鼠标点这一行的任务那一列 → 弹框；点名字、状态等其它位置 → 照旧打开会话。</li>
+        <li>选中最上面 <code>Main session</code> 那行时，<code>t</code> 不做事。</li>
+      </ul>
+    </div>
+    <div class="opt">
+      <h3>B. Enter 改成弹框，打开会话换成 <code>o</code></h3>
+<pre class="t"><span class="c">╰────────── ↑↓ select · <b>Enter task</b> · <b>o open</b> · s stop · Esc close ╯</span></pre>
+      <ul>
+        <li>看任务更顺手。</li>
+        <li>改了已有习惯，点一行到底是弹框还是打开会话也要重新定。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>附：深度从哪来</h2>
+  <ul>
+    <li>现在深度是模型写在任务正文里的，写法不固定（GPT 写 <code>medium depth — …</code>，DeepSeek 写「深度：medium」），没法可靠地拆成一列。</li>
+    <li>所以给 <code>spawn_agent</code> 加一个必填参数 <code>depth</code>，只能填 <code>quick</code> / <code>medium</code> / <code>thorough</code>。服务端把对应的一句英文说明接在任务后面交给子 agent，列表直接显示这个值。</li>
+    <li>任务列和弹框里显示的是模型写的任务，不含服务端接上的那句；深度只在深度列和弹框标题里出现。</li>
+    <li>对话里的 <code>Spawned</code> 卡片（Ctrl+O 看全文）和 <code>/export</code> 不改。</li>
+  </ul>
+</main>
+</body>
+</html>
