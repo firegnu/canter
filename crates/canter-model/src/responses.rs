@@ -178,7 +178,9 @@ impl Responses {
                 }
                 for output_event in state.accept(&event, request)? {
                     let finished = matches!(output_event, ModelEvent::Finished(_));
-                    if finished {
+                    // Only a fully validated completed batch can be replayed.
+                    // Length confirms streamed text, not incomplete raw items.
+                    if finished && event["type"] == "response.completed" {
                         yield ModelEvent::Replay(crate::Replay::Responses {
                             model:request.model.clone(), scope:None, account:Some(account.into()),
                             output:state.replay_output(),

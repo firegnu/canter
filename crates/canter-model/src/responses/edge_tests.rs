@@ -300,3 +300,77 @@ async fn incomplete_tool_item_in_completed_batch_is_not_executable() {
     );
     server.stop().await;
 }
+
+#[tokio::test]
+async fn output_limit_finishes_with_length_without_replaying_or_releasing_tools() {
+    for kind in ["message", "function_call", "custom_tool_call"] {
+        let delta = match kind {
+            "message" => {
+                json!({"type":"response.output_text.delta","output_index":0,"item_id":"partial","content_index":0,"delta":"Half a reply"})
+            }
+            "function_call" => {
+                json!({"type":"response.function_call_arguments.delta","output_index":0,"item_id":"partial","delta":"{\"path\":"})
+            }
+            _ => {
+                json!({"type":"response.custom_tool_call_input.delta","output_index":0,"item_id":"partial","delta":"*** Begin Patch\n"})
+            }
+        };
+        let mut stream = event(
+            json!({"type":"response.output_item.added","output_index":0,"item":{"type":kind,"id":"partial"}}),
+        ) + &event(delta);
+        if kind != "message" {
+            // Even an earlier fully assembled call is withheld when its batch
+            // reaches the output limit while assembling another call.
+            stream.push_str(&event(json!({"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"done","call_id":"done-call","namespace":"canter","name":"read","arguments":"{}","status":"completed"}})));
+        }
+        stream.push_str(&event(json!({"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14}}})));
+        let server = Server::start(vec![Reply::sse(stream)]).await;
+        let events: Vec<_> = model(&server)
+            .stream(Request::default(), CancellationToken::new())
+            .collect()
+            .await;
+        server.stop().await;
+        assert_eq!(
+            events.last(),
+            Some(&Ok(ModelEvent::Finished(crate::FinishReason::Length))),
+            "{kind}: {events:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .any(|event| matches!(event, Ok(ModelEvent::TruncatedToolCalls))),
+            kind != "message"
+        );
+        assert!(events.iter().any(
+            |event| matches!(event, Ok(ModelEvent::Usage(usage)) if usage.total_tokens == 14)
+        ));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            Ok(ModelEvent::ToolCall(_)
+                | ModelEvent::Replay(_)
+                | ModelEvent::ItemCompleted {
+                    content: AssistantContent::ToolCall(_),
+                    ..
+                })
+        )));
+    }
+}
+
+#[tokio::test]
+async fn non_length_incomplete_reasons_remain_errors() {
+    for reason in [json!("content_filter"), json!("future_reason"), Value::Null] {
+        let server = Server::start(vec![Reply::sse(event(json!({"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":reason}}}))) ]).await;
+        let events: Vec<_> = model(&server)
+            .stream(Request::default(), CancellationToken::new())
+            .collect()
+            .await;
+        server.stop().await;
+        assert!(events.last().is_some_and(
+            |event| matches!(event, Err(error) if error.kind == ErrorKind::IncompleteResponse)
+        ));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            Ok(ModelEvent::Finished(_) | ModelEvent::TruncatedToolCalls)
+        )));
+    }
+}

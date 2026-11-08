@@ -547,15 +547,14 @@ async fn conversation(
                 || (reason == Some(FinishReason::Stop) && calls.is_empty())
             {
                 let mut state = shared.state.lock().await;
-                if !state.steers.is_empty()
-                    || if reason == Some(FinishReason::Length) {
-                        state
-                            .continue_truncated(truncated_calls || !calls.is_empty())
-                            .await?
-                    } else {
-                        state.remind_unfinished_plan().await?
-                    }
-                {
+                let continued = if reason == Some(FinishReason::Length) {
+                    state
+                        .continue_truncated(truncated_calls || !calls.is_empty())
+                        .await?
+                } else {
+                    state.remind_unfinished_plan().await?
+                };
+                if continued {
                     state.active.as_mut().expect("active turn").suggestion_ready = false;
                     compacted = false;
                     continue;

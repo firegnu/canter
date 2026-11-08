@@ -22,7 +22,9 @@ impl State {
         let Some(active) = &mut self.active else {
             return;
         };
-        if !enabled {
+        // Waiting without new output is not evidence of a stuck task. A wait
+        // also breaks the consecutive sequence of other tool calls.
+        if !enabled || matches!(call.name.as_str(), "shell_output" | "wait_agent") {
             active.long_run.repeated = None;
             return;
         }

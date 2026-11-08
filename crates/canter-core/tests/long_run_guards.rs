@@ -3,9 +3,13 @@
 mod support;
 
 use canter_core::{CoreOptions, RuntimeContext, Session, Subscription};
-use canter_model::{ApiKey, ChatCompletions};
+use canter_model::{
+    ApiKey, ChatCompletions, Model, ModelContext, ModelError, Request, Responses, ResponsesAuth,
+    ResponsesCredential,
+};
 use canter_protocol::*;
 use canter_store::Store;
+use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use support::{KEY, Reply, Server};
@@ -35,9 +39,24 @@ struct Fixture {
 
 impl Fixture {
     async fn new(replies: Vec<Reply>) -> Self {
+        Self::with_api(replies, false).await
+    }
+
+    async fn with_api(replies: Vec<Reply>, responses: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         let server = Server::start(replies).await;
         let store = Arc::new(Store::new(root.path().join("sessions")).unwrap());
+        let model: Arc<dyn Model> = if responses {
+            Arc::new(
+                Responses::for_test(
+                    Arc::new(Auth),
+                    format!("{}responses", server.base_url).parse().unwrap(),
+                )
+                .unwrap(),
+            )
+        } else {
+            Arc::new(ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap())
+        };
         let (session, _) = Session::create(
             store.clone(),
             "guards".into(),
@@ -59,7 +78,7 @@ impl Fixture {
                 .into(),
                 ..Default::default()
             },
-            Arc::new(ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap()),
+            model,
             CoreOptions {
                 prompt_suggestions: false,
                 ..Default::default()
@@ -663,5 +682,200 @@ async fn a_truncated_tool_call_can_be_replaced_with_a_complete_smaller_call() {
         std::fs::read_to_string(fixture.root.path().join("small.txt")).unwrap(),
         "Done."
     );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn polling_a_running_silent_background_command_does_not_trigger_the_repeat_guard() {
+    let fixture = Fixture::new(
+        [tool(
+            0,
+            "shell",
+            r#"{"command":"sleep 60","background":true}"#,
+            "tool_calls",
+        )]
+        .into_iter()
+        .chain((1..=6).map(|id| tool(id, "shell_output", r#"{"id":1}"#, "tool_calls")))
+        .chain([answer("Still waiting.")])
+        .collect(),
+    )
+    .await;
+    let turn = fixture.send("Wait for the command.").await;
+    let requests = fixture.requests();
+    // Always stop the isolated session's own background process group.
+    fixture.close().await;
+    assert_eq!(turn.status, TurnStatus::Completed);
+    assert_eq!(requests.len(), 8);
+    let results: Vec<_> = requests[2..]
+        .iter()
+        .map(|request| {
+            request["messages"].as_array().unwrap().last().unwrap()["content"]
+                .as_str()
+                .unwrap()
+        })
+        .collect();
+    assert!(results[0].contains("running"), "{}", results[0]);
+    assert!(results.iter().all(|result| *result == results[0]));
+    assert!(
+        !requests.last().unwrap()["messages"]
+            .to_string()
+            .contains("[Repeated call]")
+    );
+}
+
+struct Auth;
+impl ResponsesAuth for Auth {
+    fn credential<'a>(
+        &'a self,
+        _: &'a Request,
+        _: Option<&'a ModelContext>,
+    ) -> BoxFuture<'a, Result<Box<dyn ResponsesCredential>, ModelError>> {
+        Box::pin(async { Ok(Box::new(Credential) as Box<dyn ResponsesCredential>) })
+    }
+}
+struct Credential;
+impl ResponsesCredential for Credential {
+    fn authorization(&mut self) -> BoxFuture<'_, Result<axum::http::HeaderValue, ModelError>> {
+        Box::pin(async { Ok(axum::http::HeaderValue::from_str(&format!("Bearer {KEY}")).unwrap()) })
+    }
+    fn recover_unauthorized(&mut self) -> BoxFuture<'_, Result<(), ModelError>> {
+        Box::pin(async {
+            Err(ModelError {
+                kind: canter_model::ErrorKind::Authentication,
+                status: None,
+                retry_after: None,
+                retries: 0,
+            })
+        })
+    }
+    fn replay_account(&self) -> String {
+        "test-account".into()
+    }
+}
+
+fn response_events(events: impl IntoIterator<Item = Value>) -> Reply {
+    Reply::sse(
+        events
+            .into_iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+    )
+}
+
+fn response_truncated(kind: &str, reason: &str) -> Reply {
+    let delta = match kind {
+        "message" => {
+            json!({"type":"response.output_text.delta","output_index":0,"item_id":"partial","content_index":0,"delta":"Half a reply"})
+        }
+        "function_call" => {
+            json!({"type":"response.function_call_arguments.delta","output_index":0,"item_id":"partial","delta":"{\"path\":\"must-not-exist\",\"content\":"})
+        }
+        _ => {
+            json!({"type":"response.custom_tool_call_input.delta","output_index":0,"item_id":"partial","delta":"*** Begin Patch\n*** Add File: must-not-exist\n"})
+        }
+    };
+    response_events([
+        json!({"type":"response.output_item.added","output_index":0,"item":{"type":kind,"id":"partial","name":if kind == "custom_tool_call" { "apply_patch" } else { "write" },"namespace":"canter","call_id":"call-partial"}}),
+        delta,
+        json!({"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":reason}}}),
+    ])
+}
+
+fn response_complete(item: Value) -> Reply {
+    response_events([
+        json!({"type":"response.output_item.done","output_index":0,"item":item}),
+        json!({"type":"response.completed","response":{"status":"completed"}}),
+    ])
+}
+
+fn response_answer() -> Reply {
+    response_complete(
+        json!({"id":"message-done","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Finished."}]}),
+    )
+}
+
+#[tokio::test]
+async fn responses_output_limit_continues_text_without_changing_the_input_prefix() {
+    let fixture = Fixture::with_api(
+        vec![
+            response_truncated("message", "max_output_tokens"),
+            response_answer(),
+        ],
+        true,
+    )
+    .await;
+    assert_eq!(fixture.send("Explain.").await.status, TurnStatus::Completed);
+    let requests = fixture.requests();
+    assert_eq!(requests.len(), 2);
+    let before = requests[0]["input"].as_array().unwrap();
+    let after = requests[1]["input"].as_array().unwrap();
+    assert_eq!(
+        serde_json::to_vec(before).unwrap(),
+        serde_json::to_vec(&after[..before.len()]).unwrap()
+    );
+    assert!(requests[1]["input"].to_string().contains("Half a reply"));
+    assert!(
+        requests[1]["input"]
+            .to_string()
+            .contains("Continue from where")
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn responses_truncated_tools_are_not_executed_and_share_the_three_continuation_limit() {
+    let fixture = Fixture::with_api(
+        ["message", "function_call", "custom_tool_call", "message"]
+            .into_iter()
+            .map(|kind| response_truncated(kind, "max_output_tokens"))
+            .collect(),
+        true,
+    )
+    .await;
+    assert_eq!(fixture.send("Write.").await.status, TurnStatus::Completed);
+    let requests = fixture.requests();
+    assert_eq!(requests.len(), 4);
+    for request in &requests[2..] {
+        assert!(
+            request["input"]
+                .to_string()
+                .contains("Split them into smaller steps")
+        );
+        assert!(!request["input"].to_string().contains("call-partial"));
+    }
+    assert!(!fixture.root.path().join("must-not-exist").exists());
+    let events = fixture.store.events_after("guards", 0).unwrap();
+    assert!(events.iter().any(|event| matches!(&event.payload, EventPayload::Warning { message } if message == "The model reply was incomplete; its tool calls were not run.")));
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn responses_can_replace_a_truncated_call_with_a_smaller_complete_call() {
+    let fixture = Fixture::with_api(vec![
+        response_truncated("function_call", "max_output_tokens"),
+        response_complete(json!({"id":"small-write","type":"function_call","call_id":"small-call","name":"write","namespace":"canter","arguments":r#"{"path":"small.txt","content":"Done."}"#,"status":"completed"})),
+        response_answer(),
+    ], true).await;
+    assert_eq!(
+        fixture.send("Write a file.").await.status,
+        TurnStatus::Completed
+    );
+    assert_eq!(fixture.requests().len(), 3);
+    assert!(!fixture.root.path().join("must-not-exist").exists());
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.path().join("small.txt")).unwrap(),
+        "Done."
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn responses_content_filter_does_not_auto_continue() {
+    let fixture =
+        Fixture::with_api(vec![response_truncated("message", "content_filter")], true).await;
+    assert_eq!(fixture.send("Explain.").await.status, TurnStatus::Failed);
+    assert_eq!(fixture.requests().len(), 1);
+    let events = fixture.store.events_after("guards", 0).unwrap();
+    assert!(!events.iter().any(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains("continuing automatically"))));
     fixture.close().await;
 }

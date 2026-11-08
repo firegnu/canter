@@ -276,7 +276,21 @@ impl State {
             }
             "response.failed" => return Err(super::error::classified(&event["response"], None)),
             "error" => return Err(super::error::classified(event, None)),
-            "response.incomplete" => return Err(ModelError::new(ErrorKind::IncompleteResponse)),
+            "response.incomplete" => {
+                if event["response"]["incomplete_details"]["reason"] != "max_output_tokens" {
+                    return Err(ModelError::new(ErrorKind::IncompleteResponse));
+                }
+                // Keep streamed text, but never release calls from an
+                // incomplete batch, including calls with output_item.done.
+                if self
+                    .items
+                    .values()
+                    .any(|item| matches!(item.kind.as_str(), "function_call" | "custom_tool_call"))
+                {
+                    events.push(ModelEvent::TruncatedToolCalls);
+                }
+                events.push(ModelEvent::Finished(FinishReason::Length));
+            }
             _ => {}
         }
         Ok(events)
