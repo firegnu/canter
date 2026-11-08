@@ -99,6 +99,7 @@ async fn cleanup_treats_a_parent_and_children_as_one_family() {
         turn_id: "turn".into(),
         task: "child task".into(),
         agent_type: AgentType::General,
+        depth: None,
     };
     let settings = SessionSnapshot::empty("recent-child").settings;
     drop(
@@ -124,6 +125,7 @@ async fn cleanup_treats_a_parent_and_children_as_one_family() {
         turn_id: "turn".into(),
         task: "old child task".into(),
         agent_type: AgentType::General,
+        depth: None,
     };
     let settings = SessionSnapshot::empty("old-child").settings;
     drop(
@@ -539,6 +541,7 @@ async fn failed_child_delete_preserves_its_parent() {
         turn_id: "turn".into(),
         task: "child task".into(),
         agent_type: AgentType::General,
+        depth: None,
     };
     let settings = SessionSnapshot::empty("delete-child").settings;
     drop(

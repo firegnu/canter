@@ -547,7 +547,7 @@ impl Session {
         id: String,
         task: String,
     ) -> Result<(Session, SessionCreateResponse), CoreError> {
-        self.spawn_agent_of_type(id, task, AgentType::General, None)
+        self.spawn_agent_of_type(id, task, AgentType::General, None, None)
             .await
     }
 
@@ -557,6 +557,7 @@ impl Session {
         task: String,
         kind: AgentType,
         name: Option<String>,
+        depth: Option<AgentDepth>,
     ) -> Result<(Session, SessionCreateResponse), CoreError> {
         let parent = self.clone();
         crate::session::owned(async move {
@@ -613,6 +614,7 @@ impl Session {
                 session_id: state.journal.snapshot.id.clone(),
                 turn_id: turn.id.clone(),
                 task: task.clone(),
+                depth,
             };
             let runtime = parent.shared.runtime();
             let mut settings = state.journal.snapshot.settings.clone();
@@ -676,10 +678,15 @@ impl Session {
                 serde_json::json!({"task":task}),
                 child.shared.lifetime.child_token(),
             );
+            // The parent link keeps the model's task alone, for the list (P2-255).
+            let first = match depth {
+                Some(depth) => crate::agent_tools::with_depth(&task, depth),
+                None => task,
+            };
             child
                 .input_with_prompt_hook(SessionInputParams {
                     from_suggestion: false,
-                    input: vec![UserInput::Text { text: task }],
+                    input: vec![UserInput::Text { text: first }],
                     client_name: "agent".into(),
                     mode: InputMode::Queue,
                     review: None,

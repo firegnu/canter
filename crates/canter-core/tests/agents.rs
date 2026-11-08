@@ -172,7 +172,8 @@ async fn spawn_inherits_current_settings_runs_fresh_and_can_continue_and_reopen(
             agent_type: AgentType::General,
             session_id: "parent".into(),
             turn_id: before.turns[0].id.clone(),
-            task: "Inspect parser".into()
+            task: "Inspect parser".into(),
+            depth: None,
         }
     );
     assert_eq!(created.session.settings.model, "changed-model");
@@ -301,6 +302,7 @@ async fn plan_mode_and_review_allow_only_explorers() {
                 "Inspect code".into(),
                 AgentType::Explorer,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -423,6 +425,7 @@ fn restart_marks_unfinished_children_interrupted_without_loading_a_model() {
                 session_id: "parent".into(),
                 turn_id: "t1".into(),
                 task: "Unfinished task".into(),
+                depth: None,
             },
             3,
         )
@@ -533,7 +536,7 @@ async fn explorer_rejects_writes_and_nested_agents_but_keeps_its_own_checklist()
         tool("write", json!({"path":"forbidden.txt","content":"no"})),
         shell("touch forbidden-shell.txt"),
         tool("update_plan", json!({"plan":[{"step":"Inspect parser","status":"completed"}]})),
-        tool("spawn_agent", json!({"task":"Nested","type":"general"})),
+        tool("spawn_agent", json!({"task":"Nested","type":"general","depth":"medium"})),
         tool("ask_user", json!({"question":"Continue?","options":[{"label":"Yes","description":"Proceed"},{"label":"No","description":"Stop"}]})),
         complete("Inspection complete"),
     ]).await;
@@ -543,6 +546,7 @@ async fn explorer_rejects_writes_and_nested_agents_but_keeps_its_own_checklist()
             "explorer".into(),
             "Inspect parser".into(),
             AgentType::Explorer,
+            None,
             None,
         )
         .await
@@ -919,6 +923,7 @@ fn recovery_skips_a_locked_child_and_still_recovers_other_running_children() {
         session_id: "parent".into(),
         turn_id: "p1".into(),
         task: "Work".into(),
+        depth: None,
     };
     let locked = store
         .create_child("locked", settings.clone(), source.clone(), 1)
@@ -981,6 +986,7 @@ async fn explorer_from_plan_mode_uses_its_checklist_without_the_parent_plan_work
             "Inspect parser".into(),
             AgentType::Explorer,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1035,7 +1041,7 @@ async fn exec_spawn_result_says_to_wait_because_no_report_will_wake_the_parent()
         let test = Fixture::new(vec![
             tool(
                 "spawn_agent",
-                json!({"task":"Inspect parser","type":"explorer","name":"Inspect parser"}),
+                json!({"task":"Inspect parser","type":"explorer","name":"Inspect parser","depth":"medium"}),
             ),
             complete("Started"),
         ])

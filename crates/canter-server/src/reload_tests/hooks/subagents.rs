@@ -64,7 +64,7 @@ async fn spawn_with(
         .send().await.unwrap().error_for_status().unwrap();
     fixture.request().await.tool(
         "spawn_agent",
-        json!({"task":"Inspect the parser", "type":kind, "name":"Trace parser errors"}),
+        json!({"task":"Inspect the parser", "type":kind, "name":"Trace parser errors", "depth":"medium"}),
     );
     let first = fixture.request().await;
     let second = fixture.request().await;

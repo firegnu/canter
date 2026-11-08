@@ -24,8 +24,8 @@ impl canter_core::AgentHost for Host {
             app.pauses.hit(&parent, "agent_execute").await;
             let result: Result<canter_core::AgentToolOutput, ApiError> = async {
                 match command {
-                canter_core::AgentCommand::SpawnAgent { task, kind, name } => {
-                    let response = app.spawn_agent_of_type(parent, task, kind, name).await?;
+                canter_core::AgentCommand::SpawnAgent { task, kind, name, depth } => {
+                    let response = app.spawn_agent_of_type(parent, task, kind, name, Some(depth)).await?;
                     Ok(canter_core::AgentToolOutput {
                         value: serde_json::json!({"id":response.session.id,"name":response.session.settings.name}),
                         agents: vec![collab_agent(&response.session, false)],
@@ -219,7 +219,7 @@ impl App {
         parent_id: String,
         task: String,
     ) -> Result<SessionCreateResponse, ApiError> {
-        self.spawn_agent_of_type(parent_id, task, AgentType::General, None)
+        self.spawn_agent_of_type(parent_id, task, AgentType::General, None, None)
             .await
     }
 
@@ -229,6 +229,7 @@ impl App {
         task: String,
         kind: AgentType,
         name: Option<String>,
+        depth: Option<AgentDepth>,
     ) -> Result<SessionCreateResponse, ApiError> {
         let app = self.clone();
         tokio::spawn(async move {
@@ -250,7 +251,7 @@ impl App {
             let id = crate::new_id();
             let _child_operation = app.session_locks.lock(&id).await;
             let (child, response) = parent
-                .spawn_agent_of_type(id.clone(), task, kind, name)
+                .spawn_agent_of_type(id.clone(), task, kind, name, depth)
                 .await?;
             app.register_session(id, child).await?;
             Ok(response)

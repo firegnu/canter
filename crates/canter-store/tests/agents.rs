@@ -16,6 +16,7 @@ fn child_is_hidden_from_default_list_but_readable_by_id() {
                     session_id: "parent".into(),
                     turn_id: "turn".into(),
                     task: "Check parser".into(),
+                    depth: None,
                 },
             },
             3,

@@ -78,6 +78,7 @@ fn stats_preserve_unknown_values_child_parent_line_and_ordinary_output() {
         turn_id: "t1".into(),
         task: "inspect".into(),
         agent_type: AgentType::Explorer,
+        depth: None,
     });
     for output in [format_report(&report), html_report(&report)] {
         assert!(output.contains("Parent: main-id · explorer"));

@@ -416,7 +416,7 @@ async fn subagent_inherits_its_parents_provider_and_uses_its_own_header_id() {
     fixture.input(&url).await;
     receive(&mut second).await.tool(
         "spawn_agent",
-        json!({"task":"Inspect only","type":"explorer","name":"Inspector"}),
+        json!({"task":"Inspect only","type":"explorer","name":"Inspector","depth":"medium"}),
     );
     let first = receive(&mut second).await;
     let next = receive(&mut second).await;

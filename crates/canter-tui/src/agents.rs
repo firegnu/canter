@@ -2,19 +2,22 @@
 //! `/agents` list it opens, the two rows on top of a sub-agent's screen,
 //! and the words cards use for an agent's type and status.
 
-use canter_protocol::{AgentStatus, AgentSummary, AgentType, RequestKind, SessionSnapshot};
+use canter_protocol::{
+    AgentDepth, AgentStatus, AgentSummary, AgentType, RequestKind, SessionSnapshot,
+};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::format_elapsed;
 use crate::commands::first_shown;
 use crate::report::clean;
-use crate::text::{str_width, truncate};
+use crate::text::{sanitize, str_width, truncate};
 use crate::theme;
 
 /// The input box's grey text on a sub-agent's screen.
 pub(crate) const PLACEHOLDER: &str = "Message this sub-agent";
-const KEYS: &str = "↑↓ select · Enter open · s stop · Esc close";
+const KEYS: &str = "↑↓ select · Enter open · t task · s stop · Esc close";
+const TASK_KEYS: &str = " ↑↓ scroll · Esc close";
 pub(crate) const NONE: &str = "No sub-agents in this session.";
 
 pub(crate) fn type_label(kind: &AgentType) -> &str {
@@ -36,6 +39,26 @@ pub(crate) fn status_label(status: AgentStatus, stopped: bool) -> &'static str {
         AgentStatus::Interrupted if stopped => "stopped by you",
         AgentStatus::Interrupted => "interrupted",
         AgentStatus::Unknown => "unknown",
+    }
+}
+
+/// How deep `spawn_agent` asked it to look (P2-255); `—` when the server
+/// did not say.
+fn depth_label(depth: Option<AgentDepth>) -> &'static str {
+    match depth {
+        Some(AgentDepth::Quick) => "quick",
+        Some(AgentDepth::Medium) => "medium",
+        Some(AgentDepth::Thorough) => "thorough",
+        Some(AgentDepth::Unknown) | None => "—",
+    }
+}
+
+/// `quick` and `—` dim, `medium` yellow, `thorough` magenta.
+fn depth_style(depth: Option<AgentDepth>) -> Style {
+    match depth {
+        Some(AgentDepth::Medium) => theme::depth_medium(),
+        Some(AgentDepth::Thorough) => theme::depth_thorough(),
+        _ => theme::secondary(),
     }
 }
 
@@ -194,12 +217,45 @@ impl Agents {
         rows.push(cut(vec![crate::report::keys(KEYS)]));
         rows
     }
+
+    /// Where the task column starts in each sub-agent's row of [`Agents::rows`]
+    /// for the same `here`, `width` and `now`; `None` when it does not show.
+    pub fn task_column(&self, here: Option<&str>, width: u16, now: i64) -> Option<usize> {
+        Tree::new(&self.list, here, usize::from(width), now).task_column()
+    }
+
+    /// The box `t` opens for the sub-agent `id` (P2-255): the task the model
+    /// wrote, whole, under its name and depth.
+    pub fn task(&self, id: &str) -> Option<crate::report::Report> {
+        use crate::report::{Part, Report};
+        let agent = self.list.iter().find(|agent| agent.id == id)?;
+        let mut detail = clean(&agent.name);
+        if let Some(depth) = agent.depth.filter(|depth| *depth != AgentDepth::Unknown) {
+            detail.push_str(" · ");
+            detail.push_str(depth_label(Some(depth)));
+        }
+        let body = sanitize(&agent.task)
+            .lines()
+            .map(|line| match line.trim_end() {
+                "" => Part::blank(),
+                line => Part::Wrap {
+                    indent: 1,
+                    text: line.to_owned(),
+                    style: Style::new(),
+                    rows: usize::MAX,
+                },
+            })
+            .collect();
+        Some(Report::new(crate::report::title("Task", &detail), body, Vec::new()).keys(TASK_KEYS))
+    }
 }
 
 /// Columns before a row's text in the open list: ` › ` or blanks.
 const LEAD: usize = 3;
 /// The fewest columns the names give way to before the row is cut.
 const MIN_NAME: usize = 12;
+/// The fewest columns the task shows in; with fewer it does not show.
+const MIN_TASK: usize = 10;
 const HERE: &str = " (here)";
 
 /// The main session's row in the open list: `Main session · <name>`,
@@ -222,13 +278,18 @@ fn main_row(name: &str, here: bool, chosen: bool, width: usize) -> Vec<Span<'sta
 }
 
 /// The sub-agents' rows in the open list, hanging under the main session:
-/// mark and name, type, status and time in columns.
+/// mark and name, type, depth, status, time and task in columns.
 struct Tree {
     agents: Vec<Branch>,
-    /// The names' column, `(here)` included, and the type's and status's.
+    /// The names' column, `(here)` included, and the type's, depth's,
+    /// status's and time's.
     name: usize,
     kind: usize,
+    depth: usize,
     status: usize,
+    time: usize,
+    /// The task's column, as wide as there is room; `None` without room.
+    task: Option<usize>,
 }
 
 struct Branch {
@@ -236,14 +297,18 @@ struct Branch {
     name: String,
     here: bool,
     kind: String,
+    depth: &'static str,
+    depth_style: Style,
     status: &'static str,
     time: String,
+    /// The first line of the task the model wrote.
+    task: String,
     style: Style,
     last: bool,
 }
 
 impl Tree {
-    /// Names are cut before anything else when `width` is short.
+    /// When `width` is short the task gives way first, then the names.
     fn new(list: &[AgentSummary], here: Option<&str>, width: usize, now: i64) -> Self {
         let agents: Vec<Branch> = list
             .iter()
@@ -253,11 +318,19 @@ impl Tree {
                 name: clean(&agent.name),
                 here: here == Some(agent.id.as_str()),
                 kind: type_label(&agent.agent_type).to_owned(),
+                depth: depth_label(agent.depth),
+                depth_style: depth_style(agent.depth),
                 status: match agent.status {
                     AgentStatus::Completed => "done",
                     status => status_label(status, agent.stopped_by_user),
                 },
                 time: elapsed(agent, now).unwrap_or_default(),
+                task: sanitize(&agent.task)
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .unwrap_or_default()
+                    .to_owned(),
                 style: status_style(agent.status),
                 last: index + 1 == list.len(),
             })
@@ -265,17 +338,35 @@ impl Tree {
         let widest = |of: &dyn Fn(&Branch) -> usize| agents.iter().map(of).max().unwrap_or(0);
         let named = widest(&|branch| str_width(&branch.name) + branch.here_width());
         let kind = widest(&|branch| str_width(&branch.kind));
+        let depth = widest(&|branch| str_width(branch.depth));
         let status = widest(&|branch| str_width(branch.status));
         let time = widest(&|branch| str_width(&branch.time));
         // The tree line and the mark, then two columns before each of the rest.
-        let rest = LEAD + 4 + 2 + kind + 2 + status + if time > 0 { 2 + time } else { 0 };
-        let name = named.min(width.saturating_sub(rest).max(MIN_NAME));
+        let rest =
+            LEAD + 4 + 2 + kind + 2 + depth + 2 + status + if time > 0 { 2 + time } else { 0 };
+        let task = width
+            .checked_sub(rest + named + 2)
+            .filter(|room| *room >= MIN_TASK);
+        let name = match task {
+            Some(_) => named,
+            None => named.min(width.saturating_sub(rest).max(MIN_NAME)),
+        };
         Self {
             agents,
             name,
             kind,
+            depth,
             status,
+            time,
+            task,
         }
+    }
+
+    /// Where the task column starts, after the lead.
+    fn task_column(&self) -> Option<usize> {
+        self.task?;
+        let time = if self.time > 0 { 2 + self.time } else { 0 };
+        Some(LEAD + 4 + self.name + 2 + self.kind + 2 + self.depth + 2 + self.status + time + 2)
     }
 
     /// The row of the `index`th sub-agent, after its lead.
@@ -303,12 +394,30 @@ impl Tree {
         spans.push(Span::raw(" ".repeat(self.name.saturating_sub(shown) + 2)));
         spans.push(Span::styled(pad(&branch.kind, self.kind), dim));
         spans.push(Span::raw("  "));
-        if branch.time.is_empty() {
-            spans.push(Span::styled(branch.status, branch.style));
-        } else {
-            spans.push(Span::styled(pad(branch.status, self.status), branch.style));
+        spans.push(Span::styled(
+            pad(branch.depth, self.depth),
+            branch.depth_style,
+        ));
+        // Status, time and task; each padded to its column but the last
+        // shown, so the row ends with no blanks.
+        let mut columns = vec![(branch.status.to_owned(), self.status, branch.style)];
+        if self.time > 0 {
+            columns.push((branch.time.clone(), self.time, branch.style));
+        }
+        if let Some(room) = self.task {
+            columns.push((branch.task.clone(), room, dim));
+        }
+        while columns.len() > 1 && columns.last().is_some_and(|(text, ..)| text.is_empty()) {
+            columns.pop();
+        }
+        let last = columns.len() - 1;
+        for (index, (text, width, style)) in columns.into_iter().enumerate() {
             spans.push(Span::raw("  "));
-            spans.push(Span::styled(branch.time.clone(), branch.style));
+            if index < last {
+                spans.push(Span::styled(pad(&text, width), style));
+            } else {
+                spans.extend(truncate(vec![Span::styled(text, style)], width));
+            }
         }
         spans
     }
@@ -447,35 +556,119 @@ mod tests {
             .collect()
     }
 
+    /// The span of `row` that starts with `text`.
+    fn span<'a>(row: &'a Line, text: &str) -> &'a Span<'a> {
+        row.spans
+            .iter()
+            .find(|span| span.content.starts_with(text))
+            .unwrap_or_else(|| panic!("{text} not in {row:?}"))
+    }
+
+    /// P2-255: after the type, the depth `spawn_agent` was given, coloured;
+    /// after the time, the first line of the task the model wrote.
     #[test]
-    fn a_narrow_list_cuts_the_names_first() {
+    fn each_row_shows_its_depth_and_the_first_line_of_its_task() {
+        use ratatui::style::{Color, Modifier};
+        let mut agents = Agents::default();
+        let mut a = agent("a", AgentStatus::Running);
+        a.depth = Some(AgentDepth::Medium);
+        a.task = "\nInspect the parser\nThen report back".into();
+        let mut b = agent("b", AgentStatus::Completed);
+        b.depth = Some(AgentDepth::Thorough);
+        // Spawned before P2-255, or listed by an older server.
+        let c = agent("c", AgentStatus::Completed);
+        let mut d = agent("d", AgentStatus::Failed);
+        d.depth = Some(AgentDepth::Quick);
+        for entry in [a, b, c, d] {
+            agents.update(entry);
+        }
+        agents.selected = Some(1);
+        let rows = agents.rows("Main", None, 100, 10, 0);
+        let shown: Vec<String> = rows.iter().map(|row| text(&row.spans)).collect();
+        assert_eq!(
+            shown[2..6],
+            [
+                " › ├ ● agent-a  explorer  medium    running  0s  Inspect the parser",
+                "   ├ ✓ agent-b  explorer  thorough  done     2s  Task",
+                "   ├ ✓ agent-c  explorer  —         done     2s  Task",
+                "   └ ✗ agent-d  explorer  quick     failed   2s  Task",
+            ]
+        );
+        assert_eq!(span(&rows[2], "medium").style.fg, Some(Color::Yellow));
+        assert_eq!(span(&rows[3], "thorough").style.fg, Some(Color::Magenta));
+        for (row, depth) in [(4, "—"), (5, "quick")] {
+            let style = span(&rows[row], depth).style;
+            assert!(style.add_modifier.contains(Modifier::DIM), "{style:?}");
+        }
+        let task = span(&rows[2], "Inspect the parser").style;
+        assert!(task.add_modifier.contains(Modifier::DIM), "{task:?}");
+        assert_eq!(
+            shown.last().unwrap(),
+            " ↑↓ select · Enter open · t task · s stop · Esc close"
+        );
+    }
+
+    #[test]
+    fn a_narrow_list_gives_up_the_task_column_then_cuts_the_names() {
         let mut agents = Agents::default();
         let mut long = agent("a", AgentStatus::Running);
         long.name = "Review date and duration parsing".into();
+        long.depth = Some(AgentDepth::Medium);
+        long.task = "Check how dates and durations are parsed".into();
         agents.update(long);
         agents.update(agent("b", AgentStatus::Completed));
         agents.selected = Some(1);
-        // Wide enough: the names are whole.
-        let wide = drawn(&agents, Some("a"), 80);
+        // Wide enough: everything is whole.
+        let wide = drawn(&agents, Some("a"), 120);
         assert_eq!(
             wide[2],
-            " › ├ ● Review date and duration parsing (here)  explorer  running  0s"
+            " › ├ ● Review date and duration parsing (here)  explorer  medium  running  0s  Check how dates and durations are parsed"
         );
         assert_eq!(
             wide[3],
-            format!("   └ ✓ agent-b{}  explorer  done     2s", " ".repeat(32))
+            format!(
+                "   └ ✓ agent-b{}  explorer  —       done     2s  Task",
+                " ".repeat(32)
+            )
         );
-        // Narrower: only the names give way.
-        let narrow = drawn(&agents, Some("a"), 50);
+        // Narrower: only the task gives way.
+        let cut = drawn(&agents, Some("a"), 100);
+        assert_eq!(
+            cut[2],
+            " › ├ ● Review date and duration parsing (here)  explorer  medium  running  0s  Check how dates and …"
+        );
+        assert!(cut.iter().all(|row| str_width(row) <= 100), "{cut:?}");
+        // Under 10 columns left for it: no task column, the names whole.
+        for width in [88, 85] {
+            let gone = drawn(&agents, Some("a"), width);
+            assert_eq!(
+                gone[2],
+                " › ├ ● Review date and duration parsing (here)  explorer  medium  running  0s",
+                "{width}"
+            );
+            assert_eq!(
+                gone[3],
+                format!(
+                    "   └ ✓ agent-b{}  explorer  —       done     2s",
+                    " ".repeat(32)
+                )
+            );
+        }
+        assert!(drawn(&agents, Some("a"), 89)[2].ends_with("  Check how…"));
+        // Narrower still: then the names give way, as before.
+        let narrow = drawn(&agents, Some("a"), 60);
         assert_eq!(
             narrow[2],
-            " › ├ ● Review date … (here)  explorer  running  0s"
+            " › ├ ● Review date an… (here)  explorer  medium  running  0s"
         );
         assert_eq!(
             narrow[3],
-            format!("   └ ✓ agent-b{}  explorer  done     2s", " ".repeat(13))
+            format!(
+                "   └ ✓ agent-b{}  explorer  —       done     2s",
+                " ".repeat(15)
+            )
         );
-        assert!(narrow.iter().all(|row| str_width(row) <= 50), "{narrow:?}");
+        assert!(narrow.iter().all(|row| str_width(row) <= 60), "{narrow:?}");
         // Narrower still: the names keep a few columns, the row is cut.
         let tiny = drawn(&agents, Some("a"), 30);
         assert!(tiny.iter().all(|row| str_width(row) <= 30), "{tiny:?}");

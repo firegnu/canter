@@ -21,6 +21,7 @@ fn fixture(
                     session_id: "user".into(),
                     turn_id: "t".into(),
                     task: "search test".into(),
+                    depth: None,
                 },
                 time,
             )

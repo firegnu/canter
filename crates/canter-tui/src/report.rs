@@ -155,6 +155,8 @@ pub(crate) struct Report {
     top: usize,
     /// The largest `top`, for the room the last frame had.
     last_top: usize,
+    /// How many body rows the last frame showed, for a page up or down.
+    page: usize,
     /// Keep a selectable body's current row visible, including after a resize.
     focus: Option<usize>,
     /// The body laid out for a width, so a long one is not laid out every frame.
@@ -170,6 +172,7 @@ impl Report {
             keys: KEYS,
             top: 0,
             last_top: 0,
+            page: 0,
             focus: None,
             laid_out: None,
         }
@@ -192,6 +195,16 @@ impl Report {
 
     pub fn down(&mut self) {
         self.top = (self.top + 1).min(self.last_top);
+    }
+
+    /// Up as many body rows as the last frame showed.
+    pub fn page_up(&mut self) {
+        self.top = self.top.saturating_sub(self.page.max(1));
+    }
+
+    /// Down as many body rows as the last frame showed.
+    pub fn page_down(&mut self) {
+        self.top = (self.top + self.page.max(1)).min(self.last_top);
     }
 
     /// At most `max` rows; nothing when not even one body row fits.
@@ -238,6 +251,7 @@ impl Report {
         } else {
             room - 2
         };
+        self.page = shown;
         let more = |arrow: char, count: usize| {
             Line::from(vec![Span::styled(
                 format!("   {arrow} {count} more"),

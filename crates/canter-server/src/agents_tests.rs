@@ -632,7 +632,7 @@ async fn child_trash_conflict_and_stale_rewind_leave_family_intact() {
 #[tokio::test]
 async fn model_can_spawn_a_named_child_without_waiting_for_its_result() {
     assert_model_agent_name(
-        json!({"task":"Inspect the parser","name":"  Trace parser errors  ","type":"explorer"}),
+        json!({"task":"Inspect the parser","name":"  Trace parser errors  ","type":"explorer","depth":"medium"}),
         "Trace parser errors",
     )
     .await;
@@ -655,6 +655,7 @@ async fn duplicate_agent_names_include_closed_siblings_but_not_other_parents() {
                 "Inspect parser".into(),
                 AgentType::Explorer,
                 Some("Trace parser errors".into()),
+                None,
             )
             .await
             .unwrap_or_else(|error| panic!("{}", error.0.message));
@@ -701,6 +702,7 @@ async fn duplicate_agent_names_include_closed_siblings_but_not_other_parents() {
             "Inspect parser".into(),
             AgentType::Explorer,
             Some("Trace parser errors".into()),
+            None,
         )
         .await
         .unwrap_or_else(|error| panic!("{}", error.0.message));
@@ -715,20 +717,19 @@ async fn duplicate_agent_names_include_closed_siblings_but_not_other_parents() {
 #[tokio::test]
 async fn model_agent_names_fall_back_to_the_first_five_task_words() {
     for name in [None, Some(" \t ".to_owned()), Some("x".repeat(41))] {
-        let mut arguments =
-            json!({"task":"Inspect the parser and its errors\nIgnore this line","type":"explorer"});
+        let mut arguments = json!({"task":"Inspect the parser and its errors\nIgnore this line","type":"explorer","depth":"medium"});
         if let Some(name) = name {
             arguments["name"] = json!(name);
         }
         assert_model_agent_name(arguments, "Inspect the parser and its").await;
     }
     assert_model_agent_name(
-        json!({"task":"abcdefghijklmnopqrstuvwxyzabcdefghijklmnop more words","type":"explorer"}),
+        json!({"task":"abcdefghijklmnopqrstuvwxyzabcdefghijklmnop more words","type":"explorer","depth":"medium"}),
         "abcdefghijklmnopqrstuvwxyzabcdefghijklm…",
     )
     .await;
     assert_model_agent_name(
-        json!({"task":"Fallback task","type":"explorer","name":"é".repeat(40)}),
+        json!({"task":"Fallback task","type":"explorer","name":"é".repeat(40),"depth":"medium"}),
         &"é".repeat(40),
     )
     .await;
@@ -785,7 +786,7 @@ async fn assert_model_agent_name(arguments: serde_json::Value, expected: &str) {
         .unwrap();
     assert_eq!(
         spawn["function"]["parameters"]["required"],
-        json!(["task", "type", "name"])
+        json!(["task", "type", "depth", "name"])
     );
     assert_eq!(
         spawn["function"]["parameters"]["properties"]["name"]["type"],
@@ -811,6 +812,102 @@ async fn assert_model_agent_name(arguments: serde_json::Value, expected: &str) {
                         .contains(&agents.data[0].id)
             })
     }));
+    test.stop().await;
+    fake.stop().await;
+}
+
+/// P2-255: the model must say how deep a sub-agent looks. Without `depth`
+/// nothing starts; with it, the child gets the model's task and then a
+/// sentence on that depth, while its list entry keeps the task alone.
+#[tokio::test]
+async fn model_spawn_needs_a_depth_and_the_child_hears_it_after_the_task() {
+    let spawn = |id: &str, arguments: serde_json::Value| {
+        model_server::Reply::sse(format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":id,"type":"function","function":{"name":"spawn_agent","arguments":arguments.to_string()}}]},"finish_reason":"tool_calls"}]})
+        ))
+    };
+    let task = "Inspect the parser\nthen report";
+    let mut replies = vec![
+        spawn(
+            "no-depth",
+            json!({"task":task,"type":"explorer","name":"Trace parser errors"}),
+        ),
+        spawn(
+            "with-depth",
+            json!({"task":task,"type":"explorer","name":"Trace parser errors","depth":"medium"}),
+        ),
+    ];
+    replies.extend((0..8).map(|_| model_server::Reply::sse(format!("data: {}\n\ndata: [DONE]\n\n", json!({"choices":[{"index":0,"delta":{"content":"Inspection finished"},"finish_reason":"stop"}]})))));
+    let fake = model_server::Server::start(replies).await;
+    let model = canter_model::ChatCompletions::new(
+        &fake.base_url,
+        canter_model::ApiKey::new(model_server::KEY),
+    )
+    .unwrap();
+    let test = Harness::with_model(Arc::new(model)).await;
+    let url = parent(&test).await;
+    let agents: AgentListResponse = test
+        .client
+        .get(format!("{url}/agents"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        agents.data.len(),
+        1,
+        "only the call with a depth starts one"
+    );
+    let listed = &agents.data[0];
+    assert_eq!(listed.depth, Some(AgentDepth::Medium));
+    assert_eq!(listed.task, task);
+    let child = idle(
+        &test,
+        &format!("http://localhost/v1/sessions/{}", listed.id),
+    )
+    .await;
+    assert_eq!(child.parent.as_ref().unwrap().task, task);
+    let requests = fake.requests.lock().unwrap().clone();
+    let refused = requests
+        .iter()
+        .flat_map(|request| request["messages"].as_array().unwrap())
+        .find(|message| message["tool_call_id"] == "no-depth")
+        .expect("the refused call's result");
+    assert!(
+        refused["content"]
+            .as_str()
+            .unwrap()
+            .contains("missing field `depth`"),
+        "{refused}"
+    );
+    let heard: Vec<_> = requests
+        .iter()
+        .filter(|request| {
+            request["messages"]
+                .to_string()
+                .contains("You are a sub-agent")
+        })
+        .map(|request| {
+            request["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .rfind(|message| message["role"] == "user")
+                .unwrap()["content"]
+                .clone()
+        })
+        .collect();
+    assert_eq!(
+        heard,
+        [json!(format!(
+            "{task}\n\nDepth: medium. Answer each question with file:line evidence, then stop."
+        ))]
+    );
     test.stop().await;
     fake.stop().await;
 }
@@ -1711,7 +1808,7 @@ impl Model for Collab {
             (false, _) => None,
             (_, 0) => call(
                 "spawn_agent",
-                json!({"task":"Inspect the parser\nthen report","type":"explorer"}),
+                json!({"task":"Inspect the parser\nthen report","type":"explorer","depth":"medium"}),
             ),
             (_, 1) => call("wait_agent", json!({"ids":[id],"timeoutMs":5000})),
             (_, 2) => call(
