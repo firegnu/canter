@@ -513,49 +513,68 @@ async fn escape_during_a_continuation_stops_without_another_request() {
 }
 
 #[tokio::test]
-async fn user_steering_resets_the_plan_reminder_budget() {
-    let fixture = Fixture::new(vec![
-        plan(0), answer("Stop 1."), answer("Stop 2."), answer("Stop 3."),
-        tool(1, "ask_user", r#"{"question":"Which direction?","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}"#, "tool_calls"),
-        answer("New stop 1."), answer("New stop 2."), answer("New stop 3."), answer("New stop 4."),
-    ]).await;
-    let mut events = fixture.session.subscribe(0).await.unwrap();
-    fixture.session.input(input("Work.")).await.unwrap();
-    let question = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if let EventPayload::RequestOpened { request } =
-                events.recv().await.unwrap().unwrap().payload
-            {
-                break request;
-            }
+async fn user_steering_resets_plan_updates_and_the_reminder_budget() {
+    for update_after_steer in [false, true] {
+        let mut replies = vec![
+            plan(0),
+            answer("Stop 1."),
+            answer("Stop 2."),
+            answer("Stop 3."),
+            tool(
+                1,
+                "ask_user",
+                r#"{"question":"Which direction?","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}"#,
+                "tool_calls",
+            ),
+        ];
+        if update_after_steer {
+            replies.push(plan(2));
         }
-    })
-    .await
-    .unwrap();
-    let mut steer = input("Focus on A.");
-    steer.mode = InputMode::Steer;
-    fixture.session.input(steer).await.unwrap();
-    fixture
-        .session
-        .resolve(
-            &question.id,
-            serde_json::from_value(
-                json!({"answer":{"type":"option","label":"A"},"clientName":"test"}),
-            )
-            .unwrap(),
-        )
+        replies.extend([
+            answer("New stop 1."),
+            answer("New stop 2."),
+            answer("New stop 3."),
+            answer("New stop 4."),
+        ]);
+        let fixture = Fixture::new(replies).await;
+        let mut events = fixture.session.subscribe(0).await.unwrap();
+        fixture.session.input(input("Work.")).await.unwrap();
+        let question = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let EventPayload::RequestOpened { request } =
+                    events.recv().await.unwrap().unwrap().payload
+                {
+                    break request;
+                }
+            }
+        })
         .await
         .unwrap();
-    assert_eq!(finished(&mut events).await.status, TurnStatus::Completed);
-    let requests = fixture.requests();
-    assert_eq!(requests.len(), 9);
-    assert_eq!(
-        requests[5]["messages"].as_array().unwrap().last().unwrap()["content"],
-        "Focus on A."
-    );
-    let events = fixture.store.events_after("guards", 0).unwrap();
-    assert_eq!(events.iter().filter(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains("unfinished plan"))).count(), 6);
-    fixture.close().await;
+        let mut steer = input("Focus on A.");
+        steer.mode = InputMode::Steer;
+        fixture.session.input(steer).await.unwrap();
+        fixture
+            .session
+            .resolve(
+                &question.id,
+                serde_json::from_value(
+                    json!({"answer":{"type":"option","label":"A"},"clientName":"test"}),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(finished(&mut events).await.status, TurnStatus::Completed);
+        let requests = fixture.requests();
+        assert_eq!(requests.len(), if update_after_steer { 10 } else { 6 });
+        assert_eq!(
+            requests[5]["messages"].as_array().unwrap().last().unwrap()["content"],
+            "Focus on A."
+        );
+        let events = fixture.store.events_after("guards", 0).unwrap();
+        assert_eq!(events.iter().filter(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains("unfinished plan"))).count(), if update_after_steer { 6 } else { 3 });
+        fixture.close().await;
+    }
 }
 
 #[tokio::test]
@@ -878,4 +897,64 @@ async fn responses_content_filter_does_not_auto_continue() {
     let events = fixture.store.events_after("guards", 0).unwrap();
     assert!(!events.iter().any(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains("continuing automatically"))));
     fixture.close().await;
+}
+
+#[tokio::test]
+async fn a_previous_turns_unfinished_plan_needs_a_successful_update_in_the_new_turn() {
+    for failed_update in [false, true] {
+        let mut replies = vec![
+            plan(0),
+            answer("Stopped."),
+            answer("Blocked."),
+            answer("Need input."),
+            answer("Still blocked."),
+        ];
+        if failed_update {
+            replies.push(tool(
+                1,
+                "update_plan",
+                r#"{"plan":[{"step":"","status":"pending"}]}"#,
+                "tool_calls",
+            ));
+        }
+        replies.extend((0..4).map(|_| answer("Four.")));
+        let fixture = Fixture::new(replies).await;
+        assert_eq!(
+            fixture.send("Inspect and verify.").await.status,
+            TurnStatus::Completed
+        );
+        assert_eq!(fixture.requests().len(), 5);
+        let before = fixture.session.snapshot().await;
+        let previous_plan = before.session.current_plan().unwrap().to_vec();
+        assert!(
+            previous_plan
+                .iter()
+                .any(|step| step.status == PlanStepStatus::Pending)
+        );
+
+        assert_eq!(
+            fixture
+                .send("Never mind that task. What is two plus two?")
+                .await
+                .status,
+            TurnStatus::Completed
+        );
+        assert_eq!(fixture.requests().len(), if failed_update { 7 } else { 6 });
+        let events = fixture
+            .store
+            .events_after("guards", before.event_seq)
+            .unwrap();
+        assert!(!events.iter().any(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains("unfinished plan"))));
+        assert_eq!(
+            fixture
+                .session
+                .snapshot()
+                .await
+                .session
+                .current_plan()
+                .unwrap(),
+            previous_plan
+        );
+        fixture.close().await;
+    }
 }

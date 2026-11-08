@@ -552,6 +552,9 @@ impl State {
         if call.name == "update_plan" {
             if succeeded {
                 self.plan_tool_calls = 0;
+                if let Some(active) = &mut self.active {
+                    active.long_run.plan_updated = true;
+                }
             }
         } else if !self.journal.snapshot.settings.plan_mode
             && self.journal.snapshot.settings.plan_enabled != Some(false)

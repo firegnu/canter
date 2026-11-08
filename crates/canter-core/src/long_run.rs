@@ -4,6 +4,7 @@ use canter_protocol::{EventPayload, GoalStatus, PlanStepStatus};
 
 #[derive(Default)]
 pub(crate) struct Guards {
+    pub plan_updated: bool,
     continuations: u8,
     plan_reminders: u8,
     repeated: Option<RepeatedCall>,
@@ -86,6 +87,12 @@ impl State {
 
     pub(crate) async fn remind_unfinished_plan(&mut self) -> Result<bool, CoreError> {
         if !self.long_run_enabled()
+            || !self
+                .active
+                .as_ref()
+                .expect("active turn")
+                .long_run
+                .plan_updated
             || self.journal.snapshot.settings.plan_enabled == Some(false)
             || self
                 .journal
