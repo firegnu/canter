@@ -142,7 +142,7 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     assert!(
         has(
             &test,
-            &["↑↓ select · Enter open · t task · s stop · Esc close"]
+            &["↑↓ select · Enter open · t or click task · s stop · Esc close"]
         ),
         "{text}"
     );
@@ -364,7 +364,7 @@ async fn t_or_a_click_on_the_task_opens_it_in_a_box_that_esc_alone_closes() {
     assert!(
         has(
             &test,
-            &["↑↓ select · Enter open · t task · s stop · Esc close"]
+            &["↑↓ select · Enter open · t or click task · s stop · Esc close"]
         ),
         "{text}"
     );

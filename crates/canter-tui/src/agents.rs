@@ -5,7 +5,7 @@
 use canter_protocol::{
     AgentDepth, AgentStatus, AgentSummary, AgentType, RequestKind, SessionSnapshot,
 };
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::format_elapsed;
@@ -16,7 +16,7 @@ use crate::theme;
 
 /// The input box's grey text on a sub-agent's screen.
 pub(crate) const PLACEHOLDER: &str = "Message this sub-agent";
-const KEYS: &str = "↑↓ select · Enter open · t task · s stop · Esc close";
+const KEYS: &str = "↑↓ select · Enter open · t or click task · s stop · Esc close";
 const TASK_KEYS: &str = " ↑↓ scroll · Esc close";
 pub(crate) const NONE: &str = "No sub-agents in this session.";
 
@@ -405,7 +405,12 @@ impl Tree {
             columns.push((branch.time.clone(), self.time, branch.style));
         }
         if let Some(room) = self.task {
-            columns.push((branch.task.clone(), room, dim));
+            // Underlined like a link: a click on it opens the task box.
+            columns.push((
+                branch.task.clone(),
+                room,
+                dim.add_modifier(Modifier::UNDERLINED),
+            ));
         }
         while columns.len() > 1 && columns.last().is_some_and(|(text, ..)| text.is_empty()) {
             columns.pop();
@@ -602,9 +607,16 @@ mod tests {
         }
         let task = span(&rows[2], "Inspect the parser").style;
         assert!(task.add_modifier.contains(Modifier::DIM), "{task:?}");
+        // Underlined like a link: a click on it opens the task.
+        assert!(task.add_modifier.contains(Modifier::UNDERLINED), "{task:?}");
+        let name = span(&rows[2], "medium").style;
+        assert!(
+            !name.add_modifier.contains(Modifier::UNDERLINED),
+            "{name:?}"
+        );
         assert_eq!(
             shown.last().unwrap(),
-            " ↑↓ select · Enter open · t task · s stop · Esc close"
+            " ↑↓ select · Enter open · t or click task · s stop · Esc close"
         );
     }
 
