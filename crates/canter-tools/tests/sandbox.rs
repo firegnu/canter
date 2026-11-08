@@ -1292,3 +1292,29 @@ async fn sandboxed_shell_turns_off_colours_and_pagers() {
     assert_eq!(code(&output), Some(0), "{}", output.text);
     assert!(output.text.starts_with("1|cat|cat\n"), "{}", output.text);
 }
+
+#[tokio::test]
+async fn long_output_is_saved_whether_or_not_the_shell_is_sandboxed() {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.cwd.join("large"), "y".repeat(100_000)).unwrap();
+    for sandbox in [true, false] {
+        let tools = fixture.tools(sandbox);
+        let saved = tools
+            .scratch_directory()
+            .unwrap()
+            .path()
+            .unwrap()
+            .join("sandbox.txt");
+        let output = run(&tools, "cat large").await;
+        assert_eq!(code(&output), Some(0), "{}", output.text);
+        assert!(
+            output.text.contains(&format!(
+                "[truncated 67232 bytes; full output saved to {}",
+                saved.display()
+            )),
+            "sandbox={sandbox}: {}",
+            output.text
+        );
+        assert_eq!(std::fs::read_to_string(&saved).unwrap().len(), 100_000);
+    }
+}

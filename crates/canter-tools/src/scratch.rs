@@ -6,12 +6,16 @@ use std::{
     sync::Mutex,
 };
 
+/// Most command output one session keeps in files here, across every call.
+pub(crate) const MAX_SESSION_SAVED_OUTPUT_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Shared by every executor used during one open session, including retired ones.
 pub struct ScratchDirectory {
     directory: Mutex<Option<tempfile::TempDir>>,
     path: Option<PathBuf>,
     resolved: Option<PathBuf>,
     warning: Option<String>,
+    saved_output: Mutex<u64>,
 }
 
 impl ScratchDirectory {
@@ -74,6 +78,7 @@ impl ScratchDirectory {
                 path: Some(path),
                 resolved: Some(resolved),
                 warning: None,
+                saved_output: Mutex::new(0),
             },
             Err(error) => Self {
                 directory: Mutex::new(None),
@@ -83,6 +88,7 @@ impl ScratchDirectory {
                     "Scratch directory unavailable at {}: {error}",
                     path.display()
                 )),
+                saved_output: Mutex::new(0),
             },
         }
     }
@@ -115,5 +121,15 @@ impl ScratchDirectory {
 
     pub fn close(&self) {
         self.directory.lock().unwrap().take();
+    }
+
+    /// Charge saved command output against the session's total; false when it is full.
+    pub(crate) fn claim_saved_output(&self, bytes: u64) -> bool {
+        let mut saved = self.saved_output.lock().unwrap();
+        if saved.saturating_add(bytes) > MAX_SESSION_SAVED_OUTPUT_BYTES {
+            return false;
+        }
+        *saved += bytes;
+        true
     }
 }

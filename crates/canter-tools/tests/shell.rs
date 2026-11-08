@@ -17,6 +17,16 @@ fn tools(dir: &tempfile::TempDir) -> Tools {
     ))
 }
 
+/// Where a truncated result's saved output goes: one file per tool call id.
+fn saved_file(tools: &Tools, id: &str) -> std::path::PathBuf {
+    tools
+        .scratch_directory()
+        .unwrap()
+        .path()
+        .unwrap()
+        .join(format!("{id}.txt"))
+}
+
 // The command intentionally escapes our process group. Always clean up its recorded PID,
 // including when a regression makes the outer timeout or an assertion fail.
 struct EscapedProcess(std::path::PathBuf);
@@ -380,11 +390,17 @@ async fn shell_preserves_split_utf8_and_truncates_only_the_model_result() {
     assert!(
         matches!(result.item, Item::CommandExecution {aggregated_output, ..} if aggregated_output == streamed)
     );
+    let saved = saved_file(&tools, "utf8");
+    assert_eq!(
+        std::fs::read_to_string(&saved).unwrap(),
+        format!("中{large}")
+    );
     assert_eq!(
         result.text,
         format!(
-            "中{}\n[truncated 7240 bytes]\n{}终\nExit code: 0",
+            "中{}\n[truncated 7240 bytes; full output saved to {} (this session only; use read with startLine, or rg, to view the middle)]\n{}终\nExit code: 0",
             "🙂".repeat(4095),
+            saved.display(),
             "🙂".repeat(4095)
         )
     );
@@ -458,4 +474,221 @@ async fn shell_turns_off_colours_and_pagers_over_the_session_environment() {
         .await;
     assert_eq!(result.outcome, ToolOutcome::Completed, "{streamed}");
     assert_eq!(streamed, "1|cat|cat");
+}
+
+fn long_output(middle: &str) -> String {
+    let mut text = String::new();
+    for index in 0..4000 {
+        if index == 2000 {
+            text.push_str(middle);
+        }
+        text.push_str(&format!("line {index}: some ordinary command output\n"));
+    }
+    text
+}
+
+#[tokio::test]
+async fn long_output_is_saved_so_the_dropped_middle_stays_readable() {
+    let middle = "MIDDLE-MARKER";
+    let large = long_output(middle);
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("large"), &large).unwrap();
+    let tools = tools(&dir);
+    let cancel = CancellationToken::new();
+    let call = tools
+        .prepare(Tool::Shell, "long", r#"{"command":"cat large"}"#, &cancel)
+        .await
+        .unwrap();
+    let mut streamed = String::new();
+    let result = tools
+        .execute(allow(&call), &cancel, &mut |chunk| streamed.push_str(chunk))
+        .await;
+    assert_eq!(result.outcome, ToolOutcome::Completed);
+    let saved = saved_file(&tools, "long");
+    assert!(
+        result.text.contains(&format!(
+            "[truncated {} bytes; full output saved to {}",
+            large.len() - 32 * 1024,
+            saved.display()
+        )),
+        "{}",
+        result.text
+    );
+    assert!(
+        result
+            .text
+            .contains("(this session only; use read with startLine, or rg, to view the middle)"),
+        "{}",
+        result.text
+    );
+    // The saved file holds the whole output, including the part the model lost.
+    assert!(!result.text.contains(middle));
+    assert_eq!(std::fs::read_to_string(&saved).unwrap(), large);
+    // The model can read the middle back with the read tool.
+    let read = tools
+        .prepare(
+            Tool::Read,
+            "read-middle",
+            &serde_json::json!({"path":saved.to_string_lossy(),"startLine":1999,"lineCount":4})
+                .to_string(),
+            &cancel,
+        )
+        .await
+        .unwrap();
+    let read = tools.execute(allow(&read), &cancel, &mut |_| {}).await;
+    assert!(read.text.contains(middle), "{}", read.text);
+    // The client's card output stays exactly the command's own text.
+    let Item::CommandExecution {
+        aggregated_output, ..
+    } = result.item
+    else {
+        panic!("wrong item")
+    };
+    assert_eq!(aggregated_output, streamed);
+    assert!(!aggregated_output.contains("saved to"));
+    assert!(streamed.starts_with("line 0:"));
+}
+
+#[tokio::test]
+async fn short_output_creates_no_file_and_keeps_the_same_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools(&dir);
+    let cancel = CancellationToken::new();
+    let raw = serde_json::json!({"command":"printf 'short\n'"}).to_string();
+    let call = tools
+        .prepare(Tool::Shell, "short", &raw, &cancel)
+        .await
+        .unwrap();
+    let result = tools.execute(allow(&call), &cancel, &mut |_| {}).await;
+    assert_eq!(result.outcome, ToolOutcome::Completed);
+    assert_eq!(result.text, "short\n\nExit code: 0");
+    let scratch = tools.scratch_directory().unwrap().path().unwrap();
+    assert_eq!(
+        std::fs::read_dir(&scratch).unwrap().count(),
+        0,
+        "a short output must not leave a file in {}",
+        scratch.display()
+    );
+}
+
+#[tokio::test]
+async fn unavailable_scratch_directory_keeps_the_truncated_result() {
+    let dir = tempfile::tempdir().unwrap();
+    // A session path that cannot be resolved leaves the scratch directory unusable.
+    let scratch = std::sync::Arc::new(canter_tools::ScratchDirectory::for_session(
+        std::path::Path::new("/nonexistent/canter-session"),
+    ));
+    assert!(scratch.path().is_none());
+    assert!(scratch.warning().is_some());
+    let environment = BTreeMap::from([
+        ("HOME".into(), dir.path().to_string_lossy().into_owned()),
+        ("PATH".into(), "/usr/bin:/bin".into()),
+    ]);
+    let tools = Tools::new(std::sync::Arc::new(
+        LocalExecutor::with_scratch_directory(dir.path().into(), environment, vec![], scratch)
+            .unwrap(),
+    ));
+    let large = "x".repeat(100_000);
+    std::fs::write(dir.path().join("large"), &large).unwrap();
+    let cancel = CancellationToken::new();
+    let call = tools
+        .prepare(Tool::Shell, "large", r#"{"command":"cat large"}"#, &cancel)
+        .await
+        .unwrap();
+    let result = tools.execute(allow(&call), &cancel, &mut |_| {}).await;
+    assert_eq!(result.outcome, ToolOutcome::Completed);
+    assert_eq!(
+        result.text,
+        format!(
+            "{}\n[truncated 67232 bytes]\n{}\nExit code: 0",
+            "x".repeat(16_384),
+            "x".repeat(16_384)
+        )
+    );
+}
+
+#[tokio::test]
+async fn failing_to_create_the_output_file_keeps_the_truncated_result() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools(&dir);
+    let scratch = tools.scratch_directory().unwrap().path().unwrap();
+    std::fs::write(dir.path().join("large"), "x".repeat(100_000)).unwrap();
+    // The directory stays usable, but no new file can be created in it.
+    std::fs::set_permissions(&scratch, PermissionsExt::from_mode(0o500)).unwrap();
+    let cancel = CancellationToken::new();
+    let call = tools
+        .prepare(
+            Tool::Shell,
+            "readonly",
+            r#"{"command":"cat large"}"#,
+            &cancel,
+        )
+        .await
+        .unwrap();
+    let result = tools.execute(allow(&call), &cancel, &mut |_| {}).await;
+    std::fs::set_permissions(&scratch, PermissionsExt::from_mode(0o700)).unwrap();
+    assert_eq!(result.outcome, ToolOutcome::Completed);
+    assert_eq!(
+        result.text,
+        format!(
+            "{}\n[truncated 67232 bytes]\n{}\nExit code: 0",
+            "x".repeat(16_384),
+            "x".repeat(16_384)
+        )
+    );
+}
+
+#[tokio::test]
+async fn saving_stops_at_the_per_file_limit() {
+    let limit = 8 * 1024 * 1024;
+    let total = 9 * 1024 * 1024;
+    let large: Vec<u8> = (0..total).map(|index| b'a' + (index % 26) as u8).collect();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("large"), &large).unwrap();
+    let tools = tools(&dir);
+    let cancel = CancellationToken::new();
+    let call = tools
+        .prepare(Tool::Shell, "huge", r#"{"command":"cat large"}"#, &cancel)
+        .await
+        .unwrap();
+    let result = tools.execute(allow(&call), &cancel, &mut |_| {}).await;
+    assert_eq!(result.outcome, ToolOutcome::Completed);
+    let saved = saved_file(&tools, "huge");
+    assert!(
+        result.text.contains(&format!(
+            "[truncated {} bytes; only the first {limit} of {total} bytes saved to {}",
+            total - 32 * 1024,
+            saved.display()
+        )),
+        "{}",
+        result.text
+    );
+    assert_eq!(std::fs::read(&saved).unwrap(), large[..limit]);
+}
+
+#[tokio::test]
+async fn user_shell_saves_long_output_too() {
+    let large = long_output("MIDDLE-MARKER");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("large"), &large).unwrap();
+    let tools = tools(&dir);
+    let cancel = CancellationToken::new();
+    let params = canter_protocol::SessionShellCommandParams {
+        command: "cat large".into(),
+        timeout_ms: None,
+    };
+    let result = tools
+        .user_shell("user-call".into(), &params, &cancel, &mut |_| {})
+        .await;
+    assert_eq!(result.outcome, ToolOutcome::Completed);
+    let saved = saved_file(&tools, "user-call");
+    assert!(
+        result
+            .text
+            .contains(&format!("full output saved to {}", saved.display())),
+        "{}",
+        result.text
+    );
+    assert_eq!(std::fs::read_to_string(&saved).unwrap(), large);
 }
