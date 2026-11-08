@@ -244,6 +244,11 @@ impl LocalExecutor {
             launch.env_clear().envs(&self.environment);
             launch
         };
+        // Output goes to the model, not a terminal: no colour codes, no pager.
+        launch
+            .env("NO_COLOR", "1")
+            .env("PAGER", "cat")
+            .env("GIT_PAGER", "cat");
         if let Some(path) = self.scratch.path() {
             launch.env("TMPDIR", &path);
         }

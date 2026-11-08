@@ -1280,3 +1280,15 @@ async fn sandbox_keeps_original_package_caches_readonly_even_with_home_added() {
         );
     }
 }
+
+#[tokio::test]
+async fn sandboxed_shell_turns_off_colours_and_pagers() {
+    let fixture = Fixture::new();
+    let output = run(
+        &fixture.tools(true),
+        "printf '%s|%s|%s' \"$NO_COLOR\" \"$PAGER\" \"$GIT_PAGER\"",
+    )
+    .await;
+    assert_eq!(code(&output), Some(0), "{}", output.text);
+    assert!(output.text.starts_with("1|cat|cat\n"), "{}", output.text);
+}

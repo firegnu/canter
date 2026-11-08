@@ -430,3 +430,32 @@ async fn shell_uses_session_directory_and_environment_and_streams_both_outputs()
         item => panic!("unexpected item {item:?}"),
     }
 }
+
+#[tokio::test]
+async fn shell_turns_off_colours_and_pagers_over_the_session_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let environment = BTreeMap::from([
+        ("HOME".into(), dir.path().to_string_lossy().into_owned()),
+        ("PATH".into(), "/usr/bin:/bin".into()),
+        ("NO_COLOR".into(), String::new()),
+        ("PAGER".into(), "less".into()),
+        ("GIT_PAGER".into(), "less -R".into()),
+    ]);
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(dir.path().into(), environment, vec![]).unwrap(),
+    ));
+    let cancel = CancellationToken::new();
+    let raw =
+        serde_json::json!({"command":"printf '%s|%s|%s' \"$NO_COLOR\" \"$PAGER\" \"$GIT_PAGER\""})
+            .to_string();
+    let call = tools
+        .prepare(Tool::Shell, "env", &raw, &cancel)
+        .await
+        .unwrap();
+    let mut streamed = String::new();
+    let result = tools
+        .execute(allow(&call), &cancel, &mut |chunk| streamed.push_str(chunk))
+        .await;
+    assert_eq!(result.outcome, ToolOutcome::Completed, "{streamed}");
+    assert_eq!(streamed, "1|cat|cat");
+}
