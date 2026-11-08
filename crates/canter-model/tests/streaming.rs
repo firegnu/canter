@@ -900,6 +900,9 @@ async fn fragmented_invalid_arguments_are_preserved_and_truncated_calls_are_not_
             .collect()
             .await;
         let mut expected_events = Vec::new();
+        if reason == "length" {
+            expected_events.push(Ok(ModelEvent::TruncatedToolCalls));
+        }
         if reason == "tool_calls" {
             expected_events.push(Ok(ModelEvent::ToolCall(ToolCall {
                 id: "raw".into(),

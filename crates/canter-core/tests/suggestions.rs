@@ -138,8 +138,14 @@ async fn excluded_turn(kind: &str) {
     if kind == "truncated" {
         reply.body = reply.body.replace("\"stop\"", "\"length\"");
     }
+    let expected_requests = if kind == "truncated" { 4 } else { 1 };
+    let mut replies = Vec::new();
+    for _ in 1..expected_requests {
+        replies.push(Reply::sse(reply.body.clone()));
+    }
+    replies.push(reply);
     let f = Fixture::with_options(
-        vec![reply],
+        replies,
         CoreOptions {
             prompt_suggestions: kind != "disabled",
             ..Default::default()
@@ -159,7 +165,11 @@ async fn excluded_turn(kind: &str) {
     next_type(&mut events, "turn.completed").await;
     no_suggestion(&mut events).await;
     f.session.close().await.unwrap();
-    assert_eq!(f.server.requests.lock().unwrap().len(), 1, "{kind}");
+    assert_eq!(
+        f.server.requests.lock().unwrap().len(),
+        expected_requests,
+        "{kind}"
+    );
     f.server.stop().await;
 }
 #[tokio::test]

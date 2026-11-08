@@ -172,6 +172,9 @@ impl ChatCompletions {
                     })?;
                 if event.data == "[DONE]" {
                     let reason = finish.ok_or_else(|| ModelError::new(ErrorKind::Network))?;
+                    if reason == FinishReason::Length && !calls.is_empty() {
+                        yield ModelEvent::TruncatedToolCalls;
+                    }
                     if reason == FinishReason::ToolCalls {
                         for call in calls.into_values() {
                             if call.id.is_empty() || call.name.is_empty() {

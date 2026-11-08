@@ -790,6 +790,16 @@ Each file is Markdown with a first line `# Name`, a non-empty one-line descripti
 
 The model writes and edits memories with the normal `write` and `edit` tools; these two memory directories do not need approval. `/memory` lists name, description and layer; Enter opens the file in `$VISUAL` or `$EDITOR`, and `d` asks once before deleting it. Restricted sessions neither read nor write memories. There is no background extraction, extra model request, vector search or automatic cleanup.
 
+## Long-running tasks
+
+canter adds a few bounded checks during ordinary task execution:
+
+- After three consecutive tool calls with identical names, argument bytes, and result text, the model receives a reminder to try another approach. If four results are identical and it requests the same call again, canter stops before executing the fifth call and shows a warning. An active goal is paused. Send a new message to continue.
+- When the model stops with unfinished plan steps, canter reminds it to continue and shows a warning, up to three times per turn. The reminder allows it to explain a blocker or ask for a user decision and stop. This also applies to sub-agents; active goals use their existing continuation instead.
+- When the model reports an output length limit, canter asks it to continue from the cutoff. Truncated tool calls are not executed; the model is asked to split them into smaller steps. Text and tool continuations share a limit of three per turn, after which canter stops with the existing incomplete-reply warning.
+
+These checks are disabled in Plan mode, reviews, and the final goal-budget summary. Esc stops continuation, and steering input is handled first. A new turn or user steering resets the counts; compaction does not. Ordinary turns that do not trigger a check send no extra requests or reminders.
+
 ## Plan mode
 
 Plan mode is a session setting, not a fourth permission mode. Enter or leave it with `/plan` or by cycling modes with Shift+Tab (the cycle includes `Plan`). It is saved with the session and restored by `/resume` and `-c`; only the user can enter or leave it. While in Plan mode:
