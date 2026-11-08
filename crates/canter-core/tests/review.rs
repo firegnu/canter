@@ -1428,7 +1428,7 @@ async fn project_instruction_warnings_repeat_only_when_reopening() {
 async fn failed_automatic_compaction_waits_until_a_new_turn_or_manual_request() {
     let release_reply = Arc::new(Notify::new());
     let model = ScriptModel::new(vec![
-        vec![text(&"x".repeat(174_000)), finish()],
+        vec![text(&"x".repeat(155_000)), finish()],
         vec![Step::Error(ErrorKind::Server)],
         read_fixture("first"),
         read_fixture("second"),

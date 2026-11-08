@@ -999,3 +999,66 @@ async fn explorer_from_plan_mode_uses_its_checklist_without_the_parent_plan_work
     );
     test.stop(&[child]).await;
 }
+
+/// Starts nothing: answers spawn_agent with a fixed id, so only the parent runs.
+struct StartOnlyHost;
+impl canter_core::AgentHost for StartOnlyHost {
+    fn execute(
+        &self,
+        _parent: String,
+        _command: canter_core::AgentCommand,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> futures_util::future::BoxFuture<
+        '_,
+        Result<canter_core::AgentToolOutput, canter_core::CoreError>,
+    > {
+        Box::pin(async {
+            Ok(canter_core::AgentToolOutput {
+                value: json!({"id":"child-1","name":"Inspect parser"}),
+                agents: Vec::new(),
+            })
+        })
+    }
+    fn describe(
+        &self,
+        _parent: String,
+        _ids: Vec<String>,
+    ) -> futures_util::future::BoxFuture<'_, Vec<CollabAgent>> {
+        Box::pin(async { Vec::new() })
+    }
+}
+
+#[tokio::test]
+async fn exec_spawn_result_says_to_wait_because_no_report_will_wake_the_parent() {
+    let note = "This run is non-interactive: sub-agent reports will not wake you. Call wait_agent before your final reply.";
+    for non_interactive in [false, true] {
+        let test = Fixture::new(vec![
+            tool(
+                "spawn_agent",
+                json!({"task":"Inspect parser","type":"explorer","name":"Inspect parser"}),
+            ),
+            complete("Started"),
+        ])
+        .await;
+        test.parent.set_agent_host(Arc::new(StartOnlyHost));
+        let mut params = input("Research the parser");
+        params.non_interactive = non_interactive;
+        test.parent.input(params).await.unwrap();
+        idle(&test.parent).await;
+        let requests = test.fake.requests.lock().unwrap().clone();
+        let spawn_result = requests.last().unwrap()["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["tool_call_id"] == "call-spawn_agent")
+            .expect("spawn result")["content"]
+            .to_string();
+        assert!(spawn_result.contains("child-1"), "{spawn_result}");
+        assert_eq!(
+            spawn_result.contains(note),
+            non_interactive,
+            "{spawn_result}"
+        );
+        test.stop(&[]).await;
+    }
+}
