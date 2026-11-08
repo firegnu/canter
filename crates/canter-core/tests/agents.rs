@@ -1062,3 +1062,43 @@ async fn exec_spawn_result_says_to_wait_because_no_report_will_wake_the_parent()
         test.stop(&[]).await;
     }
 }
+
+#[tokio::test]
+async fn wait_agent_in_a_turn_woken_by_a_report_does_not_block_the_user() {
+    let note = "Not waiting: a sub-agent report started this turn, and waiting here would keep the user from talking to you. Tell the user in a sentence what arrived, then end your turn; the other sub-agents' reports will wake you when they finish.";
+    let test = Fixture::new(vec![
+        complete("Parser findings"),
+        tool("wait_agent", json!({"ids":["child-2"]})),
+        complete("Parser is back; the lexer is still running"),
+    ])
+    .await;
+    test.parent.set_agent_host(Arc::new(StartOnlyHost));
+    let (child, _) = test
+        .parent
+        .spawn_agent("child".into(), "Inspect parser".into())
+        .await
+        .unwrap();
+    idle(&child).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let done = test.fake.requests.lock().unwrap().len() >= 3;
+            if done && test.parent.snapshot().await.session.status == SessionStatus::Idle {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the parent should wake and finish its turn");
+    let requests = test.fake.requests.lock().unwrap().clone();
+    let wait_result = requests.last().unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["tool_call_id"] == "call-wait_agent")
+        .expect("wait result")["content"]
+        .to_string();
+    assert!(wait_result.contains(note), "{wait_result}");
+    assert!(!wait_result.contains("child-1"), "{wait_result}");
+    test.stop(&[child]).await;
+}

@@ -69,8 +69,8 @@ pub(crate) fn is_tool(name: &str) -> bool {
 
 pub(crate) fn definitions() -> [ToolDefinition; 4] {
     [
-        ToolDefinition { name: "spawn_agent".into(), description: "Start a sub-agent with a fresh conversation and your current model and reasoning effort; returns its id and short name immediately. Use type explorer for read-only code lookup or research to save your main context; you may start explorers on your own. When research splits into independent parts that each need many files read, such as comparing how several projects or modules handle something, start one explorer per part in the same reply so they run at the same time. Give each one only its part of the user's question without widening the scope, and say how deep to look: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. Don't research those parts yourself meanwhile. When a few reads answer the question, do it yourself. Use type general only when the user or applicable AGENTS.md explicitly requests sub-agents, delegation, or parallel agent work. Requests to investigate carefully or analyze deeply do not authorize general sub-agents. Before spawning, make your own plan; do work blocking your next step yourself and delegate independent work. Give a general agent explicit ownership of files or modules, and tell it that others share the repository: do not revert others' edits and accommodate their changes. At most four agents may run at once; children cannot spawn agents. Plan mode and review rounds allow only explorers.".into(), parameters: json!({"type":"object","properties":{"task":{"type":"string","minLength":1},"type":{"type":"string","enum":["explorer","general"]},"name":{"type":"string","description":"A short name of 3 to 5 English words describing what this sub-agent does, shown to the user in lists and cards."}},"required":["task","type","name"],"additionalProperties":false}) },
-        ToolDefinition { name: "wait_agent".into(), description: "Wait until any listed sub-agent completes, fails, closes, or is interrupted, or the timeout expires. Returns every listed agent's current status and its final reply when available. Default timeout is 30000 ms, maximum 600000 ms. In a non-interactive exec turn, use this tool to receive results before ending your turn. In an interactive session, call it only when you cannot answer the user's latest message without the results, such as when they ask for the findings now. When they are just chatting, thanking you, or asking about something else, reply and end your turn instead: finished sub-agents' reports arrive on their own and wake you.".into(), parameters: json!({"type":"object","properties":{"ids":{"type":"array","minItems":1,"items":{"type":"string"}},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000,"default":30000}},"required":["ids"],"additionalProperties":false}) },
+        ToolDefinition { name: "spawn_agent".into(), description: "Start a sub-agent with a fresh conversation and your current model and reasoning effort; returns its id and short name immediately. Use type explorer for read-only code lookup or research to save your main context; you may start explorers on your own. When research splits into independent parts that each need many files read, such as comparing how several projects or modules handle something, start one explorer per part in the same reply so they run at the same time. Give each one only its part of the user's question without widening the scope, and say how deep to look: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. When a report wakes you while other sub-agents you started are still running, tell the user in a sentence what arrived and end your turn; combine them when the last one arrives. Never say a report has arrived before you have seen it. Don't research those parts yourself meanwhile. When a few reads answer the question, do it yourself. Use type general only when the user or applicable AGENTS.md explicitly requests sub-agents, delegation, or parallel agent work. Requests to investigate carefully or analyze deeply do not authorize general sub-agents. Before spawning, make your own plan; do work blocking your next step yourself and delegate independent work. Give a general agent explicit ownership of files or modules, and tell it that others share the repository: do not revert others' edits and accommodate their changes. At most four agents may run at once; children cannot spawn agents. Plan mode and review rounds allow only explorers.".into(), parameters: json!({"type":"object","properties":{"task":{"type":"string","minLength":1},"type":{"type":"string","enum":["explorer","general"]},"name":{"type":"string","description":"A short name of 3 to 5 English words describing what this sub-agent does, shown to the user in lists and cards."}},"required":["task","type","name"],"additionalProperties":false}) },
+        ToolDefinition { name: "wait_agent".into(), description: "Wait until any listed sub-agent completes, fails, closes, or is interrupted, or the timeout expires. Returns every listed agent's current status and its final reply when available. Default timeout is 30000 ms, maximum 600000 ms. In a non-interactive exec turn, use this tool to receive results before ending your turn. In an interactive session, call it only when you cannot answer the user's latest message without the results, such as when they ask for the findings now. When they are just chatting, thanking you, or asking about something else, reply and end your turn instead: finished sub-agents' reports arrive on their own and wake you. In a turn started by a sub-agent report, it returns at once without waiting.".into(), parameters: json!({"type":"object","properties":{"ids":{"type":"array","minItems":1,"items":{"type":"string"}},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000,"default":30000}},"required":["ids"],"additionalProperties":false}) },
         ToolDefinition { name: "send_input".into(), description: "Send a follow-up task or clarification to an existing sub-agent. In interactive sessions, queues input while it is running; starts another turn when it is idle or interrupted. In canter exec, first use wait_agent until the running sub-agent stops, then send_input. Use this to continue an interrupted agent; there is no resume_agent tool.".into(), parameters: json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string","minLength":1}},"required":["id","message"],"additionalProperties":false}) },
         ToolDefinition { name: "close_agent".into(), description: "Close a sub-agent, cancelling its active turn and stopping its background commands. A completed final reply is retained.".into(), parameters: json!({"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}) },
     ]
@@ -86,7 +86,7 @@ pub(crate) fn definitions_for_roles(roles: &[crate::roles::Role]) -> [ToolDefini
         return definitions;
     }
     let spawn = &mut definitions[0];
-    spawn.description = "Start a sub-agent with a fresh conversation; returns its id and short name immediately. Choose the role by its description, or use the role explicitly named by the user. Read-only roles may be started on your own. When research splits into independent parts that each need many files read, such as comparing how several projects or modules handle something, start one read-only agent per part in the same reply so they run at the same time. Give each one only its part of the user's question without widening the scope, and say how deep to look: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. Don't research those parts yourself meanwhile. When a few reads answer the question, do it yourself. Roles that can edit require explicit sub-agent, delegation, or parallel-work instructions from the user or applicable AGENTS.md, including standing instructions such as delegating tests to a test-writer. Requests to investigate carefully or analyze deeply do not authorize editing roles. Make your own plan first; do work blocking your next step yourself and delegate independent work. Give editing agents explicit file or module ownership and tell them that others share the repository: do not revert others' edits. At most four agents may run at once; children cannot spawn agents. Plan mode and review rounds allow only read-only roles. Roles inherit your model and effort unless configured otherwise. Available roles:\n- explorer (read-only): Read-only code lookup or research.\n- general (can edit): Independent work, including file changes, when explicitly delegated.".into();
+    spawn.description = "Start a sub-agent with a fresh conversation; returns its id and short name immediately. Choose the role by its description, or use the role explicitly named by the user. Read-only roles may be started on your own. When research splits into independent parts that each need many files read, such as comparing how several projects or modules handle something, start one read-only agent per part in the same reply so they run at the same time. Give each one only its part of the user's question without widening the scope, and say how deep to look: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. When a report wakes you while other sub-agents you started are still running, tell the user in a sentence what arrived and end your turn; combine them when the last one arrives. Never say a report has arrived before you have seen it. Don't research those parts yourself meanwhile. When a few reads answer the question, do it yourself. Roles that can edit require explicit sub-agent, delegation, or parallel-work instructions from the user or applicable AGENTS.md, including standing instructions such as delegating tests to a test-writer. Requests to investigate carefully or analyze deeply do not authorize editing roles. Make your own plan first; do work blocking your next step yourself and delegate independent work. Give editing agents explicit file or module ownership and tell them that others share the repository: do not revert others' edits. At most four agents may run at once; children cannot spawn agents. Plan mode and review rounds allow only read-only roles. Roles inherit your model and effort unless configured otherwise. Available roles:\n- explorer (read-only): Read-only code lookup or research.\n- general (can edit): Independent work, including file changes, when explicitly delegated.".into();
     let names = spawn.parameters["properties"]["type"]["enum"]
         .as_array_mut()
         .expect("role enum");
@@ -190,6 +190,8 @@ async fn card(
     }
 }
 
+const WOKEN_WAIT: &str = "Not waiting: a sub-agent report started this turn, and waiting here would keep the user from talking to you. Tell the user in a sentence what arrived, then end your turn; the other sub-agents' reports will wake you when they finish.";
+
 pub(crate) async fn execute(
     shared: &Shared,
     turn_id: &str,
@@ -274,7 +276,19 @@ pub(crate) async fn execute(
             .await?;
         return Ok(true);
     }
+    // A turn woken by a sub-agent report must not block the user while the
+    // others run (P2-248); canter exec is never woken, so it still waits.
+    let woken = call.name == "wait_agent" && {
+        let state = shared.state.lock().await;
+        !state.non_interactive() && state.active.as_ref().is_some_and(|active| active.auto_wake)
+    };
     let result = async {
+        if woken {
+            return Ok(AgentToolOutput {
+                value: Value::Null,
+                agents: Vec::new(),
+            });
+        }
         let host = host.ok_or_else(|| {
             CoreError::new(
                 ErrorCode::InvalidRequest,
@@ -286,6 +300,8 @@ pub(crate) async fn execute(
     .await;
     let success = result.is_ok();
     let (mut text, found, error) = match result {
+        // Keep the card's agents as they were described when it started.
+        Ok(_) if woken => (WOKEN_WAIT.to_owned(), None, None),
         Ok(output) => (output.value.to_string(), Some(output.agents), None),
         Err(error) => (error.message.clone(), None, Some(error.message)),
     };
@@ -329,7 +345,7 @@ mod tests {
 
     const SPLIT: &str = "When research splits into independent parts that each need many files read, such as comparing how several projects or modules handle something,";
     const SMALL: &str = "When a few reads answer the question, do it yourself.";
-    const SCOPE: &str = "Give each one only its part of the user's question without widening the scope, and say how deep to look: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. Don't research those parts yourself meanwhile.";
+    const SCOPE: &str = "Give each one only its part of the user's question without widening the scope, and say how deep to look: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. When a report wakes you while other sub-agents you started are still running, tell the user in a sentence what arrived and end your turn; combine them when the last one arrives. Never say a report has arrived before you have seen it. Don't research those parts yourself meanwhile.";
 
     #[test]
     fn spawn_description_says_when_to_run_read_only_agents_in_parallel() {
@@ -362,7 +378,14 @@ mod tests {
             .find(|tool| tool.name == "wait_agent")
             .unwrap();
         assert!(
-            wait.description.contains("In an interactive session, call it only when you cannot answer the user's latest message without the results, such as when they ask for the findings now. When they are just chatting, thanking you, or asking about something else, reply and end your turn instead: finished sub-agents' reports arrive on their own and wake you."),
+            wait.description.contains("In an interactive session, call it only when you cannot answer the user's latest message without the results, such as when they ask for the findings now. When they are just chatting, thanking you, or asking about something else, reply and end your turn instead: finished sub-agents' reports arrive on their own and wake you. In a turn started by a sub-agent report, it returns at once without waiting."),
+            "{}",
+            wait.description
+        );
+        assert!(
+            wait.description.ends_with(
+                "In a turn started by a sub-agent report, it returns at once without waiting."
+            ),
             "{}",
             wait.description
         );
