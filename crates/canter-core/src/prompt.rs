@@ -363,6 +363,17 @@ mod tests {
     }
 
     #[test]
+    fn mcp_bullet_sits_under_using_tools() {
+        let text = core(&named(&["mcp_call"]));
+        let bullet = text
+            .find("- First use mcp_search to read an MCP tool's description")
+            .expect("MCP bullet");
+        let using = text.find("# Using tools").unwrap();
+        let changing = text.find("# Changing code").unwrap();
+        assert!(using < bullet && bullet < changing, "{text}");
+    }
+
+    #[test]
     fn core_includes_each_conditional_sentence_only_when_its_tools_exist() {
         const READ_BULLET: &str =
             "- To look at a file, use read rather than cat, head, or sed in the shell.";
