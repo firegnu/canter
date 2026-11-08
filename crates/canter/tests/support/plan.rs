@@ -99,9 +99,8 @@ async fn plan_reminders_count_calls_across_turns_repeat_and_stay_out_of_ui_and_u
     first.extend(reads(1..=9));
     let mut fixture = Fixture::start(vec![
         batch(first),
-        // Exhaust the stop-time reminders before the next user's tool batch.
-        text_reply(),
-        text_reply(),
+        // One stop-time reminder; stopping again without a plan update ends
+        // the turn before the next user's tool batch.
         text_reply(),
         text_reply(),
         batch(reads(10..=20)),

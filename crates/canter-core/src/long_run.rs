@@ -128,15 +128,15 @@ impl State {
             return Ok(false);
         }
         let text = format!(
-            "[Unfinished plan] There are {} unfinished plan steps:\n- {}\nContinue working. If you are blocked or need a user decision, explain why and stop. First use update_plan to mark any finished steps completed.",
+            "[Unfinished plan] There are {} unfinished plan steps:\n- {}\nContinue working. If the user told you to stop at a certain step, stop there. If you are blocked or need a user decision, explain why and stop. First use update_plan to mark any finished steps completed.",
             steps.len(),
             steps.join("\n- ")
         );
-        self.active
-            .as_mut()
-            .expect("active turn")
-            .long_run
-            .plan_reminders += 1;
+        let guards = &mut self.active.as_mut().expect("active turn").long_run;
+        guards.plan_reminders += 1;
+        // Remind again only after the model updates the plan; stopping again
+        // without progress means it chose to stop (asked to, or blocked).
+        guards.plan_updated = false;
         self.message(Message::User { text }).await?;
         self.journal
             .append(vec![EventPayload::Warning {

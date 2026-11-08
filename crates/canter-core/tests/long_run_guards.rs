@@ -176,13 +176,29 @@ fn plan(id: usize) -> Reply {
     )
 }
 
+/// A plan update with the same steps, distinct from `plan` so it does not
+/// count as a repeated call.
+fn progress(id: usize) -> Reply {
+    tool(
+        id,
+        "update_plan",
+        &format!(
+            r#"{{"explanation":"Progress {id}","plan":[{{"step":"Inspect","status":"in_progress"}},{{"step":"Verify","status":"pending"}}]}}"#
+        ),
+        "tool_calls",
+    )
+}
+
 #[tokio::test]
 async fn unfinished_plan_gets_three_reminders_then_stops() {
     let fixture = Fixture::new(vec![
         plan(0),
         answer("Stopping."),
+        progress(1),
         answer("Blocked."),
+        progress(2),
         answer("Need input."),
+        progress(3),
         answer("Still blocked."),
     ])
     .await;
@@ -191,11 +207,11 @@ async fn unfinished_plan_gets_three_reminders_then_stops() {
         TurnStatus::Completed
     );
     let requests = fixture.requests();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 8);
     for pair in requests.windows(2) {
         assert_prefix(&pair[0], &pair[1]);
     }
-    for request in &requests[2..] {
+    for request in [&requests[2], &requests[4], &requests[6]] {
         let text = request["messages"].as_array().unwrap().last().unwrap()["content"]
             .as_str()
             .unwrap();
@@ -207,6 +223,42 @@ async fn unfinished_plan_gets_three_reminders_then_stops() {
     }
     let events = fixture.store.events_after("guards", 0).unwrap();
     assert_eq!(events.iter().filter(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains("unfinished plan"))).count(), 3);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn a_stop_without_a_plan_update_after_a_reminder_is_not_reminded_again() {
+    let fixture = Fixture::new(vec![
+        plan(0),
+        answer("You asked me to stop after step one."),
+        answer("Still stopping as you asked."),
+        answer("Unused."),
+        answer("Unused."),
+        answer("Unused."),
+    ])
+    .await;
+    assert_eq!(
+        fixture
+            .send("Make a plan, do only step one, then stop.")
+            .await
+            .status,
+        TurnStatus::Completed
+    );
+    assert_eq!(fixture.requests().len(), 3);
+    let text = fixture.requests()[2]["messages"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        text.contains("If the user told you to stop at a certain step, stop there."),
+        "{text}"
+    );
+    let events = fixture.store.events_after("guards", 0).unwrap();
+    assert_eq!(events.iter().filter(|event| matches!(&event.payload, EventPayload::Warning { message } if message.contains("unfinished plan"))).count(), 1);
     fixture.close().await;
 }
 
@@ -518,7 +570,9 @@ async fn user_steering_resets_plan_updates_and_the_reminder_budget() {
         let mut replies = vec![
             plan(0),
             answer("Stop 1."),
+            progress(10),
             answer("Stop 2."),
+            progress(11),
             answer("Stop 3."),
             tool(
                 1,
@@ -528,14 +582,19 @@ async fn user_steering_resets_plan_updates_and_the_reminder_budget() {
             ),
         ];
         if update_after_steer {
-            replies.push(plan(2));
+            replies.extend([
+                progress(20),
+                answer("New stop 1."),
+                progress(21),
+                answer("New stop 2."),
+                progress(22),
+                answer("New stop 3."),
+                progress(23),
+                answer("New stop 4."),
+            ]);
+        } else {
+            replies.push(answer("New stop 1."));
         }
-        replies.extend([
-            answer("New stop 1."),
-            answer("New stop 2."),
-            answer("New stop 3."),
-            answer("New stop 4."),
-        ]);
         let fixture = Fixture::new(replies).await;
         let mut events = fixture.session.subscribe(0).await.unwrap();
         fixture.session.input(input("Work.")).await.unwrap();
@@ -566,9 +625,9 @@ async fn user_steering_resets_plan_updates_and_the_reminder_budget() {
             .unwrap();
         assert_eq!(finished(&mut events).await.status, TurnStatus::Completed);
         let requests = fixture.requests();
-        assert_eq!(requests.len(), if update_after_steer { 10 } else { 6 });
+        assert_eq!(requests.len(), if update_after_steer { 15 } else { 8 });
         assert_eq!(
-            requests[5]["messages"].as_array().unwrap().last().unwrap()["content"],
+            requests[7]["messages"].as_array().unwrap().last().unwrap()["content"],
             "Focus on A."
         );
         let events = fixture.store.events_after("guards", 0).unwrap();
@@ -602,8 +661,6 @@ async fn subagents_are_reminded_about_unfinished_plans() {
         plan(0),
         answer("Stopped."),
         answer("Blocked."),
-        answer("Need input."),
-        answer("Still blocked."),
     ])
     .await;
     fixture.send("Prepare.").await;
@@ -614,7 +671,7 @@ async fn subagents_are_reminded_about_unfinished_plans() {
         .unwrap();
     let mut events = child.subscribe(0).await.unwrap();
     assert_eq!(finished(&mut events).await.status, TurnStatus::Completed);
-    assert_eq!(fixture.requests().len(), 6);
+    assert_eq!(fixture.requests().len(), 4);
     assert!(
         fixture.requests()[3]["messages"]
             .to_string()
@@ -902,13 +959,7 @@ async fn responses_content_filter_does_not_auto_continue() {
 #[tokio::test]
 async fn a_previous_turns_unfinished_plan_needs_a_successful_update_in_the_new_turn() {
     for failed_update in [false, true] {
-        let mut replies = vec![
-            plan(0),
-            answer("Stopped."),
-            answer("Blocked."),
-            answer("Need input."),
-            answer("Still blocked."),
-        ];
+        let mut replies = vec![plan(0), answer("Stopped."), answer("Blocked.")];
         if failed_update {
             replies.push(tool(
                 1,
@@ -923,7 +974,7 @@ async fn a_previous_turns_unfinished_plan_needs_a_successful_update_in_the_new_t
             fixture.send("Inspect and verify.").await.status,
             TurnStatus::Completed
         );
-        assert_eq!(fixture.requests().len(), 5);
+        assert_eq!(fixture.requests().len(), 3);
         let before = fixture.session.snapshot().await;
         let previous_plan = before.session.current_plan().unwrap().to_vec();
         assert!(
@@ -939,7 +990,7 @@ async fn a_previous_turns_unfinished_plan_needs_a_successful_update_in_the_new_t
                 .status,
             TurnStatus::Completed
         );
-        assert_eq!(fixture.requests().len(), if failed_update { 7 } else { 6 });
+        assert_eq!(fixture.requests().len(), if failed_update { 5 } else { 4 });
         let events = fixture
             .store
             .events_after("guards", before.event_seq)
