@@ -159,3 +159,11 @@
 
 - core `agents.rs` 那段在很长的 `crate::session::owned(async move { … })` 里，rustfmt 不格式化，内联的 `match` 很难看；改成先算 `let first` 再传。
 - 新界面测试里「往下滚一行后第一行看不到了」一开始失败：列表那一行的任务列显示的正是同一句。改成只认框里带左边框的 `│ ` 那一行。
+
+## 主控审查
+
+- 开发：canter/dev-agent-depth-task-1（Claude Code，`opus[1m]` / xhigh），第一轮约 32 分钟，没有停下来问。用户在开发中提出「能改文件的子 agent 也会收到查完就停」，主控定、用户同意「可以，就这么定」：深度那句只接给只读子 agent，交回改了一次（`26e82b1`），这不是未达标返工。
+- 看了 diff：协议只加可选 `depth`；只读子 agent 收到「任务 + 空行 + 深度那句」，能改文件的原样；列表和弹框显示模型写的原文；弹框里的按键排在打断主会话的处理之前，Esc 只关弹框。越出「只动」范围的 `canter-store` 测试补一行 `depth: None` 是编译所需，认可。
+- 合并前全套：`cargo nextest run --all-targets` 2023 个全过，`cargo test --doc --workspace` 通过。
+- 开发记下没做的三处（状态行仍写 `Esc to interrupt`、滚轮滚的是底下对话、终端太矮时按键仍给弹框）记进 HANDOFF，等用户试用后定。
+- 结果：一次过
