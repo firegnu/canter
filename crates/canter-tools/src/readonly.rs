@@ -211,6 +211,8 @@ fn readonly_command(
             "efmABCgtTE",
             &[
                 "files",
+                "heading",
+                "no-heading",
                 "hidden",
                 "no-ignore",
                 "no-ignore-vcs",
@@ -248,6 +250,8 @@ fn readonly_command(
                 "type-not",
                 "encoding",
                 "max-depth",
+                "sort",
+                "sortr",
             ],
         ),
         "pwd" => return args.iter().all(|arg| matches!(arg.as_str(), "-L" | "-P")),

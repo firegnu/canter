@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn parallel_explorer_bullet_only_appears_with_spawn_agent() {
-        let bullet = "- When a task splits into independent research parts that each need many files read, such as comparing several projects, start one explorer per part in the same reply instead of reading everything yourself.";
+        let bullet = "- When a task splits into independent research parts that each need many files read, such as comparing several projects, start one explorer per part in the same reply instead of reading everything yourself. Give each one only its part of the user's question without widening the scope; while they run, don't research those parts yourself, wait for their reports.";
         let text = core(&named(&["spawn_agent"]));
         let at = text.find(bullet).expect("explorer bullet");
         let using = text.find("# Using tools").unwrap();

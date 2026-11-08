@@ -851,7 +851,7 @@ impl Tools {
         };
         // Read-only explorers share this check; they have no ask_user or submit_plan.
         let text = if name == "shell" {
-            "This shell command is not read-only, so it did not run. Read-only commands still work: run one command or a pipeline of read-only programs such as rg, ls, cat, head, sed -n or git log, without redirections such as 2>/dev/null or 2>&1.".to_string()
+            "This shell command is not read-only, so it did not run. Read-only commands still work: run one command or a pipeline of read-only programs such as rg, ls, cat, head, sed -n or git log, without redirections such as 2>/dev/null or 2>&1 and without shell globs such as dir/*.rs (give rg the directory and filter with rg -g '*.rs').".to_string()
         } else {
             format!(
                 "Plan mode: {name} is not allowed. Use read-only tools to investigate, ask_user to clarify requirements, and submit_plan when the complete plan is ready. Do not implement changes until the user approves or leaves Plan mode."

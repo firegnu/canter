@@ -537,10 +537,19 @@ fn plan_mode_shell_hint_names_commands_that_pass_the_read_only_check() {
         "head -n 5 README.md",
         "sed -n 1,20p README.md",
         "git log --oneline -3",
+        "rg -n timeout -g '*.rs' src",
+        "rg --no-heading -n timeout src",
+        "rg --heading timeout src",
+        "rg --sort path timeout src",
+        "rg --sort=path timeout src",
     ] {
         assert!(check(command), "{command}");
     }
-    for command in ["ls src 2>/dev/null", "rg timeout src 2>&1"] {
+    for command in [
+        "ls src 2>/dev/null",
+        "rg timeout src 2>&1",
+        "rg timeout src/*.rs",
+    ] {
         assert!(!check(command), "{command}");
     }
     let hint = tools
@@ -550,5 +559,6 @@ fn plan_mode_shell_hint_names_commands_that_pass_the_read_only_check() {
         hint.contains("rg, ls, cat, head, sed -n or git log"),
         "{hint}"
     );
+    assert!(hint.contains("rg -g '*.rs'"), "{hint}");
     assert!(!hint.contains("ask_user"), "{hint}");
 }
