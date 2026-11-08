@@ -1,5 +1,6 @@
 use crate::background::{self, BackgroundCommands, Control, Tail};
-use crate::output::{BoundedText, MAX_CLIENT_OUTPUT_BYTES};
+use crate::output::{BoundedText, MAX_CLIENT_OUTPUT_BYTES, OutputStore, SavedOutput};
+use crate::scratch::ScratchDirectory;
 use crate::{Executor, ToolOutcome, ToolOutput};
 use canter_protocol::{ExecCommandSource, Item, ItemStatus};
 use serde::Deserialize;
@@ -93,7 +94,7 @@ async fn run_command(
     sender: &mpsc::UnboundedSender<Stream>,
 ) -> ToolOutput {
     let start = Instant::now();
-    let mut output = Output::new();
+    let mut output = Output::new(executor, &id);
     let mut on_output = |text: &str| {
         let _ = sender.send(Stream::Output(text.into()));
     };
@@ -159,6 +160,7 @@ async fn run_command(
     if control.background_id.is_some() {
         return background_output(executor, id, args, source, control.output(!yielded), start);
     }
+    let saved = output.finish_saved();
     ToolOutput {
         output_size: output.model.original_bytes_if_truncated().into(),
         change_ticket: None,
@@ -167,9 +169,12 @@ async fn run_command(
             && exit_code.is_some()
             && matches!(outcome, ToolOutcome::Completed | ToolOutcome::Failed)
         {
-            output.model.render(false)
+            output.model.render_saved(false, saved.as_ref())
         } else {
-            format!("{}\n{message}", output.model.render(false))
+            format!(
+                "{}\n{message}",
+                output.model.render_saved(false, saved.as_ref())
+            )
         },
         item: Item::CommandExecution {
             id,
@@ -331,8 +336,9 @@ async fn capture(
             Some(reply) = control.promotions.recv(), if control.background_id.is_none() && status.is_none() => {
                 let result = control.detach(&mut output.tail);
                 if result.is_ok() {
-                    // The foreground head/tail buffers are no longer needed.
-                    *output = Output::new();
+                    // The foreground head/tail buffers are no longer needed, and
+                    // a background result never refers to a saved file.
+                    output.clear();
                     returned = true;
                     on_background(control.output(true));
                 }
@@ -448,22 +454,43 @@ struct Output {
     client: BoundedText,
     model: BoundedText,
     streamed: usize,
+    /// The output so far, until it is saved to a file or the result stays short.
+    pending: Option<Vec<u8>>,
+    saved: Option<OutputStore>,
+    scratch: Option<Arc<ScratchDirectory>>,
+    id: String,
 }
 
 impl Output {
-    fn new() -> Self {
+    fn new(executor: &dyn Executor, id: &str) -> Self {
         Self {
             tail: Tail::default(),
             client: BoundedText::new(MAX_CLIENT_OUTPUT_BYTES),
             model: BoundedText::new(MAX_MODEL_OUTPUT_BYTES),
             streamed: 0,
+            pending: Some(Vec::new()),
+            saved: None,
+            scratch: executor.scratch_directory(),
+            id: id.to_owned(),
         }
+    }
+
+    /// Drop the foreground buffers and any saved file. Used when the caller's
+    /// result becomes a background one, which never names a file.
+    fn clear(&mut self) {
+        self.tail = Tail::default();
+        self.client = BoundedText::new(MAX_CLIENT_OUTPUT_BYTES);
+        self.model = BoundedText::new(MAX_MODEL_OUTPUT_BYTES);
+        self.streamed = 0;
+        self.pending = None;
+        self.saved = None;
     }
 
     fn push(&mut self, text: &str, on_output: &mut (dyn FnMut(&str) + Send)) {
         self.tail.push(text);
         self.client.push(text.as_bytes());
         self.model.push(text.as_bytes());
+        self.save(text.as_bytes());
         let mut end = text.len().min(MAX_CLIENT_OUTPUT_BYTES - self.streamed);
         while !text.is_char_boundary(end) {
             end -= 1;
@@ -473,5 +500,105 @@ impl Output {
         }
         // Once a chunk crosses the limit, no later bytes are streamed.
         self.streamed = (self.streamed + text.len()).min(MAX_CLIENT_OUTPUT_BYTES);
+    }
+
+    /// Copy the whole output into the session scratch directory once the model
+    /// result is truncated, so the discarded middle can still be read.
+    fn save(&mut self, bytes: &[u8]) {
+        if let Some(saved) = self.saved.as_mut() {
+            let pushed = saved.push(bytes);
+            if let Err(error) = pushed {
+                self.save_failed(error);
+            }
+            return;
+        }
+        let Some(pending) = self.pending.as_mut() else {
+            return;
+        };
+        pending.extend_from_slice(bytes);
+        if self.model.original_bytes_if_truncated().is_none() {
+            return;
+        }
+        let Some(scratch) = self.scratch.clone() else {
+            self.pending = None;
+            return;
+        };
+        let mut store = match OutputStore::create(scratch, &self.id) {
+            Ok(store) => store,
+            Err(error) => {
+                self.save_failed(error);
+                return;
+            }
+        };
+        let prefix = self.pending.take().unwrap_or_default();
+        match store.push(&prefix) {
+            // Dropping the store removes the partial file.
+            Err(error) => self.save_failed(error),
+            Ok(()) => self.saved = Some(store),
+        }
+    }
+
+    fn save_failed(&mut self, error: io::Error) {
+        // Dropping the store removes the partial file.
+        self.saved = None;
+        self.pending = None;
+        eprintln!("Full command output was not saved: {error}");
+    }
+
+    /// Flush a saved file before the result text names it; the model sees the
+    /// path only for a file that was written.
+    fn finish_saved(&mut self) -> Option<SavedOutput> {
+        let saved = self.saved.take()?;
+        match saved.finish() {
+            Ok(saved) => saved,
+            Err(error) => {
+                eprintln!("Full command output was not saved: {error}");
+                None
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{LocalExecutor, PermissionGate, Tool, Tools};
+    use canter_protocol::PermissionMode;
+    use std::collections::BTreeMap;
+
+    #[tokio::test]
+    async fn a_full_session_budget_truncates_without_saving() {
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = Arc::new(ScratchDirectory::temporary());
+        assert!(scratch.claim_saved_output(crate::scratch::MAX_SESSION_SAVED_OUTPUT_BYTES));
+        let environment = BTreeMap::from([
+            ("HOME".into(), dir.path().to_string_lossy().into_owned()),
+            ("PATH".into(), "/usr/bin:/bin".into()),
+        ]);
+        let tools = Tools::new(Arc::new(
+            LocalExecutor::with_scratch_directory(dir.path().into(), environment, vec![], scratch)
+                .unwrap(),
+        ));
+        std::fs::write(dir.path().join("large"), "x".repeat(100_000)).unwrap();
+        let cancel = CancellationToken::new();
+        let call = tools
+            .prepare(Tool::Shell, "full", r#"{"command":"cat large"}"#, &cancel)
+            .await
+            .unwrap();
+        let permit = match PermissionGate::default().evaluate(&call, PermissionMode::AllowAll) {
+            crate::PermissionCheck::Execute(permit) => permit,
+            _ => panic!("allowAll must issue a permit"),
+        };
+        let result = tools.execute(permit, &cancel, &mut |_| {}).await;
+        assert_eq!(
+            result.text,
+            format!(
+                "{}\n[truncated 67232 bytes]\n{}\nExit code: 0",
+                "x".repeat(16_384),
+                "x".repeat(16_384)
+            )
+        );
+        let scratch = tools.scratch_directory().unwrap().path().unwrap();
+        assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0);
     }
 }

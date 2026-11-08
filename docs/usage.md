@@ -566,7 +566,7 @@ Read-only shell commands that match canter's whitelist run without approval in t
 
 The sandbox is a separate switch from the permission mode. It is on by default (`"sandbox": true`) and uses macOS Seatbelt. It constrains model shell commands, including foreground, background and temporarily written scripts:
 
-- Writable: the session working directory, directories added with `--add-dir` or `/add-dir`, the session's private temporary directory (also `$TMPDIR`), and a disposable cache area for Cargo and npm. The `.git` parts needed for commits are writable, but Git config and hooks are locked.
+- Writable: the session working directory, directories added with `--add-dir` or `/add-dir`, the session's private temporary directory (also `$TMPDIR`, where truncated command output is saved so the model can read the middle), and a disposable cache area for Cargo and npm. The `.git` parts needed for commits are writable, but Git config and hooks are locked.
 - Not readable or writable: the canter state directory, the control socket, `~/.ssh`, `~/.aws`, `~/.gnupg` and similar credential locations. The whole `/tmp`, the real `~/.cargo` and the real `~/.npm` are not opened.
 - `allow-all` with the sandbox on allows network access but does not expand the write range; a command that steps outside fails rather than prompting for a wider range.
 - `ask-for-execution` and `always-ask` can ask once for a command to use the network (all IP networks for that command and its children) or to write specific paths outside the range. The request names a justification and canonical paths. A rule, session grant or read-only whitelist does not move a command outside the sandbox; it only removes canter's own approval, not the sandbox boundary.
@@ -600,7 +600,7 @@ The model sees only tools that the current provider and configuration support. T
 | `write` | Create or replace a whole UTF-8 file; creates missing parent directories. |
 | `edit` | Replace exact text in an existing UTF-8 file. All edits in one call succeed or nothing is written. |
 | `apply_patch` | Apply a freeform `*** Begin Patch` patch. Offered only when the model's catalog entry supports the freeform patch tool; other models use `write` and `edit`. |
-| `shell` | Run `/bin/sh -c` in the session directory. Foreground timeout defaults to 120 seconds, maximum 600; keep the beginning and end of output. `background: true` returns an id and initial output. |
+| `shell` | Run `/bin/sh -c` in the session directory. Foreground timeout defaults to 120 seconds, maximum 600; keep the beginning and end of output. Above 32 KiB the whole output is also saved under the session's temporary directory (up to 8 MiB per call), and the result names that file so `read` with `startLine` or `rg` can show the middle; the path works only while the session is open. `background: true` returns an id and initial output. |
 | `shell_output` | Read output added since the last model read from a background command; reports running state and exit code. |
 | `shell_stop` | Stop a background command's whole process group and return the remaining output. |
 | `monitor` | Watch a background command's new output for a regular expression and wake or notify the model. Available in Plan mode. |
