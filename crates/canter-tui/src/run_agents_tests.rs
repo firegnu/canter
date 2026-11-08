@@ -119,19 +119,31 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     assert!(!text.contains("sub-agents running"), "{text}");
     assert!(has(&test, &["│   Main session · test (here)"]), "{text}");
     assert!(
-        has(&test, &["│ › ├ ● agent-a  explorer  running  42s"]),
+        has(
+            &test,
+            &["│ › ├ ● agent-a  explorer  —  running  42s     Inspect"]
+        ),
         "{text}"
     );
     assert!(
-        has(&test, &["│   ├ ● agent-b  general   running  42s"]),
+        has(
+            &test,
+            &["│   ├ ● agent-b  general   —  running  42s     Inspect"]
+        ),
         "{text}"
     );
     assert!(
-        has(&test, &["│   └ ✓ agent-c  general   done     2m 13s"]),
+        has(
+            &test,
+            &["│   └ ✓ agent-c  general   —  done     2m 13s  Inspect"]
+        ),
         "{text}"
     );
     assert!(
-        has(&test, &["↑↓ select · Enter open · s stop · Esc close"]),
+        has(
+            &test,
+            &["↑↓ select · Enter open · t task · s stop · Esc close"]
+        ),
         "{text}"
     );
 
@@ -152,7 +164,10 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     test.message().await;
     let text = shown(&test);
     assert!(
-        has(&test, &["├ ■ agent-a  explorer  stopped by you  5s"]),
+        has(
+            &test,
+            &["├ ■ agent-a  explorer  —  stopped by you  5s      Inspect"]
+        ),
         "{text}"
     );
     assert!(
@@ -176,7 +191,10 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
         "{text}"
     );
     assert!(
-        has(&test, &["├ ✗ agent-b  general   failed          9s"]),
+        has(
+            &test,
+            &["├ ✗ agent-b  general   —  failed          9s      Inspect"]
+        ),
         "{text}"
     );
     assert_eq!(press(&mut test, KeyCode::Up), None);
@@ -252,17 +270,26 @@ async fn the_list_hangs_the_sub_agents_under_the_main_session() {
     let main = cell(&test, "Main session");
     assert!(main.modifier.contains(Modifier::DIM), "{main:?}");
     assert!(!main.modifier.contains(Modifier::BOLD), "{main:?}");
-    // The sub-agents hang under it, in four columns.
+    // The sub-agents hang under it, in columns.
     assert!(
-        has(&test, &["│ › ├ ● agent-a  reviewer  running  2m 05s"]),
+        has(
+            &test,
+            &["│ › ├ ● agent-a  reviewer  —  running  2m 05s  Inspect"]
+        ),
         "{text}"
     );
     assert!(
-        has(&test, &["│   ├ ✓ agent-b  explorer  done     41s"]),
+        has(
+            &test,
+            &["│   ├ ✓ agent-b  explorer  —  done     41s     Inspect"]
+        ),
         "{text}"
     );
     assert!(
-        has(&test, &["│   └ ✗ agent-c  general   failed   12s"]),
+        has(
+            &test,
+            &["│   └ ✗ agent-c  general   —  failed   12s     Inspect"]
+        ),
         "{text}"
     );
     assert!(cell(&test, "├ ✓").modifier.contains(Modifier::DIM));
@@ -294,6 +321,153 @@ async fn the_list_hangs_the_sub_agents_under_the_main_session() {
     assert_eq!(test.ui.app_mut().handle_mouse(click), None);
     test.ui.draw(0).unwrap();
     assert!(has(&test, &[row]), "{}", shown(&test));
+    test.stop().await;
+}
+
+/// P2-255: `t`, or a click on the task column, opens the task the model
+/// wrote in a box over the conversation, the list still under it. Esc (or
+/// `t`) closes only the box: the turn runs on, no sub-agent stops.
+#[tokio::test]
+async fn t_or_a_click_on_the_task_opens_it_in_a_box_that_esc_alone_closes() {
+    let mut test = Harness::new().await;
+    test.start("t1", "Compare the two parsers", None);
+    let questions: Vec<String> = (1..=20).map(|n| format!("Question {n:02}")).collect();
+    let a = agent(
+        "a",
+        "explorer",
+        "running",
+        json!({ "startedAt": -42_000, "depth": "medium",
+                "task": format!("Only look at the parser.\n{}", questions.join("\n")) }),
+    );
+    // Spawned before P2-255: no depth.
+    let b = agent("b", "general", "completed", json!({ "durationMs": 9_000 }));
+    test.chat.act(test.ui.app_mut(), Action::AgentList);
+    let request = test.request().await;
+    assert_eq!(request.path, "/v1/sessions/test/agents");
+    request.json(json!({ "data": [a, b] }));
+    test.message().await;
+    let text = shown(&test);
+    assert!(
+        has(
+            &test,
+            &["│ › ├ ● agent-a  explorer  medium  running  42s  Only look at the parser."]
+        ),
+        "{text}"
+    );
+    assert!(
+        has(
+            &test,
+            &["│   └ ✓ agent-b  general   —       done     9s   Inspect"]
+        ),
+        "{text}"
+    );
+    assert!(
+        has(
+            &test,
+            &["↑↓ select · Enter open · t task · s stop · Esc close"]
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Task ·"), "{text}");
+
+    assert_eq!(press(&mut test, KeyCode::Char('t')), None);
+    let text = shown(&test);
+    assert!(has(&test, &["╭─ Task · agent-a · medium ─"]), "{text}");
+    assert!(has(&test, &["│ Only look at the parser."]), "{text}");
+    assert!(has(&test, &["│ Question 01"]), "{text}");
+    assert!(!text.contains("Question 20"), "{text}");
+    assert!(has(&test, &["↑↓ scroll · Esc close ─╯"]), "{text}");
+    // Over the conversation, above the list, which still shows.
+    assert!(row_of(&test, "Task · agent-a") < row_of(&test, "Sub-agents ·"));
+    assert!(has(&test, &["│ › ├ ● agent-a"]), "{text}");
+    // ↑↓, PgUp and PgDn scroll it.
+    press(&mut test, KeyCode::Down);
+    assert!(
+        !has(&test, &["│ Only look at the parser."]),
+        "{}",
+        shown(&test)
+    );
+    assert!(has(&test, &["│ Question 01"]), "{}", shown(&test));
+    press(&mut test, KeyCode::PageDown);
+    assert!(!shown(&test).contains("Question 01"), "{}", shown(&test));
+    press(&mut test, KeyCode::PageDown);
+    assert!(has(&test, &["│ Question 20"]), "{}", shown(&test));
+    press(&mut test, KeyCode::PageUp);
+    press(&mut test, KeyCode::PageUp);
+    press(&mut test, KeyCode::Up);
+    assert!(
+        has(&test, &["│ Only look at the parser."]),
+        "{}",
+        shown(&test)
+    );
+    // `s` and Enter do nothing in the box.
+    assert_eq!(press(&mut test, KeyCode::Char('s')), None);
+    assert_eq!(press(&mut test, KeyCode::Enter), None);
+
+    // Esc closes the box alone: the list stays, the same row selected.
+    assert_eq!(press(&mut test, KeyCode::Esc), None);
+    let text = shown(&test);
+    assert!(!text.contains("Task · agent-a"), "{text}");
+    assert!(has(&test, &["│ › ├ ● agent-a  explorer  medium"]), "{text}");
+    assert_eq!(test.ui.app().snapshot().status, SessionStatus::Working);
+    assert!(test.requests.try_recv().is_err(), "nothing is sent");
+    // `t` closes it too.
+    press(&mut test, KeyCode::Char('t'));
+    assert!(has(&test, &["Task · agent-a"]), "{}", shown(&test));
+    assert_eq!(press(&mut test, KeyCode::Char('t')), None);
+    assert!(!shown(&test).contains("Task · agent-a"));
+    assert!(has(&test, &["│ › ├ ● agent-a"]), "{}", shown(&test));
+    // Not for the main session.
+    press(&mut test, KeyCode::Up);
+    assert_eq!(press(&mut test, KeyCode::Char('t')), None);
+    assert!(!shown(&test).contains("Task ·"), "{}", shown(&test));
+
+    // A click on a row's task opens it; without a depth, the title has none.
+    let click = |column: u16, row: u16| MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    let (y, row) = rows(&test)
+        .into_iter()
+        .enumerate()
+        .find(|(_, row)| row.contains("agent-b"))
+        .unwrap();
+    let x = crate::text::str_width(&row[..row.rfind("Inspect").unwrap()]);
+    assert_eq!(
+        test.ui.app_mut().handle_mouse(click(x as u16, y as u16)),
+        None
+    );
+    test.ui.draw(0).unwrap();
+    let text = shown(&test);
+    assert!(has(&test, &["╭─ Task · agent-b ─"]), "{text}");
+    assert!(has(&test, &["│ Inspect"]), "{text}");
+    assert!(has(&test, &["│ › └ ✓ agent-b"]), "{text}");
+    // A click inside the box does nothing.
+    let inside = row_of(&test, "│ Inspect");
+    assert_eq!(test.ui.app_mut().handle_mouse(click(6, inside)), None);
+    test.ui.draw(0).unwrap();
+    assert!(has(&test, &["╭─ Task · agent-b ─"]), "{}", shown(&test));
+    // A click on the task of the other row opens that one instead.
+    let other = row_of(&test, "├ ● agent-a");
+    let row = &rows(&test)[usize::from(other)];
+    let x = crate::text::str_width(&row[..row.find("Only look").unwrap()]);
+    assert_eq!(test.ui.app_mut().handle_mouse(click(x as u16, other)), None);
+    test.ui.draw(0).unwrap();
+    assert!(
+        has(&test, &["╭─ Task · agent-a · medium ─"]),
+        "{}",
+        shown(&test)
+    );
+    // Elsewhere on a row, a click opens that session as before.
+    let other = row_of(&test, "├ ● agent-a");
+    assert_eq!(
+        test.ui.app_mut().handle_mouse(click(8, other)),
+        Some(Action::OpenAgent("a".into()))
+    );
+    test.ui.draw(0).unwrap();
+    assert!(!shown(&test).contains("Task ·"), "{}", shown(&test));
     test.stop().await;
 }
 
@@ -542,11 +716,17 @@ async fn a_sub_agents_screen_shows_it_with_the_main_sessions_approvals() {
     assert!(has(&test, &["│ › Main session · Refactor locks"]), "{text}");
     assert!(!text.contains("←"), "{text}");
     assert!(
-        has(&test, &["│   ├ ● agent-child (here)  explorer  running"]),
+        has(
+            &test,
+            &["│   ├ ● agent-child (here)  explorer  —  running  Inspect"]
+        ),
         "{text}"
     );
     assert!(
-        has(&test, &["│   └ ● agent-sib           general   running"]),
+        has(
+            &test,
+            &["│   └ ● agent-sib           general   —  running  Inspect"]
+        ),
         "{text}"
     );
     assert_eq!(

@@ -271,6 +271,16 @@
       ],
       "type": "string"
     },
+    "AgentDepth": {
+      "description": "P2-255: `spawn_agent`'s `depth`.",
+      "enum": [
+        "quick",
+        "medium",
+        "thorough",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "AgentListResponse": {
       "properties": {
         "data": {
@@ -422,6 +432,17 @@
         "createdAt": {
           "format": "int64",
           "type": "integer"
+        },
+        "depth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentDepth"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "P2-255: the child's `SessionParent.depth`; absent from older\nservers and for children spawned before it."
         },
         "durationMs": {
           "description": "How long the latest agent turn took; absent while it runs.",
@@ -5626,6 +5647,17 @@
         "agentType": {
           "default": "general",
           "type": "string"
+        },
+        "depth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentDepth"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "P2-255: how deep `spawn_agent` asked the child to look; absent for\nchildren spawned before it."
         },
         "sessionId": {
           "type": "string"

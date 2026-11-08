@@ -206,7 +206,7 @@ async fn child_agent_models_do_not_change_the_remembered_selection() {
     fixture.input(&parent).await;
     fixture.request().await.tool(
         "spawn_agent",
-        json!({"task":"Inspect only","type":"explorer"}),
+        json!({"task":"Inspect only","type":"explorer","depth":"medium"}),
     );
     let first = fixture.request().await;
     let next = fixture.request().await;

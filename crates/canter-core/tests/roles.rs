@@ -149,7 +149,7 @@ async fn custom_role_file_can_be_spawned() {
     say(&session, "Review my changes").await;
     let role = serde_json::from_value(json!("reviewer")).unwrap();
     let result = session
-        .spawn_agent_of_type("child".into(), "Review changes".into(), role, None)
+        .spawn_agent_of_type("child".into(), "Review changes".into(), role, None, None)
         .await;
     let (child, _) =
         result.unwrap_or_else(|error| panic!("custom role should be available: {error}"));
@@ -185,6 +185,7 @@ async fn spawn(session: &Session, name: &str, id: &str) -> Result<Session, cante
             id.into(),
             "Inspect the requested files".into(),
             serde_json::from_value(json!(name)).unwrap(),
+            None,
             None,
         )
         .await

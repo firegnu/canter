@@ -205,3 +205,51 @@ fn completed_child_keeps_result_through_maintenance_turns_and_close() {
         Some("Findings preserved")
     );
 }
+
+/// P2-255: the depth a child was spawned with is kept on its parent link and
+/// listed; children spawned before it, and older servers, have none.
+#[test]
+fn agent_depth_is_listed_and_optional_for_older_children_and_servers() {
+    let mut snapshot = SessionSnapshot::empty("child");
+    apply(
+        &mut snapshot,
+        json!({"type":"session.parent","parent":{
+        "sessionId":"parent","turnId":"parent-turn","task":"Inspect the parser",
+        "agentType":"explorer","depth":"thorough"}}),
+    );
+    apply(
+        &mut snapshot,
+        json!({"type":"turn.started","turn":turn("t1", "inProgress")}),
+    );
+    let parent = snapshot.parent.clone().unwrap();
+    assert_eq!(parent.depth, Some(AgentDepth::Thorough));
+    let listed = AgentSummary::from_snapshot(&snapshot).unwrap();
+    assert_eq!(listed.depth, Some(AgentDepth::Thorough));
+    assert_eq!(listed.task, "Inspect the parser");
+    let wire = serde_json::to_value(&listed).unwrap();
+    assert_eq!(wire["depth"], "thorough");
+    for (name, depth) in [
+        ("quick", AgentDepth::Quick),
+        ("medium", AgentDepth::Medium),
+        ("thorough", AgentDepth::Thorough),
+        ("deeper", AgentDepth::Unknown),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<AgentDepth>(json!(name)).unwrap(),
+            depth
+        );
+    }
+
+    // Spawned before P2-255: no depth, and none written back.
+    let old: SessionParent =
+        serde_json::from_value(json!({"sessionId":"p","turnId":"t","task":"Inspect"})).unwrap();
+    assert_eq!(old.depth, None);
+    assert!(serde_json::to_value(&old).unwrap().get("depth").is_none());
+    // An older server's list entry.
+    let entry: AgentSummary = serde_json::from_value(json!({
+        "id":"a","task":"Inspect","status":"running","result":null,
+        "createdAt":0,"updatedAt":0,"name":"Inspect","agentType":"explorer"}))
+    .unwrap();
+    assert_eq!(entry.depth, None);
+    assert!(serde_json::to_value(&entry).unwrap().get("depth").is_none());
+}

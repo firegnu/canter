@@ -294,6 +294,22 @@ pub struct SessionParent {
     pub session_id: String,
     pub turn_id: String,
     pub task: String,
+    /// P2-255: how deep `spawn_agent` asked the child to look; absent for
+    /// children spawned before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub depth: Option<AgentDepth>,
+}
+
+/// P2-255: `spawn_agent`'s `depth`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentDepth {
+    Quick,
+    Medium,
+    Thorough,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -414,6 +430,11 @@ pub struct AgentSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub duration_ms: Option<u64>,
+    /// P2-255: the child's `SessionParent.depth`; absent from older
+    /// servers and for children spawned before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub depth: Option<AgentDepth>,
 }
 
 impl AgentSummary {
@@ -445,6 +466,7 @@ impl AgentSummary {
             duration_ms: turn
                 .filter(|turn| turn.status != TurnStatus::InProgress)
                 .and_then(|turn| turn.duration_ms),
+            depth: parent.depth,
         })
     }
 }

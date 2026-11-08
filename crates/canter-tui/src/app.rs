@@ -22,7 +22,7 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
+use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 
 use crate::approval::{self, ApprovalBox, shorten_home};
 use crate::cells;
@@ -595,6 +595,8 @@ struct Shown {
     main_waiting: bool,
     /// The prompt on the top row, for a click on it.
     sticky: Option<DrawnSticky>,
+    /// The task box `t` opened over the conversation (P2-255).
+    agent_task: Option<Rect>,
 }
 
 /// The prompt a frame showed on the top row, above the conversation.
@@ -638,6 +640,9 @@ struct DrawnAgents {
     /// The screen row of the list's first entry shown, and what each
     /// entry shown from there opens: `None` is the main session.
     choices: (usize, Vec<Option<String>>),
+    /// The screen column where the sub-agents' task column starts; `None`
+    /// while it did not show (P2-255).
+    task: Option<usize>,
 }
 
 /// The draft as the input box drew it.
@@ -746,6 +751,12 @@ pub struct App {
     footer_selected: Option<Footer>,
     /// The main session's sub-agents, and `/agents` while it is open.
     agents: crate::agents::Agents,
+    /// While `/agents` is open: the task `t` opened over the conversation
+    /// (P2-255).
+    agent_task: Option<crate::report::Report>,
+    /// Where the task column starts in the rows of the `/agents` list drawn
+    /// last, inside its border; `None` when it did not show.
+    agent_task_column: Option<usize>,
     /// How many times a command name was completed in the input box.
     completions: u64,
     /// In the order they came, which is also the order of their places.
@@ -1077,6 +1088,8 @@ impl App {
             agents_empty: None,
             footer_selected: None,
             agents: Default::default(),
+            agent_task: None,
+            agent_task_column: None,
             completions: 0,
             notices: Vec::new(),
             active_btw: None,
@@ -1581,6 +1594,11 @@ impl App {
         // with a choice open.
         if key.code == KeyCode::End && self.input.is_empty() {
             self.scroll.top = None;
+            return None;
+        }
+        // The task box over the conversation takes every key, PgUp and PgDn too.
+        if self.agent_task_open() {
+            self.agent_task_key(key, shown.chooser == Some(self.choosers));
             return None;
         }
         if self.choosing() && !matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
@@ -2785,7 +2803,49 @@ impl App {
         self.setup = None;
         self.report = None;
         self.close_theme_picker();
+        self.agent_task = None;
         self.agents.selected = Some(usize::from(self.snapshot.parent.is_none()));
+    }
+
+    /// Whether the task box `t` opened is over the conversation: only
+    /// while `/agents` is open under it.
+    fn agent_task_open(&self) -> bool {
+        self.agents.selected.is_some() && self.agent_task.is_some()
+    }
+
+    /// Opens the task box for the sub-agent `id`, selected in the list.
+    fn open_agent_task(&mut self, id: &str) {
+        if let Some(index) = self
+            .agents
+            .targets()
+            .iter()
+            .position(|target| target.is_some_and(|agent| agent.id == id))
+        {
+            self.agents.selected = Some(index);
+        }
+        self.agent_task = self.agents.task(id);
+    }
+
+    /// Keys while the task box is open (P2-255): Up, Down, PgUp and PgDn
+    /// scroll it; Esc, `t`, Ctrl+C or Ctrl+D close it alone, back to the list
+    /// with the same row selected. Nothing else happens: the turn goes on
+    /// and no sub-agent stops.
+    fn agent_task_key(&mut self, key: KeyEvent, seen: bool) {
+        let Some(task) = self.agent_task.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Up if seen => task.up(),
+            KeyCode::Down if seen => task.down(),
+            KeyCode::PageUp if seen => task.page_up(),
+            KeyCode::PageDown if seen => task.page_down(),
+            KeyCode::Esc => self.agent_task = None,
+            KeyCode::Char('t') if key.modifiers.is_empty() => self.agent_task = None,
+            KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.agent_task = None;
+            }
+            _ => {}
+        }
     }
 
     /// A sub-agent's entry changed: the stop just asked for, or what the
@@ -2904,6 +2964,12 @@ impl App {
                     return Some(Action::StopAgent(id));
                 }
             }
+            // The main session's row has no task.
+            KeyCode::Char('t') if seen && key.modifiers.is_empty() => {
+                if let Some(Some(agent)) = targets.get(selected) {
+                    self.agent_task = self.agents.task(&agent.id);
+                }
+            }
             KeyCode::Enter if seen && !send_guarded => {
                 self.agents.selected = None;
                 return target
@@ -2938,9 +3004,10 @@ impl App {
 
     /// A click on the sub-agents row drawn on frame `frame` opens
     /// `/agents`, or closes it when it showed open; a click on an entry in
-    /// the list opens that session, as Enter. The waiting hint always goes
-    /// back to the main session; the list is inactive during approval/search.
-    fn agents_click(&mut self, y: usize, frame: u64) -> Option<Action> {
+    /// the list opens that session, as Enter, or on a sub-agent's task its
+    /// task box, as `t`. The waiting hint always goes back to the main
+    /// session; the list is inactive during approval/search.
+    fn agents_click(&mut self, (x, y): (usize, usize), frame: u64) -> Option<Action> {
         if frame > self.latest_frame {
             return None;
         }
@@ -2969,9 +3036,27 @@ impl App {
         if !same {
             return None;
         }
+        if let Some(id) = &target
+            && drawn.task.is_some_and(|column| x >= column)
+        {
+            self.open_agent_task(id);
+            return None;
+        }
         self.agents.selected = None;
         let id = target.unwrap_or_else(|| self.main_session().to_owned());
         (id != self.snapshot.id).then_some(Action::OpenAgent(id))
+    }
+
+    /// Whether frame `frame` drew the task box over `cell`.
+    fn task_box_at(&self, (x, y): (u16, u16), frame: u64) -> bool {
+        frame <= self.latest_frame
+            && self
+                .shown
+                .iter()
+                .rev()
+                .find(|(since, _)| *since <= frame)
+                .and_then(|(_, shown)| shown.agent_task)
+                .is_some_and(|rect| rect.contains(Position::new(x, y)))
     }
 
     /// `/lsp`: the language servers, above the input box.
@@ -3314,11 +3399,16 @@ impl App {
         let cell = (mouse.column, mouse.row);
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                // Not on the conversation under the task box: no hidden
+                // selection or link.
+                if self.agent_task_open() && self.task_box_at(cell, frame) {
+                    return None;
+                }
                 self.press(cell, frame, now_ms);
                 let y = usize::from(cell.1);
                 return self
                     .background_click(y, frame)
-                    .or_else(|| self.agents_click(y, frame));
+                    .or_else(|| self.agents_click((usize::from(cell.0), y), frame));
             }
             MouseEventKind::ScrollUp => {
                 self.scroll_by(-(WHEEL_ROWS as isize));
@@ -4693,6 +4783,7 @@ impl App {
             footer: Vec::new(),
             main_waiting: false,
             sticky: None,
+            agent_task: None,
         };
         let (bottom, input_rows) = match approval {
             Some((request, laid)) => {
@@ -4990,6 +5081,11 @@ impl App {
             },
             open: agents_open,
             choices: (box_top + 1, self.agent_choices(opened.saturating_sub(2))),
+            // Inside the list's left border.
+            task: self
+                .agent_task_column
+                .filter(|_| agents_open)
+                .map(|column| column + 1),
         };
         let starts = starts(&self.history, live_parts, lead);
         let rows = Rows {
@@ -5141,6 +5237,24 @@ impl App {
             })
             .collect();
         let found = current.map(|current| (current, hits.len()));
+        // The task `t` opened, over the conversation's last rows (P2-255).
+        let task_box = self
+            .agent_task
+            .as_mut()
+            .filter(|_| agents_open)
+            .and_then(|task| {
+                let margin = if width >= 40 { 2 } else { 0 };
+                let rows = task.rows(width.saturating_sub(2 * margin + PANEL_CHROME), area);
+                let height = u16::try_from(rows.len())
+                    .ok()
+                    .filter(|height| *height > 0)?;
+                let top = u16::try_from(header_rows + sticky_rows + area).ok()? - height;
+                Some((
+                    Rect::new(margin, top, width - 2 * margin, height),
+                    Bottom::panel(rows),
+                ))
+            });
+        self.drawing.agent_task = task_box.as_ref().map(|(rect, _)| *rect);
         let view = View {
             header,
             plan,
@@ -5169,6 +5283,7 @@ impl App {
             info,
             footer,
             footer_box,
+            task_box,
         };
         // Shift+Tab uses the mode of this frame under the bare input box.
         // Custom output, or items without it on the first row, need not
@@ -5219,6 +5334,7 @@ impl App {
                 ),
             };
             let here = main.map(|_| self.snapshot.id.as_str());
+            self.agent_task_column = self.agents.task_column(here, width, now_ms);
             return self.agents.rows(&main_name, here, width, max, now_ms);
         }
         if let Some(chooser) = &self.chooser {
@@ -6562,6 +6678,9 @@ pub(crate) struct View {
     footer: Vec<Line<'static>>,
     /// `/agents` or `/ps`, open under them: a [`Bottom::Panel`].
     footer_box: Option<Bottom>,
+    /// The task `t` opened (P2-255): a [`Bottom::Panel`] over the
+    /// conversation's last rows, where it is relative to the screen.
+    task_box: Option<(Rect, Bottom)>,
 }
 
 /// The input box, or the approval box in its place.
@@ -6705,6 +6824,12 @@ impl View {
         frame.render_widget(Paragraph::new(self.footer), footer);
         if let Some(open) = self.footer_box {
             open.draw(frame, footer_box);
+        }
+        if let Some((at, task)) = self.task_box {
+            let at = Rect::new(area.x + at.x, area.y + at.y, at.width, at.height)
+                .intersection(conversation);
+            frame.render_widget(Clear, at);
+            task.draw(frame, at);
         }
     }
 }

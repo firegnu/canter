@@ -2,7 +2,7 @@
 use crate::{CoreError, session::Shared};
 use canter_model::{ToolCall, ToolDefinition};
 use canter_protocol::{
-    AgentType, CollabAgent, CollabAgentTool, ErrorCode, EventPayload, Item, ItemStatus,
+    AgentDepth, AgentType, CollabAgent, CollabAgentTool, ErrorCode, EventPayload, Item, ItemStatus,
 };
 use futures_util::future::BoxFuture;
 use serde::Deserialize;
@@ -21,6 +21,8 @@ pub enum AgentCommand {
         name: Option<String>,
         #[serde(rename = "type")]
         kind: AgentType,
+        /// P2-255: never [`AgentDepth::Unknown`] once parsed.
+        depth: AgentDepth,
     },
     WaitAgent {
         ids: Vec<String>,
@@ -69,7 +71,7 @@ pub(crate) fn is_tool(name: &str) -> bool {
 
 pub(crate) fn definitions() -> [ToolDefinition; 4] {
     [
-        ToolDefinition { name: "spawn_agent".into(), description: "Start a sub-agent with a fresh conversation and your current model and reasoning effort; returns its id and short name immediately. Use type explorer for read-only code lookup or research to save your main context; you may start explorers on your own. When research splits into independent parts that each need many files read, such as comparing how several projects or modules handle something, start one explorer per part in the same reply so they run at the same time. Give each one only its part of the user's question without widening the scope, and say how deep to look: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. When a report wakes you while other sub-agents you started are still running, tell the user in a sentence what arrived and end your turn; combine them when the last one arrives. Never say a report has arrived before you have seen it. Don't research those parts yourself meanwhile. When a few reads answer the question, do it yourself. Use type general only when the user or applicable AGENTS.md explicitly requests sub-agents, delegation, or parallel agent work. Requests to investigate carefully or analyze deeply do not authorize general sub-agents. Before spawning, make your own plan; do work blocking your next step yourself and delegate independent work. Give a general agent explicit ownership of files or modules, and tell it that others share the repository: do not revert others' edits and accommodate their changes. At most four agents may run at once; children cannot spawn agents. Plan mode and review rounds allow only explorers.".into(), parameters: json!({"type":"object","properties":{"task":{"type":"string","minLength":1},"type":{"type":"string","enum":["explorer","general"]},"name":{"type":"string","description":"A short name of 3 to 5 English words describing what this sub-agent does, shown to the user in lists and cards."}},"required":["task","type","name"],"additionalProperties":false}) },
+        ToolDefinition { name: "spawn_agent".into(), description: "Start a sub-agent with a fresh conversation and your current model and reasoning effort; returns its id and short name immediately. Use type explorer for read-only code lookup or research to save your main context; you may start explorers on your own. When research splits into independent parts that each need many files read, such as comparing how several projects or modules handle something, start one explorer per part in the same reply so they run at the same time. Give each one only its part of the user's question without widening the scope, and set depth instead of writing it into the task: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. When a report wakes you while other sub-agents you started are still running, tell the user in a sentence what arrived and end your turn; combine them when the last one arrives. Never say a report has arrived before you have seen it. Don't research those parts yourself meanwhile. When a few reads answer the question, do it yourself. Use type general only when the user or applicable AGENTS.md explicitly requests sub-agents, delegation, or parallel agent work. Requests to investigate carefully or analyze deeply do not authorize general sub-agents. Before spawning, make your own plan; do work blocking your next step yourself and delegate independent work. Give a general agent explicit ownership of files or modules, and tell it that others share the repository: do not revert others' edits and accommodate their changes. At most four agents may run at once; children cannot spawn agents. Plan mode and review rounds allow only explorers.".into(), parameters: json!({"type":"object","properties":{"task":{"type":"string","minLength":1},"type":{"type":"string","enum":["explorer","general"]},"depth":{"type":"string","enum":["quick","medium","thorough"]},"name":{"type":"string","description":"A short name of 3 to 5 English words describing what this sub-agent does, shown to the user in lists and cards."}},"required":["task","type","depth","name"],"additionalProperties":false}) },
         ToolDefinition { name: "wait_agent".into(), description: "Wait until any listed sub-agent completes, fails, closes, or is interrupted, or the timeout expires. Returns every listed agent's current status and its final reply when available. Default timeout is 30000 ms, maximum 600000 ms. In a non-interactive exec turn, use this tool to receive results before ending your turn. In an interactive session, call it only when you cannot answer the user's latest message without the results, such as when they ask for the findings now. When they are just chatting, thanking you, or asking about something else, reply and end your turn instead: finished sub-agents' reports arrive on their own and wake you. In a turn started by a sub-agent report, it returns at once without waiting.".into(), parameters: json!({"type":"object","properties":{"ids":{"type":"array","minItems":1,"items":{"type":"string"}},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000,"default":30000}},"required":["ids"],"additionalProperties":false}) },
         ToolDefinition { name: "send_input".into(), description: "Send a follow-up task or clarification to an existing sub-agent. In interactive sessions, queues input while it is running; starts another turn when it is idle or interrupted. In canter exec, first use wait_agent until the running sub-agent stops, then send_input. Use this to continue an interrupted agent; there is no resume_agent tool.".into(), parameters: json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string","minLength":1}},"required":["id","message"],"additionalProperties":false}) },
         ToolDefinition { name: "close_agent".into(), description: "Close a sub-agent, cancelling its active turn and stopping its background commands. A completed final reply is retained.".into(), parameters: json!({"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}) },
@@ -86,7 +88,7 @@ pub(crate) fn definitions_for_roles(roles: &[crate::roles::Role]) -> [ToolDefini
         return definitions;
     }
     let spawn = &mut definitions[0];
-    spawn.description = "Start a sub-agent with a fresh conversation; returns its id and short name immediately. Choose the role by its description, or use the role explicitly named by the user. Read-only roles may be started on your own. When research splits into independent parts that each need many files read, such as comparing how several projects or modules handle something, start one read-only agent per part in the same reply so they run at the same time. Give each one only its part of the user's question without widening the scope, and say how deep to look: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. When a report wakes you while other sub-agents you started are still running, tell the user in a sentence what arrived and end your turn; combine them when the last one arrives. Never say a report has arrived before you have seen it. Don't research those parts yourself meanwhile. When a few reads answer the question, do it yourself. Roles that can edit require explicit sub-agent, delegation, or parallel-work instructions from the user or applicable AGENTS.md, including standing instructions such as delegating tests to a test-writer. Requests to investigate carefully or analyze deeply do not authorize editing roles. Make your own plan first; do work blocking your next step yourself and delegate independent work. Give editing agents explicit file or module ownership and tell them that others share the repository: do not revert others' edits. At most four agents may run at once; children cannot spawn agents. Plan mode and review rounds allow only read-only roles. Roles inherit your model and effort unless configured otherwise. Available roles:\n- explorer (read-only): Read-only code lookup or research.\n- general (can edit): Independent work, including file changes, when explicitly delegated.".into();
+    spawn.description = "Start a sub-agent with a fresh conversation; returns its id and short name immediately. Choose the role by its description, or use the role explicitly named by the user. Read-only roles may be started on your own. When research splits into independent parts that each need many files read, such as comparing how several projects or modules handle something, start one read-only agent per part in the same reply so they run at the same time. Give each one only its part of the user's question without widening the scope, and set depth instead of writing it into the task: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. When a report wakes you while other sub-agents you started are still running, tell the user in a sentence what arrived and end your turn; combine them when the last one arrives. Never say a report has arrived before you have seen it. Don't research those parts yourself meanwhile. When a few reads answer the question, do it yourself. Roles that can edit require explicit sub-agent, delegation, or parallel-work instructions from the user or applicable AGENTS.md, including standing instructions such as delegating tests to a test-writer. Requests to investigate carefully or analyze deeply do not authorize editing roles. Make your own plan first; do work blocking your next step yourself and delegate independent work. Give editing agents explicit file or module ownership and tell them that others share the repository: do not revert others' edits. At most four agents may run at once; children cannot spawn agents. Plan mode and review rounds allow only read-only roles. Roles inherit your model and effort unless configured otherwise. Available roles:\n- explorer (read-only): Read-only code lookup or research.\n- general (can edit): Independent work, including file changes, when explicitly delegated.".into();
     let names = spawn.parameters["properties"]["type"]["enum"]
         .as_array_mut()
         .expect("role enum");
@@ -126,12 +128,39 @@ fn parse(call: &ToolCall) -> Result<AgentCommand, CoreError> {
         )
     })?;
     object.insert("tool".into(), json!(call.name));
-    serde_json::from_value(args).map_err(|error| {
+    let command = serde_json::from_value(args).map_err(|error| {
         CoreError::new(
             ErrorCode::InvalidRequest,
             &format!("Invalid agent tool arguments: {error}"),
         )
-    })
+    })?;
+    if let AgentCommand::SpawnAgent {
+        depth: AgentDepth::Unknown,
+        ..
+    } = command
+    {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "Invalid agent tool arguments: depth must be quick, medium, or thorough",
+        ));
+    }
+    Ok(command)
+}
+
+/// P2-255: the task a read-only child gets: the model's, then a sentence on
+/// how deep to look. A child that can edit gets the model's task alone.
+pub(crate) fn with_depth(task: &str, depth: AgentDepth) -> String {
+    let said = match depth {
+        AgentDepth::Quick => "Depth: quick. Find the main places, report them, and stop.",
+        AgentDepth::Medium => {
+            "Depth: medium. Answer each question with file:line evidence, then stop."
+        }
+        AgentDepth::Thorough => {
+            "Depth: thorough. Cover everything the task asks for before you report."
+        }
+        AgentDepth::Unknown => return task.to_owned(),
+    };
+    format!("{task}\n\n{said}")
 }
 
 /// The card shown for a call: the tool, the task or message, and the agents
@@ -345,7 +374,7 @@ mod tests {
 
     const SPLIT: &str = "When research splits into independent parts that each need many files read, such as comparing how several projects or modules handle something,";
     const SMALL: &str = "When a few reads answer the question, do it yourself.";
-    const SCOPE: &str = "Give each one only its part of the user's question without widening the scope, and say how deep to look: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. When a report wakes you while other sub-agents you started are still running, tell the user in a sentence what arrived and end your turn; combine them when the last one arrives. Never say a report has arrived before you have seen it. Don't research those parts yourself meanwhile.";
+    const SCOPE: &str = "Give each one only its part of the user's question without widening the scope, and set depth instead of writing it into the task: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. When a report wakes you while other sub-agents you started are still running, tell the user in a sentence what arrived and end your turn; combine them when the last one arrives. Never say a report has arrived before you have seen it. Don't research those parts yourself meanwhile.";
 
     #[test]
     fn spawn_description_says_when_to_run_read_only_agents_in_parallel() {
@@ -368,7 +397,79 @@ mod tests {
             assert!(text.contains(SPLIT), "{text}");
             assert!(text.contains(SMALL), "{text}");
             assert!(text.contains(SCOPE), "{text}");
+            assert!(!text.contains("say how deep to look"), "{text}");
         }
+    }
+
+    fn spawn(arguments: Value) -> Result<AgentCommand, CoreError> {
+        parse(&ToolCall {
+            id: "call".into(),
+            name: "spawn_agent".into(),
+            arguments: arguments.to_string(),
+        })
+    }
+
+    /// P2-255: every spawn names how deep to look, whatever the type.
+    #[test]
+    fn spawn_agent_requires_one_of_three_depths() {
+        let reviewer = crate::roles::Role {
+            summary: AgentRole {
+                name: "reviewer".into(),
+                description: "Reviews code.".into(),
+                model: None,
+                effort: None,
+                read_only: true,
+                built_in: false,
+                error: None,
+            },
+            tools: None,
+            prompt: String::new(),
+        };
+        for spawn in [definitions(), definitions_for_roles(&[reviewer])]
+            .map(|definitions| definitions[0].parameters.clone())
+        {
+            assert_eq!(spawn["required"], json!(["task", "type", "depth", "name"]));
+            assert_eq!(
+                spawn["properties"]["depth"],
+                json!({"type":"string","enum":["quick","medium","thorough"]})
+            );
+        }
+        for kind in ["explorer", "general", "reviewer"] {
+            let missing = spawn(json!({"task":"Inspect","type":kind,"name":"Inspect"}))
+                .expect_err("depth is required");
+            assert!(missing.message.contains("depth"), "{}", missing.message);
+            for (name, depth) in [
+                ("quick", AgentDepth::Quick),
+                ("medium", AgentDepth::Medium),
+                ("thorough", AgentDepth::Thorough),
+            ] {
+                let Ok(AgentCommand::SpawnAgent { depth: parsed, .. }) =
+                    spawn(json!({"task":"Inspect","type":kind,"depth":name}))
+                else {
+                    panic!("{kind} {name}");
+                };
+                assert_eq!(parsed, depth);
+            }
+            let other = spawn(json!({"task":"Inspect","type":kind,"depth":"deep"}))
+                .expect_err("only the three depths");
+            assert!(other.message.contains("depth"), "{}", other.message);
+        }
+    }
+
+    /// The child's task: the model's, then what the depth asks for.
+    #[test]
+    fn the_depth_is_said_after_the_task() {
+        for (depth, said) in [
+            (AgentDepth::Quick, "Depth: quick."),
+            (AgentDepth::Medium, "Depth: medium."),
+            (AgentDepth::Thorough, "Depth: thorough."),
+        ] {
+            let task = with_depth("Inspect the parser", depth);
+            let (before, after) = task.split_once("\n\n").unwrap();
+            assert_eq!(before, "Inspect the parser");
+            assert!(after.starts_with(said), "{after}");
+        }
+        assert!(with_depth("Inspect", AgentDepth::Medium).contains("file:line evidence"));
     }
 
     #[test]

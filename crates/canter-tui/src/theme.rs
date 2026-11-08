@@ -194,6 +194,16 @@ pub fn warning() -> Style {
     }
 }
 
+/// `medium` in the `/agents` list (P2-255): yellow.
+pub fn depth_medium() -> Style {
+    current().fg(Color::Yellow)
+}
+
+/// `thorough` in the `/agents` list (P2-255): magenta.
+pub fn depth_thorough() -> Style {
+    current().fg(Color::Magenta)
+}
+
 /// The approval box's border: yellow on any background.
 pub fn warning_border() -> Style {
     current().fg(Color::Yellow)

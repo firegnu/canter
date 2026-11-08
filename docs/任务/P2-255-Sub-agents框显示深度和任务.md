@@ -118,3 +118,44 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+2026-11-08，canter/dev-agent-depth-task（Claude Code opus[1m] xhigh）。
+
+### 做了什么
+
+- 协议：新增 `AgentDepth`（`quick` / `medium` / `thorough`，另有 `unknown` 接以后的新值，照协议里别的枚举）；`SessionParent` 和 `AgentSummary` 各加可选 `depth`，`AgentSummary::from_snapshot` 从 `parent.depth` 取。重新生成了 `generated/`（多了 `AgentDepth.ts`）。
+- 核心：`spawn_agent` 加必填 `depth`（schema 里 `required: task, type, depth, name`），缺了是 serde 的 `missing field depth`，别的值报 `depth must be quick, medium, or thorough`，都不开子 agent。`Session::spawn_agent_of_type` 加 `depth: Option<AgentDepth>`：存进子会话的 `parent.depth`，子会话第一条输入是「模型的任务 + 空行 + 一句英文」，`parent.task` 仍是模型的任务本身。两份工具说明和 `core.txt` 那一行改成 `set depth instead of writing it into the task: …`。服务端模型工具宿主把 `Some(depth)` 传下去。
+- 界面：`/agents` 每行在类型后加深度列（quick 暗、medium 黄、thorough 品红，没有为暗 `—`），用时后加任务列（第一行有字的那行，暗色，截断带 `…`）；先缩任务列，少于 10 列整列不显示，再缩名字。`t` 或点任务列开任务框，盖在对话区最下面，标题 `Task · 名字 · 深度`，↑↓/PgUp/PgDn 滚，Esc 或 `t` 只关框。底部提示加 `t task`。`Report` 加了 `page_up` / `page_down`。
+- 请求样本三份照新文字和新 schema 更新；`docs/DESIGN.md` 协议一节（P2-179 前面）、模型工具一节（P2-248 后面）、子 agent 终端界面一节（卡片后面）各加一段。
+- 返工（主控 11-08 定，用户「可以，就这么定」）：深度那句只接在只读子 agent（explorer、只读的自定义角色）的任务后面；能改文件的（general、能改文件的自定义角色）照样必填 `depth`、列表照样显示，但任务原样交给它，因为 medium 那句是调研口气，接在「把 X 改好」后面可能让它只汇报或改到一半就停。改在核心 `spawn_agent_of_type` 用已有的只读判断；工具说明和系统提示词里没有「接在任务后面」的话，没改，请求样本也不用动；DESIGN 三处写明只对只读的。
+
+### 验证了什么
+
+- 先写测试再改：协议、核心的新测试先因为没有 `depth` 编译不过；服务端 `model_spawn_needs_a_depth_and_the_child_hears_it_after_the_task` 在去掉接那句的情况下失败（子 agent 收到的只有任务本身）；新的界面测试 `t_or_a_click_on_the_task_opens_it_in_a_box_that_esc_alone_closes` 在 main 的界面代码上失败（找不到深度和任务列）。
+- 新测试覆盖：不带 `depth` 被拒且不开子 agent、带了以后子 agent 最后一条用户消息是「任务 + 空行 + medium 那句」、列表项 `depth` 和 `task`（不含那句）；三种类型（explorer、general、自定义角色）都要填、填错被拒；框里两列和颜色、`—`、窄宽度下任务列先缩再整列不显示再缩名字；`t` 和点任务列开框、PgUp/PgDn/↑↓ 滚、Esc 和 `t` 只关框（主会话这一轮仍是 Working、没有返回打断或停子 agent 的动作、没发任何请求）、`Main session` 那行 `t` 不做事、点别的行的任务列换内容、点行的其它位置照旧打开会话。
+- 整包：`canter-protocol` + `canter-store` + `canter-core` 365 过（23 个默认跳过）；`canter-server` 418 过（5 个默认跳过）；`canter` 229 过；`canter-tui` 721 过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 干净。
+- 返工：新测试 `an_editing_child_gets_its_task_without_the_depth_sentence`（general 子 agent 带 `depth: medium`，收到的任务就是任务本身，列表仍显示 medium）先在旧代码上失败（收到的带着 medium 那句），改后通过；explorer 那条 `model_spawn_needs_a_depth_and_the_child_hears_it_after_the_task` 仍要求带那句。返工只跑了这两条和 `canter-core` 的 `agent_tools`、`agents`、`roles` 测试，加 clippy、fmt、diff-check，没再跑整包。
+- 没调真实模型接口（0 次），没录屏、没截图。
+
+### 拿主意的地方
+
+- 深度那三句英文：quick `Find the main places, report them, and stop.`，medium `Answer each question with file:line evidence, then stop.`，thorough `Cover everything the task asks for before you report.`，都以 `Depth: <值>.` 开头，空一行接在任务后面。
+- 自定义角色：那句照第 1 条接在任务后面（子会话的第一条用户消息），角色自己的说明仍在系统提示词里，两处不冲突，没有停下来问。（返工后只对只读的自定义角色接，见「做了什么」最后一条。）
+- 深度存在 `SessionParent` 上（随 `session.parent` 存盘），列表项从这里取；核心接口用 `Option`，只有测试里的旧入口传 `None`，模型工具总是有值。SubagentStart 钩子的 `task` 仍是模型写的任务。
+- 深度列宽按各行最宽的值定（和类型列一样），全是旧子 agent 时只有一列 `—` 宽。
+- 任务框沿用 `/context` 等报告框（上下各一行空、`↑ N more` / `↓ N more`），左右各留 2 列（窗口窄于 40 列不留），放在对话区最下面几行。Ctrl+C、Ctrl+D 在框里和 Esc 一样只关框；Enter、`s` 在框里不做事；点框里面不做事（不让底下看不见的对话被选字或开链接）；点任务列会把那一行设为选中。批准框出来时列表本来就不画，框跟着不画。
+- 越出「只动」范围的一处：`crates/canter-store/tests/agents.rs` 构造 `SessionParent` 字面量，加字段后必须补一行 `depth: None` 才编译得过；没别的办法，已跑 `canter-store` 全部测试。
+
+### 没做的事
+
+- 鼠标滚轮在框上滚的仍是底下的对话，不滚框（只按要求做了键盘滚动）。
+- 框开着时状态行仍写 `Esc to interrupt`，和列表开着时一样，没改。
+- 终端太矮、框画不出来时，按键照样先给框（Esc 关掉它）。
+- `Spawned` 卡片、`/export`、调度、`wait_agent`、叫醒、主会话 Esc 连带停子 agent 都没动；`crates/canter-protocol/README.md` 没写（协议说明只写进 DESIGN）。
+
+### 踩过的坑
+
+- core `agents.rs` 那段在很长的 `crate::session::owned(async move { … })` 里，rustfmt 不格式化，内联的 `match` 很难看；改成先算 `let first` 再传。
+- 新界面测试里「往下滚一行后第一行看不到了」一开始失败：列表那一行的任务列显示的正是同一句。改成只认框里带左边框的 `│ ` 那一行。

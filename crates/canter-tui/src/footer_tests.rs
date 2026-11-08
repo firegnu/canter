@@ -288,7 +288,7 @@ fn the_sub_agents_list_opens_under_the_info_rows_and_esc_keeps_the_draft() {
         below
             .last()
             .unwrap()
-            .contains("↑↓ select · Enter open · s stop · Esc close"),
+            .contains("↑↓ select · Enter open · t task · s stop · Esc close"),
         "{shown_rows}"
     );
     // Keys go to the list.

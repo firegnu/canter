@@ -351,7 +351,7 @@ impl Model for SpawnAfterReady {
             vec![
                 Ok(ModelEvent::ToolCall(canter_model::ToolCall {
                     id: "spawn".into(), name: "spawn_agent".into(),
-                    arguments: json!({"task":"Inspect the code", "type":"general", "name":"Inspect Local Code"}).to_string(),
+                    arguments: json!({"task":"Inspect the code", "type":"general", "name":"Inspect Local Code", "depth":"medium"}).to_string(),
                 })),
                 Ok(ModelEvent::Finished(FinishReason::ToolCalls)),
             ]
