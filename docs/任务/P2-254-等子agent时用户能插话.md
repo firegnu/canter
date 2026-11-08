@@ -6,7 +6,7 @@
 依据：P2-248「主动开只读子 agent 并行调研」的后续。本轮只让 `wait_agent` 遇到用户新消息时停止等待，并补几句工具说明；不动 Esc、不动 Sub-agents 框。
 提示：围绕已确认的使用目标完成变更，优先沿用现有机制。
 对比样本：第 12 件，Kimi 7 件 / Codex 4 件，这件 Codex（主控按轮流提议，用户可改）。
-待用户：定下面「要用户定的」两条，确认交给谁。
+待用户：确认交给谁，说「派」。
 执行：派出
 你是被委派的 agent：照本文件做，不要再开别的 agent。
 
@@ -30,40 +30,35 @@
   - 另一次用户说「好的，谢谢」，模型没等，但回复说「两个 explorer 的报告到了，我直接把对照结论发给你」，其实一个都没到。
 - **相关说明文字**：`crates/canter-core/src/agent_tools.rs` 的 `spawn_agent` 两份说明（内置的 `definitions()` 和带自定义角色的 `definitions_for_roles()`）、`wait_agent` 说明；系统提示词 `crates/canter-core/src/prompt/core.txt` 第 20 行 `[spawn_agent]`。这些文字原样出现在请求样本里：`crates/canter/tests/fixtures/no_mcp_request.json`、`crates/canter-core/tests/sandbox-disabled-request.json`、`crates/canter-core/tests/fixtures/p2-223-main-requests.jsonl`。
 
-## 要用户定的（主控推荐都选 A）
+## 主控定的（用户 11-08：「我的意思身简单，就是派出去的subagent在执行的时候，我能和主agent聊就行了，而不是现在主agent一直waiting」，细节交主控定）
 
-1. **哪种消息让等待停下**：
-   - **A（推荐）**：Enter 和 Tab 都算。
-     - Tab（插话）：`wait_agent` 马上返回，这条消息照插话的规矩进这一轮，模型在同一次请求里同时看到等待结果和用户的话。
-     - Enter（排队）：`wait_agent` 马上返回，这一轮在记下等待结果后直接结束，不再请求模型；排队的消息照现在的规矩开新一轮。模型在新一轮里能看到等待结果和用户的话。这样不改「Enter 是开新一轮」的意思。
-   - B：只有 Tab 算，Enter 照现在等到等待结束。改动小，但大家默认按 Enter，多数时候还是插不上话。
-2. **提前停下时，`wait_agent` 返回什么**：
-   - **A（推荐）**：照常返回每个子 agent 当前的状态和已有结果，末尾加一句英文：`Stopped waiting because the user sent a new message. Reply to the user first. The sub-agents keep running, and their reports will wake you.` 已经拿到终态结果的子 agent，照现在的规矩不再另发通知；还在跑的，结束后照 P2-101 送回、叫醒。
-   - B：返回一条只说「用户发了新消息」的短结果，不带状态。模型要再查一次才知道谁跑完了。
+1. **什么消息让等待停下**：用户发的任何普通消息，Enter（排队）和 Tab（插话）都算；等待开始时已经排着的消息也算。
+2. **停下后消息怎么处理**：主会话在 `wait_agent` 里时，Enter 发来的消息也照 Tab 插话处理，直接进这一轮：`wait_agent` 马上返回，模型在下一次请求里同时看到等待结果和用户的话。这样不用改一轮怎么结束。服务端对这条消息的回复带上 `turnId`，终端照现有插话的样子显示，不用改终端。
+3. **提前停下时 `wait_agent` 返回什么**：照常返回每个子 agent 当前的状态和已有结果，末尾加一句英文：`Stopped waiting because the user sent a new message. Reply to the user first. The sub-agents keep running, and their reports will wake you.` 已经拿到终态结果的子 agent，照现在的规矩不再另发通知；还在跑的，结束后照 P2-101 送回、叫醒。
 
 ## 要做的
 
-1. 交互会话里，主会话在 `wait_agent` 中，用户发来新消息（照第 1 条定的范围）时，`wait_agent` 马上结束，照第 1、2 条定的处理。子 agent 一个都不停。
+1. 交互会话里，主会话在 `wait_agent` 中，用户发来消息时，照上面三条处理。子 agent 一个都不停。
 2. 下面这些照旧，不受影响：
    - `canter exec` 单轮运行：`wait_agent` 照旧等，不因任何输入提前停。
    - 主会话没在 `wait_agent` 里时，Enter 和 Tab 的行为。
    - Esc：照旧打断这一轮（连带停子 agent 那条本件不改）。
-   - `/btw`、斜杠命令、`!命令` 不算用户新消息。
+   - `/btw`、斜杠命令、`!命令` 不算用户消息。
    - 子 agent 自己的会话（它们没有 `wait_agent`）。
 3. 工具说明和系统提示词补两点，英文，意思如下，措辞你定：
    - 被某个子 agent 的报告叫醒、你开的别的子 agent 还在跑时，不要等：用一句话告诉用户哪个回来了、说了什么要点，然后结束这一轮；剩下的回来会再叫醒你，最后一个到了再合并。
    - 没看到子 agent 的报告，不要说它到了。
    - 加在 `wait_agent` 说明、`spawn_agent` 两份说明，以及 `core.txt` 的 `[spawn_agent]` 那一行。只在有这个工具时出现，照现有写法。请求样本照新文字更新。
-4. `docs/DESIGN.md` 子 agent 一节写清新行为（哪种消息让等待停下、停下后返回什么、`exec` 不变），注明 P2-254 和用户原话。
+4. `docs/DESIGN.md` 子 agent 一节写清新行为（什么消息让等待停下、Enter 在等待时按插话处理、停下后返回什么、`exec` 不变），注明 P2-254 和用户原话；P2-97 那段补一句等待时 Enter 的例外。
 
 ## 怎么算做完
 
-- 交互会话里，主会话在 `wait_agent` 中、子 agent 还在跑时，用户发一条消息，模型马上处理这条消息（照第 1 条定的范围），不用等子 agent 结束；子 agent 继续跑，跑完后照常把结果送回主会话。
+- 交互会话里，主会话在 `wait_agent` 中、子 agent 还在跑时，用户发一条消息（Enter 或 Tab），模型马上回这条消息，不用等子 agent 结束；子 agent 继续跑，跑完后照常把结果送回主会话。
 - `canter exec` 下 `wait_agent` 行为不变。
 - 主会话没在等待时，Enter、Tab、Esc 的行为不变。
 - 第 3 条的说明加上了，请求样本更新了。
 - 验证只做这些：
-  - 针对这件活的测试：先写测试，确认它因为「消息等到等待结束才处理」而失败，再改。至少覆盖：等待中 Enter 发消息；等待中 Tab 发消息（第 1 条选 A 时）；`exec` 下不提前停；提前停下后，还在跑的子 agent 结束时照常送回、叫醒。
+  - 针对这件活的测试：先写测试，确认它因为「消息等到等待结束才处理」而失败，再改。至少覆盖：等待中 Enter 发消息；等待中 Tab 发消息；`exec` 下不提前停；提前停下后，还在跑的子 agent 结束时照常送回、叫醒。
   - 改了哪个包，就跑那个包的全部测试：`cargo nextest run -p <包> --all-targets`。至少跑 `canter-core`、`canter-server`、`canter`：后两个有请求回放和样本测试，提示词或请求内容变了会在那里失败（P2-251 漏跑过 `canter`，三条回放测试坏了）。
   - `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check`。
   - 编译目录：命令前加 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-254-wait-interrupt`。
@@ -78,7 +73,7 @@
 
 - 不改 Esc 连带停子 agent 的行为（HANDOFF「已知没修的问题」里那条，用户说先不做）。
 - 不改 Sub-agents 框（P2-255 另做）。
-- 不改 `canter exec` 的单轮语义（P2-178），不改 P2-101 的叫醒和合并窗口，不改 P2-97 的 Enter 排队、Tab 插话规矩（第 1 条 A 里 Enter 让这一轮直接结束，是本件唯一的例外）。
+- 不改 `canter exec` 的单轮语义（P2-178），不改 P2-101 的叫醒和合并窗口，不改 P2-97 的 Enter 排队、Tab 插话规矩（主会话在 `wait_agent` 里时 Enter 按插话处理，是本件唯一的例外）。
 - 核心逻辑不按模型名、`base_url`、请求字段或缓存行为分支，不绑定 DeepSeek；DeepSeek 只是用户实测时碰巧用的模型。
 - 测试不调真实的模型接口，用假服务端回放。
 - 不用 Python。
