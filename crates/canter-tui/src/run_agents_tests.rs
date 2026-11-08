@@ -778,7 +778,7 @@ async fn the_four_sub_agent_tools_have_their_own_cards() {
             "spawnAgent",
             "completed",
             json!({
-                "prompt": "Trace how locks are taken\nand report",
+                "prompt": "Trace how locks are taken\nand report which module takes each lock, with file and line for every place you find, medium depth, then stop",
                 "agents": [collab("a", "explorer", Some("running"), None)],
             }),
         ),
@@ -883,5 +883,14 @@ async fn the_four_sub_agent_tools_have_their_own_cards() {
     test.ui.draw(0).unwrap();
     let text = shown(&test);
     assert!(has(&test, &["┃ line 5"]), "{text}");
+    // ...and the whole task, wrapped under the card.
+    assert!(has(&test, &["    └ Trace how locks are taken"]), "{text}");
+    assert!(!text.contains("Trace how locks are taken …"), "{text}");
+    assert!(has(&test, &["      and report which module"]), "{text}");
+    assert!(
+        has(&test, &["      find, medium depth, then stop"]),
+        "{text}"
+    );
+    assert!(has(&test, &["      thanks"]), "{text}");
     test.stop().await;
 }

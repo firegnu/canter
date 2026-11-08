@@ -1721,7 +1721,20 @@ fn agent_tool(item: &Item, details: bool, width: u16) -> Vec<Row> {
         line.extend(spans);
         Row::text_from(Line::from(truncate(line, usize::from(width))), 6)
     };
-    if let Some(prompt) = prompt {
+    // With details, the whole task, wrapped; otherwise its first line.
+    if let Some(prompt) = prompt.as_deref().filter(|_| details) {
+        for (index, line) in visible(prompt).lines().enumerate() {
+            let indent = if index == 0 {
+                vec![Span::raw("    "), Span::styled("└ ", theme::guide())]
+            } else {
+                vec![Span::raw("      ")]
+            };
+            rows.extend(wrap_rows(
+                &LogicalLine::new(indent, vec![Span::styled(line.to_owned(), dim)]),
+                width,
+            ));
+        }
+    } else if let Some(prompt) = prompt {
         rows.push(branch(vec![Span::styled(first_line(prompt), dim)]));
     }
     let fold = || {

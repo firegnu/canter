@@ -70,7 +70,7 @@ pub(crate) fn is_tool(name: &str) -> bool {
 pub(crate) fn definitions() -> [ToolDefinition; 4] {
     [
         ToolDefinition { name: "spawn_agent".into(), description: "Start a sub-agent with a fresh conversation and your current model and reasoning effort; returns its id and short name immediately. Use type explorer for read-only code lookup or research to save your main context; you may start explorers on your own. When research splits into independent parts that each need many files read, such as comparing how several projects or modules handle something, start one explorer per part in the same reply so they run at the same time. Give each one only its part of the user's question without widening the scope, and say how deep to look: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. Don't research those parts yourself meanwhile. When a few reads answer the question, do it yourself. Use type general only when the user or applicable AGENTS.md explicitly requests sub-agents, delegation, or parallel agent work. Requests to investigate carefully or analyze deeply do not authorize general sub-agents. Before spawning, make your own plan; do work blocking your next step yourself and delegate independent work. Give a general agent explicit ownership of files or modules, and tell it that others share the repository: do not revert others' edits and accommodate their changes. At most four agents may run at once; children cannot spawn agents. Plan mode and review rounds allow only explorers.".into(), parameters: json!({"type":"object","properties":{"task":{"type":"string","minLength":1},"type":{"type":"string","enum":["explorer","general"]},"name":{"type":"string","description":"A short name of 3 to 5 English words describing what this sub-agent does, shown to the user in lists and cards."}},"required":["task","type","name"],"additionalProperties":false}) },
-        ToolDefinition { name: "wait_agent".into(), description: "Wait until any listed sub-agent completes, fails, closes, or is interrupted, or the timeout expires. Returns every listed agent's current status and its final reply when available. Default timeout is 30000 ms, maximum 600000 ms. In a non-interactive exec turn, use this tool to receive results before ending your turn.".into(), parameters: json!({"type":"object","properties":{"ids":{"type":"array","minItems":1,"items":{"type":"string"}},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000,"default":30000}},"required":["ids"],"additionalProperties":false}) },
+        ToolDefinition { name: "wait_agent".into(), description: "Wait until any listed sub-agent completes, fails, closes, or is interrupted, or the timeout expires. Returns every listed agent's current status and its final reply when available. Default timeout is 30000 ms, maximum 600000 ms. In a non-interactive exec turn, use this tool to receive results before ending your turn. In an interactive session, call it only when you cannot answer the user's latest message without the results, such as when they ask for the findings now. When they are just chatting, thanking you, or asking about something else, reply and end your turn instead: finished sub-agents' reports arrive on their own and wake you.".into(), parameters: json!({"type":"object","properties":{"ids":{"type":"array","minItems":1,"items":{"type":"string"}},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000,"default":30000}},"required":["ids"],"additionalProperties":false}) },
         ToolDefinition { name: "send_input".into(), description: "Send a follow-up task or clarification to an existing sub-agent. In interactive sessions, queues input while it is running; starts another turn when it is idle or interrupted. In canter exec, first use wait_agent until the running sub-agent stops, then send_input. Use this to continue an interrupted agent; there is no resume_agent tool.".into(), parameters: json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string","minLength":1}},"required":["id","message"],"additionalProperties":false}) },
         ToolDefinition { name: "close_agent".into(), description: "Close a sub-agent, cancelling its active turn and stopping its background commands. A completed final reply is retained.".into(), parameters: json!({"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}) },
     ]
@@ -353,5 +353,18 @@ mod tests {
             assert!(text.contains(SMALL), "{text}");
             assert!(text.contains(SCOPE), "{text}");
         }
+    }
+
+    #[test]
+    fn wait_description_says_not_to_wait_when_the_user_is_just_talking() {
+        let wait = definitions()
+            .into_iter()
+            .find(|tool| tool.name == "wait_agent")
+            .unwrap();
+        assert!(
+            wait.description.contains("In an interactive session, call it only when you cannot answer the user's latest message without the results, such as when they ask for the findings now. When they are just chatting, thanking you, or asking about something else, reply and end your turn instead: finished sub-agents' reports arrive on their own and wake you."),
+            "{}",
+            wait.description
+        );
     }
 }
