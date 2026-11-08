@@ -374,6 +374,17 @@ mod tests {
     }
 
     #[test]
+    fn parallel_explorer_bullet_only_appears_with_spawn_agent() {
+        let bullet = "- When a task splits into independent research parts that each need many files read, such as comparing several projects, start one explorer per part in the same reply instead of reading everything yourself.";
+        let text = core(&named(&["spawn_agent"]));
+        let at = text.find(bullet).expect("explorer bullet");
+        let using = text.find("# Using tools").unwrap();
+        let changing = text.find("# Changing code").unwrap();
+        assert!(using < at && at < changing, "{text}");
+        assert!(!core(&named(&["read"])).contains(bullet));
+    }
+
+    #[test]
     fn core_includes_each_conditional_sentence_only_when_its_tools_exist() {
         const READ_BULLET: &str =
             "- To look at a file, use read rather than cat, head, or sed in the shell.";
