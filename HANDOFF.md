@@ -434,3 +434,7 @@
   - 读文件和结果没有大小上限：整份读进内存再解析，一个文件的全部匹配都复制下来再分页，每条预览只限三行、不限字节；碰到提交进仓库的压缩 JS、大生成文件会占不少内存，协议里的 `matches[].text` 也不截断。
   - 「跳过了几个文件」「几个文件有语法错误没搜」「某语言模式解析不了」只写给模型，终端卡片和导出看不到，卡片也只显示本页条数、不显示总数（`crates/canter-tui/src/cells.rs`、`export.rs` 没用 `total_matches`）。
 - canter 命令环境里 `canter-tools::guardian concurrent_commands_do_not_inherit_each_others_pipes` 失败（spawn 报 NotFound），普通终端通过（P2-241、P2-244 开发时都碰到，原因没查）。canter 派的 agent 跑 canter 自己的测试时会看到这条失败，不是改动引入的。
+- 长程护栏（P2-251，11-08 合并）交叉审查「可以不改」、留着试用中观察的：
+  - 模型停下来问用户（不用 `ask_user`、直接在回复里问）时，如果这一轮更新过清单且还有没做完的，会被连续提醒最多 3 次，每次多一次请求、一行 warning。觉得烦再改成「提醒后模型没调工具就停，不再提醒」（`crates/canter-core/src/long_run.rs`）。
+  - 第 5 次重复调用停下时走取消，排队中的输入像按 Esc 一样退回给用户。
+  - 用其它工具做、输出一直不变的合法轮询（比如反复 `sleep 30; tail log` 而日志没动）仍可能第 5 次被停；`shell_output`、`wait_agent` 已排除。用户发一句就能继续。
