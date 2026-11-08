@@ -191,16 +191,25 @@ async fn budget_notices_follow_both_thresholds_once_at_each_limit() {
     for limit in [40_000, 60_000] {
         let fixture = Fixture::new(
             vec![
-                read(limit * 70 / 100),
-                read(limit * 76 / 100),
-                read(limit * 80 / 100),
-                read(limit * 91 / 100),
-                read(limit * 95 / 100),
+                tool("read", json!({"path":"note-70.txt"}), limit * 70 / 100),
+                tool("read", json!({"path":"note-76.txt"}), limit * 76 / 100),
+                tool("read", json!({"path":"note-80.txt"}), limit * 80 / 100),
+                tool("read", json!({"path":"note-91.txt"}), limit * 91 / 100),
+                tool("read", json!({"path":"note-95.txt"}), limit * 95 / 100),
                 answer("Done."),
             ],
             limit,
         )
         .await;
+        // Reading different files exercises the budget thresholds without
+        // intentionally triggering the repeated-call guard.
+        for percent in [70, 76, 80, 91, 95] {
+            std::fs::write(
+                fixture.root.path().join(format!("note-{percent}.txt")),
+                "File facts.\n",
+            )
+            .unwrap();
+        }
         assert_eq!(
             fixture.send("Read the file.").await.status,
             TurnStatus::Completed
@@ -351,6 +360,11 @@ async fn successful_file_changes_and_newly_completed_steps_reset_the_count() {
                 answer("Summary 3."),
                 read(41_000),
                 answer("Summary 4."),
+                tool(
+                    "update_plan",
+                    json!({"plan":[{"step":"Inspect","status":"completed"}]}),
+                    100,
+                ),
                 answer("Done."),
             ],
             40_000,
@@ -385,7 +399,7 @@ async fn successful_file_changes_and_newly_completed_steps_reset_the_count() {
             "progress tool must succeed: {name}"
         );
         assert_eq!(turn.status, TurnStatus::Completed, "{name}");
-        assert_eq!(fixture.server.requests.lock().unwrap().len(), 10, "{name}");
+        assert_eq!(fixture.server.requests.lock().unwrap().len(), 11, "{name}");
         if name != "update_plan" {
             assert_eq!(
                 std::fs::read_to_string(fixture.root.path().join("note.txt")).unwrap(),

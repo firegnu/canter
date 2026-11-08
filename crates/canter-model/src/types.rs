@@ -187,6 +187,9 @@ pub enum ModelEvent {
     /// ItemCompleted with item_id equal to the call's id. Adapters may also
     /// emit ItemCompleted directly without this provisional event.
     ToolCall(ToolCall),
+    /// The reply reached its output limit while assembling calls that this
+    /// adapter does not expose as ToolCall content. No call may be executed.
+    TruncatedToolCalls,
     Usage(Usage),
     /// Private provider output, delivered only after a successful terminal event.
     /// The core assigns its replay scope before writing model history.

@@ -15,10 +15,20 @@ fn reads(range: std::ops::RangeInclusive<usize>) -> Vec<Value> {
     range
         .map(|n| {
             json!({"id":format!("read-{n}"),"type":"function","function":{
-                "name":"read","arguments":r#"{"path":"note.txt"}"#
+                "name":"read","arguments":json!({"path":format!("read-{n}/note.txt")}).to_string()
             }})
         })
         .collect()
+}
+
+fn write_notes(fixture: &Fixture) {
+    // Count real, distinct reads without triggering the repeated-call guard.
+    // Identical contents preserve the exact reminder-only output assertions.
+    for n in 1..=20 {
+        let directory = fixture.root.path().join(format!("work/read-{n}"));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("note.txt"), "Tool output only\n").unwrap();
+    }
 }
 
 fn batch(mut calls: Vec<Value>) -> String {
@@ -89,17 +99,17 @@ async fn plan_reminders_count_calls_across_turns_repeat_and_stay_out_of_ui_and_u
     first.extend(reads(1..=9));
     let mut fixture = Fixture::start(vec![
         batch(first),
+        // Exhaust the stop-time reminders before the next user's tool batch.
+        text_reply(),
+        text_reply(),
+        text_reply(),
         text_reply(),
         batch(reads(10..=20)),
         text_reply(),
         text_reply(),
     ])
     .await;
-    fs::write(
-        fixture.root.path().join("work/note.txt"),
-        "Tool output only\n",
-    )
-    .unwrap();
+    write_notes(&fixture);
     let id = fixture.create().await.session.id;
     turn(&fixture, &id).await;
     assert!(
@@ -243,12 +253,15 @@ async fn plan_reminders_reset_only_after_successful_updates() {
     calls.extend(reads(10..=18));
     calls.push(plan("invalid", "invalid-status"));
     calls.extend(reads(19..=19));
-    let mut fixture = Fixture::start(vec![batch(calls), text_reply()]).await;
-    fs::write(
-        fixture.root.path().join("work/note.txt"),
-        "Tool output only\n",
-    )
-    .unwrap();
+    let mut fixture = Fixture::start(vec![
+        batch(calls),
+        text_reply(),
+        text_reply(),
+        text_reply(),
+        text_reply(),
+    ])
+    .await;
+    write_notes(&fixture);
     let id = fixture.create().await.session.id;
     let snapshot = turn(&fixture, &id).await;
     assert_eq!(reminded(&fixture), ["read-19"]);
@@ -267,11 +280,7 @@ async fn plan_reminders_require_an_enabled_unfinished_plan() {
             .unwrap_or_default();
         calls.extend(reads(1..=20));
         let mut fixture = Fixture::start(vec![batch(calls), text_reply()]).await;
-        fs::write(
-            fixture.root.path().join("work/note.txt"),
-            "Tool output only\n",
-        )
-        .unwrap();
+        write_notes(&fixture);
         let id = fixture.create().await.session.id;
         turn(&fixture, &id).await;
         assert!(reminded(&fixture).is_empty());
@@ -281,15 +290,14 @@ async fn plan_reminders_require_an_enabled_unfinished_plan() {
     let mut fixture = Fixture::start(vec![
         batch(vec![plan("initial", "in_progress")]),
         text_reply(),
+        text_reply(),
+        text_reply(),
+        text_reply(),
         batch(reads(1..=20)),
         text_reply(),
     ])
     .await;
-    fs::write(
-        fixture.root.path().join("work/note.txt"),
-        "Tool output only\n",
-    )
-    .unwrap();
+    write_notes(&fixture);
     let id = fixture.create().await.session.id;
     turn(&fixture, &id).await;
     let config_path = fixture.root.path().join("state/config.json");

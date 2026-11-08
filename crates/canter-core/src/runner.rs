@@ -465,7 +465,7 @@ async fn conversation(
             .lock()
             .await
             .consume_background_notices(&request.messages);
-        let (content, reason, error) =
+        let (content, reason, error, truncated_calls) =
             model_response(shared, turn_id, request, context, cancel).await?;
         let calls: Vec<_> = content
             .iter()
@@ -543,6 +543,23 @@ async fn conversation(
                     "No result: the model reply was incomplete, so the tool was not run",
                 )
                 .await?;
+            if reason == Some(FinishReason::Length)
+                || (reason == Some(FinishReason::Stop) && calls.is_empty())
+            {
+                let mut state = shared.state.lock().await;
+                let continued = if reason == Some(FinishReason::Length) {
+                    state
+                        .continue_truncated(truncated_calls || !calls.is_empty())
+                        .await?
+                } else {
+                    state.remind_unfinished_plan().await?
+                };
+                if continued {
+                    state.active.as_mut().expect("active turn").suggestion_ready = false;
+                    compacted = false;
+                    continue;
+                }
+            }
             if matches!(reason, Some(FinishReason::Length | FinishReason::Other)) {
                 shared
                     .state
@@ -566,6 +583,9 @@ async fn conversation(
             }
             if shared.state.lock().await.goal_summary.is_some() {
                 break;
+            }
+            if shared.state.lock().await.stop_repeated_call(&call).await? {
+                return Ok(());
             }
             execute(shared, turn_id, call, cancel).await?;
             if shared
@@ -594,6 +614,7 @@ async fn model_response(
         Vec<AssistantContent>,
         Option<FinishReason>,
         Option<ModelError>,
+        bool,
     ),
     CoreError,
 > {
@@ -621,6 +642,7 @@ async fn model_response(
     let mut error = None;
     let mut usage = None;
     let mut replay = None;
+    let mut truncated_calls = false;
     loop {
         tokio::select! {
             biased;
@@ -645,6 +667,7 @@ async fn model_response(
                     goal_id = shared.charge_goal().await;
                 }
                 Some(Ok(ModelEvent::Usage(value))) => usage = Some(value),
+                Some(Ok(ModelEvent::TruncatedToolCalls)) => truncated_calls = true,
                 Some(Ok(ModelEvent::Replay(value))) => replay = Some(value),
                 Some(Ok(ModelEvent::Finished(finish))) => {
                     response.apply(&ModelEvent::Finished(finish.clone()));
@@ -738,7 +761,7 @@ async fn model_response(
         )
         .await?;
     }
-    Ok((content, reason, error))
+    Ok((content, reason, error, truncated_calls))
 }
 
 fn finish_items(

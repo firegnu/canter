@@ -106,6 +106,7 @@ pub(crate) struct State {
     plan_tool_calls: u8,
 }
 pub(crate) struct Active {
+    pub long_run: crate::long_run::Guards,
     pub model_scope: Arc<tokio::sync::OnceCell<String>>,
     pub pending_prompt: Option<(Vec<UserInput>, Vec<crate::skill_invocation::Snapshot>)>,
     pub prompt_blocked: bool,
@@ -546,9 +547,14 @@ impl State {
         output_size: canter_tools::OutputSize,
         item_id: Option<&str>,
     ) -> Result<(), CoreError> {
+        // Compare the actual result before either guard appends a reminder.
+        self.repeated_result(call, &mut text);
         if call.name == "update_plan" {
             if succeeded {
                 self.plan_tool_calls = 0;
+                if let Some(active) = &mut self.active {
+                    active.long_run.plan_updated = true;
+                }
             }
         } else if !self.journal.snapshot.settings.plan_mode
             && self.journal.snapshot.settings.plan_enabled != Some(false)
@@ -602,6 +608,9 @@ impl State {
         turn_id: &str,
         skills: Vec<crate::skill_invocation::Snapshot>,
     ) -> Result<(), CoreError> {
+        if let Some(active) = &mut self.active {
+            active.long_run = Default::default();
+        }
         let message = crate::skill_invocation::message(input, &skills, true);
         let user_message = crate::skill_invocation::message(input, &skills, false);
         let skill_input = (!skills.is_empty()).then(|| crate::skill_invocation::Invocation {
@@ -2435,6 +2444,7 @@ impl Shared {
         let events = state.journal.append(payloads).await?;
         let (done, receiver) = watch::channel(None);
         state.active = Some(Active {
+            long_run: Default::default(),
             model_scope: Default::default(),
             pending_prompt: check_prompt.then_some((params.input, skills)),
             prompt_blocked: false,

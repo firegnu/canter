@@ -15,6 +15,7 @@ mod goal;
 pub mod hooks;
 mod images;
 mod journal;
+mod long_run;
 mod lsp;
 mod memory;
 mod plan_mode;
