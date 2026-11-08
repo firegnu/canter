@@ -436,4 +436,5 @@
 - canter 命令环境里 `canter-tools::guardian concurrent_commands_do_not_inherit_each_others_pipes` 失败（spawn 报 NotFound），普通终端通过（P2-241、P2-244 开发时都碰到，原因没查）。canter 派的 agent 跑 canter 自己的测试时会看到这条失败，不是改动引入的。
 - 长程护栏（P2-251，11-08 合并）交叉审查「可以不改」、留着试用中观察的：
   - 第 5 次重复调用停下时走取消，排队中的输入像按 Esc 一样退回给用户。
+  - 11-08 试用：模型一次回复里发 5 个相同的 read 时，「Stopped before the fifth repeated tool call…」那行显示在 Explored 读取卡片上面（顺序反了），回合底部显示 `Turn interrupted`，像用户按了 Esc。功能对，只是显示；用户没说要改。
   - 用其它工具做、输出一直不变的合法轮询（比如反复 `sleep 30; tail log` 而日志没动）仍可能第 5 次被停；`shell_output`、`wait_agent` 已排除。用户发一句就能继续；开着 `/goal` 无人值守时目标会暂停到用户回来。11-08 主控提过在系统提示词里加一句「等长命令用后台加 `monitor` / `shell_output`，不要 sleep 轮询」，用户：「先观察吧」。
