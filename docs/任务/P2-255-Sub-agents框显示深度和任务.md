@@ -1,8 +1,115 @@
 # 任务：第二期 - Sub-agents 框每行加「深度」和「任务」两列，任务可弹框看全文
 
-待用户：被叫醒后不干等那处修完、用户测过后，再写正文给用户看。
+2026-11-08 写好，canter/main 交给 canter/dev-agent-depth-task（Claude Code，`opus[1m]` / xhigh，高档界面和设计格）。
+路由：重 / 交叉审查不要 / 影响面：改行为（路由：重（置信 0.88）、拿不准、拿不准；主控判：协议只加可选字段，不碰并发、安全和数据迁移，按改行为、不交叉审查）。
+类型：功能变更
+依据：P2-248「主动开只读子 agent 并行调研」的后续。本轮给 `spawn_agent` 加 `depth` 参数，在 Sub-agents 框显示深度和任务、弹框看全文；不动子 agent 的调度、等待和叫醒。
+提示：围绕已确认的使用目标完成变更，优先沿用现有机制。
+待用户：看任务文件，定交给谁，说「派」。
+执行：派出
+你是被委派的 agent：照本文件做，不要再开别的 agent。
 
 ## 用户原话
 
-- 11-08：「不能写到最下面sub-agents中每一个subagent所在的行吗？只是加一列 所谓的排出去的深度。然后全文任务再加一列，点击之后使用对话框展开。这么设计不行吗？」
-- 主控提议：`spawn_agent` 加必填参数 `depth`（quick / medium / thorough），服务端把对应说明加进子 agent 任务；选中一行按 `t` 或鼠标点任务列，弹框显示全文，Enter 仍是打开子 agent 会话。用户：「可以，先写第一件的任务文件」（本件排第二，正文待写）。
+- 11-08 用户（找不到派给子 agent 的完整任务后）：「不能写到最下面sub-agents中每一个subagent所在的行吗？只是加一列 所谓的排出去的深度。然后全文任务再加一列，点击之后使用对话框展开。这么设计不行吗？」
+- 主控提议：`spawn_agent` 加一个必填的 `depth` 参数（quick / medium / thorough），服务端把对应说明加进子 agent 的任务，界面直接显示；选中一行按 `t` 或鼠标点任务那一列，弹框显示全文；Enter 仍是打开子 agent 的会话。附了下面「样子」里的两张示意。用户：「可以」。
+- 11-08 用户：「写P2-255的任务文件吧」
+
+## 现状（主控查过的，main `a594c46`）
+
+- **深度现在只在任务正文里**：`spawn_agent` 的参数是 `task`、`type`、`name`（`crates/canter-core/src/agent_tools.rs` 的 `AgentCommand::SpawnAgent` 和 `definitions()`）。说明里让模型「say how deep to look: quick (…), medium (…), thorough (…)」，模型自己写进任务正文，写法不固定：GPT 写过 `medium depth — cover these questions and then stop`，DeepSeek 写过中文「深度：medium」。所以现在没法可靠地拆成一列。
+- 同样的说法还出现在：带自定义角色的那份说明（`definitions_for_roles()`）、系统提示词 `crates/canter-core/src/prompt/core.txt` 第 20 行 `[spawn_agent]`。这些文字原样出现在请求样本里：`crates/canter/tests/fixtures/no_mcp_request.json`、`crates/canter-core/tests/sandbox-disabled-request.json`、`crates/canter-core/tests/fixtures/p2-223-main-requests.jsonl`。
+- **服务端开子 agent**：`crates/canter-server/src/agent_sessions.rs` 收到 `SpawnAgent` 后调 `spawn_agent_of_type(parent, task, kind, name)`。
+- **协议**：`AgentSummary`（`crates/canter-protocol/src/types.rs` 约 390 行）已经有 `task`、`name`、`agentType`、状态和时间，父会话通过 `agent.updated` 推给客户端（DESIGN P2-179）。没有深度字段。
+- **Sub-agents 框**：`crates/canter-tui/src/agents.rs`。
+  - `rows()` 画框，`Tree::row()` 画每一行：树线、状态记号、名字、类型、状态、用时。
+  - 宽度不够时先缩名字，名字最少留 12 列（`MIN_NAME`）。
+  - 按键在 `crates/canter-tui/src/app.rs` 的 `agents_key()`（约 2884 行）：↑↓ 选、Enter 打开子会话、`s` 停掉在跑的子 agent、Esc 收起列表。
+  - 鼠标在 `agents_click()`（约 2943 行）：点一行和 Enter 一样，打开那个会话。
+  - 第一行 `Main session · <标题>` 是主会话，不是子 agent。
+- 对话里 `Spawned` 卡片按 Ctrl+O 显示任务全文（11-08 已做），本件不动。
+
+## 样子（用户看过、说「可以」）
+
+框里每行，界面文字用英文：
+
+```
+╭ Sub-agents · 1 running · 1 done ──────────────────────────────────────────────────────╮
+│   Main session · 对比 /tmp/codex 和 /tmp/pi-mono …                              (here) │
+│ › ├ ● codex tool timeout study   explorer  medium  running  8m 52s  只研究 /tmp/codex 这… │
+│   └ ✓ pi-mono timeout study      explorer  medium  done     4m 30s  只研究 /tmp/pi-mono … │
+╰─────────────────────────── ↑↓ select · Enter open · t task · s stop · Esc close ╯
+```
+
+选中一行按 `t`，或鼠标点这一行的任务那一列，弹框：
+
+```
+╭ Task · codex tool timeout study · medium ──────────────╮
+│ 只研究 /tmp/codex 这个项目（Rust 里的 codex CLI…）是如何 │
+│ 处理「工具调用超时」的。不要看 /tmp/pi-mono。             │
+│ 要回答三个问题，每条给出 file:line 证据：                 │
+│ …                                                       │
+╰──────────────────────────────── ↑↓ scroll · Esc close ╯
+```
+
+## 主控定的
+
+1. **`depth` 参数**：`spawn_agent` 加必填参数 `depth`，只能是 `quick`、`medium`、`thorough`。
+   - 每种子 agent 都要填，包括 general 和自定义角色。
+   - 服务端把一句英文说明接在模型写的任务后面交给子 agent：quick 找到主要位置就报告；medium 每个问题给 file:line 证据，然后停；thorough 照任务要求查全。措辞你定。
+   - 工具说明和系统提示词里，「say how deep to look」那段改成「设 `depth`」：medium 是默认，thorough 只在用户要求查全时用。不再让模型把深度写进任务正文。
+2. **协议**：`AgentSummary` 加可选的 `depth`。旧服务端没有这个字段，旧会话里已有的子 agent 也没有，界面上这一列显示 `—`。只加字段，不改已有字段的意思。
+3. **任务列**：显示模型写的任务（不含服务端接上的那句深度说明），只显示第一行，截到能放下的宽度。弹框也显示模型写的任务全文，深度放在弹框标题里。
+4. **宽度不够时**：先缩任务列，任务列少于 10 列就整列不显示；然后照现在的样子缩名字。深度列宽度固定，和类型列一样一直显示。
+5. **按键和鼠标**：
+   - `t`：选中的是子 agent 时打开弹框；选中的是 `Main session` 那一行时不做事。
+   - 鼠标点子 agent 行的任务那一列：打开弹框。点这一行的其它位置：照现在的样子打开那个会话。
+   - 弹框里：↑↓、PgUp、PgDn 滚动；Esc 或 `t` 关掉弹框，回到列表，选中的还是原来那一行。
+   - **弹框里的 Esc 只关弹框**：不收起列表，不打断主会话的这一轮，不停任何子 agent。
+   - 框底部的按键提示加上 `t task`。
+6. **范围**：只改 Sub-agents 框。对话里的 `Spawned` 卡片、`/export` 不加深度。
+
+## 要做的
+
+1. 照「主控定的」第 1、2 条改 `spawn_agent` 的参数、服务端开子 agent、协议，以及工具说明和系统提示词；请求样本照新文字更新。
+2. 照第 3～5 条改 Sub-agents 框：加深度列、任务列、`t` 键、点任务列、弹框。
+3. `docs/DESIGN.md`：
+   - 协议一节（P2-179 那段附近）写 `AgentSummary.depth` 和 `spawn_agent.depth`。照规矩写清楚和 Codex `CollabAgentToolCall` / spawn 参数比加了什么、为什么。
+   - 子 agent 终端界面一节写新的两列和弹框。
+   - 都注明 P2-255 和用户原话。
+
+## 怎么算做完
+
+- 用户原话的要求：Sub-agents 框每个子 agent 那一行多一列派出去的深度，再多一列任务；点任务那一列，用弹框展开全文。
+- 主控定的第 1～6 条都做到了：`t` 键能打开弹框，弹框里的 Esc 只关弹框，窄终端下任务列先让出位置，旧子 agent 的深度显示 `—`。
+- 验证只做这些：
+  - 针对这件活的测试：先写测试，确认失败，再改。至少覆盖：
+    - `spawn_agent` 不带 `depth` 被拒，带了以后子 agent 收到的任务末尾有对应说明；
+    - 框里显示深度和任务两列，窄宽度下任务列先缩、再整列不显示；
+    - `t` 和点任务列都能打开弹框；弹框里 Esc 只关弹框，主会话这一轮照跑、子 agent 没停；
+    - 没有 `depth` 的旧列表项显示 `—`。
+  - 改了哪个包，就跑那个包的全部测试：`cargo nextest run -p <包> --all-targets`。至少跑 `canter-protocol`、`canter-core`、`canter-server`、`canter`、`canter-tui`。`canter` 和 `canter-server` 有请求回放和样本测试，工具说明一变，那里会失败。
+  - `cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check`。
+  - 编译目录：命令前加 `CARGO_TARGET_DIR=$HOME/Developer/personal_projs/canter-worktrees/.target/p2-255-agent-depth-task`。
+  - 不录屏，不截图。觉得不够，在回复里说，不要自己加。
+
+## 在哪里干活
+
+- worktree：`../canter-worktrees/p2-255-agent-depth-task`，分支 `p2-255-agent-depth-task`（已从 main 建好）。
+- 只动 `crates/canter-protocol`、`crates/canter-core`、`crates/canter-server`、`crates/canter-tui`、上面列的三个请求样本、`docs/DESIGN.md` 和本任务文件。协议改了，照仓库现有方式更新生成的类型（如果有）。
+
+## 不要做
+
+- 不改子 agent 的调度、`wait_agent`、叫醒和合并（P2-101、P2-178、11-08 被叫醒不干等那处兜底）。
+- 不改 Esc 在主会话里连带停子 agent 的行为（HANDOFF 已记，用户说先不做）。
+- 不改对话里的 `Spawned` 卡片和 `/export`。
+- 界面文字一律英文，不出现中文。
+- 核心逻辑不按模型名、`base_url`、请求字段或缓存行为分支，不绑定 DeepSeek。
+- 测试不调真实的模型接口，用假服务端回放。不用 Python。
+- 不要按项目名或路径批量杀进程（`pkill -f canter` 这类）：主控和别的 agent 的进程命令行里都带着项目名和工作目录。停自己起的服务用起的时候记下的 PID。
+- 碰到要拿主意的事（比如框太窄、弹框和别的弹出层同时出现、自定义角色有自己的说明时深度那句放哪），停下来，在回复里写清问题、可选办法和你的建议，然后结束这一轮，等主控回复再接着做；不在自己窗口里问用户，不自己换别的办法。主控的决定写进完成记录。
+- 不合并到 main，不推送。只在 `p2-255-agent-depth-task` 上提交。
+
+## 做完
+
+在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
