@@ -140,3 +140,11 @@
 没做的事：没跑真实一轮（按任务留给合并后、用户在场时跑）；没起、不停、不替换任何真的 canter 服务端；没写子 agent / 记忆 / Terminal-Bench 题组；没合并、没推送。
 
 踩过的坑：测试里造 12 个 ritual 提交时，一开始按「第 n 个未勾选项」改 TODO，结果第 10 个提交没有改动、`git commit` 直接失败，改成每步按序号重建 TODO。停服务端的测试一开始用 `sleep 60 & echo $!` 拿 PID，后台进程继承了 stdout 管道，`Command::output()` 一直等到 60 秒；改成把后台进程的 stdout/stderr 丢掉。另外冒烟时一条 `rm -rf "$S"` 被 canter 自己的 dangerous command 检查拦下（AllowAll 也拒），改用 `mktemp -d` 新目录。
+
+## 返工
+
+主控审查指出 `long.toml` 的 setup 用软链接接 `node_modules` 有问题：canter-test-ts 的 `.gitignore` 是 `node_modules/`（带斜杠只忽略目录），软链接不是目录，`git status` 会显示 `?? node_modules`，模型 `git add -A` 会把指向本机绝对路径的链接提交进去。改成 `cp -cR "$REPO/node_modules" node_modules`（macOS APFS 克隆，快、不占空间）；测试里准备后断言 worktree 的 `node_modules` 是真目录、不是软链接，且 `git status --short` 为空；fixture 改成按真实仓库忽略 `dist/`，不再提交 `dist/`。README 的说明和示例一并改了。
+
+`prompt_suggestions`：主控 11-09 决定不关，保持 canter 默认；`result.json` 另存的 `conversationRequests` 够对比用。
+
+返工验证：`cargo nextest run -p canter-eval` 12 个测试全过；`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都过。

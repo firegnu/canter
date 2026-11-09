@@ -59,7 +59,7 @@ eval 自己的状态目录默认 `~/.canter-eval`，用 `CANTER_EVAL_HOME` 或 `
    cargo run -p canter-eval -- prepare --round <轮次> --run long-1 --task long
    ```
 
-   它会写 eval 的 `config.json`（只有一个模型，压缩线 60000，思考 high）、清空两层记忆、在题目仓库开一个 worktree 检出起点提交、链好 `node_modules`、删掉旧 `dist/`，最后打印 eval 服务端、trust 和 corral 的命令。
+   它会写 eval 的 `config.json`（只有一个模型，压缩线 60000，思考 high）、清空两层记忆、在题目仓库开一个 worktree 检出起点提交、把 `node_modules` 拷进去（APFS 克隆，不占空间）、删掉旧 `dist/`，最后打印 eval 服务端、trust 和 corral 的命令。`node_modules` 用拷贝不用软链接：题目的 `.gitignore` 写的是 `node_modules/`（只忽略目录），软链接会以 `?? node_modules` 出现在 `git status` 里，模型 `git add -A` 会把指向本机绝对路径的链接提交进去。
 
 2. 起 eval 服务端（用打印出来的命令）：
 
@@ -144,7 +144,7 @@ reasoning = "high"                    # 写进 default_reasoning_effort
 prompt = '''开跑提示原文'''
 
 setup = [                             # 在 worktree 里按顺序跑；有 REPO、WORKTREE、BASE
-  '''[ -d node_modules ] || ln -s "$REPO/node_modules" node_modules''',
+  '''[ -d node_modules ] || cp -cR "$REPO/node_modules" node_modules''',
   '''rm -rf dist''',
 ]
 

@@ -119,7 +119,7 @@ fn lifecycle_repo(dir: &Path, options: &FixtureOptions) -> String {
         }))
         .unwrap(),
     );
-    write(&dir.join(".gitignore"), "node_modules/\n");
+    write(&dir.join(".gitignore"), "node_modules/\ndist/\n");
     let todo: String = (1..=12)
         .map(|n| format!("- [ ] **Task {n}.** Do item {n}.\n"))
         .collect();
@@ -132,7 +132,6 @@ fn lifecycle_repo(dir: &Path, options: &FixtureOptions) -> String {
          const assert = require(\"node:assert\");\n\
          test(\"habit\", () => { assert.ok(true); });\n",
     );
-    write(&dir.join("dist/stale.js"), "// old build output\n");
     write(&dir.join("node_modules/.bin/tsc"), "#!/bin/sh\nexit 0\n");
     let tsc = dir.join("node_modules/.bin/tsc");
     let mut permissions = std::fs::metadata(&tsc).unwrap().permissions();
@@ -301,11 +300,13 @@ fn prepare_writes_one_model_and_a_worktree_at_the_base_commit() {
         git(prepared.state.worktree(), &["rev-parse", "HEAD"]).trim(),
         base
     );
-    assert!(!Path::new(&prepared.state.worktree()).join("dist").exists());
-    assert!(
-        Path::new(&prepared.state.worktree())
-            .join("node_modules")
-            .is_symlink()
+    let node_modules = Path::new(&prepared.state.worktree()).join("node_modules");
+    assert!(node_modules.is_dir());
+    assert!(!node_modules.is_symlink());
+    assert!(node_modules.join(".bin/tsc").is_file());
+    assert_eq!(
+        git(prepared.state.worktree(), &["status", "--short"]).trim(),
+        ""
     );
     assert_eq!(
         std::fs::read_dir(home.root.join("memory")).unwrap().count(),
