@@ -99,3 +99,111 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+**做了什么**
+
+- `eval/tasks/memory.toml`：canter-test-rust（起点 `e9ee31c`）连做 4 件：Add an edit command、Support weekly reports、Add CSV export、Add monthly project comparisons；第 1 个会话的提示后面接任务单给的三条长期规矩原文。六个判分照任务单：4 件勾掉、`cargo test` 和 `cargo clippy -- -D warnings` 过、依赖不变、第 2～4 个会话的提交标题都是 `tc(...): `、第 2～4 个会话各自改了 `docs/commands.md`、这些会话的 shell 命令里没有 `git add -A` / `--all` / `.`。
+- 题目文件支持多个会话（`[[sessions]]`，每个一段开跑提示）；没写多个会话的 `long.toml` 照旧一个 `prompt`，没动。
+- `prepare` 加 `--memory keep|clear`（缺省 `clear`）和 `--session n`。清空只删 eval 状态目录的 `memory/` 和 `projects/*/memory/` 里的东西，沿用原来的状态目录检查；canter 打开会话时才读记忆，清完不重启服务端。
+- 每个会话在 `runs/<轮次>/<次>/sessions/<n>/` 记 `session.json`、`head`、`commands.txt`（完成的 `commandExecution`，每行一条）、`memory.json`；新增 `canter-eval finish` 记这些。`steer --session n` 找新会话时排除这次跑已经记过的 ID 和子 agent 的会话，仍不止一个就报错。
+- `grade` 的检查环境多一个 `RUN_DIR`；`collect` 按会话取 stats 和事件，合计照原来的列，每个会话另记用时、花费、写记忆、读记忆、记忆文件个数和名字；`report` 对多会话题加「记忆」列和「会话」一节，「通过次数」按保留 / 清空分开统计。单会话题的表不变。
+- `eval/README.md` 和 `docs/DESIGN.md` 的 eval 一节写清多会话流程、记忆跑法、run 目录里的文件、`RUN_DIR`、结果表新增的列和节。
+
+**验证了什么**
+
+- `cargo nextest run -p canter-eval`：31 个全过（新增 7 个集成测试、4 个单元测试）。
+- `cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt -p canter-eval -- --check`、`git diff --check` 都过。
+- 多会话准备：清空跑法每个会话前清、保留跑法只在整次跑开始时清；只动两层记忆目录，旁边的文件不动；前一个会话没记时拒绝下一个；跑法和 `--memory` 不一致、重复准备都拒绝。
+- 找会话：同一个 worktree 里先后两个会话认对新 ID（排除已记的和子 agent 的），两个都没记过时报错且不列已记的。
+- 判分：用真的 `memory.toml` 在临时 cargo 仓库上跑，六条全过；逐条造失败（TODO 没勾、加了依赖、提交标题不合、会话没改 `docs/commands.md`、命令里 `git add -A`、测试失败）都判不过；`RUN_DIR` 由判分环境给到。
+- 按会话收数据：造事件，完成的 `fileChange` / `fileRead` 碰到两层记忆里的 `.md` 才算写 / 读，普通文件读写不算；多会话的用时、请求、峰值、平均、token、花费、工具失败合计正确。
+- 旧结果：把 `sessionCount` / `memoryMode` / `sessions` 从 result.json 删掉后出表，和带这些字段的单会话结果一字不差，表里没有「记忆」和「会话」。
+
+**拿主意的地方**
+
+- `--memory` 缺省 `clear`，和以前单会话一样；`keep` 也在整次跑开始时清一次（任务单：「每次跑开始时照旧清一次」）。
+- 会话记录放 `sessions/<n>/`；旧跑没有这些目录时，`collect` 的第 1 个会话仍退回 `state.sessionFile`，旧结果照读。
+- `finish` 不覆盖已记的 `head`；`prepare --session n` 要求前一个会话的 `head` 已经在。
+- 多会话的 `corral start` 打印时去掉 `--unique`：同一个名字要跨会话复用，`--unique` 在名字被占时会补 `-1` 后缀，后面的 wait/stop 就对不上；单会话保持原来的 `--unique`。
+- `commands.txt` 把命令里的换行改成空格，保证每行一条；多会话题的 `--stats-json` 是目录，每个会话一份 `<n>.json`。
+- 结果表只在 `sessionCount > 1` 时加「记忆」列和「会话」一节；「写记忆 / 读记忆」只数完成的 `fileChange` / `fileRead` 碰到的两层记忆目录里的 `.md`。
+- 多行开跑提示：corral 的 `--prompt` 是单个 argv，打印的命令用单引号包住整段（原文里没有单引号）；没有起真实 agent 验证整条链路（任务单不许调真实模型 / 服务端）。
+
+**没做的事**
+
+- 没有真跑记忆题（合并后由主控按任务单跑）；没有起过 canter 服务端、没有调模型。
+- 没改 `crates/`、长程题 `long.toml` 和它的判分、`canter stats` 的口径。
+- 没跑全套（任务单只要求 `-p canter-eval` 和那三项检查）。
+
+**踩过的坑**
+
+- 结果表「会话」一节的行尾少了一个 ` |`，测试当场抓到，补上了。
+- 临时仓库的 TODO 标题在 `**...**` 里带句号，fixture 和检查一开始少了句号，勾不上；按 TODO 原文改了。
+- 集成测试在同一个临时目录里起两个假服务端，第二次 bind 报 `Address already in use`；改成两个子目录。另外 shadow 掉的 `Fake` 不会当场 drop，监听还在，旧 socket 不能重用。
+- 旧的 `State`、`SteerOptions`、`RunResult` 构造在测试里都要补新字段；会话文件从 run 根挪到 `sessions/1/`，相关测试一起改了。
+
+## 返工
+
+2026-11-09，按主仓库交叉审查（`P2-259-交叉审查.md` 的「## 审查意见」）返工 7 条，都在本分支、未合并。
+
+**改了什么**
+
+1. （必须改 1）清记忆和列记忆文件不跟随符号链接：`memory.rs` 用 `symlink_metadata` 逐组件检查 `memory`、`projects`、`projects/<key>/memory`，本身是链接就报错不动；`projects/` 里的项目目录是链接也报错；目录里的条目用 `file_type` 判断，链接只删链接本身、不计入 `.md` 快照。加了链接目录和链接条目的测试，断言外面的目标原样还在。
+2. （必须改 2）单会话旧状态先读 `state.sessionFile`（run 根的 `session.json`），不再把当前会话当历史会话排除；新增 `paths::session_id_file`，`steer`、`finish`、`collect` 共用。多会话报歧义时打印 `sessions/<n>/session.json` 的准确路径。保留一条旧状态格式的回归测试（state.json 没有 `sessionCount` / `memoryMode`，ID 在 run 根；假服务端同时列出这个 ID 和另一个候选，断言直接用旧 ID、不列会话、不写 `sessions/1/`）。
+3. （必须改 3）`commands.txt` 里命令内的换行改成 `; `（先归一 CRLF / CR），保留命令边界；`memory.toml` 的 `no-blanket-git-add` 改成按参数边界匹配的正则：`git` 后可有多个空格和任意多个 `-C <目录>` 之类的全局选项，然后 `add`，参数是单独的 `-A`、`--all` 或 `.`，后面接空白、`;`、`&`、`|` 或行尾。测试覆盖 `git add -A`、`git  add  -A`、`git add --all`、`git add .`、`cargo test && git add .`、`cargo test; git add -A`、`git -C "$WORKTREE" add .`（都判违规）和 `git add .gitignore`、`git add ./src/cli.rs`、按文件名 `git add src/cli.rs TODO.md`（都放过）。
+4. （必须改 4）`dependencies-unchanged` 改成比较起点和现在的 `Cargo.lock` 里 `[[package]]` 的 name 集合（`git show "$BASE:Cargo.lock"` 对当前文件，`sed` 取 `name = "..."` 行排序比较），不再用 awk 读 `Cargo.toml`。测试仓库的起点提交带 `Cargo.lock`；用 `[dependencies.foo]` 子表加依赖、锁文件里加 `foo` 包时判不过，恢复后判过。
+5. （必须改 5）单会话 `collect --session <id>` 显式指定时以它为准，跳过与已存 ID 的冲突校验；没给时仍用已存 ID 并严格校验。多会话照旧按每个会话记录的 ID 严格校验、忽略这个选项。测试：已存 `s-other`、`--stats-json` 是 `s-collect` 时，不给 `--session` 报冲突，给了就按 `s-collect` 收数。
+6. （建议改 6）`PrepareOptions.task` 改成 `Option<String>`：第 1 个会话必填，第 2 个及以后从 `State.task_path` 读题目，`--task` 给了且和这次跑不一致才报错。`prepare` 打印的下一会话命令和 README 现在照原样可直接执行。
+7. （建议改 7）「通过次数」只对多会话题按 `(轮次, 题, 记忆跑法)` 分组；单会话题照原来的 `(轮次, 题)` 分组，同一轮同一题的旧结果（无 `memoryMode`）和新结果（`clear`）合成一行。测试用一份删掉新字段的旧结果和一份带 `clear` 的新结果，断言只有一行 `2/2`、`2.0/2`。
+
+另外把 DESIGN 的 eval 一节和 README 的流程、`commands.txt` 说明、`prepare` 的 `--task` 说明一并更新。
+
+**验证了什么**
+
+- `CARGO_TARGET_DIR=…/.target/eval-memory cargo nextest run -p canter-eval`：34 个全过（新增 3 个：旧状态 steer 回归、链接目录清理、单会话显式 `--session`；扩了依赖、`git add` 各形式、通过次数分组的断言）。
+- 同一编译目录的 `cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt -p canter-eval -- --check`、`git diff --check` 都过。
+- 没有起 canter 服务端、corral agent，没调真实模型，没读 `~/.canter` / `~/.canter-eval`；判分测试只在临时 cargo 仓库里跑。
+
+**拿主意的地方**
+
+- 符号链接按「层目录本身及 `projects/` 下的项目目录是链接就报错，目录里的条目是链接只删链接」处理；列记忆文件同一规则，链接条目不进快照。
+- `no-blanket-git-add` 的正则不做 shell 解析，按主控定的参数边界识别；引用里的 `git add .`（比如 `echo "git add ."`）如果前面不是空白、`;`、`&`、`|` 就不会误中。
+- 后续 `prepare` 的 `--task` 给了相同值也接受，只有不一致才报错；`--tasks` 目录在后续会话里不影响，题目从 `state.task_path` 读。
+- 通过次数里单会话行在多会话表同时出现时「记忆」列写 `—`。
+
+**没做的事**
+
+- 没有真跑记忆题、没起真实 agent 服务端；没有改 `crates/`、`long.toml` 和 `canter stats` 口径。
+- 没有跑全套（按任务单只跑 `-p canter-eval`、clippy、fmt、`git diff --check`）。
+
+**踩过的坑**
+
+- 一次 `edit` 里第三个替换的原文对不上，整次没写入；重新读文件确认后逐段改，`prepare` 的签名一度和调用对不上，靠编译发现。
+- 记忆测试把 `clear` 和 `files` 放进同一个数组遍历，两个 `Result` 的成功类型不同，编译不过；改成分别断言。
+- 新加的旧状态 steer 测试里假服务端需要 `mut` 才能读请求，编译提示后补上。
+
+## 返工 2
+
+2026-11-09，按主仓库交叉审查「## 复核 1」的两条必须改返工，仍在 `eval-memory` 分支、未合并。
+
+**改了什么**
+
+1. `no-blanket-git-add` 的正则改成在 `add` 后面的参数列表里找禁用参数，不再只看第一个参数：`add` 后可以跟任意多个非分隔符参数（普通选项、`--`、文件名），只要其中有一个单独的 `-A`、`--all` 或 `.` 就算违规；仍然按参数边界匹配，不做 shell 解析。`git add -- .`、`git add -v -A`、`git add --verbose --all`、`git add src/lib.rs -v -A` 现在都判违规；`git add .gitignore`、`git add ./src/cli.rs`、`git add -- .gitignore`、`git add -v .gitignore` 仍不算违规。
+2. 单会话 `collect` 的预期 ID 改成 `explicit.or(recorded)`，再和 `stats.sessionId` 比较：显式指定 B、记录是 A、stats 是 B 时照旧收数；显式指定 B、stats 实际是 C 时报错，不再跳过一致性检查。多会话仍用各自记录的 ID 严格校验。
+
+**验证了什么**
+
+- `cargo nextest run -p canter-eval`：34 个全过。`git add` 的失败/放过断言已补上面几种；`collect_extracts_metrics_and_counts_events` 里加了「显式 `s-wanted`、stats 是 `s-collect` 必须报错」，原来「记录是 `s-other`、显式 `s-collect` 成功」的断言保留。
+- `cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt -p canter-eval -- --check`、`git diff --check` 都过。
+- 没起 canter 服务端、corral agent，没调真实模型，没读真实 eval 状态目录。
+
+**拿主意的地方**
+
+- 正则把 `--` 后面的参数也当作参数检查：`git add -- .` 必须抓到；代价是 `git add -- --all` 这种给文件起名叫 `--all` 的极端写法也会判违规，这个题组的仓库里不会出现。
+- 显式 ID 不一致的报错写 `asked for as <B>`，记录不一致仍写 `recorded as <A>`，方便区分是哪一种失配。
+
+**没做的事**
+
+- 没做 shell 分词或引号求值，按主控定的参数边界办法；没跑全套。

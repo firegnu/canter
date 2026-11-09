@@ -91,10 +91,16 @@ pub async fn get_json(socket: &Path, path: &str) -> Result<(u16, Value)> {
     Ok((status, value))
 }
 
-/// The run's session: the one top-level session the eval server lists in the
-/// run's worktree. Each run has its own worktree, so the path identifies it.
+/// The run's new session: a top-level session the eval server lists in the
+/// run's worktree, except the ones already recorded for earlier sessions of
+/// this run. Each run has its own worktree, so the path identifies it.
 /// `None` while canter has not opened it yet; an error when several match.
-pub async fn find_session(registration: &Registration, worktree: &Path) -> Result<Option<String>> {
+pub async fn find_session(
+    registration: &Registration,
+    worktree: &Path,
+    exclude: &[String],
+    session_file: &Path,
+) -> Result<Option<String>> {
     let (status, body) =
         get_json(&registration.socket_path, canter_protocol::routes::SESSIONS).await?;
     if !(200..300).contains(&status) {
@@ -123,14 +129,16 @@ pub async fn find_session(registration: &Registration, worktree: &Path) -> Resul
                 .and_then(Value::as_str)
                 .map(str::to_string)
         })
+        .filter(|id| !exclude.iter().any(|recorded| recorded == id))
         .collect();
     match matches.as_slice() {
         [] => Ok(None),
         [one] => Ok(Some(one.clone())),
         several => Err(format!(
-            "several sessions run in {}: {}; write the right one as {{\"sessionId\": \"...\"}} to the run's session.json",
+            "several sessions run in {}: {}; write the right one as {{\"sessionId\": \"...\"}} to {}",
             worktree.display(),
-            several.join(", ")
+            several.join(", "),
+            session_file.display()
         )),
     }
 }

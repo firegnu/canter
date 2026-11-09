@@ -2,16 +2,16 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     path::{Component, Path, PathBuf},
 };
 
 use canter_protocol::{
-    Event, EventPayload, Item, ItemStatus, RequestPurpose, StatsCompaction, StatsRequest,
-    StatsResponse,
+    Event, EventPayload, Item, ItemStatus, RequestPurpose, StatsCompaction, StatsResponse,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, grade::CheckResult};
+use crate::{Result, grade::CheckResult, paths::MemoryMode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,6 +103,23 @@ pub struct Metrics {
     pub event_parse_errors: usize,
 }
 
+/// One session of a multi-session run; the run's metrics are the sum.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRow {
+    pub index: usize,
+    pub session_id: String,
+    pub duration_ms: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub cost_unknown: bool,
+    /// Completed `fileChange` writes of `.md` files in the eval memories.
+    pub memory_writes: usize,
+    /// Completed `fileRead` reads of `.md` files in the eval memories.
+    pub memory_reads: usize,
+    pub memory_files: usize,
+    pub memory_file_names: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunResult {
@@ -118,6 +135,20 @@ pub struct RunResult {
     pub checks_passed: usize,
     pub checks_total: usize,
     pub metrics: Metrics,
+    /// Sessions in the task; absent in results collected before multi-session
+    /// tasks, which always had one.
+    #[serde(default = "one_session")]
+    pub session_count: usize,
+    /// `keep` or `clear`; absent in results collected before memory modes.
+    #[serde(default)]
+    pub memory_mode: Option<MemoryMode>,
+    /// One row per session, in order; empty for first-version results.
+    #[serde(default)]
+    pub sessions: Vec<SessionRow>,
+}
+
+fn one_session() -> usize {
+    1
 }
 
 impl RunResult {
@@ -141,14 +172,19 @@ pub struct CollectOptions {
 pub fn collect(options: CollectOptions) -> Result<RunResult> {
     let state = crate::paths::State::load(&options.home, &options.round, &options.run)?;
     let checks = crate::grade::load(&options.home, &options.round, &options.run)?;
-    let stats = stats(&options, &state)?;
-    let session_id = stats.session_id.clone();
-    let events =
-        std::fs::read_to_string(options.home.session_events(&session_id)).map_err(|error| {
-            format!("cannot read the events of {session_id}: {error}\nthe eval home may be wrong")
-        })?;
-    let scan = scan_events(&events, &stats.overview.cwd);
-    let metrics = metrics(&stats, &scan);
+    let session_count = state.session_count.max(1);
+    let mut sessions = Vec::with_capacity(session_count);
+    let mut rows = Vec::with_capacity(session_count);
+    for index in 1..=session_count {
+        let (stats, scan, row) = collect_session(&options, &state, index, session_count)?;
+        sessions.push((stats, scan));
+        rows.push(row);
+    }
+    let metrics = metrics(&sessions);
+    let session_id = rows
+        .first()
+        .map(|row| row.session_id.clone())
+        .unwrap_or_default();
     let registration = crate::server::registration(&options.home).ok();
     let checks_passed = checks
         .results
@@ -169,6 +205,9 @@ pub fn collect(options: CollectOptions) -> Result<RunResult> {
         checks_passed,
         checks_total,
         metrics,
+        session_count,
+        memory_mode: state.memory_mode,
+        sessions: rows,
     };
     crate::paths::write_private(
         &options
@@ -182,162 +221,348 @@ pub fn collect(options: CollectOptions) -> Result<RunResult> {
     Ok(result)
 }
 
-fn stats(options: &CollectOptions, state: &crate::paths::State) -> Result<StatsResponse> {
-    let text = match &options.stats_json {
-        Some(path) => std::fs::read_to_string(path)
-            .map_err(|error| format!("cannot read {}: {error}", path.display()))?,
+/// The session's stats and events: one result row and one input to the run's
+/// summed metrics.
+fn collect_session(
+    options: &CollectOptions,
+    state: &crate::paths::State,
+    index: usize,
+    session_count: usize,
+) -> Result<(StatsResponse, EventScan, SessionRow)> {
+    let home = &options.home;
+    let run = &state.run;
+    let recorded =
+        crate::paths::read_session_id(&crate::paths::session_id_file(home, state, index))?;
+    if session_count > 1 && recorded.is_none() {
+        return Err(format!(
+            "session {index} has no id yet; run `canter-eval steer --session {index}` while it is open"
+        ));
+    }
+    let explicit = options.session.clone().filter(|_| session_count == 1);
+    // A one-session run expects the explicit id when given, else the recorded
+    // one; a multi-session run always expects its recorded id.
+    let expected = explicit.clone().or(recorded.clone());
+    let stats = match &options.stats_json {
+        Some(path) => read_stats(path, index, session_count)?,
         None => {
-            let local = crate::paths::Local::load(&options.home)?;
-            let session = options
-                .session
-                .clone()
-                .or_else(|| read_session(&state.session_file))
-                .ok_or_else(|| {
-                    format!(
-                        "no session id yet; the run has not written {}",
-                        state.session_file
-                    )
-                })?;
-            crate::server::run_canter(
+            let id = expected.clone().ok_or_else(|| {
+                format!(
+                    "no session id yet; the run has not written {}",
+                    crate::paths::session_id_file(home, state, index).display()
+                )
+            })?;
+            let local = crate::paths::Local::load(home)?;
+            let text = crate::server::run_canter(
                 &crate::server::canter_binary(&local),
-                &["stats", &session, "--json"],
-                &options.home,
-            )?
+                &["stats", &id, "--json"],
+                home,
+            )?;
+            serde_json::from_str::<StatsResponse>(&text)
+                .map_err(|error| format!("the stats JSON is not valid: {error}"))?
         }
     };
-    serde_json::from_str::<StatsResponse>(&text)
-        .map_err(|error| format!("the stats JSON is not valid: {error}"))
-}
-
-fn read_session(path: &str) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    value
-        .get("sessionId")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-}
-
-fn metrics(stats: &StatsResponse, scan: &EventScan) -> Metrics {
+    let session_id = stats.session_id.clone();
+    if let Some(expected) = &expected
+        && *expected != session_id
+    {
+        let how = if explicit.is_some() {
+            "asked for as"
+        } else {
+            "recorded as"
+        };
+        return Err(format!(
+            "session {index} was {how} {expected}, but its stats are for {session_id}"
+        ));
+    }
+    let events_path = home.session_events(&session_id);
+    let events = fs::read_to_string(&events_path).map_err(|error| {
+        format!("cannot read the events of {session_id}: {error}\nthe eval home may be wrong")
+    })?;
+    let scan = scan_events(&events, &stats.overview.cwd);
+    let memory = memory_snapshot(home, &options.round, run, index, session_count)?;
+    let activity = memory_activity(&events, &stats.overview.cwd, home);
     let usage = stats.overview.usage.as_ref();
-    let duration_ms = (stats.overview.updated_at >= stats.overview.started_at).then(|| {
-        u64::try_from(stats.overview.updated_at - stats.overview.started_at).unwrap_or(u64::MAX)
-    });
-    let reread = reread_breakdowns(&stats.compactions, scan, &stats.overview.cwd);
-    let compactions: Vec<CompactionRow> = stats
-        .compactions
-        .iter()
-        .zip(reread)
-        .map(|(compaction, reread)| CompactionRow {
-            trigger: serde_json::to_value(compaction.trigger)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_string)),
-            before_tokens: compaction.before_tokens,
-            after_tokens: compaction.after_tokens,
-            succeeded: compaction.succeeded,
-            reread_files: compaction.signals.reread_files.as_ref().map_or(0, Vec::len),
-            reread,
-        })
-        .collect();
-    let mut reread_total = RereadFiles::default();
-    for row in &compactions {
-        reread_total.push_all(&row.reread);
-    }
-    let (context_peak_tokens, context_average_tokens, context_share) =
-        context_metrics(&stats.requests);
-    let mut tool_failures_by_name = BTreeMap::new();
-    let mut tool_failures = 0;
-    for tool in &stats.tools {
-        if let Some(failures) = tool.failure_count
-            && failures > 0
-        {
-            tool_failures += failures;
-            tool_failures_by_name.insert(tool.name.clone(), failures);
+    let row = SessionRow {
+        index,
+        session_id,
+        duration_ms: duration(&stats),
+        cost_usd: usage.map(|row| row.total.cost.usd),
+        cost_unknown: usage.is_none_or(|row| row.total.cost.unknown),
+        memory_writes: activity.writes,
+        memory_reads: activity.reads,
+        memory_files: memory.files.len(),
+        memory_file_names: memory.files,
+    };
+    Ok((stats, scan, row))
+}
+
+/// `--stats-json` is one file for a one-session run and a directory of
+/// `<session>.json` files for a multi-session one.
+fn read_stats(path: &Path, index: usize, session_count: usize) -> Result<StatsResponse> {
+    let path = if path.is_dir() {
+        path.join(format!("{index}.json"))
+    } else if session_count == 1 {
+        path.to_path_buf()
+    } else {
+        return Err(format!(
+            "--stats-json must be a directory with <session>.json files for {session_count} sessions: {}",
+            path.display()
+        ));
+    };
+    let text = fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    serde_json::from_str(&text)
+        .map_err(|error| format!("the stats JSON in {} is not valid: {error}", path.display()))
+}
+
+fn memory_snapshot(
+    home: &crate::paths::Home,
+    round: &str,
+    run: &str,
+    index: usize,
+    session_count: usize,
+) -> Result<crate::finish::MemorySnapshot> {
+    let path = home.session_memory_path(round, run, index);
+    match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text)
+            .map_err(|error| format!("{} is not valid: {error}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && session_count == 1 => {
+            // A first-version run recorded nothing; every session was the last.
+            Ok(crate::finish::MemorySnapshot {
+                files: crate::memory::files(home)?,
+            })
         }
-    }
-    let cost = usage.map(|row| &row.total.cost);
-    let compaction_cost: Option<f64> = stats
-        .requests
-        .iter()
-        .filter(|request| request.purpose == RequestPurpose::Compaction)
-        .filter_map(|request| request.cost.as_ref().map(|cost| cost.usd))
-        .reduce(|total, value| total + value);
-    Metrics {
-        duration_ms,
-        requests: stats.overview.request_count,
-        conversation_requests: stats
-            .requests
-            .iter()
-            .filter(|request| request.purpose == RequestPurpose::Conversation)
-            .count(),
-        context_peak_tokens,
-        context_average_tokens,
-        context_share,
-        compactions,
-        cached_input_tokens: usage.map(|row| row.total.cached_input_tokens),
-        uncached_input_tokens: usage.map(|row| row.total.uncached_input_tokens),
-        output_tokens: usage.map(|row| row.total.output_tokens),
-        reasoning_output_tokens: stats
-            .requests
-            .iter()
-            .filter_map(|request| request.usage.as_ref())
-            .map(|usage| usage.reasoning_output_tokens)
-            .fold(0u64, u64::saturating_add),
-        cost_usd: cost.map(|cost| cost.usd),
-        cost_unknown: cost.is_none_or(|cost| cost.unknown),
-        compaction_cost_usd: compaction_cost,
-        read_calls: tool_calls(stats, "read"),
-        update_plan_calls: tool_calls(stats, "update_plan"),
-        reread_files_after_compaction: stats
-            .compactions
-            .iter()
-            .map(|compaction| compaction.signals.reread_files.as_ref().map_or(0, Vec::len))
-            .sum(),
-        reread: reread_total,
-        tool_failures,
-        tool_failures_by_name,
-        guard_reminders: scan.guard_reminders,
-        blocked_commands: scan.blocked_commands,
-        event_parse_errors: scan.parse_errors,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
+            "session {index} is not recorded: {} is missing\nrun `canter-eval finish --session {index}` when it stops",
+            path.display()
+        )),
+        Err(error) => Err(format!("cannot read {}: {error}", path.display())),
     }
 }
 
-/// Peak and mean input tokens from the provider and the estimated context parts
-/// of the conversation requests. Compaction, suggestion and other request kinds
-/// do not grow with the task, and a request that reported no usage is left out.
-fn context_metrics(requests: &[StatsRequest]) -> (Option<u64>, Option<u64>, Option<ContextShare>) {
-    let mut peak: Option<u64> = None;
-    let mut total = 0_u128;
-    let mut count = 0_u128;
-    // System prompt, tool definitions, conversation, tool results.
-    let mut parts = [0_u128; 4];
-    for request in requests {
-        if request.purpose != RequestPurpose::Conversation {
-            continue;
-        }
-        let Some(usage) = &request.usage else {
+/// How many times the session wrote and read memory `.md` files.
+#[derive(Debug, Default, Clone, Copy)]
+struct MemoryActivity {
+    writes: usize,
+    reads: usize,
+}
+
+fn memory_activity(text: &str, cwd: &str, home: &crate::paths::Home) -> MemoryActivity {
+    let mut activity = MemoryActivity::default();
+    for line in text.lines() {
+        let Ok(event) = serde_json::from_str::<Event>(line) else {
             continue;
         };
-        peak = Some(peak.map_or(usage.input_tokens, |peak| peak.max(usage.input_tokens)));
-        total += u128::from(usage.input_tokens);
-        count += 1;
-        if let Some(context) = &request.context {
-            parts[0] += u128::from(context.system_tokens);
-            parts[1] += u128::from(context.tool_definition_tokens);
-            parts[2] += u128::from(context.conversation_tokens);
-            parts[3] += u128::from(context.tool_result_tokens);
+        let EventPayload::ItemCompleted { item, .. } = &event.payload else {
+            continue;
+        };
+        match item {
+            Item::FileChange {
+                changes,
+                status: ItemStatus::Completed,
+                ..
+            } => {
+                for change in changes {
+                    let path = normalize(cwd, &change.path);
+                    if crate::memory::is_memory_md(home, Path::new(&path)) {
+                        activity.writes += 1;
+                    }
+                }
+            }
+            Item::FileRead {
+                path,
+                status: ItemStatus::Completed,
+                ..
+            } => {
+                let path = normalize(cwd, path);
+                if crate::memory::is_memory_md(home, Path::new(&path)) {
+                    activity.reads += 1;
+                }
+            }
+            _ => {}
         }
     }
-    let average =
-        (count > 0).then(|| u64::try_from((total + count / 2) / count).unwrap_or(u64::MAX));
+    activity
+}
+
+/// The run's metrics, summed over its sessions: tokens, cost, requests and
+/// calls add up, the context peak is the highest, and the context average and
+/// shares come from all conversation requests together.
+fn metrics(sessions: &[(StatsResponse, EventScan)]) -> Metrics {
+    let mut duration_ms: Option<u64> = Some(0);
+    let mut requests = 0;
+    let mut conversation_requests = 0;
+    let mut context_peak: Option<u64> = None;
+    let mut input_total: u128 = 0;
+    let mut input_count: u128 = 0;
+    // System prompt, tool definitions, conversation, tool results.
+    let mut parts = [0_u128; 4];
+    let mut compactions = Vec::new();
+    let mut cached_input_tokens: Option<u64> = Some(0);
+    let mut uncached_input_tokens: Option<u64> = Some(0);
+    let mut output_tokens: Option<u64> = Some(0);
+    let mut reasoning_output_tokens = 0_u64;
+    let mut cost_usd: Option<f64> = Some(0.0);
+    let mut cost_unknown = false;
+    let mut compaction_cost_usd: Option<f64> = None;
+    let mut read_calls = 0;
+    let mut update_plan_calls = 0;
+    let mut reread_files_after_compaction = 0;
+    let mut reread = RereadFiles::default();
+    let mut tool_failures = 0;
+    let mut tool_failures_by_name = BTreeMap::new();
+    let mut guard_reminders = 0;
+    let mut blocked_commands = 0;
+    let mut event_parse_errors = 0;
+
+    for (stats, scan) in sessions {
+        duration_ms = match (duration_ms, duration(stats)) {
+            (Some(total), Some(one)) => Some(total.saturating_add(one)),
+            _ => None,
+        };
+        requests += stats.overview.request_count;
+        guard_reminders += scan.guard_reminders;
+        blocked_commands += scan.blocked_commands;
+        event_parse_errors += scan.parse_errors;
+
+        for request in &stats.requests {
+            if request.purpose == RequestPurpose::Conversation {
+                conversation_requests += 1;
+            }
+            if request.purpose != RequestPurpose::Conversation {
+                continue;
+            }
+            let Some(usage) = &request.usage else {
+                continue;
+            };
+            context_peak =
+                Some(context_peak.map_or(usage.input_tokens, |peak| peak.max(usage.input_tokens)));
+            input_total += u128::from(usage.input_tokens);
+            input_count += 1;
+            if let Some(context) = &request.context {
+                parts[0] += u128::from(context.system_tokens);
+                parts[1] += u128::from(context.tool_definition_tokens);
+                parts[2] += u128::from(context.conversation_tokens);
+                parts[3] += u128::from(context.tool_result_tokens);
+            }
+        }
+        reasoning_output_tokens = reasoning_output_tokens.saturating_add(
+            stats
+                .requests
+                .iter()
+                .filter_map(|request| request.usage.as_ref())
+                .map(|usage| usage.reasoning_output_tokens)
+                .fold(0u64, u64::saturating_add),
+        );
+
+        let usage = stats.overview.usage.as_ref();
+        cached_input_tokens = add_tokens(
+            cached_input_tokens,
+            usage.map(|row| row.total.cached_input_tokens),
+        );
+        uncached_input_tokens = add_tokens(
+            uncached_input_tokens,
+            usage.map(|row| row.total.uncached_input_tokens),
+        );
+        output_tokens = add_tokens(output_tokens, usage.map(|row| row.total.output_tokens));
+        match usage {
+            Some(row) => {
+                cost_unknown |= row.total.cost.unknown;
+                cost_usd = cost_usd.map(|total| total + row.total.cost.usd);
+            }
+            None => {
+                cost_usd = None;
+                cost_unknown = true;
+            }
+        }
+        let session_compaction_cost: Option<f64> = stats
+            .requests
+            .iter()
+            .filter(|request| request.purpose == RequestPurpose::Compaction)
+            .filter_map(|request| request.cost.as_ref().map(|cost| cost.usd))
+            .reduce(|total, value| total + value);
+        if let Some(value) = session_compaction_cost {
+            compaction_cost_usd = Some(compaction_cost_usd.unwrap_or(0.0) + value);
+        }
+
+        let breakdowns = reread_breakdowns(&stats.compactions, scan, &stats.overview.cwd);
+        for (compaction, compaction_reread) in stats.compactions.iter().zip(breakdowns) {
+            reread_files_after_compaction +=
+                compaction.signals.reread_files.as_ref().map_or(0, Vec::len);
+            reread.push_all(&compaction_reread);
+            compactions.push(CompactionRow {
+                trigger: serde_json::to_value(compaction.trigger)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_string)),
+                before_tokens: compaction.before_tokens,
+                after_tokens: compaction.after_tokens,
+                succeeded: compaction.succeeded,
+                reread_files: compaction.signals.reread_files.as_ref().map_or(0, Vec::len),
+                reread: compaction_reread,
+            });
+        }
+
+        read_calls += tool_calls(stats, "read");
+        update_plan_calls += tool_calls(stats, "update_plan");
+        for tool in &stats.tools {
+            if let Some(failures) = tool.failure_count
+                && failures > 0
+            {
+                tool_failures += failures;
+                *tool_failures_by_name.entry(tool.name.clone()).or_insert(0) += failures;
+            }
+        }
+    }
+
+    let context_average_tokens = (input_count > 0)
+        .then(|| u64::try_from((input_total + input_count / 2) / input_count).unwrap_or(u64::MAX));
     let sum: u128 = parts.iter().sum();
-    let share = (sum > 0).then(|| ContextShare {
+    let context_share = (sum > 0).then(|| ContextShare {
         system_percent: percent(parts[0], sum),
         tool_definition_percent: percent(parts[1], sum),
         conversation_percent: percent(parts[2], sum),
         tool_result_percent: percent(parts[3], sum),
     });
-    (peak, average, share)
+    Metrics {
+        duration_ms,
+        requests,
+        conversation_requests,
+        context_peak_tokens: context_peak,
+        context_average_tokens,
+        context_share,
+        compactions,
+        cached_input_tokens,
+        uncached_input_tokens,
+        output_tokens,
+        reasoning_output_tokens,
+        cost_usd,
+        cost_unknown,
+        compaction_cost_usd,
+        read_calls,
+        update_plan_calls,
+        reread_files_after_compaction,
+        reread,
+        tool_failures,
+        tool_failures_by_name,
+        guard_reminders,
+        blocked_commands,
+        event_parse_errors,
+    }
+}
+
+fn duration(stats: &StatsResponse) -> Option<u64> {
+    (stats.overview.updated_at >= stats.overview.started_at).then(|| {
+        u64::try_from(stats.overview.updated_at - stats.overview.started_at).unwrap_or(u64::MAX)
+    })
+}
+
+/// Add one session's token total; a session without usage makes the run's total
+/// unknown.
+fn add_tokens(total: Option<u64>, one: Option<u64>) -> Option<u64> {
+    match (total, one) {
+        (Some(total), Some(one)) => Some(total.saturating_add(one)),
+        _ => None,
+    }
 }
 
 fn percent(part: u128, total: u128) -> u32 {
@@ -588,7 +813,7 @@ mod tests {
         }))
         .unwrap();
 
-        let metrics = metrics(&stats, &EventScan::default());
+        let metrics = metrics(&[(stats, EventScan::default())]);
         assert_eq!(metrics.context_peak_tokens, Some(2000));
         assert_eq!(metrics.context_average_tokens, Some(1334));
         assert_eq!(
@@ -598,6 +823,94 @@ mod tests {
                 tool_definition_percent: 10,
                 conversation_percent: 50,
                 tool_result_percent: 10,
+            })
+        );
+        assert_eq!(metrics.conversation_requests, 4);
+    }
+
+    #[test]
+    fn sums_metrics_across_sessions() {
+        let first: StatsResponse = serde_json::from_value(json!({
+            "sessionId": "s-1",
+            "eventSeq": 1,
+            "overview": {
+                "cwd": "/w", "model": "m", "startedAt": 1_000, "updatedAt": 4_000,
+                "tags": {}, "turnCount": 1, "requestCount": 4,
+                "usage": {"data": [], "total": {
+                    "cachedInputTokens": 100, "uncachedInputTokens": 200,
+                    "outputTokens": 300, "cost": {"usd": 0.25, "unknown": false}}},
+                "retryCount": 0, "recordedRetryCount": 0
+            },
+            "requests": [
+                {"startedAt": 1, "purpose": "conversation", "outcome": "completed",
+                 "toolCallIds": [],
+                 "usage": {"inputTokens": 1000, "cachedInputTokens": 0, "outputTokens": 10,
+                           "reasoningOutputTokens": 2, "totalTokens": 1010},
+                 "context": {"estimated": true, "systemTokens": 10,
+                             "toolDefinitionTokens": 10, "conversationTokens": 10,
+                             "toolResultTokens": 10}}
+            ],
+            "compactions": [],
+            "tools": [{"name": "read", "callCount": 2, "failureCount": 1, "truncatedCount": 0,
+                       "averageResultTokens": 1.0, "maxResultTokens": 10, "unknownStatusCount": 0,
+                       "unknownTruncatedCount": 0, "unknownResultSizeCount": 0}],
+            "toolCalls": [],
+            "approvals": {"count": 0, "data": []}
+        }))
+        .unwrap();
+        let second: StatsResponse = serde_json::from_value(json!({
+            "sessionId": "s-2",
+            "eventSeq": 2,
+            "overview": {
+                "cwd": "/w", "model": "m", "startedAt": 10_000, "updatedAt": 11_000,
+                "tags": {}, "turnCount": 1, "requestCount": 3,
+                "usage": {"data": [], "total": {
+                    "cachedInputTokens": 7, "uncachedInputTokens": 8,
+                    "outputTokens": 9, "cost": {"usd": 0.5, "unknown": false}}},
+                "retryCount": 0, "recordedRetryCount": 0
+            },
+            "requests": [
+                {"startedAt": 1, "purpose": "conversation", "outcome": "completed",
+                 "toolCallIds": [],
+                 "usage": {"inputTokens": 3000, "cachedInputTokens": 0, "outputTokens": 10,
+                           "reasoningOutputTokens": 5, "totalTokens": 3010},
+                 "context": {"estimated": true, "systemTokens": 30,
+                             "toolDefinitionTokens": 30, "conversationTokens": 30,
+                             "toolResultTokens": 30}}
+            ],
+            "compactions": [],
+            "tools": [{"name": "read", "callCount": 1, "failureCount": 2, "truncatedCount": 0,
+                       "averageResultTokens": 1.0, "maxResultTokens": 10, "unknownStatusCount": 0,
+                       "unknownTruncatedCount": 0, "unknownResultSizeCount": 0}],
+            "toolCalls": [],
+            "approvals": {"count": 0, "data": []}
+        }))
+        .unwrap();
+
+        let metrics = metrics(&[
+            (first, EventScan::default()),
+            (second, EventScan::default()),
+        ]);
+        assert_eq!(metrics.duration_ms, Some(4_000));
+        assert_eq!(metrics.requests, 7);
+        assert_eq!(metrics.conversation_requests, 2);
+        assert_eq!(metrics.context_peak_tokens, Some(3000));
+        assert_eq!(metrics.context_average_tokens, Some(2000));
+        assert_eq!(metrics.cached_input_tokens, Some(107));
+        assert_eq!(metrics.uncached_input_tokens, Some(208));
+        assert_eq!(metrics.output_tokens, Some(309));
+        assert_eq!(metrics.reasoning_output_tokens, 7);
+        assert_eq!(metrics.cost_usd, Some(0.75));
+        assert_eq!(metrics.read_calls, 3);
+        assert_eq!(metrics.tool_failures, 3);
+        assert_eq!(metrics.tool_failures_by_name["read"], 3);
+        assert_eq!(
+            metrics.context_share,
+            Some(ContextShare {
+                system_percent: 25,
+                tool_definition_percent: 25,
+                conversation_percent: 25,
+                tool_result_percent: 25,
             })
         );
     }

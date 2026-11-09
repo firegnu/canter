@@ -8,7 +8,8 @@ use std::{
 
 use crate::{
     Result,
-    collect::{ContextShare, RereadFiles, RunResult},
+    collect::{ContextShare, RereadFiles, RunResult, SessionRow},
+    paths::MemoryMode,
 };
 
 pub struct ReportOptions {
@@ -103,15 +104,23 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
     }
 
     let show_round = against.is_some();
+    // Multi-session tasks compare runs with memories kept or emptied, so they
+    // get one more column and a section per session.
+    let show_memory = rows.iter().any(|row| row.session_count > 1);
     out.push_str("| ");
     if show_round {
         out.push_str("轮次 | ");
     }
+    out.push_str("题 | 次 | ");
+    if show_memory {
+        out.push_str("记忆 | ");
+    }
     out.push_str(
-        "题 | 次 | 判分 | 未过 | 用时 | 请求 | 压缩 | 上下文峰值 | 平均上下文 | 上下文组成（估算） | 缓存输入 | 未缓存输入 | 输出 | 思考 | 花费 | 读 | 压后重读 | 工具失败 | 改计划 | 护栏 | 被拦 | 记录 | 会话 |\n",
+        "判分 | 未过 | 用时 | 请求 | 压缩 | 上下文峰值 | 平均上下文 | 上下文组成（估算） | 缓存输入 | 未缓存输入 | 输出 | 思考 | 花费 | 读 | 压后重读 | 工具失败 | 改计划 | 护栏 | 被拦 | 记录 | 会话 |\n",
     );
     out.push('|');
-    for _ in 0..if show_round { 24 } else { 23 } {
+    let columns = if show_round { 24 } else { 23 } + usize::from(show_memory);
+    for _ in 0..columns {
         out.push_str("---|");
     }
     out.push('\n');
@@ -136,10 +145,15 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
         if show_round {
             out.push_str(&format!("{} | ", row.round));
         }
+        let run_cell = if show_memory {
+            format!("{} | {}", row.run, memory_label(row.memory_mode))
+        } else {
+            row.run.clone()
+        };
         out.push_str(&format!(
             "{} | {} | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             row.task,
-            row.run,
+            run_cell,
             row.checks_passed,
             row.checks_total,
             if failed.is_empty() {
@@ -169,24 +183,38 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
             } else {
                 records.join(" · ")
             },
-            row.session_id,
+            sessions_cell(row),
         ));
     }
     out.push('\n');
 
     if !rows.is_empty() {
-        out.push_str(
-            "## 通过次数\n\n| 轮次 | 题 | 全部通过 | 平均判分 |\n| --- | --- | --- | --- |\n",
-        );
-        let mut groups: std::collections::BTreeMap<(&str, &str), Vec<&RunResult>> =
+        let show_modes = show_memory && rows.iter().any(|row| row.memory_mode.is_some());
+        out.push_str("## 通过次数\n\n| 轮次 | 题 | ");
+        if show_modes {
+            out.push_str("记忆 | ");
+        }
+        out.push_str("全部通过 | 平均判分 |\n| --- | --- | ");
+        if show_modes {
+            out.push_str("--- | ");
+        }
+        out.push_str("--- | --- |\n");
+        let mut groups: std::collections::BTreeMap<(&str, &str, &str), Vec<&RunResult>> =
             std::collections::BTreeMap::new();
         for row in rows {
+            // Only multi-session runs compare memory modes; a one-session run
+            // keeps the original (round, task) grouping even when it records one.
+            let mode = if row.session_count > 1 {
+                memory_label(row.memory_mode)
+            } else {
+                ""
+            };
             groups
-                .entry((row.round.as_str(), row.task.as_str()))
+                .entry((row.round.as_str(), row.task.as_str(), mode))
                 .or_default()
                 .push(row);
         }
-        for ((round, task), group) in groups {
+        for ((round, task, mode), group) in groups {
             let complete = group
                 .iter()
                 .filter(|row| row.checks_passed == row.checks_total)
@@ -197,10 +225,47 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
                 .sum::<f64>()
                 / group.len() as f64;
             let total = group.first().map_or(0, |row| row.checks_total);
+            out.push_str(&format!("| {round} | {task} | "));
+            if show_modes {
+                let label = if mode.is_empty() { "—" } else { mode };
+                out.push_str(&format!("{label} | "));
+            }
             out.push_str(&format!(
-                "| {round} | {task} | {complete}/{} | {average:.1}/{total} |\n",
+                "{complete}/{} | {average:.1}/{total} |\n",
                 group.len()
             ));
+        }
+        out.push('\n');
+    }
+
+    if show_memory {
+        out.push_str("## 会话\n\n");
+        out.push_str("| ");
+        if show_round {
+            out.push_str("轮次 | ");
+        }
+        out.push_str("次 | 会话 | 用时 | 花费 | 写记忆 | 读记忆 | 记忆文件数 |\n| ");
+        if show_round {
+            out.push_str("--- | ");
+        }
+        out.push_str("--- | --- | --- | --- | --- | --- | --- |\n");
+        for row in rows.iter().filter(|row| row.session_count > 1) {
+            for session in &row.sessions {
+                out.push_str("| ");
+                if show_round {
+                    out.push_str(&format!("{} | ", row.round));
+                }
+                out.push_str(&format!(
+                    "{} | {} | {} | {} | {} | {} | {} |\n",
+                    row.run,
+                    session_cell(session),
+                    duration(session.duration_ms),
+                    cost(session.cost_usd, session.cost_unknown, None),
+                    session.memory_writes,
+                    session.memory_reads,
+                    session.memory_files,
+                ));
+            }
         }
         out.push('\n');
     }
@@ -246,6 +311,29 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
         out.push('\n');
     }
     out
+}
+
+fn memory_label(mode: Option<MemoryMode>) -> &'static str {
+    match mode {
+        Some(MemoryMode::Keep) => "保留",
+        Some(MemoryMode::Clear) => "清空",
+        None => "—",
+    }
+}
+
+fn sessions_cell(row: &RunResult) -> String {
+    if row.session_count <= 1 || row.sessions.is_empty() {
+        return row.session_id.clone();
+    }
+    row.sessions
+        .iter()
+        .map(session_cell)
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn session_cell(session: &SessionRow) -> String {
+    format!("{} {}", session.index, session.session_id)
 }
 
 fn timestamp(ms: i64) -> String {

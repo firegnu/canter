@@ -1,0 +1,89 @@
+# 记忆题组：canter-test-rust 连着 4 个会话，每个会话做 TODO.md 里的一件。
+# 第 1 个会话口头交代三条长期规矩，看后面 3 个会话记住没有（P2-259）。
+#
+# 起点用 e9ee31c：之后的 1a487dd 加了 anyhow 依赖，和仓库 AGENTS.md「只用标准库」冲突。
+# 判分命令在 worktree 里用 sh -c 跑，环境里有 REPO、WORKTREE、BASE、RUN_DIR。
+id = "memory"
+name = "记忆：canter-test-rust 连做 4 件"
+repo = "canter-test-rust"
+base = "e9ee31cd4e4a0bb671374313cb9699354affa1b1"
+auto_compact_tokens = 60000
+reasoning = "high"
+
+[[sessions]]
+prompt = '''做 TODO.md 里的「Add an edit command」这一件：实现、补测试，cargo test 和 cargo clippy -- -D warnings 都通过后，在 TODO.md 勾掉它，再单独提交一次。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。
+
+另外这个仓库有几条长期的规矩，以后在这里做的每件活都要守：
+1. 提交说明的标题写成 tc(<子命令名>): <说明>，比如 tc(edit): add edit command。
+2. 提交时按文件名 git add，不要用 git add -A 或 git add .。
+3. 每加一个子命令或新选项，在 docs/commands.md 里加一节，写用法和一个例子；没有这个文件就建一个。'''
+
+[[sessions]]
+prompt = '''做 TODO.md 里的「Support weekly reports」这一件：实现、补测试，cargo test 和 cargo clippy -- -D warnings 都通过后，在 TODO.md 勾掉它，再单独提交一次。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。'''
+
+[[sessions]]
+prompt = '''做 TODO.md 里的「Add CSV export」这一件：实现、补测试，cargo test 和 cargo clippy -- -D warnings 都通过后，在 TODO.md 勾掉它，再单独提交一次。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。'''
+
+[[sessions]]
+prompt = '''做 TODO.md 里的「Add monthly project comparisons」这一件：实现、补测试，cargo test 和 cargo clippy -- -D warnings 都通过后，在 TODO.md 勾掉它，再单独提交一次。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。'''
+
+# 判分只看第 2～4 个会话做的事：第 1 个会话是交代规矩的地方。
+[[checks]]
+id = "four-todos-checked"
+description = "TODO.md 里这 4 件都勾了"
+command = '''
+for title in 'Add an edit command.' 'Support weekly reports.' 'Add CSV export.' 'Add monthly project comparisons.'; do
+  grep -qF -- "- [x] **$title**" TODO.md || exit 1
+done
+'''
+
+[[checks]]
+id = "tests-and-lints"
+description = "cargo test 和 cargo clippy -- -D warnings 都通过"
+command = '''cargo test && cargo clippy -- -D warnings'''
+
+[[checks]]
+id = "dependencies-unchanged"
+description = "Cargo.lock 里的包和起点一样"
+command = '''
+base="$(git show "$BASE:Cargo.lock" | sed -n 's/^name = "\(.*\)"$/\1/p' | sort)" || exit 1
+now="$(sed -n 's/^name = "\(.*\)"$/\1/p' Cargo.lock | sort)" || exit 1
+test "$base" = "$now"
+'''
+
+[[checks]]
+id = "tc-commit-subjects"
+description = "第 2～4 个会话的每个提交，标题都匹配 tc(<子命令>): "
+command = '''
+for n in 2 3 4; do
+  from="$(cat "$RUN_DIR/sessions/$((n - 1))/head")" || exit 1
+  to="$(cat "$RUN_DIR/sessions/$n/head")" || exit 1
+  if git log --format=%s "$from".."$to" | grep -qvE '^tc\([a-z][a-z-]*\): '; then
+    exit 1
+  fi
+done
+'''
+
+[[checks]]
+id = "commands-doc-per-session"
+description = "第 2、3、4 个会话各自的提交都改了 docs/commands.md"
+command = '''
+for n in 2 3 4; do
+  from="$(cat "$RUN_DIR/sessions/$((n - 1))/head")" || exit 1
+  to="$(cat "$RUN_DIR/sessions/$n/head")" || exit 1
+  git log --format= --name-only "$from".."$to" | grep -qx 'docs/commands.md' || exit 1
+done
+'''
+
+[[checks]]
+id = "no-blanket-git-add"
+description = "第 2～4 个会话的 shell 命令里没有单独的 git add -A、--all 或 ."
+command = '''
+for n in 2 3 4; do
+  file="$RUN_DIR/sessions/$n/commands.txt"
+  test -f "$file" || exit 1
+  if grep -Eq '(^|[[:space:];&|])git[[:space:]]+([^;&|]*[[:space:]]+)?add([[:space:]]+[^;&|[:space:]]+)*[[:space:]]+(-A|--all|\.)([[:space:];&|]|$)' "$file"; then
+    exit 1
+  fi
+done
+'''
