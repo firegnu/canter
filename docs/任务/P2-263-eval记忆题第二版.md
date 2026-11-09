@@ -91,3 +91,13 @@
   - `eval/README.md` 除了题目组那行，目录清单里也加了 `tasks/memory-2.toml`，不然目录说明不全。
 - 没做的事：没跑真实模型，没起 canter 服务端，没读 `~/.canter`、`~/.canter-eval`；没改 `eval/tasks/memory.toml`、`eval/src/`、`crates/`；没合并、没推送。
 - 踩过的坑：`$RUN_DIR` 是 `<eval 状态目录>/runs/<轮次>/<次>`，状态目录根在它上面三层，起先写成两层（`../../AGENTS.md`），eval 状态目录根下有 `AGENTS.md` 那种情况没拦住，判分测试抓出来了，改成 `../../../AGENTS.md`。
+
+## 主控审查
+
+- 改动只在 `eval/tasks/memory-2.toml`（新建）、`eval/tests/eval.rs`、`eval/README.md`；`memory.toml`、`eval/src/`、`crates/` 没动。六条检查和任务单一致，`rules-not-in-repo` 查了 worktree 各层 AGENTS.md / CLAUDE.md / `.agents/`（含没提交的、新文件）、新增内容里的 `cargo doc` 字样、eval 状态目录根的 AGENTS.md。
+- 主控重跑 `cargo nextest run -p canter-eval` 36 个全过，clippy、fmt、`git diff --check` 过。
+- 开发问 `.agents/`、`CLAUDE.md` 要不要单独造例子：和 AGENTS.md 同一条匹配，开发已手试，不加。
+- 合并前全套：`cargo nextest run --all-targets` 2060 个全过（50 跳过），`cargo test --doc --workspace` 没有失败。
+- 验收（用户确认的提议）：用 `memory-2` 跑一轮，保留、清空各 3 次，结果表用户看过觉得能用——还没跑。审查期间查到 canter 记忆目录的 bug（记忆文件标题后空一行，这条记忆不进目录、也不提示；第一轮 keep-3 就是这样），用户定先修再跑。
+
+结果：一次过
