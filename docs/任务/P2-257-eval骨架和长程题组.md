@@ -161,3 +161,13 @@
 返工 2 验证：`cargo nextest run -p canter-eval` 16 个测试全过；`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都过。
 
 返工 2 踩的坑：新路径还不存在时，`canonicalize` 整条路径会失败，而 macOS 上 `/tmp` 是 `/private/tmp` 的软链接，只做字面比较会把「在状态目录里面」误判成不在；改成先解析最长的已存在前缀再把剩下的部分接回去。
+
+## 主控审查
+
+- 改动范围：`eval/`（新 crate `canter-eval`、`tasks/long.toml`、README）、根 `Cargo.toml` 工作区加 `eval` 一行、`Cargo.lock` 只新增 `toml` 系的包、DESIGN 加 eval 一节；`crates/` 没动。测试里的 key 都是占位、地址都是 `.invalid`，不调真实模型接口。
+- 主控审查交回一次：`node_modules` 软链接不被 `node_modules/` 忽略，模型 `git add -A` 会提交指向本机的链接，改成 APFS 拷贝。`prompt_suggestions` 主控定不关。
+- 交叉审查（`canter/review-eval-long`，Claude Code opus / high）必须改 2 条：worktree 在 eval 的 `CANTER_HOME` 里会被 canter 当私有路径拒绝读写；`stop` 只看 PID 可能停错进程。主控连同建议改 3（拒绝 `$HOME` 和上级目录）、4（拷顶层价格）一起交回；复核 1 结论可以合并。建议改 5、6 和复核的「可以不改」1 条记进 HANDOFF。
+- 合并前全套：`cargo nextest run --all-targets` 2040 个全过，`cargo test --doc --workspace` 全过。
+- 还没跑真实一轮：验收「主控用 `eval/` 跑完第一轮……出一张结果表，你看过觉得能用」留到用户在场时做。
+
+结果：返工 2 次
