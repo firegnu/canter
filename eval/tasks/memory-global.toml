@@ -1,0 +1,156 @@
+# 全局记忆题：第 1 个会话在 canter-test-rust 交代对所有项目都适用的两个习惯，
+# 后面 3 个会话换到 canter-test-ts 做活，看它们守不守（P2-264）。
+#
+# 和 memory-2 的区别：那两条规矩说的是「这个仓库」，只能靠项目记忆；这两条说的是
+# 「以后我所有的项目」。全局记忆在 eval 状态目录的 memory/ 下，换了仓库还看得见；
+# 项目记忆换了仓库就看不到。所以第 1 个会话结束时全局记忆里要至少有一个文件
+# （preference-in-global-memory）。
+#
+# 主仓库 canter-test-rust 的起点、压缩线、思考档和 memory-2 一样；canter-test-ts
+# 的起点和准备命令和 long.toml 一样，写在 [[repos]] 里。
+# 判分命令在各检查所在的仓库的 worktree 里用 sh -c 跑，环境里有那个仓库的 REPO、
+# WORKTREE、BASE，以及这次跑的 RUN_DIR。
+id = "memory-global"
+name = "全局记忆：第 1 个会话在 canter-test-rust 交代所有项目适用的偏好，后 3 个会话换到 canter-test-ts 做活"
+repo = "canter-test-rust"
+base = "e9ee31cd4e4a0bb671374313cb9699354affa1b1"
+auto_compact_tokens = 60000
+reasoning = "high"
+
+[[repos]]
+name = "canter-test-ts"
+base = "8e19ca8db4b181c15a3a2a8cc75e1fccfee98538"
+setup = [
+  '''[ -d node_modules ] || cp -cR "$REPO/node_modules" node_modules''',
+  '''rm -rf dist''',
+]
+
+[[sessions]]
+prompt = '''做 TODO.md 里的「Add an edit command」这一件：实现、补测试，cargo test 和 cargo clippy -- -D warnings 都通过后，在 TODO.md 勾掉它，再单独提交一次。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。
+
+另外说两个我个人的习惯，以后我所有的项目都这样，不只是这个仓库：
+1. 每个提交说明的最后一行写 Assisted-by: canter。
+2. 每次提交前先跑一次 git diff --check，有问题先改掉。'''
+
+[[sessions]]
+repo = "canter-test-ts"
+prompt = '''做 TODO.md 里的「Fix future-date handling」这一件：实现、补测试，npm test 和 npx tsc --noEmit 都通过后，在 TODO.md 勾掉它，再单独提交一次。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。'''
+
+[[sessions]]
+repo = "canter-test-ts"
+prompt = '''做 TODO.md 里的「Add habit archiving」这一件：实现、补测试，npm test 和 npx tsc --noEmit 都通过后，在 TODO.md 勾掉它，再单独提交一次。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。'''
+
+[[sessions]]
+repo = "canter-test-ts"
+prompt = '''做 TODO.md 里的「Implement CSV export」这一件：实现、补测试，npm test 和 npx tsc --noEmit 都通过后，在 TODO.md 勾掉它，再单独提交一次。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。'''
+
+# 判分只看第 2～4 个会话做的事：第 1 个会话是交代习惯的地方。这几条都在
+# canter-test-ts 的 worktree 里跑；preference-in-global-memory 看的是第 1 个会话
+# 留下的记忆，不用 worktree，就留在主仓库。
+[[checks]]
+id = "three-todos-checked"
+description = "这 3 件在 TODO.md 里勾了"
+repo = "canter-test-ts"
+command = '''
+for title in 'Fix future-date handling.' 'Add habit archiving.' 'Implement CSV export.'; do
+  grep -qF -- "- [x] **$title**" TODO.md || exit 1
+done
+'''
+
+[[checks]]
+id = "tests-and-types"
+description = "npm test 和 npx tsc --noEmit 都通过"
+repo = "canter-test-ts"
+command = '''npm test && npx tsc --noEmit'''
+
+[[checks]]
+id = "dependencies-unchanged"
+description = "package.json 的依赖和起点一样"
+repo = "canter-test-ts"
+command = '''node -e 'const fs=require("fs"),cp=require("child_process");const sorted=o=>JSON.stringify(Object.fromEntries(Object.keys(o||{}).sort().map(k=>[k,o[k]])));const base=JSON.parse(cp.execFileSync("git",["show",process.env.BASE+":package.json"]));const now=JSON.parse(fs.readFileSync("package.json"));process.exit(sorted(base.dependencies)===sorted(now.dependencies)&&sorted(base.devDependencies)===sorted(now.devDependencies)?0:1)' '''
+
+[[checks]]
+id = "assisted-by-trailer"
+description = "第 2～4 个会话的每个提交，说明最后一行是 Assisted-by: canter"
+repo = "canter-test-ts"
+command = '''
+for n in 2 3 4; do
+  # 第 1 个会话在别的仓库，它的 head 不在这个仓库里；第 2 个会话的提交从本仓库
+  # 的起点算起，后面各会话从上一个会话的 head 算起。
+  if [ "$n" -eq 2 ]; then
+    from="$BASE"
+  else
+    from="$(cat "$RUN_DIR/sessions/$((n - 1))/head")" || exit 1
+  fi
+  to="$(cat "$RUN_DIR/sessions/$n/head")" || exit 1
+  commits="$(git rev-list "$from".."$to")" || exit 1
+  test -n "$commits" || exit 1
+  for commit in $commits; do
+    last="$(git log -1 --format=%B "$commit" | awk 'NF { line = $0 } END { print line }')"
+    test "$last" = "Assisted-by: canter" || exit 1
+  done
+done
+'''
+
+[[checks]]
+id = "diff-check-per-session"
+description = "第 2～4 个会话的命令里各有一条 git diff --check"
+repo = "canter-test-ts"
+command = '''
+for n in 2 3 4; do
+  file="$RUN_DIR/sessions/$n/commands.txt"
+  test -f "$file" || exit 1
+  grep -Eq '(^|[;&|(])[[:space:]]*git[[:space:]]+diff[[:space:]]+--check([[:space:]]|[;&|)]|$)' "$file" || exit 1
+done
+'''
+
+[[checks]]
+id = "preference-in-global-memory"
+description = "第 1 个会话结束时全局记忆里至少有一个文件"
+command = '''
+test -f "$RUN_DIR/sessions/1/memory.json" || exit 1
+grep -q '"memory/[^"]*\.md"' "$RUN_DIR/sessions/1/memory.json"
+'''
+
+# 习惯要能看见，只能靠记忆：第 2～4 个会话开局自动读的地方（worktree 各层的
+# AGENTS.md、CLAUDE.md 和 .agents/ 下的文件，eval 状态目录根下的 AGENTS.md）和起点
+# 比都不能变；相对起点新增的内容里也不能留下 Assisted-by 或 git diff --check 字样。
+[[checks]]
+id = "rules-not-in-repo"
+description = "两个习惯没有写进 canter-test-ts 的仓库或 eval 状态目录里自动读的地方"
+repo = "canter-test-ts"
+command = '''
+changed="$(git diff --name-only "$BASE")" || exit 1
+untracked_all="$(git ls-files --others)" || exit 1
+if printf '%s\n' "$changed" "$untracked_all" | grep -Eq '(^|/)(AGENTS\.md|CLAUDE\.md)$|(^|/)\.agents/'; then
+  echo "AGENTS.md, CLAUDE.md or .agents/ differs from the base commit" >&2
+  exit 1
+fi
+
+if git diff --no-color "$BASE" | awk '
+  /^diff --git / { hunk = 0; next }
+  /^@@/ { hunk = 1; next }
+  hunk && /^\+/ && (index($0, "Assisted-by") || index($0, "git diff --check")) { found = 1 }
+  END { exit(found ? 0 : 1) }
+'; then
+  echo "an added line mentions the remembered habits" >&2
+  exit 1
+fi
+
+untracked="$(git ls-files --others --exclude-standard)" || exit 1
+if [ -n "$untracked" ]; then
+  if ! printf '%s\n' "$untracked" | while IFS= read -r file; do
+    if [ -f "$file" ] && grep -qF -e 'Assisted-by' -e 'git diff --check' "$file"; then
+      exit 1
+    fi
+  done; then
+    echo "a new untracked file mentions the remembered habits" >&2
+    exit 1
+  fi
+fi
+
+if [ -e "$RUN_DIR/../../../AGENTS.md" ]; then
+  echo "the eval state directory has a global AGENTS.md" >&2
+  exit 1
+fi
+'''

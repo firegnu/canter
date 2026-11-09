@@ -36,13 +36,17 @@ pub fn grade(
     let task = state.task()?;
     let mut results = Vec::with_capacity(task.checks.len());
     for check in &task.checks {
+        // A check runs in the worktree of its own repository, with that
+        // repository's start commit and path.
+        let repo = state.repo_by_name(task.check_repo(check))?;
+        let worktree = Path::new(&repo.worktree);
         let output = Command::new("sh")
             .arg("-c")
             .arg(&check.command)
-            .current_dir(state.worktree())
-            .env("BASE", &state.base_commit)
-            .env("REPO", &state.repo)
-            .env("WORKTREE", &state.worktree)
+            .current_dir(worktree)
+            .env("BASE", &repo.base_commit)
+            .env("REPO", &repo.repo)
+            .env("WORKTREE", &repo.worktree)
             .env("RUN_DIR", home.run_dir(round, run))
             .output()
             .map_err(|error| format!("cannot run check {}: {error}", check.id))?;

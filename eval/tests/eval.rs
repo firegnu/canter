@@ -10,7 +10,7 @@ use std::{
 use canter_eval::{
     collect::{CollectOptions, ContextShare, Metrics, RereadFiles, RunResult, SessionRow},
     grade::{CheckFile, CheckResult},
-    paths::{Home, MemoryMode, State},
+    paths::{Home, MemoryMode, State, StateRepo},
     prepare::PrepareOptions,
     steer::SteerOptions,
     task::Task,
@@ -192,6 +192,7 @@ fn state(home: &Home, dir: &Path, base: &str, round: &str, run: &str) -> State {
         created_at: 0,
         session_count: 1,
         memory_mode: None,
+        repos: Vec::new(),
     };
     state.save(home).unwrap();
     state
@@ -603,6 +604,7 @@ async fn steer_waits_for_the_counted_commits_and_sends_steer_mode() {
         created_at: 0,
         session_count: 1,
         memory_mode: None,
+        repos: Vec::new(),
     };
     state.save(&home).unwrap();
     write(
@@ -720,6 +722,7 @@ fn steer_state_without_session_file(temp: &Path, home: &Home) -> (PathBuf, State
         created_at: 0,
         session_count: 1,
         memory_mode: None,
+        repos: Vec::new(),
     };
     state.save(home).unwrap();
     (repo, state)
@@ -854,6 +857,7 @@ async fn trust_posts_the_worktree_through_the_public_interface() {
         created_at: 0,
         session_count: 1,
         memory_mode: None,
+        repos: Vec::new(),
     };
     let mut fake = fake_server(
         temp.path(),
@@ -908,6 +912,7 @@ async fn collect_extracts_metrics_and_counts_events() {
         created_at: 0,
         session_count: 1,
         memory_mode: None,
+        repos: Vec::new(),
     };
     state.save(&home).unwrap();
     let checks = CheckFile {
@@ -1533,6 +1538,143 @@ fn two_session_task(temp: &Path, base: &str) -> PathBuf {
     dir
 }
 
+fn write_local_config_repos(home: &Home, repos: &[(&str, &Path)], source: &Path, worktrees: &Path) {
+    let repos: serde_json::Map<String, Value> = repos
+        .iter()
+        .map(|(name, path)| ((*name).to_string(), json!(path.display().to_string())))
+        .collect();
+    canter_eval::paths::write_private(
+        &home.local_path(),
+        serde_json::to_vec_pretty(&json!({
+            "repos": repos,
+            "model": "opencode-go/deepseek-v4.1-flash",
+            "sourceConfig": source.display().to_string(),
+            "canter": "canter",
+            "worktrees": worktrees.display().to_string()
+        }))
+        .unwrap()
+        .as_slice(),
+    )
+    .unwrap();
+}
+
+/// Two repositories, three sessions: the first in the main one, then two in
+/// `canter-test-ts`; each repository's checks prove where they ran.
+fn multi_repo_task(temp: &Path, rust_base: &str, ts_base: &str) -> PathBuf {
+    let dir = temp.join("tasks-multi");
+    write(
+        &dir.join("multi.toml"),
+        &format!(
+            r#"id = "multi"
+name = "two repositories"
+repo = "canter-test-rust"
+base = "{rust_base}"
+
+[[repos]]
+name = "canter-test-ts"
+base = "{ts_base}"
+setup = ['''echo prepared > prepared.txt''']
+
+[[sessions]]
+prompt = "rust prompt"
+
+[[sessions]]
+repo = "canter-test-ts"
+prompt = "ts prompt"
+
+[[sessions]]
+repo = "canter-test-ts"
+prompt = "ts prompt two"
+
+[[checks]]
+id = "ts-check"
+description = "runs in the second repository"
+repo = "canter-test-ts"
+command = '''test -f ts-marker.txt && test "$(git log -1 --format=%s "$BASE")" = ts-base && test "$(cd "$WORKTREE" && pwd -P)" = "$(pwd -P)"'''
+
+[[checks]]
+id = "rust-check"
+description = "runs in the main repository"
+command = '''test -f rust-marker.txt && test "$(git log -1 --format=%s "$BASE")" = rust-base && test "$(cd "$WORKTREE" && pwd -P)" = "$(pwd -P)"'''
+"#
+        ),
+    );
+    dir
+}
+
+/// A canter-test-ts-shaped repository with the three TODO items the global
+/// memory task's sessions 2-4 do, and a local test runner that needs no network.
+fn ts_repo(dir: &Path) -> String {
+    init_repo(dir);
+    write(
+        &dir.join("package.json"),
+        &serde_json::to_string_pretty(&json!({
+            "name": "canter-test-ts",
+            "version": "0.1.0",
+            "private": true,
+            "type": "commonjs",
+            "scripts": {"test": "node --test tests/*.test.js"},
+            "devDependencies": {"typescript": "^7.0.2"}
+        }))
+        .unwrap(),
+    );
+    write(&dir.join(".gitignore"), "node_modules/\ndist/\n");
+    let todo: String = [
+        "Fix future-date handling.",
+        "Add habit archiving.",
+        "Implement CSV export.",
+    ]
+    .iter()
+    .map(|title| format!("- [ ] **{title}** Do it.\n"))
+    .collect();
+    write(&dir.join("TODO.md"), &todo);
+    write(&dir.join("README.md"), "# Ritual\n");
+    write(
+        &dir.join("AGENTS.md"),
+        "# 仓库说明\n\n只用标准库，不加依赖。\n",
+    );
+    write(&dir.join(".agents/skills/readme/SKILL.md"), "# skill\n");
+    write(
+        &dir.join("tests/habit.test.js"),
+        "const test = require(\"node:test\");\n\
+         const assert = require(\"node:assert\");\n\
+         test(\"habit\", () => { assert.ok(true); });\n",
+    );
+    write(&dir.join("node_modules/.bin/tsc"), "#!/bin/sh\nexit 0\n");
+    let tsc = dir.join("node_modules/.bin/tsc");
+    let mut permissions = std::fs::metadata(&tsc).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&tsc, permissions).unwrap();
+    commit(dir, "初始骨架", None);
+    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+}
+
+/// One commit per session of the global memory task's second half; each follows
+/// the remembered habit: a trailer and the TODO item checked.
+fn ts_session_commits(dir: &Path) -> Vec<String> {
+    let mut heads = Vec::new();
+    for (index, title) in [
+        "Fix future-date handling.",
+        "Add habit archiving.",
+        "Implement CSV export.",
+    ]
+    .iter()
+    .enumerate()
+    {
+        check_todo(dir, title);
+        let mut source = std::fs::read_to_string(dir.join("tests/habit.test.js")).unwrap();
+        source.push_str(&format!("// session {}\n", index + 2));
+        write(&dir.join("tests/habit.test.js"), &source);
+        commit(
+            dir,
+            &format!("session {} work", index + 2),
+            Some("Assisted-by: canter"),
+        );
+        heads.push(git(dir, &["rev-parse", "HEAD"]).trim().to_string());
+    }
+    heads
+}
+
 fn prepare_session(
     home: &Home,
     source: &Path,
@@ -1682,6 +1824,132 @@ fn memory_2_task_has_four_sessions_and_the_rules_in_the_first() {
 }
 
 #[test]
+fn memory_global_task_has_four_sessions_in_two_repositories() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tasks/memory-global.toml");
+    let task = Task::load(&path).unwrap();
+    assert_eq!(task.id, "memory-global");
+    assert!(task.name.contains("全局记忆"), "{}", task.name);
+    assert_eq!(task.repo, "canter-test-rust");
+    assert_eq!(task.base, "e9ee31cd4e4a0bb671374313cb9699354affa1b1");
+    assert_eq!(task.auto_compact_tokens, Some(60_000));
+    assert_eq!(task.reasoning.as_deref(), Some("high"));
+    assert_eq!(task.session_count(), 4);
+
+    let repos = task.repositories();
+    assert_eq!(repos.len(), 2);
+    assert_eq!(repos[0].name, "canter-test-rust");
+    assert_eq!(repos[1].name, "canter-test-ts");
+    assert_eq!(repos[1].base, "8e19ca8db4b181c15a3a2a8cc75e1fccfee98538");
+    assert_eq!(repos[1].setup.len(), 2);
+
+    let session_repos: Vec<&str> = (1..=4).map(|n| task.session_repo(n).unwrap()).collect();
+    assert_eq!(
+        session_repos,
+        [
+            "canter-test-rust",
+            "canter-test-ts",
+            "canter-test-ts",
+            "canter-test-ts"
+        ]
+    );
+
+    let first = task.prompt(1).unwrap();
+    assert!(
+        first.starts_with("做 TODO.md 里的「Add an edit command」这一件"),
+        "session 1 prompt: {first}"
+    );
+    for line in [
+        "另外说两个我个人的习惯，以后我所有的项目都这样，不只是这个仓库：",
+        "1. 每个提交说明的最后一行写 Assisted-by: canter。",
+        "2. 每次提交前先跑一次 git diff --check，有问题先改掉。",
+    ] {
+        assert!(first.contains(line), "the first prompt is missing {line:?}");
+    }
+    for (index, title) in [
+        "Fix future-date handling",
+        "Add habit archiving",
+        "Implement CSV export",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let prompt = task.prompt(index + 2).unwrap();
+        assert!(
+            prompt.starts_with(&format!("做 TODO.md 里的「{title}」这一件")),
+            "session {} prompt: {prompt}",
+            index + 2
+        );
+        assert!(prompt.contains("npm test 和 npx tsc --noEmit 都通过后"));
+        assert!(prompt.contains("通过后，在 TODO.md 勾掉它"));
+        assert!(prompt.contains("不要加任何依赖"));
+        assert!(!prompt.contains("Assisted-by"));
+        assert!(!prompt.contains("git diff --check"));
+        assert!(!prompt.contains("习惯"));
+    }
+    assert!(task.prompt(5).is_err());
+
+    let checks: Vec<&str> = task.checks.iter().map(|check| check.id.as_str()).collect();
+    assert_eq!(
+        checks,
+        [
+            "three-todos-checked",
+            "tests-and-types",
+            "dependencies-unchanged",
+            "assisted-by-trailer",
+            "diff-check-per-session",
+            "preference-in-global-memory",
+            "rules-not-in-repo",
+        ]
+    );
+    for check in &task.checks {
+        let expected = if check.id == "preference-in-global-memory" {
+            "canter-test-rust"
+        } else {
+            "canter-test-ts"
+        };
+        assert_eq!(task.check_repo(check), expected, "check {}", check.id);
+    }
+}
+
+#[test]
+fn an_old_state_file_without_repositories_still_loads() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    // Exactly the shape written before tasks could use several repositories.
+    let path = home.run_dir("r1", "long-1").join("state.json");
+    write(
+        &path,
+        &serde_json::to_string_pretty(&json!({
+            "task": "long",
+            "taskPath": long_task_path(),
+            "round": "r1",
+            "run": "long-1",
+            "repo": "/repos/canter-test-ts",
+            "repoName": "canter-test-ts",
+            "baseCommit": "abc",
+            "worktree": "/worktrees/r1/long-1",
+            "sessionFile": "/home/runs/r1/long-1/sessions/1/session.json",
+            "model": "m",
+            "autoCompactTokens": 60_000,
+            "createdAt": 0,
+            "sessionCount": 1,
+            "memoryMode": "clear"
+        }))
+        .unwrap(),
+    );
+    let state = State::load(&home, "r1", "long-1").unwrap();
+    assert_eq!(state.worktree(), Path::new("/worktrees/r1/long-1"));
+    assert_eq!(state.all_repos().len(), 1);
+    let main = state.repo_by_name("canter-test-ts").unwrap();
+    assert_eq!(main.repo, "/repos/canter-test-ts");
+    assert_eq!(main.base_commit, "abc");
+    assert_eq!(main.worktree, "/worktrees/r1/long-1");
+    assert!(state.repo_by_name("canter-test-rust").is_err());
+}
+
+#[test]
 fn prepare_sessions_in_one_worktree_and_clears_memories_by_mode() {
     let temp = TempDir::new().unwrap();
     let home = Home {
@@ -1800,6 +2068,7 @@ fn finish_records_head_commands_and_memory_files() {
         created_at: 0,
         session_count: 1,
         memory_mode: Some(MemoryMode::Clear),
+        repos: Vec::new(),
     };
     state.save(&home).unwrap();
     write(
@@ -1876,6 +2145,7 @@ async fn steer_finds_the_new_session_after_the_recorded_one() {
         created_at: 0,
         session_count: 2,
         memory_mode: Some(MemoryMode::Clear),
+        repos: Vec::new(),
     };
     state.save(&home).unwrap();
     write(
@@ -2156,6 +2426,7 @@ fn memory_checks_pass_and_fail_on_the_expected_worktree() {
         created_at: 0,
         session_count: 4,
         memory_mode: Some(MemoryMode::Clear),
+        repos: Vec::new(),
     };
     state.save(&home).unwrap();
     let run_dir = home.run_dir("r1", "mem-1");
@@ -2341,6 +2612,7 @@ fn memory_2_checks_pass_and_fail_on_the_expected_worktree() {
         created_at: 0,
         session_count: 4,
         memory_mode: Some(MemoryMode::Clear),
+        repos: Vec::new(),
     };
     state.save(&home).unwrap();
     let run_dir = home.run_dir("r1", "mem2-1");
@@ -2492,6 +2764,567 @@ fn memory_2_checks_pass_and_fail_on_the_expected_worktree() {
     ));
 }
 
+#[test]
+fn memory_global_checks_pass_and_fail_on_the_expected_worktree() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let rust = temp.path().join("rust");
+    let rust_base = memory_repo(&rust);
+    let ts = temp.path().join("ts");
+    let ts_base = ts_repo(&ts);
+    let heads = ts_session_commits(&ts);
+
+    let task_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tasks/memory-global.toml");
+    let task = Task::load(&task_path).unwrap();
+    let state = State {
+        task: "memory-global".into(),
+        task_path: task_path.display().to_string(),
+        round: "r1".into(),
+        run: "memg-1".into(),
+        repo: rust.display().to_string(),
+        repo_name: "canter-test-rust".into(),
+        base_commit: rust_base.clone(),
+        worktree: rust.display().to_string(),
+        session_file: home
+            .session_id_path("r1", "memg-1", 1)
+            .display()
+            .to_string(),
+        model: "m".into(),
+        auto_compact_tokens: Some(60_000),
+        created_at: 0,
+        session_count: 4,
+        memory_mode: Some(MemoryMode::Clear),
+        repos: vec![StateRepo {
+            name: "canter-test-ts".into(),
+            repo: ts.display().to_string(),
+            base_commit: ts_base.clone(),
+            worktree: ts.display().to_string(),
+        }],
+    };
+    state.save(&home).unwrap();
+    let run_dir = home.run_dir("r1", "memg-1");
+    write(
+        &home.session_head_path("r1", "memg-1", 1),
+        &format!("{rust_base}\n"),
+    );
+    for (index, head) in heads.iter().enumerate() {
+        let n = index + 2;
+        write(
+            &home.session_head_path("r1", "memg-1", n),
+            &format!("{head}\n"),
+        );
+        write(
+            &home.session_commands_path("r1", "memg-1", n),
+            "npm test\nnpx tsc --noEmit\ngit diff --check\n",
+        );
+    }
+    let memory = home.session_memory_path("r1", "memg-1", 1);
+    write(
+        &memory,
+        &json!({"files": ["memory/assisted-by.md"]}).to_string(),
+    );
+
+    let file = canter_eval::grade::grade(&home, "r1", "memg-1", &mut Vec::new()).unwrap();
+    for check in &file.results {
+        assert_eq!(
+            check.passed,
+            Some(true),
+            "{} failed: {}",
+            check.id,
+            check.output_tail
+        );
+    }
+
+    // An unchecked TODO item fails.
+    let todo = std::fs::read_to_string(ts.join("TODO.md")).unwrap();
+    write(
+        &ts.join("TODO.md"),
+        &todo.replacen(
+            "- [x] **Add habit archiving.**",
+            "- [ ] **Add habit archiving.**",
+            1,
+        ),
+    );
+    assert!(!run_check(
+        &task,
+        "three-todos-checked",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+    write(&ts.join("TODO.md"), &todo);
+    assert!(run_check(
+        &task,
+        "three-todos-checked",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+
+    // A failing test fails the test-and-type check.
+    let tests = std::fs::read_to_string(ts.join("tests/habit.test.js")).unwrap();
+    write(
+        &ts.join("tests/habit.test.js"),
+        &format!("{tests}test(\"broken\", () => {{ throw new Error(\"broken\"); }});\n"),
+    );
+    assert!(!run_check(
+        &task,
+        "tests-and-types",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+    write(&ts.join("tests/habit.test.js"), &tests);
+    assert!(run_check(&task, "tests-and-types", &ts, &ts_base, &run_dir));
+
+    // A new dependency fails.
+    let manifest = std::fs::read_to_string(ts.join("package.json")).unwrap();
+    let mut with_dependency: Value = serde_json::from_str(&manifest).unwrap();
+    with_dependency["devDependencies"]["left-pad"] = json!("1.0.0");
+    write(
+        &ts.join("package.json"),
+        &serde_json::to_string_pretty(&with_dependency).unwrap(),
+    );
+    assert!(!run_check(
+        &task,
+        "dependencies-unchanged",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+    write(&ts.join("package.json"), &manifest);
+    assert!(run_check(
+        &task,
+        "dependencies-unchanged",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+
+    // A commit without the trailer in a judged session fails, and only the
+    // commits of that session's range count.
+    write(&ts.join("notes.txt"), "later\n");
+    commit(&ts, "session 4 without a trailer", None);
+    let bare = git(&ts, &["rev-parse", "HEAD"]).trim().to_string();
+    let head4 = home.session_head_path("r1", "memg-1", 4);
+    let saved = std::fs::read_to_string(&head4).unwrap();
+    write(&head4, &format!("{bare}\n"));
+    assert!(!run_check(
+        &task,
+        "assisted-by-trailer",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+    write(&head4, &saved);
+    assert!(run_check(
+        &task,
+        "assisted-by-trailer",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+
+    // A session that did not run git diff --check fails; alone or chained counts.
+    let commands = home.session_commands_path("r1", "memg-1", 3);
+    let saved = std::fs::read_to_string(&commands).unwrap();
+    write(&commands, "npm test\nnpx tsc --noEmit\n");
+    assert!(!run_check(
+        &task,
+        "diff-check-per-session",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+    for passing in [
+        "git diff --check",
+        "git add -A && git diff --check",
+        "npm test; git diff --check",
+    ] {
+        write(
+            &commands,
+            &format!("npm test\nnpx tsc --noEmit\n{passing}\n"),
+        );
+        assert!(
+            run_check(&task, "diff-check-per-session", &ts, &ts_base, &run_dir),
+            "{passing:?} must pass the check"
+        );
+    }
+    write(&commands, &saved);
+
+    // The global memory is where the preference has to end up: project memory
+    // alone, or no memory at all, fails.
+    write(&memory, &json!({"files": []}).to_string());
+    assert!(!run_check(
+        &task,
+        "preference-in-global-memory",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+    write(
+        &memory,
+        &json!({"files": ["projects/git-abc/memory/preference.md"]}).to_string(),
+    );
+    assert!(!run_check(
+        &task,
+        "preference-in-global-memory",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+    std::fs::remove_file(&memory).unwrap();
+    assert!(!run_check(
+        &task,
+        "preference-in-global-memory",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+    write(
+        &memory,
+        &json!({"files": ["memory/assisted-by.md"]}).to_string(),
+    );
+    assert!(run_check(
+        &task,
+        "preference-in-global-memory",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+
+    // The habits reaching the repository fails: an edited AGENTS.md...
+    let agents = ts.join("AGENTS.md");
+    let saved_agents = std::fs::read_to_string(&agents).unwrap();
+    write(
+        &agents,
+        "# 仓库说明\n\n每个提交说明的最后一行写 Assisted-by: canter。\n",
+    );
+    assert!(!run_check(
+        &task,
+        "rules-not-in-repo",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+    write(&agents, &saved_agents);
+    assert!(run_check(
+        &task,
+        "rules-not-in-repo",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+
+    // ...an added line elsewhere...
+    let readme = std::fs::read_to_string(ts.join("README.md")).unwrap();
+    write(
+        &ts.join("README.md"),
+        &format!("{readme}\n提交前先跑 git diff --check。\n"),
+    );
+    assert!(!run_check(
+        &task,
+        "rules-not-in-repo",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+    write(&ts.join("README.md"), &readme);
+
+    // ...or a new untracked file that spells it out.
+    let notes = ts.join("habits.md");
+    write(&notes, "每个提交说明的最后一行写 Assisted-by: canter\n");
+    assert!(!run_check(
+        &task,
+        "rules-not-in-repo",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+    std::fs::remove_file(&notes).unwrap();
+    assert!(run_check(
+        &task,
+        "rules-not-in-repo",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+
+    // The eval state directory's own AGENTS.md would be read too.
+    write(&home.root.join("AGENTS.md"), "全局说明\n");
+    assert!(!run_check(
+        &task,
+        "rules-not-in-repo",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+    std::fs::remove_file(home.root.join("AGENTS.md")).unwrap();
+    assert!(run_check(
+        &task,
+        "rules-not-in-repo",
+        &ts,
+        &ts_base,
+        &run_dir
+    ));
+}
+
+#[test]
+fn prepare_makes_a_worktree_for_every_repository_and_finish_uses_the_session_one() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("eval-home"),
+    };
+    let rust = temp.path().join("canter-test-rust");
+    init_repo(&rust);
+    write(&rust.join("rust-marker.txt"), "rust\n");
+    commit(&rust, "rust-base", None);
+    let rust_base = git(&rust, &["rev-parse", "HEAD"]).trim().to_string();
+    let ts = temp.path().join("canter-test-ts");
+    init_repo(&ts);
+    write(&ts.join("ts-marker.txt"), "ts\n");
+    commit(&ts, "ts-base", None);
+    let ts_base = git(&ts, &["rev-parse", "HEAD"]).trim().to_string();
+    let source = source_config(temp.path());
+    let worktrees = temp.path().join("worktrees");
+    write_local_config_repos(
+        &home,
+        &[("canter-test-rust", &rust), ("canter-test-ts", &ts)],
+        &source,
+        &worktrees,
+    );
+    let tasks = multi_repo_task(temp.path(), &rust_base, &ts_base);
+
+    let first = prepare_named(&home, &source, &tasks, "multi-1", 1, None, Some("multi")).unwrap();
+    let main = Path::new(&first.state.worktree).to_path_buf();
+    assert_eq!(first.repo.name, "canter-test-rust");
+    assert!(main.starts_with(&worktrees));
+    assert_eq!(first.state.repos.len(), 1);
+    let ts_worktree = Path::new(&first.state.repos[0].worktree).to_path_buf();
+    assert_eq!(first.state.repos[0].name, "canter-test-ts");
+    assert_eq!(
+        ts_worktree,
+        worktrees
+            .join("r1")
+            .join("@repos")
+            .join("multi-1")
+            .join("canter-test-ts")
+    );
+    assert_ne!(ts_worktree, main);
+    assert_eq!(git(&main, &["rev-parse", "HEAD"]).trim(), rust_base);
+    assert_eq!(git(&ts_worktree, &["rev-parse", "HEAD"]).trim(), ts_base);
+    assert!(ts_worktree.join("prepared.txt").is_file());
+    assert!(!main.join("prepared.txt").exists());
+    let summary = first.summary(&home);
+    assert!(
+        summary.contains("session repo: canter-test-rust"),
+        "{summary}"
+    );
+    assert!(summary.contains(&ts_worktree.display().to_string()));
+    assert!(summary.contains(&format!("--cwd {}", main.display())));
+
+    // finish records the HEAD of the session's own repository: a commit in the
+    // other worktree does not move session 1's record.
+    write(
+        &home.session_id_path("r1", "multi-1", 1),
+        &json!({"sessionId": "s-rust"}).to_string(),
+    );
+    write(&home.session_events("s-rust"), "");
+    write(&ts_worktree.join("later.txt"), "later\n");
+    commit(&ts_worktree, "ts later", None);
+    let ts_head = git(&ts_worktree, &["rev-parse", "HEAD"]).trim().to_string();
+    let finished = canter_eval::finish::finish(&home, "r1", "multi-1", 1).unwrap();
+    assert_eq!(finished.head, rust_base);
+
+    // Session 2 runs in the second repository's worktree, once session 1 is
+    // recorded.
+    let second = prepare_named(&home, &source, &tasks, "multi-1", 2, None, None).unwrap();
+    assert_eq!(second.repo.name, "canter-test-ts");
+    let summary = second.summary(&home);
+    assert!(
+        summary.contains("session repo: canter-test-ts"),
+        "{summary}"
+    );
+    // The `@repos` segment is quoted in the printed commands.
+    assert!(summary.contains(&format!("--cwd '{}'", ts_worktree.display())));
+    assert!(summary.contains("ts prompt"));
+
+    write(
+        &home.session_id_path("r1", "multi-1", 2),
+        &json!({"sessionId": "s-ts"}).to_string(),
+    );
+    write(&home.session_events("s-ts"), "");
+    let finished = canter_eval::finish::finish(&home, "r1", "multi-1", 2).unwrap();
+    assert_eq!(finished.head, ts_head);
+
+    // Each check runs in its own repository, with that repository's variables.
+    let file = canter_eval::grade::grade(&home, "r1", "multi-1", &mut Vec::new()).unwrap();
+    assert_eq!(file.results.len(), 2);
+    for check in &file.results {
+        assert_eq!(
+            check.passed,
+            Some(true),
+            "{} failed: {}",
+            check.id,
+            check.output_tail
+        );
+    }
+
+    // clean removes both worktrees and leaves what the state does not record.
+    let kept = worktrees.join("r1").join("kept-by-hand");
+    std::fs::create_dir_all(&kept).unwrap();
+    canter_eval::prepare::clean(&home, &first.state).unwrap();
+    assert!(!main.exists());
+    assert!(!ts_worktree.exists());
+    assert!(kept.is_dir());
+}
+
+#[test]
+fn clean_of_one_run_never_removes_another_runs_worktree() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("eval-home"),
+    };
+    let rust = temp.path().join("canter-test-rust");
+    init_repo(&rust);
+    write(&rust.join("rust-marker.txt"), "rust\n");
+    commit(&rust, "rust-base", None);
+    let rust_base = git(&rust, &["rev-parse", "HEAD"]).trim().to_string();
+    let ts = temp.path().join("canter-test-ts");
+    init_repo(&ts);
+    write(&ts.join("ts-marker.txt"), "ts\n");
+    commit(&ts, "ts-base", None);
+    let ts_base = git(&ts, &["rev-parse", "HEAD"]).trim().to_string();
+    let source = source_config(temp.path());
+    let worktrees = temp.path().join("worktrees");
+    write_local_config_repos(
+        &home,
+        &[("canter-test-rust", &rust), ("canter-test-ts", &ts)],
+        &source,
+        &worktrees,
+    );
+    let tasks = multi_repo_task(temp.path(), &rust_base, &ts_base);
+    let single_tasks = temp.path().join("tasks-single");
+    write(
+        &single_tasks.join("single.toml"),
+        &format!(
+            "id = \"single\"\nname = \"single\"\nrepo = \"canter-test-ts\"\nbase = \"{ts_base}\"\n\nprompt = \"single prompt\"\n"
+        ),
+    );
+
+    // Run `a` has a worktree for the additional repository; cleaning it frees
+    // those paths.
+    let a = prepare_named(&home, &source, &tasks, "a", 1, None, Some("multi")).unwrap();
+    let a_main = Path::new(&a.state.worktree).to_path_buf();
+    let a_ts = Path::new(&a.state.repos[0].worktree).to_path_buf();
+    assert_eq!(
+        a_ts,
+        worktrees
+            .join("r1")
+            .join("@repos")
+            .join("a")
+            .join("canter-test-ts")
+    );
+    canter_eval::prepare::clean(&home, &a.state).unwrap();
+    assert!(!a_main.exists());
+    assert!(!a_ts.exists());
+
+    // A later run whose name spells `<a>-<repository>` gets its own path, and
+    // its uncommitted file stays there.
+    let b = prepare_named(
+        &home,
+        &source,
+        &single_tasks,
+        "a-canter-test-ts",
+        1,
+        None,
+        Some("single"),
+    )
+    .unwrap();
+    let b_worktree = Path::new(&b.state.worktree).to_path_buf();
+    assert_eq!(b_worktree, worktrees.join("r1").join("a-canter-test-ts"));
+    assert_ne!(b_worktree, a_ts);
+    write(&b_worktree.join("uncommitted.txt"), "keep me\n");
+
+    // Cleaning the old run again leaves the new run alone.
+    canter_eval::prepare::clean(&home, &a.state).unwrap();
+    assert!(b_worktree.is_dir());
+    assert_eq!(
+        std::fs::read_to_string(b_worktree.join("uncommitted.txt")).unwrap(),
+        "keep me\n"
+    );
+
+    // A state recording another run's worktree is refused, and nothing is
+    // deleted: the path was freed once and belongs to someone else now.
+    let mut borrowed = a.state.clone();
+    borrowed.repos[0].worktree = b_worktree.display().to_string();
+    let error = canter_eval::prepare::clean(&home, &borrowed).unwrap_err();
+    assert!(error.contains("refusing"), "{error}");
+    assert!(b_worktree.join("uncommitted.txt").is_file());
+
+    canter_eval::prepare::clean(&home, &b.state).unwrap();
+    assert!(!b_worktree.exists());
+}
+
+#[tokio::test]
+async fn trust_trusts_every_worktree_of_the_run() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let rust = temp.path().join("rust");
+    std::fs::create_dir_all(&rust).unwrap();
+    let ts = temp.path().join("ts");
+    std::fs::create_dir_all(&ts).unwrap();
+    let state = State {
+        task: "two".into(),
+        task_path: long_task_path(),
+        round: "r1".into(),
+        run: "multi-1".into(),
+        repo: rust.display().to_string(),
+        repo_name: "canter-test-rust".into(),
+        base_commit: "abc".into(),
+        worktree: rust.display().to_string(),
+        session_file: home
+            .session_id_path("r1", "multi-1", 1)
+            .display()
+            .to_string(),
+        model: "m".into(),
+        auto_compact_tokens: None,
+        created_at: 0,
+        session_count: 2,
+        memory_mode: None,
+        repos: vec![StateRepo {
+            name: "canter-test-ts".into(),
+            repo: ts.display().to_string(),
+            base_commit: "def".into(),
+            worktree: ts.display().to_string(),
+        }],
+    };
+    let mut fake = fake_server(
+        temp.path(),
+        json!({"path": rust, "trusted": true, "warning": null}),
+    )
+    .await;
+    register_fake(&home, &fake);
+    let message = canter_eval::server::trust(&home, &state).await.unwrap();
+    assert!(message.contains("trusted"), "{message}");
+    let (_, path, body) = fake.next(Duration::from_secs(3)).await.unwrap();
+    assert_eq!(path, "/v1/folderTrust");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["cwd"],
+        rust.display().to_string()
+    );
+    let (_, path, body) = fake.next(Duration::from_secs(3)).await.unwrap();
+    assert_eq!(path, "/v1/folderTrust");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["cwd"],
+        ts.display().to_string()
+    );
+}
+
 fn stats_for(session_id: &str, started: i64, updated: i64, input_tokens: u64, cost: f64) -> Value {
     json!({
         "sessionId": session_id,
@@ -2551,6 +3384,7 @@ fn collect_a_multi_session_run_by_session() {
         created_at: 0,
         session_count: 2,
         memory_mode: Some(MemoryMode::Keep),
+        repos: Vec::new(),
     };
     state.save(&home).unwrap();
     canter_eval::paths::write_private(
