@@ -1621,6 +1621,67 @@ fn memory_task_has_four_sessions_and_the_rules_in_the_first() {
 }
 
 #[test]
+fn memory_2_task_has_four_sessions_and_the_rules_in_the_first() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tasks/memory-2.toml");
+    let task = Task::load(&path).unwrap();
+    assert_eq!(task.id, "memory-2");
+    assert_eq!(
+        task.name,
+        "记忆第二版：canter-test-rust 连做 4 件（规矩从仓库里看不出来）"
+    );
+    assert_eq!(task.repo, "canter-test-rust");
+    assert_eq!(task.base, "e9ee31cd4e4a0bb671374313cb9699354affa1b1");
+    assert_eq!(task.auto_compact_tokens, Some(60_000));
+    assert_eq!(task.reasoning.as_deref(), Some("high"));
+    assert_eq!(task.session_count(), 4);
+
+    let titles = [
+        "Add an edit command",
+        "Support weekly reports",
+        "Add CSV export",
+        "Add monthly project comparisons",
+    ];
+    for (index, title) in titles.iter().enumerate() {
+        let prompt = task.prompt(index + 1).unwrap();
+        assert!(
+            prompt.starts_with(&format!("做 TODO.md 里的「{title}」这一件")),
+            "session {index} prompt: {prompt}"
+        );
+        assert!(prompt.contains("cargo test 和 cargo clippy -- -D warnings 都通过后"));
+        assert!(prompt.contains("通过后，在 TODO.md 勾掉它"));
+        assert!(prompt.contains("不要加任何依赖"));
+    }
+    let first = task.prompt(1).unwrap();
+    for line in [
+        "另外这个仓库有两条长期的规矩，以后在这里做的每件活都要守：",
+        "1. README.md 由人维护，不要改它。",
+        "2. 每次提交前跑一次 cargo doc --no-deps，要通过。",
+    ] {
+        assert!(first.contains(line), "the first prompt is missing {line:?}");
+    }
+    for n in 2..=4 {
+        assert!(
+            !task.prompt(n).unwrap().contains("长期的规矩"),
+            "session {n} prompt must not repeat the rules"
+        );
+    }
+    assert!(task.prompt(5).is_err());
+
+    let checks: Vec<&str> = task.checks.iter().map(|check| check.id.as_str()).collect();
+    assert_eq!(
+        checks,
+        [
+            "four-todos-checked",
+            "tests-and-lints",
+            "dependencies-unchanged",
+            "readme-untouched",
+            "cargo-doc-per-session",
+            "rules-not-in-repo",
+        ]
+    );
+}
+
+#[test]
 fn prepare_sessions_in_one_worktree_and_clears_memories_by_mode() {
     let temp = TempDir::new().unwrap();
     let home = Home {
@@ -1980,6 +2041,11 @@ fn memory_repo(dir: &Path) -> String {
          #[cfg(test)]\nmod tests {\n    #[test]\n    fn adds() {\n        assert_eq!(super::add(1, 2), 3);\n    }\n}\n",
     );
     write(&dir.join("docs/commands.md"), "# Commands\n");
+    write(&dir.join("README.md"), "# timecard\n\nUsage notes.\n");
+    write(
+        &dir.join("AGENTS.md"),
+        "# 仓库说明\n\n只用标准库，不加依赖。\n",
+    );
     write(
         &dir.join("Cargo.lock"),
         "version = 4\n\n[[package]]\nname = \"timecard-fixture\"\nversion = \"0.1.0\"\n",
@@ -2244,6 +2310,186 @@ fn memory_checks_pass_and_fail_on_the_expected_worktree() {
     );
     assert!(!run_check(&task, "tests-and-lints", &repo, &base, &run_dir));
     write(&repo.join("src/lib.rs"), &source);
+}
+
+#[test]
+fn memory_2_checks_pass_and_fail_on_the_expected_worktree() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    let base = memory_repo(&repo);
+    let heads = memory_commits(&repo);
+    let task_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tasks/memory-2.toml");
+    let task = Task::load(&task_path).unwrap();
+    let state = State {
+        task: "memory-2".into(),
+        task_path: task_path.display().to_string(),
+        round: "r1".into(),
+        run: "mem2-1".into(),
+        repo: repo.display().to_string(),
+        repo_name: "canter-test-rust".into(),
+        base_commit: base.clone(),
+        worktree: repo.display().to_string(),
+        session_file: home
+            .session_id_path("r1", "mem2-1", 1)
+            .display()
+            .to_string(),
+        model: "m".into(),
+        auto_compact_tokens: Some(60_000),
+        created_at: 0,
+        session_count: 4,
+        memory_mode: Some(MemoryMode::Clear),
+    };
+    state.save(&home).unwrap();
+    let run_dir = home.run_dir("r1", "mem2-1");
+    for (index, head) in heads.iter().enumerate() {
+        let n = index + 1;
+        write(
+            &home.session_head_path("r1", "mem2-1", n),
+            &format!("{head}\n"),
+        );
+        if n >= 2 {
+            write(
+                &home.session_commands_path("r1", "mem2-1", n),
+                "cargo test\ncargo clippy -- -D warnings\ncargo doc --no-deps\n",
+            );
+        }
+    }
+
+    let file = canter_eval::grade::grade(&home, "r1", "mem2-1", &mut Vec::new()).unwrap();
+    for check in &file.results {
+        assert_eq!(
+            check.passed,
+            Some(true),
+            "{} failed: {}",
+            check.id,
+            check.output_tail
+        );
+    }
+
+    // A session whose commits touch README.md fails, and only that session's
+    // range matters.
+    write(
+        &repo.join("README.md"),
+        "# timecard\n\nA session rewrote me.\n",
+    );
+    commit(&repo, "tc(edit): mention the edit command", None);
+    let readme_head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let head4 = home.session_head_path("r1", "mem2-1", 4);
+    let saved = std::fs::read_to_string(&head4).unwrap();
+    write(&head4, &format!("{readme_head}\n"));
+    assert!(!run_check(
+        &task,
+        "readme-untouched",
+        &repo,
+        &base,
+        &run_dir
+    ));
+    write(&head4, &saved);
+    assert!(run_check(&task, "readme-untouched", &repo, &base, &run_dir));
+
+    // Each judged session has to run cargo doc; alone or chained counts.
+    let commands = home.session_commands_path("r1", "mem2-1", 3);
+    let saved = std::fs::read_to_string(&commands).unwrap();
+    write(&commands, "cargo test\ncargo clippy -- -D warnings\n");
+    assert!(!run_check(
+        &task,
+        "cargo-doc-per-session",
+        &repo,
+        &base,
+        &run_dir
+    ));
+    for passing in [
+        "cargo doc --no-deps",
+        "cargo test && cargo doc --no-deps",
+        "cargo test; cargo doc --no-deps",
+    ] {
+        write(
+            &commands,
+            &format!("cargo test\ncargo clippy -- -D warnings\n{passing}\n"),
+        );
+        assert!(
+            run_check(&task, "cargo-doc-per-session", &repo, &base, &run_dir),
+            "{passing:?} must pass the check"
+        );
+    }
+    write(&commands, &saved);
+
+    // The rules reaching the repository through AGENTS.md fails, edited in the
+    // worktree...
+    let agents = repo.join("AGENTS.md");
+    let saved_agents = std::fs::read_to_string(&agents).unwrap();
+    write(&agents, "# 仓库说明\n\n只改 src/ 和 docs/。\n");
+    assert!(!run_check(
+        &task,
+        "rules-not-in-repo",
+        &repo,
+        &base,
+        &run_dir
+    ));
+    write(&agents, &saved_agents);
+    assert!(run_check(
+        &task,
+        "rules-not-in-repo",
+        &repo,
+        &base,
+        &run_dir
+    ));
+
+    // ...or committed there (a separate repository, so this one stays clean).
+    let committed_repo = temp.path().join("committed");
+    let committed_base = memory_repo(&committed_repo);
+    write(
+        &committed_repo.join("AGENTS.md"),
+        "# 仓库说明\n\n只改 src/ 和 docs/。\n",
+    );
+    commit(&committed_repo, "docs: describe the workflow", None);
+    assert!(!run_check(
+        &task,
+        "rules-not-in-repo",
+        &committed_repo,
+        &committed_base,
+        &run_dir
+    ));
+
+    // A new untracked file that spells out the rule fails.
+    let notes = repo.join("notes.md");
+    write(&notes, "before committing, run cargo doc --no-deps\n");
+    assert!(!run_check(
+        &task,
+        "rules-not-in-repo",
+        &repo,
+        &base,
+        &run_dir
+    ));
+    std::fs::remove_file(&notes).unwrap();
+    assert!(run_check(
+        &task,
+        "rules-not-in-repo",
+        &repo,
+        &base,
+        &run_dir
+    ));
+
+    // So does a global AGENTS.md in the eval state directory.
+    write(&home.root.join("AGENTS.md"), "全局说明\n");
+    assert!(!run_check(
+        &task,
+        "rules-not-in-repo",
+        &repo,
+        &base,
+        &run_dir
+    ));
+    std::fs::remove_file(home.root.join("AGENTS.md")).unwrap();
+    assert!(run_check(
+        &task,
+        "rules-not-in-repo",
+        &repo,
+        &base,
+        &run_dir
+    ));
 }
 
 fn stats_for(session_id: &str, started: i64, updated: i64, input_tokens: u64, cost: f64) -> Value {

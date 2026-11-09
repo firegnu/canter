@@ -2,7 +2,7 @@
 
 评测 canter 自己在长程任务里的表现：任务完成度、token 和花费、上下文怎么涨、压缩前后什么样、插话听不听、会话之间的记忆留不留得住。评测不改 canter 本身；`canter` 在 eval 里是被测的对象。
 
-设计见 `docs/DESIGN.md` 的「eval（P2-151）」。题目组：长程（`tasks/long.toml`）、记忆（`tasks/memory.toml`）；子 agent 题另做（P2-258）。
+设计见 `docs/DESIGN.md` 的「eval（P2-151）」。题目组：长程（`tasks/long.toml`）、记忆（`tasks/memory.toml`）、记忆第二版（`tasks/memory-2.toml`：规矩换成 README.md 不要改、每次提交前 `cargo doc`，这两条从仓库里看不出来；`memory` 那三条从 `git log` 和已有文件看得出来，清空记忆也守得住）；子 agent 题另做（P2-258）。
 
 ## 目录
 
@@ -12,6 +12,7 @@ eval/
   src/               工具
   tasks/long.toml    长程题：canter-test-ts 的 12 件 TODO（一个会话）
   tasks/memory.toml  记忆题：canter-test-rust 连做 4 件（4 个会话，第 1 个口头交代三条长期规矩）
+  tasks/memory-2.toml 记忆题第二版：同样 4 个会话，规矩换成仓库里看不出来的两条，另查规矩没漏进仓库
   results/           每轮的对比表，提交进仓库（只有数字、会话 ID、版本、模型、时段）
 ```
 

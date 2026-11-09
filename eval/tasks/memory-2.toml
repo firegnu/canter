@@ -1,0 +1,122 @@
+# 记忆题第二版：canter-test-rust 连着 4 个会话，每个会话做 TODO.md 里的一件。
+# 第 1 个会话口头交代两条长期规矩，看后面 3 个会话记住没有（P2-263）。
+#
+# 和 memory.toml 的区别：那三条规矩从 git log 和已有文件看得出来，不看记忆也能守；
+# 这两条在仓库里看不出来（README 由人维护、每次提交前 cargo doc），模型平时也不做。
+# 判分另加 readme-untouched、cargo-doc-per-session，还查规矩有没有漏进仓库
+# （rules-not-in-repo 不过，说明后面的会话不靠记忆也能看到规矩，这次不能拿来比记忆）。
+#
+# 仓库、起点、压缩线、思考档和 memory.toml 一样。
+# 判分命令在 worktree 里用 sh -c 跑，环境里有 REPO、WORKTREE、BASE、RUN_DIR。
+id = "memory-2"
+name = "记忆第二版：canter-test-rust 连做 4 件（规矩从仓库里看不出来）"
+repo = "canter-test-rust"
+base = "e9ee31cd4e4a0bb671374313cb9699354affa1b1"
+auto_compact_tokens = 60000
+reasoning = "high"
+
+[[sessions]]
+prompt = '''做 TODO.md 里的「Add an edit command」这一件：实现、补测试，cargo test 和 cargo clippy -- -D warnings 都通过后，在 TODO.md 勾掉它，再单独提交一次。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。
+
+另外这个仓库有两条长期的规矩，以后在这里做的每件活都要守：
+1. README.md 由人维护，不要改它。
+2. 每次提交前跑一次 cargo doc --no-deps，要通过。'''
+
+[[sessions]]
+prompt = '''做 TODO.md 里的「Support weekly reports」这一件：实现、补测试，cargo test 和 cargo clippy -- -D warnings 都通过后，在 TODO.md 勾掉它，再单独提交一次。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。'''
+
+[[sessions]]
+prompt = '''做 TODO.md 里的「Add CSV export」这一件：实现、补测试，cargo test 和 cargo clippy -- -D warnings 都通过后，在 TODO.md 勾掉它，再单独提交一次。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。'''
+
+[[sessions]]
+prompt = '''做 TODO.md 里的「Add monthly project comparisons」这一件：实现、补测试，cargo test 和 cargo clippy -- -D warnings 都通过后，在 TODO.md 勾掉它，再单独提交一次。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。'''
+
+# 判分只看第 2～4 个会话做的事：第 1 个会话是交代规矩的地方。
+[[checks]]
+id = "four-todos-checked"
+description = "TODO.md 里这 4 件都勾了"
+command = '''
+for title in 'Add an edit command.' 'Support weekly reports.' 'Add CSV export.' 'Add monthly project comparisons.'; do
+  grep -qF -- "- [x] **$title**" TODO.md || exit 1
+done
+'''
+
+[[checks]]
+id = "tests-and-lints"
+description = "cargo test 和 cargo clippy -- -D warnings 都通过"
+command = '''cargo test && cargo clippy -- -D warnings'''
+
+[[checks]]
+id = "dependencies-unchanged"
+description = "Cargo.lock 里的包和起点一样"
+command = '''
+base="$(git show "$BASE:Cargo.lock" | sed -n 's/^name = "\(.*\)"$/\1/p' | sort)" || exit 1
+now="$(sed -n 's/^name = "\(.*\)"$/\1/p' Cargo.lock | sort)" || exit 1
+test "$base" = "$now"
+'''
+
+[[checks]]
+id = "readme-untouched"
+description = "第 2～4 个会话的提交都没改 README.md"
+command = '''
+for n in 2 3 4; do
+  from="$(cat "$RUN_DIR/sessions/$((n - 1))/head")" || exit 1
+  to="$(cat "$RUN_DIR/sessions/$n/head")" || exit 1
+  if git log --format= --name-only "$from".."$to" | grep -qx 'README.md'; then
+    exit 1
+  fi
+done
+'''
+
+[[checks]]
+id = "cargo-doc-per-session"
+description = "第 2、3、4 个会话的命令里各跑了一次 cargo doc"
+command = '''
+for n in 2 3 4; do
+  file="$RUN_DIR/sessions/$n/commands.txt"
+  test -f "$file" || exit 1
+  grep -Eq '(^|[;&|(])[[:space:]]*cargo[[:space:]]+doc([[:space:]]|[;&|)]|$)' "$file" || exit 1
+done
+'''
+
+# 规矩要能看见，只能靠记忆：后面的会话开局自动读的地方（worktree 各层的 AGENTS.md、
+# CLAUDE.md 和 .agents/ 下的文件，eval 状态目录根下的 AGENTS.md）和起点比都不能变；
+# 相对起点新增的内容里也不能留下 cargo doc 字样（比如写进某个文件照着抄）。
+[[checks]]
+id = "rules-not-in-repo"
+description = "两条规矩没有写进仓库或 eval 状态目录里自动读的地方"
+command = '''
+changed="$(git diff --name-only "$BASE")" || exit 1
+untracked_all="$(git ls-files --others)" || exit 1
+if printf '%s\n' "$changed" "$untracked_all" | grep -Eq '(^|/)(AGENTS\.md|CLAUDE\.md)$|(^|/)\.agents/'; then
+  echo "AGENTS.md, CLAUDE.md or .agents/ differs from the base commit" >&2
+  exit 1
+fi
+
+if git diff --no-color "$BASE" | awk '
+  /^diff --git / { hunk = 0; next }
+  /^@@/ { hunk = 1; next }
+  hunk && /^\+/ && index($0, "cargo doc") { found = 1 }
+  END { exit(found ? 0 : 1) }
+'; then
+  echo "an added line mentions cargo doc" >&2
+  exit 1
+fi
+
+untracked="$(git ls-files --others --exclude-standard)" || exit 1
+if [ -n "$untracked" ]; then
+  if ! printf '%s\n' "$untracked" | while IFS= read -r file; do
+    if [ -f "$file" ] && grep -qF -- 'cargo doc' "$file"; then
+      exit 1
+    fi
+  done; then
+    echo "a new untracked file mentions cargo doc" >&2
+    exit 1
+  fi
+fi
+
+if [ -e "$RUN_DIR/../../../AGENTS.md" ]; then
+  echo "the eval state directory has a global AGENTS.md" >&2
+  exit 1
+fi
+'''
