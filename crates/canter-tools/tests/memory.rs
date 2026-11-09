@@ -265,6 +265,43 @@ fn memory_indexes_are_sorted_bounded_and_only_include_headers() {
 }
 
 #[test]
+fn memory_index_skips_blank_lines_before_the_description_and_warns_about_invalid_headers() {
+    let fixture = Fixture::new();
+    let roots = fixture.memory.roots().unwrap().unwrap();
+    // Models often leave a blank line under the heading; the memory still counts.
+    std::fs::write(
+        roots.project.join("conventions.md"),
+        "# Commit conventions\n\n\nStanding rules for every task.\n\nBODY MUST NOT BE INDEXED",
+    )
+    .unwrap();
+    let index = fixture.memory.index().unwrap();
+    assert!(
+        index.contains(
+            r#""name":"Commit conventions","description":"Standing rules for every task.""#
+        )
+    );
+    assert!(!index.contains("BODY MUST NOT BE INDEXED"));
+    assert_eq!(fixture.memory.take_warning(), None);
+
+    // A file the index has to leave out is reported instead of dropped silently.
+    std::fs::write(
+        roots.project.join("no-description.md"),
+        "# Heading only\n\n",
+    )
+    .unwrap();
+    std::fs::write(roots.global.join("no-heading.md"), "Missing header\n").unwrap();
+    let index = fixture.memory.index().unwrap();
+    assert!(!index.contains("Heading only"));
+    assert!(!index.contains("no-heading.md"));
+    assert_eq!(
+        fixture.memory.take_warning().as_deref(),
+        Some(
+            "Some memory files have no valid header (2): they need a `# name` line followed by a one-line description. They are listed by filename in /memory and omitted from the index."
+        )
+    );
+}
+
+#[test]
 fn memory_project_identity_is_shared_by_git_worktrees_and_separate_for_other_directories() {
     let fixture = Fixture::new();
     let git = |cwd: &std::path::Path, args: &[&str]| {

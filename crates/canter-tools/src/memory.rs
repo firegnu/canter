@@ -65,6 +65,7 @@ impl Memory {
         let roots = self.roots()?.ok_or_else(disabled)?;
         let mut entries = Vec::new();
         let mut unreadable = 0;
+        let mut invalid = 0;
         for (scope, directory) in [
             (MemoryScope::Global, &roots.global),
             (MemoryScope::Project, &roots.project),
@@ -95,7 +96,14 @@ impl Memory {
                     // The body is loaded by the model's normal read tool.
                     let mut reader = io::BufReader::new(input.take(64 * 1024));
                     reader.read_line(&mut first)?;
-                    reader.read_line(&mut second)
+                    // Blank lines between the heading and the description are skipped.
+                    while second.trim().is_empty() {
+                        second.clear();
+                        if reader.read_line(&mut second)? == 0 {
+                            break;
+                        }
+                    }
+                    Ok::<_, io::Error>(())
                 })();
                 if header.is_err() {
                     unreadable += 1;
@@ -106,6 +114,9 @@ impl Memory {
                     .map(str::trim)
                     .filter(|name| !name.is_empty());
                 let valid = header.is_ok() && name.is_some() && !second.trim().is_empty();
+                if header.is_ok() && !valid {
+                    invalid += 1;
+                }
                 entries.push(MemoryEntry {
                     scope,
                     file: file.clone(),
@@ -119,10 +130,19 @@ impl Memory {
                 });
             }
         }
+        let mut warnings = Vec::new();
         if unreadable > 0 {
-            *self.warning.lock().unwrap() = Some(format!(
+            warnings.push(format!(
                 "Some memory files could not be read ({unreadable}). They are listed by filename in /memory and omitted from the index."
             ));
+        }
+        if invalid > 0 {
+            warnings.push(format!(
+                "Some memory files have no valid header ({invalid}): they need a `# name` line followed by a one-line description. They are listed by filename in /memory and omitted from the index."
+            ));
+        }
+        if !warnings.is_empty() {
+            *self.warning.lock().unwrap() = Some(warnings.join(" "));
         }
         Ok(entries)
     }
