@@ -393,7 +393,7 @@ impl ReadArgs {
         if supplied("lineCount") && supplied("limit") {
             return Err("read accepts lineCount or limit, not both".into());
         }
-        // offset counts from 0 like pi and opencode; startLine counts from 1.
+        // offset is a 1-based line number like startLine (as in pi and opencode); 0 means the first line.
         if let Some(offset) = self.offset {
             self.start_line = offset.max(1);
         }
