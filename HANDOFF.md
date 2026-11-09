@@ -147,6 +147,7 @@
 ## 已知没修的问题
 
 - eval 工具（P2-257，11-09 合并）交叉审查建议改、没做的：
+  - 「用时」取会话第一条到最后一条事件，一轮结束后的「下一句建议」请求和 corral 关闭时的状态也算进去，所以 `collect` 早跑晚跑差十几二十秒（P2-261 重出第一轮的表时三次各多 16～24 秒）。改法：算到最后一个 `turn.completed`（`eval/src/collect.rs` `metrics`）。
   - 源模型写了 `supported_reasoning_efforts`、里面没有题目要的档位时，`set_reasoning` 会自己把档位补进列表，不报错（`eval/src/config.rs`）。
   - `prepare` 中途失败（worktree 或 setup 失败、`state.json` 还没写）会留下半截 run，`canter-eval clean` 清不掉，同名 run 也不能再 `prepare`；只能换 run 名或手动删 run 目录（`eval/src/prepare.rs`）。
   - 可以不改：eval 状态目录只拒绝 canter 状态目录的直接上级，更上面的没拦；缺省 `~/.canter` 时碰不到（`eval/src/paths.rs` `refuse_daily_state`）。

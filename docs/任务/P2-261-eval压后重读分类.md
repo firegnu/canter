@@ -103,3 +103,12 @@ def rel($cwd): if startswith($cwd + "/") then .[($cwd|length)+1:] else ltrimstr(
 没做的事：没用第一轮 `baseline-2026-11-09` 的真会话核对 31/0/14 等数（按任务留给主控）；没改 `crates/`，没动 `eval/results/`；没合并、没推送。
 
 踩过的坑：一次编辑 `report.rs` 时 oldText 选错，误删了 `cost()` 开头三行，编译前看 diff 发现并补回；clippy 的 `redundant_guards` 要求把 `if matches!(...)` 写成结构体字段里的 or 模式；用 `rg -rn` 搜索时 `-r` 是替换而不是行号，输出被改得看不出原样，换回 `rg -n` 才看对。
+
+## 主控审查
+
+- 改动只在 `eval/`（`collect.rs`、`report.rs`、测试、README），`crates/` 没动。分类用 stats 给的 `rereadFiles` 名单、只算成功有摘要的压缩，和 canter 的 `fill` 同口径。
+- 验收（主控提、用户 11-09「派吧」同意）：主控用分支版本对 `baseline-2026-11-09` 三次重跑 `collect`、`report`，三类为 31/0/14、23/0/17、34/0/16，合计 45、40、50，和 P2-151 记的一致；表里有工具失败分项和「改计划」列。合并后用 main 版重出了第一轮的表。
+- 合并前全套：`cargo nextest run --all-targets` 2043 个全过，`cargo test --doc --workspace` 全过。
+- 顺带发现（P2-257 留下，记进 HANDOFF）：「用时」到会话最后一条事件为止，会算进一轮结束后的建议请求和关闭时的状态，早收和晚收差十几二十秒；这次重出的表三次用时因此各多了 16～24 秒。
+
+结果：一次过
