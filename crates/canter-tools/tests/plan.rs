@@ -58,6 +58,54 @@ async fn invalid_plan_steps_return_errors_instead_of_a_successful_update() {
 }
 
 #[tokio::test]
+async fn update_plan_accepts_description_in_place_of_step() {
+    let root = tempfile::tempdir().unwrap();
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(root.path().into(), BTreeMap::new(), vec![]).unwrap(),
+    ));
+    let cancel = CancellationToken::new();
+    let gate = PermissionGate::default();
+    let tool = Tool::from_name("update_plan").expect("update_plan is a built-in tool");
+    let mut items = Vec::new();
+    for plan in [
+        json!([
+            {"step":"Read the code", "status":"completed"},
+            {"step":"Implement", "status":"in_progress"}
+        ]),
+        json!([
+            {"description":"Read the code", "status":"completed"},
+            {"description":"Implement", "status":"in_progress"}
+        ]),
+    ] {
+        let call = tools
+            .prepare(tool, "plan", &json!({"plan":plan}).to_string(), &cancel)
+            .await
+            .unwrap();
+        let PermissionCheck::Execute(permit) = gate.evaluate(&call, PermissionMode::AllowAll)
+        else {
+            panic!("update_plan must not ask for approval");
+        };
+        let result = tools.execute(permit, &cancel, &mut |_| {}).await;
+        assert_eq!(result.outcome, ToolOutcome::Completed, "{}", result.text);
+        items.push(serde_json::to_value(result.item).unwrap());
+    }
+    assert_eq!(items[0], items[1]);
+
+    let raw =
+        json!({"plan":[{"step":"Read", "description":"Read", "status":"pending"}]}).to_string();
+    let error = match tools.prepare(tool, "plan", &raw, &cancel).await {
+        Err(error) => error,
+        Ok(_) => panic!("a step with both step and description must be rejected"),
+    };
+    assert_eq!(error.outcome, ToolOutcome::Failed);
+    assert!(
+        error.text.contains("step") && error.text.contains("description"),
+        "{}",
+        error.text
+    );
+}
+
+#[tokio::test]
 async fn update_plan_returns_a_complete_checklist_without_approval_in_every_mode() {
     let root = tempfile::tempdir().unwrap();
     let tools = Tools::new(Arc::new(

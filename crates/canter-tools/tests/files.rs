@@ -709,6 +709,79 @@ async fn edit_validates_all_replacements_against_the_original_before_writing() {
 }
 
 #[tokio::test]
+async fn edit_ignores_replacements_whose_old_and_new_text_are_identical() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("notes");
+    std::fs::write(&path, "alpha beta gamma\n").unwrap();
+    let tools = tools(&dir);
+    let cancel = CancellationToken::new();
+
+    // An anchor that overlaps the real replacement is ignored, not reported.
+    let anchored = r#"{"path":"notes","edits":[{"oldText":"alpha beta","newText":"alpha beta"},{"oldText":"alpha","newText":"ALPHA"}]}"#;
+    let alone = r#"{"path":"notes","edits":[{"oldText":"alpha","newText":"ALPHA"}]}"#;
+    let call = tools
+        .prepare(Tool::Edit, "e1", anchored, &cancel)
+        .await
+        .unwrap();
+    let anchored_result = tools.execute(allow(&call), &cancel, &mut |_| {}).await;
+    assert_eq!(
+        anchored_result.outcome,
+        ToolOutcome::Completed,
+        "{}",
+        anchored_result.text
+    );
+    let anchored_file = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(anchored_file, "ALPHA beta gamma\n");
+    std::fs::write(&path, "alpha beta gamma\n").unwrap();
+    let call = tools
+        .prepare(Tool::Edit, "e1", alone, &cancel)
+        .await
+        .unwrap();
+    let alone_result = tools.execute(allow(&call), &cancel, &mut |_| {}).await;
+    assert_eq!(alone_result.outcome, ToolOutcome::Completed);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), anchored_file);
+    assert_eq!(anchored_result.text, alone_result.text);
+    assert_eq!(
+        serde_json::to_value(&anchored_result.item).unwrap(),
+        serde_json::to_value(&alone_result.item).unwrap()
+    );
+
+    // An anchor is still located in the file exactly once before it is dropped.
+    for (edit, problem) in [
+        (r#"{"oldText":"absent","newText":"absent"}"#, "not found"),
+        (r#"{"oldText":"a","newText":"a"}"#, "multiple"),
+    ] {
+        let before = std::fs::read(&path).unwrap();
+        let raw = format!(r#"{{"path":"notes","edits":[{edit}]}}"#);
+        let error = match tools.prepare(Tool::Edit, "e2", &raw, &cancel).await {
+            Err(error) => error,
+            Ok(_) => panic!("invalid anchor should be rejected"),
+        };
+        assert!(error.text.contains(problem), "{}", error.text);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    // A call made only of anchors changes nothing and says so.
+    std::fs::write(&path, "alpha beta gamma\n").unwrap();
+    let raw = r#"{"path":"notes","edits":[{"oldText":"alpha","newText":"alpha"},{"oldText":"beta","newText":"beta"}]}"#;
+    let error = match tools.prepare(Tool::Edit, "e3", raw, &cancel).await {
+        Err(error) => error,
+        Ok(_) => panic!("a call with only anchors must fail"),
+    };
+    assert!(
+        error
+            .text
+            .contains("nothing changed: every edit has identical oldText and newText"),
+        "{}",
+        error.text
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "alpha beta gamma\n"
+    );
+}
+
+#[tokio::test]
 async fn edit_not_found_shows_the_closest_text_and_the_difference() {
     let dir = tempfile::tempdir().unwrap();
     let tools = tools(&dir);
