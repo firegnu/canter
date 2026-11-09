@@ -1,0 +1,139 @@
+# 子 agent 题组：P2-248 第九次测试的调研问题（P2-258）。
+#
+# 主会话的目录是一次跑的 @repos 目录（`<worktrees>/<轮次>/@repos/<次>/`）：它不在
+# 任何仓库里，里面只有 codex/ 和 pi-mono/ 两个仓库的 worktree，也没有 AGENTS.md、
+# CLAUDE.md。所以题目不写 repo、base，两个仓库都写在 [[repos]] 里。
+#
+# 开跑提示和插话里可以写 {repo:<名字>}，prepare / steer 换成那个仓库 worktree 的
+# 绝对路径。
+#
+# 插话时机（[[chat]] 的 after）只有两种：
+#   turn   上一轮结束后（第一句是开跑提示那一轮），等主会话空闲再发；
+#   report 某个子 agent 的报告叫醒过主会话以后，等主会话空闲再发；这时所有子
+#          agent 都已经回来了就不发，记下原因。
+# 判分命令在 $RUN_DIR 里跑，读 grade 写的 session-data.json（见 README）。
+
+id = "subagent"
+name = "子 agent：codex 与 pi-mono 的工具调用超时调研"
+auto_compact_tokens = 60000
+reasoning = "high"
+
+prompt = '''对比 {repo:codex} 和 {repo:pi-mono} 这两个项目是怎么处理工具调用超时的：各自在哪些文件、默认超时多少、超时后怎么告诉模型。'''
+
+[[repos]]
+name = "codex"
+base = "57a808a"
+
+[[repos]]
+name = "pi-mono"
+base = "085c84e"
+
+[[chat]]
+after = "turn"
+text = '''好的，谢谢'''
+
+[[chat]]
+after = "turn"
+text = '''{repo:codex} 的最新提交是哪天的？'''
+
+[[chat]]
+after = "turn"
+text = '''你觉得这两个项目哪个代码更好读？'''
+
+[[chat]]
+after = "turn"
+text = '''等他们调查回来吧'''
+
+[[chat]]
+after = "report"
+text = '''好的，继续等另外一个subagent回来'''
+
+# 判分全靠 session-data.json：
+#   turns[i].durationMs     这一轮从开始到结束的毫秒数
+#   turns[i].openedBy.kind  prompt / steer / report / other
+#   turns[i].tools          这一轮各工具调用的次数，按工具名（read、shell、
+#                           spawn_agent、wait_agent 等）
+#   finalReply              主会话最后一条回复的原文
+#   subAgents[]             每个子 agent 的请求、被拦命令、开始结束、token、花费
+#   chats[]                 插话：index 从 1 起，sentAt、turnId、skipped
+[[checks]]
+id = "spawned-subagents"
+description = "主会话第 1 轮开了至少 1 个子 agent"
+command = '''jq -e '(.turns[0].tools.spawn_agent // 0) > 0' "$RUN_DIR/session-data.json"'''
+
+[[checks]]
+id = "dispatch-turn-quick"
+description = "主会话第 1 轮 60 秒内结束（第九次 15 秒）"
+command = '''jq -e '.turns[0].durationMs != null and .turns[0].durationMs <= 60000' "$RUN_DIR/session-data.json"'''
+
+[[checks]]
+id = "no-wait-in-chat"
+description = "插话开的那几轮里没调 wait_agent"
+command = '''jq -e '([.turns[] | select(.openedBy.kind == "steer") | (.tools.wait_agent // 0)] | add // 0) == 0' "$RUN_DIR/session-data.json"'''
+
+# 6 条事实：codex shell 默认 10 秒、codex MCP 默认 300 秒、codex 超时退出码 124、
+# pi 的 bash 没有默认超时、pi 超时文案 Command timed out after N seconds、pi MCP
+# 默认 60 秒。中英文都认，数字和单位之间有没有空格都认，也认毫秒写法
+# （10 000 ms、10_000、10000 ms）。每条在整篇回复里找一个写法即可。
+[[checks]]
+id = "answer-facts"
+description = "最后一条回复提到 6 条事实（codex 10 秒 / codex MCP 300 秒 / 退出码 124 / pi bash 无默认 / pi 超时文案 / pi MCP 60 秒）"
+command = '''
+reply="$(jq -r '.finalReply // ""' "$RUN_DIR/session-data.json")" || exit 1
+
+fail() { echo "missing: $1" >&2; exit 1; }
+
+seconds() {
+  # 一个数字后接秒或秒的英文写法
+  printf '%s' "$reply" | grep -Eqi "$1[[:space:]]*(秒|s([^a-z]|$)|sec(ond)?s?([^a-z]|$))"
+}
+
+millis() {
+  # 一个数字的毫秒写法：10 000 ms、10_000、10000ms
+  printf '%s' "$reply" | grep -Eqi "$1[_,]?000[[:space:]]*(ms([^a-z]|$)|毫秒)"
+}
+
+seconds 10 || millis 10 || fail "codex shell 默认 10 秒"
+seconds 300 || millis 300 || fail "codex MCP 默认 300 秒"
+printf '%s' "$reply" | grep -q '124' || fail "codex 超时后退出码 124"
+printf '%s' "$reply" | grep -Eqi '(没有|无)[[:space:]]*(默认|超时)|no[[:space:]]+default[[:space:]]+timeout|no[[:space:]]+timeout[[:space:]]+by[[:space:]]+default' || fail "pi 的 bash 没有默认超时"
+printf '%s' "$reply" | grep -Fqi 'Command timed out after' || fail "pi 超时告诉模型 Command timed out after N seconds"
+seconds 60 || millis 60 || fail "pi MCP 默认 60 秒"
+'''
+
+# 以下只记数，不判过不过。
+[[checks]]
+id = "dispatch-turn-seconds"
+description = "第 1 轮用了几秒（只记数）"
+record = true
+command = '''jq '(.turns[0].durationMs // 0) / 1000 | floor' "$RUN_DIR/session-data.json"'''
+
+[[checks]]
+id = "subagent-requests"
+description = "子 agent 请求次数合计（只记数）"
+record = true
+command = '''jq '[.subAgents[].requestCount] | add // 0' "$RUN_DIR/session-data.json"'''
+
+[[checks]]
+id = "subagent-blocked"
+description = "子 agent 被拦命令数合计（只记数）"
+record = true
+command = '''jq '[.subAgents[].blockedCommands] | add // 0' "$RUN_DIR/session-data.json"'''
+
+[[checks]]
+id = "subagent-rg-replace-blocked"
+description = "子 agent 里 rg 带 -r（含 -rn 这类合写）被拦的条数（只记数）"
+record = true
+command = '''jq '[.subAgents[].blockedRgReplace] | add // 0' "$RUN_DIR/session-data.json"'''
+
+[[checks]]
+id = "main-reads-and-commands"
+description = "主会话第 2 轮到最后一轮之前读文件和跑命令的次数（只记数）"
+record = true
+command = '''jq '[.turns[1:-1][] | ((.tools.read // 0) + (.tools.shell // 0))] | add // 0' "$RUN_DIR/session-data.json"'''
+
+[[checks]]
+id = "fifth-chat-sent"
+description = "第 5 句插话发没发：1 发了，0 没发（只记数）"
+record = true
+command = '''jq '[.chats[] | select(.index == 5 and .sentAt != null)] | length' "$RUN_DIR/session-data.json"'''

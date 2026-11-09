@@ -2,7 +2,7 @@
 
 评测 canter 自己在长程任务里的表现：任务完成度、token 和花费、上下文怎么涨、压缩前后什么样、插话听不听、会话之间的记忆留不留得住。评测不改 canter 本身；`canter` 在 eval 里是被测的对象。
 
-设计见 `docs/DESIGN.md` 的「eval（P2-151）」。题目组：长程（`tasks/long.toml`）、记忆（`tasks/memory.toml`）、记忆第二版（`tasks/memory-2.toml`：规矩换成 README.md 不要改、每次提交前 `cargo doc`，这两条从仓库里看不出来；`memory` 那三条从 `git log` 和已有文件看得出来，清空记忆也守得住）；全局记忆（`tasks/memory-global.toml`：第 1 个会话在 canter-test-rust 交代对所有项目都适用的两个习惯，后 3 个会话换到 canter-test-ts 做活，看守不守）；子 agent 题另做（P2-258）。
+设计见 `docs/DESIGN.md` 的「eval（P2-151）」。题目组：长程（`tasks/long.toml`）、记忆（`tasks/memory.toml`）、记忆第二版（`tasks/memory-2.toml`：规矩换成 README.md 不要改、每次提交前 `cargo doc`，这两条从仓库里看不出来；`memory` 那三条从 `git log` 和已有文件看得出来，清空记忆也守得住）；全局记忆（`tasks/memory-global.toml`：第 1 个会话在 canter-test-rust 交代对所有项目都适用的两个习惯，后 3 个会话换到 canter-test-ts 做活，看守不守）；子 agent（`tasks/subagent.toml`：P2-248 第九次测试的调研问题，主会话在两个源码仓库之间，看它开不开子 agent、插话时听不听、最后答得准不准）。
 
 ## 目录
 
@@ -14,6 +14,7 @@ eval/
   tasks/memory.toml  记忆题：canter-test-rust 连做 4 件（4 个会话，第 1 个口头交代三条长期规矩）
   tasks/memory-2.toml 记忆题第二版：同样 4 个会话，规矩换成仓库里看不出来的两条，另查规矩没漏进仓库
   tasks/memory-global.toml 全局记忆题：第 1 个会话在 canter-test-rust，后 3 个会话换到 canter-test-ts
+  tasks/subagent.toml 子 agent 题：主会话在两个源码仓库之间做调研，5 句插话按轮次发
   results/           每轮的对比表，提交进仓库（只有数字、会话 ID、版本、模型、时段）
 ```
 
@@ -28,7 +29,7 @@ eval 自己的状态目录默认 `~/.canter-eval`，用 `CANTER_EVAL_HOME` 或 `
   memory/            全局记忆（每次准备时清空；清空跑法每个会话前都清）
   projects/*/memory/ 项目记忆（同上）
   sessions/          eval 的会话（canter 自己写）
-  runs/<轮次>/<次>/  一次跑：state.json、checks.json、result.json
+  runs/<轮次>/<次>/  一次跑：state.json、checks.json、result.json、session-data.json、steers.json
     sessions/<n>/    第 n 个会话：session.json（ID）、head（结束时 HEAD）、
                      commands.txt（用过的 shell 命令，每行一条）、memory.json（结束时的记忆文件）
 ```
@@ -63,6 +64,26 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
 ## 跑一轮
 
 以下命令在 canter 仓库根目录跑（`eval/results/` 的缺省位置按当前目录算）。`<轮次>` 用能排序的名字，比如 `baseline-2026-11-09`；`<次>` 是 `<题>-<n>`，比如 `long-1`。
+
+### 子 agent 题（没有主仓库，插话按轮次发）
+
+题目不写 `repo`、`base`，两三个源码仓库写在 `[[repos]]` 里。主会话的目录是这次跑的 `@repos` 目录（`<worktrees>/<轮次>/@repos/<次>/`）：它不在任何仓库里，里面只有那些仓库的 worktree，也没有 AGENTS.md、CLAUDE.md。开跑提示和插话用 `{repo:<名字>}` 写仓库路径，`prepare`、`steer` 换成那个 worktree 的绝对路径。
+
+1. 准备、起 eval 服务端、trust 和单会话题一样（第 1～3 步），`prepare` 打印的 `--cwd` 就是那个目录，`trust` 把那个目录和每个仓库的 worktree 都设为信任。
+
+2. 开跑同第 4 步（`corral start eval/<次>`，`--cwd` 用打印的那个目录）。
+
+3. 另开一个终端让工具发插话（必须跑：它同时写下主会话的 ID）：
+
+   ```
+   canter-eval steer --round <轮次> --run subagent-1
+   ```
+
+   题目里 `[[chat]]` 每句写 `after`：`turn` 是上一轮结束后（第一句是开跑提示那一轮），`report` 是某个子 agent 的报告叫醒过主会话以后。每句都等主会话空闲再发，主会话正忙就等，不用 steer 模式；上句那一轮没结束不发下一句；`report` 那句在所有子 agent 都已经回来时不发，记下原因。它自己退出的条件：插话都发了（或判定不发）、所有子 agent 都结束、主会话空闲一会儿。总时限 30 分钟（`--timeout <秒>` 可改），到了就退出，`steers.json` 记 `timedOut: true`，这次跑照样继续。
+
+4. `steer` 退出以后再 `corral wait eval/<次>` 到 idle（它退出时主会话通常已经空闲，`wait` 是兜底），再 `corral stop`。
+
+5. `finish`、`grade`、`collect`、`clean`、`stop`、`report` 同单会话题。题目有 `[[chat]]` 时，`grade` 会先把会话数据整理到 `$RUN_DIR/session-data.json`（见下面「判分能读的会话数据」），再跑判分命令。
 
 ### 一个会话的题（长程）
 
@@ -277,7 +298,43 @@ repo = "canter-test-ts"
 prompt = '''第 2 个会话换到另一个仓库'''
 ```
 
+一道题没有主仓库时，把 `repo`、`base`、`setup` 省掉，只写 `[[repos]]`（至少一个）：主会话在 `<worktrees>/<轮次>/@repos/<次>/` 里做，那个目录里只有各仓库的 worktree，不在任何仓库里；`prepare` 打印的 `--cwd` 是它，`trust` 把它和每个 worktree 都设为信任。这种题的 `[[chat]]`、判分都在这个目录里说 `$RUN_DIR`；检查不写 `repo` 时也在这里跑，环境里没有 `REPO`、`WORKTREE`、`BASE`。
+
+插话有三种写法，一道题只用一种：
+
+```toml
+[[steers]]                            # 第 2 个 ritual: 提交之后发（长程题）
+after_commits = 2
+text = '''插话原文'''
+
+[[chat]]                               # 上一轮（第一句是开跑提示那一轮）结束后、主会话空闲时发
+after = "turn"
+text = '''第一批插话'''
+
+[[chat]]                               # 某个子 agent 的报告叫醒过主会话以后、主会话空闲时发；
+                                       # 所有子 agent 都回来了就不发（子 agent 题）
+after = "report"
+text = '''报告回来以后说的那句'''
+```
+
+`[[chat]]` 只能用在单会话题上；`after = "report"` 那句没发时，原因写在 `$RUN_DIR/steers.json` 里。插话和开跑提示里可以写 `{repo:<[[repos]] 的名字>}`，换成那个仓库 worktree 的绝对路径。
+
 判分命令的环境：`BASE`（这个检查所在仓库的起点提交）、`REPO`（这个仓库）、`WORKTREE`（这个仓库的 worktree）、`RUN_DIR`（这次跑的目录）。检查用 `repo` 指定在哪个仓库的 worktree 里跑，不写就是主仓库。多会话题可以读 `$RUN_DIR/sessions/<n>/head`（第 n 个会话结束时的提交）和 `$RUN_DIR/sessions/<n>/commands.txt`（它用过的 shell 命令，每行一条）按会话判分。`record` 检查取输出的最后一个非空行当数字。
+
+### 判分能读的会话数据
+
+题目里有 `[[chat]]` 时，`grade` 先用 `canter stats <主会话 ID> --json` 收一遍，把这次跑的会话数据写到 `$RUN_DIR/session-data.json`，再跑判分命令（写不出来时打一行 note，检查自会因读不到文件不过）：
+
+| 字段 | 内容 |
+| --- | --- |
+| `sessionId`、`cwd` | 主会话和它的目录 |
+| `turns[]` | 主会话每一轮，按开始顺序：`index`（从 1 起）、`id`、`startedAt`、`endedAt`（毫秒）、`durationMs`（没结束时为空）、`openedBy`（`{"kind":"prompt"}`、`{"kind":"steer","index":n}`、`{"kind":"report"}` 或 `{"kind":"other","clientName":"..."}`）、`tools`（这一轮各工具调用的次数，按工具名，比如 `read`、`shell`、`spawn_agent`、`wait_agent`） |
+| `finalReply` | 主会话最后一条完成回复的原文 |
+| `subAgents[]` | 主会话开的每个子 agent：`id`、`name`、`agentType`、`status`、`startedAt`、`endedAt`、`durationMs`、`requestCount`、`blockedCommands`、`blockedRgReplace`（`rg` 带 `-r` 或 `-rn` 这类合写被拦的条数）、`cachedInputTokens`、`uncachedInputTokens`、`outputTokens`、`costUsd`、`costUnknown` |
+| `chats[]` | 每句插话的 `index`（从 1 起）、`sentAt`、`turnId`、`skipped`（没发的原因） |
+| `timedOut` | 插话的总时限到了没有 |
+
+判分命令用 `sh` 和 `jq` 就能写，比如 `jq -e '(.turns[0].tools.spawn_agent // 0) > 0' "$RUN_DIR/session-data.json"`。
 
 会话换过仓库时，各会话的 `head` 不在同一个仓库里，`git rev-list <上一个的 head>..<这个的 head>` 这种范围只能用在同一个仓库的会话之间；换仓库后的第一个会话，边界用那个仓库的 `$BASE`（`memory-global.toml` 的 `assisted-by-trailer` 就是这么写的）。
 
@@ -311,6 +368,8 @@ prompt = '''第 2 个会话换到另一个仓库'''
 | 会话 | 会话 ID，方便 `canter stats <id>` 回看；多会话题列出每个会话 |
 
 「会话」一节只对多会话题出现。写记忆次数是完成的 `fileChange` 改到两层记忆目录里的 `.md`，读记忆次数是完成的 `fileRead` 读这些 `.md`；记忆文件数是那个会话结束时两层目录里 `.md` 的个数（`result.json` 里带文件名）。
+
+有子 agent 的跑多一节「子 agent」：先一行这次跑的主会话和子 agent 的用时、请求、花费分开算（主表那些数仍只算主会话，和以前一样），再每个子 agent 一行（类型、状态、用时、请求、缓存输入、未缓存输入、输出、花费、被拦命令、`rg -r` 被拦）。没有子 agent 的跑不出这一节，表一字不差。
 
 「压后重读」的三类：
 

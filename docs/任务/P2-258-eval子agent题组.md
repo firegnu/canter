@@ -117,3 +117,47 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+做了什么：
+
+- 目录：题目可以不写 `repo`、`base`（`Task.repo/base` 变成 `Option`，两个一起写或一起省），只写 `[[repos]]`。这种题的主会话目录是 `<worktrees>/<轮次>/@repos/<次>/`，`prepare` 建它、打印 `--cwd`，各仓库的 worktree 直接建在它下面；`trust` 把它和每个 worktree 都设为信任；`steer` 按这个目录找会话；`finish` 不写 HEAD（没有主仓库）；`collect`、`grade` 在它里面跑不带 `repo` 的检查；`clean` 删完 worktree 后把它也删掉（里面还有别的东西时留着并打 note）。没有新增 `State` 字段：无主仓库时 `repo_name` 为空，`worktree` 就是会话目录。
+- 占位符 `{repo:<名字>}`：`prepare` 渲染开跑提示，`steer` 渲染插话，换成那个仓库 worktree 的绝对路径；名字不在这次跑里就报错。
+- `[[chat]]`：`after = "turn"` 等上一轮（第一句等开跑提示那轮）结束、主会话空闲再发；`after = "report"` 要见过 `clientName == "background"` 且 input 为空的轮次，等空闲再发，所有子 agent 都回来了就跳过并记原因，没开子 agent 就记「没有子 agent 的报告」。发送用 `POST /v1/sessions/{id}/input`（`mode: queue`），主会话忙就等。进度写在 `$RUN_DIR/steers.json`（`sent`、`chats`、`timedOut`），重开不重发。退出条件：插话都解决、主会话空闲、子 agent 都结束、再空闲满一小段（`poll*3`，最少 150ms）；会话关闭也退出；默认总时限 1800 秒，`--timeout` 可改，到了记 `timedOut: true` 后正常返回。`[[chat]]` 与 `[[steers]]` 互斥，只能用于单会话题；`after_commits` 照旧。
+- 会话数据：有 `[[chat]]` 的题，`grade` 先跑 `canter stats <主会话 ID> --json`，把 `session-data.json` 写到 `$RUN_DIR`（失败只打 note，不中断），里面有每轮的起止、`openedBy`（`prompt`/`steer{index}`/`report`/`other`）、按工具名计数的 `tools`、`finalReply`、`subAgents[]`（`requestCount`、`blockedCommands`、`blockedRgReplace`、起止、token、花费）、`chats[]`、`timedOut`。老题不写这个文件。
+- 结果表：只有这次跑有子 agent 时才多一节「## 子 agent」——先一行主会话与子 agent 的用时/请求/花费分开算，再每个子 agent 一行。`RunResult.sub_agents` 空时序列化也省掉，没子 agent 的老题表不变。
+- 新题 `eval/tasks/subagent.toml`：4 条判分 + 6 条只记数，判分命令只读 `$RUN_DIR/session-data.json`；README 加题目行、跑法、`[[chat]]` 和占位符写法、会话数据表、结果表那一节。
+
+验证了什么：
+
+- `cargo nextest run -p canter-eval`：55 个全过（原 46 个 + 9 个新的），新增测试覆盖：插话按顺序等上一轮、忙时等空闲、report 句在叫醒后发、子 agent 都回来时跳过、没开子 agent 不卡住、总时限退出、`after_commits` 老行为；无主仓库的 prepare/trust/finish/grade/clean 全流程；每条判分各有一个过和一个不过的例子（`answer-facts` 用第九次回答过，删 6 条事实的任一条都不过）；`grade` 为 chat 题写 `session-data.json`；`collect`、`report` 的子 agent 数和表样；老题的 report 测试照样过。
+- `cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 全过。
+
+拿主意的地方：
+
+- 无主仓库时不加 `State` 字段，用空 `repo_name` 表示，`main_repo()` 返回 `Option`，减少对现有测试构造的改动；会话目录由 `session_dir_path` 统一定义。
+- 判分数据由 `grade` 调真实 `canter stats` 整理，而不是另存事件解析；判分命令只看一份 JSON，shell + jq 就够。
+- 结果表把子 agent 另列一节（主表口径不改），总数行同时给出「主 / 子 / 共」，因为子 agent 和主会话的用时、花费是并行的，混进主表会改老题口径。
+- TOML 字段叫 `[[chat]]`（Rust 侧 `chats` + `rename = "chat"`），和 `[[steers]]` 一样按用途命名；子 agent 的请求次数直接用 stats 的同名字段 `requestCount`。
+- `finish` 的「已记录」判断从 HEAD 文件改成 `memory.json`，否则无主仓库的会话没有 HEAD 就永远能重复记录；有仓库的会话两个文件仍然一起写。
+- `rg -r` 的识别看 `rg` 后的短旗标里有没有 `r`（`-rn`、`-nr` 都算），`--replace` 不算（题目里说的是 `-r`）。
+
+没做的事：
+
+- 「谎称报告到了」没有写成检查，按任务要求留给主控人工看。
+- `no-wait-in-chat` 在一轮插话都没开时是空过（`add // 0 == 0`）；任务没让加前置条件，没自己加，请主控定要不要补一条「第 2 轮起至少有一轮插话」。
+- 没有调真实模型、没有起真的 canter 服务端；3 次 DeepSeek flash 的验收跑留给主控。
+- 没有跑全套 `cargo nextest run --all-targets` 和 `cargo test --doc`（按约定只在合并前由主控跑）。
+
+踩过的坑：
+
+- `[[repos]]` 后面写 `prompt` 会被当成那个仓库的字段，题目加载直接报未知字段；把 `prompt` 挪到 `[[repos]]` 之前。
+- serde 默认把 `chats` 写成 `chats`，题目里 `[[chat]]` 认不出来；加 `rename = "chat"`。
+- 假服务端的 `folderTrust` 响应固定带 `path`，`trust` 用它去重，第三次请求被当成重复跳过，测试少一次请求；假响应改成不带 `path`，回落到请求里的目录。
+- 测试造假事件的时间戳比 `steers.json` 里的 `sentAt` 小，按「发之后开始的轮次」匹配不上；改成按插话原文匹配轮次、每轮只用一次。
+- `match_turns` 只在发送或跳过时落盘，补上 `turnId` 那次没保存；改成返回「有没有变化」再写。
+- `SubAgentRow` 字段叫 `requests`，序列化出来是 `requests`，判分和 README 写的是 `requestCount`，测试读成 0；字段改名 `request_count`。
+- `answer-facts` 的「删一条事实」测试里，第九次回答同一事实有几种写法（`没有默认超时`、`无默认`、`无超时`、大小写不同的 `command timed out after`），只替换一种仍然过；测试改成把各种写法都换掉，检查本身没放松。
+- macOS 临时目录是符号链接，`pwd -P` 和 `$WORKTREE` 字面不同；测试检查改成两边都 `pwd -P` 再比。
+- 自己用 `rg -rn 'pattern' path` 想搜内容，`-r` 被当成替换参数，输出全被改了；搜内容用 `rg -n`。

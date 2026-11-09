@@ -17,7 +17,9 @@ pub struct MemorySnapshot {
 
 #[derive(Debug)]
 pub struct Finished {
-    pub head: String,
+    /// The session's repository worktree HEAD; `None` when the session runs in a
+    /// task without a main repository and not in one of its repositories.
+    pub head: Option<String>,
     pub commands: usize,
     pub memory_files: usize,
 }
@@ -44,27 +46,37 @@ pub fn finish(home: &crate::paths::Home, round: &str, run: &str, index: usize) -
             dir.display()
         ));
     }
-    let head_path = home.session_head_path(round, run, index);
-    if head_path.exists() {
+    let memory_path = home.session_memory_path(round, run, index);
+    if memory_path.exists() {
         return Err(format!(
             "session {index} is already recorded in {}\nremove that file to record it again",
-            head_path.display()
+            memory_path.display()
         ));
     }
     let events_path = home.session_events(&session_id);
     let events = fs::read_to_string(&events_path).map_err(|error| {
         format!("cannot read the events of {session_id}: {error}\nthe eval home may be wrong")
     })?;
-    // The session's own repository: each repository has its own worktree.
-    let repo = state.session_repo(index)?;
-    let head = crate::prepare::git(Path::new(&repo.worktree), &["rev-parse", "HEAD"])?
-        .trim()
-        .to_string();
+    // The session's own repository: each repository has its own worktree. A
+    // session without one has no HEAD to record.
+    let head = match state.session_checkout(index)? {
+        Some(repo) => Some(
+            crate::prepare::git(Path::new(&repo.worktree), &["rev-parse", "HEAD"])?
+                .trim()
+                .to_string(),
+        ),
+        None => None,
+    };
     let commands = commands_from_events(&events);
     let memory = MemorySnapshot {
         files: crate::memory::files(home)?,
     };
-    crate::paths::write_private(&head_path, format!("{head}\n").as_bytes())?;
+    if let Some(head) = &head {
+        crate::paths::write_private(
+            &home.session_head_path(round, run, index),
+            format!("{head}\n").as_bytes(),
+        )?;
+    }
     let mut text = String::new();
     for command in &commands {
         text.push_str(command);

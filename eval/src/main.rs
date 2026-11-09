@@ -16,8 +16,10 @@ Usage:
       --task is for the first session, later sessions read it from state.json
   canter-eval trust --round <r> --run <n>
       trust the run worktree through POST /v1/folderTrust
-  canter-eval steer --round <r> --run <n> [--session <n>]
-      find the run's new session and send the task's steers; run it in another window
+  canter-eval steer --round <r> --run <n> [--session <n>] [--timeout <secs>]
+      find the run's new session and send the task's chat; run it in another window
+      ([[chat]]: waits for the opening turn, each chat's turn and a report wake;
+       gives up after 1800 seconds unless --timeout says otherwise)
   canter-eval finish --round <r> --run <n> [--session <n>]
       record the session's end HEAD, shell commands and memory files
   canter-eval grade --round <r> --run <n>
@@ -39,6 +41,7 @@ Options:
   --memory <keep|clear>  keep memories between sessions, or empty them before each
                          (default clear; fixed when session 1 is prepared)
   --session <n>          one-based session for a multi-session task (default 1)
+  --timeout <secs>       how long [[chat]] steering may wait (default 1800)
   --against <round>      include another round in the report
   --out <path>           report destination
   -h, --help             show this help
@@ -99,22 +102,35 @@ async fn run() -> Result<bool> {
             Ok(true)
         }
         "steer" => {
-            canter_eval::steer::steer(canter_eval::steer::SteerOptions::new(
+            let mut steer = canter_eval::steer::SteerOptions::new(
                 home,
                 required(&options, "round")?.into(),
                 required(&options, "run")?.into(),
                 session(&options)?,
-            ))
-            .await?;
+            );
+            if let Some(value) = options.get("timeout") {
+                let seconds = value
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|seconds| *seconds > 0)
+                    .ok_or_else(|| format!("--timeout must be seconds from 1: {value:?}"))?;
+                steer.timeout = std::time::Duration::from_secs(seconds);
+            }
+            canter_eval::steer::steer(steer).await?;
             Ok(true)
         }
         "finish" => {
             let (round, run) = round_and_run(&options)?;
             let index = session(&options)?;
             let finished = canter_eval::finish::finish(&home, &round, &run, index)?;
+            let head = finished
+                .head
+                .as_deref()
+                .map(|head| format!("HEAD {head}"))
+                .unwrap_or_else(|| "no repository worktree".to_string());
             println!(
-                "recorded session {index}: HEAD {}, {} memory files, {} commands",
-                finished.head, finished.memory_files, finished.commands
+                "recorded session {index}: {head}, {} memory files, {} commands",
+                finished.memory_files, finished.commands
             );
             Ok(true)
         }

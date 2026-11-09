@@ -143,25 +143,32 @@ pub async fn find_session(
     }
 }
 
-/// Record trust for every worktree of the run so canter does not ask in the
-/// terminal.
+/// Record trust for every worktree of the run and for the directory a session
+/// without a main repository runs in, so canter does not ask in the terminal.
 pub async fn trust(home: &crate::paths::Home, state: &crate::paths::State) -> Result<String> {
     let registration = registration(home)?;
+    let mut dirs: Vec<String> = state
+        .all_repos()
+        .into_iter()
+        .map(|repo| repo.worktree)
+        .collect();
+    if !dirs.contains(&state.worktree) {
+        dirs.push(state.worktree.clone());
+    }
     let mut trusted = Vec::new();
-    for repo in state.all_repos() {
-        if trusted.contains(&repo.worktree) {
+    for dir in dirs {
+        if trusted.contains(&dir) {
             continue;
         }
         let (status, body) = post_json(
             &registration.socket_path,
             canter_protocol::routes::FOLDER_TRUST,
-            &json!({ "cwd": repo.worktree }),
+            &json!({ "cwd": dir }),
         )
         .await?;
         if !(200..300).contains(&status) {
             return Err(format!(
-                "the eval server refused to trust {}: HTTP {status} {body}",
-                repo.worktree
+                "the eval server refused to trust {dir}: HTTP {status} {body}"
             ));
         }
         let is_trusted = body
@@ -173,34 +180,58 @@ pub async fn trust(home: &crate::paths::Home, state: &crate::paths::State) -> Re
                 .get("warning")
                 .and_then(Value::as_str)
                 .unwrap_or("no reason given");
-            return Err(format!(
-                "the eval server did not trust {}: {warning}",
-                repo.worktree
-            ));
+            return Err(format!("the eval server did not trust {dir}: {warning}"));
         }
         let path = body
             .get("path")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .unwrap_or(repo.worktree);
+            .unwrap_or(dir);
         trusted.push(path);
     }
     Ok(format!("trusted {}", trusted.join(", ")))
 }
 
+/// Send a line of chat as ordinary input: the idle session starts a turn with
+/// it, a busy one queues it for when it is free.
+pub async fn chat(registration: &Registration, session: &str, text: &str) -> Result<(u16, Value)> {
+    send_input(
+        registration,
+        session,
+        text,
+        canter_protocol::InputMode::Queue,
+    )
+    .await
+}
+
 /// Send `mode: steer` input, the same request the terminal's Tab sends.
 pub async fn steer(registration: &Registration, session: &str, text: &str) -> Result<(u16, Value)> {
+    send_input(
+        registration,
+        session,
+        text,
+        canter_protocol::InputMode::Steer,
+    )
+    .await
+}
+
+async fn send_input(
+    registration: &Registration,
+    session: &str,
+    text: &str,
+    mode: canter_protocol::InputMode,
+) -> Result<(u16, Value)> {
     let params = canter_protocol::SessionInputParams {
         from_suggestion: false,
         non_interactive: false,
         approval_policy: None,
         review: None,
         input: vec![canter_protocol::UserInput::Text { text: text.into() }],
-        mode: canter_protocol::InputMode::Steer,
+        mode,
         client_name: "canter-eval".into(),
     };
     let body = serde_json::to_value(&params)
-        .map_err(|error| format!("cannot encode the steer request: {error}"))?;
+        .map_err(|error| format!("cannot encode the input request: {error}"))?;
     let path = canter_protocol::routes::INPUT.replace("{id}", session);
     post_json(&registration.socket_path, &path, &body).await
 }
