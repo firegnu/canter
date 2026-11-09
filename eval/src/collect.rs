@@ -239,10 +239,13 @@ fn collect_session(
         ));
     }
     let explicit = options.session.clone().filter(|_| session_count == 1);
+    // A one-session run expects the explicit id when given, else the recorded
+    // one; a multi-session run always expects its recorded id.
+    let expected = explicit.clone().or(recorded.clone());
     let stats = match &options.stats_json {
         Some(path) => read_stats(path, index, session_count)?,
         None => {
-            let id = explicit.clone().or(recorded.clone()).ok_or_else(|| {
+            let id = expected.clone().ok_or_else(|| {
                 format!(
                     "no session id yet; the run has not written {}",
                     crate::paths::session_id_file(home, state, index).display()
@@ -259,14 +262,16 @@ fn collect_session(
         }
     };
     let session_id = stats.session_id.clone();
-    // An explicit id wins for a one-session run, as it did before; a
-    // multi-session run always trusts the id recorded for this session.
-    if explicit.is_none()
-        && let Some(recorded) = &recorded
-        && *recorded != session_id
+    if let Some(expected) = &expected
+        && *expected != session_id
     {
+        let how = if explicit.is_some() {
+            "asked for as"
+        } else {
+            "recorded as"
+        };
         return Err(format!(
-            "session {index} was recorded as {recorded}, but its stats are for {session_id}"
+            "session {index} was {how} {expected}, but its stats are for {session_id}"
         ));
     }
     let events_path = home.session_events(&session_id);

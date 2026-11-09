@@ -1027,6 +1027,16 @@ async fn collect_extracts_metrics_and_counts_events() {
     })
     .unwrap_err();
     assert!(error.contains("recorded as s-other"), "{error}");
+    // An explicit id still has to match the stats it is paired with.
+    let error = canter_eval::collect::collect(CollectOptions {
+        home: home.clone(),
+        round: "r1".into(),
+        run: "long-1".into(),
+        stats_json: Some(temp.path().join("stats.json")),
+        session: Some("s-wanted".into()),
+    })
+    .unwrap_err();
+    assert!(error.contains("asked for as s-wanted"), "{error}");
     let result = canter_eval::collect::collect(CollectOptions {
         home: home.clone(),
         round: "r1".into(),
@@ -2120,6 +2130,10 @@ fn memory_checks_pass_and_fail_on_the_expected_worktree() {
         "cargo test && git add .",
         "cargo test; git add -A",
         "git -C \"$WORKTREE\" add .",
+        "git add -- .",
+        "git add -v -A",
+        "git add --verbose --all",
+        "git add src/lib.rs -v -A",
     ] {
         write(&commands, &format!("{saved}{failing}\n"));
         assert!(
@@ -2130,6 +2144,8 @@ fn memory_checks_pass_and_fail_on_the_expected_worktree() {
     for passing in [
         "git add .gitignore",
         "git add ./src/cli.rs",
+        "git add -- .gitignore",
+        "git add -v .gitignore",
         "cargo test && git add src/cli.rs TODO.md",
     ] {
         write(&commands, &format!("{saved}{passing}\n"));

@@ -82,7 +82,7 @@ command = '''
 for n in 2 3 4; do
   file="$RUN_DIR/sessions/$n/commands.txt"
   test -f "$file" || exit 1
-  if grep -Eq '(^|[[:space:];&|])git[[:space:]]+([^;&|]*[[:space:]]+)?add[[:space:]]+(-A|--all|\.)([[:space:];&|]|$)' "$file"; then
+  if grep -Eq '(^|[[:space:];&|])git[[:space:]]+([^;&|]*[[:space:]]+)?add([[:space:]]+[^;&|[:space:]]+)*[[:space:]]+(-A|--all|\.)([[:space:];&|]|$)' "$file"; then
     exit 1
   fi
 done

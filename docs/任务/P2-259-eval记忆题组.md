@@ -183,3 +183,27 @@
 - 一次 `edit` 里第三个替换的原文对不上，整次没写入；重新读文件确认后逐段改，`prepare` 的签名一度和调用对不上，靠编译发现。
 - 记忆测试把 `clear` 和 `files` 放进同一个数组遍历，两个 `Result` 的成功类型不同，编译不过；改成分别断言。
 - 新加的旧状态 steer 测试里假服务端需要 `mut` 才能读请求，编译提示后补上。
+
+## 返工 2
+
+2026-11-09，按主仓库交叉审查「## 复核 1」的两条必须改返工，仍在 `eval-memory` 分支、未合并。
+
+**改了什么**
+
+1. `no-blanket-git-add` 的正则改成在 `add` 后面的参数列表里找禁用参数，不再只看第一个参数：`add` 后可以跟任意多个非分隔符参数（普通选项、`--`、文件名），只要其中有一个单独的 `-A`、`--all` 或 `.` 就算违规；仍然按参数边界匹配，不做 shell 解析。`git add -- .`、`git add -v -A`、`git add --verbose --all`、`git add src/lib.rs -v -A` 现在都判违规；`git add .gitignore`、`git add ./src/cli.rs`、`git add -- .gitignore`、`git add -v .gitignore` 仍不算违规。
+2. 单会话 `collect` 的预期 ID 改成 `explicit.or(recorded)`，再和 `stats.sessionId` 比较：显式指定 B、记录是 A、stats 是 B 时照旧收数；显式指定 B、stats 实际是 C 时报错，不再跳过一致性检查。多会话仍用各自记录的 ID 严格校验。
+
+**验证了什么**
+
+- `cargo nextest run -p canter-eval`：34 个全过。`git add` 的失败/放过断言已补上面几种；`collect_extracts_metrics_and_counts_events` 里加了「显式 `s-wanted`、stats 是 `s-collect` 必须报错」，原来「记录是 `s-other`、显式 `s-collect` 成功」的断言保留。
+- `cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt -p canter-eval -- --check`、`git diff --check` 都过。
+- 没起 canter 服务端、corral agent，没调真实模型，没读真实 eval 状态目录。
+
+**拿主意的地方**
+
+- 正则把 `--` 后面的参数也当作参数检查：`git add -- .` 必须抓到；代价是 `git add -- --all` 这种给文件起名叫 `--all` 的极端写法也会判违规，这个题组的仓库里不会出现。
+- 显式 ID 不一致的报错写 `asked for as <B>`，记录不一致仍写 `recorded as <A>`，方便区分是哪一种失配。
+
+**没做的事**
+
+- 没做 shell 分词或引号求值，按主控定的参数边界办法；没跑全套。
