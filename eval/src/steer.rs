@@ -35,11 +35,12 @@ impl SteerOptions {
 pub async fn steer(options: SteerOptions) -> Result<()> {
     let state = State::load(&options.home, &options.round, &options.run)?;
     let task = state.task()?;
+    let registration = crate::server::registration(&options.home)?;
+    let session = wait_for_session(&registration, &state, options.poll).await?;
     if task.steers.is_empty() {
         println!("task {} defines no steers", task.id);
         return Ok(());
     }
-    let _ = crate::server::registration(&options.home)?;
     let progress_path = options
         .home
         .run_dir(&options.round, &options.run)
@@ -66,7 +67,6 @@ pub async fn steer(options: SteerOptions) -> Result<()> {
             steer.after_commits
         );
         let registration = crate::server::registration(&options.home)?;
-        let session = wait_for_session(&state.session_file, options.poll).await?;
         let (status, body) = crate::server::steer(&registration, &session, &steer.text).await?;
         if !(200..300).contains(&status) {
             return Err(format!(
@@ -120,13 +120,25 @@ pub fn ritual_commits(state: &State) -> Result<u32> {
     u32::try_from(count).map_err(|_| "too many commits".into())
 }
 
-async fn wait_for_session(path: &str, poll: Duration) -> Result<String> {
-    let path = Path::new(path);
+/// The session id from `session.json`, or else the one session the eval server
+/// lists in the run's worktree, saved to `session.json` for `collect`.
+async fn wait_for_session(
+    registration: &crate::server::Registration,
+    state: &State,
+    poll: Duration,
+) -> Result<String> {
+    let path = Path::new(&state.session_file);
     loop {
         if let Some(session) = read_session(path)? {
             return Ok(session);
         }
-        println!("waiting for the session file {}", path.display());
+        if let Some(session) = crate::server::find_session(registration, state.worktree()).await? {
+            let body = serde_json::json!({ "sessionId": session });
+            crate::paths::write_private(path, body.to_string().as_bytes())?;
+            println!("session {session}");
+            return Ok(session);
+        }
+        println!("waiting for a session in {}", state.worktree.as_str());
         tokio::time::sleep(poll).await;
     }
 }

@@ -67,6 +67,74 @@ pub async fn post_json(socket: &Path, path: &str, body: &Value) -> Result<(u16, 
     Ok((status, value))
 }
 
+pub async fn get_json(socket: &Path, path: &str) -> Result<(u16, Value)> {
+    let client = reqwest::Client::builder()
+        .unix_socket(socket.to_path_buf())
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| format!("cannot build the eval HTTP client: {error}"))?;
+    let response = client
+        .get(format!("http://canter{path}"))
+        .send()
+        .await
+        .map_err(|error| {
+            format!(
+                "cannot reach the eval server at {}: {error}",
+                socket.display()
+            )
+        })?;
+    let status = response.status().as_u16();
+    let value = response
+        .json::<Value>()
+        .await
+        .map_err(|error| format!("cannot read the eval server response: {error}"))?;
+    Ok((status, value))
+}
+
+/// The run's session: the one top-level session the eval server lists in the
+/// run's worktree. Each run has its own worktree, so the path identifies it.
+/// `None` while canter has not opened it yet; an error when several match.
+pub async fn find_session(registration: &Registration, worktree: &Path) -> Result<Option<String>> {
+    let (status, body) =
+        get_json(&registration.socket_path, canter_protocol::routes::SESSIONS).await?;
+    if !(200..300).contains(&status) {
+        return Err(format!(
+            "the eval server could not list sessions: HTTP {status} {body}"
+        ));
+    }
+    let wanted = fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
+    let matches: Vec<String> = body
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|session| session.get("parent").is_none_or(Value::is_null))
+        .filter(|session| {
+            session
+                .get("cwd")
+                .and_then(Value::as_str)
+                .is_some_and(|cwd| {
+                    fs::canonicalize(cwd).unwrap_or_else(|_| PathBuf::from(cwd)) == wanted
+                })
+        })
+        .filter_map(|session| {
+            session
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    match matches.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one.clone())),
+        several => Err(format!(
+            "several sessions run in {}: {}; write the right one as {{\"sessionId\": \"...\"}} to the run's session.json",
+            worktree.display(),
+            several.join(", ")
+        )),
+    }
+}
+
 /// Record trust for the run's worktree so canter does not ask in the terminal.
 pub async fn trust(home: &crate::paths::Home, state: &crate::paths::State) -> Result<String> {
     let registration = registration(home)?;

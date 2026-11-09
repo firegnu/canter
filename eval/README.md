@@ -84,10 +84,12 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
 
    ```
    corral start eval/long-1 --unique --cwd <worktree> \
-     --env CANTER_HOME=<eval home> \
+     --env CANTER_HOME=<eval home> --env CAIRN_DISABLE=1 \
      --prompt '<题目里的开跑提示原文>' \
-     -- canter --yolo --tag eval=<轮次> --session-file <run>/session.json
+     -- canter --yolo --tag eval=<轮次>
    ```
+
+   不带 `--session-file`：canter 的这个选项由 corral 自己传，手动再传 corral 会拒绝。`CAIRN_DISABLE=1` 让 eval 的会话不进 cairn。
 
 5. 另开一个终端，让工具按提交数插话（它自己数 `ritual: ` 提交，到第 N 个就用 `POST /v1/sessions/{id}/input`、`mode: steer` 发题目里的原文；发完自己退出）：
 
@@ -95,7 +97,7 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
    canter-eval steer --round <轮次> --run long-1
    ```
 
-   会话 ID 从第 4 步写的 `session.json` 读。跑完前不用管；如果这一轮提前结束、插话还没发完，把它停掉即可。发过的记在 `runs/<轮次>/<次>/steers.json`，重开不会重复发。
+   每次都要跑这一步（题目没有插话也要跑）：它先用 `GET /v1/sessions` 找这次 worktree 里的那个主会话（子 agent 的不算），写进 `runs/<轮次>/<次>/session.json`，`collect` 从这里读会话 ID；找到不止一个就报错，不猜，手动把对的那个写成 `{"sessionId": "..."}`。跑完前不用管；如果这一轮提前结束、插话还没发完，把它停掉即可。发过的记在 `runs/<轮次>/<次>/steers.json`，重开不会重复发。
 
 6. 等它停下：`corral wait eval/long-1` 到 idle。
 

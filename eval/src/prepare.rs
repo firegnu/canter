@@ -75,13 +75,12 @@ impl Prepared {
 
     pub fn corral_command(&self, eval_home: &str) -> String {
         format!(
-            "corral start {} --unique --cwd {} --env {} --prompt {} -- canter --yolo --tag {} --session-file {}",
+            "corral start {} --unique --cwd {} --env {} --env CAIRN_DISABLE=1 --prompt {} -- canter --yolo --tag {}",
             quote(&format!("eval/{}", self.state.run)),
             quote(&self.state.worktree),
             quote(&format!("CANTER_HOME={eval_home}")),
             quote(&self.task.prompt),
             quote(&format!("eval={}", self.state.round)),
-            quote(&self.state.session_file),
         )
     }
 }

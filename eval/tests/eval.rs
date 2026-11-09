@@ -684,6 +684,133 @@ async fn steer_waits_for_the_counted_commits_and_sends_steer_mode() {
     assert!(fake.next(Duration::from_millis(300)).await.is_none());
 }
 
+/// A repo with one base commit and a saved run state whose `session.json`
+/// does not exist yet, as after `corral start` (corral owns `--session-file`).
+fn steer_state_without_session_file(temp: &Path, home: &Home) -> (PathBuf, State) {
+    let repo = temp.join("repo");
+    init_repo(&repo);
+    write(&repo.join("base.txt"), "base\n");
+    commit(&repo, "base", None);
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let state = State {
+        task: "long".into(),
+        task_path: long_task_path(),
+        round: "r1".into(),
+        run: "long-1".into(),
+        repo: repo.display().to_string(),
+        repo_name: "canter-test-ts".into(),
+        base_commit: base,
+        worktree: repo.display().to_string(),
+        session_file: home.root.join("session.json").display().to_string(),
+        model: "m".into(),
+        auto_compact_tokens: Some(60_000),
+        created_at: 0,
+    };
+    state.save(home).unwrap();
+    (repo, state)
+}
+
+fn register_fake(home: &Home, fake: &Fake) {
+    write(
+        &home.server_path(),
+        &serde_json::to_string(&json!({
+            "pid": 1, "version": "test", "protocolVersion": 1,
+            "socketPath": fake.socket.clone(), "instance": "i"
+        }))
+        .unwrap(),
+    );
+}
+
+fn listed(id: &str, cwd: &Path, parent: Option<&str>) -> Value {
+    let mut session = json!({
+        "id": id, "cwd": cwd, "name": null, "status": "idle",
+        "updatedAt": 1, "lastEventSeq": 1
+    });
+    if let Some(parent) = parent {
+        session["parent"] = json!({
+            "agentType": "explorer", "sessionId": parent, "turnId": "t", "task": "look"
+        });
+    }
+    session
+}
+
+#[tokio::test]
+async fn steer_finds_the_run_session_by_worktree_and_writes_the_session_file() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let (repo, state) = steer_state_without_session_file(temp.path(), &home);
+    let other = temp.path().join("other");
+    let list = json!({"data": [
+        listed("s-other", &other, None),
+        listed("s-child", &repo, Some("s-run")),
+        listed("s-run", &repo, None),
+    ]});
+    let mut fake = fake_server_with(
+        temp.path(),
+        vec![("/v1/sessions", list)],
+        json!({"eventSeq": 1, "turnId": "t-1"}),
+    )
+    .await;
+    register_fake(&home, &fake);
+
+    let handle = tokio::spawn({
+        let home = home.clone();
+        async move {
+            canter_eval::steer::steer(SteerOptions {
+                home,
+                round: "r1".into(),
+                run: "long-1".into(),
+                poll: Duration::from_millis(50),
+            })
+            .await
+        }
+    });
+
+    let (method, path, _) = fake.next(Duration::from_secs(3)).await.unwrap();
+    assert_eq!((method.as_str(), path.as_str()), ("GET", "/v1/sessions"));
+    for n in 1..=2 {
+        commit_ritual(&repo, n);
+    }
+    let (method, path, _) = fake.next(Duration::from_secs(3)).await.unwrap();
+    assert_eq!(
+        (method.as_str(), path.as_str()),
+        ("POST", "/v1/sessions/s-run/input")
+    );
+    let saved: Value =
+        serde_json::from_str(&std::fs::read_to_string(&state.session_file).unwrap()).unwrap();
+    assert_eq!(saved["sessionId"], "s-run");
+    handle.abort();
+}
+
+#[tokio::test]
+async fn steer_refuses_to_guess_between_two_run_sessions() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let (repo, state) = steer_state_without_session_file(temp.path(), &home);
+    let list = json!({"data": [listed("s-a", &repo, None), listed("s-b", &repo, None)]});
+    let fake = fake_server_with(temp.path(), vec![("/v1/sessions", list)], json!({})).await;
+    register_fake(&home, &fake);
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(3),
+        canter_eval::steer::steer(SteerOptions {
+            home,
+            round: "r1".into(),
+            run: "long-1".into(),
+            poll: Duration::from_millis(50),
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert!(error.contains("s-a") && error.contains("s-b"), "{error}");
+    assert!(!Path::new(&state.session_file).exists());
+}
+
 #[tokio::test]
 async fn trust_posts_the_worktree_through_the_public_interface() {
     let temp = TempDir::new().unwrap();
@@ -1174,11 +1301,20 @@ impl Fake {
 }
 
 async fn fake_server(dir: &Path, response: Value) -> Fake {
+    fake_server_with(dir, Vec::new(), response).await
+}
+
+/// Replies with the body routed by exact path, or `response` for any other path.
+async fn fake_server_with(dir: &Path, routes: Vec<(&str, Value)>, response: Value) -> Fake {
     let socket = dir.join("fake.sock");
+    let routes: Vec<(String, String)> = routes
+        .into_iter()
+        .map(|(path, body)| (path.to_string(), body.to_string()))
+        .collect();
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
     let (sender, requests) = mpsc::unbounded_channel();
     let task = tokio::spawn(async move {
-        let reply_body = response.to_string();
+        let default_body = response.to_string();
         loop {
             let Ok((mut stream, _)) = listener.accept().await else {
                 break;
@@ -1216,6 +1352,10 @@ async fn fake_server(dir: &Path, response: Value) -> Fake {
             let mut parts = header.lines().next().unwrap_or("").split_whitespace();
             let method = parts.next().unwrap_or("").to_string();
             let path = parts.next().unwrap_or("").to_string();
+            let reply_body = routes
+                .iter()
+                .find(|(route, _)| *route == path)
+                .map_or(default_body.as_str(), |(_, body)| body.as_str());
             let _ = sender.send((method, path, body));
             let reply = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
