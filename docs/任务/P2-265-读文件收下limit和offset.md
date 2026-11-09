@@ -84,3 +84,5 @@
 - 派 canter 做：一次做完，用时约 5 分钟，没有必须改。
 
 结果：一次过
+
+合并前全套（主控）：`cargo nextest run --all-targets` 第一次碰到 `canter-core::suggestions no_example_for_non_git_empty_git_disabled_or_timed_out_git` 失败（和读文件无关，名字里带超时），单独重跑一次通过；之后 `--no-fail-fast` 再跑全套 2070 个全过（50 跳过）。`cargo test --doc --workspace` 没有失败。这个测试可能会偶发失败，原因没查。
