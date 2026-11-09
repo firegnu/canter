@@ -6,7 +6,8 @@ use std::{
 };
 
 use canter_protocol::{
-    Event, EventPayload, Item, ItemStatus, RequestPurpose, StatsCompaction, StatsResponse,
+    Event, EventPayload, Item, ItemStatus, RequestPurpose, StatsCompaction, StatsRequest,
+    StatsResponse,
 };
 use serde::{Deserialize, Serialize};
 
@@ -55,12 +56,33 @@ impl RereadFiles {
     }
 }
 
+/// Each part's share of the estimated context the conversation requests carried,
+/// in whole percents of the four parts summed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextShare {
+    pub system_percent: u32,
+    pub tool_definition_percent: u32,
+    pub conversation_percent: u32,
+    pub tool_result_percent: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Metrics {
     pub duration_ms: Option<u64>,
     pub requests: usize,
     pub conversation_requests: usize,
+    /// Highest real input tokens the provider reported for a conversation
+    /// request; `None` for results collected before this was measured.
+    #[serde(default)]
+    pub context_peak_tokens: Option<u64>,
+    /// Mean real input tokens of the conversation requests, rounded.
+    #[serde(default)]
+    pub context_average_tokens: Option<u64>,
+    /// Estimated context parts, only proportions.
+    #[serde(default)]
+    pub context_share: Option<ContextShare>,
     pub compactions: Vec<CompactionRow>,
     pub cached_input_tokens: Option<u64>,
     pub uncached_input_tokens: Option<u64>,
@@ -221,6 +243,8 @@ fn metrics(stats: &StatsResponse, scan: &EventScan) -> Metrics {
     for row in &compactions {
         reread_total.push_all(&row.reread);
     }
+    let (context_peak_tokens, context_average_tokens, context_share) =
+        context_metrics(&stats.requests);
     let mut tool_failures_by_name = BTreeMap::new();
     let mut tool_failures = 0;
     for tool in &stats.tools {
@@ -246,6 +270,9 @@ fn metrics(stats: &StatsResponse, scan: &EventScan) -> Metrics {
             .iter()
             .filter(|request| request.purpose == RequestPurpose::Conversation)
             .count(),
+        context_peak_tokens,
+        context_average_tokens,
+        context_share,
         compactions,
         cached_input_tokens: usage.map(|row| row.total.cached_input_tokens),
         uncached_input_tokens: usage.map(|row| row.total.uncached_input_tokens),
@@ -273,6 +300,48 @@ fn metrics(stats: &StatsResponse, scan: &EventScan) -> Metrics {
         blocked_commands: scan.blocked_commands,
         event_parse_errors: scan.parse_errors,
     }
+}
+
+/// Peak and mean input tokens from the provider and the estimated context parts
+/// of the conversation requests. Compaction, suggestion and other request kinds
+/// do not grow with the task, and a request that reported no usage is left out.
+fn context_metrics(requests: &[StatsRequest]) -> (Option<u64>, Option<u64>, Option<ContextShare>) {
+    let mut peak: Option<u64> = None;
+    let mut total = 0_u128;
+    let mut count = 0_u128;
+    // System prompt, tool definitions, conversation, tool results.
+    let mut parts = [0_u128; 4];
+    for request in requests {
+        if request.purpose != RequestPurpose::Conversation {
+            continue;
+        }
+        let Some(usage) = &request.usage else {
+            continue;
+        };
+        peak = Some(peak.map_or(usage.input_tokens, |peak| peak.max(usage.input_tokens)));
+        total += u128::from(usage.input_tokens);
+        count += 1;
+        if let Some(context) = &request.context {
+            parts[0] += u128::from(context.system_tokens);
+            parts[1] += u128::from(context.tool_definition_tokens);
+            parts[2] += u128::from(context.conversation_tokens);
+            parts[3] += u128::from(context.tool_result_tokens);
+        }
+    }
+    let average =
+        (count > 0).then(|| u64::try_from((total + count / 2) / count).unwrap_or(u64::MAX));
+    let sum: u128 = parts.iter().sum();
+    let share = (sum > 0).then(|| ContextShare {
+        system_percent: percent(parts[0], sum),
+        tool_definition_percent: percent(parts[1], sum),
+        conversation_percent: percent(parts[2], sum),
+        tool_result_percent: percent(parts[3], sum),
+    });
+    (peak, average, share)
+}
+
+fn percent(part: u128, total: u128) -> u32 {
+    (part as f64 / total as f64 * 100.0).round() as u32
 }
 
 fn tool_calls(stats: &StatsResponse, name: &str) -> usize {
@@ -461,6 +530,76 @@ mod tests {
         assert_eq!(scan.guard_reminders, 2);
         assert_eq!(scan.blocked_commands, 1);
         assert_eq!(scan.parse_errors, 0);
+    }
+
+    #[test]
+    fn context_metrics_use_conversation_requests_that_reported_usage() {
+        let stats: StatsResponse = serde_json::from_value(json!({
+            "sessionId": "s",
+            "eventSeq": 1,
+            "overview": {
+                "cwd": "/w", "model": "m", "startedAt": 1, "updatedAt": 2,
+                "tags": {}, "turnCount": 1, "requestCount": 6,
+                "retryCount": 0, "recordedRetryCount": 0
+            },
+            "requests": [
+                {"startedAt": 1, "purpose": "conversation", "outcome": "completed",
+                 "toolCallIds": [],
+                 "usage": {"inputTokens": 1000, "cachedInputTokens": 0, "outputTokens": 10,
+                           "reasoningOutputTokens": 0, "totalTokens": 1010},
+                 "context": {"estimated": true, "systemTokens": 100,
+                             "toolDefinitionTokens": 50, "conversationTokens": 200,
+                             "toolResultTokens": 50}},
+                {"startedAt": 2, "purpose": "conversation", "outcome": "completed",
+                 "toolCallIds": [],
+                 "usage": {"inputTokens": 2000, "cachedInputTokens": 0, "outputTokens": 10,
+                           "reasoningOutputTokens": 0, "totalTokens": 2010},
+                 "context": {"estimated": true, "systemTokens": 200,
+                             "toolDefinitionTokens": 50, "conversationTokens": 300,
+                             "toolResultTokens": 50}},
+                {"startedAt": 3, "purpose": "conversation", "outcome": "completed",
+                 "toolCallIds": [],
+                 "usage": {"inputTokens": 1001, "cachedInputTokens": 0, "outputTokens": 10,
+                           "reasoningOutputTokens": 0, "totalTokens": 1011}},
+                {"startedAt": 4, "purpose": "compaction", "outcome": "completed",
+                 "toolCallIds": [],
+                 "usage": {"inputTokens": 999999, "cachedInputTokens": 0, "outputTokens": 10,
+                           "reasoningOutputTokens": 0, "totalTokens": 1000009},
+                 "context": {"estimated": true, "systemTokens": 999999,
+                             "toolDefinitionTokens": 0, "conversationTokens": 0,
+                             "toolResultTokens": 0}},
+                {"startedAt": 5, "purpose": "suggestion", "outcome": "completed",
+                 "toolCallIds": [],
+                 "usage": {"inputTokens": 888888, "cachedInputTokens": 0, "outputTokens": 10,
+                           "reasoningOutputTokens": 0, "totalTokens": 888898},
+                 "context": {"estimated": true, "systemTokens": 888888,
+                             "toolDefinitionTokens": 0, "conversationTokens": 0,
+                             "toolResultTokens": 0}},
+                {"startedAt": 6, "purpose": "conversation", "outcome": "failed",
+                 "toolCallIds": [],
+                 "context": {"estimated": true, "systemTokens": 777777,
+                             "toolDefinitionTokens": 0, "conversationTokens": 0,
+                             "toolResultTokens": 0}}
+            ],
+            "compactions": [],
+            "tools": [],
+            "toolCalls": [],
+            "approvals": {"count": 0, "data": []}
+        }))
+        .unwrap();
+
+        let metrics = metrics(&stats, &EventScan::default());
+        assert_eq!(metrics.context_peak_tokens, Some(2000));
+        assert_eq!(metrics.context_average_tokens, Some(1334));
+        assert_eq!(
+            metrics.context_share,
+            Some(ContextShare {
+                system_percent: 30,
+                tool_definition_percent: 10,
+                conversation_percent: 50,
+                tool_result_percent: 10,
+            })
+        );
     }
 
     #[test]

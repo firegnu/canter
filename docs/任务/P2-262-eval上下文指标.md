@@ -62,3 +62,11 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：`collect` 从 `requests` 里只取 `purpose` 是 `conversation` 且带 `usage` 的请求；峰值取 `usage.inputTokens` 最大、平均取平均（四舍五入），组成把这些请求的 `context` 四项各自加总后算百分比，写进 `metrics` 的 `contextPeakTokens`、`contextAverageTokens`、`contextShare`（`systemPercent`、`toolDefinitionPercent`、`conversationPercent`、`toolResultPercent`）。`report` 在「压缩」后加三列，缺字段显示 `—`；README「结果表」补了三列的说明和计算口径。
+- 验证了什么：新增 `context_metrics_use_conversation_requests_that_reported_usage`，造的 stats JSON 里有压缩、建议、没有 `usage` 的对话请求（带大块假 context）和一条没有 `context` 的对话请求，确认前三种都不算，平均四舍五入（4001/3 → 1334），组成 30/10/50/10；`cargo nextest run -p canter-eval` 20 个全过；`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都过。
+- 拿主意的地方：组成也只算带 `usage` 的对话请求，和峰值、平均是同一个集合（按任务里测试要求「没有 `usage` 的对话请求……都不算进来」）；百分比各自四舍五入，四项加起来可能不是 100（比如 101），不做归一；有 `usage` 但没有 `context` 的请求只进峰值和平均。
+- 没做的事：没有拿 `baseline-2026-11-09` 的真数据核对（要读 `~/.canter-eval`，任务里说不读，由主控做）；没给旧 `result.json` 缺字段专门加测试（任务说只加一条测试），向后兼容靠新字段的 `#[serde(default)]`，现有 report 测试两头都带字段，没覆盖缺字段那一头。
+- 踩过的坑：插入测试时没注意原文件里 `counts_malformed_lines` 前面已有 `#[test]`，多了一个，`clippy -D warnings` 报 duplicated attribute，删掉后过。别的没有。
