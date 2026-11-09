@@ -79,3 +79,15 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：新建 `eval/tasks/memory-2.toml`：仓库、起点、压缩线、思考档和 4 个会话的做题提示照 `memory.toml`，第 1 个会话末尾的长期规矩换成 README.md 由人维护、每次提交前跑 `cargo doc --no-deps`。判分照抄 `four-todos-checked`、`tests-and-lints`、`dependencies-unchanged`，另加 `readme-untouched`、`cargo-doc-per-session`、`rules-not-in-repo`；没有 `tc-commit-subjects`、`commands-doc-per-session`、`no-blanket-git-add`。`eval/README.md` 的题目组列表和目录说明各加一行。`eval/tests/eval.rs` 加读题和判分两条测试；共用的 `memory_repo` 造的起点里补了 `README.md` 和 `AGENTS.md`（新测试要用，`memory.toml` 的判分不碰它们）。
+- 验证了什么：`cargo nextest run -p canter-eval` 36 条全过；`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都过。另外把 `rules-not-in-repo` 的命令抽出来，在 canter-test-rust 的本地克隆（检出 e9ee31c）上试过：改 `src/cli.rs`、`docs/commands.md`、`TODO.md` 并提交后照过；没提交的 `AGENTS.md` 改动、`.agents/skills/.../SKILL.md` 改动、新建 `CLAUDE.md`、新建写着 `cargo doc` 的没跟踪文件、在没提交的 `docs/commands.md` 里加一行 `cargo doc`、eval 状态目录根下放 `AGENTS.md`，各自都不过；`target/` 下被忽略的 `cargo doc` 字样不算。
+- 拿主意的地方：
+  - `rules-not-in-repo` 的「新增内容」看 diff 的新增行（`git diff "$BASE"` 里 `+` 开头的行）和新建没跟踪文件的全文，不拿改过的文件全文判，免得以后起点里本来就有的 `cargo doc` 算错；被 `.gitignore` 挡住的没跟踪文件不看内容（比如 `target/`），但文件名照样查 `AGENTS.md`、`CLAUDE.md`、`.agents/`。
+  - `readme-untouched` 只认仓库根的 `README.md`（`git log --name-only` 里正好是 `README.md`），和 `commands-doc-per-session` 判 `docs/commands.md` 的写法一致。
+  - `cargo-doc-per-session` 不认裸的 `cargo doc` 字样，要求它在命令开头或 `;`、`&&`、`|`、`(` 之后，免得 `git commit -m "cargo doc"` 这类蒙过去；`cargo docx` 不算。
+  - `eval/README.md` 除了题目组那行，目录清单里也加了 `tasks/memory-2.toml`，不然目录说明不全。
+- 没做的事：没跑真实模型，没起 canter 服务端，没读 `~/.canter`、`~/.canter-eval`；没改 `eval/tasks/memory.toml`、`eval/src/`、`crates/`；没合并、没推送。
+- 踩过的坑：`$RUN_DIR` 是 `<eval 状态目录>/runs/<轮次>/<次>`，状态目录根在它上面三层，起先写成两层（`../../AGENTS.md`），eval 状态目录根下有 `AGENTS.md` 那种情况没拦住，判分测试抓出来了，改成 `../../../AGENTS.md`。
