@@ -9,6 +9,7 @@
 - 11-09（看到 eval 会话里 `Read src/cli.ts · failed`）：「我发现委派出去的agent这种错误有点多。虽然最后也能纠正过来。只调查给结论即可」
 - 主控查明是 `{"path": "src/cli.ts", "limit": 40}` 被拒之后：「读文件手下limit，offset对所有的repo都起作用吗？我不想只针对某一个repo修复」
 - 「先写任务单吧，我觉得是不是调查完再写？」
+- 主控列出四条待定和建议后：「照建议，等 eval 跑完再派」
 
 ## 背景（主控 11-09 查的）
 
@@ -32,18 +33,18 @@
 - 读文件工具收下 `offset` 当 `startLine`、`limit` 当 `lineCount`，读出来的结果和直接写 `startLine`、`lineCount` 一样。四种写法（只 `limit`、`offset` + `limit`、`startLine` + `limit`、`offset` + `lineCount`）都能读。
 - 读出来的条目（界面上显示的起始行）按换算后的起始行。
 
-下面几条主控拿不准，等用户定（定了改写成要做的）：
+下面四条用户 11-09 定了（「照建议」）：
 
-1. `offset: 0`：pi、opencode 都当从头读。主控建议同样当 1；`startLine: 0` 照旧报错。
-2. 同一个意思写了两遍（`startLine` 和 `offset` 都有，或 `lineCount` 和 `limit` 都有）：主控建议报错，说明只能写一个；目前记录里没出现过。
-3. 数字写成字符串（`"offset":"80"`，5 次）：改完以后这几次会换成「类型不对」的报错，模型照样能自己改。主控建议这次不收，要收的话 `startLine`、`lineCount` 也得一起收，范围就大了。
-4. 工具说明和参数定义（发给模型的那份）不改，不对模型提 `limit`、`offset`，只在收到时照收。主控建议这样，系统提示词和缓存都不变。
+1. `offset: 0` 当从头读（同 pi、opencode）；`startLine: 0` 照旧报错。
+2. 同一个意思写了两遍（`startLine` 和 `offset` 都有，或 `lineCount` 和 `limit` 都有）：报错，说明只能写一个（报错文字用英文）。
+3. 数字写成字符串（`"offset":"80"`）这次不收，照旧报类型不对；`startLine`、`lineCount` 也不改。
+4. 工具说明和参数定义（发给模型的那份）不改，不对模型提 `limit`、`offset`，只在收到时照收。
 
 ## 怎么算做完
 
 - 验收（主控提议，待用户确认）：用户日常用一段时间，会话里不再出现读文件因 `limit` / `offset` 被拒；主控事后可以用同样的办法再数一次。
 - 验证只做这些：
-  - `crates/canter-tools/tests/files.rs` 加测试：上面四种写法各读一次，结果和对应的 `startLine` / `lineCount` 写法逐字一样；用户定下的几条各有一个例子；
+  - `crates/canter-tools/tests/files.rs` 加测试：上面四种写法各读一次，结果和对应的 `startLine` / `lineCount` 写法逐字一样；上面定下的 1、2、3 条各有一个例子；
   - 原有读文件测试、工具说明快照（`tests/data/descriptions/read.txt`）不变；
   - `cargo nextest run -p canter-tools`、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check`。
 
@@ -51,7 +52,7 @@
 
 - 不改别的工具的参数（`edit` 缺 `oldText` 之类的另说）。
 - 不按模型、按服务商分支：所有模型一样收。
-- 不改工具说明和参数定义，除非用户在上面第 4 条定了要改。
+- 不改工具说明和参数定义。
 - 不调真实模型接口，不读、不改 `~/.canter`、`~/.canter-eval`。
 - 不用 Python。不按名字批量杀进程。
 - 不合并到 main，不推送。只在 `read-aliases` 分支上提交。
