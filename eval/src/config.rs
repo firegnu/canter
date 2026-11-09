@@ -56,10 +56,19 @@ pub fn write(
 
     let mut providers = Map::new();
     providers.insert(provider_name.to_string(), Value::Object(provider));
-    let config = json!({
+    let mut config = json!({
         "model": qualified,
         "providers": Value::Object(providers),
     });
+    if let Some(price) = root
+        .get("prices")
+        .and_then(|prices| prices.get(qualified))
+        .cloned()
+    {
+        let mut prices = Map::new();
+        prices.insert(qualified.to_string(), price);
+        config["prices"] = Value::Object(prices);
+    }
     crate::paths::write_private(
         destination,
         serde_json::to_vec_pretty(&config)
@@ -106,7 +115,11 @@ mod tests {
             "providers": {"p": {"base_url": "https://example.test/v1", "api_key": "test-placeholder-key",
                                 "models": {"m": model, "other": {"context_window": 200000}}},
                           "q": {"base_url": "https://q.test/v1", "api_key": "other-placeholder-key",
-                                "models": {"n": {"context_window": 200000}}}}
+                                "models": {"n": {"context_window": 200000}}}},
+            "prices": {
+                "p/m": {"peak": {"cache_hit": 0.1, "cache_miss": 0.3, "output": 1.2}},
+                "q/n": {"peak": {"cache_hit": 1, "cache_miss": 2, "output": 3}}
+            }
         });
         let path = dir.join("source.json");
         fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
@@ -135,6 +148,18 @@ mod tests {
             .map(|value| value.as_str().unwrap())
             .collect();
         assert!(listed.contains(&"high"));
+    }
+
+    #[test]
+    fn copies_only_the_matching_top_level_price() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = source(dir.path(), false);
+        let destination = dir.path().join("config.json");
+        write(&destination, &source, "p/m", None, None).unwrap();
+        let config: Value = serde_json::from_slice(&fs::read(&destination).unwrap()).unwrap();
+        assert_eq!(config["prices"]["p/m"]["peak"]["cache_miss"], 0.3);
+        assert!(config["prices"]["q/n"].is_null());
+        assert_eq!(config["prices"].as_object().unwrap().len(), 1);
     }
 
     #[test]

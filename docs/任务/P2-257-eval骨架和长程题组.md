@@ -148,3 +148,16 @@
 `prompt_suggestions`：主控 11-09 决定不关，保持 canter 默认；`result.json` 另存的 `conversationRequests` 够对比用。
 
 返工验证：`cargo nextest run -p canter-eval` 12 个测试全过；`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都过。
+
+## 返工 2
+
+按交叉审查意见改了四条（其余不动）：
+
+1. run 的 worktree 移出 eval 状态目录：默认放在 `~/.canter-eval-worktrees/<轮次>/<次>/`，`local.json` 的 `worktrees` 可改；`prepare` 拒绝落在 eval 状态目录或 canter 日常状态目录里面的根；`clean` 移到库里，只删配置的 worktree 根下面、且不是根本身的路径。测试断言准备出的 worktree 不在 `<eval home>` 下面、在 worktree 根下面，另加一条拒绝根落在 eval 状态目录里的测试。README 和 DESIGN 的布局、说明一起改，并写清为什么不能放进 `CANTER_HOME`（canter 把整个状态目录当私有路径，读写改文件工具会拒绝）。
+2. `stop` 不再只看 PID：先照 canter 的 `server_running` 对 `<eval home>/server.lock` 试共享锁，锁被占才算服务端在跑；拿得到锁就报 `server.json` 过期、不发信号。测试两条：锁被占时停的是登记的 PID、不碰另一个进程；锁没被占时登记的活进程不被发信号。
+3. eval 状态目录的检查加严：拒绝 `$HOME` 本身、canter 状态目录本身、它里面的目录和它的上级目录。加了 `Home::resolve_with`（环境传参）和一条测试。
+4. `config::write` 在源配置顶层 `prices` 里有 `<家>/<模型>` 这个键时一起拷过去，只拷这一个键；加了一条测试。
+
+返工 2 验证：`cargo nextest run -p canter-eval` 16 个测试全过；`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都过。
+
+返工 2 踩的坑：新路径还不存在时，`canonicalize` 整条路径会失败，而 macOS 上 `/tmp` 是 `/private/tmp` 的软链接，只做字面比较会把「在状态目录里面」误判成不在；改成先解析最长的已存在前缀再把剩下的部分接回去。

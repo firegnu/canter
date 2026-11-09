@@ -233,6 +233,14 @@ fn source_config(dir: &Path) -> PathBuf {
                     "api_key": "other-placeholder-key",
                     "models": {"k3.1-pro": {"context_window": 900000}}
                 }
+            },
+            "prices": {
+                "opencode-go/deepseek-v4.1-flash": {
+                    "peak": {"cache_hit": 0.006, "cache_miss": 0.3, "output": 1.2}
+                },
+                "kimi/k3.1-pro": {
+                    "peak": {"cache_hit": 1, "cache_miss": 2, "output": 3}
+                }
             }
         }))
         .unwrap(),
@@ -240,14 +248,21 @@ fn source_config(dir: &Path) -> PathBuf {
     path
 }
 
-fn local_config(home: &Home, repo: &Path, source: &Path) {
+fn local_config(home: &Home, repo: &Path, source: &Path) -> PathBuf {
+    let worktrees = home.root.parent().unwrap().join("worktrees");
+    write_local_config(home, repo, source, &worktrees);
+    worktrees
+}
+
+fn write_local_config(home: &Home, repo: &Path, source: &Path, worktrees: &Path) {
     canter_eval::paths::write_private(
         &home.local_path(),
         serde_json::to_vec_pretty(&json!({
             "repos": {"canter-test-ts": repo.display().to_string()},
             "model": "opencode-go/deepseek-v4.1-flash",
             "sourceConfig": source.display().to_string(),
-            "canter": "canter"
+            "canter": "canter",
+            "worktrees": worktrees.display().to_string()
         }))
         .unwrap()
         .as_slice(),
@@ -264,7 +279,7 @@ fn prepare_writes_one_model_and_a_worktree_at_the_base_commit() {
     let home = Home {
         root: temp.path().join("eval-home"),
     };
-    local_config(&home, &repo, &source);
+    let worktrees = local_config(&home, &repo, &source);
     write(&home.root.join("memory/global.md"), "# memory\n");
     write(
         &home.root.join("projects/git-abc/memory/project.md"),
@@ -295,11 +310,21 @@ fn prepare_writes_one_model_and_a_worktree_at_the_base_commit() {
         "high"
     );
     assert_eq!(providers["opencode-go"]["api_key"], "test-placeholder-key");
+    assert_eq!(
+        config["prices"]["opencode-go/deepseek-v4.1-flash"]["peak"]["cache_miss"],
+        0.3
+    );
+    assert!(config["prices"]["other/another-model"].is_null());
 
     assert_eq!(
         git(prepared.state.worktree(), &["rev-parse", "HEAD"]).trim(),
         base
     );
+    assert!(
+        !Path::new(&prepared.state.worktree()).starts_with(&home.root),
+        "the worktree must stay outside the eval state directory"
+    );
+    assert!(Path::new(&prepared.state.worktree()).starts_with(&worktrees));
     let node_modules = Path::new(&prepared.state.worktree()).join("node_modules");
     assert!(node_modules.is_dir());
     assert!(!node_modules.is_symlink());
@@ -326,9 +351,67 @@ fn prepare_writes_one_model_and_a_worktree_at_the_base_commit() {
     assert!(!summary.contains("test-placeholder-key"));
     assert!(!summary.contains("other-placeholder-key"));
 
-    git(
-        &repo,
-        &["worktree", "remove", "--force", &prepared.state.worktree],
+    canter_eval::prepare::clean(&home, &prepared.state).unwrap();
+    assert!(!Path::new(&prepared.state.worktree()).exists());
+
+    let outside = canter_eval::paths::State {
+        worktree: temp.path().join("elsewhere").display().to_string(),
+        ..prepared.state.clone()
+    };
+    assert!(canter_eval::prepare::clean(&home, &outside).is_err());
+}
+
+#[test]
+fn eval_home_refuses_home_and_parents_of_canter_state() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let daily = home.join(".canter");
+    assert!(
+        Home::resolve_with(Some(home.clone()), Some(&home), Some(&daily)).is_err(),
+        "$HOME itself must be refused"
+    );
+    assert!(
+        Home::resolve_with(Some(daily.clone()), Some(&home), Some(&daily)).is_err(),
+        "canter's state directory itself must be refused"
+    );
+    assert!(
+        Home::resolve_with(Some(daily.join("nested")), Some(&home), Some(&daily)).is_err(),
+        "a directory inside canter's state directory must be refused"
+    );
+    let custom = temp.path().join("data/canter");
+    assert!(
+        Home::resolve_with(Some(temp.path().join("data")), Some(&home), Some(&custom)).is_err(),
+        "the parent of a custom canter state directory must be refused"
+    );
+    assert!(
+        Home::resolve_with(Some(home.join(".canter-eval")), Some(&home), Some(&daily)).is_ok(),
+        "a sibling of the daily state directory is fine"
+    );
+}
+
+#[test]
+fn prepare_refuses_a_worktree_root_inside_the_eval_state_directory() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("canter-test-ts");
+    let base = lifecycle_repo(&repo, &FixtureOptions::default());
+    let source = source_config(temp.path());
+    let home = Home {
+        root: temp.path().join("eval-home"),
+    };
+    write_local_config(&home, &repo, &source, &home.root.join("worktrees"));
+    let error = canter_eval::prepare::prepare(&PrepareOptions {
+        home: home.clone(),
+        task_dir: task_dir_with_base(temp.path(), &base),
+        task: "long".into(),
+        round: "r1".into(),
+        run: "long-1".into(),
+        model: None,
+        source_config: Some(source),
+    })
+    .unwrap_err();
+    assert!(
+        error.contains("inside the eval state directory"),
+        "unexpected error: {error}"
     );
 }
 
@@ -975,6 +1058,7 @@ fn stop_signals_only_the_pid_in_server_json() {
     let home = Home {
         root: temp.path().join("home"),
     };
+    let _lock = hold_server_lock(&home);
     let first = spawn_detached_sleep();
     let second = spawn_detached_sleep();
     canter_eval::paths::write_private(
@@ -995,6 +1079,53 @@ fn stop_signals_only_the_pid_in_server_json() {
         nix::unistd::Pid::from_raw(second as i32),
         nix::sys::signal::Signal::SIGKILL,
     );
+}
+
+#[test]
+fn stop_does_not_signal_a_stale_registration() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    std::fs::create_dir_all(&home.root).unwrap();
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(home.server_lock_path())
+        .unwrap();
+    let pid = spawn_detached_sleep();
+    canter_eval::paths::write_private(
+        &home.server_path(),
+        serde_json::to_vec(&json!({
+            "pid": pid, "version": "test", "protocolVersion": 1,
+            "socketPath": temp.path().join("server.sock"), "instance": "i"
+        }))
+        .unwrap()
+        .as_slice(),
+    )
+    .unwrap();
+    let error = canter_eval::server::stop(&home).unwrap_err();
+    assert!(error.contains("stale"), "unexpected error: {error}");
+    assert!(is_running(pid), "the process must not be signalled");
+    let _ = nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid as i32),
+        nix::sys::signal::Signal::SIGKILL,
+    );
+}
+
+fn hold_server_lock(home: &Home) -> std::fs::File {
+    std::fs::create_dir_all(&home.root).unwrap();
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(home.server_lock_path())
+        .unwrap();
+    file.lock().unwrap();
+    file
 }
 
 fn spawn_detached_sleep() -> u32 {

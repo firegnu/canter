@@ -113,6 +113,21 @@ pub fn prepare(options: &PrepareOptions) -> Result<Prepared> {
             run_dir.display()
         ));
     }
+    let worktree = local.worktree_path(&options.home, &options.round, &options.run)?;
+    if worktree.exists() {
+        return Err(format!(
+            "worktree already exists: {}\nremove it or pick another run name",
+            worktree.display()
+        ));
+    }
+    if let Some(parent) = worktree.parent() {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .and_then(|()| fs::set_permissions(parent, fs::Permissions::from_mode(0o700)))
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
     options.home.ensure()?;
     fs::DirBuilder::new()
         .recursive(true)
@@ -138,7 +153,6 @@ pub fn prepare(options: &PrepareOptions) -> Result<Prepared> {
         ],
     )?;
     let base_commit = base_commit.trim().to_string();
-    let worktree = run_dir.join("worktree");
     git(
         &repo,
         &[
@@ -245,6 +259,32 @@ fn clear_dir(path: &Path) -> Result<usize> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
         .map_err(|error| format!("cannot protect {}: {error}", path.display()))?;
     Ok(removed)
+}
+
+/// Remove the run's worktree, but only when it is below the configured
+/// worktree root and not the root itself.
+pub fn clean(home: &crate::paths::Home, state: &crate::paths::State) -> Result<()> {
+    let local = crate::paths::Local::load(home)?;
+    let root = local.worktree_root(home)?;
+    let worktree = state.worktree();
+    let inside = crate::paths::within(worktree, &root) && !crate::paths::within(&root, worktree);
+    if !inside {
+        return Err(format!(
+            "refusing to remove {}: it is not under the worktree root {}",
+            worktree.display(),
+            root.display()
+        ));
+    }
+    if worktree.exists() {
+        git(
+            Path::new(&state.repo),
+            &["worktree", "remove", "--force", &state.worktree],
+        )?;
+    } else {
+        // A worktree removed by hand leaves stale metadata in the repository.
+        let _ = git(Path::new(&state.repo), &["worktree", "prune"]);
+    }
+    Ok(())
 }
 
 pub fn git(repo: &Path, args: &[&str]) -> Result<String> {

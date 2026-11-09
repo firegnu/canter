@@ -126,7 +126,7 @@ async fn run() -> Result<bool> {
         "clean" => {
             let (round, run) = round_and_run(&options)?;
             let state = State::load(&home, &round, &run)?;
-            clean(&state)?;
+            canter_eval::prepare::clean(&home, &state)?;
             println!("removed the worktree of {round}/{run}");
             Ok(true)
         }
@@ -192,18 +192,4 @@ fn round_and_run(options: &BTreeMap<String, String>) -> Result<(String, String)>
 fn state(home: &Home, options: &BTreeMap<String, String>) -> Result<State> {
     let (round, run) = round_and_run(options)?;
     State::load(home, &round, &run)
-}
-
-fn clean(state: &State) -> Result<()> {
-    if std::path::Path::new(&state.worktree).exists() {
-        canter_eval::prepare::git(
-            std::path::Path::new(&state.repo),
-            &["worktree", "remove", "--force", &state.worktree],
-        )?;
-    } else {
-        // A worktree removed by hand leaves stale metadata in the repository.
-        let _ =
-            canter_eval::prepare::git(std::path::Path::new(&state.repo), &["worktree", "prune"]);
-    }
-    Ok(())
 }

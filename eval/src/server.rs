@@ -120,9 +120,17 @@ pub async fn steer(registration: &Registration, session: &str, text: &str) -> Re
     post_json(&registration.socket_path, &path, &body).await
 }
 
-/// Stop only the process recorded in `server.json`.
+/// Stop only the process recorded in `server.json`, and only while a canter
+/// server still holds the eval state directory's lock.
 pub fn stop(home: &crate::paths::Home) -> Result<String> {
     let registration = registration(home)?;
+    if !server_running(home)? {
+        return Err(format!(
+            "{} is stale: no canter server holds {}; stopped nothing",
+            home.server_path().display(),
+            home.server_lock_path().display()
+        ));
+    }
     let pid = nix::unistd::Pid::from_raw(
         i32::try_from(registration.pid).map_err(|_| "server.json has an invalid pid")?,
     );
@@ -160,6 +168,29 @@ pub fn stop(home: &crate::paths::Home) -> Result<String> {
             "sent SIGTERM to the eval server (pid {}) but it is still running",
             registration.pid
         ))
+    }
+}
+
+/// canter's own check: a running server holds the lock exclusively.
+fn server_running(home: &crate::paths::Home) -> Result<bool> {
+    let path = home.server_lock_path();
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!("cannot check {}: {error}", path.display()));
+        }
+    };
+    match file.try_lock_shared() {
+        Ok(()) => Ok(false),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+        Err(std::fs::TryLockError::Error(error)) => {
+            Err(format!("cannot check {}: {error}", path.display()))
+        }
     }
 }
 

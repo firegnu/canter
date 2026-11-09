@@ -14,18 +14,21 @@ eval/
   results/           每轮的对比表，提交进仓库（只有数字、会话 ID、版本、模型、时段）
 ```
 
-eval 自己的状态目录默认 `~/.canter-eval`，用 `CANTER_EVAL_HOME` 或 `--eval-home` 改。它和 `~/.canter` 完全分开：配置、记忆、会话、信任记录各是各的。工具拒绝把状态目录指到 canter 自己的状态目录。
+eval 自己的状态目录默认 `~/.canter-eval`，用 `CANTER_EVAL_HOME` 或 `--eval-home` 改。它和 `~/.canter` 完全分开：配置、记忆、会话、信任记录各是各的。工具拒绝把状态目录指到用户 home、canter 自己的状态目录、它里面的目录或它的上级目录。
 
 ```
 <eval home>/
   config.json        只放一个模型（从日常配置拷来，含 key），权限 0600
   local.json         本机路径和模型选择，不进仓库
   server.json        eval 服务端的登记（pid、socket、版本）
+  server.lock        服务端持有的时候才能停它
   memory/            全局记忆（每次准备时清空）
   projects/*/memory/ 项目记忆（每次准备时清空）
   sessions/          eval 的会话
-  runs/<轮次>/<次>/  一次跑：state.json、session.json、checks.json、result.json、worktree/
+  runs/<轮次>/<次>/  一次跑：state.json、session.json、checks.json、result.json
 ```
+
+run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/<轮次>/<次>/`（`local.json` 的 `worktrees` 可改）。canter 把整个 `CANTER_HOME` 当私有路径，读写改文件工具会拒绝；worktree 放进去，模型连 `TODO.md` 都读不了。
 
 ## 第一次用
 
@@ -38,7 +41,8 @@ eval 自己的状态目录默认 `~/.canter-eval`，用 `CANTER_EVAL_HOME` 或 `
   },
   "model": "opencode-go/deepseek-v4.1-flash",
   "sourceConfig": "/Users/you/.canter/config.json",
-  "canter": "canter"
+  "canter": "canter",
+  "worktrees": "/absolute/path/to/eval-worktrees"
 }
 ```
 
@@ -46,6 +50,7 @@ eval 自己的状态目录默认 `~/.canter-eval`，用 `CANTER_EVAL_HOME` 或 `
 - `model`：这一轮用的唯一模型，`家/模型`。题目和代码不按模型分支。
 - `sourceConfig`：从哪份日常配置拷这一家这一段。缺省 `$HOME/.canter/config.json`。
 - `canter`：`collect` 调用的 canter 可执行文件。缺省 `canter`。
+- `worktrees`：run 的 worktree 放在哪。缺省 `$HOME/.canter-eval-worktrees`；必须在 eval 状态目录和 canter 日常状态目录之外。`clean` 只删这个根下面的路径。
 
 `prepare` 只从 `sourceConfig` 读那一个家、那一个模型（含 key），写到 eval 自己的 `config.json`，不会打印、不会写进日志或仓库。
 
@@ -116,7 +121,7 @@ eval 自己的状态目录默认 `~/.canter-eval`，用 `CANTER_EVAL_HOME` 或 `
    canter-eval clean --round <轮次> --run long-1
    ```
 
-10. 一轮跑完，停 eval 服务端（只按 `server.json` 里记的 pid 停，不按名字杀进程）：
+10. 一轮跑完，停 eval 服务端（只按 `server.json` 里记的 pid 停，不按名字杀进程；先看 `server.lock` 有没有服务端占着，没占就报登记过期、不发信号）：
 
     ```
     canter-eval stop

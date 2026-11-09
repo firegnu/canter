@@ -22,13 +22,26 @@ pub struct Home {
 
 impl Home {
     pub fn resolve(flag: Option<PathBuf>) -> Result<Self> {
+        let home = env::var_os("HOME").map(PathBuf::from);
+        let daily = env::var_os("CANTER_HOME").map(PathBuf::from);
+        Self::resolve_with(flag, home.as_deref(), daily.as_deref())
+    }
+
+    /// The environment is passed in so the guards can be tested without
+    /// changing process-wide variables.
+    #[doc(hidden)]
+    pub fn resolve_with(
+        flag: Option<PathBuf>,
+        home: Option<&Path>,
+        daily: Option<&Path>,
+    ) -> Result<Self> {
         let root = match flag {
             Some(path) => path,
             None => match env::var_os("CANTER_EVAL_HOME") {
                 Some(value) => PathBuf::from(value),
                 None => {
-                    let home = env::var_os("HOME").ok_or("HOME is not set")?;
-                    PathBuf::from(home).join(".canter-eval")
+                    let home = home.ok_or("HOME is not set")?;
+                    home.join(".canter-eval")
                 }
             },
         };
@@ -39,26 +52,37 @@ impl Home {
                 root.display()
             ));
         }
-        let home = Self { root };
-        home.refuse_daily_state()?;
-        Ok(home)
+        let eval = Self { root };
+        eval.refuse_daily_state(home, daily)?;
+        Ok(eval)
     }
 
-    /// Never point eval state at the directory canter itself uses.
-    fn refuse_daily_state(&self) -> Result<()> {
-        let root = same_path(&self.root);
-        let mut candidates = Vec::new();
-        if let Some(home) = env::var_os("HOME") {
-            candidates.push(PathBuf::from(home).join(".canter"));
+    /// Never point eval state at the user's home or at canter's own state
+    /// directory (or a parent of it).
+    fn refuse_daily_state(&self, home: Option<&Path>, daily: Option<&Path>) -> Result<()> {
+        if let Some(home) = home
+            && same(&self.root, home)
+        {
+            return Err(format!(
+                "refusing to use {} as the eval state directory: it is the user's home directory",
+                self.root.display()
+            ));
         }
-        if let Some(configured) = env::var_os("CANTER_HOME") {
-            candidates.push(PathBuf::from(configured));
-        }
-        for candidate in candidates {
-            if same_path(&candidate) == root {
+        for candidate in daily_state_dirs(home, daily) {
+            if within(&self.root, &candidate) {
                 return Err(format!(
-                    "refusing to use {} as the eval state directory: it is canter's own state directory",
-                    self.root.display()
+                    "refusing to use {} as the eval state directory: it is inside canter's state directory {}",
+                    self.root.display(),
+                    candidate.display()
+                ));
+            }
+            if let Some(parent) = candidate.parent()
+                && same(&self.root, parent)
+            {
+                return Err(format!(
+                    "refusing to use {} as the eval state directory: it is a parent of canter's state directory {}",
+                    self.root.display(),
+                    candidate.display()
                 ));
             }
         }
@@ -84,6 +108,10 @@ impl Home {
 
     pub fn server_path(&self) -> PathBuf {
         self.root.join("server.json")
+    }
+
+    pub fn server_lock_path(&self) -> PathBuf {
+        self.root.join("server.lock")
     }
 
     pub fn session_events(&self, id: &str) -> PathBuf {
@@ -113,6 +141,11 @@ pub struct Local {
     /// The canter executable used by `collect`; defaults to `canter` on PATH.
     #[serde(default)]
     pub canter: Option<String>,
+    /// Where run worktrees live; defaults to `$HOME/.canter-eval-worktrees`.
+    /// Must stay outside both the eval state directory and canter's own one,
+    /// because canter refuses to read or write inside `CANTER_HOME`.
+    #[serde(default)]
+    pub worktrees: Option<String>,
 }
 
 impl Local {
@@ -167,6 +200,54 @@ impl Local {
 
     pub fn canter(&self) -> String {
         self.canter.clone().unwrap_or_else(|| "canter".into())
+    }
+
+    pub fn worktree_root(&self, home: &Home) -> Result<PathBuf> {
+        let value = match &self.worktrees {
+            Some(value) => value.clone(),
+            None => {
+                let home_dir = env::var_os("HOME").ok_or("HOME is not set")?;
+                PathBuf::from(home_dir)
+                    .join(".canter-eval-worktrees")
+                    .display()
+                    .to_string()
+            }
+        };
+        let root = expand(Path::new(&value))?;
+        if !root.is_absolute() {
+            return Err(format!("worktrees in local.json must be absolute: {value}"));
+        }
+        let home_dir = env::var_os("HOME").map(PathBuf::from);
+        if let Some(home_dir) = &home_dir
+            && same(&root, home_dir)
+        {
+            return Err(format!(
+                "refusing to put worktrees in {}: it is the user's home directory",
+                root.display()
+            ));
+        }
+        if within(&root, &home.root) {
+            return Err(format!(
+                "refusing to put worktrees in {}: it is inside the eval state directory {}",
+                root.display(),
+                home.root.display()
+            ));
+        }
+        let daily = env::var_os("CANTER_HOME").map(PathBuf::from);
+        for candidate in daily_state_dirs(home_dir.as_deref(), daily.as_deref()) {
+            if within(&root, &candidate) {
+                return Err(format!(
+                    "refusing to put worktrees in {}: it is inside canter's state directory {}",
+                    root.display(),
+                    candidate.display()
+                ));
+            }
+        }
+        Ok(root)
+    }
+
+    pub fn worktree_path(&self, home: &Home, round: &str, run: &str) -> Result<PathBuf> {
+        Ok(self.worktree_root(home)?.join(round).join(run))
     }
 }
 
@@ -227,8 +308,61 @@ pub fn expand(path: &Path) -> Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
-fn same_path(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+/// canter's own state directories: `$HOME/.canter` and any `CANTER_HOME`.
+fn daily_state_dirs(home: Option<&Path>, daily: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(home) = home {
+        candidates.push(home.join(".canter"));
+    }
+    if let Some(daily) = daily {
+        candidates.push(daily.to_path_buf());
+    }
+    candidates
+}
+
+/// Whether `path` is `dir` or below it, comparing resolved paths when they
+/// exist and falling back to `.`/`..` normalization for paths not yet created.
+pub fn within(path: &Path, dir: &Path) -> bool {
+    let path = compare_path(path);
+    let dir = compare_path(dir);
+    path.starts_with(&dir)
+}
+
+fn same(left: &Path, right: &Path) -> bool {
+    compare_path(left) == compare_path(right)
+}
+
+fn compare_path(path: &Path) -> PathBuf {
+    // Resolve the longest existing prefix so a not-yet-created path still
+    // shares the resolved form of its existing parents (macOS /tmp and /var
+    // are symlinks).
+    let mut existing = path.to_path_buf();
+    let mut suffix = Vec::new();
+    loop {
+        if let Ok(canonical) = existing.canonicalize() {
+            let mut out = canonical;
+            for part in suffix.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        let Some(name) = existing.file_name().map(|name| name.to_os_string()) else {
+            break;
+        };
+        suffix.push(name);
+        existing.pop();
+    }
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            component => out.push(component.as_os_str()),
+        }
+    }
+    out
 }
 
 pub fn check_label(kind: &str, value: &str) -> Result<()> {
