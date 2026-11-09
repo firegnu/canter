@@ -64,6 +64,23 @@
 - 碰到要拿主意的事，停下来，在回复里写清问题、可选办法和你的建议，然后结束这一轮，等主控回复再接着做；不在自己窗口里问用户，不要自己换别的办法。
 - 不合并到 main，不推送。只在 `read-aliases` 分支上提交。
 
+## 完成记录
+
+- 做了什么：`ReadArgs` 多收 `offset`、`limit` 两个可选别名（仍 `deny_unknown_fields`），`Tools::prepare_action` 的 `Tool::Read` 解析后调 `accept_aliases` 换算：`offset` 从 0 数、0 当从头读（`offset.max(1)`），`limit` 就是 `lineCount`；同一个意思写两遍就报错（`read accepts startLine or offset, not both`、`read accepts lineCount or limit, not both`）；数字写成字符串照旧是 serde 的类型错误。准备失败时 `tool_error` 生成的 `fileRead` 项目起始行也认 `offset`（0 换算成 1）；成功的条目原本就取换算后的 `start_line`。PDF worker 里手工构造的 `ReadArgs` 补了两个 `None`。工具说明和参数定义没动。
+- 验证了什么：`crates/canter-tools/tests/files.rs` 新加 3 个测试：四种写法各与对应的 `startLine`/`lineCount` 写法读一次，结果文字和条目起始行逐字比较；`offset: 0` 从头读、`startLine: 0` 照旧报错；`startLine`+`offset`、`lineCount`+`limit` 两种重复写法和 `"offset":"80"` 各一个例子。`cargo nextest run -p canter-tools` 241 个全过（含工具说明快照 `tests/data/descriptions/read.txt` 的测试），`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都过。
+- 拿主意的地方：重复写按原始 JSON 里有没有这个键判断（`start_line`、`line_count` 有默认值，解析后分不出省略和显式写 1），`null` 当没写。错误文字用 `read accepts …` 两句，跟现有小写英文短句一致。失败条目里只对 `offset` 做 `max(1)`，`startLine` 照旧原样显示。
+- 没做的事：`limit: 0` 照旧被 `startLine and lineCount must be positive` 挡下，报错里提的是 `lineCount`，没另写；DESIGN 没改（里面没有 read 参数的一节，别名也不对模型公开，要不要记一条请主控定）；没合并、没推送。
+- 踩过的坑：没有。
+
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 主控审查
+
+- diff 只动了 `crates/canter-tools`（`lib.rs`、`pdf.rs`、`tests/files.rs`）和本文件；工具说明、参数定义、快照没动，「不要做」一条没碰。四种写法、`offset: 0`、写两遍报错、字符串不收都有测试。主控重跑 `cargo nextest run -p canter-tools`：241 个全过（22 跳过），和完成记录一致。
+- 代码注释写成「offset 和 pi、opencode 一样从 0 数」，与实际（`offset` 和 `startLine` 一样从 1 数，只是 0 当第 1 行）不符，主控在分支上改了这一行注释，不算返工。
+- 对方问 DESIGN 要不要补：主控定补一句（合并时写进 DESIGN 的工具一节）。`limit: 0` 沿用原来的 positive 报错，同意。
+- 派 canter 做：一次做完，用时约 5 分钟，没有必须改。
+
+结果：一次过

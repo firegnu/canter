@@ -380,6 +380,28 @@ struct ReadArgs {
     start_line: u32,
     #[serde(default = "max_lines")]
     line_count: u32,
+    // Other agents' read tools call these offset and limit.
+    offset: Option<u32>,
+    limit: Option<u32>,
+}
+impl ReadArgs {
+    fn accept_aliases(&mut self, raw: &Value) -> Result<(), String> {
+        let supplied = |name: &str| raw.get(name).is_some_and(|value| !value.is_null());
+        if supplied("startLine") && supplied("offset") {
+            return Err("read accepts startLine or offset, not both".into());
+        }
+        if supplied("lineCount") && supplied("limit") {
+            return Err("read accepts lineCount or limit, not both".into());
+        }
+        // offset is a 1-based line number like startLine (as in pi and opencode); 0 means the first line.
+        if let Some(offset) = self.offset {
+            self.start_line = offset.max(1);
+        }
+        if let Some(limit) = self.limit {
+            self.line_count = limit;
+        }
+        Ok(())
+    }
 }
 fn first_line() -> u32 {
     1
@@ -1356,7 +1378,8 @@ impl Tools {
                 Ok(Action::AskUser(args))
             }
             Tool::Read => {
-                let read: ReadArgs = parse(arguments)?;
+                let mut read: ReadArgs = parse(arguments)?;
+                read.accept_aliases(arguments)?;
                 validate_path(&read.path)?;
                 if read.start_line == 0 || read.line_count == 0 {
                     return Err("startLine and lineCount must be positive".into());
@@ -2371,6 +2394,7 @@ fn tool_error(
             path: arguments["path"].as_str().unwrap_or_default().into(),
             start_line: arguments["startLine"]
                 .as_u64()
+                .or_else(|| arguments["offset"].as_u64().map(|offset| offset.max(1)))
                 .and_then(|n| n.try_into().ok())
                 .unwrap_or(1),
             content: String::new(),

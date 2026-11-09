@@ -562,6 +562,117 @@ async fn read_returns_numbered_requested_lines_and_a_final_item() {
 }
 
 #[tokio::test]
+async fn read_accepts_limit_and_offset_as_aliases_for_line_count_and_start_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let contents: String = (1..=9).map(|n| format!("line {n}\n")).collect();
+    std::fs::write(dir.path().join("notes"), contents).unwrap();
+    let tools = tools(&dir);
+    for (aliased_args, canonical_args) in [
+        (
+            serde_json::json!({"path":"notes","limit":3}),
+            serde_json::json!({"path":"notes","lineCount":3}),
+        ),
+        (
+            serde_json::json!({"path":"notes","offset":3,"limit":2}),
+            serde_json::json!({"path":"notes","startLine":3,"lineCount":2}),
+        ),
+        (
+            serde_json::json!({"path":"notes","startLine":3,"limit":2}),
+            serde_json::json!({"path":"notes","startLine":3,"lineCount":2}),
+        ),
+        (
+            serde_json::json!({"path":"notes","offset":3,"lineCount":2}),
+            serde_json::json!({"path":"notes","startLine":3,"lineCount":2}),
+        ),
+    ] {
+        let aliased = invoke(&tools, Tool::Read, aliased_args.clone()).await;
+        let canonical = invoke(&tools, Tool::Read, canonical_args.clone()).await;
+        assert_eq!(
+            aliased.outcome,
+            ToolOutcome::Completed,
+            "{aliased_args}: {}",
+            aliased.text
+        );
+        assert_eq!(aliased.text, canonical.text, "{aliased_args}");
+        let start_line = |result: &canter_tools::ToolOutput| match &result.item {
+            Item::FileRead { start_line, .. } => *start_line,
+            other => panic!("wrong item: {other:?}"),
+        };
+        assert_eq!(
+            start_line(&aliased),
+            start_line(&canonical),
+            "{aliased_args}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn read_offset_zero_starts_at_the_first_line() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("notes"), "one\ntwo\nthree\n").unwrap();
+    let tools = tools(&dir);
+    let result = invoke(
+        &tools,
+        Tool::Read,
+        serde_json::json!({"path":"notes","offset":0,"limit":2}),
+    )
+    .await;
+    assert_eq!(result.outcome, ToolOutcome::Completed, "{}", result.text);
+    assert!(result.text.contains("1: one\n2: two\n"), "{}", result.text);
+    assert!(matches!(
+        result.item,
+        Item::FileRead {
+            start_line: 1,
+            status: ItemStatus::Completed,
+            ..
+        }
+    ));
+    let zero = invoke(
+        &tools,
+        Tool::Read,
+        serde_json::json!({"path":"notes","startLine":0}),
+    )
+    .await;
+    assert_eq!(zero.outcome, ToolOutcome::Failed);
+    assert!(zero.text.contains("must be positive"), "{}", zero.text);
+}
+
+#[tokio::test]
+async fn read_rejects_a_setting_supplied_twice_and_string_aliases() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("notes"), "one\ntwo\n").unwrap();
+    let tools = tools(&dir);
+    for (args, expected) in [
+        (
+            serde_json::json!({"path":"notes","startLine":2,"offset":2}),
+            "startLine or offset",
+        ),
+        (
+            serde_json::json!({"path":"notes","lineCount":2,"limit":2}),
+            "lineCount or limit",
+        ),
+        (
+            serde_json::json!({"path":"notes","offset":"2"}),
+            "invalid type",
+        ),
+    ] {
+        let result = invoke(&tools, Tool::Read, args.clone()).await;
+        assert_eq!(result.outcome, ToolOutcome::Failed, "{args}");
+        assert!(result.text.contains(expected), "{args}: {}", result.text);
+        assert!(
+            matches!(
+                result.item,
+                Item::FileRead {
+                    status: ItemStatus::Failed,
+                    ..
+                }
+            ),
+            "{args}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn edit_validates_all_replacements_against_the_original_before_writing() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("notes");
