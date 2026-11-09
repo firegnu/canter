@@ -98,6 +98,6 @@
 - 主控重跑 `cargo nextest run -p canter-eval` 36 个全过，clippy、fmt、`git diff --check` 过。
 - 开发问 `.agents/`、`CLAUDE.md` 要不要单独造例子：和 AGENTS.md 同一条匹配，开发已手试，不加。
 - 合并前全套：`cargo nextest run --all-targets` 2060 个全过（50 跳过），`cargo test --doc --workspace` 没有失败。
-- 验收（用户确认的提议）：用 `memory-2` 跑一轮，保留、清空各 3 次，结果表用户看过觉得能用——还没跑。审查期间查到 canter 记忆目录的 bug（记忆文件标题后空一行，这条记忆不进目录、也不提示；第一轮 keep-3 就是这样），用户定先修再跑。
+- 验收（用户确认的提议）：用 `memory-2` 跑一轮，保留、清空各 3 次，结果表用户看过觉得能用——还没跑。审查期间查到 canter 记忆目录的 bug（记忆文件标题后空一行，这条记忆不进目录、也不提示；第一轮 keep-3 就是这样），主控建议先修再跑，待用户定。
 
 结果：一次过
