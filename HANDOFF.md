@@ -158,6 +158,7 @@
     - `blockedRgReplace` 按空格分词，引号和 `--` 后面的 `-r` 会数错；
     - 插话按原文回退匹配轮次，没限定发送之后、没一对一占用；
     - 答案检查不认毫秒的逗号千分位（`10,000 ms`）。
+  - 没有主仓库的题（子 agent 题）`clean` 以后不能重新 `grade`：判分命令在已删掉的会话目录里跑，报 `No such file or directory`。P2-269 验收时临时 `mkdir -p <worktrees>/<轮次>/@repos/<次>` 跑完再 `rmdir`（判分只读 `$RUN_DIR/session-data.json`）。
 - Sub-agents 任务弹框（P2-255，11-08 合并）开发记下、没做的：弹框开着时状态行仍写 `Esc to interrupt`（此时 Esc 只关弹框）；鼠标滚轮在弹框上滚的是底下的对话；终端太矮、弹框画不出来时按键仍先给弹框。
 - 几家同时配（P2-200、P2-201）以后，订阅（opencode go、Kimi Code 等）没有按 token 的价格：状态栏花费显示 `unknown`，和有价格的混用时显示 `$X+?`；`/goal` 的美元预算（P2-109）算不到订阅的请求，用订阅跑长任务时拦不住原地打转烧额度。缓存命中靠服务商报 `cached_tokens` 或 DeepSeek 的字段，不报的家显示 0%。11-04 主控提了两个方向（配置里标订阅、花费显示 `plan` 并按家列 token；`/goal` 能按 token 设预算），用户：「没事，你考虑到这些事情就好了」，没开任务。
 - 界面里跨家选模型（P2-201）开发记下、主控没让改的：`/model` 第二层说明栏的窗口按十进制（1048576 显示 `1049k`，不是 `1024k`）；第二层按键行仍写 `Esc cancel`，实际按 Esc 是回第一层；某一家正好叫 `default` 时第一层会有两行 `default`（`crates/canter-tui/src/commands.rs`）。

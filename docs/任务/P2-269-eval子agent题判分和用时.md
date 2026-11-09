@@ -63,3 +63,13 @@
 - 拿主意的地方：字段使用字符串数组 `replies`，完成回复的识别沿用原 `finalReply` 的规则（`item.completed` 的 `agentMessage`，状态为 completed 或旧事件未写状态）。子 agent 没有任何 `turn.completed` 时结束时间和用时为空，结果表显示 `?`。没有需要主控决定的事。
 - 没做的事：未改 `crates/`、已有结果表和 P2-258 的其他建议；未读写真实 `~/.canter`、`~/.canter-eval`，未起真实服务端，真实模型调用 0 次。历史轮次重判和重出表由主控合并后验收，本分支没有声称已验证历史 4m49s、3m31s 或其他已提交表逐字不变；未合并、未推送。
 - 踩过的坑：一次 README 补丁因上下文文字不匹配未应用，核对原文后缩小补丁上下文重新应用；无实现方案返工。
+
+## 主控审查
+
+- diff 只动 `eval/`（`session_data.rs`、`subagent.toml`、README、测试）和本文件；`finalReply` 保留，新增 `replies`；子 agent `ended_at` 取最后一个 `turn.completed`。两条回归测试先红后绿。
+- 合并前全套（主控）：`cargo nextest run --all-targets` 2091 个全过（50 跳过），`cargo test --doc --workspace` 没有失败。
+- 验收（主控，用户批准的口径）：合并后对 `subagent-2026-11-10` 重新判分、重出表。第 2 次 `answer-facts` 过（3/4），第 1 次仍不过（真缺 pi MCP 60 秒），两个「关闭」子 agent 用时 4m49s、3m31s；另外 4 张已提交的表重出一字不差。
+- 重判时碰到：这道题没有主仓库，`clean` 删掉了会话目录，判分命令在那个目录里跑，报找不到目录。用户选临时建空目录跑完再删（判分只读 `session-data.json`）。记进 HANDOFF。
+- 派 Codex（`gpt-6-astra` high）做：一次做完，没有必须改。
+
+结果：一次过
