@@ -62,3 +62,8 @@
 4. 模型：「先只用deepseek flash」（opencode go 的 `deepseek-v4.1-flash`）。
 5. 对照：用户问「上一版指的是什么？」，主控解释中（见对话），待用户回。
 6. 放哪：「放eval」——canter 仓库的 `eval/`：题目（数据文件）、判分（shell 命令）、结果表。不用 Python。
+
+## 11-09 Terminal-Bench 排在第一版之后
+
+- 用户问「你打算什么时候使用terminal bench这种eval？」，主控答：自己的三组题先跑出第一份基准，再单开一件接 Terminal-Bench 2.0；它只看做没做完、分数主要由模型决定，测不到压缩、插话、子 agent 这些 canter 自己改的东西，所以不每版跑，只在想知道和 Codex、Claude Code 差多少时跑。接入要解决：Harbor 在 Docker 里跑，canter 是常驻服务端 + 客户端；适配器是一小段 Python，放 canter 仓库外；约 90 件，先拿几件试出花费和时间；比外壳要让对方用同一个模型（Codex 能不能接 DeepSeek 到时查）。
+- 用户：「记进去，第一版跑通后接着做」。第一版跑通后，下一件就是接 Terminal-Bench 2.0。
