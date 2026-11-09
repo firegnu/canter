@@ -6,8 +6,8 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
 use canter_protocol::{
-    AgentStatus, Event, EventPayload, ExecCommandSource, Item, ItemStatus, StatsResponse,
-    StatsSubAgent, Turn,
+    AgentStatus, CollabAgentTool, Event, EventPayload, ExecCommandSource, Item, ItemStatus,
+    StatsResponse, StatsSubAgent, Turn,
 };
 use serde::{Deserialize, Serialize};
 
@@ -85,6 +85,9 @@ pub struct TurnRow {
     pub opened_by: Opener,
     /// How many times each tool ran in this turn, by tool name.
     pub tools: BTreeMap<String, usize>,
+    /// How many spawn calls returned an agent with an id: a failed spawn is a
+    /// tool call but did not start a sub-agent.
+    pub spawned_agents: usize,
 }
 
 /// What started a turn of the main session.
@@ -184,6 +187,7 @@ fn turns(events: &[Event], chats: &[ChatRecord], texts: &[String]) -> Vec<TurnRo
                     duration_ms: None,
                     opened_by: opener(index, turn, chats, texts),
                     tools: BTreeMap::new(),
+                    spawned_agents: 0,
                 });
             }
             EventPayload::TurnCompleted { turn } => {
@@ -199,6 +203,15 @@ fn turns(events: &[Event], chats: &[ChatRecord], texts: &[String]) -> Vec<TurnRo
                     && let Some(row) = turns.iter_mut().find(|row| row.id == *turn_id)
                 {
                     *row.tools.entry(name).or_insert(0) += 1;
+                    if let Item::CollabAgentToolCall {
+                        tool: CollabAgentTool::SpawnAgent,
+                        agents,
+                        ..
+                    } = item
+                    {
+                        row.spawned_agents +=
+                            agents.iter().filter(|agent| !agent.id.is_empty()).count();
+                    }
                 }
             }
             _ => {}
@@ -454,6 +467,20 @@ mod tests {
             final_reply(&parse_events(&events)).as_deref(),
             Some("second")
         );
+    }
+
+    #[test]
+    fn counts_only_spawns_that_returned_an_agent() {
+        let events = [
+            r#"{"seq":1,"sessionId":"s","timestamp":1000,"type":"turn.started","turn":{"id":"t1","items":[],"status":"inProgress","error":null,"input":[{"type":"text","text":"调研"}],"clientName":""},"inputId":null}"#,
+            r#"{"seq":2,"sessionId":"s","timestamp":2000,"type":"item.completed","turnId":"t1","item":{"type":"collabAgentToolCall","id":"sp1","tool":"spawnAgent","status":"completed","error":"bad role","agents":[{"id":"","name":"","status":null}]}}"#,
+            r#"{"seq":3,"sessionId":"s","timestamp":3000,"type":"item.completed","turnId":"t1","item":{"type":"collabAgentToolCall","id":"sp2","tool":"spawnAgent","status":"completed","agents":[{"id":"c1","name":"probe","status":"running"}]}}"#,
+            r#"{"seq":4,"sessionId":"s","timestamp":4000,"type":"turn.completed","turn":{"id":"t1","items":[],"status":"completed","error":null,"input":[],"clientName":""}}"#,
+        ]
+        .join("\n");
+        let turns = turns(&parse_events(&events), &[], &[]);
+        assert_eq!(turns[0].tools["spawn_agent"], 2);
+        assert_eq!(turns[0].spawned_agents, 1);
     }
 
     #[test]

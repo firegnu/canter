@@ -53,13 +53,15 @@ text = '''好的，继续等另外一个subagent回来'''
 #   turns[i].openedBy.kind  prompt / steer / report / other
 #   turns[i].tools          这一轮各工具调用的次数，按工具名（read、shell、
 #                           spawn_agent、wait_agent 等）
+#   turns[i].spawnedAgents  这一轮 spawn 成功、拿到子 agent ID 的次数（失败也算
+#                           工具调用，但不算开出子 agent）
 #   finalReply              主会话最后一条回复的原文
 #   subAgents[]             每个子 agent 的请求、被拦命令、开始结束、token、花费
 #   chats[]                 插话：index 从 1 起，sentAt、turnId、skipped
 [[checks]]
 id = "spawned-subagents"
-description = "主会话第 1 轮开了至少 1 个子 agent"
-command = '''jq -e '(.turns[0].tools.spawn_agent // 0) > 0' "$RUN_DIR/session-data.json"'''
+description = "主会话第 1 轮成功开了至少 1 个子 agent（拿到 ID）"
+command = '''jq -e '(.turns[0].spawnedAgents // 0) > 0' "$RUN_DIR/session-data.json"'''
 
 [[checks]]
 id = "dispatch-turn-quick"
@@ -68,13 +70,14 @@ command = '''jq -e '.turns[0].durationMs != null and .turns[0].durationMs <= 600
 
 [[checks]]
 id = "no-wait-in-chat"
-description = "插话开的那几轮里没调 wait_agent"
-command = '''jq -e '([.turns[] | select(.openedBy.kind == "steer") | (.tools.wait_agent // 0)] | add // 0) == 0' "$RUN_DIR/session-data.json"'''
+description = "有插话开的轮，且这些轮里没调 wait_agent"
+command = '''jq -e '([.turns[] | select(.openedBy.kind == "steer")] | length) > 0 and ([.turns[] | select(.openedBy.kind == "steer") | (.tools.wait_agent // 0)] | add // 0) == 0' "$RUN_DIR/session-data.json"'''
 
 # 6 条事实：codex shell 默认 10 秒、codex MCP 默认 300 秒、codex 超时退出码 124、
 # pi 的 bash 没有默认超时、pi 超时文案 Command timed out after N seconds、pi MCP
-# 默认 60 秒。中英文都认，数字和单位之间有没有空格都认，也认毫秒写法
-# （10 000 ms、10_000、10000 ms）。每条在整篇回复里找一个写法即可。
+# 默认 60 秒。中英文都认，数字和单位之间有没有空格都认，也认毫秒写法：
+# `10 000 ms`、`10_000`（源码常量）、`10000 ms`、`10000ms`。数字两边不能粘着别的
+# 数字：`110 秒` 不是 10 秒，`1124` 不是 124。每条在整篇回复里找一个写法即可。
 [[checks]]
 id = "answer-facts"
 description = "最后一条回复提到 6 条事实（codex 10 秒 / codex MCP 300 秒 / 退出码 124 / pi bash 无默认 / pi 超时文案 / pi MCP 60 秒）"
@@ -83,19 +86,26 @@ reply="$(jq -r '.finalReply // ""' "$RUN_DIR/session-data.json")" || exit 1
 
 fail() { echo "missing: $1" >&2; exit 1; }
 
+# 一个独立的数字：两边都不粘着别的数字。
+has_number() {
+  printf '%s' "$reply" | grep -Eq "(^|[^0-9])$1([^0-9]|$)"
+}
+
 seconds() {
   # 一个数字后接秒或秒的英文写法
-  printf '%s' "$reply" | grep -Eqi "$1[[:space:]]*(秒|s([^a-z]|$)|sec(ond)?s?([^a-z]|$))"
+  printf '%s' "$reply" | grep -Eqi "(^|[^0-9])$1[[:space:]]*(秒|s([^a-z]|$)|sec(ond)?s?([^a-z]|$))"
 }
 
 millis() {
-  # 一个数字的毫秒写法：10 000 ms、10_000、10000ms
-  printf '%s' "$reply" | grep -Eqi "$1[_,]?000[[:space:]]*(ms([^a-z]|$)|毫秒)"
+  # 同一个时长的毫秒写法：10 000 ms、10_000、10000 ms、10000ms、300 000 毫秒
+  printf '%s' "$reply" | grep -Eqi "(^|[^0-9])$(( $1 * 1000 ))[[:space:]]*(ms([^a-z]|$)|毫秒)" && return 0
+  printf '%s' "$reply" | grep -Eqi "(^|[^0-9])$1[[:space:]]000[[:space:]]*(ms([^a-z]|$)|毫秒)" && return 0
+  printf '%s' "$reply" | grep -Eqi "(^|[^0-9])$1_000([^0-9]|$)"
 }
 
 seconds 10 || millis 10 || fail "codex shell 默认 10 秒"
 seconds 300 || millis 300 || fail "codex MCP 默认 300 秒"
-printf '%s' "$reply" | grep -q '124' || fail "codex 超时后退出码 124"
+has_number 124 || fail "codex 超时后退出码 124"
 printf '%s' "$reply" | grep -Eqi '(没有|无)[[:space:]]*(默认|超时)|no[[:space:]]+default[[:space:]]+timeout|no[[:space:]]+timeout[[:space:]]+by[[:space:]]+default' || fail "pi 的 bash 没有默认超时"
 printf '%s' "$reply" | grep -Fqi 'Command timed out after' || fail "pi 超时告诉模型 Command timed out after N seconds"
 seconds 60 || millis 60 || fail "pi MCP 默认 60 秒"

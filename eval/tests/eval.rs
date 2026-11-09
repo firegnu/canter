@@ -4443,6 +4443,139 @@ async fn chat_steering_skips_the_report_line_when_every_child_is_back() {
 }
 
 #[tokio::test]
+async fn chat_steering_skips_the_report_line_when_children_finish_without_a_wake() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    write(&repo.join("base.txt"), "base\n");
+    commit(&repo, "base", None);
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let tasks = chat_task(
+        temp.path(),
+        &base,
+        &[("turn", "好的，谢谢"), ("report", "继续等")],
+    );
+    chat_state(&home, &tasks.join("chat.toml"), &repo, "chat-1");
+    write(
+        &home.session_id_path("r1", "chat-1", 1),
+        &json!({"sessionId": "s-chat"}).to_string(),
+    );
+    let mut fake = fake_server(temp.path(), json!({"eventSeq": 1, "turnId": null})).await;
+    register_fake(&home, &fake);
+    let events_path = home.session_events("s-chat");
+    let mut events = vec![
+        started_event(1, 1_000, "s-chat", "t1", "开题", ""),
+        spawn_event(2, 2_000, "s-chat", "t1", "c1", "running"),
+        turn_done_event(3, 15_000, "s-chat", "t1"),
+    ];
+    flush_events(&events_path, &events);
+
+    let handle = tokio::spawn({
+        let home = home.clone();
+        async move {
+            canter_eval::steer::steer(SteerOptions {
+                home,
+                round: "r1".into(),
+                run: "chat-1".into(),
+                session: 1,
+                poll: Duration::from_millis(20),
+                timeout: Duration::from_millis(300),
+            })
+            .await
+        }
+    });
+    let (_, _, body) = fake.next(Duration::from_secs(3)).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["input"][0]["text"],
+        "好的，谢谢"
+    );
+
+    // The child comes back and the chat turn handles its report; no separate
+    // background turn ever appears, so the report line is skipped, not waited
+    // for until the time limit.
+    events.push(started_event(
+        4,
+        20_000,
+        "s-chat",
+        "t2",
+        "好的，谢谢",
+        "canter-eval",
+    ));
+    events.push(agent_updated_event(5, 21_000, "s-chat", "c1", "completed"));
+    events.push(turn_done_event(6, 22_000, "s-chat", "t2"));
+    flush_events(&events_path, &events);
+    tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let progress = chat_progress(&home, "r1", "chat-1");
+    let chats = progress["chats"].as_array().unwrap();
+    assert_eq!(chats[1]["skipped"], "所有子 agent 都回来了", "{progress}");
+    assert_eq!(progress["timedOut"], false, "{progress}");
+}
+
+#[tokio::test]
+async fn chat_steering_ignores_a_failed_spawn_placeholder() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    write(&repo.join("base.txt"), "base\n");
+    commit(&repo, "base", None);
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let tasks = chat_task(temp.path(), &base, &[("report", "继续等")]);
+    chat_state(&home, &tasks.join("chat.toml"), &repo, "chat-1");
+    write(
+        &home.session_id_path("r1", "chat-1", 1),
+        &json!({"sessionId": "s-chat"}).to_string(),
+    );
+    let mut fake = fake_server(temp.path(), json!({"eventSeq": 1, "turnId": null})).await;
+    register_fake(&home, &fake);
+    let events_path = home.session_events("s-chat");
+    // A failed spawn: the tool call completed but returned no agent id.
+    let events = vec![
+        started_event(1, 1_000, "s-chat", "t1", "开题", ""),
+        item_event(
+            2,
+            2_000,
+            "s-chat",
+            "t1",
+            json!({"type": "collabAgentToolCall", "id": "spawn-failed",
+                   "tool": "spawnAgent", "status": "completed", "error": "bad role",
+                   "agents": [{"id": "", "name": "", "status": null}]}),
+        ),
+        turn_done_event(3, 15_000, "s-chat", "t1"),
+    ];
+    flush_events(&events_path, &events);
+
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        canter_eval::steer::steer(SteerOptions {
+            home: home.clone(),
+            round: "r1".into(),
+            run: "chat-1".into(),
+            session: 1,
+            poll: Duration::from_millis(20),
+            timeout: Duration::from_millis(300),
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(fake.next(Duration::from_millis(200)).await.is_none());
+    let progress = chat_progress(&home, "r1", "chat-1");
+    let chats = progress["chats"].as_array().unwrap();
+    assert_eq!(chats[0]["skipped"], "没有子 agent 的报告", "{progress}");
+    assert_eq!(progress["timedOut"], false, "{progress}");
+}
+
+#[tokio::test]
 async fn chat_steering_stops_at_the_time_limit() {
     let temp = TempDir::new().unwrap();
     let home = Home {
@@ -4487,6 +4620,41 @@ async fn chat_steering_stops_at_the_time_limit() {
     assert!(fake.next(Duration::from_millis(200)).await.is_none());
 }
 
+#[tokio::test]
+async fn chat_steering_stops_at_the_time_limit_before_the_session_appears() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    write(&repo.join("base.txt"), "base\n");
+    commit(&repo, "base", None);
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let tasks = chat_task(temp.path(), &base, &[("turn", "好的，谢谢")]);
+    chat_state(&home, &tasks.join("chat.toml"), &repo, "chat-1");
+    // No session id yet, and the eval server lists no session in the run's
+    // directory: the whole schedule is still due to stop at its time limit.
+    let fake = fake_server(temp.path(), json!({"data": []})).await;
+    register_fake(&home, &fake);
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        canter_eval::steer::steer(SteerOptions {
+            home: home.clone(),
+            round: "r1".into(),
+            run: "chat-1".into(),
+            session: 1,
+            poll: Duration::from_millis(20),
+            timeout: Duration::from_millis(300),
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let progress = chat_progress(&home, "r1", "chat-1");
+    assert_eq!(progress["timedOut"], true, "{progress}");
+}
+
 /// The ninth test's final answer, without the wrapper around the code fence.
 fn ninth_answer() -> String {
     let text = std::fs::read_to_string(
@@ -4507,7 +4675,7 @@ fn turn_row(index: usize, id: &str, duration: u64, opened: Value, tools: Value) 
 }
 
 fn subagent_session_data(reply: &str) -> Value {
-    json!({
+    let mut data = json!({
         "sessionId": "s-main",
         "cwd": "/work",
         "turns": [
@@ -4540,7 +4708,9 @@ fn subagent_session_data(reply: &str) -> Value {
             {"index": 5, "sentAt": 200_000, "turnId": "t5"},
         ],
         "timedOut": false
-    })
+    });
+    data["turns"][0]["spawnedAgents"] = json!(2);
+    data
 }
 
 fn run_check_in(task: &Task, id: &str, cwd: &Path, run_dir: &Path) -> (bool, String) {
@@ -4602,7 +4772,16 @@ fn subagent_checks_read_the_session_data() {
     // A run that spawned nothing fails the dispatch check.
     let mut quiet = data.clone();
     quiet["turns"][0]["tools"]["spawn_agent"] = json!(0);
+    quiet["turns"][0]["spawnedAgents"] = json!(0);
     write(&data_path, &quiet.to_string());
+    assert!(!run_check_in(&task, "spawned-subagents", &run_dir, &run_dir).0);
+
+    // A spawn that failed returned no agent id: the attempt counts as a tool
+    // call, but the run did not start a sub-agent.
+    let mut failed = data.clone();
+    failed["turns"][0]["tools"]["spawn_agent"] = json!(1);
+    failed["turns"][0]["spawnedAgents"] = json!(0);
+    write(&data_path, &failed.to_string());
     assert!(!run_check_in(&task, "spawned-subagents", &run_dir, &run_dir).0);
 
     // A first turn over 60 seconds fails the quick dispatch check.
@@ -4615,6 +4794,20 @@ fn subagent_checks_read_the_session_data() {
     let mut waiting = data.clone();
     waiting["turns"][1]["tools"]["wait_agent"] = json!(1);
     write(&data_path, &waiting.to_string());
+    assert!(!run_check_in(&task, "no-wait-in-chat", &run_dir, &run_dir).0);
+
+    // A run in which no turn was opened by chat cannot pass the no-wait check:
+    // an empty set of chat turns must not pass by accident.
+    let mut no_chat = data.clone();
+    for (index, turn) in no_chat["turns"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        turn["openedBy"] = json!({"kind": "other", "clientName": format!("client-{index}")});
+    }
+    write(&data_path, &no_chat.to_string());
     assert!(!run_check_in(&task, "no-wait-in-chat", &run_dir, &run_dir).0);
 
     // Every one of the six facts is required; the real answer has them all.
@@ -4657,6 +4850,39 @@ fn subagent_checks_read_the_session_data() {
         let (passed, error) = run_check_in(&task, "answer-facts", &run_dir, &run_dir);
         assert!(!passed, "removing the {label} fact must fail the check");
         assert!(error.contains("missing:"), "{label}: {error}");
+    }
+}
+
+#[test]
+fn answer_facts_checks_number_boundaries_and_millisecond_forms() {
+    let temp = TempDir::new().unwrap();
+    let run_dir = temp.path().join("run");
+    std::fs::create_dir_all(&run_dir).unwrap();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tasks/subagent.toml");
+    let task = Task::load(&path).unwrap();
+    let data_path = run_dir.join("session-data.json");
+    let check = |reply: &str| {
+        let mut data = subagent_session_data(reply);
+        data["finalReply"] = json!(reply);
+        write(&data_path, &data.to_string());
+        run_check_in(&task, "answer-facts", &run_dir, &run_dir)
+    };
+    let rest = "codex MCP 300 秒；exit 124；pi bash 没有默认超时；\
+                Command timed out after N seconds；pi MCP 60 秒";
+
+    // A longer number that ends in the fact's digits is not that fact.
+    let (passed, error) = check(&format!("codex shell 110 秒；{rest}"));
+    assert!(!passed, "110 秒 is not 10 秒: {error}");
+    let (passed, error) = check(
+        "codex shell 10 秒；codex MCP 300 秒；exit 1124；\
+         pi bash 没有默认超时；Command timed out after N seconds；pi MCP 60 秒",
+    );
+    assert!(!passed, "1124 is not exit code 124: {error}");
+
+    // Every millisecond form the task lists stands for the fact.
+    for written in ["10 000 ms", "10_000", "10000 ms", "10000ms"] {
+        let (passed, error) = check(&format!("codex shell {written}；{rest}"));
+        assert!(passed, "{written} was not recognised: {error}");
     }
 }
 
@@ -4889,7 +5115,9 @@ fn collect_and_report_show_sub_agents() {
     let text = std::fs::read_to_string(path).unwrap();
     assert!(text.contains("## 子 agent"), "{text}");
     assert!(
-        text.contains("| subagent-1 | 1 | 主 6m39s · 子 2s（共 6m41s） | 48（主 4 · 子 44） |"),
+        text.contains(
+            "| subagent-1 | 1 | 主 6m39s · 子 2s（各会话相加 6m41s） | 48（主 4 · 子 44） | $0.06（主 $0.05 · 子 $0.01） |"
+        ),
         "{text}"
     );
     assert!(

@@ -161,3 +161,50 @@
 - `answer-facts` 的「删一条事实」测试里，第九次回答同一事实有几种写法（`没有默认超时`、`无默认`、`无超时`、大小写不同的 `command timed out after`），只替换一种仍然过；测试改成把各种写法都换掉，检查本身没放松。
 - macOS 临时目录是符号链接，`pwd -P` 和 `$WORKTREE` 字面不同；测试检查改成两边都 `pwd -P` 再比。
 - 自己用 `rg -rn 'pattern' path` 想搜内容，`-r` 被当成替换参数，输出全被改了；搜内容用 `rg -n`。
+
+## 返工记录（第 1 次，按交叉审查的主控判断）
+
+改了审查意见里「交回开发方改」的：第 1、2、5、7、8 条，以及 `no-wait-in-chat` 要求至少有一轮插话。第 3、4、6、9、10 条按主控判断不改。
+
+做了什么：
+
+- 第 1 条（`eval/src/steer.rs`）：`ready(Report)` 先看有没有子 agent、是不是都结束了。没有就跳过「没有子 agent 的报告」；都结束就跳过「所有子 agent 都回来了」，不再要求出现过 background 叫醒轮；只有还有子 agent 在跑、确实要发第 5 句时才看 `report_woke`。退出仍要求插话都解决、主会话空闲、子 agent 都结束并空闲满 grace，报告晚到也会等它处理完。
+- 第 2 条（`eval/src/session_data.rs`、`eval/src/steer.rs`、`eval/tasks/subagent.toml`）：`turns[]` 新增 `spawnedAgents`，只数 spawn 结果里非空 ID 的个数；`spawned-subagents` 改看它，失败的 spawn 仍记在 `tools.spawn_agent` 里。`View` 登记子 agent 时丢掉空 ID，失败调用的占位项不再挡住跳过和退出。
+- 第 5 条（`eval/src/steer.rs`）：chat 题的总 deadline 在找主会话之前建立，找会话、发送、轮询共用；找会话耗尽预算就把 `timedOut: true` 落盘后退出。`after_commits` 的老路径仍然没有这个 deadline。
+- 第 7 条（`eval/tasks/subagent.toml`）：数字都加左边界（`110 秒` 不算 10 秒），`124` 用独立数字匹配（`1124` 不算）；毫秒认 `10 000 ms`、裸 `10_000`、`10000 ms`、`10000ms`（`millis` 里把秒数乘 1000 再找，另认空格千分位和下划线常量）。按主控判断没有按项目、按句子绑定数值。
+- 第 8 条（`eval/src/report.rs`）：汇总行的总花费改成主会话加子 agent 的和，unknown 也合并；用时的「共」改成「各会话相加」，说明是并行会话时长直接相加。
+- `no-wait-in-chat`（`eval/tasks/subagent.toml`）：要求至少有一轮 `openedBy.kind == "steer"`，没有就不过；仍要求这些轮里没调 `wait_agent`。
+- README 和题目注释同步：`spawnedAgents`、总花费口径、总时限包括等主会话出现。
+
+验证了什么：
+
+- 先加测试、确认每条在改之前失败（`--no-fail-fast` 跑出 7 个失败）：
+  - 报告在插话轮里处理完、没有 background 轮：`chat_steering_skips_the_report_line_when_children_finish_without_a_wake` 原来等到超时、第 5 句没记跳过；
+  - 失败 spawn 的空 ID 占位：`chat_steering_ignores_a_failed_spawn_placeholder` 原来一直等、记超时；
+  - 找会话时总时限：`chat_steering_stops_at_the_time_limit_before_the_session_appears` 原来不返回，被外层 3 秒超时打断；
+  - `counts_only_spawns_that_returned_an_agent` 原来数成 0；
+  - `answer_facts_checks_number_boundaries_and_millisecond_forms` 原来把 `110 秒` 当成 10 秒；
+  - `collect_and_report_show_sub_agents` 原来总额是 `$0.05（主 $0.05 · 子 $0.01）`、用时写「共」；
+  - `subagent_checks_read_the_session_data` 里失败 spawn 能过 `spawned-subagents`；`no-wait-in-chat` 的新断言在旧命令下单独跑过一次，失败在「没有插话轮」这一条。
+- 改完 `cargo nextest run -p canter-eval` 60 个全过（原 55 + 5 个新测试）；`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 全过。
+
+拿主意的地方：
+
+- `spawnedAgents` 记成计数而不是 ID 列表：判分只要「这轮有没有真开出来」，README 也只加一列；要看是谁另有 `subAgents[]`。
+- `View` 只按事件里的 ID 建子 agent，空 ID 直接忽略；没有改「结束不可逆」的累计逻辑（第 3 条按主控判断不改）。
+- 找会话超时返回 `None`，由 `steer` 统一落盘「超时」，和 `chat` 内部的超时出口一致；chat 分支的 deadline 用 `expect`，因为只有 chat 题会建它。
+- 总数行措辞用「各会话相加」而不是「累计」，避免被读成墙钟时间。
+- 事实检查用几个小的 shell 函数（`has_number`、`seconds`、`millis`），题目注释写清认哪些写法；没有引入 jq 之外的依赖。
+
+没做的事：
+
+- 第 3、4、6、9、10 条按主控判断不改（子 agent 被 `send_input` 唤醒、发送后进度没落盘的重复发送、重判分沿用旧数据、`rg -r` 分词、原文回退匹配范围）。
+- 第 7 条没有按项目、按句子绑定数值，照主控判断只加边界、补齐写法。
+- 没有调真实模型、没有起真 canter 服务端，也没有跑全套测试。
+
+踩过的坑：
+
+- 给 `spawned-subagents` 换字段后，测试 fixture 没给 `spawnedAgents` 时 jq 的 `// 0` 让真样本也判不过；fixture 补上第 1 轮的 2 个成功 spawn。
+- `nextest` 默认遇错就取消，第一次只看得到 3 个失败；加 `--no-fail-fast` 才收齐 7 个。
+- 新测试第一次改动把原来的 `chat_steering_stops_at_the_time_limit` 函数名换掉了，发现后改回原名，另起一个「找会话就超时」的测试。
+- clippy 不让对静态字符串用 `format!`，直接传 `&str`。

@@ -357,8 +357,14 @@ fn render_sub_agents(out: &mut String, rows: &[RunResult], show_round: bool) {
             .duration_ms
             .zip(child_duration)
             .map(|(main, children)| main + children);
+        let total_cost = row
+            .metrics
+            .cost_usd
+            .zip(child_cost)
+            .map(|(main, children)| main + children);
+        let total_unknown = row.metrics.cost_unknown || child_unknown;
         out.push_str(&format!(
-            "| {round}{} | {} | 主 {} · 子 {}（共 {}） | {}（主 {} · 子 {}） | {}（主 {} · 子 {}） |\n",
+            "| {round}{} | {} | 主 {} · 子 {}（各会话相加 {}） | {}（主 {} · 子 {}） | {}（主 {} · 子 {}） |\n",
             row.run,
             row.sub_agents.len(),
             duration(row.metrics.duration_ms),
@@ -367,7 +373,7 @@ fn render_sub_agents(out: &mut String, rows: &[RunResult], show_round: bool) {
             row.metrics.requests + child_requests,
             row.metrics.requests,
             child_requests,
-            cost(row.metrics.cost_usd, row.metrics.cost_unknown, None),
+            cost(total_cost, total_unknown, None),
             cost(row.metrics.cost_usd, row.metrics.cost_unknown, None),
             cost(child_cost, child_unknown, None),
         ));

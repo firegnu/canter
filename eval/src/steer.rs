@@ -55,21 +55,44 @@ pub async fn steer(options: SteerOptions) -> Result<()> {
     // Each repository has its own worktree; a task without a main repository
     // runs its session in the directory between them.
     let cwd = state.session_cwd(options.session)?;
-    let session = wait_for_session(
+    let progress_path = options
+        .home
+        .steer_progress_path(&options.round, &options.run);
+    let mut progress = read_progress(&progress_path)?;
+    // The whole chat schedule, including finding the session, shares one time
+    // limit; a task whose chat is sent after counted commits keeps its own
+    // waits.
+    let deadline = (!task.chats.is_empty()).then(|| tokio::time::Instant::now() + options.timeout);
+    let Some(session) = wait_for_session(
         &options.home,
         &registration,
         &state,
         &cwd,
         options.session,
         options.poll,
+        deadline,
     )
-    .await?;
-    let progress_path = options
-        .home
-        .steer_progress_path(&options.round, &options.run);
-    let progress = read_progress(&progress_path)?;
+    .await?
+    else {
+        progress.timed_out = true;
+        save_progress(&progress_path, &progress)?;
+        println!(
+            "timeout: no session appeared within {} seconds",
+            options.timeout.as_secs()
+        );
+        return Ok(());
+    };
     if !task.chats.is_empty() {
-        return chat(&options, &state, &task, &session, &progress_path, progress).await;
+        return chat(
+            &options,
+            &state,
+            &task,
+            &session,
+            &progress_path,
+            progress,
+            deadline.expect("chat tasks have a deadline"),
+        )
+        .await;
     }
     if task.steers.is_empty() {
         println!("task {} defines no steers", task.id);
@@ -130,6 +153,7 @@ async fn chat(
     session: &str,
     progress_path: &Path,
     mut progress: Progress,
+    deadline: tokio::time::Instant,
 ) -> Result<()> {
     let events_path = options.home.session_events(session);
     let texts = task
@@ -137,7 +161,6 @@ async fn chat(
         .iter()
         .map(|entry| crate::task::render(&entry.text, state))
         .collect::<Result<Vec<_>>>()?;
-    let deadline = tokio::time::Instant::now() + options.timeout;
     // A report wake is due a moment after a child finishes; stay idle a little
     // longer before deciding the session has handled every report.
     let grace = options
@@ -294,21 +317,24 @@ fn ready(after: ChatAfter, index: usize, view: &View, chats: &[ChatRecord]) -> R
             }
         }
         ChatAfter::Report => {
-            if !view.report_woke {
-                // Without a sub-agent no report can ever wake the session.
+            if !view.has_children() {
                 let opening_ended = view
                     .turns
                     .first()
                     .is_some_and(|turn| turn.ended_at.is_some());
-                if opening_ended && !view.has_children() {
+                if opening_ended {
                     Ready::Skip("没有子 agent 的报告")
                 } else {
                     Ready::Wait
                 }
             } else if view.all_children_done() {
+                // The children may have finished during an earlier turn: the
+                // report can have been handled without a wake turn of its own.
                 Ready::Skip("所有子 agent 都回来了")
-            } else {
+            } else if view.report_woke {
                 Ready::Send
+            } else {
+                Ready::Wait
             }
         }
     }
@@ -417,6 +443,10 @@ impl View {
     }
 
     fn agent(&mut self, id: &str, status: Option<AgentStatus>) {
+        // A failed spawn returns a placeholder with no id: it started nothing.
+        if id.is_empty() {
+            return;
+        }
         let done = status.is_some_and(is_done);
         self.children
             .entry(id.to_string())
@@ -501,11 +531,12 @@ async fn wait_for_session(
     cwd: &Path,
     index: usize,
     poll: Duration,
-) -> Result<String> {
+    deadline: Option<tokio::time::Instant>,
+) -> Result<Option<String>> {
     let path = crate::paths::session_id_file(home, state, index);
     loop {
         if let Some(session) = crate::paths::read_session_id(&path)? {
-            return Ok(session);
+            return Ok(Some(session));
         }
         let exclude = home.recorded_session_ids(&state.round, &state.run)?;
         if let Some(session) =
@@ -514,7 +545,10 @@ async fn wait_for_session(
             let body = serde_json::json!({ "sessionId": session });
             crate::paths::write_private(&path, body.to_string().as_bytes())?;
             println!("session {session}");
-            return Ok(session);
+            return Ok(Some(session));
+        }
+        if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+            return Ok(None);
         }
         println!("waiting for a session in {}", cwd.display());
         tokio::time::sleep(poll).await;

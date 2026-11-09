@@ -79,7 +79,7 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
    canter-eval steer --round <轮次> --run subagent-1
    ```
 
-   题目里 `[[chat]]` 每句写 `after`：`turn` 是上一轮结束后（第一句是开跑提示那一轮），`report` 是某个子 agent 的报告叫醒过主会话以后。每句都等主会话空闲再发，主会话正忙就等，不用 steer 模式；上句那一轮没结束不发下一句；`report` 那句在所有子 agent 都已经回来时不发，记下原因。它自己退出的条件：插话都发了（或判定不发）、所有子 agent 都结束、主会话空闲一会儿。总时限 30 分钟（`--timeout <秒>` 可改），到了就退出，`steers.json` 记 `timedOut: true`，这次跑照样继续。
+   题目里 `[[chat]]` 每句写 `after`：`turn` 是上一轮结束后（第一句是开跑提示那一轮），`report` 是某个子 agent 的报告叫醒过主会话以后。每句都等主会话空闲再发，主会话正忙就等，不用 steer 模式；上句那一轮没结束不发下一句；`report` 那句在所有子 agent 都已经回来时不发，记下原因。它自己退出的条件：插话都发了（或判定不发）、所有子 agent 都结束、主会话空闲一会儿。总时限 30 分钟（`--timeout <秒>` 可改），包括等主会话出现的时间，到了就退出，`steers.json` 记 `timedOut: true`，这次跑照样继续。
 
 4. `steer` 退出以后再 `corral wait eval/<次>` 到 idle（它退出时主会话通常已经空闲，`wait` 是兜底），再 `corral stop`。
 
@@ -328,7 +328,7 @@ text = '''报告回来以后说的那句'''
 | 字段 | 内容 |
 | --- | --- |
 | `sessionId`、`cwd` | 主会话和它的目录 |
-| `turns[]` | 主会话每一轮，按开始顺序：`index`（从 1 起）、`id`、`startedAt`、`endedAt`（毫秒）、`durationMs`（没结束时为空）、`openedBy`（`{"kind":"prompt"}`、`{"kind":"steer","index":n}`、`{"kind":"report"}` 或 `{"kind":"other","clientName":"..."}`）、`tools`（这一轮各工具调用的次数，按工具名，比如 `read`、`shell`、`spawn_agent`、`wait_agent`） |
+| `turns[]` | 主会话每一轮，按开始顺序：`index`（从 1 起）、`id`、`startedAt`、`endedAt`（毫秒）、`durationMs`（没结束时为空）、`openedBy`（`{"kind":"prompt"}`、`{"kind":"steer","index":n}`、`{"kind":"report"}` 或 `{"kind":"other","clientName":"..."}`）、`tools`（这一轮各工具调用的次数，按工具名，比如 `read`、`shell`、`spawn_agent`、`wait_agent`）、`spawnedAgents`（这一轮 spawn 成功、拿到子 agent ID 的次数；失败也算一次 `spawn_agent` 工具调用，但不算开出子 agent） |
 | `finalReply` | 主会话最后一条完成回复的原文 |
 | `subAgents[]` | 主会话开的每个子 agent：`id`、`name`、`agentType`、`status`、`startedAt`、`endedAt`、`durationMs`、`requestCount`、`blockedCommands`、`blockedRgReplace`（`rg` 带 `-r` 或 `-rn` 这类合写被拦的条数）、`cachedInputTokens`、`uncachedInputTokens`、`outputTokens`、`costUsd`、`costUnknown` |
 | `chats[]` | 每句插话的 `index`（从 1 起）、`sentAt`、`turnId`、`skipped`（没发的原因） |
@@ -369,7 +369,7 @@ text = '''报告回来以后说的那句'''
 
 「会话」一节只对多会话题出现。写记忆次数是完成的 `fileChange` 改到两层记忆目录里的 `.md`，读记忆次数是完成的 `fileRead` 读这些 `.md`；记忆文件数是那个会话结束时两层目录里 `.md` 的个数（`result.json` 里带文件名）。
 
-有子 agent 的跑多一节「子 agent」：先一行这次跑的主会话和子 agent 的用时、请求、花费分开算（主表那些数仍只算主会话，和以前一样），再每个子 agent 一行（类型、状态、用时、请求、缓存输入、未缓存输入、输出、花费、被拦命令、`rg -r` 被拦）。没有子 agent 的跑不出这一节，表一字不差。
+有子 agent 的跑多一节「子 agent」：先一行这次跑的主会话和子 agent 分开算的用时、请求和花费——总花费是主加子，用时的「各会话相加」是主会话与每个子 agent 各自的时长直接相加（它们并行跑，不是墙钟时间）；主表那些数仍只算主会话，和以前一样。再每个子 agent 一行（类型、状态、用时、请求、缓存输入、未缓存输入、输出、花费、被拦命令、`rg -r` 被拦）。没有子 agent 的跑不出这一节，表一字不差。
 
 「压后重读」的三类：
 
