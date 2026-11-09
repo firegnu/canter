@@ -64,3 +64,11 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：先在 DESIGN 子 agent 一节写明新规则，再扩展 `wait_agent`。交互用户轮（直接输入、排队、插话及派出当轮）和报告叫醒轮，在 `auto_wake_limit > 0` 时只取一次状态与可用结果，有仍在运行的子 agent 就附英文提示先回复用户、结束本轮。核心设置内部 `no_wait` 标记（模型参数不能设置），服务端复用原来的校验、状态读取、最后回复及终态结果确认，只跳过等结果的循环；工具说明和三份请求快照同步更新。
+- 验证了什么：先加真实会话／工具路径回归，保持子 agent 运行并请求等待 600000 ms。未改实现时，`interactive_dispatch_wait_returns_while_the_child_is_running` 因 2 秒内没有返回而失败；最小实现后同一测试通过。新增 6 项测试覆盖派出当轮、直接／排队／插话、exec、关闭叫醒、goal 自动续跑和已完成子 agent 的最后回复；原报告叫醒测试保留并更新提示断言。相关 9 项先通过，随后 `cargo nextest run -p canter-core -p canter-server` 为 716 passed / 28 skipped；`cargo nextest run -p canter --test exec --test server -E 'binary(exec) or test(mcp::no_mcp_request_matches_pre_search_bytes)'` 为 23 passed / 61 skipped。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。所有 Cargo 命令使用任务指定的独立编译目录，命令均在前台等到退出。
+- 拿主意的地方：`runner` 在轮末调用 `schedule_goal`，后者约 10 毫秒后安排续跑，`next_goal` 不检查子 agent 是否还在运行；因此按任务给定分支，保留 `active.goal_continuation` 轮次的等待，避免空转。普通用户轮不因会话设过 goal 就保留等待。无待主控决定的实现问题。
+- 没做的事：没有调用真实模型（0 次），没有改 `eval/`，没有读取或修改用户的 canter 状态目录，没有修改 `spawn_agent` 说明、系统提示、报告叫醒或目标调度。没有跑工作区全套测试，没有再派 agent，没有合并或推送；交叉审查及一次 DeepSeek flash 的 `subagent` 真实验收由主控执行。
+- 踩过的坑：首次编译测试替身时把 `Message::ToolResult` 字段误写为 `call_id`，改为实际的 `tool_call_id` 后重新运行，取得上述等待超时的有效 RED；编译错误没有当成 RED。初次检索用了不存在的路径和无匹配的 zsh 通配符，随后用 `rg` 定位到实际文件。没有其它实现返工或环境异常。
