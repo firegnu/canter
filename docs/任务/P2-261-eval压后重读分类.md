@@ -91,3 +91,15 @@ def rel($cwd): if startswith($cwd + "/") then .[($cwd|length)+1:] else ltrimstr(
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+做了什么：`collect` 读事件时多扫一遍（和原来的护栏、被拦计数合成一次 `scan_events`），把每次压缩的 `rereadFiles` 按改过 / 读回 / 没改分类，每次压缩的三类路径写进 `CompactionRow.reread`，合计写进 `Metrics.reread`（都是相对 worktree 的路径，带 `serde(default)`，旧 `result.json` 照读）。`report` 的「压后重读」列写成 `5（改过 2 · 读回 1 · 没改 2）`，「压缩」一节每次后面带 ` · 压后重读 N（…）`；新增「改计划」列，「工具失败」列写出分项 `14（edit 6 · shell 5 · read 3）`。README「结果表」补了三类说明、shell 改动只看得到「没改」的提醒和两列口径。
+
+验证了什么：`cargo nextest run -p canter-eval` 19 个全过（含新的一条分类测试：造的事件里改过、读回、没改各一个，另有在失败压缩之后才重读的文件，验证它不会被切出窗口、失败压缩本身不算进来）；`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都干净。另外用临时 eval 目录里手写的 `result.json`（新格式和缺 `reread` 字段的旧格式）各跑了一次 `report`，看过表的样子：旧格式显示原来的整数，新格式显示分项；没碰 `~/.canter-eval`。
+
+拿主意的地方：分类的文件集合直接用 `canter stats` 给的 `rereadFiles`（不再从事件重算），这样三类相加一定等于那一列；按 itemId 找这次压缩的 `restoredFiles`，按 `stats` 的口径（`overview.cwd`、和 `fill` 一样的路径规范化）对读和改的 seq。只有 `succeeded != false` 且有摘要的压缩算数、才切窗口，失败的和 `fill` 一样跳过（它的事件仍会被扫到，只是不设边界）。事件里找不到该文件的上一次读时放进「没改」，宁可多算也不丢。`result.json` 里存路径列表，个数用列表长度（不另存一份一数）。
+
+没做的事：没用第一轮 `baseline-2026-11-09` 的真会话核对 31/0/14 等数（按任务留给主控）；没改 `crates/`，没动 `eval/results/`；没合并、没推送。
+
+踩过的坑：一次编辑 `report.rs` 时 oldText 选错，误删了 `cost()` 开头三行，编译前看 diff 发现并补回；clippy 的 `redundant_guards` 要求把 `if matches!(...)` 写成结构体字段里的 or 模式；用 `rg -rn` 搜索时 `-r` 是替换而不是行号，输出被改得看不出原样，换回 `rg -n` 才看对。

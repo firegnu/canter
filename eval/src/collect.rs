@@ -1,8 +1,13 @@
 //! Turn `canter stats --json` and the session events into one run result.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Component, Path, PathBuf},
+};
 
-use canter_protocol::{Event, EventPayload, Item, ItemStatus, RequestPurpose, StatsResponse};
+use canter_protocol::{
+    Event, EventPayload, Item, ItemStatus, RequestPurpose, StatsCompaction, StatsResponse,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, grade::CheckResult};
@@ -15,6 +20,39 @@ pub struct CompactionRow {
     pub after_tokens: Option<u64>,
     pub succeeded: Option<bool>,
     pub reread_files: usize,
+    #[serde(default)]
+    pub reread: RereadFiles,
+}
+
+/// The files read again after a compaction, split by why; paths are relative to
+/// the worktree. The three lists together are that compaction's `rereadFiles`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RereadFiles {
+    /// A completed `fileChange` touched them after their last read, so rereading
+    /// is expected.
+    #[serde(default)]
+    pub changed: Vec<String>,
+    /// The compaction restored them and the model read them again anyway.
+    #[serde(default)]
+    pub restored: Vec<String>,
+    /// Neither changed nor restored: the compaction lost content still in use.
+    /// Shell edits (`sed -i`, `git checkout`) do not show up here, so only this
+    /// list can over-count.
+    #[serde(default)]
+    pub unchanged: Vec<String>,
+}
+
+impl RereadFiles {
+    pub fn count(&self) -> usize {
+        self.changed.len() + self.restored.len() + self.unchanged.len()
+    }
+
+    fn push_all(&mut self, other: &Self) {
+        self.changed.extend(other.changed.iter().cloned());
+        self.restored.extend(other.restored.iter().cloned());
+        self.unchanged.extend(other.unchanged.iter().cloned());
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +72,8 @@ pub struct Metrics {
     pub read_calls: usize,
     pub update_plan_calls: usize,
     pub reread_files_after_compaction: usize,
+    #[serde(default)]
+    pub reread: RereadFiles,
     pub tool_failures: usize,
     pub tool_failures_by_name: BTreeMap<String, usize>,
     pub guard_reminders: usize,
@@ -85,13 +125,8 @@ pub fn collect(options: CollectOptions) -> Result<RunResult> {
         std::fs::read_to_string(options.home.session_events(&session_id)).map_err(|error| {
             format!("cannot read the events of {session_id}: {error}\nthe eval home may be wrong")
         })?;
-    let (guard_reminders, blocked_commands, event_parse_errors) = event_counts(&events);
-    let metrics = metrics(
-        &stats,
-        guard_reminders,
-        blocked_commands,
-        event_parse_errors,
-    );
+    let scan = scan_events(&events, &stats.overview.cwd);
+    let metrics = metrics(&stats, &scan);
     let registration = crate::server::registration(&options.home).ok();
     let checks_passed = checks
         .results
@@ -161,20 +196,17 @@ fn read_session(path: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn metrics(
-    stats: &StatsResponse,
-    guard_reminders: usize,
-    blocked_commands: usize,
-    event_parse_errors: usize,
-) -> Metrics {
+fn metrics(stats: &StatsResponse, scan: &EventScan) -> Metrics {
     let usage = stats.overview.usage.as_ref();
     let duration_ms = (stats.overview.updated_at >= stats.overview.started_at).then(|| {
         u64::try_from(stats.overview.updated_at - stats.overview.started_at).unwrap_or(u64::MAX)
     });
+    let reread = reread_breakdowns(&stats.compactions, scan, &stats.overview.cwd);
     let compactions: Vec<CompactionRow> = stats
         .compactions
         .iter()
-        .map(|compaction| CompactionRow {
+        .zip(reread)
+        .map(|(compaction, reread)| CompactionRow {
             trigger: serde_json::to_value(compaction.trigger)
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_string)),
@@ -182,8 +214,13 @@ fn metrics(
             after_tokens: compaction.after_tokens,
             succeeded: compaction.succeeded,
             reread_files: compaction.signals.reread_files.as_ref().map_or(0, Vec::len),
+            reread,
         })
         .collect();
+    let mut reread_total = RereadFiles::default();
+    for row in &compactions {
+        reread_total.push_all(&row.reread);
+    }
     let mut tool_failures_by_name = BTreeMap::new();
     let mut tool_failures = 0;
     for tool in &stats.tools {
@@ -229,11 +266,12 @@ fn metrics(
             .iter()
             .map(|compaction| compaction.signals.reread_files.as_ref().map_or(0, Vec::len))
             .sum(),
+        reread: reread_total,
         tool_failures,
         tool_failures_by_name,
-        guard_reminders,
-        blocked_commands,
-        event_parse_errors,
+        guard_reminders: scan.guard_reminders,
+        blocked_commands: scan.blocked_commands,
+        event_parse_errors: scan.parse_errors,
     }
 }
 
@@ -245,46 +283,170 @@ fn tool_calls(stats: &StatsResponse, name: &str) -> usize {
         .map_or(0, |tool| tool.call_count)
 }
 
-/// P2-251 reminders and blocked commands are not in the stats report.
-fn event_counts(text: &str) -> (usize, usize, usize) {
+/// P2-251 reminders and blocked commands are not in the stats report; the reads
+/// and changes are what tells apart why a file was read again after a
+/// compaction.
+#[derive(Debug, Default)]
+struct EventScan {
+    guard_reminders: usize,
+    blocked_commands: usize,
+    parse_errors: usize,
+    /// Completed reads: event seq and normalized path, oldest first.
+    reads: Vec<(u64, String)>,
+    /// Completed file changes: event seq and normalized path.
+    changes: Vec<(u64, String)>,
+    /// The files each compaction restored, by compaction item id.
+    restored: BTreeMap<String, BTreeSet<String>>,
+}
+
+fn scan_events(text: &str, cwd: &str) -> EventScan {
     const GUARDS: [&str; 3] = [
         "The model stopped with unfinished plan steps",
         "The model reply was truncated",
         "Stopped before the fifth repeated tool call",
     ];
-    let mut guards = 0;
-    let mut blocked = 0;
-    let mut errors = 0;
+    let mut scan = EventScan::default();
     for line in text.lines() {
         let Ok(event) = serde_json::from_str::<Event>(line) else {
-            errors += 1;
+            scan.parse_errors += 1;
             continue;
         };
         match &event.payload {
             EventPayload::Warning { message } => {
                 if GUARDS.iter().any(|prefix| message.starts_with(prefix)) {
-                    guards += 1;
+                    scan.guard_reminders += 1;
                 }
             }
             EventPayload::ItemCompleted { item, .. } => {
-                if let Item::CommandExecution { status, .. } = item
-                    && matches!(status, ItemStatus::Declined | ItemStatus::Blocked)
-                {
-                    blocked += 1;
+                match item {
+                    Item::CommandExecution {
+                        status: ItemStatus::Declined | ItemStatus::Blocked,
+                        ..
+                    } => scan.blocked_commands += 1,
+                    Item::FileRead {
+                        path,
+                        status: ItemStatus::Completed,
+                        ..
+                    } => scan.reads.push((event.seq, normalize(cwd, path))),
+                    Item::FileChange {
+                        changes,
+                        status: ItemStatus::Completed,
+                        ..
+                    } => scan.changes.extend(
+                        changes
+                            .iter()
+                            .map(|change| (event.seq, normalize(cwd, &change.path))),
+                    ),
+                    Item::ContextCompaction {
+                        id, restored_files, ..
+                    } => {
+                        scan.restored.insert(
+                            id.clone(),
+                            restored_files
+                                .iter()
+                                .map(|file| normalize(cwd, &file.path))
+                                .collect(),
+                        );
+                    }
+                    _ => {}
                 }
                 if serde_json::to_string(item).is_ok_and(|text| text.contains("[Repeated call]")) {
-                    guards += 1;
+                    scan.guard_reminders += 1;
                 }
             }
             _ => {}
         }
     }
-    (guards, blocked, errors)
+    scan
+}
+
+/// Split each counted compaction's `rereadFiles` by why the file was read again.
+/// One entry per compaction; a failed or unfinished one has no signals and gets
+/// an empty breakdown.
+fn reread_breakdowns(
+    compactions: &[StatsCompaction],
+    scan: &EventScan,
+    cwd: &str,
+) -> Vec<RereadFiles> {
+    let counted: Vec<usize> = compactions
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.succeeded != Some(false) && row.summary.is_some())
+        .map(|(index, _)| index)
+        .collect();
+    let mut breakdowns = vec![RereadFiles::default(); compactions.len()];
+    for (position, &index) in counted.iter().enumerate() {
+        let row = &compactions[index];
+        let boundary = row.event_seq;
+        // The same window as `canter stats`: up to the next counted compaction.
+        let end = counted
+            .get(position + 1)
+            .map_or(u64::MAX, |next| compactions[*next].event_seq);
+        let restored = scan.restored.get(&row.item_id);
+        let mut files = RereadFiles::default();
+        for path in row.signals.reread_files.iter().flatten() {
+            let Some(last_read) = scan
+                .reads
+                .iter()
+                .filter(|(seq, read)| read == path && *seq < boundary)
+                .map(|(seq, _)| *seq)
+                .max()
+            else {
+                files.unchanged.push(relative(cwd, path));
+                continue;
+            };
+            let reread = scan
+                .reads
+                .iter()
+                .filter(|(seq, read)| read == path && *seq > boundary && *seq < end)
+                .map(|(seq, _)| *seq)
+                .min();
+            let changed = reread.is_some_and(|reread| {
+                scan.changes
+                    .iter()
+                    .any(|(seq, changed)| changed == path && *seq > last_read && *seq < reread)
+            });
+            if changed {
+                files.changed.push(relative(cwd, path));
+            } else if restored.is_some_and(|restored| restored.contains(path)) {
+                files.restored.push(relative(cwd, path));
+            } else {
+                files.unchanged.push(relative(cwd, path));
+            }
+        }
+        breakdowns[index] = files;
+    }
+    breakdowns
+}
+
+/// Paths as `canter stats` keys them; see `crates/canter-core/src/stats/signals.rs`.
+fn normalize(cwd: &str, path: &str) -> String {
+    let joined = Path::new(cwd).join(path);
+    let mut normalized = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized.to_string_lossy().into_owned()
+}
+
+/// Back to a worktree-relative path for the result.
+fn relative(cwd: &str, path: &str) -> String {
+    if let Ok(rest) = Path::new(path).strip_prefix(cwd) {
+        return rest.to_string_lossy().into_owned();
+    }
+    path.strip_prefix("./").unwrap_or(path).to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn counts_guards_and_blocked_commands() {
@@ -295,15 +457,113 @@ mod tests {
             r#"{"seq":4,"sessionId":"s","timestamp":4,"type":"item.completed","turnId":"t","item":{"type":"commandExecution","id":"j","command":"ls","cwd":"/tmp","status":"completed","aggregatedOutput":"ok\n\n[Repeated call] This identical call and result have occurred 3 consecutive times.","exitCode":0,"durationMs":1}}"#,
         ]
         .join("\n");
-        let (guards, blocked, errors) = event_counts(&events);
-        assert_eq!(guards, 2);
-        assert_eq!(blocked, 1);
-        assert_eq!(errors, 0);
+        let scan = scan_events(&events, "/work");
+        assert_eq!(scan.guard_reminders, 2);
+        assert_eq!(scan.blocked_commands, 1);
+        assert_eq!(scan.parse_errors, 0);
     }
 
     #[test]
     fn counts_malformed_lines() {
-        let (guards, blocked, errors) = event_counts("not json\n{\"seq\":1");
-        assert_eq!((guards, blocked, errors), (0, 0, 2));
+        let scan = scan_events("not json\n{\"seq\":1", "/work");
+        assert_eq!(
+            (
+                scan.guard_reminders,
+                scan.blocked_commands,
+                scan.parse_errors
+            ),
+            (0, 0, 2)
+        );
+    }
+
+    fn completed_item(seq: u64, item: serde_json::Value) -> String {
+        json!({
+            "seq": seq, "sessionId": "s", "timestamp": seq, "type": "item.completed",
+            "turnId": "t", "item": item
+        })
+        .to_string()
+    }
+
+    fn read(id: &str, path: &str) -> serde_json::Value {
+        json!({
+            "type": "fileRead", "id": id, "path": path, "startLine": 1,
+            "content": "", "status": "completed"
+        })
+    }
+
+    fn change(path: &str) -> serde_json::Value {
+        json!({
+            "type": "fileChange", "id": format!("change-{path}"),
+            "changes": [{"path": path, "kind": {"type": "update", "movePath": null}, "diff": ""}],
+            "status": "completed"
+        })
+    }
+
+    fn compaction(id: &str, summary: &str, restored: &[&str]) -> serde_json::Value {
+        json!({
+            "type": "contextCompaction", "id": id, "summary": summary,
+            "restoredFiles": restored.iter().map(|path| json!({"path": path})).collect::<Vec<_>>()
+        })
+    }
+
+    #[test]
+    fn reread_files_split_by_why_the_model_read_them_again() {
+        let events = [
+            completed_item(1, read("r1", "changed.ts")),
+            completed_item(2, change("changed.ts")),
+            completed_item(3, read("r2", "restored.ts")),
+            completed_item(4, read("r3", "plain.ts")),
+            completed_item(5, read("r4", "late.ts")),
+            completed_item(6, compaction("c1", "summary", &["restored.ts"])),
+            completed_item(7, read("r5", "changed.ts")),
+            completed_item(8, read("r6", "restored.ts")),
+            completed_item(9, read("r7", "plain.ts")),
+            completed_item(10, compaction("c2", "Compaction did not finish.", &[])),
+            completed_item(11, read("r8", "late.ts")),
+            completed_item(12, change("late.ts")),
+        ]
+        .join("\n");
+        let stats: StatsResponse = serde_json::from_value(json!({
+            "sessionId": "s",
+            "eventSeq": 12,
+            "overview": {
+                "cwd": "/work", "model": "m", "startedAt": 1, "updatedAt": 12,
+                "tags": {}, "turnCount": 1, "requestCount": 0,
+                "retryCount": null, "recordedRetryCount": 0
+            },
+            "requests": [],
+            "compactions": [
+                {"turnId": "t", "itemId": "c1", "eventSeq": 6, "timestamp": 6,
+                 "summary": "summary", "trigger": "auto", "succeeded": true,
+                 "signals": {
+                     "rereadFiles": ["/work/changed.ts", "/work/restored.ts",
+                                      "/work/plain.ts", "/work/late.ts"],
+                     "plan": {"before": null, "after": null, "removed": null,
+                              "statusChanged": null}
+                 }},
+                {"turnId": "t", "itemId": "c2", "eventSeq": 10, "timestamp": 10,
+                 "summary": "Compaction did not finish.", "trigger": "auto",
+                 "succeeded": false,
+                 "signals": {"rereadFiles": null,
+                             "plan": {"before": null, "after": null, "removed": null,
+                                      "statusChanged": null}}}
+            ],
+            "tools": [],
+            "toolCalls": [],
+            "approvals": {"count": 0, "data": []}
+        }))
+        .unwrap();
+
+        let scan = scan_events(&events, &stats.overview.cwd);
+        let breakdowns = reread_breakdowns(&stats.compactions, &scan, &stats.overview.cwd);
+
+        assert_eq!(breakdowns.len(), 2);
+        assert_eq!(breakdowns[0].changed, ["changed.ts"]);
+        assert_eq!(breakdowns[0].restored, ["restored.ts"]);
+        // `late.ts` was only read again after the failed compaction, which is not
+        // a boundary: it still belongs to the first compaction's window.
+        assert_eq!(breakdowns[0].unchanged, ["plain.ts", "late.ts"]);
+        assert_eq!(breakdowns[0].count(), 4);
+        assert_eq!(breakdowns[1].count(), 0);
     }
 }

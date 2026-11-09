@@ -8,7 +8,7 @@ use std::{
 };
 
 use canter_eval::{
-    collect::{CollectOptions, Metrics, RunResult},
+    collect::{CollectOptions, Metrics, RereadFiles, RunResult},
     grade::{CheckFile, CheckResult},
     paths::{Home, State},
     prepare::PrepareOptions,
@@ -1118,6 +1118,11 @@ fn sample_result(round: &str, run: &str, passed: usize, duration: u64, cost: f64
                 after_tokens: Some(12_000),
                 succeeded: Some(true),
                 reread_files: 2,
+                reread: RereadFiles {
+                    changed: vec!["a.ts".into()],
+                    restored: Vec::new(),
+                    unchanged: vec!["b.ts".into()],
+                },
             }],
             cached_input_tokens: Some(1_000_000),
             uncached_input_tokens: Some(20_000),
@@ -1129,8 +1134,13 @@ fn sample_result(round: &str, run: &str, passed: usize, duration: u64, cost: f64
             read_calls: 20,
             update_plan_calls: 12,
             reread_files_after_compaction: 2,
+            reread: RereadFiles {
+                changed: vec!["a.ts".into()],
+                restored: Vec::new(),
+                unchanged: vec!["b.ts".into()],
+            },
             tool_failures: 3,
-            tool_failures_by_name: Default::default(),
+            tool_failures_by_name: [("shell".to_string(), 2), ("edit".to_string(), 1)].into(),
             guard_reminders: 1,
             blocked_commands: 1,
             event_parse_errors: 0,
@@ -1171,12 +1181,15 @@ fn report_puts_two_rounds_side_by_side() {
     assert!(text.contains("12m34s"));
     assert!(text.contains("1h02m"));
     assert!(text.contains("$0.52 (压缩 $0.02)"));
+    assert!(text.contains("| 压后重读 | 工具失败 | 改计划 |"));
+    assert!(text.contains("2（改过 1 · 读回 0 · 没改 1）"));
+    assert!(text.contains("3（shell 2 · edit 1）"));
     assert!(text.contains("readme-in-late-commits=4"));
     assert!(text.contains("## 通过次数"));
     assert!(text.contains("| old | long | 0/1 | 1.0/2 |"));
     assert!(text.contains("| new | long | 1/1 | 2.0/2 |"));
     assert!(text.contains("## 压缩"));
-    assert!(text.contains("60k → 12k（成功）"));
+    assert!(text.contains("60k → 12k（成功） · 压后重读 2（改过 1 · 读回 0 · 没改 1）"));
 }
 
 #[test]
