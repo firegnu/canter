@@ -43,3 +43,8 @@
   - 公开 bench（11-07 查的）：通用的有 SWE-bench（Verified / Pro）、Terminal-Bench 2.0（官方运行框架 Harbor，用 `--agent-import-path` 接自己的 agent，Docker 里跑，排行榜上有 Codex、Claude Code）。专门测长程的有 LongCLI-Bench（20 件命令行长任务）、SWE-EVO（48 件）、RoadmapBench（115 件）、NL2Repo-Bench、SpecBench（看钻空子骗测试），多是预印本，没有公认标准。它们只看做没做完、成绩主要由模型决定，不专门测压缩、插话、缓存；全是真调模型，长程一件可能一小时。
   - 主控建议两层：自己的小 eval 每版跑（防 canter 自己的部分退化），公开 bench 偶尔跑（和 Codex、Claude Code 比整体水平）。
   - Python：canter 能做 Python 项目；「不用 Python」只管 canter 仓库里的代码。Harbor 是外部工具，接 canter 的适配器要写一小段 Python，主控倾向放在 canter 仓库外的单独 eval 仓库，不破例。
+
+## 11-09 开始前补的两条
+
+- 用户 11-09：「最后集中精力来做151(我理解其实可以借助corral，让opus主控来直接分配eval的benchmark题委派给canter来做，这样就不会要使用canter -p这种来做了）」。方案里要答：用 corral 开 `canter --yolo` 一题一个、主控收结果，和 `canter exec` 比各有什么得失（固定起点和跑完清理、没人批准、判分脚本放在 agent 看不到的地方、遥测怎么取）。
+- P2-256（11-09 结掉）并进来一项：记忆的 eval。同一仓库连着做几件相关的活，开记忆和不开记忆对比；看模型会不会读记忆、记得对不对、会不会写重复。
