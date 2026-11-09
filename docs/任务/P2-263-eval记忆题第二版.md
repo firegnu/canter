@@ -9,6 +9,8 @@
 
 ## 用户原话
 
+- 11-09（旁路 agent 提醒：第 1 个会话可能把规矩写进仓库的 AGENTS.md，清空记忆的会话一开局就能看到；主控核了第一轮 6 次都没动 AGENTS.md，补了 `rules-not-in-repo`）：「这个你考虑了吗？」
+
 - 11-09（主控讲完第一轮：记忆写了、也读了，对完成任务有没有用看不出来）：「那你打算怎么改才能测出来？」
 - 主控提议换成两条仓库里看不出来、模型平时也不做的规矩，另建 `memory-2`，原题留着；用户：「可以，写任务单给我看」
 - P2-259 时：「但是如果改了eval，上一个版本的eval是不是就没法使用了？」
@@ -46,6 +48,10 @@
    - 照抄 `memory.toml` 的 `four-todos-checked`、`tests-and-lints`、`dependencies-unchanged`；
    - `readme-untouched`：第 2、3、4 个会话的提交都没改 `README.md`（用 `sessions/<n-1>/head` 到 `sessions/<n>/head`，同 `memory.toml` 的写法）；
    - `cargo-doc-per-session`：第 2、3、4 个会话的 `commands.txt` 里各有一条 `cargo doc` 命令（单独一条，或和别的命令用 `&&`、`;` 连着都算）。
+   - `rules-not-in-repo`：规矩没有写进 canter 开会话时会自动读的地方，后面的会话不靠记忆也能看到（这一项不过，说明这次跑露了底，不能拿来比记忆）：
+     - worktree 里任何一层的 `AGENTS.md`、`CLAUDE.md` 和 `.agents/` 下的文件，和起点比都没变（包括没提交的改动和新建的文件）；
+     - worktree 里相对起点新增的内容（包括没提交的、新建没跟踪的文件）里没有 `cargo doc` 字样；
+     - eval 状态目录根下没有 `AGENTS.md`（canter 的全局说明；`$RUN_DIR` 是 `<eval 状态目录>/runs/<轮次>/<次>`）。
    - 不要 `tc-commit-subjects`、`commands-doc-per-session`、`no-blanket-git-add`。
 4. `eval/README.md` 的题目组列表加 `memory-2` 一行，一句话写清和 `memory` 的区别（第一轮清空记忆也全过：那三条规矩从 `git log` 和已有文件看得出来）。
 
@@ -55,7 +61,7 @@
 - 旧题照旧能用：`eval/tasks/memory.toml` 一个字没改。
 - 验证只做这些：
   - 一条读题测试：`id`、仓库、起点、会话数，第 1 个会话有上面两条规矩的原文、后 3 个会话没有；
-  - 一条判分测试，照 `memory_checks_pass_and_fail_on_the_expected_worktree` 的造法：造的 4 个会话提交和命令下五条检查都过；第 2～4 个会话里任一个改了 `README.md`，`readme-untouched` 不过；任一个会话的命令里没有 `cargo doc`，`cargo-doc-per-session` 不过；
+  - 一条判分测试，照 `memory_checks_pass_and_fail_on_the_expected_worktree` 的造法：造的 4 个会话提交和命令下六条检查都过；第 2～4 个会话里任一个改了 `README.md`，`readme-untouched` 不过；任一个会话的命令里没有 `cargo doc`，`cargo-doc-per-session` 不过；改了 `AGENTS.md`（提交了或只改没提交）、新建了一个写着 `cargo doc` 的没跟踪文件、eval 状态目录根下有 `AGENTS.md`，这三种各自让 `rules-not-in-repo` 不过；
   - `cargo nextest run -p canter-eval`、`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check`。
 
   觉得不够，在回复里说，不要自己加。
@@ -64,7 +70,7 @@
 
 - 不改 `eval/tasks/memory.toml`、`eval/src/`、`crates/` 下的任何代码。
 - 不读、不改 `~/.canter`、`~/.canter-eval`（里面有 key 和真实会话），不起任何 canter 服务端，不调真实模型接口。测试只用临时目录和造的提交、命令。
-- 不加别的规矩、别的检查（用户这次只要这两条）。
+- 不加上面没写的规矩和检查。
 - 不用 Python。
 - 不要按项目名或路径批量杀进程（`pkill -f canter` 这类）。停自己起的进程用记下的 PID。
 - 碰到要拿主意的事（比如照抄的检查在新题里跑不通、两条规矩的判法有歧义），停下来，在回复里写清问题、可选办法和你的建议，然后结束这一轮，等主控回复再接着做；不在自己窗口里问用户，不换别的办法。
