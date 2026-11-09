@@ -207,3 +207,13 @@
 **没做的事**
 
 - 没做 shell 分词或引号求值，按主控定的参数边界办法；没跑全套。
+
+## 主控审查
+
+- 改动只在 `eval/`（新题 `tasks/memory.toml`，多会话、记忆保留/清空、按会话找 ID 和收数据、`finish`、判分的 `RUN_DIR`、结果表的记忆列和会话一节）、README、DESIGN 的 eval 一节；`crates/` 没动，`long.toml` 没动。
+- 用户定的验收前两条已核对：用合并前的分支版本（重新编译）对 `baseline-2026-11-09` 重出结果表，和 main 上那张一字不差；长程题的题目文件和步骤不变。「新版跑的长程题能和第一轮 `--against` 并排」要等下一次跑长程题时看。
+- 交叉审查（`canter/review-eval-memory`，Codex gpt-6-astra / xhigh）：第一轮必须改 5 条（记忆目录符号链接越界、旧状态 `steer` 和歧义提示路径、整批 `git add` 判分、依赖判分、单会话 `collect --session`）、建议改 2 条，主控全部交回，其中 `git add` 定为按参数边界的正则、依赖定为比较 `Cargo.lock` 包名；复核 1 又提 2 条（`add` 后非首位参数、显式 ID 不校验 stats），交回；复核 2 可以合并。
+- 合并前全套：`cargo nextest run --all-targets` 2058 个全过，`cargo test --doc --workspace` 没有失败。
+- 还没跑真实一轮：第一个会话的多行开跑提示经 corral 送到 canter 的整条链路只做了静态核对，跑第一轮时主控先核对提示是否完整送到。验收「记忆题第一轮结果表用户看过觉得能用」留到用户在场时跑。
+
+结果：返工 2 次
