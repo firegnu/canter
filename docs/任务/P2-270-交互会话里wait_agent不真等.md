@@ -72,3 +72,4 @@
 - 拿主意的地方：`runner` 在轮末调用 `schedule_goal`，后者约 10 毫秒后安排续跑，`next_goal` 不检查子 agent 是否还在运行；因此按任务给定分支，保留 `active.goal_continuation` 轮次的等待，避免空转。普通用户轮不因会话设过 goal 就保留等待。无待主控决定的实现问题。
 - 没做的事：没有调用真实模型（0 次），没有改 `eval/`，没有读取或修改用户的 canter 状态目录，没有修改 `spawn_agent` 说明、系统提示、报告叫醒或目标调度。没有跑工作区全套测试，没有再派 agent，没有合并或推送；交叉审查及一次 DeepSeek flash 的 `subagent` 真实验收由主控执行。
 - 踩过的坑：首次编译测试替身时把 `Message::ToolResult` 字段误写为 `call_id`，改为实际的 `tool_call_id` 后重新运行，取得上述等待超时的有效 RED；编译错误没有当成 RED。初次检索用了不存在的路径和无匹配的 zsh 通配符，随后用 `rg` 定位到实际文件。没有其它实现返工或环境异常。
+- 主控补充（11-10）已完成：按主仓库任务文件的「主控补充」，shell 工具说明新增 `rg searches directories recursively by default; -r means --replace, not recursion.`，同步四份快照，`cargo nextest run -p canter-tools`（243 passed / 22 skipped）、受影响的三项请求快照测试、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过，未新增测试、未改只读子 agent 的拦截提示，所有命令均使用指定编译目录并在前台跑完，无新增坑或待主控决定事项。
