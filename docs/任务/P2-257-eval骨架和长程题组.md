@@ -120,3 +120,44 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+做了什么：加了 `eval/`（workspace member），`canter-eval` 八个命令：`prepare`（写只有一家的 eval config、清两层记忆、开 worktree、跑题目 setup、存 state）、`trust`（POST /v1/folderTrust）、`steer`（数 `ritual: ` 提交，POST /v1/sessions/{id}/input、mode steer，进度存 steers.json）、`grade`（跑题目里的 shell 判分，记过/不过和输出末尾）、`collect`（`canter stats <id> --json` + 会话事件，写 result.json）、`clean`（删 worktree）、`stop`（只按 server.json 的 pid 停）、`report`（`eval/results/<轮次>.md`，可和上一轮并排，带通过次数汇总）。另加 `eval/tasks/long.toml`（canter-test-ts 12 件、三句插话、P2-81 的七条判分 + 最终测试条数）、`eval/README.md`、DESIGN 的「eval（P2-151）」一节。没动 `crates/`。
+
+验证了什么：`cargo nextest run -p canter-eval` 12 个测试全过，覆盖准备一次跑（config 只有一个家一个模型、压缩线 60000、思考 high、记忆清空、worktree 在起点提交、node_modules 链上、dist 删掉、key 不出现在输出里）、第 N 个提交才插话且请求是 `mode: steer` 和原文、重开不重发、长程题每条判分的过/不过例子（record 项改数字）、stats JSON 抽数 + 事件里的护栏/被拦计数、两轮并排出表、按 server.json 的 PID 停且不碰另一个进程、trust 的请求体和路径。另用临时仓库跑了 CLI 的 `prepare` 和 `clean`。`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都过。
+
+拿主意的地方：
+
+- `prepare` 和 `trust` 分成两条命令。eval 服务端要读 `config.json`，而 config 由 prepare 写，所以顺序只能是 prepare → 起服务端 → trust；prepare 的结尾把这三步和 corral 命令一起打印出来。
+- 题目格式用 TOML；repo 只写名字，路径在 eval 状态目录的 `local.json`（`repos`、`model`、`sourceConfig`、`canter`）。判分命令的环境给 `BASE`、`REPO`、`WORKTREE`；`record = true` 的检查取输出最后一个非空行当数字。
+- `node_modules` 从题目仓库链、`dist` 删除，写成 `long.toml` 的 `setup` 命令，不写进代码；压缩线和思考档位也来自题目文件。
+- `collect` 加 `--stats-json` 以便用事先写好的 stats JSON 测试，生产路径仍是 `CANTER_HOME=<eval home> canter stats <id> --json`。
+- 护栏提醒次数 = 三条 P2-251 warning 前缀 + 工具结果里的 `[Repeated call]`；被拦命令 = `commandExecution` 状态 declined 或 blocked；两条都写进 README 的列说明。
+- eval config 除模型和题目设置外不加开关（不写 prompt_suggestions），保持 canter 默认；因此 stats 的请求数和花费里会含提示建议请求，result.json 另存了 conversationRequests。要不要为评测关掉建议，留给主控定。
+- `stop` 只认 `server.json` 的 pid：先确认 PID 活着，再 SIGTERM，最多等 5 秒；不按进程名找，也不碰别的进程。
+
+没做的事：没跑真实一轮（按任务留给合并后、用户在场时跑）；没起、不停、不替换任何真的 canter 服务端；没写子 agent / 记忆 / Terminal-Bench 题组；没合并、没推送。
+
+踩过的坑：测试里造 12 个 ritual 提交时，一开始按「第 n 个未勾选项」改 TODO，结果第 10 个提交没有改动、`git commit` 直接失败，改成每步按序号重建 TODO。停服务端的测试一开始用 `sleep 60 & echo $!` 拿 PID，后台进程继承了 stdout 管道，`Command::output()` 一直等到 60 秒；改成把后台进程的 stdout/stderr 丢掉。另外冒烟时一条 `rm -rf "$S"` 被 canter 自己的 dangerous command 检查拦下（AllowAll 也拒），改用 `mktemp -d` 新目录。
+
+## 返工
+
+主控审查指出 `long.toml` 的 setup 用软链接接 `node_modules` 有问题：canter-test-ts 的 `.gitignore` 是 `node_modules/`（带斜杠只忽略目录），软链接不是目录，`git status` 会显示 `?? node_modules`，模型 `git add -A` 会把指向本机绝对路径的链接提交进去。改成 `cp -cR "$REPO/node_modules" node_modules`（macOS APFS 克隆，快、不占空间）；测试里准备后断言 worktree 的 `node_modules` 是真目录、不是软链接，且 `git status --short` 为空；fixture 改成按真实仓库忽略 `dist/`，不再提交 `dist/`。README 的说明和示例一并改了。
+
+`prompt_suggestions`：主控 11-09 决定不关，保持 canter 默认；`result.json` 另存的 `conversationRequests` 够对比用。
+
+返工验证：`cargo nextest run -p canter-eval` 12 个测试全过；`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都过。
+
+## 返工 2
+
+按交叉审查意见改了四条（其余不动）：
+
+1. run 的 worktree 移出 eval 状态目录：默认放在 `~/.canter-eval-worktrees/<轮次>/<次>/`，`local.json` 的 `worktrees` 可改；`prepare` 拒绝落在 eval 状态目录或 canter 日常状态目录里面的根；`clean` 移到库里，只删配置的 worktree 根下面、且不是根本身的路径。测试断言准备出的 worktree 不在 `<eval home>` 下面、在 worktree 根下面，另加一条拒绝根落在 eval 状态目录里的测试。README 和 DESIGN 的布局、说明一起改，并写清为什么不能放进 `CANTER_HOME`（canter 把整个状态目录当私有路径，读写改文件工具会拒绝）。
+2. `stop` 不再只看 PID：先照 canter 的 `server_running` 对 `<eval home>/server.lock` 试共享锁，锁被占才算服务端在跑；拿得到锁就报 `server.json` 过期、不发信号。测试两条：锁被占时停的是登记的 PID、不碰另一个进程；锁没被占时登记的活进程不被发信号。
+3. eval 状态目录的检查加严：拒绝 `$HOME` 本身、canter 状态目录本身、它里面的目录和它的上级目录。加了 `Home::resolve_with`（环境传参）和一条测试。
+4. `config::write` 在源配置顶层 `prices` 里有 `<家>/<模型>` 这个键时一起拷过去，只拷这一个键；加了一条测试。
+
+返工 2 验证：`cargo nextest run -p canter-eval` 16 个测试全过；`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都过。
+
+返工 2 踩的坑：新路径还不存在时，`canonicalize` 整条路径会失败，而 macOS 上 `/tmp` 是 `/private/tmp` 的软链接，只做字面比较会把「在状态目录里面」误判成不在；改成先解析最长的已存在前缀再把剩下的部分接回去。

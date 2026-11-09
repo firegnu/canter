@@ -705,3 +705,12 @@ P2-191（11-03）：用户在「终端写一个文件 / 服务端登记每个客
 - 输出截断：Length 后追加英文内部消息从断点续写；有截断工具调用则说明未执行，要求拆小步骤。文字和工具截断合计最多三次，再次 Length 沿用原有结束和警告。已经向核心交付的调用继续补未执行占位；Chat Completions 原本不交付截断调用，新增模型层内部 `TruncatedToolCalls` 信号，只说明存在截断调用，不交付半截参数或改变已有历史。它不是 HTTP/SSE 协议事件。11-08 用户补定：Responses 的 `response.incomplete` 仅当 `incomplete_details.reason == max_output_tokens` 时映射为 Length，复用同一额度；其它原因（包括 content_filter、未知或缺失原因）仍返回 IncompleteResponse。截断批次不释放任何工具调用（包括该批次已有 done 的调用），只保留已流出的文本和思考；不生成私有 replay，避免把未确认项作为完整响应重放。按接口事件判断，不按模型名字分支。正常 Stop、Other、网络重试和断流保留半截的路径不变。Responses 的输出上限（max_output_tokens）现在在压缩、btw、提示建议、目标收尾总结这几处也按 Length 处理，和 Chat Completions 已有的 Length 行为一致：压缩用 prefix 时分块重试，不用时报告没有完整摘要；btw 和提示建议把截断文字当回答；目标收尾总结被截断时这一轮算完成。
 
 这些提醒只追加新消息或附在尚未记录的新工具结果末尾，不修改历史前缀，不新增界面和配置。待办提醒和截断续写各最多三次，同轮同时触发时最多多六次请求（与任务单评估中的单项最多三次区分）；每次用户插话后重新计数。比较结果可避免把输出在变化的轮询当成打转，但用其它工具执行且连续相同输出的合法轮询仍可能被停止，用户可发新消息继续。
+
+## eval（P2-151）
+
+canter 仓库里加 `eval/`（`canter-eval`），评测 canter 自己在长程任务里的表现；不改 canter 的代码、提示词和协议，canter 是被测对象。工具只做确定的几步（准备、插话、判分、取数、停服务端、清理、出表），开跑、等待、停下由主控照 `eval/README.md` 用 corral 做。
+
+- **状态目录分开**：eval 用自己的状态目录，默认 `~/.canter-eval`，支持 `CANTER_EVAL_HOME`（也可 `--eval-home`）；工具拒绝指向用户 home、canter 自己的状态目录、它里面的目录或它的上级目录。配置、记忆、会话、信任记录都和日常分开；服务端是同一个 `canter` 起的另一个实例，`CANTER_HOME` 指这里，配置只放这一轮用的一个模型（从日常配置拷那一家那一段，key 只在本机）。服务端在跑完按 `server.json` 记的 pid 停，不按名字杀进程；停之前照 canter 自己的做法看这个状态目录的 `server.lock` 有没有服务端占着，没占就报登记过期、不发信号。
+- **题目和结果**：题目是 `eval/tasks/*.toml`（数据文件，不含本机路径），写起点提交、开跑提示原文、插话和位置、压缩线、判分 shell 命令；仓库的本机路径在 eval 状态目录的 `local.json`。每次跑的 git worktree 放在状态目录之外的 eval 专用根（默认 `~/.canter-eval-worktrees`，`local.json` 可改），跑完删掉，`clean` 只删这个根下面的路径。canter 把整个 `CANTER_HOME` 当私有路径，读写改文件工具都拒绝，所以 worktree 不能放在状态目录里。每次的判分和过程数据是一份 JSON，留在 eval 状态目录；每轮的对比表 `eval/results/<轮次>.md` 提交进仓库（只有数字、会话 ID、canter 版本、模型、时段，没有本机路径和密钥）。
+- **插话走公开接口**：按 worktree 里以 `ritual: ` 开头的提交计数，到题目定的位置用 `POST /v1/sessions/{id}/input`、`mode: steer` 发原文，和终端按 Tab 一样；会话 ID 从 `--session-file` 写的文件读。`corral send` 在 canter 干活时退回 `not_idle`、`corral keys` 送不了 Tab，所以插话不用 corral。
+- **过程数据**：token、缓存、花费、压缩前后、工具调用和失败、重读文件从 `canter stats <id> --json` 取；stats 里没有的护栏提醒和被拦命令从会话事件数。模型名和家名都从配置读，题目和代码不按模型分支；第一版跑 DeepSeek flash 是跑的时候的选择。

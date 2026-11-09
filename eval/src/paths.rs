@@ -1,0 +1,416 @@
+//! The eval state directory and the files that describe one run.
+
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    io::Write,
+    os::unix::fs::{DirBuilderExt, PermissionsExt},
+    path::{Path, PathBuf},
+};
+
+use serde::{Deserialize, Serialize};
+
+use crate::Result;
+
+pub const DEFAULT_TASKS: &str = "eval/tasks";
+
+/// The eval state directory, separate from canter's own `~/.canter`.
+#[derive(Clone, Debug)]
+pub struct Home {
+    pub root: PathBuf,
+}
+
+impl Home {
+    pub fn resolve(flag: Option<PathBuf>) -> Result<Self> {
+        let home = env::var_os("HOME").map(PathBuf::from);
+        let daily = env::var_os("CANTER_HOME").map(PathBuf::from);
+        Self::resolve_with(flag, home.as_deref(), daily.as_deref())
+    }
+
+    /// The environment is passed in so the guards can be tested without
+    /// changing process-wide variables.
+    #[doc(hidden)]
+    pub fn resolve_with(
+        flag: Option<PathBuf>,
+        home: Option<&Path>,
+        daily: Option<&Path>,
+    ) -> Result<Self> {
+        let root = match flag {
+            Some(path) => path,
+            None => match env::var_os("CANTER_EVAL_HOME") {
+                Some(value) => PathBuf::from(value),
+                None => {
+                    let home = home.ok_or("HOME is not set")?;
+                    home.join(".canter-eval")
+                }
+            },
+        };
+        let root = expand(&root)?;
+        if !root.is_absolute() {
+            return Err(format!(
+                "the eval state directory must be an absolute path: {}",
+                root.display()
+            ));
+        }
+        let eval = Self { root };
+        eval.refuse_daily_state(home, daily)?;
+        Ok(eval)
+    }
+
+    /// Never point eval state at the user's home or at canter's own state
+    /// directory (or a parent of it).
+    fn refuse_daily_state(&self, home: Option<&Path>, daily: Option<&Path>) -> Result<()> {
+        if let Some(home) = home
+            && same(&self.root, home)
+        {
+            return Err(format!(
+                "refusing to use {} as the eval state directory: it is the user's home directory",
+                self.root.display()
+            ));
+        }
+        for candidate in daily_state_dirs(home, daily) {
+            if within(&self.root, &candidate) {
+                return Err(format!(
+                    "refusing to use {} as the eval state directory: it is inside canter's state directory {}",
+                    self.root.display(),
+                    candidate.display()
+                ));
+            }
+            if let Some(parent) = candidate.parent()
+                && same(&self.root, parent)
+            {
+                return Err(format!(
+                    "refusing to use {} as the eval state directory: it is a parent of canter's state directory {}",
+                    self.root.display(),
+                    candidate.display()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn ensure(&self) -> Result<()> {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&self.root)
+            .and_then(|()| fs::set_permissions(&self.root, fs::Permissions::from_mode(0o700)))
+            .map_err(|error| format!("cannot create {}: {error}", self.root.display()))
+    }
+
+    pub fn local_path(&self) -> PathBuf {
+        self.root.join("local.json")
+    }
+
+    pub fn config_path(&self) -> PathBuf {
+        self.root.join("config.json")
+    }
+
+    pub fn server_path(&self) -> PathBuf {
+        self.root.join("server.json")
+    }
+
+    pub fn server_lock_path(&self) -> PathBuf {
+        self.root.join("server.lock")
+    }
+
+    pub fn session_events(&self, id: &str) -> PathBuf {
+        self.root.join("sessions").join(id).join("events.jsonl")
+    }
+
+    pub fn round_dir(&self, round: &str) -> PathBuf {
+        self.root.join("runs").join(round)
+    }
+
+    pub fn run_dir(&self, round: &str, run: &str) -> PathBuf {
+        self.round_dir(round).join(run)
+    }
+}
+
+/// A local-only configuration; `local.json` in the eval state directory.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Local {
+    /// Task name to the absolute path of its repository.
+    pub repos: BTreeMap<String, String>,
+    /// The one model this eval home uses, as `provider/model`.
+    pub model: String,
+    /// Defaults to `$HOME/.canter/config.json`.
+    #[serde(default)]
+    pub source_config: Option<String>,
+    /// The canter executable used by `collect`; defaults to `canter` on PATH.
+    #[serde(default)]
+    pub canter: Option<String>,
+    /// Where run worktrees live; defaults to `$HOME/.canter-eval-worktrees`.
+    /// Must stay outside both the eval state directory and canter's own one,
+    /// because canter refuses to read or write inside `CANTER_HOME`.
+    #[serde(default)]
+    pub worktrees: Option<String>,
+}
+
+impl Local {
+    pub fn load(home: &Home) -> Result<Self> {
+        let path = home.local_path();
+        let text = fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "cannot read {}: {error}\n\
+                 create it first; see eval/README.md for the format",
+                path.display()
+            )
+        })?;
+        serde_json::from_str(&text).map_err(|error| {
+            format!(
+                "{} is not valid local configuration: {error}",
+                path.display()
+            )
+        })
+    }
+
+    pub fn repo(&self, task: &str) -> Result<PathBuf> {
+        let value = self
+            .repos
+            .get(task)
+            .ok_or_else(|| format!("repos in {} has no path for task {task}", "local.json"))?;
+        let path = expand(Path::new(value))?;
+        if !path.is_absolute() {
+            return Err(format!(
+                "the repo path for task {task} must be absolute: {value}"
+            ));
+        }
+        Ok(path)
+    }
+
+    pub fn source_config(&self) -> Result<PathBuf> {
+        match &self.source_config {
+            Some(value) => {
+                let path = expand(Path::new(value))?;
+                if !path.is_absolute() {
+                    return Err(format!(
+                        "sourceConfig in local.json must be absolute: {value}"
+                    ));
+                }
+                Ok(path)
+            }
+            None => {
+                let home = env::var_os("HOME").ok_or("HOME is not set")?;
+                Ok(PathBuf::from(home).join(".canter").join("config.json"))
+            }
+        }
+    }
+
+    pub fn canter(&self) -> String {
+        self.canter.clone().unwrap_or_else(|| "canter".into())
+    }
+
+    pub fn worktree_root(&self, home: &Home) -> Result<PathBuf> {
+        let value = match &self.worktrees {
+            Some(value) => value.clone(),
+            None => {
+                let home_dir = env::var_os("HOME").ok_or("HOME is not set")?;
+                PathBuf::from(home_dir)
+                    .join(".canter-eval-worktrees")
+                    .display()
+                    .to_string()
+            }
+        };
+        let root = expand(Path::new(&value))?;
+        if !root.is_absolute() {
+            return Err(format!("worktrees in local.json must be absolute: {value}"));
+        }
+        let home_dir = env::var_os("HOME").map(PathBuf::from);
+        if let Some(home_dir) = &home_dir
+            && same(&root, home_dir)
+        {
+            return Err(format!(
+                "refusing to put worktrees in {}: it is the user's home directory",
+                root.display()
+            ));
+        }
+        if within(&root, &home.root) {
+            return Err(format!(
+                "refusing to put worktrees in {}: it is inside the eval state directory {}",
+                root.display(),
+                home.root.display()
+            ));
+        }
+        let daily = env::var_os("CANTER_HOME").map(PathBuf::from);
+        for candidate in daily_state_dirs(home_dir.as_deref(), daily.as_deref()) {
+            if within(&root, &candidate) {
+                return Err(format!(
+                    "refusing to put worktrees in {}: it is inside canter's state directory {}",
+                    root.display(),
+                    candidate.display()
+                ));
+            }
+        }
+        Ok(root)
+    }
+
+    pub fn worktree_path(&self, home: &Home, round: &str, run: &str) -> Result<PathBuf> {
+        Ok(self.worktree_root(home)?.join(round).join(run))
+    }
+}
+
+/// What one prepared run needs later; `state.json` inside the run directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct State {
+    pub task: String,
+    pub task_path: String,
+    pub round: String,
+    pub run: String,
+    pub repo: String,
+    pub repo_name: String,
+    pub base_commit: String,
+    pub worktree: String,
+    pub session_file: String,
+    pub model: String,
+    pub auto_compact_tokens: Option<u64>,
+    pub created_at: i64,
+}
+
+impl State {
+    pub fn load(home: &Home, round: &str, run: &str) -> Result<Self> {
+        let path = home.run_dir(round, run).join("state.json");
+        let text = fs::read_to_string(&path)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        serde_json::from_str(&text)
+            .map_err(|error| format!("{} is not valid: {error}", path.display()))
+    }
+
+    pub fn save(&self, home: &Home) -> Result<()> {
+        let path = home.run_dir(&self.round, &self.run).join("state.json");
+        write_private(
+            &path,
+            serde_json::to_vec_pretty(self)
+                .map_err(|error| format!("cannot encode state: {error}"))?
+                .as_slice(),
+        )
+    }
+
+    pub fn task(&self) -> Result<crate::task::Task> {
+        crate::task::Task::load(Path::new(&self.task_path))
+    }
+
+    pub fn worktree(&self) -> &Path {
+        Path::new(&self.worktree)
+    }
+}
+
+pub fn expand(path: &Path) -> Result<PathBuf> {
+    let text = path
+        .to_str()
+        .ok_or_else(|| format!("path is not UTF-8: {}", path.display()))?;
+    if let Some(rest) = text.strip_prefix("~/") {
+        let home = env::var_os("HOME").ok_or("HOME is not set")?;
+        return Ok(PathBuf::from(home).join(rest));
+    }
+    Ok(path.to_path_buf())
+}
+
+/// canter's own state directories: `$HOME/.canter` and any `CANTER_HOME`.
+fn daily_state_dirs(home: Option<&Path>, daily: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(home) = home {
+        candidates.push(home.join(".canter"));
+    }
+    if let Some(daily) = daily {
+        candidates.push(daily.to_path_buf());
+    }
+    candidates
+}
+
+/// Whether `path` is `dir` or below it, comparing resolved paths when they
+/// exist and falling back to `.`/`..` normalization for paths not yet created.
+pub fn within(path: &Path, dir: &Path) -> bool {
+    let path = compare_path(path);
+    let dir = compare_path(dir);
+    path.starts_with(&dir)
+}
+
+fn same(left: &Path, right: &Path) -> bool {
+    compare_path(left) == compare_path(right)
+}
+
+fn compare_path(path: &Path) -> PathBuf {
+    // Resolve the longest existing prefix so a not-yet-created path still
+    // shares the resolved form of its existing parents (macOS /tmp and /var
+    // are symlinks).
+    let mut existing = path.to_path_buf();
+    let mut suffix = Vec::new();
+    loop {
+        if let Ok(canonical) = existing.canonicalize() {
+            let mut out = canonical;
+            for part in suffix.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        let Some(name) = existing.file_name().map(|name| name.to_os_string()) else {
+            break;
+        };
+        suffix.push(name);
+        existing.pop();
+    }
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            component => out.push(component.as_os_str()),
+        }
+    }
+    out
+}
+
+pub fn check_label(kind: &str, value: &str) -> Result<()> {
+    let ok = !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.+".contains(&byte));
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "{kind} must use ASCII letters, digits, - _ . or +: {value:?}"
+        ))
+    }
+}
+
+/// Create a 0600 file inside a 0700 directory, replacing it atomically.
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(parent)
+        .and_then(|()| fs::set_permissions(parent, fs::Permissions::from_mode(0o700)))
+        .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+        format!(
+            "cannot create a temporary file in {}: {error}",
+            parent.display()
+        )
+    })?;
+    file.as_file()
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("cannot protect {}: {error}", path.display()))?;
+    file.write_all(bytes)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    file.as_file()
+        .sync_all()
+        .map_err(|error| format!("cannot sync {}: {error}", path.display()))?;
+    file.persist(path)
+        .map_err(|error| format!("cannot replace {}: {}", path.display(), error.error))?;
+    Ok(())
+}
+
+pub fn read_private_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+    let text = fs::read_to_string(path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    serde_json::from_str(&text).map_err(|error| format!("{} is not valid: {error}", path.display()))
+}

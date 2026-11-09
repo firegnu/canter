@@ -1,0 +1,82 @@
+# 长程题组：canter-test-ts 的 12 件 TODO，照 P2-81 的跑法固定下来。
+#
+# 题目文件只写仓库名；本机路径在 eval 状态目录的 local.json 里。
+# 判分命令在 worktree 里用 sh -c 跑，环境里有 REPO、WORKTREE、BASE。
+id = "long"
+name = "长程：canter-test-ts 12 件"
+repo = "canter-test-ts"
+base = "8e19ca8db4b181c15a3a2a8cc75e1fccfee98538"
+auto_compact_tokens = 60000
+reasoning = "high"
+
+prompt = '''顺序完成 TODO.md 里的全部 12 件任务。每件：实现、补测试、npm test 和 npx tsc --noEmit 都通过后，在 TODO.md 勾掉它，再单独提交一次，提交说明以 ritual: 开头。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。'''
+
+setup = [
+  '''[ -d node_modules ] || cp -cR "$REPO/node_modules" node_modules''',
+  '''rm -rf dist''',
+]
+
+# 插话照 11-07 那次（会话 s-1794028618032124000-1486-1）的原文和位置。
+[[steers]]
+after_commits = 2
+text = '''补一条要求：从现在开始，每个提交说明的最后一行加上 Task: N/12，N 是这件在 TODO 里的序号。'''
+
+[[steers]]
+after_commits = 3
+text = '''先记住一个细节，做第 12 件（交互确认）时用：确认提示的文字用 Remove "<habit name>"? [y/N]'''
+
+[[steers]]
+after_commits = 5
+text = '''再补一条：之后每件新加的命令或选项，都在 README.md 里加一个用法示例。'''
+
+# 判分照 P2-81「收尾」的七条；最后一条只记数、不判过不过。
+[[checks]]
+id = "todo-checked"
+description = "TODO.md 12 件全勾"
+command = '''test "$(grep -c '^- \[x\]' TODO.md)" -eq 12 && test "$(grep -c '^- \[ \]' TODO.md)" -eq 0'''
+
+[[checks]]
+id = "twelve-ritual-commits"
+description = "起点之后正好 12 个提交，都以 ritual: 开头"
+command = '''test "$(git rev-list --count "$BASE"..HEAD)" -eq 12 && ! git log --format=%s "$BASE"..HEAD | grep -qv '^ritual: ' '''
+
+[[checks]]
+id = "task-trailer"
+description = "第 3～12 个提交的说明最后一行是 Task: N/12"
+command = '''
+test "$(git rev-list --count "$BASE"..HEAD)" -ge 12 || exit 1
+i=3
+for commit in $(git log --reverse --format=%H "$BASE"..HEAD | sed -n '3,12p'); do
+  last=$(git log -1 --format=%B "$commit" | awk 'NF { line = $0 } END { print line }')
+  test "$last" = "Task: $i/12" || exit 1
+  i=$((i + 1))
+done
+test "$i" -eq 13
+'''
+
+[[checks]]
+id = "tests-and-types"
+description = "npm test 和 npx tsc --noEmit 都通过"
+command = '''npm test && npx tsc --noEmit'''
+
+[[checks]]
+id = "confirmation-prompt"
+description = "源码里有确认提示 Remove \"…\"? [y/N]"
+command = '''grep -rn --include='*.ts' 'Remove "' src | grep -Fq '"? [y/N]' '''
+
+[[checks]]
+id = "dependencies-unchanged"
+description = "package.json 的依赖和起点一样"
+command = '''node -e 'const fs=require("fs"),cp=require("child_process");const sorted=o=>JSON.stringify(Object.fromEntries(Object.keys(o||{}).sort().map(k=>[k,o[k]])));const base=JSON.parse(cp.execFileSync("git",["show",process.env.BASE+":package.json"]));const now=JSON.parse(fs.readFileSync("package.json"));process.exit(sorted(base.dependencies)===sorted(now.dependencies)&&sorted(base.devDependencies)===sorted(now.devDependencies)?0:1)' '''
+
+[[checks]]
+id = "readme-in-late-commits"
+description = "第 6～12 个提交里改了 README.md 的个数（只记数）"
+record = true
+command = '''git log --reverse --format=%H "$BASE"..HEAD | sed -n '6,12p' | while read -r commit; do git show --name-only --format= "$commit" | grep -qx README.md && echo "$commit"; done | wc -l | tr -d ' ' '''
+
+[[checks]]
+id = "final-test-count"
+description = "最终测试条数（只记数）"
+record = true
+command = '''npm test 2>&1 | sed -n 's/^ℹ tests \([0-9][0-9]*\)$/\1/p' | tail -n 1'''
