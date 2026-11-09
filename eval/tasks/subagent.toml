@@ -56,6 +56,7 @@ text = '''好的，继续等另外一个subagent回来'''
 #   turns[i].spawnedAgents  这一轮 spawn 成功、拿到子 agent ID 的次数（失败也算
 #                           工具调用，但不算开出子 agent）
 #   finalReply              主会话最后一条回复的原文
+#   replies[]               主会话全部完成回复的原文，按事件顺序
 #   subAgents[]             每个子 agent 的请求、被拦命令、开始结束、token、花费
 #   chats[]                 插话：index 从 1 起，sentAt、turnId、skipped
 [[checks]]
@@ -77,12 +78,12 @@ command = '''jq -e '([.turns[] | select(.openedBy.kind == "steer")] | length) > 
 # pi 的 bash 没有默认超时、pi 超时文案 Command timed out after N seconds、pi MCP
 # 默认 60 秒。中英文都认，数字和单位之间有没有空格都认，也认毫秒写法：
 # `10 000 ms`、`10_000`（源码常量）、`10000 ms`、`10000ms`。数字两边不能粘着别的
-# 数字：`110 秒` 不是 10 秒，`1124` 不是 124。每条在整篇回复里找一个写法即可。
+# 数字：`110 秒` 不是 10 秒，`1124` 不是 124。每条在全部回复里找一个写法即可。
 [[checks]]
 id = "answer-facts"
-description = "最后一条回复提到 6 条事实（codex 10 秒 / codex MCP 300 秒 / 退出码 124 / pi bash 无默认 / pi 超时文案 / pi MCP 60 秒）"
+description = "主会话全部回复合起来提到 6 条事实（codex 10 秒 / codex MCP 300 秒 / 退出码 124 / pi bash 无默认 / pi 超时文案 / pi MCP 60 秒）"
 command = '''
-reply="$(jq -r '.finalReply // ""' "$RUN_DIR/session-data.json")" || exit 1
+reply="$(jq -r '(.replies // []) | join("\n")' "$RUN_DIR/session-data.json")" || exit 1
 
 fail() { echo "missing: $1" >&2; exit 1; }
 

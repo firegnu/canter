@@ -330,9 +330,12 @@ text = '''报告回来以后说的那句'''
 | `sessionId`、`cwd` | 主会话和它的目录 |
 | `turns[]` | 主会话每一轮，按开始顺序：`index`（从 1 起）、`id`、`startedAt`、`endedAt`（毫秒）、`durationMs`（没结束时为空）、`openedBy`（`{"kind":"prompt"}`、`{"kind":"steer","index":n}`、`{"kind":"report"}` 或 `{"kind":"other","clientName":"..."}`）、`tools`（这一轮各工具调用的次数，按工具名，比如 `read`、`shell`、`spawn_agent`、`wait_agent`）、`spawnedAgents`（这一轮 spawn 成功、拿到子 agent ID 的次数；失败也算一次 `spawn_agent` 工具调用，但不算开出子 agent） |
 | `finalReply` | 主会话最后一条完成回复的原文 |
+| `replies[]` | 主会话全部完成回复的原文，按事件顺序；只收 `item.completed` 中已完成的 `agentMessage`（旧事件没写 `status` 也算完成），不含子 agent 的回复、工具输出或思考。`answer-facts` 将这些回复用换行拼起来找 6 条事实，不限最后一轮 |
 | `subAgents[]` | 主会话开的每个子 agent：`id`、`name`、`agentType`、`status`、`startedAt`、`endedAt`、`durationMs`、`requestCount`、`blockedCommands`、`blockedRgReplace`（`rg` 带 `-r` 或 `-rn` 这类合写被拦的条数）、`cachedInputTokens`、`uncachedInputTokens`、`outputTokens`、`costUsd`、`costUnknown` |
 | `chats[]` | 每句插话的 `index`（从 1 起）、`sentAt`、`turnId`、`skipped`（没发的原因） |
 | `timedOut` | 插话的总时限到了没有 |
+
+子 agent 的 `startedAt` 取第一条事件，`endedAt` 取最后一个 `turn.completed`（最后一次交报告），`durationMs` 是两者之差；交完报告后直到关闭会话的事件不再增加用时。还没有 `turn.completed` 时，`endedAt` 和 `durationMs` 都为空。
 
 判分命令用 `sh` 和 `jq` 就能写，比如 `jq -e '(.turns[0].tools.spawn_agent // 0) > 0' "$RUN_DIR/session-data.json"`。
 
@@ -369,7 +372,7 @@ text = '''报告回来以后说的那句'''
 
 「会话」一节只对多会话题出现。写记忆次数是完成的 `fileChange` 改到两层记忆目录里的 `.md`，读记忆次数是完成的 `fileRead` 读这些 `.md`；记忆文件数是那个会话结束时两层目录里 `.md` 的个数（`result.json` 里带文件名）。
 
-有子 agent 的跑多一节「子 agent」：先一行这次跑的主会话和子 agent 分开算的用时、请求和花费——总花费是主加子，用时的「各会话相加」是主会话与每个子 agent 各自的时长直接相加（它们并行跑，不是墙钟时间）；主表那些数仍只算主会话，和以前一样。再每个子 agent 一行（类型、状态、用时、请求、缓存输入、未缓存输入、输出、花费、被拦命令、`rg -r` 被拦）。没有子 agent 的跑不出这一节，表一字不差。
+有子 agent 的跑多一节「子 agent」：先一行这次跑的主会话和子 agent 分开算的用时、请求和花费——总花费是主加子，用时的「各会话相加」是主会话与每个子 agent 各自的时长直接相加（它们并行跑，不是墙钟时间）；主表那些数仍只算主会话，和以前一样。再每个子 agent 一行（类型、状态、用时、请求、缓存输入、未缓存输入、输出、花费、被拦命令、`rg -r` 被拦）。子 agent 用时与 `session-data.json` 一样，从第一条事件算到最后一个 `turn.completed`，不算交报告后等到会话关闭的时间；还没有完成轮次时显示 `?`。没有子 agent 的跑不出这一节，表一字不差。
 
 「压后重读」的三类：
 
