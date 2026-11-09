@@ -638,7 +638,35 @@ async fn read_offset_zero_starts_at_the_first_line() {
 }
 
 #[tokio::test]
-async fn read_rejects_a_setting_supplied_twice_and_string_aliases() {
+async fn read_accepts_line_numbers_written_as_strings() {
+    let dir = tempfile::tempdir().unwrap();
+    let contents: String = (1..=9).map(|n| format!("line {n}\n")).collect();
+    std::fs::write(dir.path().join("notes"), contents).unwrap();
+    let tools = tools(&dir);
+    for (string_args, number_args) in [
+        (
+            serde_json::json!({"path":"notes","startLine":"3","lineCount":"2"}),
+            serde_json::json!({"path":"notes","startLine":3,"lineCount":2}),
+        ),
+        (
+            serde_json::json!({"path":"notes","offset":"3","limit":"2"}),
+            serde_json::json!({"path":"notes","offset":3,"limit":2}),
+        ),
+    ] {
+        let from_strings = invoke(&tools, Tool::Read, string_args.clone()).await;
+        let from_numbers = invoke(&tools, Tool::Read, number_args).await;
+        assert_eq!(
+            from_strings.outcome,
+            ToolOutcome::Completed,
+            "{string_args}: {}",
+            from_strings.text
+        );
+        assert_eq!(from_strings.text, from_numbers.text, "{string_args}");
+    }
+}
+
+#[tokio::test]
+async fn read_rejects_a_setting_supplied_twice_and_non_numeric_strings() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("notes"), "one\ntwo\n").unwrap();
     let tools = tools(&dir);
@@ -652,8 +680,24 @@ async fn read_rejects_a_setting_supplied_twice_and_string_aliases() {
             "lineCount or limit",
         ),
         (
-            serde_json::json!({"path":"notes","offset":"2"}),
-            "invalid type",
+            serde_json::json!({"path":"notes","startLine":"2","offset":"2"}),
+            "startLine or offset",
+        ),
+        (
+            serde_json::json!({"path":"notes","limit":"abc"}),
+            "expected a non-negative integer",
+        ),
+        (
+            serde_json::json!({"path":"notes","offset":"-1"}),
+            "expected a non-negative integer",
+        ),
+        (
+            serde_json::json!({"path":"notes","lineCount":""}),
+            "expected a non-negative integer",
+        ),
+        (
+            serde_json::json!({"path":"notes","startLine":"0"}),
+            "must be positive",
         ),
     ] {
         let result = invoke(&tools, Tool::Read, args.clone()).await;

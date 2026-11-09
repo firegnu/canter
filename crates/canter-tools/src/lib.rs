@@ -376,13 +376,34 @@ impl ToolImage {
 struct ReadArgs {
     path: String,
     page: Option<u32>,
-    #[serde(default = "first_line")]
+    #[serde(default = "first_line", deserialize_with = "deserialize_count")]
     start_line: u32,
-    #[serde(default = "max_lines")]
+    #[serde(default = "max_lines", deserialize_with = "deserialize_count")]
     line_count: u32,
     // Other agents' read tools call these offset and limit.
+    #[serde(default, deserialize_with = "deserialize_optional_count")]
     offset: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_optional_count")]
     limit: Option<u32>,
+}
+
+// Models sometimes write a line number as a string, like "220".
+fn deserialize_count<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    use serde::de::{Error as _, Unexpected};
+
+    match Value::deserialize(deserializer)? {
+        Value::String(text) => text.parse().map_err(|_| {
+            D::Error::invalid_value(Unexpected::Str(&text), &"a non-negative integer")
+        }),
+        value => u32::deserialize(value).map_err(D::Error::custom),
+    }
+}
+fn deserialize_optional_count<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u32>, D::Error> {
+    #[derive(Deserialize)]
+    struct Count(#[serde(deserialize_with = "deserialize_count")] u32);
+    Ok(Option::<Count>::deserialize(deserializer)?.map(|Count(count)| count))
 }
 impl ReadArgs {
     fn accept_aliases(&mut self, raw: &Value) -> Result<(), String> {

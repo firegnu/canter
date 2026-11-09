@@ -41,7 +41,7 @@
 
 1. `offset: 0` 当从头读（同 pi、opencode）；`startLine: 0` 照旧报错。
 2. 同一个意思写了两遍（`startLine` 和 `offset` 都有，或 `lineCount` 和 `limit` 都有）：报错，说明只能写一个（报错文字用英文）。
-3. 数字写成字符串（`"offset":"80"`）这次不收，照旧报类型不对；`startLine`、`lineCount` 也不改。
+3. 数字写成字符串（`"offset":"80"`）这次不收，照旧报类型不对；`startLine`、`lineCount` 也不改。（11-10 由 P2-271 改为照收。）
 4. 工具说明和参数定义（发给模型的那份）不改，不对模型提 `limit`、`offset`，只在收到时照收。
 
 ## 怎么算做完
