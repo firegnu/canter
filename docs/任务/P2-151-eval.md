@@ -67,3 +67,26 @@
 
 - 用户问「你打算什么时候使用terminal bench这种eval？」，主控答：自己的三组题先跑出第一份基准，再单开一件接 Terminal-Bench 2.0；它只看做没做完、分数主要由模型决定，测不到压缩、插话、子 agent 这些 canter 自己改的东西，所以不每版跑，只在想知道和 Codex、Claude Code 差多少时跑。接入要解决：Harbor 在 Docker 里跑，canter 是常驻服务端 + 客户端；适配器是一小段 Python，放 canter 仓库外；约 90 件，先拿几件试出花费和时间；比外壳要让对方用同一个模型（Codex 能不能接 DeepSeek 到时查）。
 - 用户：「记进去，第一版跑通后接着做」。第一版跑通后，下一件就是接 Terminal-Bench 2.0。
+
+## 方案（11-09 主控写，用户看过再拆实现）
+
+用户 11-09 确认第 5 条：第一版只和 canter 自己的旧版比（同样的题、同样的模型，换 canter 版本跑；第一轮当基准）。
+
+### 怎么跑一轮
+
+1. **单独的状态目录**：eval 用自己的 `CANTER_HOME`（建议 `~/.canter-eval`），起自己的一个 canter 服务端。配置只放 DeepSeek flash 这一家（key 从 `~/.canter/config.json` 拷过去，只在本机），不挂 MCP、钩子、状态栏；压缩线等按题目设。记忆、会话、信任记录都和日常的分开：日常用的记忆不进 eval，eval 每次跑前清空自己的记忆，也不用再改用户的 config.json。服务端按记下的 PID 停。
+2. **题目是数据文件**（`eval/tasks/*.toml`）：起点仓库和提交、开跑提示原文、插话（在第几个提交之后、原文）、压缩线、判分命令。仓库位置不写进题目（canter 是公开仓库，不放本机路径），记在 eval 状态目录的本机配置里。
+3. **每次跑**：在题目仓库开一个新 git worktree（固定提交，共用主仓库的信任，不弹框）→ 主控 `corral start ... -- canter --yolo --tag eval=<轮次> --session-file <路径>`，`--env CANTER_HOME=<eval 目录>` → 插话由 eval 工具在 git 里看到第 N 个提交后，用 canter 公开接口的插话方式（`mode: steer`，和终端按 Tab 一样）发出 → `corral wait` 到这一轮停下 → 判分 → 取 `canter stats --json` → `corral stop`、删 worktree。
+4. **主控只做编排和归因**：照题目文件派、等、跑判分、出表；不打分；失败时看回放，写「模型的」还是「canter 的」。用户在场、不干预。
+5. **结果**：每次一份 JSON（判分 + 过程数据）放 eval 状态目录；每轮一张对比表 `eval/results/<轮次>.md` 提交进仓库（和上一轮并排：通过次数、用时、请求、压缩、缓存、花费、重读、工具失败、护栏提醒等）。
+
+### 工具
+
+`eval/` 下一个小 Rust 程序 `canter-eval`（加进 workspace），只做确定的几件事：准备一次跑（写 eval 配置、清 eval 记忆、开 worktree、让 eval 服务端信任题目仓库）、按提交数插话、判分、取过程数据、出对比表、清理。编排（corral 开、等、停）由主控照 `eval/README.md` 做。不用 Python；判分是题目文件里的 shell 命令。
+
+### 拆成几件
+
+- P2-257：`eval/` 骨架 + 工具 + 长程题组（canter-test-ts 12 件）。做完由主控跑第一轮（3 次）当基准，这就是「第一版跑通」的第一步。
+- P2-258：子 agent 题组（P2-248 的调研题，固定 codex `57a808a`、pi-mono `085c84e`，把那几次的插话写进题目）。
+- P2-259：记忆题组（canter-test-rust 连着 4 件，记忆开 / 关；题目先给用户看）。
+- P2-260：接 Terminal-Bench 2.0（第一版跑通后）。
