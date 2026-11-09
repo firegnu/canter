@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2-151 agent eval 讲解</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --fg: #1f1f1f; --muted: #6b6b6b; --card: #ffffff; --line: #e2e0d8;
+    --accent: #b4532a; --accent-soft: #f3e3da; --ok: #2f7d4f; --ok-soft: #e1f0e6;
+    --warn: #8a6100; --warn-soft: #f6ecd2; --no: #9b2c2c; --no-soft: #f5e0e0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #111214; --fg: #e6e6e6; --muted: #9a9a9a; --card: #1b1c1f; --line: #2c2d31;
+      --accent-soft: #3a251c; --ok: #7fc79a; --ok-soft: #1c2d22; --warn: #e2bf6b; --warn-soft: #2f2817; --no: #e59a9a; --no-soft: #331d1d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.7 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 48px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 22px 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  .note { font-size: 13px; color: var(--muted); }
+  .box { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin: 12px 0; }
+  .box.rec { border: 2px solid var(--accent); }
+  .box ol, .box ul { margin: 6px 0 0; padding-left: 22px; }
+  code { font: 13px "SF Mono", Menlo, monospace; background: var(--line); padding: 0 4px; border-radius: 4px; }
+  pre { background: #16181d; color: #d7dae0; border-radius: 8px; padding: 12px 14px; font: 13px/1.55 "SF Mono", Menlo, monospace; overflow-x: auto; }
+  pre .d { color: #7c818c; } pre .c { color: #56b6c2; } pre .y { color: #e5c07b; }
+  .tw { overflow-x: auto; margin: 10px 0; }
+  table { border-collapse: collapse; width: 100%; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; font-size: 14px; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { background: var(--accent-soft); font-weight: 600; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  .pill { display: inline-block; font-size: 12px; padding: 0 8px; border-radius: 99px; white-space: nowrap; }
+  .ok { background: var(--ok-soft); color: var(--ok); }
+  .warn { background: var(--warn-soft); color: var(--warn); }
+  .no { background: var(--no-soft); color: var(--no); }
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin: 14px 0; }
+  .step { flex: 1 1 130px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14px; position: relative; }
+  .step b { display: block; color: var(--accent); font-size: 13px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+  .toc { columns: 2 260px; font-size: 14px; }
+  .toc a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <h1>P2-151 · agent eval 是怎么做的，canter 该怎么做</h1>
+  <p class="sub">给用户看的讲解页（11-09）。先讲一般做法，再对上 canter 已有的东西，最后是主控建议的第一版和要你定的事。数字来自本机会话统计和 P2-81 / P2-176 / P2-248 的记录。</p>
+
+  <div class="box rec">
+    <b>一句话版</b>
+    <ol>
+      <li>eval 就是：<b>一批固定的题</b>，每题从<b>同一个起点</b>开始，<b>没人插手</b>地跑完，用 <b>agent 看不到的检查脚本</b>判分，<b>每题跑几次</b>，再和<b>上一版或别家</b>比。</li>
+      <li>canter 已经有一半零件：遥测和 <code>canter stats</code> 能记下过程（上下文、压缩、缓存、工具、花费），P2-81 的长程试跑就是一次手工 eval。缺的是：题目写成文件、判分写成脚本、跑法固定下来、结果自动出表。</li>
+      <li>你提的「Opus 主控用 corral 派题给 canter」可行，而且比 <code>canter exec</code> 更合适跑长程：能按时插话、多轮对话、能 attach 上去看。判分仍要交给脚本，不靠主控的感觉。</li>
+      <li>建议第一版只做三组题（长程、子 agent 调研、记忆），每题跑 3 次，DeepSeek 一轮全跑完约 1～2 美元、约 3 小时。</li>
+    </ol>
+  </div>
+
+  <div class="box toc">
+    <a href="#s1">1. eval 要回答什么</a><br>
+    <a href="#s2">2. 一次 eval 的七个零件</a><br>
+    <a href="#s3">3. 看哪些指标</a><br>
+    <a href="#s4">4. 公开 benchmark 能测什么</a><br>
+    <a href="#s5">5. canter 已经有的零件</a><br>
+    <a href="#s6">6. 怎么跑：exec 还是 corral</a><br>
+    <a href="#s7">7. 把子 agent 那几次测试变成 eval</a><br>
+    <a href="#s8">8. 记忆的 eval</a><br>
+    <a href="#s9">9. 主控建议的第一版</a><br>
+    <a href="#s10">10. 要你定的事</a>
+  </div>
+
+  <h2 id="s1">1. eval 要回答什么</h2>
+  <p>agent 的表现 = 模型 × 外壳（canter：提示词、工具、压缩、护栏、子 agent……）。canter 能改的只有外壳，所以 canter 的 eval 主要回答两个问题：</p>
+  <div class="grid2">
+    <div class="box"><b>A. 回归：这一版比上一版变好还是变坏？</b><br>同一批题、同一个模型，换 canter 版本跑。改了提示词、压缩、工具说明之后，靠它知道是不是真的变好了，而不是「感觉好了」。<b>这是最该先有的。</b></div>
+    <div class="box"><b>B. 水平：canter 和 Codex、Claude Code 比怎么样？</b><br>同一批题换 agent 跑。差距大多来自模型，要比外壳就得用同一个模型——但别家不一定能接 DeepSeek。偶尔做一次就够。</div>
+  </div>
+  <p class="note">P2-252、P2-253 那次的教训也算 eval 的一种：拿本机已有会话做统计，能回答「这个改动有没有收益」。eval 是在这之上再加「固定的题 + 判分」，用来回答「改完之后是不是更好了」。</p>
+
+  <h2 id="s2">2. 一次 eval 的七个零件</h2>
+  <div class="flow">
+    <div class="step"><b>① 任务集</b>真实的活，写成文件：提示词、起点、判分方法</div>
+    <div class="step"><b>② 固定起点</b>同一个提交、空的记忆、一次性的拷贝，跑完就扔</div>
+    <div class="step"><b>③ 无人值守地跑</b>不弹批准框；要插话就按预定时间插</div>
+    <div class="step"><b>④ 判分</b>agent 看不到的检查：测试、类型检查、git 记录、文件内容</div>
+    <div class="step"><b>⑤ 记录过程</b>每次请求的上下文、压缩、缓存、工具、花费</div>
+    <div class="step"><b>⑥ 重复</b>每题 3～5 次，看通过率和波动</div>
+    <div class="step"><b>⑦ 对照</b>和上一版、别的模型比；失败分「模型的」「canter 的」</div>
+  </div>
+  <h3>几个容易做错的地方</h3>
+  <ul>
+    <li><b>判分要 agent 看不到。</b>检查脚本放在拷贝外面，跑完再拷进去执行。agent 看得到就可能「对着答案做」，或者改测试让它过（SpecBench 专门测这个）。</li>
+    <li><b>只跑一次说明不了什么。</b>同一题同一版本，模型每次走的路都不一样。P2-248 测子 agent 时，第三次 13 分半，第九次从派出到合并约 6 分 40 秒，提示词改动和运气都混在里面。3 次是最少，看「3 次都过」比看「过了 1 次」更说明可靠。</li>
+    <li><b>起点要干净。</b>P2-81 已经踩过：<code>dist/</code> 里旧的编译结果被模型抄了；记忆里留着上一轮的东西会帮它作弊。</li>
+    <li><b>花费和时间也是成绩。</b>两版都做对了，便宜一半、快一半的那版更好。</li>
+    <li><b>要能看回放。</b>分数掉了，得能打开那次会话看是哪一步出的事——canter 会话本来就留盘，<code>canter -r &lt;id&gt;</code> 就能打开。</li>
+  </ul>
+
+  <h2 id="s3">3. 看哪些指标</h2>
+  <p>你点名要的是：任务完成度、token 消耗、长程任务里上下文的变化、压缩之后什么样。下表列出每项从哪里来。</p>
+  <div class="tw"><table>
+    <tr><th>类</th><th>指标</th><th>从哪里来</th><th>现在有没有</th></tr>
+    <tr><td rowspan="2">结果</td><td>通过率（每题 3 次里过几次）</td><td>判分脚本</td><td><span class="pill no">要写</span></td></tr>
+    <tr><td>做一半就说做完了、中途停下交回给人</td><td>判分脚本 + 最后一条回复</td><td><span class="pill no">要写</span></td></tr>
+    <tr><td rowspan="3">代价</td><td>输入（缓存命中 / 未命中）、输出 token、花费</td><td><code>canter stats --json</code> 的 usage</td><td><span class="pill ok">有</span></td></tr>
+    <tr><td>用时、请求次数、每次等首字多久</td><td>stats 的 requests</td><td><span class="pill ok">有</span></td></tr>
+    <tr><td>子 agent 各自的花费、用时</td><td>stats 的 subAgents</td><td><span class="pill ok">有</span></td></tr>
+    <tr><td rowspan="5">长程过程</td><td>上下文怎么涨：每次请求的系统提示词 / 工具定义 / 对话 / 工具结果各多少</td><td>stats 的 requests[].context</td><td><span class="pill ok">有</span></td></tr>
+    <tr><td>压缩几次、压前压后多少、摘要原文</td><td>stats 的 compactions</td><td><span class="pill ok">有</span></td></tr>
+    <tr><td>压缩后丢没丢：重读了哪些文件、改过但摘要没提的文件、待办前后对不对得上</td><td>compactions[].signals</td><td><span class="pill warn">有，但会高估</span></td></tr>
+    <tr><td>中途插的话守到最后没有</td><td>判分脚本查结果（比如每个提交末行都有 <code>Task: N/12</code>）</td><td><span class="pill no">要写</span></td></tr>
+    <tr><td>原地打转、待办没做完就停</td><td>P2-251 护栏的 warning 次数</td><td><span class="pill warn">事件里有，没汇总</span></td></tr>
+    <tr><td rowspan="2">工具</td><td>每种工具调用次数、失败、截断</td><td>stats 的 tools</td><td><span class="pill ok">有</span></td></tr>
+    <tr><td>命令被拦（计划模式、只读子 agent）</td><td>会话事件 <code>blocked</code></td><td><span class="pill warn">事件里有，没汇总</span></td></tr>
+  </table></div>
+  <p class="note">也就是说「过程」几乎都有了，缺的是「结果」：判分。eval 的主要工作量在写题和写判分。</p>
+
+  <h2 id="s4">4. 公开 benchmark 能测什么</h2>
+  <div class="tw"><table>
+    <tr><th>名字</th><th>测什么</th><th>对 canter 的用处</th></tr>
+    <tr><td>SWE-bench Verified / Pro</td><td>真实 GitHub issue，改代码让隐藏测试通过。Python 仓库为主。</td><td>业界最常引用的分数，能和别家比；但成绩主要看模型，每题都是短活，不测压缩、插话、缓存。</td></tr>
+    <tr><td>Terminal-Bench 2.0</td><td>终端里的各种活（编译、配环境、数据处理……），Docker 里跑，官方框架 Harbor，用 <code>--agent-import-path</code> 接自己的 agent。排行榜上有 Codex、Claude Code。</td><td>最适合拿来和别家比「整体水平」。接 canter 要写一小段适配器（Python），主控倾向放 canter 仓库外的单独 eval 仓库。</td></tr>
+    <tr><td>LongCLI-Bench、SWE-EVO、RoadmapBench、NL2Repo-Bench</td><td>长程：一件活要几十上百步。</td><td>方向对，但多是预印本、没有公认标准；一件可能一小时，真调模型很花时间。</td></tr>
+    <tr><td>SpecBench</td><td>agent 会不会钻空子骗过测试。</td><td>提醒判分要防作弊，不必跑。</td></tr>
+    <tr><td>CL-Bench（Anthropic 记忆文章用的）</td><td>连续很多题，看 agent 能不能用记忆越做越好。</td><td>记忆 eval 的思路可以照搬（见第 8 节）。</td></tr>
+  </table></div>
+  <div class="box"><b>结论：</b>公开 bench 只回答「做没做完」，而且分数大多由模型决定；canter 自己改的东西（压缩、插话、子 agent、缓存、护栏）它们测不到。所以<b>主力是 canter 自己的小题集，每版都跑</b>；公开 bench（首选 Terminal-Bench 2.0）偶尔跑一次，看和别家的差距。</div>
+
+  <h2 id="s5">5. canter 已经有的零件</h2>
+  <div class="tw"><table>
+    <tr><th>零件</th><th>是什么</th><th>在 eval 里干什么</th></tr>
+    <tr><td>遥测 + <code>canter stats &lt;id&gt; --json / --html</code></td><td>每次请求、每次压缩、每种工具、子 agent、批准都记了</td><td>第 3 节「过程」那些指标全从这里取；<code>--html</code> 可以直接看一次跑的详情</td></tr>
+    <tr><td><code>--tag key=value</code></td><td>新会话打标签</td><td>给 eval 跑的会话打 <code>eval=第几轮</code>，和日常会话分开</td></tr>
+    <tr><td><code>--session-file &lt;path&gt;</code></td><td>交互式 canter 把会话 ID 写进一个文件</td><td>用 corral 跑时，靠它拿到会话 ID 去取 stats</td></tr>
+    <tr><td><code>canter exec [--json] [--yolo]</code></td><td>没人看着跑一轮，输出 JSONL 事件和结果，有退出码</td><td>批量跑短题最省事</td></tr>
+    <tr><td>Git worktree 共用主仓库的信任</td><td>DESIGN 信任一节</td><td>每次跑在 eval 仓库的一个新 worktree 上（固定提交），不会卡在「是否信任」框上</td></tr>
+    <tr><td>沙箱</td><td>macOS 自带沙箱</td><td>注意：<code>--yolo</code> 会强制关沙箱。eval 跑在一次性 worktree 里，关了问题也不大</td></tr>
+    <tr><td>P2-81 试跑记录</td><td>canter-test-ts 12 件、三句插话、压缩线 60000，前后跑过好几次，有对比表</td><td>就是现成的长程题，把手工步骤变成固定流程即可</td></tr>
+    <tr><td>P2-248 子 agent 测试</td><td>同一个调研问题测了 9 次</td><td>就是现成的子 agent 题（第 7 节）</td></tr>
+  </table></div>
+
+  <h2 id="s6">6. 怎么跑：<code>canter exec</code> 还是 corral 派 canter</h2>
+  <p>你提的做法：Opus 主控（就是现在这个 Claude Code）用 corral 开 <code>canter --yolo</code>，一题一个，跑完收结果。和 <code>canter exec</code> 比：</p>
+  <div class="tw"><table>
+    <tr><th></th><th>corral 派 canter（你提的）</th><th><code>canter exec</code></th></tr>
+    <tr><td>走的路</td><td><span class="pill ok">和你日常用的完全一样</span>（终端界面、批准、子 agent 叫醒）</td><td><span class="pill warn">略有不同</span>：exec 下子 agent 要 <code>wait_agent</code> 等，不靠叫醒</td></tr>
+    <tr><td>中途插话</td><td><span class="pill ok">能</span>：<code>corral send</code> 按预定时间插</td><td><span class="pill no">不能</span>：只跑一轮</td></tr>
+    <tr><td>多轮对话（记忆题、子 agent 题要）</td><td><span class="pill ok">能</span></td><td><span class="pill warn">要用 <code>--resume</code> 一轮一轮接</span></td></tr>
+    <tr><td>跑的时候能看</td><td><span class="pill ok">能</span>：<code>corral attach</code>，或在 paddock 里看</td><td><span class="pill warn">只能看输出</span></td></tr>
+    <tr><td>知道跑完了</td><td><code>corral wait</code> 等到 idle；要防「模型停下来问问题」也算 idle</td><td>进程退出，有退出码</td></tr>
+    <tr><td>拿会话 ID</td><td><code>--session-file</code></td><td>JSONL 结果里有</td></tr>
+    <tr><td>谁来编排</td><td>Opus 主控照一份写好的流程做；<b>基本不用写代码</b></td><td>一段脚本（canter 规矩：不用 Python，写 Rust 或 shell）</td></tr>
+    <tr><td>可重复</td><td><span class="pill warn">要靠流程写死</span>：插话时间、判分命令都写进题目文件，主控只照做</td><td><span class="pill ok">天然可重复</span></td></tr>
+    <tr><td>额外花费</td><td>主控用的是你的 Claude 订阅（编排和归因，不是被测的模型）</td><td>无</td></tr>
+  </table></div>
+  <div class="box rec"><b>主控建议：用 corral 当主路。</b>长程题要插话、子 agent 题和记忆题要多轮，这些 exec 都做不了，而且 corral 跑的就是你平时用的那条路。为了可重复，把「做什么」全写进题目文件（提示词、起点提交、插话的时间点和原文、判分命令），主控只负责照着派、照着插、跑判分、填表；<b>主控不打分</b>，只在失败时看回放，判断是「模型的」还是「canter 的」问题。<br>exec 先不用，等以后要接 Terminal-Bench 再说（它的框架是一条命令一个任务）。</div>
+  <h3>一题跑一次的样子</h3>
+<pre><span class="d"># 1. 固定起点：eval 仓库里开一个新 worktree（共用信任，不弹框）</span>
+git -C ~/evals/canter-test-ts worktree add /tmp/eval/long-1 8e19ca8
+<span class="d"># 2. 开 canter，记下会话 ID</span>
+corral start eval/long-1 --cwd /tmp/eval/long-1 --prompt "<span class="y">&lt;题目文件里的提示词&gt;</span>" \
+  -- canter --yolo --tag eval=2026-11-xx --session-file /tmp/eval/long-1.session.json
+<span class="d"># 3. 按题目文件里的时间点插话（比如：第 2 件提交后）</span>
+corral send eval/long-1 "<span class="y">&lt;插话原文&gt;</span>"
+<span class="d"># 4. 等它停下，判分（脚本在 worktree 外面，agent 看不到）</span>
+corral wait eval/long-1 ... ; ~/evals/checks/long.sh /tmp/eval/long-1
+<span class="d"># 5. 取过程数据，写一行结果；关掉、删 worktree</span>
+canter stats <span class="c">&lt;会话ID&gt;</span> --json &gt; results/long-1.json
+corral stop eval/long-1; git worktree remove /tmp/eval/long-1</pre>
+  <p class="note">「第 2 件提交后」这种时间点，主控靠看 git log 判断；也可以简化成固定的几分钟后插。具体放进方案里定。</p>
+
+  <h2 id="s7">7. 把子 agent 那几次测试变成 eval</h2>
+  <p>P2-248 里同一个调研问题（「对比 /tmp/codex 和 /tmp/pi-mono 怎么处理工具调用超时」）测了 9 次，每次都是你手工跑、我手工翻记录。下面这些当时人工看的东西，全能写成自动检查：</p>
+  <div class="tw"><table>
+    <tr><th>当时看的</th><th>自动检查</th><th>数据从哪来</th></tr>
+    <tr><td>派出后能不能接着聊</td><td>开子 agent 那一轮在 N 秒内结束（第九次是 15 秒）</td><td>stats：轮的开始、结束时间</td></tr>
+    <tr><td>闲聊时会不会干等</td><td>你插话的那几轮里没有 <code>wait_agent</code></td><td>会话事件</td></tr>
+    <tr><td>会不会谎称报告到了</td><td>回复里说「报告到了」之前，那个子 agent 的结果确实已经送到</td><td>事件先后（这一条最难写，可以先人工看）</td></tr>
+    <tr><td>子 agent 命令被拦</td><td>被拦 0 次</td><td>会话事件 <code>blocked</code></td></tr>
+    <tr><td>子 agent 有没有扩大范围、主会话有没有自己重查</td><td>子 agent 请求次数、主会话在等待期间的读文件次数不超过上限</td><td>stats 的 subAgents、tools</td></tr>
+    <tr><td>花费、用时</td><td>和上一版比没有明显变差</td><td>stats</td></tr>
+    <tr><td>最后答得好不好</td><td>答案里提到了几个必须有的点（文件名、默认超时数值）</td><td>判分脚本对答案做关键词检查</td></tr>
+  </table></div>
+  <p>当时你在中间发的 4 句话（「谢谢」之类），写进题目文件，按时间点用 <code>corral send</code> 发，就能每版都重放一遍。</p>
+
+  <h2 id="s8">8. 记忆的 eval（P2-256 并进来的）</h2>
+  <p>照 Anthropic 文章的做法：同一个仓库连着做几件<b>相关</b>的活，每件开一个新会话，比「记忆开」和「记忆清空」两种。</p>
+  <ul>
+    <li>题目例子：canter-test-ts 上连着做 4 件，后面的活要用到前面踩过的坑（比如「提交末行写 <code>Task: N/12</code>」这种只在对话里说过、代码里看不出来的约定）。</li>
+    <li>看：后面几件是不是更快、更少犯同样的错；模型有没有去读记忆；写下的记忆有没有重复、有没有错。</li>
+    <li>本机现在的数据：模型一共只写过 6 次记忆，3 条重复，从没读过细节——量太少，eval 正好能补上。</li>
+  </ul>
+
+  <h2 id="s9">9. 主控建议的第一版</h2>
+  <div class="tw"><table>
+    <tr><th>题组</th><th>题</th><th>每次大约</th><th>判分</th></tr>
+    <tr><td>长程</td><td>P2-81 那件：canter-test-ts 12 件、三句插话、压缩线 60000</td><td>35 分钟、约 $0.2（DeepSeek flash，P2-176 前几次 $0.14～0.28）</td><td>12 件全做、各一个提交、<code>npm test</code> 和 <code>tsc</code> 过、三句插话守到最后</td></tr>
+    <tr><td>子 agent</td><td>P2-248 那个调研问题，加 4 句插话</td><td>几分钟到十几分钟、约 $0.15</td><td>第 7 节那张表</td></tr>
+    <tr><td>记忆</td><td>canter-test-ts 连着 4 件小活，记忆开 / 关各一遍</td><td>待估</td><td>第 8 节</td></tr>
+  </table></div>
+  <ul>
+    <li>每题跑 3 次，模型先只用 DeepSeek flash（opencode go）。一轮全跑完约 1～2 美元、串着跑约 3 小时；几题同时跑能快，但可能碰到接入方的限流。</li>
+    <li>每装一个新版（或改了提示词、压缩、工具说明后）跑一轮，结果和上一版并排出一张表。</li>
+    <li>题目、判分脚本、结果放哪：canter 规矩是「工具用 Rust 或纯数据文件、不用 Python」。题目写成数据文件，判分用 shell 命令（<code>npm test</code>、<code>git log</code>、<code>grep</code>）就够；放 canter 仓库里的 <code>eval/</code> 还是单独一个仓库，要你定。</li>
+    <li>之后再加：从 canter 自己的历史提交里挑两三件真实长活；偶尔接一次 Terminal-Bench 2.0 和 Codex、Claude Code 比。</li>
+  </ul>
+
+  <h2 id="s10">10. 要你定的事</h2>
+  <div class="box">
+    <ol>
+      <li><b>跑法</b>：用 corral 派 canter 当主路（主控建议），exec 先不用——同意吗？</li>
+      <li><b>第一版的题</b>：长程、子 agent、记忆这三组够不够？要不要从一开始就加你真实干活里的题？</li>
+      <li><b>次数和预算</b>：每题 3 次、每轮约 1～2 美元、约 3 小时，可以吗？真调模型时你要不要每次都在场（CLAUDE.md 现在要求在场并同意）？</li>
+      <li><b>模型</b>：先只跑 DeepSeek flash；GPT 用套餐额度，要不要也跑？</li>
+      <li><b>对照</b>：第一版只和 canter 上一版比；Codex、Claude Code 对照（以及 Terminal-Bench）以后再说——同意吗？Claude Code 当对照组要用 Claude 订阅，和 10-23「canter 不用 Claude 订阅」算不算冲突？</li>
+      <li><b>放哪</b>：题目、判分、结果放 canter 仓库的 <code>eval/</code>，还是单独一个仓库？</li>
+    </ol>
+  </div>
+  <p class="note">定下来以后，主控按这些写 P2-151 的方案和实现任务单，给你看过再派。</p>
+</main>
+</body>
+</html>
