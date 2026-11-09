@@ -208,3 +208,14 @@
 - `nextest` 默认遇错就取消，第一次只看得到 3 个失败；加 `--no-fail-fast` 才收齐 7 个。
 - 新测试第一次改动把原来的 `chat_steering_stops_at_the_time_limit` 函数名换掉了，发现后改回原名，另起一个「找会话就超时」的测试。
 - clippy 不让对静态字符串用 `format!`，直接传 `&str`。
+
+## 主控审查
+
+- diff 只动 `eval/` 和本文件；已有题目文件、`eval/results/` 没改。4 张已提交的结果表（baseline、memory、memory2、memglobal）用合并前的最终版本重出，一字不差。「报告叫醒」认 `clientName == "background"` 且没有输入，和第九次测试的真实记录对得上。
+- 交叉审查（Codex `gpt-6-astra` xhigh）第一轮 7 条必须改、3 条建议改。主控交回 5 条（第 1、2、5、7、8 条，第 8 条从建议改升为必须改，第 7 条不按项目绑定数值）加 `no-wait-in-chat` 至少一轮插话；第 3、4、6、9、10 条只在少见操作或故障下才碰到，记建议改不挡合并（详见 `P2-258-交叉审查.md`「主控判断」）。复核：可以合并，0 条必须改，1 条建议改（毫秒的逗号千分位 `10,000 ms` 不认）。
+- 对方拿的主意（不加 `State` 字段、`grade` 生成一份 `session-data.json`、子 agent 另列一节、`[[chat]]` 命名、`finish` 改用 `memory.json` 作完成标记、只数短 `-r`）都同意。
+- 合并前全套（主控）：`cargo nextest run --all-targets` 2090 个全过（50 跳过），`cargo test --doc --workspace` 没有失败。
+- 派 canter 做（DeepSeek flash，第一轮 195 次请求）。返工多的原因：插话、子 agent 报告和主会话忙闲撞在一起的时序难；任务单写「报告叫醒过主会话以后」默认报告一定另开一轮，也没让它读 canter 送报告、开子 agent 的代码。
+- 验收（主控跑 3 次 DeepSeek flash，用户看结果表）还没做。
+
+结果：返工 1 次
