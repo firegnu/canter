@@ -449,23 +449,42 @@ struct SubmitPlanArgs {
 fn deserialize_plan<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<PlanStep>, D::Error> {
+    use serde::de::Error as _;
+
     #[derive(Deserialize)]
     struct Step {
-        step: String,
+        // Other agents' plans call this field description.
+        step: Option<String>,
+        description: Option<String>,
         status: String,
     }
-    Ok(Vec::<Step>::deserialize(deserializer)?
+    Vec::<Step>::deserialize(deserializer)?
         .into_iter()
-        .map(|step| PlanStep {
-            step: step.step,
-            status: match step.status.as_str() {
-                "pending" => PlanStepStatus::Pending,
-                "in_progress" => PlanStepStatus::InProgress,
-                "completed" => PlanStepStatus::Completed,
-                _ => PlanStepStatus::Unknown,
-            },
+        .map(|step| {
+            let text = match (step.step, step.description) {
+                (Some(text), None) | (None, Some(text)) => text,
+                (Some(_), Some(_)) => {
+                    return Err(D::Error::custom(
+                        "update_plan steps accept step or description, not both",
+                    ));
+                }
+                (None, None) => {
+                    return Err(D::Error::custom(
+                        "update_plan steps require step or description",
+                    ));
+                }
+            };
+            Ok(PlanStep {
+                step: text,
+                status: match step.status.as_str() {
+                    "pending" => PlanStepStatus::Pending,
+                    "in_progress" => PlanStepStatus::InProgress,
+                    "completed" => PlanStepStatus::Completed,
+                    _ => PlanStepStatus::Unknown,
+                },
+            })
         })
-        .collect())
+        .collect::<Result<Vec<_>, D::Error>>()
 }
 
 /// The `update_plan` plan array in model-facing snake_case, skipping unknown statuses.
@@ -1435,7 +1454,16 @@ impl Tools {
                             index + 1
                         ));
                     }
+                    // Some models use an unchanged replacement as an anchor for nearby edits.
+                    if replacement.old_text == replacement.new_text {
+                        continue;
+                    }
                     ranges.push((start, start + replacement.old_text.len(), index));
+                }
+                if ranges.is_empty() {
+                    return Err(
+                        "nothing changed: every edit has identical oldText and newText".into(),
+                    );
                 }
                 ranges.sort_unstable();
                 for pair in ranges.windows(2) {

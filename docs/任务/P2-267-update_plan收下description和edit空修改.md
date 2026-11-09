@@ -68,3 +68,11 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：`update_plan` 的每一步现在收 `description`，当 `step` 用；同一步两个都写报错 `update_plan steps accept step or description, not both`。`edit` 里 `oldText` 和 `newText` 一样的条目照旧要求找得到且只出现一次，但不参与重叠检查、不替换；一次调用全是这种条目时按失败返回 `nothing changed: every edit has identical oldText and newText`，不写文件。工具说明和参数定义没动。
+- 验证了什么：先加两个测试并确认按预期变红（`missing field step`、`edit 1 overlaps edit 2`），再实现转绿。`cargo nextest run -p canter-tools` 243 个测试通过（22 个跳过），`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都干净。
+- 拿主意的地方：Step 结构体没加 `deny_unknown_fields`，保持原来容忍多余字段的行为，只特判 `step`/`description`。两个都不写时的报错写成 `update_plan steps require step or description`（任务文件没规定这条的措辞）。空 `oldText`（哪怕 `newText` 也一样）仍走原有的 `oldText must not be empty`。锚点先做查找和唯一性检查，再跳过。
+- 没做的事：没跑全套测试（按任务文件只跑相关的那几条命令）；没改工具说明、参数定义和其他工具；没合并、没推送。
+- 踩过的坑：`deserialize_plan` 改成逐条返回 `Result` 后，先把 `collect` 的返回值套进了外层的 `Ok(...)`，编译不过，去掉外层 `Ok` 就对了。新测试第一版在空修改用例前没把文件内容从 `ALPHA beta gamma` 写回 `alpha beta gamma`，锚点找不到，是测试自己的问题，补了一行写回。
