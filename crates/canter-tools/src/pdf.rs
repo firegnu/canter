@@ -47,6 +47,8 @@ pub fn worker_main() -> std::process::ExitCode {
             page: None,
             start_line: start.parse().map_err(|_| "Invalid PDF start line")?,
             line_count: count.parse().map_err(|_| "Invalid PDF line count")?,
+            offset: None,
+            limit: None,
         };
         if args.start_line == 0 || args.line_count == 0 {
             return Err("PDF line numbers must be positive".into());
