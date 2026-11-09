@@ -76,3 +76,12 @@
 - 拿主意的地方：Step 结构体没加 `deny_unknown_fields`，保持原来容忍多余字段的行为，只特判 `step`/`description`。两个都不写时的报错写成 `update_plan steps require step or description`（任务文件没规定这条的措辞）。空 `oldText`（哪怕 `newText` 也一样）仍走原有的 `oldText must not be empty`。锚点先做查找和唯一性检查，再跳过。
 - 没做的事：没跑全套测试（按任务文件只跑相关的那几条命令）；没改工具说明、参数定义和其他工具；没合并、没推送。
 - 踩过的坑：`deserialize_plan` 改成逐条返回 `Result` 后，先把 `collect` 的返回值套进了外层的 `Ok(...)`，编译不过，去掉外层 `Ok` 就对了。新测试第一版在空修改用例前没把文件内容从 `ALPHA beta gamma` 写回 `alpha beta gamma`，锚点找不到，是测试自己的问题，补了一行写回。
+
+## 主控审查
+
+- diff 只动 `crates/canter-tools`（`lib.rs`、`tests/plan.rs`、`tests/files.rs`）和本文件；工具说明、参数定义、快照没动，「不要做」一条没碰。`update_plan` 两种写法、两个都写报错；`edit` 空修改先查找和唯一性再跳过、全空时失败不写文件，都有测试，测试先红后绿。
+- 合并前全套（主控，兼审查重跑）：`cargo nextest run --all-targets` 2072 个全过（50 跳过），`cargo test --doc --workspace` 没有失败。
+- 对方拿的主意（`Step` 不加 `deny_unknown_fields`、两个都不写的报错措辞、空 `oldText` 先走原有报错）都同意。DESIGN 补了一句（和 P2-265 放在一起）。
+- 派 canter 做：一次做完，约 5 分钟，没有必须改。
+
+结果：一次过
