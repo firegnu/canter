@@ -788,7 +788,7 @@ async fn running_child_follows_readonly_parent(review: bool) {
 }
 
 #[tokio::test]
-async fn interrupting_parent_interrupts_running_children_without_waking_it() {
+async fn interrupting_parent_leaves_running_children_alone() {
     let hang = || Reply {
         hang: true,
         ..Reply::sse("")
@@ -824,9 +824,10 @@ async fn interrupting_parent_interrupts_running_children_without_waking_it() {
         })
         .await
         .unwrap();
+    // Esc stops only the parent's turn (DESIGN, 11-09).
     assert_eq!(
         child.snapshot().await.session.agent.unwrap().status,
-        AgentStatus::Interrupted
+        AgentStatus::Running
     );
     tokio::time::sleep(Duration::from_millis(2200)).await;
     assert_eq!(test.parent.snapshot().await.session.turns.len(), 2);

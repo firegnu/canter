@@ -1483,6 +1483,124 @@ async fn close_agent_stops_its_background_command_and_keeps_its_final_reply() {
     fake.stop().await;
 }
 
+/// Esc in the main session stops only its own turn: the user may have sent the
+/// wrong message, and sub-agents it already started keep running (user 11-09).
+#[tokio::test]
+async fn parent_interrupt_leaves_running_sub_agents_alone() {
+    use canter_core::{AgentCommand, AgentHost};
+    let done = || {
+        model_server::Reply::sse(format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            json!({"choices":[{"index":0,"delta":{"content":"Done"},"finish_reason":"stop"}]})
+        ))
+    };
+    let hang = || model_server::Reply {
+        hang: true,
+        ..model_server::Reply::sse("")
+    };
+    // Parent's first turn, the child, the parent's second turn, spare replies.
+    let fake = model_server::Server::start(vec![done(), hang(), hang(), done(), done()]).await;
+    let model = canter_model::ChatCompletions::new(
+        &fake.base_url,
+        canter_model::ApiKey::new(model_server::KEY),
+    )
+    .unwrap();
+    let test = Harness::with_model(Arc::new(model)).await;
+    let url = parent(&test).await;
+    let parent_id = url.rsplit('/').next().unwrap().to_owned();
+    let child = spawn(&test, &url, "Long research").await;
+    let child_id = child.rsplit('/').next().unwrap().to_owned();
+    let requests = |count: usize| {
+        let fake = &fake;
+        async move {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while fake.requests.lock().unwrap().len() < count {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+    };
+    requests(2).await;
+    test.client
+        .post(format!("{url}/input"))
+        .json(&json!({"input":[{"type":"text","text":"Oops, wrong message"}],"mode":"queue","clientName":"test"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    requests(3).await;
+    let parent_session = test.app.opened_session(&parent_id).await.unwrap();
+    let turn_id = parent_session
+        .snapshot()
+        .await
+        .session
+        .turns
+        .last()
+        .unwrap()
+        .id
+        .clone();
+    parent_session
+        .interrupt(SessionInterruptParams {
+            turn_id,
+            retract: None,
+        })
+        .await
+        .unwrap();
+    idle(&test, &url).await;
+
+    let host = super::super::agent_sessions::Host(Arc::downgrade(&test.app));
+    let result = host
+        .execute(
+            parent_id,
+            AgentCommand::WaitAgent {
+                ids: vec![child_id.clone()],
+                timeout_ms: 10,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        result.value["data"][0]["status"], "running",
+        "the sub-agent must keep running after Esc in the main session"
+    );
+
+    // When it ends later, its result still wakes the main session.
+    let turns = test.read(&url).await.session.turns.len();
+    let child_session = test.app.opened_session(&child_id).await.unwrap();
+    let child_turn = child_session
+        .snapshot()
+        .await
+        .session
+        .turns
+        .last()
+        .unwrap()
+        .id
+        .clone();
+    child_session
+        .interrupt(SessionInterruptParams {
+            turn_id: child_turn,
+            retract: None,
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while test.read(&url).await.session.turns.len() <= turns {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    idle(&test, &url).await;
+    let sent = fake.requests.lock().unwrap().last().unwrap()["messages"].to_string();
+    assert!(sent.contains(&format!("[Sub-agent {child_id} ")), "{sent}");
+    test.stop().await;
+    fake.stop().await;
+}
+
 #[tokio::test]
 async fn wait_only_acknowledges_terminal_results_and_keeps_already_sent_notices() {
     use canter_core::{AgentCommand, AgentHost};

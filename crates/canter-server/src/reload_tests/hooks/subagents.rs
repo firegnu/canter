@@ -241,8 +241,9 @@ async fn subagent_notifications_are_async_and_agent_inputs_skip_prompt_hooks() {
 }
 
 #[tokio::test]
-async fn subagent_stop_reports_failure_interrupt_user_stop_parent_stop_and_close() {
-    for ending in ["failed", "interrupt", "user", "parent", "close"] {
+// Esc in the parent no longer stops sub-agents (DESIGN, 11-09), so it is not an ending here.
+async fn subagent_stop_reports_failure_interrupt_user_stop_and_close() {
+    for ending in ["failed", "interrupt", "user", "close"] {
         let mut events = ORDINARY.to_vec();
         events.extend(["SubagentStart", "SubagentStop"]);
         let mut fixture = fixture(&events).await;
@@ -275,11 +276,6 @@ async fn subagent_stop_reports_failure_interrupt_user_stop_parent_stop_and_close
                     .error_for_status()
                     .unwrap();
                 drop(waiting);
-            }
-            "parent" => {
-                fixture.interrupt_hook_turn(&parent).await;
-                drop(waiting);
-                parent_request.take();
             }
             "close" => {
                 parent_request

@@ -1578,7 +1578,7 @@ impl Session {
         &self,
         params: SessionInterruptParams,
     ) -> Result<SessionInterruptResponse, CoreError> {
-        let (done, retracted, children) = {
+        let (done, retracted) = {
             let mut state = self.shared.state.lock().await;
             state.available()?;
             let active = state
@@ -1609,10 +1609,9 @@ impl Session {
             }
             state.goal_summary = None;
             state.background_events.interrupt();
-            let children = state.interrupt_agents().await;
-            (result.0, result.1, children)
+            // Sub-agents keep running: Esc stops only this turn (DESIGN, 11-09).
+            result
         };
-        crate::agents::finish_agent_stops(children).await?;
         Ok(SessionInterruptResponse {
             event_seq: wait_done(done).await?,
             retracted: params.retract.map(|_| retracted),
