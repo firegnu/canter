@@ -148,3 +148,11 @@
 - 验收第 1 条（用 `memory-global` 跑一轮，保留、清空各 3 次，用户看结果表）：合并后主控跑。
 
 结果：返工 1 次
+
+## 验收（11-09，主控跑）
+
+- 轮次 `memglobal-2026-11-09`（DeepSeek v4.1 flash，canter `e42dce0`），保留 `mg-keep-1..3`、清空 `mg-clear-1..3`，24 个会话，表 `eval/results/memglobal-2026-11-09.md`。花费合计约 $0.39。
+- 保留 3/3 全过（7/7）；清空 0/3，每次都只差 `assisted-by-trailer`、`diff-check-per-session` 两条。换到 canter-test-ts 后守不守习惯，取决于有没有全局记忆。
+- `preference-in-global-memory` 6 次都过：6 次的第 1 个会话都把习惯写进全局记忆（1～2 个文件，文件名各次不同），项目记忆一条没写。`rules-not-in-repo` 6 次都过。
+- 用户 11-09：「现在的这个做完如果没有问题就派265」，主控看过结果没有问题。
+- 跑的时候碰到的：驱动脚本是主控临时写的（不进仓库），第 2 个会话起 `prepare` 打印的下一步从 1 编号，脚本只认第 3 步，停过一次，改后接着跑，没有重跑会话。`clean` 删了 worktree，但留下空的 `@repos/<次>/` 父目录，主控用 `rmdir` 清掉；不影响下次跑。
