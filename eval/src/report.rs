@@ -1,8 +1,15 @@
 //! The round's comparison table, committed to `eval/results/`.
 
-use std::{collections::BTreeSet, fs, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::PathBuf,
+};
 
-use crate::{Result, collect::RunResult};
+use crate::{
+    Result,
+    collect::{RereadFiles, RunResult},
+};
 
 pub struct ReportOptions {
     pub home: crate::paths::Home,
@@ -101,10 +108,10 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
         out.push_str("轮次 | ");
     }
     out.push_str(
-        "题 | 次 | 判分 | 未过 | 用时 | 请求 | 压缩 | 缓存输入 | 未缓存输入 | 输出 | 思考 | 花费 | 读 | 压后重读 | 工具失败 | 护栏 | 被拦 | 记录 | 会话 |\n",
+        "题 | 次 | 判分 | 未过 | 用时 | 请求 | 压缩 | 缓存输入 | 未缓存输入 | 输出 | 思考 | 花费 | 读 | 压后重读 | 工具失败 | 改计划 | 护栏 | 被拦 | 记录 | 会话 |\n",
     );
     out.push('|');
-    for _ in 0..if show_round { 20 } else { 19 } {
+    for _ in 0..if show_round { 21 } else { 20 } {
         out.push_str("---|");
     }
     out.push('\n');
@@ -130,7 +137,7 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
             out.push_str(&format!("{} | ", row.round));
         }
         out.push_str(&format!(
-            "{} | {} | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "{} | {} | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             row.task,
             row.run,
             row.checks_passed,
@@ -149,8 +156,9 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
             tokens(Some(metrics.reasoning_output_tokens)),
             cost(metrics.cost_usd, metrics.cost_unknown, metrics.compaction_cost_usd),
             metrics.read_calls,
-            metrics.reread_files_after_compaction,
-            metrics.tool_failures,
+            reread_cell(&metrics.reread, metrics.reread_files_after_compaction),
+            tool_failures(metrics.tool_failures, &metrics.tool_failures_by_name),
+            metrics.update_plan_calls,
             metrics.guard_reminders,
             metrics.blocked_commands,
             if records.is_empty() {
@@ -206,8 +214,17 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
             row.metrics.compactions.len()
         ));
         for compaction in &row.metrics.compactions {
+            let reread = if compaction.reread.count() > 0 {
+                format!(
+                    " · 压后重读 {}（{}）",
+                    compaction.reread.count(),
+                    reread_parts(&compaction.reread)
+                )
+            } else {
+                String::new()
+            };
             details.push_str(&format!(
-                "  - {} {} → {}（{}）\n",
+                "  - {} {} → {}（{}）{}\n",
                 compaction.trigger.as_deref().unwrap_or("unknown"),
                 tokens(compaction.before_tokens),
                 tokens(compaction.after_tokens),
@@ -215,7 +232,8 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
                     Some(true) => "成功",
                     Some(false) => "失败",
                     None => "结果未知",
-                }
+                },
+                reread
             ));
         }
     }
@@ -278,6 +296,39 @@ fn cost(value: Option<f64>, unknown: bool, compaction: Option<f64>) -> String {
         Some(compaction) if compaction > 0.0 => format!("{base} (压缩 {})", money(compaction)),
         _ => base,
     }
+}
+
+fn reread_cell(files: &RereadFiles, total: usize) -> String {
+    if files.count() == 0 {
+        total.to_string()
+    } else {
+        format!("{total}（{}）", reread_parts(files))
+    }
+}
+
+fn reread_parts(files: &RereadFiles) -> String {
+    format!(
+        "改过 {} · 读回 {} · 没改 {}",
+        files.changed.len(),
+        files.restored.len(),
+        files.unchanged.len()
+    )
+}
+
+fn tool_failures(total: usize, by_name: &BTreeMap<String, usize>) -> String {
+    if by_name.is_empty() {
+        return total.to_string();
+    }
+    let mut rows: Vec<(&str, usize)> = by_name
+        .iter()
+        .map(|(name, count)| (name.as_str(), *count))
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let parts: Vec<String> = rows
+        .iter()
+        .map(|(name, count)| format!("{name} {count}"))
+        .collect();
+    format!("{total}（{}）", parts.join(" · "))
 }
 
 fn money(value: f64) -> String {
