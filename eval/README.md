@@ -2,7 +2,7 @@
 
 评测 canter 自己在长程任务里的表现：任务完成度、token 和花费、上下文怎么涨、压缩前后什么样、插话听不听、会话之间的记忆留不留得住。评测不改 canter 本身；`canter` 在 eval 里是被测的对象。
 
-设计见 `docs/DESIGN.md` 的「eval（P2-151）」。题目组：长程（`tasks/long.toml`）、记忆（`tasks/memory.toml`）、记忆第二版（`tasks/memory-2.toml`：规矩换成 README.md 不要改、每次提交前 `cargo doc`，这两条从仓库里看不出来；`memory` 那三条从 `git log` 和已有文件看得出来，清空记忆也守得住）；子 agent 题另做（P2-258）。
+设计见 `docs/DESIGN.md` 的「eval（P2-151）」。题目组：长程（`tasks/long.toml`）、记忆（`tasks/memory.toml`）、记忆第二版（`tasks/memory-2.toml`：规矩换成 README.md 不要改、每次提交前 `cargo doc`，这两条从仓库里看不出来；`memory` 那三条从 `git log` 和已有文件看得出来，清空记忆也守得住）；全局记忆（`tasks/memory-global.toml`：第 1 个会话在 canter-test-rust 交代对所有项目都适用的两个习惯，后 3 个会话换到 canter-test-ts 做活，看守不守）；子 agent 题另做（P2-258）。
 
 ## 目录
 
@@ -13,6 +13,7 @@ eval/
   tasks/long.toml    长程题：canter-test-ts 的 12 件 TODO（一个会话）
   tasks/memory.toml  记忆题：canter-test-rust 连做 4 件（4 个会话，第 1 个口头交代三条长期规矩）
   tasks/memory-2.toml 记忆题第二版：同样 4 个会话，规矩换成仓库里看不出来的两条，另查规矩没漏进仓库
+  tasks/memory-global.toml 全局记忆题：第 1 个会话在 canter-test-rust，后 3 个会话换到 canter-test-ts
   results/           每轮的对比表，提交进仓库（只有数字、会话 ID、版本、模型、时段）
 ```
 
@@ -32,7 +33,7 @@ eval 自己的状态目录默认 `~/.canter-eval`，用 `CANTER_EVAL_HOME` 或 `
                      commands.txt（用过的 shell 命令，每行一条）、memory.json（结束时的记忆文件）
 ```
 
-run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/<轮次>/<次>/`（`local.json` 的 `worktrees` 可改）。canter 把整个 `CANTER_HOME` 当私有路径，读写改文件工具会拒绝；worktree 放进去，模型连 `TODO.md` 都读不了。
+run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/<轮次>/<次>/`（`local.json` 的 `worktrees` 可改）。一道题用到别的仓库时，那些仓库的 worktree 是它的兄弟目录，叫 `<次>-<仓库名>`，比如 `~/.canter-eval-worktrees/<轮次>/memory-global-1-canter-test-ts/`。canter 把整个 `CANTER_HOME` 当私有路径，读写改文件工具会拒绝；worktree 放进去，模型连 `TODO.md` 都读不了。
 
 ## 第一次用
 
@@ -148,7 +149,7 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
 
 ### 多个会话的题（记忆）
 
-一个题目可以写多个会话，在同一个 worktree 里接着做。记忆跑法在准备第 1 个会话时用 `--memory` 定下来，之后不能改：
+一个题目可以写多个会话，同一仓库的会话在同一个 worktree 里接着做；会话也可以换仓库（见「题目文件」的 `[[repos]]` 和 `repo`），每个仓库各一个 worktree。记忆跑法在准备第 1 个会话时用 `--memory` 定下来，之后不能改：
 
 - `--memory keep`：整次跑开始时清一次，会话之间保留；
 - `--memory clear`（缺省）：每个会话开始前都清空 eval 状态目录的两层记忆。
@@ -161,7 +162,7 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
    canter-eval prepare --round <轮次> --run memory-keep-1 --task memory --memory keep
    ```
 
-   服务端、trust 同一个单会话题一样，只用做一次。`--task` 只在第 1 个会话给，后面的会话从这次的 `state.json` 读。
+   服务端、trust 同一个单会话题一样，只用做一次；`prepare` 把题目用到的每个仓库的 worktree 都建好、各跑一遍自己的准备命令，`trust` 把它们都设为信任。`--task` 只在第 1 个会话给，后面的会话从这次的 `state.json` 读。
 
 2. 会话 1 到 n 依次这样跑（prepare 打印的下一步就是这些命令）：
 
@@ -172,7 +173,7 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
       canter-eval steer --round <轮次> --run <次> --session <n>
       ```
 
-      它把新会话写进 `runs/<轮次>/<次>/sessions/<n>/session.json`；同一个 worktree 里前面会话记过的 ID 和子 agent 都不算，还是不止一个就报错。
+      它把新会话写进 `runs/<轮次>/<次>/sessions/<n>/session.json`；在这个会话所在仓库的 worktree 里找，同一个 worktree 里前面会话记过的 ID 和子 agent 都不算，还是不止一个就报错。
 
    3. `corral wait eval/<次>` 到 idle，然后 `corral stop eval/<次>`。
    4. 记下这个会话结束时的 HEAD、shell 命令和两层记忆：
@@ -181,7 +182,7 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
       canter-eval finish --round <轮次> --run <次> --session <n>
       ```
 
-      写 `sessions/<n>/head`、`commands.txt`（每行一条，取自会话事件的 `commandExecution`，命令里的换行改成 `; `，保留命令之间的边界）、`memory.json`（记忆文件个数和名字）。一个会话只能记一次。
+      写 `sessions/<n>/head`（这个会话所在仓库的 worktree 的 HEAD）、`commands.txt`（每行一条，取自会话事件的 `commandExecution`，命令里的换行改成 `; `，保留命令之间的边界）、`memory.json`（记忆文件个数和名字）。一个会话只能记一次。
 
    5. 下一个会话：
 
@@ -191,7 +192,7 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
 
       第 2 个及以后的会话从这次的 `state.json` 读题目，不用再给 `--task`（给了不同的题会报错）；清空跑法会在这时清记忆。前一个会话没 `finish` 会报错，不猜。
 
-3. 全部会话跑完，判分、取数、清理、出表和单会话一样：
+3. 全部会话跑完，判分、取数、清理、出表和单会话一样（`clean` 删掉这次跑建的全部 worktree，只删 `state.json` 里记着的）：
 
    ```
    canter-eval grade --round <轮次> --run memory-keep-1
@@ -243,7 +244,7 @@ record = true
 command = '''...'''
 ```
 
-多个会话的题用 `[[sessions]]` 替掉 `prompt`（不能两个都写），每个会话一段开跑提示，按顺序在同一个 worktree 里跑：
+多个会话的题用 `[[sessions]]` 替掉 `prompt`（不能两个都写），每个会话一段开跑提示，按顺序跑；同一仓库的会话接着上一个的 worktree：
 
 ```toml
 id = "memory"
@@ -260,7 +261,25 @@ prompt = '''第 1 个会话的开跑提示原文'''
 prompt = '''第 2 个会话的开跑提示原文'''
 ```
 
-判分命令的环境：`BASE`（起点提交）、`REPO`（题目仓库）、`WORKTREE`、`RUN_DIR`（这次跑的目录）。多会话题可以读 `$RUN_DIR/sessions/<n>/head`（第 n 个会话结束时的提交）和 `$RUN_DIR/sessions/<n>/commands.txt`（它用过的 shell 命令，每行一条）按会话判分。`record` 检查取输出的最后一个非空行当数字。
+一道题用到主仓库之外的仓库时，在 `[[repos]]` 里写每个仓库的名字（`local.json` 的 `repos` 键）、起点和准备命令；主仓库的起点还是上面的 `base`、准备命令还是 `setup`。`prepare` 第 1 个会话时给每个仓库建一个 worktree、各跑一遍它的准备命令（环境里是那个仓库的 `REPO`、`WORKTREE`、`BASE`）。会话用 `repo` 指定在哪个仓库里做，不写就是主仓库。主仓库的 worktree 是 `worktrees/<轮次>/<次>`，别的仓库是它的兄弟目录 `worktrees/<轮次>/<次>-<仓库名>`。
+
+```toml
+[[repos]]
+name = "canter-test-ts"
+base = "<起点提交>"
+setup = ['''[ -d node_modules ] || cp -cR "$REPO/node_modules" node_modules''']
+
+[[sessions]]
+prompt = '''第 1 个会话在主仓库里做'''
+
+[[sessions]]
+repo = "canter-test-ts"
+prompt = '''第 2 个会话换到另一个仓库'''
+```
+
+判分命令的环境：`BASE`（这个检查所在仓库的起点提交）、`REPO`（这个仓库）、`WORKTREE`（这个仓库的 worktree）、`RUN_DIR`（这次跑的目录）。检查用 `repo` 指定在哪个仓库的 worktree 里跑，不写就是主仓库。多会话题可以读 `$RUN_DIR/sessions/<n>/head`（第 n 个会话结束时的提交）和 `$RUN_DIR/sessions/<n>/commands.txt`（它用过的 shell 命令，每行一条）按会话判分。`record` 检查取输出的最后一个非空行当数字。
+
+会话换过仓库时，各会话的 `head` 不在同一个仓库里，`git rev-list <上一个的 head>..<这个的 head>` 这种范围只能用在同一个仓库的会话之间；换仓库后的第一个会话，边界用那个仓库的 `$BASE`（`memory-global.toml` 的 `assisted-by-trailer` 就是这么写的）。
 
 ## 结果表
 

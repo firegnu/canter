@@ -143,40 +143,49 @@ pub async fn find_session(
     }
 }
 
-/// Record trust for the run's worktree so canter does not ask in the terminal.
+/// Record trust for every worktree of the run so canter does not ask in the
+/// terminal.
 pub async fn trust(home: &crate::paths::Home, state: &crate::paths::State) -> Result<String> {
     let registration = registration(home)?;
-    let (status, body) = post_json(
-        &registration.socket_path,
-        canter_protocol::routes::FOLDER_TRUST,
-        &json!({ "cwd": state.worktree }),
-    )
-    .await?;
-    if !(200..300).contains(&status) {
-        return Err(format!(
-            "the eval server refused to trust {}: HTTP {status} {body}",
-            state.worktree
-        ));
-    }
-    let trusted = body
-        .get("trusted")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !trusted {
-        let warning = body
-            .get("warning")
+    let mut trusted = Vec::new();
+    for repo in state.all_repos() {
+        if trusted.contains(&repo.worktree) {
+            continue;
+        }
+        let (status, body) = post_json(
+            &registration.socket_path,
+            canter_protocol::routes::FOLDER_TRUST,
+            &json!({ "cwd": repo.worktree }),
+        )
+        .await?;
+        if !(200..300).contains(&status) {
+            return Err(format!(
+                "the eval server refused to trust {}: HTTP {status} {body}",
+                repo.worktree
+            ));
+        }
+        let is_trusted = body
+            .get("trusted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !is_trusted {
+            let warning = body
+                .get("warning")
+                .and_then(Value::as_str)
+                .unwrap_or("no reason given");
+            return Err(format!(
+                "the eval server did not trust {}: {warning}",
+                repo.worktree
+            ));
+        }
+        let path = body
+            .get("path")
             .and_then(Value::as_str)
-            .unwrap_or("no reason given");
-        return Err(format!(
-            "the eval server did not trust {}: {warning}",
-            state.worktree
-        ));
+            .map(str::to_string)
+            .unwrap_or(repo.worktree);
+        trusted.push(path);
     }
-    let path = body
-        .get("path")
-        .and_then(Value::as_str)
-        .unwrap_or(&state.worktree);
-    Ok(format!("trusted {path}"))
+    Ok(format!("trusted {}", trusted.join(", ")))
 }
 
 /// Send `mode: steer` input, the same request the terminal's Tab sends.

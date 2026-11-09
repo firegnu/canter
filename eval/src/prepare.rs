@@ -1,6 +1,7 @@
-//! Prepare one run: eval configuration, empty memories, a fresh worktree, and
-//! the commands the orchestrator runs next. Later sessions of a multi-session
-//! run are prepared one at a time in the same worktree.
+//! Prepare one run: eval configuration, empty memories, a fresh worktree for
+//! every repository the task uses, and the commands the orchestrator runs
+//! next. Later sessions of a multi-session run are prepared one at a time in
+//! the worktree of their own repository.
 
 use std::{
     fs,
@@ -9,7 +10,10 @@ use std::{
     process::Command,
 };
 
-use crate::{Result, paths::Home, paths::MemoryMode, paths::State};
+use crate::{
+    Result,
+    paths::{Home, MemoryMode, State, StateRepo},
+};
 
 #[derive(Debug)]
 pub struct PrepareOptions {
@@ -33,6 +37,8 @@ pub struct Prepared {
     pub task: crate::task::Task,
     pub session: usize,
     pub prompt: String,
+    /// The repository this session runs in, and so the worktree it uses.
+    pub repo: StateRepo,
     pub memories_cleared: usize,
 }
 
@@ -42,13 +48,16 @@ impl Prepared {
         let eval_home = home.root.display().to_string();
         let session_count = self.state.session_count.max(1);
         let mode = self.state.memory_mode.unwrap_or(MemoryMode::Clear);
+        let repos = self.state.all_repos();
         let mut out = String::new();
         out.push_str(&format!("task: {}\n", self.task.name));
-        out.push_str(&format!(
-            "repo: {} @ {}\n",
-            self.state.repo_name, self.state.base_commit
-        ));
-        out.push_str(&format!("worktree: {}\n", self.state.worktree));
+        for repo in &repos {
+            out.push_str(&format!("repo: {} @ {}\n", repo.name, repo.base_commit));
+            out.push_str(&format!("worktree: {}\n", repo.worktree));
+        }
+        if repos.len() > 1 {
+            out.push_str(&format!("session repo: {}\n", self.repo.name));
+        }
         out.push_str(&format!("model: {}\n", self.state.model));
         out.push_str(&format!(
             "auto compact: {}\n",
@@ -70,7 +79,7 @@ impl Prepared {
                 quote(&eval_home)
             ));
             out.push_str(&format!(
-                "  2. trust the worktree: canter-eval trust --eval-home {} --round {} --run {}\n",
+                "  2. trust the worktrees: canter-eval trust --eval-home {} --round {} --run {}\n",
                 quote(&eval_home),
                 self.state.round,
                 self.state.run
@@ -95,7 +104,7 @@ impl Prepared {
             ));
             step += 1;
             out.push_str(&format!(
-                "  {step}. trust the worktree: canter-eval trust --eval-home {} --round {} --run {}\n",
+                "  {step}. trust the worktrees: canter-eval trust --eval-home {} --round {} --run {}\n",
                 quote(&eval_home),
                 self.state.round,
                 self.state.run
@@ -160,7 +169,7 @@ impl Prepared {
         format!(
             "corral start eval/{}{unique} --cwd {} --env {} --env CAIRN_DISABLE=1 --prompt {} -- canter --yolo --tag {}",
             self.state.run,
-            quote(&self.state.worktree),
+            quote(&self.repo.worktree),
             quote(&format!("CANTER_HOME={eval_home}")),
             quote(&self.prompt),
             quote(&format!("eval={}", self.state.round)),
@@ -223,15 +232,20 @@ fn prepare_first(
         Some(path) => crate::paths::expand(path)?,
         None => local.source_config()?,
     };
-    let repo = local.repo(&task.repo)?;
-    if !repo.is_dir() {
-        return Err(format!(
-            "repository for {} does not exist: {}",
-            task.repo,
-            repo.display()
-        ));
-    }
     let memory = options.memory.unwrap_or(MemoryMode::Clear);
+    // Every repository has to be there before anything is written or cleared.
+    let mut planned = Vec::new();
+    for repo_setup in task.repositories() {
+        let repo = local.repo(repo_setup.name)?;
+        if !repo.is_dir() {
+            return Err(format!(
+                "repository for {} does not exist: {}",
+                repo_setup.name,
+                repo.display()
+            ));
+        }
+        planned.push((repo_setup, repo));
+    }
 
     let run_dir = options.home.run_dir(&options.round, &options.run);
     if run_dir.exists() {
@@ -240,14 +254,15 @@ fn prepare_first(
             run_dir.display()
         ));
     }
-    let worktree = local.worktree_path(&options.home, &options.round, &options.run)?;
-    if worktree.exists() {
+    // The main repository keeps the run's own worktree path.
+    let main_worktree = local.worktree_path(&options.home, &options.round, &options.run)?;
+    if main_worktree.exists() {
         return Err(format!(
             "worktree already exists: {}\nremove it or pick another run name",
-            worktree.display()
+            main_worktree.display()
         ));
     }
-    if let Some(parent) = worktree.parent() {
+    if let Some(parent) = main_worktree.parent() {
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
@@ -279,37 +294,110 @@ fn prepare_first(
     )?;
     let memories_cleared = crate::memory::clear(&options.home)?;
 
-    let base_commit = git(
-        &repo,
-        &[
-            "rev-parse",
-            "--verify",
-            &format!("{}^{{commit}}", task.base),
-        ],
-    )?;
-    let base_commit = base_commit.trim().to_string();
-    git(
-        &repo,
-        &[
-            "worktree",
-            "add",
-            "--detach",
-            worktree.to_str().ok_or("the worktree path is not UTF-8")?,
-            &base_commit,
-        ],
-    )?;
+    // Every repository the task uses gets a worktree and its own setup run.
+    let mut repos = Vec::new();
+    let mut main = None;
+    for (repo_setup, repo) in planned {
+        let worktree = if repo_setup.name == task.repo {
+            main_worktree.clone()
+        } else {
+            local.other_worktree_path(
+                &options.home,
+                &options.round,
+                &options.run,
+                repo_setup.name,
+            )?
+        };
+        if worktree != main_worktree && worktree.exists() {
+            return Err(format!(
+                "worktree already exists: {}\nremove it or pick another run name",
+                worktree.display()
+            ));
+        }
+        let base_commit = git(
+            &repo,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("{}^{{commit}}", repo_setup.base),
+            ],
+        )?;
+        let base_commit = base_commit.trim().to_string();
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                worktree.to_str().ok_or("the worktree path is not UTF-8")?,
+                &base_commit,
+            ],
+        )?;
+        run_setup(&repo, &worktree, &base_commit, repo_setup.setup)?;
+        let row = StateRepo {
+            name: repo_setup.name.to_string(),
+            repo: repo.display().to_string(),
+            base_commit,
+            worktree: worktree.display().to_string(),
+        };
+        if row.name == task.repo {
+            main = Some(row);
+        } else {
+            repos.push(row);
+        }
+    }
+    let main = main.ok_or("the task's main repository has no worktree")?;
 
-    let setup_env = vec![
+    let state = State {
+        task: task.id.clone(),
+        task_path: task_path
+            .canonicalize()
+            .unwrap_or_else(|_| task_path.to_path_buf())
+            .display()
+            .to_string(),
+        round: options.round.clone(),
+        run: options.run.clone(),
+        repo: main.repo,
+        repo_name: main.name,
+        base_commit: main.base_commit,
+        worktree: main.worktree,
+        session_file: options
+            .home
+            .session_id_path(&options.round, &options.run, 1)
+            .display()
+            .to_string(),
+        model,
+        auto_compact_tokens: task.auto_compact_tokens,
+        created_at: crate::now_ms(),
+        session_count: task.session_count(),
+        memory_mode: Some(memory),
+        repos,
+    };
+    state.save(&options.home)?;
+    let repo = state.repo_by_name(task.session_repo(1)?)?;
+    Ok(Prepared {
+        state,
+        task: task.clone(),
+        session: 1,
+        prompt: task.prompt(1)?.to_string(),
+        repo,
+        memories_cleared,
+    })
+}
+
+/// Run a repository's setup commands in its new worktree.
+fn run_setup(repo: &Path, worktree: &Path, base_commit: &str, setup: &[String]) -> Result<()> {
+    let env = vec![
         ("REPO".to_string(), repo.display().to_string()),
         ("WORKTREE".to_string(), worktree.display().to_string()),
-        ("BASE".to_string(), base_commit.clone()),
+        ("BASE".to_string(), base_commit.to_string()),
     ];
-    for (index, command) in task.setup.iter().enumerate() {
+    for (index, command) in setup.iter().enumerate() {
         let output = Command::new("sh")
             .arg("-c")
             .arg(command)
-            .current_dir(&worktree)
-            .envs(setup_env.clone())
+            .current_dir(worktree)
+            .envs(env.clone())
             .output()
             .map_err(|error| format!("cannot run setup command {}: {error}", index + 1))?;
         if !output.status.success() {
@@ -322,39 +410,7 @@ fn prepare_first(
             ));
         }
     }
-
-    let state = State {
-        task: task.id.clone(),
-        task_path: task_path
-            .canonicalize()
-            .unwrap_or_else(|_| task_path.to_path_buf())
-            .display()
-            .to_string(),
-        round: options.round.clone(),
-        run: options.run.clone(),
-        repo: repo.display().to_string(),
-        repo_name: task.repo.clone(),
-        base_commit,
-        worktree: worktree.display().to_string(),
-        session_file: options
-            .home
-            .session_id_path(&options.round, &options.run, 1)
-            .display()
-            .to_string(),
-        model,
-        auto_compact_tokens: task.auto_compact_tokens,
-        created_at: crate::now_ms(),
-        session_count: task.session_count(),
-        memory_mode: Some(memory),
-    };
-    state.save(&options.home)?;
-    Ok(Prepared {
-        state,
-        task: task.clone(),
-        session: 1,
-        prompt: task.prompt(1)?.to_string(),
-        memories_cleared,
-    })
+    Ok(())
 }
 
 fn prepare_next(
@@ -385,10 +441,11 @@ fn prepare_next(
         (None, Some(run)) => run,
         (None, None) => MemoryMode::Clear,
     };
-    if !Path::new(&state.worktree).is_dir() {
+    let repo = state.repo_by_name(task.session_repo(options.session)?)?;
+    if !Path::new(&repo.worktree).is_dir() {
         return Err(format!(
             "the worktree is gone: {}\nprepare the run again or clean it",
-            state.worktree
+            repo.worktree
         ));
     }
     let previous =
@@ -428,32 +485,44 @@ fn prepare_next(
         task: task.clone(),
         session: options.session,
         prompt: task.prompt(options.session)?.to_string(),
+        repo,
         memories_cleared,
     })
 }
 
-/// Remove the run's worktree, but only when it is below the configured
-/// worktree root and not the root itself.
+/// Remove every worktree this run made, but only ones below the configured
+/// worktree root and never the root itself.
 pub fn clean(home: &crate::paths::Home, state: &crate::paths::State) -> Result<()> {
     let local = crate::paths::Local::load(home)?;
     let root = local.worktree_root(home)?;
-    let worktree = state.worktree();
-    let inside = crate::paths::within(worktree, &root) && !crate::paths::within(&root, worktree);
-    if !inside {
-        return Err(format!(
-            "refusing to remove {}: it is not under the worktree root {}",
-            worktree.display(),
-            root.display()
-        ));
+    let mut worktrees: Vec<StateRepo> = Vec::new();
+    for repo in state.all_repos() {
+        let worktree = Path::new(&repo.worktree);
+        let inside =
+            crate::paths::within(worktree, &root) && !crate::paths::within(&root, worktree);
+        if !inside {
+            return Err(format!(
+                "refusing to remove {}: it is not under the worktree root {}",
+                worktree.display(),
+                root.display()
+            ));
+        }
+        if worktrees.iter().any(|seen| seen.worktree == repo.worktree) {
+            continue;
+        }
+        worktrees.push(repo);
     }
-    if worktree.exists() {
-        git(
-            Path::new(&state.repo),
-            &["worktree", "remove", "--force", &state.worktree],
-        )?;
-    } else {
-        // A worktree removed by hand leaves stale metadata in the repository.
-        let _ = git(Path::new(&state.repo), &["worktree", "prune"]);
+    for repo in worktrees {
+        let worktree = Path::new(&repo.worktree);
+        if worktree.exists() {
+            git(
+                Path::new(&repo.repo),
+                &["worktree", "remove", "--force", &repo.worktree],
+            )?;
+        } else {
+            // A worktree removed by hand leaves stale metadata in the repository.
+            let _ = git(Path::new(&repo.repo), &["worktree", "prune"]);
+        }
     }
     Ok(())
 }

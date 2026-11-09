@@ -1,10 +1,13 @@
 //! Send the task's steers after the counted commits appear.
 
-use std::{fs, time::Duration};
+use std::{fs, path::Path, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, paths::State};
+use crate::{
+    Result,
+    paths::{State, StateRepo},
+};
 
 const POLL: Duration = Duration::from_secs(2);
 
@@ -44,10 +47,13 @@ pub async fn steer(options: SteerOptions) -> Result<()> {
         ));
     }
     let registration = crate::server::registration(&options.home)?;
+    // Each repository has its own worktree; this session runs in one of them.
+    let repo = state.session_repo(options.session)?;
     let session = wait_for_session(
         &options.home,
         &registration,
         &state,
+        &repo,
         options.session,
         options.poll,
     )
@@ -73,7 +79,7 @@ pub async fn steer(options: SteerOptions) -> Result<()> {
         if progress.sent.contains(&index) {
             continue;
         }
-        let count = wait_for_commits(&state, steer.after_commits, options.poll).await?;
+        let count = wait_for_commits(&repo, steer.after_commits, options.poll).await?;
         println!(
             "steer {}: {} ritual: commits ({}, wanted {})",
             index + 1,
@@ -102,10 +108,10 @@ pub async fn steer(options: SteerOptions) -> Result<()> {
     Ok(())
 }
 
-async fn wait_for_commits(state: &State, wanted: u32, poll: Duration) -> Result<u32> {
+async fn wait_for_commits(repo: &StateRepo, wanted: u32, poll: Duration) -> Result<u32> {
     let mut last = None;
     loop {
-        let count = ritual_commits(state)?;
+        let count = ritual_commits(repo)?;
         if count >= wanted {
             return Ok(count);
         }
@@ -118,14 +124,14 @@ async fn wait_for_commits(state: &State, wanted: u32, poll: Duration) -> Result<
 }
 
 /// Commits after the base commit whose subject starts with `ritual: `.
-pub fn ritual_commits(state: &State) -> Result<u32> {
+pub fn ritual_commits(repo: &StateRepo) -> Result<u32> {
     let output = crate::prepare::git(
-        state.worktree(),
+        Path::new(&repo.worktree),
         &[
             "log",
             "--reverse",
             "--format=%s",
-            &format!("{}..HEAD", state.base_commit),
+            &format!("{}..HEAD", repo.base_commit),
         ],
     )?;
     let count = output
@@ -136,11 +142,13 @@ pub fn ritual_commits(state: &State) -> Result<u32> {
 }
 
 /// The session id from this session's `session.json`, or else the new session
-/// the eval server lists in the run's worktree, saved for `finish` and `collect`.
+/// the eval server lists in the session's worktree, saved for `finish` and
+/// `collect`.
 async fn wait_for_session(
     home: &crate::paths::Home,
     registration: &crate::server::Registration,
     state: &State,
+    repo: &StateRepo,
     index: usize,
     poll: Duration,
 ) -> Result<String> {
@@ -151,14 +159,15 @@ async fn wait_for_session(
         }
         let exclude = home.recorded_session_ids(&state.round, &state.run)?;
         if let Some(session) =
-            crate::server::find_session(registration, state.worktree(), &exclude, &path).await?
+            crate::server::find_session(registration, Path::new(&repo.worktree), &exclude, &path)
+                .await?
         {
             let body = serde_json::json!({ "sessionId": session });
             crate::paths::write_private(&path, body.to_string().as_bytes())?;
             println!("session {session}");
             return Ok(session);
         }
-        println!("waiting for a session in {}", state.worktree.as_str());
+        println!("waiting for a session in {}", repo.worktree);
         tokio::time::sleep(poll).await;
     }
 }

@@ -87,3 +87,35 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+做了什么：
+
+- `eval/src/task.rs`：题目文件加 `[[repos]]`（`name`、`base`、`setup`），`[[sessions]]` 和 `[[checks]]` 加可选的 `repo`（不写是主仓库的 `repo`）；加载时校验仓库名不重复、不重复 `repo`、名字能放进路径、`repo` 指向的仓库确实在 `[[repos]]` 里。
+- `eval/src/paths.rs`：`state.json` 加 `repos`（`name`、`repo`、`baseCommit`、`worktree`，没有时按空处理）；`State::all_repos` / `repo_by_name` / `session_repo`。主仓库还是原来那几个字段。别的仓库的 worktree 是主仓库那个的兄弟目录 `<run>-<仓库名>`（`Local::other_worktree_path`）。
+- `prepare`：第 1 个会话时给每个仓库建 worktree、各跑自己的准备命令（环境是那个仓库的 `REPO`、`WORKTREE`、`BASE`）；`prepare` 打印的 `--cwd` 是这个会话所在仓库的 worktree，多个仓库时多一行 `session repo:`；`finish` 记会话所在仓库的 HEAD；`steer` 在那个 worktree 里找会话、按那个仓库的起点数终点提交；`grade` 按检查的 `repo` 选 worktree 和环境变量；`clean` 删 `state.json` 里记的全部 worktree（先把所有路径都验一遍在不在 worktree 根下，再动手）；`trust` 把这次的 worktree 全部设为信任。
+- 新题 `eval/tasks/memory-global.toml`：主仓库 canter-test-rust，`[[repos]]` 里是 canter-test-ts；第 1 个会话交代两个对所有项目适用的习惯，第 2～4 个会话换仓库做三件 TODO；7 条检查照任务文件写。README 加了题目组列表、worktree 位置、「多个会话」一节、`[[repos]]`/`repo` 的写法和环境变量。
+
+验证了什么：
+
+- 新测试：`memory_global_task_has_four_sessions_in_two_repositories`（会话数、各会话的仓库、第 1 个会话有偏好原文、后 3 个没有、检查 id 和所在仓库）；`memory_global_checks_pass_and_fail_on_the_expected_worktree`（7 条检查各有一过一个不过的例子）；`prepare_makes_a_worktree_for_every_repository_and_finish_uses_the_session_one`（两个 worktree、准备命令只在第二个仓库跑、`summary` 的 `--cwd` 对、`finish` 记各自仓库的 HEAD、检查在各自仓库跑且 `REPO`/`WORKTREE`/`BASE` 是那个仓库的、`clean` 两个都删、状态里没记的目录不动）；`trust_trusts_every_worktree_of_the_run`；`an_old_state_file_without_repositories_still_loads`（老的 `state.json`）。
+- `cargo nextest run -p canter-eval`：41 个全过（老题相关的测试一个没改）。`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 都干净。
+
+拿主意的地方：
+
+- 字段名和 worktree 路径：别的仓库的 worktree 放 `<worktree 根>/<轮次>/<次>-<仓库名>`，主仓库不变。
+- `clean` 先把所有 worktree 都验一遍（都在根下、根本身不动）再删，不边验边删，免得一个状态坏了删掉一半。
+- 第 2～4 个会话换到了另一个仓库，它们的 `head` 不在同一个仓库里，所以 `assisted-by-trailer` 里第 2 个会话的提交范围从那个仓库的 `$BASE` 算起（README 也写了一句，免得别人照 `head1..head2` 写）；`preference-in-global-memory` 不碰 worktree，留在主仓库跑。
+- 老 `state.json` 没有 `repos` 就当只有主仓库（那时也不可能有别的仓库），新测试把它钉住。
+- `assisted-by-trailer` 要求每个会话至少有一个提交，免得范围空着也算过。
+- 没给单会话题（`prompt`）加 `repo`：能换仓库的是 `[[sessions]]`，老题不写新字段就和以前一样。
+
+没做的事：
+
+- 没在真的 canter-test-rust / canter-test-ts 上跑（验收由主控跑，任务也没要求）；没改 `long`、`memory`、`memory-2` 三个题目文件和 `eval/results/`，没改 `crates/`。
+
+踩过的坑：
+
+- 判分检查里 `test "$WORKTREE" = "$(pwd)"` 在 macOS 上会挂：`sh` 的 `pwd` 给的是物理路径（`/private/tmp/...`），`WORKTREE` 是 `/tmp/...`。多仓库测试里的检查改成两边都取 `pwd -P` 再比。
+- 给测试里这些 `State { … }` 加字段时手滑删了两行 `let temp = TempDir::new().unwrap();`，下一轮编译就暴露了，已改回；现在 `git diff` 里除了一行 `use` 没有删改。

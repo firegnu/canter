@@ -293,6 +293,21 @@ impl Local {
     pub fn worktree_path(&self, home: &Home, round: &str, run: &str) -> Result<PathBuf> {
         Ok(self.worktree_root(home)?.join(round).join(run))
     }
+
+    /// Where a further repository's worktree goes: a sibling of the run's own
+    /// worktree, named `<run>-<repository>`.
+    pub fn other_worktree_path(
+        &self,
+        home: &Home,
+        round: &str,
+        run: &str,
+        repo: &str,
+    ) -> Result<PathBuf> {
+        Ok(self
+            .worktree_root(home)?
+            .join(round)
+            .join(format!("{run}-{repo}")))
+    }
 }
 
 /// What one prepared run needs later; `state.json` inside the run directory.
@@ -317,6 +332,22 @@ pub struct State {
     /// Whether memories are emptied before every session or only once at the start.
     #[serde(default)]
     pub memory_mode: Option<MemoryMode>,
+    /// The worktrees made from the task's further repositories; empty in state
+    /// files written before multi-repository tasks. The main repository's
+    /// worktree and base commit are the fields above.
+    #[serde(default)]
+    pub repos: Vec<StateRepo>,
+}
+
+/// One repository of a run: the checkout it came from and its worktree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateRepo {
+    /// The `repos` key in the local configuration.
+    pub name: String,
+    pub repo: String,
+    pub base_commit: String,
+    pub worktree: String,
 }
 
 fn one_session() -> usize {
@@ -373,6 +404,48 @@ impl State {
 
     pub fn worktree(&self) -> &Path {
         Path::new(&self.worktree)
+    }
+
+    /// The main repository, described by the run-level fields.
+    pub fn main_repo(&self) -> StateRepo {
+        StateRepo {
+            name: self.repo_name.clone(),
+            repo: self.repo.clone(),
+            base_commit: self.base_commit.clone(),
+            worktree: self.worktree.clone(),
+        }
+    }
+
+    /// Every repository this run made a worktree for, the main one first.
+    pub fn all_repos(&self) -> Vec<StateRepo> {
+        let main = self.main_repo();
+        let mut repos = vec![main.clone()];
+        repos.extend(
+            self.repos
+                .iter()
+                .filter(|repo| repo.name != main.name)
+                .cloned(),
+        );
+        repos
+    }
+
+    /// The worktree of one repository of this run.
+    pub fn repo_by_name(&self, name: &str) -> Result<StateRepo> {
+        self.all_repos()
+            .into_iter()
+            .find(|repo| repo.name == name)
+            .ok_or_else(|| {
+                format!(
+                    "run {} has no worktree for repository {name}\nprepared before the task used it? prepare the run again",
+                    self.run
+                )
+            })
+    }
+
+    /// The repository session `index` (one-based) runs in, from the task file.
+    pub fn session_repo(&self, index: usize) -> Result<StateRepo> {
+        let name = self.task()?.session_repo(index)?.to_string();
+        self.repo_by_name(&name)
     }
 }
 

@@ -2,6 +2,7 @@
 //! commands the session ran, and the memory files it left behind.
 
 use std::fs;
+use std::path::Path;
 
 use canter_protocol::{Event, EventPayload, Item};
 use serde::{Deserialize, Serialize};
@@ -54,7 +55,9 @@ pub fn finish(home: &crate::paths::Home, round: &str, run: &str, index: usize) -
     let events = fs::read_to_string(&events_path).map_err(|error| {
         format!("cannot read the events of {session_id}: {error}\nthe eval home may be wrong")
     })?;
-    let head = crate::prepare::git(state.worktree(), &["rev-parse", "HEAD"])?
+    // The session's own repository: each repository has its own worktree.
+    let repo = state.session_repo(index)?;
+    let head = crate::prepare::git(Path::new(&repo.worktree), &["rev-parse", "HEAD"])?
         .trim()
         .to_string();
     let commands = commands_from_events(&events);

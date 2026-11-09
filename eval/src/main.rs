@@ -11,9 +11,9 @@ use canter_eval::{
 const USAGE: &str = "\
 Usage:
   canter-eval prepare --round <r> --run <n> [--task <task>] [options]
-      write the eval config, clear memories, create the run worktree, print the
-      eval server, trust and corral commands; --task is for the first session,
-      later sessions read it from state.json
+      write the eval config, clear memories, create a worktree for every
+      repository of the run, print the eval server, trust and corral commands;
+      --task is for the first session, later sessions read it from state.json
   canter-eval trust --round <r> --run <n>
       trust the run worktree through POST /v1/folderTrust
   canter-eval steer --round <r> --run <n> [--session <n>]
@@ -25,7 +25,7 @@ Usage:
   canter-eval collect --round <r> --run <n> [--stats-json <path>] [--session <id>]
       save the run's stats and checks as one result JSON
   canter-eval clean --round <r> --run <n>
-      remove the run worktree
+      remove the run's worktrees
   canter-eval stop
       stop the eval server recorded in the eval home's server.json
   canter-eval report --round <r> [--against <round>] [--out <path>]
