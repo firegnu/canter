@@ -1,5 +1,6 @@
 //! Prepare one run: eval configuration, empty memories, a fresh worktree, and
-//! the commands the orchestrator runs next.
+//! the commands the orchestrator runs next. Later sessions of a multi-session
+//! run are prepared one at a time in the same worktree.
 
 use std::{
     fs,
@@ -8,15 +9,19 @@ use std::{
     process::Command,
 };
 
-use crate::{Result, paths::State};
+use crate::{Result, paths::Home, paths::MemoryMode, paths::State};
 
 #[derive(Debug)]
 pub struct PrepareOptions {
-    pub home: crate::paths::Home,
+    pub home: Home,
     pub task_dir: PathBuf,
     pub task: String,
     pub round: String,
     pub run: String,
+    /// One-based session of the task; defaults to the first.
+    pub session: usize,
+    /// `None` keeps the run's mode, or clears for the first session.
+    pub memory: Option<MemoryMode>,
     pub model: Option<String>,
     pub source_config: Option<PathBuf>,
 }
@@ -25,13 +30,17 @@ pub struct PrepareOptions {
 pub struct Prepared {
     pub state: State,
     pub task: crate::task::Task,
+    pub session: usize,
+    pub prompt: String,
     pub memories_cleared: usize,
 }
 
 impl Prepared {
     /// What the orchestrator sees; no configuration values are included.
-    pub fn summary(&self, home: &crate::paths::Home) -> String {
+    pub fn summary(&self, home: &Home) -> String {
         let eval_home = home.root.display().to_string();
+        let session_count = self.state.session_count.max(1);
+        let mode = self.state.memory_mode.unwrap_or(MemoryMode::Clear);
         let mut out = String::new();
         out.push_str(&format!("task: {}\n", self.task.name));
         out.push_str(&format!(
@@ -47,39 +56,112 @@ impl Prepared {
                 .map(|tokens| tokens.to_string())
                 .unwrap_or_else(|| "model default".into())
         ));
+        out.push_str(&format!("memory: {}\n", mode.as_str()));
+        if session_count > 1 {
+            out.push_str(&format!("session: {} of {}\n", self.session, session_count));
+        }
         out.push_str(&format!("memories cleared: {}\n", self.memories_cleared));
         out.push_str(&format!("eval home: {eval_home}\n\n"));
         out.push_str("next:\n");
+        if session_count == 1 {
+            out.push_str(&format!(
+                "  1. start the eval server: CANTER_HOME={} canter serve --replace\n",
+                quote(&eval_home)
+            ));
+            out.push_str(&format!(
+                "  2. trust the worktree: canter-eval trust --eval-home {} --round {} --run {}\n",
+                quote(&eval_home),
+                self.state.round,
+                self.state.run
+            ));
+            out.push_str(&format!(
+                "  3. start the run: {}\n",
+                self.corral_command(&eval_home)
+            ));
+            out.push_str(&format!(
+                "  4. in another terminal: canter-eval steer --eval-home {} --round {} --run {}\n",
+                quote(&eval_home),
+                self.state.round,
+                self.state.run
+            ));
+            return out;
+        }
+        let mut step = 1;
+        if self.session == 1 {
+            out.push_str(&format!(
+                "  {step}. start the eval server: CANTER_HOME={} canter serve --replace\n",
+                quote(&eval_home)
+            ));
+            step += 1;
+            out.push_str(&format!(
+                "  {step}. trust the worktree: canter-eval trust --eval-home {} --round {} --run {}\n",
+                quote(&eval_home),
+                self.state.round,
+                self.state.run
+            ));
+            step += 1;
+        }
+        let run = &self.state.run;
         out.push_str(&format!(
-            "  1. start the eval server: CANTER_HOME={} canter serve --replace\n",
-            quote(&eval_home)
-        ));
-        out.push_str(&format!(
-            "  2. trust the worktree: canter-eval trust --eval-home {} --round {} --run {}\n",
-            quote(&eval_home),
-            self.state.round,
-            self.state.run
-        ));
-        out.push_str(&format!(
-            "  3. start the run: {}\n",
+            "  {step}. start session {} of {}: {}\n",
+            self.session,
+            session_count,
             self.corral_command(&eval_home)
         ));
+        step += 1;
         out.push_str(&format!(
-            "  4. in another terminal: canter-eval steer --eval-home {} --round {} --run {}\n",
+            "  {step}. in another terminal: canter-eval steer --eval-home {} --round {} --run {} --session {}\n",
             quote(&eval_home),
             self.state.round,
-            self.state.run
+            run,
+            self.session
         ));
+        step += 1;
+        out.push_str(&format!("  {step}. wait for it: corral wait eval/{run}\n"));
+        step += 1;
+        out.push_str(&format!("  {step}. stop it: corral stop eval/{run}\n"));
+        step += 1;
+        out.push_str(&format!(
+            "  {step}. record it: canter-eval finish --eval-home {} --round {} --run {} --session {}\n",
+            quote(&eval_home),
+            self.state.round,
+            run,
+            self.session
+        ));
+        step += 1;
+        if self.session < session_count {
+            out.push_str(&format!(
+                "  {step}. next: canter-eval prepare --eval-home {} --round {} --run {} --session {}\n",
+                quote(&eval_home),
+                self.state.round,
+                run,
+                self.session + 1
+            ));
+        } else {
+            out.push_str(&format!(
+                "  {step}. grade it: canter-eval grade --eval-home {} --round {} --run {}, then collect\n",
+                quote(&eval_home),
+                self.state.round,
+                run
+            ));
+        }
         out
     }
 
     pub fn corral_command(&self, eval_home: &str) -> String {
+        // A multi-session run starts several sessions under the same name; a
+        // `--unique` suffix would not match the wait and stop commands.
+        let unique = if self.state.session_count > 1 {
+            ""
+        } else {
+            " --unique"
+        };
         format!(
-            "corral start {} --unique --cwd {} --env {} --env CAIRN_DISABLE=1 --prompt {} -- canter --yolo --tag {}",
-            quote(&format!("eval/{}", self.state.run)),
+            "corral start eval/{}{unique} --cwd {} --env {} --env CAIRN_DISABLE=1 --prompt {} -- canter --yolo --tag {}",
+            self.state.run,
             quote(&self.state.worktree),
             quote(&format!("CANTER_HOME={eval_home}")),
-            quote(&self.task.prompt),
+            quote(&self.prompt),
             quote(&format!("eval={}", self.state.round)),
         )
     }
@@ -88,8 +170,31 @@ impl Prepared {
 pub fn prepare(options: &PrepareOptions) -> Result<Prepared> {
     crate::paths::check_label("round", &options.round)?;
     crate::paths::check_label("run", &options.run)?;
+    if options.session == 0 {
+        return Err("--session starts at 1".into());
+    }
     let task_path = options.task_dir.join(format!("{}.toml", options.task));
     let task = crate::task::Task::load(&task_path)?;
+    if options.session > task.session_count() {
+        return Err(format!(
+            "task {} has {} sessions; --session {} is past the end",
+            task.id,
+            task.session_count(),
+            options.session
+        ));
+    }
+    if options.session == 1 {
+        prepare_first(options, &task, &task_path)
+    } else {
+        prepare_next(options, &task)
+    }
+}
+
+fn prepare_first(
+    options: &PrepareOptions,
+    task: &crate::task::Task,
+    task_path: &Path,
+) -> Result<Prepared> {
     let local = crate::paths::Local::load(&options.home)?;
     let model = options.model.clone().unwrap_or_else(|| local.model.clone());
     let source = match &options.source_config {
@@ -104,6 +209,7 @@ pub fn prepare(options: &PrepareOptions) -> Result<Prepared> {
             repo.display()
         ));
     }
+    let memory = options.memory.unwrap_or(MemoryMode::Clear);
 
     let run_dir = options.home.run_dir(&options.round, &options.run);
     if run_dir.exists() {
@@ -131,8 +237,16 @@ pub fn prepare(options: &PrepareOptions) -> Result<Prepared> {
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
-        .create(&run_dir)
-        .map_err(|error| format!("cannot create {}: {error}", run_dir.display()))?;
+        .create(options.home.session_dir(&options.round, &options.run, 1))
+        .map_err(|error| {
+            format!(
+                "cannot create {}: {error}",
+                options
+                    .home
+                    .session_dir(&options.round, &options.run, 1)
+                    .display()
+            )
+        })?;
 
     crate::config::write(
         &options.home.config_path(),
@@ -141,7 +255,7 @@ pub fn prepare(options: &PrepareOptions) -> Result<Prepared> {
         task.auto_compact_tokens,
         task.reasoning.as_deref(),
     )?;
-    let memories_cleared = clear_memories(&options.home)?;
+    let memories_cleared = crate::memory::clear(&options.home)?;
 
     let base_commit = git(
         &repo,
@@ -191,7 +305,7 @@ pub fn prepare(options: &PrepareOptions) -> Result<Prepared> {
         task: task.id.clone(),
         task_path: task_path
             .canonicalize()
-            .unwrap_or_else(|_| task_path.clone())
+            .unwrap_or_else(|_| task_path.to_path_buf())
             .display()
             .to_string(),
         round: options.round.clone(),
@@ -200,64 +314,104 @@ pub fn prepare(options: &PrepareOptions) -> Result<Prepared> {
         repo_name: task.repo.clone(),
         base_commit,
         worktree: worktree.display().to_string(),
-        session_file: run_dir.join("session.json").display().to_string(),
+        session_file: options
+            .home
+            .session_id_path(&options.round, &options.run, 1)
+            .display()
+            .to_string(),
         model,
         auto_compact_tokens: task.auto_compact_tokens,
         created_at: crate::now_ms(),
+        session_count: task.session_count(),
+        memory_mode: Some(memory),
     };
     state.save(&options.home)?;
     Ok(Prepared {
         state,
-        task,
+        task: task.clone(),
+        session: 1,
+        prompt: task.prompt(1)?.to_string(),
         memories_cleared,
     })
 }
 
-/// Empty the global and every project memory of the eval state directory.
-fn clear_memories(home: &crate::paths::Home) -> Result<usize> {
-    let mut cleared = 0;
-    let global = home.root.join("memory");
-    cleared += clear_dir(&global)?;
-    let projects = home.root.join("projects");
-    let entries = match fs::read_dir(&projects) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(cleared),
-        Err(error) => return Err(format!("cannot read {}: {error}", projects.display())),
-    };
-    for entry in entries {
-        let entry =
-            entry.map_err(|error| format!("cannot read {}: {error}", projects.display()))?;
-        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            cleared += clear_dir(&entry.path().join("memory"))?;
-        }
+fn prepare_next(options: &PrepareOptions, task: &crate::task::Task) -> Result<Prepared> {
+    let state = State::load(&options.home, &options.round, &options.run)
+        .map_err(|error| format!("{error}\nprepare session 1 of this run first"))?;
+    if state.task != task.id {
+        return Err(format!(
+            "run {} is for task {}, not {}",
+            state.run, state.task, task.id
+        ));
     }
-    Ok(cleared)
-}
-
-fn clear_dir(path: &Path) -> Result<usize> {
-    let entries = match fs::read_dir(path) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
-    };
-    let mut removed = 0;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-        let metadata = entry
-            .metadata()
-            .map_err(|error| format!("cannot read {}: {error}", entry.path().display()))?;
-        if metadata.is_dir() {
-            fs::remove_dir_all(entry.path())
-                .map_err(|error| format!("cannot remove {}: {error}", entry.path().display()))?;
-        } else {
-            fs::remove_file(entry.path())
-                .map_err(|error| format!("cannot remove {}: {error}", entry.path().display()))?;
-        }
-        removed += 1;
+    if state.session_count != task.session_count() {
+        return Err(format!(
+            "task {} now has {} sessions; this run was prepared with {}",
+            task.id,
+            task.session_count(),
+            state.session_count
+        ));
     }
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .map_err(|error| format!("cannot protect {}: {error}", path.display()))?;
-    Ok(removed)
+    if options.model.is_some() || options.source_config.is_some() {
+        return Err("the model is fixed when session 1 is prepared".into());
+    }
+    let mode = match (options.memory, state.memory_mode) {
+        (Some(given), Some(run)) if given != run => {
+            return Err(format!(
+                "this run uses --memory {}; prepare the next session with {} or leave it out",
+                run.as_str(),
+                run.as_str()
+            ));
+        }
+        (Some(given), _) => given,
+        (None, Some(run)) => run,
+        (None, None) => MemoryMode::Clear,
+    };
+    if !Path::new(&state.worktree).is_dir() {
+        return Err(format!(
+            "the worktree is gone: {}\nprepare the run again or clean it",
+            state.worktree
+        ));
+    }
+    let previous =
+        options
+            .home
+            .session_head_path(&options.round, &options.run, options.session - 1);
+    if !previous.is_file() {
+        return Err(format!(
+            "session {} is not recorded yet: {} is missing\nrun `canter-eval finish --session {}` when it stops",
+            options.session - 1,
+            previous.display(),
+            options.session - 1
+        ));
+    }
+    let session_dir = options
+        .home
+        .session_dir(&options.round, &options.run, options.session);
+    if session_dir.exists() {
+        return Err(format!(
+            "session {} was already prepared: {}\nremove that directory to prepare it again",
+            options.session,
+            session_dir.display()
+        ));
+    }
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&session_dir)
+        .map_err(|error| format!("cannot create {}: {error}", session_dir.display()))?;
+    let memories_cleared = if mode == MemoryMode::Clear {
+        crate::memory::clear(&options.home)?
+    } else {
+        0
+    };
+    Ok(Prepared {
+        state,
+        task: task.clone(),
+        session: options.session,
+        prompt: task.prompt(options.session)?.to_string(),
+        memories_cleared,
+    })
 }
 
 /// Remove the run's worktree, but only when it is below the configured

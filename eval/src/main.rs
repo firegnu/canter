@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use canter_eval::{
     Result,
-    paths::{Home, State},
+    paths::{Home, MemoryMode, State},
     prepare::PrepareOptions,
 };
 
@@ -12,11 +12,13 @@ const USAGE: &str = "\
 Usage:
   canter-eval prepare --round <r> --run <n> --task <task> [options]
       write the eval config, clear memories, create the run worktree, print the
-      eval server, trust and corral commands
+      eval server, trust and corral commands; later sessions use --session
   canter-eval trust --round <r> --run <n>
       trust the run worktree through POST /v1/folderTrust
-  canter-eval steer --round <r> --run <n>
-      send the task's steers after the counted commits; run it in another window
+  canter-eval steer --round <r> --run <n> [--session <n>]
+      find the run's new session and send the task's steers; run it in another window
+  canter-eval finish --round <r> --run <n> [--session <n>]
+      record the session's end HEAD, shell commands and memory files
   canter-eval grade --round <r> --run <n>
       run the task's checks in the worktree
   canter-eval collect --round <r> --run <n> [--stats-json <path>] [--session <id>]
@@ -33,6 +35,9 @@ Options:
   --tasks <dir>          task files for prepare (default eval/tasks)
   --model <p/m>          override the model in local.json
   --source-config <path> canter config to copy the model from
+  --memory <keep|clear>  keep memories between sessions, or empty them before each
+                         (default clear; fixed when session 1 is prepared)
+  --session <n>          one-based session for a multi-session task (default 1)
   --against <round>      include another round in the report
   --out <path>           report destination
   -h, --help             show this help
@@ -75,6 +80,11 @@ async fn run() -> Result<bool> {
                 task: required(&options, "task")?.into(),
                 round: required(&options, "round")?.into(),
                 run: required(&options, "run")?.into(),
+                session: session(&options)?,
+                memory: options
+                    .get("memory")
+                    .map(|value| MemoryMode::parse(value))
+                    .transpose()?,
                 model: options.get("model").cloned(),
                 source_config: options.get("source-config").map(PathBuf::from),
             })?;
@@ -92,8 +102,19 @@ async fn run() -> Result<bool> {
                 home,
                 required(&options, "round")?.into(),
                 required(&options, "run")?.into(),
+                session(&options)?,
             ))
             .await?;
+            Ok(true)
+        }
+        "finish" => {
+            let (round, run) = round_and_run(&options)?;
+            let index = session(&options)?;
+            let finished = canter_eval::finish::finish(&home, &round, &run, index)?;
+            println!(
+                "recorded session {index}: HEAD {}, {} memory files, {} commands",
+                finished.head, finished.memory_files, finished.commands
+            );
             Ok(true)
         }
         "grade" => {
@@ -187,6 +208,17 @@ fn round_and_run(options: &BTreeMap<String, String>) -> Result<(String, String)>
         required(options, "round")?.into(),
         required(options, "run")?.into(),
     ))
+}
+
+fn session(options: &BTreeMap<String, String>) -> Result<usize> {
+    match options.get("session") {
+        Some(value) => value
+            .parse::<usize>()
+            .ok()
+            .filter(|index| *index >= 1)
+            .ok_or_else(|| format!("--session must be a number from 1: {value:?}")),
+        None => Ok(1),
+    }
 }
 
 fn state(home: &Home, options: &BTreeMap<String, String>) -> Result<State> {

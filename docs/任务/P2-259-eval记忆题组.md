@@ -99,3 +99,47 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+**做了什么**
+
+- `eval/tasks/memory.toml`：canter-test-rust（起点 `e9ee31c`）连做 4 件：Add an edit command、Support weekly reports、Add CSV export、Add monthly project comparisons；第 1 个会话的提示后面接任务单给的三条长期规矩原文。六个判分照任务单：4 件勾掉、`cargo test` 和 `cargo clippy -- -D warnings` 过、依赖不变、第 2～4 个会话的提交标题都是 `tc(...): `、第 2～4 个会话各自改了 `docs/commands.md`、这些会话的 shell 命令里没有 `git add -A` / `--all` / `.`。
+- 题目文件支持多个会话（`[[sessions]]`，每个一段开跑提示）；没写多个会话的 `long.toml` 照旧一个 `prompt`，没动。
+- `prepare` 加 `--memory keep|clear`（缺省 `clear`）和 `--session n`。清空只删 eval 状态目录的 `memory/` 和 `projects/*/memory/` 里的东西，沿用原来的状态目录检查；canter 打开会话时才读记忆，清完不重启服务端。
+- 每个会话在 `runs/<轮次>/<次>/sessions/<n>/` 记 `session.json`、`head`、`commands.txt`（完成的 `commandExecution`，每行一条）、`memory.json`；新增 `canter-eval finish` 记这些。`steer --session n` 找新会话时排除这次跑已经记过的 ID 和子 agent 的会话，仍不止一个就报错。
+- `grade` 的检查环境多一个 `RUN_DIR`；`collect` 按会话取 stats 和事件，合计照原来的列，每个会话另记用时、花费、写记忆、读记忆、记忆文件个数和名字；`report` 对多会话题加「记忆」列和「会话」一节，「通过次数」按保留 / 清空分开统计。单会话题的表不变。
+- `eval/README.md` 和 `docs/DESIGN.md` 的 eval 一节写清多会话流程、记忆跑法、run 目录里的文件、`RUN_DIR`、结果表新增的列和节。
+
+**验证了什么**
+
+- `cargo nextest run -p canter-eval`：31 个全过（新增 7 个集成测试、4 个单元测试）。
+- `cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt -p canter-eval -- --check`、`git diff --check` 都过。
+- 多会话准备：清空跑法每个会话前清、保留跑法只在整次跑开始时清；只动两层记忆目录，旁边的文件不动；前一个会话没记时拒绝下一个；跑法和 `--memory` 不一致、重复准备都拒绝。
+- 找会话：同一个 worktree 里先后两个会话认对新 ID（排除已记的和子 agent 的），两个都没记过时报错且不列已记的。
+- 判分：用真的 `memory.toml` 在临时 cargo 仓库上跑，六条全过；逐条造失败（TODO 没勾、加了依赖、提交标题不合、会话没改 `docs/commands.md`、命令里 `git add -A`、测试失败）都判不过；`RUN_DIR` 由判分环境给到。
+- 按会话收数据：造事件，完成的 `fileChange` / `fileRead` 碰到两层记忆里的 `.md` 才算写 / 读，普通文件读写不算；多会话的用时、请求、峰值、平均、token、花费、工具失败合计正确。
+- 旧结果：把 `sessionCount` / `memoryMode` / `sessions` 从 result.json 删掉后出表，和带这些字段的单会话结果一字不差，表里没有「记忆」和「会话」。
+
+**拿主意的地方**
+
+- `--memory` 缺省 `clear`，和以前单会话一样；`keep` 也在整次跑开始时清一次（任务单：「每次跑开始时照旧清一次」）。
+- 会话记录放 `sessions/<n>/`；旧跑没有这些目录时，`collect` 的第 1 个会话仍退回 `state.sessionFile`，旧结果照读。
+- `finish` 不覆盖已记的 `head`；`prepare --session n` 要求前一个会话的 `head` 已经在。
+- 多会话的 `corral start` 打印时去掉 `--unique`：同一个名字要跨会话复用，`--unique` 在名字被占时会补 `-1` 后缀，后面的 wait/stop 就对不上；单会话保持原来的 `--unique`。
+- `commands.txt` 把命令里的换行改成空格，保证每行一条；多会话题的 `--stats-json` 是目录，每个会话一份 `<n>.json`。
+- 结果表只在 `sessionCount > 1` 时加「记忆」列和「会话」一节；「写记忆 / 读记忆」只数完成的 `fileChange` / `fileRead` 碰到的两层记忆目录里的 `.md`。
+- 多行开跑提示：corral 的 `--prompt` 是单个 argv，打印的命令用单引号包住整段（原文里没有单引号）；没有起真实 agent 验证整条链路（任务单不许调真实模型 / 服务端）。
+
+**没做的事**
+
+- 没有真跑记忆题（合并后由主控按任务单跑）；没有起过 canter 服务端、没有调模型。
+- 没改 `crates/`、长程题 `long.toml` 和它的判分、`canter stats` 的口径。
+- 没跑全套（任务单只要求 `-p canter-eval` 和那三项检查）。
+
+**踩过的坑**
+
+- 结果表「会话」一节的行尾少了一个 ` |`，测试当场抓到，补上了。
+- 临时仓库的 TODO 标题在 `**...**` 里带句号，fixture 和检查一开始少了句号，勾不上；按 TODO 原文改了。
+- 集成测试在同一个临时目录里起两个假服务端，第二次 bind 报 `Address already in use`；改成两个子目录。另外 shadow 掉的 `Fake` 不会当场 drop，监听还在，旧 socket 不能重用。
+- 旧的 `State`、`SteerOptions`、`RunResult` 构造在测试里都要补新字段；会话文件从 run 根挪到 `sessions/1/`，相关测试一起改了。

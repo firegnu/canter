@@ -118,6 +118,50 @@ impl Home {
         self.root.join("sessions").join(id).join("events.jsonl")
     }
 
+    /// One run's per-session records: id, end HEAD, shell commands, memory snapshot.
+    pub fn session_dir(&self, round: &str, run: &str, index: usize) -> PathBuf {
+        self.run_dir(round, run)
+            .join("sessions")
+            .join(index.to_string())
+    }
+
+    pub fn session_id_path(&self, round: &str, run: &str, index: usize) -> PathBuf {
+        self.session_dir(round, run, index).join("session.json")
+    }
+
+    pub fn session_head_path(&self, round: &str, run: &str, index: usize) -> PathBuf {
+        self.session_dir(round, run, index).join("head")
+    }
+
+    pub fn session_commands_path(&self, round: &str, run: &str, index: usize) -> PathBuf {
+        self.session_dir(round, run, index).join("commands.txt")
+    }
+
+    pub fn session_memory_path(&self, round: &str, run: &str, index: usize) -> PathBuf {
+        self.session_dir(round, run, index).join("memory.json")
+    }
+
+    /// Session ids already recorded for this run: one file per session, plus
+    /// the run-level `session.json` that first-version runs wrote.
+    pub fn recorded_session_ids(&self, round: &str, run: &str) -> Result<Vec<String>> {
+        let mut ids = Vec::new();
+        let sessions = self.run_dir(round, run).join("sessions");
+        if let Ok(entries) = fs::read_dir(&sessions) {
+            for entry in entries.flatten() {
+                if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    continue;
+                }
+                if let Some(id) = read_session_id(&entry.path().join("session.json"))? {
+                    ids.push(id);
+                }
+            }
+        }
+        if let Some(id) = read_session_id(&self.run_dir(round, run).join("session.json"))? {
+            ids.push(id);
+        }
+        Ok(ids)
+    }
+
     pub fn round_dir(&self, round: &str) -> PathBuf {
         self.root.join("runs").join(round)
     }
@@ -267,6 +311,41 @@ pub struct State {
     pub model: String,
     pub auto_compact_tokens: Option<u64>,
     pub created_at: i64,
+    /// Sessions in this run; absent in state files written before multi-session tasks.
+    #[serde(default = "one_session")]
+    pub session_count: usize,
+    /// Whether memories are emptied before every session or only once at the start.
+    #[serde(default)]
+    pub memory_mode: Option<MemoryMode>,
+}
+
+fn one_session() -> usize {
+    1
+}
+
+/// What `prepare --memory` chooses: memories are kept between sessions or emptied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryMode {
+    Keep,
+    Clear,
+}
+
+impl MemoryMode {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "keep" => Ok(Self::Keep),
+            "clear" => Ok(Self::Clear),
+            other => Err(format!("--memory must be keep or clear, not {other:?}")),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Keep => "keep",
+            Self::Clear => "clear",
+        }
+    }
 }
 
 impl State {
@@ -297,6 +376,21 @@ impl State {
     }
 }
 
+/// The session id in a `session.json`, or `None` when the file is not there.
+pub fn read_session_id(path: &Path) -> Result<Option<String>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("{} is not valid: {error}", path.display()))?;
+    Ok(value
+        .get("sessionId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string))
+}
+
 pub fn expand(path: &Path) -> Result<PathBuf> {
     let text = path
         .to_str()
@@ -318,6 +412,15 @@ fn daily_state_dirs(home: Option<&Path>, daily: Option<&Path>) -> Vec<PathBuf> {
         candidates.push(daily.to_path_buf());
     }
     candidates
+}
+
+/// `path` relative to `dir`, resolving the existing parts of both so a
+/// canonicalised state directory still matches the paths canter reports.
+pub fn relative_to(path: &Path, dir: &Path) -> Option<PathBuf> {
+    compare_path(path)
+        .strip_prefix(compare_path(dir))
+        .ok()
+        .map(Path::to_path_buf)
 }
 
 /// Whether `path` is `dir` or below it, comparing resolved paths when they

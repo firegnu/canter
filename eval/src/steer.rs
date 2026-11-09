@@ -1,9 +1,8 @@
 //! Send the task's steers after the counted commits appear.
 
-use std::{fs, path::Path, time::Duration};
+use std::{fs, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::{Result, paths::State};
 
@@ -18,15 +17,18 @@ pub struct SteerOptions {
     pub home: crate::paths::Home,
     pub round: String,
     pub run: String,
+    /// One-based session of a multi-session task.
+    pub session: usize,
     pub poll: Duration,
 }
 
 impl SteerOptions {
-    pub fn new(home: crate::paths::Home, round: String, run: String) -> Self {
+    pub fn new(home: crate::paths::Home, round: String, run: String, session: usize) -> Self {
         Self {
             home,
             round,
             run,
+            session,
             poll: POLL,
         }
     }
@@ -35,8 +37,21 @@ impl SteerOptions {
 pub async fn steer(options: SteerOptions) -> Result<()> {
     let state = State::load(&options.home, &options.round, &options.run)?;
     let task = state.task()?;
+    let session_count = state.session_count.max(1);
+    if options.session == 0 || options.session > session_count {
+        return Err(format!(
+            "--session must be between 1 and {session_count} for this run"
+        ));
+    }
     let registration = crate::server::registration(&options.home)?;
-    let session = wait_for_session(&registration, &state, options.poll).await?;
+    let session = wait_for_session(
+        &options.home,
+        &registration,
+        &state,
+        options.session,
+        options.poll,
+    )
+    .await?;
     if task.steers.is_empty() {
         println!("task {} defines no steers", task.id);
         return Ok(());
@@ -120,40 +135,30 @@ pub fn ritual_commits(state: &State) -> Result<u32> {
     u32::try_from(count).map_err(|_| "too many commits".into())
 }
 
-/// The session id from `session.json`, or else the one session the eval server
-/// lists in the run's worktree, saved to `session.json` for `collect`.
+/// The session id from this session's `session.json`, or else the new session
+/// the eval server lists in the run's worktree, saved for `finish` and `collect`.
 async fn wait_for_session(
+    home: &crate::paths::Home,
     registration: &crate::server::Registration,
     state: &State,
+    index: usize,
     poll: Duration,
 ) -> Result<String> {
-    let path = Path::new(&state.session_file);
+    let path = home.session_id_path(&state.round, &state.run, index);
     loop {
-        if let Some(session) = read_session(path)? {
+        if let Some(session) = crate::paths::read_session_id(&path)? {
             return Ok(session);
         }
-        if let Some(session) = crate::server::find_session(registration, state.worktree()).await? {
+        let exclude = home.recorded_session_ids(&state.round, &state.run)?;
+        if let Some(session) =
+            crate::server::find_session(registration, state.worktree(), &exclude).await?
+        {
             let body = serde_json::json!({ "sessionId": session });
-            crate::paths::write_private(path, body.to_string().as_bytes())?;
+            crate::paths::write_private(&path, body.to_string().as_bytes())?;
             println!("session {session}");
             return Ok(session);
         }
         println!("waiting for a session in {}", state.worktree.as_str());
         tokio::time::sleep(poll).await;
-    }
-}
-
-fn read_session(path: &Path) -> Result<Option<String>> {
-    match fs::read_to_string(path) {
-        Ok(text) => {
-            let value: Value = serde_json::from_str(&text)
-                .map_err(|error| format!("{} is not valid: {error}", path.display()))?;
-            Ok(value
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .map(str::to_string))
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("cannot read {}: {error}", path.display())),
     }
 }

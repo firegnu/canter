@@ -708,9 +708,12 @@ P2-191（11-03）：用户在「终端写一个文件 / 服务端登记每个客
 
 ## eval（P2-151）
 
-canter 仓库里加 `eval/`（`canter-eval`），评测 canter 自己在长程任务里的表现；不改 canter 的代码、提示词和协议，canter 是被测对象。工具只做确定的几步（准备、插话、判分、取数、停服务端、清理、出表），开跑、等待、停下由主控照 `eval/README.md` 用 corral 做。
+canter 仓库里加 `eval/`（`canter-eval`），评测 canter 自己在长程任务里的表现；不改 canter 的代码、提示词和协议，canter 是被测对象。工具只做确定的几步（准备每个会话、找会话、插话、记下会话结束、判分、取数、停服务端、清理、出表），开跑、等待、停下由主控照 `eval/README.md` 用 corral 做。
 
 - **状态目录分开**：eval 用自己的状态目录，默认 `~/.canter-eval`，支持 `CANTER_EVAL_HOME`（也可 `--eval-home`）；工具拒绝指向用户 home、canter 自己的状态目录、它里面的目录或它的上级目录。配置、记忆、会话、信任记录都和日常分开；服务端是同一个 `canter` 起的另一个实例，`CANTER_HOME` 指这里，配置只放这一轮用的一个模型（从日常配置拷那一家那一段，key 只在本机）。服务端在跑完按 `server.json` 记的 pid 停，不按名字杀进程；停之前照 canter 自己的做法看这个状态目录的 `server.lock` 有没有服务端占着，没占就报登记过期、不发信号。
 - **题目和结果**：题目是 `eval/tasks/*.toml`（数据文件，不含本机路径），写起点提交、开跑提示原文、插话和位置、压缩线、判分 shell 命令；仓库的本机路径在 eval 状态目录的 `local.json`。每次跑的 git worktree 放在状态目录之外的 eval 专用根（默认 `~/.canter-eval-worktrees`，`local.json` 可改），跑完删掉，`clean` 只删这个根下面的路径。canter 把整个 `CANTER_HOME` 当私有路径，读写改文件工具都拒绝，所以 worktree 不能放在状态目录里。每次的判分和过程数据是一份 JSON，留在 eval 状态目录；每轮的对比表 `eval/results/<轮次>.md` 提交进仓库（只有数字、会话 ID、canter 版本、模型、时段，没有本机路径和密钥）。
+- **多会话和记忆跑法**（P2-259，2026-11-09）：一个题目可以用 `[[sessions]]` 写多个会话，按顺序在同一个 worktree 里接着做；没写 `[[sessions]]` 的题照旧一个 `prompt`。准备第 1 个会话时用 `--memory keep|clear` 定下记忆跑法：keep 只在整次跑开始时清一次，clear 在每个会话开始前清空 eval 状态目录的两层记忆；只清 `memory/` 和 `projects/*/memory/` 里的文件，旁边的目录和文件不动。canter 打开会话时才读记忆，所以清完不用重启 eval 服务端。
+- **按会话记录和判分**：跑目录下 `sessions/<n>/` 存会话 ID、结束时的 HEAD、这个会话用过的 shell 命令（取自事件的 `commandExecution`，每行一条）和结束时的记忆文件；`finish` 记下这些，`prepare --session n` 检查前一个会话已记，再按跑法清记忆并打印下一步。找会话 ID 时排除这次跑已经记过的会话和子 agent 的会话，仍不止一个就报错，不猜。判分命令的环境多一个 `RUN_DIR`（这次跑的目录），可以按每个会话的 HEAD 和命令判分。
+- **按会话取数**：`collect` 对每个会话取一次 `canter stats` 和事件，合计的 token、花费、请求、压缩、工具等照旧列；结果里每个会话带用时、花费、写记忆次数、读记忆次数和结束时的记忆文件个数与名字。写、读记忆分别数完成的 `fileChange` 和 `fileRead` 碰到的两层记忆目录里的 `.md`。`report` 对多会话题加「记忆」列和按会话的一节，「通过次数」按保留 / 清空分开统计；单会话题的表和第一版一样。
 - **插话走公开接口**：按 worktree 里以 `ritual: ` 开头的提交计数，到题目定的位置用 `POST /v1/sessions/{id}/input`、`mode: steer` 发原文，和终端按 Tab 一样；会话 ID 由插话工具开始时用 `GET /v1/sessions` 按 worktree 找（每次一个 worktree，子 agent 的不算，不止一个就报错），存进这次的 `session.json`；不用 `--session-file`，因为 corral 开 canter 时自己传这个选项（11-09 第一轮发现）。`corral send` 在 canter 干活时退回 `not_idle`、`corral keys` 送不了 Tab，所以插话不用 corral。
 - **过程数据**：token、缓存、花费、压缩前后、工具调用和失败、重读文件从 `canter stats <id> --json` 取；stats 里没有的护栏提醒和被拦命令从会话事件数。模型名和家名都从配置读，题目和代码不按模型分支；第一版跑 DeepSeek flash 是跑的时候的选择。

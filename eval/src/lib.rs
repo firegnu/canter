@@ -1,13 +1,16 @@
 //! `canter-eval`: the deterministic parts of a canter eval round.
 //!
 //! The orchestrator starts the eval server and runs corral; this crate prepares
-//! a run, steers it after counted commits, grades it, records stats, stops the
-//! eval server, cleans up and writes the round's result table. See
-//! `eval/README.md` for the whole procedure.
+//! a run's sessions, finds each session, steers it after counted commits,
+//! records its end, grades it, records stats, stops the eval server, cleans up
+//! and writes the round's result table. See `eval/README.md` for the whole
+//! procedure.
 
 pub mod collect;
 pub mod config;
+pub mod finish;
 pub mod grade;
+pub mod memory;
 pub mod paths;
 pub mod prepare;
 pub mod report;

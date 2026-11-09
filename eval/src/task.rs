@@ -17,7 +17,12 @@ pub struct Task {
     pub repo: String,
     /// The commit the worktree starts from, as accepted by `git rev-parse`.
     pub base: String,
-    pub prompt: String,
+    /// The prompt of a one-session task; a multi-session task uses `sessions`.
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// Several sessions in a row in the same worktree, each with its own prompt.
+    #[serde(default)]
+    pub sessions: Vec<Session>,
     #[serde(default)]
     pub auto_compact_tokens: Option<u64>,
     #[serde(default)]
@@ -29,6 +34,12 @@ pub struct Task {
     pub steers: Vec<Steer>,
     #[serde(default)]
     pub checks: Vec<Check>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Session {
+    pub prompt: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -61,12 +72,60 @@ impl Task {
         Ok(task)
     }
 
+    /// How many sessions one run of this task has: one unless `sessions` lists more.
+    pub fn session_count(&self) -> usize {
+        if self.sessions.is_empty() {
+            1
+        } else {
+            self.sessions.len()
+        }
+    }
+
+    /// The prompt of session `index` (one-based).
+    pub fn prompt(&self, index: usize) -> Result<&str> {
+        if self.sessions.is_empty() {
+            if index == 1 {
+                return self
+                    .prompt
+                    .as_deref()
+                    .ok_or_else(|| format!("task {} has no prompt", self.id));
+            }
+            return Err(format!("task {} has only one session", self.id));
+        }
+        self.sessions
+            .get(index - 1)
+            .map(|session| session.prompt.as_str())
+            .ok_or_else(|| format!("task {} has no session {index}", self.id))
+    }
+
     fn validate(&self) -> Result<()> {
         if self.id.is_empty() || self.name.is_empty() || self.repo.is_empty() {
             return Err("a task needs id, name and repo".into());
         }
-        if self.prompt.trim().is_empty() {
-            return Err(format!("task {} has an empty prompt", self.id));
+        if self.sessions.is_empty() {
+            if self
+                .prompt
+                .as_deref()
+                .is_none_or(|prompt| prompt.trim().is_empty())
+            {
+                return Err(format!("task {} has an empty prompt", self.id));
+            }
+        } else {
+            if self.prompt.is_some() {
+                return Err(format!(
+                    "task {} uses both prompt and sessions; write one prompt per session or one prompt",
+                    self.id
+                ));
+            }
+            for (index, session) in self.sessions.iter().enumerate() {
+                if session.prompt.trim().is_empty() {
+                    return Err(format!(
+                        "task {} has an empty prompt in session {}",
+                        self.id,
+                        index + 1
+                    ));
+                }
+            }
         }
         if self.auto_compact_tokens == Some(0) {
             return Err(format!(

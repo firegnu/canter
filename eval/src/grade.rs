@@ -43,6 +43,7 @@ pub fn grade(
             .env("BASE", &state.base_commit)
             .env("REPO", &state.repo)
             .env("WORKTREE", &state.worktree)
+            .env("RUN_DIR", home.run_dir(round, run))
             .output()
             .map_err(|error| format!("cannot run check {}: {error}", check.id))?;
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
