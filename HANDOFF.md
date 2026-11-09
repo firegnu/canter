@@ -149,7 +149,7 @@
 - eval 工具（P2-257，11-09 合并）交叉审查建议改、没做的：
   - 「用时」取会话第一条到最后一条事件，一轮结束后的「下一句建议」请求和 corral 关闭时的状态也算进去，所以 `collect` 早跑晚跑差十几二十秒（P2-261 重出第一轮的表时三次各多 16～24 秒）。改法：算到最后一个 `turn.completed`（`eval/src/collect.rs` `metrics`）。
   - 源模型写了 `supported_reasoning_efforts`、里面没有题目要的档位时，`set_reasoning` 会自己把档位补进列表，不报错（`eval/src/config.rs`）。
-  - `prepare` 中途失败（worktree 或 setup 失败、`state.json` 还没写）会留下半截 run，`canter-eval clean` 清不掉，同名 run 也不能再 `prepare`；只能换 run 名或手动删 run 目录（`eval/src/prepare.rs`）。
+  - `prepare` 中途失败（worktree 或 setup 失败、`state.json` 还没写）会留下半截 run，`canter-eval clean` 清不掉，同名 run 也不能再 `prepare`；只能换 run 名或手动删 run 目录（`eval/src/prepare.rs`）。P2-264 后一道题可以有几个仓库：第二个仓库的 worktree 或 setup 失败时，前面已建的 worktree 也留着、没有记录，要手动 `git worktree remove`（P2-264 交叉审查第 2 条，主控降为建议）。
   - 可以不改：eval 状态目录只拒绝 canter 状态目录的直接上级，更上面的没拦；缺省 `~/.canter` 时碰不到（`eval/src/paths.rs` `refuse_daily_state`）。
 - Sub-agents 任务弹框（P2-255，11-08 合并）开发记下、没做的：弹框开着时状态行仍写 `Esc to interrupt`（此时 Esc 只关弹框）；鼠标滚轮在弹框上滚的是底下的对话；终端太矮、弹框画不出来时按键仍先给弹框。
 - 几家同时配（P2-200、P2-201）以后，订阅（opencode go、Kimi Code 等）没有按 token 的价格：状态栏花费显示 `unknown`，和有价格的混用时显示 `$X+?`；`/goal` 的美元预算（P2-109）算不到订阅的请求，用订阅跑长任务时拦不住原地打转烧额度。缓存命中靠服务商报 `cached_tokens` 或 DeepSeek 的字段，不报的家显示 0%。11-04 主控提了两个方向（配置里标订阅、花费显示 `plan` 并按家列 token；`/goal` 能按 token 设预算），用户：「没事，你考虑到这些事情就好了」，没开任务。
