@@ -15,6 +15,7 @@ pub mod paths;
 pub mod prepare;
 pub mod report;
 pub mod server;
+pub mod session_data;
 pub mod steer;
 pub mod task;
 

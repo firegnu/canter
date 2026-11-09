@@ -1,6 +1,10 @@
 //! Run the task's checks in the worktree and keep a short tail of each result.
 
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -34,20 +38,43 @@ pub fn grade(
 ) -> Result<CheckFile> {
     let state = crate::paths::State::load(home, round, run)?;
     let task = state.task()?;
+    // A task with `[[chat]]` is judged on what the session did: turns, tools,
+    // replies and sub-agents. Checks read it from the run directory.
+    if !task.chats.is_empty() {
+        match write_session_data(home, &state) {
+            Ok(path) => {
+                writeln!(out, "session data: {}", path.display())
+                    .map_err(|error| error.to_string())?;
+            }
+            Err(error) => {
+                writeln!(out, "note: session data was not written: {error}")
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+    }
     let mut results = Vec::with_capacity(task.checks.len());
     for check in &task.checks {
         // A check runs in the worktree of its own repository, with that
-        // repository's start commit and path.
-        let repo = state.repo_by_name(task.check_repo(check))?;
-        let worktree = Path::new(&repo.worktree);
-        let output = Command::new("sh")
+        // repository's start commit and path, or in the session's directory
+        // when the task has no main repository.
+        let target = state.check_checkout(&task, check)?;
+        let worktree = target.as_ref().map_or_else(
+            || state.worktree().to_path_buf(),
+            |repo| PathBuf::from(&repo.worktree),
+        );
+        let mut command = Command::new("sh");
+        command
             .arg("-c")
             .arg(&check.command)
-            .current_dir(worktree)
-            .env("BASE", &repo.base_commit)
-            .env("REPO", &repo.repo)
-            .env("WORKTREE", &repo.worktree)
-            .env("RUN_DIR", home.run_dir(round, run))
+            .current_dir(&worktree)
+            .env("RUN_DIR", home.run_dir(round, run));
+        if let Some(repo) = &target {
+            command
+                .env("BASE", &repo.base_commit)
+                .env("REPO", &repo.repo)
+                .env("WORKTREE", &repo.worktree);
+        }
+        let output = command
             .output()
             .map_err(|error| format!("cannot run check {}: {error}", check.id))?;
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -97,6 +124,35 @@ pub fn grade(
             .as_slice(),
     )?;
     Ok(file)
+}
+
+fn write_session_data(home: &crate::paths::Home, state: &crate::paths::State) -> Result<PathBuf> {
+    let session_path = crate::paths::session_id_file(home, state, 1);
+    let session_id = crate::paths::read_session_id(&session_path)?.ok_or_else(|| {
+        format!(
+            "session 1 has no id yet: {} is missing\nrun `canter-eval steer` while the session is open",
+            session_path.display()
+        )
+    })?;
+    let local = crate::paths::Local::load(home)?;
+    let text = crate::server::run_canter(
+        &crate::server::canter_binary(&local),
+        &["stats", &session_id, "--json"],
+        home,
+    )?;
+    let stats: canter_protocol::StatsResponse = serde_json::from_str(&text)
+        .map_err(|error| format!("the stats JSON of {session_id} is not valid: {error}"))?;
+    let data = crate::session_data::build(home, state, &stats)?;
+    let path = home
+        .run_dir(&state.round, &state.run)
+        .join("session-data.json");
+    crate::paths::write_private(
+        &path,
+        serde_json::to_vec_pretty(&data)
+            .map_err(|error| format!("cannot encode the session data: {error}"))?
+            .as_slice(),
+    )?;
+    Ok(path)
 }
 
 fn number(stdout: &[u8]) -> Option<i64> {

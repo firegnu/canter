@@ -270,6 +270,10 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
         out.push('\n');
     }
 
+    if rows.iter().any(|row| !row.sub_agents.is_empty()) {
+        render_sub_agents(&mut out, rows, show_round);
+    }
+
     let mut details = String::new();
     for row in rows {
         if row.metrics.compactions.is_empty() {
@@ -318,6 +322,102 @@ fn memory_label(mode: Option<MemoryMode>) -> &'static str {
         Some(MemoryMode::Keep) => "保留",
         Some(MemoryMode::Clear) => "清空",
         None => "—",
+    }
+}
+
+/// The runs with sub-agents: one row for the run's totals next to the main
+/// session's numbers, then one row per sub-agent.
+fn render_sub_agents(out: &mut String, rows: &[RunResult], show_round: bool) {
+    out.push_str("## 子 agent\n\n");
+    let round_column = if show_round { "轮次 | " } else { "" };
+    let round_rule = if show_round { "--- | " } else { "" };
+    out.push_str(&format!(
+        "| {round_column}次 | 个数 | 用时 | 请求 | 花费 |\n| {round_rule}--- | --- | --- | --- | --- |\n"
+    ));
+    for row in rows.iter().filter(|row| !row.sub_agents.is_empty()) {
+        let round = if show_round {
+            format!("{} | ", row.round)
+        } else {
+            String::new()
+        };
+        let child_duration = row.sub_agents.iter().try_fold(0_u64, |total, agent| {
+            agent.duration_ms.map(|one| total + one)
+        });
+        let child_requests: usize = row.sub_agents.iter().map(|agent| agent.request_count).sum();
+        let mut child_cost = Some(0.0_f64);
+        let mut child_unknown = false;
+        for agent in &row.sub_agents {
+            child_cost = child_cost
+                .zip(agent.cost_usd)
+                .map(|(total, one)| total + one);
+            child_unknown |= agent.cost_unknown;
+        }
+        let both = row
+            .metrics
+            .duration_ms
+            .zip(child_duration)
+            .map(|(main, children)| main + children);
+        let total_cost = row
+            .metrics
+            .cost_usd
+            .zip(child_cost)
+            .map(|(main, children)| main + children);
+        let total_unknown = row.metrics.cost_unknown || child_unknown;
+        out.push_str(&format!(
+            "| {round}{} | {} | 主 {} · 子 {}（各会话相加 {}） | {}（主 {} · 子 {}） | {}（主 {} · 子 {}） |\n",
+            row.run,
+            row.sub_agents.len(),
+            duration(row.metrics.duration_ms),
+            duration(child_duration),
+            duration(both),
+            row.metrics.requests + child_requests,
+            row.metrics.requests,
+            child_requests,
+            cost(total_cost, total_unknown, None),
+            cost(row.metrics.cost_usd, row.metrics.cost_unknown, None),
+            cost(child_cost, child_unknown, None),
+        ));
+    }
+    out.push('\n');
+    out.push_str(&format!(
+        "| {round_column}次 | 子 agent | 类型 | 状态 | 用时 | 请求 | 缓存输入 | 未缓存输入 | 输出 | 花费 | 被拦 | rg -r 被拦 |\n| {round_rule}--- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+    ));
+    for row in rows.iter().filter(|row| !row.sub_agents.is_empty()) {
+        let round = if show_round {
+            format!("{} | ", row.round)
+        } else {
+            String::new()
+        };
+        for (index, agent) in row.sub_agents.iter().enumerate() {
+            out.push_str(&format!(
+                "| {round}{} | {} {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+                row.run,
+                index + 1,
+                agent.name.as_deref().unwrap_or(&agent.id),
+                agent.agent_type,
+                agent_status(&agent.status),
+                duration(agent.duration_ms),
+                agent.request_count,
+                tokens(agent.cached_input_tokens),
+                tokens(agent.uncached_input_tokens),
+                tokens(agent.output_tokens),
+                cost(agent.cost_usd, agent.cost_unknown, None),
+                agent.blocked_commands,
+                agent.blocked_rg_replace,
+            ));
+        }
+    }
+    out.push('\n');
+}
+
+fn agent_status(status: &str) -> &'static str {
+    match status {
+        "running" => "进行中",
+        "completed" => "完成",
+        "failed" => "失败",
+        "closed" => "关闭",
+        "interrupted" => "中断",
+        _ => "?",
     }
 }
 

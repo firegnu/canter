@@ -143,6 +143,11 @@ impl Home {
         self.session_dir(round, run, index).join("memory.json")
     }
 
+    /// What `steer` has sent, skipped or timed out on for this run.
+    pub fn steer_progress_path(&self, round: &str, run: &str) -> PathBuf {
+        self.run_dir(round, run).join("steers.json")
+    }
+
     /// Session ids already recorded for this run: one file per session, plus
     /// the run-level `session.json` that first-version runs wrote.
     pub fn recorded_session_ids(&self, round: &str, run: &str) -> Result<Vec<String>> {
@@ -296,10 +301,21 @@ impl Local {
         Ok(self.worktree_root(home)?.join(round).join(run))
     }
 
-    /// Where a further repository's worktree goes: below a fixed segment that no
-    /// run or repository tag can be, then by run and repository. A run's main
-    /// worktree is `<round>/<run>`, so the two layouts cannot meet: the segment
-    /// holds `@`, which `check_label` refuses in a run name.
+    /// The directory a run without a main repository runs its session in: the
+    /// one that holds the further repositories' worktrees. Below a fixed
+    /// segment that no run or repository tag can be, then by run. A run with a
+    /// main repository keeps `<round>/<run>`, so the two layouts cannot meet:
+    /// the segment holds `@`, which `check_label` refuses in a run name.
+    pub fn session_dir_path(&self, home: &Home, round: &str, run: &str) -> Result<PathBuf> {
+        Ok(self
+            .worktree_root(home)?
+            .join(round)
+            .join(REPOS_SEGMENT)
+            .join(run))
+    }
+
+    /// Where a further repository's worktree goes: below the directory a
+    /// session without a main repository runs in, by repository name.
     pub fn other_worktree_path(
         &self,
         home: &Home,
@@ -307,12 +323,7 @@ impl Local {
         run: &str,
         repo: &str,
     ) -> Result<PathBuf> {
-        Ok(self
-            .worktree_root(home)?
-            .join(round)
-            .join(REPOS_SEGMENT)
-            .join(run)
-            .join(repo))
+        Ok(self.session_dir_path(home, round, run)?.join(repo))
     }
 }
 
@@ -355,9 +366,14 @@ pub struct State {
     pub task_path: String,
     pub round: String,
     pub run: String,
+    /// The main repository's checkout; empty when the task has none.
     pub repo: String,
+    /// The main repository's `repos` key; empty when the task has none.
     pub repo_name: String,
+    /// The main repository's start commit; empty when the task has none.
     pub base_commit: String,
+    /// The main repository's worktree, or, without a main repository, the
+    /// directory the session runs in.
     pub worktree: String,
     pub session_file: String,
     pub model: String,
@@ -443,24 +459,34 @@ impl State {
         Path::new(&self.worktree)
     }
 
+    /// Whether the task has a main repository. A task without one leaves the
+    /// run-level repository fields empty and runs its session in `worktree`,
+    /// the directory that holds the further repositories' worktrees.
+    pub fn has_main_repo(&self) -> bool {
+        !self.repo_name.is_empty()
+    }
+
     /// The main repository, described by the run-level fields.
-    pub fn main_repo(&self) -> StateRepo {
-        StateRepo {
+    pub fn main_repo(&self) -> Option<StateRepo> {
+        self.has_main_repo().then(|| StateRepo {
             name: self.repo_name.clone(),
             repo: self.repo.clone(),
             base_commit: self.base_commit.clone(),
             worktree: self.worktree.clone(),
-        }
+        })
     }
 
     /// Every repository this run made a worktree for, the main one first.
     pub fn all_repos(&self) -> Vec<StateRepo> {
-        let main = self.main_repo();
-        let mut repos = vec![main.clone()];
+        let mut repos = Vec::new();
+        let main_name = self.main_repo().map(|main| {
+            repos.push(main.clone());
+            main.name
+        });
         repos.extend(
             self.repos
                 .iter()
-                .filter(|repo| repo.name != main.name)
+                .filter(|repo| main_name.as_ref() != Some(&repo.name))
                 .cloned(),
         );
         repos
@@ -479,10 +505,35 @@ impl State {
             })
     }
 
-    /// The repository session `index` (one-based) runs in, from the task file.
-    pub fn session_repo(&self, index: usize) -> Result<StateRepo> {
-        let name = self.task()?.session_repo(index)?.to_string();
-        self.repo_by_name(&name)
+    /// The repository session `index` (one-based) runs in; `None` when the task
+    /// has no main repository and the session runs between the others.
+    pub fn session_checkout(&self, index: usize) -> Result<Option<StateRepo>> {
+        match self.task()?.session_repo(index)? {
+            Some(name) => Ok(Some(self.repo_by_name(name)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// The directory session `index` (one-based) works in.
+    pub fn session_cwd(&self, index: usize) -> Result<PathBuf> {
+        Ok(self.session_checkout(index)?.map_or_else(
+            || PathBuf::from(&self.worktree),
+            |repo| PathBuf::from(repo.worktree),
+        ))
+    }
+
+    /// The repository a check runs in; `None` means the task's own session
+    /// directory.
+    pub fn check_checkout(
+        &self,
+        task: &crate::task::Task,
+        check: &crate::task::Check,
+    ) -> Result<Option<StateRepo>> {
+        match task.check_repo(check) {
+            Some(name) => Ok(Some(self.repo_by_name(name)?)),
+            None if self.has_main_repo() => Ok(self.main_repo()),
+            None => Ok(None),
+        }
     }
 }
 

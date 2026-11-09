@@ -11,7 +11,7 @@ use canter_protocol::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, grade::CheckResult, paths::MemoryMode};
+use crate::{Result, grade::CheckResult, paths::MemoryMode, session_data::SubAgentRow};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,6 +145,10 @@ pub struct RunResult {
     /// One row per session, in order; empty for first-version results.
     #[serde(default)]
     pub sessions: Vec<SessionRow>,
+    /// The sub-agent sessions this run started, from the main session's stats.
+    /// Absent from results of runs without sub-agents.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sub_agents: Vec<SubAgentRow>,
 }
 
 fn one_session() -> usize {
@@ -181,6 +185,13 @@ pub fn collect(options: CollectOptions) -> Result<RunResult> {
         rows.push(row);
     }
     let metrics = metrics(&sessions);
+    let mut sub_agents = Vec::new();
+    for (stats, _) in &sessions {
+        sub_agents.extend(crate::session_data::sub_agents(
+            &options.home,
+            &stats.sub_agents,
+        )?);
+    }
     let session_id = rows
         .first()
         .map(|row| row.session_id.clone())
@@ -208,6 +219,7 @@ pub fn collect(options: CollectOptions) -> Result<RunResult> {
         session_count,
         memory_mode: state.memory_mode,
         sessions: rows,
+        sub_agents,
     };
     crate::paths::write_private(
         &options

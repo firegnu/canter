@@ -37,8 +37,11 @@ pub struct Prepared {
     pub task: crate::task::Task,
     pub session: usize,
     pub prompt: String,
-    /// The repository this session runs in, and so the worktree it uses.
-    pub repo: StateRepo,
+    /// The repository this session runs in; `None` when the task has no main
+    /// repository and the session runs between the others' worktrees.
+    pub repo: Option<StateRepo>,
+    /// The directory this session works in.
+    pub cwd: PathBuf,
     pub memories_cleared: usize,
 }
 
@@ -56,7 +59,11 @@ impl Prepared {
             out.push_str(&format!("worktree: {}\n", repo.worktree));
         }
         if repos.len() > 1 {
-            out.push_str(&format!("session repo: {}\n", self.repo.name));
+            if let Some(repo) = &self.repo {
+                out.push_str(&format!("session repo: {}\n", repo.name));
+            } else {
+                out.push_str(&format!("session cwd: {}\n", self.cwd.display()));
+            }
         }
         out.push_str(&format!("model: {}\n", self.state.model));
         out.push_str(&format!(
@@ -169,7 +176,7 @@ impl Prepared {
         format!(
             "corral start eval/{}{unique} --cwd {} --env {} --env CAIRN_DISABLE=1 --prompt {} -- canter --yolo --tag {}",
             self.state.run,
-            quote(&self.repo.worktree),
+            quote(&self.cwd.display().to_string()),
             quote(&format!("CANTER_HOME={eval_home}")),
             quote(&self.prompt),
             quote(&format!("eval={}", self.state.round)),
@@ -254,21 +261,33 @@ fn prepare_first(
             run_dir.display()
         ));
     }
-    // The main repository keeps the run's own worktree path.
-    let main_worktree = local.worktree_path(&options.home, &options.round, &options.run)?;
-    if main_worktree.exists() {
+    // The session's directory: the main repository keeps the run's own worktree
+    // path; a task without one runs between the further repositories' worktrees.
+    let session_dir = match task.repo.as_deref() {
+        Some(_) => local.worktree_path(&options.home, &options.round, &options.run)?,
+        None => local.session_dir_path(&options.home, &options.round, &options.run)?,
+    };
+    if session_dir.exists() {
         return Err(format!(
             "worktree already exists: {}\nremove it or pick another run name",
-            main_worktree.display()
+            session_dir.display()
         ));
     }
-    if let Some(parent) = main_worktree.parent() {
+    if let Some(parent) = session_dir.parent() {
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(parent)
             .and_then(|()| fs::set_permissions(parent, fs::Permissions::from_mode(0o700)))
             .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    if task.repo.is_none() {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&session_dir)
+            .and_then(|()| fs::set_permissions(&session_dir, fs::Permissions::from_mode(0o700)))
+            .map_err(|error| format!("cannot create {}: {error}", session_dir.display()))?;
     }
     options.home.ensure()?;
     fs::DirBuilder::new()
@@ -298,8 +317,8 @@ fn prepare_first(
     let mut repos = Vec::new();
     let mut main = None;
     for (repo_setup, repo) in planned {
-        let worktree = if repo_setup.name == task.repo {
-            main_worktree.clone()
+        let worktree = if Some(repo_setup.name) == task.repo.as_deref() {
+            session_dir.clone()
         } else {
             local.other_worktree_path(
                 &options.home,
@@ -308,7 +327,7 @@ fn prepare_first(
                 repo_setup.name,
             )?
         };
-        if worktree != main_worktree && worktree.exists() {
+        if worktree != session_dir && worktree.exists() {
             return Err(format!(
                 "worktree already exists: {}\nremove it or pick another run name",
                 worktree.display()
@@ -348,13 +367,25 @@ fn prepare_first(
             base_commit,
             worktree: worktree.display().to_string(),
         };
-        if row.name == task.repo {
+        if Some(row.name.as_str()) == task.repo.as_deref() {
             main = Some(row);
         } else {
             repos.push(row);
         }
     }
-    let main = main.ok_or("the task's main repository has no worktree")?;
+    if task.repo.is_some() && main.is_none() {
+        return Err("the task's main repository has no worktree".into());
+    }
+    // Without a main repository the session's directory is the run-level one.
+    let (repo, repo_name, base_commit, worktree) = match main {
+        Some(main) => (main.repo, main.name, main.base_commit, main.worktree),
+        None => (
+            String::new(),
+            String::new(),
+            String::new(),
+            session_dir.display().to_string(),
+        ),
+    };
 
     let state = State {
         task: task.id.clone(),
@@ -365,10 +396,10 @@ fn prepare_first(
             .to_string(),
         round: options.round.clone(),
         run: options.run.clone(),
-        repo: main.repo,
-        repo_name: main.name,
-        base_commit: main.base_commit,
-        worktree: main.worktree,
+        repo,
+        repo_name,
+        base_commit,
+        worktree,
         session_file: options
             .home
             .session_id_path(&options.round, &options.run, 1)
@@ -382,13 +413,16 @@ fn prepare_first(
         repos,
     };
     state.save(&options.home)?;
-    let repo = state.repo_by_name(task.session_repo(1)?)?;
+    let repo = state.session_checkout(1)?;
+    let cwd = state.session_cwd(1)?;
+    let prompt = crate::task::render(task.prompt(1)?, &state)?;
     Ok(Prepared {
         state,
         task: task.clone(),
         session: 1,
-        prompt: task.prompt(1)?.to_string(),
+        prompt,
         repo,
+        cwd,
         memories_cleared,
     })
 }
@@ -449,11 +483,11 @@ fn prepare_next(
         (None, Some(run)) => run,
         (None, None) => MemoryMode::Clear,
     };
-    let repo = state.repo_by_name(task.session_repo(options.session)?)?;
-    if !Path::new(&repo.worktree).is_dir() {
+    let cwd = state.session_cwd(options.session)?;
+    if !cwd.is_dir() {
         return Err(format!(
             "the worktree is gone: {}\nprepare the run again or clean it",
-            repo.worktree
+            cwd.display()
         ));
     }
     let previous =
@@ -492,8 +526,9 @@ fn prepare_next(
         state: state.clone(),
         task: task.clone(),
         session: options.session,
-        prompt: task.prompt(options.session)?.to_string(),
-        repo,
+        prompt: crate::task::render(task.prompt(options.session)?, state)?,
+        repo: state.session_checkout(options.session)?,
+        cwd,
         memories_cleared,
     })
 }
@@ -507,8 +542,7 @@ pub fn clean(home: &crate::paths::Home, state: &crate::paths::State) -> Result<(
     let mut worktrees: Vec<StateRepo> = Vec::new();
     for repo in state.all_repos() {
         let worktree = Path::new(&repo.worktree);
-        let inside =
-            crate::paths::within(worktree, &root) && !crate::paths::within(&root, worktree);
+        let inside = within_no_self(worktree, &root);
         if !inside {
             return Err(format!(
                 "refusing to remove {}: it is not under the worktree root {}",
@@ -540,7 +574,39 @@ pub fn clean(home: &crate::paths::Home, state: &crate::paths::State) -> Result<(
             let _ = git(Path::new(&repo.repo), &["worktree", "prune"]);
         }
     }
+    // A task without a main repository has its session's directory between the
+    // removed worktrees; remove it when nothing else is left in it.
+    if !state.has_main_repo() {
+        let dir = Path::new(&state.worktree);
+        let expected = local.session_dir_path(home, &state.round, &state.run)?;
+        if !within_no_self(dir, &root) || *dir != expected {
+            return Err(format!(
+                "refusing to remove {}: it is not the directory run {} would have made",
+                dir.display(),
+                state.run
+            ));
+        }
+        if dir.exists() {
+            match fs::remove_dir(dir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+                    eprintln!(
+                        "note: {} still holds files this run did not make; left it",
+                        dir.display()
+                    );
+                }
+                Err(error) => {
+                    return Err(format!("cannot remove {}: {error}", dir.display()));
+                }
+            }
+        }
+    }
     Ok(())
+}
+
+/// Whether `path` is below `dir`, not `dir` itself.
+fn within_no_self(path: &Path, dir: &Path) -> bool {
+    crate::paths::within(path, dir) && !crate::paths::within(dir, path)
 }
 
 pub fn git(repo: &Path, args: &[&str]) -> Result<String> {

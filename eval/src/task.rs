@@ -14,11 +14,15 @@ pub struct Task {
     pub id: String,
     pub name: String,
     /// The main repository name only; its path lives in the eval state
-    /// directory. Sessions and checks that name no other repository run here.
-    pub repo: String,
+    /// directory. A task without a main repository leaves `repo` and `base`
+    /// out and runs its session in the directory that holds the further
+    /// repositories' worktrees.
+    #[serde(default)]
+    pub repo: Option<String>,
     /// The commit the main repository's worktree starts from, as accepted by
     /// `git rev-parse`.
-    pub base: String,
+    #[serde(default)]
+    pub base: Option<String>,
     /// Further repositories, each with its own start commit and setup commands.
     #[serde(default)]
     pub repos: Vec<TaskRepo>,
@@ -35,8 +39,14 @@ pub struct Task {
     /// Shell commands run in the new worktree before the session starts.
     #[serde(default)]
     pub setup: Vec<String>,
+    /// Send a line of chat after counted commits; for tasks whose work is
+    /// marked by commits.
     #[serde(default)]
     pub steers: Vec<Steer>,
+    /// Send a line of chat at a moment of one session's run; the entry's
+    /// `after` says which moment.
+    #[serde(default, rename = "chat")]
+    pub chats: Vec<Chat>,
     #[serde(default)]
     pub checks: Vec<Check>,
 }
@@ -57,7 +67,8 @@ pub struct TaskRepo {
 #[serde(deny_unknown_fields)]
 pub struct Session {
     pub prompt: String,
-    /// The repository this session runs in; defaults to the task's `repo`.
+    /// The repository this session runs in; defaults to the task's `repo`, or,
+    /// without one, to the directory holding the repositories' worktrees.
     #[serde(default)]
     pub repo: Option<String>,
 }
@@ -72,6 +83,26 @@ pub struct Steer {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct Chat {
+    pub after: ChatAfter,
+    pub text: String,
+}
+
+/// When a chat line is sent: after a turn of the main session, or after a
+/// sub-agent report woke it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChatAfter {
+    /// After the previous turn ends: the opening turn for the first entry, the
+    /// turn the previous entry started for the others.
+    Turn,
+    /// After a sub-agent report woke the main session. Not sent when every
+    /// sub-agent has already come back by then.
+    Report,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Check {
     pub id: String,
     pub description: String,
@@ -81,7 +112,8 @@ pub struct Check {
     #[serde(default)]
     pub record: bool,
     /// The repository whose worktree the command runs in; defaults to the
-    /// task's `repo`.
+    /// task's `repo`, or, without one, to the directory holding the
+    /// repositories' worktrees.
     #[serde(default)]
     pub repo: Option<String>,
 }
@@ -135,33 +167,39 @@ impl Task {
             .ok_or_else(|| format!("task {} has no session {index}", self.id))
     }
 
-    /// The repository session `index` (one-based) runs in.
-    pub fn session_repo(&self, index: usize) -> Result<&str> {
+    /// The repository session `index` (one-based) runs in; `None` means the
+    /// task has no main repository and the session runs between the others'
+    /// worktrees.
+    pub fn session_repo(&self, index: usize) -> Result<Option<&str>> {
         if self.sessions.is_empty() {
             if index == 1 {
-                return Ok(&self.repo);
+                return Ok(self.repo.as_deref());
             }
             return Err(format!("task {} has only one session", self.id));
         }
         self.sessions
             .get(index - 1)
-            .map(|session| session.repo.as_deref().unwrap_or(&self.repo))
+            .map(|session| session.repo.as_deref().or(self.repo.as_deref()))
             .ok_or_else(|| format!("task {} has no session {index}", self.id))
     }
 
-    /// The repository a check runs in.
-    pub fn check_repo<'a>(&'a self, check: &'a Check) -> &'a str {
-        check.repo.as_deref().unwrap_or(&self.repo)
+    /// The repository a check runs in; `None` means the directory holding the
+    /// repositories' worktrees (a task without a main repository).
+    pub fn check_repo<'a>(&'a self, check: &'a Check) -> Option<&'a str> {
+        check.repo.as_deref().or(self.repo.as_deref())
     }
 
     /// Every repository the task uses, the main one first, with the start
     /// commit and setup commands of each.
     pub fn repositories(&self) -> Vec<Repo<'_>> {
-        let mut repos = vec![Repo {
-            name: &self.repo,
-            base: &self.base,
-            setup: &self.setup,
-        }];
+        let mut repos = Vec::new();
+        if let (Some(name), Some(base)) = (self.repo.as_deref(), self.base.as_deref()) {
+            repos.push(Repo {
+                name,
+                base,
+                setup: &self.setup,
+            });
+        }
         repos.extend(self.repos.iter().map(|repo| Repo {
             name: &repo.name,
             base: &repo.base,
@@ -171,8 +209,25 @@ impl Task {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.id.is_empty() || self.name.is_empty() || self.repo.is_empty() {
-            return Err("a task needs id, name and repo".into());
+        if self.id.is_empty() || self.name.is_empty() {
+            return Err("a task needs id and name".into());
+        }
+        match (&self.repo, &self.base) {
+            (Some(repo), Some(base)) if !repo.trim().is_empty() && !base.trim().is_empty() => {}
+            (None, None) => {
+                if self.repos.is_empty() {
+                    return Err(format!(
+                        "task {} has no repo and base and no [[repos]]; it needs at least one repository",
+                        self.id
+                    ));
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "task {} writes repo and base together or leaves both out",
+                    self.id
+                ));
+            }
         }
         let mut names = std::collections::BTreeSet::new();
         for repo in &self.repos {
@@ -182,7 +237,7 @@ impl Task {
                     self.id
                 ));
             }
-            if repo.name == self.repo {
+            if self.repo.as_deref() == Some(repo.name.as_str()) {
                 return Err(format!(
                     "task {} lists {} both as its repo and under [[repos]]",
                     self.id, repo.name
@@ -222,7 +277,7 @@ impl Task {
                     ));
                 }
                 if let Some(name) = &session.repo
-                    && *name != self.repo
+                    && Some(name.as_str()) != self.repo.as_deref()
                     && !names.contains(name.as_str())
                 {
                     return Err(format!(
@@ -239,6 +294,18 @@ impl Task {
                 self.id
             ));
         }
+        if !self.steers.is_empty() && !self.chats.is_empty() {
+            return Err(format!(
+                "task {} uses both [[steers]] and [[chat]]; a task sends one kind of chat",
+                self.id
+            ));
+        }
+        if !self.chats.is_empty() && self.session_count() > 1 {
+            return Err(format!(
+                "task {} uses [[chat]], which runs one session; write [[steers]] for a multi-session task",
+                self.id
+            ));
+        }
         for steer in &self.steers {
             if steer.after_commits == 0 || steer.text.trim().is_empty() {
                 return Err(format!(
@@ -247,13 +314,18 @@ impl Task {
                 ));
             }
         }
+        for chat in &self.chats {
+            if chat.text.trim().is_empty() {
+                return Err(format!("task {} has a chat with no text", self.id));
+            }
+        }
         let mut ids = std::collections::BTreeSet::new();
         for check in &self.checks {
             if check.command.trim().is_empty() {
                 return Err(format!("check {} has an empty command", check.id));
             }
             if let Some(name) = &check.repo
-                && *name != self.repo
+                && Some(name.as_str()) != self.repo.as_deref()
                 && !names.contains(name.as_str())
             {
                 return Err(format!(
@@ -267,4 +339,28 @@ impl Task {
         }
         Ok(())
     }
+}
+
+/// Replace `{repo:<name>}` in a prompt or chat line with that repository's
+/// worktree path, so the model sees the same absolute paths every run.
+pub fn render(text: &str, state: &crate::paths::State) -> Result<String> {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("{repo:") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + "{repo:".len()..];
+        let end = after
+            .find('}')
+            .ok_or_else(|| format!("{text:?} has an unclosed repository placeholder"))?;
+        let name = &after[..end];
+        let repo = state.repo_by_name(name).map_err(|_| {
+            format!(
+                "the placeholder {{repo:{name}}} names a repository this run has no worktree for"
+            )
+        })?;
+        out.push_str(&repo.worktree);
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
 }

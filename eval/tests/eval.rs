@@ -634,6 +634,7 @@ async fn steer_waits_for_the_counted_commits_and_sends_steer_mode() {
                 run: "long-1".into(),
                 session: 1,
                 poll: Duration::from_millis(50),
+                timeout: Duration::from_secs(30),
             })
             .await
         }
@@ -690,6 +691,7 @@ async fn steer_waits_for_the_counted_commits_and_sends_steer_mode() {
         run: "long-1".into(),
         session: 1,
         poll: Duration::from_millis(50),
+        timeout: Duration::from_secs(30),
     })
     .await
     .unwrap();
@@ -782,6 +784,7 @@ async fn steer_finds_the_run_session_by_worktree_and_writes_the_session_file() {
                 run: "long-1".into(),
                 session: 1,
                 poll: Duration::from_millis(50),
+                timeout: Duration::from_secs(30),
             })
             .await
         }
@@ -822,6 +825,7 @@ async fn steer_refuses_to_guess_between_two_run_sessions() {
             run: "long-1".into(),
             session: 1,
             poll: Duration::from_millis(50),
+            timeout: Duration::from_secs(30),
         }),
     )
     .await
@@ -1233,6 +1237,7 @@ fn sample_result(round: &str, run: &str, passed: usize, duration: u64, cost: f64
             memory_files: 0,
             memory_file_names: Vec::new(),
         }],
+        sub_agents: Vec::new(),
     }
 }
 
@@ -1539,6 +1544,16 @@ fn two_session_task(temp: &Path, base: &str) -> PathBuf {
 }
 
 fn write_local_config_repos(home: &Home, repos: &[(&str, &Path)], source: &Path, worktrees: &Path) {
+    write_local_config_canter(home, repos, source, worktrees, "canter");
+}
+
+fn write_local_config_canter(
+    home: &Home,
+    repos: &[(&str, &Path)],
+    source: &Path,
+    worktrees: &Path,
+    canter: &str,
+) {
     let repos: serde_json::Map<String, Value> = repos
         .iter()
         .map(|(name, path)| ((*name).to_string(), json!(path.display().to_string())))
@@ -1549,7 +1564,7 @@ fn write_local_config_repos(home: &Home, repos: &[(&str, &Path)], source: &Path,
             "repos": repos,
             "model": "opencode-go/deepseek-v4.1-flash",
             "sourceConfig": source.display().to_string(),
-            "canter": "canter",
+            "canter": canter,
             "worktrees": worktrees.display().to_string()
         }))
         .unwrap()
@@ -1714,8 +1729,11 @@ fn memory_task_has_four_sessions_and_the_rules_in_the_first() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tasks/memory.toml");
     let task = Task::load(&path).unwrap();
     assert_eq!(task.id, "memory");
-    assert_eq!(task.repo, "canter-test-rust");
-    assert_eq!(task.base, "e9ee31cd4e4a0bb671374313cb9699354affa1b1");
+    assert_eq!(task.repo.as_deref(), Some("canter-test-rust"));
+    assert_eq!(
+        task.base.as_deref(),
+        Some("e9ee31cd4e4a0bb671374313cb9699354affa1b1")
+    );
     assert_eq!(task.auto_compact_tokens, Some(60_000));
     assert_eq!(task.reasoning.as_deref(), Some("high"));
     assert_eq!(task.session_count(), 4);
@@ -1771,8 +1789,11 @@ fn memory_2_task_has_four_sessions_and_the_rules_in_the_first() {
         task.name,
         "记忆第二版：canter-test-rust 连做 4 件（规矩从仓库里看不出来）"
     );
-    assert_eq!(task.repo, "canter-test-rust");
-    assert_eq!(task.base, "e9ee31cd4e4a0bb671374313cb9699354affa1b1");
+    assert_eq!(task.repo.as_deref(), Some("canter-test-rust"));
+    assert_eq!(
+        task.base.as_deref(),
+        Some("e9ee31cd4e4a0bb671374313cb9699354affa1b1")
+    );
     assert_eq!(task.auto_compact_tokens, Some(60_000));
     assert_eq!(task.reasoning.as_deref(), Some("high"));
     assert_eq!(task.session_count(), 4);
@@ -1829,8 +1850,11 @@ fn memory_global_task_has_four_sessions_in_two_repositories() {
     let task = Task::load(&path).unwrap();
     assert_eq!(task.id, "memory-global");
     assert!(task.name.contains("全局记忆"), "{}", task.name);
-    assert_eq!(task.repo, "canter-test-rust");
-    assert_eq!(task.base, "e9ee31cd4e4a0bb671374313cb9699354affa1b1");
+    assert_eq!(task.repo.as_deref(), Some("canter-test-rust"));
+    assert_eq!(
+        task.base.as_deref(),
+        Some("e9ee31cd4e4a0bb671374313cb9699354affa1b1")
+    );
     assert_eq!(task.auto_compact_tokens, Some(60_000));
     assert_eq!(task.reasoning.as_deref(), Some("high"));
     assert_eq!(task.session_count(), 4);
@@ -1842,14 +1866,14 @@ fn memory_global_task_has_four_sessions_in_two_repositories() {
     assert_eq!(repos[1].base, "8e19ca8db4b181c15a3a2a8cc75e1fccfee98538");
     assert_eq!(repos[1].setup.len(), 2);
 
-    let session_repos: Vec<&str> = (1..=4).map(|n| task.session_repo(n).unwrap()).collect();
+    let session_repos: Vec<Option<&str>> = (1..=4).map(|n| task.session_repo(n).unwrap()).collect();
     assert_eq!(
         session_repos,
         [
-            "canter-test-rust",
-            "canter-test-ts",
-            "canter-test-ts",
-            "canter-test-ts"
+            Some("canter-test-rust"),
+            Some("canter-test-ts"),
+            Some("canter-test-ts"),
+            Some("canter-test-ts")
         ]
     );
 
@@ -1907,7 +1931,7 @@ fn memory_global_task_has_four_sessions_in_two_repositories() {
         } else {
             "canter-test-ts"
         };
-        assert_eq!(task.check_repo(check), expected, "check {}", check.id);
+        assert_eq!(task.check_repo(check), Some(expected), "check {}", check.id);
     }
 }
 
@@ -2091,7 +2115,7 @@ fn finish_records_head_commands_and_memory_files() {
     let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
 
     let finished = canter_eval::finish::finish(&home, "r1", "long-1", 1).unwrap();
-    assert_eq!(finished.head, head);
+    assert_eq!(finished.head.as_deref(), Some(head.as_str()));
     assert_eq!(finished.commands, 2);
     assert_eq!(finished.memory_files, 2);
     assert_eq!(
@@ -2173,6 +2197,7 @@ async fn steer_finds_the_new_session_after_the_recorded_one() {
                 run: "two-1".into(),
                 session: 2,
                 poll: Duration::from_millis(50),
+                timeout: Duration::from_secs(30),
             })
             .await
         }
@@ -2214,6 +2239,7 @@ async fn steer_finds_the_new_session_after_the_recorded_one() {
             run: "two-1".into(),
             session: 2,
             poll: Duration::from_millis(50),
+            timeout: Duration::from_secs(30),
         }),
     )
     .await
@@ -2287,6 +2313,7 @@ async fn steer_reads_a_first_version_session_file_without_excluding_it() {
             run: "quiet-1".into(),
             session: 1,
             poll: Duration::from_millis(50),
+            timeout: Duration::from_secs(30),
         }),
     )
     .await
@@ -3099,7 +3126,7 @@ fn prepare_makes_a_worktree_for_every_repository_and_finish_uses_the_session_one
 
     let first = prepare_named(&home, &source, &tasks, "multi-1", 1, None, Some("multi")).unwrap();
     let main = Path::new(&first.state.worktree).to_path_buf();
-    assert_eq!(first.repo.name, "canter-test-rust");
+    assert_eq!(first.repo.as_ref().unwrap().name, "canter-test-rust");
     assert!(main.starts_with(&worktrees));
     assert_eq!(first.state.repos.len(), 1);
     let ts_worktree = Path::new(&first.state.repos[0].worktree).to_path_buf();
@@ -3136,12 +3163,12 @@ fn prepare_makes_a_worktree_for_every_repository_and_finish_uses_the_session_one
     commit(&ts_worktree, "ts later", None);
     let ts_head = git(&ts_worktree, &["rev-parse", "HEAD"]).trim().to_string();
     let finished = canter_eval::finish::finish(&home, "r1", "multi-1", 1).unwrap();
-    assert_eq!(finished.head, rust_base);
+    assert_eq!(finished.head.as_deref(), Some(rust_base.as_str()));
 
     // Session 2 runs in the second repository's worktree, once session 1 is
     // recorded.
     let second = prepare_named(&home, &source, &tasks, "multi-1", 2, None, None).unwrap();
-    assert_eq!(second.repo.name, "canter-test-ts");
+    assert_eq!(second.repo.as_ref().unwrap().name, "canter-test-ts");
     let summary = second.summary(&home);
     assert!(
         summary.contains("session repo: canter-test-ts"),
@@ -3157,7 +3184,7 @@ fn prepare_makes_a_worktree_for_every_repository_and_finish_uses_the_session_one
     );
     write(&home.session_events("s-ts"), "");
     let finished = canter_eval::finish::finish(&home, "r1", "multi-1", 2).unwrap();
-    assert_eq!(finished.head, ts_head);
+    assert_eq!(finished.head.as_deref(), Some(ts_head.as_str()));
 
     // Each check runs in its own repository, with that repository's variables.
     let file = canter_eval::grade::grade(&home, "r1", "multi-1", &mut Vec::new()).unwrap();
@@ -3655,4 +3682,1446 @@ fn report_shows_memory_mode_and_per_session_numbers() {
     let text = std::fs::read_to_string(path).unwrap();
     assert!(text.contains("| mixed | long | 2/2 | 2.0/2 |"), "{text}");
     assert_eq!(text.matches("| mixed | long |").count(), 1, "{text}");
+}
+
+// ---- 子 agent 题（P2-258）----
+
+fn simple_repo(dir: &Path, subject: &str) -> String {
+    init_repo(dir);
+    write(&dir.join("marker.txt"), &format!("{subject}\n"));
+    commit(dir, subject, None);
+    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+}
+
+/// A single-session task without a main repository.
+fn outside_task(temp: &Path, codex_base: &str, pi_base: &str) -> PathBuf {
+    let dir = temp.join("tasks-outside");
+    write(
+        &dir.join("outside.toml"),
+        &format!(
+            r#"id = "outside"
+name = "outside"
+prompt = "在 {{repo:codex}} 和 {{repo:pi-mono}} 里看看"
+
+[[repos]]
+name = "codex"
+base = "{codex_base}"
+
+[[repos]]
+name = "pi-mono"
+base = "{pi_base}"
+
+[[checks]]
+id = "session-dir"
+description = "runs in the session directory, with only the repositories"
+command = '''test -z "${{REPO:-}}" && test -d codex && test -d pi-mono && test "$(ls -A | wc -l | tr -d ' ')" -eq 2'''
+
+[[checks]]
+id = "named-repo"
+description = "runs in the named repository"
+repo = "codex"
+command = '''test -n "${{REPO}}" && test "$(pwd -P)" = "$(cd "$WORKTREE" && pwd -P)" && test -f "$WORKTREE/marker.txt"'''
+"#
+        ),
+    );
+    dir
+}
+
+#[test]
+fn subagent_task_reads_as_written() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tasks/subagent.toml");
+    let task = Task::load(&path).unwrap();
+    assert_eq!(task.id, "subagent");
+    assert!(
+        task.name.contains("子 agent") && task.name.contains("超时"),
+        "{}",
+        task.name
+    );
+    assert_eq!(task.repo, None);
+    assert_eq!(task.base, None);
+    assert_eq!(task.auto_compact_tokens, Some(60_000));
+    assert_eq!(task.reasoning.as_deref(), Some("high"));
+    assert_eq!(task.session_count(), 1);
+    assert!(task.session_repo(1).unwrap().is_none());
+    let repos = task.repositories();
+    assert_eq!(repos.len(), 2);
+    assert_eq!(repos[0].name, "codex");
+    assert_eq!(repos[0].base, "57a808a");
+    assert_eq!(repos[1].name, "pi-mono");
+    assert_eq!(repos[1].base, "085c84e");
+
+    let prompt = task.prompt(1).unwrap();
+    assert!(prompt.starts_with("对比 {repo:codex} 和 {repo:pi-mono} 这两个项目"));
+    assert!(prompt.ends_with("超时后怎么告诉模型。"));
+    assert_eq!(task.chats.len(), 5);
+    let kinds: Vec<_> = task.chats.iter().map(|chat| chat.after).collect();
+    assert_eq!(
+        kinds,
+        [
+            canter_eval::task::ChatAfter::Turn,
+            canter_eval::task::ChatAfter::Turn,
+            canter_eval::task::ChatAfter::Turn,
+            canter_eval::task::ChatAfter::Turn,
+            canter_eval::task::ChatAfter::Report,
+        ]
+    );
+    let texts: Vec<&str> = task.chats.iter().map(|chat| chat.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        [
+            "好的，谢谢",
+            "{repo:codex} 的最新提交是哪天的？",
+            "你觉得这两个项目哪个代码更好读？",
+            "等他们调查回来吧",
+            "好的，继续等另外一个subagent回来",
+        ]
+    );
+    assert!(task.steers.is_empty());
+    let checks: Vec<&str> = task.checks.iter().map(|check| check.id.as_str()).collect();
+    assert_eq!(
+        checks,
+        [
+            "spawned-subagents",
+            "dispatch-turn-quick",
+            "no-wait-in-chat",
+            "answer-facts",
+            "dispatch-turn-seconds",
+            "subagent-requests",
+            "subagent-blocked",
+            "subagent-rg-replace-blocked",
+            "main-reads-and-commands",
+            "fifth-chat-sent",
+        ]
+    );
+    for check in &task.checks {
+        assert!(task.check_repo(check).is_none(), "check {}", check.id);
+        if check.id == "answer-facts"
+            || matches!(
+                check.id.as_str(),
+                "spawned-subagents" | "dispatch-turn-quick" | "no-wait-in-chat"
+            )
+        {
+            assert!(!check.record, "{} judges", check.id);
+        } else {
+            assert!(check.record, "{} records", check.id);
+        }
+    }
+
+    // Placeholders become the repositories' absolute worktree paths.
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let state = State {
+        task: "subagent".into(),
+        task_path: path.display().to_string(),
+        round: "r1".into(),
+        run: "subagent-1".into(),
+        repo: String::new(),
+        repo_name: String::new(),
+        base_commit: String::new(),
+        worktree: temp.path().join("between").display().to_string(),
+        session_file: home
+            .session_id_path("r1", "subagent-1", 1)
+            .display()
+            .to_string(),
+        model: "m".into(),
+        auto_compact_tokens: Some(60_000),
+        created_at: 0,
+        session_count: 1,
+        memory_mode: None,
+        repos: vec![
+            StateRepo {
+                name: "codex".into(),
+                repo: "/repos/codex".into(),
+                base_commit: "abc".into(),
+                worktree: temp.path().join("between/codex").display().to_string(),
+            },
+            StateRepo {
+                name: "pi-mono".into(),
+                repo: "/repos/pi-mono".into(),
+                base_commit: "def".into(),
+                worktree: temp.path().join("between/pi-mono").display().to_string(),
+            },
+        ],
+    };
+    let rendered = canter_eval::task::render(prompt, &state).unwrap();
+    assert_eq!(
+        rendered,
+        format!(
+            "对比 {} 和 {} 这两个项目是怎么处理工具调用超时的：各自在哪些文件、默认超时多少、超时后怎么告诉模型。",
+            temp.path().join("between/codex").display(),
+            temp.path().join("between/pi-mono").display()
+        )
+    );
+    let second = canter_eval::task::render(&task.chats[1].text, &state).unwrap();
+    assert_eq!(
+        second,
+        format!(
+            "{} 的最新提交是哪天的？",
+            temp.path().join("between/codex").display()
+        )
+    );
+    assert!(canter_eval::task::render("{repo:missing}", &state).is_err());
+}
+
+#[tokio::test]
+async fn prepare_trust_finish_grade_and_clean_a_task_without_a_main_repository() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("eval-home"),
+    };
+    let codex = temp.path().join("codex-repo");
+    let codex_base = simple_repo(&codex, "codex base");
+    let pi = temp.path().join("pi-mono-repo");
+    let pi_base = simple_repo(&pi, "pi base");
+    let source = source_config(temp.path());
+    let worktrees = temp.path().join("worktrees");
+    write_local_config_repos(
+        &home,
+        &[("codex", &codex), ("pi-mono", &pi)],
+        &source,
+        &worktrees,
+    );
+    let tasks = outside_task(temp.path(), &codex_base, &pi_base);
+
+    let prepared =
+        prepare_named(&home, &source, &tasks, "sub-1", 1, None, Some("outside")).unwrap();
+    let session_dir = worktrees.join("r1").join("@repos").join("sub-1");
+    assert_eq!(prepared.cwd, session_dir);
+    assert_eq!(prepared.state.worktree, session_dir.display().to_string());
+    assert!(!prepared.state.has_main_repo());
+    assert!(prepared.state.repo_name.is_empty());
+    assert!(prepared.repo.is_none());
+    assert_eq!(prepared.state.all_repos().len(), 2);
+    let codex_wt = session_dir.join("codex");
+    let pi_wt = session_dir.join("pi-mono");
+    assert_eq!(git(&codex_wt, &["rev-parse", "HEAD"]).trim(), codex_base);
+    assert_eq!(git(&pi_wt, &["rev-parse", "HEAD"]).trim(), pi_base);
+    assert!(
+        !worktrees.join("r1").join("sub-1").exists(),
+        "a task without a main repository must not make a main worktree"
+    );
+
+    let summary = prepared.summary(&home);
+    assert!(
+        summary.contains(&format!("--cwd '{}'", session_dir.display())),
+        "{summary}"
+    );
+    assert!(
+        summary.contains(&format!("session cwd: {}", session_dir.display())),
+        "{summary}"
+    );
+    assert!(
+        summary.contains(&codex_wt.display().to_string()),
+        "{summary}"
+    );
+    assert!(summary.contains(&pi_wt.display().to_string()), "{summary}");
+    assert!(!summary.contains("{repo:"), "{summary}");
+
+    // Trust covers both worktrees and the directory between them.
+    let mut fake = fake_server(temp.path(), json!({"trusted": true, "warning": null})).await;
+    register_fake(&home, &fake);
+    canter_eval::server::trust(&home, &prepared.state)
+        .await
+        .unwrap();
+    for expected in [&codex_wt, &pi_wt, &session_dir] {
+        let (_, path, body) = fake.next(Duration::from_secs(3)).await.unwrap();
+        assert_eq!(path, "/v1/folderTrust");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["cwd"],
+            expected.display().to_string()
+        );
+    }
+    assert!(fake.next(Duration::from_millis(200)).await.is_none());
+
+    // finish records no HEAD: the session is in no repository.
+    write(
+        &home.session_id_path("r1", "sub-1", 1),
+        &json!({"sessionId": "s-sub"}).to_string(),
+    );
+    write(&home.session_events("s-sub"), "");
+    let finished = canter_eval::finish::finish(&home, "r1", "sub-1", 1).unwrap();
+    assert_eq!(finished.head, None);
+    assert!(!home.session_head_path("r1", "sub-1", 1).exists());
+    assert!(home.session_memory_path("r1", "sub-1", 1).is_file());
+    assert!(
+        canter_eval::finish::finish(&home, "r1", "sub-1", 1)
+            .unwrap_err()
+            .contains("already recorded")
+    );
+
+    // Checks without a repo run in the session directory; named ones in theirs.
+    let file = canter_eval::grade::grade(&home, "r1", "sub-1", &mut Vec::new()).unwrap();
+    for check in &file.results {
+        assert_eq!(
+            check.passed,
+            Some(true),
+            "{} failed: {}",
+            check.id,
+            check.output_tail
+        );
+    }
+
+    // clean removes this run's worktrees and the directory holding them.
+    let kept = worktrees.join("r1").join("kept-by-hand");
+    std::fs::create_dir_all(&kept).unwrap();
+    canter_eval::prepare::clean(&home, &prepared.state).unwrap();
+    assert!(!codex_wt.exists());
+    assert!(!pi_wt.exists());
+    assert!(!session_dir.exists());
+    assert!(kept.is_dir());
+}
+
+/// A task whose chat lines are sent at the given moments.
+fn chat_task(temp: &Path, base: &str, chats: &[(&str, &str)]) -> PathBuf {
+    let dir = temp.join("tasks-chat");
+    let mut text = format!(
+        "id = \"chat\"\nname = \"chat task\"\nrepo = \"canter-test-ts\"\nbase = \"{base}\"\nprompt = \"开题\"\n"
+    );
+    for (after, line) in chats {
+        text.push_str(&format!(
+            "\n[[chat]]\nafter = \"{after}\"\ntext = '''{line}'''\n"
+        ));
+    }
+    write(&dir.join("chat.toml"), &text);
+    dir
+}
+
+fn chat_state(home: &Home, task_path: &Path, repo: &Path, run: &str) -> State {
+    let base = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let state = State {
+        task: "chat".into(),
+        task_path: task_path.display().to_string(),
+        round: "r1".into(),
+        run: run.into(),
+        repo: repo.display().to_string(),
+        repo_name: "canter-test-ts".into(),
+        base_commit: base,
+        worktree: repo.display().to_string(),
+        session_file: home.session_id_path("r1", run, 1).display().to_string(),
+        model: "m".into(),
+        auto_compact_tokens: None,
+        created_at: 0,
+        session_count: 1,
+        memory_mode: None,
+        repos: Vec::new(),
+    };
+    state.save(home).unwrap();
+    state
+}
+
+fn started_event(seq: u64, ts: i64, session: &str, id: &str, text: &str, client: &str) -> String {
+    let input = if text.is_empty() {
+        json!([])
+    } else {
+        json!([{"type": "text", "text": text}])
+    };
+    json!({
+        "seq": seq, "sessionId": session, "timestamp": ts, "type": "turn.started",
+        "turn": {"id": id, "items": [], "status": "inProgress", "error": null,
+                 "input": input, "clientName": client},
+        "inputId": null
+    })
+    .to_string()
+}
+
+fn turn_done_event(seq: u64, ts: i64, session: &str, id: &str) -> String {
+    json!({
+        "seq": seq, "sessionId": session, "timestamp": ts, "type": "turn.completed",
+        "turn": {"id": id, "items": [], "status": "completed", "error": null,
+                 "input": [], "clientName": ""}
+    })
+    .to_string()
+}
+
+fn item_event(seq: u64, ts: i64, session: &str, turn: &str, item: Value) -> String {
+    json!({
+        "seq": seq, "sessionId": session, "timestamp": ts, "type": "item.completed",
+        "turnId": turn, "item": item
+    })
+    .to_string()
+}
+
+fn spawn_event(seq: u64, ts: i64, session: &str, turn: &str, child: &str, status: &str) -> String {
+    item_event(
+        seq,
+        ts,
+        session,
+        turn,
+        json!({
+            "type": "collabAgentToolCall", "id": format!("spawn-{child}"),
+            "tool": "spawnAgent", "status": "completed",
+            "agents": [{"id": child, "name": "probe", "status": status}]
+        }),
+    )
+}
+
+fn agent_updated_event(seq: u64, ts: i64, session: &str, child: &str, status: &str) -> String {
+    json!({
+        "seq": seq, "sessionId": session, "timestamp": ts, "type": "agent.updated",
+        "agent": {"id": child, "task": "look", "status": status, "result": null,
+                  "createdAt": ts, "updatedAt": ts}
+    })
+    .to_string()
+}
+
+fn flush_events(path: &Path, events: &[String]) {
+    write(path, &events.join("\n"));
+}
+
+fn chat_progress(home: &Home, round: &str, run: &str) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(home.steer_progress_path(round, run)).unwrap())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn chat_steering_sends_in_order_waits_when_busy_and_skips_without_children() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    write(&repo.join("base.txt"), "base\n");
+    commit(&repo, "base", None);
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let tasks = chat_task(
+        temp.path(),
+        &base,
+        &[
+            ("turn", "好的，谢谢"),
+            ("turn", "第二句"),
+            ("turn", "第三句"),
+            ("turn", "等他们调查回来吧"),
+            ("report", "继续等"),
+        ],
+    );
+    chat_state(&home, &tasks.join("chat.toml"), &repo, "chat-1");
+    write(
+        &home.session_id_path("r1", "chat-1", 1),
+        &json!({"sessionId": "s-chat"}).to_string(),
+    );
+    let mut fake = fake_server(temp.path(), json!({"eventSeq": 1, "turnId": null})).await;
+    register_fake(&home, &fake);
+    let events_path = home.session_events("s-chat");
+
+    let handle = tokio::spawn({
+        let home = home.clone();
+        async move {
+            canter_eval::steer::steer(SteerOptions {
+                home,
+                round: "r1".into(),
+                run: "chat-1".into(),
+                session: 1,
+                poll: Duration::from_millis(20),
+                timeout: Duration::from_secs(5),
+            })
+            .await
+        }
+    });
+
+    // The opening turn ends: the first line goes out as ordinary input.
+    let mut events = vec![
+        started_event(1, 1_000, "s-chat", "t1", "开题", ""),
+        turn_done_event(2, 16_000, "s-chat", "t1"),
+    ];
+    flush_events(&events_path, &events);
+    let (method, path, body) = fake.next(Duration::from_secs(3)).await.unwrap();
+    assert_eq!(
+        (method.as_str(), path.as_str()),
+        ("POST", "/v1/sessions/s-chat/input")
+    );
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["mode"], "queue");
+    assert_eq!(body["clientName"], "canter-eval");
+    assert_eq!(body["input"][0]["text"], "好的，谢谢");
+
+    // The first line's turn is still running: the second line waits.
+    events.push(started_event(
+        3,
+        20_000,
+        "s-chat",
+        "t2",
+        "好的，谢谢",
+        "canter-eval",
+    ));
+    flush_events(&events_path, &events);
+    assert!(fake.next(Duration::from_millis(300)).await.is_none());
+
+    // Each line's turn ends before the next is sent.
+    events.push(turn_done_event(4, 25_000, "s-chat", "t2"));
+    flush_events(&events_path, &events);
+    let (_, _, body) = fake.next(Duration::from_secs(3)).await.unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["input"][0]["text"], "第二句");
+
+    events.push(started_event(
+        5,
+        30_000,
+        "s-chat",
+        "t3",
+        "第二句",
+        "canter-eval",
+    ));
+    events.push(turn_done_event(6, 31_000, "s-chat", "t3"));
+    flush_events(&events_path, &events);
+    let (_, _, body) = fake.next(Duration::from_secs(3)).await.unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["input"][0]["text"], "第三句");
+
+    events.push(started_event(
+        7,
+        40_000,
+        "s-chat",
+        "t4",
+        "第三句",
+        "canter-eval",
+    ));
+    events.push(turn_done_event(8, 41_000, "s-chat", "t4"));
+    flush_events(&events_path, &events);
+    let (_, _, body) = fake.next(Duration::from_secs(3)).await.unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["input"][0]["text"], "等他们调查回来吧");
+
+    // No sub-agent was started, so no report can wake the session: the fifth
+    // line is not sent and steering ends instead of waiting.
+    events.push(started_event(
+        9,
+        50_000,
+        "s-chat",
+        "t5",
+        "等他们调查回来吧",
+        "canter-eval",
+    ));
+    events.push(turn_done_event(10, 51_000, "s-chat", "t5"));
+    flush_events(&events_path, &events);
+    tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    let progress = chat_progress(&home, "r1", "chat-1");
+    let chats = progress["chats"].as_array().unwrap();
+    assert_eq!(chats.len(), 5, "{progress}");
+    for (index, turn) in ["t2", "t3", "t4", "t5"].iter().enumerate() {
+        assert_eq!(chats[index]["index"], index + 1);
+        assert_eq!(chats[index]["turnId"], *turn);
+    }
+    assert_eq!(chats[4]["skipped"], "没有子 agent 的报告");
+    assert!(chats[4].get("sentAt").is_none());
+    assert_eq!(progress["timedOut"], false);
+
+    // A restart sends nothing again.
+    canter_eval::steer::steer(SteerOptions {
+        home: home.clone(),
+        round: "r1".into(),
+        run: "chat-1".into(),
+        session: 1,
+        poll: Duration::from_millis(20),
+        timeout: Duration::from_secs(5),
+    })
+    .await
+    .unwrap();
+    assert!(fake.next(Duration::from_millis(300)).await.is_none());
+}
+
+#[tokio::test]
+async fn chat_steering_sends_the_report_line_after_a_wake() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let session_dir = temp.path().join("worktrees/r1/@repos/chat-1");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    let codex = session_dir.join("codex");
+    let codex_base = simple_repo(&codex, "codex base");
+    let task_path = temp.path().join("chat.toml");
+    write(
+        &task_path,
+        &format!(
+            "id = \"outside-chat\"\nname = \"outside chat\"\nprompt = \"开题\"\n\n[[repos]]\nname = \"codex\"\nbase = \"{codex_base}\"\n\n[[chat]]\nafter = \"turn\"\ntext = '''好的，谢谢'''\n\n[[chat]]\nafter = \"report\"\ntext = '''继续等'''\n"
+        ),
+    );
+    let state = State {
+        task: "outside-chat".into(),
+        task_path: task_path.display().to_string(),
+        round: "r1".into(),
+        run: "chat-1".into(),
+        repo: String::new(),
+        repo_name: String::new(),
+        base_commit: String::new(),
+        worktree: session_dir.display().to_string(),
+        session_file: home
+            .session_id_path("r1", "chat-1", 1)
+            .display()
+            .to_string(),
+        model: "m".into(),
+        auto_compact_tokens: None,
+        created_at: 0,
+        session_count: 1,
+        memory_mode: None,
+        repos: vec![StateRepo {
+            name: "codex".into(),
+            repo: codex.display().to_string(),
+            base_commit: codex_base,
+            worktree: codex.display().to_string(),
+        }],
+    };
+    state.save(&home).unwrap();
+
+    let other = temp.path().join("elsewhere");
+    let list = json!({"data": [
+        listed("s-other", &other, None),
+        listed("s-child", &session_dir, Some("s-main")),
+        listed("s-main", &session_dir, None),
+    ]});
+    let mut fake = fake_server_with(
+        temp.path(),
+        vec![("/v1/sessions", list)],
+        json!({"eventSeq": 1, "turnId": null}),
+    )
+    .await;
+    register_fake(&home, &fake);
+    let events_path = home.session_events("s-main");
+    let events = vec![
+        started_event(1, 1_000, "s-main", "t1", "开题", ""),
+        spawn_event(2, 2_000, "s-main", "t1", "c1", "running"),
+        turn_done_event(3, 15_000, "s-main", "t1"),
+        started_event(4, 20_000, "s-main", "t2", "好的，谢谢", "canter-eval"),
+        turn_done_event(5, 23_000, "s-main", "t2"),
+    ];
+    flush_events(&events_path, &events);
+
+    let handle = tokio::spawn({
+        let home = home.clone();
+        async move {
+            canter_eval::steer::steer(SteerOptions {
+                home,
+                round: "r1".into(),
+                run: "chat-1".into(),
+                session: 1,
+                poll: Duration::from_millis(20),
+                timeout: Duration::from_secs(5),
+            })
+            .await
+        }
+    });
+
+    // The session is found by the directory between the repositories.
+    let (method, path, _) = fake.next(Duration::from_secs(3)).await.unwrap();
+    assert_eq!((method.as_str(), path.as_str()), ("GET", "/v1/sessions"));
+
+    let (_, _, body) = fake.next(Duration::from_secs(3)).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["input"][0]["text"],
+        "好的，谢谢"
+    );
+
+    // No report has woken the session yet: the report line waits.
+    assert!(fake.next(Duration::from_millis(300)).await.is_none());
+
+    // A wake turn starts, still busy: nothing is sent during it.
+    let mut events = events;
+    events.push(started_event(6, 30_000, "s-main", "w1", "", "background"));
+    flush_events(&events_path, &events);
+    assert!(fake.next(Duration::from_millis(300)).await.is_none());
+
+    // The wake turn ends while the child still runs: now the line goes out.
+    events.push(turn_done_event(7, 35_000, "s-main", "w1"));
+    flush_events(&events_path, &events);
+    let (_, _, body) = fake.next(Duration::from_secs(3)).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["input"][0]["text"],
+        "继续等"
+    );
+
+    events.push(started_event(
+        8,
+        40_000,
+        "s-main",
+        "t4",
+        "继续等",
+        "canter-eval",
+    ));
+    events.push(turn_done_event(9, 42_000, "s-main", "t4"));
+    flush_events(&events_path, &events);
+    // A second report line waits for another wake, and there is none left: the
+    // child comes back and steering ends without it.
+    events.push(agent_updated_event(10, 50_000, "s-main", "c1", "completed"));
+    flush_events(&events_path, &events);
+    tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    let progress = chat_progress(&home, "r1", "chat-1");
+    let chats = progress["chats"].as_array().unwrap();
+    assert_eq!(chats[1]["turnId"], "t4");
+    assert!(chats[1].get("skipped").is_none(), "{progress}");
+    let saved: Value = serde_json::from_str(
+        &std::fs::read_to_string(home.session_id_path("r1", "chat-1", 1)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved["sessionId"], "s-main");
+}
+
+#[tokio::test]
+async fn chat_steering_skips_the_report_line_when_every_child_is_back() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    write(&repo.join("base.txt"), "base\n");
+    commit(&repo, "base", None);
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let tasks = chat_task(
+        temp.path(),
+        &base,
+        &[("turn", "好的，谢谢"), ("report", "继续等")],
+    );
+    chat_state(&home, &tasks.join("chat.toml"), &repo, "chat-1");
+    write(
+        &home.session_id_path("r1", "chat-1", 1),
+        &json!({"sessionId": "s-chat"}).to_string(),
+    );
+    let mut fake = fake_server(temp.path(), json!({"eventSeq": 1, "turnId": null})).await;
+    register_fake(&home, &fake);
+    let events_path = home.session_events("s-chat");
+    let mut events = vec![
+        started_event(1, 1_000, "s-chat", "t1", "开题", ""),
+        spawn_event(2, 2_000, "s-chat", "t1", "c1", "running"),
+        turn_done_event(3, 15_000, "s-chat", "t1"),
+    ];
+    flush_events(&events_path, &events);
+
+    let handle = tokio::spawn({
+        let home = home.clone();
+        async move {
+            canter_eval::steer::steer(SteerOptions {
+                home,
+                round: "r1".into(),
+                run: "chat-1".into(),
+                session: 1,
+                poll: Duration::from_millis(20),
+                timeout: Duration::from_secs(5),
+            })
+            .await
+        }
+    });
+    let (_, _, body) = fake.next(Duration::from_secs(3)).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["input"][0]["text"],
+        "好的，谢谢"
+    );
+    events.push(started_event(
+        4,
+        20_000,
+        "s-chat",
+        "t2",
+        "好的，谢谢",
+        "canter-eval",
+    ));
+    events.push(turn_done_event(5, 21_000, "s-chat", "t2"));
+    events.push(agent_updated_event(6, 30_000, "s-chat", "c1", "completed"));
+    flush_events(&events_path, &events);
+    events.push(started_event(7, 35_000, "s-chat", "w1", "", "background"));
+    events.push(turn_done_event(8, 36_000, "s-chat", "w1"));
+    flush_events(&events_path, &events);
+    tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let progress = chat_progress(&home, "r1", "chat-1");
+    let chats = progress["chats"].as_array().unwrap();
+    assert_eq!(chats[1]["skipped"], "所有子 agent 都回来了", "{progress}");
+}
+
+#[tokio::test]
+async fn chat_steering_skips_the_report_line_when_children_finish_without_a_wake() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    write(&repo.join("base.txt"), "base\n");
+    commit(&repo, "base", None);
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let tasks = chat_task(
+        temp.path(),
+        &base,
+        &[("turn", "好的，谢谢"), ("report", "继续等")],
+    );
+    chat_state(&home, &tasks.join("chat.toml"), &repo, "chat-1");
+    write(
+        &home.session_id_path("r1", "chat-1", 1),
+        &json!({"sessionId": "s-chat"}).to_string(),
+    );
+    let mut fake = fake_server(temp.path(), json!({"eventSeq": 1, "turnId": null})).await;
+    register_fake(&home, &fake);
+    let events_path = home.session_events("s-chat");
+    let mut events = vec![
+        started_event(1, 1_000, "s-chat", "t1", "开题", ""),
+        spawn_event(2, 2_000, "s-chat", "t1", "c1", "running"),
+        turn_done_event(3, 15_000, "s-chat", "t1"),
+    ];
+    flush_events(&events_path, &events);
+
+    let handle = tokio::spawn({
+        let home = home.clone();
+        async move {
+            canter_eval::steer::steer(SteerOptions {
+                home,
+                round: "r1".into(),
+                run: "chat-1".into(),
+                session: 1,
+                poll: Duration::from_millis(20),
+                timeout: Duration::from_millis(300),
+            })
+            .await
+        }
+    });
+    let (_, _, body) = fake.next(Duration::from_secs(3)).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["input"][0]["text"],
+        "好的，谢谢"
+    );
+
+    // The child comes back and the chat turn handles its report; no separate
+    // background turn ever appears, so the report line is skipped, not waited
+    // for until the time limit.
+    events.push(started_event(
+        4,
+        20_000,
+        "s-chat",
+        "t2",
+        "好的，谢谢",
+        "canter-eval",
+    ));
+    events.push(agent_updated_event(5, 21_000, "s-chat", "c1", "completed"));
+    events.push(turn_done_event(6, 22_000, "s-chat", "t2"));
+    flush_events(&events_path, &events);
+    tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let progress = chat_progress(&home, "r1", "chat-1");
+    let chats = progress["chats"].as_array().unwrap();
+    assert_eq!(chats[1]["skipped"], "所有子 agent 都回来了", "{progress}");
+    assert_eq!(progress["timedOut"], false, "{progress}");
+}
+
+#[tokio::test]
+async fn chat_steering_ignores_a_failed_spawn_placeholder() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    write(&repo.join("base.txt"), "base\n");
+    commit(&repo, "base", None);
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let tasks = chat_task(temp.path(), &base, &[("report", "继续等")]);
+    chat_state(&home, &tasks.join("chat.toml"), &repo, "chat-1");
+    write(
+        &home.session_id_path("r1", "chat-1", 1),
+        &json!({"sessionId": "s-chat"}).to_string(),
+    );
+    let mut fake = fake_server(temp.path(), json!({"eventSeq": 1, "turnId": null})).await;
+    register_fake(&home, &fake);
+    let events_path = home.session_events("s-chat");
+    // A failed spawn: the tool call completed but returned no agent id.
+    let events = vec![
+        started_event(1, 1_000, "s-chat", "t1", "开题", ""),
+        item_event(
+            2,
+            2_000,
+            "s-chat",
+            "t1",
+            json!({"type": "collabAgentToolCall", "id": "spawn-failed",
+                   "tool": "spawnAgent", "status": "completed", "error": "bad role",
+                   "agents": [{"id": "", "name": "", "status": null}]}),
+        ),
+        turn_done_event(3, 15_000, "s-chat", "t1"),
+    ];
+    flush_events(&events_path, &events);
+
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        canter_eval::steer::steer(SteerOptions {
+            home: home.clone(),
+            round: "r1".into(),
+            run: "chat-1".into(),
+            session: 1,
+            poll: Duration::from_millis(20),
+            timeout: Duration::from_millis(300),
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(fake.next(Duration::from_millis(200)).await.is_none());
+    let progress = chat_progress(&home, "r1", "chat-1");
+    let chats = progress["chats"].as_array().unwrap();
+    assert_eq!(chats[0]["skipped"], "没有子 agent 的报告", "{progress}");
+    assert_eq!(progress["timedOut"], false, "{progress}");
+}
+
+#[tokio::test]
+async fn chat_steering_stops_at_the_time_limit() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    write(&repo.join("base.txt"), "base\n");
+    commit(&repo, "base", None);
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let tasks = chat_task(temp.path(), &base, &[("turn", "好的，谢谢")]);
+    chat_state(&home, &tasks.join("chat.toml"), &repo, "chat-1");
+    write(
+        &home.session_id_path("r1", "chat-1", 1),
+        &json!({"sessionId": "s-chat"}).to_string(),
+    );
+    let mut fake = fake_server(temp.path(), json!({"eventSeq": 1, "turnId": null})).await;
+    register_fake(&home, &fake);
+
+    // The session never starts its opening turn: the schedule gives up.
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        canter_eval::steer::steer(SteerOptions {
+            home: home.clone(),
+            round: "r1".into(),
+            run: "chat-1".into(),
+            session: 1,
+            poll: Duration::from_millis(20),
+            timeout: Duration::from_millis(300),
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let progress = chat_progress(&home, "r1", "chat-1");
+    assert_eq!(progress["timedOut"], true, "{progress}");
+    assert!(
+        progress["chats"]
+            .as_array()
+            .is_none_or(|chats| chats.is_empty())
+    );
+    assert!(fake.next(Duration::from_millis(200)).await.is_none());
+}
+
+#[tokio::test]
+async fn chat_steering_stops_at_the_time_limit_before_the_session_appears() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    write(&repo.join("base.txt"), "base\n");
+    commit(&repo, "base", None);
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let tasks = chat_task(temp.path(), &base, &[("turn", "好的，谢谢")]);
+    chat_state(&home, &tasks.join("chat.toml"), &repo, "chat-1");
+    // No session id yet, and the eval server lists no session in the run's
+    // directory: the whole schedule is still due to stop at its time limit.
+    let fake = fake_server(temp.path(), json!({"data": []})).await;
+    register_fake(&home, &fake);
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        canter_eval::steer::steer(SteerOptions {
+            home: home.clone(),
+            round: "r1".into(),
+            run: "chat-1".into(),
+            session: 1,
+            poll: Duration::from_millis(20),
+            timeout: Duration::from_millis(300),
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let progress = chat_progress(&home, "r1", "chat-1");
+    assert_eq!(progress["timedOut"], true, "{progress}");
+}
+
+/// The ninth test's final answer, without the wrapper around the code fence.
+fn ninth_answer() -> String {
+    let text = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/subagent-answer-9.md"),
+    )
+    .unwrap();
+    let start = text.find("````markdown\n").unwrap() + "````markdown\n".len();
+    let end = text.rfind("\n````").unwrap();
+    text[start..end].to_string()
+}
+
+fn turn_row(index: usize, id: &str, duration: u64, opened: Value, tools: Value) -> Value {
+    json!({
+        "index": index, "id": id, "startedAt": 1_000 * index as i64,
+        "endedAt": 1_000 * index as i64 + duration as i64, "durationMs": duration,
+        "openedBy": opened, "tools": tools
+    })
+}
+
+fn subagent_session_data(reply: &str) -> Value {
+    let mut data = json!({
+        "sessionId": "s-main",
+        "cwd": "/work",
+        "turns": [
+            turn_row(1, "t1", 15_000, json!({"kind": "prompt"}),
+                     json!({"spawn_agent": 2, "shell": 5})),
+            turn_row(2, "t2", 3_000, json!({"kind": "steer", "index": 1}),
+                     json!({"read": 2, "shell": 1})),
+            turn_row(3, "t3", 4_000, json!({"kind": "steer", "index": 2}), json!({})),
+            turn_row(4, "t4", 25_000, json!({"kind": "steer", "index": 3}),
+                     json!({"read": 1})),
+            turn_row(5, "t5", 32_000, json!({"kind": "report"}), json!({})),
+        ],
+        "finalReply": reply,
+        "subAgents": [
+            {"id": "c1", "name": "probe-timeouts", "agentType": "explorer",
+             "status": "completed", "startedAt": 2_000, "endedAt": 94_000,
+             "durationMs": 92_000, "requestCount": 44, "blockedCommands": 4,
+             "blockedRgReplace": 2, "cachedInputTokens": 100,
+             "uncachedInputTokens": 200, "outputTokens": 300,
+             "costUsd": 0.01, "costUnknown": false},
+            {"id": "c2", "name": "probe-paths", "agentType": "explorer",
+             "status": "completed", "startedAt": 2_500, "endedAt": 90_000,
+             "durationMs": 87_500, "requestCount": 73, "blockedCommands": 0,
+             "blockedRgReplace": 0, "cachedInputTokens": 0,
+             "uncachedInputTokens": 0, "outputTokens": 0,
+             "costUsd": 0.02, "costUnknown": false},
+        ],
+        "chats": [
+            {"index": 1, "sentAt": 20_000, "turnId": "t2"},
+            {"index": 5, "sentAt": 200_000, "turnId": "t5"},
+        ],
+        "timedOut": false
+    });
+    data["turns"][0]["spawnedAgents"] = json!(2);
+    data
+}
+
+fn run_check_in(task: &Task, id: &str, cwd: &Path, run_dir: &Path) -> (bool, String) {
+    let check = task
+        .checks
+        .iter()
+        .find(|check| check.id == id)
+        .unwrap_or_else(|| panic!("no check {id}"));
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(&check.command)
+        .current_dir(cwd)
+        .env("RUN_DIR", run_dir)
+        .output()
+        .unwrap();
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn subagent_checks_read_the_session_data() {
+    let temp = TempDir::new().unwrap();
+    let run_dir = temp.path().join("run");
+    std::fs::create_dir_all(&run_dir).unwrap();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tasks/subagent.toml");
+    let task = Task::load(&path).unwrap();
+    let data = subagent_session_data(&ninth_answer());
+    let data_path = run_dir.join("session-data.json");
+    write(&data_path, &serde_json::to_string_pretty(&data).unwrap());
+
+    for id in [
+        "spawned-subagents",
+        "dispatch-turn-quick",
+        "no-wait-in-chat",
+        "answer-facts",
+    ] {
+        let (passed, error) = run_check_in(&task, id, &run_dir, &run_dir);
+        assert!(passed, "{id} should pass: {error}");
+    }
+    let record = |id: &str| {
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&task.checks.iter().find(|c| c.id == id).unwrap().command)
+            .current_dir(&run_dir)
+            .env("RUN_DIR", &run_dir)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    assert_eq!(record("dispatch-turn-seconds"), "15");
+    assert_eq!(record("subagent-requests"), "117");
+    assert_eq!(record("subagent-blocked"), "4");
+    assert_eq!(record("subagent-rg-replace-blocked"), "2");
+    assert_eq!(record("main-reads-and-commands"), "4");
+    assert_eq!(record("fifth-chat-sent"), "1");
+
+    // A run that spawned nothing fails the dispatch check.
+    let mut quiet = data.clone();
+    quiet["turns"][0]["tools"]["spawn_agent"] = json!(0);
+    quiet["turns"][0]["spawnedAgents"] = json!(0);
+    write(&data_path, &quiet.to_string());
+    assert!(!run_check_in(&task, "spawned-subagents", &run_dir, &run_dir).0);
+
+    // A spawn that failed returned no agent id: the attempt counts as a tool
+    // call, but the run did not start a sub-agent.
+    let mut failed = data.clone();
+    failed["turns"][0]["tools"]["spawn_agent"] = json!(1);
+    failed["turns"][0]["spawnedAgents"] = json!(0);
+    write(&data_path, &failed.to_string());
+    assert!(!run_check_in(&task, "spawned-subagents", &run_dir, &run_dir).0);
+
+    // A first turn over 60 seconds fails the quick dispatch check.
+    let mut slow = data.clone();
+    slow["turns"][0]["durationMs"] = json!(61_000);
+    write(&data_path, &slow.to_string());
+    assert!(!run_check_in(&task, "dispatch-turn-quick", &run_dir, &run_dir).0);
+
+    // A chat turn that waited fails the no-wait check.
+    let mut waiting = data.clone();
+    waiting["turns"][1]["tools"]["wait_agent"] = json!(1);
+    write(&data_path, &waiting.to_string());
+    assert!(!run_check_in(&task, "no-wait-in-chat", &run_dir, &run_dir).0);
+
+    // A run in which no turn was opened by chat cannot pass the no-wait check:
+    // an empty set of chat turns must not pass by accident.
+    let mut no_chat = data.clone();
+    for (index, turn) in no_chat["turns"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        turn["openedBy"] = json!({"kind": "other", "clientName": format!("client-{index}")});
+    }
+    write(&data_path, &no_chat.to_string());
+    assert!(!run_check_in(&task, "no-wait-in-chat", &run_dir, &run_dir).0);
+
+    // Every one of the six facts is required; the real answer has them all.
+    let answer = ninth_answer();
+    for (label, removed) in [
+        (
+            "10 seconds",
+            answer
+                .replace("10 秒", "十几秒")
+                .replace("10 000 ms", "若干 ms"),
+        ),
+        (
+            "300 seconds",
+            answer.replace("300 s", "几分钟").replace("300s", "很久"),
+        ),
+        ("exit 124", answer.replace("124", "125")),
+        (
+            "no default",
+            answer
+                .replace("没有默认超时", "有默认超时")
+                .replace("无默认", "有默认")
+                .replace("无超时", "有超时"),
+        ),
+        (
+            "timeout message",
+            answer
+                .replace("Command timed out after", "Command aborted")
+                .replace("command timed out after", "command aborted"),
+        ),
+        (
+            "60 seconds",
+            answer
+                .replace("60 s", "一分钟")
+                .replace("60000ms", "若干ms"),
+        ),
+    ] {
+        let mut data = subagent_session_data(&removed);
+        data["finalReply"] = json!(removed);
+        write(&data_path, &data.to_string());
+        let (passed, error) = run_check_in(&task, "answer-facts", &run_dir, &run_dir);
+        assert!(!passed, "removing the {label} fact must fail the check");
+        assert!(error.contains("missing:"), "{label}: {error}");
+    }
+}
+
+#[test]
+fn answer_facts_checks_number_boundaries_and_millisecond_forms() {
+    let temp = TempDir::new().unwrap();
+    let run_dir = temp.path().join("run");
+    std::fs::create_dir_all(&run_dir).unwrap();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tasks/subagent.toml");
+    let task = Task::load(&path).unwrap();
+    let data_path = run_dir.join("session-data.json");
+    let check = |reply: &str| {
+        let mut data = subagent_session_data(reply);
+        data["finalReply"] = json!(reply);
+        write(&data_path, &data.to_string());
+        run_check_in(&task, "answer-facts", &run_dir, &run_dir)
+    };
+    let rest = "codex MCP 300 秒；exit 124；pi bash 没有默认超时；\
+                Command timed out after N seconds；pi MCP 60 秒";
+
+    // A longer number that ends in the fact's digits is not that fact.
+    let (passed, error) = check(&format!("codex shell 110 秒；{rest}"));
+    assert!(!passed, "110 秒 is not 10 秒: {error}");
+    let (passed, error) = check(
+        "codex shell 10 秒；codex MCP 300 秒；exit 1124；\
+         pi bash 没有默认超时；Command timed out after N seconds；pi MCP 60 秒",
+    );
+    assert!(!passed, "1124 is not exit code 124: {error}");
+
+    // Every millisecond form the task lists stands for the fact.
+    for written in ["10 000 ms", "10_000", "10000 ms", "10000ms"] {
+        let (passed, error) = check(&format!("codex shell {written}；{rest}"));
+        assert!(passed, "{written} was not recognised: {error}");
+    }
+}
+
+#[test]
+fn grade_writes_the_session_data_for_chat_tasks() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    write(&repo.join("base.txt"), "base\n");
+    commit(&repo, "base", None);
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let tasks = chat_task(temp.path(), &base, &[("turn", "好的，谢谢")]);
+    let task_path = tasks.join("chat.toml");
+    // One check reads what grade gathered.
+    let text = std::fs::read_to_string(&task_path).unwrap()
+        + "\n[[checks]]\nid = \"has-data\"\ndescription = \"session data\"\ncommand = '''jq -e '.turns[0].tools.spawn_agent == 1 and .subAgents[0].blockedRgReplace == 1 and .finalReply == \"汇总\"' \"$RUN_DIR/session-data.json\"'''\n";
+    write(&task_path, &text);
+    let state = chat_state(&home, &task_path, &repo, "chat-1");
+    write(
+        &home.session_id_path("r1", "chat-1", 1),
+        &json!({"sessionId": "s-main"}).to_string(),
+    );
+    let stats = json!({
+        "sessionId": "s-main", "eventSeq": 9,
+        "overview": {"cwd": repo.display().to_string(), "model": "m",
+                     "startedAt": 1_000, "updatedAt": 60_000, "tags": {},
+                     "turnCount": 1, "requestCount": 1,
+                     "retryCount": 0, "recordedRetryCount": 0},
+        "subAgents": [{"id": "c1", "name": "probe", "agentType": "explorer",
+                       "status": "completed", "requestCount": 12,
+                       "toolCount": 4, "durationMs": 9_000,
+                       "usage": {"cachedInputTokens": 1, "uncachedInputTokens": 2,
+                                 "outputTokens": 3, "cost": {"usd": 0.01, "unknown": false}}}],
+        "requests": [], "compactions": [], "tools": [], "toolCalls": [],
+        "approvals": {"count": 0, "data": []}
+    });
+    let canter = fake_canter(temp.path(), &stats);
+    let source = source_config(temp.path());
+    write_local_config_canter(
+        &home,
+        &[("canter-test-ts", &repo)],
+        &source,
+        &temp.path().join("worktrees"),
+        &canter.display().to_string(),
+    );
+    let _ = state;
+    let events = vec![
+        started_event(1, 1_000, "s-main", "t1", "开题", ""),
+        spawn_event(2, 2_000, "s-main", "t1", "c1", "completed"),
+        item_event(
+            3,
+            3_000,
+            "s-main",
+            "t1",
+            json!({"type": "agentMessage", "id": "a1", "text": "汇总", "status": "completed"}),
+        ),
+        turn_done_event(4, 16_000, "s-main", "t1"),
+    ];
+    flush_events(&home.session_events("s-main"), &events);
+    let child = vec![item_event(
+        1,
+        2_000,
+        "c1",
+        "ct",
+        json!({"type": "commandExecution", "id": "x", "command": "rg -rn foo src",
+               "cwd": "/w", "status": "blocked", "aggregatedOutput": "",
+               "exitCode": null, "durationMs": null}),
+    )];
+    flush_events(&home.session_events("c1"), &child);
+
+    let mut out = Vec::new();
+    let file = canter_eval::grade::grade(&home, "r1", "chat-1", &mut out).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains("session data:"), "{out}");
+    for check in &file.results {
+        assert_eq!(
+            check.passed,
+            Some(true),
+            "{}: {}",
+            check.id,
+            check.output_tail
+        );
+    }
+    assert!(
+        home.run_dir("r1", "chat-1")
+            .join("session-data.json")
+            .is_file()
+    );
+}
+
+/// A canter executable that answers `stats` with the given JSON.
+fn fake_canter(dir: &Path, stats: &Value) -> PathBuf {
+    let stats_path = dir.join("stats.json");
+    write(&stats_path, &stats.to_string());
+    let path = dir.join("fake-canter");
+    write(
+        &path,
+        &format!("#!/bin/sh\ncat '{}'\n", stats_path.display()),
+    );
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&path, permissions).unwrap();
+    path
+}
+
+#[test]
+fn collect_and_report_show_sub_agents() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    write(&repo.join("base.txt"), "base\n");
+    commit(&repo, "base", None);
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let state = State {
+        task: "long".into(),
+        task_path: long_task_path(),
+        round: "r1".into(),
+        run: "subagent-1".into(),
+        repo: repo.display().to_string(),
+        repo_name: "canter-test-ts".into(),
+        base_commit: base,
+        worktree: repo.display().to_string(),
+        session_file: home
+            .session_id_path("r1", "subagent-1", 1)
+            .display()
+            .to_string(),
+        model: "opencode-go/deepseek-v4.1-flash".into(),
+        auto_compact_tokens: Some(60_000),
+        created_at: 0,
+        session_count: 1,
+        memory_mode: None,
+        repos: Vec::new(),
+    };
+    state.save(&home).unwrap();
+    write(
+        &home.session_id_path("r1", "subagent-1", 1),
+        &json!({"sessionId": "s-main"}).to_string(),
+    );
+    canter_eval::paths::write_private(
+        &home.run_dir("r1", "subagent-1").join("checks.json"),
+        serde_json::to_vec_pretty(&CheckFile {
+            ran_at: 0,
+            results: vec![CheckResult {
+                id: "dispatch".into(),
+                description: "spawned".into(),
+                record: false,
+                passed: Some(true),
+                value: None,
+                output_tail: String::new(),
+            }],
+        })
+        .unwrap()
+        .as_slice(),
+    )
+    .unwrap();
+    let mut stats = stats_for("s-main", 1_000, 400_000, 1_000, 0.05);
+    stats["subAgents"] = json!([{
+        "id": "c1", "name": "probe", "agentType": "explorer", "status": "completed",
+        "requestCount": 44, "toolCount": 9, "durationMs": 92_000,
+        "usage": {"cachedInputTokens": 100, "uncachedInputTokens": 200,
+                  "outputTokens": 300, "cost": {"usd": 0.01, "unknown": false}}
+    }]);
+    let stats_path = temp.path().join("stats.json");
+    write(&stats_path, &stats.to_string());
+    let child = vec![
+        item_event(
+            1,
+            2_000,
+            "c1",
+            "ct",
+            json!({"type": "commandExecution", "id": "x",
+            "command": "rg -rn foo src", "cwd": "/w", "status": "blocked",
+            "aggregatedOutput": "", "exitCode": null, "durationMs": null}),
+        ),
+        item_event(
+            2,
+            3_000,
+            "c1",
+            "ct",
+            json!({"type": "commandExecution", "id": "y",
+            "command": "ls", "cwd": "/w", "status": "declined",
+            "aggregatedOutput": "Blocked", "exitCode": null, "durationMs": null}),
+        ),
+        item_event(
+            3,
+            4_000,
+            "c1",
+            "ct",
+            json!({"type": "commandExecution", "id": "z",
+            "command": "rg -n foo src", "cwd": "/w", "status": "completed",
+            "aggregatedOutput": "", "exitCode": 0, "durationMs": 1}),
+        ),
+    ];
+    flush_events(&home.session_events("c1"), &child);
+    write(&home.session_events("s-main"), "");
+
+    let result = canter_eval::collect::collect(CollectOptions {
+        home: home.clone(),
+        round: "r1".into(),
+        run: "subagent-1".into(),
+        stats_json: Some(stats_path),
+        session: None,
+    })
+    .unwrap();
+    assert_eq!(result.sub_agents.len(), 1);
+    let agent = &result.sub_agents[0];
+    assert_eq!(agent.name.as_deref(), Some("probe"));
+    assert_eq!(agent.agent_type, "explorer");
+    assert_eq!(agent.status, "completed");
+    assert_eq!(agent.request_count, 44);
+    assert_eq!(agent.blocked_commands, 2);
+    assert_eq!(agent.blocked_rg_replace, 1);
+    assert_eq!(agent.duration_ms, Some(2_000));
+    assert_eq!(agent.cost_usd, Some(0.01));
+
+    let out = temp.path().join("results/r1.md");
+    let path = canter_eval::report::report(&canter_eval::report::ReportOptions {
+        home,
+        round: "r1".into(),
+        against: None,
+        out,
+    })
+    .unwrap();
+    let text = std::fs::read_to_string(path).unwrap();
+    assert!(text.contains("## 子 agent"), "{text}");
+    assert!(
+        text.contains(
+            "| subagent-1 | 1 | 主 6m39s · 子 2s（各会话相加 6m41s） | 48（主 4 · 子 44） | $0.06（主 $0.05 · 子 $0.01） |"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("| subagent-1 | 1 probe | explorer | 完成 | 2s | 44 |"),
+        "{text}"
+    );
 }
