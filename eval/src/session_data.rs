@@ -1,5 +1,5 @@
 //! The session facts a task's checks read: every turn of the main session and
-//! who opened it, the tools each turn called, the last reply, what each
+//! who opened it, the tools each turn called, all replies, what each
 //! sub-agent did, and the chat lines `steer` sent. `grade` writes them to
 //! `session-data.json` in the run directory for tasks that use `[[chat]]`.
 
@@ -65,6 +65,9 @@ pub struct SessionData {
     pub session_id: String,
     pub cwd: String,
     pub turns: Vec<TurnRow>,
+    /// Completed agent messages from the main session, in event order.
+    #[serde(default)]
+    pub replies: Vec<String>,
     /// The text of the last completed agent message, if there was one.
     pub final_reply: Option<String>,
     pub sub_agents: Vec<SubAgentRow>,
@@ -117,7 +120,9 @@ pub struct SubAgentRow {
     pub agent_type: String,
     pub status: String,
     pub started_at: Option<i64>,
+    /// The last `turn.completed`, excluding events after the report.
     pub ended_at: Option<i64>,
+    /// From the first event to the last completed turn; absent without one.
     pub duration_ms: Option<u64>,
     pub request_count: usize,
     pub blocked_commands: usize,
@@ -148,11 +153,13 @@ pub fn build(
         .map(|chat| crate::task::render(&chat.text, state))
         .collect::<Result<Vec<_>>>()?;
     let turns = turns(&events, &progress.chats, &texts);
+    let replies = replies(&events);
     Ok(SessionData {
         session_id: stats.session_id.clone(),
         cwd: stats.overview.cwd.clone(),
         turns,
-        final_reply: final_reply(&events),
+        final_reply: replies.last().cloned(),
+        replies,
         sub_agents: sub_agents(home, &stats.sub_agents)?,
         chats: progress.chats,
         timed_out: progress.timed_out,
@@ -257,17 +264,17 @@ fn input_text(turn: &Turn) -> String {
         .join("\n")
 }
 
-fn final_reply(events: &[Event]) -> Option<String> {
-    let mut reply = None;
+fn replies(events: &[Event]) -> Vec<String> {
+    let mut replies = Vec::new();
     for event in events {
         if let EventPayload::ItemCompleted { item, .. } = &event.payload
             && let Item::AgentMessage { text, status, .. } = item
             && status.is_none_or(|status| status == ItemStatus::Completed)
         {
-            reply = Some(text.clone());
+            replies.push(text.clone());
         }
     }
-    reply
+    replies
 }
 
 /// The tool a completed item stands for, by the names the tools report.
@@ -304,14 +311,18 @@ fn tool_name(item: &Item) -> Option<String> {
 }
 
 /// One row per sub-agent from the main session's stats; each child's events
-/// give its start and end and its blocked commands.
+/// give its start, last completed turn and blocked commands.
 pub fn sub_agents(home: &crate::paths::Home, list: &[StatsSubAgent]) -> Result<Vec<SubAgentRow>> {
     let mut rows = Vec::with_capacity(list.len());
     for child in list {
         let events = read_events(&home.session_events(&child.id))
             .map_err(|error| format!("the sub-agent {} has no events: {error}", child.id))?;
         let started_at = events.first().map(|event| event.timestamp);
-        let ended_at = events.last().map(|event| event.timestamp);
+        let ended_at = events
+            .iter()
+            .rev()
+            .find(|event| matches!(event.payload, EventPayload::TurnCompleted { .. }))
+            .map(|event| event.timestamp);
         let mut blocked_commands = 0;
         let mut blocked_rg_replace = 0;
         for event in &events {
@@ -456,17 +467,14 @@ mod tests {
     }
 
     #[test]
-    fn finds_the_last_completed_reply() {
+    fn finds_completed_replies_in_order() {
         let events = [
             r#"{"seq":1,"sessionId":"s","timestamp":1,"type":"item.completed","turnId":"t","item":{"type":"agentMessage","id":"a1","text":"first","status":"completed"}}"#,
             r#"{"seq":2,"sessionId":"s","timestamp":2,"type":"item.completed","turnId":"t","item":{"type":"agentMessage","id":"a2","text":"second","status":"completed"}}"#,
             r#"{"seq":3,"sessionId":"s","timestamp":3,"type":"item.started","turnId":"t","item":{"type":"agentMessage","id":"a3","text":"later","status":"inProgress"}}"#,
         ]
         .join("\n");
-        assert_eq!(
-            final_reply(&parse_events(&events)).as_deref(),
-            Some("second")
-        );
+        assert_eq!(replies(&parse_events(&events)), vec!["first", "second"]);
     }
 
     #[test]

@@ -4689,6 +4689,7 @@ fn subagent_session_data(reply: &str) -> Value {
             turn_row(5, "t5", 32_000, json!({"kind": "report"}), json!({})),
         ],
         "finalReply": reply,
+        "replies": [reply],
         "subAgents": [
             {"id": "c1", "name": "probe-timeouts", "agentType": "explorer",
              "status": "completed", "startedAt": 2_000, "endedAt": 94_000,
@@ -4844,13 +4845,57 @@ fn subagent_checks_read_the_session_data() {
                 .replace("60000ms", "若干ms"),
         ),
     ] {
-        let mut data = subagent_session_data(&removed);
-        data["finalReply"] = json!(removed);
+        let data = subagent_session_data(&removed);
         write(&data_path, &data.to_string());
         let (passed, error) = run_check_in(&task, "answer-facts", &run_dir, &run_dir);
         assert!(!passed, "removing the {label} fact must fail the check");
         assert!(error.contains("missing:"), "{label}: {error}");
     }
+}
+
+#[test]
+fn answer_facts_reads_earlier_main_session_replies() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("home"),
+    };
+    let repo = temp.path().join("repo");
+    let base = simple_repo(&repo, "base");
+    let tasks = chat_task(temp.path(), &base, &[("turn", "哪个代码更好读？")]);
+    let state = chat_state(&home, &tasks.join("chat.toml"), &repo, "chat-1");
+    let replies = [
+        "codex shell 默认 10 秒；codex MCP 默认 300 秒；超时退出码 124",
+        "pi bash 没有默认超时；Command timed out after N seconds；pi MCP 默认 60 秒",
+        "我觉得 pi 更好读。",
+    ];
+    let mut events = Vec::new();
+    for (index, reply) in replies.iter().enumerate() {
+        let seq = index as u64 * 3 + 1;
+        let turn = format!("t{index}");
+        events.push(started_event(seq, seq as i64, "s-main", &turn, "问题", ""));
+        events.push(item_event(
+            seq + 1,
+            seq as i64 + 1,
+            "s-main",
+            &turn,
+            json!({"type": "agentMessage", "id": format!("a{index}"),
+                   "text": reply, "status": "completed"}),
+        ));
+        events.push(turn_done_event(seq + 2, seq as i64 + 2, "s-main", &turn));
+    }
+    flush_events(&home.session_events("s-main"), &events);
+    let stats = serde_json::from_value(stats_for("s-main", 1, 9, 0, 0.0)).unwrap();
+    let data = canter_eval::session_data::build(&home, &state, &stats).unwrap();
+    assert_eq!(data.final_reply.as_deref(), Some(replies[2]));
+    assert_eq!(data.replies, replies);
+    let run_dir = home.run_dir("r1", "chat-1");
+    write(
+        &run_dir.join("session-data.json"),
+        &serde_json::to_string(&data).unwrap(),
+    );
+    let task = Task::load(&task_dir().join("subagent.toml")).unwrap();
+    let (passed, error) = run_check_in(&task, "answer-facts", &run_dir, &run_dir);
+    assert!(passed, "facts in earlier replies must count: {error}");
 }
 
 #[test]
@@ -4862,8 +4907,7 @@ fn answer_facts_checks_number_boundaries_and_millisecond_forms() {
     let task = Task::load(&path).unwrap();
     let data_path = run_dir.join("session-data.json");
     let check = |reply: &str| {
-        let mut data = subagent_session_data(reply);
-        data["finalReply"] = json!(reply);
+        let data = subagent_session_data(reply);
         write(&data_path, &data.to_string());
         run_check_in(&task, "answer-facts", &run_dir, &run_dir)
     };
@@ -4992,7 +5036,7 @@ fn fake_canter(dir: &Path, stats: &Value) -> PathBuf {
 }
 
 #[test]
-fn collect_and_report_show_sub_agents() {
+fn collect_and_report_time_sub_agents_until_the_last_report() {
     let temp = TempDir::new().unwrap();
     let home = Home {
         root: temp.path().join("home"),
@@ -5046,7 +5090,7 @@ fn collect_and_report_show_sub_agents() {
     .unwrap();
     let mut stats = stats_for("s-main", 1_000, 400_000, 1_000, 0.05);
     stats["subAgents"] = json!([{
-        "id": "c1", "name": "probe", "agentType": "explorer", "status": "completed",
+        "id": "c1", "name": "probe", "agentType": "explorer", "status": "closed",
         "requestCount": 44, "toolCount": 9, "durationMs": 92_000,
         "usage": {"cachedInputTokens": 100, "uncachedInputTokens": 200,
                   "outputTokens": 300, "cost": {"usd": 0.01, "unknown": false}}
@@ -5081,9 +5125,23 @@ fn collect_and_report_show_sub_agents() {
             "command": "rg -n foo src", "cwd": "/w", "status": "completed",
             "aggregatedOutput": "", "exitCode": 0, "durationMs": 1}),
         ),
+        turn_done_event(4, 4_000, "c1", "ct"),
+        started_event(5, 5_000, "c1", "ct2", "补查", ""),
+        turn_done_event(6, 6_000, "c1", "ct2"),
+        json!({"seq": 7, "sessionId": "c1", "timestamp": 20_000,
+               "type": "session.status", "status": "closed"})
+        .to_string(),
     ];
     flush_events(&home.session_events("c1"), &child);
     write(&home.session_events("s-main"), "");
+
+    let data =
+        canter_eval::session_data::build(&home, &state, &serde_json::from_value(stats).unwrap())
+            .unwrap();
+    let data = serde_json::to_value(data).unwrap();
+    assert_eq!(data["subAgents"][0]["startedAt"], 2_000);
+    assert_eq!(data["subAgents"][0]["endedAt"], 6_000);
+    assert_eq!(data["subAgents"][0]["durationMs"], 4_000);
 
     let result = canter_eval::collect::collect(CollectOptions {
         home: home.clone(),
@@ -5097,11 +5155,11 @@ fn collect_and_report_show_sub_agents() {
     let agent = &result.sub_agents[0];
     assert_eq!(agent.name.as_deref(), Some("probe"));
     assert_eq!(agent.agent_type, "explorer");
-    assert_eq!(agent.status, "completed");
+    assert_eq!(agent.status, "closed");
     assert_eq!(agent.request_count, 44);
     assert_eq!(agent.blocked_commands, 2);
     assert_eq!(agent.blocked_rg_replace, 1);
-    assert_eq!(agent.duration_ms, Some(2_000));
+    assert_eq!(agent.duration_ms, Some(4_000));
     assert_eq!(agent.cost_usd, Some(0.01));
 
     let out = temp.path().join("results/r1.md");
@@ -5116,12 +5174,12 @@ fn collect_and_report_show_sub_agents() {
     assert!(text.contains("## 子 agent"), "{text}");
     assert!(
         text.contains(
-            "| subagent-1 | 1 | 主 6m39s · 子 2s（各会话相加 6m41s） | 48（主 4 · 子 44） | $0.06（主 $0.05 · 子 $0.01） |"
+            "| subagent-1 | 1 | 主 6m39s · 子 4s（各会话相加 6m43s） | 48（主 4 · 子 44） | $0.06（主 $0.05 · 子 $0.01） |"
         ),
         "{text}"
     );
     assert!(
-        text.contains("| subagent-1 | 1 probe | explorer | 完成 | 2s | 44 |"),
+        text.contains("| subagent-1 | 1 probe | explorer | 关闭 | 4s | 44 |"),
         "{text}"
     );
 }
