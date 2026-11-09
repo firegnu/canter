@@ -117,6 +117,8 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
 
    调试时可以用 `--stats-json <事先存好的 stats JSON>` 代替调用 canter。
 
+   eval 服务端没在跑时，`canter stats` 会在 eval 状态目录里自己起一个（不调模型）。所以事后重跑 `collect` 也要接着做第 10 步停掉它。
+
 9. 收尾：`corral stop eval/long-1`，然后删 worktree：
 
    ```

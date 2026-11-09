@@ -70,3 +70,12 @@
 - 拿主意的地方：组成也只算带 `usage` 的对话请求，和峰值、平均是同一个集合（按任务里测试要求「没有 `usage` 的对话请求……都不算进来」）；百分比各自四舍五入，四项加起来可能不是 100（比如 101），不做归一；有 `usage` 但没有 `context` 的请求只进峰值和平均。
 - 没做的事：没有拿 `baseline-2026-11-09` 的真数据核对（要读 `~/.canter-eval`，任务里说不读，由主控做）；没给旧 `result.json` 缺字段专门加测试（任务说只加一条测试），向后兼容靠新字段的 `#[serde(default)]`，现有 report 测试两头都带字段，没覆盖缺字段那一头。
 - 踩过的坑：插入测试时没注意原文件里 `counts_malformed_lines` 前面已有 `#[test]`，多了一个，`clippy -D warnings` 报 duplicated attribute，删掉后过。别的没有。
+
+## 主控审查
+
+- 改动只在 `eval/`（`collect.rs`、`report.rs`、测试、README），`crates/` 没动。只取带 `usage` 的对话请求，组成也用同一批请求：主控的 jq 也是这个口径，第一轮没有缺 `usage` 的对话请求，两种算法一样，照开发的做法。
+- 验收（主控提、用户 11-09「派吧」同意）：分支版本对 `baseline-2026-11-09` 三次重跑 `collect`，峰值、平均、组成和事先算的完全一致（49710 / 34148 / 17·13·45·26，48047 / 33379 / 17·13·49·21，48803 / 35523 / 16·12·51·21）。合并后用 main 版重出了第一轮的表。
+- 合并前全套：`cargo nextest run --all-targets` 2044 个全过，`cargo test --doc --workspace` 没有失败。
+- 顺带发现：eval 服务端没在跑时 `canter stats` 会自己起一个；主控事后重跑 `collect` 时起了一个（PID 16499），用 `canter-eval stop` 停了。README 第 8 步补了这句。
+
+结果：一次过
