@@ -33,7 +33,7 @@ eval 自己的状态目录默认 `~/.canter-eval`，用 `CANTER_EVAL_HOME` 或 `
                      commands.txt（用过的 shell 命令，每行一条）、memory.json（结束时的记忆文件）
 ```
 
-run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/<轮次>/<次>/`（`local.json` 的 `worktrees` 可改）。一道题用到别的仓库时，那些仓库的 worktree 是它的兄弟目录，叫 `<次>-<仓库名>`，比如 `~/.canter-eval-worktrees/<轮次>/memory-global-1-canter-test-ts/`。canter 把整个 `CANTER_HOME` 当私有路径，读写改文件工具会拒绝；worktree 放进去，模型连 `TODO.md` 都读不了。
+run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/<轮次>/<次>/`（`local.json` 的 `worktrees` 可改）。一道题用到别的仓库时，那些仓库的 worktree 放在 `<worktrees>/<轮次>/@repos/<次>/<仓库名>/`：`@` 不能出现在轮次和次的名字里（`--round`、`--run` 只允许字母、数字和 `-_.+`），所以这个目录段不会和任何一次跑的主 worktree 撞上，也不会和别的次的附加 worktree 撞上。canter 把整个 `CANTER_HOME` 当私有路径，读写改文件工具会拒绝；worktree 放进去，模型连 `TODO.md` 都读不了。
 
 ## 第一次用
 
@@ -192,7 +192,7 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
 
       第 2 个及以后的会话从这次的 `state.json` 读题目，不用再给 `--task`（给了不同的题会报错）；清空跑法会在这时清记忆。前一个会话没 `finish` 会报错，不猜。
 
-3. 全部会话跑完，判分、取数、清理、出表和单会话一样（`clean` 删掉这次跑建的全部 worktree，只删 `state.json` 里记着的）：
+3. 全部会话跑完，判分、取数、清理、出表和单会话一样（`clean` 删掉这次跑建的全部 worktree，只删 `state.json` 里记着的、且确实是这次跑会建的路径）：
 
    ```
    canter-eval grade --round <轮次> --run memory-keep-1
@@ -261,7 +261,7 @@ prompt = '''第 1 个会话的开跑提示原文'''
 prompt = '''第 2 个会话的开跑提示原文'''
 ```
 
-一道题用到主仓库之外的仓库时，在 `[[repos]]` 里写每个仓库的名字（`local.json` 的 `repos` 键）、起点和准备命令；主仓库的起点还是上面的 `base`、准备命令还是 `setup`。`prepare` 第 1 个会话时给每个仓库建一个 worktree、各跑一遍它的准备命令（环境里是那个仓库的 `REPO`、`WORKTREE`、`BASE`）。会话用 `repo` 指定在哪个仓库里做，不写就是主仓库。主仓库的 worktree 是 `worktrees/<轮次>/<次>`，别的仓库是它的兄弟目录 `worktrees/<轮次>/<次>-<仓库名>`。
+一道题用到主仓库之外的仓库时，在 `[[repos]]` 里写每个仓库的名字（`local.json` 的 `repos` 键）、起点和准备命令；主仓库的起点还是上面的 `base`、准备命令还是 `setup`。`prepare` 第 1 个会话时给每个仓库建一个 worktree、各跑一遍它的准备命令（环境里是那个仓库的 `REPO`、`WORKTREE`、`BASE`）。会话用 `repo` 指定在哪个仓库里做，不写就是主仓库。主仓库的 worktree 是 `worktrees/<轮次>/<次>`，别的仓库是 `worktrees/<轮次>/@repos/<次>/<仓库名>`。
 
 ```toml
 [[repos]]

@@ -314,6 +314,14 @@ fn prepare_first(
                 worktree.display()
             ));
         }
+        if let Some(parent) = worktree.parent() {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(parent)
+                .and_then(|()| fs::set_permissions(parent, fs::Permissions::from_mode(0o700)))
+                .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+        }
         let base_commit = git(
             &repo,
             &[
@@ -491,7 +499,8 @@ fn prepare_next(
 }
 
 /// Remove every worktree this run made, but only ones below the configured
-/// worktree root and never the root itself.
+/// worktree root, never the root itself, and only paths this run would have
+/// made: a path another run took over is not this run's to delete.
 pub fn clean(home: &crate::paths::Home, state: &crate::paths::State) -> Result<()> {
     let local = crate::paths::Local::load(home)?;
     let root = local.worktree_root(home)?;
@@ -505,6 +514,13 @@ pub fn clean(home: &crate::paths::Home, state: &crate::paths::State) -> Result<(
                 "refusing to remove {}: it is not under the worktree root {}",
                 worktree.display(),
                 root.display()
+            ));
+        }
+        if !crate::paths::owned_worktree(&root, &state.round, &state.run, worktree) {
+            return Err(format!(
+                "refusing to remove {}: it is not a worktree run {} would have made",
+                worktree.display(),
+                state.run
             ));
         }
         if worktrees.iter().any(|seen| seen.worktree == repo.worktree) {

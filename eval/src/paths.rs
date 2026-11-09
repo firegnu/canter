@@ -2,10 +2,12 @@
 
 use std::{
     collections::BTreeMap,
-    env, fs,
+    env,
+    ffi::OsStr,
+    fs,
     io::Write,
     os::unix::fs::{DirBuilderExt, PermissionsExt},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
@@ -294,8 +296,10 @@ impl Local {
         Ok(self.worktree_root(home)?.join(round).join(run))
     }
 
-    /// Where a further repository's worktree goes: a sibling of the run's own
-    /// worktree, named `<run>-<repository>`.
+    /// Where a further repository's worktree goes: below a fixed segment that no
+    /// run or repository tag can be, then by run and repository. A run's main
+    /// worktree is `<round>/<run>`, so the two layouts cannot meet: the segment
+    /// holds `@`, which `check_label` refuses in a run name.
     pub fn other_worktree_path(
         &self,
         home: &Home,
@@ -306,7 +310,40 @@ impl Local {
         Ok(self
             .worktree_root(home)?
             .join(round)
-            .join(format!("{run}-{repo}")))
+            .join(REPOS_SEGMENT)
+            .join(run)
+            .join(repo))
+    }
+}
+
+/// The directory segment that holds the worktrees of a run's further
+/// repositories. `@` cannot appear in a run or repository tag (`check_label`
+/// only allows ASCII letters, digits, `-`, `_`, `.` and `+`), so a main
+/// worktree path can never be inside it and the other way round.
+pub const REPOS_SEGMENT: &str = "@repos";
+
+/// Whether `worktree` is a path this run would have made: its own worktree
+/// `<round>/<run>`, or a further repository's
+/// `<round>/@repos/<run>/<repository>`. A path recorded by an older layout, or
+/// by another run, is not this run's to delete even if it exists.
+pub fn owned_worktree(root: &Path, round: &str, run: &str, worktree: &Path) -> bool {
+    let Some(relative) = relative_to(worktree, root) else {
+        return false;
+    };
+    let parts: Vec<Component> = relative.components().collect();
+    let round = OsStr::new(round);
+    let run = OsStr::new(run);
+    match parts.as_slice() {
+        [Component::Normal(path_round), Component::Normal(path_run)] => {
+            *path_round == round && *path_run == run
+        }
+        [
+            Component::Normal(path_round),
+            Component::Normal(repos),
+            Component::Normal(path_run),
+            Component::Normal(_repo),
+        ] => *path_round == round && *repos == OsStr::new(REPOS_SEGMENT) && *path_run == run,
+        _ => false,
     }
 }
 

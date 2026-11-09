@@ -3104,7 +3104,14 @@ fn prepare_makes_a_worktree_for_every_repository_and_finish_uses_the_session_one
     assert_eq!(first.state.repos.len(), 1);
     let ts_worktree = Path::new(&first.state.repos[0].worktree).to_path_buf();
     assert_eq!(first.state.repos[0].name, "canter-test-ts");
-    assert!(ts_worktree.starts_with(&worktrees));
+    assert_eq!(
+        ts_worktree,
+        worktrees
+            .join("r1")
+            .join("@repos")
+            .join("multi-1")
+            .join("canter-test-ts")
+    );
     assert_ne!(ts_worktree, main);
     assert_eq!(git(&main, &["rev-parse", "HEAD"]).trim(), rust_base);
     assert_eq!(git(&ts_worktree, &["rev-parse", "HEAD"]).trim(), ts_base);
@@ -3140,7 +3147,8 @@ fn prepare_makes_a_worktree_for_every_repository_and_finish_uses_the_session_one
         summary.contains("session repo: canter-test-ts"),
         "{summary}"
     );
-    assert!(summary.contains(&format!("--cwd {}", ts_worktree.display())));
+    // The `@repos` segment is quoted in the printed commands.
+    assert!(summary.contains(&format!("--cwd '{}'", ts_worktree.display())));
     assert!(summary.contains("ts prompt"));
 
     write(
@@ -3171,6 +3179,93 @@ fn prepare_makes_a_worktree_for_every_repository_and_finish_uses_the_session_one
     assert!(!main.exists());
     assert!(!ts_worktree.exists());
     assert!(kept.is_dir());
+}
+
+#[test]
+fn clean_of_one_run_never_removes_another_runs_worktree() {
+    let temp = TempDir::new().unwrap();
+    let home = Home {
+        root: temp.path().join("eval-home"),
+    };
+    let rust = temp.path().join("canter-test-rust");
+    init_repo(&rust);
+    write(&rust.join("rust-marker.txt"), "rust\n");
+    commit(&rust, "rust-base", None);
+    let rust_base = git(&rust, &["rev-parse", "HEAD"]).trim().to_string();
+    let ts = temp.path().join("canter-test-ts");
+    init_repo(&ts);
+    write(&ts.join("ts-marker.txt"), "ts\n");
+    commit(&ts, "ts-base", None);
+    let ts_base = git(&ts, &["rev-parse", "HEAD"]).trim().to_string();
+    let source = source_config(temp.path());
+    let worktrees = temp.path().join("worktrees");
+    write_local_config_repos(
+        &home,
+        &[("canter-test-rust", &rust), ("canter-test-ts", &ts)],
+        &source,
+        &worktrees,
+    );
+    let tasks = multi_repo_task(temp.path(), &rust_base, &ts_base);
+    let single_tasks = temp.path().join("tasks-single");
+    write(
+        &single_tasks.join("single.toml"),
+        &format!(
+            "id = \"single\"\nname = \"single\"\nrepo = \"canter-test-ts\"\nbase = \"{ts_base}\"\n\nprompt = \"single prompt\"\n"
+        ),
+    );
+
+    // Run `a` has a worktree for the additional repository; cleaning it frees
+    // those paths.
+    let a = prepare_named(&home, &source, &tasks, "a", 1, None, Some("multi")).unwrap();
+    let a_main = Path::new(&a.state.worktree).to_path_buf();
+    let a_ts = Path::new(&a.state.repos[0].worktree).to_path_buf();
+    assert_eq!(
+        a_ts,
+        worktrees
+            .join("r1")
+            .join("@repos")
+            .join("a")
+            .join("canter-test-ts")
+    );
+    canter_eval::prepare::clean(&home, &a.state).unwrap();
+    assert!(!a_main.exists());
+    assert!(!a_ts.exists());
+
+    // A later run whose name spells `<a>-<repository>` gets its own path, and
+    // its uncommitted file stays there.
+    let b = prepare_named(
+        &home,
+        &source,
+        &single_tasks,
+        "a-canter-test-ts",
+        1,
+        None,
+        Some("single"),
+    )
+    .unwrap();
+    let b_worktree = Path::new(&b.state.worktree).to_path_buf();
+    assert_eq!(b_worktree, worktrees.join("r1").join("a-canter-test-ts"));
+    assert_ne!(b_worktree, a_ts);
+    write(&b_worktree.join("uncommitted.txt"), "keep me\n");
+
+    // Cleaning the old run again leaves the new run alone.
+    canter_eval::prepare::clean(&home, &a.state).unwrap();
+    assert!(b_worktree.is_dir());
+    assert_eq!(
+        std::fs::read_to_string(b_worktree.join("uncommitted.txt")).unwrap(),
+        "keep me\n"
+    );
+
+    // A state recording another run's worktree is refused, and nothing is
+    // deleted: the path was freed once and belongs to someone else now.
+    let mut borrowed = a.state.clone();
+    borrowed.repos[0].worktree = b_worktree.display().to_string();
+    let error = canter_eval::prepare::clean(&home, &borrowed).unwrap_err();
+    assert!(error.contains("refusing"), "{error}");
+    assert!(b_worktree.join("uncommitted.txt").is_file());
+
+    canter_eval::prepare::clean(&home, &b.state).unwrap();
+    assert!(!b_worktree.exists());
 }
 
 #[tokio::test]

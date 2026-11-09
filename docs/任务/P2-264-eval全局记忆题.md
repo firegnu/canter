@@ -119,3 +119,22 @@
 
 - 判分检查里 `test "$WORKTREE" = "$(pwd)"` 在 macOS 上会挂：`sh` 的 `pwd` 给的是物理路径（`/private/tmp/...`），`WORKTREE` 是 `/tmp/...`。多仓库测试里的检查改成两边都取 `pwd -P` 再比。
 - 给测试里这些 `State { … }` 加字段时手滑删了两行 `let temp = TempDir::new().unwrap();`，下一轮编译就暴露了，已改回；现在 `git diff` 里除了一行 `use` 没有删改。
+
+## 返工 1
+
+交叉审查（P2-264-交叉审查）提了两条必须改，主控决定第 1 条改、第 2 条记成建议不改。
+
+改了什么：
+
+- 附加仓库的 worktree 路径从 `<轮次>/<次>-<仓库名>` 换成 `<轮次>/@repos/<次>/<仓库名>`：`@` 不在 `check_label` 允许的字符里（只有字母、数字、`-_.+`），所以这个目录段永远不可能是一个合法 run 的主 worktree（主路径还是 `<轮次>/<次>`），两次跑的附加路径也按 run 各自分层，两者都不会重叠。主仓库路径不变。
+- `clean` 在原来的「在 worktree 根下」之外再加一条所有权检查（`paths::owned_worktree`）：记着的路径必须是这次跑的 `<轮次>/<次>` 或 `<轮次>/@repos/<次>/<仓库名>`，否则报 `refusing`、一个都不删。旧分支那种旧布局的 state 会被拒绝而不是拿来删别人的目录（那个分支没合并，没有真实 state 受影响）。
+- `prepare` 给每个 worktree（包括附加仓库的）建父目录（`git worktree add` 不会建多级父目录）。README 的 worktree 位置、`clean` 的说法跟着改。
+
+验证了什么：
+
+- 新增回归检查 `clean_of_one_run_never_removes_another_runs_worktree`：prepare `a`（两个仓库）→ `clean --run a` → prepare `a-canter-test-ts`（主仓库就是 canter-test-ts，名字恰好拼出旧布局的路径）→ 再 `clean --run a`，后者路径是 `<轮次>/a-canter-test-ts`，旧布局会和 `a` 的附加路径重合；现在 B 的 worktree 和里面的未提交文件都在。再把一份 state 的 `repos[0].worktree` 改成 B 的路径去 clean，报 `refusing` 且 B 不动；最后 `clean` B 能正常删掉。
+- 多仓库测试的路径断言改成新布局（`worktrees/r1/@repos/multi-1/canter-test-ts`）。`cargo nextest run -p canter-eval` 42 个全过；`cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 干净。
+
+没做的事：第 2 条（多仓库 `prepare` 中途失败会留下没有 `state.json` 的 worktree、`clean` 收不了尾）按主控决定不改，主控记成建议。
+
+踩过的坑：附加路径带 `@` 后，`summary` 里打印的 corral 命令会把 `--cwd` 加上单引号（`quote` 的允许字符里没有 `@`），测试里相应地按带引号的形式断言；命令本身没问题。
