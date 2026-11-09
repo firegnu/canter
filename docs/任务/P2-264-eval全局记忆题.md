@@ -22,7 +22,7 @@
 
 - `eval/README.md`「多个会话的题（记忆）」一节和「题目文件」相关的部分
 - `eval/tasks/memory-2.toml`（新题照它写）、`eval/tasks/long.toml`（canter-test-ts 的起点和 `setup`）
-- `eval/src/task.rs`、`eval/src/paths.rs`（`State`）、`eval/src/prepare.rs`、`eval/src/steer.rs`、`eval/src/finish.rs`、`eval/src/grade.rs`、`eval/src/clean.rs`（按你的阅读顺序，名字以实际文件为准）
+- `eval/src/task.rs`、`eval/src/paths.rs`（`State`）、`eval/src/prepare.rs`（含 `clean`）、`eval/src/steer.rs`、`eval/src/finish.rs`、`eval/src/grade.rs`、`eval/src/collect.rs`、`eval/src/memory.rs`
 
 ## 在哪里干活
 
