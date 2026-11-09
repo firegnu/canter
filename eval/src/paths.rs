@@ -376,6 +376,19 @@ impl State {
     }
 }
 
+/// Where one session's id lives. First-version state files wrote the id of
+/// their only session at the run level; keep using that file for session 1.
+pub fn session_id_file(home: &Home, state: &State, index: usize) -> PathBuf {
+    let path = home.session_id_path(&state.round, &state.run, index);
+    if index == 1 && state.session_count <= 1 {
+        let legacy = Path::new(&state.session_file);
+        if legacy != path {
+            return legacy.to_path_buf();
+        }
+    }
+    path
+}
+
 /// The session id in a `session.json`, or `None` when the file is not there.
 pub fn read_session_id(path: &Path) -> Result<Option<String>> {
     let text = match fs::read_to_string(path) {

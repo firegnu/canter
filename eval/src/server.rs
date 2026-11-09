@@ -99,6 +99,7 @@ pub async fn find_session(
     registration: &Registration,
     worktree: &Path,
     exclude: &[String],
+    session_file: &Path,
 ) -> Result<Option<String>> {
     let (status, body) =
         get_json(&registration.socket_path, canter_protocol::routes::SESSIONS).await?;
@@ -134,9 +135,10 @@ pub async fn find_session(
         [] => Ok(None),
         [one] => Ok(Some(one.clone())),
         several => Err(format!(
-            "several sessions run in {}: {}; write the right one as {{\"sessionId\": \"...\"}} to the run's session.json",
+            "several sessions run in {}: {}; write the right one as {{\"sessionId\": \"...\"}} to {}",
             worktree.display(),
-            several.join(", ")
+            several.join(", "),
+            session_file.display()
         )),
     }
 }

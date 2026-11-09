@@ -10,9 +10,10 @@ use canter_eval::{
 
 const USAGE: &str = "\
 Usage:
-  canter-eval prepare --round <r> --run <n> --task <task> [options]
+  canter-eval prepare --round <r> --run <n> [--task <task>] [options]
       write the eval config, clear memories, create the run worktree, print the
-      eval server, trust and corral commands; later sessions use --session
+      eval server, trust and corral commands; --task is for the first session,
+      later sessions read it from state.json
   canter-eval trust --round <r> --run <n>
       trust the run worktree through POST /v1/folderTrust
   canter-eval steer --round <r> --run <n> [--session <n>]
@@ -77,7 +78,7 @@ async fn run() -> Result<bool> {
             let prepared = canter_eval::prepare::prepare(&PrepareOptions {
                 home: home.clone(),
                 task_dir,
-                task: required(&options, "task")?.into(),
+                task: options.get("task").cloned(),
                 round: required(&options, "round")?.into(),
                 run: required(&options, "run")?.into(),
                 session: session(&options)?,

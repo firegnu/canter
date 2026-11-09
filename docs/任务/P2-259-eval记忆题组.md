@@ -143,3 +143,43 @@
 - 临时仓库的 TODO 标题在 `**...**` 里带句号，fixture 和检查一开始少了句号，勾不上；按 TODO 原文改了。
 - 集成测试在同一个临时目录里起两个假服务端，第二次 bind 报 `Address already in use`；改成两个子目录。另外 shadow 掉的 `Fake` 不会当场 drop，监听还在，旧 socket 不能重用。
 - 旧的 `State`、`SteerOptions`、`RunResult` 构造在测试里都要补新字段；会话文件从 run 根挪到 `sessions/1/`，相关测试一起改了。
+
+## 返工
+
+2026-11-09，按主仓库交叉审查（`P2-259-交叉审查.md` 的「## 审查意见」）返工 7 条，都在本分支、未合并。
+
+**改了什么**
+
+1. （必须改 1）清记忆和列记忆文件不跟随符号链接：`memory.rs` 用 `symlink_metadata` 逐组件检查 `memory`、`projects`、`projects/<key>/memory`，本身是链接就报错不动；`projects/` 里的项目目录是链接也报错；目录里的条目用 `file_type` 判断，链接只删链接本身、不计入 `.md` 快照。加了链接目录和链接条目的测试，断言外面的目标原样还在。
+2. （必须改 2）单会话旧状态先读 `state.sessionFile`（run 根的 `session.json`），不再把当前会话当历史会话排除；新增 `paths::session_id_file`，`steer`、`finish`、`collect` 共用。多会话报歧义时打印 `sessions/<n>/session.json` 的准确路径。保留一条旧状态格式的回归测试（state.json 没有 `sessionCount` / `memoryMode`，ID 在 run 根；假服务端同时列出这个 ID 和另一个候选，断言直接用旧 ID、不列会话、不写 `sessions/1/`）。
+3. （必须改 3）`commands.txt` 里命令内的换行改成 `; `（先归一 CRLF / CR），保留命令边界；`memory.toml` 的 `no-blanket-git-add` 改成按参数边界匹配的正则：`git` 后可有多个空格和任意多个 `-C <目录>` 之类的全局选项，然后 `add`，参数是单独的 `-A`、`--all` 或 `.`，后面接空白、`;`、`&`、`|` 或行尾。测试覆盖 `git add -A`、`git  add  -A`、`git add --all`、`git add .`、`cargo test && git add .`、`cargo test; git add -A`、`git -C "$WORKTREE" add .`（都判违规）和 `git add .gitignore`、`git add ./src/cli.rs`、按文件名 `git add src/cli.rs TODO.md`（都放过）。
+4. （必须改 4）`dependencies-unchanged` 改成比较起点和现在的 `Cargo.lock` 里 `[[package]]` 的 name 集合（`git show "$BASE:Cargo.lock"` 对当前文件，`sed` 取 `name = "..."` 行排序比较），不再用 awk 读 `Cargo.toml`。测试仓库的起点提交带 `Cargo.lock`；用 `[dependencies.foo]` 子表加依赖、锁文件里加 `foo` 包时判不过，恢复后判过。
+5. （必须改 5）单会话 `collect --session <id>` 显式指定时以它为准，跳过与已存 ID 的冲突校验；没给时仍用已存 ID 并严格校验。多会话照旧按每个会话记录的 ID 严格校验、忽略这个选项。测试：已存 `s-other`、`--stats-json` 是 `s-collect` 时，不给 `--session` 报冲突，给了就按 `s-collect` 收数。
+6. （建议改 6）`PrepareOptions.task` 改成 `Option<String>`：第 1 个会话必填，第 2 个及以后从 `State.task_path` 读题目，`--task` 给了且和这次跑不一致才报错。`prepare` 打印的下一会话命令和 README 现在照原样可直接执行。
+7. （建议改 7）「通过次数」只对多会话题按 `(轮次, 题, 记忆跑法)` 分组；单会话题照原来的 `(轮次, 题)` 分组，同一轮同一题的旧结果（无 `memoryMode`）和新结果（`clear`）合成一行。测试用一份删掉新字段的旧结果和一份带 `clear` 的新结果，断言只有一行 `2/2`、`2.0/2`。
+
+另外把 DESIGN 的 eval 一节和 README 的流程、`commands.txt` 说明、`prepare` 的 `--task` 说明一并更新。
+
+**验证了什么**
+
+- `CARGO_TARGET_DIR=…/.target/eval-memory cargo nextest run -p canter-eval`：34 个全过（新增 3 个：旧状态 steer 回归、链接目录清理、单会话显式 `--session`；扩了依赖、`git add` 各形式、通过次数分组的断言）。
+- 同一编译目录的 `cargo clippy -p canter-eval --all-targets -- -D warnings`、`cargo fmt -p canter-eval -- --check`、`git diff --check` 都过。
+- 没有起 canter 服务端、corral agent，没调真实模型，没读 `~/.canter` / `~/.canter-eval`；判分测试只在临时 cargo 仓库里跑。
+
+**拿主意的地方**
+
+- 符号链接按「层目录本身及 `projects/` 下的项目目录是链接就报错，目录里的条目是链接只删链接」处理；列记忆文件同一规则，链接条目不进快照。
+- `no-blanket-git-add` 的正则不做 shell 解析，按主控定的参数边界识别；引用里的 `git add .`（比如 `echo "git add ."`）如果前面不是空白、`;`、`&`、`|` 就不会误中。
+- 后续 `prepare` 的 `--task` 给了相同值也接受，只有不一致才报错；`--tasks` 目录在后续会话里不影响，题目从 `state.task_path` 读。
+- 通过次数里单会话行在多会话表同时出现时「记忆」列写 `—`。
+
+**没做的事**
+
+- 没有真跑记忆题、没起真实 agent 服务端；没有改 `crates/`、`long.toml` 和 `canter stats` 口径。
+- 没有跑全套（按任务单只跑 `-p canter-eval`、clippy、fmt、`git diff --check`）。
+
+**踩过的坑**
+
+- 一次 `edit` 里第三个替换的原文对不上，整次没写入；重新读文件确认后逐段改，`prepare` 的签名一度和调用对不上，靠编译发现。
+- 记忆测试把 `clear` 和 `files` 放进同一个数组遍历，两个 `Result` 的成功类型不同，编译不过；改成分别断言。
+- 新加的旧状态 steer 测试里假服务端需要 `mut` 才能读请求，编译提示后补上。

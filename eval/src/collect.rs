@@ -232,33 +232,22 @@ fn collect_session(
     let home = &options.home;
     let run = &state.run;
     let recorded =
-        match crate::paths::read_session_id(&home.session_id_path(&options.round, run, index))? {
-            Some(id) => Some(id),
-            // A first-version run wrote its one session id at the run level.
-            None if session_count == 1 => {
-                crate::paths::read_session_id(Path::new(&state.session_file))?
-            }
-            None => None,
-        };
+        crate::paths::read_session_id(&crate::paths::session_id_file(home, state, index))?;
     if session_count > 1 && recorded.is_none() {
         return Err(format!(
             "session {index} has no id yet; run `canter-eval steer --session {index}` while it is open"
         ));
     }
+    let explicit = options.session.clone().filter(|_| session_count == 1);
     let stats = match &options.stats_json {
         Some(path) => read_stats(path, index, session_count)?,
         None => {
-            let id = options
-                .session
-                .clone()
-                .filter(|_| session_count == 1)
-                .or(recorded.clone())
-                .ok_or_else(|| {
-                    format!(
-                        "no session id yet; the run has not written {}",
-                        home.session_id_path(&options.round, run, index).display()
-                    )
-                })?;
+            let id = explicit.clone().or(recorded.clone()).ok_or_else(|| {
+                format!(
+                    "no session id yet; the run has not written {}",
+                    crate::paths::session_id_file(home, state, index).display()
+                )
+            })?;
             let local = crate::paths::Local::load(home)?;
             let text = crate::server::run_canter(
                 &crate::server::canter_binary(&local),
@@ -270,7 +259,10 @@ fn collect_session(
         }
     };
     let session_id = stats.session_id.clone();
-    if let Some(recorded) = &recorded
+    // An explicit id wins for a one-session run, as it did before; a
+    // multi-session run always trusts the id recorded for this session.
+    if explicit.is_none()
+        && let Some(recorded) = &recorded
         && *recorded != session_id
     {
         return Err(format!(

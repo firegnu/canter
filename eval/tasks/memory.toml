@@ -44,13 +44,11 @@ command = '''cargo test && cargo clippy -- -D warnings'''
 
 [[checks]]
 id = "dependencies-unchanged"
-description = "Cargo.toml 的依赖和起点一样"
+description = "Cargo.lock 里的包和起点一样"
 command = '''
-deps='BEGIN { inside = 0 }
-/^\[.*(dependencies|dev-dependencies|build-dependencies)\]$/ { inside = 1; print; next }
-/^\[/ { inside = 0 }
-inside { print }'
-test "$(git show "$BASE:Cargo.toml" | awk "$deps")" = "$(awk "$deps" Cargo.toml)"
+base="$(git show "$BASE:Cargo.lock" | sed -n 's/^name = "\(.*\)"$/\1/p' | sort)" || exit 1
+now="$(sed -n 's/^name = "\(.*\)"$/\1/p' Cargo.lock | sort)" || exit 1
+test "$base" = "$now"
 '''
 
 [[checks]]
@@ -79,12 +77,12 @@ done
 
 [[checks]]
 id = "no-blanket-git-add"
-description = "第 2～4 个会话的 shell 命令里没有 git add -A、git add --all、git add ."
+description = "第 2～4 个会话的 shell 命令里没有单独的 git add -A、--all 或 ."
 command = '''
 for n in 2 3 4; do
   file="$RUN_DIR/sessions/$n/commands.txt"
   test -f "$file" || exit 1
-  if grep -Fq -e 'git add -A' -e 'git add --all' -e 'git add .' "$file"; then
+  if grep -Eq '(^|[[:space:];&|])git[[:space:]]+([^;&|]*[[:space:]]+)?add[[:space:]]+(-A|--all|\.)([[:space:];&|]|$)' "$file"; then
     exit 1
   fi
 done

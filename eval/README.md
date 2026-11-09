@@ -152,7 +152,7 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
 - `--memory keep`：整次跑开始时清一次，会话之间保留；
 - `--memory clear`（缺省）：每个会话开始前都清空 eval 状态目录的两层记忆。
 
-清空只在 eval 状态目录的 `memory/` 和 `projects/*/memory/` 里删文件，旁边的目录和文件不动；canter 打开会话时才读记忆，所以清完不用重启 eval 服务端。
+清空只在 eval 状态目录的 `memory/` 和 `projects/*/memory/` 里删文件，旁边的目录和文件不动；这两层目录及其上级本身是符号链接时报错、不碰那个目录，目录里的链接只删链接、不跟随。canter 打开会话时才读记忆，所以清完不用重启 eval 服务端。
 
 1. 准备第 1 个会话：
 
@@ -160,7 +160,7 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
    canter-eval prepare --round <轮次> --run memory-keep-1 --task memory --memory keep
    ```
 
-   服务端、trust 同一个单会话题一样，只用做一次。
+   服务端、trust 同一个单会话题一样，只用做一次。`--task` 只在第 1 个会话给，后面的会话从这次的 `state.json` 读。
 
 2. 会话 1 到 n 依次这样跑（prepare 打印的下一步就是这些命令）：
 
@@ -180,9 +180,15 @@ run 的 worktree 不在状态目录里，默认放在 `~/.canter-eval-worktrees/
       canter-eval finish --round <轮次> --run <次> --session <n>
       ```
 
-      写 `sessions/<n>/head`、`commands.txt`（每行一条，取自会话事件的 `commandExecution`，命令里的换行改成空格）、`memory.json`（记忆文件个数和名字）。一个会话只能记一次。
+      写 `sessions/<n>/head`、`commands.txt`（每行一条，取自会话事件的 `commandExecution`，命令里的换行改成 `; `，保留命令之间的边界）、`memory.json`（记忆文件个数和名字）。一个会话只能记一次。
 
-   5. 下一个会话：`prepare --session <n+1>`（清空跑法会在这时清记忆）。前一个会话没 `finish` 会报错，不猜。
+   5. 下一个会话：
+
+      ```
+      canter-eval prepare --round <轮次> --run <次> --session <n+1>
+      ```
+
+      第 2 个及以后的会话从这次的 `state.json` 读题目，不用再给 `--task`（给了不同的题会报错）；清空跑法会在这时清记忆。前一个会话没 `finish` 会报错，不猜。
 
 3. 全部会话跑完，判分、取数、清理、出表和单会话一样：
 

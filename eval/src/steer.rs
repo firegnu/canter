@@ -144,14 +144,14 @@ async fn wait_for_session(
     index: usize,
     poll: Duration,
 ) -> Result<String> {
-    let path = home.session_id_path(&state.round, &state.run, index);
+    let path = crate::paths::session_id_file(home, state, index);
     loop {
         if let Some(session) = crate::paths::read_session_id(&path)? {
             return Ok(session);
         }
         let exclude = home.recorded_session_ids(&state.round, &state.run)?;
         if let Some(session) =
-            crate::server::find_session(registration, state.worktree(), &exclude).await?
+            crate::server::find_session(registration, state.worktree(), &exclude, &path).await?
         {
             let body = serde_json::json!({ "sessionId": session });
             crate::paths::write_private(&path, body.to_string().as_bytes())?;

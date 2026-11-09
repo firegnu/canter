@@ -202,12 +202,15 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
         let mut groups: std::collections::BTreeMap<(&str, &str, &str), Vec<&RunResult>> =
             std::collections::BTreeMap::new();
         for row in rows {
+            // Only multi-session runs compare memory modes; a one-session run
+            // keeps the original (round, task) grouping even when it records one.
+            let mode = if row.session_count > 1 {
+                memory_label(row.memory_mode)
+            } else {
+                ""
+            };
             groups
-                .entry((
-                    row.round.as_str(),
-                    row.task.as_str(),
-                    memory_label(row.memory_mode),
-                ))
+                .entry((row.round.as_str(), row.task.as_str(), mode))
                 .or_default()
                 .push(row);
         }
@@ -224,7 +227,8 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
             let total = group.first().map_or(0, |row| row.checks_total);
             out.push_str(&format!("| {round} | {task} | "));
             if show_modes {
-                out.push_str(&format!("{mode} | "));
+                let label = if mode.is_empty() { "—" } else { mode };
+                out.push_str(&format!("{label} | "));
             }
             out.push_str(&format!(
                 "{complete}/{} | {average:.1}/{total} |\n",

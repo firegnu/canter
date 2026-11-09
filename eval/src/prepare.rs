@@ -15,7 +15,8 @@ use crate::{Result, paths::Home, paths::MemoryMode, paths::State};
 pub struct PrepareOptions {
     pub home: Home,
     pub task_dir: PathBuf,
-    pub task: String,
+    /// The task of session 1; later sessions read it from the run's state.json.
+    pub task: Option<String>,
     pub round: String,
     pub run: String,
     /// One-based session of the task; defaults to the first.
@@ -173,8 +174,33 @@ pub fn prepare(options: &PrepareOptions) -> Result<Prepared> {
     if options.session == 0 {
         return Err("--session starts at 1".into());
     }
-    let task_path = options.task_dir.join(format!("{}.toml", options.task));
-    let task = crate::task::Task::load(&task_path)?;
+    if options.session == 1 {
+        let name = options.task.as_deref().ok_or(
+            "--task is required for session 1; later sessions read it from the run's state.json",
+        )?;
+        let task_path = options.task_dir.join(format!("{name}.toml"));
+        let task = crate::task::Task::load(&task_path)?;
+        if options.session > task.session_count() {
+            return Err(format!(
+                "task {} has {} sessions; --session {} is past the end",
+                task.id,
+                task.session_count(),
+                options.session
+            ));
+        }
+        return prepare_first(options, &task, &task_path);
+    }
+    let state = State::load(&options.home, &options.round, &options.run)
+        .map_err(|error| format!("{error}\nprepare session 1 of this run first"))?;
+    if let Some(name) = &options.task
+        && *name != state.task
+    {
+        return Err(format!(
+            "run {} is for task {}; leave --task out for a later session",
+            state.run, state.task
+        ));
+    }
+    let task = state.task()?;
     if options.session > task.session_count() {
         return Err(format!(
             "task {} has {} sessions; --session {} is past the end",
@@ -183,11 +209,7 @@ pub fn prepare(options: &PrepareOptions) -> Result<Prepared> {
             options.session
         ));
     }
-    if options.session == 1 {
-        prepare_first(options, &task, &task_path)
-    } else {
-        prepare_next(options, &task)
-    }
+    prepare_next(options, &task, &state)
 }
 
 fn prepare_first(
@@ -335,15 +357,11 @@ fn prepare_first(
     })
 }
 
-fn prepare_next(options: &PrepareOptions, task: &crate::task::Task) -> Result<Prepared> {
-    let state = State::load(&options.home, &options.round, &options.run)
-        .map_err(|error| format!("{error}\nprepare session 1 of this run first"))?;
-    if state.task != task.id {
-        return Err(format!(
-            "run {} is for task {}, not {}",
-            state.run, state.task, task.id
-        ));
-    }
+fn prepare_next(
+    options: &PrepareOptions,
+    task: &crate::task::Task,
+    state: &State,
+) -> Result<Prepared> {
     if state.session_count != task.session_count() {
         return Err(format!(
             "task {} now has {} sessions; this run was prepared with {}",
@@ -406,7 +424,7 @@ fn prepare_next(options: &PrepareOptions, task: &crate::task::Task) -> Result<Pr
         0
     };
     Ok(Prepared {
-        state,
+        state: state.clone(),
         task: task.clone(),
         session: options.session,
         prompt: task.prompt(options.session)?.to_string(),

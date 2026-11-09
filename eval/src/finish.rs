@@ -29,7 +29,7 @@ pub fn finish(home: &crate::paths::Home, round: &str, run: &str, index: usize) -
             "--session must be between 1 and {count} for this run"
         ));
     }
-    let session_path = home.session_id_path(round, run, index);
+    let session_path = crate::paths::session_id_file(home, &state, index);
     let session_id = crate::paths::read_session_id(&session_path)?.ok_or_else(|| {
         format!(
             "session {index} has no id yet; run `canter-eval steer --session {index}` while it is open and writes {}",
@@ -84,8 +84,9 @@ pub fn finish(home: &crate::paths::Home, round: &str, run: &str, index: usize) -
     })
 }
 
-/// Each completed `commandExecution` item's command, one line per command;
-/// newlines inside a command become spaces.
+/// Each completed `commandExecution` item's command, one line per command.
+/// Newlines inside a command become `; ` so command boundaries stay visible;
+/// the commands are not parsed any further.
 pub fn commands_from_events(text: &str) -> Vec<String> {
     let mut commands = Vec::new();
     for line in text.lines() {
@@ -97,7 +98,12 @@ pub fn commands_from_events(text: &str) -> Vec<String> {
             ..
         } = event.payload
         {
-            commands.push(command.replace(['\n', '\r'], " "));
+            commands.push(
+                command
+                    .replace("\r\n", "\n")
+                    .replace('\r', "\n")
+                    .replace('\n', "; "),
+            );
         }
     }
     commands
