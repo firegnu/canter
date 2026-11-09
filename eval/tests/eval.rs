@@ -8,7 +8,7 @@ use std::{
 };
 
 use canter_eval::{
-    collect::{CollectOptions, Metrics, RereadFiles, RunResult},
+    collect::{CollectOptions, ContextShare, Metrics, RereadFiles, RunResult},
     grade::{CheckFile, CheckResult},
     paths::{Home, State},
     prepare::PrepareOptions,
@@ -1112,6 +1112,14 @@ fn sample_result(round: &str, run: &str, passed: usize, duration: u64, cost: f64
             duration_ms: Some(duration),
             requests: 30,
             conversation_requests: 12,
+            context_peak_tokens: Some(49_710),
+            context_average_tokens: Some(34_148),
+            context_share: Some(ContextShare {
+                system_percent: 17,
+                tool_definition_percent: 13,
+                conversation_percent: 45,
+                tool_result_percent: 26,
+            }),
             compactions: vec![canter_eval::collect::CompactionRow {
                 trigger: Some("auto".into()),
                 before_tokens: Some(60_000),
@@ -1182,6 +1190,8 @@ fn report_puts_two_rounds_side_by_side() {
     assert!(text.contains("1h02m"));
     assert!(text.contains("$0.52 (压缩 $0.02)"));
     assert!(text.contains("| 压后重读 | 工具失败 | 改计划 |"));
+    assert!(text.contains("| 压缩 | 上下文峰值 | 平均上下文 | 上下文组成（估算） | 缓存输入 |"));
+    assert!(text.contains("50k | 34k | 系统 17% · 工具定义 13% · 对话 45% · 工具结果 26% |"));
     assert!(text.contains("2（改过 1 · 读回 0 · 没改 1）"));
     assert!(text.contains("3（shell 2 · edit 1）"));
     assert!(text.contains("readme-in-late-commits=4"));

@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     Result,
-    collect::{RereadFiles, RunResult},
+    collect::{ContextShare, RereadFiles, RunResult},
 };
 
 pub struct ReportOptions {
@@ -108,10 +108,10 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
         out.push_str("轮次 | ");
     }
     out.push_str(
-        "题 | 次 | 判分 | 未过 | 用时 | 请求 | 压缩 | 缓存输入 | 未缓存输入 | 输出 | 思考 | 花费 | 读 | 压后重读 | 工具失败 | 改计划 | 护栏 | 被拦 | 记录 | 会话 |\n",
+        "题 | 次 | 判分 | 未过 | 用时 | 请求 | 压缩 | 上下文峰值 | 平均上下文 | 上下文组成（估算） | 缓存输入 | 未缓存输入 | 输出 | 思考 | 花费 | 读 | 压后重读 | 工具失败 | 改计划 | 护栏 | 被拦 | 记录 | 会话 |\n",
     );
     out.push('|');
-    for _ in 0..if show_round { 21 } else { 20 } {
+    for _ in 0..if show_round { 24 } else { 23 } {
         out.push_str("---|");
     }
     out.push('\n');
@@ -137,7 +137,7 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
             out.push_str(&format!("{} | ", row.round));
         }
         out.push_str(&format!(
-            "{} | {} | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "{} | {} | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             row.task,
             row.run,
             row.checks_passed,
@@ -150,6 +150,9 @@ fn render(round: &str, against: Option<&str>, rows: &[RunResult]) -> String {
             duration(metrics.duration_ms),
             metrics.requests,
             metrics.compactions.len(),
+            context_tokens(metrics.context_peak_tokens),
+            context_tokens(metrics.context_average_tokens),
+            context_share(metrics.context_share.as_ref()),
             tokens(metrics.cached_input_tokens),
             tokens(metrics.uncached_input_tokens),
             tokens(metrics.output_tokens),
@@ -281,6 +284,25 @@ fn tokens(value: Option<u64>) -> String {
     } else {
         value.to_string()
     }
+}
+
+/// A missing context column used to be absent from `result.json`; show that as
+/// a dash, not as an unknown token count.
+fn context_tokens(value: Option<u64>) -> String {
+    value.map_or_else(|| "—".to_string(), |value| tokens(Some(value)))
+}
+
+fn context_share(share: Option<&ContextShare>) -> String {
+    let Some(share) = share else {
+        return "—".into();
+    };
+    format!(
+        "系统 {}% · 工具定义 {}% · 对话 {}% · 工具结果 {}%",
+        share.system_percent,
+        share.tool_definition_percent,
+        share.conversation_percent,
+        share.tool_result_percent
+    )
 }
 
 fn cost(value: Option<f64>, unknown: bool, compaction: Option<f64>) -> String {
