@@ -72,3 +72,23 @@
 - `shell` 的工具说明（`crates/canter-tools/src/lib.rs` 约 263 行）加一句英文：rg 默认就递归搜目录，它的 `-r` 是 `--replace`，不是递归（意思照这句，措辞你定，越短越好）。只读子 agent 被拦时的提示（约 895 行）已经有这句，不改。
 - 验证：工具说明快照照新说明更新，不另加测试。
 - P2-248、P2-268 记的这件由本件做掉。
+
+## 完成记录
+
+- 做了什么：先在 DESIGN 子 agent 一节写明新规则，再扩展 `wait_agent`。交互用户轮（直接输入、排队、插话及派出当轮）和报告叫醒轮，在 `auto_wake_limit > 0` 时只取一次状态与可用结果，有仍在运行的子 agent 就附英文提示先回复用户、结束本轮。核心设置内部 `no_wait` 标记（模型参数不能设置），服务端复用原来的校验、状态读取、最后回复及终态结果确认，只跳过等结果的循环；工具说明和三份请求快照同步更新。
+- 验证了什么：先加真实会话／工具路径回归，保持子 agent 运行并请求等待 600000 ms。未改实现时，`interactive_dispatch_wait_returns_while_the_child_is_running` 因 2 秒内没有返回而失败；最小实现后同一测试通过。新增 6 项测试覆盖派出当轮、直接／排队／插话、exec、关闭叫醒、goal 自动续跑和已完成子 agent 的最后回复；原报告叫醒测试保留并更新提示断言。相关 9 项先通过，随后 `cargo nextest run -p canter-core -p canter-server` 为 716 passed / 28 skipped；`cargo nextest run -p canter --test exec --test server -E 'binary(exec) or test(mcp::no_mcp_request_matches_pre_search_bytes)'` 为 23 passed / 61 skipped。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。所有 Cargo 命令使用任务指定的独立编译目录，命令均在前台等到退出。
+- 拿主意的地方：`runner` 在轮末调用 `schedule_goal`，后者约 10 毫秒后安排续跑，`next_goal` 不检查子 agent 是否还在运行；因此按任务给定分支，保留 `active.goal_continuation` 轮次的等待，避免空转。普通用户轮不因会话设过 goal 就保留等待。无待主控决定的实现问题。
+- 没做的事：没有调用真实模型（0 次），没有改 `eval/`，没有读取或修改用户的 canter 状态目录，没有修改 `spawn_agent` 说明、系统提示、报告叫醒或目标调度。没有跑工作区全套测试，没有再派 agent，没有合并或推送；交叉审查及一次 DeepSeek flash 的 `subagent` 真实验收由主控执行。
+- 踩过的坑：首次编译测试替身时把 `Message::ToolResult` 字段误写为 `call_id`，改为实际的 `tool_call_id` 后重新运行，取得上述等待超时的有效 RED；编译错误没有当成 RED。初次检索用了不存在的路径和无匹配的 zsh 通配符，随后用 `rg` 定位到实际文件。没有其它实现返工或环境异常。
+- 主控补充（11-10）已完成：按主仓库任务文件的「主控补充」，shell 工具说明新增 `rg searches directories recursively by default; -r means --replace, not recursion.`，同步四份快照，`cargo nextest run -p canter-tools`（243 passed / 22 skipped）、受影响的三项请求快照测试、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过，未新增测试、未改只读子 agent 的拦截提示，所有命令均使用指定编译目录并在前台跑完，无新增坑或待主控决定事项。
+
+## 主控审查
+
+- diff 动了 `canter-core` 的 `agent_tools.rs`（判定、`INTERACTIVE_WAIT`、`wait_agent` 说明）、`canter-server` 的 `agent_sessions.rs`（`no_wait` 跳过等待循环）、`canter-tools` 的 `shell` 说明、四份请求快照、DESIGN 和测试；没碰 `spawn_agent` 说明、系统提示词、叫醒和 exec 的行为。
+- `/goal` 续跑：开发读出续跑在轮末 10 毫秒后开下一轮、不看子 agent，续跑轮照旧等，主控同意。
+- 交叉审查（Claude Code `opus[1m]` xhigh）：可以合并，0 必须改；建议改 2 条（不等时不计入重复保护、说明措辞）记 HANDOFF，可以不改 3 条同意不改，见 `P2-270-交叉审查.md`。
+- 合并前全套（主控）：`cargo nextest run --all-targets` 2097 个全过（50 跳过），`cargo test --doc --workspace` 没有失败。
+- 派 Codex（`gpt-6-astra` xhigh）做：一次做完；开工后用户同意加的 rg 那句，主控在它交完主体后转去补上。合并时任务文件两边都在末尾追加（主控补充 / 完成记录），两节都保留。
+- 验收（用户 11-10「跑一次通了就行了」）：等用户 `canter upgrade` 后，主控用 `subagent` 题真跑一次。
+
+结果：一次过

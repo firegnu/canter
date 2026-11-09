@@ -1007,19 +1007,31 @@ async fn explorer_from_plan_mode_uses_its_checklist_without_the_parent_plan_work
     test.stop(&[child]).await;
 }
 
-/// Starts nothing: answers spawn_agent with a fixed id, so only the parent runs.
+/// Starts nothing: reports a fixed running child, so only the parent runs.
 struct StartOnlyHost;
 impl canter_core::AgentHost for StartOnlyHost {
     fn execute(
         &self,
         _parent: String,
-        _command: canter_core::AgentCommand,
+        command: canter_core::AgentCommand,
         _cancel: tokio_util::sync::CancellationToken,
     ) -> futures_util::future::BoxFuture<
         '_,
         Result<canter_core::AgentToolOutput, canter_core::CoreError>,
     > {
-        Box::pin(async {
+        Box::pin(async move {
+            if let canter_core::AgentCommand::WaitAgent { ids, .. } = command {
+                return Ok(canter_core::AgentToolOutput {
+                    value: json!({"data":[{"id":ids[0],"status":"running"}]}),
+                    agents: vec![CollabAgent {
+                        id: ids[0].clone(),
+                        name: "Inspect lexer".into(),
+                        agent_type: AgentType::Explorer,
+                        status: Some(AgentStatus::Running),
+                        result: None,
+                    }],
+                });
+            }
             Ok(canter_core::AgentToolOutput {
                 value: json!({"id":"child-1","name":"Inspect parser"}),
                 agents: Vec::new(),
@@ -1072,7 +1084,7 @@ async fn exec_spawn_result_says_to_wait_because_no_report_will_wake_the_parent()
 
 #[tokio::test]
 async fn wait_agent_in_a_turn_woken_by_a_report_does_not_block_the_user() {
-    let note = "Not waiting: a sub-agent report started this turn, and waiting here would keep the user from talking to you. Tell the user in a sentence what arrived, then end your turn; the other sub-agents' reports will wake you when they finish.";
+    let note = "Not waiting: sub-agents are still running and their reports will wake you when they finish; reply to the user now and end this turn.";
     let test = Fixture::new(vec![
         complete("Parser findings"),
         tool("wait_agent", json!({"ids":["child-2"]})),

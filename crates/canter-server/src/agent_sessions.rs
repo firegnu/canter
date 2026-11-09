@@ -31,8 +31,8 @@ impl canter_core::AgentHost for Host {
                         agents: vec![collab_agent(&response.session, false)],
                     })
                 }
-                canter_core::AgentCommand::WaitAgent { ids, timeout_ms } => {
-                    app.wait_agents(&parent, &ids, timeout_ms, &cancel).await
+                canter_core::AgentCommand::WaitAgent { ids, timeout_ms, no_wait } => {
+                    app.wait_agents(&parent, &ids, timeout_ms, no_wait, &cancel).await
                 }
                 canter_core::AgentCommand::SendInput { id, message } => {
                     if id == parent {
@@ -145,6 +145,7 @@ impl App {
         parent: &str,
         ids: &[String],
         timeout_ms: u64,
+        no_wait: bool,
         cancel: &CancellationToken,
     ) -> Result<canter_core::AgentToolOutput, ApiError> {
         use futures_util::{StreamExt, stream::FuturesUnordered};
@@ -194,7 +195,8 @@ impl App {
                     completed.push(snapshot);
                 }
             }
-            if terminal || tokio::time::Instant::now() >= deadline || changes.is_empty() {
+            if no_wait || terminal || tokio::time::Instant::now() >= deadline || changes.is_empty()
+            {
                 if let Some(parent) = self.opened_session(parent).await {
                     for snapshot in &completed {
                         parent.acknowledge_agent_result(snapshot).await?;

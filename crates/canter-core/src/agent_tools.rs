@@ -2,7 +2,8 @@
 use crate::{CoreError, session::Shared};
 use canter_model::{ToolCall, ToolDefinition};
 use canter_protocol::{
-    AgentDepth, AgentType, CollabAgent, CollabAgentTool, ErrorCode, EventPayload, Item, ItemStatus,
+    AgentDepth, AgentStatus, AgentType, CollabAgent, CollabAgentTool, ErrorCode, EventPayload,
+    Item, ItemStatus,
 };
 use futures_util::future::BoxFuture;
 use serde::Deserialize;
@@ -28,6 +29,9 @@ pub enum AgentCommand {
         ids: Vec<String>,
         #[serde(rename = "timeoutMs", default = "wait_timeout")]
         timeout_ms: u64,
+        /// Set by the core for interactive turns, never by model arguments.
+        #[serde(skip)]
+        no_wait: bool,
     },
     SendInput {
         id: String,
@@ -72,7 +76,7 @@ pub(crate) fn is_tool(name: &str) -> bool {
 pub(crate) fn definitions() -> [ToolDefinition; 4] {
     [
         ToolDefinition { name: "spawn_agent".into(), description: "Start a sub-agent with a fresh conversation and your current model and reasoning effort; returns its id and short name immediately. Use type explorer for read-only code lookup or research to save your main context; you may start explorers on your own. When research splits into independent parts that each need many files read, such as comparing how several projects or modules handle something, start one explorer per part in the same reply so they run at the same time. Give each one only its part of the user's question without widening the scope, and set depth instead of writing it into the task: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage). Then tell the user what each one is checking and end your reply instead of calling wait_agent, so the user can keep talking; their reports arrive on their own and wake you to combine them. When a report wakes you while other sub-agents you started are still running, tell the user in a sentence what arrived and end your turn; combine them when the last one arrives. Never say a report has arrived before you have seen it. Don't research those parts yourself meanwhile. When a few reads answer the question, do it yourself. Use type general only when the user or applicable AGENTS.md explicitly requests sub-agents, delegation, or parallel agent work. Requests to investigate carefully or analyze deeply do not authorize general sub-agents. Before spawning, make your own plan; do work blocking your next step yourself and delegate independent work. Give a general agent explicit ownership of files or modules, and tell it that others share the repository: do not revert others' edits and accommodate their changes. At most four agents may run at once; children cannot spawn agents. Plan mode and review rounds allow only explorers.".into(), parameters: json!({"type":"object","properties":{"task":{"type":"string","minLength":1},"type":{"type":"string","enum":["explorer","general"]},"depth":{"type":"string","enum":["quick","medium","thorough"]},"name":{"type":"string","description":"A short name of 3 to 5 English words describing what this sub-agent does, shown to the user in lists and cards."}},"required":["task","type","depth","name"],"additionalProperties":false}) },
-        ToolDefinition { name: "wait_agent".into(), description: "Wait until any listed sub-agent completes, fails, closes, or is interrupted, or the timeout expires. Returns every listed agent's current status and its final reply when available. Default timeout is 30000 ms, maximum 600000 ms. In a non-interactive exec turn, use this tool to receive results before ending your turn. In an interactive session, call it only when you cannot answer the user's latest message without the results, such as when they ask for the findings now. When they are just chatting, thanking you, or asking about something else, reply and end your turn instead: finished sub-agents' reports arrive on their own and wake you. In a turn started by a sub-agent report, it returns at once without waiting.".into(), parameters: json!({"type":"object","properties":{"ids":{"type":"array","minItems":1,"items":{"type":"string"}},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000,"default":30000}},"required":["ids"],"additionalProperties":false}) },
+        ToolDefinition { name: "wait_agent".into(), description: "Returns every listed sub-agent's current status and its final reply when available. In an interactive session with auto wake enabled, user-started and report-woken turns return at once without waiting. If sub-agents are still running, reply to the user and end your turn; their reports arrive on their own and wake you. With auto wake disabled or in an automatic goal continuation, wait until any listed sub-agent completes, fails, closes, or is interrupted, or the timeout expires. Default timeout is 30000 ms, maximum 600000 ms. In a non-interactive exec turn, use this tool to receive results before ending your turn.".into(), parameters: json!({"type":"object","properties":{"ids":{"type":"array","minItems":1,"items":{"type":"string"}},"timeoutMs":{"type":"integer","minimum":1,"maximum":600000,"default":30000}},"required":["ids"],"additionalProperties":false}) },
         ToolDefinition { name: "send_input".into(), description: "Send a follow-up task or clarification to an existing sub-agent. In interactive sessions, queues input while it is running; starts another turn when it is idle or interrupted. In canter exec, first use wait_agent until the running sub-agent stops, then send_input. Use this to continue an interrupted agent; there is no resume_agent tool.".into(), parameters: json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string","minLength":1}},"required":["id","message"],"additionalProperties":false}) },
         ToolDefinition { name: "close_agent".into(), description: "Close a sub-agent, cancelling its active turn and stopping its background commands. A completed final reply is retained.".into(), parameters: json!({"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}) },
     ]
@@ -219,7 +223,7 @@ async fn card(
     }
 }
 
-const WOKEN_WAIT: &str = "Not waiting: a sub-agent report started this turn, and waiting here would keep the user from talking to you. Tell the user in a sentence what arrived, then end your turn; the other sub-agents' reports will wake you when they finish.";
+const INTERACTIVE_WAIT: &str = "Not waiting: sub-agents are still running and their reports will wake you when they finish; reply to the user now and end this turn.";
 
 pub(crate) async fn execute(
     shared: &Shared,
@@ -231,7 +235,7 @@ pub(crate) async fn execute(
         return Ok(false);
     }
     let parent = shared.state.lock().await.journal.snapshot.id.clone();
-    let command = parse(call);
+    let mut command = parse(call);
     let host = shared.agent_host.get();
     let mut item = card(host, &parent, &call.name, &command).await;
     let item_id = item.id().unwrap_or_default().to_owned();
@@ -305,19 +309,20 @@ pub(crate) async fn execute(
             .await?;
         return Ok(true);
     }
-    // A turn woken by a sub-agent report must not block the user while the
-    // others run (P2-248); canter exec is never woken, so it still waits.
-    let woken = call.name == "wait_agent" && {
+    // User and report-woken turns must leave the user free to talk (P2-270).
+    // Exec and disabled auto-wake need the wait; goal continuations would spin.
+    let interactive_wait = call.name == "wait_agent" && {
         let state = shared.state.lock().await;
-        !state.non_interactive() && state.active.as_ref().is_some_and(|active| active.auto_wake)
+        shared.runtime().options.auto_wake_limit > 0
+            && state
+                .active
+                .as_ref()
+                .is_some_and(|active| !active.non_interactive && !active.goal_continuation)
     };
+    if let Ok(AgentCommand::WaitAgent { no_wait, .. }) = &mut command {
+        *no_wait = interactive_wait;
+    }
     let result = async {
-        if woken {
-            return Ok(AgentToolOutput {
-                value: Value::Null,
-                agents: Vec::new(),
-            });
-        }
         let host = host.ok_or_else(|| {
             CoreError::new(
                 ErrorCode::InvalidRequest,
@@ -329,8 +334,19 @@ pub(crate) async fn execute(
     .await;
     let success = result.is_ok();
     let (mut text, found, error) = match result {
-        // Keep the card's agents as they were described when it started.
-        Ok(_) if woken => (WOKEN_WAIT.to_owned(), None, None),
+        Ok(output)
+            if interactive_wait
+                && output
+                    .agents
+                    .iter()
+                    .any(|agent| agent.status == Some(AgentStatus::Running)) =>
+        {
+            (
+                format!("{}\n\n{INTERACTIVE_WAIT}", output.value),
+                Some(output.agents),
+                None,
+            )
+        }
         Ok(output) => (output.value.to_string(), Some(output.agents), None),
         Err(error) => (error.message.clone(), None, Some(error.message)),
     };
@@ -473,22 +489,21 @@ mod tests {
     }
 
     #[test]
-    fn wait_description_says_not_to_wait_when_the_user_is_just_talking() {
+    fn wait_description_explains_interactive_returns_and_blocking_exceptions() {
         let wait = definitions()
             .into_iter()
             .find(|tool| tool.name == "wait_agent")
             .unwrap();
         assert!(
-            wait.description.contains("In an interactive session, call it only when you cannot answer the user's latest message without the results, such as when they ask for the findings now. When they are just chatting, thanking you, or asking about something else, reply and end your turn instead: finished sub-agents' reports arrive on their own and wake you. In a turn started by a sub-agent report, it returns at once without waiting."),
+            wait.description.contains("In an interactive session with auto wake enabled, user-started and report-woken turns return at once without waiting. If sub-agents are still running, reply to the user and end your turn; their reports arrive on their own and wake you."),
             "{}",
             wait.description
         );
         assert!(
-            wait.description.ends_with(
-                "In a turn started by a sub-agent report, it returns at once without waiting."
-            ),
+            wait.description.contains("With auto wake disabled or in an automatic goal continuation, wait until any listed sub-agent completes, fails, closes, or is interrupted, or the timeout expires."),
             "{}",
             wait.description
         );
+        assert!(wait.description.contains("In a non-interactive exec turn, use this tool to receive results before ending your turn."));
     }
 }

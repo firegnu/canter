@@ -2,6 +2,9 @@ use super::*;
 
 use crate::model_test_server as model_server;
 
+#[path = "agents_tests/wait.rs"]
+mod wait;
+
 pub(super) async fn harness(hold_child: bool) -> (Harness, model_server::Server) {
     let replies = (0..8).map(|index| {
         if hold_child && index == 1 {
@@ -1040,6 +1043,7 @@ async fn agent_tools_wait_continue_interrupted_and_close_without_losing_results(
             AgentCommand::WaitAgent {
                 ids: vec![child_id.clone()],
                 timeout_ms: 10,
+                no_wait: false,
             },
             CancellationToken::new(),
         )
@@ -1069,6 +1073,7 @@ async fn agent_tools_wait_continue_interrupted_and_close_without_losing_results(
             AgentCommand::WaitAgent {
                 ids: vec![child_id.clone()],
                 timeout_ms: 1000,
+                no_wait: false,
             },
             CancellationToken::new(),
         )
@@ -1091,6 +1096,7 @@ async fn agent_tools_wait_continue_interrupted_and_close_without_losing_results(
             AgentCommand::WaitAgent {
                 ids: vec![child_id.clone()],
                 timeout_ms: 1000,
+                no_wait: false,
             },
             CancellationToken::new(),
         )
@@ -1279,6 +1285,7 @@ async fn wait_returns_all_states_on_any_completion_and_bounds_the_reply() {
                     running.rsplit('/').next().unwrap().into(),
                 ],
                 timeout_ms: 600_000,
+                no_wait: false,
             },
             CancellationToken::new(),
         ),
@@ -1364,6 +1371,7 @@ async fn wait_withdraws_queued_completion_without_waking_and_survives_reopen() {
             AgentCommand::WaitAgent {
                 ids: vec![child_id.clone()],
                 timeout_ms: 1000,
+                no_wait: false,
             },
             CancellationToken::new(),
         )
@@ -1558,6 +1566,7 @@ async fn parent_interrupt_leaves_running_sub_agents_alone() {
             AgentCommand::WaitAgent {
                 ids: vec![child_id.clone()],
                 timeout_ms: 10,
+                no_wait: false,
             },
             CancellationToken::new(),
         )
@@ -1623,6 +1632,7 @@ async fn wait_only_acknowledges_terminal_results_and_keeps_already_sent_notices(
             AgentCommand::WaitAgent {
                 ids: vec![running_id.clone()],
                 timeout_ms: 10,
+                no_wait: false,
             },
             CancellationToken::new(),
         )
@@ -1638,6 +1648,7 @@ async fn wait_only_acknowledges_terminal_results_and_keeps_already_sent_notices(
             AgentCommand::WaitAgent {
                 ids: vec![done_id.clone(), running_id.clone()],
                 timeout_ms: 1000,
+                no_wait: false,
             },
             CancellationToken::new(),
         )
@@ -1683,6 +1694,7 @@ async fn wait_only_acknowledges_terminal_results_and_keeps_already_sent_notices(
         AgentCommand::WaitAgent {
             ids: vec![running_id],
             timeout_ms: 1000,
+            no_wait: false,
         },
         CancellationToken::new(),
     )

@@ -649,6 +649,8 @@ P2-178 的四个模型工具：`spawn_agent {task,type,name}` 立即返回 ID �
 
 11-08（P2-255）：上面「写明查多深」改成 `spawn_agent` 的必填参数 `depth`（quick / medium / thorough，协议和服务端给只读子 agent 接上的那句见协议一节）。两份工具说明和系统提示词那一行里的 `say how deep to look: …` 改成 `set depth instead of writing it into the task: quick (find the main places), medium (the default: answer each question with file:line evidence, then stop), or thorough (only when the user asks for exhaustive coverage).`，不再让模型把深度写进任务正文；三份请求样本照新文字更新。没改调度、`wait_agent`、叫醒和合并。
 
+11-10（P2-270）：交互会话里，只要自动叫醒没有关闭（`auto_wake_limit > 0`），用户开的轮次（直接发消息、插话、排队，包括派出子 agent 的那一轮）和报告叫醒的轮次调 `wait_agent` 都立即返回当前状态及已有的最后回复，不等还在跑的子 agent；有子 agent 还在跑时，附一句英文说明报告回来会叫醒主会话，请先回复用户、结束这一轮。已交付的终态结果沿用原有确认机制，不再重复通知。理由是 P2-258 实测用户轮次仍会干等，只靠工具说明不能保证用户能继续聊天。`canter exec` 不会被报告叫醒、`auto_wake_limit = 0` 明确关闭叫醒，这两种仍等待；`/goal` 自动续跑轮次也仍等待，因为 `schedule_goal` 在轮末约 10 毫秒后就安排下一轮，`next_goal` 不检查子 agent 是否仍在跑，不等会造成空转。已有目标时用户发消息开的轮次仍按用户轮次处理。只改 `wait_agent` 的执行与说明，不改报告叫醒、次数上限、目标调度、`spawn_agent` 说明或系统提示词。
+
 
 子会话正常装入 AGENTS.md 和技能；系统提示说明子 agent 身份、最终回复交回父 agent、不向用户提问、把问题或阻碍写进最终回复。不装入记忆段、不开放记忆读写；配置刷新和重开保持此限制。explorer 压缩或回退后仍保留自己的清单，不补入要求 ask_user、禁用 update_plan、最后 submit_plan 的普通计划流程指令。批准复用现有框和回答方式，主界面多显示 `Requested by sub-agent <name>`，拒绝只拒本次调用，子 agent 继续；exec 子会话沿用父轮的自动批准处理。
 
