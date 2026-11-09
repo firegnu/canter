@@ -138,3 +138,13 @@
 没做的事：第 2 条（多仓库 `prepare` 中途失败会留下没有 `state.json` 的 worktree、`clean` 收不了尾）按主控决定不改，主控记成建议。
 
 踩过的坑：附加路径带 `@` 后，`summary` 里打印的 corral 命令会把 `--cwd` 加上单引号（`quote` 的允许字符里没有 `@`），测试里相应地按带引号的形式断言；命令本身没问题。
+
+## 主控审查
+
+- 改动只在 `eval/` 和任务文件；`long`、`memory`、`memory-2` 题目文件、已有结果表、`crates/` 没动。主控重跑 `cargo nextest run -p canter-eval` 41 个全过；看了 `clean` 先校验全部路径在 worktree 根下再用 `git worktree remove`。
+- 交叉审查（Codex `gpt-6-astra` xhigh，`P2-264-交叉审查.md`）提 2 条必须改：第 1 条附加 worktree 路径 `<run>-<repo>` 会和别的 run 撞上、旧 run 再 clean 删掉新 run，接受、返工 1 次（改成 `<轮次>/@repos/<次>/<仓库名>`，clean 校验路径属于这次 run，补回归测试）；第 2 条多仓库 prepare 半途失败留下没记录的 worktree，主控降为建议，记进 HANDOFF。复核 1：可以合并。
+- 验收第 2 条：用合并版本重出 `baseline-2026-11-09`、`memory-2026-11-09`、`memory2-2026-11-09` 三张表，和提交的一字不差（返工前后各核一次）。
+- 合并前全套：`cargo nextest run --all-targets` 2067 个全过（50 跳过），`cargo test --doc --workspace` 没有失败。
+- 验收第 1 条（用 `memory-global` 跑一轮，保留、清空各 3 次，用户看结果表）：合并后主控跑。
+
+结果：返工 1 次
