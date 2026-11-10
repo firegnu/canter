@@ -4,6 +4,9 @@
 
 ## 装的哪一版、怎么退回
 
+- 5090（`my-5090d-host`）：11-10 用户同意，从 `~/canter-linux/canter`（GitHub 克隆）`cargo install` 装进 `~/.cargo/bin/canter`，`canter --version` 显示 `canter 0.1.0 · 1ad5b0e2`（和 Mac 的 `1ad5b0e` 同一提交，缩写长度不同）。真实 `~/.canter/config.json` 只有 deepseek 一家、模型 `deepseek/deepseek-flash`，含 key（用户同意）。升级：在 `~/canter-linux/canter` 里 `git pull` 再 `canter upgrade`；退回 `canter rollback`（备份在 `~/.canter/backups/`，现有两份同一提交的）。没有登录自动启动，开终端时自己起服务端；验收后服务端已停。验收用的测试 HOME `~/canter-linux/accept-home` 里另有一份同样的 key，P2-260 做完再问用户删不删。
+- Mac：11-10 用户自己 `canter upgrade` 到 `1ad5b0e`（含 P2-160、P2-272）。
+
 - 11-05 用户同意，删了 `~/.canter` 根目录 51 个 11-01 以前手动留的旧程序（`canter-<提交号>`，1.5G）。下面写 `cp -p ~/.canter/canter-<提交号>` 的老退回办法都用不了了；现在只能 `canter rollback` 退到 `~/.canter/backups/` 里留着的几版。
 
 - 11-03 装 main `16fb98c`（用户自己跑 `canter upgrade`；`canter --version` 显示 `canter 0.1.0 · 16fb98c`，服务端 pid 86706；11-02 第六十一次之后今天还装过 `467547e`、`55806f6`、`79e4572`、`327dd4c`，HANDOFF 没逐次记，备份都在 `~/.canter/backups/`。比 `55806f6` 多 P2-190 钩子用会话环境、P2-191 `--session-file` 和只看订阅、P2-192 `--close-on-exit`、P2-194 干活那一行醒目和每轮用时 / token、P2-195 卡片按类型上色）。用户试用：「看起来感官不错」。配置没改，仍是 opencode go。

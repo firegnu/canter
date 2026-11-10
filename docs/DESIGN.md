@@ -525,6 +525,8 @@ P2-161 内置关键路径删除判断，只管模型 shell（前台、后台）�
 
 Linux 不提供 `canter service install` / `uninstall`，不写 launchd 配置，也不实现 systemd；提示终端打开时会自动启动服务端。网址用 `xdg-open`，登录无法打开浏览器时打印网址，用户手动打开后仍能完成登录；macOS 继续用 `open`。终端链接遵循第 19 条：SSH 下复制全部链接，Linux 本地路径复制，网址打开失败时显示带网址的错误。
 
+安装和升级（11-10 用户同意）：Linux 和 macOS 用同一套办法，不改代码。第一次从仓库 `cargo install --locked --path crates/canter` 装进 `~/.cargo/bin`；之后在该仓库 `git pull` 再 `canter upgrade`，备份、原子替换、换服务端和 `canter rollback` 照 P2-14 定的规则。11-10 在 5090 上真跑过一次 upgrade 和 rollback。
+
 为 P2-260 准备 `x86_64-unknown-linux-musl` 静态可执行文件，在 Docker 编译环境中构建，验证 Debian 11、Ubuntu 20.04、Alpine 中的版本命令和服务端启动。不安装宿主机编译工具，不实现发布或升级安装流程，不在容器内调用真实模型。
 
 在 x86_64 Linux 的仓库根目录构建（Rust 官方 Alpine 镜像固定 digest；依赖用仓库的 `Cargo.lock`，C 编译器等只装进新建的编译镜像）：
