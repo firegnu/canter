@@ -1470,6 +1470,64 @@ async fn linux_missing_write_requests_are_rejected_without_creation_or_scope_exp
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+async fn linux_single_file_grant_keeps_outside_git_pointers_readonly() {
+    use canter_protocol::{ApprovalDecision, PermissionMode};
+    use canter_tools::{PermissionCheck, PermissionGate};
+    let outside = Fixture::new();
+    outside.git(&["init", "-q"]);
+    outside.git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "initial",
+    ]);
+    outside.git(&["worktree", "add", "-q", "-b", "linked", "../linked"]);
+    let linked = outside.root.path().join("linked");
+    let original = std::fs::read(linked.join(".git")).unwrap();
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    tools.configure_shell(PermissionMode::AskForExecution, &[]);
+    let cancel = CancellationToken::new();
+    for name in [".git", ".GiT"] {
+        let pointer = linked.join(name);
+        if name != ".git" {
+            std::fs::rename(linked.join(".git"), &pointer).unwrap();
+        }
+        let call = tools.prepare(Tool::Shell, "pointer-file", &serde_json::json!({
+            "command":format!("printf changed > {}", shell_quote(pointer.to_str().unwrap())),
+            "sandboxRequest":{"writePaths":[pointer]}, "justification":"Update this existing file."
+        }).to_string(), &cancel).await.unwrap();
+        let mut gate = PermissionGate::default();
+        assert!(matches!(
+            gate.evaluate(&call, PermissionMode::AskForExecution),
+            PermissionCheck::Ask(_)
+        ));
+        let PermissionCheck::Execute(permit) =
+            gate.resolve(&call, ApprovalDecision::Accept, None).unwrap()
+        else {
+            panic!("the single-file request must reach execution after approval")
+        };
+        let output = tools.execute(permit, &cancel, &mut |_| {}).await;
+        assert!(
+            code(&output).is_some_and(|status| status != 0),
+            "{}",
+            output.text
+        );
+        assert!(
+            output.text.contains("Read-only file system"),
+            "{}",
+            output.text
+        );
+        assert_eq!(std::fs::read(pointer).unwrap(), original);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
 async fn linux_git_discovery_skips_broken_pointers_and_file_grant_siblings() {
     let fixture = Fixture::new();
     let tools = fixture.tools(true);

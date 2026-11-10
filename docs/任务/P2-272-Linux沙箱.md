@@ -112,7 +112,7 @@
 - RED：5090 修改前运行 `cargo test -p canter-tools --test sandbox sandbox_allows_project_writes_but_rejects_outside_writes -- --exact --nocapture`，因为原 `Sandbox is not available on Linux yet` 失败；实现后同一项通过。原 RED 输出留在 `~/canter-linux/p2-272-red.log`，不是语法错误或夹具错误。
 - 5090：最终 `cargo test --workspace` 成功，154 组结果共 2103 passed、0 failed、50 ignored（含文档测试；忽略项含原有测试和由父测试显式调用的 socket 辅助入口）。所有可移植沙箱测试均在 Linux 开启，只有 macOS mDNS 专属项保持平台限制。全量输出在 `~/canter-linux/p2-272-linux-final.log`；最终 `cargo clippy --all-targets -- -D warnings` 通过，输出在 `~/canter-linux/p2-272-linux-clippy-final.log`。环境使用任务独立 CARGO_TARGET_DIR、P2-160 已有 Node `v22.23.4` 和 `~/canter-linux/npm-cache`，未安装 nextest 或系统包。
 - Mac：`cargo nextest run -p canter-tools -p canter-core -p canter-server -p canter --no-fail-fast` 全部通过（1189 passed、50 skipped，`/tmp/p2-272-mac-nextest-final.log`）；后续 PID 测试适配后单独完整复跑 `canter-server` 也通过（426 passed、5 skipped，`/tmp/p2-272-mac-server-final.log`）。`cargo clippy --all-targets -- -D warnings` 通过，最后输出在 `/tmp/p2-272-mac-clippy-final.log`。使用本任务独立 CARGO_TARGET_DIR；`cargo fmt --check`、`git diff --check` 通过。
-- 缺少 bwrap 的单独验收：5090 前台运行 `cargo test -p canter-tools --test sandbox_unavailable unavailable_bubblewrap_explains_opt_out_and_never_runs_the_command -- --exact --nocapture`（测试只将命令会话的 PATH 设为空），1 passed，确认命令正文未执行。输出为 `Could not start sandbox: Linux sandbox could not start. Install bubblewrap and enable unprivileged user namespaces, or set "sandbox": false in config.json or use --yolo.`，留在 `~/canter-linux/p2-272-no-bwrap.log`。namespace 失败用隔离夹具的启动器故障注入检查，不改机器策略。
+- 缺少 bwrap 的单独验收（返工后的现行做法）：5090 前台运行 `cargo test -p canter-tools --lib sandbox::linux::tests::unavailable_bubblewrap_explains_opt_out_and_never_runs_the_command -- --exact --nocapture`，通过仅 `cfg(test)` 可用的单元测试注入点模拟“找不到启动器”，1 passed，确认命令正文未执行。真机已安装 `/usr/bin/bwrap`，不能在不动系统的前提下拿掉它；固定系统目录查找已不受 PATH 影响，不再以清空 PATH 模拟缺失。输出为 `Could not start sandbox: Linux sandbox could not start. Install bubblewrap and enable unprivileged user namespaces, or set "sandbox": false in config.json or use --yolo.`，本轮输出留在 `~/canter-linux/p2-272-r2-no-bwrap.log`。namespace 失败同样使用仅测试可用的启动器故障注入，不改机器策略。
 - 所有命令均前台执行并等到退出。Linux 全量结束后按本任务编译产物的精确路径检查 `/proc`，本任务的 `canter serve` 残留为 0；未按名字杀进程。
 
 ### 拿主意的地方
@@ -157,3 +157,12 @@
 - 新回归最初把嵌套仓库外层目录的改名断言也放在 Mac 上，发现现有 Seatbelt 阻止嵌套 `.git` 改名，但允许整体改名 `nested/repo`。本轮没有修改 Mac 行为：用户要求的三个 Git 路径及敏感祖先检查仍在两边跑，Linux 额外检查两级外层目录。DESIGN 已准确说明 Linux 采用逐级祖先保护，外层目录禁止挪动是本次已接受的更严处理；没有删改任何原有 Mac 断言。
 
 全部命令均前台运行并等到退出；真实模型调用 0 次，没有新的待决定事项。
+
+### 返工 2
+
+2026-11-10，按主控决定仅修复复核第 1 条并更新第 2 条验收记录；第 3 条独立 gitdir 不做。
+
+- 做了什么：Linux `find_git` 遇到已有文件时，文件名若为 `.git`（不区分大小写）则加入 `pointers`，由既有只读挂载覆盖该文件的写授权，恢复指针保护；其他文件仍不扫描上级目录。没有修改批准流程、macOS 规则或独立 gitdir 识别。完成记录中“缺少 bwrap 的单独验收”已改成当前单元测试注入做法，并注明真机不动系统就无法拿掉 `/usr/bin/bwrap`。
+- 新回归使用 cwd 外真实 worktree 的已有指针文件，经原批准流程接受单文件 writePaths 后，仅尝试写入普通文本，断言 shell 写入因只读文件系统失败、原内容不变；覆盖 `.git`、`.GiT`。RED 时原实现返回退出码 0，修复后通过，日志分别为 `~/canter-linux/p2-272-r2-red.log`、`~/canter-linux/p2-272-r2-green.log`。
+- 5090 前台运行 `cargo test -p canter-tools --lib sandbox::` 和 `cargo test -p canter-tools --test sandbox --test sandbox_files --test sandbox_unavailable --test memory`，52 passed、1 ignored，包含新回归和返工 1 的普通单文件不扫描上级目录回归，输出在 `~/canter-linux/p2-272-r2-linux-tests.log`。另按更新后的完整单元测试命令运行缺少 bwrap 验收，1 passed，英文提示与正文未执行断言均通过，输出在 `~/canter-linux/p2-272-r2-no-bwrap.log`。
+- 两边 `cargo clippy --all-targets -- -D warnings` 通过，日志分别为 `~/canter-linux/p2-272-r2-linux-clippy.log`、`/tmp/p2-272-r2-mac-clippy.log`；Mac `cargo fmt --check`、`git diff --check` 通过。沿用原任务独立编译目录，未重跑全套，未加跑 Mac 测试。全部命令前台跑完；未改系统、未调真实模型、未合并或推送，没有新的待决定事项。

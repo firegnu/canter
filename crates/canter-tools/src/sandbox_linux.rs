@@ -326,7 +326,17 @@ fn find_git(
     directories: &mut Vec<PathBuf>,
     pointers: &mut Vec<PathBuf>,
 ) -> io::Result<()> {
-    if !scan(root, fs::metadata(root))?.is_some_and(|metadata| metadata.is_dir()) {
+    let Some(metadata) = scan(root, fs::metadata(root))? else {
+        return Ok(());
+    };
+    if !metadata.is_dir() {
+        if metadata.is_file()
+            && root
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case(".git"))
+        {
+            pointers.push(root.to_path_buf());
+        }
         // A single-file grant does not authorize or require walking its siblings.
         return Ok(());
     }
