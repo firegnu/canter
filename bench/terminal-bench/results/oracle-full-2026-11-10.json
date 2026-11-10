@@ -1,0 +1,3333 @@
+{
+  "schema_version": 2,
+  "date": "2026-11-10T13:01:12.682840+00:00",
+  "dataset": "terminal-bench/terminal-bench-2-1",
+  "harbor_version": "0.25.0",
+  "agent": {
+    "name": "oracle",
+    "version": "1.0.0",
+    "model_info": null
+  },
+  "model": null,
+  "reasoning_effort": null,
+  "n_trials": 89,
+  "n_expected_tasks": 89,
+  "expected_tasks": [
+    "terminal-bench/adaptive-rejection-sampler",
+    "terminal-bench/bn-fit-modify",
+    "terminal-bench/break-filter-js-from-html",
+    "terminal-bench/build-cython-ext",
+    "terminal-bench/build-pmars",
+    "terminal-bench/build-pov-ray",
+    "terminal-bench/caffe-cifar-10",
+    "terminal-bench/cancel-async-tasks",
+    "terminal-bench/chess-best-move",
+    "terminal-bench/circuit-fibsqrt",
+    "terminal-bench/cobol-modernization",
+    "terminal-bench/code-from-image",
+    "terminal-bench/compile-compcert",
+    "terminal-bench/configure-git-webserver",
+    "terminal-bench/constraints-scheduling",
+    "terminal-bench/count-dataset-tokens",
+    "terminal-bench/crack-7z-hash",
+    "terminal-bench/custom-memory-heap-crash",
+    "terminal-bench/db-wal-recovery",
+    "terminal-bench/distribution-search",
+    "terminal-bench/dna-assembly",
+    "terminal-bench/dna-insert",
+    "terminal-bench/extract-elf",
+    "terminal-bench/extract-moves-from-video",
+    "terminal-bench/feal-differential-cryptanalysis",
+    "terminal-bench/feal-linear-cryptanalysis",
+    "terminal-bench/filter-js-from-html",
+    "terminal-bench/financial-document-processor",
+    "terminal-bench/fix-code-vulnerability",
+    "terminal-bench/fix-git",
+    "terminal-bench/fix-ocaml-gc",
+    "terminal-bench/gcode-to-text",
+    "terminal-bench/git-leak-recovery",
+    "terminal-bench/git-multibranch",
+    "terminal-bench/gpt2-codegolf",
+    "terminal-bench/headless-terminal",
+    "terminal-bench/hf-model-inference",
+    "terminal-bench/install-windows-3.11",
+    "terminal-bench/kv-store-grpc",
+    "terminal-bench/large-scale-text-editing",
+    "terminal-bench/largest-eigenval",
+    "terminal-bench/llm-inference-batching-scheduler",
+    "terminal-bench/log-summary-date-ranges",
+    "terminal-bench/mailman",
+    "terminal-bench/make-doom-for-mips",
+    "terminal-bench/make-mips-interpreter",
+    "terminal-bench/mcmc-sampling-stan",
+    "terminal-bench/merge-diff-arc-agi-task",
+    "terminal-bench/model-extraction-relu-logits",
+    "terminal-bench/modernize-scientific-stack",
+    "terminal-bench/mteb-leaderboard",
+    "terminal-bench/mteb-retrieve",
+    "terminal-bench/multi-source-data-merger",
+    "terminal-bench/nginx-request-logging",
+    "terminal-bench/openssl-selfsigned-cert",
+    "terminal-bench/overfull-hbox",
+    "terminal-bench/password-recovery",
+    "terminal-bench/path-tracing",
+    "terminal-bench/path-tracing-reverse",
+    "terminal-bench/polyglot-c-py",
+    "terminal-bench/polyglot-rust-c",
+    "terminal-bench/portfolio-optimization",
+    "terminal-bench/protein-assembly",
+    "terminal-bench/prove-plus-comm",
+    "terminal-bench/pypi-server",
+    "terminal-bench/pytorch-model-cli",
+    "terminal-bench/pytorch-model-recovery",
+    "terminal-bench/qemu-alpine-ssh",
+    "terminal-bench/qemu-startup",
+    "terminal-bench/query-optimize",
+    "terminal-bench/raman-fitting",
+    "terminal-bench/regex-chess",
+    "terminal-bench/regex-log",
+    "terminal-bench/reshard-c4-data",
+    "terminal-bench/rstan-to-pystan",
+    "terminal-bench/sam-cell-seg",
+    "terminal-bench/sanitize-git-repo",
+    "terminal-bench/schemelike-metacircular-eval",
+    "terminal-bench/sparql-university",
+    "terminal-bench/sqlite-db-truncate",
+    "terminal-bench/sqlite-with-gcov",
+    "terminal-bench/torch-pipeline-parallelism",
+    "terminal-bench/torch-tensor-parallelism",
+    "terminal-bench/train-fasttext",
+    "terminal-bench/tune-mjcf",
+    "terminal-bench/video-processing",
+    "terminal-bench/vulnerable-secret",
+    "terminal-bench/winning-avg-corewars",
+    "terminal-bench/write-compressor"
+  ],
+  "missing_tasks": [],
+  "score": 0.8764044943820225,
+  "score_denominator_includes_errors": true,
+  "score_denominator_includes_missing": true,
+  "totals": {
+    "total_seconds": 35322.377079,
+    "agent_seconds": 14963.43608,
+    "input_tokens": null,
+    "cached_input_tokens": null,
+    "output_tokens": null,
+    "cost_usd": null
+  },
+  "answer_source_rules": {
+    "version": 2,
+    "sha256": "c283c93d1e082ccf4779ad0676ed3919467ed88ec3d1c8d3503ac8aad7599eb2",
+    "interpretation": "References require human review; no score is changed. No match is not proof of no answer access."
+  },
+  "trials": [
+    {
+      "task": "terminal-bench/adaptive-rejection-sampler",
+      "trial": "adaptive-rejection-sampler__c9gNnpw",
+      "job": "oracle-full",
+      "task_checksum": "a4726253ad23c3fc46b5cb9c3d21025874e367b18643a3920f636a1fa89e1207",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:32:46.801905Z",
+      "finished_at": "2026-11-10T10:41:58.026390Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 551.224485,
+      "agent_seconds": 375.627697,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/bn-fit-modify",
+      "trial": "bn-fit-modify__2kEyjYV",
+      "job": "oracle-full",
+      "task_checksum": "de87a0c253c75b7dfbc68a2fcf120d5bd77b1df632c7469e3d0a3b74321d26c2",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:32:46.845877Z",
+      "finished_at": "2026-11-10T10:38:07.553148Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 320.707271,
+      "agent_seconds": 33.223559,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/break-filter-js-from-html",
+      "trial": "break-filter-js-from-html__QneXmp5",
+      "job": "oracle-full",
+      "task_checksum": "3b08ac8e870b13a6161363e4152bceaa9c945eb7c3c35cc33c8c5bc19f2a1873",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:32:46.852110Z",
+      "finished_at": "2026-11-10T10:34:20.732821Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 93.880711,
+      "agent_seconds": 0.129675,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/build-cython-ext",
+      "trial": "build-cython-ext__AaTpQtK",
+      "job": "oracle-full",
+      "task_checksum": "b7e605f001726583c03bcf62835408e03cd413ae917a3a982d6beb4a0f3a01d2",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:32:46.857306Z",
+      "finished_at": "2026-11-10T10:34:52.663557Z",
+      "reward": 0.0,
+      "passed": false,
+      "exception_type": null,
+      "total_seconds": 125.806251,
+      "agent_seconds": 99.188191,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/build-pmars",
+      "trial": "build-pmars__6tMoDvA",
+      "job": "oracle-full",
+      "task_checksum": "d8b362b978357ecfe110604103166aeb7c1379bf97da88fd66ea200db54c6a37",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:34:20.738373Z",
+      "finished_at": "2026-11-10T10:38:12.788204Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 232.049831,
+      "agent_seconds": 152.748885,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/build-pov-ray",
+      "trial": "build-pov-ray__EogF3Vj",
+      "job": "oracle-full",
+      "task_checksum": "3426fb4714b5bb0463cc30bd872712a2400b23934b135c40ef7f88b27da4cd7a",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:34:52.669658Z",
+      "finished_at": "2026-11-10T10:47:20.944492Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 748.274834,
+      "agent_seconds": 338.375434,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/caffe-cifar-10",
+      "trial": "caffe-cifar-10__i3U5yRe",
+      "job": "oracle-full",
+      "task_checksum": "38da84d32a37ce45b201f202f0deb320dd80b5482afbcf66ba8456c8ea814c69",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:38:07.558088Z",
+      "finished_at": "2026-11-10T11:10:21.769789Z",
+      "reward": 0.0,
+      "passed": false,
+      "exception_type": null,
+      "total_seconds": 1934.211701,
+      "agent_seconds": 1816.096416,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/cancel-async-tasks",
+      "trial": "cancel-async-tasks__3bQwFAL",
+      "job": "oracle-full",
+      "task_checksum": "44b08781bbffcbff0555fafbad034389009edeb85c2f83cd10620f91aa24974f",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:38:12.793736Z",
+      "finished_at": "2026-11-10T10:39:59.569994Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 106.776258,
+      "agent_seconds": 0.112623,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/chess-best-move",
+      "trial": "chess-best-move__bd8ZWK8",
+      "job": "oracle-full",
+      "task_checksum": "aeda768947080f7e68599cb77d4311f1c550fd394994b6582fd223c1a863578e",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:39:59.575417Z",
+      "finished_at": "2026-11-10T10:45:03.569019Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 303.993602,
+      "agent_seconds": 147.717131,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/circuit-fibsqrt",
+      "trial": "circuit-fibsqrt__8WMXyGH",
+      "job": "oracle-full",
+      "task_checksum": "dc4c18df98c940d9ec11336861e07f7f5ca2a13b9e8e0f95e886c20f3d61bc0d",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:41:58.032622Z",
+      "finished_at": "2026-11-10T10:44:02.292861Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 124.260239,
+      "agent_seconds": 0.227237,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/cobol-modernization",
+      "trial": "cobol-modernization__rW9a72A",
+      "job": "oracle-full",
+      "task_checksum": "5e3806427eaaaa9f0f756a2a87d4f7f50ec1c8a0d329b26bab7dc09657b937cf",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:44:02.298878Z",
+      "finished_at": "2026-11-10T10:45:39.109558Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 96.81068,
+      "agent_seconds": 24.531755,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/code-from-image",
+      "trial": "code-from-image__EjdmPEy",
+      "job": "oracle-full",
+      "task_checksum": "fc8d3d89bfdedcbd8bac8a5e2387ed975532bb48a285d106fc37984b9890202f",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:45:03.574321Z",
+      "finished_at": "2026-11-10T10:46:42.122482Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 98.548161,
+      "agent_seconds": 0.129738,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/compile-compcert",
+      "trial": "compile-compcert__P7SbVzi",
+      "job": "oracle-full",
+      "task_checksum": "48aa77171fd532f9c3ccf3d19c90f9585c84e800340f3b4e2b9536ea9e73d989",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:45:39.115761Z",
+      "finished_at": "2026-11-10T11:04:39.883451Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 1140.76769,
+      "agent_seconds": 1019.681327,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/configure-git-webserver",
+      "trial": "configure-git-webserver__4RdpAxH",
+      "job": "oracle-full",
+      "task_checksum": "84d7c2fd653dad4307c7d2e9dd4f937ecbcd7ad4d1acf5d2b74c35166634178e",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:46:42.128253Z",
+      "finished_at": "2026-11-10T10:53:00.355458Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 378.227205,
+      "agent_seconds": 244.991696,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/constraints-scheduling",
+      "trial": "constraints-scheduling__AQEExDp",
+      "job": "oracle-full",
+      "task_checksum": "5b311f974587adf67804532222c59395f41a6c984b54a5e96a56dd071ee801dc",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:47:20.950143Z",
+      "finished_at": "2026-11-10T10:51:27.602262Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 246.652119,
+      "agent_seconds": 0.145253,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/count-dataset-tokens",
+      "trial": "count-dataset-tokens__zTiPGn3",
+      "job": "oracle-full",
+      "task_checksum": "0ab655881a4827d9ec8f9930d4c4c8827729b20c978c20ff9cc6317f90660b5c",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:51:27.607195Z",
+      "finished_at": "2026-11-10T10:55:54.630253Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 267.023058,
+      "agent_seconds": 220.115589,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/crack-7z-hash",
+      "trial": "crack-7z-hash__jnR6vxn",
+      "job": "oracle-full",
+      "task_checksum": "22789e2dc5cc9b54c430b61556ac8ad3cddb9052d1c7ef349f25acd6f0d1db28",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:53:00.360918Z",
+      "finished_at": "2026-11-10T11:01:35.359018Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 514.9981,
+      "agent_seconds": 421.8063,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/custom-memory-heap-crash",
+      "trial": "custom-memory-heap-crash__7KE5X7o",
+      "job": "oracle-full",
+      "task_checksum": "a0db695f342c1b72f1b3d0b6c234eb802e970c4758931355e4ceeea4c9e73c37",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:55:54.637825Z",
+      "finished_at": "2026-11-10T10:57:25.397361Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 90.759536,
+      "agent_seconds": 1.778816,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/db-wal-recovery",
+      "trial": "db-wal-recovery__7KVLrZ3",
+      "job": "oracle-full",
+      "task_checksum": "c18abdc4fdc3a01bf374c55a9700708fe6a9662077d29db81abb692f0a3c5f6f",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:57:25.403566Z",
+      "finished_at": "2026-11-10T10:59:00.925298Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 95.521732,
+      "agent_seconds": 0.184932,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/distribution-search",
+      "trial": "distribution-search__S2CL7xV",
+      "job": "oracle-full",
+      "task_checksum": "b92a6ca622e24a97dce2720f090562d729f8423aa03b8e77875c1a217c71ea4c",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:59:00.931255Z",
+      "finished_at": "2026-11-10T10:59:57.356483Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 56.425228,
+      "agent_seconds": 0.331931,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/dna-assembly",
+      "trial": "dna-assembly__kWcueYZ",
+      "job": "oracle-full",
+      "task_checksum": "e2acbc34aa5f20bbe3b10d2d297cdec9e6f2086c94a70068f2325e7bb7ab1212",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T10:59:57.363208Z",
+      "finished_at": "2026-11-10T11:03:52.743514Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 235.380306,
+      "agent_seconds": 122.755451,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/dna-insert",
+      "trial": "dna-insert__XEiLEHL",
+      "job": "oracle-full",
+      "task_checksum": "8ee918b8953bf437bf764153a84080475e1c2dfa18d0209cc4b19fee12ccce3c",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:01:35.365084Z",
+      "finished_at": "2026-11-10T11:06:52.983695Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 317.618611,
+      "agent_seconds": 207.16351,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/extract-elf",
+      "trial": "extract-elf__N5gLgBs",
+      "job": "oracle-full",
+      "task_checksum": "642b0321f77002c7c9a70acb825b31295d0a6baf07a5c3880ca5b30461fbbdcb",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:03:52.751014Z",
+      "finished_at": "2026-11-10T11:05:54.565269Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 121.814255,
+      "agent_seconds": 0.115792,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/extract-moves-from-video",
+      "trial": "extract-moves-from-video__aaKLsMH",
+      "job": "oracle-full",
+      "task_checksum": "5d0d37ba5e80cba32a14cf34d1252fff3ca9483d967b4ca6c96a7f4230f63c7b",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:04:39.904329Z",
+      "finished_at": "2026-11-10T11:07:27.323179Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 167.41885,
+      "agent_seconds": 0.115388,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/feal-differential-cryptanalysis",
+      "trial": "feal-differential-cryptanalysis__QGGW2ks",
+      "job": "oracle-full",
+      "task_checksum": "edacb57935c0b4181a115ac309d3b0e7c26c7cf49ccadf69762822068445df78",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:05:54.573286Z",
+      "finished_at": "2026-11-10T11:09:26.567792Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 211.994506,
+      "agent_seconds": 0.114739,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/feal-linear-cryptanalysis",
+      "trial": "feal-linear-cryptanalysis__q3pdH7o",
+      "job": "oracle-full",
+      "task_checksum": "d0b41813a535b13144fc12f12242e1aa9b2ae6088d13afbd5276c8240eec403d",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:06:52.990462Z",
+      "finished_at": "2026-11-10T11:08:13.275304Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 80.284842,
+      "agent_seconds": 0.342866,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/filter-js-from-html",
+      "trial": "filter-js-from-html__vniRdQK",
+      "job": "oracle-full",
+      "task_checksum": "53d156752f8706d9e88c598e0e562ddacf52ab478c7655352e939b8f44a5d13b",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:07:27.329167Z",
+      "finished_at": "2026-11-10T11:11:34.304431Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 246.975264,
+      "agent_seconds": 0.116701,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/financial-document-processor",
+      "trial": "financial-document-processor__iFBkF5z",
+      "job": "oracle-full",
+      "task_checksum": "312889565426c3a4ed49c11531586aa8b7ba947b1507a846347280f44185cdba",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:08:13.294674Z",
+      "finished_at": "2026-11-10T11:20:32.171606Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 738.876932,
+      "agent_seconds": 611.006163,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/fix-code-vulnerability",
+      "trial": "fix-code-vulnerability__eVgxXp9",
+      "job": "oracle-full",
+      "task_checksum": "80d707a96acfd0e19af96f0f0c8f44deefdbf167538fefbc0d1dc6391392090a",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:09:26.573996Z",
+      "finished_at": "2026-11-10T11:09:43.518266Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 16.94427,
+      "agent_seconds": 0.119895,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/fix-git",
+      "trial": "fix-git__e3S7NcR",
+      "job": "oracle-full",
+      "task_checksum": "d3220d70bc668ec6f4034fab51e62873dff724a61f824d764fd201d6f5e7a88a",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:09:43.525129Z",
+      "finished_at": "2026-11-10T11:11:53.921075Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 130.395946,
+      "agent_seconds": 0.221053,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/fix-ocaml-gc",
+      "trial": "fix-ocaml-gc__5uxme3s",
+      "job": "oracle-full",
+      "task_checksum": "811cace6625023ba2bed90b8a07aa23affc6bebf77e8e5870f6c8c61e5107ae2",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:10:21.775400Z",
+      "finished_at": "2026-11-10T11:36:04.188640Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 1542.41324,
+      "agent_seconds": 0.115598,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/gcode-to-text",
+      "trial": "gcode-to-text__R7oybV5",
+      "job": "oracle-full",
+      "task_checksum": "0ce9e2f5430d6cad157437ae0fc23f581c3f6ce3ee3eb9233484a554011557ed",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:11:34.311156Z",
+      "finished_at": "2026-11-10T11:27:53.869019Z",
+      "reward": 0.0,
+      "passed": false,
+      "exception_type": "AgentTimeoutError",
+      "total_seconds": 979.557863,
+      "agent_seconds": 900.103655,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/git-leak-recovery",
+      "trial": "git-leak-recovery__29XaEYb",
+      "job": "oracle-full",
+      "task_checksum": "45308cc1d3e5c665486621c50d95a4789861f41066e85e572eb7ccddb7932720",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:11:53.927295Z",
+      "finished_at": "2026-11-10T11:15:08.439406Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 194.512111,
+      "agent_seconds": 0.141056,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/git-multibranch",
+      "trial": "git-multibranch__snh9qRJ",
+      "job": "oracle-full",
+      "task_checksum": "abe8a7f8f9dcb0e2170740e4735559b368cecd925ddee09c9ed81a7c67dce90a",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:15:08.445323Z",
+      "finished_at": "2026-11-10T11:19:55.906504Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 287.461181,
+      "agent_seconds": 0.205018,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "exit-code.txt",
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/gpt2-codegolf",
+      "trial": "gpt2-codegolf__abFdG6n",
+      "job": "oracle-full",
+      "task_checksum": "d3ac734dba0344c290f521377e65f68e5005a96d6c76c2ca49a9f06ffa8ed0d5",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:19:55.912415Z",
+      "finished_at": "2026-11-10T11:22:37.339494Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 161.427079,
+      "agent_seconds": 0.110554,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/headless-terminal",
+      "trial": "headless-terminal__wDi8g7N",
+      "job": "oracle-full",
+      "task_checksum": "d1324ce5d4734d79b4569b569d2aa826dbfce6eadc6ac406f137d21446ac8d1a",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:20:32.178550Z",
+      "finished_at": "2026-11-10T11:22:04.525785Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 92.347235,
+      "agent_seconds": 0.116621,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/hf-model-inference",
+      "trial": "hf-model-inference__hjJXs4p",
+      "job": "oracle-full",
+      "task_checksum": "66ef04e259d5846b2106181c2a22bc1bbc391421a9fd9bf070e7320b022ae256",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:22:04.532060Z",
+      "finished_at": "2026-11-10T11:30:51.789019Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 527.256959,
+      "agent_seconds": 500.527247,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/install-windows-3.11",
+      "trial": "install-windows-3.11__2bkLu5o",
+      "job": "oracle-full",
+      "task_checksum": "202b47d242c769a8c68fe4e8fba8bf918a22226b61929ccd36120ee5a4241a85",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:22:37.348368Z",
+      "finished_at": "2026-11-10T11:36:15.772815Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 818.424447,
+      "agent_seconds": 485.647137,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/kv-store-grpc",
+      "trial": "kv-store-grpc__JK7m8sR",
+      "job": "oracle-full",
+      "task_checksum": "901a4dd5c3078d5155043875a0d07f3583f462c73f919b52855c025e680b1edd",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:27:53.875698Z",
+      "finished_at": "2026-11-10T11:28:47.520313Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 53.644615,
+      "agent_seconds": 27.261107,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/large-scale-text-editing",
+      "trial": "large-scale-text-editing__59LBh57",
+      "job": "oracle-full",
+      "task_checksum": "e2851ab29f9dc799ae4ba2ad8f7495ccd1625476a3954dde8cec09771e41208a",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:28:47.528308Z",
+      "finished_at": "2026-11-10T11:30:52.380563Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 124.852255,
+      "agent_seconds": 0.1229,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/largest-eigenval",
+      "trial": "largest-eigenval__eemZosD",
+      "job": "oracle-full",
+      "task_checksum": "40a3fe4b82d167abbf65fe4a3d86be67c1f06ed141b5cf7662b6b2391dc06313",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:30:51.795449Z",
+      "finished_at": "2026-11-10T11:32:16.641024Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 84.845575,
+      "agent_seconds": 65.124028,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/llm-inference-batching-scheduler",
+      "trial": "llm-inference-batching-scheduler__RVX3mv5",
+      "job": "oracle-full",
+      "task_checksum": "c19d5af0dc6e54b45f66e3d8f25bfa783c51df3e1844253aa60c20ca0a827046",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:30:52.392575Z",
+      "finished_at": "2026-11-10T11:32:10.737456Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 78.344881,
+      "agent_seconds": 1.367604,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/log-summary-date-ranges",
+      "trial": "log-summary-date-ranges__5WTkTr9",
+      "job": "oracle-full",
+      "task_checksum": "c833c594814ec7b8cb32eba3b9cb5ed648171efe5a074767aa64c25ea060f08f",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:32:10.743439Z",
+      "finished_at": "2026-11-10T11:33:26.743779Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 76.00034,
+      "agent_seconds": 15.262798,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/mailman",
+      "trial": "mailman__zY5axes",
+      "job": "oracle-full",
+      "task_checksum": "ab0557da8fe78e716eecfa52622c0c3f5ae8ab68aa22dc3b532b54520b279413",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:32:16.647593Z",
+      "finished_at": "2026-11-10T11:35:00.090866Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 163.443273,
+      "agent_seconds": 17.649902,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/make-doom-for-mips",
+      "trial": "make-doom-for-mips__DfCBM5i",
+      "job": "oracle-full",
+      "task_checksum": "8ecf7ffa820c3c76e07d06ad5042fb5661f3371c24f6c0ee710c36596b802549",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:33:26.751612Z",
+      "finished_at": "2026-11-10T11:42:07.546481Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 520.794869,
+      "agent_seconds": 403.920502,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/make-mips-interpreter",
+      "trial": "make-mips-interpreter__BH62oZh",
+      "job": "oracle-full",
+      "task_checksum": "929f50bc438e551fb6c09fdc9f91ab528e266bc57a79e52c90d398738a553a72",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:35:00.098281Z",
+      "finished_at": "2026-11-10T11:37:36.619809Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 156.521528,
+      "agent_seconds": 0.281636,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/mcmc-sampling-stan",
+      "trial": "mcmc-sampling-stan__fzaF8te",
+      "job": "oracle-full",
+      "task_checksum": "6fdb210250c823349d76470d9e3239817fae480378dafe759fd1867346d347cf",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:36:04.195046Z",
+      "finished_at": "2026-11-10T11:49:18.535722Z",
+      "reward": 0.0,
+      "passed": false,
+      "exception_type": null,
+      "total_seconds": 794.340676,
+      "agent_seconds": 586.450635,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "exit-code.txt",
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/merge-diff-arc-agi-task",
+      "trial": "merge-diff-arc-agi-task__bbzrvR4",
+      "job": "oracle-full",
+      "task_checksum": "f6ac6f6b96613c5a110b0b0d51172b7cad781c0adc99b556425408d8d3278147",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:36:15.779974Z",
+      "finished_at": "2026-11-10T11:40:46.080179Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 270.300205,
+      "agent_seconds": 115.963241,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/model-extraction-relu-logits",
+      "trial": "model-extraction-relu-logits__JLxFRgp",
+      "job": "oracle-full",
+      "task_checksum": "8b3048320aa04676089f9240563c2d7d381be03d8810bcf5f5d336cab538f523",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:37:36.625751Z",
+      "finished_at": "2026-11-10T11:39:42.694761Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 126.06901,
+      "agent_seconds": 0.116382,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/modernize-scientific-stack",
+      "trial": "modernize-scientific-stack__t5zobjn",
+      "job": "oracle-full",
+      "task_checksum": "8b7ed959204af91e65a1c364773fce48530405fa42083e2e77037ecf028cddf7",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:39:42.701666Z",
+      "finished_at": "2026-11-10T11:43:35.675541Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 232.973875,
+      "agent_seconds": 0.445845,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/mteb-leaderboard",
+      "trial": "mteb-leaderboard__3baugGg",
+      "job": "oracle-full",
+      "task_checksum": "f4c2fa1f189121ba4a0f654a270b92bfa2dad319c3315d89184f71c5c346a497",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:40:46.086210Z",
+      "finished_at": "2026-11-10T12:04:48.620047Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 1442.533837,
+      "agent_seconds": 1287.610122,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/mteb-retrieve",
+      "trial": "mteb-retrieve__pPfPWTT",
+      "job": "oracle-full",
+      "task_checksum": "1781978a0bfb529eaa640df59a8300a6badd8fe39d29a7e9121eca7bd3a75cf8",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:42:07.552426Z",
+      "finished_at": "2026-11-10T12:14:34.390177Z",
+      "reward": null,
+      "passed": null,
+      "exception_type": "VerifierTimeoutError",
+      "total_seconds": 1946.837751,
+      "agent_seconds": 134.933988,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/multi-source-data-merger",
+      "trial": "multi-source-data-merger__RafBJU5",
+      "job": "oracle-full",
+      "task_checksum": "33fa3b988ff60ec62b6ce40ee455208cb083ac1ac46ddc5247e954c88b9d5e8e",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:43:35.682677Z",
+      "finished_at": "2026-11-10T11:47:44.788660Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 249.105983,
+      "agent_seconds": 0.455231,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/nginx-request-logging",
+      "trial": "nginx-request-logging__7kP39M7",
+      "job": "oracle-full",
+      "task_checksum": "913305d8f286ff121b30e4893217142190b27f12952343f22c0999dd2a4d725e",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:47:44.794621Z",
+      "finished_at": "2026-11-10T11:49:32.071714Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 107.277093,
+      "agent_seconds": 31.943769,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/openssl-selfsigned-cert",
+      "trial": "openssl-selfsigned-cert__U47mT7m",
+      "job": "oracle-full",
+      "task_checksum": "2b70d5535b5873f644fad37b76dbef86a1e42162e018c7bc06316e5e2521929a",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:49:18.541398Z",
+      "finished_at": "2026-11-10T11:50:59.174204Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 100.632806,
+      "agent_seconds": 0.493104,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/overfull-hbox",
+      "trial": "overfull-hbox__Hp5Bsmo",
+      "job": "oracle-full",
+      "task_checksum": "e615e59bebd52c82c6143c646aec4df7e57d2349665320295c2802532e2d283e",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:49:32.080934Z",
+      "finished_at": "2026-11-10T11:57:55.663090Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 503.582156,
+      "agent_seconds": 323.573392,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/password-recovery",
+      "trial": "password-recovery__rpdva7P",
+      "job": "oracle-full",
+      "task_checksum": "a8b12d116b3a8e03e946f0db92b77e789cfa26ecb49a56be5723ff47a03a532d",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:50:59.180111Z",
+      "finished_at": "2026-11-10T11:54:36.431124Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 217.251013,
+      "agent_seconds": 0.123026,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/path-tracing-reverse",
+      "trial": "path-tracing-reverse__ErJ66je",
+      "job": "oracle-full",
+      "task_checksum": "0cd6d81623fa783c2f3de9aae84c270b85968dc920dc95d0ecd4ec3a890dc679",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:57:55.670351Z",
+      "finished_at": "2026-11-10T12:02:33.500571Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 277.83022,
+      "agent_seconds": 0.113575,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/path-tracing",
+      "trial": "path-tracing__JXzaZd2",
+      "job": "oracle-full",
+      "task_checksum": "549aa348dde50ec3824205f402d9686da5d1dedf65ae2bd2ae8806513839fe93",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:54:36.436992Z",
+      "finished_at": "2026-11-10T11:58:34.525513Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 238.088521,
+      "agent_seconds": 0.114309,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/polyglot-c-py",
+      "trial": "polyglot-c-py__NqxeGV7",
+      "job": "oracle-full",
+      "task_checksum": "d1e52e6139c57528762bbb163dc3f89edb967511d897ac5e7859398d3f44eb3c",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T11:58:34.531246Z",
+      "finished_at": "2026-11-10T12:02:16.719759Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 222.188513,
+      "agent_seconds": 0.118357,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/polyglot-rust-c",
+      "trial": "polyglot-rust-c__qAWBUPx",
+      "job": "oracle-full",
+      "task_checksum": "aabe829791a3d41a79deb775717a64fab08f286349cb07640e50dcfff6f497be",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:02:16.725390Z",
+      "finished_at": "2026-11-10T12:05:39.122668Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 202.397278,
+      "agent_seconds": 0.113306,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/portfolio-optimization",
+      "trial": "portfolio-optimization__WWLfMCB",
+      "job": "oracle-full",
+      "task_checksum": "43497eefff71e8fe8730c3e3e97d29cd9720123be046b9722a7c538bf8a67255",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:02:33.508072Z",
+      "finished_at": "2026-11-10T12:05:40.046765Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 186.538693,
+      "agent_seconds": 26.983437,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/protein-assembly",
+      "trial": "protein-assembly__GE3sJXE",
+      "job": "oracle-full",
+      "task_checksum": "c160f31b399d5663784ac3e054e79995ca7cd28d52d60935083e9b8dafb04304",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:04:48.626722Z",
+      "finished_at": "2026-11-10T12:11:29.372115Z",
+      "reward": 0.0,
+      "passed": false,
+      "exception_type": null,
+      "total_seconds": 400.745393,
+      "agent_seconds": 274.981259,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "exit-code.txt",
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/prove-plus-comm",
+      "trial": "prove-plus-comm__7khCD4d",
+      "job": "oracle-full",
+      "task_checksum": "77604ed7016a102179b1ca9ae9810fe6cd1b29de53de342e7f7a6f286de8cb82",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:05:39.128794Z",
+      "finished_at": "2026-11-10T12:08:50.214308Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 191.085514,
+      "agent_seconds": 0.246398,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/pypi-server",
+      "trial": "pypi-server__6JMBGDx",
+      "job": "oracle-full",
+      "task_checksum": "9eb21236249d5b42ee64c7229bb1e5a3b3c0be7ed5ee9801bdd0d16ca575941a",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:05:40.052861Z",
+      "finished_at": "2026-11-10T12:12:13.231147Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 393.178286,
+      "agent_seconds": 317.221138,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/pytorch-model-cli",
+      "trial": "pytorch-model-cli__bm4BVYC",
+      "job": "oracle-full",
+      "task_checksum": "e8438573f503c2d98ad71905862638bfa485470010d15d5b092821e0096b9daa",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:08:50.223036Z",
+      "finished_at": "2026-11-10T12:30:42.818227Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 1312.595191,
+      "agent_seconds": 582.048608,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/pytorch-model-recovery",
+      "trial": "pytorch-model-recovery__kQRWXw5",
+      "job": "oracle-full",
+      "task_checksum": "e321c0e7501b3f021cfca26520574b343dff3dee6919f2e9dd5ff9e28ffc3725",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:11:29.389649Z",
+      "finished_at": "2026-11-10T12:26:45.418388Z",
+      "reward": null,
+      "passed": null,
+      "exception_type": "VerifierTimeoutError",
+      "total_seconds": 916.028739,
+      "agent_seconds": 4.385286,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/qemu-alpine-ssh",
+      "trial": "qemu-alpine-ssh__LzNPjb8",
+      "job": "oracle-full",
+      "task_checksum": "48bb495efc325f96892d45c341d8997c4a13b71bbe7051119f28dcaa7970df4f",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:12:13.236804Z",
+      "finished_at": "2026-11-10T12:13:03.127659Z",
+      "reward": 0.0,
+      "passed": false,
+      "exception_type": null,
+      "total_seconds": 49.890855,
+      "agent_seconds": 32.497035,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/qemu-startup",
+      "trial": "qemu-startup__pUSpV6C",
+      "job": "oracle-full",
+      "task_checksum": "bd03967ee678917f663b6e6b6957432d5cc136a01693275ba26519e38b7821dc",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:13:03.134051Z",
+      "finished_at": "2026-11-10T12:13:51.123781Z",
+      "reward": 0.0,
+      "passed": false,
+      "exception_type": null,
+      "total_seconds": 47.98973,
+      "agent_seconds": 30.127378,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/query-optimize",
+      "trial": "query-optimize__t2eDxmJ",
+      "job": "oracle-full",
+      "task_checksum": "593405b6a2f6970f0f4c2ca2aff455a3b32bce3eecf8b506cfeeb0fe93b14838",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:13:51.130508Z",
+      "finished_at": "2026-11-10T12:20:50.873459Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 419.742951,
+      "agent_seconds": 0.115411,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/raman-fitting",
+      "trial": "raman-fitting__VEQTmbF",
+      "job": "oracle-full",
+      "task_checksum": "73157911d2f6196d30097f9b7e3388771a0a843500ad23ea31b66ca9ae5b5118",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:14:34.396611Z",
+      "finished_at": "2026-11-10T12:17:58.744570Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 204.347959,
+      "agent_seconds": 120.464387,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/regex-chess",
+      "trial": "regex-chess__XezE2jN",
+      "job": "oracle-full",
+      "task_checksum": "64993ab339d437cea9397a033e825663a77d5527a42ef3c2fb2ad25133dcbd4e",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:17:58.750786Z",
+      "finished_at": "2026-11-10T12:24:45.764748Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 407.013962,
+      "agent_seconds": 0.129794,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/regex-log",
+      "trial": "regex-log__Ej8AFbP",
+      "job": "oracle-full",
+      "task_checksum": "31dc6115c061b96539a5287090ce41a7a89d3201c291b9b843bd70e416f35c39",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:20:50.880941Z",
+      "finished_at": "2026-11-10T12:26:10.210666Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 319.329725,
+      "agent_seconds": 0.115015,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/reshard-c4-data",
+      "trial": "reshard-c4-data__Z7aWjVn",
+      "job": "oracle-full",
+      "task_checksum": "89d8d86b48c2619328d2eb1a86c33a93d1f641fbfb59c4e0626535e246715b65",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:24:45.772852Z",
+      "finished_at": "2026-11-10T12:39:15.274176Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 869.501324,
+      "agent_seconds": 0.113759,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/rstan-to-pystan",
+      "trial": "rstan-to-pystan__GyabM3X",
+      "job": "oracle-full",
+      "task_checksum": "2083c5878b9e8232e5a52244781bc31c677e0f39bed2503cf9a246b0b12578c6",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:26:10.217565Z",
+      "finished_at": "2026-11-10T12:49:44.423412Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 1414.205847,
+      "agent_seconds": 1213.356917,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/sam-cell-seg",
+      "trial": "sam-cell-seg__B3oGg3f",
+      "job": "oracle-full",
+      "task_checksum": "7ec5aad46e3ecdb169a65cf38392d4a87eb37ce0bf4acef3398dbd60af59b2f4",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:26:45.427648Z",
+      "finished_at": "2026-11-10T12:52:45.703345Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 1560.275697,
+      "agent_seconds": 992.642056,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/sanitize-git-repo",
+      "trial": "sanitize-git-repo__NPLNWaP",
+      "job": "oracle-full",
+      "task_checksum": "b2e4391be7422fb3cf8686964979a57704aae85a36bccd2df40e22c049f58e13",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:30:42.825814Z",
+      "finished_at": "2026-11-10T12:32:31.158634Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 108.33282,
+      "agent_seconds": 0.277708,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/schemelike-metacircular-eval",
+      "trial": "schemelike-metacircular-eval__DGSrKYt",
+      "job": "oracle-full",
+      "task_checksum": "e4525988ae20585b6b90a2f1af2fcc9d18d6363d3cfcdd7be5305199428883d2",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:32:31.220698Z",
+      "finished_at": "2026-11-10T12:35:06.068851Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 154.848153,
+      "agent_seconds": 0.114084,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/sparql-university",
+      "trial": "sparql-university__t6prbyK",
+      "job": "oracle-full",
+      "task_checksum": "9c12586c19816f24b248cb8843f317cfef98804c8a6f4fe3717133db79ffca25",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:35:06.075228Z",
+      "finished_at": "2026-11-10T12:39:10.335015Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 244.259787,
+      "agent_seconds": 0.111995,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/sqlite-db-truncate",
+      "trial": "sqlite-db-truncate__qRLjaz7",
+      "job": "oracle-full",
+      "task_checksum": "673cdff46735ca0b8d83c6c82c0a4e252149d31629e80da9d8439a05d771351c",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:39:10.340876Z",
+      "finished_at": "2026-11-10T12:41:08.506850Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 118.165974,
+      "agent_seconds": 0.154419,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/sqlite-with-gcov",
+      "trial": "sqlite-with-gcov__vCTYiw9",
+      "job": "oracle-full",
+      "task_checksum": "243352f9b742b39a4a21fe51a1d88c04cc45ede977e83cc968c9becfaf3f1de2",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:39:15.295106Z",
+      "finished_at": "2026-11-10T12:46:00.145772Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 404.850666,
+      "agent_seconds": 307.881163,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/torch-pipeline-parallelism",
+      "trial": "torch-pipeline-parallelism__mms3jgC",
+      "job": "oracle-full",
+      "task_checksum": "31e565558cd22598a3c2069f771d9d0eee26fb843b77f7b03e00ad4c336fbce9",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:41:08.512672Z",
+      "finished_at": "2026-11-10T12:56:20.075986Z",
+      "reward": null,
+      "passed": null,
+      "exception_type": "VerifierTimeoutError",
+      "total_seconds": 911.563314,
+      "agent_seconds": 0.112343,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/torch-tensor-parallelism",
+      "trial": "torch-tensor-parallelism__9Q947Ad",
+      "job": "oracle-full",
+      "task_checksum": "d0160c1fe523063419b445f7b2974b64ff72a842ad5dc2b970d256e7629f0426",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:46:00.153851Z",
+      "finished_at": "2026-11-10T13:01:11.919174Z",
+      "reward": null,
+      "passed": null,
+      "exception_type": "VerifierTimeoutError",
+      "total_seconds": 911.765323,
+      "agent_seconds": 0.141586,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/train-fasttext",
+      "trial": "train-fasttext__kxxSKL6",
+      "job": "oracle-full",
+      "task_checksum": "f521c0d2f312c54d2ba22574c94cfe2e646969cc744974ab9faf68aead2bc1b2",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:49:44.439415Z",
+      "finished_at": "2026-11-10T12:57:15.742662Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 451.303247,
+      "agent_seconds": 301.473714,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/tune-mjcf",
+      "trial": "tune-mjcf__cCznLyk",
+      "job": "oracle-full",
+      "task_checksum": "f3acebfbcd525ce06e2f0103acd078d66d9afa9ed4e72c380ff9b7302e50f63a",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:52:45.710084Z",
+      "finished_at": "2026-11-10T12:54:40.474786Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 114.764702,
+      "agent_seconds": 0.137679,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/video-processing",
+      "trial": "video-processing__oNKUoyc",
+      "job": "oracle-full",
+      "task_checksum": "1b34c811ec16da1fb7a40d07b8a8256ea79a83e33fbbe07ce361cd53383850cf",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:54:40.483397Z",
+      "finished_at": "2026-11-10T12:58:52.229806Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 251.746409,
+      "agent_seconds": 0.117289,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/vulnerable-secret",
+      "trial": "vulnerable-secret__A3JKtDy",
+      "job": "oracle-full",
+      "task_checksum": "08ff9cb3cd416576bed330e9b92191ce0acbf5322f64714b6955ea6638361256",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:56:20.082202Z",
+      "finished_at": "2026-11-10T12:58:13.200422Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 113.11822,
+      "agent_seconds": 0.12837,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/winning-avg-corewars",
+      "trial": "winning-avg-corewars__FkdTs2H",
+      "job": "oracle-full",
+      "task_checksum": "ef26211fb0bfc03ae2fddb937acce4df425861a40090d627a267edb3fb15e356",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:57:15.749376Z",
+      "finished_at": "2026-11-10T12:59:18.923914Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 123.174538,
+      "agent_seconds": 0.117778,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    },
+    {
+      "task": "terminal-bench/write-compressor",
+      "trial": "write-compressor__GEsFbKG",
+      "job": "oracle-full",
+      "task_checksum": "17ff45a3beaa04e5f08eb4f3c6136f4b56602bdcca52ade0896cfd341f374e99",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T12:58:13.208302Z",
+      "finished_at": "2026-11-10T13:00:27.343500Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 134.135198,
+      "agent_seconds": 17.498686,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null,
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "oracle.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      }
+    }
+  ],
+  "oracle_trials": []
+}
