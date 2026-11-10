@@ -2,6 +2,9 @@ use super::*;
 use canter_model::{ApiKey, ChatCompletions};
 use std::sync::Mutex as SyncMutex;
 
+#[path = "../../canter/tests/support/process_pid.rs"]
+mod process_pid;
+
 fn is_compaction_request(request: &serde_json::Value) -> bool {
     request["messages"].as_array().is_some_and(|messages| {
         messages.last().is_some_and(|message| {
@@ -44,7 +47,7 @@ impl Fixture {
             json!({
                 "base_url":"http://127.0.0.1:1/v1", "model":"fake", "api_key":"test-key",
                 "context_window":1048576, "auto_wake_limit":limit.unwrap_or(10),
-                "prompt_suggestions":false, "sandbox":cfg!(target_os = "macos")
+                "prompt_suggestions":false, "sandbox":true
             })
             .to_string(),
         )
@@ -826,6 +829,10 @@ async fn model_can_start_read_stop_and_shutdown_stops_all_groups() {
     let fixture = Fixture::new().await;
     let url = fixture.create("allowAll").await;
     let started = fixture.say(&url, "background").await;
+    assert!(
+        !started.session.background_commands.is_empty(),
+        "{started:?}"
+    );
     assert!(started.session.background_commands[0].running);
     fixture.say(&url, "output").await;
     let stopped = fixture.say(&url, "stop").await;
@@ -841,6 +848,8 @@ async fn model_can_start_read_stop_and_shutdown_stops_all_groups() {
         .await
         .unwrap();
     let pid: i32 = output.output.trim().parse().unwrap();
+    let pid = process_pid::host_pid(pid, &fixture.root.path().join("project"))
+        .expect("background command is running");
     let session = fixture
         .app
         .sessions
@@ -947,6 +956,12 @@ async fn both_user_and_model_foreground_shells_can_be_backgrounded_and_stopped_o
             .await
             .unwrap();
         let pid: i32 = output.output.trim().parse().unwrap();
+        let pid = if model {
+            process_pid::host_pid(pid, &fixture.root.path().join("project"))
+                .expect("promoted command is running")
+        } else {
+            pid
+        };
         let other = fixture.create("allowAll").await;
         fixture.shell(&other, "printf elsewhere").await;
         let resumed: SessionResumeResponse = fixture

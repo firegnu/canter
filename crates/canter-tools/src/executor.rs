@@ -224,6 +224,7 @@ impl LocalExecutor {
         use std::process::Stdio;
         check_cancel(cancel)?;
         let mut sandbox_approval_allowed = false;
+        let mut sandbox_resources = crate::sandbox::Resources::default();
         let mut launch = if let Some(sandbox) = self.sandbox.as_ref().filter(|_| sandboxed) {
             let sandbox = sandbox.lock().unwrap();
             let sandbox = sandbox
@@ -237,7 +238,7 @@ impl LocalExecutor {
                 scope.write_paths = request.write_paths.iter().map(PathBuf::from).collect();
             }
             sandbox
-                .command(&self.cwd, &self.environment, &scope)
+                .command(&self.cwd, &self.environment, &scope, &mut sandbox_resources)
                 .map_err(|error| io::Error::other(format!("Could not start sandbox: {error}")))?
         } else {
             let mut launch = tokio::process::Command::new("/bin/sh");
@@ -272,6 +273,7 @@ impl LocalExecutor {
                 error
             }
         })?;
+        process.keep_sandbox_resources(sandbox_resources);
         let stdout = process
             .child
             .stdout

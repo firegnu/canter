@@ -30,6 +30,7 @@ pub(crate) fn spawn(
         child,
         group,
         guardian,
+        sandbox_resources: crate::sandbox::Resources::default(),
     })
 }
 
@@ -37,9 +38,14 @@ pub(crate) struct LocalProcess {
     pub(crate) child: tokio::process::Child,
     group: Option<nix::unistd::Pid>,
     guardian: std::io::PipeWriter,
+    sandbox_resources: crate::sandbox::Resources,
 }
 
 impl LocalProcess {
+    pub(crate) fn keep_sandbox_resources(&mut self, resources: crate::sandbox::Resources) {
+        self.sandbox_resources = resources;
+    }
+
     fn kill_group(&mut self) -> io::Result<()> {
         if let Some(group) = self.group {
             match nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL) {

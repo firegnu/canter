@@ -8,6 +8,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(target_os = "linux")]
+#[path = "sandbox_linux.rs"]
+pub(crate) mod linux;
+
+/// Mount targets are held until the command and its background children finish.
+#[derive(Default)]
+pub(crate) struct Resources {
+    #[cfg(target_os = "linux")]
+    pub mounts: linux::MountTargets,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct Scope {
     pub network: bool,
@@ -35,13 +46,8 @@ impl Sandbox {
         scratch: std::sync::Arc<crate::ScratchDirectory>,
         memory: Option<std::sync::Arc<crate::memory::Memory>>,
     ) -> io::Result<Self> {
-        if cfg!(target_os = "linux") {
-            return Err(io::Error::other(
-                "Sandbox is not available on Linux yet. Set \"sandbox\": false in config.json or use --yolo.",
-            ));
-        }
-        if !cfg!(target_os = "macos") {
-            return Err(io::Error::other("Seatbelt requires macOS"));
+        if !cfg!(any(target_os = "macos", target_os = "linux")) {
+            return Err(io::Error::other("Sandbox requires macOS or Linux"));
         }
         let home = environment
             .get("HOME")
@@ -70,12 +76,20 @@ impl Sandbox {
             }
         }
         let unreadable = crate::executor::prepare_protected_paths(unreadable)?;
+        #[cfg(target_os = "linux")]
+        listed_unreadable.extend(linux::socket_roots(environment)?);
         let readonly =
             crate::executor::prepare_protected_paths(vec![home.join(".cargo"), home.join(".npm")])?;
         let mut protected = unreadable.clone();
         protected.extend(readonly.iter().cloned());
-        let cache =
-            crate::executor::resolve_target(&home.join("Library/Caches/canter"), &protected)?;
+        let cache = crate::executor::resolve_target(
+            &home.join(if cfg!(target_os = "linux") {
+                ".cache/canter"
+            } else {
+                "Library/Caches/canter"
+            }),
+            &protected,
+        )?;
         let cargo = cache.join("cargo");
         let npm = cache.join("npm");
         for path in [&cargo, &npm] {
@@ -135,6 +149,11 @@ impl Sandbox {
                     "sandbox request path changed since preparation",
                 ));
             }
+            if cfg!(target_os = "linux") && !path.try_exists()? {
+                return Err(io::Error::other(
+                    "Linux sandbox write requests only support existing paths. Request an existing parent directory instead.",
+                ));
+            }
             for protected in self.unreadable.iter().chain(&self.readonly) {
                 let protected = crate::executor::prepare_protected_paths(vec![protected.clone()])?;
                 if protected
@@ -150,7 +169,13 @@ impl Sandbox {
             let protected = git_protected_roots(
                 std::iter::once(cwd)
                     .chain(scope.additional_directories.iter().map(PathBuf::as_path))
-                    .chain(std::iter::once(path)),
+                    .chain(std::iter::once(
+                        if cfg!(target_os = "linux") && path.is_file() {
+                            path.parent().unwrap_or(path)
+                        } else {
+                            path
+                        },
+                    )),
             )?;
             if protected
                 .iter()
@@ -171,7 +196,9 @@ impl Sandbox {
         cwd: &Path,
         environment: &BTreeMap<String, String>,
         scope: &Scope,
+        resources: &mut Resources,
     ) -> io::Result<tokio::process::Command> {
+        let _ = &resources;
         let temporary = self.scratch.resolved_path();
         if let Some(path) = &temporary {
             if path.canonicalize()? != *path {
@@ -183,6 +210,10 @@ impl Sandbox {
         let mut project_roots = vec![cwd.canonicalize()?];
         for directory in &scope.additional_directories {
             project_roots.push(directory.canonicalize()?);
+        }
+        if cfg!(target_os = "linux") {
+            #[cfg(target_os = "linux")]
+            return linux::command(self, cwd, environment, scope, resources);
         }
         let mut git_directories = Vec::new();
         for root in
