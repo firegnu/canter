@@ -21,7 +21,7 @@ reasoning = "high"
 name = "canter-test-ts"
 base = "8e19ca8db4b181c15a3a2a8cc75e1fccfee98538"
 setup = [
-  '''[ -d node_modules ] || cp -R "$REPO/node_modules" node_modules''',
+  '''[ -d node_modules ] || cp -cR "$REPO/node_modules" node_modules 2>/dev/null || { rm -rf node_modules && cp -R "$REPO/node_modules" node_modules; }''',
   '''rm -rf dist''',
 ]
 

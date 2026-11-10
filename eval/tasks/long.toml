@@ -12,7 +12,7 @@ reasoning = "high"
 prompt = '''顺序完成 TODO.md 里的全部 12 件任务。每件：实现、补测试、npm test 和 npx tsc --noEmit 都通过后，在 TODO.md 勾掉它，再单独提交一次，提交说明以 ritual: 开头。不要加任何依赖。中途不要停下来问我，自己拿主意继续做。不要开子 agent，全部自己做。'''
 
 setup = [
-  '''[ -d node_modules ] || cp -R "$REPO/node_modules" node_modules''',
+  '''[ -d node_modules ] || cp -cR "$REPO/node_modules" node_modules 2>/dev/null || { rm -rf node_modules && cp -R "$REPO/node_modules" node_modules; }''',
   '''rm -rf dist''',
 ]
 

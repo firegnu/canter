@@ -208,3 +208,13 @@ docker run --rm --network none \
 - Debian 11 的默认安全仓库能返回索引，但安装包 404；禁用 HTTP 缓存、切换 security.debian.org 均无效。对应 [Debian #1147093](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1147093)，改用官方 archive.debian.org 的相同发行版安全仓库后安装成功，未关闭包签名校验。
 - Debian 基础镜像没有 `/bin/kill`。辅助程序最初在服务端已 ready、HTTP 已返回 200 后，因调用该外部命令失败；改为 Rust 直接按 PID 发送 SIGTERM，重新验收通过。
 - 本轮第一次 Linux 全套中，现有 `mcp::http_mcp_ignores_server_proxy_environment` 偶发记录 2 个连接。单测重跑、完整 server 测试重跑、再加临时请求诊断的 10 轮完整 server 测试均通过，未能复现或确定原因。临时诊断已完全移除，未改 MCP 代码或该测试断言，保留这次观察供主控审查。
+
+### 主控审查补充（2026-11-10）
+
+1. 已核实并清理失败测试遗留的两个服务端。
+   - PID 901321：远端启动时间 09:20:23，CANTER_HOME 为 `/tmp/canter-tui-ZmtBNR/state`；PID 981950：09:32:02，CANTER_HOME 为 `/tmp/canter-tui-IPntCI/state`。两者 PPID 均为 1，运行的是任务 target 目录里的旧 canter，临时目录已删除。
+   - 从两个进程仍持有的会话文件描述符读到的 cwd 都是各自临时目录的 `somewhere/else/deep`，对应 `canter_opens_in_any_directory_and_starts_the_server`。`p2-160-baseline.log` 中该测试在读取未生成的 `env.txt` 时失败；`p2-160-linux-check.log` 中该测试因状态栏已显示 `Sandbox off`、旧断言仍等待原状态栏而超时，日志明确含 `IPntCI`。
+   - 该测试由客户端自动拉起后台服务端，`World.server` 保持 None；末尾才按注册 PID 发 SIGTERM 并等待 ESRCH，因此中途断言失败会跳过清理。后续 `p2-160-remaining.log`、`p2-160-linux-final.log`、`p2-160-linux-ca-final.log` 均记载该测试通过，现存进程的启动时间也都早于这些成功运行。没有发现正常跑完仍遗留的情况；按主控要求不改 TUI 代码、不重跑 TUI 测试，仅记录失败路径。
+   - 核对 `/proc/<pid>/exe` 后只对 901321、981950 发送 SIGTERM，并等待两者退出。随后以及本轮 eval 测试结束后，检查远端进程列表均确认没有 `canter serve`，未按名字批量杀进程。
+2. `eval/tasks/long.toml` 和 `memory-global.toml` 的 node_modules 准备命令恢复优先 `cp -cR`：Mac 继续使用 clonefile；第一次复制失败才删除本次半截 node_modules，再执行 `cp -R`。已有 node_modules 仍直接保留，Linux 测试走兼容回退，不再令 Mac 每次整份复制。
+3. 本轮只运行 canter-eval 测试：Mac `cargo nextest run -p canter-eval --no-fail-fast`，61 项全过；Linux `cargo test -p canter-eval`，19 项单测和 42 项集成测试全过，文档测试 0 项。继续使用前述独立 target、Node 和 npm cache，日志为 `/tmp/p2-160-mac-eval-review.log` 和远端 `~/canter-linux/p2-160-linux-eval-review.log`。这是任务配置修正，使用现有 prepare/grading 测试验证；未改其他 crate 或增加测试范围。`git diff --check` 通过，所有命令均在前台结束，无新增待定事项。
