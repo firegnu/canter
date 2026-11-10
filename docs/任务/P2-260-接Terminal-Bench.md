@@ -1,30 +1,77 @@
-# 任务：第二期 - eval 接 Terminal-Bench 2.0
+# 任务：Terminal-Bench 2.1 接入 canter（第一步：适配器和试跑）
 
-依据：P2-151「11-09 Terminal-Bench 排在第一版之后」。
+2026-11-10，canter/main 交给 canter/dev-tbench（Codex，`gpt-6-astra` / xhigh）。交叉审查交 Claude Code（`opus[1m]` / xhigh）。
+路由：重 / 交叉审查要 / 影响面：碰要害（路由：常规（置信 0.25）、要、碰要害；推翻：常规和重各 0.5，要在用户的工作站上装框架、碰 key 和 Docker，按重派）
+类型：功能变更
+依据：P2-151「11-09 Terminal-Bench 排在第一版之后」；11-10 用户定用官方 Harbor 跑 Terminal-Bench 2.1，适配器和结果放进仓库的 `bench/terminal-bench/`。本件只做第一步：装好、写好适配器、用 oracle 查环境、canter 真跑 3 道题、估出全套花费和时间。全套 89 题和 Terminus-2 那一轮是第二步，主控在用户在场时做，不归本件。
 依赖：P2-257、P2-258、P2-259、P2-160、P2-272
-待用户：第一版跑通后再补全。
+执行：派出
+提示：围绕已确认的使用目标完成变更，优先沿用现有机制。
+你是被委派的 agent：照本文件做，不要再开别的 agent。
 
 ## 用户原话
 
 - 11-09：「记进去，第一版跑通后接着做」
-
 - 11-10（看完 benchmark 评估）：「我觉得可以先做160。」「我同意1，但是我的想法也是拆2件，但是要两件都做完，再跑260.」
 - 11-10（问过能不能在 macOS 上跑、能不能接进现在的 eval 架构）：「还是走正常的bench吧。不要投机取巧了」
+- 11-10（主控提：适配器和结果放进仓库单独的 `bench/terminal-bench/`，给「不用 Python」开这一个目录的例外）：「这两条都同意」
+- 11-10（主控推荐：开发真跑 canter 3 道题；第一轮比 canter 和 Terminus-2；全套跑之前先报估算、用户同意再跑；题目镜像跑完前留着）：「四个问题按你的推荐来」
 
-## 11-10 评估的结论（主控）
+## 背景（主控 11-10 摸的底）
 
-- 评的是 canter 外壳，模型固定 DeepSeek v4.1 flash。用 Terminal-Bench 2.1（89 题，官方运行框架 Harbor），不用 4.x（太难，flash 只有 20～31%，单题很长）和 SWE-bench Verified（OpenAI 26-02 起认定污染）。SWE-bench Pro 排第二。
-- 和同一模型下的别家外壳并排跑：Harbor 自带 Terminus-2（官方中立外壳）、Claude Code（接 DeepSeek 的 Anthropic 兼容接口，不占 Claude 订阅）、opencode、pi；Codex 能不能接 DeepSeek 到时查。
-- 外壳带来的差别往往只有几个百分点，89 题跑一次误差约 ±10 个百分点：只看得出明显差距，要跑几次、按题成对比。压缩、插话、子 agent、记忆、缓存照旧靠自己的 eval。
-- canter 装进每道题的 Linux 容器，用 `canter exec "<题目>" --yolo` 跑（和别家的 `-p`、`codex exec` 一样，没人批准、没人回答）。要 Linux 静态版（P2-160），在 5090（`my-5090d-host`，x86_64 原生）上跑。
-- 适配器是 Harbor 要的一小段 Python（`BaseInstalledAgent`），放 canter 仓库外。
+- Harbor 是 Terminal-Bench 官方的运行框架：每道题起一个 Docker 容器，把外壳装进去，把英文题目交给它，外壳自己干完（或超时）后 Harbor 跑隐藏的测试，全过得 1 分；总分是通过题数 ÷ 题数。2.1 是 2.0 的修订版（26 道题修过），数据集名 `terminal-bench/terminal-bench-2-1`。
+- 自定义外壳用 `harbor run ... --agent-import-path <模块>:<类>` 接入，类继承 `BaseInstalledAgent`：`install()` 装外壳（能做进镜像的步骤），`configure()` 每次运行前的准备（写凭证、上传文件），再实现运行和事后取用量。环境接口有 `upload_file`、`exec`、`download_dir` 等。环境变量用 `--ae KEY=VALUE` 传给外壳。Harbor 自带的 `pi`、`opencode`、`claude_code` 外壳可以照着看。主控只读克隆在 Mac 的 `/tmp/r49-src/harbor`（`ec66182`），你在 5090 上需要读源码就自己克隆到 `/tmp` 下，只读。
+- 5090（`my-5090d-host`，Ubuntu 24.04，x86_64，32 核，60G 内存，磁盘剩 1.3T）：Docker 29.8，当前用户能直接用；有 Python 3.12，没有 `uv` 和 Harbor。机器上有用户自己的 Docker 容器和镜像。
+- canter 的 musl 静态版编法见 `docs/DESIGN.md`「Linux 支持（P2-160）」。题目容器要先装 `ca-certificates`，缺了服务端报错退出。
+- DeepSeek key：用户同意本件真调模型（canter 3 道题）。key 在 5090 的 `~/canter-linux/accept-home/.canter/config.json`（验收用的测试 HOME，`providers.deepseek.api_key`），用 `jq` 读进环境变量传给 Harbor，不打印、不写进任何文件。
 
-## P2-160 留给本件的（11-10）
+## 先读
 
-- 静态版从干净的已提交代码编（P2-160 验收时的 `--version` 显示的是开发自己同步仓库的 `3690057-dirty`）。编译命令见 DESIGN「Linux 支持（P2-160）」。
-- 题目容器要先装 `ca-certificates`（Debian/Ubuntu `apt-get`，Alpine `apk`），缺了服务端报错退出。
-- 看护进程杀进程组的写法在 Alpine 的 busybox ash 上没验过，在 Alpine 题目里跑时看一眼。
+- `docs/DESIGN.md`「Terminal-Bench（P2-260）」「Linux 支持（P2-160）」两节
+- `CLAUDE.md`「语言与依赖」那条 Python 例外
+- `docs/任务/P2-160-第三期-Linux支持.md` 完成记录里 5090 的同步办法和静态版编译
+- Harbor 源码：`src/harbor/agents/installed/base.py`，和一个自带外壳（比如 `pi.py`）
+
+## 在哪里干活
+
+- worktree：`/Users/firegnu/Developer/personal_projs/canter-worktrees/p2-260-terminal-bench`，分支 `p2-260-terminal-bench`（已从 main 建好）。只动 `bench/terminal-bench/` 和本任务文件。
+- 5090：只用 `~/canter-linux/` 下面。代码放 `~/canter-linux/p2-260-terminal-bench`，同步办法同 P2-160。`uv`、Harbor、Python、uv 缓存都装在 `~/canter-linux/` 下（用 `UV_INSTALL_DIR`、`UV_TOOL_DIR`、`UV_TOOL_BIN_DIR`、`UV_CACHE_DIR`、`UV_PYTHON_INSTALL_DIR` 这类变量指过去，不改 shell 配置文件）。Harbor 自己的缓存和结果目录也尽量指到 `~/canter-linux/` 下；指不过去的写进完成记录。Docker 镜像落在系统的 Docker 目录，这个没办法，照常。
 
 ## 要做的
 
-（占号。要解决：Harbor 在 Docker 里跑，canter 是常驻服务端 + 客户端；适配器是一小段 Python，放 canter 仓库外；约 90 件，先拿几件试出花费和时间；比外壳要让对方用同一个模型。）
+- 在 5090 上装 `uv` 和 Harbor，Harbor 钉一个具体版本（用当时最新的正式版），写进 README。
+- 用分支起点那个干净提交编 canter 的 musl 静态版，`canter --version` 写进结果数据。
+- 写 `bench/terminal-bench/` 下的适配器（Python，只做衔接）：每道题把静态版拷进容器、按容器系统装 `ca-certificates`、把配置写进容器里的 `~/.canter/config.json`（服务商、模型、思考档从 Harbor 的参数和环境变量来，不写死）、运行 `canter exec --yolo "<题目>"`、结束后用 `canter stats --last --json` 取 token 和花费交给 Harbor、把 canter 的会话记录存进 Harbor 这道题的日志目录。
+- 写 `bench/terminal-bench/README.md`：在任意一台 x86_64 Linux（有 Docker）上从零跑起来的步骤：装 uv 和钉住版本的 Harbor、编静态版、key 用哪个环境变量传、先 oracle 查环境、再试跑几题、再跑全套的命令；Terminus-2 用同一个模型跑的命令也写上（本件不跑）；用 `jq` 比较两轮或两个外壳的几条命令。
+- `bench/terminal-bench/results/`：每一轮一个纯数据文件（JSON 或 CSV），记 canter 版本、外壳、模型、思考档、Harbor 版本、日期、总分、每题过没过、用时、token、花费。本件只有试跑这一轮。
+- 用 Harbor 自带的 oracle 外壳（直接用标准答案，不调模型）跑 2～3 道题，确认环境正常；再用 canter 真跑 3 道题，挑耗时短的。真跑的题里最好有一道是 Alpine 镜像，顺带看 canter 的看护进程在 busybox ash 上杀进程组正不正常（P2-160 留下的）；没有 Alpine 题就说明。
+- 按试跑数字估出全套 89 题跑一轮的花费和时间（写清按什么算的），写进完成记录。
+
+## 怎么算做完
+
+- 验收（主控建议，用户 11-10：「四个问题按你的推荐来」）：
+  1. 5090 上 oracle 跑的 2～3 道题都通过。
+  2. canter 真跑 3 道题，每道都走完整个流程：装进容器、跑完、Harbor 判分、token 和花费记进 Harbor、会话记录存下来。题做没做对不要求。
+  3. `bench/terminal-bench/` 有适配器、README、`results/` 里这次试跑的数据文件；照 README 能在另一台机器上跑起来（不用真去另一台机器，步骤写全即可）。
+  4. 完成记录里有全套一轮的花费和时间估算。
+- 验证只做这些：上面的 oracle 和 canter 试跑；`git diff --check`。不跑 canter 的 Rust 测试（本件不改 Rust 代码）。
+
+  觉得不够，在回复里说，不要自己加。
+
+## 不要做
+
+- 不改 canter 的代码（`crates/`、`eval/`、`Cargo.*`）。跑出 canter 自己的问题，记进完成记录、在回复里报给主控，不在本件里修。
+- 不投机取巧（用户原话）：不改题目、不放宽超时和资源、不让 canter 看到测试或标准答案、不按某道题调 canter 的提示或配置。canter 用默认配置跑，只配服务商和模型。
+- 不跑全套 89 题，不跑 Terminus-2 或别家外壳（第二步主控做）。真调模型的题目运行一共不超过 6 次（3 道题，加修适配器后重跑最多 3 次），次数写进完成记录。
+- key 不打印、不写进任何文件、日志、结果数据和提交。查一下 Harbor 自己的结果目录里会不会存下 `--ae` 传的值，查清写进完成记录；会存的话换一种不落盘的传法，换不了就停下问主控。
+- 不上传任何东西到 Harbor Hub 或别的服务，不登录 Harbor 的账号。
+- 适配器不写死 DeepSeek：服务商、模型、地址、key 的环境变量名都从参数来；DeepSeek 只是这次跑的配置。
+- Python 只放 `bench/terminal-bench/`，不进 cargo 工作区。
+- 5090 上只用 `~/canter-linux/`，不用 sudo、不装系统包、不改 shell 配置文件；不碰机器上已有的容器和镜像，不 `docker system prune` 这类会删别人东西的命令；Harbor 自己起的容器跑完由 Harbor 清。不读、不改两台机器上真实的 `~/.canter`。
+- 不按名字批量杀进程（`pkill -f canter`、`pkill -f docker` 这类）。停自己起的进程用记下的 PID。
+- 碰到要拿主意的事（比如 Harbor 的接口和这里写的不一样、某种容器里 canter 起不来、key 的传法），停下来，在回复里写清问题、可选办法和你的建议，然后结束这一轮，等主控回复再接着做；不在自己窗口里问用户，不开着命令等，不要自己换别的办法。主控的决定写进完成记录。
+- 不合并到 main，不推送到 `origin`（推到 5090 上自己的裸仓库可以）。只在 `p2-260-terminal-bench` 分支上提交。
+
+## 做完
+
+在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。

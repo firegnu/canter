@@ -550,6 +550,15 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 会话写锁、服务端锁和发现探测锁由拥有者显式解锁后释放：Linux 的文件锁会随 fork 继承，不能只靠关闭父进程的文件描述符，否则并发启动命令时会短暂阻止会话重开或误报服务端仍在运行。看护进程继续用系统 `/bin/sh`，杀进程组使用 macOS sh 和 Linux dash 都接受的 `kill -KILL -<pgid>` 写法（dash 不接受原来的 `--`）。
 
+## Terminal-Bench（P2-260，2026-11-10 用户定）
+
+评的是 canter 这个外壳，用官方运行框架 Harbor 跑 Terminal-Bench 2.1（数据集 `terminal-bench/terminal-bench-2-1`），和同一模型下的别家外壳逐题对比。用户：「还是走正常的bench吧。不要投机取巧了」——不改题、不放宽超时、不让外壳看测试和标准答案，也不接进 `eval/` 那套 Rust 评测工具；两套各出各的结果，`eval/` 照旧测压缩、插话、子 agent、记忆这些 canter 自己的能力。
+
+- 放在仓库根下的 `bench/terminal-bench/`（用户 11-10 同意）：Harbor 适配器、从零跑起来的说明（钉住 Harbor 版本）、`results/` 里每一轮的结果数据（纯数据文件：canter 版本、外壳、模型、总分、每题过没过、用时、token、花费）。Harbor 的原始结果目录留在跑的机器上，不进仓库。适配器只能用 Python，是 CLAUDE.md「语言与依赖」写明的唯一例外。
+- canter 进题目容器：用干净提交编的 musl 静态版（上节的编译办法），先装 `ca-certificates`，配置写进容器里的 `~/.canter/config.json`，key 从 Harbor 传的环境变量来，不写进仓库、日志和结果数据；运行 `canter exec --yolo "<题目>"`，结束后用 `canter stats --last --json` 取 token 和花费交给 Harbor。适配器的服务商和模型从参数来，不写死某一家。
+- 不改 canter 代码：跑出 canter 自己的问题，记下来另开任务。
+- 第一轮（用户 11-10 同意主控推荐）：DeepSeek 官方接口 v4.1 flash，比 canter 和 Terminus-2，思考档都设 high，超时用 Harbor 默认。全套跑之前先按试跑数字报花费和时间，用户同意再跑。89 题一轮误差约 ±10 个百分点，要不要多跑几轮看第一轮再定。题目镜像跑完前留着，结束后问用户清不清。
+
 ## 沙箱（P2-123，2026-10-30 用户定）
 
 依据 `docs/调研/P2-104-沙箱调研.md` §7.3，用户：「权限的问题我觉得接受你的建议」「选 A，其余都按推荐」。细节和每题原文记在 `docs/任务/P2-123-沙箱.md`。
