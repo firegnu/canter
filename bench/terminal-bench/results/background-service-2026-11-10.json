@@ -1,0 +1,132 @@
+{
+  "schema_version": 2,
+  "artifact_type": "background-service-validation",
+  "adapter_test_only": true,
+  "included_in_benchmark_score": false,
+  "date": "2026-11-10T08:26:59.064424+00:00",
+  "dataset": "terminal-bench/terminal-bench-2-1",
+  "harbor_version": "0.25.0",
+  "agent": {
+    "name": "canter",
+    "version": "canter 0.1.0 · 64b80e3f",
+    "model_info": {
+      "name": "deepseek-flash",
+      "provider": "deepseek"
+    }
+  },
+  "model": "deepseek/deepseek-flash",
+  "reasoning_effort": "high",
+  "canter_commit": "64b80e3f963f0005f69f078e68a4af71a611ca28",
+  "real_task_run_ordinal": 4,
+  "real_task_runs_total": 4,
+  "reruns": 0,
+  "trial": {
+    "task": "terminal-bench/pypi-server",
+    "trial": "pypi-server__ACAuY5g",
+    "job": "pypi-server-background",
+    "task_checksum": "9eb21236249d5b42ee64c7229bb1e5a3b3c0be7ed5ee9801bdd0d16ca575941a",
+    "agent": {
+      "name": "canter",
+      "version": "canter 0.1.0 · 64b80e3f",
+      "model_info": {
+        "name": "deepseek-flash",
+        "provider": "deepseek"
+      }
+    },
+    "model": "deepseek/deepseek-flash",
+    "reasoning_effort": "high",
+    "started_at": "2026-11-10T08:18:14.725137Z",
+    "finished_at": "2026-11-10T08:26:14.906466Z",
+    "exception_type": null,
+    "total_seconds": 480.181329,
+    "agent_seconds": 99.352895,
+    "input_tokens": 217405,
+    "cached_input_tokens": 208896,
+    "output_tokens": 9894,
+    "cost_usd": 0.015678875999999998,
+    "metadata": {
+      "reasoning_effort": "high",
+      "errors": [],
+      "server_stopped_for_sub_agents": false,
+      "server_stop_reason": null,
+      "credential_redactions": 0,
+      "canter_session_id": "s-1794298974934623451-4999-1",
+      "sub_agent_count": 0,
+      "sub_agent_empty_usage_count": 0
+    },
+    "answer_source_check": {
+      "status": "complete",
+      "matched": false,
+      "files_scanned": [
+        "collection.json",
+        "exec.pid",
+        "sessions/s-1794298974934623451-4999-1/events.jsonl",
+        "sessions/s-1794298974934623451-4999-1/model-history.jsonl",
+        "sessions/s-1794298974934623451-4999-1/rewind-0sWkIJ",
+        "sessions/s-1794298974934623451-4999-1/rewind-1Hp89B",
+        "sessions/s-1794298974934623451-4999-1/rewind-Kda6VT",
+        "sessions/s-1794298974934623451-4999-1/rewind-RWXGND",
+        "sessions/s-1794298974934623451-4999-1/rewind-lrNhn8",
+        "sessions/s-1794298974934623451-4999-1/rewind-uxpAqw",
+        "stats.exit",
+        "stats.json",
+        "stats.pid",
+        "stats.stderr",
+        "stdout.txt"
+      ],
+      "files_not_scanned": [],
+      "parse_errors": [],
+      "hits": [],
+      "score_changed": false
+    },
+    "observed_verifier_reward": 1.0
+  },
+  "verifier": {
+    "started_at": "2026-11-10T08:24:34.298756Z",
+    "finished_at": "2026-11-10T08:26:04.423268Z"
+  },
+  "background_service_check": {
+    "background_true_calls": [
+      {
+        "tool_call_id": "call_00_8lvSs4A4dd9sF7cwPlsj9181",
+        "arguments": {
+          "background": true,
+          "command": "python3 -m http.server 8080 --bind 0.0.0.0 --directory /app/public"
+        }
+      }
+    ],
+    "observation": {
+      "server_pid": 4999,
+      "server_alive": true,
+      "config_present": false,
+      "tcp_8080_listening": true,
+      "listener_pids": [
+        5054
+      ],
+      "checked_at": "2026-11-10T08:24:35.002893622Z",
+      "trial": "pypi-server__ACAuY5g",
+      "container_id": "3fe128d0acf6",
+      "tests_uploaded": true
+    },
+    "observed_during_verification": true,
+    "background_service_preserved": true
+  },
+  "credential_scan": {
+    "method": "grep -rlF with pattern supplied through a pipe; filenames only",
+    "baseline_matches": [
+      "accept-home/.canter/config.json"
+    ],
+    "job_directory_matches": [],
+    "job_scan_exit": 1,
+    "full_root_matches": [
+      "accept-home/.canter/config.json"
+    ],
+    "full_root_scan_exit": 0,
+    "new_matches": []
+  },
+  "answer_source_rules": {
+    "version": 2,
+    "sha256": "c283c93d1e082ccf4779ad0676ed3919467ed88ec3d1c8d3503ac8aad7599eb2",
+    "interpretation": "References require human review; no score is changed. No match is not proof of no answer access."
+  }
+}

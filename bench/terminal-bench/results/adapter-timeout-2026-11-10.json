@@ -1,0 +1,78 @@
+{
+  "adapter_test_only": true,
+  "harbor_version": "0.25.0",
+  "canter_commit": "64b80e3f963f0005f69f078e68a4af71a611ca28",
+  "task": "terminal-bench/fix-git",
+  "trial": "fix-git__q9B333Q",
+  "endpoint": "https://192.0.2.1:443/v1",
+  "real_model_calls": 0,
+  "agent_timeout_multiplier": 0.01,
+  "agent_timeout_sec": 9,
+  "exception_type": "AgentTimeoutError",
+  "observations": [
+    {
+      "phase": "before_stop",
+      "checked_at": "2026-11-10T07:51:24.513042+00:00",
+      "canter_pids": [
+        4991,
+        4999
+      ],
+      "config_present": true
+    },
+    {
+      "phase": "after_stop",
+      "checked_at": "2026-11-10T07:51:26.589070+00:00",
+      "canter_pids": [],
+      "config_present": true
+    },
+    {
+      "phase": "before_stop",
+      "checked_at": "2026-11-10T07:51:26.759196+00:00",
+      "canter_pids": [
+        5044
+      ],
+      "config_present": false
+    },
+    {
+      "phase": "after_stop",
+      "checked_at": "2026-11-10T07:51:27.835313+00:00",
+      "canter_pids": [],
+      "config_present": false
+    },
+    {
+      "phase": "before_return_to_harbor",
+      "checked_at": "2026-11-10T07:51:27.872431+00:00",
+      "canter_pids": [],
+      "config_present": false
+    }
+  ],
+  "verified_stopped_before_grading": true,
+  "verifier": {
+    "started_at": "2026-11-10T07:51:27.973653Z",
+    "finished_at": "2026-11-10T07:52:31.249606Z"
+  },
+  "verifier_completed": true,
+  "agent_result": {
+    "n_input_tokens": 0,
+    "n_cache_tokens": 0,
+    "n_output_tokens": 0,
+    "cost_usd": null,
+    "model_usage": {
+      "timeout/never": {
+        "n_input_tokens": 0,
+        "n_cache_tokens": 0,
+        "n_output_tokens": 0,
+        "cost_usd": null
+      }
+    },
+    "rollout_details": null,
+    "metadata": {
+      "reasoning_effort": null,
+      "errors": [],
+      "credential_redactions": 0,
+      "canter_session_id": "s-1794297075552873532-4999-1",
+      "sub_agent_count": 0,
+      "sub_agent_empty_usage_count": 0
+    }
+  }
+}

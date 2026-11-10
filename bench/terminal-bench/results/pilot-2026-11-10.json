@@ -1,0 +1,352 @@
+{
+  "schema_version": 2,
+  "date": "2026-11-10T07:07:14.468121+00:00",
+  "dataset": "terminal-bench/terminal-bench-2-1",
+  "harbor_version": "0.25.0",
+  "agent": {
+    "name": "canter",
+    "version": "canter 0.1.0 · 64b80e3f",
+    "model_info": {
+      "name": "deepseek-flash",
+      "provider": "deepseek"
+    }
+  },
+  "model": "deepseek/deepseek-flash",
+  "reasoning_effort": "high",
+  "n_trials": 3,
+  "score": 1.0,
+  "score_denominator_includes_errors": true,
+  "totals": {
+    "total_seconds": 537.3801530000001,
+    "agent_seconds": 305.038528,
+    "input_tokens": 1450421,
+    "cached_input_tokens": 1419136,
+    "output_tokens": 37315,
+    "cost_usd": 0.06267831599999998
+  },
+  "answer_source_rules": {
+    "version": 2,
+    "sha256": "c283c93d1e082ccf4779ad0676ed3919467ed88ec3d1c8d3503ac8aad7599eb2",
+    "interpretation": "References require human review; no score is changed. No match is not proof of no answer access."
+  },
+  "trials": [
+    {
+      "task": "terminal-bench/fix-git",
+      "trial": "fix-git__gVvohvh",
+      "job": "canter-fix-git",
+      "task_checksum": "d3220d70bc668ec6f4034fab51e62873dff724a61f824d764fd201d6f5e7a88a",
+      "agent": {
+        "name": "canter",
+        "version": "canter 0.1.0 · 64b80e3f",
+        "model_info": {
+          "name": "deepseek-flash",
+          "provider": "deepseek"
+        }
+      },
+      "model": "deepseek/deepseek-flash",
+      "reasoning_effort": "high",
+      "started_at": "2026-11-10T06:55:22.253722Z",
+      "finished_at": "2026-11-10T06:57:04.799494Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 102.545772,
+      "agent_seconds": 32.617297,
+      "input_tokens": 184049,
+      "cached_input_tokens": 173824,
+      "output_tokens": 3719,
+      "cost_usd": 0.008573244,
+      "metadata": {
+        "canter_session_id": "s-1794293743251815284-5002-1",
+        "reasoning_effort": "high",
+        "credential_redactions": 0
+      },
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "collection.json",
+          "sessions/s-1794293743251815284-5002-1/events.jsonl",
+          "sessions/s-1794293743251815284-5002-1/model-history.jsonl",
+          "sessions/s-1794293743251815284-5002-1/rewind-6VkcQy",
+          "sessions/s-1794293743251815284-5002-1/rewind-8cmW39",
+          "stats.exit",
+          "stats.json",
+          "stats.stderr",
+          "stdout.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      },
+      "oracle_checksum_check": {
+        "status": "match",
+        "oracle_task_checksum": "d3220d70bc668ec6f4034fab51e62873dff724a61f824d764fd201d6f5e7a88a"
+      },
+      "credential_scan": {
+        "method": "grep -rlF with pattern supplied through a pipe; filenames only",
+        "job_directory_matches": [],
+        "full_root_matches": [
+          "accept-home/.canter/config.json"
+        ],
+        "preexisting_authorized_source": "accept-home/.canter/config.json",
+        "new_matches": []
+      }
+    },
+    {
+      "task": "terminal-bench/openssl-selfsigned-cert",
+      "trial": "openssl-selfsigned-cert__QeaftoL",
+      "job": "canter-openssl-selfsigned-cert",
+      "task_checksum": "2b70d5535b5873f644fad37b76dbef86a1e42162e018c7bc06316e5e2521929a",
+      "agent": {
+        "name": "canter",
+        "version": "canter 0.1.0 · 64b80e3f",
+        "model_info": {
+          "name": "deepseek-flash",
+          "provider": "deepseek"
+        }
+      },
+      "model": "deepseek/deepseek-flash",
+      "reasoning_effort": "high",
+      "started_at": "2026-11-10T06:58:12.149223Z",
+      "finished_at": "2026-11-10T07:00:07.629881Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 115.480658,
+      "agent_seconds": 35.66301,
+      "input_tokens": 131208,
+      "cached_input_tokens": 123520,
+      "output_tokens": 4765,
+      "cost_usd": 0.00876552,
+      "metadata": {
+        "canter_session_id": "s-1794293905177435385-5000-1",
+        "reasoning_effort": "high",
+        "credential_redactions": 0
+      },
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "collection.json",
+          "sessions/s-1794293905177435385-5000-1/events.jsonl",
+          "sessions/s-1794293905177435385-5000-1/model-history.jsonl",
+          "sessions/s-1794293905177435385-5000-1/rewind-1mNbUO",
+          "sessions/s-1794293905177435385-5000-1/rewind-TdlxC7",
+          "sessions/s-1794293905177435385-5000-1/rewind-YjSieR",
+          "sessions/s-1794293905177435385-5000-1/rewind-puiK60",
+          "stats.exit",
+          "stats.json",
+          "stats.stderr",
+          "stdout.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      },
+      "oracle_checksum_check": {
+        "status": "match",
+        "oracle_task_checksum": "2b70d5535b5873f644fad37b76dbef86a1e42162e018c7bc06316e5e2521929a"
+      },
+      "credential_scan": {
+        "method": "grep -rlF with pattern supplied through a pipe; filenames only",
+        "job_directory_matches": [],
+        "full_root_matches": [
+          "accept-home/.canter/config.json"
+        ],
+        "preexisting_authorized_source": "accept-home/.canter/config.json",
+        "new_matches": []
+      }
+    },
+    {
+      "task": "terminal-bench/polyglot-c-py",
+      "trial": "polyglot-c-py__nuEKqg2",
+      "job": "canter-polyglot-c-py",
+      "task_checksum": "d1e52e6139c57528762bbb163dc3f89edb967511d897ac5e7859398d3f44eb3c",
+      "agent": {
+        "name": "canter",
+        "version": "canter 0.1.0 · 64b80e3f",
+        "model_info": {
+          "name": "deepseek-flash",
+          "provider": "deepseek"
+        }
+      },
+      "model": "deepseek/deepseek-flash",
+      "reasoning_effort": "high",
+      "started_at": "2026-11-10T07:00:15.837324Z",
+      "finished_at": "2026-11-10T07:05:35.191047Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 319.353723,
+      "agent_seconds": 236.758221,
+      "input_tokens": 1135164,
+      "cached_input_tokens": 1121792,
+      "output_tokens": 28831,
+      "cost_usd": 0.045339551999999984,
+      "metadata": {
+        "canter_session_id": "s-1794294040159013545-1744-1",
+        "reasoning_effort": "high",
+        "credential_redactions": 0
+      },
+      "answer_source_check": {
+        "status": "complete",
+        "matched": false,
+        "files_scanned": [
+          "collection.json",
+          "sessions/s-1794294040159013545-1744-1/events.jsonl",
+          "sessions/s-1794294040159013545-1744-1/model-history.jsonl",
+          "sessions/s-1794294040159013545-1744-1/rewind-9o8UXn",
+          "sessions/s-1794294040159013545-1744-1/rewind-KTbZyL",
+          "sessions/s-1794294040159013545-1744-1/rewind-RHem2Y",
+          "sessions/s-1794294040159013545-1744-1/rewind-dIr4yZ",
+          "sessions/s-1794294040159013545-1744-1/rewind-wz4CHA",
+          "stats.exit",
+          "stats.json",
+          "stats.stderr",
+          "stdout.txt"
+        ],
+        "files_not_scanned": [],
+        "parse_errors": [],
+        "hits": [],
+        "score_changed": false
+      },
+      "oracle_checksum_check": {
+        "status": "match",
+        "oracle_task_checksum": "d1e52e6139c57528762bbb163dc3f89edb967511d897ac5e7859398d3f44eb3c"
+      },
+      "credential_scan": {
+        "method": "grep -rlF with pattern supplied through a pipe; filenames only",
+        "job_directory_matches": [],
+        "full_root_matches": [
+          "accept-home/.canter/config.json"
+        ],
+        "preexisting_authorized_source": "accept-home/.canter/config.json",
+        "new_matches": []
+      }
+    }
+  ],
+  "oracle_trials": [
+    {
+      "task": "terminal-bench/fix-git",
+      "trial": "fix-git__bwimzu5",
+      "job": "oracle-fix-git",
+      "task_checksum": "d3220d70bc668ec6f4034fab51e62873dff724a61f824d764fd201d6f5e7a88a",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T06:42:51.437730Z",
+      "finished_at": "2026-11-10T06:51:37.220337Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 525.782607,
+      "agent_seconds": 0.175582,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null
+    },
+    {
+      "task": "terminal-bench/openssl-selfsigned-cert",
+      "trial": "openssl-selfsigned-cert__mvQbMqH",
+      "job": "oracle-openssl-selfsigned-cert",
+      "task_checksum": "2b70d5535b5873f644fad37b76dbef86a1e42162e018c7bc06316e5e2521929a",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T06:51:37.582564Z",
+      "finished_at": "2026-11-10T06:53:38.037452Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 120.454888,
+      "agent_seconds": 0.379472,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null
+    },
+    {
+      "task": "terminal-bench/polyglot-c-py",
+      "trial": "polyglot-c-py__vWEGQyi",
+      "job": "oracle-polyglot-c-py",
+      "task_checksum": "d1e52e6139c57528762bbb163dc3f89edb967511d897ac5e7859398d3f44eb3c",
+      "agent": {
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
+      },
+      "model": null,
+      "reasoning_effort": null,
+      "started_at": "2026-11-10T06:53:38.424746Z",
+      "finished_at": "2026-11-10T06:57:32.510849Z",
+      "reward": 1.0,
+      "passed": true,
+      "exception_type": null,
+      "total_seconds": 234.086103,
+      "agent_seconds": 0.115132,
+      "input_tokens": null,
+      "cached_input_tokens": null,
+      "output_tokens": null,
+      "cost_usd": null,
+      "metadata": null
+    }
+  ],
+  "canter_commit": "64b80e3f963f0005f69f078e68a4af71a611ca28",
+  "binary_sha256": "4f813abe5e46235b8b93856e901ccbdd3a9c8ff17e4f9aeb78dabb10e6240a4a",
+  "model_endpoint": "https://api.deepseek.com",
+  "model_settings": {
+    "context_window": 1048576,
+    "image": true,
+    "price": {
+      "peak": {
+        "cache_hit": 0.006,
+        "cache_miss": 0.30,
+        "output": 1.20
+      },
+      "off_peak": {
+        "cache_hit": 0.003,
+        "cache_miss": 0.15,
+        "output": 0.60
+      }
+    }
+  },
+  "live_task_runs": 3,
+  "reruns": 0,
+  "estimate_89_tasks": {
+    "method": "Pilot totals multiplied by 89/3; four-worker time divided by 4",
+    "factor": 29.666666666666668,
+    "cost_usd": 1.8594567079999995,
+    "serial_seconds": 15942.277872333334,
+    "ideal_four_worker_seconds": 3985.5694680833335,
+    "agent_serial_seconds": 9049.476330666666,
+    "assumptions": [
+      "Three deliberately short tasks; optimistic and not representative of all 89 tasks",
+      "Canter runs used images already prepared by oracle; cold pulls/builds excluded",
+      "Same model, high effort, canter price table and billing time band",
+      "Ideal concurrency excludes rate limits, contention and long-tail imbalance"
+    ]
+  },
+  "n_expected_tasks": 3,
+  "expected_tasks": [
+    "terminal-bench/fix-git",
+    "terminal-bench/openssl-selfsigned-cert",
+    "terminal-bench/polyglot-c-py"
+  ],
+  "missing_tasks": [],
+  "score_denominator_includes_missing": true,
+  "answer_source_checked_at": "2026-11-10T07:53:09.195732+00:00"
+}
