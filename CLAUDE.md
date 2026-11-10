@@ -12,7 +12,7 @@ canter 是用户自己做的 coding agent：Rust 写，一台机器一个常驻�
 
 ## 规矩
 
-- **语言与依赖**：Rust stable；只用成熟、活跃维护的库，依赖版本由 canter 自己决定，升级作为单独任务。实现、测试和辅助工具不用 Python，工具用 Rust 或纯数据文件。唯一例外（用户 11-10）：`bench/terminal-bench/` 里接 Harbor 的适配器只能用 Python（Harbor 只认 Python 写的外壳接口），只限这个目录，只做衔接（拷程序、写配置、调 `canter exec`、取用量），不进 cargo 工作区。终端界面可以用 ratatui、crossterm（ranch 不许用的那条只管 ranch）。
+- **语言与依赖**：Rust stable；只用成熟、活跃维护的库，依赖版本由 canter 自己决定，升级作为单独任务。实现、测试和辅助工具不用 Python，工具用 Rust 或纯数据文件。唯一例外（用户 11-10）：`bench/terminal-bench/` 里接 Harbor 的适配器只能用 Python（Harbor 只认 Python 写的外壳接口），只限这个目录，只做衔接（拷程序、写配置、调 `canter exec`、取用量），不进 cargo 工作区；本目录里对这个适配器的测试和不调模型的探针也算在内（用户 11-10）。终端界面可以用 ratatui、crossterm（ranch 不许用的那条只管 ranch）。
 - **独立**：不在 Cargo 里引用 ranch、paddock、cairn 的包，不读它们的状态目录（`~/.corral`、`~/.pony` 等），代码和文档里不为 corral 写特例。以后接 corral，是 corral 去适配 canter 的公开接口（DESIGN 第 1、12 条）。
 - **协议**：服务端和客户端之间用 canter 自定的 HTTP + SSE 协议，结构照 Codex app-server v2（DESIGN 第 8 条）。和 Codex 结构不一样的地方（加了什么、改了什么）写进 DESIGN，说明为什么。
 - **从别的项目搬来的代码**（比如 Codex 的 `apply-patch`）：文件开头注明来源（项目、版本标签、原文件），保留原许可证声明；Apache-2.0 的代码按要求维护 `NOTICE`。只参考、不搬的，在任务文件里写参考了哪里。
