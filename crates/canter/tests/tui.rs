@@ -124,7 +124,16 @@ async fn folder_trust_corrupt_record_opens_terminal_restricted_with_warning() {
     terminal
         .wait_for("Restricted mode: LSP and hooks are disabled.")
         .await;
-    terminal.wait_for("trailing comma").await;
+    terminal
+        .wait_until("trailing comma", |terminal| {
+            terminal
+                .screen()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .contains("trailing comma")
+        })
+        .await;
     assert!(terminal.screen().contains(path.to_str().unwrap()));
     assert!(!terminal.screen().contains("Trust this folder?"));
     let id = terminal.quit().await;
@@ -253,6 +262,7 @@ async fn terminal_can_open_and_interrupt_a_running_exec_turn() {
     world.start_server().await;
     let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_canter"))
         .args(["exec", "Long task"])
+        .args((!cfg!(target_os = "macos")).then_some("--yolo"))
         .env_clear()
         .env("HOME", world.path("home"))
         .env("CANTER_HOME", world.path("state"))
@@ -816,7 +826,7 @@ impl World {
             serde_json::to_vec(&json!({
                 "base_url": base_url, "model": "fake-model",
                 "context_window": 1048576, "api_key": "test-only-canter-key",
-                "prompt_suggestions": false
+                "prompt_suggestions": false, "sandbox": cfg!(target_os = "macos")
             }))
             .unwrap(),
         )
@@ -832,6 +842,13 @@ impl World {
 
     fn path(&self, name: &str) -> PathBuf {
         self.root.path().join(name)
+    }
+
+    fn set_sandbox(&self, enabled: bool) {
+        let path = self.path("state/config.json");
+        let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        config["sandbox"] = json!(enabled);
+        fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
     }
 
     /// Starts `canter serve` the way a user would by hand.
@@ -2262,6 +2279,7 @@ async fn new_session_retries_with_default_model_when_previous_model_was_removed(
     let config_path = world.path("state/config.json");
     let mut config: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
     config["models"] = json!(["fake-model"]);
+    config["sandbox"] = json!(true);
     fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     world.start_server().await;
 
@@ -2432,9 +2450,14 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     // The info rows: default model, asking each time, this directory.
     terminal
         .wait_until("the info rows", |terminal| {
-            terminal.info().starts_with(
-                "◆ fake-model · ◐ think high · Always ask · Sandbox on · /tmp/canter-tui-",
-            )
+            let sandbox = if cfg!(target_os = "macos") {
+                "Sandbox on"
+            } else {
+                "▲ Sandbox off"
+            };
+            terminal.info().starts_with(&format!(
+                "◆ fake-model · ◐ think high · Always ask · {sandbox} · /tmp/canter-tui-",
+            ))
         })
         .await;
     assert!(terminal.screen().contains("somewhere/else/deep"));
@@ -3026,6 +3049,7 @@ async fn slash_new_opens_a_new_session_in_this_terminal() {
 #[tokio::test]
 async fn ordinary_terminal_new_keeps_configured_sandbox_even_after_allow_all() {
     let mut world = World::new(Vec::new()).await;
+    world.set_sandbox(true);
     world.start_server().await;
     let terminal = world.open(&[], "ordinary").await;
     terminal.wait_for("Sandbox on").await;

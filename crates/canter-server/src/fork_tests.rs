@@ -36,6 +36,48 @@ async fn copy(test: &Harness, url: &str) -> SessionCreateResponse {
         .unwrap()
 }
 
+// Scratch exists with or without Seatbelt. Read the persisted model-facing path
+// instead of depending on the sandbox's writable-path listing.
+fn scratch_path(test: &Harness, url: &str) -> String {
+    let id = url.rsplit('/').next().unwrap();
+    let history = test
+        .app
+        .store
+        .model_history::<serde_json::Value>(id)
+        .unwrap();
+    let path = history
+        .iter()
+        .rev()
+        .find_map(|entry| {
+            if entry["type"] != "fork_notice" {
+                return None;
+            }
+            entry["message"]["text"]
+                .as_str()?
+                .strip_prefix(
+                    "This session was forked from another session. Its scratch directory is now ",
+                )?
+                .split_once("; use it instead")
+                .map(|(path, _)| path)
+        })
+        .or_else(|| {
+            history
+                .iter()
+                .filter_map(|entry| entry["messages"].as_array())
+                .flatten()
+                .filter_map(|message| message["text"].as_str())
+                .flat_map(str::lines)
+                .find_map(|line| {
+                    line.strip_prefix("Scratch directory: ")?
+                        .split_once(". Put temporary files")
+                        .map(|(path, _)| path)
+                })
+        })
+        .expect("session history must name its scratch directory");
+    assert!(std::path::Path::new(path).is_dir());
+    path.to_owned()
+}
+
 fn environment(test: &Harness) -> BTreeMap<String, String> {
     let home = test.root.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -370,7 +412,7 @@ async fn fork_preserves_request_bytes_after_compaction_rewind_and_plan() {
         let test = Harness::with_options(
             model.clone(),
             CoreOptions {
-                sandbox: true,
+                sandbox: cfg!(target_os = "macos"),
                 ..Default::default()
             },
         )
@@ -410,11 +452,7 @@ async fn fork_preserves_request_bytes_after_compaction_rewind_and_plan() {
             .json()
             .await
             .unwrap();
-        let scratch = sandbox
-            .writable
-            .iter()
-            .find(|path| path.contains("canter-shell-"))
-            .unwrap();
+        let scratch = scratch_path(&test, &url);
         let original_sandbox: SessionSandboxResponse = test
             .client
             .get(format!("{source}/sandbox"))
@@ -424,14 +462,10 @@ async fn fork_preserves_request_bytes_after_compaction_rewind_and_plan() {
             .json()
             .await
             .unwrap();
-        let original_scratch = original_sandbox
-            .writable
-            .iter()
-            .find(|path| path.contains("canter-shell-"))
-            .unwrap();
+        let original_scratch = scratch_path(&test, &source);
         assert_ne!(scratch, original_scratch);
-        assert!(!sandbox.writable.contains(original_scratch));
-        assert!(!original_sandbox.writable.contains(scratch));
+        assert!(!sandbox.writable.contains(&original_scratch));
+        assert!(!original_sandbox.writable.contains(&scratch));
         let notice = Message::User {
             text: format!(
                 "This session was forked from another session. Its scratch directory is now {scratch}; use it instead of the scratch directory named earlier."
@@ -617,7 +651,7 @@ async fn fork_copies_image_bytes_but_not_backups_telemetry_or_scratch() {
     let test = Harness::with_options(
         model.clone(),
         CoreOptions {
-            sandbox: true,
+            sandbox: cfg!(target_os = "macos"),
             image_models: vec!["fake-model".into()],
             ..Default::default()
         },
@@ -643,22 +677,7 @@ async fn fork_copies_image_bytes_but_not_backups_telemetry_or_scratch() {
         .store
         .save_rewind(&before.session.id, b"file backup")
         .unwrap();
-    let sandbox: SessionSandboxResponse = test
-        .client
-        .get(format!("{source}/sandbox"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let scratch = std::path::Path::new(
-        sandbox
-            .writable
-            .iter()
-            .find(|path| path.contains("canter-shell-"))
-            .unwrap(),
-    );
+    let scratch = std::path::PathBuf::from(scratch_path(&test, &source));
     std::fs::write(scratch.join("original-only"), b"scratch").unwrap();
     let fork = copy(&test, &source).await;
     let target = test.app.store.session_dir(&fork.session.id).unwrap();
@@ -677,22 +696,7 @@ async fn fork_copies_image_bytes_but_not_backups_telemetry_or_scratch() {
         b"scratch"
     );
     let url = format!("http://localhost/v1/sessions/{}", fork.session.id);
-    let sandbox: SessionSandboxResponse = test
-        .client
-        .get(format!("{url}/sandbox"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let scratch = std::path::Path::new(
-        sandbox
-            .writable
-            .iter()
-            .find(|path| path.contains("canter-shell-"))
-            .unwrap(),
-    );
+    let scratch = std::path::PathBuf::from(scratch_path(&test, &url));
     assert!(!scratch.join("original-only").exists());
     let image = std::fs::read_dir(&target)
         .unwrap()

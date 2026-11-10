@@ -34,7 +34,16 @@ impl Fixture {
         ] {
             fs::create_dir_all(path).unwrap();
         }
-        fs::copy(env!("CARGO_BIN_EXE_canter"), &binary).unwrap();
+        // Keep writable executable descriptors out of the test process: another
+        // test's concurrent fork can inherit one and cause ETXTBSY on Linux.
+        assert!(
+            Command::new("/bin/cp")
+                .arg(env!("CARGO_BIN_EXE_canter"))
+                .arg(&binary)
+                .status()
+                .unwrap()
+                .success()
+        );
         fs::write(repo.join("Cargo.toml"), "[workspace]\n").unwrap();
         fs::write(
             repo.join("crates/canter/Cargo.toml"),

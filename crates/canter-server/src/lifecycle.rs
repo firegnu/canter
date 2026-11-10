@@ -67,7 +67,11 @@ pub(crate) fn server_running(home: &Path) -> Result<bool, ServerError> {
         Err(_) => return Err(ServerError("cannot check the server file lock".into())),
     };
     match file.try_lock_shared() {
-        Ok(()) => Ok(false), // Dropping the file immediately releases this probe's lock.
+        Ok(()) => {
+            file.unlock()
+                .map_err(|_| ServerError("cannot release the server probe lock".into()))?;
+            Ok(false)
+        }
         Err(TryLockError::WouldBlock) => Ok(true),
         Err(_) => Err(ServerError("cannot check the server file lock".into())),
     }
@@ -210,6 +214,8 @@ impl Drop for Lease {
         for name in ["server.json", "server.sock", "replace.json"] {
             let _ = fs::remove_file(self.home.join(name));
         }
+        // Concurrent forks can retain a copy until exec; release ownership now.
+        let _ = self._lock.unlock();
     }
 }
 

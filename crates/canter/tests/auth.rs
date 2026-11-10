@@ -3,6 +3,12 @@ use serde_json::json;
 use std::process::Command;
 use std::{fs, os::unix::fs::PermissionsExt, process::Stdio, time::Duration};
 
+const BROWSER: &str = if cfg!(target_os = "macos") {
+    "open"
+} else {
+    "xdg-open"
+};
+
 #[test]
 fn auth_login_without_provider_prints_usage_without_starting_server() {
     let root = tempfile::tempdir().unwrap();
@@ -44,7 +50,7 @@ impl Fixture {
             .unwrap();
         fs::create_dir(root.path().join("home")).unwrap();
         fs::create_dir(root.path().join("bin")).unwrap();
-        let script = root.path().join("bin/open");
+        let script = root.path().join("bin").join(BROWSER);
         fs::write(
             &script,
             "#!/bin/sh\nprintf '%s' \"$1\" > \"$CANTER_BROWSER_CAPTURE\"\n",
@@ -234,7 +240,7 @@ async fn cli_terminal_consent_is_explicit_and_defaults_to_no() {
 async fn cli_ctrl_c_cancels_login_and_fallback_url_stays_on_initiating_terminal() {
     let test = Fixture::new().await;
     fs::write(
-        test.root.path().join("bin/open"),
+        test.root.path().join("bin").join(BROWSER),
         "#!/bin/sh\nprintf '%s' \"$1\" > \"$CANTER_BROWSER_CAPTURE\"\nexit 1\n",
     )
     .unwrap();
@@ -264,7 +270,12 @@ async fn cli_ctrl_c_cancels_login_and_fallback_url_stays_on_initiating_terminal(
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stdout.contains("paste this link into a browser on this Mac"));
+    let machine = if cfg!(target_os = "macos") {
+        "Mac"
+    } else {
+        "machine"
+    };
+    assert!(stdout.contains(&format!("paste this link into a browser on this {machine}")));
     assert!(stdout.contains(&url));
     assert!(stderr.contains("Sign-in canceled."));
     let url = reqwest::Url::parse(&url).unwrap();
@@ -288,6 +299,20 @@ async fn cli_ctrl_c_cancels_login_and_fallback_url_stays_on_initiating_terminal(
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn cli_login_completes_when_the_browser_cannot_open() {
+    let test = Fixture::new().await;
+    fs::write(
+        test.root.path().join("bin").join(BROWSER),
+        "#!/bin/sh\nprintf '%s' \"$1\" > \"$CANTER_BROWSER_CAPTURE\"\nexit 1\n",
+    )
+    .unwrap();
+    let output = test.login().await;
+    assert!(output.contains("paste this link into a browser"));
+    assert!(output.contains(&fs::read_to_string(test.root.path().join("browser-url")).unwrap()));
+    assert!(output.contains("Signed in as same@example.test."));
 }
 
 #[tokio::test]

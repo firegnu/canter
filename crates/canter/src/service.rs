@@ -14,6 +14,9 @@ pub enum Command {
 }
 
 pub fn run(command: Command) -> Result<String, String> {
+    if cfg!(target_os = "linux") {
+        return Err("Service installation is not supported on Linux. The server starts automatically when you open the terminal client.".into());
+    }
     if !cfg!(target_os = "macos") {
         return Err("service installation is only supported on macOS".into());
     }

@@ -171,7 +171,7 @@ impl Fixture {
         for name in ["home", "state", "project"] {
             std::fs::create_dir(root.path().join(name)).unwrap();
         }
-        let mut config = json!({"base_url":"http://127.0.0.1:1/v1","model":"fake","api_key":"test-key","context_window":1048576,"prompt_suggestions":false});
+        let mut config = json!({"base_url":"http://127.0.0.1:1/v1","model":"fake","api_key":"test-key","context_window":1048576,"prompt_suggestions":false,"sandbox":cfg!(target_os = "macos")});
         config
             .as_object_mut()
             .unwrap()

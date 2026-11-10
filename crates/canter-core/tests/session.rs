@@ -521,11 +521,13 @@ fn normalize_session_scratch(request: &mut Request) {
     }
 }
 
+#[cfg(target_os = "macos")]
 struct ScratchConfiguration {
     state: Mutex<(u64, bool)>,
     model: Arc<ScriptModel>,
 }
 
+#[cfg(target_os = "macos")]
 impl canter_core::ConfigurationSource for ScratchConfiguration {
     fn snapshot(&self) -> canter_core::Configuration {
         let (revision, sandbox) = *self.state.lock().unwrap();

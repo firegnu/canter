@@ -453,7 +453,7 @@ async fn provider(app: &App, provider: crate::config::DoctorProvider) -> DoctorC
 static SANDBOX_FAILURES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
     std::sync::LazyLock::new(Default::default);
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 pub(super) fn fail_sandbox_for_test(home: PathBuf) {
     SANDBOX_FAILURES.lock().unwrap().insert(home);
 }

@@ -11,7 +11,7 @@ pub(crate) fn attach(command: &mut tokio::process::Command) -> io::Result<io::Pi
     // All strings are static. The only dynamic argument is the group ID, formatted
     // into a stack buffer before the forks, without allocation or Rust locks.
     let script =
-        c"printf .; exec 1>&- 2>&-; if IFS= read -r _; then exit 0; fi; kill -KILL -- -\"$1\"";
+        c"printf .; exec 1>&- 2>&-; if IFS= read -r _; then exit 0; fi; kill -KILL -\"$1\"";
     // SAFETY: after fork both branches use only async-signal-safe syscalls. The
     // watchdog exits with _exit, never unwinding or returning into the runtime.
     unsafe {

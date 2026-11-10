@@ -47,6 +47,7 @@ async fn yolo_reconnect_restores_the_terminals_sandbox_choice() {
 #[tokio::test]
 async fn yolo_slash_resume_and_fork_use_the_terminal_choice() {
     let mut world = World::new(Vec::new()).await;
+    world.set_sandbox(true);
     world.start_server().await;
     let ordinary = world.open(&[], "ordinary").await;
     ordinary.wait_idle().await;
@@ -100,6 +101,7 @@ async fn yolo_slash_resume_and_fork_use_the_terminal_choice() {
 #[tokio::test]
 async fn yolo_resume_changes_only_that_session_and_updates_both_terminals() {
     let mut world = World::new(Vec::new()).await;
+    world.set_sandbox(true);
     world.start_server().await;
     let yolo = world.open(&["--yolo"], "yolo").await;
     yolo.wait_for("Sandbox off").await;

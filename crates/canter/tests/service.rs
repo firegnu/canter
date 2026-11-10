@@ -1,7 +1,6 @@
-#![cfg(target_os = "macos")]
-
 use std::{fs, process::Command};
 
+#[cfg(target_os = "macos")]
 #[test]
 fn service_install_updates_login_configuration_and_uninstall_preserves_state() {
     let root = tempfile::tempdir().unwrap();
@@ -79,4 +78,24 @@ fn service_install_updates_login_configuration_and_uninstall_preserves_state() {
         "test-owned running registration"
     );
     assert!(run(&["service", "uninstall"], "/unused").contains("not installed"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn unsupported_service_installation_leaves_home_untouched() {
+    let root = tempfile::tempdir().unwrap();
+    for action in ["install", "uninstall"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_canter"))
+            .args(["service", action])
+            .env_clear()
+            .env("HOME", root.path())
+            .env("CANTER_HOME", root.path().join("state"))
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let message = String::from_utf8(output.stderr).unwrap();
+        assert!(message.contains("not supported on Linux"), "{message}");
+        assert!(message.contains("starts automatically"), "{message}");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    }
 }

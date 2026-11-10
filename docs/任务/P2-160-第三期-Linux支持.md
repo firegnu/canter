@@ -82,3 +82,62 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 阶段记录（2026-11-10，未完成，等待主控决定）
+
+### 做了什么
+
+- Linux 默认沙箱继续拒绝执行，错误改为 `Sandbox is not available on Linux yet. Set "sandbox": false in config.json or use --yolo.`；新增公开工具接口回归，检查 shell、read、write、edit 都拒绝且不产生写入。Linux 的 service install/uninstall 明确提示不支持、终端自动启动服务端，测试确认不会写 launchd 文件。
+- 保留已有 xdg-open 实现，修正 Linux 登录文案中的 Mac，并验证浏览器启动器失败后手动登录仍完成。已有终端链接规则未改。
+- 修复 `/bin/sh` 看护进程杀进程组的兼容写法；会话写锁、服务端锁、发现探测锁显式解锁，避免 Linux 并发 fork 继承文件描述符导致短暂残留锁。
+- 普通功能测试在 Linux 显式关闭未实现的沙箱，保留 macOS 沙箱覆盖；只有确实验证 Seatbelt/launchd 的部分限于 macOS。fork scratch 隔离测试改从持久化上下文读取实际 scratch 路径；仍检查隔离。修正 dash 作业控制、终端自动折行、Node 测试报告格式、复制参数和部署夹具复制可执行文件的真实平台差异，保留原功能断言。
+- DESIGN 记录 Linux 范围、静态构建命令和待定 CA 问题。C 依赖全部编过，产物 `~/canter-linux/.target/p2-160-linux/musl/x86_64-unknown-linux-musl/release/canter` 经 `file` 确认是 x86-64 static-pie，无 glibc 动态依赖。
+
+### 验证了什么
+
+- 开工在独立 Linux git 仓库跑 `cargo test --workspace --no-fail-fast`：1984 通过、69 失败、49 忽略。新增沙箱、service 测试和调整后的 auth 测试均先观察到目标原因失败，再修到通过；进程组、锁、信号等使用现有失败测试定位并回归。
+- Linux 最终 `cargo test --workspace` 退出 0：合计 2054 通过、0 失败、49 忽略（含文档测试）。命令在 `~/canter-linux/p2-160-linux` 内执行：
+
+  ```sh
+  PATH="$HOME/canter-linux/node-v22.23.4-linux-x64/bin:$PATH" \
+  npm_config_cache="$HOME/canter-linux/npm-cache" \
+  CARGO_TARGET_DIR="$HOME/canter-linux/.target/p2-160-linux" \
+  cargo test --workspace
+  ```
+
+  日志为 `~/canter-linux/p2-160-linux-final.log`。Node 只解包到任务目录，官方 v22.23.4 的 linux-x64 包经官方 SHA256 核对，未装宿主机包。
+- Mac 在指定 target 目录运行 `cargo nextest run -p canter -p canter-server -p canter-core -p canter-tools -p canter-store -p canter-tui -p canter-eval --no-fail-fast`：1990 通过、50 跳过。最后修改部署测试夹具后重新跑完整 `cargo nextest run -p canter --no-fail-fast`：229 全过。日志分别为 `/tmp/p2-160-mac-nextest-final.log`、`/tmp/p2-160-mac-canter-final.log`。
+- `cargo fmt --check`、`git diff --check` 通过。
+- 静态构建按 DESIGN 的 Docker 命令完成，包含 tree-sitter 等 C 依赖。构建日志为 5090 上 `~/canter-linux/p2-160-musl-final.log`。
+- 验收 4 的 Debian 11 检查：`--version` 成功，显示 `canter 0.1.0 · 3690057-dirty`（这是独立 Linux 验证仓库的基线提交，不是本分支提交号）；随后服务端在加载 CA 时 panic。使用任务目录内的 Rust 检查程序，隔离 HOME/CANTER_HOME，假模型配置、禁网容器；计划检查 `/v1/info` 后发送 SIGTERM 并等待退出，实际未到 HTTP 检查。命令为：
+
+  ```sh
+  docker run --rm --network none \
+    -v "$HOME/canter-linux/.target/p2-160-linux/musl/x86_64-unknown-linux-musl/release/canter:/canter:ro" \
+    -v "$HOME/canter-linux/musl/smoke:/smoke:ro" debian:11 /smoke
+  ```
+
+  错误是 `crates/canter-server/src/model_catalog.rs:190` 的 `catalog HTTP client`：`No CA certificates were loaded from the system`。遇到该决策点后停止后续容器验收，等待已启动的前台测试结束；没有遗留本任务容器。
+
+### 要主控决定
+
+Debian 11 基础镜像没有系统 CA；当前 reqwest/rustls 客户端在服务端启动时即加载 CA，尚未请求模型也会失败。静态链接消除了 glibc 依赖，但没有消除证书依赖。
+
+- 方案 A（建议）：明确运行环境需要系统 CA，只在自己的验收镜像中加入 `ca-certificates`，继续沿用现有系统信任源。后续 P2-260 在部署 canter 时保证证书可用。
+- 方案 B：随静态版携带 CA 根证书，支持无系统 CA 的基础镜像。这需要决定信任源、更新方式及依赖，属于新的 TLS 设计。
+
+尚未采用任一方案，也未改 TLS 行为。按本任务「碰到要拿主意的事……结束这一轮，等主控回复」停止；主控的决定后续补在这里。
+
+### 没做的事
+
+- 本任务尚未完成；两端 clippy、验收 3 单独展示提示尚未执行（Linux 全套已包含提示断言）。Debian 服务端验收未通过，Ubuntu 20.04 和 Alpine 容器运行验收尚未执行。
+- 未实现 Linux 沙箱、systemd、发布/升级流程；未接 Harbor 或 Terminal-Bench；未读写两端真实 `~/.canter`，未带凭证，真实模型调用 0 次。合并后主控的 DeepSeek 终端/exec 验收未做。未合并 main、未推 origin。
+- 自己拉取/构建的镜像保留：`rust:1.97-alpine`（固定 digest 见 DESIGN）、`canter-p2-160-musl:latest`、`debian:11`、`ubuntu:20.04`、`alpine:3.23`。自己的容器均以前台 `--rm` 运行并已退出；未改现有容器和镜像。代码、构建缓存、Node 和检查程序保留在 `~/canter-linux/`，供继续验收。
+
+### 踩过的坑
+
+- Linux 单测单跑会隐藏 fork 继承锁的问题；完整并发测试才复现关闭 writer 后仍报 Locked、服务端锁探测短暂误报。显式 unlock 后全套通过。
+- 看护脚本原来的 `kill -KILL -- -<pgid>` 不被 dash 接受；中途尝试 `kill -s KILL -<pgid>`，Mac SIGKILL 回归仍失败。最终使用两端都接受的 `kill -KILL -<pgid>`，两端进程组回归通过。
+- Linux 并发部署测试偶发 ETXTBSY：其他测试的 fork 可继承 `fs::copy` 期间打开的可写可执行文件。夹具改用前台 `/bin/cp`，写描述符只在复制子进程中存在；Linux 部署 9 项和全套、Mac canter 229 项通过。
+- 远端缺 Node，eval 需要它；解包独立官方发行包后仍遇 Node 默认报告格式差异，fixture 显式用 spec 报告器，eval 42 项通过。macOS 专有 `cp -cR` 改为 `cp -R`。
+- 静态构建成功不代表基础容器能启动服务端：缺少 CA 的失败发生在 HTTP 客户端初始化，而不是首次联网。

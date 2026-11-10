@@ -60,7 +60,7 @@ async fn escaped_output_holders_cannot_block_exit_timeout_or_cancellation() {
         let tools = tools(&dir);
         let cancel = CancellationToken::new();
         let command = format!(
-            "set -m; /bin/sleep 30 & echo $! > escaped.pid; echo started; {}",
+            "/bin/bash -c 'set -m; /bin/sleep 30 & echo $! > escaped.pid; echo started; {}'",
             if mode == "cancel" || mode == "timeout" {
                 "/bin/sleep 30"
             } else if mode.ends_with("failed") {
@@ -148,7 +148,7 @@ async fn cancellation_and_original_timeout_remain_active_after_the_other_trigger
         let _escaped = EscapedProcess(dir.path().join("escaped.pid"));
         let tools = tools(&dir);
         let cancel = CancellationToken::new();
-        let raw = serde_json::json!({"command":"set -m; /bin/sleep 30 & echo $! > escaped.pid; /bin/sleep 30", "timeoutMs":if cancel_first {600} else {300}}).to_string();
+        let raw = serde_json::json!({"command":"/bin/bash -c 'set -m; /bin/sleep 30 & echo $! > escaped.pid; /bin/sleep 30'", "timeoutMs":if cancel_first {600} else {300}}).to_string();
         let call = tools
             .prepare(Tool::Shell, "drain", &raw, &cancel)
             .await
