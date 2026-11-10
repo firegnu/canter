@@ -301,7 +301,10 @@ impl App {
 
 pub(crate) fn router(app: Arc<App>) -> Router {
     let auth = app.reload.as_ref().map_or_else(
-        || crate::model_auth::ModelAuth::new(app.home.clone()),
+        || {
+            crate::model_auth::ModelAuth::new(app.home.clone())
+                .expect("model authentication for app without live config")
+        },
         |reload| reload.auth.clone(),
     );
     let accounts = account::router(auth, app.stopped.clone());

@@ -14,14 +14,14 @@ pub(crate) struct ModelAuth {
 }
 
 impl ModelAuth {
-    pub fn new(home: PathBuf) -> Arc<Self> {
-        Arc::new(Self {
-            catalog: crate::model_catalog::ModelCatalog::new(home.clone(), None),
+    pub fn new(home: PathBuf) -> Result<Arc<Self>, crate::ServerError> {
+        Ok(Arc::new(Self {
+            catalog: crate::model_catalog::ModelCatalog::new(home.clone(), None)?,
             home,
             manager: Mutex::new(None),
             #[cfg(test)]
             endpoint: None,
-        })
+        }))
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -33,7 +33,8 @@ impl ModelAuth {
                     reqwest::Url::parse("http://127.0.0.1:9/v1/models")
                         .expect("isolated test catalog URL"),
                 ),
-            ),
+            )
+            .expect("test catalog HTTP client"),
             home,
             manager: Mutex::new(Some(manager)),
             #[cfg(test)]
@@ -63,7 +64,8 @@ impl ModelAuth {
         catalog_endpoint.set_path("/v1/models");
         catalog_endpoint.set_query(None);
         Arc::new(Self {
-            catalog: crate::model_catalog::ModelCatalog::new(home.clone(), Some(catalog_endpoint)),
+            catalog: crate::model_catalog::ModelCatalog::new(home.clone(), Some(catalog_endpoint))
+                .expect("test catalog HTTP client"),
             home,
             manager: Mutex::new(Some(manager)),
             endpoint: Some(endpoint),

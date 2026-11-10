@@ -145,7 +145,7 @@ impl Lease {
                     .map_err(|_| ServerError("another upgrade is in progress".into()))?;
                 // Reject unusable replacement settings before asking a healthy daemon to exit.
                 crate::config::Config::load(&home)?
-                    .model_client(Some(crate::model_auth::ModelAuth::new(home.clone())))?;
+                    .model_client(Some(crate::model_auth::ModelAuth::new(home.clone())?))?;
                 let previous = read_registration(&home)?.ok_or(ServerError(
                     "the old server has not finished starting; try again later".into(),
                 ))?;

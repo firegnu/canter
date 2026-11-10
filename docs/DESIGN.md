@@ -544,7 +544,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   --target x86_64-unknown-linux-musl
 ```
 
-产物为 `~/canter-linux/.target/p2-160-linux/musl/x86_64-unknown-linux-musl/release/canter`。不依赖容器中的 glibc；运行命令仍需要容器提供 `/bin/sh`，浏览器和 PDF 转换等外部程序仍按原功能按需使用。当前 HTTP 客户端在服务端启动时加载系统 CA，缺少 CA 的 Debian 11 基础镜像会启动失败；由运行镜像提供 CA，还是随程序携带 CA，待主控决定，见 P2-160 任务记录。
+产物为 `~/canter-linux/.target/p2-160-linux/musl/x86_64-unknown-linux-musl/release/canter`。不依赖容器中的 glibc；运行命令仍需要容器提供 `/bin/sh`，浏览器和 PDF 转换等外部程序仍按原功能按需使用。主控决定沿用系统信任源，不随静态版携带 CA：运行镜像先安装 `ca-certificates`（Debian/Ubuntu 用 `apt-get`，Alpine 用 `apk`），P2-260 适配器安装 canter 时同样准备该依赖。缺少系统 CA 时，服务端输出英文错误 `No system CA certificates were found. Install ca-certificates and try again.`，以失败状态正常退出，不 panic；只处理这处 HTTP 客户端初始化失败，不改变其他 TLS 行为。验收覆盖安装 CA 的三个容器，以及未安装 CA 的基础容器错误。
 
 会话写锁、服务端锁和发现探测锁由拥有者显式解锁后释放：Linux 的文件锁会随 fork 继承，不能只靠关闭父进程的文件描述符，否则并发启动命令时会短暂阻止会话重开或误报服务端仍在运行。看护进程继续用系统 `/bin/sh`，杀进程组使用 macOS sh 和 Linux dash 都接受的 `kill -KILL -<pgid>` 写法（dash 不接受原来的 `--`）。
 

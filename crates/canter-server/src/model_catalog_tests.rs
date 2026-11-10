@@ -147,7 +147,7 @@ async fn parsing_precedence_defaults_cache_and_restart() {
             "default_reasoning_level":"future","input_modalities":"unknown"})
     ]}))])
     .await;
-    let catalog = ModelCatalog::new(home.clone(), Some(server.endpoint.clone()));
+    let catalog = ModelCatalog::new(home.clone(), Some(server.endpoint.clone())).unwrap();
     catalog.account_changed(auth.clone()).await;
     server.next().await;
     until(|| catalog.state.read().unwrap().models.len() == 4).await;
@@ -235,7 +235,7 @@ async fn parsing_precedence_defaults_cache_and_restart() {
         0o600
     );
     drop(catalog);
-    let restarted = ModelCatalog::new(home.clone(), Some(server.endpoint.clone()));
+    let restarted = ModelCatalog::new(home.clone(), Some(server.endpoint.clone())).unwrap();
     assert_eq!(
         restarted.activate(&auth).await.map(|(account, _)| account),
         Some(account)
@@ -253,7 +253,7 @@ async fn failed_refresh_uses_cache_and_empty_success_removes_listings() {
     let fake = Fake::new().await;
     let (auth, _) = login(&home, &fake).await;
     let mut server = CatalogServer::new(vec![ok(json!({"models":[bare("old")]}))]).await;
-    let catalog = ModelCatalog::new(home.clone(), Some(server.endpoint.clone()));
+    let catalog = ModelCatalog::new(home.clone(), Some(server.endpoint.clone())).unwrap();
     catalog.account_changed(auth.clone()).await;
     server.next().await;
     until(|| catalog.state.read().unwrap().models.len() == 1).await;
@@ -290,7 +290,7 @@ async fn switching_accounts_ignores_an_old_inflight_result_and_logout_deletes_ca
         ok(json!({"models":[bare("second-model")]})),
     ])
     .await;
-    let catalog = ModelCatalog::new(home.clone(), Some(server.endpoint.clone()));
+    let catalog = ModelCatalog::new(home.clone(), Some(server.endpoint.clone())).unwrap();
     catalog.account_changed(auth.clone()).await;
     server.next().await;
     fake.state.lock().unwrap().client_id = "second-test-client".into();
@@ -343,7 +343,7 @@ async fn no_login_or_plan_does_not_fetch_and_failure_without_cache_lists_nothing
         Arc::new(move || now.load(std::sync::atomic::Ordering::SeqCst)),
     );
     let mut server = CatalogServer::new(Vec::new()).await;
-    let catalog = ModelCatalog::new(home.clone(), Some(server.endpoint.clone()));
+    let catalog = ModelCatalog::new(home.clone(), Some(server.endpoint.clone())).unwrap();
     catalog.account_changed(auth.clone()).await;
     assert!(
         tokio::time::timeout(Duration::from_millis(100), server.requests.recv())
@@ -381,7 +381,7 @@ async fn malformed_and_unauthorized_responses_fail_without_replacing_cache() {
     let fake = Fake::new().await;
     let (auth, _) = login(&home, &fake).await;
     let mut server = CatalogServer::new(vec![ok(json!({"models":[bare("known")]}))]).await;
-    let catalog = ModelCatalog::new(home.clone(), Some(server.endpoint.clone()));
+    let catalog = ModelCatalog::new(home.clone(), Some(server.endpoint.clone())).unwrap();
     catalog.account_changed(auth.clone()).await;
     server.next().await;
     until(|| catalog.state.read().unwrap().models.len() == 1).await;
@@ -423,7 +423,7 @@ async fn opening_a_stale_catalog_refreshes_in_the_background() {
         ok(json!({"models":[bare("refreshed")]})),
     ])
     .await;
-    let catalog = ModelCatalog::new(home, Some(server.endpoint.clone()));
+    let catalog = ModelCatalog::new(home, Some(server.endpoint.clone())).unwrap();
     catalog.start(auth.clone());
     server.next().await;
     until(|| catalog.details("chatgpt/first").is_some()).await;
@@ -449,7 +449,7 @@ async fn activation_cannot_leave_a_new_account_stuck_behind_an_old_refresh() {
     auth.complete_login(&second.id, true).await.unwrap();
     auth.select(&first).await.unwrap();
     let server = CatalogServer::new(vec![ok(json!({"models":[bare("new-account")]}))]).await;
-    let catalog = ModelCatalog::new(home, Some(server.endpoint.clone()));
+    let catalog = ModelCatalog::new(home, Some(server.endpoint.clone())).unwrap();
     catalog
         .pause_after_activate
         .armed
@@ -478,7 +478,7 @@ async fn activation_cannot_leave_a_new_account_stuck_behind_an_old_refresh() {
 #[test]
 fn apply_patch_capability_comes_only_from_the_catalog_even_for_configured_models() {
     let temp = tempfile::tempdir().unwrap();
-    let catalog = ModelCatalog::new(temp.path().to_owned(), None);
+    let catalog = ModelCatalog::new(temp.path().to_owned(), None).unwrap();
     for (slug, capability) in [
         ("freeform", Some("freeform")),
         ("missing", None),

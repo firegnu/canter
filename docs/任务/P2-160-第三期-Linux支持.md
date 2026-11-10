@@ -85,6 +85,8 @@
 
 ## 阶段记录（2026-11-10，未完成，等待主控决定）
 
+以下保留当时中断的记录；CA 决定和后续结果见文末完成记录。
+
 ### 做了什么
 
 - Linux 默认沙箱继续拒绝执行，错误改为 `Sandbox is not available on Linux yet. Set "sandbox": false in config.json or use --yolo.`；新增公开工具接口回归，检查 shell、read、write、edit 都拒绝且不产生写入。Linux 的 service install/uninstall 明确提示不支持、终端自动启动服务端，测试确认不会写 launchd 文件。
@@ -141,3 +143,68 @@ Debian 11 基础镜像没有系统 CA；当前 reqwest/rustls 客户端在服务
 - Linux 并发部署测试偶发 ETXTBSY：其他测试的 fork 可继承 `fs::copy` 期间打开的可写可执行文件。夹具改用前台 `/bin/cp`，写描述符只在复制子进程中存在；Linux 部署 9 项和全套、Mac canter 229 项通过。
 - 远端缺 Node，eval 需要它；解包独立官方发行包后仍遇 Node 默认报告格式差异，fixture 显式用 spec 报告器，eval 42 项通过。macOS 专有 `cp -cR` 改为 `cp -R`。
 - 静态构建成功不代表基础容器能启动服务端：缺少 CA 的失败发生在 HTTP 客户端初始化，而不是首次联网。
+
+## 完成记录
+
+### 做了什么、主控决定
+
+沿用前述 Linux 兼容修复。主控 11-10 明确选方案 1：沿用系统信任源，不随静态版携带 CA；运行镜像用 apt-get/apk 安装 `ca-certificates`。缺 CA 时只调整初始化失败的处理，不改信任源或其他 TLS 行为。该决定已写进 DESIGN 的静态版说明。
+
+模型目录 HTTP 客户端构建失败现在通过 ModelAuth 返回 ServerError，再走已有命令行错误输出。缺 CA 时输出 `canter: No system CA certificates were found. Install ca-certificates and try again.`，退出码 1；替换服务端的预检查也会返回错误，不先停止旧服务端。新增 Linux CLI 回归测试，隔离 HOME 和证书目录，断言完整错误、退出码以及没有服务端注册文件；先观察到原 panic/退出码 101，再验证修复通过。
+
+错误来源和测试隔离方式参考本地已锁定依赖源码：rustls-platform-verifier 0.7.1 的 `src/verification/others.rs`、rustls 0.23.46 的 `src/error.rs`、rustls-native-certs 0.8.5 的 `src/lib.rs`。只参考，没有复制第三方实现或新增依赖。
+
+### 验证了什么
+
+- Linux 最终 `cargo test --workspace` 退出 0，合计 2055 通过、0 失败、49 忽略，包含文档测试；环境变量与前述阶段记录相同，日志为 `~/canter-linux/p2-160-linux-ca-final.log`。
+- Mac 上一轮涉及的 7 个 crate 共 1990 项通过；本轮修改只涉及 canter/server，重新完整运行 `cargo nextest run -p canter -p canter-server --no-fail-fast`，655 通过、5 跳过。日志为 `/tmp/p2-160-mac-ca-final.log`，编译目录仍为指定的 p2-160-linux。
+- 两端 `cargo clippy --all-targets -- -D warnings` 均退出 0，日志分别为 `/tmp/p2-160-mac-clippy.log`、5090 的 `~/canter-linux/p2-160-linux-clippy.log`。`cargo fmt --check`、`git diff --check` 通过。
+- 验收 3：在 5090 的代码目录、指定 target 目录执行 `cargo test -p canter-tools --test sandbox_unavailable -- --nocapture`，1 项通过。实际打印 `Sandbox is not available on Linux yet. Set "sandbox": false in config.json or use --yolo.`；shell、read、write、edit 均拒绝，副作用断言通过。
+- 验收 4：下述三个有 CA 容器、一个无 CA 容器全部通过。所有命令均在前台结束，未遗留本任务容器。
+
+### 静态版和容器验收
+
+按 DESIGN 的 Docker 命令重编译成功。产物仍在 5090 的 `~/canter-linux/.target/p2-160-linux/musl/x86_64-unknown-linux-musl/release/canter`，`file` 为 x86-64 static-pie，SHA256 为 `57e9f3dce743c8c5722fc7d2f53b3644e1c410e9b7cf4463ebcd8b06fb42f617`。版本输出中的 `3690057-dirty` 是独立验证仓库的基线标识，源码已从本 worktree 同步。
+
+验收镜像的构建命令（在 5090 上前台运行，仅向自己的新镜像装包）：
+
+```sh
+docker build -t canter-p2-160-debian11-ca - <<'DOCKERFILE'
+FROM debian:11
+RUN sed -i 's@http://deb.debian.org/debian-security@http://archive.debian.org/debian-security@g' /etc/apt/sources.list \
+    && apt-get update && apt-get install -y --no-install-recommends ca-certificates
+DOCKERFILE
+docker build -t canter-p2-160-ubuntu2004-ca - <<'DOCKERFILE'
+FROM ubuntu:20.04
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
+DOCKERFILE
+docker build -t canter-p2-160-alpine323-ca - <<'DOCKERFILE'
+FROM alpine:3.23
+RUN apk add --no-cache ca-certificates
+DOCKERFILE
+```
+
+Rust 验收辅助程序保留在 `~/canter-linux/musl/smoke.rs`，在同一个 musl 编译镜像中用 `rustc --edition=2024 --target x86_64-unknown-linux-musl smoke.rs -o smoke` 编译。它使用隔离 HOME/CANTER_HOME 和本地假模型配置；容器禁网，检查版本、启动服务端、通过 Unix socket 请求 `/v1/info`，最后按子进程 PID 发送 SIGTERM 并等待退出。以下三次都通过：
+
+```sh
+for image in canter-p2-160-debian11-ca canter-p2-160-ubuntu2004-ca canter-p2-160-alpine323-ca; do
+  docker run --rm --network none \
+    -v "$HOME/canter-linux/.target/p2-160-linux/musl/x86_64-unknown-linux-musl/release/canter:/canter:ro" \
+    -v "$HOME/canter-linux/musl/smoke:/smoke:ro" "$image" /smoke
+done
+docker run --rm --network none \
+  -v "$HOME/canter-linux/.target/p2-160-linux/musl/x86_64-unknown-linux-musl/release/canter:/canter:ro" \
+  -v "$HOME/canter-linux/musl/smoke:/smoke:ro" debian:11 /smoke --no-ca
+```
+
+三个装有 CA 的容器均打印版本及 `canter server ready`，`/v1/info` 返回 200、protocolVersion 1，SIGTERM 后正常退出。原始 `debian:11` 未装 CA 的检查也通过：打印规定错误、退出码 1，没有 panic、socket 或注册文件。
+
+新增保留镜像为 `canter-p2-160-debian11-ca:latest`、`canter-p2-160-ubuntu2004-ca:latest`、`canter-p2-160-alpine323-ca:latest`；前述编译镜像和基础镜像继续保留。容器均用前台 `--rm`；未改宿主机包或已有容器。
+
+### 没做的事和踩过的坑
+
+没有实现 Linux 沙箱、systemd、发布升级流程或 P2-260。真实模型调用仍为 0 次；未接触两端真实 `~/.canter`，未带凭证。合并后主控的 DeepSeek 终端/exec 验收仍按原任务由主控执行。没有新增待主控决定的事项。
+
+- Debian 11 的默认安全仓库能返回索引，但安装包 404；禁用 HTTP 缓存、切换 security.debian.org 均无效。对应 [Debian #1147093](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1147093)，改用官方 archive.debian.org 的相同发行版安全仓库后安装成功，未关闭包签名校验。
+- Debian 基础镜像没有 `/bin/kill`。辅助程序最初在服务端已 ready、HTTP 已返回 200 后，因调用该外部命令失败；改为 Rust 直接按 PID 发送 SIGTERM，重新验收通过。
+- 本轮第一次 Linux 全套中，现有 `mcp::http_mcp_ignores_server_proxy_environment` 偶发记录 2 个连接。单测重跑、完整 server 测试重跑、再加临时请求诊断的 10 轮完整 server 测试均通过，未能复现或确定原因。临时诊断已完全移除，未改 MCP 代码或该测试断言，保留这次观察供主控审查。
