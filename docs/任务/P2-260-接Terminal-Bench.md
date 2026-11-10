@@ -142,3 +142,5 @@
 2. 按主控指示执行 `git merge main`，无冲突带入 `76b1089` 的「偷看答案检查」及验收第 5 条，合并提交为 `bc6d065`。同一套规则扫描 canter 和 Terminus-2 日志，命中留给主控判断，不自动改分；本件只真跑 canter 的检查。
 
 uv 已将 Python 3.12.16 安装到 `~/canter-linux/python`，Harbor 0.25.0 已重新绑定该 managed Python，不再使用系统解释器。官方 2.1 数据集以 export 模式完整下载 89 题到 `~/canter-linux/p2-260-data/terminal-bench-2-1`；未改题目文件。检查全部环境 Dockerfile，没有 Alpine 基础镜像，两个名称含 Alpine 的任务是 Debian 容器里启动 Alpine 虚拟机，因此本件不能补上 canter 看护进程在 busybox ash 上的真实题目验证。
+
+真跑前先用 `grep -rlF -f <(printf '%s\n' "$scan_key") "$HOME/canter-linux"` 建立凭证基线，只输出文件名；唯一命中为任务明确授权读取的既有凭证源 `~/canter-linux/accept-home/.canter/config.json`。没有其它命中，文件名记录在 `~/canter-linux/p2-260-key-baseline.txt`。未修改或删除该源文件；后续每题仍完整扫描并分别报告该既有源和新增命中，不把它隐藏在排除规则中。

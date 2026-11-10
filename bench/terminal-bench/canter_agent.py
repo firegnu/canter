@@ -162,6 +162,8 @@ class Canter(BaseInstalledAgent):
                 redactions += content.count(self._key.encode())
                 content = content.replace(self._key.encode(), b"[REDACTED]")
                 path = self.logs_dir / str(name).replace(self._key, "[REDACTED]")
+                if not path.resolve().is_relative_to(self.logs_dir.resolve()):
+                    raise RuntimeError("Canter log path escapes the trial log directory")
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(content)
         (self.logs_dir / "collection.json").write_text(
