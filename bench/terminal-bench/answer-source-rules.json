@@ -1,11 +1,12 @@
 {
   "version": 1,
   "rules": [
-    {"id": "harbor-github", "pattern": "(?:github\\.com|raw\\.githubusercontent\\.com)/(?:harbor-framework|harborframework)(?:/[^\\s\"'<>?#]*)?"},
-    {"id": "terminal-bench-repository", "pattern": "(?:github\\.com|raw\\.githubusercontent\\.com)/[^/\\s\"'<>]+/[^\\s\"'<>?#]*terminal[-_]bench[^\\s\"'<>?#]*"},
-    {"id": "legacy-harbor-repository", "pattern": "(?:github\\.com|raw\\.githubusercontent\\.com)/laude-institute/harbor(?:/[^\\s\"'<>?#]*)?"},
+    {"id": "harbor-github", "pattern": "(?:github\\.com|raw\\.githubusercontent\\.com)[/:](?:harbor-framework|harborframework)(?:/[^\\s\"'<>?#]*)?"},
+    {"id": "terminal-bench-repository", "pattern": "(?:github\\.com|raw\\.githubusercontent\\.com)[/:][^/\\s\"'<>]+/[^\\s\"'<>?#]*terminal[-_]bench[^\\s\"'<>?#]*"},
+    {"id": "legacy-harbor-repository", "pattern": "(?:github\\.com|raw\\.githubusercontent\\.com)[/:]laude-institute/harbor(?:/[^\\s\"'<>?#]*)?"},
     {"id": "tbench-website", "pattern": "(?:[a-z0-9-]+\\.)?tbench\\.ai(?:/[^\\s\"'<>?#]*)?"},
     {"id": "harbor-hub", "pattern": "hub\\.harborframework\\.com(?:/[^\\s\"'<>?#]*)?"},
-    {"id": "huggingface-benchmark", "pattern": "huggingface\\.co/(?:datasets/)?(?:harborframework|harbor-framework|terminal-bench|tbench)(?:/[^\\s\"'<>?#]*)?"}
+    {"id": "huggingface-benchmark", "pattern": "huggingface\\.co/(?:datasets/)?(?:harborframework|harbor-framework|terminal-bench|tbench)(?:/[^\\s\"'<>?#]*)?"},
+    {"id": "huggingface-repo-id", "pattern": "harborframework/[a-z0-9_.-]+(?:/[^\\s\"'<>?#]*)?"}
   ]
 }
