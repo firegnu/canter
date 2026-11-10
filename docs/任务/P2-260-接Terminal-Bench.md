@@ -189,3 +189,44 @@ uv 已将 Python 3.12.16 安装到 `~/canter-linux/python`，Harbor 0.25.0 已�
 - 没有改 Rust 或运行 Rust 测试；验收只跑上述 oracle、真实 canter、追加的答案来源/凭证检查，以及 `git diff --check`。最终 diff 检查通过。没有跑 89 题、Terminus-2 或其它外壳，没有合并 main 或推送 origin；只向 5090 的专用裸仓库同步。本地分支和 worktree 留给主控审查。
 - 无 Alpine 题，因此 busybox ash 看护进程的真实题目验证仍未覆盖。原授权测试 HOME 凭证源保留，按 HANDOFF 留给主控后续决定是否清理。
 - 踩过的坑：主分支与正式包版本号同为 0.25.0，但 configure 生命周期不同，已按主控决定适配正式版；第一次 uv 安装默认用了系统 Python，改用 managed Python 重装后路径符合要求；Harbor 的通知缓存不遵循 XDG，已记录例外。试跑适配器没有出现运行失败或重跑，没有新增待主控决定的实现事项。
+
+## 返工记录（2026-11-10）
+
+按主控决定，只处理交叉审查的「必须改 1、2」和「建议改 1、2、3」。主仓库的 `P2-260-交叉审查.md` 只读，未改动。建议改 4、5 留主控记 HANDOFF，建议改 6 留主控合并时补 DESIGN；本分支没有扩展到这些事项。
+
+### 修改
+
+- **必须改 1**：`run()` 记录 exec PID，并在正常结束、非零退出、异常、取消时，先按 exec PID 和 `~/.canter/server.json` 的服务端 PID 停进程，再取 stats、采集会话、删除配置。先 TERM，最多等 30 秒；仍存活则 KILL，再等 5 秒。正常结束也停服务端，避免主 agent 没等子 agent 时判分与模型执行重叠。用停止标记防止延迟启动的 exec 在清理后继续执行；只按 PID 发信号，没有按进程名杀。stats 会启动新服务端，采集结束后再次按 PID 停掉。核对 `canter-server/src/lib.rs` 的新服务端 sessions 初始化为空，`http.rs::session_stats` 只从 Store 读统计，不恢复模型执行。清理使用 shield 并等待完成，重复取消仍保留 `CancelledError`；清理异常只记类型，不能替换原取消异常。
+- **必须改 2**：优先取 `usageWithSubAgents`；为空时，把主会话和各子 agent 的非空用量相加，任一 `cost.unknown` 则美元 null。metadata 增加 `sub_agent_count`、`sub_agent_empty_usage_count`。canter 的 `crates/canter-core/src/stats.rs` 合计 fold 使用 `Option::zip`，任一子 agent 的空用量会把整个合计变为 None；按主控要求只记录这个问题，未改 Rust。
+- **建议改 1**：采集失败或 stats/用量解析失败只写 `metadata.errors` 的阶段和异常类型，用量未知，仍交回 Harbor 判分；有效 stats 完全没有用量时 token 为 0、美元 null。删配置失败在普通路径仍抛，取消路径保留原 `CancelledError` 并记清理错误。tar 的 stderr 单独留在容器；base64 输出加边界，避免 Harbor 0.25.0 合并的 Docker stderr 警告混入归档。所有日志仍先在内存替换 key 后才落宿主机，凭证传输仍为 stdin，没有改为 `-e KEY=value`。
+- **建议改 2**：规则升级到 v2，补任意域名的相关仓库路径、pip/pipx/uv/uvx 的相关包命令、Harbor 下载、Terminal-Bench 数据集 ID、`gh repo clone` 和 PyPI 包地址；不添加光秃秃的 `terminal-bench` 词规则。扫描扩展到所有文件，包括无扩展名 rewind 快照和 recording.cast；不可读、非文本、软链接逐项列 `files_not_scanned` 并标 incomplete，JSON 解析错误也不标 complete。命中仍只提示人工判断，不改分。
+- **建议改 3**：`report.py` 必填 `--tasks-dir`，从 task.toml 的题名建立应有题单；缺题按 0 分进入分母并列入 `missing_tasks`，缺题时总耗时和用量未知。重复题及计划外题报错；提供 oracle 时逐题记录 `oracle_checksum_check` 的 match/mismatch/missing。报告 schema 升到 2；三题试跑使用仅含三道官方题目软链接的目录，全套用完整导出目录，不改官方题目文件。
+
+### 验证
+
+先加夹具直接复现问题：旧实现漏掉非空子 agent 用量、未知金额被当已知、空 usage/坏 JSON/采集错误抛出、CancelledError 被删除异常覆盖、重复题不报错、缺题参数和新规则缺失、归档被 Docker 警告破坏。之后在 5090 的 Harbor 0.25.0 managed Python 环境执行 `python -m unittest discover -s bench/terminal-bench -p 'test_*.py'`，最终 **19 项通过**。这些测试不调用模型，临时状态使用临时目录并自动清理。
+
+造的 stats JSON 直接调用真实 `populate_context_post_run`：主会话缓存/非缓存/输出为 2/3/4、$0.1，一个子 agent 为 10/20/30、$0.2，另一个为空，得到输入 35（含缓存 12）、输出 34、$0.3，子 agent 总数 2、空用量数 1；子 agent `cost.unknown=true` 时金额 null；完全无用量时 0 token/null 美元；坏 JSON 和采集失败不阻断判分、用量未知。另测正常完成、非零退出、清理自身取消、重复取消、删除失败和 stderr 归档边界。
+
+只额外运行 **1 次无模型适配器测试**：`fix-git`，endpoint 为不应答的 TEST-NET 地址 `https://192.0.2.1:443/v1`，使用没有权限的测试字符串，不读取真实 key；`--agent-timeout-multiplier 0.01` 将 900 秒缩为 9 秒，`--max-retries 0`。使用只增加观察的 `timeout_probe:TimeoutProbe`，没有改原题或 verifier。结果保留 `AgentTimeoutError`，Harbor 继续判分得到 0；这是适配器测试，**不算成绩**，没有并入三题 pilot 或估算。
+
+该 trial 为 `fix-git__q9B333Q`，原始记录在 5090 的 `~/canter-linux/p2-260-adapter-tests/timeout-fix-git/`。独立的纯数据证据：[adapter-timeout-2026-11-10.json](../../bench/terminal-bench/results/adapter-timeout-2026-11-10.json)。时间均为 UTC：
+
+| 检查 | 时间 | canter PID | 配置存在 |
+| --- | --- | --- | --- |
+| 超时后、第一次停止前 | 07:51:24.513042 | 4991、4999 | 是 |
+| exec 和服务端停止后、stats 前 | 07:51:26.589070 | 无 | 是 |
+| stats 完成、删配置后、第二次停止前 | 07:51:26.759196 | 5044 | 否 |
+| 第二次停止后 | 07:51:27.835313 | 无 | 否 |
+| 交回 Harbor 前最后检查 | 07:51:27.872431 | 无 | 否 |
+| Harbor 开始判分 | 07:51:27.973653 | — | — |
+
+Harbor 在 07:52:31.249606 完成 verifier；输入/缓存/输出 token 均为 0，美元 null，metadata.errors 为空。测试容器 `f2f27e2fbc73` 随后由 Harbor 删除，`docker inspect` 确认已不存在。没有把「还留在容器里的进程恰好没影响分数」当作停止证据。
+
+用新规则、新 report 程序在原三题日志上重跑，更新 [pilot-2026-11-10.json](../../bench/terminal-bench/results/pilot-2026-11-10.json)：fix-git 扫 9 个文件，openssl 扫 11 个，polyglot 扫 12 个，共 32 个；均 complete、未扫描文件 0、解析错误 0、命中 0。三题 checksum 自动比较均为 match，缺题列表为空，分母 3，仍为 3/3。规则 SHA256 为 `c283c93d1e082ccf4779ad0676ed3919467ed88ec3d1c8d3503ac8aad7599eb2`。历史用量、费用、真实运行 3 次/重跑 0 次、原每题 grep 凭证检查及估算原样保留；这次只更新时间和报告字段，没有伪装成新适配器真跑成绩。
+
+### 收尾与范围
+
+本轮真实模型调用 **0 次**，未使用剩余额度、未读取或传递真实 key，因而没有新增「每次真跑后」的 key grep 记录；原三次 grep 结果仍保留在上述完成记录及 pilot 数据中。本轮对 bench 目录及本任务文件运行 gitleaks（redact）和 trufflehog：均无凭证发现。
+
+命令均在前台等待结束；未修改 canter/Rust、未跑 Rust 测试、未修改或删除题目镜像、未触碰主控的镜像拉取 PID 2003673（只读检查时仍在运行），未改真实 HOME 的 `.canter`。只在本分支提交，未合并 main、未推送 origin。`git diff --check` 通过；README 已补清理流程、报告新参数和无模型验证命令。后续合并、HANDOFF、DESIGN 由主控处理。

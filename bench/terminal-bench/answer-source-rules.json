@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "rules": [
     {"id": "harbor-github", "pattern": "(?:github\\.com|raw\\.githubusercontent\\.com)[/:](?:harbor-framework|harborframework)(?:/[^\\s\"'<>?#]*)?"},
     {"id": "terminal-bench-repository", "pattern": "(?:github\\.com|raw\\.githubusercontent\\.com)[/:][^/\\s\"'<>]+/[^\\s\"'<>?#]*terminal[-_]bench[^\\s\"'<>?#]*"},
@@ -7,6 +7,12 @@
     {"id": "tbench-website", "pattern": "(?:[a-z0-9-]+\\.)?tbench\\.ai(?:/[^\\s\"'<>?#]*)?"},
     {"id": "harbor-hub", "pattern": "hub\\.harborframework\\.com(?:/[^\\s\"'<>?#]*)?"},
     {"id": "huggingface-benchmark", "pattern": "huggingface\\.co/(?:datasets/)?(?:harborframework|harbor-framework|terminal-bench|tbench)(?:/[^\\s\"'<>?#]*)?"},
-    {"id": "huggingface-repo-id", "pattern": "harborframework/[a-z0-9_.-]+(?:/[^\\s\"'<>?#]*)?"}
+    {"id": "huggingface-repo-id", "pattern": "harborframework/[a-z0-9_.-]+(?:/[^\\s\"'<>?#]*)?"},
+    {"id": "benchmark-mirror-url", "pattern": "(?:https?://|ssh://|git@)[a-z0-9_.:-]+[/:][^\\s\"'<>]*?(?:terminal[-_]bench|harbor-framework|harborframework|laude-institute)[^\\s\"'<>]*"},
+    {"id": "benchmark-package-command", "pattern": "\\b(?:pip3?|pipx|uvx?)\\b[^\\r\\n]*(?:\\bharbor\\b|terminal[-_]bench)"},
+    {"id": "harbor-download-command", "pattern": "\\bharbor\\s+(?:datasets?\\s+)?download\\b"},
+    {"id": "terminal-bench-dataset-id", "pattern": "terminal-bench/terminal-bench[^\\s\"'<>]*"},
+    {"id": "github-cli-clone", "pattern": "\\bgh\\s+repo\\s+clone\\b[^\\r\\n]*"},
+    {"id": "benchmark-pypi", "pattern": "(?:pypi\\.org/project/|files\\.pythonhosted\\.org/[^\\s\"'<>]*)(?:harbor|terminal[-_]bench)[^\\s\"'<>]*"}
   ]
 }

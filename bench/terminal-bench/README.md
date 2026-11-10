@@ -143,15 +143,32 @@ grep -rlF -f <(printf '%s\n' "$CANTER_BENCH_API_KEY") "$BENCH_ROOT"
 
 `canter exec --yolo` 的 stdout、`canter stats --last --json` 和 `sessions/` 先留在
 容器内，经不带流式日志回调的 stdin/stdout 通道采集，在内存中替换意外出现的 key
-后才写宿主机。不会下载 `config.json` 或整个 `.canter`。finally 中删除配置；Harbor
-负责删容器。`agent/collection.json` 记录替换次数，非零必须人工查看。
-Harbor 的 `n_input_tokens` 包含缓存 token；美元直接采用 canter stats，不重算。
+后才写宿主机。不会下载 `config.json` 或整个 `.canter`。正常结束、异常和取消都先按
+exec 的 PID 文件、服务端的 `server.json` PID 发 TERM，最多等 30 秒，再 KILL 并等
+5 秒，确认进程停止才取 stats；正常结束也停服务端，防止未等完的子 agent 继续工作。
+stats 使用新服务端读取磁盘会话，不恢复模型执行。采集后删除配置，再停掉 stats
+启动的服务端，最后 Harbor 判分并删容器。清理受 shield 保护，重复取消也等它完成；
+取消时保留 `CancelledError`，清理错误记 metadata。其它情况下删配置失败仍抛异常。
+tar 的 stderr 单独留在容器，base64 归档加边界，Docker 警告不参与解码。
+
+`agent/collection.json` 记录替换次数，非零必须人工查看。采集或解析失败只在
+metadata.errors 记阶段和异常类型，不记录可能含凭证的异常内容；用量未知，仍交回
+Harbor 判分。Harbor 的 `n_input_tokens` 包含缓存 token；优先用 canter stats 的合计，
+合计为空时加主会话及各子 agent 的非空用量，metadata 记录子 agent 总数和空用量数。
+任一已记录用量 `cost.unknown` 时美元为 null；全部没有用量时 token 为 0、美元 null。
 
 ## 结果与偷看答案检查
 
 ```bash
+# 三题试跑用单独的目录列出应有题目，软链接不改官方题目内容。
+export TB_PILOT_TASKS="$BENCH_ROOT/p2-260-pilot-tasks"
+mkdir -p "$TB_PILOT_TASKS"
+for task in fix-git openssl-selfsigned-cert polyglot-c-py; do
+  test -e "$TB_PILOT_TASKS/$task" || ln -s "$TB_DATA/$task" "$TB_PILOT_TASKS/$task"
+done
 "$BENCH_PYTHON" bench/terminal-bench/report.py \
   --dataset terminal-bench/terminal-bench-2-1 \
+  --tasks-dir "$TB_PILOT_TASKS" \
   --oracle-job "$TB_JOBS/oracle-fix-git" \
   --oracle-job "$TB_JOBS/oracle-openssl-selfsigned-cert" \
   --oracle-job "$TB_JOBS/oracle-polyglot-c-py" \
@@ -162,15 +179,43 @@ jq '.trials[] | {task, reward, cost_usd, answer_source_check}' \
 ```
 
 `answer-source-rules.json` 是共用规则，覆盖 Harbor 的 GitHub、Terminal-Bench 相关仓库、
-tbench.ai、Harbor Hub 和 Hugging Face 的 benchmark 数据集组织。`report.py` 扫描每个
-trial 的 `agent/` 下所有 JSON、JSONL、txt：canter 的原始会话、模型历史、工具调用、
-工具返回和 stdout；Terminus-2 的 `trajectory.json` 及文本日志也走同一套规则。
-JSON 会递归检查字符串，JSONL 按记录检查，包含网页、搜索、shell 命令和输出里的来源。
+tbench.ai、Harbor Hub、Hugging Face 的 benchmark 数据集组织、其它域名镜像地址、
+相关 pip/uv 安装命令、PyPI 地址、Harbor 下载命令、数据集 ID 和 `gh repo clone`。
+不以单独的 `terminal-bench` 词命中。`report.py` 尝试按 UTF-8 扫描每个 trial 的
+`agent/` 下所有文件，包括无扩展名 rewind 快照、Terminus-2 的 `recording.cast`。
+JSON 递归检查字符串，JSONL/cast 按记录检查，其它文件按文本行检查，包含网页、
+搜索、shell 命令和输出里的来源。
 
 报告保存每题是否命中、规则 ID、匹配来源、文件名、行号（整份 JSON 用 1）和规则文件
-SHA256。日志缺失或 JSON 损坏会标为 `incomplete`，不会报告为“检查通过”。命中只表示
+SHA256；不可读、非文本或软链接文件逐项列入 `files_not_scanned`，状态为 `incomplete`。
+日志缺失或 JSON 损坏也标为 `incomplete`，不会报告为“检查通过”。命中只表示
 需要主控人工判断，可能只是提到一个 URL；不自动改分。无命中不证明绝对没有偷看，
 不能识别未记录的访问、混淆地址或模型训练中已有的答案。本件只实际检查 canter 试跑。
+
+`--tasks-dir` 必填，从导出的 `*/task.toml` 读取应有题名。schema 2 的分母是
+`n_expected_tasks`，未产生结果的题计 0 分并单列 `missing_tasks`；缺题时总耗时和用量
+也记未知。重复题（包括混入重跑）和计划外题报错。有 `--oracle-job` 时，每题自动
+写 `oracle_checksum_check`（match/mismatch/missing），不一致或缺少版本依据留给主控核对。
+
+## 不调用模型的适配器验证
+
+```bash
+"$BENCH_PYTHON" -m unittest discover -s bench/terminal-bench -p 'test_*.py'
+
+# 只测超时清理，不算基准成绩；TEST-NET 地址不提供模型服务。
+export CANTER_TIMEOUT_TEST_KEY=timeout-test-no-real-credential
+harbor run --path "$TB_DATA/fix-git" --agent-import-path timeout_probe:TimeoutProbe \
+  --model timeout/never --ak "binary_path=$CANTER_BINARY" \
+  --ak endpoint=https://192.0.2.1:443/v1 --ak key_env=CANTER_TIMEOUT_TEST_KEY \
+  --ak 'model_settings={"context_window":1048576}' \
+  --agent-timeout-multiplier 0.01 --n-concurrent 1 --max-retries 0 \
+  --jobs-dir "$BENCH_ROOT/p2-260-adapter-tests" --job-name timeout-fix-git
+unset CANTER_TIMEOUT_TEST_KEY
+```
+
+检查该 trial 的 `agent/timeout-probe.json`：最后一次检查应无 canter PID、无临时配置，
+其 `checked_at` 应早于 `result.json` 的 `verifier.started_at`；结果应保留
+`AgentTimeoutError` 且仍产生判分。这个 job 不传给成绩报告程序。
 
 ## 全套与 Terminus-2（本件不执行，先报估算并获同意）
 
@@ -191,9 +236,11 @@ harbor run --path "$TB_DATA" --agent terminus-2 --model deepseek/deepseek-flash 
   --jobs-dir "$TB_JOBS" --job-name terminus2-full
 
 "$BENCH_PYTHON" bench/terminal-bench/report.py \
-  --dataset terminal-bench/terminal-bench-2-1 "$TB_JOBS/canter-full" > canter-full.json
+  --dataset terminal-bench/terminal-bench-2-1 --tasks-dir "$TB_DATA" \
+  "$TB_JOBS/canter-full" > canter-full.json
 "$BENCH_PYTHON" bench/terminal-bench/report.py \
-  --dataset terminal-bench/terminal-bench-2-1 "$TB_JOBS/terminus2-full" > terminus2-full.json
+  --dataset terminal-bench/terminal-bench-2-1 --tasks-dir "$TB_DATA" \
+  "$TB_JOBS/terminus2-full" > terminus2-full.json
 ```
 
 Terminus-2 命令只按正式版接口写出，尚未真跑或验证其凭证日志路径；第二步同样需要

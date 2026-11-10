@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "date": "2026-11-10T07:07:14.468121+00:00",
   "dataset": "terminal-bench/terminal-bench-2-1",
   "harbor_version": "0.25.0",
@@ -25,8 +25,8 @@
     "cost_usd": 0.06267831599999998
   },
   "answer_source_rules": {
-    "version": 1,
-    "sha256": "d8394bd1271cd5147b7b5972e5cb4b22cb242945fea0cfe99248ae04e4776da0",
+    "version": 2,
+    "sha256": "c283c93d1e082ccf4779ad0676ed3919467ed88ec3d1c8d3503ac8aad7599eb2",
     "interpretation": "References require human review; no score is changed. No match is not proof of no answer access."
   },
   "trials": [
@@ -68,12 +68,21 @@
           "collection.json",
           "sessions/s-1794293743251815284-5002-1/events.jsonl",
           "sessions/s-1794293743251815284-5002-1/model-history.jsonl",
+          "sessions/s-1794293743251815284-5002-1/rewind-6VkcQy",
+          "sessions/s-1794293743251815284-5002-1/rewind-8cmW39",
+          "stats.exit",
           "stats.json",
+          "stats.stderr",
           "stdout.txt"
         ],
+        "files_not_scanned": [],
         "parse_errors": [],
         "hits": [],
         "score_changed": false
+      },
+      "oracle_checksum_check": {
+        "status": "match",
+        "oracle_task_checksum": "d3220d70bc668ec6f4034fab51e62873dff724a61f824d764fd201d6f5e7a88a"
       },
       "credential_scan": {
         "method": "grep -rlF with pattern supplied through a pipe; filenames only",
@@ -123,12 +132,23 @@
           "collection.json",
           "sessions/s-1794293905177435385-5000-1/events.jsonl",
           "sessions/s-1794293905177435385-5000-1/model-history.jsonl",
+          "sessions/s-1794293905177435385-5000-1/rewind-1mNbUO",
+          "sessions/s-1794293905177435385-5000-1/rewind-TdlxC7",
+          "sessions/s-1794293905177435385-5000-1/rewind-YjSieR",
+          "sessions/s-1794293905177435385-5000-1/rewind-puiK60",
+          "stats.exit",
           "stats.json",
+          "stats.stderr",
           "stdout.txt"
         ],
+        "files_not_scanned": [],
         "parse_errors": [],
         "hits": [],
         "score_changed": false
+      },
+      "oracle_checksum_check": {
+        "status": "match",
+        "oracle_task_checksum": "2b70d5535b5873f644fad37b76dbef86a1e42162e018c7bc06316e5e2521929a"
       },
       "credential_scan": {
         "method": "grep -rlF with pattern supplied through a pipe; filenames only",
@@ -178,12 +198,24 @@
           "collection.json",
           "sessions/s-1794294040159013545-1744-1/events.jsonl",
           "sessions/s-1794294040159013545-1744-1/model-history.jsonl",
+          "sessions/s-1794294040159013545-1744-1/rewind-9o8UXn",
+          "sessions/s-1794294040159013545-1744-1/rewind-KTbZyL",
+          "sessions/s-1794294040159013545-1744-1/rewind-RHem2Y",
+          "sessions/s-1794294040159013545-1744-1/rewind-dIr4yZ",
+          "sessions/s-1794294040159013545-1744-1/rewind-wz4CHA",
+          "stats.exit",
           "stats.json",
+          "stats.stderr",
           "stdout.txt"
         ],
+        "files_not_scanned": [],
         "parse_errors": [],
         "hits": [],
         "score_changed": false
+      },
+      "oracle_checksum_check": {
+        "status": "match",
+        "oracle_task_checksum": "d1e52e6139c57528762bbb163dc3f89edb967511d897ac5e7859398d3f44eb3c"
       },
       "credential_scan": {
         "method": "grep -rlF with pattern supplied through a pipe; filenames only",
@@ -307,5 +339,14 @@
       "Same model, high effort, canter price table and billing time band",
       "Ideal concurrency excludes rate limits, contention and long-tail imbalance"
     ]
-  }
+  },
+  "n_expected_tasks": 3,
+  "expected_tasks": [
+    "terminal-bench/fix-git",
+    "terminal-bench/openssl-selfsigned-cert",
+    "terminal-bench/polyglot-c-py"
+  ],
+  "missing_tasks": [],
+  "score_denominator_includes_missing": true,
+  "answer_source_checked_at": "2026-11-10T07:53:09.195732+00:00"
 }
