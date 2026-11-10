@@ -23,7 +23,7 @@
 
 ## 要做的
 
-0. **开跑前**：89 个镜像都拉完（`~/canter-linux/p2-273-pull.log` 有 DONE、没有 FAIL）。Terminus-2 先真跑 1 题（fix-git）确认三件事：凭证不落盘（`grep -rlF` 只命中既有授权源）；`reasoning_effort=high` 真的传到了 DeepSeek（日志里有思考 token）；Harbor 给的花费是不是空的（LiteLLM 可能不认识 `deepseek-flash` 的价格）。花费为空就按下面「花费口径」自己算。这一题算 Terminus-2 的检查，不算成绩。
+0. **开跑前**：89 个镜像都拉完（先拉的 59 个见 `~/canter-linux/p2-273-pull.log`；11-10 中途停过一次，剩下的 29 个见 `~/canter-linux/p2-274-pull.log`，要有 DONE、没有 FAIL；最后用 `docker image inspect` 核对 89 个都在）。Terminus-2 先真跑 1 题（fix-git）确认三件事：凭证不落盘（`grep -rlF` 只命中既有授权源）；`reasoning_effort=high` 真的传到了 DeepSeek（日志里有思考 token）；Harbor 给的花费是不是空的（LiteLLM 可能不认识 `deepseek-flash` 的价格）。花费为空就按下面「花费口径」自己算。这一题算 Terminus-2 的检查，不算成绩。
 1. **oracle 跑 89 题**：`--agent oracle`，4 并发，不调模型。没过的题单列，查是题目环境的问题还是网络、镜像的问题。
 2. **canter 跑 89 题**：README「全套」一节的命令，4 并发，`--max-retries 0`，思考档 high，超时和资源用题目默认。
 3. **Terminus-2 跑 89 题**：同一模型 `deepseek/deepseek-flash`、high、同一地址，4 并发，`--max-retries 0`。
@@ -64,3 +64,9 @@
 - 不上传到 Harbor Hub，不登录 Harbor 账号。
 - 5090 上不用 sudo，不碰别人的容器和镜像，不 `docker system prune`；题目镜像跑完先留着，问用户再清。
 - 不按名字批量杀进程；停 Harbor、停盯花费的脚本都用记下的 PID。
+
+## 为什么还是 2.1（11-10）
+
+- 11-10 用户问「为什么没用4.1？」。主控核对官方网站：之后又出了 3.0（7-30）、4.0（8-28）、4.1（11-09），2.1 是 5-06 的版本。P2-260 选 2.1 时主控只凭自己的知识（到 2026 年 6 月），没上官方网站核对，是主控的疏漏。
+- 用户先选「换成 4.1」，主控停了镜像下载，用 Harbor 0.25.0（仍是 PyPI 最新版）下载了最新版查看（`~/canter-linux/p2-274-data/terminal-bench/`）：66 题，每题外壳时限 8 小时，官方标的专家用时中位约 4 小时、最长 60 小时；判分在单独的容器里（`environment_mode = "separate"`，适配器没在这种方式下验证过）；有的题要 16 核、32G 内存，3 题要显卡（`fp8-rmsnorm-gemm`、`jax-speedrun-gpu`、`math-eval-grader`）；镜像 132 个（做题、判分各一个）。官方 4.1 公告：Opus 5.5（Claude Code）65.76%、GPT-6.1 Sol（Codex）60.91%；4.0 榜的提交总花费 $116k。
+- 主控说明代价（要先重新试跑、重拉镜像、每遍可能 $15～30 和一两天、$10 上限不够）后，用户改定：「先跑 2.1，4.1 另开一件」。4.1 是 P2-275。
