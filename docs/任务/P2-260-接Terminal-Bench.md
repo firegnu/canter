@@ -230,3 +230,53 @@ Harbor 在 07:52:31.249606 完成 verifier；输入/缓存/输出 token 均为 0
 本轮真实模型调用 **0 次**，未使用剩余额度、未读取或传递真实 key，因而没有新增「每次真跑后」的 key grep 记录；原三次 grep 结果仍保留在上述完成记录及 pilot 数据中。本轮对 bench 目录及本任务文件运行 gitleaks（redact）和 trufflehog：均无凭证发现。
 
 命令均在前台等待结束；未修改 canter/Rust、未跑 Rust 测试、未修改或删除题目镜像、未触碰主控的镜像拉取 PID 2003673（只读检查时仍在运行），未改真实 HOME 的 `.canter`。只在本分支提交，未合并 main、未推送 origin。`git diff --check` 通过；README 已补清理流程、报告新参数和无模型验证命令。后续合并、HANDOFF、DESIGN 由主控处理。
+
+## 第二次返工记录（2026-11-10）
+
+### 主控决定和修改范围
+
+按用户 11-10 决定，只处理复核的「新必须改 1」。主仓库交叉审查文件只读；本次不处理复核里的 3 条建议改，留主控记 HANDOFF / 改 CLAUDE.md。用户另授权 DeepSeek 真跑一次 pypi-server，算原不超过 6 次额度里的第 4 次，只观察模型后台服务是否保留到判分，不计成绩，不重跑。
+
+复核指出的原因属实：canter 服务端退出会让 shell 的看护进程结束它托管的进程组；模型通过 `background=true` 起的服务因此会在旧清理流程中被一起停掉。本次把 exec 和服务端的停止分开：主回合正常完成不发停止信号，超时或出错才按记录的 PID 停 exec。先通过活着的服务端取 `canter stats --last --json`，经原有私有 stdin/stdout 通道在宿主机内存解析 `subAgents[].status`；仅有 `running` 子 agent 时停服务端。metadata 新增 `server_stopped_for_sub_agents` 和 `server_stop_reason`，后者在该路径写「为停子 agent 停了服务端」。
+
+没有运行中子 agent 的路径只取一次 stats、采集日志和删配置，服务端与后台命令留给 Harbor 判分后随容器删除，不再主动重启服务端或二次停止。有运行中子 agent 的路径停服务端后重新读一次最终用量，采集、删配置，再停掉为读最终 stats 新起的服务端。原有 PID 停止等待、取消保护、采集脱敏和错误 metadata 处理保留。README 和已有超时探针对应改为区分 exec PID 与保留的服务端 PID；本轮没有再次运行无模型超时题。
+
+**canter 仍缺少「只停子 agent、不停后台命令」的接口。** 有活跃子 agent 时停服务端仍会连带结束后台命令，所以显式留下上述 metadata 供主控判断；按本任务范围不改 Rust，留另开 canter 任务处理。
+
+### mock 验证
+
+先补「正常结束、没有运行中子 agent 时不停服务端」测试，在旧实现上实际失败：`_stop_processes` 被调用 2 次。修改后在 5090 的 Harbor 0.25.0 managed Python 环境执行本目录 unittest，共 **22 项通过**。其中覆盖正常保留服务端、活跃子 agent 才停并记录原因、超时/非零退出只先停 exec、stats 解码仅在内存进行、stats 读取失败只记错误，以及原有取消和用量回归；没有调用真实模型。
+
+### pypi-server 单次实测
+
+按授权只运行一次官方 pypi-server：Harbor 0.25.0、原静态版 canter `64b80e3f`、`deepseek/deepseek-flash`、high、原有模型能力/价格，`--max-retries 0`；不改题目、提示、资源或超时。该次使用真实模型，累计真实题目运行 **4 次**，本轮重跑 **0 次**。没有额外 oracle 或模型试探调用。镜像首次准备耗时较长，未调整超时或干预主控拉取进程。
+
+纯数据记录：[background-service-2026-11-10.json](../../bench/terminal-bench/results/background-service-2026-11-10.json)。此文件明确 `adapter_test_only=true`、`included_in_benchmark_score=false`，没有汇总 score；Harbor 实际返回的 1 仅保存在 `observed_verifier_reward`，不加入原三题成绩、费用估算或 89 题外推。原 pilot 数据未修改。
+
+模型确实调用了 shell 的 `background=true`，并非只在文字里说“放后台”：`model-history.jsonl` 中工具调用 `call_00_8lvSs4A4dd9sF7cwPlsj9181` 的参数为 `{"background":true,"command":"python3 -m http.server 8080 --bind 0.0.0.0 --directory /app/public"}`。没有向模型额外要求它使用某种工具或启动方式。
+
+独立的前台只读观察命令等待该 trial 的 `agent/collection.json`，再等待容器出现 Harbor 上传的 `/tests/test.sh`，读取 `/proc/net/tcp*` 的 8080 LISTEN socket、对应 `/proc/*/fd` PID、`server.json` 的服务端 PID及配置是否存在；没有发送信号、启动服务或改容器文件。结果的观察时间随后与 Harbor 的 verifier 起止时间核对，确实落在判分期间：
+
+| 项目 | 观察结果（时间为 UTC） |
+| --- | --- |
+| trial | `pypi-server__ACAuY5g` |
+| 主回合运行 | 08:22:54.843741 至 08:24:34.196636 |
+| Harbor 判分 | 08:24:34.298756 至 08:26:04.423268 |
+| 只读观察时间 | 08:24:35.002893622 |
+| 8080 TCP 监听进程 | PID 5054，仍在监听 |
+| canter 服务端 | PID 4999，存活 |
+| 临时 config.json | 已删除 |
+| 子 agent | 0 个，`server_stopped_for_sub_agents=false` |
+| 采集与异常 | `metadata.errors=[]`，`credential_redactions=0`，无 Harbor exception |
+
+本轮输入 217405 token（含缓存 208896）、输出 9894，canter stats 计费 **$0.015678876**；agent 阶段 99.352895 秒，全流程约 8 分钟（含镜像准备和判分）。四次真实题目的记录费用合计 $0.078357192，仅用于交代消耗，不作为基准成绩或新估算。
+
+### 凭证、答案来源与收尾
+
+真跑前先用 `grep -rlF` 建立基线，唯一命中仍为既有授权源 `~/canter-linux/accept-home/.canter/config.json`。本轮之后再次按原要求扫描本次 Harbor job 和整个 `~/canter-linux`，pattern 经管道输入，不进入参数或文件，只输出文件名：job 无命中（退出 1），全目录只命中该既有源（退出 0），没有新增命中或扫描错误。原始文件名记录为 `~/canter-linux/p2-260-pypi-key-baseline.txt`、`p2-260-pypi-server-job-key-scan.txt`、`p2-260-pypi-server-all-key-scan.txt`。没有打印 key，没有修改或删除凭证源，运行后已 unset 环境变量。
+
+同一套 v2 答案来源规则实际扫描本次 agent 的 **15 个文件**，包括会话、模型历史、6 个 rewind 快照、stdout、stats 和 PID 文件：complete，未扫描文件 0、解析错误 0、命中 0；结果已写入上述纯数据记录。没有因为验证通过而跳过这项检查，也没有改变规则或评分。
+
+原始日志留在 5090 的 `~/canter-linux/p2-260-adapter-tests/pypi-server-background/`；独立观察文件是 `~/canter-linux/p2-260-pypi-server-verifier-observation.json`。容器 `3fe128d0acf6` 最后由 Harbor 删除，`docker inspect` 确认已不存在；未删镜像。主控 PID 2003673 只做只读状态核对，仍在运行，未干预。
+
+本次不改 Rust、report.py、答案来源规则、CLAUDE.md、HANDOFF 或主仓库复核文件；三条建议改仍交主控处理。命令均在前台等待结束，最后 `git diff --check` 及 gitleaks / trufflehog 检查通过。只在本分支提交并同步 5090 专用裸仓库，不合并 main、不推送 GitHub origin。没有新增待主控决定的实现事项；上述缺少独立停止子 agent 接口的问题留后续任务。

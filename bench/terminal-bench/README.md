@@ -11,6 +11,11 @@
 这是镜像已缓存、同一价表和计费时段下的乐观估算，不含冷启动、限流与长尾差异，
 不是完整基准的分数或预算上限。
 
+[第二次返工的后台服务验证](results/background-service-2026-11-10.json)：另用 DeepSeek
+真跑一次 pypi-server（累计第 4 次），不计成绩。模型实际使用 `background=true`，
+只读观察确认 8080 服务在 Harbor 判分期间仍在监听；配置已删除、服务端保留。
+该次答案来源检查 15 个文件、无命中，凭证扫描无新增命中，费用 $0.015678876，未重跑。
+
 ## 安装（在仓库根目录，Bash）
 
 宿主机需要可直接使用的 Docker（含 Compose）、Git、curl、jq；无需 sudo。
@@ -143,11 +148,16 @@ grep -rlF -f <(printf '%s\n' "$CANTER_BENCH_API_KEY") "$BENCH_ROOT"
 
 `canter exec --yolo` 的 stdout、`canter stats --last --json` 和 `sessions/` 先留在
 容器内，经不带流式日志回调的 stdin/stdout 通道采集，在内存中替换意外出现的 key
-后才写宿主机。不会下载 `config.json` 或整个 `.canter`。正常结束、异常和取消都先按
-exec 的 PID 文件、服务端的 `server.json` PID 发 TERM，最多等 30 秒，再 KILL 并等
-5 秒，确认进程停止才取 stats；正常结束也停服务端，防止未等完的子 agent 继续工作。
-stats 使用新服务端读取磁盘会话，不恢复模型执行。采集后删除配置，再停掉 stats
-启动的服务端，最后 Harbor 判分并删容器。清理受 shield 保护，重复取消也等它完成；
+后才写宿主机。不会下载 `config.json` 或整个 `.canter`。主回合正常结束不发停止信号；
+超时或出错先按 exec PID 发 TERM，最多等 30 秒，再 KILL 并等 5 秒。先通过仍存活的
+服务端取 stats，在宿主机内存里检查 `subAgents[].status`；没有 `running` 子 agent
+就保留服务端，让模型用 `background=true` 启动的服务留到判分，不重启或二次停止。
+只有仍有子 agent 在跑时，才按 `server.json` 的 PID 停服务端，metadata 记录
+`server_stopped_for_sub_agents=true` 和「为停子 agent 停了服务端」。这条路径会连带
+停后台命令；canter 暂无只停子 agent 的接口。本适配器不改 Rust。
+停子 agent 的路径再取一次最终 stats，随后停掉为读取统计新起的服务端；其它路径
+只取一次 stats。两条路径都采集日志、删除配置，最后 Harbor 判分并删容器。
+清理受 shield 保护，重复取消也等它完成；
 取消时保留 `CancelledError`，清理错误记 metadata。其它情况下删配置失败仍抛异常。
 tar 的 stderr 单独留在容器，base64 归档加边界，Docker 警告不参与解码。
 
@@ -213,8 +223,9 @@ harbor run --path "$TB_DATA/fix-git" --agent-import-path timeout_probe:TimeoutPr
 unset CANTER_TIMEOUT_TEST_KEY
 ```
 
-检查该 trial 的 `agent/timeout-probe.json`：最后一次检查应无 canter PID、无临时配置，
-其 `checked_at` 应早于 `result.json` 的 `verifier.started_at`；结果应保留
+检查该 trial 的 `agent/timeout-probe.json`：停止后的 PID 列表不应包含停止前记录的
+`exec_pid`，最后检查应无临时配置；没有活跃子 agent 时服务端会保留。
+最后的 `checked_at` 应早于 `result.json` 的 `verifier.started_at`；结果应保留
 `AgentTimeoutError` 且仍产生判分。这个 job 不传给成绩报告程序。
 
 ## 全套与 Terminus-2（本件不执行，先报估算并获同意）

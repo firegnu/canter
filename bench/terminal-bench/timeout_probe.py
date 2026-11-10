@@ -26,6 +26,9 @@ for entry in /proc/[0-9]*/exe; do
 done
 printf 'CANTER_PROCESS_END\n'
 if [ -e "$HOME/.canter/config.json" ]; then printf 'CONFIG_PRESENT\n'; fi
+if [ -f /tmp/canter-harbor/exec.pid ]; then
+    printf 'EXEC_PID='; cat /tmp/canter-harbor/exec.pid
+fi
 ''', timeout=10)
         if result.return_code:
             raise RuntimeError("Timeout probe could not inspect processes")
@@ -35,15 +38,19 @@ if [ -e "$HOME/.canter/config.json" ]; then printf 'CONFIG_PRESENT\n'; fi
             "phase": phase, "checked_at": datetime.now(timezone.utc).isoformat(),
             "canter_pids": [int(pid) for pid in pids.split()],
             "config_present": "CONFIG_PRESENT" in text,
+            "exec_pid": next((int(line.partition("=")[2]) for line in text.splitlines()
+                              if line.startswith("EXEC_PID=")), None),
         }
         self.observations.append(observation)
         return observation
 
-    async def _stop_processes(self, environment):
-        await self.snapshot(environment, "before_stop")
-        await super()._stop_processes(environment)
+    async def _stop_processes(self, environment, *, stop_server=True):
+        before = await self.snapshot(environment, "before_stop")
+        await super()._stop_processes(environment, stop_server=stop_server)
         observation = await self.snapshot(environment, "after_stop")
-        if observation["canter_pids"]:
+        observation["stop_server"] = stop_server
+        if ((stop_server and observation["canter_pids"])
+                or before["exec_pid"] in observation["canter_pids"]):
             raise RuntimeError("Canter survived PID cleanup")
 
     async def run(self, instruction, environment, context):
@@ -54,5 +61,5 @@ if [ -e "$HOME/.canter/config.json" ]; then printf 'CONFIG_PRESENT\n'; fi
             (self.logs_dir / "timeout-probe.json").write_text(json.dumps({
                 "adapter_test_only": True, "observations": self.observations,
             }, indent=2) + "\n")
-            if observation["canter_pids"] or observation["config_present"]:
+            if observation["config_present"]:
                 raise RuntimeError("Timeout probe found incomplete cleanup")

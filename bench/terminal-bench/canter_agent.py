@@ -119,6 +119,7 @@ class Canter(BaseInstalledAgent):
 
     async def run(self, instruction, environment, context: AgentContext) -> None:
         self._errors = []
+        self._server_stopped_for_sub_agents = False
         error = None
         execution = asyncio.create_task(self._exec_private(
             environment,
@@ -134,7 +135,9 @@ class Canter(BaseInstalledAgent):
             error = exc
         # Harbor waits for cancellation to finish before grading. Shield the
         # cleanup even from a second cancellation; preserve CancelledError.
-        cleanup = asyncio.create_task(self._cleanup(environment))
+        cleanup = asyncio.create_task(self._cleanup(
+            environment, stop_exec=error is not None or result.return_code != 0
+        ))
         while True:
             try:
                 await asyncio.shield(cleanup)
@@ -161,8 +164,8 @@ class Canter(BaseInstalledAgent):
         # Exception messages may include command output: store types only.
         self._errors.append({"phase": phase, "type": type(error).__name__})
 
-    async def _stop_processes(self, environment):
-        result = await self._exec_private(environment, r'''
+    async def _stop_processes(self, environment, *, stop_server=True):
+        result = await self._exec_private(environment, f'stop_server={int(stop_server)}\n' + r'''
 set -eu
 touch /tmp/canter-harbor/stopping
 stop_pid() {
@@ -190,7 +193,7 @@ stop_pid() {
 for file in /tmp/canter-harbor/exec.pid /tmp/canter-harbor/stats.pid; do
     if [ -f "$file" ]; then stop_pid "$(cat "$file")"; rm -f "$file"; fi
 done
-if [ -f "$HOME/.canter/server.json" ]; then
+if [ "$stop_server" = 1 ] && [ -f "$HOME/.canter/server.json" ]; then
     pid=$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$HOME/.canter/server.json")
     stop_pid "$pid"
 fi
@@ -198,10 +201,29 @@ fi
         if result.return_code:
             raise RuntimeError("Could not stop canter before verification")
 
-    async def _cleanup(self, environment):
+    async def _cleanup(self, environment, *, stop_exec):
         try:
-            # Stop the daemon even on normal completion: subagents may be busy.
-            await self._stop_processes(environment)
+            if stop_exec:
+                await self._stop_processes(environment, stop_server=False)
+            # A live server owns background shell commands needed by graders.
+            # Inspect subagents before deciding whether it must be stopped.
+            running_children = False
+            try:
+                report = await self._read_stats(environment)
+                running_children = any(
+                    child["status"] == "running" for child in report.get("subAgents", [])
+                )
+            except Exception as exc:
+                self._record_error("collection", exc)
+            if running_children:
+                self._server_stopped_for_sub_agents = True
+                await self._stop_processes(environment, stop_server=True)
+                # Refresh final usage after stopping active children. Only this
+                # path starts a fresh stats daemon and stops it again below.
+                try:
+                    await self._read_stats(environment)
+                except Exception as exc:
+                    self._record_error("collection", exc)
             try:
                 await self._collect(environment)
             except Exception as exc:
@@ -210,16 +232,30 @@ fi
             try:
                 await self._remove_config(environment)
             finally:
-                # stats starts a fresh daemon for its read-only request.
-                await self._stop_processes(environment)
+                if self._server_stopped_for_sub_agents:
+                    await self._stop_processes(environment, stop_server=True)
 
-    async def _collect(self, environment) -> None:
+    async def _read_stats(self, environment):
         result = await self._exec_private(
             environment,
             "sh -c 'echo $$ > /tmp/canter-harbor/stats.pid; "
             "exec /usr/local/bin/canter stats --last --json' "
             "> /tmp/canter-harbor/stats.json 2> /tmp/canter-harbor/stats.stderr; "
             "status=$?; printf '%s' \"$status\" > /tmp/canter-harbor/stats.exit; "
+            "printf 'CANTER_STATS_BEGIN\\n'; base64 /tmp/canter-harbor/stats.json; "
+            "printf '\\nCANTER_STATS_END\\n'; exit \"$status\"",
+            timeout=60,
+        )
+        if result.return_code:
+            raise RuntimeError("canter stats failed; see agent/stats.stderr")
+        encoded = (result.stdout or "").split("CANTER_STATS_BEGIN\n", 1)[1]
+        encoded, _ = encoded.split("\nCANTER_STATS_END\n", 1)
+        # The raw report stays in host memory; _collect redacts before writing.
+        return json.loads(base64.b64decode("".join(encoded.split()), validate=True))
+
+    async def _collect(self, environment) -> None:
+        result = await self._exec_private(
+            environment,
             'if [ -d "$HOME/.canter/sessions" ]; then '
             'cp -R "$HOME/.canter/sessions" /tmp/canter-harbor/sessions || exit 1; fi; '
             "tar -C /tmp/canter-harbor -cf /tmp/canter-harbor.tar . "
@@ -267,6 +303,11 @@ fi
         context.metadata = {
             "reasoning_effort": self.options.reasoning_effort,
             "errors": self._errors,
+            "server_stopped_for_sub_agents": getattr(self, "_server_stopped_for_sub_agents", False),
+            "server_stop_reason": (
+                "为停子 agent 停了服务端"
+                if getattr(self, "_server_stopped_for_sub_agents", False) else None
+            ),
         }
         try:
             context.metadata["credential_redactions"] = json.loads(

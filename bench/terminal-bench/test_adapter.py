@@ -30,6 +30,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.agent.options = SimpleNamespace(reasoning_effort="high")
         self.agent._key = "test-only-credential"
         self.agent._errors = []
+        self.agent._read_stats = AsyncMock(return_value={"subAgents": []})
         self.context = AgentContext()
         self.write("collection.json", {"credential_redactions": 0})
 
@@ -77,7 +78,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.context.cost_usd)
         self.assertTrue(self.context.metadata["errors"])
 
-    async def test_collection_failure_still_removes_config_and_stops(self):
+    async def test_collection_failure_still_removes_config_and_keeps_server(self):
         order = []
         async def stop(_):
             order.append("stop")
@@ -92,7 +93,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.agent._remove_config = remove
         await self.agent.run("fixture", None, self.context)
         self.agent.populate_context_post_run(self.context)
-        self.assertEqual(order, ["stop", "collect", "remove", "stop"])
+        self.assertEqual(order, ["collect", "remove"])
         self.assertTrue(self.context.metadata["errors"])
         self.assertIsNone(self.context.n_input_tokens)
 
@@ -103,7 +104,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.agent._remove_config = AsyncMock(side_effect=OSError("remove"))
         with self.assertRaises(asyncio.CancelledError):
             await self.agent.run("fixture", None, self.context)
-        self.assertEqual(self.agent._stop_processes.await_count, 2)
+        self.agent._stop_processes.assert_awaited_once_with(None, stop_server=False)
 
     async def test_remove_failure_still_raises_without_cancellation(self):
         self.agent._exec_private = AsyncMock(return_value=SimpleNamespace(return_code=0))
@@ -113,16 +114,38 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(OSError, "remove"):
             await self.agent.run("fixture", None, self.context)
 
-    async def test_normal_completion_stops_daemon_before_collection(self):
+    async def test_running_child_stops_server_then_refreshes_usage(self):
         order = []
         async def record(phase):
             order.append(phase)
+        async def stats(_):
+            order.append("stats")
+            return {"subAgents": [{"status": "running"}]}
         self.agent._exec_private = AsyncMock(return_value=SimpleNamespace(return_code=0))
-        self.agent._stop_processes = lambda _: record("stop")
+        self.agent._read_stats = stats
+        self.agent._stop_processes = lambda _, *, stop_server: record(f"stop:{stop_server}")
         self.agent._collect = lambda _: record("collect")
         self.agent._remove_config = lambda _: record("remove")
         await self.agent.run("fixture", None, self.context)
-        self.assertEqual(order, ["stop", "collect", "remove", "stop"])
+        self.assertEqual(order, ["stats", "stop:True", "stats", "collect", "remove", "stop:True"])
+        self.populate(usage())
+        self.assertTrue(self.context.metadata["server_stopped_for_sub_agents"])
+        self.assertEqual(self.context.metadata["server_stop_reason"], "为停子 agent 停了服务端")
+
+    async def test_normal_completion_without_running_children_keeps_server(self):
+        self.agent._exec_private = AsyncMock(return_value=SimpleNamespace(return_code=0))
+        self.agent._read_stats = AsyncMock(return_value={"subAgents": [
+            {"status": "completed"}, {"status": "interrupted"},
+        ]})
+        self.agent._stop_processes = AsyncMock()
+        self.agent._collect = AsyncMock()
+        self.agent._remove_config = AsyncMock()
+        await self.agent.run("fixture", None, self.context)
+        self.agent._stop_processes.assert_not_awaited()
+        self.agent._read_stats.assert_awaited_once()
+        self.agent._collect.assert_awaited_once()
+        self.agent._remove_config.assert_awaited_once()
+        self.assertFalse(self.agent._server_stopped_for_sub_agents)
 
     async def test_repeated_cancellation_waits_for_cleanup(self):
         started, release = asyncio.Event(), asyncio.Event()
@@ -144,7 +167,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await run
         self.agent._remove_config.assert_awaited_once()
-        self.assertEqual(self.agent._stop_processes.await_count, 2)
+        self.agent._stop_processes.assert_not_awaited()
 
     async def test_collection_cancellation_is_preserved(self):
         self.agent._exec_private = AsyncMock(return_value=SimpleNamespace(return_code=0))
@@ -154,7 +177,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await self.agent.run("fixture", None, self.context)
         self.agent._remove_config.assert_awaited_once()
-        self.assertEqual(self.agent._stop_processes.await_count, 2)
+        self.agent._stop_processes.assert_not_awaited()
 
     async def test_nonzero_exec_still_stops_and_collects(self):
         self.agent._exec_private = AsyncMock(return_value=SimpleNamespace(return_code=7))
@@ -165,7 +188,30 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             await self.agent.run("fixture", None, self.context)
         self.agent._collect.assert_awaited_once()
         self.agent._remove_config.assert_awaited_once()
-        self.assertEqual(self.agent._stop_processes.await_count, 2)
+        self.agent._stop_processes.assert_awaited_once_with(None, stop_server=False)
+
+    async def test_stats_failure_does_not_stop_background_services(self):
+        self.agent._exec_private = AsyncMock(return_value=SimpleNamespace(return_code=0))
+        self.agent._read_stats = AsyncMock(side_effect=ValueError("bad stats"))
+        self.agent._stop_processes = AsyncMock()
+        self.agent._collect = AsyncMock()
+        self.agent._remove_config = AsyncMock()
+        await self.agent.run("fixture", None, self.context)
+        self.agent.populate_context_post_run(self.context)
+        self.agent._stop_processes.assert_not_awaited()
+        self.agent._remove_config.assert_awaited_once()
+        self.assertTrue(self.context.metadata["errors"])
+        self.assertIsNone(self.context.n_input_tokens)
+
+    async def test_read_stats_decodes_private_memory_payload(self):
+        import base64
+        report = {"subAgents": [{"status": "running"}, {"status": "completed"}]}
+        encoded = base64.b64encode(json.dumps(report).encode()).decode()
+        self.agent._exec_private = AsyncMock(return_value=SimpleNamespace(
+            return_code=0, stdout="warning\nCANTER_STATS_BEGIN\n"
+            + encoded + "\nCANTER_STATS_END\nwarning\n"))
+        self.assertEqual(await Canter._read_stats(self.agent, None), report)
+        self.assertFalse((self.agent.logs_dir / "stats.json").exists())
 
     async def test_archive_ignores_docker_stderr_outside_frame(self):
         import base64
