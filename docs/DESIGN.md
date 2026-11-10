@@ -521,7 +521,7 @@ P2-161 内置关键路径删除判断，只管模型 shell（前台、后台）�
 
 ## Linux 支持（P2-160，2026-11-10 用户定）
 
-提前支持 x86_64 Linux：服务端、终端和 `canter exec` 在 Ubuntu 24.04 上运行。Linux 沙箱单独由 P2-272 实现；本件保留默认开启、无法启动就拒绝执行的行为，提示 Linux 暂不支持沙箱，需在配置中设 `"sandbox": false` 或使用 `--yolo`。不自动关闭沙箱，不改变 macOS 的 Seatbelt。
+提前支持 x86_64 Linux：服务端、终端和 `canter exec` 在 Ubuntu 24.04 上运行。P2-272 用系统 bubblewrap 实现默认开启的 Linux 沙箱，范围及 Linux 差异见下节。未安装 bubblewrap 或无法建立命名空间时拒绝执行，提示安装 bubblewrap，或在配置中设 `"sandbox": false`、使用 `--yolo`；不自动关闭沙箱，不改变 macOS 的 Seatbelt。
 
 Linux 不提供 `canter service install` / `uninstall`，不写 launchd 配置，也不实现 systemd；提示终端打开时会自动启动服务端。网址用 `xdg-open`，登录无法打开浏览器时打印网址，用户手动打开后仍能完成登录；macOS 继续用 `open`。终端链接遵循第 19 条：SSH 下复制全部链接，Linux 本地路径复制，网址打开失败时显示带网址的错误。
 
@@ -552,7 +552,12 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 依据 `docs/调研/P2-104-沙箱调研.md` §7.3，用户：「权限的问题我觉得接受你的建议」「选 A，其余都按推荐」。细节和每题原文记在 `docs/任务/P2-123-沙箱.md`。
 
-沙箱和权限模式是两个开关：`approvalPolicy` 三档管问不问，沙箱管模型命令能碰什么。沙箱用 macOS Seatbelt，由 canter 自己生成规则并启动，不依赖 sandbox-runtime；默认开，`config.json` 的 `sandbox` 缺省为开，`false` 关闭，服务端自动重新读取、下一轮生效（P2-154），第一版界面里不能临时切换。起不来时命令失败并说明原因，不在墙外重跑；被墙挡住也不自动提权重跑。
+沙箱和权限模式是两个开关：`approvalPolicy` 三档管问不问，沙箱管模型命令能碰什么。macOS 用 Seatbelt，x86_64 Linux 用系统 bubblewrap，由 canter 自己生成规则并启动，不依赖 sandbox-runtime、不捆绑 bwrap；默认开，`config.json` 的 `sandbox` 缺省为开，`false` 关闭，服务端自动重新读取、下一轮生效（P2-154），第一版界面里不能临时切换。起不来时命令失败并说明原因，不在墙外重跑；被墙挡住也不自动提权重跑。
+
+Linux 实现及与 macOS 的不同（P2-272，11-10 用户确认）：根目录只读挂载，按当前命令范围重新挂入可写目录，敏感目录遮蔽，原 Cargo/npm 缓存和 Git 保护路径只读。Linux 可丢弃缓存放在会话 HOME 的 `.cache/canter/{cargo,npm}`；文件工具继续在服务端执行原有边界检查。使用用户、PID、IPC 命名空间，默认另外隔离网络命名空间，seccomp 限制 socket 类型并禁用 io_uring；联网批准与 Allow all 放行 IP 网络。
+
+- Unix socket：将 `/run`（包括 `/var/run` 的实际目标）、`$XDG_RUNTIME_DIR` 和 `/tmp` 盖成空目录，再挂回项目、新增目录、会话临时目录、可丢弃缓存及本次批准的写路径；普通临时文件仍使用 `$TMPDIR`。联网时只读挂回 `/etc/resolv.conf` 的真实目标，避免 Ubuntu 的 `/run/systemd/resolve/stub-resolv.conf` 被遮蔽后 DNS 失效。项目、新增目录、会话临时目录和缓存的具名 socket 可建可连。不联网时新网络命名空间隔离宿主机抽象 socket；联网时只用 Landlock 的 `LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET` 隔离抽象 socket，不使用 Landlock 文件或 TCP 权限规则。内核不支持这项 scope 时照常运行，doctor 明示缺少此隔离。用户接受的差异：位于不常见且仍可访问位置的具名 socket 仍可能连接，`writePaths` 的挂载也不提供 macOS 那种独立的 socket 路径权限；不增加监管进程。
+- Git：每次命令启动时发现已有仓库（含项目内嵌套仓库、worktree 和子模块），将 config、config.worktree、hooks、commondir、gitdir 及 `.git` 文件指针按 macOS 的保护范围锁为只读，提交所需数据仍可写。命令运行中新建的仓库在该命令内不锁，下一条命令启动时再锁；macOS 继续用动态路径规则保护新仓库。
 
 模型 shell（前台、后台、转后台、临时脚本）都在墙里，后台命令一直沿用启动时的范围。可写：cwd、P2-118 的新增目录、每会话独占的临时目录（作 TMPDIR）和 canter 指定的可丢弃缓存位置；`.git` 里提交用到的部分可写，`config` 和 `hooks` 锁住。不能读写：canter 状态目录（含控制 socket）和 `~/.ssh`、`~/.aws`、`~/.gnupg` 等凭证目录；不开放整个 `/tmp` 和真实的 `~/.cargo`、`~/.npm`。
 

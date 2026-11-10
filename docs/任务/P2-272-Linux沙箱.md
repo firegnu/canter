@@ -39,7 +39,7 @@
 ## 要做的
 
 - Linux（x86_64）上沙箱开着时，模型 shell 进墙跑，范围和 macOS 一样（上面背景第一条和 DESIGN 沙箱一节的全部规则，包括 `sandboxRequest` 申请联网和写路径、被挡识别、`/sandbox`、状态栏、doctor 自检）。read / write / edit 的服务端边界在 Linux 上照 macOS 生效。macOS 上的行为不变。
-- 做法（用户定：按推荐）：照 Codex，用系统的 bubblewrap 管文件和命名空间；联网照 macOS 的规则挡（用什么挡、Unix socket 怎么管，你参考 Codex 定，写进完成记录）。不用 Landlock。
+- 做法（用户定：按推荐）：照 Codex，用系统的 bubblewrap 管文件和命名空间；联网照 macOS 的规则挡（用什么挡、Unix socket 怎么管，你参考 Codex 定，写进完成记录）。不用 Landlock 文件系统规则；11-10 后续决定仅抽象 Unix socket scope 例外，见完成记录。
 - 机器上没有 bwrap、或者 bwrap 建不了命名空间（比如在不给权限的容器里）时（用户定：按推荐）：照现在的规矩「起不来时命令失败并说明原因」，给一句英文：要装 bubblewrap，或关沙箱、用 `--yolo`；doctor 也报出来。不随 canter 带一份 bwrap，不悄悄在墙外跑。
 - P2-160 交叉审查留下的（见下一节）一起做。
 - 改设计先改 `docs/DESIGN.md`（沙箱一节加 Linux 的做法，P2-160 那节里「Linux 上没有沙箱」的说法改掉）。
@@ -70,7 +70,7 @@
 
 ## 不要做
 
-- 不用 Landlock，不随 canter 带 bwrap。不做 Windows。不改 macOS 沙箱的规则和行为。
+- 除用户 11-10 确认的抽象 Unix socket scope 外不用 Landlock，不随 canter 带 bwrap。不做 Windows。不改 macOS 沙箱的规则和行为。
 - 不扩大沙箱范围（按域名代理、精简环境变量、MCP 隔离、文件工具移进受限进程，DESIGN 写着「以后再做」的照旧不做）。
 - 不按发行版、按模型、按服务商写分支。
 - 5090 上只用 `~/canter-linux/`，不碰机器上已有的东西，不用 sudo、不装系统包、不改 sysctl 和 AppArmor。不读、不改两台机器上的 `~/.canter`，不调真实模型接口。
@@ -81,3 +81,20 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+当前仅完成设计决定记录；实现、测试验收尚未完成，待下述写路径语义决定后继续。
+
+### 用户决定（11-10，实施前确认）
+
+- 接受两处 Linux 差异，不做监管进程。Unix socket 用空目录遮蔽 `/run`（含 `/var/run`、docker.sock、XDG_RUNTIME_DIR 下总线等）和 `/tmp`，挂回命令可写范围，联网时按需只读恢复 DNS 解析文件。项目、新增目录、会话临时目录和缓存里的 socket 可建可连；不常见且仍可读位置的 socket 仍能连。
+- 默认新网络命名空间隔离抽象 socket；联网时只使用 `LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET`，内核不支持则继续运行并在 doctor 说明。此项是原「不用 Landlock」的唯一例外，不增加文件系统或 TCP Landlock 规则。
+- Git 仅锁命令启动时已有仓库的 config、hooks 等原保护路径；本条命令中新建的仓库下一条再锁。macOS 行为不变。
+
+### 待主控决定：尚不存在的 writePaths
+
+- 继续核对现有验收时发现另一处机制差异：`sandbox_write_request_opens_only_that_call_and_allow_all_refuses_it` 批准尚不存在的 `../outside/new`，命令自行创建目录；`sandbox_approved_background_and_promoted_children_keep_the_request_until_exit` 批准尚不存在的 `../outside/result`，且断言后台命令实际写入前该文件仍不存在。不能统一提前创建为文件或目录，也不能默默把父目录全部放开。
+- 在 5090 的 `~/canter-linux/` 下以独占临时目录前台运行 `bwrap --ro-bind / / --bind "$sandbox_probe_dir/new" "$sandbox_probe_dir/new" -- /bin/true`，实测 `bwrap: Can't find source path …/new: No such file or directory`。确认没有创建目标后清理本次临时目录；未读真实凭证、未调用模型、未启动 canter serve。
+- 建议明确增加 Linux 差异：范围外 `writePaths` 必须已存在；新文件或新目录由模型重新申请其已存在的父目录，批准框明确展示父目录，仍只给这条命令。拒绝原精确申请并说明如何申请，不能自动扩大。已有可写目录内部的新建不受影响，macOS 保持原样。若必须保留精确批准不存在路径，需要另定机制，普通绑定挂载做不到，且本次决定已排除监管进程。
+- 按任务「碰到要拿主意的事……停下来」停止；未改功能代码或测试，未跑 Cargo 检查，不把上述机制探测算作任务要求的 RED。设计文档已记录用户确认的 socket/Git 差异及 Landlock 唯一例外。
