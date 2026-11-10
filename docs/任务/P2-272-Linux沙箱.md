@@ -134,3 +134,26 @@
 - 收紧挂载冲突校验时一度把已被 `/tmp` 隐藏、无需挂回的原缓存也当成启动冲突；改为继续隐藏它们，Linux 前后台及唤醒相关 38 项再次全部通过。未通过更改批准流程或放开目录解决。
 
 没有待主控决定的设计问题；主控仍需审查分支并执行原定的合并后真实模型验收。
+
+### 返工 1
+
+2026-11-10，按主控决定只处理交叉审查第 1～3 条；第 4～11 条未改，未合并、未推送。
+
+做了什么：
+
+- Git 保护路径及敏感遮蔽路径在已有可写范围内逐级绑定祖先目录，按深度先父后子挂载；保留原内容权限，不重新开放只读或隐藏子树。已有 worktree 元数据、子模块元数据、嵌套 `.git` 及其外层目录不能改名挪走，敏感目录的祖先也固定。普通回归直接检查改名失败、原目录仍在、保护内容未变，不构造替换配置或执行钩子的绕过过程。
+- Linux 扫描对 NotFound 跳过；权限错误核对不可读路径的属主，非当前用户拥有的跳过，当前用户拥有的仍失败并带具体路径。坏的、悬空或指向非目录的 `.git` 指针不阻止普通命令，Git 路径按原始字节解析，合法的非 UTF-8 路径不因解码失败被当成坏指针。单文件 writePaths 不扫描上级目录，仍保留既有 check_request 判断。macOS 解析与沙箱规则未改。
+- bwrap 仅查 `/usr/bin`、`/bin`、`/usr/local/bin`，文件和各级父目录须 root 所有且组／其他用户不可写；符号链接自身查属主，链接原路径、目标及中间链接的父目录均校验。命令与 doctor 共用这一查找，不再依赖会话或服务端 PATH。原缺失 bwrap／namespace 失败测试移入 Linux 单元测试模块，用仅 `cfg(test)` 可用、按测试线程隔离并在结束时恢复的注入点；正式构建没有启动器覆盖接口。保留错误原因、英文提示和正文不执行断言，增加空会话 PATH 下系统 bwrap 与探测仍能工作的检查。
+
+验证了什么：
+
+- 三组 RED 都先确认目标行为失败：Git 元数据目录改名原本返回 0；坏 `.git` 原本阻止 `printf ran`；空会话 PATH 原本使启动失败。对应日志在 5090 的 `~/canter-linux/p2-272-r1-{git,scan,launcher}-red.log`，实现后转为通过。
+- 5090 前台运行 `cargo test -p canter-tools --lib sandbox::`，以及 `cargo test -p canter-tools --test sandbox --test sandbox_files --test sandbox_unavailable --test memory`，51 passed、1 ignored，全部通过；输出在 `~/canter-linux/p2-272-r1-linux-tests.log`。覆盖新增回归、Git 提交／worktree／子模块、文件工具、记忆、前后台范围、网络和启动失败。
+- Mac 前台运行 `cargo nextest run -p canter-tools --test sandbox --test sandbox_files --test sandbox_unavailable --test memory --no-fail-fast`，42 passed、1 skipped，输出在 `/tmp/p2-272-r1-mac-tests.log`。两边 `cargo clippy --all-targets -- -D warnings` 均通过，日志分别为 `~/canter-linux/p2-272-r1-linux-clippy.log`、`/tmp/p2-272-r1-mac-clippy.log`；Mac `cargo fmt --check`、`git diff --check` 通过。沿用原任务独立编译目录，没有重跑全套。
+
+验证限制和发现：
+
+- 未使用 sudo 或改变文件属主，不能创建真正属于另一用户的目录。最接近的普通回归是在项目夹具中创建 `chmod 000` 目录，先确认真实 EACCES，再仅在测试构建内把这个路径的属主分类替代为“非当前用户”，验证普通 shell 仍执行；正式代码仍从文件系统元数据核对 UID。另有不注入的检查，确认自己拥有的不可读目录让命令失败并报出完整路径。
+- 新回归最初把嵌套仓库外层目录的改名断言也放在 Mac 上，发现现有 Seatbelt 阻止嵌套 `.git` 改名，但允许整体改名 `nested/repo`。本轮没有修改 Mac 行为：用户要求的三个 Git 路径及敏感祖先检查仍在两边跑，Linux 额外检查两级外层目录。DESIGN 已准确说明 Linux 采用逐级祖先保护，外层目录禁止挪动是本次已接受的更严处理；没有删改任何原有 Mac 断言。
+
+全部命令均前台运行并等到退出；真实模型调用 0 次，没有新的待决定事项。

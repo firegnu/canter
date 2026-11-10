@@ -6,11 +6,15 @@ use super::{Resources, Sandbox, Scope};
 use nix::libc;
 use std::{
     collections::BTreeMap,
+    ffi::OsStr,
     fs::{self, File, OpenOptions},
     io::{self, Write},
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd},
-        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        unix::{
+            ffi::OsStrExt,
+            fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        },
     },
     path::{Path, PathBuf},
     sync::{LazyLock, Mutex},
@@ -18,30 +22,52 @@ use std::{
 
 pub const HELP: &str = "Linux sandbox could not start. Install bubblewrap and enable unprivileged user namespaces, or set \"sandbox\": false in config.json or use --yolo.";
 
-fn bwrap(environment: &BTreeMap<String, String>, cwd: &Path) -> io::Result<PathBuf> {
+#[cfg(test)]
+#[path = "sandbox_linux_tests.rs"]
+mod tests;
+
+fn bwrap() -> io::Result<PathBuf> {
     if !cfg!(target_arch = "x86_64") {
         return Err(io::Error::other("Linux sandbox currently requires x86_64."));
     }
-    let path = environment
-        .get("PATH")
-        .map_or("/usr/bin:/bin", String::as_str);
-    for directory in std::env::split_paths(path) {
-        if !directory.is_absolute() {
-            continue;
-        }
-        let executable = directory.join("bwrap");
+    #[cfg(test)]
+    if let Some(launcher) = tests::BWRAP.with(|value| value.borrow().clone()) {
+        return launcher.ok_or_else(|| io::Error::other(HELP));
+    }
+    for directory in ["/usr/bin", "/bin", "/usr/local/bin"] {
+        let executable = Path::new(directory).join("bwrap");
         if fs::metadata(&executable)
             .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+            && trusted_launcher_path(&executable, 40).unwrap_or(false)
         {
-            let executable = executable.canonicalize()?;
-            // The sandbox launcher must not come from the command's workspace.
-            if cwd != Path::new("/") && executable.starts_with(cwd) {
-                continue;
-            }
-            return Ok(executable);
+            return executable.canonicalize();
         }
     }
     Err(io::Error::other(HELP))
+}
+
+fn trusted_launcher_path(path: &Path, links_left: usize) -> io::Result<bool> {
+    if links_left == 0 {
+        return Ok(false);
+    }
+    for ancestor in path.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor)?;
+        if metadata.uid() != 0 {
+            return Ok(false);
+        }
+        if metadata.is_symlink() {
+            // Symlink mode bits do not control writes; its parent and every
+            // component of the target must be trusted, including intermediate links.
+            let target = fs::read_link(ancestor)?;
+            let target = ancestor.parent().unwrap_or(Path::new("/")).join(target);
+            if !trusted_launcher_path(&target, links_left - 1)? {
+                return Ok(false);
+            }
+        } else if metadata.permissions().mode() & 0o022 != 0 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 pub(super) fn socket_roots(environment: &BTreeMap<String, String>) -> io::Result<Vec<PathBuf>> {
@@ -84,7 +110,7 @@ pub(super) fn command(
     scope: &Scope,
     resources: &mut Resources,
 ) -> io::Result<tokio::process::Command> {
-    let mut command = base_command(environment, cwd, scope.network)?;
+    let mut command = base_command(environment, scope.network)?;
     let memory = sandbox.memory_roots();
     let mut writable = vec![
         cwd.canonicalize()?,
@@ -103,7 +129,7 @@ pub(super) fn command(
     for root in
         std::iter::once(cwd).chain(scope.additional_directories.iter().map(PathBuf::as_path))
     {
-        writable.extend(super::git_metadata(root)?);
+        writable.extend(git_metadata(root)?);
     }
     if let Some(memory) = &memory {
         writable.extend([memory.global.clone(), memory.project.clone()]);
@@ -214,6 +240,21 @@ pub(super) fn command(
             ));
         }
     }
+    // Pin writable ancestors as mountpoints too: a protected leaf alone does
+    // not prevent its parent from being renamed along with that leaf mount.
+    let protected: Vec<_> = mounts
+        .iter()
+        .filter(|(_, mount)| !matches!(mount, Mount::Write))
+        .map(|(path, _)| path.clone())
+        .collect();
+    for path in protected {
+        for ancestor in path.ancestors().skip(1) {
+            let inherited = ancestor.ancestors().find_map(|path| mounts.get(path));
+            if matches!(inherited, Some(Mount::Write)) {
+                mounts.entry(ancestor.to_path_buf()).or_insert(Mount::Write);
+            }
+        }
+    }
     let mut mounts: Vec<_> = mounts.into_iter().collect();
     mounts.sort_by(|(a, _), (b, _)| {
         a.components()
@@ -285,23 +326,30 @@ fn find_git(
     directories: &mut Vec<PathBuf>,
     pointers: &mut Vec<PathBuf>,
 ) -> io::Result<()> {
-    let root = if root.is_dir() {
-        root
-    } else {
-        root.parent().unwrap_or(root)
-    };
-    directories.extend(super::git_metadata(root)?);
-    for ancestor in root.ancestors() {
-        let path = ancestor.join(".git");
-        if path.is_file() || path.is_symlink() {
-            pointers.push(path);
-            break;
+    if !scan(root, fs::metadata(root))?.is_some_and(|metadata| metadata.is_dir()) {
+        // A single-file grant does not authorize or require walking its siblings.
+        return Ok(());
+    }
+    let metadata = git_metadata(root)?;
+    if !metadata.is_empty() {
+        for ancestor in root.ancestors() {
+            let path = ancestor.join(".git");
+            if path.is_file() || (path.is_symlink() && path.exists()) {
+                pointers.push(path);
+                break;
+            }
         }
+        directories.extend(metadata);
     }
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
-        for entry in fs::read_dir(directory)? {
-            let entry = entry?;
+        let Some(entries) = scan(&directory, fs::read_dir(&directory))? else {
+            continue;
+        };
+        for entry in entries {
+            let Some(entry) = scan(&directory, entry)? else {
+                continue;
+            };
             let path = entry.path();
             if excluded.iter().any(|parent| path.starts_with(parent))
                 || ["/proc", "/sys", "/dev", "/run"]
@@ -310,14 +358,22 @@ fn find_git(
             {
                 continue;
             }
+            let Some(kind) = scan(&path, entry.file_type())? else {
+                continue;
+            };
             if entry.file_name().eq_ignore_ascii_case(".git") {
-                if entry.file_type()?.is_dir() {
-                    directories.push(path.canonicalize()?);
-                } else {
-                    directories.extend(super::git_metadata(path.parent().unwrap())?);
-                    pointers.push(path);
+                if kind.is_dir() {
+                    if scan(&path, fs::read_dir(&path))?.is_some() {
+                        directories.extend(scan(&path, path.canonicalize())?);
+                    }
+                } else if scan_git_pointer(&path, fs::metadata(&path))?.is_some() {
+                    let metadata = git_metadata(path.parent().unwrap())?;
+                    if !metadata.is_empty() {
+                        directories.extend(metadata);
+                        pointers.push(path);
+                    }
                 }
-            } else if entry.file_type()?.is_dir() {
+            } else if kind.is_dir() {
                 pending.push(path);
             }
         }
@@ -325,12 +381,104 @@ fn find_git(
     Ok(())
 }
 
+/// Missing or unusable pointers describe no existing repository to protect.
+fn git_metadata(root: &Path) -> io::Result<Vec<PathBuf>> {
+    let Some(root) = scan(root, root.canonicalize())? else {
+        return Ok(Vec::new());
+    };
+    for ancestor in root.ancestors() {
+        let pointer = ancestor.join(".git");
+        let Some(metadata) = scan_git_pointer(&pointer, fs::metadata(&pointer))? else {
+            continue;
+        };
+        let target = if metadata.is_dir() {
+            pointer
+        } else if metadata.is_file() {
+            let Some(text) = scan_git_pointer(&pointer, fs::read(&pointer))? else {
+                return Ok(Vec::new());
+            };
+            let Some(target) = text.trim_ascii().strip_prefix(b"gitdir: ") else {
+                return Ok(Vec::new());
+            };
+            ancestor.join(OsStr::from_bytes(target))
+        } else {
+            return Ok(Vec::new());
+        };
+        let Some(directory) = scan_git_pointer(&target, target.canonicalize())? else {
+            return Ok(Vec::new());
+        };
+        if scan_git_pointer(&directory, fs::read_dir(&directory))?.is_none() {
+            return Ok(Vec::new());
+        }
+        let mut directories = vec![directory.clone()];
+        let common = directory.join("commondir");
+        // A missing commondir is a normal standalone repository.
+        match fs::read(&common) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            result => {
+                let Some(text) = scan_git_pointer(&common, result)? else {
+                    return Ok(Vec::new());
+                };
+                let target = directory.join(OsStr::from_bytes(text.trim_ascii()));
+                let Some(common) = scan_git_pointer(&target, target.canonicalize())? else {
+                    return Ok(Vec::new());
+                };
+                if scan_git_pointer(&common, fs::read_dir(&common))?.is_none() {
+                    return Ok(Vec::new());
+                }
+                directories.push(common);
+            }
+        }
+        return Ok(directories);
+    }
+    Ok(Vec::new())
+}
+
+fn scan_git_pointer<T>(path: &Path, result: io::Result<T>) -> io::Result<Option<T>> {
+    match result {
+        Err(error)
+            if error.kind() == io::ErrorKind::NotADirectory
+                || error.raw_os_error() == Some(libc::ELOOP) =>
+        {
+            Ok(None)
+        }
+        result => scan(path, result),
+    }
+}
+
+fn scan<T>(path: &Path, result: io::Result<T>) -> io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => {
+            if error.kind() == io::ErrorKind::PermissionDenied {
+                // SAFETY: geteuid has no preconditions or memory effects.
+                let uid = unsafe { libc::geteuid() };
+                let foreign = path
+                    .ancestors()
+                    .find_map(|parent| fs::metadata(parent).ok())
+                    .is_some_and(|metadata| metadata.uid() != uid);
+                #[cfg(test)]
+                let foreign = foreign
+                    || tests::FOREIGN_DIRECTORY
+                        .with(|value| value.borrow().as_deref() == Some(path));
+                if foreign {
+                    return Ok(None);
+                }
+            }
+            Err(io::Error::new(
+                error.kind(),
+                format!("Cannot inspect {}: {error}", path.display()),
+            ))
+        }
+    }
+}
+
 fn base_command(
     environment: &BTreeMap<String, String>,
-    cwd: &Path,
     network: bool,
 ) -> io::Result<tokio::process::Command> {
-    let mut command = tokio::process::Command::new(bwrap(environment, cwd)?);
+    let mut command = tokio::process::Command::new(bwrap()?);
     command.env_clear().envs(environment).args([
         "--unshare-user",
         "--unshare-pid",
@@ -378,7 +526,7 @@ fn base_command(
 /// Probe namespace setup and the same seccomp/Landlock setup without file writes.
 pub async fn probe() -> io::Result<bool> {
     let environment = std::env::vars().collect();
-    let mut command = base_command(&environment, Path::new("/"), true)?;
+    let mut command = base_command(&environment, true)?;
     command
         .args(["--unshare-net", "--", "/usr/bin/true"])
         .stdin(std::process::Stdio::null())

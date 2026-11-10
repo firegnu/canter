@@ -554,10 +554,10 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 沙箱和权限模式是两个开关：`approvalPolicy` 三档管问不问，沙箱管模型命令能碰什么。macOS 用 Seatbelt，x86_64 Linux 用系统 bubblewrap，由 canter 自己生成规则并启动，不依赖 sandbox-runtime、不捆绑 bwrap；默认开，`config.json` 的 `sandbox` 缺省为开，`false` 关闭，服务端自动重新读取、下一轮生效（P2-154），第一版界面里不能临时切换。起不来时命令失败并说明原因，不在墙外重跑；被墙挡住也不自动提权重跑。
 
-Linux 实现及与 macOS 的不同（P2-272，11-10 用户确认）：根目录只读挂载，按当前命令范围重新挂入可写目录，敏感目录遮蔽，原 Cargo/npm 缓存和 Git 保护路径只读。Linux 可丢弃缓存放在会话 HOME 的 `.cache/canter/{cargo,npm}`；文件工具继续在服务端执行原有边界检查。使用用户、PID、IPC 命名空间，默认另外隔离网络命名空间，seccomp 限制 socket 类型并禁用 io_uring；联网批准与 Allow all 放行 IP 网络。
+Linux 实现及与 macOS 的不同（P2-272，11-10 用户确认）：启动器仅从固定系统目录 `/usr/bin`、`/bin`、`/usr/local/bin` 查找，不使用会话 PATH；可执行文件及各级上级目录须由 root 拥有，组和其他用户不可写，符号链接的原路径与真实路径均检查。doctor 与命令使用同一查找方式。根目录只读挂载，按当前命令范围重新挂入可写目录，敏感目录遮蔽，原 Cargo/npm 缓存和 Git 保护路径只读。Linux 可丢弃缓存放在会话 HOME 的 `.cache/canter/{cargo,npm}`；文件工具继续在服务端执行原有边界检查。使用用户、PID、IPC 命名空间，默认另外隔离网络命名空间，seccomp 限制 socket 类型并禁用 io_uring；联网批准与 Allow all 放行 IP 网络。
 
 - Unix socket：将 `/run`（包括 `/var/run` 的实际目标）、`$XDG_RUNTIME_DIR` 和 `/tmp` 盖成空目录，再挂回项目、新增目录、会话临时目录、可丢弃缓存及本次批准的写路径；普通临时文件仍使用 `$TMPDIR`。联网时只读挂回 `/etc/resolv.conf` 的真实目标，避免 Ubuntu 的 `/run/systemd/resolve/stub-resolv.conf` 被遮蔽后 DNS 失效。项目、新增目录、会话临时目录和缓存的具名 socket 可建可连。不联网时新网络命名空间隔离宿主机抽象 socket；联网时只用 Landlock 的 `LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET` 隔离抽象 socket，不使用 Landlock 文件或 TCP 权限规则。内核不支持这项 scope 时照常运行，doctor 明示缺少此隔离。用户接受的差异：位于不常见且仍可访问位置的具名 socket 仍可能连接，`writePaths` 的挂载也不提供 macOS 那种独立的 socket 路径权限；不增加监管进程。
-- Git：每次命令启动时发现已有仓库（含项目内嵌套仓库、worktree 和子模块），将 config、config.worktree、hooks、commondir、gitdir 及 `.git` 文件指针按 macOS 的保护范围锁为只读，提交所需数据仍可写。命令运行中新建的仓库在该命令内不锁，下一条命令启动时再锁；macOS 继续用动态路径规则保护新仓库。
+- Git：每次命令启动时发现已有仓库（含项目内嵌套仓库、worktree 和子模块），将 config、config.worktree、hooks、commondir、gitdir 及 `.git` 文件指针按 macOS 的保护范围锁为只读，提交所需数据仍可写。Git 保护路径和被遮蔽的敏感目录从可写根到目标之间的各级目录也绑定到自己，保持内容权限但禁止改名、删除；这包括嵌套仓库所在目录，采用 macOS `protect_ancestors` 的逐级保护方式；Linux 会禁止整体挪动嵌套仓库的外层目录，macOS 的现有规则仍保持原样。扫描时已消失的目录、非当前用户拥有且读不了的目录、坏的或悬空的 `.git` 指针跳过；当前用户拥有但读不了的目录仍让命令失败，错误指出路径。批准单个文件不递归扫描其上级目录。命令运行中新建的仓库在该命令内不锁，下一条命令启动时再锁；macOS 继续用动态路径规则保护新仓库。
 - `writePaths`：Linux 只接受已经存在的路径；申请包含不存在的路径时明确拒绝，提示重新申请已经存在的上级目录，不提前创建、不自动扩大范围。模型重新申请后，原批准框显示新的实际范围。macOS 仍支持精确申请尚不存在的文件或目录。
 
 Linux 挂载不能完全复现路径规则时从严处理：只读挂载的源与敏感目录或被遮蔽的运行时目录冲突、可写根覆盖 `/` 或 `/proc`、`/sys`、`/dev` 的系统视图、Git 保护目标无法准备时，命令明确失败。硬链接创建、跨进程内存访问及 ptrace 由 seccomp 禁止；绑定挂载的文件不能通过删除或原子替换来更新，需要这类写法时应由模型重新申请已有父目录，批准流程不变，不自动扩大范围。已有仓库中缺失的受保护条目需要短暂占位才能挂载：通常为空文件或空目录，`commondir` 使用保持原仓库布局的 `.`；并发命令共享占位引用，最后一条命令退出后仅清掉 inode 和内容未变的占位。服务端被 SIGKILL 时可能留下这些无授权含义的占位，不引入监管进程。

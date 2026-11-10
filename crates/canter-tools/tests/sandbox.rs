@@ -704,6 +704,64 @@ async fn sandbox_git_commits_in_repositories_and_worktrees_but_locks_config_and_
 }
 
 #[tokio::test]
+async fn sandbox_keeps_git_and_sensitive_ancestors_in_place() {
+    let source = Fixture::new();
+    source.git(&["init", "-q"]);
+    std::fs::write(source.cwd.join("tracked"), "initial").unwrap();
+    source.git(&["add", "tracked"]);
+    source.git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "initial",
+    ]);
+    let fixture = Fixture::new();
+    fixture.git(&["clone", "-q", source.cwd.to_str().unwrap(), "."]);
+    fixture.git(&["worktree", "add", "-q", "-b", "linked", "../linked"]);
+    fixture.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        source.cwd.to_str().unwrap(),
+        "child",
+    ]);
+    fixture.git(&["clone", "-q", source.cwd.to_str().unwrap(), "nested/repo"]);
+    let tools = fixture.tools(true);
+    for (directory, protected) in [
+        (".git/worktrees/linked", "commondir"),
+        (".git/modules/child", "config"),
+        ("nested/repo/.git", "config"),
+        #[cfg(target_os = "linux")]
+        ("nested/repo", ".git/config"),
+        #[cfg(target_os = "linux")]
+        ("nested", "repo/.git/config"),
+    ] {
+        let protected = fixture.cwd.join(directory).join(protected);
+        let original = std::fs::read(&protected).unwrap();
+        let output = run(&tools, &format!("/bin/mv {directory} {directory}-moved")).await;
+        assert_ne!(code(&output), Some(0), "{directory}: {}", output.text);
+        assert!(fixture.cwd.join(directory).is_dir());
+        assert!(!fixture.cwd.join(format!("{directory}-moved")).exists());
+        assert_eq!(std::fs::read(protected).unwrap(), original);
+    }
+    std::fs::create_dir(fixture.home.join(".ssh")).unwrap();
+    let credential = fixture.home.join(".ssh/fixture");
+    std::fs::write(&credential, "synthetic credential fixture").unwrap();
+    let tools = fixture.tools_at(fixture.root.path(), true);
+    let output = run(&tools, "/bin/mv home home-moved").await;
+    assert_ne!(code(&output), Some(0), "{}", output.text);
+    assert_eq!(
+        std::fs::read_to_string(credential).unwrap(),
+        "synthetic credential fixture"
+    );
+}
+
+#[tokio::test]
 async fn sandbox_network_allows_allow_all_and_blocks_both_asking_modes() {
     use canter_protocol::PermissionMode;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1408,6 +1466,80 @@ async fn linux_missing_write_requests_are_rejected_without_creation_or_scope_exp
         PermissionCheck::Forbidden { .. }
     ));
     assert!(!target.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn linux_git_discovery_skips_broken_pointers_and_file_grant_siblings() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    let nested = fixture.cwd.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    for root in [&fixture.cwd, &nested] {
+        for pointer in [
+            "not a Git pointer",
+            "gitdir: missing-target",
+            "gitdir: plain-file",
+        ] {
+            std::fs::write(root.join("plain-file"), "ordinary file").unwrap();
+            std::fs::write(root.join(".git"), pointer).unwrap();
+            let output = run(&tools, "printf ran").await;
+            assert_eq!(code(&output), Some(0), "{pointer}: {}", output.text);
+            assert!(output.text.contains("ran"));
+            std::fs::remove_file(root.join(".git")).unwrap();
+        }
+        std::os::unix::fs::symlink("missing-target", root.join(".git")).unwrap();
+        let output = run(&tools, "printf ran").await;
+        assert_eq!(code(&output), Some(0), "{}", output.text);
+        std::fs::remove_file(root.join(".git")).unwrap();
+    }
+
+    use canter_protocol::{ApprovalDecision, PermissionMode};
+    use canter_tools::{PermissionCheck, PermissionGate};
+    use std::os::unix::fs::PermissionsExt;
+    let outside = fixture.root.path().join("outside");
+    let blocked = outside.join("unreadable");
+    std::fs::create_dir_all(&blocked).unwrap();
+    let target = outside.join("output");
+    std::fs::write(&target, "before").unwrap();
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    tools.configure_shell(PermissionMode::AskForExecution, &[]);
+    let cancel = CancellationToken::new();
+    let call = tools
+        .prepare(
+            Tool::Shell,
+            "file-only",
+            &serde_json::json!({
+                "command":"printf after > ../outside/output",
+                "sandboxRequest":{"writePaths":[target]}, "justification":"Update this file."
+            })
+            .to_string(),
+            &cancel,
+        )
+        .await
+        .unwrap();
+    let PermissionCheck::Execute(permit) = PermissionGate::default()
+        .resolve(&call, ApprovalDecision::Accept, None)
+        .unwrap()
+    else {
+        panic!("existing file grant must be approved")
+    };
+    let output = tools.execute(permit, &cancel, &mut |_| {}).await;
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(code(&output), Some(0), "{}", output.text);
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "after");
+
+    let blocked = fixture.cwd.join("own-unreadable");
+    std::fs::create_dir(&blocked).unwrap();
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let output = run(&tools, "printf must-not-run").await;
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(code(&output), None, "{}", output.text);
+    assert!(
+        output.text.contains(blocked.to_str().unwrap()),
+        "{}",
+        output.text
+    );
 }
 
 #[cfg(target_os = "linux")]
