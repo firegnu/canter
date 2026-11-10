@@ -4,6 +4,13 @@
 `terminal-bench/terminal-bench-2-1`（89 题）。不改题目、资源、超时、提示词或评分。
 本目录不属于 Cargo workspace。Python 仅用于适配 Harbor、采集结果和检查答案来源。
 
+[2026-11-10 试跑数据](results/pilot-2026-11-10.json)：oracle 3/3，canter 3/3，
+真实题目运行 3 次、重跑 0 次；三题答案来源检查均完整、无命中。模型为
+`deepseek/deepseek-flash`，high；合计 $0.062678316、537.38 秒。
+按三道短题线性外推 89 题约 $1.86、串行 4.43 小时，4 并发理想 1.11 小时。
+这是镜像已缓存、同一价表和计费时段下的乐观估算，不含冷启动、限流与长尾差异，
+不是完整基准的分数或预算上限。
+
 ## 安装（在仓库根目录，Bash）
 
 宿主机需要可直接使用的 Docker（含 Compose）、Git、curl、jq；无需 sudo。

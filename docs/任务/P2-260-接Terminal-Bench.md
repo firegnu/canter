@@ -110,7 +110,7 @@
 
 ## 完成记录
 
-**当前状态：续跑进行中。** 前面的阶段记录保留，凭证矛盾和 Harbor 正式版接口差异均已由主控解决。
+**当前状态：本件已完成，验收 1～5 均达到，没有新的待主控决定事项。** 前面的阶段记录保留，凭证矛盾和 Harbor 正式版接口差异均已由主控解决。最终结果见本节末尾。
 
 ### 主控决定（2026-11-10）
 
@@ -144,3 +144,48 @@
 uv 已将 Python 3.12.16 安装到 `~/canter-linux/python`，Harbor 0.25.0 已重新绑定该 managed Python，不再使用系统解释器。官方 2.1 数据集以 export 模式完整下载 89 题到 `~/canter-linux/p2-260-data/terminal-bench-2-1`；未改题目文件。检查全部环境 Dockerfile，没有 Alpine 基础镜像，两个名称含 Alpine 的任务是 Debian 容器里启动 Alpine 虚拟机，因此本件不能补上 canter 看护进程在 busybox ash 上的真实题目验证。
 
 真跑前先用 `grep -rlF -f <(printf '%s\n' "$scan_key") "$HOME/canter-linux"` 建立凭证基线，只输出文件名；唯一命中为任务明确授权读取的既有凭证源 `~/canter-linux/accept-home/.canter/config.json`。没有其它命中，文件名记录在 `~/canter-linux/p2-260-key-baseline.txt`。未修改或删除该源文件；后续每题仍完整扫描并分别报告该既有源和新增命中，不把它隐藏在排除规则中。
+
+### 最终实现
+
+- `bench/terminal-bench/canter_agent.py` 实现 Harbor 0.25.0 的 installed agent：父类安装生命周期中按发行版装 CA、上传静态 canter，之后自行调用 configure；服务商/模型由 `--model provider/model` 提供，endpoint、key 的环境变量名、模型能力/价格、思考档由参数提供，没有 DeepSeek 分支。运行 `canter exec --yolo -- <原题>`，不修改题目或提示。
+- key 从宿主机环境直接进入内存，经 Docker exec stdin 生成容器内 0600 配置；不使用 `--ae` 或带 key 的命令。核对正式版源码：AgentConfig.env 的正常序列化会脱敏，但 Docker 帮助函数在 check=True 的异常中会拼接命令，普通 exec 还有流式输出回调。因此选用钉住版本的 `_run_docker_compose_command(..., stdin_data=..., check=False)`，不传日志回调，失败只报不含输入/输出内容的错误。未修改 Harbor 源码，也没有靠事后删除宿主机密钥文件来满足要求。
+- exec 结束后执行 `canter stats --last --json`；只采集 stdout、stats 和 sessions，通过内存归档通道下载，写宿主机前替换意外出现的 key；不采集 config.json 或整个 `.canter`，finally 清掉容器配置。Harbor 的 input token 含缓存，cost 使用 canter stats 的已知美元值（未知金额保留 null），有子 agent 时使用其合计。三题实际 `credential_redactions` 均为 0。
+- README 包含从零安装、静态编译、oracle、试跑、全套、同模型 Terminus-2 和 jq 比较命令；`deepseek-flash.json` 只有模型能力和基线价表，没有压缩阈值或行为调优。`report.py` 和纯数据规则文件完成共用答案来源检查；每轮结果只保存纯 JSON，原始日志不进仓库。
+
+### 最终验收和数据
+
+结果文件：[pilot-2026-11-10.json](../../bench/terminal-bench/results/pilot-2026-11-10.json)。运行版本为 `canter 0.1.0 · 64b80e3f`、Harbor 0.25.0、DeepSeek `deepseek/deepseek-flash`、high；三题配置相同。真实模型题目运行 **3 次**，重跑 **0 次**；没有额外模型试探调用，Harbor 整题重试设为 0。
+
+| 题目 | oracle 分数 | canter 分数 | canter 全流程秒数 | agent 阶段秒数 | 输入 token（含缓存） | 缓存 token | 输出 token | 美元 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| fix-git | 1 | 1 | 102.545772 | 32.617297 | 184049 | 173824 | 3719 | 0.008573244 |
+| openssl-selfsigned-cert | 1 | 1 | 115.480658 | 35.663010 | 131208 | 123520 | 4765 | 0.008765520 |
+| polyglot-c-py | 1 | 1 | 319.353723 | 236.758221 | 1135164 | 1121792 | 28831 | 0.045339552 |
+| 合计 | 3/3 | 3/3 | 537.380153 | 305.038528 | 1450421 | 1419136 | 37315 | 0.062678316 |
+
+六个 Harbor trial 都没有 exception，三道 canter 均完成安装、执行、隐藏测试判分、用量交回 Harbor、会话留存。oracle/canter 对应题目的 `task_checksum` 全部相同。没有改题、标准答案、测试、超时或资源。
+
+每题真跑后均按要求用 `grep -rlF` 分别扫描该题 Harbor 结果目录和整个 `~/canter-linux`，pattern 经管道输入而非命令行，输出只有文件名。三次题目目录扫描均无命中（grep 退出 1）；三次全目录扫描均只命中既有授权源 `accept-home/.canter/config.json`（退出 0），与基线一致，没有新增命中，也没有扫描错误。记录文件是 `~/canter-linux/p2-260-<题名>-job-key-scan.txt` 和 `p2-260-<题名>-all-key-scan.txt`。该结果也逐题写入结果 JSON；没有宣称宿主机本来就不含凭证。
+
+答案来源检查在三道真实试跑日志上实际执行：每题扫描 5 个文件，包括 events.jsonl、model-history.jsonl、stats.json、stdout.txt 和 collection.json；全部为 complete，解析错误 0、命中 0，未改分。规则覆盖 GitHub HTTPS/SSH、raw 内容地址、Harbor/Terminal-Bench 仓库、tbench.ai、Harbor Hub、Hugging Face 地址和 harborframework 数据集标识。结果记录规则 SHA256、每题扫描文件和命中列表。Terminus-2 使用同一程序扫描 trajectory.json 和文本日志，具体命令及无命中的局限写在 README；本件未真跑 Terminus-2。
+
+原始日志在 5090 的 `~/canter-linux/p2-260-jobs/{oracle,canter}-<题名>/`；每题会话在其 trial 的 `agent/sessions/<session-id>/`，版本、用量和判分在 `result.json`，统计明细在 `agent/stats.json`。用户的真实 `.canter` 未访问。
+
+### 全套 89 题一轮的估算
+
+按三题总数线性外推，倍率 `89 / 3 = 29.6667`：
+
+- 费用：`0.062678316 × 89 / 3 = $1.859456708`，约 **$1.86**。
+- 串行全流程：`537.380153 × 89 / 3 = 15942.28 秒`，约 **4.43 小时**。这包括每题环境准备、安装、agent、判分和清理，按每题耗时相加，不计人工两题之间的等待。
+- 4 并发理想全流程：上述时间除以 4，约 **1.11 小时（66.43 分钟）**；不计限流、资源争用、长尾造成的排队差异。
+- 单独 agent 阶段线性外推约 2.51 小时（串行），不要把这个数字冒充全流程时间。
+
+这是刻意选的三道短题，而且 canter 运行前 oracle 已预热镜像，**估算偏乐观，不是预算上限或有统计保证的预测**。不包括其余题的冷镜像下载/构建；三道 oracle 初次运行全流程合计 880.32 秒，说明首次环境准备的影响很大。费用按 canter 基线价表及本次计费时段估算，难题、更多轮工具调用和不同计费时段都会改变花费。全套及 Terminus-2 仍留给主控在用户在场时审批后执行。
+
+### 环境、收尾、没做的事和踩过的坑
+
+- 所有命令均在前台结束；Harbor 已删六个任务容器，最后 `docker ps -a` 按三题名字检查为空。没有按名字杀进程、没有 prune，也没有碰原有用户容器。保留三题原镜像 `alexgshaw/fix-git:20260403`（389b9c824761）、`alexgshaw/openssl-selfsigned-cert:20251031`（4c948a4e630a）、`alexgshaw/polyglot-c-py:20251031`（0f1c3b7816d7）和 Harbor 对应派生镜像，交主控决定清理。
+- 工具、managed Python、uv 缓存、源码、数据、结果、临时文件和编译缓存在 `~/canter-linux`；唯一观察到的 Harbor 路径例外为 `~/.cache/harbor/notifications.json`，0.25.0 的通知缓存常量不遵循 XDG。没有登录或上传 Harbor Hub，所有 Harbor 命令关闭遥测。Docker 自己的镜像目录按原任务保留在系统位置。
+- 没有改 Rust 或运行 Rust 测试；验收只跑上述 oracle、真实 canter、追加的答案来源/凭证检查，以及 `git diff --check`。最终 diff 检查通过。没有跑 89 题、Terminus-2 或其它外壳，没有合并 main 或推送 origin；只向 5090 的专用裸仓库同步。本地分支和 worktree 留给主控审查。
+- 无 Alpine 题，因此 busybox ash 看护进程的真实题目验证仍未覆盖。原授权测试 HOME 凭证源保留，按 HANDOFF 留给主控后续决定是否清理。
+- 踩过的坑：主分支与正式包版本号同为 0.25.0，但 configure 生命周期不同，已按主控决定适配正式版；第一次 uv 安装默认用了系统 Python，改用 managed Python 重装后路径符合要求；Harbor 的通知缓存不遵循 XDG，已记录例外。试跑适配器没有出现运行失败或重跑，没有新增待主控决定的实现事项。
