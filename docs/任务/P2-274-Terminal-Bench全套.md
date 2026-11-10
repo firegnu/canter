@@ -73,3 +73,8 @@
 - 11-10 用户问「为什么没用4.1？」。主控核对官方网站：之后又出了 3.0（7-30）、4.0（8-28）、4.1（11-09），2.1 是 5-06 的版本。P2-260 选 2.1 时主控只凭自己的知识（到 2026 年 6 月），没上官方网站核对，是主控的疏漏。
 - 用户先选「换成 4.1」，主控停了镜像下载，用 Harbor 0.25.0（仍是 PyPI 最新版）下载了最新版查看（`~/canter-linux/p2-274-data/terminal-bench/`）：66 题，每题外壳时限 8 小时，官方标的专家用时中位约 4 小时、最长 60 小时；判分在单独的容器里（`environment_mode = "separate"`，适配器没在这种方式下验证过）；有的题要 16 核、32G 内存，3 题要显卡（`fp8-rmsnorm-gemm`、`jax-speedrun-gpu`、`math-eval-grader`）；镜像 132 个（做题、判分各一个）。官方 4.1 公告：Opus 5.5（Claude Code）65.76%、GPT-6.1 Sol（Codex）60.91%；4.0 榜的提交总花费 $116k。
 - 主控说明代价（要先重新试跑、重拉镜像、每遍可能 $15～30 和一两天、$10 上限不够）后，用户改定：「先跑 2.1，4.1 另开一件」。4.1 是 P2-275。
+
+## 进展
+
+- 11-10 89 个镜像拉齐（逐个 `docker image inspect` 核对）。5090 上干净代码 `~/canter-linux/p2-274-src`（GitHub main `078735d`）。
+- 11-10 用户「跑 oracle」：18:32（北京时间）启动 `~/canter-linux/p2-274-run/run-oracle.sh`（PID 2253948，job `~/canter-linux/p2-274-jobs/oracle-full`，4 并发）；跑完写 `p2-274-run/oracle-full.json` 和 `status` 里的「oracle: DONE」。跑到 32/89 时没过 2 道：`build-cython-ext`（11 条测试挂 1 条 `test_pyknotid_repository_tests`，疑似标准答案 pip 装依赖没钉版本）、`caffe-cifar-10`，原因待查。
