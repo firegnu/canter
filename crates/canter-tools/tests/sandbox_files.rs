@@ -1,5 +1,3 @@
-#![cfg(target_os = "macos")]
-
 use canter_protocol::{ApprovalDecision, PermissionMode};
 use canter_tools::{LocalExecutor, PermissionCheck, PermissionGate, Tool, ToolOutcome, Tools};
 use std::{collections::BTreeMap, path::Path, sync::Arc};

@@ -338,7 +338,7 @@ async fn roles_cannot_override_parent_approval_sandbox_or_trust() {
         root.path(),
         &fake,
         CoreOptions {
-            sandbox: cfg!(target_os = "macos"),
+            sandbox: true,
             ..Default::default()
         },
     )

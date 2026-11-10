@@ -67,10 +67,7 @@ fn prefix(model: &ScriptModel, index: usize) -> String {
 
 #[tokio::test]
 async fn memory_model_writes_and_edits_without_approval_and_only_new_openings_update_the_prefix() {
-    for sandbox in [false, true]
-        .into_iter()
-        .filter(|enabled| !enabled || cfg!(target_os = "macos"))
-    {
+    for sandbox in [false, true] {
         let fixture = Fixture::new();
         let path = fixture.home.join("memory/testing.md");
         let model = ScriptModel::new(vec![
@@ -211,7 +208,6 @@ async fn memory_fork_keeps_the_snapshot_and_trust_changes_remove_or_reload_only_
 }
 
 #[tokio::test]
-#[cfg(target_os = "macos")]
 async fn memory_failed_trust_upgrade_does_not_leave_directory_exceptions_enabled() {
     use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
     struct RestoreWriter {
@@ -247,8 +243,12 @@ async fn memory_failed_trust_upgrade_does_not_leave_directory_exceptions_enabled
                     return None;
                 }
                 let opened = unsafe { opened.assume_init() };
+                #[cfg(target_os = "linux")]
+                let device = opened.st_dev;
+                #[cfg(not(target_os = "linux"))]
+                let device = opened.st_dev as u64;
                 let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFL) };
-                (opened.st_dev as u64 == metadata.dev()
+                (device == metadata.dev()
                     && opened.st_ino == metadata.ino()
                     && flags >= 0
                     && flags & nix::libc::O_ACCMODE != nix::libc::O_RDONLY)

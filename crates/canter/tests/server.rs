@@ -110,7 +110,7 @@ impl Fixture {
         });
         let mut config = json!({
             "base_url":base_url, "model":default_model, "context_window":1048576, "api_key":KEY,
-            "prompt_suggestions":false, "sandbox":cfg!(target_os = "macos")
+            "prompt_suggestions":false, "sandbox":true
         });
         if let Some(models) = models {
             config["models"] = json!(models);

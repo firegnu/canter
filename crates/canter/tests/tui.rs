@@ -39,6 +39,8 @@ const WAIT: Duration = Duration::from_secs(20);
 /// What the shell tool writes when it runs with a session's environment.
 const WRITE_ENV: &str = r#"printf '%s' "$CANTER_TEST_ENV" > env.txt"#;
 
+#[path = "support/process_pid.rs"]
+mod process_pid;
 #[path = "support/yolo.rs"]
 mod yolo;
 
@@ -262,7 +264,6 @@ async fn terminal_can_open_and_interrupt_a_running_exec_turn() {
     world.start_server().await;
     let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_canter"))
         .args(["exec", "Long task"])
-        .args((!cfg!(target_os = "macos")).then_some("--yolo"))
         .env_clear()
         .env("HOME", world.path("home"))
         .env("CANTER_HOME", world.path("state"))
@@ -286,6 +287,8 @@ async fn terminal_can_open_and_interrupt_a_running_exec_turn() {
     })
     .await
     .unwrap();
+    let pid = process_pid::host_pid(pid, &world.path("work"))
+        .expect("the fixture's command is still running");
     let id = world.only_session().await;
     let terminal = world.open(&["-r", &id], "watch-exec").await;
     terminal.wait_for("command.pid").await;
@@ -826,7 +829,7 @@ impl World {
             serde_json::to_vec(&json!({
                 "base_url": base_url, "model": "fake-model",
                 "context_window": 1048576, "api_key": "test-only-canter-key",
-                "prompt_suggestions": false, "sandbox": cfg!(target_os = "macos")
+                "prompt_suggestions": false, "sandbox": true
             }))
             .unwrap(),
         )
@@ -2004,8 +2007,9 @@ async fn background_shell_controls_work_through_terminal_and_survive_client_exit
             for path in &self.0 {
                 if let Ok(text) = fs::read_to_string(path)
                     && let Ok(pid) = text.trim().parse::<i32>()
+                    && let Some(pid) = process_pid::host_pid(pid, path.parent().unwrap())
                 {
-                    let _ = nix::sys::signal::killpg(Pid::from_raw(pid), Signal::SIGKILL);
+                    let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
                 }
             }
         }
@@ -2057,6 +2061,13 @@ async fn background_shell_controls_work_through_terminal_and_survive_client_exit
         .await;
     b.wait_for("continued after backgrounding").await;
     b.wait_for("▸ 1 background commands").await;
+    let model_pid: i32 = fs::read_to_string(world.path("work/model.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let model_pid = process_pid::host_pid(model_pid, &world.path("work"))
+        .expect("the fixture's model command is still running");
     b.type_line("/stop").await;
     b.wait_for("Enter choose · s stop · Esc cancel").await;
     assert!(
@@ -2070,11 +2081,6 @@ async fn background_shell_controls_work_through_terminal_and_survive_client_exit
     b.press(KeyCode::Esc).await;
     b.wait_idle().await;
     b.quit().await;
-    let model_pid: i32 = fs::read_to_string(world.path("work/model.pid"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
     assert_eq!(kill(Pid::from_raw(model_pid), None), Err(Errno::ESRCH));
     cleanup.0.clear();
     world.stop_server(Signal::SIGTERM).await;
@@ -2450,11 +2456,7 @@ async fn canter_opens_in_any_directory_and_starts_the_server() {
     // The info rows: default model, asking each time, this directory.
     terminal
         .wait_until("the info rows", |terminal| {
-            let sandbox = if cfg!(target_os = "macos") {
-                "Sandbox on"
-            } else {
-                "▲ Sandbox off"
-            };
+            let sandbox = "Sandbox on";
             terminal.info().starts_with(&format!(
                 "◆ fake-model · ◐ think high · Always ask · {sandbox} · /tmp/canter-tui-",
             ))

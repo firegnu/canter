@@ -49,7 +49,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - Doctor 的联网仅限每个已配置 provider 一次不带对话的模型列表 GET：Chat Completions 按该家 base_url 加 `/models` 并带 Authorization，Responses + ChatGPT 走现有目录端点和当前账号 access token，但不在公开目录缓存中发布结果、不写缓存、不做 401 后第二次请求。access_token 既有按需刷新保持不变，doctor 不额外刷新。每家请求含响应体读取总超时 5 秒，各家并行，整次接口总时限 8 秒；超时只把该项标 fail，其余结果照常返回。网络/地址错误、401/403 和超时是 fail；其它非成功状态及不识别的成功响应是 skip。不跟随跳转、不使用代理、不打印响应正文。
    - `canter doctor` 与 `/doctor` 都调用此接口。CLI 每项一行，以 `ok` / `fail` / `skip` 开头；fail 的下一行缩进显示 reason 与 fix，skip 下一行只显示 reason，最后一行为 `N problem(s)`，有 fail 时退出码非 0。TUI 先打开 `Doctor · checking` 弹框，在后台等待，完成后按 Configuration、Version、Sign-in and models、MCP、Sandbox 分节；fail 红色、skip 灰色，Esc 关闭，晚到结果不重新打开已关闭的弹框。旧服务端缺 `doctor` 能力时 TUI 提示 `This server is too old for /doctor; run canter serve --replace and retry`；CLI 不调用不支持的接口，退回本机检查。
    - 服务端不可达、未运行、协议不兼容或太旧时，`canter doctor` 不拉起或替换服务端，只用同一返回结构报告连接问题，并本机检查配置文件、读 server.json 比较登记版本与协议、检查 CANTER_HOME，以及从 server.log 末尾取最多 3 条含错误标记的行。日志行只保留文件已有的错误文字，不读或输出配置正文；发现假 key、令牌等敏感配置值时不显示该行。离线不能检查的登录、provider、MCP、沙箱和热重载状态均标 skip，不报 ok。
-   - 整个功能只报告，不提供 `--fix` 或 JSON 输出，不改配置和规则、不改文件权限、不创建或删除状态文件、不额外写凭证、不作废令牌、不拉起服务端、不连接/重连/重启 MCP。CANTER_HOME 可写性用操作系统 access 检查，不用临时写入试探；沙箱用无文件写入的最小 Seatbelt `/usr/bin/true` 探测。协议、CLI、TUI 和错误原因只含稳定检查 ID、家名、服务名、文件名、字段名、版本及经过固定分类的错误，不回传或记录 key、令牌、请求头的值、配置原文、模型列表响应正文或 server.log 的非错误行。Codex `rust-v0.163.0` 的 doctor 是命令行本机检查；canter 的服务端聚合接口、两个客户端共用结果、逐家模型列表和离线降级均为自定扩展，没有搬运 Codex 代码。
+   - 整个功能只报告，不提供 `--fix` 或 JSON 输出，不改配置和规则、不改文件权限、不创建或删除状态文件、不额外写凭证、不作废令牌、不拉起服务端、不连接/重连/重启 MCP。CANTER_HOME 可写性用操作系统 access 检查，不用临时写入试探；沙箱用无文件写入的最小 `/usr/bin/true` 探测：macOS 用 Seatbelt；Linux 用系统 bubblewrap、命名空间及命令使用的 seccomp／抽象 socket scope，缺少可选 scope 时仍报可运行并说明差异。协议、CLI、TUI 和错误原因只含稳定检查 ID、家名、服务名、文件名、字段名、版本及经过固定分类的错误，不回传或记录 key、令牌、请求头的值、配置原文、模型列表响应正文或 server.log 的非错误行。Codex `rust-v0.163.0` 的 doctor 是命令行本机检查；canter 的服务端聚合接口、两个客户端共用结果、逐家模型列表和离线降级均为自定扩展，没有搬运 Codex 代码。
    - **自定义子 agent 角色（P2-223，11-06）**：`parent.agentType`、列表、卡片、钩子、统计和导出的角色改为名字字符串，保留 `explorer`、`general` 的旧值和缺省 general；旧客户端把新名字读成 Unknown，仍能打开会话。增加只读 `GET /v1/sessions/{id}/roles`，返回 `{data:[{name,description,model?,effort?,readOnly,builtIn,error?}],directory}`；`features` 增加 `agentRoles`。`/roles` 在输入框上方列内置及自定义角色，`/agents` 不变。不同于 Codex 的 TOML 配置层和 Claude Code 的多级角色目录，canter 只读全局 Markdown 文件，只允许下述五个字段，不覆盖内置角色，不提供角色编辑界面。
    - **无摘要思考（P2-219，11-05）**：Responses 的 `reasoning` 条目复用既有 `reasoning` 项目和 `item.started/delta/completed`，没有摘要时文字为空，不加协议字段或事件类型；内部以空思考增量通知开始及无摘要结束，沿用 reducer 的计时算法。显示占位不进入模型历史，真实摘要与原生 replay 照旧；没有 `reasoning` 条目时不产生思考项目。旧存盘不补项目，旧客户端按已有空思考项目的显示规则读取。
    - **模型档位（P2-206，11-04）**：`ReasoningEffort` 增加 `medium`、`xhigh`，保留 `Unknown`；旧客户端按既有 unknown 规则读取新值，旧会话省略档位仍读作 high。`GET /v1/models` 的每条模型增加可选 `supportedReasoningEfforts` 和 `defaultReasoningEffort`，新服务端给出有效列表和默认，新客户端连旧服务端时沿用旧四档。字段名参考方案 §3 的 Codex 模型能力结构；当时由配置提供能力，P2-216 起也可由账号目录提供。换模型导致的自动换档复用 `session.updated` 与既有 warning 事件，不增加会话字段。
@@ -521,7 +521,7 @@ P2-161 内置关键路径删除判断，只管模型 shell（前台、后台）�
 
 ## Linux 支持（P2-160，2026-11-10 用户定）
 
-提前支持 x86_64 Linux：服务端、终端和 `canter exec` 在 Ubuntu 24.04 上运行。Linux 沙箱单独由 P2-272 实现；本件保留默认开启、无法启动就拒绝执行的行为，提示 Linux 暂不支持沙箱，需在配置中设 `"sandbox": false` 或使用 `--yolo`。不自动关闭沙箱，不改变 macOS 的 Seatbelt。
+提前支持 x86_64 Linux：服务端、终端和 `canter exec` 在 Ubuntu 24.04 上运行。P2-272 用系统 bubblewrap 实现默认开启的 Linux 沙箱，范围及 Linux 差异见下节。未安装 bubblewrap 或无法建立命名空间时拒绝执行，提示安装 bubblewrap，或在配置中设 `"sandbox": false`、使用 `--yolo`；不自动关闭沙箱，不改变 macOS 的 Seatbelt。
 
 Linux 不提供 `canter service install` / `uninstall`，不写 launchd 配置，也不实现 systemd；提示终端打开时会自动启动服务端。网址用 `xdg-open`，登录无法打开浏览器时打印网址，用户手动打开后仍能完成登录；macOS 继续用 `open`。终端链接遵循第 19 条：SSH 下复制全部链接，Linux 本地路径复制，网址打开失败时显示带网址的错误。
 
@@ -552,7 +552,15 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 依据 `docs/调研/P2-104-沙箱调研.md` §7.3，用户：「权限的问题我觉得接受你的建议」「选 A，其余都按推荐」。细节和每题原文记在 `docs/任务/P2-123-沙箱.md`。
 
-沙箱和权限模式是两个开关：`approvalPolicy` 三档管问不问，沙箱管模型命令能碰什么。沙箱用 macOS Seatbelt，由 canter 自己生成规则并启动，不依赖 sandbox-runtime；默认开，`config.json` 的 `sandbox` 缺省为开，`false` 关闭，服务端自动重新读取、下一轮生效（P2-154），第一版界面里不能临时切换。起不来时命令失败并说明原因，不在墙外重跑；被墙挡住也不自动提权重跑。
+沙箱和权限模式是两个开关：`approvalPolicy` 三档管问不问，沙箱管模型命令能碰什么。macOS 用 Seatbelt，x86_64 Linux 用系统 bubblewrap，由 canter 自己生成规则并启动，不依赖 sandbox-runtime、不捆绑 bwrap；默认开，`config.json` 的 `sandbox` 缺省为开，`false` 关闭，服务端自动重新读取、下一轮生效（P2-154），第一版界面里不能临时切换。起不来时命令失败并说明原因，不在墙外重跑；被墙挡住也不自动提权重跑。
+
+Linux 实现及与 macOS 的不同（P2-272，11-10 用户确认）：启动器仅从固定系统目录 `/usr/bin`、`/bin`、`/usr/local/bin` 查找，不使用会话 PATH；可执行文件及各级上级目录须由 root 拥有，组和其他用户不可写，符号链接的原路径与真实路径均检查。doctor 与命令使用同一查找方式。根目录只读挂载，按当前命令范围重新挂入可写目录，敏感目录遮蔽，原 Cargo/npm 缓存和 Git 保护路径只读。Linux 可丢弃缓存放在会话 HOME 的 `.cache/canter/{cargo,npm}`；文件工具继续在服务端执行原有边界检查。使用用户、PID、IPC 命名空间，默认另外隔离网络命名空间，seccomp 限制 socket 类型并禁用 io_uring；联网批准与 Allow all 放行 IP 网络。
+
+- Unix socket：将 `/run`（包括 `/var/run` 的实际目标）、`$XDG_RUNTIME_DIR` 和 `/tmp` 盖成空目录，再挂回项目、新增目录、会话临时目录、可丢弃缓存及本次批准的写路径；普通临时文件仍使用 `$TMPDIR`。联网时只读挂回 `/etc/resolv.conf` 的真实目标，避免 Ubuntu 的 `/run/systemd/resolve/stub-resolv.conf` 被遮蔽后 DNS 失效。项目、新增目录、会话临时目录和缓存的具名 socket 可建可连。不联网时新网络命名空间隔离宿主机抽象 socket；联网时只用 Landlock 的 `LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET` 隔离抽象 socket，不使用 Landlock 文件或 TCP 权限规则。内核不支持这项 scope 时照常运行，doctor 明示缺少此隔离。用户接受的差异：位于不常见且仍可访问位置的具名 socket 仍可能连接，`writePaths` 的挂载也不提供 macOS 那种独立的 socket 路径权限；不增加监管进程。
+- Git：每次命令启动时发现已有仓库（含项目内嵌套仓库、worktree 和子模块），将 config、config.worktree、hooks、commondir、gitdir 及 `.git` 文件指针按 macOS 的保护范围锁为只读，提交所需数据仍可写。Git 保护路径和被遮蔽的敏感目录从可写根到目标之间的各级目录也绑定到自己，保持内容权限但禁止改名、删除；这包括嵌套仓库所在目录，采用 macOS `protect_ancestors` 的逐级保护方式；Linux 会禁止整体挪动嵌套仓库的外层目录，macOS 的现有规则仍保持原样。扫描时已消失的目录、非当前用户拥有且读不了的目录、坏的或悬空的 `.git` 指针跳过；当前用户拥有但读不了的目录仍让命令失败，错误指出路径。批准单个文件不递归扫描其上级目录。命令运行中新建的仓库在该命令内不锁，下一条命令启动时再锁；macOS 继续用动态路径规则保护新仓库。
+- `writePaths`：Linux 只接受已经存在的路径；申请包含不存在的路径时明确拒绝，提示重新申请已经存在的上级目录，不提前创建、不自动扩大范围。模型重新申请后，原批准框显示新的实际范围。macOS 仍支持精确申请尚不存在的文件或目录。
+
+Linux 挂载不能完全复现路径规则时从严处理：只读挂载的源与敏感目录或被遮蔽的运行时目录冲突、可写根覆盖 `/` 或 `/proc`、`/sys`、`/dev` 的系统视图、Git 保护目标无法准备时，命令明确失败。硬链接创建、跨进程内存访问及 ptrace 由 seccomp 禁止；绑定挂载的文件不能通过删除或原子替换来更新，需要这类写法时应由模型重新申请已有父目录，批准流程不变，不自动扩大范围。已有仓库中缺失的受保护条目需要短暂占位才能挂载：通常为空文件或空目录，`commondir` 使用保持原仓库布局的 `.`；并发命令共享占位引用，最后一条命令退出后仅清掉 inode 和内容未变的占位。服务端被 SIGKILL 时可能留下这些无授权含义的占位，不引入监管进程。
 
 模型 shell（前台、后台、转后台、临时脚本）都在墙里，后台命令一直沿用启动时的范围。可写：cwd、P2-118 的新增目录、每会话独占的临时目录（作 TMPDIR）和 canter 指定的可丢弃缓存位置；`.git` 里提交用到的部分可写，`config` 和 `hooks` 锁住。不能读写：canter 状态目录（含控制 socket）和 `~/.ssh`、`~/.aws`、`~/.gnupg` 等凭证目录；不开放整个 `/tmp` 和真实的 `~/.cargo`、`~/.npm`。
 
@@ -567,13 +575,13 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 P2-164（10-30 主控确认）：模型 shell 仅在沙箱开启时增加可选 `sandboxRequest: { network, writePaths }` 和 `justification`，字段风格与 `timeoutMs` 一致。`network` 缺省 false，`writePaths` 缺省空数组；带申请必须给非空理由。路径相对 cwd，支持会话 HOME 的 `~`，按 P2-118 的真实路径办法处理符号链接、`..` 和不存在的尾部；批准框展示规范化后的路径。申请只给这条命令及其后代，后台和 Ctrl+B 转后台保持到退出，不加入会话目录或命令前缀授权；批准后启动前重新校验路径和硬边界。原缓存只读、Git 配置和元数据指针保护不因申请而解除。
 
-交叉审查后主控确认：`writePaths` 只增加文件写权限，不增加该路径下 Unix socket 的绑定或连接权限；cwd、新增目录、独占临时目录和缓存的原有规则保持 P2-163 的范围。连接墙外程序的 socket 可能让墙外程序执行操作，不属于批准写路径的范围。
+macOS 交叉审查后主控确认（Linux 差异见本节前文）：`writePaths` 只增加文件写权限，不增加该路径下 Unix socket 的绑定或连接权限；cwd、新增目录、独占临时目录和缓存的原有规则保持 P2-163 的范围。连接墙外程序的 socket 可能让墙外程序执行操作，不属于批准写路径的范围。
 
 判断顺序保留计划／审查限制、forbidden 和 P2-161，之后检查申请硬边界及 allowAll 的拒写规则；需询问的结果合并成一个单次批准框。allow、会话前缀、只读白名单不能免除申请批准，拒绝和附言沿用原反馈。普通墙内命令在 askForExecution 下免问，prompt、危险命令和坏规则文件仍沿用原处理。被挡提示沿用 P2-163 的输出特征识别，询问档追加用户确认的申请重试文字，不自动重跑。
 
 协议新增 `RequestKind` 的 `sandboxApproval` 类型，载荷沿用 `ApprovalRequest`，`arguments` 带规范化后的 `sandboxRequest` 和原 `justification`；仅提供 accept / decline / declineWithFeedback / cancel。旧客户端按已有 Unknown 分支忽略新类型，不会显示为普通命令批准，需新版客户端回答；只加服务端 features 无法约束旧客户端，因此不采用。Codex app-server v2 使用命令批准请求并可携带额外权限，shell 使用 `sandbox_permissions` / `additional_permissions` / `justification`；canter 使用自己 HTTP + SSE 的独立请求类型以防旧客户端漏显范围，且只扩展指定网络／写路径，永不提供整条命令脱离沙箱或永久越界授权。没有移植 Codex 实现。
 
-这不是资源配额或回滚：看护进程、超时、进程组清理照旧。以后再做：按域名代理、精简传给命令的环境变量、MCP 隔离、文件工具移进受限进程、Linux 和 Windows 的实现。
+这不是资源配额或回滚：看护进程、超时、进程组清理照旧。以后再做：按域名代理、精简传给命令的环境变量、MCP 隔离、文件工具移进受限进程、Windows 的实现。
 
 ## 钩子（P2-153）
 

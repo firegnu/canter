@@ -42,7 +42,6 @@ async fn idle(session: &Session) -> SessionSnapshot {
 }
 
 #[tokio::test]
-#[cfg(target_os = "macos")]
 async fn child_inherits_the_opening_sandbox_exemption_and_actual_command_scope() {
     for disabled in [false, true] {
         let root = tempfile::tempdir_in("/tmp").unwrap();
@@ -142,7 +141,7 @@ async fn spawn_inherits_current_settings_runs_fresh_and_can_continue_and_reopen(
     };
     let settings = serde_json::from_value(json!({"cwd":root.path().join("work"),"model":"fake-model","name":null,"approvalPolicy":"alwaysAsk"})).unwrap();
     let options = CoreOptions {
-        sandbox: cfg!(target_os = "macos"),
+        sandbox: true,
         command_rules_path: Some(root.path().join("state/rules.json")),
         ..Default::default()
     };

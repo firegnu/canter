@@ -453,7 +453,7 @@ async fn provider(app: &App, provider: crate::config::DoctorProvider) -> DoctorC
 static SANDBOX_FAILURES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
     std::sync::LazyLock::new(Default::default);
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 pub(super) fn fail_sandbox_for_test(home: PathBuf) {
     SANDBOX_FAILURES.lock().unwrap().insert(home);
 }
@@ -467,40 +467,61 @@ async fn sandbox(config: &crate::config::Config, home: &Path) -> DoctorCheck {
             "Sandbox is disabled in config.json.".into(),
         );
     }
-    if !cfg!(target_os = "macos") {
-        return fail(
-            "sandbox",
-            "Sandbox",
-            DoctorCategory::Sandbox,
-            "Seatbelt sandboxing is unavailable on this operating system.".into(),
-            "Run on macOS or set sandbox to false in config.json.".into(),
-        );
+    #[cfg(target_os = "linux")]
+    {
+        #[cfg(test)]
+        let forced = SANDBOX_FAILURES.lock().unwrap().contains(home);
+        #[cfg(not(test))]
+        let forced = {
+            let _ = home;
+            false
+        };
+        match canter_tools::probe_linux_sandbox().await {
+            Ok(scoped) if !forced => {
+                let mut check = ok("sandbox", "Sandbox", DoctorCategory::Sandbox);
+                if !scoped {
+                    check.reason = Some("Abstract Unix socket isolation is unavailable on this kernel; sandboxed commands can still run.".into());
+                }
+                check
+            }
+            _ => fail(
+                "sandbox",
+                "Sandbox",
+                DoctorCategory::Sandbox,
+                "The Linux bubblewrap sandbox probe failed or timed out.".into(),
+                canter_tools::LINUX_SANDBOX_HELP.into(),
+            ),
+        }
     }
-    let mut command = tokio::process::Command::new("/usr/bin/sandbox-exec");
-    command
-        .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let result = tokio::time::timeout(Duration::from_secs(2), command.output()).await;
-    #[cfg(test)]
-    let forced = SANDBOX_FAILURES.lock().unwrap().contains(home);
-    #[cfg(not(test))]
-    let forced = {
-        let _ = home;
-        false
-    };
-    if !forced && result.is_ok_and(|result| result.is_ok_and(|output| output.status.success())) {
-        ok("sandbox", "Sandbox", DoctorCategory::Sandbox)
-    } else {
-        fail(
-            "sandbox",
-            "Sandbox",
-            DoctorCategory::Sandbox,
-            "The macOS Seatbelt sandbox probe failed or timed out.".into(),
-            "Check /usr/bin/sandbox-exec and macOS Seatbelt availability.".into(),
-        )
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut command = tokio::process::Command::new("/usr/bin/sandbox-exec");
+        command
+            .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        let result = tokio::time::timeout(Duration::from_secs(2), command.output()).await;
+        #[cfg(test)]
+        let forced = SANDBOX_FAILURES.lock().unwrap().contains(home);
+        #[cfg(not(test))]
+        let forced = {
+            let _ = home;
+            false
+        };
+        if !forced && result.is_ok_and(|result| result.is_ok_and(|output| output.status.success()))
+        {
+            ok("sandbox", "Sandbox", DoctorCategory::Sandbox)
+        } else {
+            fail(
+                "sandbox",
+                "Sandbox",
+                DoctorCategory::Sandbox,
+                "The macOS Seatbelt sandbox probe failed or timed out.".into(),
+                "Check /usr/bin/sandbox-exec and macOS Seatbelt availability.".into(),
+            )
+        }
     }
 }
 

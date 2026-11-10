@@ -521,13 +521,11 @@ fn normalize_session_scratch(request: &mut Request) {
     }
 }
 
-#[cfg(target_os = "macos")]
 struct ScratchConfiguration {
     state: Mutex<(u64, bool)>,
     model: Arc<ScriptModel>,
 }
 
-#[cfg(target_os = "macos")]
 impl canter_core::ConfigurationSource for ScratchConfiguration {
     fn snapshot(&self) -> canter_core::Configuration {
         let (revision, sandbox) = *self.state.lock().unwrap();
@@ -556,7 +554,6 @@ impl canter_core::ConfigurationSource for ScratchConfiguration {
     }
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn sandbox_model_request_exposes_scope_only_when_enabled() {
     for enabled in [false, true] {
@@ -651,7 +648,6 @@ async fn sandbox_model_request_exposes_scope_only_when_enabled() {
     }
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn sandbox_session_uses_one_explicit_approval_and_preserves_decline_feedback() {
     for mode in [PermissionMode::AlwaysAsk, PermissionMode::AskForExecution] {
@@ -663,8 +659,13 @@ async fn sandbox_session_uses_one_explicit_approval_and_preserves_decline_feedba
             for name in ["home", "project", "state", "outside"] {
                 std::fs::create_dir(temp.path().join(name)).unwrap();
             }
+            let requested = if cfg!(target_os = "linux") {
+                "outside"
+            } else {
+                "outside/result"
+            };
             let arguments = serde_json::json!({"command":"printf approved > ../outside/result",
-                "sandboxRequest":{"writePaths":["../outside/result"]}, "justification":"Write the requested output."}).to_string();
+                "sandboxRequest":{"writePaths":[format!("../{requested}")]}, "justification":"Write the requested output."}).to_string();
             let model = ScriptModel::new(vec![
                 vec![
                     call("requested", "shell", &arguments),
@@ -719,7 +720,7 @@ async fn sandbox_session_uses_one_explicit_approval_and_preserves_decline_feedba
             );
             assert_eq!(
                 approval.arguments["sandboxRequest"]["writePaths"],
-                serde_json::json!([temp.path().canonicalize().unwrap().join("outside/result")])
+                serde_json::json!([temp.path().canonicalize().unwrap().join(requested)])
             );
             assert!(!temp.path().join("outside/result").exists());
             let answer = |decision, feedback| RequestResolveParams {
@@ -767,11 +768,16 @@ async fn sandbox_session_uses_one_explicit_approval_and_preserves_decline_feedba
     }
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp() {
     for enabled in [true, false] {
-        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let base = if cfg!(target_os = "linux") {
+            env!("CARGO_TARGET_TMPDIR")
+        } else {
+            "/tmp"
+        };
+        std::fs::create_dir_all(base).unwrap();
+        let temp = tempfile::tempdir_in(base).unwrap();
         for name in ["home", "project", "extra", "state"] {
             std::fs::create_dir(temp.path().join(name)).unwrap();
         }
@@ -861,11 +867,12 @@ async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp()
         );
         let temporary = std::fs::read_to_string(temp.path().join("project/temp-path")).unwrap();
         assert!(std::path::Path::new(&temporary).is_dir());
-        // Commands see the /tmp spelling, which follows the system link like a user's shell.
+        // macOS /tmp is a symlink; Linux keeps the same canonical spelling.
         assert!(temporary.starts_with("/tmp/canter-shell-"), "{temporary}");
-        assert_ne!(
-            std::path::Path::new(&temporary).canonicalize().unwrap(),
-            std::path::Path::new(&temporary),
+        assert_eq!(
+            std::path::Path::new(&temporary).canonicalize().unwrap()
+                == std::path::Path::new(&temporary),
+            cfg!(target_os = "linux"),
             "{temporary}"
         );
         let digest = temporary.rsplit('-').next().unwrap();
@@ -961,7 +968,6 @@ async fn sandbox_session_applies_configuration_add_dir_and_closes_private_temp()
     }
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn sandbox_status_follows_the_executor_directories_and_permission_mode() {
     for enabled in [true, false] {
@@ -1012,21 +1018,30 @@ async fn sandbox_status_follows_the_executor_directories_and_permission_mode() {
             assert_eq!(
                 &scope.writable[2..],
                 [
-                    text("home/Library/Caches/canter/cargo"),
-                    text("home/Library/Caches/canter/npm")
+                    text(if cfg!(target_os = "linux") {
+                        "home/.cache/canter/cargo"
+                    } else {
+                        "home/Library/Caches/canter/cargo"
+                    }),
+                    text(if cfg!(target_os = "linux") {
+                        "home/.cache/canter/npm"
+                    } else {
+                        "home/Library/Caches/canter/npm"
+                    })
                 ]
             );
             assert_eq!(scope.read_only, [text("home/.cargo"), text("home/.npm")]);
-            assert_eq!(
-                scope.no_access,
-                [
-                    text("home/.ssh"),
-                    text("home/.aws"),
-                    text("home/.gnupg"),
-                    text("home/.canter"),
-                    text("state"),
-                ]
-            );
+            let mut no_access = vec![
+                text("home/.ssh"),
+                text("home/.aws"),
+                text("home/.gnupg"),
+                text("home/.canter"),
+                text("state"),
+            ];
+            if cfg!(target_os = "linux") {
+                no_access.extend(["/run".into(), "/tmp".into()]);
+            }
+            assert_eq!(scope.no_access, no_access);
         }
         session
             .update(SessionUpdateParams {

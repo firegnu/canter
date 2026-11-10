@@ -1,4 +1,4 @@
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", target_os = "linux"))]
 
 mod common;
 use canter_protocol::Item;
@@ -15,7 +15,15 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = tempfile::tempdir_in("/tmp").unwrap();
+        // Linux intentionally hides host /tmp; keep ordinary read-only fixtures
+        // in Cargo's isolated test directory instead.
+        let base = if cfg!(target_os = "linux") {
+            env!("CARGO_TARGET_TMPDIR")
+        } else {
+            "/tmp"
+        };
+        std::fs::create_dir_all(base).unwrap();
+        let root = tempfile::tempdir_in(base).unwrap();
         let cwd = root.path().join("project");
         let home = root.path().join("home");
         let state = root.path().join("state");
@@ -73,6 +81,9 @@ impl Fixture {
     }
 
     fn git_command(&self) -> String {
+        if cfg!(target_os = "linux") {
+            return "/usr/bin/git".into();
+        }
         // Resolve outside Seatbelt: /usr/bin/git may refresh xcrun's system cache.
         let result = std::process::Command::new("/usr/bin/xcrun")
             .args(["--find", "git"])
@@ -207,6 +218,11 @@ async fn sandbox_write_request_opens_only_that_call_and_allow_all_refuses_it() {
     let outside = fixture.root.path().join("outside");
     std::fs::create_dir(&outside).unwrap();
     let target = outside.join("new");
+    let requested = if cfg!(target_os = "linux") {
+        "../outside"
+    } else {
+        "../outside/new"
+    };
     let command = format!(
         "mkdir -p {} && printf approved > {}/result",
         shell_quote(target.to_str().unwrap()),
@@ -218,7 +234,7 @@ async fn sandbox_write_request_opens_only_that_call_and_allow_all_refuses_it() {
             Tool::Shell,
             "write-request",
             &serde_json::json!({
-                "command": command, "sandboxRequest": {"writePaths": ["../outside/new"]},
+                "command": command, "sandboxRequest": {"writePaths": [requested]},
                 "justification": "Write the requested test output."
             })
             .to_string(),
@@ -267,7 +283,7 @@ async fn sandbox_write_request_opens_only_that_call_and_allow_all_refuses_it() {
 }
 
 #[tokio::test]
-async fn sandbox_write_request_does_not_allow_connecting_to_an_outside_unix_socket() {
+async fn sandbox_write_request_socket_access_follows_the_platform_policy() {
     use canter_protocol::{ApprovalDecision, PermissionMode};
     use canter_tools::{PermissionCheck, PermissionGate};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -325,12 +341,13 @@ async fn sandbox_write_request_does_not_allow_connecting_to_an_outside_unix_sock
         std::fs::read_to_string(outside.join("result")).unwrap(),
         "approved"
     );
-    assert!(
-        served.is_err(),
-        "a write request must not allow Unix socket connections: {}",
+    assert_eq!(served.is_ok(), cfg!(target_os = "linux"), "{}", output.text);
+    assert_eq!(
+        code(&output) == Some(0),
+        cfg!(target_os = "linux"),
+        "{}",
         output.text
     );
-    assert_ne!(code(&output), Some(0), "{}", output.text);
 }
 
 #[tokio::test]
@@ -515,6 +532,10 @@ async fn sandbox_request_paths_are_canonical_and_disabled_modes_stay_unchanged()
     let fixture = Fixture::new();
     let outside = fixture.root.path().join("outside");
     std::fs::create_dir(&outside).unwrap();
+    if cfg!(target_os = "linux") {
+        std::fs::create_dir_all(outside.join("new")).unwrap();
+        std::fs::write(outside.join("new/file"), "").unwrap();
+    }
     std::os::unix::fs::symlink(&outside, fixture.cwd.join("output-link")).unwrap();
     let tools = fixture.tools(true);
     let call = tools.prepare(Tool::Shell, "normalized", r#"{"command":"printf test","sandboxRequest":{"writePaths":["output-link/sub/../new/file"]},"justification":"Write test output."}"#, &CancellationToken::new()).await.unwrap();
@@ -578,7 +599,7 @@ async fn sandbox_approved_background_and_promoted_children_keep_the_request_unti
         let cancel = CancellationToken::new();
         let call = tools.prepare(Tool::Shell, "approved-background", &serde_json::json!({
             "command":"printf ready; while [ ! -e release ]; do sleep 0.01; done; /bin/sh -c 'printf approved > ../outside/result'",
-            "background":!promote, "sandboxRequest":{"writePaths":["../outside/result"]}, "justification":"Write output when the job finishes."
+            "background":!promote, "sandboxRequest":{"writePaths":[if cfg!(target_os = "linux") { "../outside" } else { "../outside/result" }]}, "justification":"Write output when the job finishes."
         }).to_string(), &cancel).await.unwrap();
         let mut gate = PermissionGate::default();
         assert!(matches!(
@@ -683,6 +704,64 @@ async fn sandbox_git_commits_in_repositories_and_worktrees_but_locks_config_and_
 }
 
 #[tokio::test]
+async fn sandbox_keeps_git_and_sensitive_ancestors_in_place() {
+    let source = Fixture::new();
+    source.git(&["init", "-q"]);
+    std::fs::write(source.cwd.join("tracked"), "initial").unwrap();
+    source.git(&["add", "tracked"]);
+    source.git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "initial",
+    ]);
+    let fixture = Fixture::new();
+    fixture.git(&["clone", "-q", source.cwd.to_str().unwrap(), "."]);
+    fixture.git(&["worktree", "add", "-q", "-b", "linked", "../linked"]);
+    fixture.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        source.cwd.to_str().unwrap(),
+        "child",
+    ]);
+    fixture.git(&["clone", "-q", source.cwd.to_str().unwrap(), "nested/repo"]);
+    let tools = fixture.tools(true);
+    for (directory, protected) in [
+        (".git/worktrees/linked", "commondir"),
+        (".git/modules/child", "config"),
+        ("nested/repo/.git", "config"),
+        #[cfg(target_os = "linux")]
+        ("nested/repo", ".git/config"),
+        #[cfg(target_os = "linux")]
+        ("nested", "repo/.git/config"),
+    ] {
+        let protected = fixture.cwd.join(directory).join(protected);
+        let original = std::fs::read(&protected).unwrap();
+        let output = run(&tools, &format!("/bin/mv {directory} {directory}-moved")).await;
+        assert_ne!(code(&output), Some(0), "{directory}: {}", output.text);
+        assert!(fixture.cwd.join(directory).is_dir());
+        assert!(!fixture.cwd.join(format!("{directory}-moved")).exists());
+        assert_eq!(std::fs::read(protected).unwrap(), original);
+    }
+    std::fs::create_dir(fixture.home.join(".ssh")).unwrap();
+    let credential = fixture.home.join(".ssh/fixture");
+    std::fs::write(&credential, "synthetic credential fixture").unwrap();
+    let tools = fixture.tools_at(fixture.root.path(), true);
+    let output = run(&tools, "/bin/mv home home-moved").await;
+    assert_ne!(code(&output), Some(0), "{}", output.text);
+    assert_eq!(
+        std::fs::read_to_string(credential).unwrap(),
+        "synthetic credential fixture"
+    );
+}
+
+#[tokio::test]
 async fn sandbox_network_allows_allow_all_and_blocks_both_asking_modes() {
     use canter_protocol::PermissionMode;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -750,6 +829,7 @@ fn code(output: &ToolOutput) -> Option<i32> {
 }
 
 // Invoked by the socket regression inside Seatbelt; never sends a DNS query.
+#[cfg(target_os = "macos")]
 #[test]
 #[ignore = "connector invoked inside Seatbelt by sandbox_mdns_socket_follows_network_permission"]
 fn mdns_connect_only() -> std::io::Result<()> {
@@ -759,6 +839,7 @@ fn mdns_connect_only() -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn sandbox_mdns_socket_follows_network_permission() {
     use canter_protocol::PermissionMode;
@@ -890,7 +971,11 @@ async fn check_local_cargo_git_dependency(home_is_cwd: bool) {
     assert!(
         fixture
             .home
-            .join("Library/Caches/canter/cargo/git/checkouts")
+            .join(if cfg!(target_os = "linux") {
+                ".cache/canter/cargo/git/checkouts"
+            } else {
+                "Library/Caches/canter/cargo/git/checkouts"
+            })
             .is_dir()
     );
 }
@@ -1002,7 +1087,7 @@ async fn sandbox_allows_project_writes_but_rejects_outside_writes() {
     assert!(outside.text.contains("sandbox"), "{}", outside.text);
     assert!(outside.text.contains("!"));
     assert!(
-        matches!(&outside.item, Item::CommandExecution { aggregated_output, .. } if aggregated_output.contains("Operation not permitted") && !aggregated_output.contains("sandbox"))
+        matches!(&outside.item, Item::CommandExecution { aggregated_output, .. } if aggregated_output.contains(if cfg!(target_os = "linux") { "Read-only file system" } else { "Operation not permitted" }) && !aggregated_output.contains("sandbox"))
     );
     let continued = run(&tools, "printf outside > ../outside; printf continued").await;
     assert_eq!(code(&continued), Some(0), "{}", continued.text);
@@ -1050,7 +1135,12 @@ async fn sandbox_user_commands_and_disabled_sandbox_keep_original_execution() {
 async fn sandbox_setup_and_policy_failures_never_run_the_command() {
     let fixture = Fixture::new();
     // A plain file prevents creation of the sandbox cache, without using real HOME.
-    std::fs::write(fixture.home.join("Library"), "not a directory").unwrap();
+    let cache_parent = if cfg!(target_os = "linux") {
+        ".cache"
+    } else {
+        "Library"
+    };
+    std::fs::write(fixture.home.join(cache_parent), "not a directory").unwrap();
     let tools = fixture.tools(true);
     let output = run(&tools, "printf ran > marker").await;
     assert_eq!(code(&output), None);
@@ -1060,7 +1150,7 @@ async fn sandbox_setup_and_policy_failures_never_run_the_command() {
         output.text
     );
     assert!(!fixture.cwd.join("marker").exists());
-    std::fs::remove_file(fixture.home.join("Library")).unwrap();
+    std::fs::remove_file(fixture.home.join(cache_parent)).unwrap();
     let tools = fixture.tools(true);
     tools.configure_shell(
         canter_protocol::PermissionMode::AllowAll,
@@ -1110,7 +1200,11 @@ async fn sandbox_paths_include_add_dir_private_temp_and_persistent_shared_caches
     assert!(!paths[0].starts_with(fixture.state.canonicalize().unwrap()));
     let cache = fixture
         .home
-        .join("Library/Caches/canter")
+        .join(if cfg!(target_os = "linux") {
+            ".cache/canter"
+        } else {
+            "Library/Caches/canter"
+        })
         .canonicalize()
         .unwrap();
     assert!(paths[1].starts_with(&cache));
@@ -1142,7 +1236,11 @@ async fn sandbox_temp_supports_zsh_heredocs_and_cargo_cache_lock_reads() {
     assert!(output.text.contains("heredoc\nlock"), "{}", output.text);
     let output = run(&tools, "printf '%s' \"$TMPPREFIX\"").await;
     assert!(
-        output.text.starts_with("/private/tmp/canter-shell-"),
+        output.text.starts_with(if cfg!(target_os = "linux") {
+            "/tmp/canter-shell-"
+        } else {
+            "/private/tmp/canter-shell-"
+        }),
         "{}",
         output.text
     );
@@ -1196,8 +1294,16 @@ async fn sandbox_background_and_promoted_children_keep_their_starting_scope() {
         .await
         .unwrap();
         let output = tools.background().output(1, false).unwrap();
-        assert_eq!(output.command.exit_code, Some(1), "{output:?}");
-        assert!(output.output.contains("Operation not permitted"));
+        assert_eq!(
+            output.command.exit_code,
+            Some(if cfg!(target_os = "linux") { 2 } else { 1 }),
+            "{output:?}"
+        );
+        assert!(output.output.contains(if cfg!(target_os = "linux") {
+            "Read-only file system"
+        } else {
+            "Operation not permitted"
+        }));
         assert!(output.output.contains("sandbox"));
         assert!(!extra.join("result").exists());
         let next = run(&tools, "printf next > ../later/result").await;
@@ -1317,4 +1423,300 @@ async fn long_output_is_saved_whether_or_not_the_shell_is_sandboxed() {
         );
         assert_eq!(std::fs::read_to_string(&saved).unwrap().len(), 100_000);
     }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn linux_missing_write_requests_are_rejected_without_creation_or_scope_expansion() {
+    use canter_protocol::{ApprovalDecision, PermissionMode};
+    use canter_tools::{PermissionCheck, PermissionGate};
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    let target = fixture.root.path().join("missing");
+    let cancel = CancellationToken::new();
+    let call = tools
+        .prepare(
+            Tool::Shell,
+            "missing",
+            &serde_json::json!({
+                "command":"printf should-not-run", "sandboxRequest":{"writePaths":[target]},
+                "justification":"Create the output directory."
+            })
+            .to_string(),
+            &cancel,
+        )
+        .await
+        .unwrap();
+    let mut gate = PermissionGate::default();
+    for mode in [
+        PermissionMode::AlwaysAsk,
+        PermissionMode::AskForExecution,
+        PermissionMode::AllowAll,
+    ] {
+        let PermissionCheck::Forbidden { reason } = gate.evaluate(&call, mode) else {
+            panic!("missing path must be refused")
+        };
+        assert_eq!(
+            reason,
+            "Linux sandbox write requests only support existing paths. Request an existing parent directory instead."
+        );
+    }
+    assert!(matches!(
+        gate.resolve(&call, ApprovalDecision::Accept, None).unwrap(),
+        PermissionCheck::Forbidden { .. }
+    ));
+    assert!(!target.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn linux_single_file_grant_keeps_outside_git_pointers_readonly() {
+    use canter_protocol::{ApprovalDecision, PermissionMode};
+    use canter_tools::{PermissionCheck, PermissionGate};
+    let outside = Fixture::new();
+    outside.git(&["init", "-q"]);
+    outside.git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "initial",
+    ]);
+    outside.git(&["worktree", "add", "-q", "-b", "linked", "../linked"]);
+    let linked = outside.root.path().join("linked");
+    let original = std::fs::read(linked.join(".git")).unwrap();
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    tools.configure_shell(PermissionMode::AskForExecution, &[]);
+    let cancel = CancellationToken::new();
+    for name in [".git", ".GiT"] {
+        let pointer = linked.join(name);
+        if name != ".git" {
+            std::fs::rename(linked.join(".git"), &pointer).unwrap();
+        }
+        let call = tools.prepare(Tool::Shell, "pointer-file", &serde_json::json!({
+            "command":format!("printf changed > {}", shell_quote(pointer.to_str().unwrap())),
+            "sandboxRequest":{"writePaths":[pointer]}, "justification":"Update this existing file."
+        }).to_string(), &cancel).await.unwrap();
+        let mut gate = PermissionGate::default();
+        assert!(matches!(
+            gate.evaluate(&call, PermissionMode::AskForExecution),
+            PermissionCheck::Ask(_)
+        ));
+        let PermissionCheck::Execute(permit) =
+            gate.resolve(&call, ApprovalDecision::Accept, None).unwrap()
+        else {
+            panic!("the single-file request must reach execution after approval")
+        };
+        let output = tools.execute(permit, &cancel, &mut |_| {}).await;
+        assert!(
+            code(&output).is_some_and(|status| status != 0),
+            "{}",
+            output.text
+        );
+        assert!(
+            output.text.contains("Read-only file system"),
+            "{}",
+            output.text
+        );
+        assert_eq!(std::fs::read(pointer).unwrap(), original);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn linux_git_discovery_skips_broken_pointers_and_file_grant_siblings() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    let nested = fixture.cwd.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    for root in [&fixture.cwd, &nested] {
+        for pointer in [
+            "not a Git pointer",
+            "gitdir: missing-target",
+            "gitdir: plain-file",
+        ] {
+            std::fs::write(root.join("plain-file"), "ordinary file").unwrap();
+            std::fs::write(root.join(".git"), pointer).unwrap();
+            let output = run(&tools, "printf ran").await;
+            assert_eq!(code(&output), Some(0), "{pointer}: {}", output.text);
+            assert!(output.text.contains("ran"));
+            std::fs::remove_file(root.join(".git")).unwrap();
+        }
+        std::os::unix::fs::symlink("missing-target", root.join(".git")).unwrap();
+        let output = run(&tools, "printf ran").await;
+        assert_eq!(code(&output), Some(0), "{}", output.text);
+        std::fs::remove_file(root.join(".git")).unwrap();
+    }
+
+    use canter_protocol::{ApprovalDecision, PermissionMode};
+    use canter_tools::{PermissionCheck, PermissionGate};
+    use std::os::unix::fs::PermissionsExt;
+    let outside = fixture.root.path().join("outside");
+    let blocked = outside.join("unreadable");
+    std::fs::create_dir_all(&blocked).unwrap();
+    let target = outside.join("output");
+    std::fs::write(&target, "before").unwrap();
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    tools.configure_shell(PermissionMode::AskForExecution, &[]);
+    let cancel = CancellationToken::new();
+    let call = tools
+        .prepare(
+            Tool::Shell,
+            "file-only",
+            &serde_json::json!({
+                "command":"printf after > ../outside/output",
+                "sandboxRequest":{"writePaths":[target]}, "justification":"Update this file."
+            })
+            .to_string(),
+            &cancel,
+        )
+        .await
+        .unwrap();
+    let PermissionCheck::Execute(permit) = PermissionGate::default()
+        .resolve(&call, ApprovalDecision::Accept, None)
+        .unwrap()
+    else {
+        panic!("existing file grant must be approved")
+    };
+    let output = tools.execute(permit, &cancel, &mut |_| {}).await;
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(code(&output), Some(0), "{}", output.text);
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "after");
+
+    let blocked = fixture.cwd.join("own-unreadable");
+    std::fs::create_dir(&blocked).unwrap();
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let output = run(&tools, "printf must-not-run").await;
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(code(&output), None, "{}", output.text);
+    assert!(
+        output.text.contains(blocked.to_str().unwrap()),
+        "{}",
+        output.text
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn linux_new_repository_is_locked_on_the_next_command() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(true);
+    let first = run(
+        &tools,
+        "git init -q nested && git -C nested config user.name Initial",
+    )
+    .await;
+    assert_eq!(code(&first), Some(0), "{}", first.text);
+    let config = fixture.cwd.join("nested/.git/config");
+    let original = std::fs::read(&config).unwrap();
+    let next = run(&tools, "git -C nested config user.name Changed").await;
+    assert_ne!(code(&next), Some(0), "{}", next.text);
+    assert!(next.text.contains("sandbox"), "{}", next.text);
+    assert_eq!(std::fs::read(config).unwrap(), original);
+    // Mountpoint placeholders must not become permanent repository files.
+    for name in ["commondir", "gitdir", "config.worktree"] {
+        assert!(!fixture.cwd.join("nested/.git").join(name).exists());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "socket client invoked by the Linux sandbox regression"]
+fn linux_socket_client() -> std::io::Result<()> {
+    use std::os::linux::net::SocketAddrExt;
+    let name = std::env::var("CANTER_TEST_SOCKET").unwrap();
+    let address = std::os::unix::net::SocketAddr::from_abstract_name(name)?;
+    drop(std::os::unix::net::UnixStream::connect_addr(&address)?);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn linux_abstract_sockets_are_isolated_with_network_namespaces_or_landlock() {
+    use canter_protocol::PermissionMode;
+    use std::os::linux::net::SocketAddrExt;
+    let fixture = Fixture::new();
+    let name = format!(
+        "canter-{}-{}",
+        std::process::id(),
+        fixture.root.path().file_name().unwrap().to_string_lossy()
+    );
+    let address = std::os::unix::net::SocketAddr::from_abstract_name(&name).unwrap();
+    let _listener = std::os::unix::net::UnixListener::bind_addr(&address).unwrap();
+    let scoped = canter_tools::probe_linux_sandbox().await.unwrap();
+    let tools = fixture.tools(true);
+    let command = format!(
+        "CANTER_TEST_SOCKET={} {} --ignored --exact linux_socket_client --nocapture",
+        shell_quote(&name),
+        shell_quote(std::env::current_exe().unwrap().to_str().unwrap())
+    );
+    for mode in [
+        PermissionMode::AlwaysAsk,
+        PermissionMode::AskForExecution,
+        PermissionMode::AllowAll,
+    ] {
+        tools.configure_shell(mode, &[]);
+        let output = run(&tools, &command).await;
+        assert_eq!(
+            code(&output) == Some(0),
+            mode == PermissionMode::AllowAll && !scoped,
+            "{}",
+            output.text
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn linux_masks_runtime_and_host_tmp_but_keeps_dns_and_session_tmp() {
+    use canter_protocol::PermissionMode;
+    let fixture = Fixture::new();
+    let runtime = fixture.root.path().join("runtime");
+    std::fs::create_dir(&runtime).unwrap();
+    std::fs::write(runtime.join("marker"), "host runtime fixture").unwrap();
+    let host_tmp = tempfile::tempdir_in("/tmp").unwrap();
+    std::fs::write(host_tmp.path().join("marker"), "host tmp fixture").unwrap();
+    let tools = Tools::new(Arc::new(
+        LocalExecutor::new(
+            fixture.cwd.clone(),
+            BTreeMap::from([
+                ("HOME".into(), fixture.home.display().to_string()),
+                ("PATH".into(), "/usr/bin:/bin".into()),
+                ("XDG_RUNTIME_DIR".into(), runtime.display().to_string()),
+            ]),
+            vec![fixture.state.clone()],
+        )
+        .unwrap()
+        .with_sandbox(true),
+    ));
+    for mode in [PermissionMode::AskForExecution, PermissionMode::AllowAll] {
+        tools.configure_shell(mode, &[]);
+        let output = run(&tools, &format!("test ! -e \"$XDG_RUNTIME_DIR/marker\" && test ! -e {}/marker && printf scratch > \"$TMPDIR/result\" && cat \"$TMPDIR/result\"", shell_quote(host_tmp.path().to_str().unwrap()))).await;
+        assert_eq!(code(&output), Some(0), "{}", output.text);
+        assert!(output.text.contains("scratch"));
+        if mode == PermissionMode::AllowAll {
+            let resolver = run(&tools, "cat /etc/resolv.conf").await;
+            assert_eq!(code(&resolver), Some(0), "{}", resolver.text);
+            assert!(
+                resolver
+                    .text
+                    .starts_with(&std::fs::read_to_string("/etc/resolv.conf").unwrap())
+            );
+        } else {
+            let empty = run(
+                &tools,
+                "test -z \"$(ls -A /run)\" && test -z \"$(ls -A /var/run)\"",
+            )
+            .await;
+            assert_eq!(code(&empty), Some(0), "{}", empty.text);
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(runtime.join("marker")).unwrap(),
+        "host runtime fixture"
+    );
 }

@@ -279,6 +279,7 @@ async fn capture(
     let mut stderr_decoder = Decoder::default();
     let mut denial_tails = [String::new(), String::new()];
     let mut reported_denial = false;
+    let mut setup_failed = false;
     let mut status = None;
     let mut interruption = None;
     let mut cancellation_seen = false;
@@ -352,14 +353,14 @@ async fn capture(
                 let count = result?;
                 stdout_done = count == 0;
                 let chunk = stdout_decoder.push(&stdout[..count], stdout_done);
-                if handle.sandboxed && !reported_denial { reported_denial = mentions_denial(&mut denial_tails[0], &chunk); }
+                if handle.sandboxed && !reported_denial { reported_denial = mentions_denial(&mut denial_tails[0], &chunk, &mut setup_failed); }
                 if control.background_id.is_some() { control.push(&chunk); } else { output.push(&chunk, on_output); }
             }
             result = handle.stderr.read(&mut stderr), if !stderr_done => {
                 let count = result?;
                 stderr_done = count == 0;
                 let chunk = stderr_decoder.push(&stderr[..count], stderr_done);
-                if handle.sandboxed && !reported_denial { reported_denial = mentions_denial(&mut denial_tails[1], &chunk); }
+                if handle.sandboxed && !reported_denial { reported_denial = mentions_denial(&mut denial_tails[1], &chunk, &mut setup_failed); }
                 if control.background_id.is_some() { control.push(&chunk); } else { output.push(&chunk, on_output); }
             }
         }
@@ -379,6 +380,10 @@ async fn capture(
         } else {
             "\nThe sandbox blocks access outside the permitted paths and network scope. If the user needs that access, they can run it themselves with !.\n"
         };
+        #[cfg(target_os = "linux")]
+        let setup_notice = format!("\n{}\n", crate::LINUX_SANDBOX_HELP);
+        #[cfg(target_os = "linux")]
+        let notice = if setup_failed { &setup_notice } else { notice };
         if control.background_id.is_some() {
             control.push(notice);
         } else {
@@ -390,16 +395,27 @@ async fn capture(
         .ok_or_else(|| io::Error::other("command has no exit status"))
 }
 
-fn mentions_denial(tail: &mut String, chunk: &str) -> bool {
+fn mentions_denial(tail: &mut String, chunk: &str, setup_failed: &mut bool) -> bool {
     tail.push_str(chunk);
     tail.make_ascii_lowercase();
-    let found = [
-        "operation not permitted",
-        "permission denied",
-        "sandbox-exec:",
-    ]
-    .iter()
-    .any(|message| tail.contains(message));
+    *setup_failed |= cfg!(target_os = "linux") && tail.contains("bwrap:");
+    let found = *setup_failed
+        || [
+            "operation not permitted",
+            "permission denied",
+            "sandbox-exec:",
+        ]
+        .iter()
+        .any(|message| tail.contains(message))
+        || (cfg!(target_os = "linux")
+            && [
+                "read-only file system",
+                "device or resource busy",
+                "network is unreachable",
+                "address family not supported",
+            ]
+            .iter()
+            .any(|message| tail.contains(message)));
     // Retain enough to recognize an error split across pipe reads, before the
     // ordinary output limits discard it. stdout and stderr stay separate.
     let mut start = tail.len().saturating_sub(64);

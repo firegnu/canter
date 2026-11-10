@@ -9,6 +9,7 @@ async fn yolo_reconnect_restores_the_terminals_sandbox_choice() {
         text_reply("After restart."),
     ])
     .await;
+    world.set_sandbox(true);
     world.start_server().await;
     let terminal = world
         .open(&["--yolo", "Write before restart"], "reconnect-yolo")

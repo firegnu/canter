@@ -1439,7 +1439,6 @@ async fn lsp_routes_are_advertised_and_disabled_sessions_remain_empty() {
     test.finish().await;
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn sandbox_route_reports_the_session_switch_and_current_scope() {
     for enabled in [true, false] {

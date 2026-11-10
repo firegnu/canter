@@ -412,7 +412,7 @@ async fn fork_preserves_request_bytes_after_compaction_rewind_and_plan() {
         let test = Harness::with_options(
             model.clone(),
             CoreOptions {
-                sandbox: cfg!(target_os = "macos"),
+                sandbox: true,
                 ..Default::default()
             },
         )
@@ -463,6 +463,8 @@ async fn fork_preserves_request_bytes_after_compaction_rewind_and_plan() {
             .await
             .unwrap();
         let original_scratch = scratch_path(&test, &source);
+        assert!(sandbox.writable.contains(&scratch));
+        assert!(original_sandbox.writable.contains(&original_scratch));
         assert_ne!(scratch, original_scratch);
         assert!(!sandbox.writable.contains(&original_scratch));
         assert!(!original_sandbox.writable.contains(&scratch));
@@ -651,7 +653,7 @@ async fn fork_copies_image_bytes_but_not_backups_telemetry_or_scratch() {
     let test = Harness::with_options(
         model.clone(),
         CoreOptions {
-            sandbox: cfg!(target_os = "macos"),
+            sandbox: true,
             image_models: vec!["fake-model".into()],
             ..Default::default()
         },
@@ -697,6 +699,20 @@ async fn fork_copies_image_bytes_but_not_backups_telemetry_or_scratch() {
     );
     let url = format!("http://localhost/v1/sessions/{}", fork.session.id);
     let scratch = std::path::PathBuf::from(scratch_path(&test, &url));
+    let sandbox: SessionSandboxResponse = test
+        .client
+        .get(format!("{url}/sandbox"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        sandbox
+            .writable
+            .contains(&scratch.to_string_lossy().into_owned())
+    );
     assert!(!scratch.join("original-only").exists());
     let image = std::fs::read_dir(&target)
         .unwrap()

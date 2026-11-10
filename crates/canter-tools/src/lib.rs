@@ -17,6 +17,8 @@ mod permission;
 mod readonly;
 pub mod rules;
 mod sandbox;
+#[cfg(target_os = "linux")]
+pub use sandbox::linux::{HELP as LINUX_SANDBOX_HELP, probe as probe_linux_sandbox};
 mod scratch;
 pub use scratch::ScratchDirectory;
 mod shell;

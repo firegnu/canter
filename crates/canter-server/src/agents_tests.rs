@@ -80,7 +80,6 @@ pub(super) async fn spawn(test: &Harness, parent: &str, task: &str) -> String {
 }
 
 #[tokio::test]
-#[cfg(target_os = "macos")]
 async fn parent_send_input_reopens_child_with_current_sandbox() {
     use canter_core::{AgentCommand, AgentHost};
 
