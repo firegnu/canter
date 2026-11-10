@@ -175,3 +175,15 @@
 - 合并前 Mac 全套 `cargo nextest run --all-targets` 2100 过、50 跳过，`cargo test --doc --workspace` 无失败。验收第 2 条（5090 上用 DeepSeek flash 真跑）合并后主控做，要用户同意把 key 放到 5090。
 
 结果：返工 2 次
+
+## 验收第 2 条（11-10 主控在 5090 上真跑）
+
+用户 11-10 同意把 DeepSeek key 放到 5090，并同意用单独的测试 HOME（`~/canter-linux/accept-home`，里面放假的 `.ssh/id_canary`），不碰真实的 `~/.canter` 和 `~/.ssh`。配置只带 deepseek 一家，模型 `deepseek/deepseek-flash`。程序是 main `fbdbd1e` 在 5090 上编的普通版，没装进 PATH。终端界面在 tmux 里由主控按键，权限模式 Always ask，沙箱开着。
+
+- `/doctor`：10 项 0 问题，Sandbox ok，Provider deepseek ok。
+- 读 `~/.ssh/id_canary`：read 工具失败；`cat` 报权限不够。标记内容没出现。
+- 写 cwd 外 `../outside/keep.txt`：批准了命令也被墙挡（Read-only file system）；模型用 `sandboxRequest` 申请写 `../outside`，批准框列出规范化路径和理由，批准后写入一次。
+- 联网 `curl https://example.com`：不申请时 DNS 解析失败；申请联网后批准框写「any host, including local network」，批准后 200（`/run` 盖住后 DNS 照常）。
+- 正常干活：`node --test` 失败 → 改 `math.mjs` → 再跑通过 → `git commit`（测试 HOME 没有 git 身份，模型停下来问，答一次性 `-c user.name`）。命令结束后 `.git` 里没有留下占位。墙里写 `.git/config` 被挡。
+- `canter exec`：读 `~/.ssh`、写外面、联网都被挡，重试申请被自动拒绝并说明「No one is available to approve this action」，退出时提示有动作被自动拒绝；`node --test` 通过。
+- 真实调用约 10 轮对话请求加 doctor 一次模型列表，花费状态栏显示不到 $0.01。跑完按 PID 停了服务端、关了 tmux，没有残留进程。
