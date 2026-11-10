@@ -797,9 +797,9 @@ mod tests {
         }).to_string()).unwrap();
         let config = Config::load(root.path()).unwrap();
         let client = config
-            .model_client(Some(crate::model_auth::ModelAuth::new(
-                root.path().join("state"),
-            )))
+            .model_client(Some(
+                crate::model_auth::ModelAuth::new(root.path().join("state")).unwrap(),
+            ))
             .unwrap();
         let events: Vec<_> = client
             .stream(

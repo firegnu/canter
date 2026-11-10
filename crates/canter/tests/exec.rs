@@ -503,7 +503,7 @@ async fn exec_runs_one_turn_prints_final_answer_and_keeps_the_session() {
             ),
             reply("Finished the task."),
         ],
-        true,
+        cfg!(target_os = "macos"),
     )
     .await;
     // No server now: exec must use the normal automatic startup path.
@@ -591,6 +591,7 @@ async fn exec_declines_approval_on_the_server_without_writing_outside_workspace(
             "write",
             json!({"path":"../outside.txt","content":"must not be written"}),
         ),
+        #[cfg(target_os = "macos")]
         call(
             "shell",
             json!({"command":"printf must-not-run > sandbox-request.txt","sandboxRequest":{"network":true},"justification":"Test the ordinary network approval path"}),
@@ -601,7 +602,11 @@ async fn exec_declines_approval_on_the_server_without_writing_outside_workspace(
             json!({"url":"http://127.0.0.1:9/ordinary-page"}),
         ),
     ] {
-        let world = World::new(vec![tool, reply("Could not perform the action.")], true).await;
+        let world = World::new(
+            vec![tool, reply("Could not perform the action.")],
+            cfg!(target_os = "macos"),
+        )
+        .await;
         fs::write(
             world.root.path().join("project/prompt.txt"),
             "synthetic protected content",
@@ -991,14 +996,19 @@ async fn exec_reports_goal_budget_limit_after_the_same_turn_summary() {
             reply("Reached limit."),
             reply("Budget summary."),
         ],
-        true,
+        cfg!(target_os = "macos"),
         json!({"prices":{"fake":{"peak":{"cache_hit":0,"cache_miss":0,"output":1000000}}}}),
     )
     .await;
     let client = world.client().await;
     let params = serde_json::from_value(json!({"cwd":world.root.path().join("project"),"env":{"HOME":world.root.path().join("home"),"PATH":"/usr/bin:/bin"},"model":"fake","approvalPolicy":"alwaysAsk","clientName":"test"})).unwrap();
     let id = client.create_session(&params).await.unwrap().session.id;
-    client.send_input(&id, &serde_json::from_value(json!({"nonInteractive":true,"approvalPolicy":"askForExecution","input":[{"type":"text","text":"Initial step"}],"clientName":"test"})).unwrap()).await.unwrap();
+    let policy = if cfg!(target_os = "macos") {
+        "askForExecution"
+    } else {
+        "allowAll"
+    };
+    client.send_input(&id, &serde_json::from_value(json!({"nonInteractive":true,"approvalPolicy":policy,"input":[{"type":"text","text":"Initial step"}],"clientName":"test"})).unwrap()).await.unwrap();
     tokio::time::timeout(WAIT, async {
         while !world.root.path().join("project/ready").exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1073,11 +1083,12 @@ async fn assert_signal_stops_turn(signal: nix::sys::signal::Signal) {
             "shell",
             json!({"command":"echo $$ > command.pid; exec sleep 30"}),
         )],
-        true,
+        cfg!(target_os = "macos"),
     )
     .await;
     let child = World::command(world.root.path())
         .args(["exec", "--json", "Run a long command"])
+        .args((!cfg!(target_os = "macos")).then_some("--yolo"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

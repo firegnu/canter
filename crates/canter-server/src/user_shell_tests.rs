@@ -44,7 +44,7 @@ impl Fixture {
             json!({
                 "base_url":"http://127.0.0.1:1/v1", "model":"fake", "api_key":"test-key",
                 "context_window":1048576, "auto_wake_limit":limit.unwrap_or(10),
-                "prompt_suggestions":false
+                "prompt_suggestions":false, "sandbox":cfg!(target_os = "macos")
             })
             .to_string(),
         )

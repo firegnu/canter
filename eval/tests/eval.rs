@@ -115,7 +115,7 @@ fn lifecycle_repo(dir: &Path, options: &FixtureOptions) -> String {
             "version": "0.1.0",
             "private": true,
             "type": "commonjs",
-            "scripts": {"test": "node --test tests/*.test.js"},
+            "scripts": {"test": "node --test --test-reporter=spec tests/*.test.js"},
             "devDependencies": {"typescript": "^7.0.2"}
         }))
         .unwrap(),

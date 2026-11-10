@@ -519,6 +519,35 @@ P2-161 内置关键路径删除判断，只管模型 shell（前台、后台）�
 
 不做的：`read`（本来就能接着读）、`web_fetch`、`web_search`、MCP、`ast_grep`、子 agent 结果仍只用 32 KiB 头尾截断；后台命令自己的 1 MiB 缓冲不变；不改 32 KiB 这条线、头尾各留多少、客户端 1 MiB 和临时目录的位置权限；不把文件放进项目目录或 `~/.canter`。
 
+## Linux 支持（P2-160，2026-11-10 用户定）
+
+提前支持 x86_64 Linux：服务端、终端和 `canter exec` 在 Ubuntu 24.04 上运行。Linux 沙箱单独由 P2-272 实现；本件保留默认开启、无法启动就拒绝执行的行为，提示 Linux 暂不支持沙箱，需在配置中设 `"sandbox": false` 或使用 `--yolo`。不自动关闭沙箱，不改变 macOS 的 Seatbelt。
+
+Linux 不提供 `canter service install` / `uninstall`，不写 launchd 配置，也不实现 systemd；提示终端打开时会自动启动服务端。网址用 `xdg-open`，登录无法打开浏览器时打印网址，用户手动打开后仍能完成登录；macOS 继续用 `open`。终端链接遵循第 19 条：SSH 下复制全部链接，Linux 本地路径复制，网址打开失败时显示带网址的错误。
+
+为 P2-260 准备 `x86_64-unknown-linux-musl` 静态可执行文件，在 Docker 编译环境中构建，验证 Debian 11、Ubuntu 20.04、Alpine 中的版本命令和服务端启动。不安装宿主机编译工具，不实现发布或升级安装流程，不在容器内调用真实模型。
+
+在 x86_64 Linux 的仓库根目录构建（Rust 官方 Alpine 镜像固定 digest；依赖用仓库的 `Cargo.lock`，C 编译器等只装进新建的编译镜像）：
+
+```sh
+docker build -t canter-p2-160-musl - <<'DOCKERFILE'
+FROM rust:1.97-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088a8c3324d40900
+RUN apk add --no-cache build-base cmake perl linux-headers git
+DOCKERFILE
+mkdir -p "$HOME/canter-linux/musl/cargo" "$HOME/canter-linux/musl/home" \
+  "$HOME/canter-linux/.target/p2-160-linux/musl"
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD:/src:ro" -v "$HOME/canter-linux/musl:/build" \
+  -v "$HOME/canter-linux/.target/p2-160-linux/musl:/target" \
+  -w /src -e HOME=/build/home -e CARGO_HOME=/build/cargo -e CARGO_TARGET_DIR=/target \
+  canter-p2-160-musl cargo build --locked --release -p canter \
+  --target x86_64-unknown-linux-musl
+```
+
+产物为 `~/canter-linux/.target/p2-160-linux/musl/x86_64-unknown-linux-musl/release/canter`。不依赖容器中的 glibc；运行命令仍需要容器提供 `/bin/sh`，浏览器和 PDF 转换等外部程序仍按原功能按需使用。主控决定沿用系统信任源，不随静态版携带 CA：运行镜像先安装 `ca-certificates`（Debian/Ubuntu 用 `apt-get`，Alpine 用 `apk`），P2-260 适配器安装 canter 时同样准备该依赖。缺少系统 CA 时，服务端输出英文错误 `No system CA certificates were found. Install ca-certificates and try again.`，以失败状态正常退出，不 panic；只处理这处 HTTP 客户端初始化失败，不改变其他 TLS 行为。验收覆盖安装 CA 的三个容器，以及未安装 CA 的基础容器错误。
+
+会话写锁、服务端锁和发现探测锁由拥有者显式解锁后释放：Linux 的文件锁会随 fork 继承，不能只靠关闭父进程的文件描述符，否则并发启动命令时会短暂阻止会话重开或误报服务端仍在运行。看护进程继续用系统 `/bin/sh`，杀进程组使用 macOS sh 和 Linux dash 都接受的 `kill -KILL -<pgid>` 写法（dash 不接受原来的 `--`）。
+
 ## 沙箱（P2-123，2026-10-30 用户定）
 
 依据 `docs/调研/P2-104-沙箱调研.md` §7.3，用户：「权限的问题我觉得接受你的建议」「选 A，其余都按推荐」。细节和每题原文记在 `docs/任务/P2-123-沙箱.md`。

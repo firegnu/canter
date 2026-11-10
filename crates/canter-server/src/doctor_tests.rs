@@ -464,7 +464,14 @@ async fn doctor_checks_enabled_and_disabled_sandbox() {
     enabled["sandbox"] = json!(true);
     let test = Harness::new(enabled).await;
     let report = test.get(crate::VERSION, PROTOCOL_VERSION).await;
-    assert_eq!(check(&report, "sandbox").status, DoctorStatus::Ok);
+    if cfg!(target_os = "macos") {
+        assert_eq!(check(&report, "sandbox").status, DoctorStatus::Ok);
+    } else {
+        let sandbox = check(&report, "sandbox");
+        assert_eq!(sandbox.status, DoctorStatus::Fail);
+        assert!(sandbox.reason.as_ref().unwrap().contains("unavailable"));
+        assert!(sandbox.fix.as_ref().unwrap().contains("config.json"));
+    }
 
     let test = Harness::new(valid_config()).await;
     let report = test.get(crate::VERSION, PROTOCOL_VERSION).await;
@@ -606,6 +613,7 @@ async fn doctor_reports_chatgpt_unauthorized_and_needs_login() {
     fake.stop().await;
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn doctor_reports_a_failed_sandbox_probe() {
     let mut config = valid_config();

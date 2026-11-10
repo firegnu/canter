@@ -35,6 +35,11 @@ impl Sandbox {
         scratch: std::sync::Arc<crate::ScratchDirectory>,
         memory: Option<std::sync::Arc<crate::memory::Memory>>,
     ) -> io::Result<Self> {
+        if cfg!(target_os = "linux") {
+            return Err(io::Error::other(
+                "Sandbox is not available on Linux yet. Set \"sandbox\": false in config.json or use --yolo.",
+            ));
+        }
         if !cfg!(target_os = "macos") {
             return Err(io::Error::other("Seatbelt requires macOS"));
         }

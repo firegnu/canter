@@ -54,7 +54,10 @@ impl Fixture {
 
 #[tokio::test]
 async fn memory_write_and_edit_are_allowed_in_both_roots_and_all_permission_modes() {
-    for sandbox in [false, true] {
+    for sandbox in [false, true]
+        .into_iter()
+        .filter(|enabled| !enabled || cfg!(target_os = "macos"))
+    {
         let fixture = Fixture::new();
         let tools = fixture.tools(sandbox);
         let roots = fixture.memory.roots().unwrap().unwrap();
@@ -117,6 +120,7 @@ async fn memory_write_and_edit_are_allowed_in_both_roots_and_all_permission_mode
     }
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn memory_sandbox_allows_the_two_roots_and_preserves_other_state_and_file_rules() {
     let fixture = Fixture::new();
@@ -381,7 +385,10 @@ fn disabled_memory_does_not_create_directories() {
 
 #[tokio::test]
 async fn missing_memory_directory_does_not_block_project_files_or_shell() {
-    for sandbox in [false, true] {
+    for sandbox in [false, true]
+        .into_iter()
+        .filter(|enabled| !enabled || cfg!(target_os = "macos"))
+    {
         for global in [false, true] {
             let fixture = Fixture::new();
             let tools = fixture.tools(sandbox);

@@ -236,7 +236,14 @@ fn export_alone_offers_a_file_or_the_clipboard_and_never_overwrites() {
 
     std::fs::write(&path, "mine").unwrap();
     screen.export(Export::File(None));
-    screen.wait_for("already exists; not overwritten");
+    // The temporary path has a different length on each OS; the sentence may wrap.
+    screen.wait_for("not overwritten");
+    let words = screen
+        .text()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(words.contains("already exists; not overwritten"), "{words}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine");
 }
 

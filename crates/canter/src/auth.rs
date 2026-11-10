@@ -7,6 +7,11 @@ use std::{
 };
 
 const LOGIN_USAGE: &str = "Usage: canter auth login <provider>\nProviders: chatgpt\n";
+const MACHINE: &str = if cfg!(target_os = "macos") {
+    "Mac"
+} else {
+    "machine"
+};
 const USAGE: &str = "Usage:
   canter auth login <provider>
   canter auth status [<provider>]
@@ -83,7 +88,7 @@ pub async fn run(command: Command, context: crate::Context) -> Result<(), String
     let consent = if command == Command::Login {
         println!("Continue with ChatGPT\n");
         println!(
-            "canter keeps your ChatGPT sign-in on this Mac only, in\n{} (readable only by you). When you use a\nChatGPT model, canter sends your prompts, the project files it\nreads and tool results to OpenAI. Run `canter auth logout chatgpt`\nto sign out and revoke access.\n",
+            "canter keeps your ChatGPT sign-in on this {MACHINE} only, in\n{} (readable only by you). When you use a\nChatGPT model, canter sends your prompts, the project files it\nreads and tool results to OpenAI. Run `canter auth logout chatgpt`\nto sign out and revoke access.\n",
             plain(&context.state_dir.join("auth/chatgpt").display().to_string())
         );
         if io::stdin().is_terminal() {
@@ -179,11 +184,11 @@ pub async fn run(command: Command, context: crate::Context) -> Result<(), String
             match result.result {
                 AccountLogoutResult::Revoked => println!("Signed out {name}. Access revoked."),
                 AccountLogoutResult::NoToken => {
-                    println!("Signed out {name} on this Mac. No token needed revocation.")
+                    println!("Signed out {name} on this {MACHINE}. No token needed revocation.")
                 }
                 AccountLogoutResult::Pending => {
                     println!(
-                        "Signed out {name} on this Mac. OpenAI did not confirm\nthe revocation. You can disconnect canter in ChatGPT Settings."
+                        "Signed out {name} on this {MACHINE}. OpenAI did not confirm\nthe revocation. You can disconnect canter in ChatGPT Settings."
                     );
                 }
             }
@@ -241,7 +246,7 @@ async fn login(client: &reqwest::Client, consent: bool) -> Result<(), String> {
     println!("Opening your browser to continue with ChatGPT...");
     if !open_browser(&started.auth_url).await {
         println!(
-            "If it does not open, paste this link into a browser on this Mac:\n{}",
+            "If it does not open, paste this link into a browser on this {MACHINE}:\n{}",
             started.auth_url
         );
     }

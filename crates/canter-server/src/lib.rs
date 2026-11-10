@@ -95,7 +95,7 @@ async fn serve_with_lsp(
         .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
     let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
         .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
-    let auth = model_auth::ModelAuth::new(lease.home.clone());
+    let auth = model_auth::ModelAuth::new(lease.home.clone())?;
     let model = config.model_client(Some(auth.clone()))?;
     let options = config.options();
     let lsp = make_lsp(config.lsp.clone()).map_err(|error| ServerError(error.to_string()))?;

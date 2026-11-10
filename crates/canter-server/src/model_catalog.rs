@@ -177,7 +177,10 @@ pub(crate) struct ModelCatalog {
 }
 
 impl ModelCatalog {
-    pub fn new(home: PathBuf, endpoint: Option<reqwest::Url>) -> Arc<Self> {
+    pub fn new(
+        home: PathBuf,
+        endpoint: Option<reqwest::Url>,
+    ) -> Result<Arc<Self>, crate::ServerError> {
         let endpoint = endpoint.unwrap_or_else(|| {
             reqwest::Url::parse("https://api.openai.com/v1/models").expect("fixed catalog URL")
         });
@@ -187,7 +190,21 @@ impl ModelCatalog {
             .timeout(Duration::from_secs(10))
             .user_agent(concat!("canter/", env!("CARGO_PKG_VERSION")))
             .build()
-            .expect("catalog HTTP client");
+            .map_err(|error| {
+                let mut source = std::error::Error::source(&error);
+                while let Some(cause) = source {
+                    if cause.to_string()
+                        == "unexpected error: No CA certificates were loaded from the system"
+                    {
+                        return crate::ServerError(
+                            "No system CA certificates were found. Install ca-certificates and try again."
+                                .into(),
+                        );
+                    }
+                    source = cause.source();
+                }
+                crate::ServerError(format!("cannot initialize catalog HTTP client: {error}"))
+            })?;
         let mut state = State::default();
         for (account, cache) in load_caches(&cache_dir(&home)) {
             for model in cache.models.iter().chain(&cache.known_models) {
@@ -195,7 +212,7 @@ impl ModelCatalog {
             }
             state.caches.insert(account, cache);
         }
-        Arc::new(Self {
+        Ok(Arc::new(Self {
             home,
             endpoint,
             client,
@@ -203,7 +220,7 @@ impl ModelCatalog {
             activation: Default::default(),
             #[cfg(test)]
             pause_after_activate: Pause::default(),
-        })
+        }))
     }
 
     pub fn start(self: &Arc<Self>, auth: ChatgptAuth) {

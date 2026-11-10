@@ -110,7 +110,7 @@ impl Fixture {
         });
         let mut config = json!({
             "base_url":base_url, "model":default_model, "context_window":1048576, "api_key":KEY,
-            "prompt_suggestions":false
+            "prompt_suggestions":false, "sandbox":cfg!(target_os = "macos")
         });
         if let Some(models) = models {
             config["models"] = json!(models);
@@ -1193,6 +1193,46 @@ async fn reconnect_replays_strictly_after_last_event_id() {
     }
     drop(stream);
     fixture.stop().await;
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn missing_system_ca_certificates_reports_installation_help_without_panicking() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("state");
+    let certificates = root.path().join("certificates");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&certificates).unwrap();
+    fs::write(certificates.join("empty.pem"), "").unwrap();
+    fs::write(
+        home.join("config.json"),
+        json!({"base_url":"http://127.0.0.1:9/v1", "api_key":KEY, "model":"fake", "context_window":1048576}).to_string(),
+    )
+    .unwrap();
+    let output = tokio::time::timeout(
+        Duration::from_secs(15),
+        Command::new(env!("CARGO_BIN_EXE_canter"))
+            .arg("serve")
+            .env_clear()
+            .env("HOME", root.path())
+            .env("CANTER_HOME", &home)
+            .env("SSL_CERT_FILE", certificates.join("empty.pem"))
+            .env("SSL_CERT_DIR", &certificates)
+            .current_dir(root.path())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        stderr.trim(),
+        "canter: No system CA certificates were found. Install ca-certificates and try again."
+    );
+    assert!(!home.join("server.sock").exists());
+    assert!(!home.join("server.json").exists());
 }
 
 #[tokio::test]

@@ -585,6 +585,14 @@ pub struct SessionWriter {
     write_failed: bool,
 }
 
+impl Drop for SessionWriter {
+    fn drop(&mut self) {
+        // A concurrent fork may still hold this file description before exec.
+        // Closing our descriptor alone would leave its inherited Linux lock held.
+        let _ = self.file.unlock();
+    }
+}
+
 impl SessionWriter {
     /// Private request metadata is durable but never advances the public event
     /// cursor or session activity time. The events file lock also owns this file.

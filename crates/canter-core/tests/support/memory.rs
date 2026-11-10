@@ -67,7 +67,10 @@ fn prefix(model: &ScriptModel, index: usize) -> String {
 
 #[tokio::test]
 async fn memory_model_writes_and_edits_without_approval_and_only_new_openings_update_the_prefix() {
-    for sandbox in [false, true] {
+    for sandbox in [false, true]
+        .into_iter()
+        .filter(|enabled| !enabled || cfg!(target_os = "macos"))
+    {
         let fixture = Fixture::new();
         let path = fixture.home.join("memory/testing.md");
         let model = ScriptModel::new(vec![
