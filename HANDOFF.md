@@ -146,6 +146,15 @@
 
 ## 已知没修的问题
 
+- Linux 沙箱（P2-272，11-10 合并）交叉审查建议改、没做的，详见 `docs/任务/P2-272-交叉审查.md`：
+  - seccomp 连 netlink 也挡，node 的 `os.networkInterfaces()` 在 Linux 沙箱里报错；启动时打印局域网地址的开发服务器（create-react-app `npm start`、webpack-dev-server、`next dev`）可能起不来。改法是放行 `NETLINK_ROUTE`，属于放宽限制，要先问用户。
+  - HOME 里的 Docker Desktop（`~/.docker/desktop/docker.sock`）、1Password（`~/.1password/agent.sock`）的 socket 没盖住，墙里能连；macOS 上连不上。
+  - cwd 是 HOME 且还没有 `~/.cargo`、`~/.npm` 时，命令运行期间墙外会出现同名空文件（应建目录占位）。
+  - 每条命令启动前把 cwd 整棵树走一遍找 `.git`：cwd 是 HOME 时每条命令多十几秒；新增目录在 cwd 里时同一棵树走两遍。
+  - 命令输出里出现 `bwrap:` 就被当成沙箱没起来，末尾会追加「Install bubblewrap」的提示。
+  - 批准写 `/tmp`、`XDG_RUNTIME_DIR` 本身时，实际给的是空的只读目录，命令报 Read-only file system、看不出原因；cwd 是 `/tmp` 时同样。
+  - 两个平台都有：批准写一个不叫 `.git` 的独立 gitdir（`--separate-git-dir` 建的、裸仓库）时，里面的 config、hooks 不锁。
+
 - Linux 支持（P2-160，11-10 合并）交叉审查「可以不改」、没做的：缺系统 CA 的英文提示靠比对 rustls 报错原文认出（`crates/canter-server/src/model_catalog.rs` 约 193 行），升级 reqwest / rustls 改了原文时退回成通用报错（照样退出 1、不崩）；钉住它的测试只在 Linux 跑，升级这两个依赖后在 Linux 上跑一下 `missing_system_ca_certificates_reports_installation_help_without_panicking`。开发时 Linux 全套里 `mcp::http_mcp_ignores_server_proxy_environment` 偶发一次记到 2 个连接，单跑和 10 轮重跑都没复现。其余审查建议记在 P2-272、P2-260 任务文件里。
 
 - eval 工具（P2-257，11-09 合并）交叉审查建议改、没做的：

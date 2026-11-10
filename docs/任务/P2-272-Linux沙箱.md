@@ -166,3 +166,12 @@
 - 新回归使用 cwd 外真实 worktree 的已有指针文件，经原批准流程接受单文件 writePaths 后，仅尝试写入普通文本，断言 shell 写入因只读文件系统失败、原内容不变；覆盖 `.git`、`.GiT`。RED 时原实现返回退出码 0，修复后通过，日志分别为 `~/canter-linux/p2-272-r2-red.log`、`~/canter-linux/p2-272-r2-green.log`。
 - 5090 前台运行 `cargo test -p canter-tools --lib sandbox::` 和 `cargo test -p canter-tools --test sandbox --test sandbox_files --test sandbox_unavailable --test memory`，52 passed、1 ignored，包含新回归和返工 1 的普通单文件不扫描上级目录回归，输出在 `~/canter-linux/p2-272-r2-linux-tests.log`。另按更新后的完整单元测试命令运行缺少 bwrap 验收，1 passed，英文提示与正文未执行断言均通过，输出在 `~/canter-linux/p2-272-r2-no-bwrap.log`。
 - 两边 `cargo clippy --all-targets -- -D warnings` 通过，日志分别为 `~/canter-linux/p2-272-r2-linux-clippy.log`、`/tmp/p2-272-r2-mac-clippy.log`；Mac `cargo fmt --check`、`git diff --check` 通过。沿用原任务独立编译目录，未重跑全套，未加跑 Mac 测试。全部命令前台跑完；未改系统、未调真实模型、未合并或推送，没有新的待决定事项。
+
+## 主控审查
+
+- 11-10 主控看了全部非测试代码、DESIGN 和完成记录，测试改动里没有删测试或放宽断言；Mac 上走的还是原来的 Seatbelt 规则。主控在 5090 上量过：每条命令走一遍目录树找 `.git`，对编译目录可以忽略，cwd 是 HOME 时约 14 秒，交交叉审查判断。
+- 交叉审查（Claude Code `opus[1m]` / xhigh）第一轮必须改 3 条，主控都同意并定了改法：Git 保护路径的上级目录能被改名绕过（每级上级都绑到自己身上，和 macOS 的 protect_ancestors 一致）；项目里有读不了的子目录时每条命令都起不来（属主不是自己的、走的时候消失的、坏指针跳过，属主是自己的仍失败）；bwrap 从会话 PATH 找（只找系统目录，要求属于 root、别人不可写）。返工 1 修好这三条，但「单文件写路径不扫上级」（主控的指示）让 cwd 外的 `.git` 指针文件在被批准写时变成可写；用户 11-10 选交回开发再修，返工 2 修好，第二轮复核可以合并。
+- 建议改 7 条没做，记进 HANDOFF「已知没修的问题」。
+- 合并前 Mac 全套 `cargo nextest run --all-targets` 2100 过、50 跳过，`cargo test --doc --workspace` 无失败。验收第 2 条（5090 上用 DeepSeek flash 真跑）合并后主控做，要用户同意把 key 放到 5090。
+
+结果：返工 2 次
