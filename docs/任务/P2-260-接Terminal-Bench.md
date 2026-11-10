@@ -63,7 +63,7 @@
 - 不改 canter 的代码（`crates/`、`eval/`、`Cargo.*`）。跑出 canter 自己的问题，记进完成记录、在回复里报给主控，不在本件里修。
 - 不投机取巧（用户原话）：不改题目、不放宽超时和资源、不让 canter 看到测试或标准答案、不按某道题调 canter 的提示或配置。canter 用默认配置跑，只配服务商和模型。
 - 不跑全套 89 题，不跑 Terminus-2 或别家外壳（第二步主控做）。真调模型的题目运行一共不超过 6 次（3 道题，加修适配器后重跑最多 3 次），次数写进完成记录。
-- key 不打印、不写进任何文件、日志、结果数据和提交。查一下 Harbor 自己的结果目录里会不会存下 `--ae` 传的值，查清写进完成记录；会存的话换一种不落盘的传法，换不了就停下问主控。
+- key 不打印，不写进宿主机文件、日志、结果数据、提交或镜像构建层。11-10 主控纠正原来「不写进任何文件」与容器配置要求的矛盾：允许仅临时写入单题容器的 `~/.canter/config.json`（0600），在容器内生成，不采集，取完 stats 和会话后清掉，最后由 Harbor 删除容器。查一下 Harbor 自己的结果目录（包括异常日志）是否会存下凭证，选择不让 key 进入宿主机文件的传法；每次真跑后，在 Harbor 结果目录和 `~/canter-linux` 下用 `grep -rlF` 查 key，只打印文件名，查到就停下报主控。决定及检查结果写进完成记录。
 - 不上传任何东西到 Harbor Hub 或别的服务，不登录 Harbor 的账号。
 - 适配器不写死 DeepSeek：服务商、模型、地址、key 的环境变量名都从参数来；DeepSeek 只是这次跑的配置。
 - Python 只放 `bench/terminal-bench/`，不进 cargo 工作区。
@@ -104,3 +104,31 @@
 
 - 未安装 uv/Harbor、未编静态版、未写适配器或 README、未产生结果数据与全套估算；未跑 89 题或 Terminus-2。没有合并 main、没有推送 origin。所有已执行的命令均在前台结束，无本任务遗留进程或容器。
 - 实现和试跑尚未开始，没有尝试后换方案的坑；本轮发现的是任务约束与现有凭证接口的冲突，未自行采用替代办法。
+
+## 完成记录
+
+**当前状态：续跑尚未完成，等待主控处理下述 Harbor 正式版接口差异。** 前面的阶段记录保留，凭证矛盾已由主控解决。
+
+### 主控决定（2026-11-10）
+
+主控确认原任务两条凭证要求自相矛盾，采用方案 1：允许 key 临时存在于单题容器的 `~/.canter/config.json`（0600），在容器里生成，不采集这个文件，取完 stats 和会话后清掉，最后由 Harbor 删除容器。宿主机的仓库、日志、Harbor 结果目录（包括异常日志）、结果数据和镜像层均不能新增含 key 的文件。主控授权适配器自行选择避开 Docker `-e KEY=value` 异常泄露的传法；每次真跑之后在 Harbor 结果目录和 `~/canter-linux` 下用 `grep -rlF` 检查，只输出文件名，查到就停下报告。
+
+选定的传法是标准输入管道：适配器从指定的宿主机环境变量读取 key，构造配置的内存字节，通过 Docker compose 的 `exec -T` stdin 交给容器内的 `cat > "$HOME/.canter/config.json"`。不使用 `--ae KEY=value`，不把 key 放进命令行或本地临时文件；Docker 异常中的命令因此没有 key。Harbor 0.25.0 的 Docker 后端 `_run_docker_compose_command` 支持 `stdin_data`，自带 tar 上传也使用这个通道。此传法尚未实现或真跑验证。
+
+### 续跑做了什么
+
+- 在 5090 的 `~/canter-linux/uv-bin` 安装 uv `0.13.7`，以 `UV_NO_MODIFY_PATH=1` 禁止修改 shell 配置；Harbor `0.25.0` 安装在 `~/canter-linux/uv-tools/harbor`，`harbor --version` 确认版本。工具、uv 缓存和临时目录均指向 `~/canter-linux`，Harbor 命令设置 `HARBOR_TELEMETRY=0`。当前工具虚拟环境使用已有的 `/usr/bin/python3.12`；后续仍需按任务要求改为 `~/canter-linux/python` 下的 uv managed Python。
+- 创建专用裸仓库 `~/canter-linux/p2-260-source.git`，只推送分支起点 `64b80e3f963f0005f69f078e68a4af71a611ca28`；克隆至指定的 `~/canter-linux/p2-260-terminal-bench`，核对 HEAD 和工作区干净后启动 musl 编译。使用既有编译镜像 `canter-p2-160-musl`，独立 target 为 `~/canter-linux/.target/p2-260-terminal-bench/musl`，构建日志为 `~/canter-linux/p2-260-musl-build.log`。
+- 静态编译已在前台正常结束（退出 0），产物为 `~/canter-linux/.target/p2-260-terminal-bench/musl/x86_64-unknown-linux-musl/release/canter`；版本 `canter 0.1.0 · 64b80e3f`，没有 dirty 后缀；`file` 确认 x86-64 static-pie，SHA256 为 `4f813abe5e46235b8b93856e901ccbdd3a9c8ff17e4f9aeb78dabb10e6240a4a`。编译容器以 `--rm` 前台运行并已退出，未新增或改动镜像。
+- 核对测试 HOME 配置时只输出 model、base_url 和模型能力/价格字段，不输出或传递 key。未读取两台机器的真实 `~/.canter`。
+
+### 要主控决定：正式版没有 configure 钩子
+
+安装后核对的真实代码位于 `~/canter-linux/uv-tools/harbor/lib/python3.12/site-packages/harbor/agents/installed/base.py`：0.25.0 的 `setup()` 仅调用 `install()` 和检测版本，没有 `configure()`。主控预读的 `ec661829` 则已有 `configure()`，且支持跳过 install 后仍 configure。两者元数据都显示 0.25.0，不能据此把主分支源码当作正式包接口。
+
+1. **建议**：仍钉最新正式版 0.25.0。在适配器覆盖 `setup()`，先 `await super().setup(environment)` 安装和检测版本，再调用自己的 `configure()` 写入临时配置；不改 Harbor、不改 canter。这样仍明确区分安装和每题凭证准备，凭证不会进入镜像构建层。
+2. 改钉主控预读的未发布提交，直接使用其 configure 钩子；这会偏离「最新正式版」要求，不建议。
+
+按本任务「Harbor 的接口和这里写的不一样」的停工规定，尚未自行选择兼容实现。真实模型题目运行仍为 **0 次**，oracle **0 次**，没有模型花费或试跑结果可供估算；每次真跑后的 grep 检查尚未触发。未跑 Rust 测试、未合并 main、未推送 origin。
+
+本轮 `git diff --check` 通过，所有命令均已在前台结束。踩过的坑：正式包的版本号与主控预读源码相同，但安装生命周期接口不同；以后应以钉住的正式包源码为准。
