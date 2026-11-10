@@ -218,3 +218,13 @@ docker run --rm --network none \
    - 核对 `/proc/<pid>/exe` 后只对 901321、981950 发送 SIGTERM，并等待两者退出。随后以及本轮 eval 测试结束后，检查远端进程列表均确认没有 `canter serve`，未按名字批量杀进程。
 2. `eval/tasks/long.toml` 和 `memory-global.toml` 的 node_modules 准备命令恢复优先 `cp -cR`：Mac 继续使用 clonefile；第一次复制失败才删除本次半截 node_modules，再执行 `cp -R`。已有 node_modules 仍直接保留，Linux 测试走兼容回退，不再令 Mac 每次整份复制。
 3. 本轮只运行 canter-eval 测试：Mac `cargo nextest run -p canter-eval --no-fail-fast`，61 项全过；Linux `cargo test -p canter-eval`，19 项单测和 42 项集成测试全过，文档测试 0 项。继续使用前述独立 target、Node 和 npm cache，日志为 `/tmp/p2-160-mac-eval-review.log` 和远端 `~/canter-linux/p2-160-linux-eval-review.log`。这是任务配置修正，使用现有 prepare/grading 测试验证；未改其他 crate 或增加测试范围。`git diff --check` 通过，所有命令均在前台结束，无新增待定事项。
+
+## 主控审查（2026-11-10）
+
+- 看了全部 diff 和完成记录：非测试代码 12 个文件 +72 −23。Mac 上会走到的只有三处文件锁显式解锁和看护进程 `kill` 写法，其余是 Linux 分支、缺 CA 报错（Mac 走不到）和测试。验收第 1、3、4 条达到，第 2 条（5090 上真跑 DeepSeek）合并后主控做，要用户同意放 key。
+- 中途主控定了 CA 方案（沿用系统信任源，容器装 `ca-certificates`，缺了英文报错退出）；审查时让开发改回 eval 题目的 `cp -cR`（Mac 照旧 clonefile），核实两个孤儿服务端是测试中途失败留下的、已按 PID 停掉。
+- 交叉审查（canter/review-linux-1，Claude Code `opus[1m]` / xhigh）：可以合并，必须改 0、建议改 2、可以不改 3。建议改两条（fork 测试 macOS 正向断言、yolo 重连测试补开沙箱）和 doctor 提示统一记进 P2-272；静态版从干净提交编、busybox ash 未验记进 P2-260；按文字认缺 CA、MCP 偶发一次记进 HANDOFF。
+- 合并前 Mac 全套 `cargo nextest run --all-targets` 2099 过、50 跳过；`cargo test --doc --workspace` 无失败。
+- 开发用时约 70 分钟，停下问 1 次（CA），审查补改 1 轮（两条小事，不算返工）。
+
+结果：一次过

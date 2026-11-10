@@ -19,6 +19,12 @@
 - canter 装进每道题的 Linux 容器，用 `canter exec "<题目>" --yolo` 跑（和别家的 `-p`、`codex exec` 一样，没人批准、没人回答）。要 Linux 静态版（P2-160），在 5090（`my-5090d-host`，x86_64 原生）上跑。
 - 适配器是 Harbor 要的一小段 Python（`BaseInstalledAgent`），放 canter 仓库外。
 
+## P2-160 留给本件的（11-10）
+
+- 静态版从干净的已提交代码编（P2-160 验收时的 `--version` 显示的是开发自己同步仓库的 `3690057-dirty`）。编译命令见 DESIGN「Linux 支持（P2-160）」。
+- 题目容器要先装 `ca-certificates`（Debian/Ubuntu `apt-get`，Alpine `apk`），缺了服务端报错退出。
+- 看护进程杀进程组的写法在 Alpine 的 busybox ash 上没验过，在 Alpine 题目里跑时看一眼。
+
 ## 要做的
 
 （占号。要解决：Harbor 在 Docker 里跑，canter 是常驻服务端 + 客户端；适配器是一小段 Python，放 canter 仓库外；约 90 件，先拿几件试出花费和时间；比外壳要让对方用同一个模型。）

@@ -146,6 +146,8 @@
 
 ## 已知没修的问题
 
+- Linux 支持（P2-160，11-10 合并）交叉审查「可以不改」、没做的：缺系统 CA 的英文提示靠比对 rustls 报错原文认出（`crates/canter-server/src/model_catalog.rs` 约 193 行），升级 reqwest / rustls 改了原文时退回成通用报错（照样退出 1、不崩）；钉住它的测试只在 Linux 跑，升级这两个依赖后在 Linux 上跑一下 `missing_system_ca_certificates_reports_installation_help_without_panicking`。开发时 Linux 全套里 `mcp::http_mcp_ignores_server_proxy_environment` 偶发一次记到 2 个连接，单跑和 10 轮重跑都没复现。其余审查建议记在 P2-272、P2-260 任务文件里。
+
 - eval 工具（P2-257，11-09 合并）交叉审查建议改、没做的：
   - 「用时」取会话第一条到最后一条事件，一轮结束后的「下一句建议」请求和 corral 关闭时的状态也算进去，所以 `collect` 早跑晚跑差十几二十秒（P2-261 重出第一轮的表时三次各多 16～24 秒）。改法：算到最后一个 `turn.completed`（`eval/src/collect.rs` `metrics`）。
   - 源模型写了 `supported_reasoning_efforts`、里面没有题目要的档位时，`set_reasoning` 会自己把档位补进列表，不报错（`eval/src/config.rs`）。
