@@ -280,3 +280,9 @@ Harbor 在 07:52:31.249606 完成 verifier；输入/缓存/输出 token 均为 0
 原始日志留在 5090 的 `~/canter-linux/p2-260-adapter-tests/pypi-server-background/`；独立观察文件是 `~/canter-linux/p2-260-pypi-server-verifier-observation.json`。容器 `3fe128d0acf6` 最后由 Harbor 删除，`docker inspect` 确认已不存在；未删镜像。主控 PID 2003673 只做只读状态核对，仍在运行，未干预。
 
 本次不改 Rust、report.py、答案来源规则、CLAUDE.md、HANDOFF 或主仓库复核文件；三条建议改仍交主控处理。命令均在前台等待结束，最后 `git diff --check` 及 gitleaks / trufflehog 检查通过。只在本分支提交并同步 5090 专用裸仓库，不合并 main、不推送 GitHub origin。没有新增待主控决定的实现事项；上述缺少独立停止子 agent 接口的问题留后续任务。
+
+## 主控审查
+
+2026-11-10，canter/main。适配器、README、结果数据、偷看答案检查都齐，「怎么算做完」1～5 达到；只动了 `bench/terminal-bench/` 和本任务文件，没改 canter 代码（不改 Rust，所以合并前没跑 Rust 全套）。交叉审查（Claude Code opus[1m] xhigh）首轮必须改 2 条（超时后 canter 不停、子 agent 用量漏算），主控另让一起改建议改 1～3（采集出错不判分、偷看规则漏洞、缺题不进分母）；第一次复核发现返工带进新必须改（正常结束停服务端会杀掉判分要用的后台服务），用户 11-10 定再返工一次并真跑 1 道 pypi-server（第 4 次真调，$0.0157，服务判分时仍在）；第二次复核可以合并。剩下的建议改记进 HANDOFF；DESIGN 的 key 传法和收尾规则主控合并时补。用户同意的 CLAUDE.md Python 例外补「含本目录的适配器测试和无模型探针」。真调模型共 4 次，记录费用合计 $0.0784。
+
+结果：返工 2 次

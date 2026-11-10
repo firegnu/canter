@@ -555,7 +555,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
 评的是 canter 这个外壳，用官方运行框架 Harbor 跑 Terminal-Bench 2.1（数据集 `terminal-bench/terminal-bench-2-1`），和同一模型下的别家外壳逐题对比。用户：「还是走正常的bench吧。不要投机取巧了」——不改题、不放宽超时、不让外壳看测试和标准答案，也不接进 `eval/` 那套 Rust 评测工具；两套各出各的结果，`eval/` 照旧测压缩、插话、子 agent、记忆这些 canter 自己的能力。
 
 - 放在仓库根下的 `bench/terminal-bench/`（用户 11-10 同意）：Harbor 适配器、从零跑起来的说明（钉住 Harbor 版本）、`results/` 里每一轮的结果数据（纯数据文件：canter 版本、外壳、模型、总分、每题过没过、用时、token、花费）。Harbor 的原始结果目录留在跑的机器上，不进仓库。适配器只能用 Python，是 CLAUDE.md「语言与依赖」写明的唯一例外。
-- canter 进题目容器：用干净提交编的 musl 静态版（上节的编译办法），先装 `ca-certificates`，配置写进容器里的 `~/.canter/config.json`，key 从 Harbor 传的环境变量来，不写进仓库、日志和结果数据；运行 `canter exec --yolo "<题目>"`，结束后用 `canter stats --last --json` 取 token 和花费交给 Harbor。适配器的服务商和模型从参数来，不写死某一家。
+- canter 进题目容器：用干净提交编的 musl 静态版（上节的编译办法），先装 `ca-certificates`，配置写进容器里的 `~/.canter/config.json`。key 由适配器从宿主机的环境变量读出，经 `docker compose exec -T` 的 stdin 在容器里写成配置，不走 Harbor 的 `--ae`（Harbor 出错时会把 `-e KEY=值` 打进报错），不写进仓库、日志和结果数据，采集的日志先在内存里替换掉 key 再落盘。Harbor 0.25.0 正式版没有 `configure` 钩子，适配器覆盖 `setup()`。运行 `canter exec --yolo -- "<题目>"`，结束后用 `canter stats --last --json` 取 token 和花费交给 Harbor（含子 agent）。适配器的服务商和模型从参数来，不写死某一家。
+- 交回 Harbor 判分前的收尾（P2-260 审查后定）：超时或出错时按 PID 停 `canter exec`；还有子 agent 在跑时停服务端（防止判分时还在改文件、花钱），并在结果里标出；正常结束且没有子 agent 在跑时留着服务端，模型用 `background=true` 起的服务留到判分（有些题要求服务开着）。canter 缺「只停子 agent、不停后台命令」的办法，记在 HANDOFF。
 - 不改 canter 代码：跑出 canter 自己的问题，记下来另开任务。
 - 第一轮（用户 11-10 同意主控推荐）：DeepSeek 官方接口 v4.1 flash，比 canter 和 Terminus-2，思考档都设 high，超时用 Harbor 默认。全套跑之前先按试跑数字报花费和时间，用户同意再跑。89 题一轮误差约 ±10 个百分点，要不要多跑几轮看第一轮再定。题目镜像跑完前留着，结束后问用户清不清。
 
