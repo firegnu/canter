@@ -15,3 +15,6 @@
 - 11-11 用户：「其实我还有一个目的是我想在ipad上使用这个，但是我还没想好怎么规划这个。」用户已用 iPad 上的 Terminus SSH 到 5090 跑终端版试过，有 iPad 的 Magic Keyboard。
 - 主控意见：GPUI 不支持 iPad，要在 iPad 上用就走网页版（Safari，可加到主屏幕）。网页版要先在服务端开本机端口加登录校验（安全相关，按碰要害派给 Codex 并交叉审查，不交给 canter），canter 再写网页。为 iPad 要多考虑：断线后重开原样、触屏能点批准和停止、横竖屏排版。远程入口和服务端放哪台（5090 一直开着）跟 P2-98 第二块一起定。用户还没想好怎么规划，等用户说再写任务单。
 - 11-11 用户：「我觉得terminus ssh上去之后体验还好。」iPad 暂时用 SSH 加终端版就够，客户端不急。
+- 11-11 用户：「我主要是想canter接一个独立的repo，这样我可以检验canter的能力。gpui我想请canter独立来做。……另外canter本身的开发，我还是会继续。」又定：「就叫canter-desktop，私有仓库，AGENTS.md你写吧」。
+- 主控建了 `~/Developer/personal_projs/canter-desktop`（GitHub 私有仓库 `firegnu/canter-desktop`），只放了一份 `AGENTS.md`：目标（基础版到功能对齐）、协议来源（git 依赖固定提交引用 `canter-protocol`）、测试用临时 `CANTER_HOME` 和假模型、不改 canter 仓库（缺接口记进那边的 `docs/canter需求.md` 交用户）、会话环境变量怎么拿先问用户。具体怎么做由 canter 自己定；没提 paddock 的代码（canter 卡住来问再说）。
+- 那边提来的接口需求，回到本仓库当一件活来做。用户用 canter 做那个项目时碰到的模型做事失败，按 DESIGN「用 eval 来改」第 2 条攒成 eval 题。
