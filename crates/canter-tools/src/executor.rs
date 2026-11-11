@@ -220,6 +220,7 @@ impl LocalExecutor {
         cancel: &CancellationToken,
         sandboxed: bool,
         request: Option<&canter_protocol::SandboxRequest>,
+        model: bool,
     ) -> io::Result<CommandHandle> {
         use std::process::Stdio;
         check_cancel(cancel)?;
@@ -241,10 +242,19 @@ impl LocalExecutor {
                 .command(&self.cwd, &self.environment, &scope, &mut sandbox_resources)
                 .map_err(|error| io::Error::other(format!("Could not start sandbox: {error}")))?
         } else {
-            let mut launch = tokio::process::Command::new("/bin/sh");
+            let executable = if model {
+                crate::shell_program::executable()
+            } else {
+                PathBuf::from("/bin/sh")
+            };
+            let mut launch = tokio::process::Command::new(executable);
             launch.env_clear().envs(&self.environment);
             launch
         };
+        // dash ignores BASH_ENV; bash would run it before every command.
+        if model && crate::shell_program::uses_bash() {
+            launch.env_remove("BASH_ENV");
+        }
         // Output goes to the model, not a terminal: no colour codes, no pager.
         launch
             .env("NO_COLOR", "1")
@@ -615,7 +625,7 @@ impl Executor for LocalExecutor {
     }
 
     async fn spawn(&self, command: &str, cancel: &CancellationToken) -> io::Result<CommandHandle> {
-        self.launch(command, cancel, self.sandbox.is_some(), None)
+        self.launch(command, cancel, self.sandbox.is_some(), None, true)
     }
 
     async fn spawn_with_sandbox_request(
@@ -629,7 +639,7 @@ impl Executor for LocalExecutor {
                 "sandbox requests require an enabled sandbox",
             ));
         }
-        self.launch(command, cancel, true, Some(request))
+        self.launch(command, cancel, true, Some(request), true)
     }
 
     async fn spawn_user(
@@ -637,7 +647,7 @@ impl Executor for LocalExecutor {
         command: &str,
         cancel: &CancellationToken,
     ) -> io::Result<CommandHandle> {
-        self.launch(command, cancel, false, None)
+        self.launch(command, cancel, false, None, false)
     }
 }
 

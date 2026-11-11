@@ -22,6 +22,7 @@ pub use sandbox::linux::{HELP as LINUX_SANDBOX_HELP, probe as probe_linux_sandbo
 mod scratch;
 pub use scratch::ScratchDirectory;
 mod shell;
+mod shell_program;
 pub use background::{BackgroundCommands, MAX_BACKGROUND_COMMANDS, MAX_BACKGROUND_OUTPUT_BYTES};
 mod web_fetch;
 pub mod web_search;
@@ -262,7 +263,11 @@ impl Tool {
         if self == Self::Shell {
             return ToolDefinition {
                 name: self.name(),
-                description: r#"Run a command with /bin/sh -c in the session's working directory and environment. Each call starts a new shell, so cd, variables, and other shell state don't carry over to the next call. There is no terminal and no input: use non-interactive commands. rg searches directories recursively by default; -r means --replace, not recursion. Foreground timeout: 120 seconds by default, at most 600 (timeoutMs); output keeps its beginning and end. Set background=true for development servers, file watchers, or long tests: returns after about one second with an integer id, initial output and running/exited status. Background commands have no timeoutMs deadline and belong to the session, surviving client disconnects and session switches. Read new output with shell_output and stop the entire process group with shell_stop when finished. At most 8 background commands may run per session; each retains the last 1 MiB of output. The user can also move a running foreground command to the background with Ctrl+B. When a shell exits, its remaining process group is stopped. Results include exit status, so never add commands to print it. Background execution follows the same approval and Plan-mode read-only rules as foreground execution."#.into(),
+                description: format!(
+                    "Run a command with {} -c in the session's working directory and environment. Each call starts a new shell, so cd, variables, and other shell state don't carry over to the next call. There is no terminal and no input: use non-interactive commands. rg searches directories recursively by default; -r means --replace, not recursion. Foreground timeout: 120 seconds by default, at most 600 (timeoutMs); output keeps its beginning and end. Set background=true for development servers, file watchers, or long tests: returns after about one second with an integer id, initial output and running/exited status. Background commands have no timeoutMs deadline and belong to the session, surviving client disconnects and session switches. Read new output with shell_output and stop the entire process group with shell_stop when finished. At most 8 background commands may run per session; each retains the last 1 MiB of output. The user can also move a running foreground command to the background with Ctrl+B. When a shell exits, its remaining process group is stopped. Results include exit status, so never add commands to print it. Background execution follows the same approval and Plan-mode read-only rules as foreground execution.",
+                    crate::shell_program::name()
+                )
+                .into(),
                 parameters: json!({"type":"object","properties":{"command":{"type":"string","minLength":1},"background":{"type":"boolean","default":false},"timeoutMs":{"type":"integer","minimum":1,"maximum":MAX_SHELL_TIMEOUT_MS,"default":DEFAULT_SHELL_TIMEOUT_MS}},"required":["command"],"additionalProperties":false}),
                 risk: self.risk(),
             };

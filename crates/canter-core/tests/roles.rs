@@ -122,6 +122,11 @@ async fn no_role_files_preserve_main_request_bytes() {
                     ),
                     "Platform: <OS>, <ARCH>",
                 )
+                // Recorded on macOS; Linux runs model commands with bash when installed.
+                .replace(
+                    "Run a command with bash -c",
+                    "Run a command with /bin/sh -c",
+                )
         })
         .collect::<Vec<_>>()
         .join("\n");

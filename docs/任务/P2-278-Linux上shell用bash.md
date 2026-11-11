@@ -63,3 +63,43 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+### 做了什么
+
+- 新增 `crates/canter-tools/src/shell_program.rs`：Linux 只在 `/bin/bash`、`/usr/bin/bash` 两个固定位置找可执行的 bash（不看 PATH、不看 `$SHELL`）；找到就用 bash，否则用 `/bin/sh`。结果用 `LazyLock` 缓存，一个进程内固定不变。测试构建另有仅 `#[cfg(test)]` 可用的线程局部注入点，模拟找不到 bash。
+- `executor.rs`：模型 shell（前台、后台、转后台）在墙外用选定解释器，Linux 沙箱里由 `sandbox_linux.rs` 用同一个解释器；用户 `!` 仍走 `/bin/sh`。模型 shell 用 bash 时 `env_remove("BASH_ENV")`，其它环境、工作目录、进程组、超时、输出和取消都不变。macOS 沙箱仍用 `/bin/sh`。
+- shell 工具说明按实际解释器写：Linux 有 bash 时是 `Run a command with bash -c`，没有 bash 和 macOS 仍是 `/bin/sh -c`；macOS 的说明文字逐字未变。
+- 测试：新增 `tests/linux_bash.rs`（沙箱开/关各跑 `time true`、`[[ 1 -eq 1 ]] && echo ok`、`echo $'a\tb'`，`BASH_ENV` 脚本不执行，说明与实际解释器一致）；`shell_program` 单元测试用注入点模拟没有 bash，断言说明写 `/bin/sh` 且命令确实由 `/bin/sh` 执行。
+- 跟着改的测试快照：`tests/descriptions.rs` 按实际解释器核对说明；`canter-core` 的 `roles.rs`、`session.rs` 和 `canter` 的 `mcp.rs` 三个按 macOS 录制字节比对的快照，只在比较前把 Linux 的 `bash -c` 归一成 `/bin/sh -c`，快照文件本身没改。`crates/canter-tools/README.md` 补了 Linux 换 bash 的说明。
+
+### 验证了什么
+
+- RED：5090 上在 `e4be817`（只有测试）运行 `cargo test -p canter-tools --test linux_bash`，`[[ 1 -eq 1 ]]` 以 `/bin/sh: 1: [[: not found`、退出码 127 失败，说明测试因 dash 而失败；日志 `~/canter-linux/p2-278-red.log`。
+- GREEN：5090 上 `cargo test -p canter-tools --test linux_bash` 3 项全过（沙箱开、关都通过），日志 `~/canter-linux/p2-278-green.log`；`cargo test -p canter-tools --lib shell_program` 1 项通过，日志 `~/canter-linux/p2-278-fallback.log`。
+- 5090 上 `cargo test -p canter-tools` 全过（最终输出在 `~/canter-linux/p2-278-linux-tools-rerun.log`，另两次重复在 `p2-278-linux-tools-repeat-{1,2}.log`）；`cargo clippy --all-targets -- -D warnings` 通过（`p2-278-linux-clippy.log`）。
+- 5090 上另跑改过的快照测试：`cargo test -p canter-core --test roles no_role_files_preserve_main_request_bytes`、`cargo test -p canter-core --test session sandbox_model_request_exposes_scope_only_when_enabled`、`cargo test -p canter --test server mcp::no_mcp_request_matches_pre_search_bytes` 均通过，日志 `~/canter-linux/p2-278-linux-snapshots.log`。
+- Mac 上用本任务独立编译目录：`cargo nextest run -p canter-tools` 246 passed、22 skipped；`cargo nextest run -p canter-core -p canter` 519 passed、23 skipped；`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。
+- 所有命令前台跑完。5090 上本任务启动的测试进程和 `canter serve` 均无残留；机器上原有 PID 1847055 的 `~/.cargo/bin/canter serve` 是 11-10 起的，不属本任务，未动。
+
+### 拿主意的地方
+
+- 只换模型 shell：`spawn_user`（用户 `!`）仍显式用 `/bin/sh`，与 DESIGN 第 111 条「复用会话的 `/bin/sh -c`」一致；任务只要求 shell 工具。
+- 说明里写 `bash` 而不是 `/bin/bash`，照任务「Linux 用 bash 时写 bash」；实际执行路径仍是检测到的 `/bin/bash` 或 `/usr/bin/bash`。
+- 三处按 macOS 字节录制的快照不做平台分支或改快照，只在 Linux 比较前把说明里的解释器名归一成 `/bin/sh`，这样 macOS 的逐字断言和缓存都不变。
+- 注入点照 P2-272 的 BWRAP 做法用线程局部，仅在 `cfg(test)` 构建存在；正式构建没有覆盖接口。
+- bash 只要求固定位置上的普通可执行文件，没有另加 root 属主检查（任务只要求不按 PATH 找）。
+
+### 没做的事
+
+- 没改 DESIGN：本任务限 `crates/canter-tools/` 和跟着变的快照；用户 `!` 仍用 `/bin/sh`，DESIGN 第 111 条仍准确。
+- 没改沙箱挂载、权限、放行规则、只读检查和危险命令检查，也没动 hooks、guardian、状态栏用的 shell。
+- 没调真实模型，没合并、没推送 `origin`，没跑全套（按任务只跑相关测试和指定的 crate）。5090 上只用了 `~/canter-linux/`，没装包、没用 sudo。
+
+### 踩过的坑
+
+- 第一次在 5090 跑完整 `cargo test -p canter-tools` 时，`guardian` 的 `concurrent_commands_do_not_inherit_each_others_pipes` 偶发 `Too many open files`（日志 `p2-278-linux-tools.log`）；同一测试单跑 3 次、完整重跑 2 次都通过，未改测试。该机器 `ulimit -n` 是 1024，300 条并发命令的管道可能贴近上限，后续可能需要主控判断是否单独处理。
+- 单元测试里不能用 `env!("CARGO_TARGET_TMPDIR")`，改为普通 `tempfile::tempdir()`（该测试不开沙箱）。
+
+没有要主控决定的事。

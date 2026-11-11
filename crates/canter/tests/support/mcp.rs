@@ -1265,7 +1265,11 @@ fn stable_request(fixture: &Fixture, request: &str) -> String {
         .0;
     let encoded = serde_json::to_string(scratch).unwrap();
     result = result.replace(&encoded[1..encoded.len() - 1], "<SCRATCH>");
-    result
+    // Recorded on macOS; Linux runs model commands with bash when installed.
+    result.replace(
+        "Run a command with bash -c",
+        "Run a command with /bin/sh -c",
+    )
 }
 
 #[tokio::test]

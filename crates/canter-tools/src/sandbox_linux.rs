@@ -313,7 +313,8 @@ pub(super) fn command(
         command.arg("--remount-ro").arg(path);
     }
     command
-        .args(["--", "/bin/sh"])
+        .arg("--")
+        .arg(crate::shell_program::executable())
         .env("CARGO_HOME", &sandbox.cargo)
         .env("npm_config_cache", &sandbox.npm)
         .env_remove("NPM_CONFIG_CACHE");
