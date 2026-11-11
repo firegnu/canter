@@ -3318,6 +3318,32 @@
       "oneOf": [
         {
           "properties": {
+            "charCount": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "event": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "hookContext",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "event",
+            "charCount"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "delivery": {
               "anyOf": [
                 {

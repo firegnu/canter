@@ -2,6 +2,35 @@ use canter_protocol::{Event, EventPayload, Item, SessionSnapshot, SessionStatus,
 use serde_json::json;
 
 #[test]
+fn hook_context_round_trips_and_legacy_clients_skip_it() {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type", rename_all = "camelCase")]
+    enum LegacyItem {
+        AgentMessage {
+            text: String,
+        },
+        #[serde(other)]
+        Unknown,
+    }
+    let value = json!({"type":"hookContext","id":"h1","event":"SessionStart","charCount":1200});
+    let item: Item = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&item).unwrap(), value);
+    assert_eq!(item.id(), Some("h1"));
+    assert_eq!(
+        item.hook_context_message().as_deref(),
+        Some("SessionStart hook added context (1.2k chars)")
+    );
+    assert!(matches!(
+        serde_json::from_value::<LegacyItem>(value).unwrap(),
+        LegacyItem::Unknown
+    ));
+    let next = json!({"type":"agentMessage","id":"a1","text":"continued"});
+    assert!(
+        matches!(serde_json::from_value::<LegacyItem>(next).unwrap(), LegacyItem::AgentMessage { text } if text == "continued")
+    );
+}
+
+#[test]
 fn model_provider_metadata_is_optional_and_round_trips() {
     let old = json!({"id":"legacy","model":"legacy","displayName":"legacy","isDefault":true});
     let parsed: canter_protocol::Model = serde_json::from_value(old.clone()).unwrap();

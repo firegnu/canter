@@ -195,6 +195,45 @@ async fn reconnect_within_grace_keeps_the_same_pair() {
 }
 
 #[tokio::test]
+async fn repeated_client_reconnections_notify_without_reinjecting_context() {
+    let mut fixture = Fixture::new(json!({"hooks":{
+        "SessionStart":command(r#"input=$(cat); printf '%s\n' "$input" >> starts.jsonl; printf '%s' '{"hookSpecificOutput":{"additionalContext":"opening once"}}'"#),
+        "SessionEnd":command(r#"input=$(cat); printf '%s\n' "$input" >> ends.jsonl"#)
+    }})).await;
+    fixture.trust(fixture.root.path()).await;
+    let url = fixture.create().await;
+    let mut client = connect(&fixture, &url).await;
+    for count in 1..=3 {
+        fixture.input(&url).await;
+        let request = fixture.request().await;
+        let occurrences = request.body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| {
+                message["content"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("opening once"))
+            })
+            .count();
+        assert_eq!(occurrences, 1);
+        request.stop();
+        fixture.idle(&url).await;
+        if count < 3 {
+            drop(client);
+            wait_lines(&fixture, "ends.jsonl", count).await;
+            client = connect(&fixture, &url).await;
+            assert_eq!(
+                wait_lines(&fixture, "starts.jsonl", count + 1).await[count]["source"],
+                "resume"
+            );
+        }
+    }
+    drop(client);
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn client_exit_waits_for_the_running_turn() {
     let (mut fixture, url) = fixture().await;
     let client = connect(&fixture, &url).await;

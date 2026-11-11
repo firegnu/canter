@@ -16,6 +16,12 @@ use tokio_util::sync::CancellationToken;
 const OUTPUT_LIMIT: usize = 32 * 1024;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[derive(Default)]
+struct Output {
+    reason: Option<String>,
+    context: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Event {
     SessionStart,
@@ -130,6 +136,15 @@ impl<'de> Deserialize<'de> for Hooks {
 }
 
 pub(crate) fn input(state: &State, event: Event, mut fields: Value) -> Value {
+    let transcript_path = std::path::absolute(
+        state
+            .journal
+            .store
+            .session_dir(&state.journal.snapshot.id)
+            .expect("valid session id")
+            .join("events.jsonl"),
+    )
+    .expect("absolute session transcript path");
     let settings = &state.journal.snapshot.settings;
     let mode = if settings.plan_mode {
         "plan"
@@ -145,6 +160,7 @@ pub(crate) fn input(state: &State, event: Event, mut fields: Value) -> Value {
         json!({
             "session_id":state.journal.snapshot.id, "cwd":settings.cwd,
             "hook_event_name":format!("{event:?}"), "permission_mode":mode,
+            "transcript_path":transcript_path,
         })
         .as_object()
         .unwrap()
@@ -165,9 +181,18 @@ pub(crate) async fn run(
     fields: Value,
     cancel: &CancellationToken,
 ) -> Result<Option<String>, CoreError> {
+    Ok(run_context(shared, event, fields, cancel).await?.reason)
+}
+
+async fn run_context(
+    shared: &Shared,
+    event: Event,
+    fields: Value,
+    cancel: &CancellationToken,
+) -> Result<Output, CoreError> {
     let runtime = shared.runtime();
     if runtime.context.restricted_mode {
-        return Ok(None);
+        return Ok(Output::default());
     }
     let input = input(&*shared.state.lock().await, event, fields);
     run_input(shared, &runtime, event, input, cancel).await
@@ -179,9 +204,9 @@ async fn run_input(
     event: Event,
     input: Value,
     cancel: &CancellationToken,
-) -> Result<Option<String>, CoreError> {
+) -> Result<Output, CoreError> {
     let Some(groups) = runtime.options.hooks.0.get(&event) else {
-        return Ok(None);
+        return Ok(Output::default());
     };
     let tool = input["tool_name"].as_str().unwrap_or_default();
     let commands = groups
@@ -199,11 +224,14 @@ async fn run_input(
     }))
     .await;
     let mut reasons = Vec::new();
+    let mut contexts = Vec::new();
     let mut warnings = Vec::new();
     for (command, result) in results {
         match result {
-            Ok(Some(reason)) => reasons.push(reason),
-            Ok(None) => {}
+            Ok(output) => {
+                reasons.extend(output.reason);
+                contexts.extend(output.context);
+            }
             Err(error) => warnings.push(EventPayload::Warning {
                 message: format!(
                     "{event:?} hook `{}`: {}. Continuing.",
@@ -216,7 +244,89 @@ async fn run_input(
     if !warnings.is_empty() {
         shared.state.lock().await.journal.append(warnings).await?;
     }
-    Ok((!reasons.is_empty()).then(|| reasons.join("\n")))
+    Ok(Output {
+        reason: (!reasons.is_empty()).then(|| reasons.join("\n")),
+        context: (!contexts.is_empty()).then(|| contexts.join("\n")),
+    })
+}
+
+/// Opening stays asynchronous. Only a model-bound turn waits for this result.
+pub(crate) fn session_start(shared: &Shared, state: &mut State, source: &str) {
+    let runtime = shared.runtime();
+    if runtime.context.restricted_mode
+        || state.journal.snapshot.parent.is_some()
+        || !runtime.options.hooks.has(Event::SessionStart)
+    {
+        return;
+    }
+    let input = input(state, Event::SessionStart, json!({"source":source}));
+    let frozen = shared.frozen();
+    let cancel = shared.lifetime.child_token();
+    let (sender, receiver) = tokio::sync::watch::channel(None);
+    state.session_start_hook = Some(receiver);
+    let task = tokio::spawn(async move {
+        let context = run_input(&frozen, &runtime, Event::SessionStart, input, &cancel)
+            .await
+            .ok()
+            .and_then(|output| output.context);
+        sender.send_replace(context);
+    });
+    let mut tasks = shared.hook_tasks.lock().unwrap();
+    tasks.retain(|task| !task.is_finished());
+    tasks.push(task);
+}
+
+pub(crate) fn context_message(event: &str, text: &str) -> canter_model::Message {
+    canter_model::Message::User {
+        text: format!(
+            "[Hook context: {event}]\nInternal context supplied by a hook, not the user's own words.\n\n{text}"
+        ),
+    }
+}
+
+impl State {
+    pub(crate) async fn hook_context(
+        &mut self,
+        event: &str,
+        text: String,
+        turn_id: &str,
+    ) -> Result<(), CoreError> {
+        let message = context_message(event, &text);
+        self.journal
+            .record(crate::context::HistoryEntry::HookContext {
+                event: event.into(),
+                text: text.clone(),
+            })
+            .await?;
+        self.hook_contexts.insert(self.history.len());
+        self.history.push(message);
+        self.journal
+            .append(vec![EventPayload::ItemCompleted {
+                turn_id: turn_id.into(),
+                item: canter_protocol::Item::HookContext {
+                    id: crate::session::id("hook-context"),
+                    event: event.into(),
+                    char_count: text.chars().count() as u64,
+                },
+            }])
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn session_start_context(&mut self, turn_id: &str) -> Result<(), CoreError> {
+        // A completed sender is dropped even on cancellation or execution failure.
+        if self
+            .session_start_hook
+            .as_ref()
+            .is_some_and(|receiver| !matches!(receiver.has_changed(), Ok(false)))
+        {
+            let context = self.session_start_hook.take().unwrap().borrow().clone();
+            if let Some(text) = context {
+                self.hook_context("SessionStart", text, turn_id).await?;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn notify(
@@ -301,6 +411,24 @@ fn prompt_text(input: &[canter_protocol::UserInput]) -> String {
 
 impl Shared {
     pub(crate) async fn check_prompt(&self, cancel: &CancellationToken) -> Result<(), CoreError> {
+        let receiver = {
+            let state = self.state.lock().await;
+            if state
+                .active
+                .as_ref()
+                .is_some_and(|active| active.user_shell.is_some())
+            {
+                return Ok(());
+            }
+            state.session_start_hook.clone()
+        };
+        if let Some(mut receiver) = receiver {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Ok(()),
+                _ = receiver.changed() => {},
+            }
+        }
         let pending = self
             .state
             .lock()
@@ -310,21 +438,30 @@ impl Shared {
             .expect("active turn")
             .pending_prompt
             .take();
-        let Some((input, skills)) = pending else {
+        let Some((input, skills, check_hook)) = pending else {
+            let mut state = self.state.lock().await;
+            if !cancel.is_cancelled() {
+                let turn_id = state.active.as_ref().unwrap().turn.id.clone();
+                state.session_start_context(&turn_id).await?;
+            }
             return Ok(());
         };
-        let reason = run(
-            self,
-            Event::UserPromptSubmit,
-            json!({"prompt":prompt_text(&input)}),
-            cancel,
-        )
-        .await?;
+        let output = if check_hook {
+            run_context(
+                self,
+                Event::UserPromptSubmit,
+                json!({"prompt":prompt_text(&input)}),
+                cancel,
+            )
+            .await?
+        } else {
+            Output::default()
+        };
         let mut state = self.state.lock().await;
         if cancel.is_cancelled() {
             return Ok(());
         }
-        if let Some(reason) = reason {
+        if let Some(reason) = output.reason {
             state.active.as_mut().unwrap().prompt_blocked = true;
             state
                 .journal
@@ -334,6 +471,12 @@ impl Shared {
                 .await?;
         } else {
             let turn_id = state.active.as_ref().unwrap().turn.id.clone();
+            state.session_start_context(&turn_id).await?;
+            if let Some(text) = output.context {
+                state
+                    .hook_context("UserPromptSubmit", text, &turn_id)
+                    .await?;
+            }
             state.user_input(&input, &turn_id, skills).await?;
             state.active.as_mut().unwrap().turn.input = input.clone();
             state
@@ -361,7 +504,7 @@ impl Shared {
             if cancel.is_cancelled() {
                 break;
             }
-            let reason = run(
+            let output = run_context(
                 self,
                 Event::UserPromptSubmit,
                 json!({"prompt":prompt_text(&input.input)}),
@@ -371,7 +514,7 @@ impl Shared {
             if cancel.is_cancelled() {
                 break;
             }
-            if let Some(reason) = reason {
+            if let Some(reason) = output.reason {
                 let mut state = self.state.lock().await;
                 state
                     .journal
@@ -389,7 +532,7 @@ impl Shared {
                 state.steers.retain(|queued| queued.id != input.id);
                 state.queued_skills.remove(&input.id);
             } else {
-                accepted.push(input);
+                accepted.push((input, output.context));
             }
         }
         let consumed = !accepted.is_empty();
@@ -437,9 +580,9 @@ async fn execute(
     input: &Value,
     environment: &BTreeMap<String, String>,
     cancel: &CancellationToken,
-) -> Result<Option<String>, String> {
+) -> Result<Output, String> {
     if cancel.is_cancelled() {
-        return Ok(None);
+        return Ok(Output::default());
     }
     let mut child = tokio::process::Command::new("/bin/sh")
         .args(["-c", &command.command])
@@ -475,39 +618,56 @@ async fn execute(
     };
     let result = tokio::select! {
         biased;
-        _ = cancel.cancelled() => return Ok(None),
+        _ = cancel.cancelled() => return Ok(Output::default()),
         result = tokio::time::timeout(Duration::from_secs_f64(command.timeout), work) => result,
     }
     .map_err(|_| "timed out".to_string())?
     .map_err(|e| format!("process failed: {e}"))?;
     let (status, stdout, stderr) = result;
     match status.code() {
-        Some(2) => return Ok(Some(String::from_utf8_lossy(&stderr).trim().to_owned())),
+        Some(2) => {
+            return Ok(Output {
+                reason: Some(String::from_utf8_lossy(&stderr).trim().to_owned()),
+                context: None,
+            });
+        }
         Some(0) => {}
         code => return Err(format!("unexpected exit status {code:?}")),
     }
     if stdout.iter().all(u8::is_ascii_whitespace) {
-        return Ok(None);
+        return Ok(Output::default());
     }
     let output: Value =
         serde_json::from_slice(&stdout).map_err(|_| "invalid JSON output".to_string())?;
-    if output["decision"] == "block" {
-        return Ok(Some(
+    let reason = if output["decision"] == "block" {
+        Some(
             output["reason"]
                 .as_str()
                 .unwrap_or("Blocked by hook")
                 .to_owned(),
-        ));
-    }
-    if input["hook_event_name"] == "PreToolUse"
+        )
+    } else if input["hook_event_name"] == "PreToolUse"
         && output["hookSpecificOutput"]["permissionDecision"] == "deny"
     {
-        return Ok(Some(
+        Some(
             output["hookSpecificOutput"]["permissionDecisionReason"]
                 .as_str()
                 .unwrap_or("Blocked by hook")
                 .to_owned(),
-        ));
-    }
-    Ok(None)
+        )
+    } else {
+        None
+    };
+    let context = if matches!(
+        input["hook_event_name"].as_str(),
+        Some("SessionStart" | "UserPromptSubmit")
+    ) {
+        output["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .filter(|text| !text.trim().is_empty())
+            .map(str::to_owned)
+    } else {
+        None
+    };
+    Ok(Output { reason, context })
 }

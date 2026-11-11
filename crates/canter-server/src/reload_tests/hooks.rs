@@ -1,5 +1,6 @@
 use super::*;
 mod client_exit;
+mod context;
 mod subagents;
 
 fn command(script: &str) -> Value {
@@ -327,6 +328,23 @@ async fn lifecycle_notifications_and_permission_cannot_approve_or_continue_a_tur
         fixture.hook_file("SessionEnd.json").await["reason"],
         "client_request"
     );
+    for event in [
+        "SessionStart",
+        "SessionEnd",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PermissionRequest",
+        "PostToolUse",
+        "Stop",
+        "StopFailure",
+        "Interrupt",
+    ] {
+        context::assert_transcript(
+            &fixture,
+            &url,
+            &fixture.hook_file(&format!("{event}.json")).await,
+        );
+    }
     fs::remove_file(fixture.root.path().join("SessionStart.json")).unwrap();
     fixture.resume(&url).await;
     assert_eq!(
@@ -480,7 +498,7 @@ async fn interrupt_kills_hooks_without_locking_snapshots_or_other_sessions() {
 }
 
 #[tokio::test]
-async fn notification_hooks_do_not_delay_turns_and_matching_commands_run_in_parallel() {
+async fn session_start_waits_before_turns_and_matching_commands_run_in_parallel() {
     let mut fixture = Fixture::new(json!({"hooks":{
         "SessionStart":command("cat > start.json; while [ ! -f release ]; do sleep 0.02; done"),
         "PreToolUse":[{"matcher":"read|write","hooks":[
@@ -492,6 +510,12 @@ async fn notification_hooks_do_not_delay_turns_and_matching_commands_run_in_para
     let url = fixture.create().await;
     fixture.hook_file("start.json").await;
     fixture.input(&url).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), fixture.requests.recv())
+            .await
+            .is_err()
+    );
+    fs::write(fixture.root.path().join("release"), "").unwrap();
     fixture
         .request()
         .await
@@ -499,15 +523,14 @@ async fn notification_hooks_do_not_delay_turns_and_matching_commands_run_in_para
     fixture.request().await.stop();
     fixture.idle(&url).await;
     assert!(fixture.root.path().join("first").exists());
-    fs::write(fixture.root.path().join("release"), "").unwrap();
     fixture.shutdown().await;
 }
 
 #[tokio::test]
 async fn restricted_sessions_and_hard_denials_never_run_hooks() {
     let mut fixture = Fixture::new(json!({"hooks":{
-        "SessionStart":command("cat > start.json"),
-        "UserPromptSubmit":command("cat > prompt.json"),
+        "SessionStart":command(r#"cat > start.json; printf '%s' '{"hookSpecificOutput":{"additionalContext":"restricted start context"}}'"#),
+        "UserPromptSubmit":command(r#"cat > prompt.json; printf '%s' '{"hookSpecificOutput":{"additionalContext":"restricted input context"}}'"#),
         "PreToolUse":command("cat > pre.json"),
         "PostToolUse":command("cat > post.json"),
         "Stop":command("cat > stop.json")
@@ -522,6 +545,11 @@ async fn restricted_sessions_and_hard_denials_never_run_hooks() {
     fixture.request().await.stop();
     fixture.idle(&restricted).await;
     fixture.close(&restricted).await;
+    assert!(
+        !serde_json::to_string(&fixture.snapshot(&restricted).await)
+            .unwrap()
+            .contains("hookContext")
+    );
     for name in [
         "start.json",
         "prompt.json",

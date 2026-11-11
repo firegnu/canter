@@ -182,6 +182,7 @@ impl State {
                 // Background notices are not user inputs or indexed diagnostic,
                 // budget or restored-file notices. Shift their later indices.
                 let shift = |i: usize| i - usize::from(i > index);
+                self.hook_contexts = self.hook_contexts.iter().map(|&i| shift(i)).collect();
                 self.lsp_delivery.notices = self
                     .lsp_delivery
                     .notices

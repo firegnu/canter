@@ -639,6 +639,12 @@ pub struct AstGrepMatch {
     rename_all_fields = "camelCase"
 )]
 pub enum Item {
+    HookContext {
+        id: String,
+        event: String,
+        #[ts(type = "number")]
+        char_count: u64,
+    },
     Diagnostics {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -940,8 +946,24 @@ impl Item {
             _ => None,
         }
     }
+    pub fn hook_context_message(&self) -> Option<String> {
+        let Self::HookContext {
+            event, char_count, ..
+        } = self
+        else {
+            return None;
+        };
+        let count = if *char_count >= 1000 {
+            format!("{:.1}k", *char_count as f64 / 1000.0)
+        } else {
+            char_count.to_string()
+        };
+        Some(format!("{event} hook added context ({count} chars)"))
+    }
+
     pub fn id(&self) -> Option<&str> {
         match self {
+            Self::HookContext { id, .. } => Some(id),
             Self::Diagnostics { id, .. } => Some(id),
             Self::ModelRetry { id, .. } => Some(id),
             Self::BackgroundCommandAction { id, .. }

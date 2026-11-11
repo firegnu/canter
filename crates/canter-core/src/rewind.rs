@@ -516,6 +516,7 @@ impl Session {
         if let Some((messages, users, skills)) = state.rewind.apply(&rewind) {
             let removed = state.history.split_off(messages);
             state.lsp_delivery.notices.retain(|index| *index < messages);
+            state.hook_contexts.retain(|index| *index < messages);
             state
                 .context_budget_notices
                 .retain(|index, _| *index < messages);
