@@ -472,3 +472,4 @@
   - 第 5 次重复调用停下时走取消，排队中的输入像按 Esc 一样退回给用户。
   - 11-08 试用：模型一次回复里发 5 个相同的 read 时，「Stopped before the fifth repeated tool call…」那行显示在 Explored 读取卡片上面（顺序反了），回合底部显示 `Turn interrupted`，像用户按了 Esc。功能对，只是显示；用户没说要改。
   - 用其它工具做、输出一直不变的合法轮询（比如反复 `sleep 30; tail log` 而日志没动）仍可能第 5 次被停；`shell_output`、`wait_agent` 已排除。用户发一句就能继续；开着 `/goal` 无人值守时目标会暂停到用户回来。11-08 主控提过在系统提示词里加一句「等长命令用后台加 `monitor` / `shell_output`，不要 sleep 轮询」，用户：「先观察吧」。
+- corral 给 canter 送话总报没送到（11-11 装上 cairn 钩子后碰到，问题在 ranch 的 corral，canter 不用改）：canter 配了 UserPromptSubmit 钩子时，按 P2-153 一轮开始的 `turn.started.input` 是空的，放行后才发 `userMessage` 项目。之后 `corral send` 给空闲的 canter 送话，都报 `not_delivered`（「no matching input event; not resending」），但话其实送到了。pony 也跟着在 Slack 线程里说「送了但 canter-desktop/main 没收到」，用户可能再发一遍，造成重复。改法是 corral 确认送达时认 `userMessage` 项目或 `turn.completed` 的输入，不只看 `turn.started`。用户 11-11：「暂时不写」，以后要修时写成需求交 ranch。
