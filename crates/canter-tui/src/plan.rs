@@ -1,13 +1,9 @@
-//! Plan cards and the compact checklist above the input box.
-use canter_protocol::{ItemStatus, PlanStep, PlanStepStatus, SessionSnapshot};
-use ratatui::{
-    style::Style,
-    text::{Line, Span},
-};
+//! Plan cards in the conversation and in exports.
+use canter_protocol::{ItemStatus, PlanStep, PlanStepStatus};
+use ratatui::{style::Style, text::Span};
 
 use crate::{
-    app::{HUNG, UNDER_HUNG},
-    text::{LogicalLine, Row, sanitize, str_width, truncate, wrap_rows},
+    text::{LogicalLine, Row, sanitize, truncate, wrap_rows},
     theme,
 };
 
@@ -159,83 +155,6 @@ pub(crate) fn update_row(before: &[PlanStep], plan: &[PlanStep], width: u16) -> 
     wrap_rows(&LogicalLine::new(vec![Span::raw("  ● ")], spans), width)
         .into_iter()
         .next()
-}
-
-/// The plan's unfinished steps, the one in progress first, in at most
-/// `room` rows (and five). Under the status line while working they `hang`:
-/// the first row after `   ⎿ `, the rest lined up with it; else two spaces
-/// in.
-pub(crate) fn pinned(
-    snapshot: &SessionSnapshot,
-    width: u16,
-    room: usize,
-    hang: bool,
-) -> Vec<Line<'static>> {
-    if snapshot.settings.plan_enabled == Some(false) || room == 0 {
-        return Vec::new();
-    }
-    let Some(plan) = snapshot.current_plan() else {
-        return Vec::new();
-    };
-    let steps: Vec<_> = plan
-        .iter()
-        .filter(|step| step.status == PlanStepStatus::InProgress)
-        .chain(
-            plan.iter()
-                .filter(|step| step.status == PlanStepStatus::Pending),
-        )
-        .collect();
-    let lead = |row: usize| match (hang, row) {
-        (false, _) => "  ",
-        (true, 0) => HUNG,
-        (true, _) => UNDER_HUNG,
-    };
-    let limit = room.min(5);
-    if limit == 1 && steps.len() > 1 {
-        let step = steps[0];
-        let suffix = format!(" (+{} more)", steps.len() - 1);
-        let mut spans = truncate(
-            vec![
-                Span::styled(lead(0), theme::secondary()),
-                Span::styled(format!("□ {}", text(&step.step)), step_style(step.status)),
-            ],
-            usize::from(width).saturating_sub(str_width(&suffix)),
-        );
-        spans.push(Span::styled(suffix, theme::secondary()));
-        return vec![Line::from(truncate(spans, usize::from(width)))];
-    }
-    let shown = if steps.len() > limit {
-        limit - 1
-    } else {
-        steps.len()
-    };
-    let mut rows: Vec<_> = steps
-        .iter()
-        .take(shown)
-        .enumerate()
-        .map(|(row, step)| {
-            Line::from(truncate(
-                vec![
-                    Span::styled(lead(row), theme::secondary()),
-                    Span::styled(format!("□ {}", text(&step.step)), step_style(step.status)),
-                ],
-                usize::from(width),
-            ))
-        })
-        .collect();
-    if steps.len() > shown {
-        rows.push(Line::from(truncate(
-            vec![
-                Span::styled(lead(shown), theme::secondary()),
-                Span::styled(
-                    format!("… and {} more", steps.len() - shown),
-                    theme::secondary(),
-                ),
-            ],
-            usize::from(width),
-        )));
-    }
-    rows
 }
 
 pub(crate) fn markdown(plan: &[PlanStep], explanation: Option<&str>, status: ItemStatus) -> String {
