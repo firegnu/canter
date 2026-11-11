@@ -47,7 +47,7 @@ impl Session {
                 &self.shared,
                 &state,
                 hooks::Event::SessionStart,
-                serde_json::json!({"source":"resume"}),
+                serde_json::json!({"source":"resume","accepts_additional_context":false}),
                 self.shared.lifetime.child_token(),
             );
         }

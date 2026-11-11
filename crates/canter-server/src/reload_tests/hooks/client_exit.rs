@@ -206,6 +206,11 @@ async fn repeated_client_reconnections_notify_without_reinjecting_context() {
     for count in 1..=3 {
         fixture.input(&url).await;
         let request = fixture.request().await;
+        if count == 1 {
+            let start = &wait_lines(&fixture, "starts.jsonl", 1).await[0];
+            assert_eq!(start["source"], "startup");
+            assert_eq!(start["accepts_additional_context"], true);
+        }
         let occurrences = request.body["messages"]
             .as_array()
             .unwrap()
@@ -223,10 +228,10 @@ async fn repeated_client_reconnections_notify_without_reinjecting_context() {
             drop(client);
             wait_lines(&fixture, "ends.jsonl", count).await;
             client = connect(&fixture, &url).await;
-            assert_eq!(
-                wait_lines(&fixture, "starts.jsonl", count + 1).await[count]["source"],
-                "resume"
-            );
+            let start = &wait_lines(&fixture, "starts.jsonl", count + 1).await[count];
+            assert_eq!(start["source"], "resume");
+            // The reconnect only notifies, so hooks must not record an injection.
+            assert_eq!(start["accepts_additional_context"], false);
         }
     }
     drop(client);

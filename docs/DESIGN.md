@@ -621,7 +621,7 @@ macOS 交叉审查后主控确认（Linux 差异见本节前文）：`writePaths
 
 | 事件 | 触发时机 | 其它 stdin 字段 | 作用 |
 |---|---|---|---|
-| SessionStart | 新建、打开存盘会话；客户端离开已发 SessionEnd 后，第一条事件流重新连上 | source: startup / resume | 新建和打开存盘会话可注入上下文；客户端重连只通知 |
+| SessionStart | 新建、打开存盘会话；客户端离开已发 SessionEnd 后，第一条事件流重新连上 | source: startup / resume；accepts_additional_context：新建、打开为 true，重连为 false | 新建和打开存盘会话可注入上下文；客户端重连只通知 |
 | SessionEnd | 最后一个客户端离开 10 秒且会话停下；显式关闭、服务端正常停止（本段尚未发过时） | reason: client_exit / client_request / server_shutdown | 通知 |
 | UserPromptSubmit | 用户输入或排队输入开始处理、插话消费前 | prompt 原文（文本部分，多个文本片段以换行连接） | 放行可注入上下文；被拦输入及其注入不写模型历史和用户消息，不向模型请求，也不在恢复时回放 |
 | PreToolUse | 准备工具、通过 canter 自己的规则后，批准框前 | tool_name、tool_input | 可拦；原因成为工具结果，不弹框、不执行 |
@@ -649,7 +649,7 @@ P2-190 用户原话（11-03，P2-83 调研后）：「其他我都没有异议�
 
 P2-281（11-11）：只在成功退出的 SessionStart、放行的 UserPromptSubmit 中识别 stdout JSON 的 `hookSpecificOutput.additionalContext`，必须为非空白字符串，正文原样保留，同一事件按配置顺序以换行拼接。字段名参照 [Claude Code hooks 文档](https://code.claude.com/docs/en/hooks) 的 SessionStart、UserPromptSubmit 及共同字段 `transcript_path`，只参考、不搬代码。纯文字和坏 JSON 沿用英文 warning，不注入；空串、非字符串字段忽略。其它事件输出不因此进入模型。
 
-SessionStart 不阻塞打开界面；新建（startup）和从盘恢复（resume）这一段第一次模型请求前等待仍在执行的命令，最多等到命令自己的 timeout。等候可被当前轮取消，钩子按会话生命周期继续，结果留到下次请求；已经发出的内容不修改，晚到结果只在下一次请求前追加，不叫醒、不开轮。客户端离开后重连的 SessionStart 照常运行，但只通知、不注入。分叉继承源会话已有的注入，新分叉的 startup 仍在新会话首轮追加一次。子会话仍不发 SessionStart，SubagentStart 仍只通知。
+SessionStart 不阻塞打开界面；新建（startup）和从盘恢复（resume）这一段第一次模型请求前等待仍在执行的命令，最多等到命令自己的 timeout。等候可被当前轮取消，钩子按会话生命周期继续，结果留到下次请求；已经发出的内容不修改，晚到结果只在下一次请求前追加，不叫醒、不开轮。客户端离开后重连的 SessionStart 照常运行，但只通知、不注入；它的 source 仍是 resume，stdin 的 `accepts_additional_context` 为 false（新建、打开存盘会话为 true），让钩子分得出这次输出会不会进模型，不必误记已注入（11-11 cairn 主控提出、用户选加字段，不改 P2-172 的 source 取值）。分叉继承源会话已有的注入，新分叉的 startup 仍在新会话首轮追加一次。子会话仍不发 SessionStart，SubagentStart 仍只通知。
 
 UserPromptSubmit 的上下文在放行后的本条用户输入之前追加，普通输入、排队和插话一致；任一命令拦截则丢弃本条输入的所有注入。自动轮仍不触发 UserPromptSubmit。正文以私有 `hook_context {event,text}` 历史记录保存，模型里使用带 `[Hook context: <事件>]` 标记的用户角色消息，明确是内部上下文；不进入系统提示词或环境段，不改已发请求前缀。两种压缩路径都按内部上下文处理，不计入用户原话或最近原话保留集合。注入在所属轮边界之后存盘，重开、分叉原样重放，回退、撤回随所属轮去掉；11-11 交叉审查后用户补定例外：撤回的那一轮带着 SessionStart 注入时，把它留待下一次模型请求前补发，仍存为下一轮的 hook_context 并显示一行 hookContext。重开存盘会话时从私有历史恢复待补发内容；已经补发的按新轮记录重放，不重复补发。回退不补发，UserPromptSubmit 仍随被撤回的输入去掉。终端和导出在注入处显示同一行英文摘要（例如 `SessionStart hook added context (1.2k chars)`），终端用灰字，不显示正文；协议见第 8 条。
 

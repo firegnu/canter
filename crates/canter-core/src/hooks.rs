@@ -259,7 +259,11 @@ pub(crate) fn session_start(shared: &Shared, state: &mut State, source: &str) {
     {
         return;
     }
-    let input = input(state, Event::SessionStart, json!({"source":source}));
+    let input = input(
+        state,
+        Event::SessionStart,
+        json!({"source":source,"accepts_additional_context":true}),
+    );
     let frozen = shared.frozen();
     let cancel = shared.lifetime.child_token();
     let (sender, receiver) = tokio::sync::watch::channel(None);
