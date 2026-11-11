@@ -87,8 +87,18 @@ async fn shell_runs_bash_syntax_with_and_without_sandbox() {
                 output.text
             );
         }
-        assert!(run(&tools, "[[ 1 -eq 1 ]] && echo ok").await.text.starts_with("ok\n"));
-        assert!(run(&tools, "echo $'a\\tb'").await.text.starts_with("a\tb\n"));
+        assert!(
+            run(&tools, "[[ 1 -eq 1 ]] && echo ok")
+                .await
+                .text
+                .starts_with("ok\n")
+        );
+        assert!(
+            run(&tools, "echo $'a\\tb'")
+                .await
+                .text
+                .starts_with("a\tb\n")
+        );
         tools.close_shell();
     }
 }
@@ -100,10 +110,7 @@ async fn bash_env_script_is_not_executed() {
         let marker = fixture.cwd.join("bash-env-ran");
         let script = fixture.root.path().join("bash-env.sh");
         std::fs::write(&script, format!("touch '{}'\n", marker.display())).unwrap();
-        let tools = fixture.tools(
-            sandbox,
-            &[("BASH_ENV", script.to_str().unwrap())],
-        );
+        let tools = fixture.tools(sandbox, &[("BASH_ENV", script.to_str().unwrap())]);
         let output = run(&tools, "printf ran").await;
         assert_eq!(
             output.outcome,

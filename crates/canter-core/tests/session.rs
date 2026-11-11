@@ -638,7 +638,12 @@ async fn sandbox_model_request_exposes_scope_only_when_enabled() {
             }
             let serialized = serde_json::to_string(&request)
                 .unwrap()
-                .replace(&temp.path().display().to_string(), "/fixture");
+                .replace(&temp.path().display().to_string(), "/fixture")
+                // Recorded on macOS; Linux runs model commands with bash when installed.
+                .replace(
+                    "Run a command with bash -c",
+                    "Run a command with /bin/sh -c",
+                );
             assert_eq!(
                 serialized.as_bytes(),
                 include_bytes!("sandbox-disabled-request.json")
