@@ -550,6 +550,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 会话写锁、服务端锁和发现探测锁由拥有者显式解锁后释放：Linux 的文件锁会随 fork 继承，不能只靠关闭父进程的文件描述符，否则并发启动命令时会短暂阻止会话重开或误报服务端仍在运行。看护进程继续用系统 `/bin/sh`，杀进程组使用 macOS sh 和 Linux dash 都接受的 `kill -KILL -<pgid>` 写法（dash 不接受原来的 `--`）。
 
+模型的 shell 命令（P2-278，11-11 用户同意）：Linux 上 `/bin/sh` 通常是 dash，模型写的 `time`、`[[ ]]` 这类 bash 写法会报错（P2-274 遥测 2848 条里约 22 次）。所以 Linux 上模型的前台、后台和沙箱命令改用 bash，只从 `/bin/bash`、`/usr/bin/bash` 两个固定位置找，不按 PATH 或 `$SHELL` 找；找不到就照旧用 `/bin/sh`。服务端进程内固定，shell 工具说明按实际写 `bash -c` 或 `/bin/sh -c`。用 bash 时不带 `BASH_ENV`，不读启动文件。macOS、用户 `!` 命令、钩子、看护进程和状态栏照旧用 `/bin/sh`。
+
 ## Terminal-Bench（P2-260，2026-11-10 用户定）
 
 评的是 canter 这个外壳，用官方运行框架 Harbor 跑 Terminal-Bench 2.1（数据集 `terminal-bench/terminal-bench-2-1`），和同一模型下的别家外壳逐题对比。用户：「还是走正常的bench吧。不要投机取巧了」——不改题、不放宽超时、不让外壳看测试和标准答案，也不接进 `eval/` 那套 Rust 评测工具；两套各出各的结果，`eval/` 照旧测压缩、插话、子 agent、记忆这些 canter 自己的能力。

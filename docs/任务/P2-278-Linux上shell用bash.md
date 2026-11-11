@@ -103,3 +103,13 @@
 - 单元测试里不能用 `env!("CARGO_TARGET_TMPDIR")`，改为普通 `tempfile::tempdir()`（该测试不开沙箱）。
 
 没有要主控决定的事。
+
+## 主控审查
+
+- 11-11 canter/main 审查：diff 只动了 `crates/canter-tools/`、三处按 macOS 字节比对的测试（比较前把 Linux 的 `bash -c` 归一成 `/bin/sh -c`，快照文件没改）和 README。验收四条都有对应测试：`linux_bash.rs` 沙箱开、关两种情况下跑三条 bash 写法，并验证 `BASH_ENV` 脚本不执行；`shell_program` 单元测试用 `cfg(test)` 注入点模拟没有 bash；macOS 上说明逐字不变（`descriptions.rs` 和三处快照照旧过）。只按固定位置找 bash、`BASH_ENV` 在沙箱里外都去掉（`env_remove` 加在 bwrap 命令上），两点核对过。「不要做」一条都没碰。
+- 拿主意的地方都同意：用户 `!` 仍用 `/bin/sh`；说明写 `bash` 不写路径；快照归一化不改录制字节。
+- Mac 重跑：`cargo nextest run -p canter-tools -p canter-core -p canter` 765 过、45 跳过，和它报的 246 + 519 一致。合并前全套：`cargo nextest run --all-targets` 第一次 `canter::deployment upgrade_keeps_five_backups_and_rollback_can_switch_back_again` 失败（老问题，P2-198、P2-243 合并前都出过，负载高时超时），`--no-fail-fast` 重跑 2101 全过；`cargo test --doc --workspace` 通过。
+- 建议改（不挡合并）：bash 还会读环境里的 `SHELLOPTS`、`BASHOPTS` 和导出函数（`BASH_FUNC_*`），dash 不认；这些来自用户自己的会话环境，平常不会有，先不处理。5090 上 `guardian` 的 300 并发测试在 `ulimit -n` 1024 时偶发 `Too many open files`，测试本身的问题，和本件无关。
+- 合并时主控在 DESIGN「Linux 支持」一节末尾补了一段，写这次的行为。
+
+结果：一次过
