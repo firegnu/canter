@@ -415,7 +415,8 @@ input 不填，说明只放入本地输入框供用户修改后发送。取消�
 
 ### 审查轮
 
-`GET /v1/info` 新增可选 `features` 字符串数组，本版返回 `["review"]`。
+`GET /v1/info` 的可选 `features` 字符串数组从审查轮开始加入，含 `review` 表示支持审查轮；
+之后各项扩展陆续加进这个数组（含义见上面 `features` 一条）。
 终端每次发起 `/review` 先读取所连服务端的能力；缺省/null 或不含 review 时不发送，
 提示运行 `canter serve --replace` 后重试。旧客户端可以忽略该字段。
 

@@ -228,7 +228,6 @@
   - 状态栏 Cost 项另写一份金额格式，没复用 `usage::cost`，两处都用格式化后的文字是否等于 `"$0.00"` 判断别家有没有花钱（`app.rs`、`usage.rs`）。核心选项名 `chatgpt_plan_providers` 带 ChatGPT。
   - 可以不改：别家的新请求存盘多了 `"billingKind":"tokenMetered"`（显示不变）；跨升级的会话同一模型新旧记录混在一起时显示 `unknown + ChatGPT plan` / `$0.00+? + ChatGPT plan`。
 
-- 协议 README「审查轮」一节还写着 `/v1/info` 的 `features`「本版返回 `["review"]`」，已过时（现在有十几项）；P2-196 开发看到、按范围没动。
 
 - 受管理模式（P2-192，11-03 合并，没装）交叉审查建议改、没做的（用户可以试用后再定）：
   - 正在 `--replace` / `upgrade` 换服务端的那段（旧服务端排空，最长约 60 秒加关会话的时间）里受管终端正常退出，显式收尾不起作用，会话由排空按 `ServerShutdown` 关；另有普通终端连着时，它会在新服务端把会话恢复回来，「照样收尾」没做到。改法：排空时只停 10 秒宽限的收尾，显式退出照常关（`crates/canter-server/src/managed.rs` `finish`）。
