@@ -17,6 +17,9 @@ mod telemetry;
 #[path = "support/memory.rs"]
 mod memory;
 
+#[path = "support/images.rs"]
+mod images;
+
 struct ScriptModel {
     scripts: Mutex<VecDeque<Vec<ModelEvent>>>,
     requests: Mutex<Vec<Request>>,
