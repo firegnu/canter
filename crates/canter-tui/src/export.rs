@@ -190,6 +190,9 @@ impl Body {
     fn item(&mut self, item: &Item, cwd: &str, feedback: Option<&str>) {
         let assistant = "Assistant";
         match item {
+            Item::HookContext { .. } => {
+                self.block("Context", &sanitize(&item.hook_context_message().unwrap()))
+            }
             Item::ModelRetry { .. } => {
                 self.block("Retry", &sanitize(&item.retry_message().unwrap()))
             }
@@ -741,6 +744,29 @@ fn file_safe(name: &str) -> String {
 mod tests {
     use super::*;
     use canter_protocol::{ErrorInfo, SessionSettings};
+
+    #[test]
+    fn hook_context_is_one_muted_summary_in_the_conversation_and_export() {
+        let item = Item::HookContext {
+            id: "h1".into(),
+            event: "SessionStart".into(),
+            char_count: 1200,
+        };
+        let label = "SessionStart hook added context (1.2k chars)";
+        let rows = crate::cells::item(&item, true, true, "/work", 120, None, false);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].line.to_string().contains(label));
+        assert!(
+            rows[0]
+                .line
+                .spans
+                .iter()
+                .filter(|span| span.content.contains("SessionStart"))
+                .all(|span| span.style == crate::theme::secondary())
+        );
+        let text = markdown(&snapshot(None, vec![turn("t1", "go", vec![item])]), "now").unwrap();
+        assert_eq!(text.matches(label).count(), 1);
+    }
 
     fn turn(id: &str, input: &str, items: Vec<Item>) -> Turn {
         let input = vec![UserInput::Text { text: input.into() }];

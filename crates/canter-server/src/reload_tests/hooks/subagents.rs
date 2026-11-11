@@ -146,6 +146,7 @@ async fn child_hooks_identify_tools_and_only_check_human_prompts() {
         assert_eq!(rows[0]["agent_type"], "general");
         assert_eq!(rows[0]["parent_session_id"], parent_id);
         assert_eq!(rows[0]["permission_mode"], "allowAll");
+        super::context::assert_transcript(&fixture, &child, &rows[0]);
     }
     parent_request.stop();
     fixture.idle(&parent).await;
@@ -183,6 +184,7 @@ async fn subagent_notifications_are_async_and_agent_inputs_skip_prompt_hooks() {
     assert_eq!(start[0]["agent_name"], "Trace parser errors");
     assert_eq!(start[0]["session_id"], id);
     assert_eq!(start[0]["agent_type"], "general");
+    super::context::assert_transcript(&fixture, &child, &start[0]);
     parent_request.tool(
         "send_input",
         json!({"id":id,"message":"Queued automatic task"}),
@@ -208,6 +210,7 @@ async fn subagent_notifications_are_async_and_agent_inputs_skip_prompt_hooks() {
     let stops = wait_records(&fixture, id, "SubagentStop", 3).await;
     assert!(!fixture.root.path().join("home/release").exists());
     for stop in stops {
+        super::context::assert_transcript(&fixture, &child, &stop);
         assert_eq!(stop["status"], "completed");
         assert_eq!(stop["last_assistant_message"], "done");
         assert_eq!(stop["agent_id"], id);

@@ -100,6 +100,9 @@ pub(crate) struct State {
     pub closing: bool,
     pub closing_reason: Option<SessionCloseReason>,
     pub hook_session_ended: bool,
+    pub session_start_hook: Option<watch::Receiver<Option<String>>>,
+    pub retracted_session_start: VecDeque<String>,
+    pub hook_contexts: std::collections::BTreeSet<usize>,
     pub measured_context: Option<(u64, u64)>,
     pub context_budget_notices: std::collections::BTreeMap<usize, u8>,
     pub auto_compactions_without_progress: u8,
@@ -109,7 +112,7 @@ pub(crate) struct State {
 pub(crate) struct Active {
     pub long_run: crate::long_run::Guards,
     pub model_scope: Arc<tokio::sync::OnceCell<String>>,
-    pub pending_prompt: Option<(Vec<UserInput>, Vec<crate::skill_invocation::Snapshot>)>,
+    pub pending_prompt: Option<(Vec<UserInput>, Vec<crate::skill_invocation::Snapshot>, bool)>,
     pub prompt_blocked: bool,
     pub configuration_lease: Option<Arc<dyn Send + Sync>>,
     pub non_interactive: bool,
@@ -275,6 +278,9 @@ impl State {
             closing: false,
             closing_reason: None,
             hook_session_ended: false,
+            session_start_hook: None,
+            retracted_session_start: VecDeque::new(),
+            hook_contexts: Default::default(),
             measured_context: None,
             context_budget_notices: Default::default(),
             auto_compactions_without_progress: 0,
@@ -681,13 +687,18 @@ impl State {
     pub async fn consume_steering(
         &mut self,
         turn_id: &str,
-        inputs: Vec<QueuedInput>,
+        inputs: Vec<(QueuedInput, Option<String>)>,
     ) -> Result<(), CoreError> {
         if inputs.is_empty() {
             return Ok(());
         }
         let mut payloads = Vec::new();
-        for input in &inputs {
+        for (input, context) in &inputs {
+            if let Some(text) = context {
+                self.journal.append(std::mem::take(&mut payloads)).await?;
+                self.hook_context("UserPromptSubmit", text.clone(), turn_id)
+                    .await?;
+            }
             let skills = self.queued_skills.remove(&input.id).unwrap_or_default();
             self.user_input(&input.input, turn_id, skills).await?;
             payloads.push(EventPayload::ItemCompleted {
@@ -699,7 +710,7 @@ impl State {
             });
         }
         payloads.push(EventPayload::InputRemoved {
-            input_ids: inputs.iter().map(|input| input.id.clone()).collect(),
+            input_ids: inputs.iter().map(|(input, _)| input.id.clone()).collect(),
             reason: if inputs.len() > 1 {
                 InputRemovalReason::Merged
             } else {
@@ -709,7 +720,7 @@ impl State {
         });
         self.journal.append(payloads).await?;
         self.steers
-            .retain(|input| !inputs.iter().any(|used| used.id == input.id));
+            .retain(|input| !inputs.iter().any(|(used, _)| used.id == input.id));
         Ok(())
     }
     pub async fn cancel_requests(&mut self) -> Result<(), CoreError> {
@@ -782,14 +793,8 @@ impl Session {
     }
 
     async fn session_start_hook(&self, source: &str) {
-        let state = self.shared.state.lock().await;
-        crate::hooks::notify(
-            &self.shared,
-            &state,
-            crate::hooks::Event::SessionStart,
-            serde_json::json!({"source":source}),
-            self.shared.lifetime.child_token(),
-        );
+        let mut state = self.shared.state.lock().await;
+        crate::hooks::session_start(&self.shared, &mut state, source);
     }
 
     /// Recheck trust when resuming, including a failed lookup. Granting trust
@@ -1030,6 +1035,8 @@ impl Session {
         state.rejected_replays = restored.rejected_replays;
         state.lsp_delivery.notices = restored.diagnostic_notices;
         state.context_budget_notices = restored.context_budget_notices;
+        state.hook_contexts = restored.hook_contexts;
+        state.retracted_session_start = restored.retracted_session_start;
         state.plan_mode_notices = restored.plan_mode_notices;
         state.tool_images = restored.tool_images;
         state.user_messages = restored.users;
@@ -2389,13 +2396,17 @@ impl Shared {
                 .options
                 .hooks
                 .has(crate::hooks::Event::UserPromptSubmit);
+        let defer_prompt = check_prompt
+            || (!params.input.is_empty()
+                && (state.session_start_hook.is_some()
+                    || !state.retracted_session_start.is_empty()));
         let turn = Turn {
             review: params.review,
             id: id("turn"),
             items: Vec::new(),
             status: TurnStatus::InProgress,
             error: None,
-            input: if check_prompt {
+            input: if defer_prompt {
                 Vec::new()
             } else {
                 params.input.clone()
@@ -2418,7 +2429,7 @@ impl Shared {
             state.user_messages.len(),
             state.invoked_skills.len(),
         );
-        if !params.input.is_empty() && !check_prompt {
+        if !params.input.is_empty() && !defer_prompt {
             state
                 .user_input(&params.input, &turn.id, skills.clone())
                 .await?;
@@ -2433,7 +2444,7 @@ impl Shared {
                 close_reason: None,
             },
         ];
-        if !params.input.is_empty() && !check_prompt {
+        if !params.input.is_empty() && !defer_prompt {
             payloads.push(EventPayload::ItemCompleted {
                 turn_id: turn.id.clone(),
                 item: Item::UserMessage {
@@ -2447,7 +2458,7 @@ impl Shared {
         state.active = Some(Active {
             long_run: Default::default(),
             model_scope: Default::default(),
-            pending_prompt: check_prompt.then_some((params.input, skills)),
+            pending_prompt: defer_prompt.then_some((params.input, skills, check_prompt)),
             prompt_blocked: false,
             configuration_lease,
             non_interactive: params.non_interactive,

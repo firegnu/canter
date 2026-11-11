@@ -84,6 +84,10 @@ pub(crate) enum HistoryEntry {
     DiagnosticsNotice {
         message: Message,
     },
+    HookContext {
+        event: String,
+        text: String,
+    },
     ContextBudgetNotice {
         message: Message,
         threshold: u8,
@@ -130,6 +134,8 @@ pub(crate) struct Restored {
     pub context_budget_notices: BTreeMap<usize, u8>,
     pub restored_file_notices: std::collections::BTreeSet<usize>,
     pub diagnostic_notices: std::collections::BTreeSet<usize>,
+    pub hook_contexts: std::collections::BTreeSet<usize>,
+    pub retracted_session_start: std::collections::VecDeque<String>,
     pub invoked_skills: Vec<crate::skill_invocation::Invocation>,
     pub background_cards: BTreeMap<String, canter_protocol::Item>,
     pub prefix: Vec<Message>,
@@ -175,11 +181,22 @@ pub(crate) fn restore(
     let mut tool_images = Vec::new();
     let mut background_cards = BTreeMap::new();
     let mut diagnostic_notices = std::collections::BTreeSet::new();
+    let mut hook_contexts = std::collections::BTreeSet::new();
+    let mut retracted_session_start = std::collections::VecDeque::new();
     let mut restored_file_notices = std::collections::BTreeSet::new();
     let mut context_budget_notices = BTreeMap::new();
     let mut rejected_replays = std::collections::HashSet::new();
     for entry in entries {
         match entry {
+            HistoryEntry::HookContext { event, text } => {
+                // The retry is a normal HookContext in its new turn, acknowledging
+                // the pending copy reconstructed from the earlier Retract.
+                if event == "SessionStart" && retracted_session_start.front() == Some(&text) {
+                    retracted_session_start.pop_front();
+                }
+                hook_contexts.insert(history.len());
+                history.push(crate::hooks::context_message(&event, &text));
+            }
             HistoryEntry::ContextBudgetNotice { message, threshold } => {
                 context_budget_notices.insert(history.len(), threshold);
                 history.push(message);
@@ -233,6 +250,7 @@ pub(crate) fn restore(
                     tool_images.clear();
                     history.truncate(messages);
                     diagnostic_notices.retain(|index| *index < messages);
+                    hook_contexts.retain(|index| *index < messages);
                     restored_file_notices.retain(|index| *index < messages);
                     context_budget_notices.retain(|index, _| *index < messages);
                     users.truncate(user_count);
@@ -241,9 +259,15 @@ pub(crate) fn restore(
             }
             HistoryEntry::Retract { turn_id, .. } => {
                 if let Some((messages, user_count, skills)) = rewind.retract(&turn_id) {
+                    retracted_session_start.extend(crate::hooks::retracted_start_contexts(
+                        &history,
+                        &hook_contexts,
+                        messages,
+                    ));
                     tool_images.clear();
                     history.truncate(messages);
                     diagnostic_notices.retain(|index| *index < messages);
+                    hook_contexts.retain(|index| *index < messages);
                     restored_file_notices.retain(|index| *index < messages);
                     context_budget_notices.retain(|index, _| *index < messages);
                     users.truncate(user_count);
@@ -285,6 +309,7 @@ pub(crate) fn restore(
                 tool_images.clear();
                 history = messages.into_iter().filter_map(known).collect();
                 diagnostic_notices.clear();
+                hook_contexts.clear();
                 restored_file_notices.clear();
                 context_budget_notices.clear();
                 summary_index = history.len().checked_sub(1);
@@ -321,6 +346,8 @@ pub(crate) fn restore(
         context_budget_notices,
         restored_file_notices,
         diagnostic_notices,
+        hook_contexts,
+        retracted_session_start,
         invoked_skills,
         background_cards,
         prefix,

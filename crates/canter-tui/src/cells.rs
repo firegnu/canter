@@ -211,6 +211,10 @@ pub(crate) fn item(
     sandbox: bool,
 ) -> Vec<Row> {
     let mut rows = match item {
+        Item::HookContext { .. } => wrap_rows(
+            &item_line(&item.hook_context_message().unwrap(), theme::secondary()),
+            width,
+        ),
         Item::ModelRetry { .. } => {
             wrap_all(&agent_message(&item.retry_message().unwrap(), width), width)
         }

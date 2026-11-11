@@ -18,7 +18,7 @@ import type { UserInputAnswer } from "./UserInputAnswer";
 import type { WebSearchResult } from "./WebSearchResult";
 import type { JsonValue } from "./serde_json/JsonValue";
 
-export type Item = { "type": "diagnostics", id: string, sourceItemId?: string, status: DiagnosticStatus, files: Array<DiagnosticFile>, totalCount: number, shownCount: number, omittedCount: number, resolvedCount?: number,
+export type Item = { "type": "hookContext", id: string, event: string, charCount: number, } | { "type": "diagnostics", id: string, sourceItemId?: string, status: DiagnosticStatus, files: Array<DiagnosticFile>, totalCount: number, shownCount: number, omittedCount: number, resolvedCount?: number,
 /**
  * Errors and warnings in `totalCount`; missing in items saved before P2-135.
  */

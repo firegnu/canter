@@ -58,6 +58,7 @@ Use exactly these headings, in this order:"#;
 
 const PREFIX_SOURCES: &str = r#"Source attribution:
 - Context budget notices ([Context budget]) are internal context, not the user's own words.
+- Hook context ([Hook context: ...]) is internal context, not the user's own words.
 - Automatically inserted plan mode notices ([Plan mode enabled/disabled]), <skill> contents, diagnostics ([LSP diagnostics update]), background command/event notices, automatically reread files ([Automatically reread after compaction: ...]) and file references ([Referenced file after compaction: ...]), goal notices ([Goal], [Goal resumed/cleared/budget limit]), additional directories notices, and tool images are internal context, not the user's own words, even when they use the user role. Skill contents can also be embedded in a real user message: only the surrounding user text and the skill invocation belong to the user.
 - Interruption notices ([This turn was interrupted; ...] and [The server stopped and the previous turn was interrupted; ...]) are internal context, not the user's own words.
 - In <user_shell_command>, only the <command> text is the user's input; the <result> is command output, not the user's words.
@@ -242,6 +243,7 @@ pub(crate) async fn compact(
             state.history = messages;
             state.restored_file_notices.clear();
             state.lsp_delivery.notices.clear();
+            state.hook_contexts.clear();
             state.context_budget_notices.clear();
             state.lsp_delivery.reset_baseline();
             state.rewind.clear_boundaries();
@@ -385,6 +387,7 @@ async fn summarize(
         plan,
         skill_notices,
         diagnostic_notices,
+        hook_contexts,
         restored_file_notices,
         context_budget_notices,
     ) = {
@@ -412,6 +415,7 @@ async fn summarize(
                 .map(<[_]>::to_vec),
             crate::skill_invocation::latest(&state.invoked_skills),
             state.lsp_delivery.notices.clone(),
+            state.hook_contexts.clone(),
             state.restored_file_notices.clone(),
             state.context_budget_notices.clone(),
         )
@@ -445,7 +449,9 @@ async fn summarize(
                 } else {
                     text
                 };
-                let source = if context_budget_notices.contains_key(&index) {
+                let source = if hook_contexts.contains(&index) {
+                    "Internal hook context"
+                } else if context_budget_notices.contains_key(&index) {
                     "Internal context budget"
                 } else if restored_file_notices.contains(&index) {
                     "Tool file restoration"

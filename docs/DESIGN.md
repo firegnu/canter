@@ -69,6 +69,7 @@ canter 是用户自己做的 coding agent。本文件记已经定下的事和来
    - 会话管理（P2-32，11-01 主控确认）：新增 `POST /v1/sessions/{id}/trash`，无请求体，成功返回 HTTP 204。服务端在登记表锁内检查、正常关闭无人连接且已停下的会话，再将整个目录移到 `<CANTER_HOME>/trash/<id>`；回收站目录权限 0700，同名目标已存在就报 Conflict，两边不动、由用户手动处理。有客户端事件流连接、运行中的轮、等批准或回答、排队输入、目标续跑、后台命令在跑或待唤醒或 `/btw` 时拒绝；包括用户 `!` 起的、不唤醒模型的后台命令，提示先打开会话执行 `/stop`。等批准/回答在这里仍是未完的工作，不改变 P2-172 发 SessionEnd 时的「停下」定义。删除后列表、继续上次会话、启动预热、统计均只见 sessions 中留下的目录；读取或恢复回收站内的会话报 SessionNotFound。原 `DELETE /v1/sessions/{id}` 仍只关闭会话。`features` 增加 `sessionTrash`，新终端删除前检查，旧服务端提示 `canter serve --replace`。对照本地 Codex `rust-v0.163.0`（`codex-rs/app-server-protocol/src/protocol/common.rs`、`codex-rs/app-server/src/request_processors/thread_delete.rs`、`codex-rs/thread-store/src/local/{archive_thread,delete_thread}.rs`）：`thread/archive` 将日志移入归档目录，提供归档列表及 `thread/unarchive`；`thread/delete` 永久删除保存的日志和状态，发送 `thread/deleted` 通知。canter 移走整个目录，只提供用户手动移回或清理的回收站，不开放归档查询或恢复端点，也不增加删除通知；用 `/trash` 明确可手动找回与永久删除的差异，避免改变既有 close 的含义。
    - 条件改名（P2-32，11-01 主控确认）：既有 `PATCH /v1/sessions/{id}` 新增可选字符串 `expectedName`；空字符串表示预期没有名字。服务端在会话状态锁内比较，不相等时整个 PATCH 成功但不做任何修改、不追加事件，返回当前 `eventSeq`；省略或 null 沿用无条件更新。自动起名预期空名，自动撤销预期本终端起的名字；手动 `/rename <名字>` 或 `/rename` 清名仍只传 `name`。`features` 增加 `conditionalName`；新终端使用前查询，旧服务端退回原来的无条件自动更新。条件是 canter 为多终端竞态增加的请求字段，不入存盘、不加标记文件。主控接受手动清空与另一终端为同一新会话第一轮起名恰好并发时，空名可能再次被自动命名；相同字符串的名字也无法区分来源，条件只比较名字值。
    - 钩子（P2-153）：沿用既有 `warning` 事件显示配置错误、执行故障和用户输入拦截原因；`input.removed` 的 reason 增加 `blocked`，表示插话被 UserPromptSubmit 拦下，客户端移除排队显示、不当成已消费消息，也不按 interrupted 自动恢复草稿。旧客户端按 Unknown 原因移除输入。没有新增 HTTP 端点、请求、工具项目或 hook 专用 SSE 事件。钩子 stdin 是服务端向用户命令发送的独立 JSON，字段采用 Claude Code / Codex 的 snake_case，不改变客户端协议的 camelCase。主控确认被拦输入不进模型历史、不回放给模型，允许保留原排队事件；为保留现有启动、取消、撤回和 exec 的完成信号，普通及排队输入的预检轮可保留一条不含用户文本的空轮，放行后才写用户消息。
+   - 钩子上下文（P2-281，11-11 主控确认）：新增 `hookContext {id,event,charCount}` 项目，沿用 `item.completed {turnId,item}`、快照、重放、分叉、回退、撤回和导出；`event` 是 `SessionStart` 或 `UserPromptSubmit`，`charCount` 是拼接后正文的 Unicode 标量字符数（不含内部标记），不传正文。旧客户端沿用 Item 的 Unknown 分支跳过，不报错；新客户端读旧会话无需此项目。沿用 Codex app-server v2 的会话→轮→项目结构，但钩子注入摘要是 canter 自定项目：需要让用户看到哪个钩子影响了模型，正文只进私有模型历史，不伪造用户消息或后台叫醒，也不使用 warning 表示正常注入。不新增 HTTP 端点或独立钩子 SSE 事件。共同 stdin 新增 `transcript_path`，详见钩子和会话记录公开约定两节。
    - 文件夹信任（P2-168）：新增 `GET /v1/folderTrust?cwd=...` 查询和 `POST /v1/folderTrust {cwd}` 记录信任，返回 `{path, trusted, warning?}`；path 是服务端判定的规范化仓库根或非 Git 目录，查询失败时 warning 给出英文原因并返回未信任。公开会话设置增加可选 `restrictedMode`，由服务端在创建、恢复时按记录计算，变化沿用 `session.updated`，旧存盘缺省。创建、恢复请求可带 `restrictedMode: true`，仅要求此次受限打开，false 或缺省不能放行未信任目录；PATCH 不接受修改。`features` 增加 `folderTrust`，新版终端和 exec 在打开前要求此能力，旧服务端提示 `canter serve --replace`，不悄悄绕过检查。Codex `rust-v0.163.0` 用 projects 配置里的 `trust_level`（trusted / untrusted）及配置写入机制；canter 不开放通用配置写入，只记正向信任，增加独立查询/记录端点和服务端实际会话状态，供终端、GPUI 和网页复用，不修改既有批准、沙箱或轮次协议。
    - 文件规则（P2-167）：`GET /v1/commandRules` 保留 `path/data`，增加可省略的 `fileRules:[{pattern, decision}]`（空时不发送）；文件模式为字符串，decision 仅 `prompt/forbidden`。新增 `POST /v1/fileRules/delete`，按完整模式字符串和 decision 删除重复项，返回沿用 `{removed, message}`；旧命令删除端点不变。旧客户端忽略新增字段，仍能管理命令规则；新客户端读旧服务端时文件列表缺省为空。这是 canter 的全局规则管理扩展，不改变会话协议或批准决定。
    - 命令规则管理（P2-156，10-30 主控确认）：新增全局 `GET /v1/commandRules`，返回 `{path, data:[{pattern, decision}]}`；`POST /v1/commandRules/delete` 接收 `{pattern, decision}`，返回 `{removed, message}`，removed 为删掉的条数，完全相同的重复规则一起删，已经不存在时为 0、仍成功。列表沿用 Codex app-server v2 的 `data` 结构，条目沿用已定 `rules.json` 的 `pattern/decision`；Codex 没有此文件管理接口，规则管理端点、文件路径和删除结果是 canter 扩展，用于服务端规则的查看和删除，不改变会话协议或旧客户端行为。删除使用 POST 而不是带请求体的 DELETE：HTTP 没有为 DELETE 请求体定义语义，以后网页客户端经过代理可能被丢；canter 现有按内容操作（如后台命令停止）也使用 POST。按完整词前缀数组和 decision 识别规则，不使用列表下标；删除与批准框永久放行共用写锁，原子替换、权限 0600，坏文件报错且不覆盖。
@@ -608,13 +609,13 @@ macOS 交叉审查后主控确认（Linux 差异见本节前文）：`writePaths
 
 仅支持 `type: "command"`。timeout 为正数秒，缺省 60；matcher 只对 PreToolUse、PermissionRequest、PostToolUse 生效，按 canter 给模型的工具整名匹配正则（例如 read、write、edit、shell、ask_user、web_fetch、mcp_call），空字符串、缺省或 `*` 匹配全部，`write|edit` 匹配两个整名；其它事件忽略 matcher。非法事件、类型、正则、空命令、非正 timeout 或结构错误使整份配置校验失败，沿用 P2-154 的旧配置和英文 warning，不挡现有会话。成功修改下一轮生效，当前轮用原配置；不改系统提示词、环境段或已经发送的前缀。
 
-共同字段为 `session_id`、`cwd`、`hook_event_name`、`permission_mode`。permission_mode 表示实际 canter 档位 `alwaysAsk` / `askForExecution` / `allowAll`，计划模式为 `plan`；保留实际语义，不把开着沙箱的 Allow all 伪装为 Claude Code 的 bypassPermissions。没有 transcript_path 等数据的字段不硬造。
+共同字段为 `session_id`、`cwd`、`hook_event_name`、`permission_mode`、`transcript_path`。permission_mode 表示实际 canter 档位 `alwaysAsk` / `askForExecution` / `allowAll`，计划模式为 `plan`；保留实际语义，不把开着沙箱的 Allow all 伪装为 Claude Code 的 bypassPermissions。`transcript_path` 是本会话 `events.jsonl` 的绝对路径；所有事件都提供，子会话提供自己的路径。其它没有数据的字段不硬造。
 
 | 事件 | 触发时机 | 其它 stdin 字段 | 作用 |
 |---|---|---|---|
-| SessionStart | 新建、打开存盘会话；客户端离开已发 SessionEnd 后，第一条事件流重新连上 | source: startup / resume | 通知 |
+| SessionStart | 新建、打开存盘会话；客户端离开已发 SessionEnd 后，第一条事件流重新连上 | source: startup / resume | 新建和打开存盘会话可注入上下文；客户端重连只通知 |
 | SessionEnd | 最后一个客户端离开 10 秒且会话停下；显式关闭、服务端正常停止（本段尚未发过时） | reason: client_exit / client_request / server_shutdown | 通知 |
-| UserPromptSubmit | 用户输入或排队输入开始处理、插话消费前 | prompt 原文（文本部分，多个文本片段以换行连接） | 可拦；不写模型历史和用户消息，不向模型请求，也不在恢复时回放 |
+| UserPromptSubmit | 用户输入或排队输入开始处理、插话消费前 | prompt 原文（文本部分，多个文本片段以换行连接） | 放行可注入上下文；被拦输入及其注入不写模型历史和用户消息，不向模型请求，也不在恢复时回放 |
 | PreToolUse | 准备工具、通过 canter 自己的规则后，批准框前 | tool_name、tool_input | 可拦；原因成为工具结果，不弹框、不执行 |
 | PermissionRequest | 工具需要用户批准、即将等待用户时 | tool_name、tool_input | 通知，不替用户作答；exec 自动拒绝的请求不触发 |
 | PostToolUse | 实际执行的工具返回，成功或失败均触发 | tool_name、tool_input、tool_response（原工具结果文字） | 反馈追加到该工具结果，不撤销执行；准备失败、规则拒绝、钩子拒绝或用户拒绝没有执行，不触发 |
@@ -636,7 +637,13 @@ P2-180（11-02）：子会话的 PreToolUse、PermissionRequest、PostToolUse �
 
 P2-190 用户原话（11-03，P2-83 调研后）：「其他我都没有异议，可以按照你的建议走」。对应调研 §2.2 的建议：钩子使用既有会话环境，以 `env_clear + 会话 env` 为基础，再覆盖两个 canter 身份变量。
 
-同一事件匹配命令并行执行，可拦和可反馈事件等待全部结果；任一命令拦截即生效。通知事件异步执行，不让模型轮等待，也不消费其决定。显式关会话和服务端停止时，已有通知（包括 Stop、Interrupt、PermissionRequest）与 SessionEnd 共用最多 10 秒的等待预算，不按事件或命令累加，也不因配置更长的 timeout 延长；到期取消剩余通知任务，杀掉其进程组并收完任务。服务端并行关闭各会话，通知等待不随会话数量累加。每条命令用独立进程组；超时、所属轮打断或 future 被丢弃都杀掉该组，领导进程退出也清理剩余子进程。持续读取并丢弃超限部分，stdout、stderr 各最多保留 32 KiB，不持有会话状态锁等待命令。
+同一事件匹配命令并行执行，可拦和可反馈事件等待全部结果；任一命令拦截即生效。通知事件异步执行，不消费其决定；新建和打开存盘会话的 SessionStart 在首次模型请求前等待结果（见下段），其余通知不让模型轮等待。显式关会话和服务端停止时，已有通知（包括 Stop、Interrupt、PermissionRequest）与 SessionEnd 共用最多 10 秒的等待预算，不按事件或命令累加，也不因配置更长的 timeout 延长；到期取消剩余通知任务，杀掉其进程组并收完任务。服务端并行关闭各会话，通知等待不随会话数量累加。每条命令用独立进程组；超时、所属轮打断或 future 被丢弃都杀掉该组，领导进程退出也清理剩余子进程。持续读取并丢弃超限部分，stdout、stderr 各最多保留 32 KiB，不持有会话状态锁等待命令。
+
+P2-281（11-11）：只在成功退出的 SessionStart、放行的 UserPromptSubmit 中识别 stdout JSON 的 `hookSpecificOutput.additionalContext`，必须为非空白字符串，正文原样保留，同一事件按配置顺序以换行拼接。字段名参照 [Claude Code hooks 文档](https://code.claude.com/docs/en/hooks) 的 SessionStart、UserPromptSubmit 及共同字段 `transcript_path`，只参考、不搬代码。纯文字和坏 JSON 沿用英文 warning，不注入；空串、非字符串字段忽略。其它事件输出不因此进入模型。
+
+SessionStart 不阻塞打开界面；新建（startup）和从盘恢复（resume）这一段第一次模型请求前等待仍在执行的命令，最多等到命令自己的 timeout。等候可被当前轮取消，钩子按会话生命周期继续，结果留到下次请求；已经发出的内容不修改，晚到结果只在下一次请求前追加，不叫醒、不开轮。客户端离开后重连的 SessionStart 照常运行，但只通知、不注入。分叉继承源会话已有的注入，新分叉的 startup 仍在新会话首轮追加一次。子会话仍不发 SessionStart，SubagentStart 仍只通知。
+
+UserPromptSubmit 的上下文在放行后的本条用户输入之前追加，普通输入、排队和插话一致；任一命令拦截则丢弃本条输入的所有注入。自动轮仍不触发 UserPromptSubmit。正文以私有 `hook_context {event,text}` 历史记录保存，模型里使用带 `[Hook context: <事件>]` 标记的用户角色消息，明确是内部上下文；不进入系统提示词或环境段，不改已发请求前缀。两种压缩路径都按内部上下文处理，不计入用户原话或最近原话保留集合。注入在所属轮边界之后存盘，重开、分叉原样重放，回退、撤回随所属轮去掉；11-11 交叉审查后用户补定例外：撤回的那一轮带着 SessionStart 注入时，把它留待下一次模型请求前补发，仍存为下一轮的 hook_context 并显示一行 hookContext。重开存盘会话时从私有历史恢复待补发内容；已经补发的按新轮记录重放，不重复补发。回退不补发，UserPromptSubmit 仍随被撤回的输入去掉。终端和导出在注入处显示同一行英文摘要（例如 `SessionStart hook added context (1.2k chars)`），终端用灰字，不显示正文；协议见第 8 条。
 
 P2-172（11-01 用户决定）：客户端挂在会话上指有一条订阅该会话的 `GET /v1/events` 事件流；列会话、读快照、恢复等一次性请求不计数。最后一条事件流断开（正常退出、崩溃、被杀、断线、`canter exec` 跑完都一样），10 秒内没有重连就等待会话停下，发一次 SessionEnd，reason 为 `client_exit`。停下指没有在跑的轮、顺口问、排队输入和接着续跑的目标或后台叫醒；等批准、等回答也算停下。离开只发钩子，不关闭会话、不打断工作、不改状态。10 秒内重连取消本次离开；已发 SessionEnd 后第一条事件流重连时先发一次 SessionStart(resume)，同一段挂着的时间不因多客户端或重复恢复请求重复发。已经离开发过 End，之后显式关闭或停机不再发第二次，但仍收尾已有通知。客户端离开通知平时只按钩子自己的 timeout 跑，不套停机预算；受限会话仍不跑钩子。没改协议。
 
@@ -648,13 +655,23 @@ P2-172（11-01 用户决定）：客户端挂在会话上指有一条订阅该�
 
 11-01 用户授权本件顺带修 MCP，交叉审查后分开退役与最终停机取消：热加载退役仍等在途工具列表刷新完成或超时，再取消传输并等待其正常收尾（stdio 先关闭 stdin，给进程原有的退出机会；HTTP 会话删除仍等待）。只有会话全部关完之后的 `LiveConfig::shutdown` 才取消独立的最终停机令牌，在等待退役 worker 之前释放卡住的刷新及清理等待，stdio 原进程组立即清理，不再等远端 HTTP 会话删除。不能使用等轮之前的 `stop_reloading()` 令牌代替；排空的 60 秒内，已经接受的轮仍可使用 MCP。启动阶段被退出信号取消时，也通过启动取消的子令牌走快速清理。
 
-退出码 0 放行，2 用 stderr 作为拦截／PostToolUse 反馈原因。成功退出时也识别 stdout JSON 的 `decision: "block"` + `reason`；PreToolUse 另识别 `hookSpecificOutput.permissionDecision: "deny"` + `permissionDecisionReason`。allow、ask、其它字段忽略；通知事件里的 block 同样不改变流程。命令启动失败、超时、其它退出码、非空 stdout 不是有效 JSON，一律放行，用英文 warning 标明事件、命令和故障；命令及故障提示压成单行并限长。除了 PreToolUse 的拦截原因、PostToolUse 的反馈，任何钩子输出均不进入模型内容。钩子等待后重新检查工具权限，不能放宽敏感路径、fileRules、计划／审查轮、沙箱和批准档位。审查轮保留原有交互：ask_user 仍弹提问框，submit_plan 仍由计划模式处理（未开计划模式时返回原说明），不被 review_denied 提前拒绝；二者仍经过 PreToolUse，计划批准框仍触发 PermissionRequest。
+退出码 0 放行，2 用 stderr 作为拦截／PostToolUse 反馈原因。成功退出时也识别 stdout JSON 的 `decision: "block"` + `reason`；PreToolUse 另识别 `hookSpecificOutput.permissionDecision: "deny"` + `permissionDecisionReason`。allow、ask、其它未支持字段忽略；通知事件里的 block 同样不改变流程。命令启动失败、超时、其它退出码、非空 stdout 不是有效 JSON，一律放行，用英文 warning 标明事件、命令和故障；命令及故障提示压成单行并限长。只有 PreToolUse 的拦截原因、PostToolUse 的反馈及上文两种 additionalContext 进入模型内容。钩子等待后重新检查工具权限，不能放宽敏感路径、fileRules、计划／审查轮、沙箱和批准档位。审查轮保留原有交互：ask_user 仍弹提问框，submit_plan 仍由计划模式处理（未开计划模式时返回原说明），不被 review_denied 提前拒绝；二者仍经过 PreToolUse，计划批准框仍触发 PermissionRequest。
 
-对照只参考 [Claude Code hooks 文档](https://code.claude.com/docs/en/hooks) 和 Codex `rust-v0.163.0` 的 `hooks/src/schema.rs`，没有搬代码。采用相同事件名、配置骨架和 stdin 字段名；Interrupt 参考 Codex，StopFailure 参考 Claude Code。canter 合并成功／失败工具通知到 PostToolUse，保留自己的权限档位和值类型。没有实现项目 hooks、prompt / agent / http 类型、钩子放行、Stop 拦下后继续、SessionStart / UserPromptSubmit 注入上下文、PreCompact / PostCompact、Notification、Codex 的钩子信任审核或 `/hooks` 界面。P2-180 只参考 Claude Code 的 SubagentStart、SubagentStop 和 agent_id / agent_type 字段；与它不同，两个事件均只通知，忽略 matcher，不注入上下文、不拦住子 agent。协议差异见第 8 条。
+对照只参考 [Claude Code hooks 文档](https://code.claude.com/docs/en/hooks) 和 Codex `rust-v0.163.0` 的 `hooks/src/schema.rs`，没有搬代码。采用相同事件名、配置骨架和 stdin 字段名；Interrupt 参考 Codex，StopFailure 参考 Claude Code。canter 合并成功／失败工具通知到 PostToolUse，保留自己的权限档位和值类型。没有实现项目 hooks、prompt / agent / http 类型、钩子放行、Stop 拦下后继续、PreCompact / PostCompact、Notification、Codex 的钩子信任审核或 `/hooks` 界面。P2-180 只参考 Claude Code 的 SubagentStart、SubagentStop 和 agent_id / agent_type 字段；与它不同，两个事件均只通知，忽略 matcher，不注入上下文、不拦住子 agent。协议差异见第 8 条。
 
 11-01 用户追加（第 20 条文案已同意）：成功 write／edit 后若有匹配且允许运行的 PostToolUse 钩子，canter 自己只比较这次调用写入文件在钩子前后的内容，不论钩子成功、反馈或失败，内容变化或文件被删都在这次工具结果末尾追加一行 `<path> was changed by a PostToolUse hook after this call; read it again before editing it.`；这是 canter 的观察而非钩子输出，不进入系统提示词或环境段，未配置、未匹配或文件未变时保持原工具结果逐字不变。
 
 补充第 8 条的轮次语义：启用 UserPromptSubmit 预检时，TurnStarted.input 暂为空，放行后通过既有 userMessage 项目发布用户输入，TurnCompleted.input 带最终接收的初始输入，协议 reducer 在完成时回填该字段。被拦下的轮始终为空。终端在轮未完成时也从已接收的 userMessage 保留撤回草稿（包括重新连接的终端），保留发送序号以优先恢复原图片路径；不会把未放行的输入当成已接收消息。不增加字段或新的事件类型。
+
+## 会话记录的公开读取约定（P2-281）
+
+钩子 `transcript_path` 指向本会话的 `events.jsonl`，它按顺序只追加 JSON 行，不改写已写的行。以下部分为对外公开、只加不改的约定；读取者逐行解析，跳过不认识的行、项目、字段，正在写入的末尾不完整行留到下次读取。
+
+- 每行是事件对象：`type` 是事件类型，`seq` 是本会话递增序号，`sessionId` 是会话 ID，`timestamp` 是 Unix 毫秒。以 `seq` 识别已读事件。
+- 一条完成的用户消息是 `type: "item.completed"` 且 `item.type: "userMessage"` 的行：轮 ID 为 `turnId`，项目 ID 为 `item.id`，文字取 `item.content` 中 `type: "text"` 的 `text` 字段，按片段顺序读取（合并成字符串时以换行分隔）；其它片段跳过。
+- 一条已收尾的模型消息是 `type: "item.completed"` 且 `item.type: "agentMessage"` 的行：轮 ID、项目 ID 同上，文字为 `item.text`。同轮可以有多条；不等同于整轮完成。`item.status` 缺省或为 `completed` 时按正常消息读取；`interrupted` 表示被打断的片段，不当作完整回复；不认识的状态跳过。不要把 `item.started`、`item.delta` 或 `turn.completed` 中的副本重复计为消息。
+- 用 `turn.started` 的 `turn.id` 建立轮的先后顺序。`session.rewound` 且 `rewindConversation: true` 表示去掉 `beforeTurnId` 指定轮及之后的轮；false 不删除对话。事件的 `record.id` 是回退记录轮，接在保留轮后面。`turn.retracted` 的 `turnId` 表示撤去该轮。原消息行仍保留，读取者应用这些后加事件得到当前有效对话，不能仅按文件里出现过的所有消息作摘要。
+- 工具输出、思考、遥测、其它事件及项目、`model-history.jsonl` 私有模型历史都不在此公开约定内，后续可变化。`hookContext` 摘要不含正文，也不算用户消息。
 
 ## 子 agent 的子会话（P2-177）
 
