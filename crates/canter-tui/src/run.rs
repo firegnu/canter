@@ -1635,7 +1635,11 @@ impl AutoName {
         let Some(turn) = turn_id else {
             return;
         };
-        let first = snapshot.turns.iter().find(|turn| !turn.input.is_empty());
+        // Hooks can start this turn with empty input and fill it in later.
+        let first = snapshot
+            .turns
+            .iter()
+            .find(|first| !first.input.is_empty() || first.id == turn);
         // A delayed input reply may arrive after this turn was retracted.
         if !self.eligible
             || first.is_some_and(|first| first.id != turn)

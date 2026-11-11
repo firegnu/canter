@@ -351,6 +351,35 @@ async fn first_message_after_user_shell_becomes_the_session_name() {
 }
 
 #[tokio::test]
+async fn deferred_first_input_still_names_the_session_when_its_turn_event_arrives_first() {
+    // With prompt or start hooks the server starts the turn with empty input
+    // and records the user's text only after the hooks finish.
+    let mut test = Harness::new().await;
+    let text = "fix the login page";
+    test.ui.app_mut().handle_paste(text);
+    test.key(KeyCode::Enter);
+    let input = test.request().await;
+    assert_eq!(input.path, "/v1/sessions/test/input");
+    let seq = test.ui.app().snapshot().last_event_seq + 1;
+    let turn: Turn = serde_json::from_value(json!({
+        "id":"first","input":[],"items":[],"status":"inProgress",
+        "clientName":"test","error":null,"usage":null,
+    }))
+    .unwrap();
+    test.event(EventPayload::TurnStarted {
+        turn,
+        input_id: None,
+    });
+    input.json(json!({"eventSeq":seq,"turnId":"first"}));
+    test.message().await;
+    let naming = test.naming_request().await;
+    assert_eq!(naming.path, "/v1/sessions/test");
+    assert_eq!(naming.body["name"], text);
+    naming.json(json!({"eventSeq":test.ui.app().snapshot().last_event_seq + 1}));
+    test.stop().await;
+}
+
+#[tokio::test]
 async fn automatic_name_and_retraction_negotiate_conditions() {
     for supported in [true, false] {
         let mut test = Harness::new().await;
