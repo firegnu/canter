@@ -815,17 +815,26 @@ async fn summarize(
     );
     let mut kept = Vec::new();
     let mut left = budget;
-    for message in user_messages.iter().rev() {
+    for mut message in user_messages.into_iter().rev() {
         if left == 0 {
             break;
         }
+        if let Message::UserParts { content } | Message::ToolImages { content } = &mut message {
+            for part in content {
+                if let UserContent::Image { name, .. } = part {
+                    *part = UserContent::Text {
+                        text: format!("[image: {name}]"),
+                    };
+                }
+            }
+        }
         let Message::User { text } = message else {
-            let tokens = context::message_tokens(message);
+            let tokens = context::message_tokens(&message);
             if tokens > left {
                 break;
             }
             left -= tokens;
-            kept.push(message.clone());
+            kept.push(message);
             continue;
         };
         let bytes = (left.saturating_mul(3) as usize).min(text.len());

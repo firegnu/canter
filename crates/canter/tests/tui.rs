@@ -1341,7 +1341,7 @@ async fn pasted_image_reaches_the_model_as_original_png() {
 }
 
 #[tokio::test]
-async fn image_history_survives_source_deletion_model_switch_compaction_and_restart() {
+async fn image_history_preserves_images_until_compaction_and_placeholders_after_restart() {
     let mut world = World::new(
         (1..=6)
             .map(|n| text_reply(&format!("image reply {n}")))
@@ -1393,7 +1393,7 @@ async fn image_history_survives_source_deletion_model_switch_compaction_and_rest
     terminal.wait_for("image reply 6").await;
     terminal.wait_idle().await;
     let requests = world.requests.lock().unwrap().clone();
-    for index in [0, 1, 3, 4, 5] {
+    for index in [0, 1, 3, 4] {
         assert!(
             requests[index]["messages"].to_string().contains(PNG_URL),
             "request {index} lost the image"
@@ -1404,6 +1404,12 @@ async fn image_history_survives_source_deletion_model_switch_compaction_and_rest
         requests[2]["messages"]
             .to_string()
             .contains("[image omitted: screenshot.png]")
+    );
+    assert!(!requests[5]["messages"].to_string().contains("data:image"));
+    assert!(
+        requests[5]["messages"]
+            .to_string()
+            .contains("[image: screenshot.png]")
     );
     terminal.quit().await;
     world.stop_server(Signal::SIGTERM).await;

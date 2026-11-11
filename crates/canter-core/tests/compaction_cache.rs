@@ -350,6 +350,201 @@ async fn failed_and_interrupted_compactions_do_not_report_after_tokens() {
 }
 
 #[tokio::test]
+async fn compaction_replaces_old_images_but_preserves_new_images_and_legacy_replay() {
+    fn image_count(request: &Value) -> usize {
+        request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|message| message["content"].as_array())
+            .flatten()
+            .filter(|part| part["type"] == "image_url")
+            .count()
+    }
+
+    for fallback in [false, true] {
+        let mut users = vec![
+            json!({"type":"user","text":"Keep the oldest instruction."}),
+            json!({"type":"user_parts","content":[
+                {"type":"text","text":"User text before."},
+                {"type":"image","path":"image-1568-old.png","name":"pasted.png"},
+                {"type":"text","text":"User text after."}
+            ]}),
+        ];
+        users.extend((0..24).map(|index| {
+            json!({"type":"tool_images","content":[
+                {"type":"text","text":format!("Screenshot {index}.")},
+                {"type":"image","path":"image-1568-old.png","name":format!("screen-{index}.png")}
+            ]})
+        }));
+        let mut messages = users.clone();
+        messages.push(json!({"type":"user","text":"[Context summary]\nEarlier summary."}));
+        let legacy = json!({
+            "type":"compaction","summary":"Earlier summary.",
+            "messages":messages,"user_messages":["Keep the oldest instruction."],
+            "user_inputs":users
+        });
+        let mut replies = vec![answer("Before compaction.")];
+        if fallback {
+            replies.push(context_too_long());
+        }
+        replies.extend([
+            answer("Summary of the pictures."),
+            reply(
+                json!({"tool_calls":[{"index":0,"id":"fresh","type":"function",
+                    "function":{"name":"read","arguments":"{\"path\":\"fresh.png\"}"}}]}),
+                "tool_calls",
+            ),
+            answer("Fresh image."),
+            answer("After reopening."),
+        ]);
+        let options = CoreOptions {
+            image_models: vec!["fake".into()],
+            sandbox: false,
+            ..Default::default()
+        };
+        let mut fixture =
+            Fixture::with_history(replies, options.clone(), std::slice::from_ref(&legacy)).await;
+        image::RgbImage::new(2, 2)
+            .save(
+                fixture
+                    .store
+                    .image_path("cache", "image-1568-old.png")
+                    .unwrap(),
+            )
+            .unwrap();
+        image::RgbImage::new(3, 3)
+            .save(fixture.root.path().join("fresh.png"))
+            .unwrap();
+        fixture.send("Continue from the old record.").await;
+        {
+            let requests = fixture.server.requests.lock().unwrap();
+            assert_eq!(image_count(&requests[0]), 25, "legacy images must replay");
+            let wire = requests[0]["messages"].as_array().unwrap();
+            assert_eq!(
+                wire[1],
+                json!({"role":"user","content":"Keep the oldest instruction."})
+            );
+            assert_eq!(wire[2]["content"][0]["text"], "User text before.");
+            assert_eq!(wire[2]["content"][2]["text"], "User text after.");
+            for index in 0..24 {
+                assert_eq!(
+                    wire[index + 3]["content"][0]["text"],
+                    format!("Screenshot {index}.")
+                );
+                assert_eq!(wire[index + 3]["content"][1], wire[2]["content"][1]);
+            }
+            assert_eq!(
+                wire[27],
+                json!({"role":"user","content":"[Context summary]\nEarlier summary."})
+            );
+        }
+        fixture.compact().await;
+        fixture.send("Read the fresh screenshot.").await;
+        let mut expected_reopened = {
+            let requests = fixture.server.requests.lock().unwrap();
+            let after = requests.len() - 2;
+            for summary in &requests[1..after] {
+                assert_eq!(
+                    image_count(summary),
+                    25,
+                    "summarization still sees the images"
+                );
+            }
+            assert_eq!(
+                image_count(&requests[after]),
+                0,
+                "compacted requests must not carry old images"
+            );
+            assert_eq!(
+                image_count(&requests[after + 1]),
+                1,
+                "new tool images must still be sent"
+            );
+            requests[after + 1].clone()
+        };
+        let history = fixture.store.model_history::<Value>("cache").unwrap();
+        assert_eq!(
+            history[0], legacy,
+            "the old compaction record must stay unchanged"
+        );
+        let compacted = history
+            .iter()
+            .rfind(|entry| entry["type"] == "compaction")
+            .unwrap();
+        let mut expected_users = vec![
+            json!({"type":"user","text":"Keep the oldest instruction."}),
+            json!({"type":"user_parts","content":[
+                {"type":"text","text":"User text before."},
+                {"type":"text","text":"[image: pasted.png]"},
+                {"type":"text","text":"User text after."}
+            ]}),
+        ];
+        expected_users.extend((0..24).map(|index| {
+            json!({"type":"tool_images","content":[
+                {"type":"text","text":format!("Screenshot {index}.")},
+                {"type":"text","text":format!("[image: screen-{index}.png]")}
+            ]})
+        }));
+        expected_users.push(json!({"type":"user","text":"Continue from the old record."}));
+        // All 24 screenshot messages plus the older user text fit once images
+        // are replaced; charging 1024 tokens per old image would lose them.
+        assert_eq!(compacted["user_inputs"], json!(expected_users));
+        let mut expected_messages = expected_users;
+        expected_messages
+            .push(json!({"type":"user","text":"[Context summary]\nSummary of the pictures."}));
+        assert_eq!(compacted["messages"], json!(expected_messages));
+        {
+            let requests = fixture.server.requests.lock().unwrap();
+            let wire = requests[requests.len() - 2]["messages"].as_array().unwrap();
+            for (stored, sent) in expected_messages.iter().zip(&wire[1..]) {
+                let content = stored.get("content").unwrap_or(&stored["text"]);
+                assert_eq!(sent, &json!({"role":"user","content":content}));
+            }
+        }
+        expected_reopened["messages"]
+            .as_array_mut()
+            .unwrap()
+            .extend([
+                json!({"role":"assistant","content":"Fresh image."}),
+                json!({"role":"user","content":"Reopened turn."}),
+            ]);
+        fixture.session.close().await.unwrap();
+        fixture.store = Arc::new(Store::new(fixture.root.path().join("sessions")).unwrap());
+        let (session, _) = Session::open(
+            fixture.store.clone(),
+            "cache".into(),
+            RuntimeContext {
+                environment: [
+                    (
+                        "HOME".into(),
+                        fixture.root.path().join("home").display().to_string(),
+                    ),
+                    (
+                        "CANTER_HOME".into(),
+                        fixture.root.path().join("state").display().to_string(),
+                    ),
+                ]
+                .into(),
+                ..Default::default()
+            },
+            Arc::new(ChatCompletions::new(&fixture.server.base_url, ApiKey::new(KEY)).unwrap()),
+            options,
+        )
+        .await
+        .unwrap();
+        fixture.session = session;
+        fixture.send("Reopened turn.").await;
+        {
+            let requests = fixture.server.requests.lock().unwrap();
+            assert_eq!(requests.last().unwrap(), &expected_reopened);
+            assert_eq!(image_count(requests.last().unwrap()), 1);
+        }
+        fixture.close().await;
+    }
+}
+
+#[tokio::test]
 async fn session_id_survives_compaction_and_reopening_with_a_fresh_store() {
     for fallback in [false, true] {
         let mut replies = vec![answer("Before compaction.")];

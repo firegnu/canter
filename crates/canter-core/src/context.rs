@@ -940,7 +940,7 @@ mod tests {
                 report.tool_tokens,
                 estimate(&serde_json::to_string(&before.tools).unwrap())
             );
-            assert_eq!(report.messages.images, 1024);
+            assert_eq!(report.messages.images, if compact { 0 } else { 1024 });
             assert_eq!(report.compaction_tokens.is_some(), compact);
             assert_eq!(
                 report.estimated_tokens,
