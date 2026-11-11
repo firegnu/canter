@@ -276,12 +276,34 @@ pub(crate) fn session_start(shared: &Shared, state: &mut State, source: &str) {
     tasks.push(task);
 }
 
+fn context_header(event: &str) -> String {
+    format!(
+        "[Hook context: {event}]\nInternal context supplied by a hook, not the user's own words.\n\n"
+    )
+}
+
 pub(crate) fn context_message(event: &str, text: &str) -> canter_model::Message {
     canter_model::Message::User {
-        text: format!(
-            "[Hook context: {event}]\nInternal context supplied by a hook, not the user's own words.\n\n{text}"
-        ),
+        text: format!("{}{text}", context_header(event)),
     }
+}
+
+pub(crate) fn retracted_start_contexts(
+    history: &[canter_model::Message],
+    hook_contexts: &std::collections::BTreeSet<usize>,
+    boundary: usize,
+) -> Vec<String> {
+    let header = context_header("SessionStart");
+    // Only private HookContext indices qualify; user-authored markers do not.
+    hook_contexts
+        .range(boundary..)
+        .filter_map(|&index| {
+            let canter_model::Message::User { text } = &history[index] else {
+                return None;
+            };
+            text.strip_prefix(&header).map(str::to_owned)
+        })
+        .collect()
 }
 
 impl State {
@@ -314,6 +336,10 @@ impl State {
     }
 
     pub(crate) async fn session_start_context(&mut self, turn_id: &str) -> Result<(), CoreError> {
+        while let Some(text) = self.retracted_session_start.front().cloned() {
+            self.hook_context("SessionStart", text, turn_id).await?;
+            self.retracted_session_start.pop_front();
+        }
         // A completed sender is dropped even on cancellation or execution failure.
         if self
             .session_start_hook

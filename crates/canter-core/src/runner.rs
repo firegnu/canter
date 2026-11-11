@@ -219,6 +219,12 @@ pub(crate) async fn run(shared: Arc<Shared>, mut done: Done) {
                     .rewind
                     .retract(&completed.id)
                     .ok_or_else(CoreError::internal)?;
+                let contexts = crate::hooks::retracted_start_contexts(
+                    &state.history,
+                    &state.hook_contexts,
+                    messages,
+                );
+                state.retracted_session_start.extend(contexts);
                 let removed = state.history.split_off(messages);
                 state.lsp_delivery.notices.retain(|index| *index < messages);
                 state.hook_contexts.retain(|index| *index < messages);

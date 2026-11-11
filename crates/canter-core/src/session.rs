@@ -101,6 +101,7 @@ pub(crate) struct State {
     pub closing_reason: Option<SessionCloseReason>,
     pub hook_session_ended: bool,
     pub session_start_hook: Option<watch::Receiver<Option<String>>>,
+    pub retracted_session_start: VecDeque<String>,
     pub hook_contexts: std::collections::BTreeSet<usize>,
     pub measured_context: Option<(u64, u64)>,
     pub context_budget_notices: std::collections::BTreeMap<usize, u8>,
@@ -278,6 +279,7 @@ impl State {
             closing_reason: None,
             hook_session_ended: false,
             session_start_hook: None,
+            retracted_session_start: VecDeque::new(),
             hook_contexts: Default::default(),
             measured_context: None,
             context_budget_notices: Default::default(),
@@ -1034,6 +1036,7 @@ impl Session {
         state.lsp_delivery.notices = restored.diagnostic_notices;
         state.context_budget_notices = restored.context_budget_notices;
         state.hook_contexts = restored.hook_contexts;
+        state.retracted_session_start = restored.retracted_session_start;
         state.plan_mode_notices = restored.plan_mode_notices;
         state.tool_images = restored.tool_images;
         state.user_messages = restored.users;
@@ -2393,8 +2396,10 @@ impl Shared {
                 .options
                 .hooks
                 .has(crate::hooks::Event::UserPromptSubmit);
-        let defer_prompt =
-            check_prompt || (!params.input.is_empty() && state.session_start_hook.is_some());
+        let defer_prompt = check_prompt
+            || (!params.input.is_empty()
+                && (state.session_start_hook.is_some()
+                    || !state.retracted_session_start.is_empty()));
         let turn = Turn {
             review: params.review,
             id: id("turn"),

@@ -280,7 +280,73 @@ async fn reopening_and_forking_replay_context_and_append_one_new_start_context()
 }
 
 #[tokio::test]
-async fn rewind_and_retract_remove_owned_hook_context_in_memory_and_after_replay() {
+async fn retracted_session_start_is_reinjected_once_even_after_reopening() {
+    for reopen_before_retry in [false, true] {
+        let mut fixture = Fixture::new(json!({"hooks":{
+            "SessionStart":command(r#"cat >/dev/null; printf '%s' '{"hookSpecificOutput":{"additionalContext":"opening context to retry"}}'"#),
+            "UserPromptSubmit":command(r#"cat >/dev/null; printf '%s' '{"hookSpecificOutput":{"additionalContext":"discard this input context"}}'"#)
+        }})).await;
+        fixture.trust(fixture.root.path()).await;
+        let url = fixture.create().await;
+        fixture.input(&url).await;
+        let first = fixture.request().await;
+        let opening = contexts(&first, "SessionStart");
+        assert_eq!(opening.len(), 1);
+        let turn_id = fixture.snapshot(&url).await.session.turns[0].id.clone();
+        let response: Value = fixture
+            .client
+            .post(format!("{url}/interrupt"))
+            .json(&json!({"turnId":turn_id,"retract":true}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(response["retracted"], true);
+        drop(first);
+        fixture.config["hooks"] = json!({});
+        fixture.applied("without-hooks").await;
+        if reopen_before_retry {
+            fixture.close(&url).await;
+            fixture.resume(&url).await;
+        }
+        fixture.send(&url, "corrected input", "queue").await;
+        let retry = fixture.request().await;
+        assert_eq!(
+            contexts(&retry, "SessionStart"),
+            opening,
+            "retracted SessionStart context must be reinjected exactly once"
+        );
+        assert!(contexts(&retry, "UserPromptSubmit").is_empty());
+        let messages = retry.body["messages"].as_array().unwrap();
+        let user = messages
+            .iter()
+            .position(|message| message["content"] == "corrected input")
+            .unwrap();
+        assert_eq!(messages[user - 1]["content"], opening[0]);
+        retry.stop();
+        fixture.idle(&url).await;
+        let snapshot = fixture.snapshot(&url).await;
+        assert_eq!(snapshot.session.turns.iter().flat_map(|turn| &turn.items)
+            .filter(|item| matches!(item, canter_protocol::Item::HookContext { event, .. } if event == "SessionStart")).count(), 1);
+        // Replaying the retry must keep its one saved injection, not requeue it again.
+        fixture.close(&url).await;
+        fixture.resume(&url).await;
+        fixture.send(&url, "continue", "queue").await;
+        let restored = fixture.request().await;
+        assert_eq!(contexts(&restored, "SessionStart"), opening);
+        assert!(contexts(&restored, "UserPromptSubmit").is_empty());
+        restored.stop();
+        fixture.idle(&url).await;
+        fixture.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn rewind_drops_start_context_while_retract_reinjects_it_in_memory_and_after_replay() {
     for retract in [false, true] {
         let mut fixture = Fixture::new(json!({"hooks":{
             "SessionStart":command(r#"cat >/dev/null; printf '%s' '{"hookSpecificOutput":{"additionalContext":"remove opening context"}}'"#),
@@ -291,6 +357,11 @@ async fn rewind_and_retract_remove_owned_hook_context_in_memory_and_after_replay
         fixture.input(&url).await;
         let request = fixture.request().await;
         assert_eq!(contexts(&request, "SessionStart").len(), 1);
+        let opening = if retract {
+            contexts(&request, "SessionStart")
+        } else {
+            Vec::new()
+        };
         let turn_id = fixture.snapshot(&url).await.session.turns[0].id.clone();
         if retract {
             let response: Value = fixture
@@ -344,7 +415,7 @@ async fn rewind_and_retract_remove_owned_hook_context_in_memory_and_after_replay
         fixture.applied("without-hooks").await;
         fixture.send(&url, "after removal", "queue").await;
         let request = fixture.request().await;
-        assert!(!request.body.to_string().contains("remove opening context"));
+        assert_eq!(contexts(&request, "SessionStart"), opening);
         assert!(!request.body.to_string().contains("remove input context"));
         request.stop();
         fixture.idle(&url).await;
@@ -352,7 +423,7 @@ async fn rewind_and_retract_remove_owned_hook_context_in_memory_and_after_replay
         fixture.resume(&url).await;
         fixture.input(&url).await;
         let request = fixture.request().await;
-        assert!(contexts(&request, "SessionStart").is_empty());
+        assert_eq!(contexts(&request, "SessionStart"), opening);
         assert!(contexts(&request, "UserPromptSubmit").is_empty());
         request.stop();
         fixture.idle(&url).await;
