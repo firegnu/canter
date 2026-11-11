@@ -127,19 +127,21 @@ pub fn report(
         });
     }
     if !report.sub_agents.is_empty() {
-        report.overview.usage_with_sub_agents = report.sub_agents.iter().fold(
-            report
-                .overview
-                .usage
-                .as_ref()
-                .map(|usage| usage.total.clone()),
-            |total, child| {
-                total.zip(child.usage.as_ref()).map(|(mut total, usage)| {
+        // A share without recorded usage adds nothing and marks the cost incomplete.
+        let shares = std::iter::once(report.overview.usage.as_ref().map(|usage| &usage.total))
+            .chain(report.sub_agents.iter().map(|child| child.usage.as_ref()));
+        let mut total = UsageRow::default();
+        let mut any = false;
+        for share in shares {
+            match share {
+                Some(usage) => {
                     total.add(usage);
-                    total
-                })
-            },
-        );
+                    any = true;
+                }
+                None => total.cost.unknown = true,
+            }
+        }
+        report.overview.usage_with_sub_agents = any.then_some(total);
     }
     Ok(report)
 }

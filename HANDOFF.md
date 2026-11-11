@@ -159,7 +159,7 @@
   - 两个平台都有：批准写一个不叫 `.git` 的独立 gitdir（`--separate-git-dir` 建的、裸仓库）时，里面的 config、hooks 不锁。
 
 - Terminal-Bench 适配器（P2-260，11-10 合并），详见 `docs/任务/P2-260-交叉审查.md`：
-  - canter 本身：没有「只停子 agent、不停后台命令」的办法，题目结束时还有子 agent 在跑，适配器只能停服务端，模型起的后台服务跟着停（结果 metadata 标 `server_stopped_for_sub_agents`，全套跑完逐题看）；`crates/canter-core/src/stats.rs` 合计用量用 `Option::zip`，任一子 agent 用量为空整个合计变空（适配器自己加总绕过了，终端界面的合计也会不显示）。
+  - canter 本身：没有「只停子 agent、不停后台命令」的办法，题目结束时还有子 agent 在跑，适配器只能停服务端，模型起的后台服务跟着停（结果 metadata 标 `server_stopped_for_sub_agents`，全套跑完逐题看）。
   - 适配器建议改、没做的：exec 被 KILL 或报错退出（没确认回合停了）时不停服务端，主回合可能还在跑；取消路径停 canter 失败只记 `metadata.errors` 照样判分，`report.py` 不在顶层列出带 errors 的题；运行时不检查 Harbor 版本、依赖没锁；结果文件里 `credential_scan`、`binary_sha256` 等字段 README 没写怎么生成；结果文件不记适配器版本（试跑三题是 `126beac` 的适配器跑的）；改了超时逻辑后没再跑无模型超时探针。
 
 - Linux 支持（P2-160，11-10 合并）交叉审查「可以不改」、没做的：缺系统 CA 的英文提示靠比对 rustls 报错原文认出（`crates/canter-server/src/model_catalog.rs` 约 193 行），升级 reqwest / rustls 改了原文时退回成通用报错（照样退出 1、不崩）；钉住它的测试只在 Linux 跑，升级这两个依赖后在 Linux 上跑一下 `missing_system_ca_certificates_reports_installation_help_without_panicking`。开发时 Linux 全套里 `mcp::http_mcp_ignores_server_proxy_environment` 偶发一次记到 2 个连接，单跑和 10 轮重跑都没复现。其余审查建议记在 P2-272、P2-260 任务文件里。

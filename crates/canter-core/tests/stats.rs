@@ -159,7 +159,10 @@ fn subagent_stats_keep_missing_usage_unknown_and_time_running_children_on_the_se
     let json = serde_json::to_value(saved.report()).unwrap();
     assert_eq!(json["subAgents"][0]["status"], "running");
     assert!(json["subAgents"][0]["usage"].is_null());
-    assert!(json["overview"]["usageWithSubAgents"].is_null());
+    let combined = &json["overview"]["usageWithSubAgents"];
+    assert_eq!(combined["outputTokens"], 20);
+    assert_eq!(combined["cost"]["usd"], 0.01);
+    assert_eq!(combined["cost"]["unknown"], true);
     assert!(json["subAgents"][0]["durationMs"].as_u64().unwrap() > 4000);
 }
 
