@@ -1,6 +1,7 @@
 use std::{
+    collections::BTreeMap,
     fs::OpenOptions,
-    io::Read,
+    io::{Cursor, Read},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::Arc,
@@ -11,8 +12,98 @@ use canter_protocol::{
     ErrorCode, EventPayload, MAX_IMAGE_BYTES, ToolContentItem, UserInput, image_mime_type,
 };
 use canter_store::Store;
+use image::{
+    DynamicImage, ImageDecoder, ImageEncoder, ImageFormat, ImageReader, imageops::FilterType,
+};
 
 use crate::{CoreError, session::Shared};
+
+/// Only returns a replacement when the original can be kept smaller in its own format.
+fn downscale(bytes: &[u8]) -> Option<Vec<u8>> {
+    let format = image::guess_format(bytes).ok()?;
+    match format {
+        ImageFormat::Gif => return None,
+        ImageFormat::WebP => {
+            if image::codecs::webp::WebPDecoder::new(Cursor::new(bytes))
+                .ok()?
+                .has_animation()
+            {
+                return None;
+            }
+        }
+        ImageFormat::Png => {
+            if image::codecs::png::PngDecoder::new(Cursor::new(bytes))
+                .ok()?
+                .is_apng()
+                .ok()?
+            {
+                return None;
+            }
+        }
+        ImageFormat::Jpeg => {}
+        _ => return None,
+    }
+    let mut decoder = ImageReader::with_format(Cursor::new(bytes), format)
+        .into_decoder()
+        .ok()?;
+    let (width, height) = decoder.dimensions();
+    if width.max(height) <= 1568 {
+        return None;
+    }
+    let orientation = decoder.orientation().ok()?;
+    // Decoding can change the pixel color space (for example CMYK JPEG to RGB).
+    let color_space: &[u8] = if decoder.color_type().has_color() {
+        b"RGB "
+    } else {
+        b"GRAY"
+    };
+    let profile = decoder
+        .icc_profile()
+        .ok()
+        .flatten()
+        .filter(|profile| profile.get(16..20) == Some(color_space));
+    let mut resized =
+        DynamicImage::from_decoder(decoder)
+            .ok()?
+            .resize(1568, 1568, FilterType::Triangle);
+    resized.apply_orientation(orientation);
+    let mut output = Vec::new();
+    match format {
+        // Fast PNG encoding can outweigh the pixel savings on screenshots/PDF pages.
+        ImageFormat::Png => encode(
+            &resized,
+            image::codecs::png::PngEncoder::new_with_quality(
+                &mut output,
+                image::codecs::png::CompressionType::Best,
+                image::codecs::png::FilterType::Adaptive,
+            ),
+            profile,
+        ),
+        ImageFormat::Jpeg => encode(
+            &resized,
+            image::codecs::jpeg::JpegEncoder::new(&mut output),
+            profile,
+        ),
+        ImageFormat::WebP => encode(
+            &resized,
+            image::codecs::webp::WebPEncoder::new_lossless(&mut output),
+            profile,
+        ),
+        _ => None,
+    }?;
+    (output.len() < bytes.len()).then_some(output)
+}
+
+fn encode(
+    image: &DynamicImage,
+    mut encoder: impl ImageEncoder,
+    profile: Option<Vec<u8>>,
+) -> Option<()> {
+    if let Some(profile) = profile {
+        encoder.set_icc_profile(profile).ok()?;
+    }
+    image.write_with_encoder(encoder).ok()
+}
 
 fn read(path: &Path) -> Result<(Vec<u8>, &'static str), CoreError> {
     let invalid = |message| CoreError::new(ErrorCode::InvalidRequest, message);
@@ -33,6 +124,35 @@ fn read(path: &Path) -> Result<(Vec<u8>, &'static str), CoreError> {
     }
     let mime =
         image_mime_type(&bytes).ok_or_else(|| invalid("image must be JPEG, PNG, GIF or WebP"))?;
+    Ok((bytes, mime))
+}
+
+fn read_prepared(
+    store: &Store,
+    session: &str,
+    name: &str,
+    preparations: &mut Option<BTreeMap<String, String>>,
+) -> Result<(Vec<u8>, &'static str), CoreError> {
+    if name.starts_with(canter_store::PREPARED_IMAGE_PREFIX) {
+        return read(&store.image_path(session, name)?);
+    }
+    let preparations = preparations.get_or_insert_with(|| store.prepared_images(session));
+    if let Some(prepared) = preparations.get(name)
+        && let Ok(image) = read(&store.image_path(session, prepared)?)
+    {
+        return Ok(image);
+    }
+    let (bytes, mime) = read(&store.image_path(session, name)?)?;
+    let replacement = downscale(&bytes).and_then(|resized| {
+        let path = store
+            .save_prepared_image(session, &resized, mime.strip_prefix("image/").unwrap())
+            .ok()?;
+        Some((path.file_name()?.to_str()?.to_owned(), resized))
+    });
+    let (prepared, bytes) = replacement.unwrap_or_else(|| (name.to_owned(), bytes));
+    preparations.insert(name.to_owned(), prepared);
+    // Migration is best effort: unreadable metadata must not break a usable image/session.
+    let _ = store.save_prepared_images(session, preparations);
     Ok((bytes, mime))
 }
 
@@ -111,7 +231,10 @@ pub(crate) async fn import(
             name,
         } in images
         {
-            let path = store.save_image(&session, &bytes, mime.strip_prefix("image/").unwrap())?;
+            let resized = downscale(&bytes);
+            let bytes = resized.as_deref().unwrap_or(&bytes);
+            let path =
+                store.save_prepared_image(&session, bytes, mime.strip_prefix("image/").unwrap())?;
             input[index] = UserInput::LocalImage {
                 path: path
                     .file_name()
@@ -138,9 +261,11 @@ pub(crate) async fn import_tool(
         let mut items = Vec::new();
         let mut content = Vec::new();
         for image in images {
-            let path = store.save_image(
+            let resized = downscale(&image.bytes);
+            let bytes = resized.as_deref().unwrap_or(&image.bytes);
+            let path = store.save_prepared_image(
                 &session,
-                &image.bytes,
+                bytes,
                 image.mime_type.strip_prefix("image/").unwrap(),
             )?;
             let filename = path
@@ -161,7 +286,7 @@ pub(crate) async fn import_tool(
                 path: filename,
                 name: image.name,
                 mime_type: image.mime_type.into(),
-                size_bytes: image.bytes.len() as u64,
+                size_bytes: bytes.len() as u64,
             });
         }
         Ok((items, content, saved))
@@ -246,7 +371,13 @@ pub(crate) async fn prepare_request(
             state.journal.snapshot.id.clone(),
         )
     };
+    let preparation = shared.image_preparation.clone();
     let (request, warnings) = tokio::task::spawn_blocking(move || {
+        // Ordinary, compact and side requests may prepare the same legacy image concurrently.
+        let _guard = preparation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut preparations = None;
         let mut encoded_bytes = 0;
         let mut over_budget = false;
         let mut warnings = Vec::new();
@@ -261,10 +392,7 @@ pub(crate) async fn prepare_request(
                     } = part
                     {
                         if accepts_images && !over_budget {
-                            let loaded = store
-                                .image_path(&session, path)
-                                .map_err(CoreError::from)
-                                .and_then(|path| read(&path));
+                            let loaded = read_prepared(&store, &session, path, &mut preparations);
                             let (bytes, mime) = match loaded {
                                 Ok(image) => image,
                                 Err(_) => {

@@ -1,4 +1,166 @@
 use super::*;
+use base64::Engine;
+
+pub(super) fn large_png() -> Vec<u8> {
+    let pixels = image::RgbImage::from_fn(2048, 1024, |x, y| {
+        image::Rgb([(x / 8) as u8, (y / 8) as u8, ((x + y) / 16) as u8])
+    });
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    pixels
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    bytes.into_inner()
+}
+
+pub(super) async fn downscaled_attachments(fixture: &Fixture, id: &str) -> Vec<String> {
+    let snapshot: Value = fixture
+        .request(Method::GET, &format!("/v1/sessions/{id}"), json!({}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    snapshot["session"]["turns"][0]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["contentItems"].as_array())
+        .flatten()
+        .map(|attachment| {
+            let saved = fixture
+                .root
+                .path()
+                .join("state/sessions")
+                .join(id)
+                .join(attachment["path"].as_str().unwrap());
+            let bytes = fs::read(&saved).unwrap();
+            let image = image::load_from_memory(&bytes).unwrap();
+            assert_eq!((image.width(), image.height()), (1568, 784));
+            assert_eq!(attachment["sizeBytes"], bytes.len());
+            assert_eq!(attachment["mimeType"], "image/png");
+            assert_eq!(
+                fs::metadata(saved).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(bytes)
+            )
+        })
+        .collect()
+}
+
+// A synthetic landscape page, rendered by the same poppler path as ordinary PDFs.
+fn large_pdf() -> Vec<u8> {
+    let drawing = (0..80)
+        .map(|i| {
+            format!(
+                "{} 0.4 0.8 rg {} {} 400 3 re f\n",
+                i as f32 / 80.0,
+                i * 4,
+                i * 6
+            )
+        })
+        .collect::<String>();
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 960 480] /Resources << >> /Contents 4 0 R >>"
+            .to_owned(),
+        format!(
+            "<< /Length {} >>\nstream\n{drawing}endstream",
+            drawing.len()
+        ),
+    ];
+    let mut bytes = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend(b"xref\n0 5\n0000000000 65535 f \n");
+    for offset in offsets {
+        bytes.extend(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend(
+        format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+    );
+    bytes
+}
+
+#[tokio::test]
+async fn image_downscale_read_and_pdf_use_saved_bytes_and_copy_sizes() {
+    if std::process::Command::new("pdftoppm")
+        .arg("-v")
+        .output()
+        .is_err()
+    {
+        eprintln!("Skipping PDF rendering: pdftoppm is not installed");
+        return;
+    }
+    let calls = [
+        json!({"path":"picture.png"}),
+        json!({"path":"chart.pdf","page":1}),
+    ];
+    let replies: Vec<_> = calls
+        .iter()
+        .enumerate()
+        .map(|(i, args)| {
+            json!({
+                "index":i,"id":format!("read-{i}"),"type":"function",
+                "function":{"name":"read","arguments":args.to_string()}
+            })
+        })
+        .collect();
+    let reply = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({
+            "choices":[{"index":0,"delta":{"tool_calls":replies},"finish_reason":"tool_calls"}]
+        })
+    );
+    let path = std::env::var("PATH").unwrap();
+    let mut fixture = Fixture::start_with_mcp_env(
+        vec![reply, text_reply(), text_reply()],
+        "deepseek-flash",
+        None,
+        json!({}),
+        json!({}),
+        &[("PATH", &path)],
+    )
+    .await;
+    fs::write(fixture.root.path().join("work/picture.png"), large_png()).unwrap();
+    fs::write(fixture.root.path().join("work/chart.pdf"), large_pdf()).unwrap();
+    let created = create(&fixture).await;
+    fixture.input(&created.session.id).await;
+    complete(&fixture, &created.session.id, created.event_seq).await;
+    let expected = downscaled_attachments(&fixture, &created.session.id).await;
+    assert_eq!(expected.len(), 2, "both read and PDF must attach an image");
+    let snapshot: SessionReadResponse = fixture
+        .request(
+            Method::GET,
+            &format!("/v1/sessions/{}", created.session.id),
+            json!({}),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    fixture.input(&created.session.id).await;
+    complete(&fixture, &created.session.id, snapshot.event_seq).await;
+    fixture.stop().await;
+    let requests = &fixture.script.lock().unwrap().requests;
+    for request in &requests[1..] {
+        let actual: Vec<_> = request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|message| message["content"].as_array())
+            .flatten()
+            .filter_map(|part| part["image_url"]["url"].as_str())
+            .collect();
+        assert_eq!(actual, expected);
+    }
+}
 
 const PNG: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0,

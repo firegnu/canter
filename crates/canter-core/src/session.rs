@@ -40,6 +40,7 @@ pub(crate) struct Shared {
     pub clients: Arc<std::sync::Mutex<crate::clients::Clients>>,
     pub hook_tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     pub input_waiters: AtomicUsize,
+    pub image_preparation: Arc<std::sync::Mutex<()>>,
     pub state: Arc<Mutex<State>>,
     pub runtime: std::sync::RwLock<Arc<crate::configuration::Runtime>>,
     pub configuration: std::sync::OnceLock<Arc<dyn crate::ConfigurationSource>>,
@@ -1316,6 +1317,7 @@ impl Session {
             clients: Default::default(),
             hook_tasks: Default::default(),
             input_waiters: AtomicUsize::new(0),
+            image_preparation: Default::default(),
             state: Arc::new(Mutex::new(state)),
             runtime: std::sync::RwLock::new(Arc::new(crate::configuration::Runtime {
                 revision: None,

@@ -152,6 +152,7 @@ impl Shared {
             clients: self.clients.clone(),
             input_waiters: std::sync::atomic::AtomicUsize::new(0),
             state: self.state.clone(),
+            image_preparation: self.image_preparation.clone(),
             runtime: std::sync::RwLock::new(self.runtime()),
             configuration: Default::default(),
             configuration_warnings: Default::default(),

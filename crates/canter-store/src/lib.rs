@@ -1,11 +1,11 @@
 //! Synchronous, Unix session storage. Callers choose an isolated root directory.
 //! Keep a `SessionWriter` alive for the duration of a writable session.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
 use std::os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use canter_protocol::{
@@ -13,6 +13,8 @@ use canter_protocol::{
     SessionSummary, apply_event_mut, validate_event,
 };
 use serde::{Serialize, de::DeserializeOwned};
+
+pub const PREPARED_IMAGE_PREFIX: &str = "image-1568-";
 
 #[cfg(test)]
 mod read_tests;
@@ -449,26 +451,99 @@ impl Store {
         Ok(self.session_dir(id)?.join(name))
     }
 
-    /// Publish original attachment bytes before their referencing events/history.
+    /// Publish attachment bytes before their referencing events/history.
     pub fn save_image(
         &self,
         id: &str,
         bytes: &[u8],
         extension: &str,
     ) -> Result<PathBuf, StoreError> {
+        self.save_image_with_prefix(id, bytes, extension, "image-")
+    }
+
+    /// The prefix records that import-time resizing has already been attempted.
+    pub fn save_prepared_image(
+        &self,
+        id: &str,
+        bytes: &[u8],
+        extension: &str,
+    ) -> Result<PathBuf, StoreError> {
+        self.save_image_with_prefix(id, bytes, extension, PREPARED_IMAGE_PREFIX)
+    }
+
+    fn save_image_with_prefix(
+        &self,
+        id: &str,
+        bytes: &[u8],
+        extension: &str,
+        prefix: &str,
+    ) -> Result<PathBuf, StoreError> {
         let dir = self.session_dir(id)?;
         let mut file = tempfile::Builder::new()
-            .prefix("image-")
+            .prefix(&format!(".{prefix}"))
             .suffix(&format!(".{extension}"))
             .tempfile_in(&dir)?;
         file.as_file()
             .set_permissions(fs::Permissions::from_mode(0o600))?;
         file.write_all(bytes)?;
         file.as_file().sync_all()?;
+        let name = file.path().file_name().unwrap().to_string_lossy();
+        let path = dir.join(name.strip_prefix('.').unwrap());
+        file.persist_noclobber(&path).map_err(|error| error.error)?;
         File::open(dir)?.sync_all()?;
-        let (_, path) = file.keep().map_err(|error| error.error)?;
         Ok(path)
     }
+
+    /// A missing or damaged migration map is recoverable from the original images.
+    pub fn prepared_images(&self, id: &str) -> BTreeMap<String, String> {
+        let read = || -> Result<BTreeMap<String, String>, StoreError> {
+            let bytes = fs::read(self.session_dir(id)?.join("prepared-images.json"))?;
+            let images: BTreeMap<String, String> = serde_json::from_slice(&bytes)?;
+            for (original, prepared) in &images {
+                self.image_path(id, original)?;
+                self.image_path(id, prepared)?;
+                if original != prepared && !prepared.starts_with(PREPARED_IMAGE_PREFIX) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "invalid prepared image",
+                    )
+                    .into());
+                }
+            }
+            Ok(images)
+        };
+        read().unwrap_or_default()
+    }
+
+    pub fn save_prepared_images(
+        &self,
+        id: &str,
+        images: &BTreeMap<String, String>,
+    ) -> Result<(), StoreError> {
+        write_private_file(
+            &self.session_dir(id)?.join("prepared-images.json"),
+            &serde_json::to_vec(images)?,
+        )
+    }
+
+    /// Forks retain filenames, so historical references remain valid.
+    pub fn copy_image(&self, id: &str, name: &str, bytes: &[u8]) -> Result<(), StoreError> {
+        write_private_file(&self.image_path(id, name)?, bytes)
+    }
+}
+
+fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+    let dir = path.parent().expect("session file parent");
+    let mut file = tempfile::Builder::new()
+        .prefix(".image-")
+        .tempfile_in(dir)?;
+    file.as_file()
+        .set_permissions(fs::Permissions::from_mode(0o600))?;
+    file.write_all(bytes)?;
+    file.as_file().sync_all()?;
+    file.persist(path).map_err(|error| error.error)?;
+    File::open(dir)?.sync_all()?;
+    Ok(())
 }
 
 fn lock(file: &File) -> Result<(), StoreError> {

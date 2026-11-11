@@ -8,8 +8,6 @@ use canter_protocol::*;
 use canter_store::Store;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::Write,
-    os::unix::fs::OpenOptionsExt,
     sync::Arc,
 };
 
@@ -18,6 +16,7 @@ pub struct ForkSnapshot {
     events: Vec<(EventPayload, i64)>,
     history: Vec<HistoryEntry>,
     images: BTreeMap<String, Vec<u8>>,
+    prepared_images: BTreeMap<String, String>,
     created_at: i64,
 }
 
@@ -195,6 +194,9 @@ impl ForkSnapshot {
             &serde_json::to_value(&history).map_err(|_| CoreError::internal())?,
             &mut names,
         );
+        let mut prepared_images = store.prepared_images(id);
+        prepared_images.retain(|original, _| names.contains(original));
+        names.extend(prepared_images.values().cloned());
         let mut images = BTreeMap::new();
         for name in names {
             let path = store.image_path(id, &name)?;
@@ -207,11 +209,13 @@ impl ForkSnapshot {
                 Err(_) => return Err(CoreError::internal()),
             }
         }
+        prepared_images.retain(|_, prepared| images.contains_key(prepared));
         Ok(Self {
             settings,
             events: copied,
             history,
             images,
+            prepared_images,
             created_at,
         })
     }
@@ -241,13 +245,10 @@ impl ForkSnapshot {
                         writer.append_model_history(&entry)?;
                     }
                     for (name, bytes) in self.images {
-                        let mut file = std::fs::OpenOptions::new()
-                            .write(true)
-                            .create_new(true)
-                            .mode(0o600)
-                            .open(saved_store.image_path(&saved_id, &name)?)?;
-                        file.write_all(&bytes)?;
-                        file.sync_all()?;
+                        saved_store.copy_image(&saved_id, &name, &bytes)?;
+                    }
+                    if !self.prepared_images.is_empty() {
+                        saved_store.save_prepared_images(&saved_id, &self.prepared_images)?;
                     }
                     Ok::<_, canter_store::StoreError>(())
                 })();

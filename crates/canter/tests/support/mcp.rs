@@ -159,6 +159,45 @@ async fn rpc(
 }
 
 #[tokio::test]
+async fn image_downscale_mcp_saves_a_smaller_copy() {
+    use base64::Engine;
+    let http = HttpMcp::start(&["screenshot"]).await;
+    let bytes = super::tool_images::large_png();
+    http.state.lock().unwrap().result = Some(json!({"content":[{
+        "type":"image", "mimeType":"image/png",
+        "data":base64::engine::general_purpose::STANDARD.encode(&bytes)
+    }]}));
+    let mut fixture = Fixture::start_with_mcp(
+        vec![call(&["mcp__remote__screenshot"]), text_reply()],
+        "deepseek-flash",
+        None,
+        json!({}),
+        json!({"remote":http.config()}),
+    )
+    .await;
+    let created: SessionCreateResponse = fixture.request(Method::POST, "/v1/sessions", json!({
+        "cwd":fixture.root.path().join("work"), "env":{"HOME":fixture.root.path().join("home")},
+        "model":"deepseek-flash", "approvalPolicy":"allowAll", "clientName":"test"
+    })).await.json().await.unwrap();
+    fixture.input(&created.session.id).await;
+    complete(&fixture, &created.session.id, created.event_seq).await;
+    let expected = super::tool_images::downscaled_attachments(&fixture, &created.session.id).await;
+    assert_eq!(expected.len(), 1);
+    assert!(expected[0].len() < bytes.len().div_ceil(3) * 4);
+    fixture.stop().await;
+    let requests = &fixture.script.lock().unwrap().requests;
+    let actual: Vec<_> = requests[1]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .filter_map(|part| part["image_url"]["url"].as_str())
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
 async fn mcp_images_and_text_reach_the_model_together() {
     let http = HttpMcp::start(&["screenshot"]).await;
     http.state.lock().unwrap().result = Some(json!({"content":[
