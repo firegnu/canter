@@ -465,10 +465,10 @@ fn old_turns_say_what_they_know() {
 }
 
 /// While working, a blank row sets the status line off from the
-/// conversation, and the plan's steps and the tip hang under it: the first
-/// after `⎿`, the rest lined up with it. When idle the rows are as before.
+/// conversation, and the tip hangs under it after `⎿`; a plan's steps do
+/// not. When idle the rows are as before.
 #[test]
-fn the_status_line_stands_apart_with_the_plan_and_tip_under_it() {
+fn the_status_line_stands_apart_with_the_tip_under_it_and_no_plan() {
     let mut screen = Screen::new(100);
     screen.start_turn("t1");
     // More than the screen holds, so the conversation runs down to the
@@ -491,18 +491,15 @@ fn the_status_line_stands_apart_with_the_plan_and_tip_under_it() {
     let at = screen.status_at();
     let rows = screen.rows();
     assert_eq!(rows[at - 1], "", "{rows:#?}");
-    assert_eq!(rows[at + 1], "   ⎿ □ Implement", "{rows:#?}");
-    assert_eq!(rows[at + 2], "     □ Verify", "{rows:#?}");
-    assert!(rows[at + 3].starts_with("     Tip: "), "{rows:#?}");
-    assert!(rows[at + 4].starts_with('╭'), "{rows:#?}");
+    assert!(rows[at + 1].starts_with("   ⎿ Tip: "), "{rows:#?}");
+    assert!(rows[at + 2].starts_with('╭'), "{rows:#?}");
 
     screen.end_turn("completed", Value::Null, Value::Null);
     let rows = screen.rows();
     let input = rows.iter().position(|row| row.starts_with('╭')).unwrap();
-    assert_eq!(rows[input - 2..input], ["  □ Implement", "  □ Verify"]);
-    assert_eq!(rows[input - 3], "", "the status line, empty when idle");
+    assert_eq!(rows[input - 1], "", "the status line, empty when idle");
     assert!(
-        rows[input - 4].starts_with("  Worked for"),
+        rows[input - 2].starts_with("  Worked for"),
         "no blank row above it: {rows:#?}"
     );
 }

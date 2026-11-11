@@ -56,11 +56,9 @@ const PANEL_CHROME: u16 = 3;
 pub(crate) const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Columns of a running command the status line keeps however narrow the window.
 const MIN_COMMAND: usize = 12;
-/// While working, what hangs under the status line (the plan's steps, then
-/// the tip) starts after this, under the verb; the rows after the first
-/// line up with its text.
-pub(crate) const HUNG: &str = "   ⎿ ";
-pub(crate) const UNDER_HUNG: &str = "     ";
+/// While working, what hangs under the status line (the tip) starts after
+/// this, under the verb.
+const HUNG: &str = "   ⎿ ";
 /// Conversation rows one step of the mouse wheel scrolls.
 const WHEEL_ROWS: usize = 3;
 /// Presses on the same cell this close together (ms) count as a double or
@@ -4856,7 +4854,7 @@ impl App {
         // The choice offered is on screen when any of its choices fit.
         self.drawing.chooser = (self.choosing() && opened > 0).then_some(self.choosers);
 
-        let plan_room =
+        let footer_room =
             usize::from(height.saturating_sub(3 + info_rows + bottom.height() + footer_box_height))
                 .saturating_sub(list.len() + header_rows);
         let background_count = self
@@ -4869,11 +4867,15 @@ impl App {
         // place, the background commands row, then the goal (P2-243).
         let mut footer = Vec::new();
         let agents_open = self.agents.selected.is_some() && opened > 0;
-        if let Some(row) = self.agents.row().filter(|_| !agents_open && plan_room > 0) {
+        if let Some(row) = self
+            .agents
+            .row()
+            .filter(|_| !agents_open && footer_room > 0)
+        {
             footer.push((Footer::Agents, row));
         }
         let background_open = self.background_open() && opened > 0;
-        if background_count > 0 && plan_room > footer.len() {
+        if background_count > 0 && footer_room > footer.len() {
             let mark = if background_open { '▾' } else { '▸' };
             footer.push((
                 Footer::Background,
@@ -4888,7 +4890,7 @@ impl App {
             .snapshot
             .goal
             .as_ref()
-            .filter(|_| plan_room > footer.len())
+            .filter(|_| footer_room > footer.len())
             .map(|goal| Line::from(truncate(crate::goal::row(goal), usize::from(width))));
         // ↓ selects them only from the bare input box.
         let selectable = matches!(bottom, Bottom::Input { .. })
@@ -4908,20 +4910,9 @@ impl App {
             .map(|(row, spans)| footer_line(spans, self.footer_selected == Some(row), width))
             .chain(goal)
             .collect();
-        // While working, the plan's steps hang under the status line, then
-        // the tip; with a blank row above the status line.
+        // While working, the tip hangs under the status line, with a blank
+        // row above the status line.
         let working = self.snapshot.status == SessionStatus::Working && self.search.is_none();
-        let steps = crate::plan::pinned(
-            &self.snapshot,
-            width,
-            plan_room.saturating_sub(footer.len()),
-            working,
-        );
-        let (plan, mut hung) = if working {
-            (Vec::new(), steps)
-        } else {
-            (steps, Vec::new())
-        };
 
         self.edge_scroll(now_ms);
         self.extend_history(width);
@@ -4943,10 +4934,9 @@ impl App {
         let total = history.len() + live.len() - lead;
         let room =
             usize::from(height.saturating_sub(1 + info_rows + bottom.height() + footer_box_height))
-                .saturating_sub(list.len() + plan.len() + hung.len() + header_rows + footer.len());
+                .saturating_sub(list.len() + header_rows + footer.len());
         // Only under the status line of a turn that started here, with the
         // bare input box below; it goes first when rows run short.
-        let tip_lead = if hung.is_empty() { HUNG } else { UNDER_HUNG };
         let tip = match (&self.tips, &self.drawing.turn) {
             (Some(tips), Some(turn))
                 if working
@@ -4955,12 +4945,12 @@ impl App {
                     && footer_box.is_none()
                     && room > 2 =>
             {
-                tips.line(turn, width, tip_lead)
+                tips.line(turn, width, HUNG)
             }
             _ => None,
         };
         let room = room - usize::from(tip.is_some());
-        hung.extend(tip);
+        let hung: Vec<_> = tip.into_iter().collect();
         // A running command gets its own row above the status line; the
         // blank row goes before it when rows run short, and without it the
         // command goes back onto the status line.
@@ -5026,7 +5016,7 @@ impl App {
             text: self.input.text().to_owned(),
             // Under the header and the conversation: the hint, the blank
             // row, the command row, the status line, the rows hung under it,
-            // plan, list and the box's top border.
+            // list and the box's top border.
             top: header_rows
                 + area
                 + usize::from(hint.is_some())
@@ -5034,13 +5024,12 @@ impl App {
                 + usize::from(command.is_some())
                 + 1
                 + hung.len()
-                + plan.len()
                 + list.len()
                 + 1,
             rows: input_rows,
         });
         // Under the header and the conversation: the hint, the blank row,
-        // the command row, the status line, the rows hung under it, plan,
+        // the command row, the status line, the rows hung under it, the
         // list, the box and the info rows; then the rows under them, and
         // the open list's top border.
         let footer_top = header_rows
@@ -5050,7 +5039,6 @@ impl App {
             + usize::from(command.is_some())
             + 1
             + hung.len()
-            + plan.len()
             + list.len()
             + usize::from(bottom.height())
             + usize::from(info_rows);
@@ -5257,7 +5245,6 @@ impl App {
         self.drawing.agent_task = task_box.as_ref().map(|(rect, _)| *rect);
         let view = View {
             header,
-            plan,
             sticky,
             conversation,
             hint,
@@ -6649,7 +6636,6 @@ fn after_plan(settings: &canter_protocol::SessionSettings) -> PermissionMode {
 pub(crate) struct View {
     /// On a sub-agent's screen: which it is and how to go back, on top.
     header: Vec<Line<'static>>,
-    plan: Vec<Line<'static>>,
     /// While scrolled back past it: the prompt the rows in view answer, on
     /// the top row.
     sticky: Option<Line<'static>>,
@@ -6665,7 +6651,7 @@ pub(crate) struct View {
     /// While a command runs: the command, on its own row above the status
     /// line.
     command: Option<Line<'static>>,
-    /// While working, under the status line: the plan's steps and the tip.
+    /// While working, under the status line: the tip.
     hung: Vec<Line<'static>>,
     /// The command list or a choice, right above the input box.
     list: Vec<Line<'static>>,
@@ -6759,15 +6745,14 @@ impl Bottom {
 
 impl View {
     /// Rows under the conversation: the hint, the blank row, the command
-    /// row, the status line, the rows hung under it, the plan rows, the
-    /// list, the box, the info rows and what is under them.
+    /// row, the status line, the rows hung under it, the list, the box,
+    /// the info rows and what is under them.
     fn below(&self) -> u16 {
         u16::from(self.hint.is_some())
             + 1
             + u16::from(self.gap)
             + u16::from(self.command.is_some())
             + self.hung.len() as u16
-            + self.plan.len() as u16
             + self.list.len() as u16
             + self.bottom.height()
             + self.info.len() as u16
@@ -6812,8 +6797,6 @@ impl View {
         frame.render_widget(Paragraph::new(self.status), row(1));
         let hung_height = self.hung.len() as u16;
         frame.render_widget(Paragraph::new(self.hung), row(hung_height));
-        let plan_height = self.plan.len() as u16;
-        frame.render_widget(Paragraph::new(self.plan), row(plan_height));
         frame.render_widget(Paragraph::new(self.list), row(list));
         let boxed = row(self.bottom.height());
         let info = row(self.info.len() as u16);

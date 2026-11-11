@@ -70,7 +70,7 @@ fn steps() -> Value {
 }
 
 #[test]
-fn plan_cards_pin_unfinished_steps_and_collapse_after_completion() {
+fn plan_cards_show_in_the_conversation_and_nothing_is_pinned_above_the_input() {
     let mut screen = Screen::new();
     assert!(screen.pinned().is_empty());
     screen.plan("p1", steps());
@@ -81,7 +81,12 @@ fn plan_cards_pin_unfinished_steps_and_collapse_after_completion() {
             .any(|line| line == "  ● Updated Plan · 1/3 complete"),
         "{lines:#?}"
     );
-    assert_eq!(screen.pinned(), ["   ⎿ □ Implement", "     □ Verify"]);
+    assert!(screen.pinned().is_empty(), "{lines:#?}");
+    assert_eq!(
+        lines.iter().filter(|line| line.contains("Verify")).count(),
+        1,
+        "only on the card: {lines:#?}"
+    );
     let read = lines
         .iter()
         .position(|line| line.contains("✔ Read"))
@@ -112,23 +117,15 @@ fn plan_cards_pin_unfinished_steps_and_collapse_after_completion() {
 }
 
 #[test]
-fn pinned_plan_uses_at_most_five_rows_with_active_first_and_overflow_count() {
+fn a_long_plan_pins_no_steps_or_overflow_count_above_the_input() {
     let mut screen = Screen::new();
     let mut plan: Vec<Value> = (1..=7)
         .map(|n| json!({"step":format!("Step {n}"),"status":"pending"}))
         .collect();
     plan[6]["status"] = json!("inProgress");
     screen.plan("p1", json!(plan));
-    assert_eq!(
-        screen.pinned(),
-        [
-            "   ⎿ □ Step 7",
-            "     □ Step 1",
-            "     □ Step 2",
-            "     □ Step 3",
-            "     … and 3 more"
-        ]
-    );
+    assert!(screen.pinned().is_empty());
+    assert!(!screen.lines().join("\n").contains("and 3 more"));
     screen.ui.backend_mut().resize(20, 12);
     screen.plan(
         "p2",
@@ -140,11 +137,11 @@ fn pinned_plan_uses_at_most_five_rows_with_active_first_and_overflow_count() {
         "{lines:#?}"
     );
     let input = lines.iter().position(|line| line.starts_with('╭')).unwrap();
-    assert!(lines[input - 1].starts_with("   ⎿ □ "), "{lines:#?}");
+    assert!(!lines[input - 1].contains('□'), "{lines:#?}");
 }
 
 #[test]
-fn a_single_plan_row_keeps_the_active_step_and_overflow_count() {
+fn a_short_screen_pins_no_step_with_an_overflow_count() {
     let mut screen = Screen::new();
     screen.ui.backend_mut().resize(40, 9);
     screen.plan("p1", json!([
@@ -153,9 +150,9 @@ fn a_single_plan_row_keeps_the_active_step_and_overflow_count() {
         {"step":"Verify","status":"pending"}
     ]));
     let pinned = screen.pinned();
-    assert_eq!(pinned.len(), 1, "{pinned:#?}");
-    assert!(pinned[0].starts_with("   ⎿ □ Implement"), "{pinned:#?}");
-    assert!(pinned[0].ends_with(" (+2 more)"), "{pinned:#?}");
+    assert!(pinned.is_empty(), "{pinned:#?}");
+    let text = screen.lines().join("\n");
+    assert!(!text.contains("(+2 more)"), "{text}");
 }
 
 #[test]
@@ -330,11 +327,7 @@ fn later_updates_in_a_turn_are_one_row_each() {
             {"step":"Verify","status":"inProgress"}
         ]),
     );
-    assert_eq!(
-        screen.pinned(),
-        ["   ⎿ □ Verify"],
-        "the pinned plan stays whole"
-    );
+    assert!(screen.pinned().is_empty());
     let lines = screen.lines();
     assert!(
         lines.contains(&"  ● Updated Plan · 1/3 complete".to_owned()),

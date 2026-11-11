@@ -182,7 +182,7 @@ fn background_initial_output_arriving_after_started_state_is_not_frozen_out() {
 }
 
 #[test]
-fn background_count_and_unfinished_plan_both_have_pinned_rows() {
+fn background_count_keeps_its_row_and_an_unfinished_plan_pins_none() {
     let mut snapshot = SessionSnapshot::empty("pinned");
     snapshot.status = SessionStatus::Idle;
     snapshot.background_commands.push(serde_json::from_value(serde_json::json!({"id":1,"itemId":"c","command":"server","startedAt":0,"completedAt":null,"running":true,"exitCode":null})).unwrap());
@@ -196,9 +196,17 @@ fn background_count_and_unfinished_plan_both_have_pinned_rows() {
             .iter()
             .position(|line| line.starts_with('╰'))
             .unwrap();
-    // The count under the two info rows (P2-240), the plan above the box.
+    // The count under the two info rows (P2-240), no plan above the box.
     assert!(lines[bottom + 3].contains("▸ 1 background commands · ↓ to view"));
-    assert!(lines[input - 1].contains("Verify background commands"));
+    assert!(
+        !lines[input - 1].contains("Verify background commands"),
+        "{shown}"
+    );
+    assert_eq!(
+        shown.matches("Verify background commands").count(),
+        1,
+        "only on the card: {shown}"
+    );
 }
 
 /// A left click at screen row `row`, then letting go.
