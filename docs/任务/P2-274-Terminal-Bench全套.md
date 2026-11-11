@@ -3,7 +3,7 @@
 依据：P2-260 已合并（Harbor 0.25.0 适配器、三题试跑、偷看答案检查）。本件在 5090 上用同一模型把全套 89 题一遍一遍跑，出 canter 的绝对分数和与 Terminus-2、pi 的对比。每遍跑完用户确认才跑下一遍。不改 canter 代码、不改适配器、不改题。
 依赖：P2-260
 执行：主控
-待用户：镜像拉完后说「跑 oracle」；之后每遍看过结果再放行下一遍
+待用户：11-11 用户「暂时不往下跑了，有时间再跑」；接着跑时说「跑 Terminus-2」（先跑 fix-git 检查题）。另待定：count-dataset-tokens 是否按 0 分算
 
 ## 用户原话
 
@@ -81,3 +81,4 @@
 - 11-10 21:01（北京时间）oracle 跑完：**78/89（87.6%）**，墙钟 2 小时 28 分。没过的 11 题逐题原因见 `bench/terminal-bench/results/full-comparison.md`：4 题判分现装 torch 等、5090 到 PyPI 约 330 KB/s 超时（`mteb-retrieve`、`pytorch-model-recovery`、`torch-pipeline-parallelism`、`torch-tensor-parallelism`），1 题标准答案下载慢超时（`gcode-to-text`），3 题软件源旧版本 404（`qemu-alpine-ssh`、`qemu-startup` 判分装不上 curl；`caffe-cifar-10`），3 题依赖漂移或不稳定（`build-cython-ext`、`mcmc-sampling-stan`、`protein-assembly`）。没有容器、镜像、compose 出错的题，不重跑。key 扫描（job 目录和 `p2-274-run`）无命中。结果文件 `results/oracle-full-2026-11-10.json`。
 - 11-10 用户看过 oracle 结果后说「现在跑吧」（跑 canter）。21:11（北京时间）启动 `~/canter-linux/p2-274-run/run-canter.sh`（脚本 PID 2764519，Harbor PID 2764561，job `~/canter-linux/p2-274-jobs/canter-full`，4 并发，`--max-retries 0`，high）。canter 静态版 `canter 0.1.0 · 64b80e3f`，sha256 `4f813abe5e46235b8b93856e901ccbdd3a9c8ff17e4f9aeb78dabb10e6240a4a`。脚本每 30 秒累加已完成题的 `cost_usd`，超过 $10 向 Harbor PID 发 TERM；跑完出 `canter-full.json`（带 `--oracle-job`），再扫 `~/canter-linux` 全目录的 key（开跑前基线只命中凭证源 `accept-home/.canter/config.json`）。进度和停的原因都在 `status`。
 - 11-11 02:06（北京时间）canter 跑完，脚本正常结束（status 里「canter: DONE」），没碰 $10 上限，key 扫描只命中凭证源。判分 **70/89（78.7%）**，墙钟 4 小时 55 分，$2.88（全按低谷价；全按高峰价 $5.76），输入 2.02 亿 token（缓存命中 98.7%）、输出 313 万。偷看答案检查命中 10 题，逐题看过：6 题过了的题抓了标准答案或判分测试（build-pov-ray、dna-assembly、extract-elf、make-doom-for-mips、protein-assembly、video-processing），按 0 分算；count-dataset-tokens 搜索摘要里看到答案后拿来确认，算存疑；另 3 题本来就没过。扣掉后 **64/89（71.9%）**，存疑也扣是 63/89；只算 oracle 通过的 78 题：判分 65/78，扣后 60/78（76.9%）。qemu 两题是适配器装 ca-certificates 时 Debian 安全源 404、外壳没起来，属于软件源问题、重跑也一样，不重跑。没有 `metadata.errors`、没有停服务端的题。超时题的花费照常记上（之前待确认的事）。逐题见 `bench/terminal-bench/results/full-comparison.md`，结果文件 `results/canter-full-2026-11-10.json`。
+- 11-11 用户看过 canter 结果后说「稍后再跑terminus-2」「暂时不往下跑了，有时间再跑」。停在 canter 跑完、Terminus-2 没开始；5090 上没有在跑的东西，89 个题目镜像和 `~/canter-linux/p2-274-*` 都留着。
