@@ -117,7 +117,7 @@ async fn default_request_only_adds_canter_user_agent_and_preserves_body_bytes() 
                 "user-agent"
             ]
         );
-        assert_eq!(server.bodies.lock().unwrap()[0].as_ref(), br#"{"messages":[{"content":"Hello","role":"user"}],"model":"test-model","stream":true,"stream_options":{"include_usage":true}}"#);
+        assert_eq!(server.bodies.lock().unwrap()[0].as_ref(), br#"{"model":"test-model","messages":[{"role":"user","content":"Hello"}],"stream":true,"stream_options":{"include_usage":true}}"#);
     }
     server.stop().await;
 }

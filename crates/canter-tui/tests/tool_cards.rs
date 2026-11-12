@@ -179,11 +179,14 @@ fn mcp_card_shows_arguments_and_the_first_lines_of_its_result() {
     let long = "x".repeat(200);
     screen.mcp("m2", json!({ "query": long }), "one\n", "completed");
     let conversation = screen.conversation();
-    let rows = card(&conversation, "✓ Call github/search_issues  {\"limit\"");
+    let rows = card(
+        &conversation,
+        "✓ Call github/search_issues  {\"query\":\"diff",
+    );
     assert_eq!(
         rows,
         [
-            "✓ Call github/search_issues  {\"limit\":3,\"query\":\"diff render\"}",
+            "✓ Call github/search_issues  {\"query\":\"diff render\",\"limit\":3}",
             "    ┃ issue 1",
             "    ┃ issue 2",
             "    ┃ issue 3",
@@ -198,7 +201,10 @@ fn mcp_card_shows_arguments_and_the_first_lines_of_its_result() {
 
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
-    let rows = card(&conversation, "✓ Call github/search_issues  {\"limit\"");
+    let rows = card(
+        &conversation,
+        "✓ Call github/search_issues  {\"query\":\"diff",
+    );
     let expected: Vec<String> = (1..=7).map(|n| format!("    ┃ issue {n}")).collect();
     assert_eq!(rows[1..], expected[..]);
 }

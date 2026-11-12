@@ -105,12 +105,13 @@ async fn account_secrets_never_enter_public_records_sessions_sse_or_logs() {
         assert_eq!(done["success"], success);
         if success {
             let info = &done["account"];
-            let keys: Vec<_> = info
+            let mut keys: Vec<_> = info
                 .as_object()
                 .unwrap()
                 .keys()
                 .map(String::as_str)
                 .collect();
+            keys.sort_unstable();
             assert_eq!(
                 keys,
                 [

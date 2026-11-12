@@ -1093,3 +1093,16 @@ async fn hunk_headers_without_a_line_to_name_stay_plain() {
     .await;
     assert_eq!(headers, ["@@ -1,4 +1,4 @@"]);
 }
+
+#[test]
+fn file_tool_parameters_reach_the_model_in_the_written_order() {
+    let edit = serde_json::to_string(&Tool::Edit.definition().parameters).unwrap();
+    let at = |key: &str| edit.find(&format!("\"{key}\"")).unwrap();
+    assert!(at("path") < at("edits"), "{edit}");
+    assert!(at("oldText") < at("newText"), "{edit}");
+    let write = serde_json::to_string(&Tool::Write.definition().parameters).unwrap();
+    assert!(
+        write.find("\"path\"").unwrap() < write.find("\"content\"").unwrap(),
+        "{write}"
+    );
+}

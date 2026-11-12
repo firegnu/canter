@@ -1095,12 +1095,13 @@ mod tests {
         assert!(events.iter().all(Result::is_ok));
         // P2-210 replay eligibility is independent of the current tool list.
         assert_eq!(server.bodies.lock().unwrap()[0].as_ref(), serde_json::to_vec(&json!({
-            "model":"test-model","stream":true,"store":false,"reasoning":{"summary":"auto"},
+            "model":"test-model",
             "input":[
                 {"role":"developer","content":[{"type":"input_text","text":"Fixed prompt\n  unchanged "}]},
                 reasoning, call,
                 {"type":"function_call_output","call_id":"patch","output":"old result"}
-            ]
+            ],
+            "store":false,"stream":true,"reasoning":{"summary":"auto"}
         })).unwrap());
         server.stop().await;
     }
