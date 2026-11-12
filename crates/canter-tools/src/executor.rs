@@ -26,7 +26,8 @@ pub trait CommandProcess: Send {
     async fn terminate(&mut self) -> io::Result<()>;
     /// Kill the original process group, even after its leader exits. Processes that
     /// moved to another group or session are outside this cleanup boundary.
-    async fn kill(&mut self) -> io::Result<()>;
+    /// Returns whether the group still had members to signal.
+    async fn kill(&mut self) -> io::Result<bool>;
 }
 
 #[async_trait]

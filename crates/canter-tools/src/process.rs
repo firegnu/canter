@@ -46,18 +46,19 @@ impl LocalProcess {
         self.sandbox_resources = resources;
     }
 
-    fn kill_group(&mut self) -> io::Result<()> {
-        if let Some(group) = self.group {
-            match nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL) {
-                Ok(()) | Err(nix::errno::Errno::ESRCH) => {
-                    self.group = None;
-                    // Disarm only after the original group has been cleaned up.
-                    let _ = std::io::Write::write_all(&mut self.guardian, b"\n");
-                }
-                Err(error) => return Err(io::Error::from_raw_os_error(error as i32)),
-            }
-        }
-        Ok(())
+    fn kill_group(&mut self) -> io::Result<bool> {
+        let Some(group) = self.group else {
+            return Ok(false);
+        };
+        let had_members = match nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL) {
+            Ok(()) => true,
+            Err(nix::errno::Errno::ESRCH) => false,
+            Err(error) => return Err(io::Error::from_raw_os_error(error as i32)),
+        };
+        self.group = None;
+        // Disarm only after the original group has been cleaned up.
+        let _ = std::io::Write::write_all(&mut self.guardian, b"\n");
+        Ok(had_members)
     }
 }
 
@@ -66,7 +67,7 @@ impl CommandProcess for LocalProcess {
     async fn wait(&mut self) -> io::Result<std::process::ExitStatus> {
         self.child.wait().await
     }
-    async fn kill(&mut self) -> io::Result<()> {
+    async fn kill(&mut self) -> io::Result<bool> {
         self.kill_group()
     }
     async fn terminate(&mut self) -> io::Result<()> {

@@ -288,6 +288,64 @@ async fn shell_reports_exit_status_and_signals() {
     }
 }
 
+const LEFTOVER_NOTICE: &str = "Processes this command left running in the background were stopped when the shell exited. To keep a server or watcher running, use background=true.";
+
+#[tokio::test]
+async fn stopping_leftover_background_processes_is_reported_to_the_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools(&dir);
+    let cancel = CancellationToken::new();
+    for (command, reported) in [
+        // Output redirected away, as with `nohup server > log 2>&1 &`.
+        ("/bin/sleep 30 > /dev/null 2>&1 & echo started", true),
+        // Still holding the output pipes.
+        ("/bin/sleep 30 & echo started", true),
+        // Waited for inside the same command: nothing is left to stop.
+        ("/bin/sleep 0.2 & wait; echo started", false),
+        ("echo started", false),
+    ] {
+        let raw = serde_json::json!({ "command": command }).to_string();
+        let call = tools
+            .prepare(Tool::Shell, "leftover", &raw, &cancel)
+            .await
+            .unwrap();
+        let result = tools.execute(allow(&call), &cancel, &mut |_| {}).await;
+        assert_eq!(result.outcome, ToolOutcome::Completed, "{command}");
+        assert!(
+            result.text.contains("started"),
+            "{command}: {}",
+            result.text
+        );
+        assert_eq!(
+            result.text.contains(LEFTOVER_NOTICE),
+            reported,
+            "{command}: {}",
+            result.text
+        );
+    }
+}
+
+#[tokio::test]
+async fn timeout_suggests_background_for_long_running_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools(&dir);
+    let cancel = CancellationToken::new();
+    let raw = serde_json::json!({"command":"/bin/sleep 30","timeoutMs":200}).to_string();
+    let call = tools
+        .prepare(Tool::Shell, "slow", &raw, &cancel)
+        .await
+        .unwrap();
+    let result = tools.execute(allow(&call), &cancel, &mut |_| {}).await;
+    assert_eq!(result.outcome, ToolOutcome::TimedOut);
+    assert!(
+        result.text.ends_with(
+            "Command timed out after 200 ms; process group killed. To keep a server or watcher running, use background=true."
+        ),
+        "{}",
+        result.text
+    );
+}
+
 async fn assert_process_tree_stops(cancelled: bool) {
     use std::time::Duration;
     let dir = tempfile::tempdir().unwrap();

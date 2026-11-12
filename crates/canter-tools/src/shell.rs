@@ -13,6 +13,10 @@ pub const DEFAULT_SHELL_TIMEOUT_MS: u64 = 120_000;
 pub const MAX_SHELL_TIMEOUT_MS: u64 = 600_000;
 pub const MAX_MODEL_OUTPUT_BYTES: usize = 32 * 1024;
 pub const IO_DRAIN_TIMEOUT_MS: u64 = 2_000;
+// The cleanup of a finished command's process group stops services started with `&`;
+// say so where it happens, so the model doesn't debug a server that is gone.
+const BACKGROUND_HINT: &str = "To keep a server or watcher running, use background=true.";
+const LEFTOVER_NOTICE: &str = "Processes this command left running in the background were stopped when the shell exited. To keep a server or watcher running, use background=true.";
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -134,8 +138,12 @@ async fn run_command(
             });
             let message = match outcome {
                 ToolOutcome::Cancelled => "Command cancelled; process group killed.".into(),
-                ToolOutcome::TimedOut => format!(
+                ToolOutcome::TimedOut if source == ExecCommandSource::UserShell => format!(
                     "Command timed out after {} ms; process group killed.",
+                    args.timeout_ms
+                ),
+                ToolOutcome::TimedOut => format!(
+                    "Command timed out after {} ms; process group killed. {BACKGROUND_HINT}",
                     args.timeout_ms
                 ),
                 _ => match status.code() {
@@ -286,6 +294,7 @@ async fn capture(
     let mut timeout_seen = false;
     let mut drain_deadline = None;
     let mut drain_stop_reason = None;
+    let mut left_running = false;
     let deadline = tokio::time::sleep(std::time::Duration::from_millis(args.timeout_ms));
     tokio::pin!(deadline);
     let grace = tokio::time::sleep(std::time::Duration::from_secs(1));
@@ -331,7 +340,7 @@ async fn capture(
             }
             result = handle.process.wait(), if status.is_none() => {
                 status = Some(result?);
-                handle.process.kill().await?;
+                left_running = handle.process.kill().await?;
                 drain_deadline = Some(tokio::time::Instant::now() + std::time::Duration::from_millis(IO_DRAIN_TIMEOUT_MS));
             }
             Some(reply) = control.promotions.recv(), if control.background_id.is_none() && status.is_none() => {
@@ -373,6 +382,13 @@ async fn capture(
         } else {
             output.push(&notice, on_output);
         }
+    }
+    if left_running
+        && interruption.is_none()
+        && control.background_id.is_none()
+        && source != ExecCommandSource::UserShell
+    {
+        output.push(&format!("\n{LEFTOVER_NOTICE}\n"), on_output);
     }
     if handle.sandboxed && interruption.is_none() && reported_denial {
         let notice = if handle.sandbox_approval_allowed {
