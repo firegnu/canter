@@ -436,8 +436,10 @@ fn reads_in_a_row_are_one_explored_block_that_grows() {
     );
     let buffer = screen.draw();
     assert!(cell(buffer, "Explored").modifier.contains(Modifier::BOLD));
-    for cell in letters(&cells(buffer, "✓ Explored")) {
-        assert_eq!(cell.fg, Color::Cyan, "the mark and title are cyan");
+    // `✓` says it worked, green on every card; the title says what kind.
+    assert_eq!(cell(buffer, "✓ Explored").fg, Color::Green);
+    for cell in letters(&cells(buffer, "Explored")) {
+        assert_eq!(cell.fg, Color::Cyan, "the title is cyan");
     }
     assert_eq!(cell(buffer, "Read app.rs").fg, Color::Blue);
     for name in ["app.rs", "README.md", "cells.rs"] {
@@ -758,29 +760,49 @@ fn paths_in_titles_are_coloured_and_addresses_underlined() {
 /// for the background; orange 166 of the 256 with the background unknown;
 /// yellow with 16 colours (P2-195).
 #[test]
-fn an_edit_is_orange() {
-    for (depth, background, orange) in [
+fn an_edit_is_amber_after_a_green_check() {
+    for (depth, background, amber) in [
         (
             Depth::TrueColor,
             Background::Dark,
-            Color::Rgb(0xd7, 0x77, 0x57),
+            Color::Rgb(0xe0, 0xa0, 0x40),
         ),
         (
             Depth::TrueColor,
             Background::Light,
-            Color::Rgb(0xb4, 0x4a, 0x1e),
+            Color::Rgb(0xb4, 0x5f, 0x06),
         ),
-        (Depth::Ansi256, Background::Unknown, Color::Indexed(166)),
+        (Depth::Ansi256, Background::Unknown, Color::Indexed(172)),
         (Depth::Ansi16, Background::Dark, Color::Yellow),
     ] {
         let mut screen = Screen::themed(Theme { depth, background }, WIDTH);
         screen.completed(edit("completed"));
         let buffer = screen.draw();
-        for cell in letters(&cells(buffer, "✓ Edit")) {
-            assert_eq!(cell.fg, orange, "{depth:?} {background:?}");
+        // An orange `✓` read as an error (user, 11-13): it is green.
+        assert_eq!(cell(buffer, "✓ Edit").fg, Color::Green);
+        for cell in letters(&cells(buffer, "Edit")) {
+            assert_eq!(cell.fg, amber, "{depth:?} {background:?}");
         }
         assert!(cell(buffer, "Edit").modifier.contains(Modifier::BOLD));
     }
+}
+
+/// A count of nothing (`−0`, `+0`) is grey, not red or green.
+#[test]
+fn a_zero_count_on_an_edit_is_grey() {
+    let mut screen = Screen::new(WIDTH);
+    screen.completed(json!({
+        "type": "fileChange", "id": "e1", "status": "completed",
+        "changes": [{
+            "path": "/work/src/lib.rs", "kind": { "type": "update", "movePath": null },
+            "diff": "@@ -1 +1,2 @@\n old\n+new\n",
+        }],
+    }));
+    let buffer = screen.draw();
+    assert_eq!(cell(buffer, "+1").fg, Color::Green);
+    let zero = cell(buffer, "−0");
+    assert_ne!(zero.fg, Color::Red);
+    assert!(zero.modifier.contains(Modifier::DIM));
 }
 
 /// Without colours the cards' titles are only bold, finished thinking's

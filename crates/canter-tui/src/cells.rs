@@ -689,7 +689,13 @@ fn changed_files(turn: &Turn, cwd: &str, width: u16) -> Vec<Row> {
         spans.push(Span::raw(
             " ".repeat(added_width.saturating_sub(str_width(&added))),
         ));
-        spans.push(Span::styled(added, theme::success()));
+        // Only `+0` counts nothing here: `−0` is left out.
+        let style = if added == "+0" {
+            theme::secondary()
+        } else {
+            theme::success()
+        };
+        spans.push(Span::styled(added, style));
         if let Some(removed) = removed {
             spans.push(Span::raw(" "));
             spans.push(Span::styled(removed, theme::failure()));
@@ -1457,14 +1463,14 @@ fn change_header(
     }
     header.push(Span::raw("  "));
     match &change.kind {
-        PatchChangeKind::Add => header.push(Span::styled(format!("+{added}"), theme::success())),
+        PatchChangeKind::Add => header.push(count(format!("+{added}"), added, theme::success())),
         PatchChangeKind::Delete => {
-            header.push(Span::styled(format!("−{removed}"), theme::failure()))
+            header.push(count(format!("−{removed}"), removed, theme::failure()))
         }
         _ => header.extend([
-            Span::styled(format!("+{added}"), theme::success()),
+            count(format!("+{added}"), added, theme::success()),
             Span::raw(" "),
-            Span::styled(format!("−{removed}"), theme::failure()),
+            count(format!("−{removed}"), removed, theme::failure()),
         ]),
     }
     header.extend(suffix);
@@ -2328,10 +2334,15 @@ fn dot(style: Style) -> Span<'static> {
 /// A card's mark and the style of the verb after it.
 type Mark = (Span<'static>, Style);
 
-/// A finished card's mark and verb: `✓` and the verb in `style`, the
-/// colour of its kind, the verb bold.
+/// A finished card's mark and verb: a green `✓`, as on every card that
+/// worked, and the verb bold in `style`, the colour of its kind.
 fn done(style: Style) -> Mark {
-    (Span::styled("✓ ", style), style.bold())
+    (Span::styled("✓ ", theme::success()), style.bold())
+}
+
+/// A `+N` or `−N` count in `style`, grey when it counts nothing.
+fn count(text: String, n: usize, style: Style) -> Span<'static> {
+    Span::styled(text, if n == 0 { theme::secondary() } else { style })
 }
 
 /// A mark in `style` and the verb plainly bold: a card still going,

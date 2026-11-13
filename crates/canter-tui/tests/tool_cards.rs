@@ -550,8 +550,9 @@ fn failed_file_read_shows_a_red_mark() {
     for cell in letters(&cells_of(buffer, "✗ Read src/theme.rs")[..6]) {
         assert_eq!(cell.fg, Color::Red, "the mark and verb are red");
     }
-    for cell in letters(&cells_of(buffer, "✓ Explored")) {
-        assert_eq!(cell.fg, Color::Cyan, "the mark and title are cyan");
+    assert_eq!(cells_of(buffer, "✓ Explored")[0].fg, Color::Green);
+    for cell in letters(&cells_of(buffer, "Explored")) {
+        assert_eq!(cell.fg, Color::Cyan, "the title is cyan");
     }
 }
 
@@ -1117,7 +1118,8 @@ fn one_patch_changing_several_files_has_a_card_for_each() {
         "{conversation:#?}"
     );
     let buffer = screen.draw();
-    // 16 colours: the edit orange is yellow.
-    assert_eq!(cells_of(buffer, "✓ Edit src/b.rs")[0].fg, Color::Yellow);
+    // A green `✓`; with 16 colours the edit amber is yellow.
+    assert_eq!(cells_of(buffer, "✓ Edit src/b.rs")[0].fg, Color::Green);
+    assert_eq!(cells_of(buffer, "Edit src/b.rs")[0].fg, Color::Yellow);
     assert_eq!(cells_of(buffer, "✗ Edit src/c.rs")[0].fg, Color::Red);
 }

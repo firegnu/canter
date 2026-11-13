@@ -287,22 +287,27 @@ pub fn explored() -> Style {
     accent()
 }
 
-/// A file change that worked, its mark and verb: the orange of the working
-/// verb ([`working`]) for the background, or orange 166 of the 256 when
-/// the background is unknown. With 16 colours there is no orange: yellow,
-/// and on a light background (where yellow is faint, as for [`warning`])
-/// the default colour. Without colours nothing.
+/// The verb of a file change that worked: amber for the background, or
+/// amber 172 of the 256 when the background is unknown. Not the working
+/// verb's orange ([`working`]): on a light background it read as red, as an
+/// error (user, 11-13). With 16 colours there is no amber: yellow, and on a
+/// light background (where yellow is faint, as for [`warning`]) the default
+/// colour. Without colours nothing.
 pub fn edited() -> Style {
     let theme = current();
     let color = match (theme.depth, theme.background) {
         (Depth::None, _) | (Depth::Ansi16, Background::Light) => return Style::new(),
         (Depth::Ansi16, _) => Color::Yellow,
-        (_, Background::Dark) => theme.shade(WORKING_DARK.0),
-        (_, Background::Light) => theme.shade(WORKING_LIGHT.0),
-        (_, Background::Unknown) => Color::Indexed(166),
+        (_, Background::Dark) => theme.shade(EDITED_DARK),
+        (_, Background::Light) => theme.shade(EDITED_LIGHT),
+        (_, Background::Unknown) => Color::Indexed(172),
     };
     Style::new().fg(color)
 }
+
+/// [`edited`]'s amber on a dark and on a light background.
+const EDITED_DARK: [u8; 3] = [0xe0, 0xa0, 0x40];
+const EDITED_LIGHT: [u8; 3] = [0xb4, 0x5f, 0x06];
 
 /// `✻ Thought for 12s` once thinking is done: magenta, as [`heading`] and
 /// [`shell`], which the terminal's colour scheme keeps readable on a dark
