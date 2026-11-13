@@ -2496,10 +2496,64 @@ const HINT_MAX_LINE_CHARS: usize = 240;
 
 fn edit_not_found(index: usize, before: &str, old_text: &str) -> String {
     let mut message = format!("edit {index}: oldText not found");
-    if let Some(hint) = edit_hint(before, old_text) {
+    if let Some(hint) = edit_hint(before, old_text).or_else(|| spacing_hint(before, old_text)) {
         message.push_str(&hint);
     }
     message
+}
+
+/// The file lines holding the one place that equals an unmatched oldText once
+/// all whitespace, line breaks included, is left out: rustfmt wraps lines other
+/// than a model remembers them (P2-8 telemetry, 11-13). None when no place or
+/// more than one place matches; that would be a guess.
+fn spacing_hint(before: &str, old_text: &str) -> Option<String> {
+    let old: String = old_text.chars().filter(|c| !c.is_whitespace()).collect();
+    let first = old.chars().next()?;
+    // The file without whitespace, and for each of its bytes where it came from.
+    let mut squashed = String::with_capacity(before.len());
+    let mut origin = Vec::with_capacity(before.len());
+    for (offset, c) in before.char_indices().filter(|(_, c)| !c.is_whitespace()) {
+        squashed.push(c);
+        origin.extend(std::iter::repeat_n(offset, c.len_utf8()));
+    }
+    let at = squashed.find(&old)?;
+    if squashed[at + first.len_utf8()..].contains(&old) {
+        return None;
+    }
+    let line_of = |offset: usize| before[..offset].matches('\n').count();
+    let start = line_of(origin[at]);
+    let count = line_of(origin[at + old.len() - 1]) - start + 1;
+    let file_lines: Vec<&str> = before.split('\n').map(without_carriage_return).collect();
+    let mut hint = closest_text(&file_lines, start, count, 0);
+    let old_count = old_text.trim_end().split('\n').count();
+    hint.push_str(if old_count == count {
+        "\nThey differ only in whitespace."
+    } else {
+        "\nThey differ only in whitespace and line breaks."
+    });
+    Some(hint)
+}
+
+/// `Closest text, …:` and up to HINT_MAX_LINES numbered file lines of the
+/// `count` lines from `start`, beginning `from` lines in.
+fn closest_text(file_lines: &[&str], start: usize, count: usize, from: usize) -> String {
+    let to = (from + HINT_MAX_LINES).min(count);
+    let range = if count == 1 {
+        format!("line {}", start + 1)
+    } else {
+        format!("lines {}-{}", start + 1, start + count)
+    };
+    let showing = if from > 0 || to < count {
+        format!(", showing lines {}-{}", start + from + 1, start + to)
+    } else {
+        String::new()
+    };
+    let mut hint = format!("\nClosest text, {range}{showing}:");
+    for (offset, line) in file_lines[start + from..start + to].iter().enumerate() {
+        let line = hint_line(line);
+        hint.push_str(&format!("\n{}: {line}", start + from + offset + 1));
+    }
+    hint
 }
 
 /// The file lines closest to an unmatched oldText and one sentence on how they
@@ -2558,22 +2612,7 @@ fn edit_hint(before: &str, old_text: &str) -> Option<String> {
     let from = first_difference
         .saturating_sub(HINT_MAX_LINES / 2)
         .min(count.saturating_sub(HINT_MAX_LINES));
-    let to = (from + HINT_MAX_LINES).min(count);
-    let range = if count == 1 {
-        format!("line {}", start + 1)
-    } else {
-        format!("lines {}-{}", start + 1, start + count)
-    };
-    let showing = if from > 0 || to < count {
-        format!(", showing lines {}-{}", start + from + 1, start + to)
-    } else {
-        String::new()
-    };
-    let mut hint = format!("\nClosest text, {range}{showing}:");
-    for (offset, line) in matched[from..to].iter().enumerate() {
-        let line = hint_line(line);
-        hint.push_str(&format!("\n{}: {line}", start + from + offset + 1));
-    }
+    let mut hint = closest_text(&file_lines, start, count, from);
     hint.push_str(&format!(
         "\nThey differ only in {}.",
         differences.join(" and ")

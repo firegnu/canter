@@ -883,6 +883,89 @@ async fn edit_not_found_shows_the_closest_text_and_the_difference() {
     assert_eq!(error.text, "edit 1: oldText not found");
 }
 
+/// P2-8 telemetry (11-13): half the oldText misses were text rustfmt had
+/// wrapped differently. When only whitespace and line breaks differ and the
+/// text occurs once, the error shows the file's own lines.
+#[tokio::test]
+async fn edit_not_found_shows_text_that_differs_only_in_line_breaks() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools(&dir);
+    let cancel = CancellationToken::new();
+    let cases: [(&str, &str, &str); 4] = [
+        // One line in oldText, wrapped over several in the file.
+        (
+            "fn f() {\n    if !self\n        .report\n        .is_some()\n    {\n        return;\n    }\n}\n",
+            "    if !self.report.is_some() {\n        return;\n    }",
+            "edit 1: oldText not found\n\
+             Closest text, lines 2-7:\n\
+             2:     if !self\n\
+             3:         .report\n\
+             4:         .is_some()\n\
+             5:     {\n\
+             6:         return;\n\
+             7:     }\n\
+             They differ only in whitespace and line breaks.",
+        ),
+        // Wrapped in oldText, one line in the file.
+        (
+            "fn f() {\n    let x = a.b().c();\n}\n",
+            "    let x = a\n        .b()\n        .c();",
+            "edit 1: oldText not found\n\
+             Closest text, line 2:\n\
+             2:     let x = a.b().c();\n\
+             They differ only in whitespace and line breaks.",
+        ),
+        // A run of a `use` list that starts mid-line in the file; the line
+        // breaks fall in the same places, so only whitespace is named.
+        (
+            "use crate::{\n    Alpha, Beta, Gamma,\n    Delta,\n};\n",
+            "    Beta, Gamma,\n    Delta,",
+            "edit 1: oldText not found\n\
+             Closest text, lines 2-3:\n\
+             2:     Alpha, Beta, Gamma,\n\
+             3:     Delta,\n\
+             They differ only in whitespace.",
+        ),
+        // Longer than the hint shows: the whole range is named.
+        (
+            "x\n    .a()\n    .b()\n    .c()\n    .d()\n    .e()\n    .f();\n",
+            "x.a().b().c().d().e().f();",
+            "edit 1: oldText not found\n\
+             Closest text, lines 1-7, showing lines 1-6:\n\
+             1: x\n\
+             2:     .a()\n\
+             3:     .b()\n\
+             4:     .c()\n\
+             5:     .d()\n\
+             6:     .e()\n\
+             They differ only in whitespace and line breaks.",
+        ),
+    ];
+    for (content, old_text, expected) in cases {
+        std::fs::write(dir.path().join("notes"), content).unwrap();
+        let raw =
+            serde_json::json!({"path":"notes","edits":[{"oldText":old_text,"newText":"changed"}]})
+                .to_string();
+        let error = match tools.prepare(Tool::Edit, "e1", &raw, &cancel).await {
+            Err(error) => error,
+            Ok(_) => panic!("unmatched edit should be rejected"),
+        };
+        assert_eq!(error.text, expected);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("notes")).unwrap(),
+            content
+        );
+    }
+    // Text that matches in two places once whitespace is ignored names neither.
+    std::fs::write(dir.path().join("notes"), "a.b();\na\n    .b();\n").unwrap();
+    let raw = r#"{"path":"notes","edits":[{"oldText":"a .b();","newText":"changed"}]}"#;
+    let error = match tools.prepare(Tool::Edit, "e1", raw, &cancel).await {
+        Err(error) => error,
+        Ok(_) => panic!("unmatched edit should be rejected"),
+    };
+    assert_eq!(error.text, "edit 1: oldText not found");
+}
+
 #[tokio::test]
 async fn invalid_json_or_missing_fields_never_mutate_files() {
     let dir = tempfile::tempdir().unwrap();
