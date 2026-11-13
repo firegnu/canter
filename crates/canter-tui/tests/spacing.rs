@@ -212,7 +212,7 @@ fn a_blank_row_separates_messages_and_thinking_and_tool_cards_in_a_row_are_one_b
         [
             "› do it",
             "",
-            "✻ Thought ·",
+            "∴ Look at",
             "",
             "● Reading two",
             "",

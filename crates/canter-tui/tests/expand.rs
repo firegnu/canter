@@ -282,11 +282,11 @@ fn thinking_in_progress_shows_the_latest_line_on_one_row() {
     );
 }
 
-/// Finished thinking folds to `✻ Thought · <first line>`, ending with `…`
-/// when more follows. A summary is used when there is one, its leading
-/// `**title**` without the stars.
+/// Finished thinking with a summary title folds to `✻ Thought · <title>`,
+/// ending with `…` when more follows. A raw thought has no title: it folds
+/// to the thought itself after `∴`, grey and upright, blank lines left out.
 #[test]
-fn finished_thinking_folds_to_its_first_line() {
+fn finished_thinking_folds_to_its_title_or_its_text() {
     let mut screen = Screen::new(20);
     screen.thought("r1", &[], &["Read the README first.\n\nThen edit it."]);
     screen.thought("r2", &[], &["Only one line."]);
@@ -297,8 +297,9 @@ fn finished_thinking_folds_to_its_first_line() {
     );
     let conversation = screen.conversation();
     for expected in [
-        "✻ Thought · Read the README first.…",
-        "✻ Thought · Only one line.",
+        "∴ Read the README first.",
+        "  Then edit it.",
+        "∴ Only one line.",
         "✻ Thought · Planning the change…",
     ] {
         assert!(
@@ -306,11 +307,10 @@ fn finished_thinking_folds_to_its_first_line() {
             "{expected:?} in {conversation:?}"
         );
     }
-    assert!(!conversation.iter().any(|row| row.contains("Then edit")));
     assert!(!conversation.iter().any(|row| row.contains("raw thoughts")));
     let buffer = screen.draw();
     assert!(purple_upright(buffer, "✻ Thought"));
-    assert!(grey_italic(buffer, "Read the README first.…"));
+    assert!(grey_upright(buffer, "Read the README"));
 }
 
 /// Ctrl+O shows thinking in full: `✻ Thought`, then the text as markdown,
@@ -358,7 +358,7 @@ fn ctrl_o_shows_thinking_in_full() {
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
     assert!(
-        conversation.contains(&"✻ Thought · Read the README first.…".to_owned()),
+        conversation.contains(&"∴ Read the README first.".to_owned()),
         "{conversation:?}"
     );
     assert!(!conversation.iter().any(|row| row.contains('┊')));

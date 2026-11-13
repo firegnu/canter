@@ -865,11 +865,13 @@ pub(crate) fn wrap_all(lines: &[LogicalLine], width: u16) -> Vec<Row> {
         .collect()
 }
 
-/// Thinking, from the summary when there is one. Folded it is one row:
-/// `✻ Thinking… <the latest line>` while it runs, `✻ Thought · <the first
-/// line>` once done, `✻ Thought for 4s · …` when its time is known; the
-/// label grey while it runs and purple once done ([`theme::thought`]),
-/// what follows it fainter and italic. With `details`, the
+/// Thinking, from the summary when there is one. Folded, while it runs it is
+/// `✻ Thinking… <the latest line>`; once done with a summary title (GPT's
+/// `**title**`), `✻ Thought · <title>`, `✻ Thought for 4s · <title>` when
+/// its time is known; the label grey while it runs and purple once done
+/// ([`theme::thought`]), what follows it fainter and italic. A raw thought
+/// done (DeepSeek's) has no title: its text after `∴`, grey and upright, at
+/// most three rows, then ` ⋯ N more lines · Ctrl+O to expand `. With `details`, the
 /// label (`✻ Thought for 4s`) and then the whole text as markdown, grey and
 /// italic, each row after a grey `┊`.
 fn reasoning(
@@ -913,27 +915,35 @@ fn reasoning(
     if finished && text.trim().is_empty() {
         return row(" · ", "no summary".into());
     }
-    if details {
-        let style = theme::thinking();
-        let mut rows = row("", String::new());
-        let bar = || Span::styled("  ┊ ", theme::secondary());
-        let thinking = |spans: Vec<Span<'static>>| {
+    // The whole text as markdown in `style`, its first row after `first`
+    // and the others after `rest`.
+    let markdown = |style: Style, first: Span<'static>, rest: Span<'static>| {
+        let restyle = |spans: Vec<Span<'static>>| {
             spans
                 .into_iter()
                 .map(|span| span.patch_style(style))
                 .collect()
         };
-        for line in markdown::render(&text, width.saturating_sub(4)) {
+        let room = width.saturating_sub(str_width(&rest.content) as u16);
+        let mut rows = Vec::new();
+        for (at, line) in markdown::render(&text, room).into_iter().enumerate() {
             let line = LogicalLine {
-                indent: thinking(line.indent),
-                hang: thinking(line.hang),
-                body: thinking(line.body),
+                indent: restyle(line.indent),
+                hang: restyle(line.hang),
+                body: restyle(line.body),
                 marker: line.marker,
                 // Thinking is not the answer: its addresses are not links.
                 links: Vec::new(),
             };
-            rows.extend(wrap_rows(&line.prefixed(bar(), bar()), width));
+            let lead = if at == 0 { first.clone() } else { rest.clone() };
+            rows.extend(wrap_rows(&line.prefixed(lead, rest.clone()), width));
         }
+        rows
+    };
+    if details {
+        let bar = || Span::styled("  ┊ ", theme::secondary());
+        let mut rows = row("", String::new());
+        rows.extend(markdown(theme::thinking(), bar(), bar()));
         return rows;
     }
     // The folded row is plain text: bold markers (GPT summary titles) would
@@ -956,20 +966,47 @@ fn reasoning(
     };
     // A summary starts with its title in bold: the title alone is the row.
     // GPT summaries arrive as content, so this does not depend on `summary`.
-    let (first, rest) = match first
+    if let Some((title, rest)) = first
         .strip_prefix("**")
         .and_then(|after| after.split_once("**"))
+        .filter(|(title, _)| !title.trim().is_empty())
     {
-        Some((title, rest)) if !title.trim().is_empty() => (title.trim(), rest),
-        _ => (first, ""),
-    };
-    let more = if !rest.trim().is_empty() || lines.next().is_some() {
-        "…"
-    } else {
-        ""
-    };
-    row(" · ", format!("{}{more}", first.replace("**", "")))
+        let more = if !rest.trim().is_empty() || lines.next().is_some() {
+            "…"
+        } else {
+            ""
+        };
+        return row(" · ", format!("{}{more}", title.trim().replace("**", "")));
+    }
+    // A raw thought (DeepSeek's) has no title to stand for it: the thought
+    // itself after `∴`, grey and upright, at most FOLDED_THOUGHT_ROWS rows
+    // with blank ones left out, then how many more Ctrl+O shows.
+    let mut rows: Vec<Row> = markdown(
+        theme::secondary(),
+        Span::styled("∴ ", theme::secondary()),
+        Span::raw("  "),
+    )
+    .into_iter()
+    .filter(|row| {
+        row.line
+            .spans
+            .iter()
+            .any(|span| !span.content.trim().is_empty())
+    })
+    .collect();
+    if rows.len() > FOLDED_THOUGHT_ROWS {
+        let hidden = rows.len() - FOLDED_THOUGHT_ROWS;
+        rows.truncate(FOLDED_THOUGHT_ROWS);
+        rows.push(Row::marks(Line::from(vec![
+            Span::raw("  "),
+            more_lines(hidden),
+        ])));
+    }
+    rows
 }
+
+/// The rows a folded raw thought shows before ` ⋯ N more lines`.
+const FOLDED_THOUGHT_ROWS: usize = 3;
 
 /// The end of `text` that fits in `width` columns.
 fn tail(text: &str, width: usize) -> &str {

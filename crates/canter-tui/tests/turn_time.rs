@@ -267,9 +267,10 @@ fn an_interrupted_or_failed_turn_says_how_long_it_ran() {
     assert!(grey(screen.draw(), "Worked for 12s · "));
 }
 
-/// Finished thinking says how long it took, up to its last line:
-/// `✻ Thought for 4s · …` folded, `✻ Thought for 4s` shown in full. Thinking
-/// still going, and thinking with no known time, look as before.
+/// Finished thinking says how long it took, up to its last line, in its
+/// heading shown in full: `✻ Thought for 4s`. Folded, a raw thought is its
+/// text without a heading. Thinking still going, and thinking with no known
+/// time, look as before.
 #[test]
 fn thinking_says_how_long_it_thought() {
     let mut screen = Screen::new();
@@ -290,19 +291,19 @@ fn thinking_says_how_long_it_thought() {
     screen.thought("r1", "Look at the README.\n\nThen edit it.");
     screen.thought("r2", "No start was seen for this one.");
     screen.end_turn("completed", Value::Null);
+    // Folded, a raw thought is its text after `∴`, without the time.
     let conversation = screen.conversation();
     for expected in [
-        "✻ Thought for 4s · Look at the README.…",
-        "✻ Thought · No start was seen for this one.",
+        "∴ Look at the README.",
+        "  Then edit it.",
+        "∴ No start was seen for this one.",
     ] {
         assert!(
             conversation.contains(&expected.to_owned()),
             "{expected:?} in {conversation:?}"
         );
     }
-    let buffer = screen.draw();
-    assert!(purple(buffer, "Thought for 4s · "));
-    assert!(grey(buffer, "Look at the README.…"));
+    assert!(grey(screen.draw(), "Look at the README."));
 
     screen.ctrl_o();
     let details = screen.conversation();
@@ -310,6 +311,7 @@ fn thinking_says_how_long_it_thought() {
         details.contains(&"✻ Thought for 4s".to_owned()),
         "{details:?}"
     );
+    assert!(purple(screen.draw(), "Thought for 4s"));
     assert!(details.contains(&"✻ Thought".to_owned()), "{details:?}");
 }
 

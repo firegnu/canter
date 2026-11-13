@@ -414,7 +414,8 @@ fn folded_parts_are_found_only_after_ctrl_o() {
     screen.start_turn("t1", "think");
     screen.event(json!({ "type": "item.completed", "turnId": "t1", "item": {
         "type": "reasoning", "id": "r1", "summary": [],
-        "content": ["First I look around.\nThe hidden plan is here."],
+        // Folded, a raw thought shows its first three lines.
+        "content": ["First I look around.\nThen the code.\nThen the tests.\nThe hidden plan is here."],
     }}));
     let output: Vec<String> = (1..=20)
         .map(|n| match n {

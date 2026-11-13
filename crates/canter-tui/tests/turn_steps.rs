@@ -1,6 +1,6 @@
 //! How the steps of a turn look, laid out the Codex way: `●` before the
 //! answer, `✓`, `✗` or `•` before every tool card, thinking as
-//! `✻ Thought for 2s · …`, reads in a row merged into `✓ Explored`, commands as `Run` / `Running` / `Ran` with
+//! `✻ Thought for 2s · <title>` or `∴ <the thought>`, reads in a row merged into `✓ Explored`, commands as `Run` / `Running` / `Ran` with
 //! their output after `  └ `, headings and bold in colours of their own,
 //! paths in card titles coloured instead of underlined, and the turn's end as
 //! `Worked for 31s · 11:13`.
@@ -302,19 +302,15 @@ fn thinking_shows_its_latest_line_then_folds_with_its_time() {
         "type": "reasoning", "id": "r1", "summary": [],
         "content": ["Look at the tests.\nThen the code."],
     }));
-    let rows = screen.rows();
-    assert!(
-        rows[0].starts_with("✻ Thought for 2s · Look at the tests."),
-        "{rows:?}"
-    );
+    // A raw thought has no title to show: folded, it is the thought itself
+    // after `∴`, grey and upright, with no label.
+    assert_eq!(screen.rows(), ["∴ Look at the tests.", "  Then the code."]);
     let buffer = screen.draw();
-    let label = cell(buffer, "✻ Thought for 2s");
-    assert_eq!(label.fg, Color::Magenta, "purple once done");
-    assert!(!label.modifier.contains(Modifier::DIM));
-    assert!(!label.modifier.contains(Modifier::ITALIC));
-    let text = cell(buffer, "Look at the tests.");
-    assert!(text.modifier.contains(Modifier::ITALIC));
-    assert_eq!(text.fg, Color::DarkGray);
+    for text in ["∴", "Look at the tests.", "Then the code."] {
+        let cell = cell(buffer, text);
+        assert!(cell.modifier.contains(Modifier::DIM), "{text}");
+        assert!(!cell.modifier.contains(Modifier::ITALIC), "{text}");
+    }
 
     // Ctrl+O: the heading keeps `✻`, the whole thought is under it.
     screen.ctrl_o();
@@ -370,21 +366,53 @@ fn thinking_without_summary_keeps_one_line_when_folded_or_expanded() {
     }
 }
 
-/// A thought with no time is `✻ Thought`; a long one is cut with `…`.
+/// A raw thought wider than the screen wraps under its first word instead
+/// of being cut; markdown shows as it does expanded, without its backticks.
 #[test]
-fn a_thought_without_a_time_is_thought_and_is_cut_to_the_width() {
+fn a_folded_raw_thought_wraps_instead_of_being_cut() {
     let mut screen = Screen::new(40);
     screen.completed(json!({
         "type": "reasoning", "id": "r1", "summary": [],
-        "content": ["A long thought that runs well past the edge of the screen."],
+        "content": ["A long thought about `main_pane` that runs well past the edge."],
     }));
     let rows = screen.rows();
-    assert!(
-        rows[0].starts_with("✻ Thought · A long thought"),
+    assert_eq!(
+        rows,
+        [
+            "∴ A long thought about main_pane that",
+            "  runs well past the edge."
+        ],
         "{rows:?}"
     );
-    assert!(rows[0].ends_with('…'), "{rows:?}");
-    assert!(rows[0].width() <= 40);
+    assert!(rows.iter().all(|row| row.width() <= 40));
+}
+
+/// A raw thought longer than three rows shows the first three, blank lines
+/// not counted, then how many more rows Ctrl+O shows, as other folded cards
+/// say it.
+#[test]
+fn a_long_folded_raw_thought_shows_three_rows_and_how_many_more() {
+    let mut screen = Screen::new(WIDTH);
+    screen.completed(json!({
+        "type": "reasoning", "id": "r1", "summary": [],
+        "content": ["Both exist.\n\nNow, implement.\n\nFiles:\n\n1. statusline.rs\n2. app.rs\n3. chrome.rs"],
+    }));
+    assert_eq!(
+        screen.rows(),
+        [
+            "∴ Both exist.",
+            "  Now, implement.",
+            "  Files:",
+            "   ⋯ 3 more lines · Ctrl+O to expand",
+        ]
+    );
+    screen.ctrl_o();
+    let rows = screen.rows();
+    assert_eq!(rows[0], "✻ Thought", "{rows:?}");
+    assert!(
+        rows.iter().any(|row| row.ends_with("chrome.rs")),
+        "{rows:?}"
+    );
 }
 
 // §3
@@ -447,7 +475,7 @@ fn reads_split_by_other_steps_failures_on_their_own_and_same_names_told_apart() 
         [
             "✓ Explored",
             "  └ Read a/mod.rs, b/mod.rs",
-            "✻ Thought · Now the lib.",
+            "∴ Now the lib.",
             "✓ Explored",
             "  └ Read lib.rs",
             "✓ Ran cat notes.txt",
@@ -804,7 +832,7 @@ fn without_colours_titles_are_only_bold() {
     ] {
         assert_eq!(cell(buffer, mark).fg, Color::Reset, "{mark}");
     }
-    let label = cell(buffer, "✻ Thought");
+    let label = cell(buffer, "∴ Look first.");
     assert_eq!(label.fg, Color::Reset);
     assert!(label.modifier.contains(Modifier::DIM));
     assert!(cell(buffer, "● Done.").modifier.contains(Modifier::BOLD));
