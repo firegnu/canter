@@ -14,7 +14,6 @@ use ratatui::text::{Line, Span};
 
 use crate::app::format_elapsed;
 use crate::diff::Diff;
-use crate::highlight;
 use crate::links::{self, Target};
 use crate::markdown;
 use crate::programs;
@@ -988,7 +987,8 @@ fn reasoning(
     // A raw thought (DeepSeek's) has no title to stand for it: the label
     // alone on its row, then the thought itself, grey and upright, at most
     // FOLDED_THOUGHT_ROWS rows with blank ones left out, then how many more
-    // Ctrl+O shows.
+    // Ctrl+O shows. Grey all through (11-13): inline code and bold take no
+    // colour or weight of their own until Ctrl+O.
     let mut text: Vec<Row> = markdown(theme::secondary(), Span::raw("  "), Span::raw("  "))
         .into_iter()
         .filter(|row| {
@@ -996,6 +996,12 @@ fn reasoning(
                 .spans
                 .iter()
                 .any(|span| !span.content.trim().is_empty())
+        })
+        .map(|mut row| {
+            for span in &mut row.line.spans {
+                span.style = theme::secondary();
+            }
+            row
         })
         .collect();
     if text.len() > FOLDED_THOUGHT_ROWS {
@@ -2139,15 +2145,10 @@ fn lines_word(count: usize) -> &'static str {
     if count == 1 { "line" } else { "lines" }
 }
 
-/// `text` as a chip: dim, a space either side, on [`theme::fold_bg`] when
-/// the terminal can show it.
+/// `text` as a fold note: dim, a space either side, no background (11-13:
+/// the one chip on screen is the hint to jump to the bottom).
 fn fold_chip(text: &str) -> Span<'static> {
-    let style = theme::secondary();
-    let style = match theme::fold_bg() {
-        Some(color) => style.bg(color),
-        None => style,
-    };
-    Span::styled(format!(" {text} "), style)
+    Span::styled(format!(" {text} "), theme::secondary())
 }
 
 /// The colour of each of a command's output lines that looks like a line
@@ -2217,13 +2218,11 @@ fn command_title(
     if lines.is_empty() {
         lines.push("");
     }
-    let mut bodies = highlight::bash(&lines).unwrap_or_else(|| {
-        lines
-            .iter()
-            .map(|line| vec![Span::raw((*line).to_owned())])
-            .collect()
-    });
-    programs::emphasize(&mut bodies, theme::program());
+    let mut bodies: Vec<Vec<Span<'static>>> = lines
+        .iter()
+        .map(|line| vec![Span::raw((*line).to_owned())])
+        .collect();
+    programs::emphasize(&mut bodies, theme::program(), theme::operator());
     if bang {
         bodies[0].splice(0..0, [Span::styled("!", theme::shell()), Span::raw(" ")]);
     }

@@ -664,25 +664,13 @@ fn each_line_of_a_command_wraps_and_counts_toward_the_fold() {
     );
 }
 
-/// The command in a card is coloured as Bash, like the approval box's.
+/// The command in a card is calm (11-13, user: 「3 和 4 也做」): the
+/// programs it runs (P2-189: the first word, and the first after `;` and
+/// `|`) bold in the default colour; `;`, `|`, `&&` and redirections such as
+/// `2>&1` dim; arguments, quotes and paths plain. The user's `!` commands
+/// too. `Ran` stays bold.
 #[test]
-fn the_command_is_coloured_as_bash() {
-    let mut screen = Screen::new(30);
-    screen.command("c1", "grep -rn \"pub struct\" src | head -5", "", 0);
-    let buffer = screen.draw();
-    for cell in letters(&cells_of(buffer, "\"pub struct\"")) {
-        assert_ne!(cell.fg, Color::Reset, "a string has a colour");
-    }
-    for cell in letters(&cells_of(buffer, "Ran ")) {
-        assert!(cell.modifier.contains(Modifier::BOLD));
-    }
-}
-
-/// The programs a command runs stand out (P2-189): the first word, and the
-/// first after `;` and `|`, blue and bold. Arguments, quotes and operators
-/// keep their Bash colours. The user's `!` commands too.
-#[test]
-fn programs_in_a_command_are_blue_and_bold() {
+fn programs_in_a_command_are_bold_and_operators_dim() {
     let mut screen = Screen::new(30);
     screen.command("c1", "rg --files -g '!node_modules'", "", 0);
     screen.command("c2", "git status --short; echo \"---\"", "", 0);
@@ -703,24 +691,30 @@ fn programs_in_a_command_are_blue_and_bold() {
     ] {
         let program = text.split(' ').next().unwrap();
         for cell in &cells_of(buffer, text)[..program.len()] {
-            assert_eq!(cell.fg, Color::Blue, "{text:?}");
+            assert_eq!(cell.fg, Color::Reset, "{text:?}");
             assert!(cell.modifier.contains(Modifier::BOLD), "{text:?}");
         }
-        for cell in letters(&cells_of(buffer, text)[program.len()..]) {
-            assert_ne!(cell.fg, Color::Blue, "{text:?}");
-            assert!(!cell.modifier.contains(Modifier::BOLD), "{text:?}");
-        }
     }
-    // A quoted argument keeps its colour as a string.
-    for cell in letters(&cells_of(buffer, "'!node_modules'")) {
-        assert_ne!(cell.fg, Color::Reset, "a string has a colour");
-        assert_ne!(cell.fg, Color::Blue);
-    }
-    for text in ["--files", "status --short", "2>&1 | ", "-25"] {
+    for text in [
+        "--files -g '!node_modules'",
+        "status --short",
+        "\"---\"",
+        "test",
+        "-25",
+    ] {
         for cell in letters(&cells_of(buffer, text)) {
-            assert_ne!(cell.fg, Color::Blue, "{text:?}");
-            assert!(!cell.modifier.contains(Modifier::BOLD), "{text:?}");
+            assert_eq!(cell.fg, Color::Reset, "{text:?}");
+            assert_eq!(cell.modifier, Modifier::empty(), "{text:?}");
         }
+    }
+    for text in [";", "2>&1", "|"] {
+        for cell in letters(&cells_of(buffer, text)) {
+            assert_eq!(cell.fg, Color::Reset, "{text:?}");
+            assert_eq!(cell.modifier, Modifier::DIM, "{text:?}");
+        }
+    }
+    for cell in letters(&cells_of(buffer, "Ran ")) {
+        assert!(cell.modifier.contains(Modifier::BOLD));
     }
 }
 
@@ -919,20 +913,17 @@ fn only_finished_cards_have_a_check_or_a_cross() {
     }
 }
 
-/// What says a command's output is folded is a chip (P2-247): on the sent
-/// message's grey when the terminal can show a background, plain with 16
-/// colours.
+/// What says a command's output is folded (P2-247) is dim text with no
+/// background (11-13, user: 「都按推荐的做」): several on a screen made it
+/// look busy, and the one chip left is the hint to jump to the bottom.
 #[test]
-fn the_fold_note_is_on_a_background_when_one_can_be_shown() {
-    for (theme, background) in [
-        (
-            Theme {
-                depth: Depth::TrueColor,
-                background: Background::Dark,
-            },
-            Color::Rgb(0x2d, 0x2e, 0x33),
-        ),
-        (Theme::default(), Color::Reset),
+fn the_fold_note_is_dim_with_no_background() {
+    for theme in [
+        Theme {
+            depth: Depth::TrueColor,
+            background: Background::Dark,
+        },
+        Theme::default(),
     ] {
         canter_tui::theme::set(theme);
         let mut screen = Screen::new(30);
@@ -944,7 +935,8 @@ fn the_fold_note_is_on_a_background_when_one_can_be_shown() {
             " ⋯ 2 lines above · Ctrl+O to expand ",
         ] {
             for cell in cells_of(buffer, text) {
-                assert_eq!(cell.bg, background, "{theme:?} {text:?}");
+                assert_eq!(cell.bg, Color::Reset, "{theme:?} {text:?}");
+                assert_eq!(cell.modifier, Modifier::DIM, "{theme:?} {text:?}");
             }
         }
         assert_eq!(cells_of(buffer, "└ ok 1")[0].bg, Color::Reset);
@@ -1011,9 +1003,9 @@ fn lines_that_look_like_a_diff_are_coloured_as_one() {
 /// Every card's fold row is the same chip (P2-247), not only a command's: a
 /// fetch's failure reason and a background command's output keep their
 /// first 3 lines, then ` ⋯ N more lines · Ctrl+O to expand ` after the
-/// `┃`, on the background when one can be shown. Searches, background
-/// commands and fetches are tool cards: `✓`/`✗`, ` · ` before the status,
-/// no blank row between them.
+/// `┃`, dim with no background. Searches, background commands and fetches
+/// are tool cards: `✓`/`✗`, ` · ` before the status; a blank row after a
+/// card that shows output (11-13).
 #[test]
 fn other_cards_fold_into_the_same_chip() {
     canter_tui::theme::set(Theme {
@@ -1052,9 +1044,14 @@ fn other_cards_fold_into_the_same_chip() {
         .iter()
         .position(|row| row.starts_with("✓ Call shell_output #3"))
         .unwrap();
-    assert_eq!(conversation[at - 1], fetch[4], "no blank row between cards");
+    assert_eq!(conversation[at - 2], fetch[4]);
     assert_eq!(
-        conversation[at + 5],
+        conversation[at - 1],
+        "",
+        "a blank row after a card with output"
+    );
+    assert_eq!(
+        conversation[at + 6],
         "✓ Searched MCP tools \"issue\" · 1 found"
     );
     let buffer = screen.draw();
@@ -1063,7 +1060,7 @@ fn other_cards_fold_into_the_same_chip() {
         " ⋯ 4 more lines · Ctrl+O to expand ",
     ] {
         for cell in cells_of(buffer, text) {
-            assert_eq!(cell.bg, Color::Rgb(0x2d, 0x2e, 0x33), "{text:?}");
+            assert_eq!(cell.bg, Color::Reset, "{text:?}");
         }
     }
     canter_tui::theme::set(Theme::default());
@@ -1109,14 +1106,23 @@ fn one_patch_changing_several_files_has_a_card_for_each() {
         .iter()
         .position(|row| row == "✓ Edit src/a.rs  +1 −1")
         .unwrap();
+    let second = conversation
+        .iter()
+        .position(|row| row == "✗ Edit src/c.rs  +1 −1 · failed")
+        .unwrap();
     let last = conversation
         .iter()
         .position(|row| row == "✗ Edit src/d.rs  +1 −1 · failed")
         .unwrap();
+    // The first item shows its diffs, so a blank row comes after it (11-13).
     assert!(
-        conversation[first..last].iter().all(|row| !row.is_empty()),
+        conversation[first..second - 1]
+            .iter()
+            .chain(&conversation[second..last])
+            .all(|row| !row.is_empty()),
         "{conversation:#?}"
     );
+    assert_eq!(conversation[second - 1], "", "{conversation:#?}");
     let buffer = screen.draw();
     // A green `✓`; with 16 colours the edit amber is yellow.
     assert_eq!(cells_of(buffer, "✓ Edit src/b.rs")[0].fg, Color::Green);

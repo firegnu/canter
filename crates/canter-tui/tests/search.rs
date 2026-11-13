@@ -156,7 +156,11 @@ impl Screen {
                     }
                     x += cell.symbol().width().max(1) as u16;
                 }
-                first.map(|x| (y, x, text))
+                // The hint about new output is reversed too (11-13): not a
+                // match.
+                first
+                    .filter(|_| !text.starts_with(" ↓ "))
+                    .map(|x| (y, x, text))
             })
             .collect()
     }

@@ -214,10 +214,31 @@ pub fn secondary() -> Style {
     Style::new().dim()
 }
 
-/// The program a command runs, in a command card's title: blue and bold;
-/// without colours bold only.
+/// The program a command runs, in a command card's title: bold in the
+/// default colour (11-13, was blue).
 pub fn program() -> Style {
-    current().fg(Color::Blue).bold()
+    Style::new().bold()
+}
+
+/// `;`, `|`, `&&` and redirections in a command card's title: dim.
+pub fn operator() -> Style {
+    secondary()
+}
+
+/// The hint to jump to the bottom while scrolled back, a chip in the middle
+/// of its row (11-13): on the sent message's grey ([`user_bg`]); dim where
+/// no background can be shown.
+pub fn jump() -> Style {
+    match user_bg() {
+        Some(color) => Style::new().bg(color),
+        None => secondary(),
+    }
+}
+
+/// The hint when new output came below while scrolled back: reversed cyan,
+/// so it stands out from the conversation's cyan, the words bold.
+pub fn new_output() -> Style {
+    accent().reversed()
 }
 
 /// A command's output under `└` (unless it failed): dark grey, as the
@@ -245,12 +266,6 @@ pub fn aside() -> Style {
 /// [`aside`] (P2-247). Without colours dim, as before.
 pub fn guide() -> Style {
     aside()
-}
-
-/// The background of a folded card's `⋯ N more lines · Ctrl+O to expand`,
-/// the sent message's grey ([`user_bg`]), when one can be shown (P2-247).
-pub fn fold_bg() -> Option<Color> {
-    user_bg()
 }
 
 /// What a folded thinking row says after `✻ Thought for 2s`: fainter than

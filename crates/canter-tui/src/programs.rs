@@ -28,15 +28,26 @@ const LEADS: &[&str] = &[
 /// Keywords that are not followed by a command.
 const OTHERS: &[&str] = &["fi", "done", "esac", "}", "for", "case", "select", "in"];
 
-/// `style` patched onto the programs in each line of a command, `bodies`
-/// being the lines' spans (as coloured by Bash).
-pub(crate) fn emphasize(bodies: &mut [Vec<Span<'static>>], style: Style) {
+/// `program` patched onto the programs in each line of a command, and
+/// `operator` onto its operators (`;`, `|`, `&&`, `&` and redirections such
+/// as `2>&1`, 11-13), `bodies` being the lines' spans.
+pub(crate) fn emphasize(bodies: &mut [Vec<Span<'static>>], program: Style, operator: Style) {
     let mut scanner = Scanner::default();
     for body in bodies.iter_mut() {
         let text: String = body.iter().map(|span| span.content.as_ref()).collect();
-        let ranges = scanner.line(&text);
+        let mut ranges: Vec<(Range<usize>, Style)> = scanner
+            .line(&text)
+            .into_iter()
+            .map(|range| (range, program))
+            .collect();
+        ranges.extend(
+            std::mem::take(&mut scanner.operators)
+                .into_iter()
+                .map(|range| (range, operator)),
+        );
+        ranges.sort_by_key(|(range, _)| range.start);
         if !ranges.is_empty() {
-            *body = patch(std::mem::take(body), &ranges, style);
+            *body = patch(std::mem::take(body), &ranges);
         }
     }
 }
@@ -66,11 +77,15 @@ struct Scanner {
     heredocs: Vec<String>,
     /// The next word ends a here document that starts in the next line.
     heredoc_word: bool,
+    /// The byte ranges of the operators in the last line read.
+    operators: Vec<Range<usize>>,
 }
 
 impl Scanner {
-    /// The byte ranges of the programs in `line`.
+    /// The byte ranges of the programs in `line`; those of its operators go
+    /// to [`Scanner::operators`].
     fn line(&mut self, line: &str) -> Vec<Range<usize>> {
+        self.operators.clear();
         if let Some(end) = self.heredocs.first() {
             if line.trim_start_matches('\t') == end {
                 self.heredocs.remove(0);
@@ -95,24 +110,33 @@ impl Scanner {
                 }
                 ';' => {
                     chars.next();
+                    self.operators.push(at..at + 1);
                     self.expect = Expect::Program;
                 }
                 '|' => {
                     chars.next();
-                    chars.next_if(|&(_, c)| c == '|' || c == '&');
+                    let end = chars
+                        .next_if(|&(_, c)| c == '|' || c == '&')
+                        .map_or(at + 1, |_| at + 2);
+                    self.operators.push(at..end);
                     self.expect = Expect::Program;
                 }
                 '&' => {
                     chars.next();
+                    let mut end = at + 1;
                     if chars.next_if(|&(_, c)| c == '&').is_some() {
+                        end += 1;
                         self.expect = Expect::Program;
                     } else if chars.peek().is_some_and(|&(_, c)| c == '>') {
                         // `&>`: a redirection.
-                        while chars.next_if(|&(_, c)| c == '>').is_some() {}
+                        while chars.next_if(|&(_, c)| c == '>').is_some() {
+                            end += 1;
+                        }
                         self.target = true;
                     } else {
                         self.expect = Expect::Program;
                     }
+                    self.operators.push(at..end);
                 }
                 '<' | '>' => {
                     let mut operator = String::new();
@@ -123,6 +147,32 @@ impl Scanner {
                     }
                     self.heredoc_word = operator == "<<" || operator == "<<-";
                     self.target = true;
+                    let mut end = at + operator.len();
+                    // The descriptor after `>&` is part of it: `>&2`.
+                    if operator.ends_with('&') {
+                        while let Some((digit, _)) = chars.next_if(|&(_, c)| c.is_ascii_digit()) {
+                            end = digit + 1;
+                            self.target = false;
+                        }
+                    }
+                    // So is the one before it, a word of digits: `2>`.
+                    let digits = line[..at].trim_end_matches(|c: char| c.is_ascii_digit());
+                    let start = if digits.len() < at
+                        && (digits.is_empty()
+                            || digits.ends_with(|c: char| {
+                                c.is_whitespace() || matches!(c, ';' | '|' | '&' | '(')
+                            })) {
+                        digits.len()
+                    } else {
+                        at
+                    };
+                    if ranges
+                        .last()
+                        .is_some_and(|range: &Range<usize>| range.end > start)
+                    {
+                        ranges.pop();
+                    }
+                    self.operators.push(start..end);
                 }
                 '(' => {
                     chars.next();
@@ -238,9 +288,10 @@ fn assignment(word: &str) -> bool {
         && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
-/// `spans` with `style` patched onto the bytes in `ranges` (in order, not
-/// overlapping), splitting spans where a range starts or ends inside one.
-fn patch(spans: Vec<Span<'static>>, ranges: &[Range<usize>], style: Style) -> Vec<Span<'static>> {
+/// `spans` with each range's style patched onto the bytes in it (`ranges`
+/// in order, not overlapping), splitting spans where a range starts or ends
+/// inside one.
+fn patch(spans: Vec<Span<'static>>, ranges: &[(Range<usize>, Style)]) -> Vec<Span<'static>> {
     let mut out = Vec::new();
     let mut offset = 0;
     for span in spans {
@@ -248,7 +299,10 @@ fn patch(spans: Vec<Span<'static>>, ranges: &[Range<usize>], style: Style) -> Ve
         let (start, end) = (offset, offset + content.len());
         offset = end;
         let mut cut = start;
-        for range in ranges.iter().filter(|r| r.start < end && r.end > start) {
+        for (range, style) in ranges
+            .iter()
+            .filter(|(r, _)| r.start < end && r.end > start)
+        {
             let from = range.start.max(start);
             let to = range.end.min(end);
             if from > cut {
@@ -259,7 +313,7 @@ fn patch(spans: Vec<Span<'static>>, ranges: &[Range<usize>], style: Style) -> Ve
             }
             out.push(Span::styled(
                 content[from - start..to - start].to_owned(),
-                span.style.patch(style),
+                span.style.patch(*style),
             ));
             cut = to;
         }
@@ -369,7 +423,7 @@ mod tests {
     fn patch_splits_spans() {
         let bold = Style::new().bold();
         let spans = vec![Span::raw("git sta"), Span::raw("tus; ls")];
-        let out = patch(spans, &[0..3, 12..14], bold);
+        let out = patch(spans, &[(0..3, bold), (12..14, bold)]);
         let texts: Vec<(&str, Style)> = out
             .iter()
             .map(|span| (span.content.as_ref(), span.style))

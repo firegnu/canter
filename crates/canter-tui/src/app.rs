@@ -260,8 +260,9 @@ enum Part {
 enum Kind {
     /// A tool card (a command, a read, a file change, a fetch, a search, an
     /// MCP call, a sub-agent tool): cards in a row are not kept apart
-    /// (P2-247).
-    Tool,
+    /// (P2-247), except after one that shows `output` under its title, such
+    /// as a command's output or a diff (11-13).
+    Tool { output: bool },
     /// Any other item, or a turn's prompt.
     Item,
     /// A notice: notices in a row, such as a command's report, are one block.
@@ -287,8 +288,9 @@ struct Tail {
 
 /// Appends a part's rows, after a blank row between it and the part before,
 /// except between two of the same kind other than [`Kind::Item`] (tool
-/// cards, notices or queued messages in a row). Parts that end or start with a
-/// blank row (a prompt) get none. Empty parts are left out.
+/// cards, notices or queued messages in a row), but after a tool card that
+/// shows output. Parts that end or start with a blank row (a prompt) get
+/// none. Empty parts are left out.
 fn push_part(
     rows: &mut Vec<Row>,
     parts: &mut Vec<(usize, Part)>,
@@ -300,11 +302,12 @@ fn push_part(
         return;
     };
     let blank = Row::is_blank;
+    let together = |before: Kind| match (before, kind) {
+        (Kind::Tool { output }, Kind::Tool { .. }) => !output,
+        (before, kind) => before == kind && kind != Kind::Item,
+    };
     let gap = tail.is_some_and(|before| {
-        !before.blank
-            && !blank(first)
-            && kind != Kind::Attached
-            && (before.kind != kind || kind == Kind::Item)
+        !before.blank && !blank(first) && kind != Kind::Attached && !together(before.kind)
     });
     *tail = Some(Tail {
         kind,
@@ -315,6 +318,16 @@ fn push_part(
     }
     parts.push((rows.len(), part));
     rows.extend(new);
+}
+
+/// Whether a tool card drawn as `rows` shows output under its title: a
+/// file change's diff, or lines of a command's or another tool's output.
+/// An `Explored` block's list of files is not output.
+fn shows_output(item: &Item, rows: &[Row]) -> bool {
+    match item {
+        Item::FileChange { .. } => rows.len() > 1,
+        _ => rows.iter().any(|row| row.source.is_some()),
+    }
 }
 
 /// The finished part of the conversation, wrapped for `width`, with the
@@ -4495,7 +4508,10 @@ impl App {
             let Some((rows, next)) = self.finished_part(self.history.end, width) else {
                 break;
             };
-            let part = (Part::At(self.history.end), self.kind(self.history.end));
+            let part = (
+                Part::At(self.history.end),
+                self.kind(self.history.end, &rows),
+            );
             let history = &mut self.history;
             push_part(
                 &mut history.rows,
@@ -4549,8 +4565,9 @@ impl App {
         (live, lead, starts)
     }
 
-    /// What the part at `at` (a prompt, an item or a turn's end) is.
-    fn kind(&self, at: Place) -> Kind {
+    /// What the part at `at` (a prompt, an item or a turn's end) is, drawn
+    /// as `rows`.
+    fn kind(&self, at: Place, rows: &[Row]) -> Kind {
         if !at.prompt {
             return Kind::Item;
         }
@@ -4561,7 +4578,7 @@ impl App {
             .and_then(|turn| turn.items.get(at.item))
         {
             Some(
-                Item::CommandExecution { .. }
+                item @ (Item::CommandExecution { .. }
                 | Item::FileChange { .. }
                 | Item::FileRead { .. }
                 | Item::McpToolCall { .. }
@@ -4570,8 +4587,10 @@ impl App {
                 | Item::WebFetch { .. }
                 | Item::WebSearch { .. }
                 | Item::AstGrep { .. }
-                | Item::CollabAgentToolCall { .. },
-            ) => Kind::Tool,
+                | Item::CollabAgentToolCall { .. }),
+            ) => Kind::Tool {
+                output: shows_output(item, rows),
+            },
             Some(Item::Diagnostics { .. }) => {
                 if crate::lsp::inline(&self.snapshot.turns[at.turn].items, at.item) {
                     Kind::Attached
@@ -4984,24 +5003,31 @@ impl App {
         }
         // Scrolled back, or held with new output below: the hint shows.
         let back = self.scroll.top.is_some_and(|top| top + room < total);
+        // A chip in the middle of its row (11-13): reversed cyan with new
+        // output below, the words bold; else grey.
         let hint = (back || self.scroll.unseen).then(|| {
-            let what = if self.scroll.unseen {
-                " ↓ New output below"
+            let (what, what_style, how_style) = if self.scroll.unseen {
+                (
+                    " ↓ New output below",
+                    theme::new_output().bold(),
+                    theme::new_output(),
+                )
             } else {
-                " ↓ Jump to bottom"
+                (" ↓ Jump to bottom", theme::jump(), theme::jump().dim())
             };
             // End goes to the bottom from the input box, not from the
             // approval box or the search box.
             let how = match bottom {
                 Bottom::Input { .. } | Bottom::Panel { .. } if self.search.is_none() => {
-                    " · click or End"
+                    " · click or End "
                 }
-                _ => " · click",
+                _ => " · click ",
             };
             Line::from(vec![
-                Span::styled(what, theme::accent()),
-                Span::styled(how, theme::secondary()),
+                Span::styled(what, what_style),
+                Span::styled(how, how_style),
             ])
+            .centered()
         });
         self.scroll.hint = hint.is_some();
         // The rows above the hint: the conversation, and the prompt row on
@@ -6073,7 +6099,7 @@ impl App {
                 } else {
                     self.render_at(turn, index, done, width)
                 };
-                let part = (Part::At(at), self.kind(at));
+                let part = (Part::At(at), self.kind(at, &new));
                 push_part(&mut rows, &mut parts, &mut tail, part, new);
             }
             let at = Place {

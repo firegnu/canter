@@ -314,6 +314,31 @@ fn finished_thinking_folds_to_its_title_or_its_text() {
     assert!(grey_upright(buffer, "Read the README"));
 }
 
+/// Folded, a raw thought is grey all through (11-13, user: 「3 和 4 也做」):
+/// inline code and bold in it take no colour or weight of their own. Ctrl+O
+/// shows them as markdown again.
+#[test]
+fn a_folded_thought_is_grey_all_through() {
+    let mut screen = Screen::new(20);
+    screen.thought("r1", &[], &["Put `goal_footer` after the **footer** row."]);
+    screen.say("m1", "Done.");
+    let buffer = screen.draw();
+    for text in ["goal_footer", "footer row"] {
+        for cell in cells_of(buffer, text) {
+            assert_eq!(cell.fg, Color::Reset, "{text:?}");
+            assert_eq!(cell.modifier, Modifier::DIM, "{text:?}");
+        }
+    }
+
+    assert_eq!(screen.ctrl_o(), None);
+    let buffer = screen.draw();
+    assert_ne!(
+        cells_of(buffer, "goal_footer")[0].fg,
+        Color::Reset,
+        "inline code keeps its colour when shown in full"
+    );
+}
+
 /// Ctrl+O shows thinking in full: `✻ Thought`, then the text as markdown,
 /// grey and italic, each row after a grey `┊`. Ctrl+O again folds it.
 #[test]

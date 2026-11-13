@@ -313,8 +313,8 @@ fn clicking_the_prompt_on_top_scrolls_back_to_it_until_the_view_scrolls() {
         screen.text()
     );
     assert_eq!(
-        screen.above_status(),
-        " ↓ Jump to bottom · click or End",
+        screen.above_status().trim_start(),
+        "↓ Jump to bottom · click or End",
         "still scrolled back"
     );
 

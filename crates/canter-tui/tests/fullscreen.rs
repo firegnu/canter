@@ -4,6 +4,7 @@
 //! rewrapping when the window changes size.
 
 use canter_protocol::{Event, SessionSnapshot, SessionStatus};
+use canter_tui::theme::{Background, Depth, Theme};
 use canter_tui::{Action, App, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
@@ -19,9 +20,10 @@ const HEIGHT: u16 = 20;
 /// Rows below the conversation: status line, input box (3) and info rows (2);
 /// while working one more, the blank row above the status line.
 const BELOW: usize = 6;
-/// The hint while scrolled back, with nothing new below and with new output.
-const JUMP: &str = " ↓ Jump to bottom · click or End";
-const NEW: &str = " ↓ New output below · click or End";
+/// The hint while scrolled back, with nothing new below and with new output,
+/// without the spaces that put it in the middle of its row.
+const JUMP: &str = "↓ Jump to bottom · click or End";
+const NEW: &str = "↓ New output below · click or End";
 
 struct Screen {
     ui: Ui<TestBackend>,
@@ -150,7 +152,7 @@ impl Screen {
     fn conversation(&self) -> Vec<String> {
         let lines = self.lines();
         let mut end = lines.len() - self.below();
-        if lines[end - 1].starts_with(" ↓ ") {
+        if lines[end - 1].trim_start().starts_with("↓ ") {
             end -= 1;
         }
         lines[..end].to_vec()
@@ -167,10 +169,12 @@ impl Screen {
     }
 
     /// The row just above the status line, and above the blank row while
-    /// working.
+    /// working, without the spaces before it.
     fn above_status(&self) -> String {
         let lines = self.lines();
-        lines[lines.len() - self.below() - 1].clone()
+        lines[lines.len() - self.below() - 1]
+            .trim_start()
+            .to_owned()
     }
 }
 
@@ -315,7 +319,7 @@ fn info_row_shows_total_and_last_cache_hit_rates_only_with_input_usage() {
 fn a_long_conversation_follows_the_latest_output() {
     let mut screen = Screen::long_turn(40);
     let shown = screen_text(&screen.lines());
-    assert_eq!(screen.above_status(), "  line 40", "{shown}");
+    assert_eq!(screen.above_status(), "line 40", "{shown}");
     assert!(
         screen.lines()[usize::from(HEIGHT) - BELOW].starts_with(" ⠋ Galloping"),
         "{shown}"
@@ -379,6 +383,64 @@ fn the_wheel_scrolls_back_and_new_output_does_not_pull_the_view_down() {
     screen.say("t1", "m42", "line 42");
     screen.draw();
     assert_eq!(screen.above_status(), "● line 42");
+}
+
+/// The hint is a chip in the middle of its row (11-13, user: 「都按推荐的做」),
+/// a space either side of its text: only scrolled back, on the sent
+/// message's grey; with new output below, reversed cyan and bold, so it
+/// stands out from the conversation's cyan.
+#[test]
+fn the_hint_is_a_chip_in_the_middle_of_its_row() {
+    canter_tui::theme::set(Theme {
+        depth: Depth::TrueColor,
+        background: Background::Dark,
+    });
+    let mut screen = Screen::long_turn(40);
+    assert_eq!(screen.key(KeyCode::PageUp), None);
+    screen.draw();
+    let chip = format!(" {JUMP} ");
+    let left = usize::from(WIDTH) / 2 - chip.width() / 2;
+    let y = screen.hint_row();
+    assert_eq!(
+        screen.lines()[usize::from(y)],
+        format!("{}{}", " ".repeat(left), chip.trim_end())
+    );
+    let buffer = screen.ui.backend().buffer();
+    for x in left..left + chip.width() {
+        let cell = &buffer[(x as u16, y)];
+        assert_eq!(cell.bg, Color::Rgb(0x2d, 0x2e, 0x33), "column {x}");
+        assert!(!cell.modifier.contains(Modifier::REVERSED), "column {x}");
+    }
+    assert_eq!(buffer[(left as u16 - 1, y)].bg, Color::Reset);
+
+    screen.say("t1", "m41", "line 41");
+    screen.draw();
+    let chip = format!(" {NEW} ");
+    let left = usize::from(WIDTH) / 2 - chip.width() / 2;
+    assert_eq!(
+        screen.lines()[usize::from(y)],
+        format!("{}{}", " ".repeat(left), chip.trim_end())
+    );
+    let buffer = screen.ui.backend().buffer();
+    for x in left..left + chip.width() {
+        let cell = &buffer[(x as u16, y)];
+        assert_eq!(cell.fg, Color::Cyan, "column {x}");
+        assert!(cell.modifier.contains(Modifier::REVERSED), "column {x}");
+    }
+    let new = left + " ↓ New output below".width();
+    for x in left + 1..new {
+        assert!(
+            buffer[(x as u16, y)].modifier.contains(Modifier::BOLD),
+            "column {x}"
+        );
+    }
+    for x in new..left + chip.width() {
+        assert!(
+            !buffer[(x as u16, y)].modifier.contains(Modifier::BOLD),
+            "column {x}"
+        );
+    }
+    canter_tui::theme::set(Theme::default());
 }
 
 /// PgUp scrolls a page; new output shows the hint; sending a message follows
@@ -483,7 +545,7 @@ fn with_the_approval_box_open_the_hint_does_not_mention_end() {
         .iter()
         .find(|row| row.contains("New output below"))
         .unwrap_or_else(|| panic!("no hint:\n{shown}"));
-    assert_eq!(hint, " ↓ New output below · click", "{shown}");
+    assert_eq!(hint.trim_start(), "↓ New output below · click", "{shown}");
 }
 
 /// Scrolled back with nothing new below: the row above the status line
@@ -544,7 +606,7 @@ fn end_with_an_empty_input_jumps_to_the_bottom() {
     assert_eq!(screen.key(KeyCode::End), None);
     screen.draw();
     let shown = screen_text(&screen.lines());
-    assert_eq!(screen.above_status(), "  line 40", "{shown}");
+    assert_eq!(screen.above_status(), "line 40", "{shown}");
 
     screen.say("t1", "m41", "line 41");
     screen.draw();

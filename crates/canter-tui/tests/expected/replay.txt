@@ -24,7 +24,6 @@
  ◆ deepseek-chat · ◐ think high · Always ask
  ~/canter
 == 第 21 条事件后，屏幕 ==
-
 ● 先看一下 README 现在怎么写的。
 
 ✓ Explored
@@ -35,6 +34,7 @@
     15 - cd canter
     16 - cargo build --release
     14 + cargo install --path crates/canter
+
 • Running cargo build
   └    Compiling proc-macro2 v1.0.101
        Compiling unicode-ident v1.0.19
@@ -49,7 +49,6 @@
  ◆ deepseek-chat · ◐ think high · Always ask
  ~/canter
 == 第 23 条事件后，屏幕 ==
-✓ Explored
   └ Read README.md
 ✓ Edit README.md  +1 −3
     13   ```sh
@@ -57,6 +56,7 @@
     15 - cd canter
     16 - cargo build --release
     14 + cargo install --path crates/canter
+
 • Running cargo build
   └  ⋯ 4 lines above · Ctrl+O to expand
        Compiling quote v1.0.41
@@ -74,12 +74,12 @@
  ◆ deepseek-chat · ◐ think high · Always ask
  ~/canter
 == 第 29 条事件后，屏幕 ==
-✓ Edit README.md  +1 −3
     13   ```sh
     14 - git clone https://github.com/firegnu/canter
     15 - cd canter
     16 - cargo build --release
     14 + cargo install --path crates/canter
+
 ✓ Ran cargo build · 12.3s
   └    Compiling proc-macro2 v1.0.101
        Compiling unicode-ident v1.0.19
@@ -141,7 +141,7 @@
   └ Read README.md
 ✓ Edit README.md  +1 −3
     13   ```sh
- ↓ Jump to bottom · click or End
+                         ↓ Jump to bottom · click or End
 
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │

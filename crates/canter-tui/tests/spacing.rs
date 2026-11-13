@@ -190,8 +190,9 @@ fn outline(rows: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Tool cards in a row are one block (P2-247): no blank row between them;
-/// one between them and the answers around them.
+/// Tool cards in a row are one block (P2-247): no blank row between them,
+/// except after a card that shows output (11-13); one between them and the
+/// answers around them.
 #[test]
 fn a_blank_row_separates_messages_and_thinking_and_tool_cards_in_a_row_are_one_block() {
     let mut screen = Screen::new(WIDTH, 40);
@@ -222,6 +223,7 @@ fn a_blank_row_separates_messages_and_thinking_and_tool_cards_in_a_row_are_one_b
             "✓ Edit a.txt",
             "1 - old",
             "1 + new",
+            "",
             "✓ Ran cargo",
             "└ ok",
             "",
@@ -236,6 +238,46 @@ fn a_blank_row_separates_messages_and_thinking_and_tool_cards_in_a_row_are_one_b
             "● You're welcome.",
             "",
             "Worked for <1s",
+        ]
+    );
+}
+
+/// A card that shows output under its title (a command's output, a diff)
+/// has a blank row after it, so the next card does not stick to its last
+/// line (11-13, user: 「都按推荐的做」); a card with none (`Explored`, a
+/// command that printed nothing) stays right above the next one.
+#[test]
+fn a_card_that_shows_output_is_set_apart_from_the_next_card() {
+    let mut screen = Screen::new(WIDTH, 40);
+    screen.read("f1", "a.txt", "completed");
+    screen.command("c1", "cargo build", "completed");
+    screen.read("f2", "b.txt", "completed");
+    screen.completed(json!({
+        "type": "commandExecution", "id": "c2", "command": "true", "cwd": "/work",
+        "status": "completed", "aggregatedOutput": "", "exitCode": 0, "durationMs": 0,
+    }));
+    screen.edit("e1", "completed");
+    screen.command("c3", "cargo test", "completed");
+
+    assert_eq!(
+        outline(&screen.conversation()),
+        [
+            "› do it",
+            "",
+            "✓ Explored",
+            "└ Read a.txt",
+            "✓ Ran cargo",
+            "└ ok",
+            "",
+            "✓ Explored",
+            "└ Read b.txt",
+            "✓ Ran true",
+            "✓ Edit a.txt",
+            "1 - old",
+            "1 + new",
+            "",
+            "✓ Ran cargo",
+            "└ ok",
         ]
     );
 }

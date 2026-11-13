@@ -218,7 +218,9 @@ impl Screen {
                     }
                     x += cell.symbol().width().max(1) as u16;
                 }
-                (!text.is_empty()).then_some((y, text))
+                // The hint about new output is reversed too (11-13): not a
+                // selection.
+                (!text.is_empty() && !text.starts_with(" ↓ ")).then_some((y, text))
             })
             .collect()
     }
