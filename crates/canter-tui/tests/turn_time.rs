@@ -268,9 +268,9 @@ fn an_interrupted_or_failed_turn_says_how_long_it_ran() {
 }
 
 /// Finished thinking says how long it took, up to its last line, in its
-/// heading shown in full: `✻ Thought for 4s`. Folded, a raw thought is its
-/// text without a heading. Thinking still going, and thinking with no known
-/// time, look as before.
+/// heading: `✻ Thought for 4s`, folded (over a raw thought) and shown in
+/// full. Thinking still going, and thinking with no known time, look as
+/// before.
 #[test]
 fn thinking_says_how_long_it_thought() {
     let mut screen = Screen::new();
@@ -291,12 +291,14 @@ fn thinking_says_how_long_it_thought() {
     screen.thought("r1", "Look at the README.\n\nThen edit it.");
     screen.thought("r2", "No start was seen for this one.");
     screen.end_turn("completed", Value::Null);
-    // Folded, a raw thought is its text after `∴`, without the time.
+    // Folded, a raw thought is its label alone on its row, then its text.
     let conversation = screen.conversation();
     for expected in [
-        "∴ Look at the README.",
+        "✻ Thought for 4s",
+        "  Look at the README.",
         "  Then edit it.",
-        "∴ No start was seen for this one.",
+        "✻ Thought",
+        "  No start was seen for this one.",
     ] {
         assert!(
             conversation.contains(&expected.to_owned()),

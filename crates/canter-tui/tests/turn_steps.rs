@@ -1,6 +1,6 @@
 //! How the steps of a turn look, laid out the Codex way: `●` before the
 //! answer, `✓`, `✗` or `•` before every tool card, thinking as
-//! `✻ Thought for 2s · <title>` or `∴ <the thought>`, reads in a row merged into `✓ Explored`, commands as `Run` / `Running` / `Ran` with
+//! `✻ Thought for 2s · <title>` or the label over the thought, reads in a row merged into `✓ Explored`, commands as `Run` / `Running` / `Ran` with
 //! their output after `  └ `, headings and bold in colours of their own,
 //! paths in card titles coloured instead of underlined, and the turn's end as
 //! `Worked for 31s · 11:13`.
@@ -302,11 +302,21 @@ fn thinking_shows_its_latest_line_then_folds_with_its_time() {
         "type": "reasoning", "id": "r1", "summary": [],
         "content": ["Look at the tests.\nThen the code."],
     }));
-    // A raw thought has no title to show: folded, it is the thought itself
-    // after `∴`, grey and upright, with no label.
-    assert_eq!(screen.rows(), ["∴ Look at the tests.", "  Then the code."]);
+    // A raw thought has no title: folded, the label alone on its row, purple,
+    // then the thought itself, grey and upright.
+    assert_eq!(
+        screen.rows(),
+        [
+            "✻ Thought for 2s",
+            "  Look at the tests.",
+            "  Then the code."
+        ]
+    );
     let buffer = screen.draw();
-    for text in ["∴", "Look at the tests.", "Then the code."] {
+    let label = cell(buffer, "✻ Thought for 2s");
+    assert_eq!(label.fg, Color::Magenta, "purple once done");
+    assert!(!label.modifier.contains(Modifier::DIM));
+    for text in ["Look at the tests.", "Then the code."] {
         let cell = cell(buffer, text);
         assert!(cell.modifier.contains(Modifier::DIM), "{text}");
         assert!(!cell.modifier.contains(Modifier::ITALIC), "{text}");
@@ -366,8 +376,7 @@ fn thinking_without_summary_keeps_one_line_when_folded_or_expanded() {
     }
 }
 
-/// A raw thought wider than the screen wraps under its first word instead
-/// of being cut; markdown shows as it does expanded, without its backticks.
+/// A raw thought wider than the screen wraps instead of being cut; markdown shows as it does expanded, without its backticks.
 #[test]
 fn a_folded_raw_thought_wraps_instead_of_being_cut() {
     let mut screen = Screen::new(40);
@@ -379,7 +388,8 @@ fn a_folded_raw_thought_wraps_instead_of_being_cut() {
     assert_eq!(
         rows,
         [
-            "∴ A long thought about main_pane that",
+            "✻ Thought",
+            "  A long thought about main_pane that",
             "  runs well past the edge."
         ],
         "{rows:?}"
@@ -400,7 +410,8 @@ fn a_long_folded_raw_thought_shows_three_rows_and_how_many_more() {
     assert_eq!(
         screen.rows(),
         [
-            "∴ Both exist.",
+            "✻ Thought",
+            "  Both exist.",
             "  Now, implement.",
             "  Files:",
             "   ⋯ 3 more lines · Ctrl+O to expand",
@@ -477,7 +488,8 @@ fn reads_split_by_other_steps_failures_on_their_own_and_same_names_told_apart() 
         [
             "✓ Explored",
             "  └ Read a/mod.rs, b/mod.rs",
-            "∴ Now the lib.",
+            "✻ Thought",
+            "  Now the lib.",
             "✓ Explored",
             "  └ Read lib.rs",
             "✓ Ran cat notes.txt",
@@ -854,7 +866,7 @@ fn without_colours_titles_are_only_bold() {
     ] {
         assert_eq!(cell(buffer, mark).fg, Color::Reset, "{mark}");
     }
-    let label = cell(buffer, "∴ Look first.");
+    let label = cell(buffer, "✻ Thought");
     assert_eq!(label.fg, Color::Reset);
     assert!(label.modifier.contains(Modifier::DIM));
     assert!(cell(buffer, "● Done.").modifier.contains(Modifier::BOLD));

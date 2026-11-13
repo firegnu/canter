@@ -131,7 +131,8 @@
 
 › 把 README 里的安装步骤改成 cargo install
 
-∴ 用户想把 README 的安装步骤换成 cargo install。先读 README 看现在怎么写的，再
+✻ Thought for <1s
+  用户想把 README 的安装步骤换成 cargo install。先读 README 看现在怎么写的，再
   改。
 
 ● 先看一下 README 现在怎么写的。
@@ -140,7 +141,6 @@
   └ Read README.md
 ✓ Edit README.md  +1 −3
     13   ```sh
-    14 - git clone https://github.com/firegnu/canter
  ↓ Jump to bottom · click or End
 
 ╭──────────────────────────────────────────────────────────────────────────────╮

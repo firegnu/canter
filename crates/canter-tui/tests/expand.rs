@@ -283,8 +283,9 @@ fn thinking_in_progress_shows_the_latest_line_on_one_row() {
 }
 
 /// Finished thinking with a summary title folds to `✻ Thought · <title>`,
-/// ending with `…` when more follows. A raw thought has no title: it folds
-/// to the thought itself after `∴`, grey and upright, blank lines left out.
+/// ending with `…` when more follows. A raw thought has no title: the label
+/// alone on its row, then the thought itself, grey and upright, blank lines
+/// left out.
 #[test]
 fn finished_thinking_folds_to_its_title_or_its_text() {
     let mut screen = Screen::new(20);
@@ -297,9 +298,9 @@ fn finished_thinking_folds_to_its_title_or_its_text() {
     );
     let conversation = screen.conversation();
     for expected in [
-        "∴ Read the README first.",
+        "  Read the README first.",
         "  Then edit it.",
-        "∴ Only one line.",
+        "  Only one line.",
         "✻ Thought · Planning the change…",
     ] {
         assert!(
@@ -358,7 +359,7 @@ fn ctrl_o_shows_thinking_in_full() {
     assert_eq!(screen.ctrl_o(), None);
     let conversation = screen.conversation();
     assert!(
-        conversation.contains(&"∴ Read the README first.".to_owned()),
+        conversation.contains(&"  Read the README first.".to_owned()),
         "{conversation:?}"
     );
     assert!(!conversation.iter().any(|row| row.contains('┊')));

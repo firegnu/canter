@@ -121,8 +121,8 @@ async fn replay() {
 
     // Colors the text above cannot show: diff lines, and finished thinking's
     // purple label.
-    // The welcome header pushed the end of the diff below: one step of the
-    // wheel down brings it back.
+    // The welcome header and the thinking label pushed the end of the diff
+    // below: two steps of the wheel down bring it back.
     let wheel = MouseEvent {
         kind: MouseEventKind::ScrollDown,
         column: 0,
@@ -130,19 +130,18 @@ async fn replay() {
         modifiers: KeyModifiers::NONE,
     };
     ui.app_mut().handle_mouse_at(wheel, NOW);
+    ui.app_mut().handle_mouse_at(wheel, NOW);
     ui.draw(NOW).unwrap();
     let top = ui.backend().0.buffer();
     let added = find(top, "+ cargo install --path crates/canter");
     assert_eq!(top[added].fg, Color::Green, "added lines are green");
     let removed = find(top, "- git clone https://github.com/firegnu/canter");
     assert_eq!(top[removed].fg, Color::Red, "removed lines are red");
-    // DeepSeek's raw thought folds to its text after `∴`, grey.
-    let thinking = find(top, "∴ 用户想");
-    assert!(
-        top[thinking]
-            .modifier
-            .contains(ratatui::style::Modifier::DIM),
-        "finished raw thinking is grey"
+    let thinking = find(top, "Thought for <1s");
+    assert_eq!(
+        top[thinking].fg,
+        Color::Magenta,
+        "finished thinking is purple"
     );
 }
 

@@ -876,8 +876,9 @@ pub(crate) fn wrap_all(lines: &[LogicalLine], width: u16) -> Vec<Row> {
 /// `**title**`), `✻ Thought · <title>`, `✻ Thought for 4s · <title>` when
 /// its time is known; the label grey while it runs and purple once done
 /// ([`theme::thought`]), what follows it fainter and italic. A raw thought
-/// done (DeepSeek's) has no title: its text after `∴`, grey and upright, at
-/// most three rows, then ` ⋯ N more lines · Ctrl+O to expand `. With `details`, the
+/// done (DeepSeek's) has no title: the label alone on its row, then its text
+/// indented 2, grey and upright, at most three rows, then
+/// ` ⋯ N more lines · Ctrl+O to expand `. With `details`, the
 /// label (`✻ Thought for 4s`) and then the whole text as markdown, grey and
 /// italic, each row after a grey `┊`.
 fn reasoning(
@@ -984,30 +985,29 @@ fn reasoning(
         };
         return row(" · ", format!("{}{more}", title.trim().replace("**", "")));
     }
-    // A raw thought (DeepSeek's) has no title to stand for it: the thought
-    // itself after `∴`, grey and upright, at most FOLDED_THOUGHT_ROWS rows
-    // with blank ones left out, then how many more Ctrl+O shows.
-    let mut rows: Vec<Row> = markdown(
-        theme::secondary(),
-        Span::styled("∴ ", theme::secondary()),
-        Span::raw("  "),
-    )
-    .into_iter()
-    .filter(|row| {
-        row.line
-            .spans
-            .iter()
-            .any(|span| !span.content.trim().is_empty())
-    })
-    .collect();
-    if rows.len() > FOLDED_THOUGHT_ROWS {
-        let hidden = rows.len() - FOLDED_THOUGHT_ROWS;
-        rows.truncate(FOLDED_THOUGHT_ROWS);
-        rows.push(Row::marks(Line::from(vec![
+    // A raw thought (DeepSeek's) has no title to stand for it: the label
+    // alone on its row, then the thought itself, grey and upright, at most
+    // FOLDED_THOUGHT_ROWS rows with blank ones left out, then how many more
+    // Ctrl+O shows.
+    let mut text: Vec<Row> = markdown(theme::secondary(), Span::raw("  "), Span::raw("  "))
+        .into_iter()
+        .filter(|row| {
+            row.line
+                .spans
+                .iter()
+                .any(|span| !span.content.trim().is_empty())
+        })
+        .collect();
+    if text.len() > FOLDED_THOUGHT_ROWS {
+        let hidden = text.len() - FOLDED_THOUGHT_ROWS;
+        text.truncate(FOLDED_THOUGHT_ROWS);
+        text.push(Row::marks(Line::from(vec![
             Span::raw("  "),
             more_lines(hidden),
         ])));
     }
+    let mut rows = row("", String::new());
+    rows.extend(text);
     rows
 }
 
