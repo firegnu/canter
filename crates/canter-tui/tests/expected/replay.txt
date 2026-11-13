@@ -24,6 +24,7 @@
  ◆ deepseek-chat · ◐ think high · Always ask
  ~/canter
 == 第 21 条事件后，屏幕 ==
+
 ● 先看一下 README 现在怎么写的。
 
 ✓ Explored
@@ -41,7 +42,6 @@
        Compiling libc v0.2.177
       Ctrl+B to run in background
 
-   Running cargo build
  ⠋ Galloping… · 0s · Esc to interrupt · Ctrl+B to run in background
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │
@@ -49,6 +49,7 @@
  ◆ deepseek-chat · ◐ think high · Always ask
  ~/canter
 == 第 23 条事件后，屏幕 ==
+✓ Explored
   └ Read README.md
 ✓ Edit README.md  +1 −3
     13   ```sh
@@ -66,7 +67,6 @@
        Compiling canter-protocol v0.1.0 (/home/dev/canter/crates/canter-protoco…
       Ctrl+B to run in background
 
-   Running cargo build
  ⠋ Galloping… · 0s · Esc to interrupt · Ctrl+B to run in background
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ › Type a message (Enter to send, Ctrl+J for a new line)                      │

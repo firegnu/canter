@@ -367,16 +367,22 @@ fn with_16_colours_the_verb_shimmers_in_two_steps() {
 }
 
 /// Only the verb shimmers: a running command, on its own row above the
-/// status line, stays as it was.
+/// status line (there while its card's title is out of view: here all of
+/// its output is shown), stays as it was.
 #[test]
 fn a_running_command_does_not_shimmer() {
     for theme in [DARK, SIXTEEN] {
         let mut screen = Screen::new(theme);
         screen.start_turn();
+        let output: String = (1..=30).map(|n| format!("line {n}\n")).collect();
         screen.start_item(json!({
             "type": "commandExecution", "id": "c1", "command": "cargo test", "cwd": "/work",
-            "status": "inProgress", "aggregatedOutput": "", "exitCode": null, "durationMs": null,
+            "status": "inProgress", "aggregatedOutput": output, "exitCode": null, "durationMs": null,
         }));
+        screen.ui.app_mut().handle_key(
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+            NOW,
+        );
         let command = |screen: &Screen| {
             let y = screen.status_y() - 1;
             assert_eq!(row(screen.buffer(), y).trim(), "Running cargo test");

@@ -4970,17 +4970,35 @@ impl App {
         };
         let room = room - usize::from(tip.is_some());
         let hung: Vec<_> = tip.into_iter().collect();
-        // A running command gets its own row above the status line; the
-        // blank row goes before it when rows run short, and without it the
-        // command goes back onto the status line.
+        let starts = starts(&self.history, live_parts, lead);
+        // The running command's card says what runs while its title is in
+        // view (11-13): rows above it only when scrolled back, under the
+        // prompt row that may show on top; else the last rows, less the
+        // blank row above the status line.
+        let title_shown = self
+            .ongoing()
+            .filter(|(_, item)| matches!(item, Item::CommandExecution { .. }))
+            .and_then(|(at, _)| starts.iter().find(|(_, part)| *part == Part::At(at)))
+            .is_some_and(|(title, _)| {
+                let area = room - usize::from(working && room > 2);
+                match self.scroll.top {
+                    Some(top) => (top + 1..top + area.saturating_sub(1)).contains(title),
+                    None => *title + area >= total,
+                }
+            });
+        // A running command whose title is out of view gets its own row
+        // above the status line; the blank row goes before it when rows run
+        // short, and without it the command goes back onto the status line.
         let command = match self.doing() {
-            Some((_, Some(command))) if working && room > 2 => Some(Line::from(truncate(
-                vec![Span::styled(
-                    format!("   Running {command}"),
-                    theme::secondary(),
-                )],
-                usize::from(width),
-            ))),
+            Some((_, Some(command))) if working && room > 2 && !title_shown => {
+                Some(Line::from(truncate(
+                    vec![Span::styled(
+                        format!("   Running {command}"),
+                        theme::secondary(),
+                    )],
+                    usize::from(width),
+                )))
+            }
             _ => None,
         };
         let room = room - usize::from(command.is_some());
@@ -5101,7 +5119,6 @@ impl App {
                 .filter(|_| agents_open)
                 .map(|column| column + 1),
         };
-        let starts = starts(&self.history, live_parts, lead);
         let rows = Rows {
             history,
             live: &live,
@@ -5285,7 +5302,7 @@ impl App {
                         && footer_box.is_none()
                         && self.drawing.turn.is_some()
                         && self.steerable();
-                    self.status_line(now_ms, width, steer, command.is_some())
+                    self.status_line(now_ms, width, steer, command.is_some() || title_shown)
                 }
             },
             gap,
@@ -6233,21 +6250,33 @@ impl App {
         Line::from(truncate(spans, width))
     }
 
+    /// The last item of the turn in progress that is not done yet, and
+    /// where it is.
+    fn ongoing(&self) -> Option<(Place, &Item)> {
+        let (turn_index, turn) = self
+            .snapshot
+            .turns
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, turn)| turn.status == TurnStatus::InProgress)?;
+        let index = (0..turn.items.len())
+            .rev()
+            .find(|&index| !self.item_done(turn, index))?;
+        let at = Place {
+            turn: turn_index,
+            prompt: true,
+            item: index,
+        };
+        Some((at, &turn.items[index]))
+    }
+
     /// What the turn in progress is doing, when the status line says it as
     /// it is: a command and the command, or compacting. `None` otherwise,
     /// and while nothing is in progress, such as while waiting for the
     /// model; then the line has the turn's playful word ([`App::turn_word`]).
     fn doing(&self) -> Option<(String, Option<String>)> {
-        let turn = self
-            .snapshot
-            .turns
-            .iter()
-            .rev()
-            .find(|turn| turn.status == TurnStatus::InProgress)?;
-        let index = (0..turn.items.len())
-            .rev()
-            .find(|&index| !self.item_done(turn, index))?;
-        Some(match &turn.items[index] {
+        Some(match self.ongoing()?.1 {
             Item::CommandExecution { command, .. } => {
                 ("Running ".into(), Some(cells::command_line(command)))
             }

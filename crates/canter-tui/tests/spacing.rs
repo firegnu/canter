@@ -120,6 +120,16 @@ impl Screen {
         }
     }
 
+    /// A command still running that has printed `lines` lines.
+    fn running(&mut self, id: &str, command: &str, lines: usize) {
+        let output: String = (1..=lines).map(|n| format!("line {n}\n")).collect();
+        self.started(json!({
+            "type": "commandExecution", "id": id, "command": command, "cwd": "/work",
+            "status": "inProgress", "aggregatedOutput": output,
+            "exitCode": null, "durationMs": null,
+        }));
+    }
+
     fn edit(&mut self, id: &str, status: &str) {
         let item = json!({
             "type": "fileChange", "id": id, "status": status,
@@ -371,7 +381,7 @@ fn blank_rows_stay_put_when_a_part_finishes() {
 /// compacting are said as they are.
 #[test]
 fn the_status_line_keeps_the_turns_word_and_names_a_command() {
-    let mut screen = Screen::new(WIDTH, 20);
+    let mut screen = Screen::new(WIDTH, 12);
     assert_eq!(screen.status(), " ⠋ Galloping… · 0s · Esc to interrupt");
 
     screen.started(json!({ "type": "reasoning", "id": "r1", "summary": [], "content": [] }));
@@ -409,9 +419,9 @@ fn the_status_line_keeps_the_turns_word_and_names_a_command() {
         "result": "ok", "status": "completed",
     }));
 
-    // A command gets its own row above the status line, which says
-    // `Working…`.
-    screen.command("c1", "cargo build\ncargo test", "inProgress");
+    // A command whose card's title is out of view gets its own row above
+    // the status line, which keeps the turn's word.
+    screen.running("c1", "cargo build\ncargo test", 8);
     assert_eq!(screen.command_row(), "   Running cargo build …");
     assert_eq!(
         screen.status(),
@@ -422,7 +432,7 @@ fn the_status_line_keeps_the_turns_word_and_names_a_command() {
     // In a narrow window the command is cut at the edge, and the
     // background shortcut stays whole.
     let long = format!("cargo test {}", "--package canter-tui ".repeat(5));
-    screen.command("c2", &long, "inProgress");
+    screen.running("c2", &long, 8);
     let command = screen.command_row();
     assert!(
         command.starts_with("   Running cargo test") && command.ends_with('…'),
@@ -436,11 +446,33 @@ fn the_status_line_keeps_the_turns_word_and_names_a_command() {
     );
 }
 
+/// The running command's own row (P2-197) shows only while its card's
+/// title is out of view (11-13, user: 「A，你改。」): with the card right
+/// above, it said the same command twice. The status line keeps the turn's
+/// word either way.
+#[test]
+fn the_command_row_shows_only_while_the_cards_title_is_out_of_view() {
+    let mut screen = Screen::new(WIDTH, 14);
+    screen.running("c1", "cargo build", 1);
+    let shown = screen.lines().join("\n");
+    assert!(shown.contains("• Running cargo build"), "{shown}");
+    assert_eq!(screen.command_row(), "", "{shown}");
+    assert!(screen.status().starts_with(" ⠋ Galloping… · 0s"), "{shown}");
+
+    // Output pushes the title out of view: the row says what runs.
+    screen.running("c1", "cargo build", 8);
+    let shown = screen.lines().join("\n");
+    assert!(!shown.contains("• Running cargo build"), "{shown}");
+    assert_eq!(screen.command_row(), "   Running cargo build", "{shown}");
+    assert!(screen.status().starts_with(" ⠋ Galloping… · 0s"), "{shown}");
+}
+
 #[test]
 fn with_details_shown_both_hints_show_and_a_narrow_window_cuts_the_command_first() {
-    // Too short for the command's own row: it stays on the status line.
+    // Too short for the command's own row, and its title out of view: it
+    // stays on the status line.
     let mut screen = Screen::new(100, 8);
-    screen.command("c1", "cargo build", "inProgress");
+    screen.running("c1", "cargo build", 8);
     screen.ui.app_mut().handle_key(
         KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
         NOW,
@@ -452,7 +484,7 @@ fn with_details_shown_both_hints_show_and_a_narrow_window_cuts_the_command_first
 
     let long = format!("cargo test {}", "--package canter-tui ".repeat(5));
     screen.command("c1", "cargo build", "completed");
-    screen.command("c2", &long, "inProgress");
+    screen.running("c2", &long, 8);
     let status = screen.status();
     assert!(
         status.starts_with(" ⠋ Running cargo test")
