@@ -389,7 +389,7 @@ mod tests {
         const READ_BULLET: &str =
             "- To look at a file, use read rather than cat, head, or sed in the shell.";
         const SEARCH_BULLET: &str = "- To search file contents, use `rg`; to find files, use `rg --files` rather than `grep -r` or `find`.";
-        const FILE_BULLET: &str = "- To change files, use the file tools rather than the shell, whether by redirection, `sed -i`, or a script (Python, Perl, and the like) that rewrites them";
+        const FILE_BULLET: &str = "- To change files, use the file tools rather than the shell, whether by redirection, `sed -i`, or a script (Python, Perl, and the like) that rewrites them: the user then sees a reviewable diff, and canter can undo the change later. Calls in one reply run in order, so an edit and the command that checks it, such as a test run, can go in the same reply; don't merge them into one shell command to save a round trip.";
         const EXACT_BULLET: &str =
             "- When the user gives you a command to run, run exactly that command.";
         const ONE_PURPOSE_BULLET: &str = "- Give each shell call one purpose.";
