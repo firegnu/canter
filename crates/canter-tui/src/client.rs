@@ -420,6 +420,34 @@ impl Client {
         .await
     }
 
+    pub async fn set_sandbox(
+        &self,
+        session: &str,
+        enabled: bool,
+    ) -> Result<canter_protocol::SessionUpdateResponse, ClientError> {
+        if !self
+            .info()
+            .await?
+            .features
+            .unwrap_or_default()
+            .iter()
+            .any(|feature| feature == "sessionSandboxSwitch")
+        {
+            return Err(ClientError::Protocol("This server does not support /sandbox on|off; run canter serve --replace and retry".into()));
+        }
+        decode(
+            self.http
+                .post(url(routes::SANDBOX, &[session]))
+                .json(&canter_protocol::SessionSandboxParams {
+                    enabled,
+                    confirmed: !enabled,
+                })
+                .send()
+                .await?,
+        )
+        .await
+    }
+
     pub async fn usage(
         &self,
         session: Option<&str>,

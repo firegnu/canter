@@ -4,7 +4,7 @@
  * GET /v1/sessions/{id}/sandbox: what this session's model commands may touch
  * now, worked out on each request. Only `enabled` is meaningful when false.
  */
-export type SessionSandboxResponse = { enabled: boolean,
+export type SessionSandboxResponse = { enabled: boolean, pendingEnabled?: boolean,
 /**
  * cwd, added directories, the session's private temporary directory and caches.
  */

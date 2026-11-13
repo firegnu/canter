@@ -93,6 +93,10 @@ mod lsp_tests;
 mod doctor_tests;
 
 #[cfg(test)]
+#[path = "run_sandbox_tests.rs"]
+mod sandbox_tests;
+
+#[cfg(test)]
 #[path = "run_session_management_tests.rs"]
 mod session_management_tests;
 
@@ -937,6 +941,11 @@ where
                     Ok(report) => ui.app_mut().show_sandbox(&report),
                     Err(error) => ui.app_mut().warning(&error.to_string()),
                 },
+                Some(Action::SetSandbox { enabled }) => {
+                    if let Err(error) = chat.client.set_sandbox(&chat.session, enabled).await {
+                        ui.app_mut().warning(&error.to_string());
+                    }
+                }
                 Some(Action::Files) => ui.app_mut().show_files().await,
                 Some(Action::ExternalEditor) => {
                     let temp = std::env::temp_dir();
@@ -1477,6 +1486,10 @@ enum Message {
     Information(String),
     /// `/diff` collected the changes.
     Diff(crate::uncommitted::Changes),
+    SandboxRefreshed {
+        chooser: u64,
+        report: canter_protocol::SessionSandboxResponse,
+    },
     AnswerFailed {
         request_id: String,
         error: String,
@@ -2166,6 +2179,21 @@ impl<C: Connector> Chat<C> {
                     self.naming.retracted(turn_id, app.snapshot(), &self.client);
                 }
                 app.apply_event(&event, now_ms());
+                if matches!(
+                    event.payload,
+                    canter_protocol::EventPayload::SessionSandboxUpdated { .. }
+                        | canter_protocol::EventPayload::SessionUpdated { .. }
+                ) && let Some(chooser) = app.sandbox_popup()
+                {
+                    let client = self.client.clone();
+                    let session = self.session.clone();
+                    let sender = self.sender.clone();
+                    tokio::spawn(async move {
+                        if let Ok(report) = client.sandbox(&session).await {
+                            let _ = sender.send(Message::SandboxRefreshed { chooser, report });
+                        }
+                    });
+                }
             }
             Message::SendFailed { error, draft } => app.text_send_failed(&error, draft),
             Message::NameFailed(error) => {
@@ -2174,6 +2202,7 @@ impl<C: Connector> Chat<C> {
             Message::Warning(message) => app.warning(&message),
             Message::Information(message) => app.information(&message),
             Message::Diff(changes) => app.show_diff(changes),
+            Message::SandboxRefreshed { chooser, report } => app.refresh_sandbox(chooser, report),
             Message::AnswerFailed { request_id, error } => app.answer_failed(&request_id, &error),
             Message::AnswerLate => app.answer_late(),
             Message::InterruptFailed {
@@ -2666,6 +2695,7 @@ impl<C: Connector> Chat<C> {
             | Action::ShellBackground(_)
             | Action::Context
             | Action::Sandbox
+            | Action::SetSandbox { .. }
             | Action::Mcp
             | Action::CommandRules
             | Action::Memory

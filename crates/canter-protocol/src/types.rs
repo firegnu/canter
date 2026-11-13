@@ -111,6 +111,10 @@ pub(crate) fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSnapshot {
+    /// Live-only next-turn sandbox state; never restored from stored events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sandbox_pending: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub parent: Option<SessionParent>,
@@ -159,6 +163,7 @@ impl SessionSnapshot {
     /// Empty replay state. The first durable event supplies public settings.
     pub fn empty(id: impl Into<String>) -> Self {
         Self {
+            sandbox_pending: None,
             parent: None,
             agent: None,
             language_servers: Vec::new(),
@@ -1343,6 +1348,9 @@ pub struct ErrorInfo {
 #[serde(rename_all = "camelCase")]
 pub struct SessionSandboxResponse {
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pending_enabled: Option<bool>,
     /// cwd, added directories, the session's private temporary directory and caches.
     #[serde(default)]
     pub writable: Vec<String>,

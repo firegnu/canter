@@ -23,7 +23,7 @@ import type { SessionStatus } from "./SessionStatus";
 import type { TokenUsage } from "./TokenUsage";
 import type { Turn } from "./Turn";
 
-export type EventPayload = { "type": "session.promptSuggestion", turnId: string | null, text: string, } | { "type": "session.promptSuggestionsReduced" } | { "type": "session.parent", parent: SessionParent, } | { "type": "telemetry.compaction", turnId: string, itemId: string, trigger?: CompactionTrigger,
+export type EventPayload = { "type": "session.sandboxUpdated", pendingEnabled: boolean | null, } | { "type": "session.promptSuggestion", turnId: string | null, text: string, } | { "type": "session.promptSuggestionsReduced" } | { "type": "session.parent", parent: SessionParent, } | { "type": "telemetry.compaction", turnId: string, itemId: string, trigger?: CompactionTrigger,
 /**
  * Summary request shape: `prefix` or `transcript`; absent in older events.
  */

@@ -42,6 +42,120 @@ async fn idle(session: &Session) -> SessionSnapshot {
 }
 
 #[tokio::test]
+async fn pending_sandbox_choice_is_inherited_only_by_new_children() {
+    for configured in [true, false] {
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        for directory in ["home", "work", "state"] {
+            std::fs::create_dir(root.path().join(directory)).unwrap();
+        }
+        let mut waiting = Reply::sse("");
+        waiting.hang = true;
+        let fake = Server::start(vec![
+            complete("Parent ready"),
+            waiting,
+            shell("printf child > ../new-child-output"),
+            complete("Child done"),
+        ])
+        .await;
+        let model = Arc::new(ChatCompletions::new(&fake.base_url, ApiKey::new(KEY)).unwrap());
+        let runtime = RuntimeContext {
+            environment: [
+                (
+                    "HOME".into(),
+                    root.path().join("home").display().to_string(),
+                ),
+                (
+                    "CANTER_HOME".into(),
+                    root.path().join("state").display().to_string(),
+                ),
+                ("PATH".into(), "/usr/bin:/bin".into()),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        let settings = serde_json::from_value(json!({"cwd":root.path().join("work"),"model":"fake-model","approvalPolicy":"allowAll"})).unwrap();
+        let store = Arc::new(Store::new(root.path().join("state/sessions")).unwrap());
+        let (parent, _) = Session::create(
+            store,
+            "parent".into(),
+            settings,
+            runtime,
+            model,
+            CoreOptions {
+                sandbox: configured,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        parent.input(input("Start")).await.unwrap();
+        idle(&parent).await;
+        let mut delayed_terminal = parent
+            .subscribe(parent.snapshot().await.event_seq)
+            .await
+            .unwrap();
+        let (old, _) = parent
+            .spawn_agent("old".into(), "Keep working".into())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fake.requests.lock().unwrap().len() < 2 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        parent
+            .set_sandbox(SessionSandboxParams {
+                enabled: !configured,
+                confirmed: true,
+            })
+            .await
+            .unwrap();
+        // A slow terminal can miss the live notification while durable events
+        // fill its bounded queue. Catch-up must still report the current choice.
+        for index in 0..270 {
+            parent
+                .update(SessionUpdateParams {
+                    name: Some(format!("parent-{index}")),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let event = delayed_terminal.recv().await.unwrap().unwrap();
+                if let EventPayload::SessionSandboxUpdated { pending_enabled } = event.payload {
+                    assert_eq!(pending_enabled, Some(!configured));
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let (new, _) = parent
+            .spawn_agent("new".into(), "Write output".into())
+            .await
+            .unwrap();
+        assert_eq!(new.sandbox().await.enabled, !configured);
+        assert_eq!(
+            idle(&new).await.agent.unwrap().result.as_deref(),
+            Some("Child done")
+        );
+        assert_eq!(root.path().join("new-child-output").exists(), configured);
+        assert_eq!(old.sandbox().await.enabled, configured);
+        assert_eq!(
+            old.snapshot().await.session.agent.unwrap().status,
+            AgentStatus::Running
+        );
+        assert_eq!(parent.sandbox().await.enabled, configured);
+        assert_eq!(parent.sandbox().await.pending_enabled, Some(!configured));
+        parent.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn child_inherits_the_opening_sandbox_exemption_and_actual_command_scope() {
     for disabled in [false, true] {
         let root = tempfile::tempdir_in("/tmp").unwrap();
@@ -57,7 +171,7 @@ async fn child_inherits_the_opening_sandbox_exemption_and_actual_command_scope()
         let model = Arc::new(ChatCompletions::new(&fake.base_url, ApiKey::new(KEY)).unwrap());
         let store = Arc::new(Store::new(root.path().join("state/sessions")).unwrap());
         let runtime = RuntimeContext {
-            sandbox_disabled: disabled,
+            sandbox_override: disabled.then_some(false),
             environment: [
                 (
                     "HOME".into(),

@@ -113,6 +113,10 @@ pub fn validate_event(snapshot: &SessionSnapshot, event: &Event) -> Result<(), R
 /// In-place replay. All validation precedes mutation, so errors leave state intact.
 pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<(), ReduceError> {
     validate_event(snapshot, event)?;
+    if let EventPayload::SessionSandboxUpdated { pending_enabled } = &event.payload {
+        snapshot.sandbox_pending = *pending_enabled;
+        return Ok(());
+    }
     if event.seq <= snapshot.last_event_seq {
         return Ok(());
     }
@@ -404,6 +408,7 @@ pub fn apply_event_mut(snapshot: &mut SessionSnapshot, event: &Event) -> Result<
         }
         EventPayload::Error { error, .. } => snapshot.error = Some(error.clone()),
         EventPayload::SessionPromptSuggestion { .. }
+        | EventPayload::SessionSandboxUpdated { .. }
         | EventPayload::SessionPromptSuggestionsReduced
         | EventPayload::TelemetryCompaction { .. }
         | EventPayload::TelemetryToolResult { .. }

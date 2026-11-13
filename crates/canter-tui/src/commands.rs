@@ -257,15 +257,36 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "sandbox",
-        about: "Show what the sandbox allows",
-        takes_args: false,
-        run: |app, _| match app.snapshot().settings.sandbox_enabled {
+        about: "Show sandbox scope, or switch on/off for the next turn",
+        takes_args: true,
+        run: |app, args| match app.snapshot().settings.sandbox_enabled {
             // An older server says nothing, which must not read as off.
             None => Err(
                 "This server does not support /sandbox; run canter serve --replace and retry"
                     .into(),
             ),
-            Some(_) => Ok(Some(Action::Sandbox)),
+            Some(_) => match args {
+                "" => Ok(Some(Action::Sandbox)),
+                "on" => Ok(Some(Action::SetSandbox { enabled: true })),
+                "off" => {
+                    app.choose(Chooser {
+                        title: "Turn off sandbox?",
+                        detail:
+                            "This session only, starting next turn. Permissions stay unchanged."
+                                .into(),
+                        back: None,
+                        keys: CHOOSE,
+                        choices: vec![Choice {
+                            label: "Turn off sandbox".into(),
+                            about: "Model commands will run without sandbox restrictions".into(),
+                            action: Action::SetSandbox { enabled: false },
+                        }],
+                        selected: 0,
+                    });
+                    Ok(None)
+                }
+                _ => Err("Usage: /sandbox [on|off]".into()),
+            },
         },
     },
     Command {
@@ -1256,16 +1277,21 @@ pub(crate) fn sandbox(
         style: Style::new(),
         rows: usize::MAX,
     };
+    let pending = report.pending_enabled.map(|enabled| {
+        line(format!(
+            "Switch to {} scheduled for next turn. Current work keeps its original sandbox state.",
+            if enabled { "on" } else { "off" }
+        ))
+    });
     if !report.enabled {
         return Report::new(
             title("Sandbox", "off"),
-            vec![
-                line("Start canter without --yolo to follow config.json.".into()),
-                line(
-                    "Set \"sandbox\": true in config.json (or remove the line), then run canter serve --replace."
-                        .into(),
-                ),
-            ],
+            pending
+                .into_iter()
+                .chain([line(
+                    "Use /sandbox on to enable it for the next turn.".into(),
+                )])
+                .collect(),
             Vec::new(),
         );
     }
@@ -1277,7 +1303,7 @@ pub(crate) fn sandbox(
     };
     let mut read_only = vec![".git config and hooks".to_owned()];
     read_only.extend(paths(&report.read_only));
-    let body = vec![
+    let mut body = vec![
         line(format!("Writable: {}", paths(&report.writable).join(", "))),
         line(format!("Read-only: {}", read_only.join(", "))),
         line(format!(
@@ -1294,6 +1320,9 @@ pub(crate) fn sandbox(
         ),
         line("Not sandboxed: ! commands, MCP tools, web_fetch".into()),
     ];
+    if let Some(pending) = pending {
+        body.insert(0, pending);
+    }
     Report::new(title("Sandbox", "on"), body, Vec::new())
 }
 

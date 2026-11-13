@@ -17,6 +17,36 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
 #[test]
+fn sandbox_off_requires_confirmation_and_on_does_not() {
+    let mut screen = Screen::new();
+    let mut settings = serde_json::to_value(&screen.ui.app().snapshot().settings).unwrap();
+    settings["sandboxEnabled"] = json!(true);
+    screen.event(json!({"type":"session.updated","settings":settings}));
+    assert_eq!(screen.enter("/sandbox off"), None);
+    screen.draw();
+    assert!(
+        screen.text().contains("Turn off sandbox?"),
+        "{}",
+        screen.text()
+    );
+    assert_eq!(screen.key(KeyCode::Esc), None);
+    assert_eq!(
+        screen.ui.app().snapshot().settings.sandbox_enabled,
+        Some(true)
+    );
+    assert_eq!(screen.enter("/sandbox off"), None);
+    screen.draw();
+    assert_eq!(
+        screen.key(KeyCode::Enter),
+        Some(Action::SetSandbox { enabled: false })
+    );
+    assert_eq!(
+        screen.enter("/sandbox on"),
+        Some(Action::SetSandbox { enabled: true })
+    );
+}
+
+#[test]
 fn model_and_think_commands_explicitly_remember_the_selection() {
     for command in ["/model local/selected", "/think low", "/think"] {
         let mut screen = Screen::new();
@@ -466,7 +496,10 @@ const COMMANDS: [(&str, &str); 38] = [
     ),
     ("/rewind", "Rewind conversation, files, or both"),
     ("/roles", "List built-in and custom sub-agent roles"),
-    ("/sandbox", "Show what the sandbox allows"),
+    (
+        "/sandbox",
+        "Show sandbox scope, or switch on/off for the next turn",
+    ),
     ("/skills", "List this session's skills"),
     ("/statusline", "Choose and order what the status line shows"),
     ("/stop", "Stop all background commands in this session"),

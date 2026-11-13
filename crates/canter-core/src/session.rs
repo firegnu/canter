@@ -1250,7 +1250,7 @@ impl Session {
             settings.additional_directories,
         )
         .await?;
-        settings.sandbox_enabled = Some(options.sandbox && !runtime.sandbox_disabled);
+        settings.sandbox_enabled = Some(runtime.sandbox_override.unwrap_or(options.sandbox));
         settings.restricted_mode = Some(runtime.restricted_mode);
         settings.plan_enabled = Some(options.plan_enabled);
         let owned_store = store.clone();
@@ -1539,6 +1539,8 @@ impl Session {
                 .event_reader(&state.journal.snapshot.id)?,
             receiver,
             committed: state.journal.committed.subscribe(),
+            sandbox_event: state.journal.sandbox_event.clone(),
+            sandbox_seen: None,
             pending: VecDeque::new(),
             cursor: after,
             ended: false,
@@ -1560,13 +1562,18 @@ impl Session {
     /// The session lock orders it after settings updates, which reconfigure the shell.
     pub async fn sandbox(&self) -> canter_protocol::SessionSandboxResponse {
         let _state = self.shared.state.lock().await;
-        self.shared.runtime().tools.sandbox_scope()
+        let runtime = self.shared.runtime();
+        let mut scope = runtime.tools.sandbox_scope();
+        scope.pending_enabled = runtime.pending_sandbox();
+        scope
     }
 
     pub async fn snapshot(&self) -> SessionReadResponse {
         let state = self.shared.state.lock().await;
+        let mut snapshot = state.journal.snapshot.clone();
+        snapshot.sandbox_pending = self.shared.runtime().pending_sandbox();
         SessionReadResponse {
-            session: state.journal.snapshot.clone(),
+            session: snapshot,
             event_seq: state.journal.snapshot.last_event_seq,
         }
     }
@@ -2304,7 +2311,7 @@ async fn executor(
             let tools = Tools::new(Arc::new(
                 executor
                     .with_memory(memory)
-                    .with_sandbox(options.sandbox && !runtime.sandbox_disabled),
+                    .with_sandbox(runtime.sandbox_override.unwrap_or(options.sandbox)),
             ))
             .with_telemetry(options.telemetry)
             .with_plan_enabled(options.plan_enabled)

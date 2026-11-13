@@ -52,6 +52,7 @@ pub fn export_protocol(directory: &Path) -> Result<(), Box<dyn std::error::Error
         StatsResponse,
         ContextResponse,
         SessionSandboxResponse,
+        SessionSandboxParams,
         McpListResponse,
         CommandRuleListResponse,
         CommandRuleDeleteResponse,

@@ -34,18 +34,32 @@ pub(crate) struct Journal {
     pub store: Arc<Store>,
     pub events: Option<broadcast::Sender<Event>>,
     pub committed: watch::Sender<u64>,
+    /// Latest live sandbox notification, retained only for stream catch-up.
+    pub sandbox_event: Arc<Mutex<Option<Event>>>,
     pub failed: bool,
 }
 impl Journal {
     pub(crate) fn ephemeral(&self, payload: EventPayload) {
         debug_assert!(payload.is_ephemeral());
+        let event = Event {
+            seq: 0,
+            session_id: self.snapshot.id.clone(),
+            timestamp: now(),
+            payload,
+        };
+        if let EventPayload::SessionSandboxUpdated { pending_enabled } = &event.payload {
+            let mut latest = self.sandbox_event.lock().unwrap();
+            if latest
+                .as_ref()
+                .is_some_and(|old| old.payload == event.payload)
+                || (latest.is_none() && pending_enabled.is_none())
+            {
+                return;
+            }
+            *latest = Some(event.clone());
+        }
         if let Some(sender) = &self.events {
-            let _ = sender.send(Event {
-                seq: 0,
-                session_id: self.snapshot.id.clone(),
-                timestamp: now(),
-                payload,
-            });
+            let _ = sender.send(event);
         }
     }
     pub fn new(store: Arc<Store>, writer: SessionWriter, telemetry: bool) -> Self {
@@ -61,6 +75,7 @@ impl Journal {
             store,
             events: Some(broadcast::channel(256).0),
             committed,
+            sandbox_event: Default::default(),
             failed: false,
         }
     }
@@ -251,6 +266,8 @@ pub struct Subscription {
     pub(crate) disk_reader: EventReader,
     pub(crate) receiver: broadcast::Receiver<Event>,
     pub(crate) committed: watch::Receiver<u64>,
+    pub(crate) sandbox_event: Arc<Mutex<Option<Event>>>,
+    pub(crate) sandbox_seen: Option<Event>,
     pub(crate) pending: VecDeque<Event>,
     pub(crate) cursor: u64,
     pub(crate) ended: bool,
@@ -270,6 +287,11 @@ impl Subscription {
         .map_err(|_| CoreError::internal())??;
         self.disk_reader = reader;
         self.pending = events.into();
+        if let Some(event) = self.sandbox_event.lock().unwrap().as_ref()
+            && self.sandbox_seen.as_ref() != Some(event)
+        {
+            self.pending.push_back(event.clone());
+        }
         Ok(())
     }
     pub async fn recv(&mut self) -> Result<Option<Event>, CoreError> {
@@ -296,6 +318,16 @@ impl Subscription {
                     }
                 }
             };
+            if matches!(event.payload, EventPayload::SessionSandboxUpdated { .. }) {
+                // A lagged queue can contain an older choice after catch-up.
+                // Always deliver the latest live value, once per subscriber.
+                let current = self.sandbox_event.lock().unwrap().clone().unwrap_or(event);
+                if self.sandbox_seen.as_ref() == Some(&current) {
+                    continue;
+                }
+                self.sandbox_seen = Some(current.clone());
+                return Ok(Some(current));
+            }
             if event.payload.is_ephemeral() {
                 return Ok(Some(event));
             }
