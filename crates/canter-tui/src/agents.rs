@@ -53,25 +53,33 @@ fn depth_label(depth: Option<AgentDepth>) -> &'static str {
     }
 }
 
-/// `quick` and `—` dim, `medium` yellow, `thorough` magenta.
+/// Dim; `thorough` bold too (11-13).
 fn depth_style(depth: Option<AgentDepth>) -> Style {
     match depth {
-        Some(AgentDepth::Medium) => theme::depth_medium(),
-        Some(AgentDepth::Thorough) => theme::depth_thorough(),
+        Some(AgentDepth::Thorough) => theme::secondary().bold(),
         _ => theme::secondary(),
     }
 }
 
 /// `●` running, `✓` completed, `✗` failed, `■` interrupted, `○` closed.
-pub(crate) fn mark(status: AgentStatus) -> Span<'static> {
+fn glyph(status: AgentStatus) -> Span<'static> {
     match status {
-        AgentStatus::Running => Span::styled("● ", theme::accent()),
-        AgentStatus::Completed => Span::styled("✓ ", theme::success()),
-        AgentStatus::Failed => Span::styled("✗ ", theme::failure()),
-        AgentStatus::Interrupted => Span::styled("■ ", theme::secondary()),
-        AgentStatus::Closed | AgentStatus::Unknown => Span::styled("○ ", theme::secondary()),
+        AgentStatus::Running => Span::styled("●", theme::accent()),
+        AgentStatus::Completed => Span::styled("✓", theme::success()),
+        AgentStatus::Failed => Span::styled("✗", theme::failure()),
+        AgentStatus::Interrupted => Span::styled("■", theme::secondary()),
+        AgentStatus::Closed | AgentStatus::Unknown => Span::styled("○", theme::secondary()),
     }
 }
+
+/// [`glyph`] and a blank.
+pub(crate) fn mark(status: AgentStatus) -> Span<'static> {
+    let glyph = glyph(status);
+    Span::styled(format!("{} ", glyph.content), glyph.style)
+}
+
+/// The most sub-agents the row under the info rows gives a mark each.
+const MOST_MARKS: usize = 10;
 
 fn count(count: usize) -> String {
     let s = if count == 1 { "" } else { "s" };
@@ -126,27 +134,30 @@ impl Agents {
             .count()
     }
 
-    /// `● 2 sub-agents running · 1 done`, or `○ 3 sub-agents` when none
-    /// runs; `None` without any.
-    pub fn row(&self) -> Option<Vec<Span<'static>>> {
+    /// `●●✓ 2 sub-agents running · 1 done`, or `✓✗✓ 3 sub-agents` when
+    /// none runs: a mark for each, oldest first (11-13). Past
+    /// [`MOST_MARKS`], or longer than `room`, one mark: `●`, or `○` when
+    /// none runs. `None` without any.
+    pub fn row(&self, room: usize) -> Option<Vec<Span<'static>>> {
         if self.list.is_empty() {
             return None;
         }
         let running = self.running();
         let done = self.list.len() - running;
-        let mut spans = match running {
-            0 => vec![
-                Span::styled("○ ", theme::secondary()),
-                Span::raw(count(done)),
-            ],
-            _ => vec![
-                Span::styled("● ", theme::accent()),
-                Span::raw(format!("{} running", count(running))),
-            ],
+        let mut text = match running {
+            0 => count(done),
+            _ => format!("{} running", count(running)),
         };
         if running > 0 && done > 0 {
-            spans.push(Span::raw(format!(" · {done} done")));
+            text.push_str(&format!(" · {done} done"));
         }
+        let fits = self.list.len() <= MOST_MARKS && self.list.len() + 1 + str_width(&text) <= room;
+        let mut spans: Vec<Span<'static>> = match running {
+            _ if fits => self.list.iter().map(|agent| glyph(agent.status)).collect(),
+            0 => vec![Span::styled("○", theme::secondary())],
+            _ => vec![Span::styled("●", theme::accent())],
+        };
+        spans.push(Span::raw(format!(" {text}")));
         Some(spans)
     }
 
@@ -212,7 +223,16 @@ impl Agents {
                 None => main_row(main_name, here.is_none(), chosen, width),
                 Some(_) => tree.row(index - 1, chosen),
             });
-            rows.push(cut(spans));
+            let mut row = cut(spans);
+            if let Some(bg) = theme::user_bg().filter(|_| chosen) {
+                // 11-13: on the sent message's grey, out to the width.
+                let blanks = width.saturating_sub(row.width());
+                row.spans.push(Span::raw(" ".repeat(blanks)));
+                for span in &mut row.spans {
+                    span.style = span.style.bg(bg);
+                }
+            }
+            rows.push(row);
         }
         rows.push(cut(vec![crate::report::keys(KEYS)]));
         rows
@@ -402,7 +422,12 @@ impl Tree {
         // shown, so the row ends with no blanks.
         let mut columns = vec![(branch.status.to_owned(), self.status, branch.style)];
         if self.time > 0 {
-            columns.push((branch.time.clone(), self.time, branch.style));
+            // Dim and right-aligned (11-13).
+            let time = match branch.time.as_str() {
+                "" => String::new(),
+                time => format!("{time:>0$}", self.time),
+            };
+            columns.push((time, self.time, dim));
         }
         if let Some(room) = self.task {
             // Underlined like a link: a click on it opens the task box.
@@ -442,14 +467,16 @@ fn pad(text: &str, width: usize) -> String {
     )
 }
 
-/// A status word and time in the list: the accent while running, green
-/// done, red failed, dim otherwise.
+/// A status word in the list: green done, red failed, dim otherwise; a
+/// running one's mark is already the accent (11-13).
 fn status_style(status: AgentStatus) -> Style {
     match status {
-        AgentStatus::Running => theme::accent(),
         AgentStatus::Completed => theme::success(),
         AgentStatus::Failed => theme::failure(),
-        AgentStatus::Interrupted | AgentStatus::Closed | AgentStatus::Unknown => theme::secondary(),
+        AgentStatus::Running
+        | AgentStatus::Interrupted
+        | AgentStatus::Closed
+        | AgentStatus::Unknown => theme::secondary(),
     }
 }
 
@@ -527,29 +554,75 @@ mod tests {
     #[test]
     fn the_row_counts_running_and_done_agents() {
         let mut agents = Agents::default();
-        assert_eq!(agents.row(), None);
+        assert_eq!(agents.row(80), None);
         agents.update(agent("a", AgentStatus::Running));
-        let row = agents.row().unwrap();
+        let row = agents.row(80).unwrap();
         assert_eq!(text(&row), "● 1 sub-agent running");
         assert_eq!(row[0].style, theme::accent());
         agents.update(agent("b", AgentStatus::Running));
         agents.update(agent("c", AgentStatus::Completed));
         assert_eq!(
-            text(&agents.row().unwrap()),
-            "● 2 sub-agents running · 1 done"
+            text(&agents.row(80).unwrap()),
+            "●●✓ 2 sub-agents running · 1 done"
         );
         assert_eq!(text(&agents.title()), " Sub-agents · 2 running · 1 done");
         agents.update(agent("a", AgentStatus::Failed));
         agents.update(agent("b", AgentStatus::Interrupted));
-        let row = agents.row().unwrap();
-        assert_eq!(text(&row), "○ 3 sub-agents");
-        assert_eq!(row[0].style, theme::secondary());
+        let row = agents.row(80).unwrap();
+        assert_eq!(text(&row), "✗■✓ 3 sub-agents");
         assert_eq!(text(&agents.title()), " Sub-agents · 3 done");
         assert_eq!(agents.list.len(), 3, "an update replaces the entry");
         agents.list.truncate(1);
-        assert_eq!(text(&agents.row().unwrap()), "○ 1 sub-agent");
+        assert_eq!(text(&agents.row(80).unwrap()), "✗ 1 sub-agent");
         agents.update(agent("d", AgentStatus::Running));
         assert_eq!(text(&agents.title()), " Sub-agents · 1 running · 1 done");
+    }
+
+    /// 11-13: a mark for each sub-agent, oldest first, coloured as in the
+    /// list; one mark as before past 10 or without the room.
+    #[test]
+    fn the_row_has_a_mark_for_each_agent_while_they_fit() {
+        let mut agents = Agents::default();
+        for (id, status) in [
+            ("a", AgentStatus::Completed),
+            ("b", AgentStatus::Running),
+            ("c", AgentStatus::Failed),
+            ("d", AgentStatus::Running),
+        ] {
+            agents.update(agent(id, status));
+        }
+        let row = agents.row(80).unwrap();
+        assert_eq!(text(&row), "✓●✗● 2 sub-agents running · 2 done");
+        let styles: Vec<Style> = row[..4].iter().map(|span| span.style).collect();
+        assert_eq!(
+            styles,
+            [
+                theme::success(),
+                theme::accent(),
+                theme::failure(),
+                theme::accent()
+            ]
+        );
+        // Without the room for the marks: one, as before.
+        let fits = str_width("✓●✗● 2 sub-agents running · 2 done");
+        assert_eq!(
+            text(&agents.row(fits).unwrap()),
+            "✓●✗● 2 sub-agents running · 2 done"
+        );
+        assert_eq!(
+            text(&agents.row(fits - 1).unwrap()),
+            "● 2 sub-agents running · 2 done"
+        );
+        // Past 10: one mark.
+        for n in 0..7 {
+            agents.update(agent(&format!("e{n}"), AgentStatus::Completed));
+        }
+        assert_eq!(
+            text(&agents.row(80).unwrap()),
+            "● 2 sub-agents running · 9 done"
+        );
+        agents.list.pop();
+        assert!(text(&agents.row(80).unwrap()).starts_with("✓●✗●✓✓✓✓✓✓ "));
     }
 
     /// The text of each row the list draws.
@@ -573,7 +646,7 @@ mod tests {
     /// after the time, the first line of the task the model wrote.
     #[test]
     fn each_row_shows_its_depth_and_the_first_line_of_its_task() {
-        use ratatui::style::{Color, Modifier};
+        use ratatui::style::Modifier;
         let mut agents = Agents::default();
         let mut a = agent("a", AgentStatus::Running);
         a.depth = Some(AgentDepth::Medium);
@@ -599,11 +672,18 @@ mod tests {
                 "   └ ✗ agent-d  explorer  quick     failed   2s  Task",
             ]
         );
-        assert_eq!(span(&rows[2], "medium").style.fg, Some(Color::Yellow));
-        assert_eq!(span(&rows[3], "thorough").style.fg, Some(Color::Magenta));
-        for (row, depth) in [(4, "—"), (5, "quick")] {
+        // 11-13: the depth dim, `thorough` bold too.
+        for (row, depth) in [(2, "medium"), (4, "—"), (5, "quick")] {
             let style = span(&rows[row], depth).style;
-            assert!(style.add_modifier.contains(Modifier::DIM), "{style:?}");
+            assert_eq!(style, theme::secondary(), "{depth}");
+        }
+        assert_eq!(span(&rows[3], "thorough").style, theme::secondary().bold());
+        // 11-13: the status coloured only done and failed; the time dim.
+        assert_eq!(span(&rows[2], "running").style, theme::secondary());
+        assert_eq!(span(&rows[3], "done").style, theme::success());
+        assert_eq!(span(&rows[5], "failed").style, theme::failure());
+        for (row, time) in [(2, "0s"), (3, "2s"), (4, "2s"), (5, "2s")] {
+            assert_eq!(span(&rows[row], time).style, theme::secondary(), "{time}");
         }
         let task = span(&rows[2], "Inspect the parser").style;
         assert!(task.add_modifier.contains(Modifier::DIM), "{task:?}");
@@ -685,5 +765,71 @@ mod tests {
         let tiny = drawn(&agents, Some("a"), 30);
         assert!(tiny.iter().all(|row| str_width(row) <= 30), "{tiny:?}");
         assert!(tiny[2].starts_with(" › ├ ● Revi"), "{tiny:?}");
+    }
+
+    /// 11-13: times right-aligned in their column.
+    #[test]
+    fn the_times_line_up_on_the_right() {
+        let mut agents = Agents::default();
+        let mut a = agent("a", AgentStatus::Completed);
+        a.duration_ms = Some(72_000);
+        agents.update(a);
+        agents.update(agent("b", AgentStatus::Failed));
+        let shown = drawn(&agents, None, 100);
+        assert_eq!(
+            shown[2],
+            "   ├ ✓ agent-a  explorer  —  done    1m 12s  Task"
+        );
+        assert_eq!(
+            shown[3],
+            "   └ ✗ agent-b  explorer  —  failed      2s  Task"
+        );
+    }
+
+    /// 11-13: the selected row on the sent message's grey, out to the
+    /// list's width; without that grey, as before.
+    #[test]
+    fn the_selected_row_lies_on_a_band() {
+        use crate::theme::{Background, Depth, Theme};
+        let mut agents = Agents::default();
+        agents.update(agent("a", AgentStatus::Running));
+        agents.update(agent("b", AgentStatus::Running));
+        agents.selected = Some(1);
+        let plain = agents.rows("Main", None, 60, 10, 0);
+        assert!(plain[2].spans.iter().all(|span| span.style.bg.is_none()));
+        assert_eq!(
+            str_width(&text(&plain[2].spans)),
+            str_width(text(&plain[2].spans).trim_end())
+        );
+        theme::set(Theme {
+            depth: Depth::TrueColor,
+            background: Background::Light,
+        });
+        let rows = agents.rows("Main", None, 60, 10, 0);
+        theme::set(Theme::default());
+        let band = rows[2]
+            .spans
+            .iter()
+            .map(|span| span.style.bg)
+            .collect::<Vec<_>>();
+        assert!(
+            band.iter().all(|bg| *bg == theme_light_user_bg()),
+            "{rows:?}"
+        );
+        assert_eq!(str_width(&text(&rows[2].spans)), 60);
+        for row in [1, 3] {
+            assert!(rows[row].spans.iter().all(|span| span.style.bg.is_none()));
+        }
+    }
+
+    fn theme_light_user_bg() -> Option<ratatui::style::Color> {
+        use crate::theme::{Background, Depth, Theme};
+        theme::set(Theme {
+            depth: Depth::TrueColor,
+            background: Background::Light,
+        });
+        let bg = theme::user_bg();
+        theme::set(Theme::default());
+        bg
     }
 }

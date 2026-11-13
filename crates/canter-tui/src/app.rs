@@ -4888,7 +4888,7 @@ impl App {
         let agents_open = self.agents.selected.is_some() && opened > 0;
         if let Some(row) = self
             .agents
-            .row()
+            .row(usize::from(width).saturating_sub(1 + str_width(TO_VIEW)))
             .filter(|_| !agents_open && footer_room > 0)
         {
             footer.push((Footer::Agents, row));

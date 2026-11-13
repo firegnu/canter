@@ -97,7 +97,7 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     let bottom = screen.iter().rposition(|row| row.starts_with('╰')).unwrap();
     assert_eq!(
         screen[bottom + 3].trim(),
-        "● 2 sub-agents running · 1 done · ↓ to view"
+        "●●✓ 2 sub-agents running · 1 done · ↓ to view"
     );
     let click = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -121,14 +121,14 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     assert!(
         has(
             &test,
-            &["│ › ├ ● agent-a  explorer  —  running  42s     Inspect"]
+            &["│ › ├ ● agent-a  explorer  —  running     42s  Inspect"]
         ),
         "{text}"
     );
     assert!(
         has(
             &test,
-            &["│   ├ ● agent-b  general   —  running  42s     Inspect"]
+            &["│   ├ ● agent-b  general   —  running     42s  Inspect"]
         ),
         "{text}"
     );
@@ -166,7 +166,7 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     assert!(
         has(
             &test,
-            &["├ ■ agent-a  explorer  —  stopped by you  5s      Inspect"]
+            &["├ ■ agent-a  explorer  —  stopped by you      5s  Inspect"]
         ),
         "{text}"
     );
@@ -193,7 +193,7 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
     assert!(
         has(
             &test,
-            &["├ ✗ agent-b  general   —  failed          9s      Inspect"]
+            &["├ ✗ agent-b  general   —  failed              9s  Inspect"]
         ),
         "{text}"
     );
@@ -203,7 +203,7 @@ async fn the_row_opens_the_list_where_s_stops_a_running_agent() {
         Some(Action::OpenAgent("b".into()))
     );
     let text = shown(&test);
-    assert!(has(&test, &["○ 3 sub-agents · ↓ to view"]), "{text}");
+    assert!(has(&test, &["■✗✓ 3 sub-agents · ↓ to view"]), "{text}");
     assert!(!text.contains("▾"), "{text}");
     test.stop().await;
 }
@@ -248,7 +248,7 @@ async fn the_list_hangs_the_sub_agents_under_the_main_session() {
         test.event(payload(json!({ "type": "agent.updated", "agent": entry })));
     }
     // The row under the info rows: a coloured mark, a dim way to open.
-    let row = "● 1 sub-agent running · 2 done · ↓ to view";
+    let row = "●✓✗ 1 sub-agent running · 2 done · ↓ to view";
     assert!(has(&test, &[row]), "{}", shown(&test));
     assert_eq!(cell(&test, row).fg, Color::Cyan);
     assert!(cell(&test, "↓ to view").modifier.contains(Modifier::DIM));
@@ -281,24 +281,29 @@ async fn the_list_hangs_the_sub_agents_under_the_main_session() {
     assert!(
         has(
             &test,
-            &["│   ├ ✓ agent-b  explorer  —  done     41s     Inspect"]
+            &["│   ├ ✓ agent-b  explorer  —  done        41s  Inspect"]
         ),
         "{text}"
     );
     assert!(
         has(
             &test,
-            &["│   └ ✗ agent-c  general   —  failed   12s     Inspect"]
+            &["│   └ ✗ agent-c  general   —  failed      12s  Inspect"]
         ),
         "{text}"
     );
     assert!(cell(&test, "├ ✓").modifier.contains(Modifier::DIM));
     assert!(cell(&test, "reviewer").modifier.contains(Modifier::DIM));
-    assert_eq!(cell(&test, "running  2m").fg, Color::Cyan);
-    assert_eq!(cell(&test, "2m 05s").fg, Color::Cyan);
-    assert_eq!(cell(&test, "done     41s").fg, Color::Green);
-    assert_eq!(cell(&test, "41s").fg, Color::Green);
-    assert_eq!(cell(&test, "failed   12s").fg, Color::Red);
+    // 11-13: the mark says running; the word and every time are dim.
+    assert_eq!(cell(&test, "├ ●").fg, Color::Reset);
+    assert_eq!(cell(&test, "● agent-a").fg, Color::Cyan);
+    for text in ["running  2m", "2m 05s", "41s", "12s"] {
+        let cell = cell(&test, text);
+        assert!(cell.modifier.contains(Modifier::DIM), "{text} {cell:?}");
+        assert_eq!(cell.fg, Color::Reset, "{text}");
+    }
+    assert_eq!(cell(&test, "done        41s").fg, Color::Green);
+    assert_eq!(cell(&test, "failed      12s").fg, Color::Red);
     assert!(!text.contains("completed"), "{text}");
 
     // Enter on the main session closes the list: it is the one on screen.
@@ -357,7 +362,7 @@ async fn t_or_a_click_on_the_task_opens_it_in_a_box_that_esc_alone_closes() {
     assert!(
         has(
             &test,
-            &["│   └ ✓ agent-b  general   —       done     9s   Inspect"]
+            &["│   └ ✓ agent-b  general   —       done      9s  Inspect"]
         ),
         "{text}"
     );

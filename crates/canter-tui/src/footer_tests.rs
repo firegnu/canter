@@ -10,7 +10,7 @@ use ratatui::style::Modifier;
 use serde_json::json;
 
 const BACKGROUND: &str = "▸ 1 background commands";
-const AGENTS: &str = "● 1 sub-agent running · 2 done";
+const AGENTS: &str = "●✓✓ 1 sub-agent running · 2 done";
 const WIDTH: u16 = 100;
 /// The info rows on these screens: with no usage yet, no second row.
 const INFO_ROWS: usize = 2;
