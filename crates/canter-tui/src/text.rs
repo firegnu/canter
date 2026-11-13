@@ -455,13 +455,20 @@ pub(crate) fn plain(text: &str) -> String {
 }
 
 /// Returns how many cells go on this row and how many to consume (the
-/// consumed count also skips the spaces at the break).
+/// consumed count also skips the spaces at the break). Next to wide (CJK)
+/// characters a row may break anywhere, except before closing punctuation
+/// or after an opening bracket: those go down with the character next to
+/// them. When nothing can move, the row is cut where it is full.
 fn break_row(cells: &[(char, Style)], room: usize) -> (usize, usize) {
     let mut used = 0;
     let mut last_break = None;
     for (i, &(c, _)) in cells.iter().enumerate() {
         let w = char_width(c);
-        if i > 0 && (w > 1 || char_width(cells[i - 1].0) > 1) {
+        if i > 0
+            && (w > 1 || char_width(cells[i - 1].0) > 1)
+            && !closes(c)
+            && !opens(cells[i - 1].0)
+        {
             last_break = Some(i);
         }
         if used + w > room {
@@ -479,6 +486,17 @@ fn break_row(cells: &[(char, Style)], room: usize) -> (usize, usize) {
         }
     }
     (cells.len(), cells.len())
+}
+
+/// Punctuation that does not start a row: Chinese closing marks, and English
+/// ones, which only meet a break next to Chinese.
+fn closes(c: char) -> bool {
+    "。，、；：？！…—）」』】》〉”’）］｝,.;:!?)]}".contains(c)
+}
+
+/// Brackets and quotes that do not end a row.
+fn opens(c: char) -> bool {
+    "（「『【《〈“‘［｛".contains(c)
 }
 
 fn trim_end(cells: &[(char, Style)], mut end: usize) -> usize {
@@ -512,4 +530,54 @@ fn group(
         }
     }
     spans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rows(text: &str, width: u16) -> Vec<String> {
+        wrap(
+            &LogicalLine::new(Vec::new(), vec![Span::raw(text.to_owned())]),
+            width,
+        )
+        .iter()
+        .map(|line| line.to_string())
+        .collect()
+    }
+
+    #[test]
+    fn closing_punctuation_takes_the_character_before_it_to_the_next_row() {
+        // `。` does not start a row: `四` goes down with it.
+        assert_eq!(rows("一二三四。", 8), ["一二三", "四。"]);
+        // Closing marks in a row move as one.
+        assert_eq!(rows("一二三四。」", 8), ["一二三", "四。」"]);
+        assert_eq!(rows("一二三四……", 8), ["一二三", "四……"]);
+        // An English mark right after Chinese counts too.
+        assert_eq!(rows("一二三四,", 8), ["一二三", "四,"]);
+        // After English text the word goes down with it.
+        assert_eq!(
+            rows("改成 cargo install。好", 16),
+            ["改成 cargo", "install。好"]
+        );
+    }
+
+    #[test]
+    fn an_opening_bracket_does_not_end_a_row() {
+        assert_eq!(rows("一二三「四」", 8), ["一二三", "「四」"]);
+        assert_eq!(rows("一二三（四）", 8), ["一二三", "（四）"]);
+    }
+
+    #[test]
+    fn rows_stay_within_the_width_when_nothing_can_move() {
+        let wrapped = rows("。。。。。", 4);
+        assert_eq!(wrapped.concat(), "。。。。。");
+        assert!(wrapped.iter().all(|row| str_width(row) <= 4), "{wrapped:?}");
+    }
+
+    #[test]
+    fn english_still_breaks_at_spaces() {
+        assert_eq!(rows("hello world, again", 12), ["hello world,", "again"]);
+        assert_eq!(rows("一二三四五六", 8), ["一二三四", "五六"]);
+    }
 }

@@ -131,8 +131,8 @@
 
 › 把 README 里的安装步骤改成 cargo install
 
-∴ 用户想把 README 的安装步骤换成 cargo install。先读 README 看现在怎么写的，再改
-  。
+∴ 用户想把 README 的安装步骤换成 cargo install。先读 README 看现在怎么写的，再
+  改。
 
 ● 先看一下 README 现在怎么写的。
 
