@@ -6,6 +6,10 @@ pub enum ErrorKind {
     Timeout,
     ContextLength,
     Authentication,
+    /// HTTP 402: the provider wants payment. Providers use it for different
+    /// things (no balance left, a plan's quota used up), so the words name
+    /// none of them.
+    PaymentRequired,
     InvalidRequest,
     IncompleteResponse,
     UnsupportedOutput,
@@ -35,6 +39,9 @@ impl ErrorKind {
             Self::Timeout => "timed out",
             Self::ContextLength => "context too long",
             Self::Authentication => "authentication failed",
+            Self::PaymentRequired => {
+                "refused for payment or quota; check the provider account's balance, plan or usage limits"
+            }
             Self::InvalidRequest => "invalid request",
             Self::IncompleteResponse => "the response did not complete; no tools were executed",
             Self::UnsupportedOutput => "this version of canter does not support the model's output",

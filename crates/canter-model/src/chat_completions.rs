@@ -253,6 +253,7 @@ async fn http_error(response: reqwest::Response) -> ModelError {
         .and_then(crate::retry::parse_retry_after);
     let mut kind = match status {
         401 | 403 => ErrorKind::Authentication,
+        402 => ErrorKind::PaymentRequired,
         400 | 422 => ErrorKind::InvalidRequest,
         408 => ErrorKind::Timeout,
         429 => ErrorKind::RateLimited,

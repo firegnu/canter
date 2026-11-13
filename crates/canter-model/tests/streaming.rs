@@ -757,6 +757,35 @@ async fn retries_rate_limit_server_and_early_disconnect_honoring_retry_after() {
     server.stop().await;
 }
 
+/// HTTP 402 says the provider wants payment, which providers use for
+/// different things: no balance left, a plan's quota or time window used
+/// up. The message names that much and where to look, not one cause
+/// (11-13: DeepSeek's 402 showed as `unexpected error (HTTP 402)`).
+#[tokio::test]
+async fn payment_required_says_to_check_the_account_and_is_not_retried() {
+    let server = Server::start(vec![Reply {
+        status: axum::http::StatusCode::PAYMENT_REQUIRED,
+        body: json!({"error":{"message":"Insufficient Balance"}}).to_string(),
+        retry_after: None,
+        hang: false,
+    }])
+    .await;
+    let client = ChatCompletions::new(&server.base_url, ApiKey::new(KEY)).unwrap();
+    let events: Vec<_> = client
+        .stream(request(), CancellationToken::new())
+        .collect()
+        .await;
+    let error = events.last().unwrap().as_ref().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Model request failed: refused for payment or quota; check the provider \
+         account's balance, plan or usage limits (HTTP 402)"
+    );
+    assert!(!error.is_retryable());
+    assert_eq!(server.requests.lock().unwrap().len(), 1);
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn errors_are_classified_retries_are_bounded_and_credentials_are_redacted() {
     use axum::http::StatusCode;
@@ -796,7 +825,7 @@ async fn errors_are_classified_retries_are_bounded_and_credentials_are_redacted(
             402,
             "insufficient_balance",
             "Insufficient balance",
-            ErrorKind::Other,
+            ErrorKind::PaymentRequired,
         ),
         (429, "rate_limit", "Slow down", ErrorKind::RateLimited),
         (503, "overloaded", "Try later", ErrorKind::Server),
