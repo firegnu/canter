@@ -1,4 +1,9 @@
-use std::{path::Path, process::Stdio, time::Duration};
+use std::{
+    path::Path,
+    process::Stdio,
+    sync::LazyLock,
+    time::{Duration, SystemTime},
+};
 
 use canter_protocol::{InfoResponse, PROTOCOL_VERSION};
 use reqwest::Client;
@@ -18,16 +23,24 @@ pub async fn discover(home: &Path) -> Result<Option<Connection>, ServerError> {
     discover_during_replacement(home, None).await
 }
 
+/// When this process first looked for a server; a client does that as it starts.
+static CLIENT_STARTED: LazyLock<SystemTime> = LazyLock::new(SystemTime::now);
+
 async fn discover_during_replacement(
     home: &Path,
     retiring: Option<&str>,
 ) -> Result<Option<Connection>, ServerError> {
+    let client_started = *CLIENT_STARTED;
     let directory = home.to_path_buf();
-    let registration = tokio::task::spawn_blocking(move || {
+    let (registration, registered) = tokio::task::spawn_blocking(move || {
         if !lifecycle::server_running(&directory)? {
-            return Ok(None);
+            return Ok((None, None));
         }
-        lifecycle::read_registration(&directory)
+        // A server writes server.json once, when it starts.
+        let registered = std::fs::metadata(directory.join("server.json"))
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        Ok::<_, ServerError>((lifecycle::read_registration(&directory)?, registered))
     })
     .await
     .map_err(|_| ServerError("failed to read the server registration".into()))??;
@@ -84,12 +97,7 @@ async fn discover_during_replacement(
                 .into(),
         ));
     }
-    let version_warning = (registration.version != VERSION).then(|| {
-        format!(
-            "Server version is {}, client version is {}; still using the old server. To upgrade, run canter serve --replace",
-            registration.version, VERSION
-        )
-    });
+    let version_warning = version_warning(&registration.version, registered, client_started);
     Ok(Some(Connection {
         registration,
         client,
@@ -279,5 +287,63 @@ fn startup_error(home: &Path) -> String {
     match last_line {
         Some(line) => format!("the server did not start: {line}"),
         None => "the server did not start; check server.log in the state directory".into(),
+    }
+}
+
+/// Warn when the server and this client were built from different versions. Whichever
+/// started later is the newer one, since an upgrade installs first and replaces the server.
+fn version_warning(
+    server_version: &str,
+    server_registered: Option<SystemTime>,
+    client_started: SystemTime,
+) -> Option<String> {
+    if server_version == VERSION {
+        return None;
+    }
+    Some(
+        if server_registered.is_some_and(|registered| registered > client_started) {
+            format!(
+                "Server version is {server_version}, client version is {VERSION}; this client started before the server was replaced. Reopen it to use the new client"
+            )
+        } else {
+            format!(
+                "Server version is {server_version}, client version is {VERSION}; still using the old server. To upgrade, run canter serve --replace"
+            )
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_warning_names_the_side_that_started_first() {
+        let client = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        assert_eq!(version_warning(VERSION, Some(client), client), None);
+
+        // The server was replaced after this client started: the client is the old one.
+        let newer_server = version_warning(
+            "0.1.0 · new",
+            Some(client + Duration::from_secs(12)),
+            client,
+        )
+        .unwrap();
+        assert_eq!(
+            newer_server,
+            format!(
+                "Server version is 0.1.0 · new, client version is {VERSION}; this client started before the server was replaced. Reopen it to use the new client"
+            )
+        );
+
+        // The server was already running when this client started: the server is the old one.
+        for registered in [Some(client - Duration::from_secs(60)), None] {
+            assert_eq!(
+                version_warning("0.1.0 · old", registered, client).unwrap(),
+                format!(
+                    "Server version is 0.1.0 · old, client version is {VERSION}; still using the old server. To upgrade, run canter serve --replace"
+                )
+            );
+        }
     }
 }
