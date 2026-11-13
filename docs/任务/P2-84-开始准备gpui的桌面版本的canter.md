@@ -19,3 +19,7 @@
 - 主控建了 `~/Developer/personal_projs/canter-desktop`（GitHub 私有仓库 `firegnu/canter-desktop`），只放了一份 `AGENTS.md`：目标（基础版到功能对齐）、协议来源（git 依赖固定提交引用 `canter-protocol`）、测试用临时 `CANTER_HOME` 和假模型、不改 canter 仓库（缺接口记进那边的 `docs/canter需求.md` 交用户）、会话环境变量怎么拿先问用户。具体怎么做由 canter 自己定；没提 paddock 的代码（canter 卡住来问再说）。
 - 那边提来的接口需求，回到本仓库当一件活来做。用户用 canter 做那个项目时碰到的模型做事失败，按 DESIGN「用 eval 来改」第 2 条攒成 eval 题。
 - 11-11 用户：不给 canter 接 cairn，「正好测试canter的记忆功能」；又说「记住这个不仅仅是测试哦，还是做真实任务的」。canter-desktop 首先是要交付能用的客户端，其次才是检验 canter 的能力和记忆。canter 卡住时可以帮（比如指给它 paddock 的 GPUI 输入框），但不替它做。
+
+## 11-13 收尾
+
+- 11-13 用户：「我觉得p2-84可以done了。因为新开了repo去做这个。」客户端在 canter-desktop 仓库（`firegnu/canter-desktop`）做，本仓库这件收尾；那边提来的接口需求照旧回本仓库当一件活来做。
