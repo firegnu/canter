@@ -741,6 +741,25 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "session.sandboxUpdated"
+            },
+            "pendingEnabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "Live sandbox selection, never persisted or used as a replay cursor."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "session.promptSuggestion"
             },
             "turnId": {
@@ -3976,6 +3995,25 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "session.sandboxUpdated"
+            },
+            "pendingEnabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "Live sandbox selection, never persisted or used as a replay cursor."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "session.promptSuggestion"
             },
             "turnId": {
@@ -4807,6 +4845,13 @@
     "SessionSnapshot": {
       "type": "object",
       "properties": {
+        "sandboxPending": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Live-only next-turn sandbox state; never restored from stored events."
+        },
         "parent": {
           "anyOf": [
             {
@@ -6331,6 +6376,12 @@
         "enabled": {
           "type": "boolean"
         },
+        "pendingEnabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "writable": {
           "type": "array",
           "items": {
@@ -6365,6 +6416,22 @@
         "enabled"
       ],
       "description": "GET /v1/sessions/{id}/sandbox: what this session's model commands may touch\nnow, worked out on each request. Only `enabled` is meaningful when false."
+    },
+    "SessionSandboxParams": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "description": "Change only this opening's sandbox choice, effective from the next turn."
     },
     "McpListResponse": {
       "type": "object",

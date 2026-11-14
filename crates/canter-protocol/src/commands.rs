@@ -617,6 +617,16 @@ pub struct SessionUpdateParams {
     pub approval_policy: Option<PermissionMode>,
 }
 
+/// Change only this opening's sandbox choice, effective from the next turn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSandboxParams {
+    pub enabled: bool,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub confirmed: bool,
+}
+
 macro_rules! command_response {
     ($($name:ident),+ $(,)?) => {$(
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

@@ -214,7 +214,7 @@ impl App {
         sandbox_disabled: bool,
     ) -> RuntimeContext {
         RuntimeContext {
-            sandbox_disabled,
+            sandbox_override: sandbox_disabled.then_some(false),
             memory_home: Some(self.home.clone()),
             restricted_mode,
             lsp_file_access: Some(crate::trust::file_access(self.home.clone())),
@@ -345,7 +345,7 @@ fn router_with_accounts(app: Arc<App>, accounts: Router) -> Router {
         .route(routes::SKILLS, get(skills))
         .route(routes::ROLES, get(roles))
         .route(routes::CONTEXT, get(context))
-        .route(routes::SANDBOX, get(sandbox))
+        .route(routes::SANDBOX, get(sandbox).post(set_sandbox))
         .route(routes::BTW, post(btw))
         .route(routes::HANDOFF, post(handoff))
         .route(routes::RESUME, post(resume))
@@ -482,6 +482,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
     Ok(Json(InfoResponse {
         features: Some(vec![
             "sessionSandbox".into(),
+            "sessionSandboxSwitch".into(),
             "managedClients".into(),
             "accounts".into(),
             "doctor".into(),
@@ -952,6 +953,15 @@ async fn sandbox(
     ApiPath(SessionPath { id }): ApiPath<SessionPath>,
 ) -> Result<Json<SessionSandboxResponse>, ApiError> {
     Ok(Json(app.session(&id).await?.sandbox().await))
+}
+
+async fn set_sandbox(
+    State(app): State<Arc<App>>,
+    ApiPath(SessionPath { id }): ApiPath<SessionPath>,
+    params: Result<Json<SessionSandboxParams>, JsonRejection>,
+) -> Result<Json<SessionUpdateResponse>, ApiError> {
+    let params = body(params)?;
+    Ok(Json(app.session(&id).await?.set_sandbox(params).await?))
 }
 
 async fn skills(

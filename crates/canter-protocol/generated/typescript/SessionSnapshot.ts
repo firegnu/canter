@@ -14,7 +14,11 @@ import type { SessionStatus } from "./SessionStatus";
 import type { TokenUsage } from "./TokenUsage";
 import type { Turn } from "./Turn";
 
-export type SessionSnapshot = { parent?: SessionParent, agent?: AgentState, languageServers?: Array<LanguageServer>, id: string, goal?: SessionGoal, settings: SessionSettings, status: SessionStatus,
+export type SessionSnapshot = {
+/**
+ * Live-only next-turn sandbox state; never restored from stored events.
+ */
+sandboxPending?: boolean, parent?: SessionParent, agent?: AgentState, languageServers?: Array<LanguageServer>, id: string, goal?: SessionGoal, settings: SessionSettings, status: SessionStatus,
 /**
  * Why the session is closed; absent for open sessions and legacy data.
  */

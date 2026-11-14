@@ -75,3 +75,12 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：实现 `/sandbox on|off`，关闭须在 `Turn off sandbox?` 确认框按 Enter，Esc 取消；服务端也拒绝未确认的关闭请求。运行态以 `Option<bool>` 表达按配置／强制开／强制关，切换只记选择，下一轮边界才换执行器；配置关闭时仍能强制开，不改权限档或配置。普通重开清掉选择，`--yolo` 保留原有打开参数语义。已有子 agent 和后台命令保持原范围，新建子 agent 继承新选择。
+- 多终端与协议：新增 `sessionSandboxSwitch`、沙箱 POST 请求、快照 `sandboxPending`、查询 `pendingEnabled` 和不落盘的 `session.sandboxUpdated` 通知；已同步 DESIGN 第 8 条、配置重载说明、TUI README 和生成的 JSON Schema／TypeScript。断线重连、慢终端补读时发送最新内存状态，不改变持久事件游标。状态栏使用 `Sandbox on → off next turn`／`▲ Sandbox off → on next turn`；弹框使用 `Switch to on/off scheduled for next turn. Current work keeps its original sandbox state.`，已打开的弹框随实时通知刷新。仅参考仓库已有的 Codex `rust-v0.163.0` 协议对照，没有搬代码。
+- 验证了什么：先跑新切换测试，旧服务端拒绝请求，确认 RED；先跑终端确认测试，旧版提示 `/sandbox takes no arguments`，确认 RED，再实现到 GREEN。后续补了慢终端测试，复现旧通知覆盖最新选择后修复。实际命令测试覆盖当前轮不变、下一轮执行器变化、同时运行的另一会话不变、强制开启、配置重载、打开中及关闭后重开、旧／新子 agent、后台命令、未确认拒绝、双终端及重连、权限档不变和选择不落盘。最终 `cargo nextest run -p canter-core -p canter-protocol -p canter-server -p canter-tui --no-fail-fast --status-level fail --final-status-level fail`：1534 通过，28 按现有规则跳过；`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 通过。使用本机假模型、临时目录和隔离状态，真实模型调用 0 次；编译均用 `.target/p2-289`，命令均在前台等到结束。
+- 主控决定（2026-11-13）：发现原 `set_sandbox_disabled` 立即换工具后先停下汇报；主控明确选①——只记录会话待生效选择，下一轮换执行器；当前轮、已运行子 agent 和后台命令保持原状态，切换后新子 agent 读新选择；多终端、`/sandbox` 和状态栏须说明下一轮生效；重开回到配置。按此实现，英文写法如上。没有尚待主控决定的事。
+- 没做的事：没有改配置项、权限档轮换或其他会话，没有把选择存盘，没有调用真实模型、接触用户 `~/.canter`、录屏、安装或重启用户服务，没有跑仓库全套、合并 main 或推送。`crates/canter` 最终无改动，因此按任务范围验证四个包。
+- 踩过的坑：后台命令测试起初误带 shell 不支持的 `wakeOnExit`，修正后又发现“文件存在”早于写完，改为等待命令完成再断言内容；内部运行态字段替换误碰到两个 CLI 示例的协议字段，编译发现后撤回了那两处修改。首次给所有新订阅加空的沙箱通知破坏了原持久事件顺序测试，改为仅保留真实变化的内存通知，并补了队列积压恢复；帮助页另有一份旧文案断言，一并同步。没有删除测试、放宽断言或缩短超时。

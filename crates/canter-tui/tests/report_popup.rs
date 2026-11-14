@@ -520,6 +520,7 @@ fn sandbox_lists_what_it_allows_or_how_to_turn_it_on() {
     assert_eq!(screen.enter("/sandbox"), Some(Action::Sandbox));
     let mut report = SessionSandboxResponse {
         enabled: true,
+        pending_enabled: None,
         writable: [
             "/Users/me/project",
             "/Users/me/extra",
@@ -559,6 +560,23 @@ fn sandbox_lists_what_it_allows_or_how_to_turn_it_on() {
         ]
     );
     assert_eq!(screen.style(" Sandbox · on").1, Modifier::BOLD);
+    screen.event(json!({"type":"session.sandboxUpdated","pendingEnabled":false}));
+    screen.draw();
+    assert!(
+        screen
+            .rows()
+            .join("\n")
+            .contains("Sandbox on → off next turn")
+    );
+    assert!(
+        screen
+            .popup(" Sandbox · on")
+            .join("\n")
+            .contains("Switch to off scheduled for next turn.")
+    );
+    screen.event(json!({"type":"session.sandboxUpdated","pendingEnabled":null}));
+    screen.draw();
+    assert!(!screen.rows().join("\n").contains("next turn"));
     screen.key(KeyCode::Esc);
     assert!(screen.popup(" Sandbox · on").is_empty());
     // After switching to Allow all the server reports the network open.
@@ -583,8 +601,7 @@ fn sandbox_lists_what_it_allows_or_how_to_turn_it_on() {
         [
             " Sandbox · off",
             "",
-            " Start canter without --yolo to follow config.json.",
-            " Set \"sandbox\": true in config.json (or remove the line), then run canter serve --replace.",
+            " Use /sandbox on to enable it for the next turn.",
             "",
             " Esc close",
         ]

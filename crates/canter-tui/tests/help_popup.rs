@@ -62,7 +62,10 @@ const COMMANDS: [(&str, &str); 38] = [
     ),
     ("/rewind", "Rewind conversation, files, or both"),
     ("/roles", "List built-in and custom sub-agent roles"),
-    ("/sandbox", "Show what the sandbox allows"),
+    (
+        "/sandbox",
+        "Show sandbox scope, or switch on/off for the next turn",
+    ),
     ("/skills", "List this session's skills"),
     ("/statusline", "Choose and order what the status line shows"),
     ("/stop", "Stop all background commands in this session"),

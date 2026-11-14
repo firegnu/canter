@@ -44,11 +44,19 @@ Environment 是会话打开时固定的目录、仓库根、系统/架构和本�
 - `/skills`：第一行 `Skills · N · global X · project Y`，按 Global（`~/.agents/skills`）、Project（`.agents/skills`）分节，
   没有的节不写。名字用强调色，不给模型用的在同一行灰色写 `not for model`；描述另起一行，灰色，最多两行，超出用 `…` 截。
   没技能时写原来那四行说明：两个目录放在哪、放好后重新打开会话。
-- `/sandbox`（P2-166）：只看不改，内容向服务端现取（`GET /v1/sessions/{id}/sandbox`），家目录写成 `~`。开着时标题 `Sandbox · on`，下面
-  `Writable:`（cwd、新增目录、会话临时目录、两个缓存）、`Read-only: .git config and hooks, ...`、`No access:`、
-  `Network:`（「全部允许」是 `on (Allow all)`，另两档 `off unless approved for one command`，切权限档后重开即变）、
-  `Not sandboxed: ! commands, MCP tools, web_fetch` 各一行，长了折行。关着时标题 `Sandbox · off`，下面一句怎么打开。
-  服务端没报沙箱状态（旧版）时不弹框，对话里写 `This server does not support /sandbox; run canter serve --replace and retry`。
+- `/sandbox` (P2-166, P2-289): show the current executor's scope from `GET /v1/sessions/{id}/sandbox`.
+  The title is `Sandbox · on` or `Sandbox · off`. Paths under the home directory use `~`.
+  When enabled, list Writable, Read-only, No access, Network, and `Not sandboxed: ! commands, MCP tools, web_fetch`.
+  `/sandbox on` enables the sandbox even if configuration disables it. `/sandbox off` opens `Turn off sandbox?`;
+  Enter confirms and Esc cancels. Only this session changes; permissions and config.json stay unchanged.
+  Changes apply from the next turn. Current work, existing sub-agents and background commands keep their original scope;
+  new sub-agents inherit the selected state. Reopening the session returns to configuration (or the opening's `--yolo`).
+  While pending, the status bar shows `Sandbox on → off next turn` or `▲ Sandbox off → on next turn`;
+  the popup adds `Switch to on/off scheduled for next turn. Current work keeps its original sandbox state.`
+  Connected terminals receive the same live state; an open popup refreshes when it changes.
+  Switching requires the `sessionSandboxSwitch` feature and uses `POST /v1/sessions/{id}/sandbox` with
+  `{enabled, confirmed}`. Older servers show `This server does not support /sandbox on|off; run canter serve --replace and retry`.
+  A server without sandbox status also rejects the read-only command with the existing upgrade hint.
 - `/usage`：标题 `Usage`，下面是本会话按模型分的表（列和以前一样：Model、Cache hit、Cache miss、Output、Cost (USD)，最后一行 Total），
   token 数照 `/context` 写成 `340k`、`1.2M`。只用 ChatGPT 套餐时 Cost 写 `ChatGPT plan`，混合时写 `$0.12 + ChatGPT plan`，
   别家有未知金额时写 `$0.12+? + ChatGPT plan`；有套餐用量时表下加 `ChatGPT plan usage: https://chatgpt.com/settings/usage`，

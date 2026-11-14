@@ -400,7 +400,7 @@ impl Session {
             child.set_configuration_source(source.clone(), runtime.revision);
         }
         child
-            .set_sandbox_disabled(runtime.context.sandbox_disabled, runtime.options.sandbox)
+            .set_sandbox_override(runtime.context.sandbox_override, runtime.options.sandbox)
             .await?;
         self.attach_agent(&child).await?;
         Ok(child)

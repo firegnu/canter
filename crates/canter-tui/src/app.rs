@@ -173,6 +173,10 @@ pub enum Action {
     Context,
     /// `/sandbox`: read what the sandbox allows from the server.
     Sandbox,
+    /// User-selected sandbox state; disabling has already been confirmed.
+    SetSandbox {
+        enabled: bool,
+    },
     Mcp,
     Btw {
         id: usize,
@@ -705,6 +709,7 @@ pub struct App {
     theme_missing: Option<String>,
     /// `/context`, `/files`, `/mcp` or `/skills`, open above the input box.
     report: Option<crate::report::Report>,
+    sandbox_report: Option<canter_protocol::SessionSandboxResponse>,
     doctor_open: bool,
     background_view: Option<u64>,
     /// `/lsp`, and the report it was open as: open while that is open.
@@ -1066,6 +1071,7 @@ impl App {
             themes_dir: None,
             theme_missing: None,
             report: None,
+            sandbox_report: None,
             doctor_open: false,
             background_view: None,
             lsp: None,
@@ -1166,6 +1172,15 @@ impl App {
                 return;
             }
             match &event.payload {
+                EventPayload::SessionSandboxUpdated { pending_enabled } => {
+                    self.snapshot.sandbox_pending = *pending_enabled;
+                    if self.report.is_some()
+                        && let Some(report) = &mut self.sandbox_report
+                    {
+                        report.pending_enabled = *pending_enabled;
+                        self.report = Some(crate::commands::sandbox(report, self.home.as_deref()));
+                    }
+                }
                 EventPayload::SessionPromptSuggestion { turn_id, text } => {
                     let current = match (turn_id, self.snapshot.turns.last()) {
                         (None, None) => true,
@@ -2721,6 +2736,25 @@ impl App {
 
     pub fn show_sandbox(&mut self, report: &canter_protocol::SessionSandboxResponse) {
         self.open_report(crate::commands::sandbox(report, self.home.as_deref()));
+        self.sandbox_report = Some(report.clone());
+    }
+
+    pub(crate) fn sandbox_popup(&self) -> Option<u64> {
+        (self.report.is_some() && self.sandbox_report.is_some()).then_some(self.choosers)
+    }
+
+    pub(crate) fn refresh_sandbox(
+        &mut self,
+        chooser: u64,
+        report: canter_protocol::SessionSandboxResponse,
+    ) {
+        if self.sandbox_popup() == Some(chooser)
+            && report.pending_enabled == self.snapshot.sandbox_pending
+            && Some(report.enabled) == self.snapshot.settings.sandbox_enabled
+        {
+            self.report = Some(crate::commands::sandbox(&report, self.home.as_deref()));
+            self.sandbox_report = Some(report);
+        }
     }
 
     pub fn show_goal(&mut self, goal: Option<&canter_protocol::SessionGoal>) {
@@ -2754,6 +2788,7 @@ impl App {
 
     /// Opens `report` above the input box, numbered like a choice.
     fn open_report(&mut self, report: crate::report::Report) {
+        self.sandbox_report = None;
         self.background_view = None;
         self.doctor_open = false;
         self.choosers += 1;
@@ -6518,7 +6553,7 @@ impl App {
                 };
                 // Servers that do not say leave it out: never shown as on.
                 if let Some(enabled) = settings.sandbox_enabled {
-                    spans.extend(bar::sandbox(enabled));
+                    spans.extend(bar::sandbox(enabled, self.snapshot.sandbox_pending));
                 }
                 Some(spans)
             }

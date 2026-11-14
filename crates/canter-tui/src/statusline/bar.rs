@@ -125,13 +125,18 @@ const DOT: &str = " · ";
 /// What the permission item adds after the mode when the server says whether
 /// the sandbox is on: ` · Sandbox on`, or `▲ Sandbox off` in red as
 /// `▲ Allow all`.
-pub(crate) fn sandbox(enabled: bool) -> [Span<'static>; 2] {
+pub(crate) fn sandbox(enabled: bool, pending: Option<bool>) -> [Span<'static>; 2] {
+    let label = if enabled { SANDBOX_ON } else { SANDBOX_OFF };
+    let label = match pending {
+        Some(next) => format!("{label} → {} next turn", if next { "on" } else { "off" }),
+        None => label.to_owned(),
+    };
     [
         Span::styled(DOT, theme::secondary()),
         if enabled {
-            Span::styled(SANDBOX_ON, theme::secondary())
+            Span::styled(label, theme::secondary())
         } else {
-            Span::styled(SANDBOX_OFF, theme::failure())
+            Span::styled(label, theme::failure())
         },
     ]
 }
@@ -199,9 +204,11 @@ impl Bar {
         if let Some(value) = self.value(values, Item::Permission) {
             // The sandbox state goes on its own: in full or not at all.
             let sandbox = value.len() > 2
-                && value
-                    .last()
-                    .is_some_and(|span| [SANDBOX_ON, SANDBOX_OFF].contains(&span.content.as_ref()));
+                && value.last().is_some_and(|span| {
+                    [SANDBOX_ON, SANDBOX_OFF]
+                        .iter()
+                        .any(|label| span.content.starts_with(label))
+                });
             mode_at = Some(items.len());
             if sandbox {
                 let (mode, sandbox) = value.split_at(value.len() - 2);

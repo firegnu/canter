@@ -47,6 +47,16 @@ pub(crate) struct Runtime {
     pub retired_tools: Vec<Tools>,
 }
 
+impl Runtime {
+    pub(crate) fn pending_sandbox(&self) -> Option<bool> {
+        let enabled = self
+            .context
+            .sandbox_override
+            .unwrap_or(self.options.sandbox);
+        (enabled != self.tools.sandbox_enabled()).then_some(enabled)
+    }
+}
+
 impl Session {
     /// Reconcile an idle session with current model capabilities, retaining the
     /// cursor before the warning so the resuming client receives it.
@@ -58,8 +68,10 @@ impl Session {
             self.shared.next_options()
         };
         let message = state.reconcile_reasoning(&options).await?;
+        let mut snapshot = state.journal.snapshot.clone();
+        snapshot.sandbox_pending = self.shared.runtime().pending_sandbox();
         let response = canter_protocol::SessionReadResponse {
-            session: state.journal.snapshot.clone(),
+            session: snapshot,
             event_seq: state.journal.snapshot.last_event_seq,
         };
         if let Some(message) = message {
@@ -78,40 +90,53 @@ impl Session {
         disabled: bool,
         configured: bool,
     ) -> Result<(), CoreError> {
+        self.set_sandbox_override(disabled.then_some(false), configured)
+            .await
+    }
+
+    pub(crate) async fn set_sandbox_override(
+        &self,
+        selection: Option<bool>,
+        configured: bool,
+    ) -> Result<(), CoreError> {
         let mut state = self.shared.state.lock().await;
         let mut runtime = (*self.shared.runtime()).clone();
-        runtime.context.sandbox_disabled = disabled;
+        runtime.context.sandbox_override = selection;
         runtime.options.sandbox = configured;
-        let enabled = runtime.options.sandbox && !disabled;
-        if runtime.tools.sandbox_enabled() != enabled {
-            let tools = sandbox_tools(&state, &runtime.context, &runtime.tools, enabled).await?;
-            tools.configure_shell(
-                state.approval_policy(),
-                &state.journal.snapshot.settings.additional_directories,
-            );
-            state.refresh_tools(&tools).await?;
-            if !runtime
-                .tools
-                .background()
-                .list()
-                .iter()
-                .any(|command| command.running)
-            {
-                runtime.retired_tools.clear();
-            }
-            runtime.retired_tools.push(runtime.tools);
-            runtime.tools = tools;
-            let mut settings = state.journal.snapshot.settings.clone();
-            settings.sandbox_enabled = Some(enabled);
-            state
-                .journal
-                .append(vec![canter_protocol::EventPayload::SessionUpdated {
-                    settings,
-                }])
-                .await?;
+        if state.active.is_none() {
+            apply_sandbox(&mut state, &mut runtime).await?;
         }
+        state
+            .journal
+            .ephemeral(canter_protocol::EventPayload::SessionSandboxUpdated {
+                pending_enabled: runtime.pending_sandbox(),
+            });
         *self.shared.runtime.write().unwrap() = Arc::new(runtime);
         Ok(())
+    }
+
+    pub async fn set_sandbox(
+        &self,
+        params: canter_protocol::SessionSandboxParams,
+    ) -> Result<canter_protocol::SessionUpdateResponse, CoreError> {
+        if !params.enabled && !params.confirmed {
+            return Err(CoreError::new(
+                canter_protocol::ErrorCode::InvalidRequest,
+                "Turning off the sandbox requires confirmation",
+            ));
+        }
+        let state = self.shared.state.lock().await;
+        let mut runtime = (*self.shared.runtime()).clone();
+        runtime.context.sandbox_override = Some(params.enabled);
+        state
+            .journal
+            .ephemeral(canter_protocol::EventPayload::SessionSandboxUpdated {
+                pending_enabled: runtime.pending_sandbox(),
+            });
+        *self.shared.runtime.write().unwrap() = Arc::new(runtime);
+        Ok(canter_protocol::SessionUpdateResponse {
+            event_seq: state.journal.snapshot.last_event_seq,
+        })
     }
 
     /// Attach immediately after creating or opening the session, using the
@@ -175,6 +200,9 @@ impl Shared {
         state: &mut State,
     ) -> Result<Option<Arc<dyn Send + Sync>>, CoreError> {
         let Some(source) = self.configuration.get() else {
+            let mut runtime = (*self.runtime()).clone();
+            apply_sandbox(state, &mut runtime).await?;
+            *self.runtime.write().unwrap() = Arc::new(runtime);
             let runtime = self.runtime();
             state
                 .refresh_roles(&runtime.options, &runtime.tools)
@@ -183,7 +211,7 @@ impl Shared {
         };
         let config = source.snapshot();
         let ready = config.revision.is_some();
-        let lease = self.apply_configuration(state, config).await?;
+        let lease = self.apply_configuration(state, config, true).await?;
         let runtime = self.runtime();
         state
             .refresh_roles(&runtime.options, &runtime.tools)
@@ -221,7 +249,9 @@ impl Shared {
         if cancel.is_cancelled() {
             return Ok(());
         }
-        let lease = self.apply_configuration(&mut state, config).await?;
+        // The turn was registered with its sandbox before acquiring services.
+        // A choice made during that wait belongs to the following turn.
+        let lease = self.apply_configuration(&mut state, config, false).await?;
         let runtime = self.runtime();
         state
             .refresh_roles(&runtime.options, &runtime.tools)
@@ -238,12 +268,18 @@ impl Shared {
         &self,
         state: &mut State,
         mut config: Configuration,
+        apply_pending_sandbox: bool,
     ) -> Result<Arc<dyn Send + Sync>, CoreError> {
         let old = self.runtime();
         if state.journal.snapshot.parent.is_some() {
             config.options.sandbox = old.options.sandbox;
         }
         if config.revision.is_some() && old.revision == config.revision {
+            let mut runtime = (*old).clone();
+            if apply_pending_sandbox {
+                apply_sandbox(state, &mut runtime).await?;
+            }
+            *self.runtime.write().unwrap() = Arc::new(runtime);
             return Ok(config.lease);
         }
         let mut context = old.context.clone();
@@ -275,7 +311,11 @@ impl Shared {
         {
             retired_tools.clear();
         }
-        let sandbox = config.options.sandbox && !context.sandbox_disabled;
+        let sandbox = if apply_pending_sandbox {
+            context.sandbox_override.unwrap_or(config.options.sandbox)
+        } else {
+            old.tools.sandbox_enabled()
+        };
         if old.tools.sandbox_enabled() != sandbox {
             retired_tools.push(old.tools.clone());
             tools = sandbox_tools(state, &context, &tools, sandbox).await?;
@@ -367,6 +407,11 @@ impl Shared {
             context,
             retired_tools,
         });
+        state
+            .journal
+            .ephemeral(canter_protocol::EventPayload::SessionSandboxUpdated {
+                pending_enabled: self.runtime().pending_sandbox(),
+            });
         Ok(config.lease)
     }
 }
@@ -395,6 +440,43 @@ impl State {
         }
         Ok(message)
     }
+}
+
+async fn apply_sandbox(state: &mut State, runtime: &mut Runtime) -> Result<(), CoreError> {
+    let Some(enabled) = runtime.pending_sandbox() else {
+        return Ok(());
+    };
+    let tools = sandbox_tools(state, &runtime.context, &runtime.tools, enabled).await?;
+    tools.configure_shell(
+        state.approval_policy(),
+        &state.journal.snapshot.settings.additional_directories,
+    );
+    state.refresh_tools(&tools).await?;
+    let mut settings = state.journal.snapshot.settings.clone();
+    settings.sandbox_enabled = Some(enabled);
+    state
+        .journal
+        .append(vec![canter_protocol::EventPayload::SessionUpdated {
+            settings,
+        }])
+        .await?;
+    if !runtime
+        .tools
+        .background()
+        .list()
+        .iter()
+        .any(|command| command.running)
+    {
+        runtime.retired_tools.clear();
+    }
+    runtime.retired_tools.push(runtime.tools.clone());
+    runtime.tools = tools;
+    state
+        .journal
+        .ephemeral(canter_protocol::EventPayload::SessionSandboxUpdated {
+            pending_enabled: None,
+        });
+    Ok(())
 }
 
 async fn sandbox_tools(

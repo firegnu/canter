@@ -50,8 +50,8 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 #[derive(Clone, Default)]
 pub struct RuntimeContext {
-    /// This opening disables the sandbox even when server configuration enables it.
-    pub sandbox_disabled: bool,
+    /// This opening overrides server configuration; None follows configuration.
+    pub sandbox_override: Option<bool>,
     /// Server-owned state directory; embedded callers opt in explicitly.
     pub memory_home: Option<PathBuf>,
     pub restricted_mode: bool,
