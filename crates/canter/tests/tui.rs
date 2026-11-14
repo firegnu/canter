@@ -3270,10 +3270,11 @@ async fn slash_compact_during_an_answer_shows_the_server_error() {
     world.start_server().await;
     let a = world.open(&["--yolo", "睡一会"], "canter-tui a").await;
     a.wait_until("the command running", |a| {
-        // The command's own row (P2-197) is above the status line.
+        // The command card's title while it is on screen (11-13: the extra
+        // P2-197 row above the status line only shows once the title scrolls away).
         a.screen()
             .lines()
-            .any(|line| line.starts_with("   Running sleep 5"))
+            .any(|line| line.starts_with("• Running sleep 5"))
             && a.status().contains("Ctrl+B to run in background")
     })
     .await;
@@ -3633,10 +3634,11 @@ async fn btw_is_private_streams_and_escape_cancels_it_before_the_main_tool() {
     world.start_server().await;
     let a = world.open(&["--yolo", "start tool"], "btw-a").await;
     a.wait_until("running tool", |a| {
-        // The command's own row (P2-197) is above the status line.
+        // The command card's title while it is on screen (11-13: the extra
+        // P2-197 row above the status line only shows once the title scrolls away).
         a.screen()
             .lines()
-            .any(|line| line.starts_with("   Running sleep 60"))
+            .any(|line| line.starts_with("• Running sleep 60"))
             && a.status().contains("Ctrl+B to run in background")
     })
     .await;
