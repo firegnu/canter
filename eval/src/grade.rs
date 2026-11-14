@@ -38,9 +38,8 @@ pub fn grade(
 ) -> Result<CheckFile> {
     let state = crate::paths::State::load(home, round, run)?;
     let task = state.task()?;
-    // A task with `[[chat]]` is judged on what the session did: turns, tools,
-    // replies and sub-agents. Checks read it from the run directory.
-    if !task.chats.is_empty() {
+    // Single-session checks can inspect replies and tools even without chat.
+    if task.session_count() == 1 {
         match write_session_data(home, &state) {
             Ok(path) => {
                 writeln!(out, "session data: {}", path.display())

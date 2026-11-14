@@ -3877,11 +3877,13 @@ async fn prepare_trust_finish_grade_and_clean_a_task_without_a_main_repository()
     let pi_base = simple_repo(&pi, "pi base");
     let source = source_config(temp.path());
     let worktrees = temp.path().join("worktrees");
-    write_local_config_repos(
+    let canter = fake_canter(temp.path(), &stats_for("s-sub", 0, 0, 0, 0.0));
+    write_local_config_canter(
         &home,
         &[("codex", &codex), ("pi-mono", &pi)],
         &source,
         &worktrees,
+        &canter.display().to_string(),
     );
     let tasks = outside_task(temp.path(), &codex_base, &pi_base);
 
@@ -4932,6 +4934,131 @@ fn answer_facts_checks_number_boundaries_and_millisecond_forms() {
 
 #[test]
 fn grade_writes_the_session_data_for_chat_tasks() {
+    grade_writes_session_data(&[("turn", "好的，谢谢")]);
+}
+
+#[test]
+fn design_preview_tasks_prepare_and_grade_delivered_files() {
+    for name in ["design-preview", "design-preview-chrome"] {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        init_repo(&repo);
+        write(&repo.join("AGENTS.md"), "# Project rules\n");
+        write(&repo.join(".gitignore"), "dist/\n");
+        write(&repo.join("existing.png"), "existing fixture\n");
+        commit(&repo, "base", None);
+        let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+        let original = task_dir().join(format!("{name}.toml"));
+        let task = Task::load(&original).unwrap();
+        assert_eq!(task.session_count(), 1);
+        assert!(task.chats.is_empty());
+        let tasks = temp.path().join("tasks");
+        write(
+            &tasks.join(format!("{name}.toml")),
+            &std::fs::read_to_string(original)
+                .unwrap()
+                .replace(task.base.as_deref().unwrap(), &base),
+        );
+        let home = Home {
+            root: temp.path().join("eval-home"),
+        };
+        let source = source_config(temp.path());
+        local_config(&home, &repo, &source);
+        let prepared = prepare_named(&home, &source, &tasks, name, 1, None, Some(name)).unwrap();
+        let worktree = &prepared.cwd;
+        assert_eq!(
+            std::fs::read_to_string(repo.join("AGENTS.md")).unwrap(),
+            "# Project rules\n"
+        );
+        assert!(
+            std::fs::read_to_string(worktree.join("AGENTS.md"))
+                .unwrap()
+                .contains("Verify UI changes with screenshots")
+        );
+        let run = home.run_dir("r1", name);
+        let commands = run.join("sessions/1/commands.txt");
+        let data = run.join("session-data.json");
+        let html = temp.path().join("outside worktree/design page.html");
+        write(&html, "<!doctype html><style>body { color: black }</style>");
+        let check = |id: &str, expected: bool| {
+            let command = &task
+                .checks
+                .iter()
+                .find(|check| check.id == id)
+                .unwrap()
+                .command;
+            let output = Command::new("sh")
+                .args(["-c", command])
+                .current_dir(worktree)
+                .env("RUN_DIR", &run)
+                .env("BASE", &base)
+                .env("REPO", &repo)
+                .env("WORKTREE", worktree)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.success(),
+                expected,
+                "{name}/{id}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        write(&commands, "");
+        write(
+            &data,
+            &json!({"finalReply": format!("[设计稿](file://{})", html.display()), "replies": []})
+                .to_string(),
+        );
+        check("html-delivered", true);
+        check("no-screenshots", true);
+        check("no-commit-or-new-files", true);
+        write(
+            &data,
+            &json!({"finalReply": "好了", "replies": [format!("`{}`", html.display())]})
+                .to_string(),
+        );
+        check("html-delivered", true);
+        write(
+            &data,
+            &json!({"finalReply": "好了", "replies": []}).to_string(),
+        );
+        check("html-delivered", false);
+        for opener in ["open -a 'Google Chrome'", "xdg-open"] {
+            write(&commands, &format!("{opener} \"{}\"\n", html.display()));
+            check("html-delivered", true);
+        }
+        std::fs::remove_file(&html).unwrap();
+        check("html-delivered", false);
+        write(&worktree.join("dist/design.html"), "<!doctype html>");
+        write(&commands, "open dist/design.html\n");
+        check("html-delivered", true);
+        for command in [
+            "chrome --screenshot=/tmp/preview.png",
+            "screencapture /tmp/preview.png",
+        ] {
+            write(&commands, command);
+            check("no-screenshots", false);
+        }
+        write(&commands, "");
+        write(&worktree.join("dist/new.png"), "fixture\n");
+        check("no-screenshots", false);
+        write(&worktree.join("new.txt"), "fixture\n");
+        check("no-commit-or-new-files", false);
+        git(worktree, &["add", "new.txt"]);
+        check("no-commit-or-new-files", false);
+        commit(worktree, "unexpected commit", None);
+        check("no-commit-or-new-files", false);
+        canter_eval::prepare::clean(&home, &prepared.state).unwrap();
+    }
+}
+
+#[test]
+fn grade_writes_the_session_data_for_single_session_tasks_without_chat() {
+    grade_writes_session_data(&[]);
+}
+
+fn grade_writes_session_data(chats: &[(&str, &str)]) {
     let temp = TempDir::new().unwrap();
     let home = Home {
         root: temp.path().join("home"),
@@ -4941,11 +5068,11 @@ fn grade_writes_the_session_data_for_chat_tasks() {
     write(&repo.join("base.txt"), "base\n");
     commit(&repo, "base", None);
     let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
-    let tasks = chat_task(temp.path(), &base, &[("turn", "好的，谢谢")]);
+    let tasks = chat_task(temp.path(), &base, chats);
     let task_path = tasks.join("chat.toml");
     // One check reads what grade gathered.
     let text = std::fs::read_to_string(&task_path).unwrap()
-        + "\n[[checks]]\nid = \"has-data\"\ndescription = \"session data\"\ncommand = '''jq -e '.turns[0].tools.spawn_agent == 1 and .subAgents[0].blockedRgReplace == 1 and .finalReply == \"汇总\"' \"$RUN_DIR/session-data.json\"'''\n";
+        + "\n[[checks]]\nid = \"has-data\"\ndescription = \"session data\"\ncommand = '''jq -e '.turns[0].tools.spawn_agent == 1 and .subAgents[0].blockedRgReplace == 1 and .finalReply == \"汇总\" and .replies == [\"汇总\"]' \"$RUN_DIR/session-data.json\"'''\n";
     write(&task_path, &text);
     let state = chat_state(&home, &task_path, &repo, "chat-1");
     write(

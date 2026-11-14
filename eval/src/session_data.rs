@@ -1,7 +1,7 @@
 //! The session facts a task's checks read: every turn of the main session and
 //! who opened it, the tools each turn called, all replies, what each
 //! sub-agent did, and the chat lines `steer` sent. `grade` writes them to
-//! `session-data.json` in the run directory for tasks that use `[[chat]]`.
+//! `session-data.json` in the run directory for single-session tasks.
 
 use std::{collections::BTreeMap, fs, path::Path};
 

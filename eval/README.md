@@ -2,7 +2,7 @@
 
 评测 canter 自己在长程任务里的表现：任务完成度、token 和花费、上下文怎么涨、压缩前后什么样、插话听不听、会话之间的记忆留不留得住。评测不改 canter 本身；`canter` 在 eval 里是被测的对象。
 
-设计见 `docs/DESIGN.md` 的「eval（P2-151）」。题目组：长程（`tasks/long.toml`）、记忆（`tasks/memory.toml`）、记忆第二版（`tasks/memory-2.toml`：规矩换成 README.md 不要改、每次提交前 `cargo doc`，这两条从仓库里看不出来；`memory` 那三条从 `git log` 和已有文件看得出来，清空记忆也守得住）；全局记忆（`tasks/memory-global.toml`：第 1 个会话在 canter-test-rust 交代对所有项目都适用的两个习惯，后 3 个会话换到 canter-test-ts 做活，看守不守）；子 agent（`tasks/subagent.toml`：P2-248 第九次测试的调研问题，主会话在两个源码仓库之间，看它开不开子 agent、插话时听不听、最后答得准不准）。
+设计见 `docs/DESIGN.md` 的「eval（P2-151）」。题目组：长程（`tasks/long.toml`）、记忆（`tasks/memory.toml`）、记忆第二版（`tasks/memory-2.toml`：规矩换成 README.md 不要改、每次提交前 `cargo doc`，这两条从仓库里看不出来；`memory` 那三条从 `git log` 和已有文件看得出来，清空记忆也守得住）；全局记忆（`tasks/memory-global.toml`：第 1 个会话在 canter-test-rust 交代对所有项目都适用的两个习惯，后 3 个会话换到 canter-test-ts 做活，看守不守）；子 agent（`tasks/subagent.toml`：P2-248 第九次测试的调研问题，主会话在两个源码仓库之间，看它开不开子 agent、插话时听不听、最后答得准不准）。 设计稿（`tasks/design-preview.toml`、`tasks/design-preview-chrome.toml`）：canter-test-ts 的 AGENTS.md 由 setup 追加界面截图验证规矩，分别用「设计图」「chrome 的设计图」两种问法，看是否交付 HTML 网页而非 PNG；deepseek-flash 改前改后每题各 3 次，共 12 个短会话。每次先 `steer` 记录会话 ID，结束后先 `finish --session 1` 保存命令，再 `grade`，在清理临时文件前判分；HTML 按回复中的绝对路径或 `open` / `xdg-open` 的文件参数是否存在判定，不限目录、不扫描 worktree。
 
 ## 目录
 
@@ -15,6 +15,8 @@ eval/
   tasks/memory-2.toml 记忆题第二版：同样 4 个会话，规矩换成仓库里看不出来的两条，另查规矩没漏进仓库
   tasks/memory-global.toml 全局记忆题：第 1 个会话在 canter-test-rust，后 3 个会话换到 canter-test-ts
   tasks/subagent.toml 子 agent 题：主会话在两个源码仓库之间做调研，5 句插话按轮次发
+  tasks/design-preview.toml 设计稿：普通问法，单会话
+  tasks/design-preview-chrome.toml 设计稿：Chrome 问法，单会话
   results/           每轮的对比表，提交进仓库（只有数字、会话 ID、版本、模型、时段）
 ```
 
@@ -323,7 +325,7 @@ text = '''报告回来以后说的那句'''
 
 ### 判分能读的会话数据
 
-题目里有 `[[chat]]` 时，`grade` 先用 `canter stats <主会话 ID> --json` 收一遍，把这次跑的会话数据写到 `$RUN_DIR/session-data.json`，再跑判分命令（写不出来时打一行 note，检查自会因读不到文件不过）：
+单会话题（包括没有插话的题），`grade` 先用 `canter stats <主会话 ID> --json` 收一遍，把这次跑的会话数据写到 `$RUN_DIR/session-data.json`，再跑判分命令（写不出来时打一行 note，检查自会因读不到文件不过）：
 
 | 字段 | 内容 |
 | --- | --- |
