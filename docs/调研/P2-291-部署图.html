@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>canter 远程部署</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one wide deployment diagram (three zones × two scenarios), then three short reading blocks */
+:root {
+  --bg: #f6f7f9;
+  --fg: #1b2230;
+  --muted: #5d6676;
+  --zone: #eaedf2;
+  --box: #ffffff;
+  --line: #c3cad6;
+  --accent: #2563a8;
+  --tunnel: #b86e12;
+  --warn: #b3261e;
+  --font-body: "Inter", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161d; --fg: #e4e8ef; --muted: #98a2b3; --zone: #1a2029; --box: #222a35;
+    --line: #3a4553; --accent: #6aa6e8; --tunnel: #e3a24b; --warn: #f07b72; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161d; --fg: #e4e8ef; --muted: #98a2b3; --zone: #1a2029; --box: #222a35;
+  --line: #3a4553; --accent: #6aa6e8; --tunnel: #e3a24b; --warn: #f07b72; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 48px;
+}
+main { max-width: 1160px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+h1 { font-size: 1.6rem; margin: 0; text-wrap: balance; }
+h2 { font-size: 1.1rem; margin: 0 0 10px; text-wrap: balance; }
+.lead { color: var(--muted); margin: 6px 0 0; max-width: 70ch; }
+.diagram { overflow-x: auto; background: var(--box); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.diagram svg { display: block; width: 100%; min-width: 900px; height: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 18px; font-size: 0.85rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend i { display: inline-block; width: 34px; height: 0; border-top: 2px solid var(--accent); }
+.legend i.dash { border-top: 2px dashed var(--tunnel); }
+.legend i.no { border-top: 2px dashed var(--warn); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; }
+.cols > section { min-width: 0; }
+ol, ul { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; }
+code { font-family: var(--font-mono); font-size: 0.88em; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 0.8rem; letter-spacing: 0.03em; }
+
+/* SVG */
+.zone { fill: var(--zone); }
+.box { fill: var(--box); stroke: var(--line); stroke-width: 1.2; }
+.inner { fill: var(--zone); stroke: var(--line); stroke-width: 1; }
+.core { fill: var(--box); stroke: var(--accent); stroke-width: 1.8; }
+.nobox { fill: var(--box); stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 6 4; }
+.zl { fill: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.06em; }
+.sh { fill: var(--fg); font-size: 15px; font-weight: 700; }
+.tt { fill: var(--fg); font-size: 14px; font-weight: 600; }
+.tb { fill: var(--fg); font-size: 13px; }
+.ts { fill: var(--muted); font-size: 12px; }
+.tm { fill: var(--fg); font-size: 12px; font-family: var(--font-mono); }
+.tw { fill: var(--warn); font-size: 14px; font-weight: 600; }
+.ta { fill: var(--accent); font-size: 12px; font-weight: 600; }
+.tn { fill: var(--tunnel); font-size: 12px; font-weight: 600; }
+.req { fill: none; stroke: var(--accent); stroke-width: 2; }
+.tun { fill: none; stroke: var(--tunnel); stroke-width: 2; stroke-dasharray: 7 5; }
+.head-a { fill: var(--accent); }
+.head-t { fill: var(--tunnel); }
+</style>
+
+<main>
+  <header>
+    <h1>canter 远程部署</h1>
+    <p class="lead">一台 canter 服务端只服务一个人，跑在代码所在的机器上。VPS 只做中转，不跑 agent、不放代码。图里的域名和端口都是例子。</p>
+  </header>
+
+  <div class="diagram">
+    <svg viewBox="0 0 1120 800" role="img" aria-label="canter 远程部署图：Mac 和 iPad 经 VPS 中转连到家里 5090 上的 canter 服务端；另一个人有自己的服务端">
+      <defs>
+        <marker id="ha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-a" d="M0 0 L10 5 L0 10 z"/></marker>
+        <marker id="ht" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-t" d="M0 0 L10 5 L0 10 z"/></marker>
+      </defs>
+
+      <!-- Scenario 1 -->
+      <text class="sh" x="16" y="26">场景一：你自己，在外面用 Mac、iPad 连家里的 5090</text>
+      <rect class="zone" x="16" y="40" width="318" height="440" rx="14"/>
+      <rect class="zone" x="392" y="40" width="318" height="440" rx="14"/>
+      <rect class="zone" x="768" y="40" width="336" height="440" rx="14"/>
+      <text class="zl" x="34" y="66">你身边的设备</text>
+      <text class="zl" x="410" y="66">公网</text>
+      <text class="zl" x="786" y="66">家里</text>
+
+      <!-- Mac -->
+      <rect class="box" x="36" y="86" width="278" height="170" rx="10"/>
+      <text class="tt" x="52" y="112">Mac 笔记本</text>
+      <rect class="inner" x="52" y="124" width="246" height="58" rx="7"/>
+      <text class="tb" x="64" y="147">canter 终端</text>
+      <text class="tm" x="64" y="170">canter --server 5090</text>
+      <rect class="inner" x="52" y="192" width="246" height="52" rx="7"/>
+      <text class="tb" x="64" y="213">Mac 自己的 canter 服务端</text>
+      <text class="ts" x="64" y="233">管 Mac 上的代码，走 unix socket</text>
+
+      <!-- iPad -->
+      <rect class="box" x="36" y="290" width="278" height="86" rx="10"/>
+      <text class="tt" x="52" y="316">iPad / iPhone（以后）</text>
+      <text class="tb" x="52" y="340">App，网址和令牌存在钥匙串</text>
+      <text class="ts" x="52" y="362">只显示和输入，不跑代码</text>
+
+      <text class="ts" x="36" y="412">客户端只存一张列表：</text>
+      <text class="ts" x="36" y="432">每台服务端一条 {名字, 网址, 令牌}</text>
+
+      <!-- VPS -->
+      <rect class="box" x="412" y="86" width="278" height="250" rx="10"/>
+      <text class="tt" x="428" y="112">你的 VPS</text>
+      <text class="ts" x="428" y="132">公网 IP + 域名 canter.example.com</text>
+      <rect class="inner" x="428" y="146" width="246" height="60" rx="7"/>
+      <text class="tb" x="440" y="170">Caddy :443</text>
+      <text class="ts" x="440" y="192">自动签证书，HTTPS 在这里解开</text>
+      <rect class="inner" x="428" y="222" width="246" height="52" rx="7"/>
+      <text class="tb" x="440" y="244">隧道入口 127.0.0.1:7000</text>
+      <text class="ts" x="440" y="263">只转发，不认识会话</text>
+      <text class="ts" x="428" y="302">不跑 agent，不放代码；能看到明文</text>
+      <text class="ts" x="428" y="322">只开 22 和 443，SSH 只认密钥</text>
+
+      <!-- Model API -->
+      <rect class="box" x="412" y="372" width="278" height="70" rx="10"/>
+      <text class="tt" x="428" y="399">模型接口</text>
+      <text class="ts" x="428" y="421">DeepSeek 等，按 key 计费</text>
+
+      <!-- 5090 -->
+      <rect class="box" x="788" y="86" width="300" height="380" rx="10"/>
+      <text class="tt" x="804" y="112">5090 · Linux · 常开</text>
+      <rect class="inner" x="804" y="126" width="268" height="56" rx="7"/>
+      <text class="tb" x="816" y="148">隧道客户端（ssh -R 或 frpc）</text>
+      <text class="ts" x="816" y="169">主动连出去，家里路由器不开端口</text>
+      <rect class="core" x="804" y="198" width="268" height="128" rx="7"/>
+      <text class="tt" x="816" y="221">canter 服务端（只服务你）</text>
+      <text class="ts" x="816" y="244">· unix socket ~/.canter/server.sock</text>
+      <text class="ts" x="816" y="262">  靠文件权限，不要令牌</text>
+      <text class="ts" x="816" y="284">· 127.0.0.1:端口，每个请求要令牌</text>
+      <text class="ts" x="816" y="306">· 会话、批准、沙箱都在这里</text>
+      <rect class="inner" x="804" y="340" width="268" height="52" rx="7"/>
+      <text class="tb" x="816" y="362">代码仓库 · git / gh · 编译测试</text>
+      <text class="ts" x="816" y="381">命令在沙箱里跑</text>
+      <rect class="inner" x="804" y="404" width="268" height="50" rx="7"/>
+      <text class="tb" x="816" y="425">本机终端（SSH 或 tmux 里开）</text>
+      <text class="ts" x="816" y="444">走 unix socket，用法不变</text>
+
+      <!-- Arrows scenario 1 -->
+      <path class="req" d="M298 153 L426 174" marker-end="url(#ha)"/>
+      <text class="ta" x="316" y="146">HTTPS + 令牌</text>
+      <path class="req" d="M314 333 C372 333 372 196 426 196" marker-end="url(#ha)"/>
+      <text class="ta" x="322" y="352">HTTPS + 令牌</text>
+      <path class="req" d="M551 206 L551 220" marker-end="url(#ha)"/>
+      <path class="tun" d="M804 154 H740 V248 H676" marker-end="url(#ht)"/>
+      <text class="tn" x="746" y="196">隧道</text>
+      <text class="tn" x="746" y="212">5090</text>
+      <text class="tn" x="746" y="228">主动连出</text>
+      <path class="req" d="M938 182 L938 196" marker-end="url(#ha)"/>
+      <path class="req" d="M804 300 H750 V407 H692" marker-end="url(#ha)"/>
+      <text class="ta" x="756" y="380">调模型</text>
+      <path class="req" d="M938 404 L938 328" marker-end="url(#ha)"/>
+
+      <!-- Scenario 2 -->
+      <text class="sh" x="16" y="502">场景二：另一个人，各用各的服务端</text>
+      <rect class="zone" x="16" y="516" width="318" height="264" rx="14"/>
+      <rect class="zone" x="392" y="516" width="318" height="264" rx="14"/>
+      <rect class="zone" x="768" y="516" width="336" height="264" rx="14"/>
+      <text class="zl" x="34" y="542">他身边的设备</text>
+      <text class="zl" x="410" y="542">公网</text>
+      <text class="zl" x="786" y="542">他那边</text>
+
+      <rect class="box" x="36" y="560" width="278" height="90" rx="10"/>
+      <text class="tt" x="52" y="586">他的笔记本 / 手机</text>
+      <text class="tm" x="52" y="610">canter --server his-box</text>
+      <text class="ts" x="52" y="634">拿的是他自己的令牌</text>
+
+      <rect class="box" x="412" y="560" width="278" height="112" rx="10"/>
+      <text class="tt" x="428" y="586">中转，两种都行</text>
+      <text class="tb" x="428" y="610">· 他自己的 VPS</text>
+      <text class="tb" x="428" y="632">· 共用你的 VPS（换个子域名）</text>
+      <text class="ts" x="428" y="654">  共用时你能看到他的明文，他得信任你</text>
+
+      <rect class="core" x="788" y="560" width="300" height="90" rx="10"/>
+      <text class="tt" x="804" y="586">他的机器</text>
+      <text class="tb" x="804" y="610">他自己的 canter 服务端和代码</text>
+      <text class="ts" x="804" y="634">和你的 5090 互不相干</text>
+
+      <rect class="nobox" x="788" y="668" width="300" height="96" rx="10"/>
+      <text class="tw" x="804" y="694">不做：几个人共用一台服务端</text>
+      <text class="ts" x="804" y="718">令牌等于这台机器的 SSH 权限，</text>
+      <text class="ts" x="804" y="738">共用就能看彼此的会话、文件和密钥</text>
+
+      <path class="req" d="M314 605 L410 605" marker-end="url(#ha)"/>
+      <path class="tun" d="M788 605 H692" marker-end="url(#ht)"/>
+    </svg>
+  </div>
+
+  <div class="legend">
+    <span><i></i>请求方向：客户端连过去，带令牌</span>
+    <span><i class="dash"></i>隧道：服务端那台机器主动连到 VPS，请求再顺着它送回来</span>
+    <span><i class="no"></i>不支持的用法</span>
+  </div>
+
+  <div class="cols">
+    <section>
+      <h2>在 iPad 上发一句话，经过哪些地方</h2>
+      <ol>
+        <li>iPad App 用 HTTPS 连 <code>canter.example.com</code>，请求头里带令牌。</li>
+        <li>VPS 上的 Caddy 解开 HTTPS，交给隧道入口。</li>
+        <li>隧道把请求送回 5090。这条隧道是 5090 事先主动连出去建好的，所以家里不用开端口。</li>
+        <li>5090 上的 canter 服务端先核对令牌，不对就直接拒绝，别的什么都不处理。</li>
+        <li>服务端在 5090 上干活：调模型、在沙箱里跑命令、读写代码。</li>
+        <li>过程和结果作为事件流原路推回 iPad。断线重连后从断开的地方接着收。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>谁拿着什么</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>东西</th><th>在哪</th><th>要注意</th></tr></thead>
+          <tbody>
+            <tr><td>令牌</td><td>5090 只存哈希；客户端存原文</td><td>等于 5090 的 SSH 权限，丢了在 5090 上撤销，已连着的会被立刻断开</td></tr>
+            <tr><td>HTTPS 证书</td><td>VPS 上的 Caddy</td><td>只保护设备到 VPS 这一段</td></tr>
+            <tr><td>明文</td><td>经过 VPS</td><td>VPS 要自己管好</td></tr>
+            <tr><td>代码、模型 key</td><td>只在 5090</td><td>客户端和 VPS 都拿不到</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>本机用法不变</h2>
+      <ul>
+        <li>在 5090 或 Mac 上直接开 <code>canter</code>，照旧走 unix socket，不要令牌，找不到服务端就自动起一个。</li>
+        <li>不在配置里写监听地址，服务端就不开任何网络端口，和现在一样。</li>
+        <li>不带 <code>--server</code> 永远连本机。</li>
+        <li>先不接 VPS 也能试：用 SSH 端口转发把 Mac 连到 5090，先看 canter 本身通不通。</li>
+      </ul>
+    </section>
+  </div>
+</main>
