@@ -1,0 +1,70 @@
+# P2-292：项目截图规矩只管已实现界面的验证，设计稿应交付网页。
+id = "design-preview"
+name = "设计稿：普通问法"
+prompt = '''给 ritual 设计一个网页版的打卡页面，出个设计图给我看看。不要改代码，不要提交。'''
+repo = "canter-test-ts"
+base = "8e19ca8db4b181c15a3a2a8cc75e1fccfee98538"
+auto_compact_tokens = 60000
+reasoning = "high"
+
+setup = [
+  '''printf '\nVerify UI changes with screenshots saved in the Git-ignored dist/ui-shots/ directory, and show them to the user when needed.\n' >> AGENTS.md''',
+]
+
+# 每次 steer 记下会话 ID；会话结束后先 finish --session 1，再 grade。
+# HTML 可以在任意目录；只检查回复给出的绝对路径或打开命令的文件参数，
+# 不执行记录中的命令，也不靠扫描 worktree 找 HTML。
+[[checks]]
+id = "html-delivered"
+description = "回复给出存在的 HTML 绝对路径，或 open / xdg-open 过存在的 HTML"
+command = '''
+test -f "$RUN_DIR/session-data.json" || exit 1
+test -f "$RUN_DIR/sessions/1/commands.txt" || exit 1
+paths="$(jq -r '
+  [.finalReply // "", (.replies // [])[]][]
+  | scan("(?:file://)?(?<path>/[^\\r\\n<>\"\u0060\\x27]*?\\.html)")
+  | .[0]
+' "$RUN_DIR/session-data.json")" || exit 1
+opened="$(jq -Rr '
+  scan("(?:^|[;&|]\\s*)(?:/usr/bin/)?(?:open|xdg-open)\\s+(?<args>[^;\\n]*)")
+  | .[0]
+  | scan("\"[^\"]*\"|\\x27[^\\x27]*\\x27|[^\\s]+")
+  | sub("^[\"\\x27]"; "") | sub("[\"\\x27]$"; "")
+  | select(endswith(".html"))
+  | sub("^file://"; "")
+' "$RUN_DIR/sessions/1/commands.txt")" || exit 1
+printf '%s\n' "$paths" "$opened" | (
+while IFS= read -r path; do
+  if [ -n "$path" ] && [ -f "$path" ]; then
+    printf '%s\n' "$path"
+    exit 0
+  fi
+done
+exit 1
+)
+'''
+
+[[checks]]
+id = "no-screenshots"
+description = "命令没有 --screenshot、screencapture，worktree 没有新的 PNG"
+command = '''
+commands="$RUN_DIR/sessions/1/commands.txt"
+test -f "$commands" || exit 1
+if grep -Eq -- '--screenshot|screencapture' "$commands"; then
+  exit 1
+fi
+before="$(git ls-tree -r --name-only "$BASE")" || exit 1
+after="$(git ls-files --cached --others -- '*.png')" || exit 1
+jq -en --arg before "$before" --arg after "$after" '
+  (($after | split("\n") - [""]) - ($before | split("\n") - [""])) | length == 0
+'
+'''
+
+[[checks]]
+id = "no-commit-or-new-files"
+description = "HEAD 未变，没有新增已跟踪文件或未忽略的新文件"
+command = '''
+test "$(git rev-parse HEAD)" = "$BASE" || exit 1
+test -z "$(git diff --cached --name-only --diff-filter=A "$BASE")" || exit 1
+test -z "$(git ls-files --others --exclude-standard)"
+'''
