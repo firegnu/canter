@@ -360,7 +360,8 @@ input、interrupt、批准回答、compact、PATCH、DELETE 返回 `session_not_
 
 P2-198：新建、恢复和分叉请求接受可选 `sandboxDisabled`（缺省 false）。true 强制这次打开
 不套沙箱；false 或省略按服务端配置，覆盖上次打开的选择，不从存盘权限档推导。子 agent
-创建时继承父会话的实际沙箱状态；明确恢复子会话也采用本次打开的选择。`features` 增加
+创建时继承父会话当时的沙箱选择（P2-289 起可能是还没生效的待生效选择，见下），不是父会话
+此刻的实际状态；明确恢复子会话也采用本次打开的选择。`features` 增加
 `sessionSandbox`；发送 true 前检查支持情况，避免旧服务端忽略它。交互终端和 exec 的
 `--yolo` 在每次打开、派生和重连时携带这一选择，配置重读不会撤销豁免。
 
@@ -381,6 +382,23 @@ P2-198：新建、恢复和分叉请求接受可选 `sandboxDisabled`（缺省 f
   切换权限档后再次查询即变。
 
 沙箱起不来时 `enabled` 仍为 true（命令照样失败、不在墙外跑），只列 cwd 和新增目录。
+
+P2-289：会话开着时用 `POST /v1/sessions/{id}/sandbox { enabled, confirmed? }` 切换这个会话的
+沙箱，返回 `{ eventSeq }`。关闭必须带 `confirmed: true`，否则返回 `invalid_request`；开启不需要
+确认。`features` 增加 `sessionSandboxSwitch`，客户端发送前检查，旧服务端没有这个接口。
+
+- 只记本会话内存里的选择（按配置 / 强制开 / 强制关），不改 `config.json`、权限档和存盘，
+  不影响别的会话。普通重开清掉选择、回到按配置；`sandboxDisabled: true` 仍强制关。
+- 不当场换执行器，下一轮开始时应用。当前轮剩下的工具调用、已经在跑的子 agent 和后台命令
+  保持原来的状态；之后新起的子 agent 继承新选择。
+- `settings.sandboxEnabled` 和 `GET .../sandbox` 的 `enabled`、范围仍报告实际执行器。
+  `GET .../sandbox` 另有可选 `pendingEnabled`：有待生效的切换时给出目标值，没有时省略。
+- 快照顶层可选 `sandboxPending: bool`，只在目标和实际执行器不同时出现；存盘的会话没有它。
+- 即时事件 `session.sandboxUpdated { pendingEnabled: bool | null }`，帧格式和提示建议一样
+  （JSON `seq` 为 0、SSE 不带 `id:`、不存盘、不推进游标）；`null` 表示没有待生效的切换，
+  下一轮更新 `sandboxEnabled` 时发出。和提示建议不同：重连或事件积压补读时，服务端补发内存里
+  最新的一条（从没切换过的会话不补），客户端收到的旧通知一律以最新值为准，所以所有终端最后
+  显示的待生效状态和服务端一致。
 
 ### 顺口问
 
@@ -461,6 +479,7 @@ data: {"seq":42,"sessionId":"s1","timestamp":9,"type":"warning","message":"notic
 接收后单独处理，旧客户端按 Unknown 或旧游标跳过。`turnId: null` 表示无对话会话的 git 示例，
 非空时仅适用于最近已完成的轮。输入参数可带 `fromSuggestion: true`，表示经 Tab / → 接受
 （含编辑后）的建议，用于恢复服务端的建议频率；缺省 false，不存入对话。
+`session.sandboxUpdated`（P2-289）用同样的帧格式，但重连时会补发最新值，见「沙箱状态」。
 data 为单行 JSON，内容里的换行保持 JSON 转义；帧末两个换行。
 续传严格取序号大于游标的事件。`Last-Event-ID` 存在时优先于查询参数 `after`，
 否则用 `after`（默认 0）；空、负数、非十进制或溢出的 header 返回 invalid_request。
