@@ -2,9 +2,10 @@
 
 依据：P2-301 试连后，用户要 paddock 也能用 canter 的远程连接（HTTP + 令牌 + 隧道）连远程机器上的 canter。改的是 paddock，canter 不改别的仓库，所以本件先在 canter 这边记成需求单，做的时候转给 paddock 主控。
 依赖：P2-301
-执行：转给 paddock（用户转交）；canter 这边要补的公开接口，另开 canter 任务
+执行：派出
 待用户：什么时候转给 paddock
 优先：低
+说明：转给 paddock 做（用户转交），canter 不改 paddock；canter 这边要补的公开接口，另开 canter 任务。
 
 ## 用户原话
 
