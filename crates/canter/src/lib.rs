@@ -15,6 +15,7 @@ pub mod doctor;
 pub mod exec;
 pub mod mcp;
 pub mod remote;
+pub mod remotes;
 pub mod service;
 pub mod skills;
 pub mod stats;
@@ -62,8 +63,13 @@ Usage:
   canter remote token add <name>     issue a token locally; print it once
   canter remote token list           list client names and creation times
   canter remote token remove <name>  revoke a client's token
+  canter remote add <name> <url>     save a server; read its token from stdin
+  canter remote list                 list server names and URLs (no tokens)
+  canter remote remove <name>        remove a saved server
 
 Options:
+  --server <name>       connect to a saved remote (chat, exec, usage, stats, doctor)
+  --cwd <path>          absolute server directory; required for new remote sessions
   -m, --model <model>  use this model (default: the server's config)
   --add-dir <path>      add a directory to the session (repeatable)
   --session-file <path> write the current session and server location as JSON
@@ -80,6 +86,7 @@ In a session:
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
+    WithServer { name: String, command: Box<Command> },
     Serve { replace: bool, foreground: bool },
     Usage,
     Doctor,
@@ -98,6 +105,8 @@ pub enum Command {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ChatArgs {
+    /// Absolute directory on the selected server.
+    pub cwd: Option<String>,
     pub close_on_exit: bool,
     pub session_file: Option<PathBuf>,
     pub tags: BTreeMap<String, String>,
@@ -121,6 +130,56 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 .map_err(|arg| format!("argument is not UTF-8: {}", arg.to_string_lossy()))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    // A named server is explicit on every invocation. Leave the local parser
+    // unchanged, including everything after the end-of-options marker.
+    let mut words = Vec::new();
+    let mut server = None;
+    let mut remaining = args.into_iter();
+    while let Some(word) = remaining.next() {
+        if word == "--" {
+            words.push(word);
+            words.extend(remaining);
+            break;
+        }
+        if word == "--server" {
+            if server.is_some() {
+                return Err("--server may only be given once".into());
+            }
+            server = Some(
+                remaining
+                    .next()
+                    .filter(|name| !name.is_empty() && !name.starts_with('-'))
+                    .ok_or("--server needs a name")?,
+            );
+        } else {
+            words.push(word);
+        }
+    }
+    if let Some(name) = server {
+        if matches!(
+            words.first().map(String::as_str),
+            Some(
+                "serve" | "upgrade" | "rollback" | "service" | "mcp" | "skills" | "auth" | "remote"
+            )
+        ) {
+            return Err("Run this on the server machine".into());
+        }
+        if words
+            .iter()
+            .take_while(|word| word.as_str() != "--")
+            .any(|word| word == "--session-file")
+        {
+            return Err("--session-file is only available on the local server".into());
+        }
+        return Ok(Command::WithServer {
+            name,
+            command: Box::new(parse_words(words)?),
+        });
+    }
+    parse_words(words)
+}
+
+fn parse_words(args: Vec<String>) -> Result<Command, String> {
     if matches!(
         args.first().map(String::as_str),
         Some("upgrade" | "rollback")
@@ -216,6 +275,12 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
             "--yolo" => chat.yolo = true,
+            "--cwd" => {
+                chat.cwd = Some(
+                    args.next_if(|next| !next.starts_with('-'))
+                        .ok_or("--cwd needs a path")?,
+                )
+            }
             "--close-on-exit" => chat.close_on_exit = true,
             "--session-file" => {
                 chat.session_file = Some(
@@ -266,6 +331,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
 
 /// Where this terminal is and what it sends to the server.
 pub struct Context {
+    pub server: Option<String>,
     /// canter's state directory (`~/.canter` or `CANTER_HOME`).
     pub state_dir: PathBuf,
     /// This program, started as `canter serve` when no server runs.
@@ -278,8 +344,48 @@ pub struct Context {
 }
 
 impl Context {
+    pub async fn connect(&self) -> Result<Connected, String> {
+        if let Some(name) = &self.server {
+            return remotes::find(&self.state_dir, name)?
+                .connect()
+                .await
+                .map(|(connected, _)| connected)
+                .map_err(|error| error.to_string());
+        }
+        connected(
+            canter_server::ensure_server(&self.state_dir, &self.executable)
+                .await
+                .map_err(|error| error.to_string())?,
+        )
+    }
+
+    fn session_cwd(&self, args: &ChatArgs) -> Result<String, String> {
+        if self.server.is_some() {
+            if let Some(cwd) = &args.cwd {
+                if !std::path::Path::new(cwd).is_absolute() {
+                    return Err("--cwd must be an absolute path on the server machine".into());
+                }
+                return Ok(cwd.clone());
+            }
+            if args.resume.is_some() || args.continue_latest {
+                return Ok(String::new());
+            }
+            return Err(
+                "Remote sessions require --cwd <absolute path on the server machine>".into(),
+            );
+        }
+        if args.cwd.is_some() {
+            return Err("--cwd requires --server".into());
+        }
+        self.cwd
+            .to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "the current directory's path is not UTF-8".into())
+    }
+
     pub fn current() -> Result<Self, String> {
         Ok(Self {
+            server: None,
             state_dir: canter_server::state_directory().map_err(|error| error.to_string())?,
             executable: std::env::current_exe()
                 .map_err(|_| "cannot find the canter executable's own path")?,
@@ -309,14 +415,24 @@ fn client_name() -> String {
 pub struct ServerConnector {
     state_dir: PathBuf,
     sandbox_disabled: bool,
+    remote: Option<remotes::Remote>,
+    remote_cwd: Option<String>,
 }
 
 impl Connector for ServerConnector {
-    async fn connect(&self) -> Result<Connected, String> {
+    async fn connect(&self) -> Result<Connected, canter_tui::ConnectError> {
+        if let Some(remote) = &self.remote {
+            let (mut connected, _) = remote.connect().await?;
+            connected.client = connected
+                .client
+                .with_sandbox_disabled(self.sandbox_disabled);
+            connected.client.remote_cwd = self.remote_cwd.clone();
+            return Ok(connected);
+        }
         let connection = canter_server::discover(&self.state_dir)
             .await
             .map_err(|error| error.to_string())?
-            .ok_or("no server found")?;
+            .ok_or_else(|| "no server found".to_owned())?;
         let mut connected = connected(connection)?;
         connected.client = connected
             .client
@@ -336,13 +452,11 @@ fn connected(connection: canter_server::Connection) -> Result<Connected, String>
 }
 
 pub async fn usage(context: Context) -> Result<String, String> {
-    let connection = canter_server::ensure_server(&context.state_dir, &context.executable)
-        .await
-        .map_err(|error| error.to_string())?;
-    if let Some(warning) = &connection.version_warning {
+    let connection = context.connect().await?;
+    if let Some(warning) = &connection.warning {
         eprintln!("{warning}");
     }
-    let report = connected(connection)?
+    let report = connection
         .client
         .usage(None)
         .await
@@ -353,6 +467,15 @@ pub async fn usage(context: Context) -> Result<String, String> {
 /// Finds the server, starting one in the background when none runs, and
 /// says which session to open.
 pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerConnector>, String> {
+    let cwd = context.session_cwd(&args)?;
+    if context.server.is_some() && args.session_file.is_some() {
+        return Err("--session-file is only available on the local server".into());
+    }
+    let remote = context
+        .server
+        .as_deref()
+        .map(|name| remotes::find(&context.state_dir, name))
+        .transpose()?;
     let session_file = args
         .session_file
         .map(|path| {
@@ -362,14 +485,13 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
             )
         })
         .transpose()?;
-    let cwd = context
-        .cwd
-        .to_str()
-        .ok_or("the current directory's path is not UTF-8")?
-        .to_owned();
-    let connection = canter_server::ensure_server(&context.state_dir, &context.executable)
-        .await
-        .map_err(|error| error.to_string())?;
+    let (mut connected, home) = if let Some(remote) = &remote {
+        let (connected, info) = remote.connect().await.map_err(|error| error.to_string())?;
+        (connected, info.home)
+    } else {
+        (context.connect().await?, context.env.get("HOME").cloned())
+    };
+    connected.client.remote_cwd = args.cwd.clone();
     let yolo = args.yolo.then_some(PermissionMode::AllowAll);
     let update = |model| SessionUpdateParams {
         remember_selection: false,
@@ -400,7 +522,6 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
             first: args.first,
         },
     };
-    let mut connected = connected(connection)?;
     connected.client = connected.client.with_sandbox_disabled(args.yolo);
     if args.close_on_exit {
         connected.client = connected
@@ -412,11 +533,13 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
         session_file,
         connected,
         connector: ServerConnector {
+            remote,
+            remote_cwd: args.cwd,
             state_dir: context.state_dir,
             sandbox_disabled: args.yolo,
         },
         open,
-        home: context.env.get("HOME").cloned(),
+        home,
         env: context.env,
         client_name: context.client_name,
         version: VERSION.to_owned(),

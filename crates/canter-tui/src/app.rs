@@ -680,6 +680,8 @@ impl Shown {
 }
 
 pub struct App {
+    remote: bool,
+    client_directory: Option<(String, Option<String>)>,
     suggestion: Option<String>,
     suggestion_dismissed: bool,
     from_suggestion: bool,
@@ -863,7 +865,9 @@ impl App {
     /// Counts the lines changed in git since the last commit for the `diff`
     /// item, in the background (on a tokio runtime) while the screen draws.
     pub fn with_git_diff(mut self) -> Self {
-        self.git_diff = Some(crate::statusline::git_diff::GitDiff::new());
+        if !self.remote {
+            self.git_diff = Some(crate::statusline::git_diff::GitDiff::new());
+        }
         self
     }
 
@@ -976,12 +980,17 @@ impl App {
         let Some(line) = &mut self.status_line else {
             return;
         };
-        if line.branch_due(&self.snapshot.settings.cwd) {
+        if !self.remote && line.branch_due(&self.snapshot.settings.cwd) {
             self.branch = crate::git::branch(&self.snapshot.settings.cwd);
         }
         let input = self.status_line_input(now_ms);
         if let Some(status_line) = &mut self.status_line {
-            status_line.update(input, &self.snapshot.settings.cwd);
+            let cwd = if self.remote {
+                "/"
+            } else {
+                &self.snapshot.settings.cwd
+            };
+            status_line.update(input, cwd);
         }
     }
 
@@ -1045,12 +1054,39 @@ impl App {
 
     /// `home` shortens paths in the info rows to `~`.
     pub fn new(snapshot: SessionSnapshot, home: Option<String>, now_ms: i64) -> Self {
+        Self::new_connected(snapshot, home, now_ms, None)
+    }
+
+    /// Remote paths are only meaningful on the server; exports stay here.
+    pub fn new_remote(
+        snapshot: SessionSnapshot,
+        home: Option<String>,
+        now_ms: i64,
+        cwd: String,
+        client_home: Option<String>,
+    ) -> Self {
+        Self::new_connected(snapshot, home, now_ms, Some((cwd, client_home)))
+    }
+
+    fn new_connected(
+        snapshot: SessionSnapshot,
+        home: Option<String>,
+        now_ms: i64,
+        client_directory: Option<(String, Option<String>)>,
+    ) -> Self {
         let working = matches!(
             snapshot.status,
             SessionStatus::Working | SessionStatus::WaitingApproval
         );
+        let remote = client_directory.is_some();
         Self {
-            branch: crate::git::branch(&snapshot.settings.cwd),
+            remote,
+            client_directory,
+            branch: if remote {
+                None
+            } else {
+                crate::git::branch(&snapshot.settings.cwd)
+            },
             suggestion: None,
             suggestion_dismissed: false,
             from_suggestion: false,
@@ -1093,7 +1129,7 @@ impl App {
             clipboard: crate::images::Clipboard::default(),
             copier: Copier::default(),
             export_copy: None,
-            opener: Opener::default(),
+            opener: Opener::default().with_remote_paths(remote),
             mouse: Mouse::default(),
             search: None,
             history_search: None,
@@ -1330,7 +1366,9 @@ impl App {
                 if self.interrupting.as_ref() == Some(&turn.id) {
                     self.interrupting = None;
                 }
-                self.branch = crate::git::branch(&self.snapshot.settings.cwd);
+                if !self.remote {
+                    self.branch = crate::git::branch(&self.snapshot.settings.cwd);
+                }
                 self.refresh_git_diff();
                 // As Codex: not when a queued message starts the next turn.
                 if turn.status == TurnStatus::Completed && self.snapshot.queued_inputs.is_empty() {
@@ -1736,6 +1774,9 @@ impl App {
             }
             KeyCode::Char('d') if ctrl && self.input.is_empty() => return Some(Action::Quit),
             KeyCode::Char('j') if ctrl => self.input.insert("\n"),
+            KeyCode::Char('v') if ctrl && self.remote => {
+                self.information("Not available on remote servers yet")
+            }
             KeyCode::Char('v') if ctrl => match self.clipboard.image() {
                 Ok(Some(path)) => self.attach_image(path),
                 Ok(None) => {}
@@ -2002,6 +2043,11 @@ impl App {
     /// a command that takes none, such as pasted lines, is refused, not
     /// dropped.
     fn run_command(&mut self, command: &Command, args: &str) -> Option<Action> {
+        if self.remote && matches!(command.name, "diff" | "review" | "files") {
+            self.input.clear();
+            self.information("Not available on remote servers yet");
+            return None;
+        }
         // Like sending, so that what the command shows is in view.
         self.scroll.top = None;
         let draft = self.input.clone();
@@ -2046,6 +2092,9 @@ impl App {
     /// and how many match. None while there is no `@` word, nothing found
     /// so far matches, or Esc closed the list.
     fn mention_list(&mut self) -> Option<(mention::Word, usize, usize)> {
+        if self.remote {
+            return None;
+        }
         if self.input_history.showing(&self.input) {
             return None;
         }
@@ -2091,6 +2140,15 @@ impl App {
     /// takes what the walk found since the last frame, and stops it once
     /// the word is gone.
     fn scan_mentions(&mut self) {
+        if self.remote {
+            let active = mention::word(self.input.text(), self.input.cursor()).is_some();
+            if active && !self.mentions.closed {
+                self.information("Not available on remote servers yet");
+            }
+            self.mentions.closed = active;
+            return;
+        }
+
         if mention::word(self.input.text(), self.input.cursor()).is_none() {
             self.mentions.scan = None;
             self.mentions.matches = None;
@@ -2658,6 +2716,10 @@ impl App {
                     if action.is_some() {
                         self.report = None;
                         self.memory = None;
+                        if self.remote {
+                            self.information("Edit memory on the server machine");
+                            return Some(None);
+                        }
                     }
                     return Some(action);
                 }
@@ -3832,8 +3894,12 @@ impl App {
                 let name = path.unwrap_or_else(|| {
                     export::default_name(&self.snapshot, &time.format("%Y%m%d-%H%M%S").to_string())
                 });
-                let path =
-                    export::resolve(&name, &self.snapshot.settings.cwd, self.home.as_deref());
+                let (cwd, home) = self
+                    .client_directory
+                    .as_ref()
+                    .map(|(cwd, home)| (cwd.as_str(), home.as_deref()))
+                    .unwrap_or((&self.snapshot.settings.cwd, self.home.as_deref()));
+                let path = export::resolve(&name, cwd, home);
                 match export::write(&path, &text) {
                     Ok(()) => self.notice(cells::notice(
                         "✓ ",
@@ -4140,6 +4206,14 @@ impl App {
             self.search_from_newest();
             return;
         }
+        if let Some((cwd, _)) = &self.client_directory {
+            if crate::images::pasted_paths(text, cwd).is_some() {
+                self.information("Not available on remote servers yet");
+            } else {
+                self.input.paste(text);
+            }
+            return;
+        }
         if let Some(paths) = crate::images::pasted_paths(text, &self.snapshot.settings.cwd) {
             if self.accepts_images() {
                 for (index, path) in paths.into_iter().enumerate() {
@@ -4245,7 +4319,7 @@ impl App {
         system: LinkSystem,
         launch: impl FnMut(std::process::Command) -> Result<(), String> + Send + 'static,
     ) -> Self {
-        self.opener = Opener::with_launcher(system, launch);
+        self.opener = Opener::with_launcher(system, launch).with_remote_paths(self.remote);
         self
     }
 
@@ -4297,6 +4371,10 @@ impl App {
     }
 
     fn accepts_images(&mut self) -> bool {
+        if self.remote {
+            self.information("Not available on remote servers yet");
+            return false;
+        }
         let model = &self.snapshot.settings.model;
         if self.image_models.contains(model) {
             return true;

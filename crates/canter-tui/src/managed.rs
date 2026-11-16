@@ -64,7 +64,7 @@ impl<C: Connector> Managed<C> {
             .iter()
             .any(|feature| feature == "managedClients")
         {
-            return Err(ClientError::Protocol("This server does not support --close-on-exit; run canter serve --replace and retry".into()));
+            return Err(ClientError::Protocol(connected.client.upgrade_hint("This server does not support --close-on-exit; run canter serve --replace and retry")));
         }
         let mut response = connected.client.managed_connect(&self.id).await?;
         let disconnected = self.disconnected.clone();
@@ -111,10 +111,8 @@ impl<C: Connector> Managed<C> {
 }
 
 impl<C: Connector> Connector for Arc<Managed<C>> {
-    async fn connect(&self) -> Result<Connected, String> {
+    async fn connect(&self) -> Result<Connected, crate::ConnectError> {
         let connected = self.connector.connect().await?;
-        self.attach(connected)
-            .await
-            .map_err(|error| error.to_string())
+        self.attach(connected).await.map_err(Into::into)
     }
 }

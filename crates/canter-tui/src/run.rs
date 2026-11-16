@@ -118,15 +118,46 @@ pub struct Connected {
 /// Finds the server again after the connection dropped.
 pub trait Connector: Send + Sync + 'static {
     /// Looks up where the server is now and connects to it.
-    fn connect(&self) -> impl Future<Output = Result<Connected, String>> + Send;
+    fn connect(&self) -> impl Future<Output = Result<Connected, ConnectError>> + Send;
+}
+
+/// Preserve terminal connection failures for non-interactive callers.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct ConnectError {
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl From<String> for ConnectError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            retryable: true,
+        }
+    }
+}
+
+impl From<ClientError> for ConnectError {
+    fn from(error: ClientError) -> Self {
+        let unauthorized = match &error {
+            ClientError::Server { status, .. } => *status == reqwest::StatusCode::UNAUTHORIZED,
+            ClientError::Http(error) => error.status() == Some(reqwest::StatusCode::UNAUTHORIZED),
+            _ => false,
+        };
+        Self {
+            message: error.to_string(),
+            retryable: !unauthorized,
+        }
+    }
 }
 
 /// A server on a fixed socket, such as the fake server.
 pub struct SocketConnector(pub PathBuf);
 
 impl Connector for SocketConnector {
-    async fn connect(&self) -> Result<Connected, String> {
-        let client = Client::new(&self.0).map_err(|error| error.to_string())?;
+    async fn connect(&self) -> Result<Connected, ConnectError> {
+        let client = Client::new(&self.0)?;
         Ok(Connected {
             client,
             warning: None,
@@ -454,6 +485,26 @@ where
     result
 }
 
+fn app_for_client(
+    client: &Client,
+    snapshot: SessionSnapshot,
+    home: Option<String>,
+    env: &BTreeMap<String, String>,
+) -> Result<App, RunError> {
+    if client.is_remote() {
+        let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
+        Ok(App::new_remote(
+            snapshot,
+            home,
+            now_ms(),
+            cwd,
+            env.get("HOME").cloned(),
+        ))
+    } else {
+        Ok(App::new(snapshot, home, now_ms()))
+    }
+}
+
 async fn run_connected<B, C>(
     mut terminal: Terminal<B>,
     mut input: Input,
@@ -497,6 +548,12 @@ where
                         update,
                     },
                     None => {
+                        if client.is_remote() && cwd.is_empty() {
+                            return Err(ClientError::Protocol(
+                                "No remote session found; use --cwd to start a new session".into(),
+                            )
+                            .into());
+                        }
                         none_to_continue = true;
                         Open::New {
                             tags: Default::default(),
@@ -639,7 +696,7 @@ where
     };
 
     let session = snapshot.id.clone();
-    let mut app = App::new(snapshot, home.clone(), now_ms())
+    let mut app = app_for_client(&client, snapshot, home.clone(), &env)?
         .with_client_name(client_name.clone())
         .with_welcome(version.clone())
         .with_status_line(status_line.clone(), env.clone())
@@ -1086,9 +1143,9 @@ async fn require_add_directories(client: &Client) -> Result<(), ClientError> {
     {
         Ok(())
     } else {
-        Err(ClientError::Protocol(
-            "This server does not support /add-dir; run canter serve --replace and retry".into(),
-        ))
+        Err(ClientError::Protocol(client.upgrade_hint(
+            "This server does not support /add-dir; run canter serve --replace and retry",
+        )))
     }
 }
 
@@ -1103,10 +1160,9 @@ async fn require_tags(client: &Client) -> Result<(), ClientError> {
     {
         Ok(())
     } else {
-        Err(ClientError::Protocol(
-            "This server does not support session tags; run canter serve --replace and retry"
-                .into(),
-        ))
+        Err(ClientError::Protocol(client.upgrade_hint(
+            "This server does not support session tags; run canter serve --replace and retry",
+        )))
     }
 }
 
@@ -1121,9 +1177,9 @@ async fn require_fork(client: &Client) -> Result<(), ClientError> {
     {
         Ok(())
     } else {
-        Err(ClientError::Protocol(
-            "This server does not support /fork; run canter serve --replace and retry".into(),
-        ))
+        Err(ClientError::Protocol(client.upgrade_hint(
+            "This server does not support /fork; run canter serve --replace and retry",
+        )))
     }
 }
 
@@ -1941,7 +1997,11 @@ impl<C: Connector> Chat<C> {
                 return Ok(ControlFlow::Continue(None));
             }
         };
-        let cwd = ui.app().snapshot().settings.cwd.clone();
+        let cwd = if self.client.is_remote() {
+            self.client.remote_cwd.clone().unwrap_or_default()
+        } else {
+            ui.app().snapshot().settings.cwd.clone()
+        };
         let picker = Picker::new(sessions, cwd, self.home.clone());
         let dir = ui.app().tab_dir();
         let tab = (tab, dir.as_str());
@@ -2015,6 +2075,14 @@ impl<C: Connector> Chat<C> {
         snapshot: SessionSnapshot,
         failed: &str,
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
+        let app = match app_for_client(&self.client, snapshot, self.home.clone(), &self.env) {
+            Ok(app) => app,
+            Err(error) => {
+                ui.app_mut().warning(&format!("{failed}: {error}"));
+                return None;
+            }
+        };
+        let snapshot = app.snapshot();
         let stream = match self
             .client
             .subscribe(&snapshot.id, snapshot.last_event_seq)
@@ -2039,18 +2107,18 @@ impl<C: Connector> Chat<C> {
         ));
         self.sender = sender;
         self.session = snapshot.id.clone();
-        self.naming = AutoName::new(&snapshot, false, self.sender.clone());
+        self.naming = AutoName::new(snapshot, false, self.sender.clone());
         let viewing_child = snapshot
             .parent
             .as_ref()
             .is_some_and(|parent| parent.session_id == ui.app().main_session());
         let publication = match self.session_file.as_mut() {
             Some(file) if !viewing_child => {
-                Some(publish_session(file, &self.client, &snapshot).await)
+                Some(publish_session(file, &self.client, snapshot).await)
             }
             _ => None,
         };
-        let app = App::new(snapshot, self.home.clone(), now_ms())
+        let app = app
             .with_client_name(self.client_name.clone())
             .with_welcome(self.version.clone())
             .with_status_line(self.status_line.clone(), self.env.clone())
@@ -2276,7 +2344,7 @@ impl<C: Connector> Chat<C> {
                     let result = async {
                         let info = client.info().await?;
                         if !info.features.unwrap_or_default().iter().any(|feature| feature == "goals") {
-                            return Err(ClientError::Protocol("This server does not support /goal; run canter serve --replace and retry".into()));
+                            return Err(ClientError::Protocol(client.upgrade_hint("This server does not support /goal; run canter serve --replace and retry")));
                         }
                         client.goal(&session, &command).await
                     }.await;
@@ -2339,7 +2407,7 @@ impl<C: Connector> Chat<C> {
                     let result = async {
                         let info = client.info().await.map_err(|e| e.to_string())?;
                         if !info.features.as_ref().is_some_and(|features| features.iter().any(|feature| feature == "review")) {
-                            return Err("The running server cannot enforce read-only review; run canter serve --replace and try again".into());
+                            return Err(client.upgrade_hint("The running server cannot enforce read-only review; run canter serve --replace and try again"));
                         }
                         let params =
                             crate::review::prepare(&cwd, &env, &target, &client_name).await?;
@@ -2757,7 +2825,10 @@ async fn pump<C: Connector>(
                     break stream;
                 }
                 Err(reason) => {
-                    if sender.send(Message::Reconnecting(reason)).is_err() {
+                    if sender
+                        .send(Message::Reconnecting(reason.to_string()))
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -2797,23 +2868,19 @@ async fn main_pump<C: Connector>(
 }
 
 /// Connects again; `previous` is the server process the last stream came from.
-async fn reconnect<C: Connector>(
+pub async fn reconnect<C: Connector>(
     connector: &C,
     previous: Option<&str>,
     session: &str,
     env: &BTreeMap<String, String>,
     cursor: u64,
-) -> Result<(Connected, EventStream), String> {
+) -> Result<(Connected, EventStream), ConnectError> {
     let connected = connector.connect().await?;
     let client = &connected.client;
     // Resuming on the same server would open a session someone closed.
     let same_server = connected.server.is_some() && connected.server.as_deref() == previous;
     if !same_server {
-        let snapshot = client
-            .read_session(session)
-            .await
-            .map_err(|error| error.to_string())?
-            .session;
+        let snapshot = client.read_session(session).await?.session;
         // Old data has no reason. Keep its restart behavior, and also recover
         // non-closed sessions left behind by a crashed server.
         if snapshot.status != SessionStatus::Closed
@@ -2822,16 +2889,10 @@ async fn reconnect<C: Connector>(
                 None | Some(SessionCloseReason::ServerShutdown)
             )
         {
-            client
-                .resume(session, env)
-                .await
-                .map_err(|error| error.to_string())?;
+            client.resume(session, env).await?;
         }
     }
-    let stream = client
-        .subscribe(session, cursor)
-        .await
-        .map_err(|error| error.to_string())?;
+    let stream = client.subscribe(session, cursor).await?;
     Ok((connected, stream))
 }
 

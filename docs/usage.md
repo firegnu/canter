@@ -4,6 +4,8 @@ canter is a coding agent with one resident server per machine and many clients. 
 
 canter is developed and used on macOS. The sandbox and the login service use macOS features.
 
+For a client on another machine, see [Remote connections](remote.md): named servers, explicit server paths, HTTPS, and SSH forwarding. Without `--server`, local behavior stays the same.
+
 ## Getting started
 
 Build from a clone with Rust stable:

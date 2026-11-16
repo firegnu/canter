@@ -47,10 +47,9 @@ where
         .iter()
         .any(|f| f == "folderTrust")
     {
-        return Err(ClientError::Protocol(
-            "This server does not support folder trust; run canter serve --replace and retry"
-                .into(),
-        )
+        return Err(ClientError::Protocol(client.upgrade_hint(
+            "This server does not support folder trust; run canter serve --replace and retry",
+        ))
         .into());
     }
     let trust = match client.folder_trust(cwd).await {

@@ -112,6 +112,7 @@ Settings live in `~/.canter/config.json`. Most changes are picked up at the next
 ## Documentation
 
 - [`docs/usage.md`](docs/usage.md): configuration, command line, terminal commands and keys, models, permissions, sandbox, tools, hooks, MCP, skills, sub-agents, memory, plan mode, goals, sessions, `canter exec`, statistics and doctor.
+- [`docs/remote.md`](docs/remote.md): named remote servers, HTTPS with Caddy and an SSH tunnel, and testing with SSH forwarding alone.
 - [`docs/DESIGN.md`](docs/DESIGN.md): the decisions and their reasons (Chinese).
 
 ## Development

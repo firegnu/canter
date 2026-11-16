@@ -1,23 +1,39 @@
 use canter_protocol::{DoctorResponse, DoctorStatus};
 
 pub async fn run(context: crate::Context) -> Result<u8, String> {
-    let report = match canter_server::discover(&context.state_dir).await {
-        Ok(Some(connection)) => {
-            let client = crate::connected(connection)?.client;
-            match client.doctor(crate::VERSION).await {
-                Ok(report) => report,
-                Err(error) => {
-                    let reason = match error {
-                        canter_tui::client::ClientError::Protocol(message) => Some(message),
-                        _ => None,
-                    };
-                    canter_server::doctor_offline(context.state_dir, crate::VERSION.into(), reason)
+    let report = if context.server.is_some() {
+        let connection = context.connect().await?;
+        if let Some(warning) = &connection.warning {
+            eprintln!("{warning}");
+        }
+        connection
+            .client
+            .doctor(crate::VERSION)
+            .await
+            .map_err(|error| error.to_string())?
+    } else {
+        match canter_server::discover(&context.state_dir).await {
+            Ok(Some(connection)) => {
+                let client = crate::connected(connection)?.client;
+                match client.doctor(crate::VERSION).await {
+                    Ok(report) => report,
+                    Err(error) => {
+                        let reason = match error {
+                            canter_tui::client::ClientError::Protocol(message) => Some(message),
+                            _ => None,
+                        };
+                        canter_server::doctor_offline(
+                            context.state_dir,
+                            crate::VERSION.into(),
+                            reason,
+                        )
                         .await
+                    }
                 }
             }
-        }
-        Ok(None) | Err(_) => {
-            canter_server::doctor_offline(context.state_dir, crate::VERSION.into(), None).await
+            Ok(None) | Err(_) => {
+                canter_server::doctor_offline(context.state_dir, crate::VERSION.into(), None).await
+            }
         }
     };
     print(&report);

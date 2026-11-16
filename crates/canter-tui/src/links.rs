@@ -206,6 +206,7 @@ type Spawn = fn(Box<dyn FnOnce() + Send>) -> io::Result<()>;
 
 /// Opens links, and says in the status line that it did, or why not.
 pub(crate) struct Opener {
+    remote_paths: bool,
     system: LinkSystem,
     /// Starts the program in place of the system (for tests).
     launch: Option<Arc<Mutex<Launch>>>,
@@ -232,6 +233,10 @@ impl Default for Opener {
 }
 
 impl Opener {
+    pub fn with_remote_paths(mut self, remote: bool) -> Self {
+        self.remote_paths = remote;
+        self
+    }
     /// Opens links as on `system`, but starts nothing: `launch` gets each
     /// command instead (for tests).
     pub fn with_launcher(
@@ -243,6 +248,7 @@ impl Opener {
 
     fn new(system: LinkSystem, launch: Option<Arc<Mutex<Launch>>>) -> Self {
         Self {
+            remote_paths: false,
             system,
             launch,
             spawn: run_apart,
@@ -255,6 +261,10 @@ impl Opener {
     /// the path and starting the program are on a thread of their own:
     /// [`Opener::poll`] says how it went. The notes go where the copier's do.
     pub fn open(&mut self, target: &Target, copier: &mut Copier, now: i64, width: usize) {
+        if self.remote_paths && matches!(target, Target::Path(_)) {
+            copier.copy_link(target.text().to_owned(), "Path copied");
+            return;
+        }
         match (self.system, target) {
             (LinkSystem::Remote, _) => {
                 copier.copy_link(target.text().to_owned(), "Link copied");
@@ -599,5 +609,56 @@ mod tests {
         assert_eq!(truncate_middle("abcdefghij", 7), "abc…hij");
         assert_eq!(truncate_middle("abcdefghij", 6), "abc…ij");
         assert_eq!(truncate_middle("中文中文中文", 7), "中…中文");
+    }
+}
+
+#[cfg(test)]
+mod remote_tests {
+    use super::*;
+    #[test]
+    fn remote_paths_copy_without_metadata_or_launch_while_web_links_open() {
+        let (opened, commands) = mpsc::channel();
+        let (copied, copies) = mpsc::channel();
+        let mut opener = Opener::with_launcher(LinkSystem::MacOs, move |command| {
+            opened
+                .send(
+                    command
+                        .get_args()
+                        .map(|arg| arg.to_string_lossy().into_owned())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+            Ok(())
+        })
+        .with_remote_paths(true);
+        let mut copier = Copier::with_writer(move |value| {
+            copied.send(value.to_owned()).unwrap();
+            Ok(())
+        });
+        opener.open(
+            &Target::Path("/server/only/report.html".into()),
+            &mut copier,
+            0,
+            80,
+        );
+        assert_eq!(
+            copies
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            "/server/only/report.html"
+        );
+        assert!(commands.try_recv().is_err());
+        opener.open(
+            &Target::Web("https://example.com".into()),
+            &mut copier,
+            0,
+            80,
+        );
+        assert_eq!(
+            commands
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            ["https://example.com"]
+        );
     }
 }

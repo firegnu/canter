@@ -145,6 +145,7 @@ async fn managed_terminal_process() {
     let terminal = Terminal::start(
         &args,
         Context {
+            server: None,
             state_dir: root.join("state"),
             executable: env!("CARGO_BIN_EXE_canter").into(),
             cwd: root.join("work"),
