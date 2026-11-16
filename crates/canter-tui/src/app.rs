@@ -681,6 +681,7 @@ impl Shown {
 
 pub struct App {
     remote: bool,
+    workspace: Option<crate::client::Client>,
     client_directory: Option<(String, Option<String>)>,
     suggestion: Option<String>,
     suggestion_dismissed: bool,
@@ -865,10 +866,47 @@ impl App {
     /// Counts the lines changed in git since the last commit for the `diff`
     /// item, in the background (on a tokio runtime) while the screen draws.
     pub fn with_git_diff(mut self) -> Self {
-        if !self.remote {
+        if self.git_diff.is_none() {
             self.git_diff = Some(crate::statusline::git_diff::GitDiff::new());
         }
         self
+    }
+
+    pub fn with_workspace(mut self, client: crate::client::Client) -> Self {
+        self.workspace = Some(client);
+        self.with_git_diff()
+    }
+
+    pub(crate) fn reconnect_workspace(&mut self, client: crate::client::Client) {
+        self.workspace = Some(client);
+        self.git_diff = Some(crate::statusline::git_diff::GitDiff::new());
+        self.mentions.scan = None;
+        self.mentions.matches = None;
+    }
+
+    pub fn set_workspace_summary(&mut self, summary: canter_protocol::WorkspaceSummary) {
+        self.branch = summary.branch.clone();
+        self.git_diff
+            .get_or_insert_with(crate::statusline::git_diff::GitDiff::new)
+            .set(&self.snapshot.settings.cwd, summary);
+    }
+
+    pub async fn load_workspace(&mut self) {
+        let Some(client) = &self.workspace else {
+            return;
+        };
+        let result = async {
+            client.require_workspace().await?;
+            client.workspace_summary(&self.snapshot.id, false).await
+        }
+        .await;
+        match result {
+            Ok(summary) => self.set_workspace_summary(summary),
+            Err(error) => {
+                self.git_diff = None;
+                self.warning(&error.to_string());
+            }
+        }
     }
 
     /// The theme `tui.json` names, or `terminal`; one not found is drawn as
@@ -974,14 +1012,21 @@ impl App {
     }
 
     pub(crate) fn update_status_line(&mut self, now_ms: i64) {
-        if let Some(git_diff) = &mut self.git_diff {
-            git_diff.poll(&self.snapshot.settings.cwd);
+        let branch_due = self
+            .status_line
+            .as_mut()
+            .is_some_and(|line| line.branch_due(&self.snapshot.settings.cwd));
+        if let (Some(git_diff), Some(client)) = (&mut self.git_diff, &self.workspace) {
+            git_diff.poll(
+                client,
+                &self.snapshot.id,
+                &self.snapshot.settings.cwd,
+                branch_due,
+            );
+            self.branch = git_diff.branch();
         }
-        let Some(line) = &mut self.status_line else {
+        if self.status_line.is_none() {
             return;
-        };
-        if !self.remote && line.branch_due(&self.snapshot.settings.cwd) {
-            self.branch = crate::git::branch(&self.snapshot.settings.cwd);
         }
         let input = self.status_line_input(now_ms);
         if let Some(status_line) = &mut self.status_line {
@@ -1081,12 +1126,9 @@ impl App {
         let remote = client_directory.is_some();
         Self {
             remote,
+            workspace: None,
             client_directory,
-            branch: if remote {
-                None
-            } else {
-                crate::git::branch(&snapshot.settings.cwd)
-            },
+            branch: None,
             suggestion: None,
             suggestion_dismissed: false,
             from_suggestion: false,
@@ -1365,9 +1407,6 @@ impl App {
                 };
                 if self.interrupting.as_ref() == Some(&turn.id) {
                     self.interrupting = None;
-                }
-                if !self.remote {
-                    self.branch = crate::git::branch(&self.snapshot.settings.cwd);
                 }
                 self.refresh_git_diff();
                 // As Codex: not when a queued message starts the next turn.
@@ -2040,11 +2079,6 @@ impl App {
     /// a command that takes none, such as pasted lines, is refused, not
     /// dropped.
     fn run_command(&mut self, command: &Command, args: &str) -> Option<Action> {
-        if self.remote && matches!(command.name, "diff" | "review" | "files") {
-            self.input.clear();
-            self.information("Not available on remote servers yet");
-            return None;
-        }
         // Like sending, so that what the command shows is in view.
         self.scroll.top = None;
         let draft = self.input.clone();
@@ -2089,9 +2123,6 @@ impl App {
     /// and how many match. None while there is no `@` word, nothing found
     /// so far matches, or Esc closed the list.
     fn mention_list(&mut self) -> Option<(mention::Word, usize, usize)> {
-        if self.remote {
-            return None;
-        }
         if self.input_history.showing(&self.input) {
             return None;
         }
@@ -2137,15 +2168,6 @@ impl App {
     /// takes what the walk found since the last frame, and stops it once
     /// the word is gone.
     fn scan_mentions(&mut self) {
-        if self.remote {
-            let active = mention::word(self.input.text(), self.input.cursor()).is_some();
-            if active && !self.mentions.closed {
-                self.information("Not available on remote servers yet");
-            }
-            self.mentions.closed = active;
-            return;
-        }
-
         if mention::word(self.input.text(), self.input.cursor()).is_none() {
             self.mentions.scan = None;
             self.mentions.matches = None;
@@ -2160,9 +2182,25 @@ impl App {
                 scan.poll()
             }
             scan => {
-                *scan = Some(mention::Scan::start(root, additional_directories));
+                let Some(client) = &self.workspace else {
+                    return;
+                };
+                *scan = Some(mention::Scan::start(
+                    client.clone(),
+                    self.snapshot.id.clone(),
+                    root,
+                    additional_directories,
+                ));
                 self.mentions.matches = None;
             }
+        }
+        if let Some(error) = self
+            .mentions
+            .scan
+            .as_mut()
+            .and_then(|scan| scan.error.take())
+        {
+            self.warning(&error);
         }
     }
 
@@ -2835,8 +2873,8 @@ impl App {
     }
 
     /// `/files`: opens above the input box.
-    pub async fn show_files(&mut self) {
-        let report = crate::files::popup(&self.snapshot, self.home.as_deref()).await;
+    pub fn show_files(&mut self, status: canter_protocol::WorkspaceStatus) {
+        let report = crate::files::popup(&self.snapshot, self.home.as_deref(), status);
         self.open_report(report);
     }
 

@@ -1,6 +1,17 @@
 use canter_protocol::{InputMode, SessionInputParams, UserInput};
-use canter_tui::review::prepare;
 use std::{collections::BTreeMap, path::Path, process::Command};
+#[path = "support/workspace.rs"]
+mod workspace;
+
+async fn prepare(
+    cwd: &str,
+    env: &BTreeMap<String, String>,
+    target: &str,
+    name: &str,
+) -> Result<SessionInputParams, String> {
+    let server = workspace::Server::with_env(cwd, &[], env.clone());
+    canter_tui::review::prepare(&server.client, "s1", target, name).await
+}
 
 fn environment(root: &Path) -> BTreeMap<String, String> {
     let home = root.join("home");

@@ -11,6 +11,7 @@ struct Screen {
     root: tempfile::TempDir,
     ui: Ui<TestBackend>,
     now: i64,
+    _workspace: crate::test_workspace::Server,
 }
 
 impl Screen {
@@ -67,13 +68,16 @@ impl Screen {
         let mut snapshot = SessionSnapshot::empty("s1");
         snapshot.settings.cwd = home.clone();
         snapshot.settings.model = "test-model".into();
-        let app = App::new(snapshot, Some(home), 0)
+        let app = App::new(snapshot, Some(home.clone()), 0)
             .with_welcome("0.1.0 · test")
             .with_status_line(Some("sh ./status.sh".into()), env);
+        let workspace = crate::test_workspace::Server::new(&home, &[], Some(&home));
+        let app = workspace.attach(app);
         Self {
             root,
             ui: Ui::new(TestBackend::new(80, 12), app).unwrap(),
             now: crate::now_ms(),
+            _workspace: workspace,
         }
     }
 
@@ -674,7 +678,12 @@ async fn branch_changes_refresh_the_script_while_idle() {
 async fn outside_a_git_repository_no_lines_are_counted() {
     let dir = tempfile::tempdir().unwrap();
     assert_eq!(
-        crate::git::changed_lines(dir.path().to_str().unwrap()).await,
+        crate::test_workspace::Server::new(dir.path().to_str().unwrap(), &[], None)
+            .client
+            .workspace_summary("s1", true)
+            .await
+            .unwrap()
+            .changed_lines,
         None
     );
 }

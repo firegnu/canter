@@ -346,6 +346,94 @@ impl Client {
         decode(self.http.get(self.url(routes::INFO, &[])).send().await?).await
     }
 
+    pub async fn require_workspace(&self) -> Result<(), ClientError> {
+        if !self
+            .info()
+            .await?
+            .features
+            .unwrap_or_default()
+            .iter()
+            .any(|feature| feature == "workspaceQueries")
+        {
+            return Err(ClientError::Protocol(self.upgrade_hint("This server does not support workspace queries; run canter serve --replace and retry")));
+        }
+        Ok(())
+    }
+
+    pub async fn workspace_summary(
+        &self,
+        session: &str,
+        changed_lines: bool,
+    ) -> Result<canter_protocol::WorkspaceSummary, ClientError> {
+        let mut url = self.url(routes::WORKSPACE_SUMMARY, &[session]);
+        url.query_pairs_mut()
+            .append_pair("changedLines", if changed_lines { "true" } else { "false" });
+        decode(self.http.get(url).send().await?).await
+    }
+
+    pub async fn workspace_diff(
+        &self,
+        session: &str,
+    ) -> Result<canter_protocol::WorkspaceDiff, ClientError> {
+        self.require_workspace().await?;
+        decode(
+            self.http
+                .get(self.url(routes::WORKSPACE_DIFF, &[session]))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn workspace_status(
+        &self,
+        session: &str,
+    ) -> Result<canter_protocol::WorkspaceStatus, ClientError> {
+        self.require_workspace().await?;
+        decode(
+            self.http
+                .get(self.url(routes::WORKSPACE_STATUS, &[session]))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn workspace_review(
+        &self,
+        session: &str,
+        target: &str,
+        client_name: &str,
+    ) -> Result<SessionInputParams, ClientError> {
+        self.require_workspace().await?;
+        let mut url = self.url(routes::WORKSPACE_REVIEW, &[session]);
+        url.query_pairs_mut()
+            .append_pair("target", target)
+            .append_pair("clientName", client_name);
+        decode(self.http.get(url).send().await?).await
+    }
+
+    pub async fn workspace_entries(
+        &self,
+        session: &str,
+    ) -> Result<WorkspaceEntriesStream, ClientError> {
+        self.require_workspace().await?;
+        let response = self
+            .http
+            .get(self.url(routes::WORKSPACE_ENTRIES, &[session]))
+            .header(ACCEPT, "text/event-stream")
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(server_error(response.status(), &response.bytes().await?));
+        }
+        Ok(WorkspaceEntriesStream {
+            response,
+            parser: SseParser::default(),
+            done: false,
+        })
+    }
+
     pub async fn doctor(
         &self,
         client_version: &str,
@@ -1043,6 +1131,53 @@ impl Client {
 pub struct BtwStream {
     response: reqwest::Response,
     parser: SseParser,
+}
+
+/// One walk, with no replay or pagination that would restart the traversal.
+pub struct WorkspaceEntriesStream {
+    response: reqwest::Response,
+    parser: SseParser,
+    done: bool,
+}
+impl WorkspaceEntriesStream {
+    pub async fn next(
+        &mut self,
+    ) -> Option<Result<canter_protocol::WorkspaceEntriesBatch, ClientError>> {
+        if self.done {
+            return None;
+        }
+        loop {
+            if let Some(data) = self.parser.ready.pop_front() {
+                return Some(
+                    match serde_json::from_str::<canter_protocol::WorkspaceEntriesBatch>(&data) {
+                        Ok(batch) => {
+                            self.done = batch.done;
+                            match &batch.error {
+                                Some(error) => Err(ClientError::Protocol(error.clone())),
+                                None => Ok(batch),
+                            }
+                        }
+                        Err(error) => Err(ClientError::Protocol(format!(
+                            "bad workspace file batch: {error}"
+                        ))),
+                    },
+                );
+            }
+            match self.response.chunk().await {
+                Ok(Some(bytes)) => self.parser.feed(&bytes),
+                Ok(None) => {
+                    self.done = true;
+                    return Some(Err(ClientError::Protocol(
+                        "Workspace file scan ended before completion".into(),
+                    )));
+                }
+                Err(error) => {
+                    self.done = true;
+                    return Some(Err(error.into()));
+                }
+            }
+        }
+    }
 }
 impl BtwStream {
     pub async fn next(&mut self) -> Option<Result<canter_protocol::BtwEvent, ClientError>> {

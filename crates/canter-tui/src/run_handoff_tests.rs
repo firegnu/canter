@@ -82,6 +82,7 @@ async fn clear_context_plan_resolves_then_starts_a_new_session_with_selected_per
             assert!(!text.contains("Queued follow-up"));
             assert!(!text.contains("Steering correction"));
             create.json(json!({"session":fresh,"eventSeq":1}));
+            super::retract_tests::workspace_unavailable(requests).await;
             let events = next(requests).await;
             assert_eq!(events.path, "/v1/events");
             let open = futures_util::stream::pending::<Result<axum::body::Bytes, io::Error>>();
@@ -188,6 +189,7 @@ async fn esc_twice_returns_to_the_original_session_and_shows_its_conversation() 
             let resume = next(requests).await;
             assert_eq!(resume.path, "/v1/sessions/original/resume");
             resume.json(json!({"session":original,"eventSeq":4}));
+            super::retract_tests::workspace_unavailable(requests).await;
             let events = next(requests).await;
             assert_eq!(events.path, "/v1/events");
             let open = futures_util::stream::pending::<Result<axum::body::Bytes, io::Error>>();

@@ -1,8 +1,8 @@
 use crate::approval::shorten_home;
-use crate::git::Status;
 use crate::report::{Part, Report, clean};
 use crate::text::str_width;
 use crate::theme;
+use canter_protocol::WorkspaceStatus as Status;
 use canter_protocol::{Item, ItemStatus, PatchChangeKind, SessionSnapshot};
 use ratatui::style::Style;
 use ratatui::text::Span;
@@ -20,7 +20,7 @@ pub(crate) fn display_path(path: &Path, cwd: &str, home: Option<&str>) -> String
 
 /// `/files`: what the session read, what canter changed and git's status,
 /// each a section.
-pub(crate) async fn popup(snapshot: &SessionSnapshot, home: Option<&str>) -> Report {
+pub(crate) fn popup(snapshot: &SessionSnapshot, home: Option<&str>, git: Status) -> Report {
     let cwd = &snapshot.settings.cwd;
     let mut read = Vec::new();
     let mut seen = HashSet::new();
@@ -63,10 +63,9 @@ pub(crate) async fn popup(snapshot: &SessionSnapshot, home: Option<&str>) -> Rep
             _ => {}
         }
     }
-    let git = crate::git::status(cwd, home).await;
     let git_count = match &git {
         Status::Repository { entries, .. } => entries.len(),
-        Status::Unavailable(_) => 0,
+        Status::Unavailable { .. } => 0,
     };
     let title = crate::report::title(
         "Files",
@@ -115,7 +114,7 @@ pub(crate) async fn popup(snapshot: &SessionSnapshot, home: Option<&str>) -> Rep
     }
     body.push(Part::blank());
     match git {
-        Status::Unavailable(why) => {
+        Status::Unavailable { reason: why } => {
             body.push(heading("Git status", None));
             body.push(none(&format!("({why})")));
         }

@@ -1,6 +1,7 @@
 //! The info-row branch read from `.git`, and a bounded read-only git status
 //! query for `/files`.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -71,9 +72,13 @@ fn branch_of(header: &str) -> String {
 
 /// Read-only status, with all git work bounded by one timeout. Dropping an
 /// unfinished output future kills and reaps its child through tokio.
-pub(crate) async fn status(cwd: &str, home: Option<&str>) -> Status {
+pub(crate) async fn status(
+    cwd: &str,
+    home: Option<&str>,
+    env: &BTreeMap<String, String>,
+) -> Status {
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        let root = git_output(cwd, &["rev-parse", "--show-toplevel"]).await?;
+        let root = git_output(cwd, env, &["rev-parse", "--show-toplevel"]).await?;
         if !root.status.success() {
             return Ok(Status::Unavailable(
                 if String::from_utf8_lossy(&root.stderr).contains("not a git repository") {
@@ -91,7 +96,7 @@ pub(crate) async fn status(cwd: &str, home: Option<&str>) -> Status {
             Some(home) => tokio::fs::canonicalize(home).await.ok(),
             None => None,
         };
-        let mut arguments = filter_overrides(cwd).await?;
+        let mut arguments = filter_overrides(cwd, env).await?;
         arguments.extend(
             [
                 "status",
@@ -105,6 +110,7 @@ pub(crate) async fn status(cwd: &str, home: Option<&str>) -> Status {
         );
         let output = git_output(
             cwd,
+            env,
             &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
         )
         .await?;
@@ -119,7 +125,7 @@ pub(crate) async fn status(cwd: &str, home: Option<&str>) -> Status {
             if let Some(path) = entry.get(3..) {
                 changes.push((
                     entry[..2].to_owned(),
-                    crate::files::display_path(
+                    super::display_path(
                         &root.join(path),
                         &display_cwd.to_string_lossy(),
                         display_home.as_ref().and_then(|home| home.to_str()),
@@ -142,10 +148,14 @@ pub(crate) async fn status(cwd: &str, home: Option<&str>) -> Status {
 
 // Status may hash worktree contents through a configured clean/process filter.
 // Disable these in the superproject and in status's recursive submodule queries.
-pub(crate) async fn filter_overrides(cwd: &str) -> std::io::Result<Vec<String>> {
+pub(crate) async fn filter_overrides(
+    cwd: &str,
+    env: &BTreeMap<String, String>,
+) -> std::io::Result<Vec<String>> {
     const KEYS: &str = r"^filter\..*\.(clean|smudge|process|required)$";
     let local = git_output(
         cwd,
+        env,
         &["config", "--null", "--name-only", "--get-regexp", KEYS],
     )
     .await?;
@@ -153,7 +163,7 @@ pub(crate) async fn filter_overrides(cwd: &str) -> std::io::Result<Vec<String>> 
         return Err(std::io::Error::other("could not inspect git filters"));
     }
     // Fixed command: no repository-provided strings are interpolated into a shell.
-    let modules = git_output(cwd, &["submodule", "--quiet", "foreach", "--recursive",
+    let modules = git_output(cwd, env, &["submodule", "--quiet", "foreach", "--recursive",
         r#"git config --null --name-only --get-regexp '^filter\..*\.(clean|smudge|process|required)$' || test "$?" = 1"#,
     ]).await?;
     if !modules.status.success() {
@@ -183,16 +193,23 @@ pub(crate) async fn filter_overrides(cwd: &str) -> std::io::Result<Vec<String>> 
     Ok(arguments)
 }
 
-async fn git_output(cwd: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
-    command(cwd).args(args).output().await
+async fn git_output(
+    cwd: &str,
+    env: &BTreeMap<String, String>,
+    args: &[&str],
+) -> std::io::Result<std::process::Output> {
+    command(cwd, env).args(args).output().await
 }
 
-pub(crate) fn command(cwd: &str) -> tokio::process::Command {
+pub(crate) fn command(cwd: &str, env: &BTreeMap<String, String>) -> tokio::process::Command {
     let mut command = tokio::process::Command::new("git");
     command
         .current_dir(cwd)
         .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env(
+            "PATH",
+            env.get("PATH").map(String::as_str).unwrap_or_default(),
+        )
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -219,10 +236,7 @@ pub(crate) const LIMIT: usize = 256 * 1024;
 pub(crate) const LIST_LIMIT: usize = 32 * 1024;
 
 /// What a command printed, at most [`LIMIT`] bytes of it.
-pub(crate) struct Output {
-    pub text: String,
-    pub truncated: bool,
-}
+pub(crate) use canter_protocol::WorkspaceOutput as Output;
 
 /// The uncommitted changes of a repository, as git printed them.
 pub(crate) struct Local {
@@ -239,18 +253,20 @@ pub(crate) struct Local {
 /// The staged and unstaged diffs and the untracked files of the repository
 /// holding `cwd`, without running programs the repository configures. An
 /// error is `<program>: <why>`, as [`run`] gives it.
-pub(crate) async fn local(cwd: &str) -> Result<Local, String> {
-    let root = run(command(cwd).args(["rev-parse", "--show-toplevel"])).await?;
+pub(crate) async fn local(cwd: &str, env: &BTreeMap<String, String>) -> Result<Local, String> {
+    let root = run(command(cwd, env).args(["rev-parse", "--show-toplevel"])).await?;
     let root = root
         .text
         .strip_suffix('\n')
         .unwrap_or(&root.text)
         .to_owned();
-    let filters = filter_overrides(&root).await.map_err(|e| e.to_string())?;
-    let staged = run(&mut diff(&root, &filters, true, false)).await?;
-    let unstaged = run(&mut diff(&root, &filters, false, false)).await?;
+    let filters = filter_overrides(&root, env)
+        .await
+        .map_err(|e| e.to_string())?;
+    let staged = run(&mut diff(&root, env, &filters, true, false)).await?;
+    let unstaged = run(&mut diff(&root, env, &filters, false, false)).await?;
     let untracked =
-        run(command(&root).args(["ls-files", "--others", "--exclude-standard"])).await?;
+        run(command(&root, env).args(["ls-files", "--others", "--exclude-standard"])).await?;
     Ok(Local {
         root,
         filters,
@@ -265,11 +281,12 @@ pub(crate) async fn local(cwd: &str) -> Result<Local, String> {
 /// `--stat`.
 pub(crate) fn diff(
     root: &str,
+    env: &BTreeMap<String, String>,
     filters: &[String],
     cached: bool,
     stat: bool,
 ) -> tokio::process::Command {
-    let mut command = diff_options(root, filters);
+    let mut command = diff_options(root, env, filters);
     if cached {
         command.arg("--cached");
     }
@@ -281,8 +298,12 @@ pub(crate) fn diff(
 }
 
 /// `git diff` and its options as [`diff`] runs it, before what to compare.
-fn diff_options(root: &str, filters: &[String]) -> tokio::process::Command {
-    let mut command = command(root);
+fn diff_options(
+    root: &str,
+    env: &BTreeMap<String, String>,
+    filters: &[String],
+) -> tokio::process::Command {
+    let mut command = command(root, env);
     command.env("GIT_NO_LAZY_FETCH", "1").args(filters).args([
         "-c",
         "diff.submodule=short",
@@ -307,19 +328,19 @@ fn diff_options(root: &str, filters: &[String]) -> tokio::process::Command {
 /// before the first commit, the staged ones. Binary files count no lines and
 /// untracked files are left out. Run as [`local`] runs git, read-only and
 /// within 2 seconds; `None` outside a repository, when git fails or is late.
-pub(crate) async fn changed_lines(cwd: &str) -> Option<(u64, u64)> {
+pub(crate) async fn changed_lines(cwd: &str, env: &BTreeMap<String, String>) -> Option<(u64, u64)> {
     let count = async {
-        let root = run(command(cwd).args(["rev-parse", "--show-toplevel"]))
+        let root = run(command(cwd, env).args(["rev-parse", "--show-toplevel"]))
             .await
             .ok()?;
         let root = root.text.strip_suffix('\n').unwrap_or(&root.text);
-        let filters = filter_overrides(root).await.ok()?;
-        let head = command(root)
+        let filters = filter_overrides(root, env).await.ok()?;
+        let head = command(root, env)
             .args(["rev-parse", "--verify", "--quiet", "HEAD"])
             .output()
             .await
             .ok()?;
-        let mut diff = diff_options(root, &filters);
+        let mut diff = diff_options(root, env, &filters);
         diff.arg("--numstat")
             .arg(if head.status.success() {
                 "HEAD"

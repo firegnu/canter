@@ -4,6 +4,8 @@
 //! which cycles the permission modes `/mode` sets.
 
 use canter_protocol::{Event, PermissionMode, SessionSnapshot, SessionUpdateParams};
+#[path = "support/workspace.rs"]
+mod workspace;
 use canter_tui::{ANSWER_GUARD_MS, Action, App, GoalCommand, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
@@ -1780,7 +1782,7 @@ async fn files_lists_deduplicated_history_and_isolated_git_status() {
         screen.event(json!({"type":"item.completed","turnId":"t1","item":{"type":"fileChange","id":id,"changes":[{"path":cwd.join("created.txt"),"kind":{"type":kind},"diff":""}],"status":"completed"}}));
     }
     screen.event(json!({"type":"item.completed","turnId":"t1","item":{"type":"fileChange","id":"delete","changes":[{"path":cwd.join("gone.txt"),"kind":{"type":"delete"},"diff":""}],"status":"completed"}}));
-    screen.ui.app_mut().show_files().await;
+    workspace::files(screen.ui.app_mut(), Some(home.to_str().unwrap())).await;
     screen.draw();
     let shown = screen.text();
     assert!(
@@ -1820,7 +1822,7 @@ async fn files_lists_deduplicated_history_and_isolated_git_status() {
     snapshot.settings.cwd = plain.to_string_lossy().into_owned();
     let mut screen = Screen::sized(80, HEIGHT);
     screen.ui = Ui::new(TestBackend::new(80, HEIGHT), App::new(snapshot, None, NOW)).unwrap();
-    screen.ui.app_mut().show_files().await;
+    workspace::files(screen.ui.app_mut(), None).await;
     screen.draw();
     let shown = screen.text();
     assert_eq!(shown.matches("(none)").count(), 2, "{shown}");

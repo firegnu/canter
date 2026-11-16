@@ -16,6 +16,8 @@ use ratatui::style::{Color, Modifier};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use unicode_width::UnicodeWidthStr;
+#[path = "support/workspace.rs"]
+mod workspace;
 
 const SESSION: &str = "s1";
 const WIDTH: u16 = 80;
@@ -75,6 +77,7 @@ impl Home {
         let app = App::new(snapshot, Some(self.root.path().to_str().unwrap().into()), 0)
             .with_welcome("0.1.0 · a3b8fe7")
             .with_status_line(script.map(str::to_owned), self.env.clone());
+        let app = workspace::branch(app);
         let mut screen = Screen {
             ui: Ui::new(TestBackend::new(WIDTH, HEIGHT), app).unwrap(),
             seq: 0,

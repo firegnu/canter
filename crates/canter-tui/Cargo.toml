@@ -20,7 +20,6 @@ pulldown-cmark.workspace = true
 unicode-width.workspace = true
 chrono.workspace = true
 nix.workspace = true
-ignore.workspace = true
 terminal-colorsaurus.workspace = true
 similar = { workspace = true, features = ["inline"] }
 syntect.workspace = true
@@ -28,3 +27,6 @@ two-face.workspace = true
 arboard.workspace = true
 tempfile.workspace = true
 base64 = "=0.23.1"
+
+[dev-dependencies]
+canter-server = { path = "../canter-server", features = ["test-support"] }

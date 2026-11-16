@@ -682,11 +682,41 @@ async fn review_requires_the_running_servers_review_feature_before_sending() {
             .and_then(|value| value.as_array().cloned())
             .unwrap_or_default();
         features.push(json!("folderTrust"));
+        features.push(json!("workspaceQueries"));
         info["features"] = json!(features);
         let saved = snapshot.clone();
         let received = Arc::new(Mutex::new(Vec::<Value>::new()));
         let requests = received.clone();
+        let review_cwd = work.display().to_string();
+        let review_env = env.clone();
         let app = Router::new()
+            .route(
+                "/v1/sessions/s1/workspace/summary",
+                get(|| async { Json(json!({"branch":null,"changedLines":null})) }),
+            )
+            .route(
+                "/v1/sessions/s1/workspace/review",
+                get(
+                    move |axum::extract::Query(params): axum::extract::Query<
+                        canter_protocol::WorkspaceReviewParams,
+                    >| {
+                        let cwd = review_cwd.clone();
+                        let env = review_env.clone();
+                        async move {
+                            Json(
+                                canter_server::workspace_test_support::review(
+                                    &cwd,
+                                    &env,
+                                    &params.target,
+                                    &params.client_name,
+                                )
+                                .await
+                                .unwrap(),
+                            )
+                        }
+                    },
+                ),
+            )
             .route(
                 "/v1/folderTrust",
                 get(|| async { Json(json!({"path":"/fixture", "trusted":true})) }),

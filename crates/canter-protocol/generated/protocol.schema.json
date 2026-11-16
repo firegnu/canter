@@ -2,6 +2,187 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Canter protocol type catalog",
   "$defs": {
+    "WorkspaceSummary": {
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changedLines": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "prefixItems": [
+            {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "WorkspaceDiff": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "staged": {
+          "$ref": "#/$defs/WorkspaceOutput"
+        },
+        "unstaged": {
+          "$ref": "#/$defs/WorkspaceOutput"
+        },
+        "untracked": {
+          "$ref": "#/$defs/WorkspaceOutput"
+        }
+      },
+      "required": [
+        "root",
+        "staged",
+        "unstaged",
+        "untracked"
+      ]
+    },
+    "WorkspaceOutput": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text",
+        "truncated"
+      ]
+    },
+    "WorkspaceStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "repository"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          },
+          "required": [
+            "type",
+            "branch",
+            "entries"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "unavailable"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "WorkspaceReviewParams": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "default": ""
+        },
+        "clientName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "clientName"
+      ]
+    },
+    "WorkspaceEntriesBatch": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkspaceEntry"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "done": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entries",
+        "truncated",
+        "done"
+      ]
+    },
+    "WorkspaceEntry": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Relative to cwd; entries in additional directories use absolute paths.\nDirectories end in `/`, as in the terminal's existing completion list."
+        },
+        "dir": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "label",
+        "dir"
+      ]
+    },
     "AccountReadParams": {
       "type": "object",
       "properties": {

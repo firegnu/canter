@@ -174,7 +174,7 @@ No API-key, device-code, or externally supplied token login variant is exposed.
 `InfoResponse` 的字段：
 
 - `features`：可选字符串数组，每项是一项扩展能力（如 `review`、`addDirectories`、
-  `managedClients`、`subagentTools`）。本版服务端总是给出；旧服务端省略或为 null，
+  `managedClients`、`subagentTools`、`workspaceQueries`）。本版服务端总是给出；旧服务端省略或为 null，
   客户端缺少某项时不调用对应接口，按各节写的旧服务端行为处理。
 - `instance`：运行中服务端的实例标识，与 `server.json` 的 `instance` 一致；重启后改变，用于判断是否连回同一服务端。
 - `home`：passwd 中服务端用户的 HOME，供客户端缩写服务端路径。这两个字段在旧服务端可省略/null，本版总是返回；`home` 不随会话的 `env` 或配置覆盖改变。
@@ -790,3 +790,29 @@ no settings change, even while exec is running; clients can watch and interrupt 
 `canter exec` checks the feature before sending session requests, follows the
 server's sandbox setting unless `--yolo` disables it for this opening, and exposes the JSONL result and exit-code contract
 documented in `docs/DESIGN.md` under P2-30.
+
+## 会话工作区只读查询（P2-299）
+
+`/v1/info.features` 的 `workspaceQueries` 表示支持以下全部接口。协议版本仍为 1，旧客户端可继续使用原有接口；新终端本机和远程都调用这些接口，缺能力时提示 `canter serve --replace`（远程沿用在服务端机器升级的提示），不回退客户端 git 或目录遍历。
+
+所有路径和环境来自已打开会话，不接受客户端指定执行命令、cwd 或 env。未打开的存盘会话返回 `sessionNotResumed`，不存在的会话返回 `sessionNotFound`。查询不发模型请求、不产生会话事件，也不修改工作区；HTTP、TCP 认证和现有错误体约定不变。
+
+| 方法与路径（前缀 `/v1/sessions/{id}/workspace`） | 返回 |
+| --- | --- |
+| `GET /summary` | `WorkspaceSummary`：`branch`（分支或 detached HEAD 的 7 位提交名）、`changedLines`（`[added, removed]` 或 null）。可选 `changedLines=false` 只查分支，此时响应的改动数为 null，调用方保留已有计数。 |
+| `GET /diff` | `WorkspaceDiff`：仓库 `root`、`staged`、`unstaged`、`untracked`；后三项各为 `{text, truncated}`。不可用时按原来的 git 错误返回 `invalidRequest`。 |
+| `GET /status` | `WorkspaceStatus`：`{type:"repository", branch, entries:[[XY, path], ...]}`，或 `{type:"unavailable", reason}`。路径按会话 cwd、会话 HOME 显示。 |
+| `GET /review?target=...&clientName=...` | 原样组装的 `SessionInputParams`。`target` 缺省/空字符串为未提交改动，否则为 PR 编号或 GitHub PR HTTPS URL；`clientName` 必填。只准备输入，不开始审查；客户端仍通过原有 `/input` 提交，仍要求 `review` 能力。 |
+| `GET /entries` | 一次遍历的 SSE 流，每个 `data` 为 `WorkspaceEntriesBatch`（见下）。 |
+
+分支、改动数、diff、review 和 status 只查询 cwd 所在的仓库，支持 git worktree。git 仍清空继承环境，仅从会话环境取 PATH，保留原来的配置、hooks、fsmonitor、filter、external diff/textconv 等加固；改动数/status 的 2 秒以及 diff/review 的 15 秒超时不变。PR 准备的 `gh` 在服务端运行，使用会话环境及该环境中的登录，原有 `GIT_*`、`GH_DEBUG` 清理不变；没有安装或没有登录时返回原错误，不尝试客户端登录。review 文本、数据分隔、统计和截断预算不变。
+
+`/entries` 的响应为 `text/event-stream`，每批最多 256 项：
+
+```json
+{"entries":[{"label":"src/","dir":true},{"label":"src/main.rs","dir":false}],"truncated":false,"done":false}
+```
+
+先遍历 cwd（相对路径），再按顺序遍历 `additionalDirectories`（绝对路径）；目录 label 以 `/` 结尾。每个目录分别最多 10,000 项，合计可超过 10,000，某个目录超限后仍继续下一个目录；这是保留原有候选及超限表现的明确约定。忽略规则、名字顺序、不跟随符号链接、跳过版本控制目录及不能输入的名字均与原终端遍历一致。`truncated` 累计表示至少一个目录超限；最后一批 `done:true`，可以没有 entries。失败的结束批次带可选 `error`；流在 `done:true` 之前断开应视为失败，不把残缺结果当完整列表。不提供游标或重放；一次请求只遍历一次，关闭响应取消遍历。客户端保留原来的过滤和排序算法。
+
+为了让 `ignore` 库的进程级 HOME/XDG/git 配置发现严格使用会话环境，服务端以内部 worker 运行原遍历代码，并流式转发结果；不会修改常驻服务端的进程环境。原有文件路径输入等协议不变。本组是 canter 的窄查询扩展，和 Codex 的 `fuzzyFileSearch`、`gitDiffToRemote`、`review/start` 不同：canter 在客户端筛选文件，在当前会话提交普通审查输入，不增加通用命令执行或文件读写接口。

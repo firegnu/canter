@@ -3,17 +3,12 @@
 //! by git's ignore rules), and which of them match what is typed after the
 //! `@`. Only the path goes into the message; the model reads the file itself.
 
+use canter_protocol::{WorkspaceEntriesBatch, WorkspaceEntry};
 use std::ops::Range;
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use tokio::{sync::mpsc, task::JoinHandle};
 
 /// The most files and directories one walk takes; the rest are not listed.
 pub(crate) const LIMIT: usize = 10_000;
-/// Version control directories, never listed, in a git repository or not.
-const SKIPPED: [&str; 4] = [".git", ".hg", ".svn", ".jj"];
-/// Entries handed to the screen at a time.
-const BATCH: usize = 256;
 
 /// The `@` word the cursor is in: `@` at the start or after a blank, up to
 /// the next blank, or `@"…"` up to the closing quote (or the end of the line).
@@ -66,33 +61,18 @@ pub(crate) struct Entry {
 }
 
 impl Entry {
-    fn new(root: &Path, entry: &ignore::DirEntry, absolute: bool) -> Option<Self> {
-        let relative = entry.path().strip_prefix(root).ok()?;
-        if relative.as_os_str().is_empty() {
-            return None;
-        }
-        let path = if absolute { entry.path() } else { relative }.to_str()?;
-        // Such a name could not be written in the input box as it is.
-        if path.is_empty() || path.contains(|c: char| c == '"' || c.is_control()) {
-            return None;
-        }
-        let dir = entry.file_type().is_some_and(|kind| kind.is_dir());
-        let label = if dir {
-            format!("{path}/")
-        } else {
-            path.to_owned()
-        };
+    fn new(WorkspaceEntry { label, dir }: WorkspaceEntry) -> Self {
         let lower: Vec<char> = label.chars().flat_map(char::to_lowercase).collect();
         let name = lower[..lower.len() - usize::from(dir)]
             .iter()
             .rposition(|&c| c == '/')
             .map_or(0, |slash| slash + 1);
-        Some(Self {
+        Self {
             label,
             dir,
             lower,
             name,
-        })
+        }
     }
 
     /// How well it matches `query` (in lower case); `None` when it does not.
@@ -191,12 +171,6 @@ pub(crate) fn matching(entries: &[Entry], query: &str) -> Vec<usize> {
     found.into_iter().map(|(_, index)| index).collect()
 }
 
-#[derive(Default)]
-struct Found {
-    entries: Vec<Entry>,
-    truncated: bool,
-}
-
 /// A walk of one directory in the background, and what it found so far.
 /// Dropping it stops the walk.
 pub(crate) struct Scan {
@@ -205,23 +179,32 @@ pub(crate) struct Scan {
     pub entries: Vec<Entry>,
     /// The walk stopped at [`LIMIT`].
     pub truncated: bool,
-    found: Arc<Mutex<Found>>,
-    stop: Arc<AtomicBool>,
+    pub error: Option<String>,
+    found: mpsc::UnboundedReceiver<Result<WorkspaceEntriesBatch, String>>,
+    task: JoinHandle<()>,
 }
 
 impl Scan {
-    pub fn start(root: &str, additional_directories: &[String]) -> Self {
-        let found = Arc::new(Mutex::new(Found::default()));
-        let stop = Arc::new(AtomicBool::new(false));
-        let (into, stopped, dir) = (found.clone(), stop.clone(), root.to_owned());
-        let extra = additional_directories.to_vec();
-        std::thread::spawn(move || {
-            walk(Path::new(&dir), false, &into, &stopped);
-            for dir in extra {
-                if stopped.load(Ordering::Relaxed) {
-                    break;
+    pub fn start(
+        client: crate::client::Client,
+        session: String,
+        root: &str,
+        additional_directories: &[String],
+    ) -> Self {
+        let (sender, found) = mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            let result = async {
+                let mut stream = client.workspace_entries(&session).await?;
+                while let Some(batch) = stream.next().await {
+                    if sender.send(Ok(batch?)).is_err() {
+                        break;
+                    }
                 }
-                walk(Path::new(&dir), true, &into, &stopped);
+                Ok::<_, crate::client::ClientError>(())
+            }
+            .await;
+            if let Err(error) = result {
+                let _ = sender.send(Err(error.to_string()));
             }
         });
         Self {
@@ -230,73 +213,30 @@ impl Scan {
             entries: Vec::new(),
             truncated: false,
             found,
-            stop,
+            task,
+            error: None,
         }
     }
 
     /// Takes what the walk found since the last call.
     pub fn poll(&mut self) {
-        let mut found = self.found.lock().unwrap_or_else(PoisonError::into_inner);
-        self.entries.append(&mut found.entries);
-        self.truncated = found.truncated;
+        while let Ok(batch) = self.found.try_recv() {
+            match batch {
+                Ok(batch) => {
+                    self.entries
+                        .extend(batch.entries.into_iter().map(Entry::new));
+                    self.truncated |= batch.truncated;
+                }
+                Err(error) => self.error = Some(error),
+            }
+        }
     }
 }
 
 impl Drop for Scan {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.task.abort();
     }
-}
-
-/// Walks `root` by `.gitignore`, `.git/info/exclude` and the global git
-/// ignore file (inside a git repository; outside one, by none of them),
-/// in name order, handing what it finds to `found` in batches.
-fn walk(root: &Path, absolute: bool, found: &Mutex<Found>, stop: &AtomicBool) {
-    let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
-        .ignore(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(true)
-        .parents(true)
-        .follow_links(false)
-        .sort_by_file_name(|a, b| a.cmp(b))
-        .filter_entry(|entry| {
-            entry.depth() == 0
-                || !entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|name| SKIPPED.contains(&name))
-        })
-        .build();
-    let hand = |batch: &mut Vec<Entry>, truncated: bool| {
-        let mut found = found.lock().unwrap_or_else(PoisonError::into_inner);
-        found.entries.append(batch);
-        found.truncated |= truncated;
-    };
-    let mut batch = Vec::new();
-    let mut count = 0;
-    for entry in walker {
-        if stop.load(Ordering::Relaxed) {
-            return;
-        }
-        let Some(entry) = entry
-            .ok()
-            .and_then(|entry| Entry::new(root, &entry, absolute))
-        else {
-            continue;
-        };
-        if count == LIMIT {
-            hand(&mut batch, true);
-            return;
-        }
-        batch.push(entry);
-        count += 1;
-        if batch.len() == BATCH {
-            hand(&mut batch, false);
-        }
-    }
-    hand(&mut batch, false);
 }
 
 #[cfg(test)]

@@ -15,6 +15,8 @@
 
 mod agents;
 mod app;
+#[cfg(test)]
+extern crate self as canter_tui;
 mod approval;
 mod background;
 mod btw;
@@ -28,7 +30,6 @@ mod editor;
 mod export;
 pub mod fake;
 mod files;
-mod git;
 mod goal;
 mod help;
 mod highlight;
@@ -53,6 +54,9 @@ mod programs;
 #[cfg(test)]
 mod reasoning_tests;
 pub mod session_file;
+#[cfg(test)]
+#[path = "../tests/support/workspace.rs"]
+mod test_workspace;
 pub use goal::GoalCommand;
 mod question;
 mod report;
