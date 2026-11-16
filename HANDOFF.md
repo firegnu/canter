@@ -4,8 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
-- 5090（`my-5090d-host`）：11-10 用户同意，从 `~/canter-linux/canter`（GitHub 克隆）`cargo install` 装进 `~/.cargo/bin/canter`，11-17（P2-301，用户同意由主控经 SSH 升级）`canter upgrade` 到 `478e4330`，上一版 `1ad5b0e2` 在 `~/.canter/backups/`。`config.json` 11-17 加了 `"remote": {"listen": ["127.0.0.1:8790"]}`（改前备份 `config.json.bak-20261117-before-remote`），令牌 `mac` 一个。真实 `~/.canter/config.json` 只有 deepseek 一家、模型 `deepseek/deepseek-flash`，含 key（用户同意）。升级：在 `~/canter-linux/canter` 里 `git pull` 再 `canter upgrade`；退回 `canter rollback`（备份在 `~/.canter/backups/`，现有两份同一提交的）。没有登录自动启动；11-17 服务端在跑（`canter upgrade` 时起的）。去中转机的 `ssh -R` 隧道 11-17 是手动开的（PID 记在 `~/.canter/relay-tunnel.pid`），断了不会自己重连，P2-302 改成 systemd。验收用的测试 HOME `~/canter-linux/accept-home` 里另有一份同样的 key，P2-260 做完再问用户删不删。
-- Mac：11-17 用户自己 `canter upgrade` 到 `c0ce1e8`（P2-295～P2-299 加 ast_grep 说明），退回用 `canter rollback`。`~/.canter/remotes.json` 里存了远程 `5090` → `http://127.0.0.1:8791/`；连它要 Mac 上的 `ssh -L 127.0.0.1:8791:127.0.0.1:8790 gcp-relay` 开着（11-17 主控手动开的，断了不会重连，P2-302 改成 launchd）。
+- 5090（`my-5090d-host`）：11-10 用户同意，从 `~/canter-linux/canter`（GitHub 克隆）`cargo install` 装进 `~/.cargo/bin/canter`，11-17（P2-301，用户同意由主控经 SSH 升级）`canter upgrade` 到 `478e4330`，上一版 `1ad5b0e2` 在 `~/.canter/backups/`。服务端 11-17 起归 systemd 用户服务 `canter-server.service` 管（P2-302，开机自起、崩溃重起；`upgrade`/`serve --replace` 后新服务端不归服务管，到重启前崩溃不重起，P2-304；要交回就按 PID 停掉再 `systemctl --user start canter-server`）。`config.json` 11-17 加了 `"remote": {"listen": ["127.0.0.1:8790"]}`（改前备份 `config.json.bak-20261117-before-remote`），令牌 `mac` 一个。真实 `~/.canter/config.json` 只有 deepseek 一家、模型 `deepseek/deepseek-flash`，含 key（用户同意）。升级：在 `~/canter-linux/canter` 里 `git pull` 再 `canter upgrade`；退回 `canter rollback`（备份在 `~/.canter/backups/`，现有两份同一提交的）。linger 开着。去中转机的 `ssh -R` 隧道是 systemd 用户服务 `canter-relay-tunnel.service`（P2-302，断了 10 秒重连）。停用：`systemctl --user disable --now canter-relay-tunnel canter-server`。验收用的测试 HOME `~/canter-linux/accept-home` 里另有一份同样的 key，P2-260 做完再问用户删不删。
+- Mac：11-17 用户自己 `canter upgrade` 到 `c0ce1e8`（P2-295～P2-299 加 ast_grep 说明），退回用 `canter rollback`。`~/.canter/remotes.json` 里存了远程 `5090` → `http://127.0.0.1:8791/`；隧道是 launchd 用户代理 `~/Library/LaunchAgents/local.canter-tunnel.5090.plist`（P2-302，登录自起、断了重连）；停用：`launchctl bootout gui/$(id -u)/local.canter-tunnel.5090`。中转机 sshd 加了 `/etc/ssh/sshd_config.d/canter-relay.conf`（心跳 15 秒 × 3，删掉再 reload 就退回）。
 
 - 11-05 用户同意，删了 `~/.canter` 根目录 51 个 11-01 以前手动留的旧程序（`canter-<提交号>`，1.5G）。下面写 `cp -p ~/.canter/canter-<提交号>` 的老退回办法都用不了了；现在只能 `canter rollback` 退到 `~/.canter/backups/` 里留着的几版。
 
@@ -150,7 +150,8 @@
   - 10-27 做完 P2-64（别家提示词调研）、P2-65（命令卡片），已装 `f2c02d6`。
   - P2-14、P2-22、P2-25～P2-28、P2-30～P2-34、P2-49～P2-55、P2-57、P2-63：各有一份入队的任务文件，要做时主控补全、给用户看过、说派才派。顺序见 P2-0「10-26 重排剩下的」：展示层一件接一件（10-26 改成 P2-58 → P2-45 → P2-44 → P2-46 → … → P2-56）（P2-43～P2-56 是 10-26 补的；P2-44～P2-48 等用户试完 P2-43 那一版再分解），然后是 P2-57 系统提示词（先出方案），之后是支持长任务的 P2-34 → P2-28（P2-27 可同时做），再往后 P2-25 等（P2-0 经过 10-26 最后一条）；P2-33 实现前要用户定方案 §7 的 4 个问题。
   - P2-21 插件系统 10-26 挪到第三期。
-- P2-302 隧道自动重连（`docs/任务/P2-302-隧道自动重连.md`）：下一件，主控和用户一起；5090 用 systemd 用户服务，Mac 用 launchd。
+- P2-302 隧道自动重连（`docs/任务/P2-302-隧道自动重连.md`）：装好了，等用户测断代理、Mac 睡醒、重启 5090 三项，再收尾。
+- P2-304 Linux 升级后服务端不归 systemd 管（`docs/任务/P2-304-Linux升级后服务端不归systemd管.md`）：只记下，碰到再修。
 - P2-300 远程连接后续加强（`docs/任务/P2-300-远程连接后续加强.md`）：（隧道自动重连已拆成 P2-302）端到端加密、网页或手机客户端、桌面端连远程、令牌分权限；等 P2-299 合并、Mac 经 GCP 连 5090 试连之后，用户定做哪几样。
 - P2-303 paddock 加 canter 远程这一路（`docs/任务/P2-303-paddock加canter远程这一路.md`）：需求单，ssh + corral 那一路保留，另加 canter 这一路；用户以后转给 paddock 主控。
 - P1-10 修第一期已知问题（`docs/任务/P1-10-第一期已知问题.md`）：第 4、5 条拆成 P1-13、P1-14 已派；第 1 到 3 条（性能）先不做。

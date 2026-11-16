@@ -81,6 +81,114 @@ ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCount
 
 Then add `http://127.0.0.1:8791` as above. Both network hops use SSH. These two tunnels are sufficient for a terminal trial across unrelated networks.
 
+## Keep the tunnels and the server running
+
+Tunnels started by hand stop when the network drops, the proxy changes, the laptop sleeps or a machine restarts. Let the operating system restart them instead. canter itself needs no change: the terminal and remote `exec` reconnect on their own once the path is back.
+
+The SSH keys used here must work without a passphrase prompt or a running agent (`BatchMode=yes`), because these services run without a terminal.
+
+**Relay.** Have the SSH daemon drop dead connections quickly, so a reconnecting server is not refused because a stale `-R` forward still holds the relay port. Add `/etc/ssh/sshd_config.d/canter-relay.conf` (the directory is included by default on Debian and Ubuntu):
+
+```
+ClientAliveInterval 15
+ClientAliveCountMax 3
+```
+
+Check with `sudo sshd -t`, then `sudo systemctl reload ssh`; a reload keeps existing connections. A dead connection is then dropped after about 45 seconds. To undo, remove the file and reload.
+
+**Linux server machine.** Allow user services to run without a login session, once (it takes effect immediately, no restart needed):
+
+```sh
+sudo loginctl enable-linger "$USER"
+```
+
+`~/.config/systemd/user/canter-relay-tunnel.service`:
+
+```ini
+[Unit]
+Description=canter relay tunnel
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=15 -R 127.0.0.1:8792:127.0.0.1:8790 relay.example.com
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+```
+
+Linux has no `canter service install`, and a remote client never starts a server. To have the server start at boot and come back after a crash, add `~/.config/systemd/user/canter-server.service`:
+
+```ini
+[Unit]
+Description=canter server
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Environment=CANTER_HOME=%h/.canter
+WorkingDirectory=%h/.canter
+ExecStart=%h/.cargo/bin/canter serve
+StandardOutput=append:%h/.canter/server.log
+StandardError=append:%h/.canter/server.log
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+Adjust `ExecStart` to where `canter` is installed. Stop a server that is already running first (`canter serve` refuses to start beside one), then:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now canter-server.service canter-relay-tunnel.service
+```
+
+`Restart=on-failure` restarts the server after a crash, not after a normal exit. The start limit stops retrying after three failed starts in a minute, for example when another canter server already holds the state directory. `canter serve --replace` and `canter upgrade` still work: the old server exits normally and systemd leaves it stopped. The new server, however, is not managed by systemd, so it is not restarted after a crash until the next boot (or until you stop it and run `systemctl --user start canter-server.service`). Logs: `journalctl --user -u canter-relay-tunnel.service` and `~/.canter/server.log`.
+
+**macOS client.** `~/Library/LaunchAgents/local.canter-tunnel.work.plist`, where `work` is the remote name:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.canter-tunnel.work</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/ssh</string><string>-N</string>
+    <string>-o</string><string>BatchMode=yes</string>
+    <string>-o</string><string>ExitOnForwardFailure=yes</string>
+    <string>-o</string><string>ServerAliveInterval=15</string>
+    <string>-o</string><string>ServerAliveCountMax=3</string>
+    <string>-o</string><string>ConnectTimeout=15</string>
+    <string>-L</string><string>127.0.0.1:8791:127.0.0.1:8792</string>
+    <string>relay.example.com</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardErrorPath</key><string>/Users/you/Library/Logs/canter-tunnel-work.log</string>
+</dict>
+</plist>
+```
+
+launchd does not expand `~` or `$HOME`; write the full path. Stop any tunnel already holding port 8791, then load it now (it also starts at every login):
+
+```sh
+plutil -lint ~/Library/LaunchAgents/local.canter-tunnel.work.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.canter-tunnel.work.plist
+launchctl print gui/$(id -u)/local.canter-tunnel.work
+```
+
+To remove it: `launchctl bootout gui/$(id -u)/local.canter-tunnel.work`, then delete the file.
+
+To check the whole path from the client, `curl --noproxy '*' http://127.0.0.1:8791/v1/info` should answer HTTP 401 (no token sent).
+
 ## Add HTTPS with Caddy
 
 For direct HTTPS clients, keep the server-to-relay reverse tunnel, and run Caddy on the relay. Point a domain such as `canter.example.com` at the relay, allow inbound ports 80/443, and use this minimal Caddyfile:
