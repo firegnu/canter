@@ -68,3 +68,12 @@
 ## 做完
 
 在本文件末尾追加「## 完成记录」（在你的分支里提交）：做了什么、验证了什么、拿主意的地方、没做的事、踩过的坑，各几句话。踩过的坑指试了不行、换了办法的，工具或环境的行为和预想不一样的；没有就写「没有」，不要凑。回复里只写这几样，加上有没有要主控决定的事。命令都在前台跑完，全部做完后，回复最后一行写 DONE。
+
+## 完成记录
+
+- 做了什么：新增可选 `content: bool`，缺省 false，只有开启时才向搜索接口增加 `need_content: true`。提供方结果将正文与协议 `WebSearchResult` 分开；正文仅加入模型输出，沿用凭证回显脱敏。开启时按结果均分 32 KiB 总预算，先给原有标题、网址、日期和摘要留位，再放正文，截断标记计入预算；关闭时保留原有请求和输出。工具说明补上正文用途、上下文开销及五种搜索语法，DESIGN 的 P2-106 段已补充本件决定。
+- 文档核对：2026-11-17 阅读 [DeepSeek 官方搜索文档](https://api-docs.deepseek.com/guides/search/)，确认 `need_content` 缺省 false、正文在 `content`，`site:`、`-site:`、`lang:`、`after:`、`before:` 仍适用。官网当前 count 范围为 1～50；按本任务明确要求，canter 仍保持 1～20，未加入其它参数或返回字段。
+- 验证了什么：先跑新增本机假服务用例，确认因不支持 `content` 失败，再实现并通过；长正文用例先因总长度超限失败，再按条分配预算后通过；工具定义检查先因缺少 content schema 失败，再补定义后通过。验证了缺省和显式 false 的请求及输出原样、true 请求带 need_content、模型收到正文、正文脱敏、20 条长正文总输出不超 32 KiB 且每条标题/网址及正文首尾都保留、各正文份额接近，以及协议结果和 events.jsonl 不带正文、model-history.jsonl 保留正文。相关 web_search 测试（canter-core 11 项、canter-tools 5 项）通过；`cargo nextest run -p canter-tools -p canter-core -p canter-server -p canter --no-fail-fast` 报告 1278 项通过、50 项跳过。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。三个指定请求快照均未包含 web_search，其字节一致性测试全部通过，无需更新文件。所有 Cargo 命令均使用本任务独立编译目录，所有命令在前台等待结束。
+- 拿主意的地方：主控明确「正文可以随模型历史（model-history.jsonl）存盘，和 web_fetch 的输出一样；任务文件里『不写进会话存盘』指的是不进协议的搜索结果（WebSearchResult）和 events.jsonl 里的界面事件，是主控写得不准，不改核心的存盘机制」。已照此执行，核心存盘机制、协议和终端显示均未改动；没有其它待主控决定的事。
+- 没做的事：真实 DeepSeek 搜索和真实模型接口调用均为 0 次；未运行工作区全套测试，未改 count 范围、其它工具或依赖，未合并 main、未推送或部署。
+- 踩过的坑：直接沿用整段输出的头尾截断时，长正文回归先得到 32794 字节（原有截断标记允许额外占字节），超过本件要求的 32768 字节；已改成开启正文时按条留预算，截断标记计入限额，避免前面正文占掉后面结果的位置。

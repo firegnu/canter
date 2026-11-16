@@ -1,5 +1,5 @@
 //! DeepSeek Search API adapter. Credentials never enter errors or Debug output.
-use super::{SearchProvider, WebSearchResult};
+use super::{SearchProvider, SearchResult};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -7,7 +7,7 @@ const MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
 
 #[derive(Deserialize)]
 struct Response {
-    results: Vec<WebSearchResult>,
+    results: Vec<SearchResult>,
 }
 
 pub struct DeepSeek {
@@ -24,7 +24,12 @@ impl DeepSeek {
 
 #[async_trait::async_trait]
 impl SearchProvider for DeepSeek {
-    async fn search(&self, query: &str, count: u32) -> Result<Vec<WebSearchResult>, String> {
+    async fn search(
+        &self,
+        query: &str,
+        count: u32,
+        content: bool,
+    ) -> Result<Vec<SearchResult>, String> {
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -32,11 +37,15 @@ impl SearchProvider for DeepSeek {
             .user_agent("canter/0.1 web_search")
             .build()
             .map_err(|_| "Could not create web_search client")?;
+        let mut request = json!({"query":query,"count":count});
+        if content {
+            request["need_content"] = json!(true);
+        }
         let mut response = client
             .post(self.endpoint.clone())
             .bearer_auth(&self.api_key)
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
-            .json(&json!({"query":query,"count":count}))
+            .json(&request)
             .send()
             .await
             .map_err(|_| "web_search request failed (connection or TLS error)")?;
@@ -78,10 +87,12 @@ impl SearchProvider for DeepSeek {
             .map_err(|_| "web_search returned an invalid response format")?;
         // Keep even a provider echo of the credential out of model/client output and storage.
         if !self.api_key.is_empty() {
-            for result in &mut response.results {
+            for entry in &mut response.results {
+                let result = &mut entry.result;
                 for text in [&mut result.title, &mut result.url, &mut result.summary]
                     .into_iter()
                     .chain(result.date.iter_mut())
+                    .chain(std::iter::once(&mut entry.content))
                 {
                     *text = text.replace(&self.api_key, "[redacted]");
                 }

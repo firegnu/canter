@@ -11,14 +11,19 @@ impl SearchProvider for FixtureSearch {
         &self,
         query: &str,
         count: u32,
-    ) -> Result<Vec<canter_tools::web_search::WebSearchResult>, String> {
+        content: bool,
+    ) -> Result<Vec<canter_tools::web_search::SearchResult>, String> {
         assert_eq!(query, "Rust 文档");
         assert_eq!(count, 10);
-        Ok(vec![canter_tools::web_search::WebSearchResult {
-            title: "Rust book".into(),
-            url: "https://doc.rust-lang.org/book/".into(),
-            date: Some("2026-10-01T00:00:00Z".into()),
-            summary: "Learn Rust".into(),
+        assert!(!content);
+        Ok(vec![canter_tools::web_search::SearchResult {
+            result: canter_tools::web_search::WebSearchResult {
+                title: "Rust book".into(),
+                url: "https://doc.rust-lang.org/book/".into(),
+                date: Some("2026-10-01T00:00:00Z".into()),
+                summary: "Learn Rust".into(),
+            },
+            content: String::new(),
         }])
     }
 }
@@ -223,11 +228,17 @@ async fn deepseek_posts_the_query_and_normalizes_search_results() {
     // A failed adapter must report its error immediately, without waiting on the fixture.
     let run = async {
         let results = provider
-            .search("Rust site:doc.rust-lang.org", 10)
+            .search("Rust site:doc.rust-lang.org", 10, false)
             .await
             .unwrap();
         assert_eq!(
-            serde_json::to_value(results).unwrap(),
+            serde_json::to_value(
+                results
+                    .into_iter()
+                    .map(|entry| entry.result)
+                    .collect::<Vec<_>>()
+            )
+            .unwrap(),
             json!([{"title":"Rust book","url":"https://doc.rust-lang.org/book/","summary":"Learn Rust"}])
         );
     };
@@ -253,9 +264,23 @@ fn web_search_is_an_execution_tool_with_provider_independent_parameters() {
     );
     assert_eq!(definition.parameters["properties"]["count"]["default"], 10);
     assert_eq!(definition.parameters["properties"]["count"]["maximum"], 20);
+    assert_eq!(
+        definition.parameters["properties"]["content"]["type"],
+        "boolean"
+    );
+    assert_eq!(
+        definition.parameters["properties"]["content"]["default"],
+        false
+    );
     for text in [
         "web_fetch",
         "site:",
+        "-site:",
+        "lang:",
+        "after:",
+        "before:",
+        "content",
+        "context",
         "untrusted",
         "secrets",
         "code",
