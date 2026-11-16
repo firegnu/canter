@@ -37,7 +37,7 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -213,6 +213,8 @@ async fn serve_with_lsp(
     }
     let close_failed = Arc::new(AtomicBool::new(false));
     let failed = close_failed.clone();
+    let http_deadline = Arc::new(OnceLock::new());
+    let shutdown_deadline = http_deadline.clone();
     let server = axum::serve(listener, router).with_graceful_shutdown(async move {
         let upgrade = async move {
             loop {
@@ -253,23 +255,26 @@ async fn serve_with_lsp(
             }
         })).await;
         if let Some(reload) = &shutdown.reload { reload.shutdown().await; }
+        shutdown_deadline.set(tokio::time::Instant::now() + Duration::from_secs(5))
+            .expect("HTTP shutdown deadline is set once");
         shutdown.stopped.cancel();
     }).into_future();
     tokio::pin!(server);
-    tokio::select! {
-        result = &mut server => { result.map_err(|_| ServerError("the HTTP server failed".into()))?; }
-        _ = stopped.cancelled() => {
-            // Sessions are already closed. A client stalled in an HTTP body must not hold the daemon lock forever.
-            if let Ok(result) = tokio::time::timeout(Duration::from_secs(5), &mut server).await {
-                result.map_err(|_| ServerError("the HTTP server failed".into()))?;
-            }
-        }
+    let server_finished = tokio::select! {
+        result = &mut server => { result.map_err(|_| ServerError("the HTTP server failed".into()))?; true }
+        _ = stopped.cancelled() => false,
+    };
+    let deadline = *http_deadline.get().expect("HTTP shutdown has started");
+    // Sessions are already closed. Both transports share the same deadline so
+    // stalled bodies cannot add two shutdown waits before the daemon lock is released.
+    if !server_finished && let Ok(result) = tokio::time::timeout_at(deadline, &mut server).await {
+        result.map_err(|_| ServerError("the HTTP server failed".into()))?;
     }
     reload.shutdown().await;
     let _ = watcher.await;
     let _ = token_watcher.await;
     // Close every TCP listener before releasing the daemon lock to a successor.
-    if tokio::time::timeout(Duration::from_secs(5), async {
+    if tokio::time::timeout_at(deadline, async {
         while tcp_servers.join_next().await.is_some() {}
     })
     .await

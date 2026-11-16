@@ -277,27 +277,88 @@ async fn authenticate(State(remote): State<Arc<Remote>>, request: Request, next:
         _ = revoked.cancelled() => return unauthorized(),
         response = next.run(request) => response,
     };
-    if response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .is_some_and(|value| value == "text/event-stream")
-    {
-        let (parts, body) = response.into_parts();
-        let mut stream = body.into_data_stream();
-        let stream = async_stream::stream! {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = revoked.cancelled() => break,
-                    frame = stream.next() => match frame {
-                        Some(frame) => yield frame,
-                        None => break,
-                    }
+    let (parts, body) = response.into_parts();
+    let mut stream = body.into_data_stream();
+    let stream = async_stream::stream! {
+        loop {
+            tokio::select! {
+                biased;
+                _ = revoked.cancelled() => break,
+                frame = stream.next() => match frame {
+                    Some(frame) => yield frame,
+                    None => break,
                 }
             }
-        };
-        Response::from_parts(parts, Body::from_stream(stream))
-    } else {
-        response
+        }
+    };
+    Response::from_parts(parts, Body::from_stream(stream))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn revocation_ends_streaming_responses_regardless_of_content_type() {
+        for content_type in [
+            "application/octet-stream",
+            "text/event-stream; charset=utf-8",
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let token = remote_tokens::add(home.path(), "phone").unwrap();
+            let (remote, mut listeners) = Remote::bind(
+                home.path().to_path_buf(),
+                &serde_json::json!({"listen":["127.0.0.1:0"]}),
+            )
+            .await;
+            let listener = listeners.pop().unwrap();
+            let address = listener.local_addr().unwrap();
+            let router = remote.router(Router::new().route(
+                "/stream",
+                axum::routing::get(move || async move {
+                    let stream =
+                        futures_util::stream::iter([Ok::<_, std::convert::Infallible>("first")])
+                            .chain(futures_util::stream::pending());
+                    (
+                        [(header::CONTENT_TYPE, content_type)],
+                        Body::from_stream(stream),
+                    )
+                }),
+            ));
+            let stopped = CancellationToken::new();
+            let watcher = tokio::spawn(remote.watch(stopped.clone()));
+            let shutdown = stopped.clone();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, router)
+                    .with_graceful_shutdown(shutdown.cancelled_owned())
+                    .await
+                    .unwrap();
+            });
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let response = client
+                .get(format!("http://{address}/stream"))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], content_type);
+            let mut stream = response.bytes_stream();
+            assert_eq!(stream.next().await.unwrap().unwrap(), "first");
+            remote_tokens::remove(home.path(), "phone").unwrap();
+            let ended = tokio::time::timeout(Duration::from_secs(3), stream.next()).await;
+            drop(stream);
+            stopped.cancel();
+            server.await.unwrap();
+            watcher.await.unwrap();
+            assert!(
+                matches!(ended, Ok(None)),
+                "revoked {content_type} response must end cleanly: {ended:?}"
+            );
+        }
     }
 }

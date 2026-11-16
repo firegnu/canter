@@ -694,7 +694,7 @@ async fn invalid_token_store_fails_closed_and_recovers_without_restart() {
 
 #[tokio::test]
 async fn replacement_reuses_tcp_port_with_existing_sse_and_stalled_http_body() {
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut server = Server::start(Some(json!(true))).await;
     let token = server.token("phone").await;
     let id = server.create().await;
@@ -710,13 +710,48 @@ async fn replacement_reuses_tcp_port_with_existing_sse_and_stalled_http_body() {
     let mut stalled = tokio::net::TcpStream::connect(server.address)
         .await
         .unwrap();
-    stalled.write_all(format!("POST /v1/sessions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{{").as_bytes()).await.unwrap();
+    let mut stalled_unix =
+        tokio::net::UnixStream::connect(server.root.path().join("state/server.sock"))
+            .await
+            .unwrap();
+    let request = format!(
+        "POST /v1/sessions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n{{"
+    );
+    stalled.write_all(request.as_bytes()).await.unwrap();
+    stalled_unix.write_all(request.as_bytes()).await.unwrap();
+    // Both transports must be waiting for the rest of the body before replacement.
+    let continuing = b"HTTP/1.1 100 Continue\r\n\r\n";
+    let mut reply = [0; 25];
+    tokio::time::timeout(Duration::from_secs(3), stalled.read_exact(&mut reply))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&reply, continuing);
+    tokio::time::timeout(Duration::from_secs(3), stalled_unix.read_exact(&mut reply))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&reply, continuing);
     let replacement = Server::spawn(server.root.path(), true);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while let Some(frame) = stream.next().await {
+            frame.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    // SSE closes when stopped fires. Allow scheduling margin around the shared
+    // five-second HTTP budget, while detecting two serial five-second waits.
+    let stopped_at = std::time::Instant::now();
     let old = tokio::time::timeout(Duration::from_secs(20), server.child.wait())
         .await
         .expect("old server exits")
         .unwrap();
     assert!(old.success(), "{}", server.log());
+    assert!(
+        stopped_at.elapsed() < Duration::from_secs(9),
+        "Unix and TCP shutdown must share one five-second budget"
+    );
     server.child = replacement;
     server.ready().await;
     assert!(
@@ -732,14 +767,8 @@ async fn replacement_reuses_tcp_port_with_existing_sse_and_stalled_http_body() {
         "{}",
         server.log()
     );
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while let Some(frame) = stream.next().await {
-            frame.unwrap();
-        }
-    })
-    .await
-    .unwrap();
     assert!(!server.log().contains("TCP disabled:"));
     drop(stalled);
+    drop(stalled_unix);
     server.stop().await;
 }
