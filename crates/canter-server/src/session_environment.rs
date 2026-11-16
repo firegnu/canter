@@ -1,12 +1,13 @@
 //! Resolve the daemon's default session environment once, without logging its contents.
 use std::{collections::BTreeMap, path::Path, process::Stdio, time::Duration};
 
-use tokio::{io::AsyncReadExt, process::Command};
+use tokio::{io::AsyncReadExt, process::Command, time::Instant};
 
 use crate::ServerError;
 
 type Environment = BTreeMap<String, String>;
-const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const PROBE_TIMEOUTS: [Duration; 2] = [Duration::from_secs(4), Duration::from_secs(2)];
+const OUTPUT_GRACE: Duration = Duration::from_millis(50);
 const MAX_OUTPUT: u64 = 1024 * 1024;
 const MARKER: &[u8] = b"\0CANTER_SESSION_ENV\0";
 
@@ -14,11 +15,23 @@ const MARKER: &[u8] = b"\0CANTER_SESSION_ENV\0";
 #[path = "session_environment_tests.rs"]
 mod tests;
 
-// Neither type implements Debug or Serialize: environments may contain credentials.
+// No Debug or Serialize: environments may contain credentials.
 pub(crate) struct SessionEnvironment {
     pub home: String,
     variables: Environment,
-    pub probe: Result<(), &'static str>,
+    pub source: Source,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Source {
+    InteractiveLogin,
+    Login {
+        interactive_failure: &'static str,
+    },
+    Process {
+        interactive_failure: &'static str,
+        login_failure: &'static str,
+    },
 }
 
 struct User {
@@ -33,24 +46,50 @@ impl SessionEnvironment {
         let inherited = std::env::vars_os()
             .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
             .collect();
-        Ok(Self::discover(user, inherited, PROBE_TIMEOUT).await)
+        Ok(Self::discover(user, inherited, PROBE_TIMEOUTS).await)
     }
 
-    async fn discover(user: User, mut inherited: Environment, timeout: Duration) -> Self {
+    async fn discover(user: User, mut inherited: Environment, timeouts: [Duration; 2]) -> Self {
         // passwd supplies the identity even when the daemon was launched with no environment.
         inherited.extend([
             ("HOME".into(), user.home.clone()),
             ("USER".into(), user.name),
             ("SHELL".into(), user.shell.clone()),
         ]);
-        let (variables, probe) = match probe(&user.shell, &inherited, timeout).await {
-            Ok(environment) => (environment, Ok(())),
-            Err(reason) => (inherited, Err(reason)),
-        };
+        let started = Instant::now();
+        let deadline = started + timeouts[0] + timeouts[1];
+        let (variables, source) =
+            match probe(&user.shell, "-ilc", &inherited, started + timeouts[0]).await {
+                Ok(environment) => (environment, Source::InteractiveLogin),
+                Err(interactive_failure) => {
+                    match probe(
+                        &user.shell,
+                        "-lc",
+                        &inherited,
+                        deadline.min(Instant::now() + timeouts[1]),
+                    )
+                    .await
+                    {
+                        Ok(environment) => (
+                            environment,
+                            Source::Login {
+                                interactive_failure,
+                            },
+                        ),
+                        Err(login_failure) => (
+                            inherited,
+                            Source::Process {
+                                interactive_failure,
+                                login_failure,
+                            },
+                        ),
+                    }
+                }
+            };
         Self {
             home: user.home,
             variables,
-            probe,
+            source,
         }
     }
 
@@ -68,7 +107,7 @@ impl SessionEnvironment {
         Self {
             variables: BTreeMap::from([("HOME".into(), home.clone())]),
             home,
-            probe: Ok(()),
+            source: Source::InteractiveLogin,
         }
     }
 }
@@ -131,12 +170,13 @@ impl Drop for ProbeGroup {
 
 async fn probe(
     shell: &str,
+    mode: &str,
     environment: &Environment,
-    timeout: Duration,
+    deadline: Instant,
 ) -> Result<Environment, &'static str> {
     let mut child = Command::new(shell)
         .args([
-            "-lc",
+            mode,
             "printf '\\0CANTER_SESSION_ENV\\0'; exec /usr/bin/env -0",
         ])
         .env_clear()
@@ -151,19 +191,42 @@ async fn probe(
         .map_err(|_| "login shell could not be started")?;
     let group = ProbeGroup(nix::unistd::Pid::from_raw(child.id().unwrap() as i32));
     let mut stdout = child.stdout.take().unwrap().take(MAX_OUTPUT + 1);
-    let result = tokio::time::timeout(timeout, async {
+    let result = tokio::time::timeout_at(deadline, async {
         let mut bytes = Vec::new();
-        stdout
-            .read_to_end(&mut bytes)
-            .await
-            .map_err(|_| "login shell output could not be read")?;
-        if bytes.len() as u64 > MAX_OUTPUT {
-            return Err("login shell output exceeded the limit");
+        let status = {
+            let read = async {
+                loop {
+                    let count = stdout
+                        .read_buf(&mut bytes)
+                        .await
+                        .map_err(|_| "login shell output could not be read")?;
+                    if bytes.len() as u64 > MAX_OUTPUT {
+                        return Err("login shell output exceeded the limit");
+                    }
+                    if count == 0 {
+                        return Ok(());
+                    }
+                }
+            };
+            tokio::pin!(read);
+            tokio::select! {
+                result = &mut read => {
+                    result?;
+                    child.wait().await
+                }
+                status = child.wait() => {
+                    // rc files may leave background processes holding stdout open.
+                    // Drain output already on its way, without waiting for their EOF.
+                    if status.as_ref().is_ok_and(|status| status.success())
+                        && let Ok(result) = tokio::time::timeout(OUTPUT_GRACE, &mut read).await
+                    {
+                        result?;
+                    }
+                    status
+                }
+            }
         }
-        let status = child
-            .wait()
-            .await
-            .map_err(|_| "login shell could not be waited for")?;
+        .map_err(|_| "login shell could not be waited for")?;
         if !status.success() {
             return Err("login shell exited unsuccessfully");
         }
@@ -172,7 +235,7 @@ async fn probe(
     .await
     .unwrap_or(Err("login shell probe timed out"));
     drop(group);
-    let _ = child.wait().await;
+    let _ = tokio::time::timeout_at(deadline, child.wait()).await;
     result
 }
 

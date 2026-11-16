@@ -48,7 +48,7 @@ async fn info_and_doctor_describe_the_default_session_environment() {
             .reason
             .as_deref()
             .unwrap()
-            .contains("login shell")
+            .contains("interactive login shell (-ilc)")
     );
     test.finish().await;
 }

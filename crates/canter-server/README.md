@@ -195,9 +195,13 @@ AppKit，只读取剪贴板已有的 PNG 表示，不转换格式。临时截图
 非本机 `http://` 地址被拒绝，本机仅接受 localhost 或 loopback IP；模型客户端禁用代理和跳转。
 模型、key、窗口在服务端启动时读取，修改后自动重读、下一轮生效。
 `session_env` 是可选的字符串映射，用于覆盖未交 `env` 时的默认会话环境，例如
-`"session_env": {"PATH":"/opt/bin:/usr/bin:/bin"}`。基础环境从 passwd 的 HOME/USER/SHELL
-和启动时一次登录 shell 探测取得；探测失败或超过 5 秒，退回 passwd 加服务端进程环境。
-探测输出不落盘、不进日志，`canter doctor` 的 `session.environment` 显示来源和原因。
+`"session_env": {"PATH":"/opt/bin:/usr/bin:/bin"}`。服务端启动时，以 passwd 的 HOME/USER/SHELL
+加服务端进程环境先探测交互式登录 shell（`-ilc`，最多 4 秒），以取得 `.zshrc`/`.bashrc` 等
+交互配置中的 PATH。启动失败、非零退出、超时、输出无效或超过 1 MiB 时，退回非交互登录
+shell（`-lc`，最多 2 秒）；两级合计不超过 6 秒，两级都失败则退回 passwd 加服务端进程环境。
+stdin 为 null，stdout 横幅由环境标记隔开；shell 退出后只留很短的输出读取宽限期，
+后台进程占着 stdout 不会拖到探测超时。探测输出不落盘、不进日志，`canter doctor` 的
+`session.environment` 显示所用级别和前级失败的固定原因，不显示环境内容。
 覆盖项跟随配置重载，只影响随后新建/重新打开的缺省环境会话；显式 `env`（包括空表）和
 已有会话不变。HOME/CANTER_HOME 必须是绝对路径，环境名和值不能含 NUL，名字也不能为空或含 `=`。
 

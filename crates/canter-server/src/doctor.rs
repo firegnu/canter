@@ -49,20 +49,27 @@ fn skip(id: &str, name: &str, category: DoctorCategory, reason: String) -> Docto
 fn session_environment(
     environment: &crate::session_environment::SessionEnvironment,
 ) -> DoctorCheck {
-    let (status, reason, action) = match environment.probe {
-        Ok(()) => (
+    use crate::session_environment::Source;
+    let (status, reason) = match environment.source {
+        Source::InteractiveLogin => (
             DoctorStatus::Ok,
-            "Using passwd + login shell environment + config.json session_env overrides.".into(),
-            None,
+            "Using passwd + interactive login shell (-ilc) environment + config.json session_env overrides.".into(),
         ),
-        Err(reason) => (
+        Source::Login { interactive_failure } => (
             DoctorStatus::Fail,
             format!(
-                "Using passwd + server process environment + config.json session_env overrides: {reason}."
+                "Using passwd + non-interactive login shell (-lc) environment + config.json session_env overrides. Interactive login shell (-ilc) failed: {interactive_failure}."
             ),
-            Some("Check the server user's login shell, then restart the server.".into()),
+        ),
+        Source::Process { interactive_failure, login_failure } => (
+            DoctorStatus::Fail,
+            format!(
+                "Using passwd + server process environment + config.json session_env overrides. Interactive login shell (-ilc) failed: {interactive_failure}. Non-interactive login shell (-lc) failed: {login_failure}."
+            ),
         ),
     };
+    let action = (status == DoctorStatus::Fail)
+        .then(|| "Check the server user's login shell, then restart the server.".into());
     check(
         "session.environment",
         "Default session environment",
@@ -71,6 +78,54 @@ fn session_environment(
         Some(reason),
         action,
     )
+}
+
+#[test]
+fn session_environment_reports_each_source_and_previous_failures_without_values() {
+    use crate::session_environment::{SessionEnvironment, Source};
+    for (source, status, details) in [
+        (
+            Source::InteractiveLogin,
+            DoctorStatus::Ok,
+            vec!["Using passwd + interactive login shell (-ilc) environment"],
+        ),
+        (
+            Source::Login {
+                interactive_failure: "login shell probe timed out",
+            },
+            DoctorStatus::Fail,
+            vec![
+                "Using passwd + non-interactive login shell (-lc) environment",
+                "Interactive login shell (-ilc) failed: login shell probe timed out",
+            ],
+        ),
+        (
+            Source::Process {
+                interactive_failure: "login shell exited unsuccessfully",
+                login_failure: "login shell returned an invalid environment",
+            },
+            DoctorStatus::Fail,
+            vec![
+                "Using passwd + server process environment",
+                "Interactive login shell (-ilc) failed: login shell exited unsuccessfully",
+                "Non-interactive login shell (-lc) failed: login shell returned an invalid environment",
+            ],
+        ),
+    ] {
+        let mut environment = SessionEnvironment::for_test(Path::new("/private-test-home"));
+        environment.source = source;
+        let check = session_environment(&environment);
+        assert_eq!(check.id, "session.environment");
+        assert_eq!(check.status, status);
+        for detail in details {
+            assert!(check.reason.as_ref().unwrap().contains(detail));
+        }
+        assert!(
+            !serde_json::to_string(&check)
+                .unwrap()
+                .contains("private-test-home")
+        );
+    }
 }
 
 fn state(home: &Path) -> DoctorCheck {

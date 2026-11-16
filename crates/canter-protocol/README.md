@@ -283,12 +283,16 @@ PATCH 的 `name: ""` 清空会话名（快照中为 null），用于手动清名
 创建请求不实现 Debug，调用方也不得记录其请求体。
 新建请求的 `env` 可省略或为 null：使用服务端默认会话环境；显式映射整份使用、不合并默认值，
 因此 `env: {}` 仍表示空环境。`features` 中的 `optionalSessionEnv` 表示支持这一语义。
-默认环境以 passwd 的 HOME/USER/SHELL 加服务端进程环境启动一次非交互登录 shell（`-lc`），
-取完整环境，最多等待 5 秒；探测失败/超时则退回 passwd 加服务端进程环境。
+默认环境以 passwd 的 HOME/USER/SHELL 加服务端进程环境启动交互式登录 shell（`-ilc`，最多 4 秒），
+取包含交互配置中 PATH 的完整环境；启动失败、非零退出、超时、输出无效或超过 1 MiB 时，
+退回非交互登录 shell（`-lc`，最多 2 秒），两级合计不超过 6 秒。
+两级都失败则退回 passwd 加服务端进程环境。stdin 为 null，stdout 的启动横幅由环境标记隔开；
+shell 退出后只留很短的输出读取宽限期，不等待后台进程关闭 stdout。
 最后叠加 `config.json` 的 `session_env` 字符串映射，例如 `{"PATH":"/opt/bin:/usr/bin:/bin"}`。
 环境名不得为空、含 `=` 或 NUL，值不得含 NUL，HOME/CANTER_HOME 覆盖必须为绝对路径。
-覆盖项随配置重载，只影响之后未交 `env` 的新建/重新打开会话；登录 shell 只在服务端启动时探测一次。
-探测结果仅在内存中，doctor 的 `session.environment` 报告来源和失败原因，不显示环境值或 shell 输出。
+覆盖项随配置重载，只影响之后未交 `env` 的新建/重新打开会话；这套探测只在服务端启动时进行一次。
+探测结果仅在内存中，doctor 的 `session.environment` 报告所用级别和前级失败的固定原因，
+不显示环境值或 shell 输出。
 沙箱、技能、全局 AGENTS.md、`~`、命令、钩子和 LSP 都使用最终选定的同一份会话环境。
 本机终端和 `canter exec` 仍发送原来的 `env`；`/new`、`/handoff`、计划开新会话复用新建请求，
 子 agent 继承父会话已选定的环境。Rust 使用方保留原行为时将原映射包装为 `Some(env)`。
