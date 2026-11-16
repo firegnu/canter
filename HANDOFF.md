@@ -136,6 +136,11 @@
 - 编译目录：`../canter-worktrees/.target/<子目录>`，主仓库用 `main`。cargo 不删旧的测试程序，`main` 会越攒越大：11-05 攒到 81G（30 万个文件），用户发现硬盘掉得快，主控 `cargo clean` 清掉（腾出 86G），连同 10-31 审查 P2-173 没清的两个 `review-p2-173-*` 目录（5.8G）。之后每件活收尾时看一眼 `du -sh ../canter-worktrees/.target/main`，超过 20G 就 `cargo clean`（只是缓存，下次编译慢一点）。
 - 测试用 cargo-nextest（10-26 用 Homebrew 装的 0.9.149，`/opt/homebrew/bin/cargo-nextest`）。
 - 开 agent：`corral start` 单独一条运行，前后不用 `&&`、`;`、`|` 接别的命令，一次只开一个；建 worktree、`corral wait`、取结果都另起一条（用户的放行规则 `Bash(corral start:*)` 只认单独的 `corral start`，串起来会被自动权限检查以「Create Unsafe Agents」拦下；corral-dispatch 技能第 4 节，ranch f4a9a29，10-28）。单独一条仍被拦，再把命令给用户用 `!` 运行。
+- 远程连接试用用的中转 VPS（P2-297「中转 VPS 调研」，11-16 用户和主控一起在网页上开）：
+  - GCP 项目 `canter-relay`，虚拟机 `relay-usw1`：us-west1（Oregon），e2-micro，Debian 13，10 GB 标准盘，不装 Ops Agent，没有服务账号，静态外网 IP（Premium）。IP 不写进仓库（用户 11-16：「IP 不写进仓库」），看 GCP 控制台或 Mac 的 `~/.ssh/config`。
+  - 登录用户 `firegnu`，只认密钥：Mac 用 `~/.ssh/gcp-canter-relay`，别名 `ssh gcp-relay`；5090 用它自己的 `~/.ssh/gcp-canter-relay`（不设口令，给以后 `ssh -R` 隧道后台自动连）。两把公钥都在 VPS 的 `~/.ssh/authorized_keys`，Mac 那把另在实例的 SSH 元数据里。
+  - Mac（Shadowrocket）和 5090（v2rayN / sing-box）去 VPS 都经代理，所以 ping 只有零点几毫秒，是假的；5090 经代理一次完整 SSH 登录约 2.2 秒。直连没测，用户 11-16：「先走代理」。代理断了或换节点，隧道会断，要能自己重连。
+  - 花钱：结算账号是 90 天免费试用账号，挂着试用的 $300 和 Google Developer Program 每月 $40（Ultra 5x）；预算 `net-spend-1usd` 按扣掉额度后的净花费、到 $1 发邮件。**2027-02-14 前要在控制台激活完整账号**，否则试用结束时结算账号停用、VPS 停掉，$40 也用不了；激活后超出额度的部分从卡里扣。
 
 ## 还没派的
 
