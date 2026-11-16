@@ -1,19 +1,17 @@
 //! `/diff`: the uncommitted changes of the session's repository in a box
 //! above the input box: the staged and the unstaged diff, each file drawn as
-//! the conversation draws a diff, then the untracked files by name. git is
-//! run as `/review` runs it ([`crate::git::local`]), with the same limits.
-
-use std::time::Duration;
+//! the conversation draws a diff, then the untracked files by name. Changes
+//! are collected by the server, with the same limits as `/review`.
 
 use canter_protocol::PatchChangeKind;
 use ratatui::text::Span;
 
 use crate::diff::Diff;
 use crate::files::{heading, none};
-use crate::git::{LIMIT, LIST_LIMIT, Local, prefix};
 use crate::report::{Part, Report, clean};
 use crate::text::sanitize;
 use crate::theme;
+use canter_protocol::WorkspaceDiff as Local;
 
 /// Where a diff's rows start in the box: under its file's path.
 const DIFF_INDENT: &str = "     ";
@@ -21,13 +19,28 @@ const DIFF_INDENT: &str = "     ";
 /// What `/diff` found, for [`crate::App::show_diff`].
 pub struct Changes(Result<Local, String>);
 
-/// The uncommitted changes of the repository holding `cwd`, collected in at
-/// most 15 seconds.
-pub async fn collect(cwd: &str) -> Changes {
-    let local = tokio::time::timeout(Duration::from_secs(15), crate::git::local(cwd))
-        .await
-        .unwrap_or_else(|_| Err("collecting changes timed out".into()));
-    Changes(local)
+/// The session repository's uncommitted changes; the server limits collection
+/// to 15 seconds.
+pub async fn collect(client: &crate::client::Client, session: &str) -> Changes {
+    Changes(
+        client
+            .workspace_diff(session)
+            .await
+            .map_err(|error| match error {
+                crate::client::ClientError::Server { message, .. } => message,
+                error => error.to_string(),
+            }),
+    )
+}
+
+const LIMIT: usize = 256 * 1024;
+const LIST_LIMIT: usize = 32 * 1024;
+fn prefix(text: &str, limit: usize) -> &str {
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 /// The box for `changes`: a section for each of staged, unstaged and

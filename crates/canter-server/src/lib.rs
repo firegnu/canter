@@ -4,6 +4,12 @@ pub mod chatgpt_auth;
 mod config;
 mod discovery;
 mod http;
+mod workspace_walk;
+#[cfg(feature = "test-support")]
+pub use http::workspace::test_support as workspace_test_support;
+pub use workspace_walk::{
+    WORKER_ARGUMENT as WORKSPACE_WORKER_ARGUMENT, worker_main as workspace_worker_main,
+};
 mod last_model;
 mod lifecycle;
 #[cfg(test)]

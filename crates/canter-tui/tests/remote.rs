@@ -3,6 +3,111 @@ use canter_tui::{App, Ui};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 
+#[tokio::test]
+async fn remote_workspace_data_drives_the_branch_counts_and_file_completion() {
+    use axum::{Json, Router, response::Sse, routing::get};
+    use serde_json::json;
+    // Wire responses keep this rendering test independent of the client's
+    // filesystem. Real collectors and session ignores run in canter's remote tests.
+    let router = Router::new()
+        .route("/v1/info", get(|| async {
+            Json(json!({"serverVersion":"test","protocolVersion":1,"sessions":[],"features":["workspaceQueries"]}))
+        }))
+        .route("/v1/sessions/test/workspace/summary", get(|| async {
+            Json(json!({"branch":"server-branch","changedLines":[2,0]}))
+        }))
+        .route("/v1/sessions/test/workspace/entries", get(|| async {
+            Sse::new(futures_util::stream::iter([Ok::<_, std::convert::Infallible>(
+                axum::response::sse::Event::default().json_data(json!({
+                    "entries":[{"label":"server-file.txt","dir":false}],"truncated":false,"done":true
+                })).unwrap()
+            )]))
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = canter_tui::client::Client::remote(
+        "fixture",
+        &format!("http://{}", listener.local_addr().unwrap()),
+        "test-only",
+    )
+    .unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let mut snapshot = SessionSnapshot::empty("test");
+    snapshot.settings.cwd = "/server/path-unavailable-on-client".into();
+    let mut app = App::new_remote(snapshot, None, 0, "/client".into(), None).with_workspace(client);
+    app.load_workspace().await;
+    let mut ui = Ui::new(TestBackend::new(100, 28), app).unwrap();
+    ui.app_mut().handle_paste("@server-");
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let shown = text(&mut ui);
+            if shown.contains("server-branch")
+                && shown.contains("server-file.txt")
+                && shown.contains("+2")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    ui.app_mut()
+        .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), 0);
+    assert!(text(&mut ui).contains("@server-file.txt"));
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn old_servers_prompt_for_replacement_without_local_workspace_fallback() {
+    use axum::{Json, Router, routing::get};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = Router::new().route(
+        "/v1/info",
+        get(|| async {
+            Json(serde_json::json!({"serverVersion":"old","protocolVersion":1,"sessions":[]}))
+        }),
+    );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client =
+        canter_tui::client::Client::remote("old", &format!("http://{address}"), "test-only")
+            .unwrap();
+    let error = client.workspace_diff("test").await.unwrap_err().to_string();
+    assert!(
+        error.contains("Server 'old'") && error.contains("upgrade it on that machine"),
+        "{error}"
+    );
+    // Local clients retain the existing explicit serve --replace wording.
+    let root = tempfile::tempdir().unwrap();
+    let socket = root.path().join("old.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let router = Router::new().route(
+        "/v1/info",
+        get(|| async {
+            Json(serde_json::json!({"serverVersion":"old","protocolVersion":1,"sessions":[]}))
+        }),
+    );
+    let local_task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let local = canter_tui::client::Client::new(&socket).unwrap();
+    let error = local
+        .workspace_status("test")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("serve --replace"), "{error}");
+    task.abort();
+    local_task.abort();
+    let _ = task.await;
+    let _ = local_task.await;
+}
+
 fn screen() -> Ui<TestBackend> {
     Ui::new(
         TestBackend::new(100, 28),
@@ -32,12 +137,16 @@ fn enter(ui: &mut Ui<TestBackend>, command: &str) -> Option<canter_tui::Action> 
 }
 
 #[test]
-fn remote_workspace_commands_explain_the_limit_without_actions() {
-    for command in ["/diff", "/review", "/files"] {
+fn remote_workspace_commands_use_the_same_actions_as_local_commands() {
+    for (command, action) in [
+        ("/diff", canter_tui::Action::Diff),
+        ("/review", canter_tui::Action::Review(String::new())),
+        ("/files", canter_tui::Action::Files),
+    ] {
         let mut ui = screen();
-        assert_eq!(enter(&mut ui, command), None, "{command}");
+        assert_eq!(enter(&mut ui, command), Some(action), "{command}");
         assert!(
-            text(&mut ui).contains("Not available on remote servers yet"),
+            !text(&mut ui).contains("Not available on remote servers yet"),
             "{command}"
         );
     }
@@ -85,7 +194,7 @@ fn remote_memory_lists_and_deletes_but_does_not_open_an_editor() {
 }
 
 #[test]
-fn remote_clipboard_images_read_client_bytes_and_file_mentions_stay_unavailable() {
+fn remote_clipboard_images_read_client_bytes_and_mentions_are_not_blocked() {
     let mut ui = screen();
     let mut snapshot = SessionSnapshot::empty("test");
     snapshot.settings.model = "deepseek-flash".into();
@@ -103,7 +212,7 @@ fn remote_clipboard_images_read_client_bytes_and_file_mentions_stay_unavailable(
     ));
     let mut ui = screen();
     ui.app_mut().handle_paste("@src/");
-    assert!(text(&mut ui).contains("Not available on remote servers yet"));
+    assert!(!text(&mut ui).contains("Not available on remote servers yet"));
 }
 
 #[test]
@@ -316,7 +425,7 @@ fn remote_screen_does_not_display_a_matching_client_repository_branch() {
         App::new(snapshot.clone(), None, 0),
     )
     .unwrap();
-    assert!(text(&mut local).contains("client-only-branch"));
+    assert!(!text(&mut local).contains("client-only-branch"));
     let mut remote = Ui::new(
         TestBackend::new(100, 28),
         App::new_remote(snapshot, None, 0, "/client".into(), None),

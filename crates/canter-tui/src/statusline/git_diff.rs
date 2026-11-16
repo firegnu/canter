@@ -1,88 +1,97 @@
-//! The lines changed since the last commit, after the branch on the status
-//! bar: counted by git in the background, never waited for while drawing.
-
+//! Workspace branch and changed-line counts fetched without blocking drawing.
+use crate::client::Client;
+use canter_protocol::WorkspaceSummary;
 use std::time::Duration;
-
 use tokio::{sync::oneshot, task::JoinHandle, time::Instant};
 
-/// Counted again this often when nothing else asks for it, to catch changes
-/// made in an editor.
 const EVERY: Duration = Duration::from_secs(5);
-
-/// Lines added and removed.
-type Lines = (u64, u64);
+type Pending = (
+    oneshot::Receiver<Option<WorkspaceSummary>>,
+    JoinHandle<()>,
+    bool,
+);
 
 pub(crate) struct GitDiff {
-    /// The directory [`GitDiff::lines`] is for.
     cwd: Option<String>,
-    lines: Option<Lines>,
+    branch: Option<String>,
+    lines: Option<(u64, u64)>,
     wanted: bool,
     started: Option<Instant>,
-    running: Option<(oneshot::Receiver<Option<Lines>>, JoinHandle<()>)>,
+    running: Option<Pending>,
 }
-
 impl GitDiff {
-    /// Counts when first polled.
     pub fn new() -> Self {
         Self {
             cwd: None,
+            branch: None,
             lines: None,
             wanted: true,
             started: None,
             running: None,
         }
     }
-
-    /// Lines added and removed; `None` outside a repository, when git
-    /// failed or before the first count.
-    pub fn lines(&self) -> Option<Lines> {
+    pub fn lines(&self) -> Option<(u64, u64)> {
         self.lines
     }
-
-    /// Counts again soon, as after a turn, a tool call or a `!` command; once
-    /// the count running now, if any, is done.
+    pub fn branch(&self) -> Option<String> {
+        self.branch.clone()
+    }
+    pub fn set(&mut self, cwd: &str, summary: WorkspaceSummary) {
+        self.cwd = Some(cwd.into());
+        self.branch = summary.branch;
+        self.lines = summary.changed_lines;
+        self.started = Some(Instant::now());
+        self.wanted = self.lines.is_none();
+    }
     pub fn refresh(&mut self) {
         self.wanted = true;
     }
-
-    /// Takes a finished count, and starts the next one when it is wanted,
-    /// the directory changed or [`EVERY`] has passed since the last.
-    pub fn poll(&mut self, cwd: &str) {
+    pub fn poll(&mut self, client: &Client, session: &str, cwd: &str, branch_due: bool) {
         if self.cwd.as_deref() != Some(cwd) {
             self.stop();
-            self.cwd = Some(cwd.to_owned());
+            self.cwd = Some(cwd.into());
+            self.branch = None;
             self.lines = None;
             self.wanted = true;
         }
-        if let Some((result, _)) = &mut self.running {
+        if let Some((result, _, counted)) = &mut self.running {
             match result.try_recv() {
-                Ok(lines) => self.lines = lines,
+                Ok(summary) => {
+                    self.branch = summary.as_ref().and_then(|s| s.branch.clone());
+                    if *counted {
+                        self.lines = summary.and_then(|s| s.changed_lines);
+                    }
+                }
                 Err(oneshot::error::TryRecvError::Empty) => return,
-                Err(oneshot::error::TryRecvError::Closed) => self.lines = None,
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    self.branch = None;
+                    self.lines = None;
+                }
             }
             self.running = None;
         }
-        if !self.wanted && self.started.is_some_and(|at| at.elapsed() < EVERY) {
+        let count = self.wanted || self.started.is_none_or(|at| at.elapsed() >= EVERY);
+        if !count && !branch_due {
             return;
         }
         self.wanted = false;
-        self.started = Some(Instant::now());
-        let cwd = cwd.to_owned();
+        if count {
+            self.started = Some(Instant::now());
+        }
+        let client = client.clone();
+        let session = session.to_owned();
         let (sender, receiver) = oneshot::channel();
         let task = tokio::spawn(async move {
-            let _ = sender.send(crate::git::changed_lines(&cwd).await);
+            let _ = sender.send(client.workspace_summary(&session, count).await.ok());
         });
-        self.running = Some((receiver, task));
+        self.running = Some((receiver, task, count));
     }
-
-    /// Drops a count in progress; git is killed with it.
     fn stop(&mut self) {
-        if let Some((_, task)) = self.running.take() {
+        if let Some((_, task, _)) = self.running.take() {
             task.abort();
         }
     }
 }
-
 impl Drop for GitDiff {
     fn drop(&mut self) {
         self.stop();

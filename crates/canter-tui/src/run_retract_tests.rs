@@ -601,3 +601,53 @@ async fn forwarded_approval_answer_uses_the_child_request_endpoint() {
     test.message().await;
     test.stop().await;
 }
+
+pub(super) async fn workspace_unavailable(requests: &mut mpsc::UnboundedReceiver<Request>) {
+    let request = requests.recv().await.unwrap();
+    assert_eq!(request.path, "/v1/info");
+    request.json(
+        serde_json::json!({"serverVersion":"test","protocolVersion":1,"sessions":[],"features":[]}),
+    );
+}
+
+#[tokio::test]
+async fn workspace_queries_follow_the_reconnected_client() {
+    let mut test = Harness::new().await;
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".git")).unwrap();
+    std::fs::write(
+        root.path().join(".git/HEAD"),
+        "ref: refs/heads/reconnected-workspace\n",
+    )
+    .unwrap();
+    let server = crate::test_workspace::Server::new(root.path().to_str().unwrap(), &[], None);
+    test.chat.message(
+        &mut test.ui,
+        Message::Reconnected(Connected {
+            client: server.client.clone(),
+            warning: None,
+            server: Some("replacement".into()),
+        }),
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            test.ui.draw(0).unwrap();
+            if test
+                .ui
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+                .contains("reconnected-workspace")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("workspace must use the replacement client after reconnect");
+    test.stop().await;
+}

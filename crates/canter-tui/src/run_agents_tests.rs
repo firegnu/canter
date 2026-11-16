@@ -574,6 +574,7 @@ async fn a_sub_agents_screen_shows_it_with_the_main_sessions_approvals() {
             let resume = next(requests).await;
             assert_eq!(resume.path, "/v1/sessions/child/resume");
             resume.json(json!({ "session": child, "eventSeq": 5 }));
+            super::retract_tests::workspace_unavailable(requests).await;
             let stream = next(requests).await;
             assert_eq!(stream.path, "/v1/events");
             let open = futures_util::stream::pending::<Result<Bytes, io::Error>>();
@@ -639,6 +640,9 @@ async fn a_sub_agents_screen_shows_it_with_the_main_sessions_approvals() {
     ] }));
     test.message().await;
     test.ui.draw(0).unwrap();
+    let workspace = next(&mut test.requests).await;
+    assert_eq!(workspace.path, "/v1/sessions/child/workspace/summary");
+    workspace.json(json!({ "branch": null, "changedLines": null }));
     let screen = rows(&test);
     let text = screen.join("\n");
     assert_eq!(screen[0], " Sub-agent · agent-child · explorer · running");
@@ -873,6 +877,9 @@ async fn returning_from_a_child_handoff_restores_its_main_session_file() {
         loop {
             let request = next(requests).await;
             match request.path.as_str() {
+                "/v1/info" => request.json(
+                    json!({"serverVersion":"test","protocolVersion":1,"sessions":[],"features":[]}),
+                ),
                 "/v1/sessions/child/resume" => request.json(json!({"session":child,"eventSeq":0})),
                 "/v1/sessions/parent" => request.json(json!({"session":parent,"eventSeq":0})),
                 "/v1/events" => {

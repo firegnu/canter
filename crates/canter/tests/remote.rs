@@ -1,6 +1,7 @@
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Output};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use serde_json::Value;
 use serde_json::json;
@@ -368,6 +369,263 @@ async fn tcp_requires_authentication_before_routing_or_processing_bodies() {
         before
     );
     assert!(!server.log().contains(&token));
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn workspace_entries_stream_once_with_session_ignores_and_each_directory_cap() {
+    let server = Server::start(Some(json!(true))).await;
+    let token = server.token("workspace-test").await;
+    let repo = server.root.path().join("repo");
+    let extra = server.root.path().join("extra");
+    let home = server.root.path().join("session-home");
+    for dir in [&repo, &extra, &home.join(".config/git")] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    let init = std::process::Command::new("git")
+        .args(["init", "-q", "-b", "workspace-test"])
+        .current_dir(&repo)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", &home)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(init.status.success());
+    fs::write(home.join(".config/git/ignore"), "000-global.txt\n").unwrap();
+    fs::write(repo.join(".gitignore"), "000-local.txt\n").unwrap();
+    for name in ["000-global.txt", "000-local.txt"] {
+        fs::write(repo.join(name), "ignored").unwrap();
+    }
+    for index in 0..10_001 {
+        fs::write(repo.join(format!("file-{index:05}")), "").unwrap();
+    }
+    fs::write(extra.join("extra.txt"), "").unwrap();
+    let created: Value = server.tcp.post(server.url("/v1/sessions")).bearer_auth(&token)
+        .json(&json!({"cwd":repo,"additionalDirectories":[extra],"env":{"HOME":home,"PATH":"/usr/bin:/bin","GIT_CONFIG_SYSTEM":"/dev/null"},
+            "model":"fake","approvalPolicy":"alwaysAsk","clientName":"test","restrictedMode":true}))
+        .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    let id = created["session"]["id"].as_str().unwrap();
+    let started = std::time::Instant::now();
+    let response = server
+        .tcp
+        .get(server.url(&format!("/v1/sessions/{id}/workspace/entries")))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(
+        response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/event-stream")
+    );
+    let mut stream = response.bytes_stream().eventsource();
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    let mut done = false;
+    while let Some(frame) = stream.next().await {
+        let batch: Value = serde_json::from_str(&frame.unwrap().data).unwrap();
+        assert!(batch["entries"].as_array().unwrap().len() <= 256);
+        assert!(batch["error"].is_null(), "{batch}");
+        if entries.is_empty() {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "first batch was late"
+            );
+        }
+        entries.extend(batch["entries"].as_array().unwrap().iter().cloned());
+        truncated |= batch["truncated"].as_bool().unwrap();
+        done |= batch["done"].as_bool().unwrap();
+    }
+    assert!(done && truncated);
+    assert_eq!(
+        entries.len(),
+        10_001,
+        "each directory keeps its own allowance"
+    );
+    let labels: Vec<_> = entries
+        .iter()
+        .map(|e| e["label"].as_str().unwrap())
+        .collect();
+    assert!(!labels.contains(&"000-global.txt") && !labels.contains(&"000-local.txt"));
+    assert_eq!(labels[0], ".gitignore");
+    assert_eq!(labels[9999], "file-09998");
+    assert_eq!(
+        labels[10000],
+        extra
+            .canonicalize()
+            .unwrap()
+            .join("extra.txt")
+            .to_str()
+            .unwrap()
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn workspace_queries_match_unix_and_tcp_in_a_worktree_and_use_server_gh() {
+    let server = Server::start(Some(json!(true))).await;
+    let token = server.token("workspace-test").await;
+    let home = server.root.path().join("session-home");
+    let repo = server.root.path().join("repo");
+    let worktree = server.root.path().join("worktree");
+    let bin = home.join("bin");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    let git = |cwd: &Path, args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(cwd)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", &home)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&repo, &["init", "-q", "-b", "main"]);
+    fs::write(repo.join("tracked.txt"), "before\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "initial"]);
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "server-worktree",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    fs::write(worktree.join("tracked.txt"), "staged\n").unwrap();
+    git(&worktree, &["add", "."]);
+    fs::write(worktree.join("tracked.txt"), "after\nextra\n").unwrap();
+    fs::write(worktree.join("new.txt"), "not part of the diff").unwrap();
+    fs::write(bin.join("gh"), "#!/bin/sh\ntest \"$WORKSPACE_TEST_VALUE\" = session || exit 9\ntest \"$GIT_CONFIG_GLOBAL\" = /dev/null || exit 9\ncase \"$2\" in\nview) printf '%s\\n' '{\"number\":7,\"title\":\"Server PR\",\"body\":\"Body\",\"baseRefName\":\"main\"}' ;;\ndiff) printf '%s\\n' 'diff --git a/test.txt b/test.txt' '+from server gh' ;;\n*) exit 1 ;;\nesac\n").unwrap();
+    fs::set_permissions(bin.join("gh"), fs::Permissions::from_mode(0o700)).unwrap();
+    let create = json!({"cwd":worktree,"env":{"HOME":home,"PATH":format!("{}:/usr/bin:/bin",bin.display()),"WORKSPACE_TEST_VALUE":"session"},
+        "model":"fake","approvalPolicy":"alwaysAsk","clientName":"test","restrictedMode":true});
+    let created: Value = server
+        .tcp
+        .post(server.url("/v1/sessions"))
+        .bearer_auth(&token)
+        .json(&create)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = created["session"]["id"].as_str().unwrap();
+    let base = format!("/v1/sessions/{id}");
+    let before: Value = server
+        .local
+        .get(format!("http://localhost{base}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    for (query, expected) in [
+        ("summary", "server-worktree"),
+        ("diff", "+staged"),
+        ("status", "tracked.txt"),
+        ("review?clientName=test", "UNSTAGED_DIFF"),
+        ("review?target=7&clientName=test", "+from server gh"),
+    ] {
+        let route = format!("{base}/workspace/{query}");
+        let local: Value = server
+            .local
+            .get(format!("http://localhost{route}"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let remote: Value = server
+            .tcp
+            .get(server.url(&route))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(local, remote, "{query}");
+        assert!(remote.to_string().contains(expected), "{query}: {remote}");
+        if query == "summary" {
+            assert_eq!(remote["changedLines"], json!([2, 1]));
+        }
+        if query == "diff" {
+            assert!(
+                remote["unstaged"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("+after\n+extra")
+            );
+        }
+    }
+    let client =
+        canter_tui::client::Client::remote("workspace-test", &server.url("/"), &token).unwrap();
+    assert_eq!(
+        client
+            .workspace_summary(id, true)
+            .await
+            .unwrap()
+            .branch
+            .as_deref(),
+        Some("server-worktree")
+    );
+    assert_eq!(
+        client
+            .workspace_review(id, "7", "test")
+            .await
+            .unwrap()
+            .review
+            .as_deref(),
+        Some("Review: PR #7 Server PR")
+    );
+    let after: Value = server
+        .local
+        .get(format!("http://localhost{base}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(before, after, "queries do not start a turn or add events");
+    assert_eq!(
+        fs::read_to_string(worktree.join("tracked.txt")).unwrap(),
+        "after\nextra\n"
+    );
     server.stop().await;
 }
 

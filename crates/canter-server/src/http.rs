@@ -36,6 +36,9 @@ mod doctor_tests;
 #[path = "session_search.rs"]
 mod session_search;
 
+#[path = "workspace/mod.rs"]
+pub(crate) mod workspace;
+
 #[path = "agent_sessions.rs"]
 mod agent_sessions;
 
@@ -345,6 +348,11 @@ fn router_with_accounts(app: Arc<App>, accounts: Router) -> Router {
                 .get(list),
         )
         .route(routes::SESSION_SEARCH, get(search_sessions))
+        .route(routes::WORKSPACE_SUMMARY, get(workspace::summary))
+        .route(routes::WORKSPACE_DIFF, get(workspace::diff))
+        .route(routes::WORKSPACE_STATUS, get(workspace::status))
+        .route(routes::WORKSPACE_REVIEW, get(workspace::review))
+        .route(routes::WORKSPACE_ENTRIES, get(workspace::entries))
         .route(
             routes::MANAGED_CLIENT,
             get(managed::connect).delete(managed::close),
@@ -512,6 +520,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         instance: Some(app.instance.clone()),
         home: Some(app.session_environment.home.clone()),
         features: Some(vec![
+            "workspaceQueries".into(),
             "imageData".into(),
             "optionalSessionEnv".into(),
             "sessionSandbox".into(),

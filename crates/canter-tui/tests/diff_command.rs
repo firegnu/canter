@@ -8,6 +8,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
+#[path = "support/workspace.rs"]
+mod workspace;
 
 const NOW: i64 = 0;
 
@@ -29,7 +31,8 @@ impl Screen {
         let cwd = self.ui.app().snapshot().settings.cwd.clone();
         self.draw();
         assert_eq!(self.enter("/diff"), Some(Action::Diff));
-        let changes = canter_tui::uncommitted::collect(&cwd).await;
+        let server = workspace::Server::new(&cwd, &[], None);
+        let changes = canter_tui::uncommitted::collect(&server.client, "s1").await;
         self.ui.app_mut().show_diff(changes);
         self.draw();
         let lines = self.lines();

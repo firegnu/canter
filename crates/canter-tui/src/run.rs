@@ -489,24 +489,21 @@ where
     result
 }
 
-fn app_for_client(
+async fn app_for_client(
     client: &Client,
     snapshot: SessionSnapshot,
     home: Option<String>,
     env: &BTreeMap<String, String>,
 ) -> Result<App, RunError> {
-    if client.is_remote() {
+    let mut app = if client.is_remote() {
         let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
-        Ok(App::new_remote(
-            snapshot,
-            home,
-            now_ms(),
-            cwd,
-            env.get("HOME").cloned(),
-        ))
+        App::new_remote(snapshot, home, now_ms(), cwd, env.get("HOME").cloned())
     } else {
-        Ok(App::new(snapshot, home, now_ms()))
+        App::new(snapshot, home, now_ms())
     }
+    .with_workspace(client.clone());
+    app.load_workspace().await;
+    Ok(app)
 }
 
 async fn run_connected<B, C>(
@@ -700,11 +697,11 @@ where
     };
 
     let session = snapshot.id.clone();
-    let mut app = app_for_client(&client, snapshot, home.clone(), &env)?
+    let mut app = app_for_client(&client, snapshot, home.clone(), &env)
+        .await?
         .with_client_name(client_name.clone())
         .with_welcome(version.clone())
         .with_status_line(status_line.clone(), env.clone())
-        .with_git_diff()
         .with_tips(&env)
         .with_input_history(&env);
     match client.list_models().await {
@@ -1007,7 +1004,6 @@ where
                         ui.app_mut().warning(&error.to_string());
                     }
                 }
-                Some(Action::Files) => ui.app_mut().show_files().await,
                 Some(Action::ExternalEditor) => {
                     let temp = std::env::temp_dir();
                     if let Err(error) = edit_draft(&mut ui, &input, &chat.env, &temp).await {
@@ -1546,6 +1542,7 @@ enum Message {
     Information(String),
     /// `/diff` collected the changes.
     Diff(crate::uncommitted::Changes),
+    Files(canter_protocol::WorkspaceStatus),
     SandboxRefreshed {
         chooser: u64,
         report: canter_protocol::SessionSandboxResponse,
@@ -2079,7 +2076,7 @@ impl<C: Connector> Chat<C> {
         snapshot: SessionSnapshot,
         failed: &str,
     ) -> Option<mpsc::UnboundedReceiver<Message>> {
-        let app = match app_for_client(&self.client, snapshot, self.home.clone(), &self.env) {
+        let app = match app_for_client(&self.client, snapshot, self.home.clone(), &self.env).await {
             Ok(app) => app,
             Err(error) => {
                 ui.app_mut().warning(&format!("{failed}: {error}"));
@@ -2126,7 +2123,6 @@ impl<C: Connector> Chat<C> {
             .with_client_name(self.client_name.clone())
             .with_welcome(self.version.clone())
             .with_status_line(self.status_line.clone(), self.env.clone())
-            .with_git_diff()
             .with_bar_from(ui.app())
             .with_tips_from(ui.app())
             .with_steering_from(ui.app())
@@ -2274,6 +2270,7 @@ impl<C: Connector> Chat<C> {
             Message::Warning(message) => app.warning(&message),
             Message::Information(message) => app.information(&message),
             Message::Diff(changes) => app.show_diff(changes),
+            Message::Files(status) => app.show_files(status),
             Message::SandboxRefreshed { chooser, report } => app.refresh_sandbox(chooser, report),
             Message::AnswerFailed { request_id, error } => app.answer_failed(&request_id, &error),
             Message::AnswerLate => app.answer_late(),
@@ -2286,6 +2283,7 @@ impl<C: Connector> Chat<C> {
             Message::Reconnecting(reason) => app.reconnecting(&reason),
             Message::Reconnected(connected) => {
                 self.client = connected.client;
+                app.reconnect_workspace(self.client.clone());
                 self.server = connected.server;
                 app.reconnected();
                 if let Some(file) = &self.session_file
@@ -2397,15 +2395,23 @@ impl<C: Connector> Chat<C> {
             }
             Action::Export(to) => app.export(to, crate::now_ms()),
             Action::Diff => {
-                let cwd = app.snapshot().settings.cwd.clone();
                 tokio::spawn(async move {
-                    let changes = crate::uncommitted::collect(&cwd).await;
+                    let changes = crate::uncommitted::collect(&client, &session).await;
                     let _ = sender.send(Message::Diff(changes));
                 });
             }
+            Action::Files => {
+                tokio::spawn(async move {
+                    let status = client
+                        .workspace_status(&session)
+                        .await
+                        .unwrap_or_else(|error| canter_protocol::WorkspaceStatus::Unavailable {
+                            reason: error.to_string(),
+                        });
+                    let _ = sender.send(Message::Files(status));
+                });
+            }
             Action::Review(target) => {
-                let cwd = app.snapshot().settings.cwd.clone();
-                let env = self.env.clone();
                 let client_name = self.client_name.clone();
                 tokio::spawn(async move {
                     let result = async {
@@ -2414,7 +2420,7 @@ impl<C: Connector> Chat<C> {
                             return Err(client.upgrade_hint("The running server cannot enforce read-only review; run canter serve --replace and try again"));
                         }
                         let params =
-                            crate::review::prepare(&cwd, &env, &target, &client_name).await?;
+                            crate::review::prepare(&client, &session, &target, &client_name).await?;
                         client
                             .send_input(&session, &params)
                             .await
@@ -2775,7 +2781,6 @@ impl<C: Connector> Chat<C> {
             | Action::DeleteMemory(_)
             | Action::DeleteCommandRule(_)
             | Action::DeleteFileRule(_)
-            | Action::Files
             | Action::ListSkills
             | Action::ListRoles
             | Action::ExternalEditor

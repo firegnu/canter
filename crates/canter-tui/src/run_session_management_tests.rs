@@ -104,6 +104,7 @@ async fn fork_switches_with_history_or_keeps_original_on_failure() {
                 return;
             }
             request.json(json!({"session":fork,"eventSeq":fork.last_event_seq}));
+            super::retract_tests::workspace_unavailable(requests).await;
             let request = requests.recv().await.unwrap();
             assert_eq!(request.path, "/v1/events");
             if outcome == "subscription failed" {

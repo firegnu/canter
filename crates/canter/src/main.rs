@@ -7,6 +7,12 @@ fn main() -> ExitCode {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
     if arguments
         .first()
+        .is_some_and(|arg| arg == canter_server::WORKSPACE_WORKER_ARGUMENT)
+    {
+        return canter_server::workspace_worker_main();
+    }
+    if arguments
+        .first()
         .is_some_and(|arg| arg == canter_tools::pdf::WORKER_ARGUMENT)
     {
         return canter_tools::pdf::worker_main();

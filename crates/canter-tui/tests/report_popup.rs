@@ -10,6 +10,8 @@ use ratatui::backend::TestBackend;
 use ratatui::style::{Color, Modifier};
 use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
+#[path = "support/workspace.rs"]
+mod workspace;
 
 const SESSION: &str = "s1";
 
@@ -217,7 +219,7 @@ async fn files_shows_sections_with_git_words_and_staged_marks() {
     screen.event(json!({ "type": "turn.completed", "turn": turn("completed") }));
     screen.draw();
     assert_eq!(screen.enter("/files"), Some(Action::Files));
-    screen.ui.app_mut().show_files().await;
+    workspace::files(screen.ui.app_mut(), None).await;
     screen.draw();
     assert_eq!(
         screen.popup(" Files"),
@@ -275,7 +277,7 @@ async fn files_outside_a_repository_says_so_and_none_for_empty_sections() {
     let temp = tempfile::tempdir().unwrap();
     let mut screen = Screen::new(80, 30, &temp.path().to_string_lossy(), None);
     assert_eq!(screen.enter("/files"), Some(Action::Files));
-    screen.ui.app_mut().show_files().await;
+    workspace::files(screen.ui.app_mut(), None).await;
     screen.draw();
     assert_eq!(
         screen.popup(" Files"),
@@ -441,7 +443,7 @@ async fn after_esc_the_conversation_has_no_rows_of_the_three() {
         let before = screen.rows();
         screen.enter(command);
         match command {
-            "/files" => screen.ui.app_mut().show_files().await,
+            "/files" => workspace::files(screen.ui.app_mut(), None).await,
             "/mcp" => screen.ui.app_mut().show_mcp(&mcp_report()),
             _ => screen.ui.app_mut().show_skills(Vec::new()),
         }
@@ -476,7 +478,7 @@ async fn files_git_status_names_the_upstream_and_how_far_ahead() {
     ok(&repo, &["commit", "-qam", "ahead"]);
     let mut screen = Screen::new(80, 30, &repo.to_string_lossy(), None);
     assert_eq!(screen.enter("/files"), Some(Action::Files));
-    screen.ui.app_mut().show_files().await;
+    workspace::files(screen.ui.app_mut(), None).await;
     screen.draw();
     let popup = screen.popup(" Files");
     assert!(

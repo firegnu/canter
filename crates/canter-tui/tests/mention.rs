@@ -13,6 +13,8 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
+#[path = "support/workspace.rs"]
+mod workspace;
 
 const NOW: i64 = 0;
 const SESSION: &str = "s1";
@@ -46,14 +48,21 @@ fn isolate_home() {
 struct Screen {
     ui: Ui<TestBackend>,
     seq: u64,
+    workspace: workspace::Server,
 }
 
 impl Screen {
     fn new(cwd: &Path) -> Self {
         isolate_home();
         let app = App::new(SessionSnapshot::empty(SESSION), None, NOW);
+        let workspace = workspace::Server::new(cwd.to_str().unwrap(), &[], None);
+        let app = app.with_workspace(workspace.client.clone());
         let ui = Ui::new(TestBackend::new(80, 30), app).unwrap();
-        let mut screen = Self { ui, seq: 0 };
+        let mut screen = Self {
+            ui,
+            seq: 0,
+            workspace,
+        };
         screen.event(json!({
             "type": "session.updated",
             "settings": {
@@ -74,9 +83,12 @@ impl Screen {
             .extend(payload.as_object().unwrap().clone());
         let event: Event = serde_json::from_value(event).unwrap();
         self.ui.app_mut().apply_event(&event, NOW);
+        self.workspace
+            .set_directories(&self.ui.app().snapshot().settings);
     }
 
     fn draw(&mut self) {
+        let _runtime = workspace::runtime().enter();
         self.ui.draw(NOW).unwrap();
     }
 

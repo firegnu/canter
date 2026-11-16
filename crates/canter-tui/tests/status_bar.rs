@@ -17,6 +17,8 @@ use ratatui::style::{Color, Modifier};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use unicode_width::UnicodeWidthStr;
+#[path = "support/workspace.rs"]
+mod workspace;
 
 const NOW: i64 = 0;
 const SESSION: &str = "s1";
@@ -26,6 +28,7 @@ const HEIGHT: u16 = 12;
 struct Screen {
     ui: Ui<TestBackend>,
     seq: u64,
+    _workspace: workspace::Server,
 }
 
 impl Screen {
@@ -40,8 +43,16 @@ impl Screen {
     }
 
     fn of(app: App) -> Self {
+        let settings = &app.snapshot().settings;
+        let workspace =
+            workspace::Server::new(&settings.cwd, &settings.additional_directories, None);
+        let app = workspace.attach(app);
         let ui = Ui::new(TestBackend::new(WIDTH, HEIGHT), app).unwrap();
-        Self { ui, seq: 0 }
+        Self {
+            ui,
+            seq: 0,
+            _workspace: workspace,
+        }
     }
 
     fn event(&mut self, payload: Value) {
@@ -100,6 +111,7 @@ impl Screen {
     }
 
     fn bar_at(&mut self, now: i64) -> Vec<String> {
+        let _runtime = workspace::runtime().enter();
         self.ui.draw(now).unwrap();
         let rows = rows(self.ui.backend().buffer());
         rows[self.info_top(&rows)..].to_vec()
@@ -478,6 +490,14 @@ fn the_branch_is_read_again_when_a_turn_ends() {
         "not read again every frame"
     );
     screen.turn("completed");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while screen.last_row() != " ~/canter ⑂ other" {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "branch was not refreshed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert_eq!(screen.last_row(), " ~/canter ⑂ other");
 }
 
@@ -533,6 +553,7 @@ impl Screen {
 
     /// The colour of each `●` of the context bar, from the first.
     fn cells(&mut self) -> Vec<Option<Color>> {
+        let _runtime = workspace::runtime().enter();
         self.ui.draw(NOW).unwrap();
         let rows = rows(self.ui.backend().buffer());
         let y = (self.info_top(&rows) + 1) as u16;
@@ -545,6 +566,7 @@ impl Screen {
 
     /// The look of `text` on info row `row`; the same in every column of it.
     fn style_of(&mut self, row: usize, text: &str) -> Look {
+        let _runtime = workspace::runtime().enter();
         self.ui.draw(NOW).unwrap();
         let rows = rows(self.ui.backend().buffer());
         let y = self.info_top(&rows) + row;
@@ -573,6 +595,7 @@ impl Screen {
 
     /// Every row of the screen drawn at `now`.
     fn screen_at(&mut self, now: i64) -> Vec<String> {
+        let _runtime = workspace::runtime().enter();
         self.ui.draw(now).unwrap();
         rows(self.ui.backend().buffer())
     }
@@ -916,10 +939,12 @@ fn plan_names_the_mode_it_leaves_for() {
 
     // `/mode allow-all` in Plan, and the update the server sends back.
     for c in "/mode allow-all".chars() {
+        let _runtime = workspace::runtime().enter();
         screen.ui.draw(NOW).unwrap();
         let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
         assert_eq!(screen.ui.app_mut().handle_key(key, NOW), None);
     }
+    let _runtime = workspace::runtime().enter();
     screen.ui.draw(NOW).unwrap();
     let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
     assert!(matches!(
@@ -1019,6 +1044,7 @@ fn a_narrow_window_leaves_the_sandbox_state_out_rather_than_cut_it() {
         assert_eq!(screen.bar()[0], mode, "width {width}");
     }
     // The mode is still all there, so Shift+Tab still switches it.
+    let _runtime = workspace::runtime().enter();
     screen.ui.draw(NOW).unwrap();
     assert_eq!(
         screen

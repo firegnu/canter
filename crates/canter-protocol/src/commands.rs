@@ -28,6 +28,11 @@ pub struct GoalResponse {
 }
 
 pub mod routes {
+    pub const WORKSPACE_SUMMARY: &str = "/v1/sessions/{id}/workspace/summary";
+    pub const WORKSPACE_DIFF: &str = "/v1/sessions/{id}/workspace/diff";
+    pub const WORKSPACE_STATUS: &str = "/v1/sessions/{id}/workspace/status";
+    pub const WORKSPACE_REVIEW: &str = "/v1/sessions/{id}/workspace/review";
+    pub const WORKSPACE_ENTRIES: &str = "/v1/sessions/{id}/workspace/entries";
     pub const ACCOUNT_READ: &str = "/v1/account/read";
     pub const ACCOUNT_LOGIN_START: &str = "/v1/account/login/start";
     pub const ACCOUNT_LOGIN_WAIT: &str = "/v1/account/login/wait";

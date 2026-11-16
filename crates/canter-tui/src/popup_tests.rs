@@ -343,10 +343,11 @@ fn reports_have_the_title_first_and_the_keys_last() {
 async fn diff_and_files_have_the_title_first_and_the_keys_last() {
     let root = tempfile::tempdir().unwrap();
     let mut screen = Screen::new();
-    let changes = crate::uncommitted::collect(root.path().to_str().unwrap()).await;
+    let server = crate::test_workspace::Server::new(root.path().to_str().unwrap(), &[], None);
+    let changes = crate::uncommitted::collect(&server.client, "s1").await;
     screen.app().show_diff(changes);
     screen.check("Diff");
-    screen.app().show_files().await;
+    crate::test_workspace::files(screen.app(), None).await;
     screen.check("Files");
 }
 

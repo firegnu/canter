@@ -1578,6 +1578,18 @@ impl Session {
         }
     }
 
+    /// Server-side read-only queries use the same directories and private
+    /// environment as the session's tools. Never serialize the environment.
+    pub async fn workspace_context(
+        &self,
+    ) -> (SessionSettings, std::collections::BTreeMap<String, String>) {
+        let state = self.shared.state.lock().await;
+        (
+            state.journal.snapshot.settings.clone(),
+            self.shared.runtime().context.environment.clone(),
+        )
+    }
+
     /// Distinguish clones of this open session from a later reopen of the same id.
     pub fn same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.shared, &other.shared)

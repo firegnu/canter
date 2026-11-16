@@ -9,6 +9,9 @@ mod session_environment;
 #[path = "image_data_tests.rs"]
 mod image_data;
 
+#[path = "workspace_tests.rs"]
+mod workspace;
+
 #[tokio::test]
 async fn account_status_lists_empty_accounts_and_rejects_unsupported_provider() {
     let test = BtwTest::new().await;
