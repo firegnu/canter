@@ -11,6 +11,7 @@ mod hooks;
 mod last_model;
 mod providers;
 mod reasoning;
+mod session_environment;
 mod yolo;
 
 #[tokio::test]

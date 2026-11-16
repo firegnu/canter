@@ -5134,6 +5134,20 @@
     "InfoResponse": {
       "type": "object",
       "properties": {
+        "instance": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The running daemon's registration identity. Absent on older servers."
+        },
+        "home": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The server user's passwd HOME, for displaying server-side paths."
+        },
         "features": {
           "type": [
             "array",
@@ -6736,10 +6750,14 @@
           "type": "string"
         },
         "env": {
-          "type": "object",
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": {
             "type": "string"
-          }
+          },
+          "description": "Omitted uses the server's default session environment; an empty map stays empty."
         },
         "model": {
           "type": "string"
@@ -6778,7 +6796,6 @@
       },
       "required": [
         "cwd",
-        "env",
         "model",
         "approvalPolicy",
         "clientName"
@@ -6924,15 +6941,16 @@
           "type": "boolean"
         },
         "env": {
-          "type": "object",
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": {
             "type": "string"
-          }
+          },
+          "description": "Omitted uses the server's default session environment; an empty map stays empty."
         }
       },
-      "required": [
-        "env"
-      ],
       "description": "POST /v1/sessions/{id}/resume. Never log this body or replace an open session's environment."
     },
     "SessionResumeResponse": {

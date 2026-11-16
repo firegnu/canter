@@ -683,7 +683,7 @@ impl Client {
     ) -> Result<SessionResumeResponse, ClientError> {
         let params = SessionResumeParams {
             sandbox_disabled: self.sandbox_disabled,
-            env: env.clone(),
+            env: Some(env.clone()),
             restricted_mode,
         };
         self.require_session_sandbox(params.sandbox_disabled)

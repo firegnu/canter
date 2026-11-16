@@ -242,7 +242,7 @@ async fn run_inner(
                 tags: args.tags,
                 additional_directories: args.additional_directories,
                 cwd,
-                env: context.env,
+                env: Some(context.env),
                 model: args.model.unwrap_or_default(),
                 reasoning_effort: None,
                 approval_policy: PermissionMode::AlwaysAsk,

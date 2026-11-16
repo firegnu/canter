@@ -155,7 +155,7 @@ async fn run_case(
                 tags: Default::default(),
                 additional_directories: Vec::new(),
                 cwd: cwd.display().to_string(),
-                env: environment(root)?,
+                env: Some(environment(root)?),
                 model: "deepseek-flash".into(),
                 reasoning_effort: Some(ReasoningEffort::High),
                 approval_policy: PermissionMode::AskForExecution,

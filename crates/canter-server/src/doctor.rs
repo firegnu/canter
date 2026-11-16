@@ -46,6 +46,88 @@ fn skip(id: &str, name: &str, category: DoctorCategory, reason: String) -> Docto
     check(id, name, category, DoctorStatus::Skip, Some(reason), None)
 }
 
+fn session_environment(
+    environment: &crate::session_environment::SessionEnvironment,
+) -> DoctorCheck {
+    use crate::session_environment::Source;
+    let (status, reason) = match environment.source {
+        Source::InteractiveLogin => (
+            DoctorStatus::Ok,
+            "Using passwd + interactive login shell (-ilc) environment + config.json session_env overrides.".into(),
+        ),
+        Source::Login { interactive_failure } => (
+            DoctorStatus::Fail,
+            format!(
+                "Using passwd + non-interactive login shell (-lc) environment + config.json session_env overrides. Interactive login shell (-ilc) failed: {interactive_failure}."
+            ),
+        ),
+        Source::Process { interactive_failure, login_failure } => (
+            DoctorStatus::Fail,
+            format!(
+                "Using passwd + server process environment + config.json session_env overrides. Interactive login shell (-ilc) failed: {interactive_failure}. Non-interactive login shell (-lc) failed: {login_failure}."
+            ),
+        ),
+    };
+    let action = (status == DoctorStatus::Fail)
+        .then(|| "Check the server user's login shell, then restart the server.".into());
+    check(
+        "session.environment",
+        "Default session environment",
+        DoctorCategory::Configuration,
+        status,
+        Some(reason),
+        action,
+    )
+}
+
+#[test]
+fn session_environment_reports_each_source_and_previous_failures_without_values() {
+    use crate::session_environment::{SessionEnvironment, Source};
+    for (source, status, details) in [
+        (
+            Source::InteractiveLogin,
+            DoctorStatus::Ok,
+            vec!["Using passwd + interactive login shell (-ilc) environment"],
+        ),
+        (
+            Source::Login {
+                interactive_failure: "login shell probe timed out",
+            },
+            DoctorStatus::Fail,
+            vec![
+                "Using passwd + non-interactive login shell (-lc) environment",
+                "Interactive login shell (-ilc) failed: login shell probe timed out",
+            ],
+        ),
+        (
+            Source::Process {
+                interactive_failure: "login shell exited unsuccessfully",
+                login_failure: "login shell returned an invalid environment",
+            },
+            DoctorStatus::Fail,
+            vec![
+                "Using passwd + server process environment",
+                "Interactive login shell (-ilc) failed: login shell exited unsuccessfully",
+                "Non-interactive login shell (-lc) failed: login shell returned an invalid environment",
+            ],
+        ),
+    ] {
+        let mut environment = SessionEnvironment::for_test(Path::new("/private-test-home"));
+        environment.source = source;
+        let check = session_environment(&environment);
+        assert_eq!(check.id, "session.environment");
+        assert_eq!(check.status, status);
+        for detail in details {
+            assert!(check.reason.as_ref().unwrap().contains(detail));
+        }
+        assert!(
+            !serde_json::to_string(&check)
+                .unwrap()
+                .contains("private-test-home")
+        );
+    }
+}
+
 fn state(home: &Path) -> DoctorCheck {
     use std::os::unix::ffi::OsStrExt;
     let directory = std::fs::metadata(home).is_ok_and(|metadata| metadata.is_dir());
@@ -683,6 +765,7 @@ pub(super) async fn run(app: Arc<App>, params: DoctorParams) -> DoctorResponse {
     );
     let mut tasks = futures_util::stream::FuturesUnordered::new();
     let mut expected = Vec::new();
+    let environment = session_environment(&app.session_environment);
     for (id, name, work) in [
         ("config", "config.json", config as fn(&Path) -> DoctorCheck),
         ("rules", "rules.json", rules as fn(&Path) -> DoctorCheck),
@@ -821,7 +904,7 @@ pub(super) async fn run(app: Arc<App>, params: DoctorParams) -> DoctorResponse {
             }]
         },
     );
-    let mut data = vec![version];
+    let mut data = vec![version, environment];
     let deadline = tokio::time::sleep(Duration::from_secs(8));
     tokio::pin!(deadline);
     loop {
@@ -973,6 +1056,12 @@ pub async fn offline(
             "Start canter normally, or run canter serve --replace to upgrade it.".into(),
         ),
         config(&home),
+        skip(
+            "session.environment",
+            "Default session environment",
+            DoctorCategory::Configuration,
+            "The running server's in-memory session environment is unavailable.".into(),
+        ),
         skip(
             "config.active",
             "Active configuration",

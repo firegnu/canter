@@ -80,6 +80,10 @@ impl Fixture {
                 .unwrap();
         });
         let app = Arc::new(App {
+            instance: crate::new_id(),
+            session_environment: crate::session_environment::SessionEnvironment::for_test(
+                &(root.path().join("state")).join("test-session-home"),
+            ),
             reload: None,
             mcp: Default::default(),
             lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),

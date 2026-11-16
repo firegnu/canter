@@ -98,6 +98,9 @@ pub(crate) struct LiveConfig {
     warning: Mutex<Option<String>>,
 }
 impl LiveConfig {
+    pub fn session_environment(&self) -> BTreeMap<String, String> {
+        self.current.read().unwrap().config.session_env.clone()
+    }
     pub async fn connect(
         home: PathBuf,
         config: Config,

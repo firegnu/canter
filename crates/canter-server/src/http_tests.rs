@@ -3,6 +3,9 @@ use canter_model::{FinishReason, ModelEvent, ModelStream, Request};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[path = "session_environment_http_tests.rs"]
+mod session_environment;
+
 #[tokio::test]
 async fn account_status_lists_empty_accounts_and_rejects_unsupported_provider() {
     let test = BtwTest::new().await;
@@ -248,6 +251,10 @@ async fn failed_close_can_be_resumed_through_http() {
         reached: Notify::new(),
     });
     let app = Arc::new(App {
+        instance: crate::new_id(),
+        session_environment: crate::session_environment::SessionEnvironment::for_test(
+            &(home).join("test-session-home"),
+        ),
         reload: None,
         mcp: Default::default(),
         lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
@@ -419,6 +426,10 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
     let model = Arc::new(Replay(Mutex::new(Vec::new())));
     let store = Arc::new(Store::new(root.path().join("state/sessions")).unwrap());
     let app = Arc::new(App {
+        instance: crate::new_id(),
+        session_environment: crate::session_environment::SessionEnvironment::for_test(
+            &(root.path().join("state")).join("test-session-home"),
+        ),
         reload: None,
         mcp: Default::default(),
         lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
@@ -972,6 +983,9 @@ impl BtwTest {
         Self::with_accounts(None).await
     }
     async fn with_accounts(fake: Option<&crate::chatgpt_auth::test_support::Fake>) -> Self {
+        Self::build(fake, false).await
+    }
+    async fn build(fake: Option<&crate::chatgpt_auth::test_support::Fake>, sandbox: bool) -> Self {
         let root = tempfile::Builder::new()
             .prefix("canter-btw-")
             .tempdir_in("/tmp")
@@ -979,6 +993,10 @@ impl BtwTest {
         std::fs::write(root.path().join("file.txt"), "test content").unwrap();
         let model = Arc::new(BtwModel(Default::default()));
         let app = Arc::new(App {
+            instance: crate::new_id(),
+            session_environment: crate::session_environment::SessionEnvironment::for_test(
+                &root.path().join("home"),
+            ),
             reload: None,
             mcp: Default::default(),
             lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),
@@ -989,6 +1007,7 @@ impl BtwTest {
             models: vec!["deepseek-flash".into()],
             options: CoreOptions {
                 request_time: || 349_200_000,
+                sandbox,
                 ..Default::default()
             },
             sessions: Default::default(),
@@ -1452,6 +1471,10 @@ async fn sandbox_route_reports_the_session_switch_and_current_scope() {
             std::fs::create_dir_all(root_path.join(name)).unwrap();
         }
         let app = Arc::new(App {
+            instance: crate::new_id(),
+            session_environment: crate::session_environment::SessionEnvironment::for_test(
+                &(root_path.join("state")).join("test-session-home"),
+            ),
             reload: None,
             mcp: Default::default(),
             lsp: canter_tools::lsp::LspService::new(Default::default()).unwrap(),

@@ -4,4 +4,12 @@ import type { SessionSummary } from "./SessionSummary";
 /**
  * GET /v1/info. Each session carries its own replay cursor; there is no global sequence.
  */
-export type InfoResponse = { features?: Array<string>, serverVersion: string, protocolVersion: number, sessions: Array<SessionSummary>, };
+export type InfoResponse = {
+/**
+ * The running daemon's registration identity. Absent on older servers.
+ */
+instance?: string,
+/**
+ * The server user's passwd HOME, for displaying server-side paths.
+ */
+home?: string, features?: Array<string>, serverVersion: string, protocolVersion: number, sessions: Array<SessionSummary>, };

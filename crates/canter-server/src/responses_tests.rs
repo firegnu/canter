@@ -359,6 +359,10 @@ async fn two_tool_loops_pause_at_last_disconnect_replay_privately_and_resume() {
     );
     // Replay the same public journal through the real Unix-socket SSE route.
     let app = Arc::new(crate::http::App {
+        instance: crate::new_id(),
+        session_environment: crate::session_environment::SessionEnvironment::for_test(
+            &(home.clone()).join("test-session-home"),
+        ),
         reload: None,
         home: home.clone(),
         store: store.clone(),

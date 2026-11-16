@@ -223,6 +223,10 @@ impl Fixture {
                 .unwrap();
         });
         let app = Arc::new(App {
+            instance: crate::new_id(),
+            session_environment: crate::session_environment::SessionEnvironment::for_test(
+                &(root.path().join("state")).join("test-session-home"),
+            ),
             reload: None,
             home: root.path().join("state"),
             store: Arc::new(Store::new(root.path().join("state/sessions")).unwrap()),

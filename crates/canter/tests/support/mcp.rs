@@ -1078,7 +1078,7 @@ async fn shutdown_during_stdio_initialization_reaps_the_process_group() {
             .success()
     );
     fs::write(root.path().join("state/config.json"),json!({
-        "base_url":"http://127.0.0.1:1","model":"fake-model","api_key":"test-only-model-key","context_window":1048576,
+        "__test_session_environment":true,"base_url":"http://127.0.0.1:1","model":"fake-model","api_key":"test-only-model-key","context_window":1048576,
         "mcp_servers":{"pending":{"transport":"stdio","command":executable,"args":["--fixture"],"env":{
             "PID_FILE":root.path().join("pid"),"CHILD_PID_FILE":root.path().join("child-pid"),"HANG_INITIALIZE":"true"
         }}}

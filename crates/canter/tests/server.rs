@@ -109,7 +109,7 @@ impl Fixture {
             axum::serve(listener, app).await.unwrap();
         });
         let mut config = json!({
-            "base_url":base_url, "model":default_model, "context_window":1048576, "api_key":KEY,
+            "__test_session_environment":true, "base_url":base_url, "model":default_model, "context_window":1048576, "api_key":KEY,
             "prompt_suggestions":false, "sandbox":true
         });
         if let Some(models) = models {
@@ -1206,7 +1206,7 @@ async fn missing_system_ca_certificates_reports_installation_help_without_panick
     fs::write(certificates.join("empty.pem"), "").unwrap();
     fs::write(
         home.join("config.json"),
-        json!({"base_url":"http://127.0.0.1:9/v1", "api_key":KEY, "model":"fake", "context_window":1048576}).to_string(),
+        json!({"__test_session_environment":true,"base_url":"http://127.0.0.1:9/v1", "api_key":KEY, "model":"fake", "context_window":1048576}).to_string(),
     )
     .unwrap();
     let output = tokio::time::timeout(
