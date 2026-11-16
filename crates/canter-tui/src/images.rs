@@ -1,9 +1,46 @@
+use base64::{Engine, engine::general_purpose::STANDARD};
+use canter_protocol::{MAX_IMAGE_BYTES, MAX_INPUT_IMAGE_BYTES, UserInput, image_mime_type};
 use std::{
     fs::OpenOptions,
     io::Read,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
+
+/// Drafts retain client paths for history/retraction; only this wire copy is encoded.
+pub(crate) fn prepare(mut input: Vec<UserInput>) -> Result<Vec<UserInput>, String> {
+    let mut total = 0;
+    for part in &mut input {
+        let UserInput::LocalImage { path, name } = part else {
+            continue;
+        };
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_NONBLOCK)
+            .open(path)
+            .map_err(|_| "cannot read image file")?;
+        if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+            return Err("image path must be a regular file".into());
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_IMAGE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "cannot read image file")?;
+        if bytes.len() as u64 > MAX_IMAGE_BYTES {
+            return Err("image exceeds the 8 MiB limit".into());
+        }
+        total += bytes.len() as u64;
+        if total > MAX_INPUT_IMAGE_BYTES {
+            return Err("combined images exceed the 64 MiB limit per input".into());
+        }
+        let mime = image_mime_type(&bytes).ok_or("image must be JPEG, PNG, GIF or WebP")?;
+        *part = UserInput::Image {
+            url: format!("data:{mime};base64,{}", STANDARD.encode(&bytes)),
+            name: name.take(),
+        };
+    }
+    Ok(input)
+}
 
 type ClipboardReader = Box<dyn FnMut(&Path) -> Result<bool, String> + Send>;
 

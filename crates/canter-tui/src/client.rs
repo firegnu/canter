@@ -16,7 +16,7 @@ use canter_protocol::{
     SessionInputParams, SessionInputResponse, SessionInterruptParams, SessionInterruptResponse,
     SessionListResponse, SessionReadResponse, SessionResumeParams, SessionResumeResponse,
     SessionShellCommandParams, SessionShellCommandResponse, SessionSummary, SessionUpdateParams,
-    SessionUpdateResponse, routes,
+    SessionUpdateResponse, UserInput, routes,
 };
 use reqwest::header::ACCEPT;
 use reqwest::{StatusCode, Url};
@@ -763,6 +763,9 @@ impl Client {
     ) -> Result<SessionCreateResponse, ClientError> {
         let mut params = params.clone();
         params.sandbox_disabled |= self.sandbox_disabled;
+        if let Some(input) = &mut params.input {
+            self.prepare_images(input).await?;
+        }
         if self.is_remote() {
             params.env = None;
         }
@@ -859,13 +862,48 @@ impl Client {
         session: &str,
         params: &SessionInputParams,
     ) -> Result<SessionInputResponse, ClientError> {
+        let mut params = std::borrow::Cow::Borrowed(params);
+        if params
+            .input
+            .iter()
+            .any(|part| matches!(part, UserInput::LocalImage { .. }))
+        {
+            self.prepare_images(&mut params.to_mut().input).await?;
+        }
         let response = self
             .http
             .post(self.url(routes::INPUT, &[session]))
-            .json(params)
+            .json(params.as_ref())
             .send()
             .await?;
         decode(response).await
+    }
+
+    async fn prepare_images(&self, input: &mut Vec<UserInput>) -> Result<(), ClientError> {
+        if !input
+            .iter()
+            .any(|part| matches!(part, UserInput::LocalImage { .. }))
+        {
+            return Ok(());
+        }
+        if !self
+            .info()
+            .await?
+            .features
+            .unwrap_or_default()
+            .iter()
+            .any(|feature| feature == "imageData")
+        {
+            return Err(ClientError::Protocol(self.upgrade_hint(
+                "This server does not support image data; run canter serve --replace and retry",
+            )));
+        }
+        let parts = std::mem::take(input);
+        *input = tokio::task::spawn_blocking(move || crate::images::prepare(parts))
+            .await
+            .map_err(|_| ClientError::Protocol("could not prepare images".into()))?
+            .map_err(ClientError::Protocol)?;
+        Ok(())
     }
 
     pub async fn shell_command(

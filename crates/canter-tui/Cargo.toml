@@ -27,3 +27,4 @@ syntect.workspace = true
 two-face.workspace = true
 arboard.workspace = true
 tempfile.workspace = true
+base64 = "=0.23.1"

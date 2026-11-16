@@ -7,9 +7,11 @@ use std::{
     sync::Arc,
 };
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use canter_model::{Message, Request, UserContent};
 use canter_protocol::{
-    ErrorCode, EventPayload, MAX_IMAGE_BYTES, ToolContentItem, UserInput, image_mime_type,
+    ErrorCode, EventPayload, MAX_IMAGE_BYTES, MAX_INPUT_IMAGE_BYTES, ToolContentItem, UserInput,
+    image_mime_type,
 };
 use canter_store::Store;
 use image::{
@@ -156,6 +158,35 @@ fn read_prepared(
     Ok((bytes, mime))
 }
 
+fn decode(url: &str) -> Result<(Vec<u8>, &'static str), CoreError> {
+    let invalid = |message| CoreError::new(ErrorCode::InvalidRequest, message);
+    let (declared, encoded) = url
+        .strip_prefix("data:")
+        .and_then(|value| value.split_once(";base64,"))
+        .ok_or_else(|| invalid("image URL must be a base64 data URL"))?;
+    if !matches!(
+        declared,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    ) {
+        return Err(invalid("image must be JPEG, PNG, GIF or WebP"));
+    }
+    if encoded.len() as u64 > MAX_IMAGE_BYTES.div_ceil(3) * 4 {
+        return Err(invalid("image exceeds the 8 MiB limit"));
+    }
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|_| invalid("image data URL contains invalid base64"))?;
+    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+        return Err(invalid("image exceeds the 8 MiB limit"));
+    }
+    let mime =
+        image_mime_type(&bytes).ok_or_else(|| invalid("image must be JPEG, PNG, GIF or WebP"))?;
+    if declared != mime {
+        return Err(invalid("image data URL type does not match its contents"));
+    }
+    Ok((bytes, mime))
+}
+
 pub(crate) struct LoadedInput {
     input: Vec<UserInput>,
     images: Vec<LoadedImage>,
@@ -189,27 +220,47 @@ impl Drop for ImportedImages {
 pub(crate) async fn load(cwd: String, input: Vec<UserInput>) -> Result<LoadedInput, CoreError> {
     tokio::task::spawn_blocking(move || {
         // Validate the entire message before saving any attachment or event.
-        let images = input
-            .iter()
-            .enumerate()
-            .filter_map(|(index, part)| {
-                let UserInput::LocalImage { path, name } = part else {
-                    return None;
-                };
-                let path = Path::new(&cwd).join(path);
-                Some(read(&path).map(|(bytes, mime)| LoadedImage {
-                    index,
-                    bytes,
-                    mime,
-                    name: name.clone().unwrap_or_else(|| {
+        let mut images = Vec::new();
+        let mut total = 0;
+        for (index, part) in input.iter().enumerate() {
+            let (bytes, mime, name) = match part {
+                UserInput::LocalImage { path, name } => {
+                    let path = Path::new(&cwd).join(path);
+                    let (bytes, mime) = read(&path)?;
+                    let name = name.clone().unwrap_or_else(|| {
                         path.file_name()
                             .unwrap_or_default()
                             .to_string_lossy()
                             .into_owned()
-                    }),
-                }))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                    });
+                    (bytes, mime, name)
+                }
+                UserInput::Image { url, name } => {
+                    let (bytes, mime) = decode(url)?;
+                    (
+                        bytes,
+                        mime,
+                        name.clone().unwrap_or_else(|| {
+                            format!("image.{}", mime.strip_prefix("image/").unwrap())
+                        }),
+                    )
+                }
+                _ => continue,
+            };
+            total += bytes.len() as u64;
+            if total > MAX_INPUT_IMAGE_BYTES {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "combined images exceed the 64 MiB limit per input",
+                ));
+            }
+            images.push(LoadedImage {
+                index,
+                bytes,
+                mime,
+                name,
+            });
+        }
         Ok(LoadedInput { input, images })
     })
     .await
@@ -321,7 +372,7 @@ pub(crate) fn message(input: &[UserInput]) -> Message {
                     name: name.clone().unwrap_or_default(),
                     data_url: String::new(),
                 }),
-                UserInput::Skill { .. } | UserInput::Unknown => None,
+                UserInput::Skill { .. } | UserInput::Image { .. } | UserInput::Unknown => None,
             })
             .collect(),
     }
@@ -444,4 +495,80 @@ fn base64(bytes: &[u8]) -> String {
         });
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inline(bytes: &[u8]) -> UserInput {
+        UserInput::Image {
+            url: format!(
+                "data:{};base64,{}",
+                image_mime_type(bytes).unwrap(),
+                STANDARD.encode(bytes)
+            ),
+            name: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn image_data_accepts_all_formats_many_images_and_exact_total_limit() {
+        let formats: &[&[u8]] = &[
+            b"\x89PNG\r\n\x1a\n",
+            b"\xff\xd8\xff",
+            b"GIF89a",
+            b"RIFFxxxxWEBP",
+        ];
+        let input = formats
+            .iter()
+            .cycle()
+            .take(20)
+            .map(|bytes| inline(bytes))
+            .collect();
+        let loaded = load("/".into(), input).await.unwrap();
+        assert_eq!(loaded.images.len(), 20);
+        for (loaded, bytes) in loaded.images.iter().zip(formats.iter().cycle()) {
+            assert_eq!(loaded.bytes, *bytes);
+            assert_eq!(loaded.mime, image_mime_type(bytes).unwrap());
+        }
+        let mut bytes = formats[0].to_vec();
+        bytes.resize(MAX_IMAGE_BYTES as usize, 0);
+        let loaded = load("/".into(), vec![inline(&bytes); 8]).await.unwrap();
+        assert_eq!(
+            loaded
+                .images
+                .iter()
+                .map(|image| image.bytes.len() as u64)
+                .sum::<u64>(),
+            MAX_INPUT_IMAGE_BYTES
+        );
+    }
+
+    #[tokio::test]
+    async fn image_data_and_server_paths_share_the_total_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("large.png");
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.resize(MAX_IMAGE_BYTES as usize, 0);
+        std::fs::write(&path, &bytes).unwrap();
+        let mut input = vec![
+            UserInput::LocalImage {
+                path: "large.png".into(),
+                name: None
+            };
+            8
+        ];
+        input.push(inline(b"\x89PNG\r\n\x1a\n"));
+        let error = load(temp.path().to_str().unwrap().into(), input)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert!(
+            error
+                .message
+                .contains("combined images exceed the 64 MiB limit")
+        );
+    }
 }

@@ -1774,9 +1774,6 @@ impl App {
             }
             KeyCode::Char('d') if ctrl && self.input.is_empty() => return Some(Action::Quit),
             KeyCode::Char('j') if ctrl => self.input.insert("\n"),
-            KeyCode::Char('v') if ctrl && self.remote => {
-                self.information("Not available on remote servers yet")
-            }
             KeyCode::Char('v') if ctrl => match self.clipboard.image() {
                 Ok(Some(path)) => self.attach_image(path),
                 Ok(None) => {}
@@ -4206,15 +4203,11 @@ impl App {
             self.search_from_newest();
             return;
         }
-        if let Some((cwd, _)) = &self.client_directory {
-            if crate::images::pasted_paths(text, cwd).is_some() {
-                self.information("Not available on remote servers yet");
-            } else {
-                self.input.paste(text);
-            }
-            return;
-        }
-        if let Some(paths) = crate::images::pasted_paths(text, &self.snapshot.settings.cwd) {
+        let cwd = self
+            .client_directory
+            .as_ref()
+            .map_or(self.snapshot.settings.cwd.as_str(), |(cwd, _)| cwd.as_str());
+        if let Some(paths) = crate::images::pasted_paths(text, cwd) {
             if self.accepts_images() {
                 for (index, path) in paths.into_iter().enumerate() {
                     if index > 0 {
@@ -4371,10 +4364,6 @@ impl App {
     }
 
     fn accepts_images(&mut self) -> bool {
-        if self.remote {
-            self.information("Not available on remote servers yet");
-            return false;
-        }
         let model = &self.snapshot.settings.model;
         if self.image_models.contains(model) {
             return true;
@@ -7139,7 +7128,7 @@ fn first_sent_line(input: &[UserInput]) -> Option<String> {
                 continue;
             }
             UserInput::Text { text } => text.clone(),
-            UserInput::LocalImage { name, .. } => {
+            UserInput::LocalImage { name, .. } | UserInput::Image { name, .. } => {
                 image_number += 1;
                 format!(
                     "[Image #{image_number} {}]",
@@ -7318,7 +7307,7 @@ fn first_line(input: &[UserInput]) -> String {
         .find_map(|part| match part {
             UserInput::Skill { name } => Some(format!("/{name}")),
             UserInput::Text { text } => Some(sanitize(text)),
-            UserInput::LocalImage { name, .. } => Some(format!(
+            UserInput::LocalImage { name, .. } | UserInput::Image { name, .. } => Some(format!(
                 "[Image {}]",
                 sanitize(name.as_deref().unwrap_or("image"))
             )),

@@ -85,19 +85,22 @@ fn remote_memory_lists_and_deletes_but_does_not_open_an_editor() {
 }
 
 #[test]
-fn remote_clipboard_images_and_file_mentions_do_not_read_client_files() {
+fn remote_clipboard_images_read_client_bytes_and_file_mentions_stay_unavailable() {
     let mut ui = screen();
-    *ui.app_mut() = App::new_remote(
-        SessionSnapshot::empty("test"),
-        None,
-        0,
-        "/client".into(),
-        None,
-    )
-    .with_clipboard_reader(|_| panic!("remote clipboard images are unavailable"));
+    let mut snapshot = SessionSnapshot::empty("test");
+    snapshot.settings.model = "deepseek-flash".into();
+    *ui.app_mut() = App::new_remote(snapshot, None, 0, "/client".into(), None)
+        .with_clipboard_reader(|path| {
+            std::fs::write(path, b"\x89PNG\r\n\x1a\n").unwrap();
+            Ok(true)
+        });
     ui.app_mut()
         .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL), 0);
-    assert!(text(&mut ui).contains("Not available on remote servers yet"));
+    assert!(text(&mut ui).contains("[Image #1 screenshot.png]"));
+    assert!(matches!(
+        enter(&mut ui, ""),
+        Some(canter_tui::Action::SendImages { .. })
+    ));
     let mut ui = screen();
     ui.app_mut().handle_paste("@src/");
     assert!(text(&mut ui).contains("Not available on remote servers yet"));
@@ -132,15 +135,18 @@ fn remote_exports_resolve_relative_paths_and_tilde_on_the_client() {
 }
 
 #[test]
-fn remote_image_drop_is_a_notice_and_path_text_still_sends() {
+fn remote_image_drop_uses_client_directory_and_path_text_still_sends() {
     let client = tempfile::tempdir().unwrap();
     let image = client.path().join("a picture.png");
     std::fs::write(&image, b"\x89PNG\r\n\x1a\n").unwrap();
     for value in [format!("'{}'", image.display()), "a picture.png".into()] {
+        let mut snapshot = SessionSnapshot::empty("test");
+        snapshot.settings.model = "deepseek-flash".into();
+        snapshot.settings.cwd = "/server/project".into();
         let mut ui = Ui::new(
             TestBackend::new(100, 28),
             App::new_remote(
-                SessionSnapshot::empty("test"),
+                snapshot,
                 None,
                 0,
                 client.path().to_str().unwrap().into(),
@@ -149,12 +155,12 @@ fn remote_image_drop_is_a_notice_and_path_text_still_sends() {
         )
         .unwrap();
         ui.app_mut().handle_paste(&value);
-        assert!(text(&mut ui).contains("Not available on remote servers yet"));
-        assert_eq!(
+        assert!(text(&mut ui).contains("[Image #1 a picture.png]"));
+        assert!(matches!(
             ui.app_mut()
                 .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 0),
-            None
-        );
+            Some(canter_tui::Action::SendImages { .. })
+        ));
     }
     for value in [
         "/srv/x.rs",

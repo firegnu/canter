@@ -11,7 +11,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{
-        FromRequestParts, Path, Query, State,
+        DefaultBodyLimit, FromRequestParts, Path, Query, State,
         rejection::{JsonRejection, QueryRejection},
     },
     http::{HeaderMap, StatusCode, request::Parts},
@@ -321,6 +321,7 @@ pub(crate) fn router(app: Arc<App>) -> Router {
 }
 
 fn router_with_accounts(app: Arc<App>, accounts: Router) -> Router {
+    let image_body_limit = (MAX_INPUT_IMAGE_BYTES as usize).div_ceil(3) * 4 + 2 * 1024 * 1024;
     Router::new()
         .route(routes::INFO, get(info))
         .route(routes::DOCTOR, get(doctor::handle))
@@ -337,7 +338,12 @@ fn router_with_accounts(app: Arc<App>, accounts: Router) -> Router {
         .route(routes::SESSION_USAGE, get(session_usage))
         .route(routes::STATS, get(stats_list))
         .route(routes::SESSION_STATS, get(session_stats))
-        .route(routes::SESSIONS, post(create).get(list))
+        .route(
+            routes::SESSIONS,
+            post(create)
+                .layer(DefaultBodyLimit::max(image_body_limit))
+                .get(list),
+        )
         .route(routes::SESSION_SEARCH, get(search_sessions))
         .route(
             routes::MANAGED_CLIENT,
@@ -358,7 +364,10 @@ fn router_with_accounts(app: Arc<App>, accounts: Router) -> Router {
         .route(routes::BTW, post(btw))
         .route(routes::HANDOFF, post(handoff))
         .route(routes::RESUME, post(resume))
-        .route(routes::INPUT, post(input))
+        .route(
+            routes::INPUT,
+            post(input).layer(DefaultBodyLimit::max(image_body_limit)),
+        )
         .route(routes::SHELL_COMMAND, post(shell_command))
         .route(routes::SHELL_BACKGROUND, post(shell_background))
         .route(routes::BACKGROUND_COMMANDS, get(background_commands))
@@ -466,6 +475,17 @@ fn body<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
         .map_err(|_| ApiError::invalid())
 }
 
+fn image_body<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
+    body.map(|Json(value)| value).map_err(|error| {
+        if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            ApiError::new(ErrorCode::InvalidRequest,
+                "image request body exceeds the limit: 8 MiB per image, 64 MiB combined before base64, plus 2 MiB for other fields")
+        } else {
+            ApiError::invalid()
+        }
+    })
+}
+
 // Axum's default path rejection is plain text; keep malformed URLs on the JSON error contract too.
 struct ApiPath<T>(T);
 impl<S, T> FromRequestParts<S> for ApiPath<T>
@@ -492,6 +512,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         instance: Some(app.instance.clone()),
         home: Some(app.session_environment.home.clone()),
         features: Some(vec![
+            "imageData".into(),
             "optionalSessionEnv".into(),
             "sessionSandbox".into(),
             "sessionSandboxSwitch".into(),
@@ -1228,7 +1249,7 @@ async fn create(
     headers: HeaderMap,
     params: Result<Json<SessionCreateParams>, JsonRejection>,
 ) -> Result<Json<SessionCreateResponse>, ApiError> {
-    let params = body(params)?;
+    let params = image_body(params)?;
     let owner = app.managed.owner(&headers)?;
     // Registry insertion belongs to the accepted command, even if its HTTP caller disconnects.
     tokio::spawn(async move {
@@ -1332,7 +1353,7 @@ async fn input(
     ApiPath(id): ApiPath<String>,
     params: Result<Json<SessionInputParams>, JsonRejection>,
 ) -> Result<Json<SessionInputResponse>, ApiError> {
-    let params = body(params)?;
+    let params = image_body(params)?;
     let draining = app.draining.read().await;
     if *draining {
         return Err(ApiError::new(ErrorCode::Conflict, "server is stopping"));

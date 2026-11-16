@@ -61,6 +61,10 @@ mod trust;
 mod retract_tests;
 
 #[cfg(test)]
+#[path = "run_image_tests.rs"]
+mod image_tests;
+
+#[cfg(test)]
 #[path = "run_input_tests.rs"]
 mod input_tests;
 

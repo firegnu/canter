@@ -278,7 +278,8 @@ impl InputBox {
                         });
                         self.attach(path, name);
                     }
-                    Part::Input(UserInput::Unknown) => {}
+                    // Inline images are input-only; events always carry session copies.
+                    Part::Input(UserInput::Image { .. } | UserInput::Unknown) => {}
                     Part::Paste(text) => self.paste(&text),
                 }
             }

@@ -39,6 +39,8 @@ pub fn image_mime_type(bytes: &[u8]) -> Option<&'static str> {
 }
 
 pub const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+/// Total original image bytes in one input, before resizing or base64 encoding.
+pub const MAX_INPUT_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
