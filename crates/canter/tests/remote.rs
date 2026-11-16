@@ -652,6 +652,53 @@ async fn remote_add_prompts_on_a_terminal_reads_one_line_without_echo_and_restor
 }
 
 #[tokio::test]
+async fn remote_add_rejects_a_bad_name_or_url_before_asking_for_the_token() {
+    use tokio::io::AsyncReadExt;
+    let root = fixture();
+    let terminal = nix::pty::openpty(None, None).unwrap();
+    nix::unistd::write(&terminal.master, b"test-only-terminal-token\n").unwrap();
+    let mut stdin = Command::new(env!("CARGO_BIN_EXE_canter"));
+    stdin
+        .args(["remote", "add", "example", "https://example.com"])
+        .env_clear()
+        .env("HOME", root.path().join("home"))
+        .env("CANTER_HOME", root.path().join("state"))
+        .stdin(terminal.slave.try_clone().unwrap());
+    assert!(stdin.output().await.unwrap().status.success());
+    for args in [
+        ["remote", "add", "example", "https://example.org"],
+        ["remote", "add", "other", "http://203.0.113.10:8790"],
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_canter"))
+            .args(args)
+            .env_clear()
+            .env("HOME", root.path().join("home"))
+            .env("CANTER_HOME", root.path().join("state"))
+            .stdin(terminal.slave.try_clone().unwrap())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut errors = String::new();
+        let status = tokio::time::timeout(Duration::from_secs(3), async {
+            child
+                .stderr
+                .take()
+                .unwrap()
+                .read_to_string(&mut errors)
+                .await
+                .unwrap();
+            child.wait().await.unwrap()
+        })
+        .await
+        .expect("a bad name or URL must fail without waiting for a token");
+        assert!(!status.success(), "{args:?}");
+        assert!(!errors.contains("Paste the token"), "{args:?}: {errors}");
+    }
+}
+
+#[tokio::test]
 async fn token_update_refuses_an_oversized_save_without_replacing_the_readable_store() {
     let root = fixture();
     let records = (0..7_000).map(|index| json!({

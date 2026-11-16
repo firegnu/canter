@@ -40,6 +40,7 @@ pub async fn run(command: Command, home: &Path) -> Result<String, String> {
     use canter_server::remote_tokens;
     match command {
         Command::AddServer { name, url } => {
+            crate::remotes::check_new(home, &name, &url)?;
             let stdin = std::io::stdin();
             let result = if stdin.is_terminal() {
                 let token = terminal_token(&stdin).await?;

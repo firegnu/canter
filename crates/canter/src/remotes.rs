@@ -106,16 +106,26 @@ fn valid_token(token: &str) -> bool {
     !token.is_empty() && token.len() <= 8192 && token.bytes().all(|b| b.is_ascii_graphic())
 }
 
-pub fn add(home: &Path, name: String, url: String, input: impl Read) -> Result<(), String> {
-    if !valid_name(&name) {
+/// Checks what can be checked before the token is read, so a bad name or URL
+/// fails before anyone pastes a secret.
+pub fn check_new(home: &Path, name: &str, url: &str) -> Result<String, String> {
+    if !valid_name(name) {
         return Err(
             "server name must be 1–128 bytes without control characters or surrounding whitespace"
                 .into(),
         );
     }
-    let url = canter_tui::client::remote_url(&url)
+    let url = canter_tui::client::remote_url(url)
         .map_err(|error| error.to_string())?
         .to_string();
+    if read(home)?.iter().any(|r| r.name == name) {
+        return Err("a server with this name already exists".into());
+    }
+    Ok(url)
+}
+
+pub fn add(home: &Path, name: String, url: String, input: impl Read) -> Result<(), String> {
+    let url = check_new(home, &name, &url)?;
     let mut token = String::new();
     input
         .take(8195)
