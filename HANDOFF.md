@@ -4,8 +4,8 @@
 
 ## 装的哪一版、怎么退回
 
-- 5090（`my-5090d-host`）：11-10 用户同意，从 `~/canter-linux/canter`（GitHub 克隆）`cargo install` 装进 `~/.cargo/bin/canter`，`canter --version` 显示 `canter 0.1.0 · 1ad5b0e2`（和 Mac 的 `1ad5b0e` 同一提交，缩写长度不同）。真实 `~/.canter/config.json` 只有 deepseek 一家、模型 `deepseek/deepseek-flash`，含 key（用户同意）。升级：在 `~/canter-linux/canter` 里 `git pull` 再 `canter upgrade`；退回 `canter rollback`（备份在 `~/.canter/backups/`，现有两份同一提交的）。没有登录自动启动，开终端时自己起服务端；验收后服务端已停。验收用的测试 HOME `~/canter-linux/accept-home` 里另有一份同样的 key，P2-260 做完再问用户删不删。
-- Mac：11-16 用户自己 `canter upgrade` 到 `aad033e`（含 P2-295 可选会话环境，`canter doctor` 显示默认环境用 `-ilc`），上一版 `392ea0f` 在 `~/.canter/backups/`；退回用 `canter rollback`。
+- 5090（`my-5090d-host`）：11-10 用户同意，从 `~/canter-linux/canter`（GitHub 克隆）`cargo install` 装进 `~/.cargo/bin/canter`，11-17（P2-301，用户同意由主控经 SSH 升级）`canter upgrade` 到 `478e4330`，上一版 `1ad5b0e2` 在 `~/.canter/backups/`。`config.json` 11-17 加了 `"remote": {"listen": ["127.0.0.1:8790"]}`（改前备份 `config.json.bak-20261117-before-remote`），令牌 `mac` 一个。真实 `~/.canter/config.json` 只有 deepseek 一家、模型 `deepseek/deepseek-flash`，含 key（用户同意）。升级：在 `~/canter-linux/canter` 里 `git pull` 再 `canter upgrade`；退回 `canter rollback`（备份在 `~/.canter/backups/`，现有两份同一提交的）。没有登录自动启动；11-17 服务端在跑（`canter upgrade` 时起的）。去中转机的 `ssh -R` 隧道 11-17 是手动开的（PID 记在 `~/.canter/relay-tunnel.pid`），断了不会自己重连，P2-302 改成 systemd。验收用的测试 HOME `~/canter-linux/accept-home` 里另有一份同样的 key，P2-260 做完再问用户删不删。
+- Mac：11-17 用户自己 `canter upgrade` 到 `c0ce1e8`（P2-295～P2-299 加 ast_grep 说明），退回用 `canter rollback`。`~/.canter/remotes.json` 里存了远程 `5090` → `http://127.0.0.1:8791/`；连它要 Mac 上的 `ssh -L 127.0.0.1:8791:127.0.0.1:8790 gcp-relay` 开着（11-17 主控手动开的，断了不会重连，P2-302 改成 launchd）。
 
 - 11-05 用户同意，删了 `~/.canter` 根目录 51 个 11-01 以前手动留的旧程序（`canter-<提交号>`，1.5G）。下面写 `cp -p ~/.canter/canter-<提交号>` 的老退回办法都用不了了；现在只能 `canter rollback` 退到 `~/.canter/backups/` 里留着的几版。
 
