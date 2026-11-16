@@ -2,7 +2,7 @@
 
 2026-11-14 记下。2026-11-17 主控补成需求，用户：「接受你的建议，做吧」。
 路由：中 / 交叉审查不要 / 影响面：改行为（路由：常规（置信 0.96）、不要、改行为）
-交给：Codex，gpt-6-astra / high（middle-other；派的时候补名字和日期）
+2026-11-17，canter/main 交给 canter/dev-p2-294（Codex，gpt-6-astra / high；middle-other）。
 执行：派出
 优先：低
 类型：功能变更
