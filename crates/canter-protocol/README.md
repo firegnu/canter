@@ -137,6 +137,8 @@ No API-key, device-code, or externally supplied token login variant is exposed.
 - `features`：可选字符串数组，每项是一项扩展能力（如 `review`、`addDirectories`、
   `managedClients`、`subagentTools`）。本版服务端总是给出；旧服务端省略或为 null，
   客户端缺少某项时不调用对应接口，按各节写的旧服务端行为处理。
+- `instance`：运行中服务端的实例标识，与 `server.json` 的 `instance` 一致；重启后改变，用于判断是否连回同一服务端。
+- `home`：passwd 中服务端用户的 HOME，供客户端缩写服务端路径。这两个字段在旧服务端可省略/null，本版总是返回；`home` 不随会话的 `env` 或配置覆盖改变。
 - `serverVersion`：运行中服务端程序的版本。`server.json` 里同一个值叫 `version`：
   登记文件用 `version`，本接口用 `serverVersion`，两者是同一个服务端版本。
 - `protocolVersion`：协议版本，等于 `PROTOCOL_VERSION`；`server.json` 里也叫
@@ -279,6 +281,17 @@ PATCH 的 `name: ""` 清空会话名（快照中为 null），用于手动清名
 `cwd` 同时出现在公开设置和会话摘要中，供显示、选择恢复目录；PATCH 不修改它。
 环境变量只留在服务端内存中，供执行器和打开会话时的技能发现使用，不存盘，不进入事件、公开设置或快照。
 创建请求不实现 Debug，调用方也不得记录其请求体。
+新建请求的 `env` 可省略或为 null：使用服务端默认会话环境；显式映射整份使用、不合并默认值，
+因此 `env: {}` 仍表示空环境。`features` 中的 `optionalSessionEnv` 表示支持这一语义。
+默认环境以 passwd 的 HOME/USER/SHELL 加服务端进程环境启动一次非交互登录 shell（`-lc`），
+取完整环境，最多等待 5 秒；探测失败/超时则退回 passwd 加服务端进程环境。
+最后叠加 `config.json` 的 `session_env` 字符串映射，例如 `{"PATH":"/opt/bin:/usr/bin:/bin"}`。
+环境名不得为空、含 `=` 或 NUL，值不得含 NUL，HOME/CANTER_HOME 覆盖必须为绝对路径。
+覆盖项随配置重载，只影响之后未交 `env` 的新建/重新打开会话；登录 shell 只在服务端启动时探测一次。
+探测结果仅在内存中，doctor 的 `session.environment` 报告来源和失败原因，不显示环境值或 shell 输出。
+沙箱、技能、全局 AGENTS.md、`~`、命令、钩子和 LSP 都使用最终选定的同一份会话环境。
+本机终端和 `canter exec` 仍发送原来的 `env`；`/new`、`/handoff`、计划开新会话复用新建请求，
+子 agent 继承父会话已选定的环境。Rust 使用方保留原行为时将原映射包装为 `Some(env)`。
 `reasoningEffort` 选用 Codex v2 创建/恢复/派生会话回复中的名字；Codex 的设置对象和
 改设置参数用 `effort`。canter 统一使用明确表示推理强度的 `reasoningEffort`，
 取值为 `none`、`low`、`medium`、`high`、`xhigh`、`max`，旧客户端把新值读作 Unknown。
@@ -330,7 +343,7 @@ Turn.usage 中是该轮累计，含可选 chatgptPlan 标记。客户端显示�
 `TokenUsage` 另有可选 `autoCompactTokens`：生效的自动压缩线（上下文占用超过它就压缩，见服务端的
 `auto_compact_tokens`），供客户端显示离压缩还剩多少；旧事件没有这个字段，旧客户端可以忽略。
 
-`POST /v1/sessions/{id}/resume` 的请求体为 `{ "env": { ... } }`，也不实现 Debug、
+`POST /v1/sessions/{id}/resume` 的请求体可为 `{}` 或 `{ "env": { ... } }`，`env` 语义与新建相同；fork 复用此参数。也不实现 Debug、
 不得记录请求体。服务端重启后，会话默认未打开；接着聊用新环境打开，并返回快照及其
 `eventSeq`。已经打开时只返回当前快照，保留原环境。未打开时快照和事件直接从盘读取，
 input、interrupt、批准回答、compact、PATCH、DELETE 返回 `session_not_resumed`，

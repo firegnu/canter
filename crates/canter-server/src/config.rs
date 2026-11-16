@@ -14,6 +14,12 @@ pub(crate) struct Config {
     // The exact validated save, used to detect edits made during server startup.
     #[serde(skip)]
     pub contents: Vec<u8>,
+    #[serde(default)]
+    pub session_env: BTreeMap<String, String>,
+    // Explicit fixture opt-in; enabling test-support alone must not change the account.
+    #[cfg(any(test, feature = "test-support"))]
+    #[serde(default, rename = "__test_session_environment")]
+    pub test_session_environment: bool,
     #[serde(default = "default_enabled")]
     prompt_suggestions: bool,
     #[serde(default = "default_enabled")]
@@ -180,6 +186,15 @@ impl Config {
             .end()
             .map_err(|_| ServerError("config.json is not valid".into()))?;
         config.contents = contents;
+        if config.session_env.iter().any(|(key, value)| {
+            key.is_empty()
+                || key.contains(['=', '\0'])
+                || value.contains('\0')
+                || (matches!(key.as_str(), "HOME" | "CANTER_HOME")
+                    && !Path::new(value).is_absolute())
+        }) {
+            return Err(ServerError("session_env contains an invalid environment entry; HOME and CANTER_HOME must be absolute paths".into()));
+        }
         config.legacy = config.providers.is_empty()
             || !config.base_url.is_empty()
             || !config.api_key.is_empty()
@@ -1214,6 +1229,30 @@ mod tests {
             .extend(extra.as_object().unwrap().clone());
         fs::write(root.path().join("config.json"), config.to_string()).unwrap();
         Config::load(root.path())
+    }
+
+    #[test]
+    fn session_env_accepts_overrides_and_rejects_unusable_values_without_echoing_them() {
+        assert!(load(json!({})).unwrap().session_env.is_empty());
+        assert_eq!(
+            load(json!({"session_env":{"PATH":"/configured/bin","VALUE":"one\ntwo"}}))
+                .unwrap()
+                .session_env["VALUE"],
+            "one\ntwo"
+        );
+        for environment in [
+            json!({"bad=name":"private-test-value"}),
+            json!({"":"private-test-value"}),
+            json!({"VALUE":"private-test-value\u{0000}"}),
+            json!({"HOME":"private-test-relative-home"}),
+            json!({"CANTER_HOME":"private-test-relative-state"}),
+        ] {
+            let error = load(json!({"session_env":environment}))
+                .err()
+                .expect("invalid session_env must be rejected");
+            assert!(error.to_string().contains("session_env"));
+            assert!(!error.to_string().contains("private-test"));
+        }
     }
 
     #[test]

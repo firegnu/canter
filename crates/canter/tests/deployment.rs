@@ -50,7 +50,7 @@ impl Fixture {
             "[package]\nname = 'canter'\n",
         )
         .unwrap();
-        fs::write(state.join("config.json"), serde_json::json!({"base_url":"http://127.0.0.1:9", "model":"fake", "api_key":"test-only", "context_window":1048576}).to_string()).unwrap();
+        fs::write(state.join("config.json"), serde_json::json!({"__test_session_environment":true, "base_url":"http://127.0.0.1:9", "model":"fake", "api_key":"test-only", "context_window":1048576}).to_string()).unwrap();
         let canonical = fs::canonicalize(&repo).unwrap();
         fs::write(root.path().join("metadata.json"), serde_json::json!({
             "workspace_root":canonical,

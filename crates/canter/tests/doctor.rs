@@ -206,7 +206,7 @@ async fn doctor_uses_the_running_server_and_succeeds_when_checks_pass() {
     });
     let config = json!({
         "base_url":base_url,
-        "api_key":"test-only-online-key",
+        "api_key":"test-only-online-key", "__test_session_environment":true,
         "model":"fake",
         "context_window":1048576,
         "sandbox":false

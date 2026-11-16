@@ -150,6 +150,8 @@ impl FakeServer {
                 routes::INFO,
                 get(|| async {
                     axum::Json(canter_protocol::InfoResponse {
+                        instance: None,
+                        home: None,
                         features: Some(vec!["folderTrust".into()]),
                         server_version: "fake".into(),
                         protocol_version: 1,

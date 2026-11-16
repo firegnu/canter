@@ -827,7 +827,7 @@ impl World {
         fs::write(
             &config,
             serde_json::to_vec(&json!({
-                "base_url": base_url, "model": "fake-model",
+                "__test_session_environment": true, "base_url": base_url, "model": "fake-model",
                 "context_window": 1048576, "api_key": "test-only-canter-key",
                 "prompt_suggestions": false, "sandbox": true
             }))

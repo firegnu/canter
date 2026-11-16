@@ -20,6 +20,7 @@ mod reload_tests;
 #[cfg(test)]
 mod responses_tests;
 mod service_env;
+mod session_environment;
 mod session_locks;
 mod startup;
 mod trust;
@@ -89,6 +90,7 @@ async fn serve_with_lsp(
 ) -> Result<(), ServerError> {
     let home = state_directory()?;
     let (lease, config, summaries) = startup::initialize(home, replace).await?;
+    let session_environment = session_environment::SessionEnvironment::load(&config).await?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|_| ServerError("cannot listen for shutdown signals".into()))?;
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
@@ -131,6 +133,8 @@ async fn serve_with_lsp(
         }
     };
     let app = Arc::new(http::App {
+        instance: lease.registration.instance.clone(),
+        session_environment,
         reload: Some(reload.clone()),
         mcp: Default::default(),
         lsp,

@@ -194,6 +194,13 @@ Enter 只发送已接受的文字。连续 20 条未采用后每四轮生成一�
 AppKit，只读取剪贴板已有的 PNG 表示，不转换格式。临时截图文件在本终端退出／换会话时清理。
 非本机 `http://` 地址被拒绝，本机仅接受 localhost 或 loopback IP；模型客户端禁用代理和跳转。
 模型、key、窗口在服务端启动时读取，修改后自动重读、下一轮生效。
+`session_env` 是可选的字符串映射，用于覆盖未交 `env` 时的默认会话环境，例如
+`"session_env": {"PATH":"/opt/bin:/usr/bin:/bin"}`。基础环境从 passwd 的 HOME/USER/SHELL
+和启动时一次登录 shell 探测取得；探测失败或超过 5 秒，退回 passwd 加服务端进程环境。
+探测输出不落盘、不进日志，`canter doctor` 的 `session.environment` 显示来源和原因。
+覆盖项跟随配置重载，只影响随后新建/重新打开的缺省环境会话；显式 `env`（包括空表）和
+已有会话不变。HOME/CANTER_HOME 必须是绝对路径，环境名和值不能含 NUL，名字也不能为空或含 `=`。
+
 `sandbox` 是可选布尔开关，默认 `true`，服务端自动重读、下一轮生效。模型 shell 默认在 macOS
 Seatbelt 中运行，`false` 恢复原执行行为。交互和 exec 的 `--yolo` 同时选择 Allow all 并强制
 关闭沙箱，不受配置重读影响；不带它时按配置。豁免跟随这次打开会话的客户端，包括派生会话和

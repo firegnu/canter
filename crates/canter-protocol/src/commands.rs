@@ -301,6 +301,14 @@ empty_params!(
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InfoResponse {
+    /// The running daemon's registration identity. Absent on older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub instance: Option<String>,
+    /// The server user's passwd HOME, for displaying server-side paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub home: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub features: Option<Vec<String>>,
@@ -431,7 +439,10 @@ pub struct SessionCreateParams {
     #[ts(optional = nullable)]
     pub additional_directories: Vec<String>,
     pub cwd: String,
-    pub env: BTreeMap<String, String>,
+    /// Omitted uses the server's default session environment; an empty map stays empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub env: Option<BTreeMap<String, String>>,
     pub model: String,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub approval_policy: PermissionMode,
@@ -475,7 +486,10 @@ pub struct SessionResumeParams {
     )]
     #[ts(optional = nullable)]
     pub restricted_mode: bool,
-    pub env: BTreeMap<String, String>,
+    /// Omitted uses the server's default session environment; an empty map stays empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub env: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

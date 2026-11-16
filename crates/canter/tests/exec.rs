@@ -344,7 +344,7 @@ impl World {
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let mut config = json!({"base_url":format!("http://{}/v1",listener.local_addr().unwrap()),"model":"fake","models":["fake"],"api_key":"test-only","context_window":1048576,"sandbox":sandbox});
+        let mut config = json!({"__test_session_environment":true,"base_url":format!("http://{}/v1",listener.local_addr().unwrap()),"model":"fake","models":["fake"],"api_key":"test-only","context_window":1048576,"sandbox":sandbox});
         config
             .as_object_mut()
             .unwrap()

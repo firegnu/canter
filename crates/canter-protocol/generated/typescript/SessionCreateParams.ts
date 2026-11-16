@@ -14,4 +14,8 @@ sandboxDisabled?: boolean,
 /**
  * Restrict this opening even if the server has a positive trust record.
  */
-restrictedMode?: boolean, tags?: { [key in string]: string }, additionalDirectories?: Array<string>, cwd: string, env: { [key in string]: string }, model: string, reasoningEffort?: ReasoningEffort | null, approvalPolicy: PermissionMode, input?: Array<UserInput> | null, name?: string | null, clientName: string, };
+restrictedMode?: boolean, tags?: { [key in string]: string }, additionalDirectories?: Array<string>, cwd: string,
+/**
+ * Omitted uses the server's default session environment; an empty map stays empty.
+ */
+env?: { [key in string]: string }, model: string, reasoningEffort?: ReasoningEffort | null, approvalPolicy: PermissionMode, input?: Array<UserInput> | null, name?: string | null, clientName: string, };

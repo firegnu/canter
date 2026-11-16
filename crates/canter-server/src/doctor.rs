@@ -46,6 +46,33 @@ fn skip(id: &str, name: &str, category: DoctorCategory, reason: String) -> Docto
     check(id, name, category, DoctorStatus::Skip, Some(reason), None)
 }
 
+fn session_environment(
+    environment: &crate::session_environment::SessionEnvironment,
+) -> DoctorCheck {
+    let (status, reason, action) = match environment.probe {
+        Ok(()) => (
+            DoctorStatus::Ok,
+            "Using passwd + login shell environment + config.json session_env overrides.".into(),
+            None,
+        ),
+        Err(reason) => (
+            DoctorStatus::Fail,
+            format!(
+                "Using passwd + server process environment + config.json session_env overrides: {reason}."
+            ),
+            Some("Check the server user's login shell, then restart the server.".into()),
+        ),
+    };
+    check(
+        "session.environment",
+        "Default session environment",
+        DoctorCategory::Configuration,
+        status,
+        Some(reason),
+        action,
+    )
+}
+
 fn state(home: &Path) -> DoctorCheck {
     use std::os::unix::ffi::OsStrExt;
     let directory = std::fs::metadata(home).is_ok_and(|metadata| metadata.is_dir());
@@ -683,6 +710,7 @@ pub(super) async fn run(app: Arc<App>, params: DoctorParams) -> DoctorResponse {
     );
     let mut tasks = futures_util::stream::FuturesUnordered::new();
     let mut expected = Vec::new();
+    let environment = session_environment(&app.session_environment);
     for (id, name, work) in [
         ("config", "config.json", config as fn(&Path) -> DoctorCheck),
         ("rules", "rules.json", rules as fn(&Path) -> DoctorCheck),
@@ -821,7 +849,7 @@ pub(super) async fn run(app: Arc<App>, params: DoctorParams) -> DoctorResponse {
             }]
         },
     );
-    let mut data = vec![version];
+    let mut data = vec![version, environment];
     let deadline = tokio::time::sleep(Duration::from_secs(8));
     tokio::pin!(deadline);
     loop {
@@ -973,6 +1001,12 @@ pub async fn offline(
             "Start canter normally, or run canter serve --replace to upgrade it.".into(),
         ),
         config(&home),
+        skip(
+            "session.environment",
+            "Default session environment",
+            DoctorCategory::Configuration,
+            "The running server's in-memory session environment is unavailable.".into(),
+        ),
         skip(
             "config.active",
             "Active configuration",

@@ -548,7 +548,7 @@ where
                     tags,
                     additional_directories,
                     cwd,
-                    env: env.clone(),
+                    env: Some(env.clone()),
                     model,
                     approval_policy,
                     input: first.clone().map(|text| vec![UserInput::Text { text }]),
@@ -1763,7 +1763,7 @@ impl<C: Connector> Chat<C> {
             tags: settings.tags.clone(),
             additional_directories: settings.additional_directories.clone(),
             cwd: settings.cwd.clone(),
-            env: self.env.clone(),
+            env: Some(self.env.clone()),
             model: settings.model.clone(),
             reasoning_effort: (settings.reasoning_effort
                 != canter_protocol::ReasoningEffort::Unknown)
@@ -1836,7 +1836,7 @@ impl<C: Connector> Chat<C> {
             tags: settings.tags.clone(),
             additional_directories: settings.additional_directories.clone(),
             cwd: settings.cwd.clone(),
-            env: self.env.clone(),
+            env: Some(self.env.clone()),
             model: settings.model.clone(),
             approval_policy: settings.approval_policy,
             reasoning_effort: (settings.reasoning_effort
@@ -1896,7 +1896,7 @@ impl<C: Connector> Chat<C> {
         let failed = "Could not fork this session";
         let params = canter_protocol::SessionResumeParams {
             sandbox_disabled: false,
-            env: self.env.clone(),
+            env: Some(self.env.clone()),
             restricted_mode: ui.app().snapshot().settings.restricted_mode == Some(true),
         };
         let response = async {

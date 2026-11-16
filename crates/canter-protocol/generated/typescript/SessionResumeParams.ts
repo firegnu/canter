@@ -7,4 +7,8 @@ export type SessionResumeParams = {
 /**
  * False or omitted follows server configuration, not saved session state.
  */
-sandboxDisabled?: boolean, restrictedMode?: boolean, env: { [key in string]: string }, };
+sandboxDisabled?: boolean, restrictedMode?: boolean,
+/**
+ * Omitted uses the server's default session environment; an empty map stays empty.
+ */
+env?: { [key in string]: string }, };

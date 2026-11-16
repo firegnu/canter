@@ -501,7 +501,7 @@ async fn run_scenario(
             tags: Default::default(),
             additional_directories: Vec::new(),
             cwd: cwd.display().to_string(),
-            env: environment(root, &server.version)?,
+            env: Some(environment(root, &server.version)?),
             model: "deepseek-flash".into(),
             reasoning_effort: Some(ReasoningEffort::High),
             approval_policy: match scenario {

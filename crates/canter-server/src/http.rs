@@ -52,6 +52,8 @@ pub(crate) mod account;
 pub(crate) mod doctor;
 
 pub(crate) struct App {
+    pub instance: String,
+    pub session_environment: crate::session_environment::SessionEnvironment,
     pub reload: Option<Arc<crate::reload::LiveConfig>>,
     pub home: PathBuf,
     pub store: Arc<Store>,
@@ -208,7 +210,7 @@ impl App {
 
     fn runtime(
         &self,
-        environment: std::collections::BTreeMap<String, String>,
+        environment: Option<std::collections::BTreeMap<String, String>>,
         config: &canter_core::Configuration,
         restricted_mode: bool,
         sandbox_disabled: bool,
@@ -219,7 +221,13 @@ impl App {
             restricted_mode,
             lsp_file_access: Some(crate::trust::file_access(self.home.clone())),
             lsp: config.lsp.clone(),
-            environment,
+            environment: self.session_environment.resolve(
+                environment,
+                self.reload
+                    .as_ref()
+                    .map(|reload| reload.session_environment())
+                    .unwrap_or_default(),
+            ),
             mcp_tools: config.mcp_tools.clone(),
             protected_paths: vec![self.home.clone(), self.home.join("config.json")],
         }
@@ -233,7 +241,7 @@ impl App {
         self.disk_snapshot(id, operation).await?;
         Err(ApiError::new(
             ErrorCode::SessionNotResumed,
-            "resume the session first: POST /v1/sessions/{id}/resume with env again",
+            "resume the session first: POST /v1/sessions/{id}/resume",
         ))
     }
 
@@ -480,7 +488,10 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         .map_err(|_| ApiError::internal())?
         .map_err(CoreError::from)?;
     Ok(Json(InfoResponse {
+        instance: Some(app.instance.clone()),
+        home: Some(app.session_environment.home.clone()),
         features: Some(vec![
+            "optionalSessionEnv".into(),
             "sessionSandbox".into(),
             "sessionSandboxSwitch".into(),
             "managedClients".into(),

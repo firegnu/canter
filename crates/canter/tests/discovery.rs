@@ -47,7 +47,7 @@ fn home() -> PathBuf {
 
 fn configure() {
     fs::write(home().join("config.json"), serde_json::to_vec(&json!({
-        "base_url":"http://127.0.0.1:9", "model":"fake-model", "context_window":1048576, "api_key":"test-only-key"
+        "__test_session_environment":true, "base_url":"http://127.0.0.1:9", "model":"fake-model", "context_window":1048576, "api_key":"test-only-key"
     })).unwrap()).unwrap();
     fs::set_permissions(
         home().join("config.json"),
