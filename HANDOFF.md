@@ -154,6 +154,8 @@
 
 ## 已知没修的问题
 
+- 可选会话环境（P2-295）交叉审查建议改、没做的，详见 `docs/任务/P2-295-交叉审查.md` 第 1 条：passwd 里查不到服务端用户，或 passwd 的 HOME/SHELL 不能用（含 SHELL 为空）时，服务端直接起不来；改之前不读 passwd，这类机器照样能起。用户的 Mac、5090、Terminal-Bench 容器都碰不到；会碰到的是 `docker run --user <没登记的 uid>`、musl 静态版跑在 LDAP/SSSD 账号上。改法：拿不到可用账号时退回进程环境的 HOME、跳过探测，doctor 写原因。
+
 - Linux 沙箱（P2-272，11-10 合并）交叉审查建议改、没做的，详见 `docs/任务/P2-272-交叉审查.md`：
   - seccomp 连 netlink 也挡，node 的 `os.networkInterfaces()` 在 Linux 沙箱里报错；启动时打印局域网地址的开发服务器（create-react-app `npm start`、webpack-dev-server、`next dev`）可能起不来。改法是放行 `NETLINK_ROUTE`，属于放宽限制，要先问用户。
   - HOME 里的 Docker Desktop（`~/.docker/desktop/docker.sock`）、1Password（`~/.1password/agent.sock`）的 socket 没盖住，墙里能连；macOS 上连不上。
