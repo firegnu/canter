@@ -1,4 +1,4 @@
-# 任务：canter-desktop 连远程服务端
+# 任务：远程 7 · canter-desktop 连远程：用户转给 canter-desktop 做
 
 依据：从 P2-300 第 4 条拆出。桌面端照终端的做法加 `--server`（在 canter-desktop 仓库做，canter 这边只提供公开接口；按 canter-desktop 那边的先后排）。
 依赖：P2-299

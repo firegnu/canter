@@ -1,4 +1,4 @@
-# 任务：paddock 在现有的 ssh + corral 远程之外，加一路 canter 的远程连接
+# 任务：远程 8 · paddock 加 canter 远程这一路：转给 paddock 前先定放哪里、要不要状态
 
 依据：P2-301 试连后，用户要 paddock 也能用 canter 的远程连接（HTTP + 令牌 + 隧道）连远程机器上的 canter。改的是 paddock，canter 不改别的仓库，所以本件先在 canter 这边记成需求单，做的时候转给 paddock 主控。
 依赖：P2-301
