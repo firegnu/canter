@@ -590,3 +590,44 @@ async fn cancellation_stops_before_reading_the_next_file() {
     assert_eq!(output.outcome, ToolOutcome::Cancelled);
     assert_eq!(item(&output)["status"], "failed");
 }
+
+#[tokio::test]
+async fn partial_code_patterns_explain_how_to_write_a_complete_one() {
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path(),
+        "one.rs",
+        "fn word_changes(x: u8) -> u8 { x }\npub const PAGE: usize = 3;\n",
+    );
+    let tools = tools(root.path());
+    for pattern in ["fn word_changes", "pub const PAGE"] {
+        let error = tools
+            .prepare(
+                Tool::from_name("ast_grep").unwrap(),
+                "ast",
+                &json!({"pattern":pattern,"lang":"rust"}).to_string(),
+                &CancellationToken::new(),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert!(error.text.contains("complete code"), "{}", error.text);
+        assert!(error.text.contains("use rg"), "{}", error.text);
+    }
+    // The complete forms the description and error suggest do match.
+    for pattern in ["fn $NAME($$$) -> $R { $$$ }", "pub const PAGE: $T = $V;"] {
+        let output = search(&tools, json!({"pattern":pattern,"lang":"rust"})).await;
+        assert!(
+            output.text.contains("1 match found"),
+            "{pattern}: {}",
+            output.text
+        );
+    }
+    let description = Tool::from_name("ast_grep")
+        .unwrap()
+        .definition()
+        .description;
+    for expected in ["complete code", "fn $NAME($$$) -> $R { $$$ }", "use rg"] {
+        assert!(description.contains(expected), "{expected}: {description}");
+    }
+}

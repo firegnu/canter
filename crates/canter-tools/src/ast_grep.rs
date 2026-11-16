@@ -225,7 +225,7 @@ pub(crate) fn prepare(arguments: &Value) -> Result<Prepared, String> {
             .first()
             .expect("every candidate grammar recorded a pattern error");
         return Err(format!(
-            "Invalid ast-grep pattern for {}: {error}. Fix the pattern so it parses as one syntax node.",
+            "Invalid ast-grep pattern for {}: {error}. Write complete code with metavariables, such as `fn $NAME($$$) -> $R {{ $$$ }}` rather than `fn name`; to find a name or other text, use rg instead.",
             lang.name()
         ));
     }
