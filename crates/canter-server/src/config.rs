@@ -14,6 +14,9 @@ pub(crate) struct Config {
     // The exact validated save, used to detect edits made during server startup.
     #[serde(skip)]
     pub contents: Vec<u8>,
+    // Validate independently: a bad remote setting must not disable the Unix socket.
+    #[serde(default)]
+    pub remote: serde_json::Value,
     #[serde(default)]
     pub session_env: BTreeMap<String, String>,
     // Explicit fixture opt-in; enabling test-support alone must not change the account.

@@ -14,6 +14,7 @@ pub mod deployment;
 pub mod doctor;
 pub mod exec;
 pub mod mcp;
+pub mod remote;
 pub mod service;
 pub mod skills;
 pub mod stats;
@@ -58,6 +59,9 @@ Usage:
   canter mcp remove <name>   remove an MCP service
   canter mcp login <name>    authorize a remote MCP service in the browser
   canter mcp logout <name>   delete its local OAuth credentials
+  canter remote token add <name>     issue a token locally; print it once
+  canter remote token list           list client names and creation times
+  canter remote token remove <name>  revoke a client's token
 
 Options:
   -m, --model <model>  use this model (default: the server's config)
@@ -83,6 +87,7 @@ pub enum Command {
     Stats(stats::Args),
     Exec(exec::Args),
     Mcp(mcp::Command),
+    Remote(remote::Command),
     Service(service::Command),
     Skills { force: bool },
     Deployment(deployment::Command),
@@ -140,6 +145,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
     }
     if args.first().map(String::as_str) == Some("mcp") {
         return mcp::parse(&args[1..]).map(Command::Mcp);
+    }
+    if args.first().map(String::as_str) == Some("remote") {
+        return remote::parse(&args[1..]).map(Command::Remote);
     }
     if args.first().map(String::as_str) == Some("skills") {
         return match args[1..]

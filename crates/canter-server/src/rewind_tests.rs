@@ -160,6 +160,7 @@ async fn check_rewind(
     let model = Arc::new(Replay::default());
     let store = Arc::new(Store::new(root.path().join("state/sessions")).unwrap());
     let app = Arc::new(App {
+        remote: None,
         instance: crate::new_id(),
         session_environment: crate::session_environment::SessionEnvironment::for_test(
             &(root.path().join("state")).join("test-session-home"),
@@ -469,6 +470,7 @@ async fn check_rewind(
     std::fs::remove_file(&socket).unwrap();
     // A fresh server registry and newly opened store exercise durable recovery.
     let app = Arc::new(App {
+        remote: None,
         instance: crate::new_id(),
         session_environment: crate::session_environment::SessionEnvironment::for_test(
             &(root.path().join("state")).join("test-session-home"),

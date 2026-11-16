@@ -52,6 +52,7 @@ pub(crate) mod account;
 pub(crate) mod doctor;
 
 pub(crate) struct App {
+    pub remote: Option<Arc<crate::remote::Remote>>,
     pub instance: String,
     pub session_environment: crate::session_environment::SessionEnvironment,
     pub reload: Option<Arc<crate::reload::LiveConfig>>,

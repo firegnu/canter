@@ -766,6 +766,10 @@ pub(super) async fn run(app: Arc<App>, params: DoctorParams) -> DoctorResponse {
     let mut tasks = futures_util::stream::FuturesUnordered::new();
     let mut expected = Vec::new();
     let environment = session_environment(&app.session_environment);
+    let remote = match &app.remote {
+        Some(remote) => remote.checks().await,
+        None => crate::remote::offline_checks(app.home.clone()).await,
+    };
     for (id, name, work) in [
         ("config", "config.json", config as fn(&Path) -> DoctorCheck),
         ("rules", "rules.json", rules as fn(&Path) -> DoctorCheck),
@@ -905,6 +909,7 @@ pub(super) async fn run(app: Arc<App>, params: DoctorParams) -> DoctorResponse {
         },
     );
     let mut data = vec![version, environment];
+    data.extend(remote);
     let deadline = tokio::time::sleep(Duration::from_secs(8));
     tokio::pin!(deadline);
     loop {
@@ -1045,6 +1050,7 @@ pub async fn offline(
 ) -> DoctorResponse {
     let registration = crate::lifecycle::read_registration(&home).ok().flatten();
     let loaded = crate::config::Config::load_read_only(&home).ok();
+    let remote = crate::remote::offline_checks(home.clone()).await;
     let mut data = vec![
         fail(
             "server",
@@ -1071,6 +1077,7 @@ pub async fn offline(
         rules(&home),
         optional_json(&home, "tui.json", "tui"),
     ];
+    data.extend(remote);
     if let Some(config) = &loaded {
         let mut options = config.options();
         options.agent_roles_directory = Some(home.join("agents"));

@@ -80,6 +80,7 @@ impl Fixture {
                 .unwrap();
         });
         let app = Arc::new(App {
+            remote: None,
             instance: crate::new_id(),
             session_environment: crate::session_environment::SessionEnvironment::for_test(
                 &(root.path().join("state")).join("test-session-home"),

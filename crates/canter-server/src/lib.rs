@@ -17,6 +17,8 @@ mod model_test_server;
 mod reload;
 #[cfg(test)]
 mod reload_tests;
+mod remote;
+pub mod remote_tokens;
 #[cfg(test)]
 mod responses_tests;
 mod service_env;
@@ -35,7 +37,7 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -132,7 +134,9 @@ async fn serve_with_lsp(
             return Err(error);
         }
     };
+    let (remote, tcp_listeners) = remote::Remote::bind(lease.home.clone(), &config.remote).await;
     let app = Arc::new(http::App {
+        remote: Some(remote.clone()),
         instance: lease.registration.instance.clone(),
         session_environment,
         reload: Some(reload.clone()),
@@ -182,9 +186,36 @@ async fn serve_with_lsp(
     let home = lease.home.clone();
     let registration = lease.registration.clone();
     let stopped = app.stopped.clone();
+    let router = http::router(app);
+    let mut tcp_servers = tokio::task::JoinSet::new();
+    let token_watcher = tokio::spawn(remote.clone().watch(stopped.clone()));
+    for listener in tcp_listeners {
+        use axum::serve::ListenerExt;
+        let listener = listener.tap_io(|stream| {
+            let keepalive = socket2::TcpKeepalive::new()
+                .with_time(Duration::from_secs(30))
+                .with_interval(Duration::from_secs(10))
+                .with_retries(3);
+            if socket2::SockRef::from(&*stream)
+                .set_tcp_keepalive(&keepalive)
+                .is_err()
+            {
+                eprintln!("TCP connection: cannot enable keepalive");
+            }
+        });
+        let router = remote.router(router.clone());
+        let stopped = stopped.clone();
+        tcp_servers.spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(stopped.cancelled_owned())
+                .await
+        });
+    }
     let close_failed = Arc::new(AtomicBool::new(false));
     let failed = close_failed.clone();
-    let server = axum::serve(listener, http::router(app)).with_graceful_shutdown(async move {
+    let http_deadline = Arc::new(OnceLock::new());
+    let shutdown_deadline = http_deadline.clone();
+    let server = axum::serve(listener, router).with_graceful_shutdown(async move {
         let upgrade = async move {
             loop {
                 let home = home.clone();
@@ -224,20 +255,33 @@ async fn serve_with_lsp(
             }
         })).await;
         if let Some(reload) = &shutdown.reload { reload.shutdown().await; }
+        shutdown_deadline.set(tokio::time::Instant::now() + Duration::from_secs(5))
+            .expect("HTTP shutdown deadline is set once");
         shutdown.stopped.cancel();
     }).into_future();
     tokio::pin!(server);
-    tokio::select! {
-        result = &mut server => { result.map_err(|_| ServerError("the HTTP server failed".into()))?; }
-        _ = stopped.cancelled() => {
-            // Sessions are already closed. A client stalled in an HTTP body must not hold the daemon lock forever.
-            if let Ok(result) = tokio::time::timeout(Duration::from_secs(5), &mut server).await {
-                result.map_err(|_| ServerError("the HTTP server failed".into()))?;
-            }
-        }
+    let server_finished = tokio::select! {
+        result = &mut server => { result.map_err(|_| ServerError("the HTTP server failed".into()))?; true }
+        _ = stopped.cancelled() => false,
+    };
+    let deadline = *http_deadline.get().expect("HTTP shutdown has started");
+    // Sessions are already closed. Both transports share the same deadline so
+    // stalled bodies cannot add two shutdown waits before the daemon lock is released.
+    if !server_finished && let Ok(result) = tokio::time::timeout_at(deadline, &mut server).await {
+        result.map_err(|_| ServerError("the HTTP server failed".into()))?;
     }
     reload.shutdown().await;
     let _ = watcher.await;
+    let _ = token_watcher.await;
+    // Close every TCP listener before releasing the daemon lock to a successor.
+    if tokio::time::timeout_at(deadline, async {
+        while tcp_servers.join_next().await.is_some() {}
+    })
+    .await
+    .is_err()
+    {
+        tcp_servers.shutdown().await;
+    }
     drop(lease);
     if close_failed.load(Ordering::Relaxed) {
         Err(ServerError(
