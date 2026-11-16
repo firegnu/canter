@@ -1307,7 +1307,7 @@ async fn named_clients_connect_to_tcp_without_starting_a_local_server() {
 }
 
 #[tokio::test]
-async fn remote_exec_creates_a_text_session_and_continues_without_a_cwd_filter() {
+async fn remote_exec_with_different_commit_runs_and_continues_without_version_warning() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let router = axum::Router::new().route("/v1/chat/completions", axum::routing::post(|| async {
@@ -1318,12 +1318,60 @@ async fn remote_exec_creates_a_text_session_and_continues_without_a_cwd_filter()
         axum::serve(listener, router).await.unwrap();
     });
     let server = Server::configured(Some(json!(true)), Some(format!("http://{address}/v1"))).await;
+    // Keep the real session/SSE flow, but advertise a different build of the same protocol.
+    let token = server.token("client").await;
+    let mut info: Value = server
+        .tcp
+        .get(server.url("/v1/info"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    info["serverVersion"] = json!("0.1.0 · different-commit");
+    let backend = server.url("");
+    let http = server.tcp.clone();
+    let router = axum::Router::new()
+        .route(
+            "/v1/info",
+            axum::routing::get(move || {
+                let info = info.clone();
+                async move { axum::Json(info) }
+            }),
+        )
+        .fallback(move |request: axum::extract::Request| {
+            let backend = backend.clone();
+            let http = http.clone();
+            async move {
+                let (parts, body) = request.into_parts();
+                let body = axum::body::to_bytes(body, 2 * 1024 * 1024).await.unwrap();
+                let response = http
+                    .request(parts.method, format!("{backend}{}", parts.uri))
+                    .headers(parts.headers)
+                    .body(body)
+                    .send()
+                    .await
+                    .unwrap();
+                let mut builder = axum::http::Response::builder().status(response.status());
+                *builder.headers_mut().unwrap() = response.headers().clone();
+                builder
+                    .body(axum::body::Body::from_stream(response.bytes_stream()))
+                    .unwrap()
+            }
+        });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let proxy = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
     let root = fixture();
     canter::remotes::add(
         &root.path().join("state"),
         "example".into(),
-        server.url(""),
-        server.token("client").await.as_bytes(),
+        url,
+        token.as_bytes(),
     )
     .unwrap();
     let missing = cli(root.path(), &["exec", "--server", "example", "hello"]).await;
@@ -1340,12 +1388,20 @@ async fn remote_exec_creates_a_text_session_and_continues_without_a_cwd_filter()
     .await;
     assert!(first.status.success(), "{first:?}");
     assert!(String::from_utf8_lossy(&first.stdout).contains("Hello from the test server."));
+    assert!(
+        !String::from_utf8_lossy(&first.stderr).contains("upgrade it on that machine"),
+        "{first:?}"
+    );
     let second = cli(
         root.path(),
         &["exec", "--server", "example", "--last", "again"],
     )
     .await;
     assert!(second.status.success(), "{second:?}");
+    assert!(
+        !String::from_utf8_lossy(&second.stderr).contains("upgrade it on that machine"),
+        "{second:?}"
+    );
     let sessions: Value = server
         .local
         .get("http://localhost/v1/sessions")
@@ -1358,6 +1414,8 @@ async fn remote_exec_creates_a_text_session_and_continues_without_a_cwd_filter()
     assert_eq!(sessions["data"].as_array().unwrap().len(), 1);
     assert_eq!(sessions["data"][0]["cwd"], cwd);
     assert!(!root.path().join("state/server.log").exists());
+    proxy.abort();
+    let _ = proxy.await;
     server.stop().await;
     model.abort();
     let _ = model.await;
@@ -1748,12 +1806,18 @@ async fn exec_after_stream_drop(failure: Option<ReconnectFailure>) {
         Some(ReconnectFailure::Unauthorized | ReconnectFailure::UnauthorizedWithoutBody) => {
             assert!(stderr.contains("unauthorized"), "{stderr}")
         }
-        Some(ReconnectFailure::Protocol) => assert!(
-            stderr.contains(
-                "Server 'example' runs canter test-incompatible; upgrade it on that machine"
-            ),
-            "{stderr}"
-        ),
+        Some(ReconnectFailure::Protocol) => {
+            assert!(stderr.contains(canter::VERSION), "{stderr}");
+            assert!(
+                stderr.contains("server 'example' runs canter test-incompatible"),
+                "{stderr}"
+            );
+            assert!(
+                stderr.contains("different protocol. Upgrade both to the same version."),
+                "{stderr}"
+            );
+            assert!(!stderr.contains("upgrade it on that machine"), "{stderr}");
+        }
         None => {}
     }
     let values: Vec<Value> = String::from_utf8(output.stdout)
@@ -1820,14 +1884,58 @@ async fn remote_protocol_mismatch_stops_before_commands_and_names_the_server() {
         let output = cli(root.path(), &args).await;
         assert!(!output.status.success());
         let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains(canter::VERSION), "{error}");
         assert!(
-            error.contains("Server 'example' runs canter test-old; upgrade it on that machine"),
+            error.contains("server 'example' runs canter test-old"),
             "{error}"
         );
+        assert!(
+            error.contains("different protocol. Upgrade both to the same version."),
+            "{error}"
+        );
+        assert!(!error.contains("upgrade it on that machine"), "{error}");
         assert!(!error.contains("serve --replace"));
     }
     assert_eq!(called.load(Ordering::SeqCst), 0);
     assert!(!root.path().join("state/server.log").exists());
+    task.abort();
+    let _ = task.await;
+}
+
+#[tokio::test]
+async fn remote_missing_features_still_requests_upgrade_on_server_machine() {
+    let router = axum::Router::new().route("/v1/info", axum::routing::get(|| async {
+        axum::Json(json!({"serverVersion":"test-old", "protocolVersion":canter_protocol::PROTOCOL_VERSION,
+            "instance":"test-instance", "sessions":[], "features":[]}))
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let root = fixture();
+    canter::remotes::add(
+        &root.path().join("state"),
+        "example".into(),
+        url,
+        b"test-token".as_slice(),
+    )
+    .unwrap();
+    for args in [
+        vec!["doctor"],
+        vec!["exec", "--cwd", "/server/project", "hello"],
+    ] {
+        let mut args = args;
+        args.extend(["--server", "example"]);
+        let output = cli(root.path(), &args).await;
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("Server 'example' runs canter test-old; upgrade it on that machine"),
+            "{error}"
+        );
+        assert!(!error.contains("serve --replace"), "{error}");
+    }
     task.abort();
     let _ = task.await;
 }
@@ -1988,7 +2096,7 @@ async fn remote_reconnect_uses_info_instance_and_preserves_explicitly_closed_ses
 }
 
 #[tokio::test]
-async fn remote_doctor_version_fix_points_to_the_server_machine() {
+async fn remote_doctor_commit_difference_is_information_only() {
     let server = Server::start(Some(json!(true))).await;
     let remote = canter::remotes::Remote {
         name: "example".into(),
@@ -2002,17 +2110,68 @@ async fn remote_doctor_version_fix_points_to_the_server_machine() {
         .iter()
         .find(|check| check.id == "version")
         .unwrap();
-    assert!(
-        version
-            .fix
-            .as_deref()
-            .unwrap()
-            .contains("upgrade it on that machine")
-    );
+    assert_eq!(version.status, canter_protocol::DoctorStatus::Ok);
+    assert!(version.fix.is_none());
+    let reason = version.reason.as_deref().unwrap();
+    assert!(reason.contains("test-old-client"));
+    assert!(reason.contains(canter::VERSION));
     assert!(
         !serde_json::to_string(&report)
             .unwrap()
             .contains("serve --replace")
     );
     server.stop().await;
+}
+
+#[tokio::test]
+async fn remote_commit_difference_connects_without_warning_and_doctor_passes() {
+    let router = axum::Router::new()
+        .route(
+            "/v1/info",
+            axum::routing::get(|| async {
+                axum::Json(json!({"serverVersion":"0.1.0 · different-commit",
+                "protocolVersion":canter_protocol::PROTOCOL_VERSION,
+                "instance":"test-instance", "sessions":[], "features":["doctor"]}))
+            }),
+        )
+        .route(
+            "/v1/sessions",
+            axum::routing::get(|| async { axum::Json(json!({"data":[]})) }),
+        )
+        .route(
+            "/v1/doctor",
+            axum::routing::get(|| async {
+                axum::Json(json!({"serverVersion":"0.1.0 · different-commit",
+                "serverProtocolVersion":canter_protocol::PROTOCOL_VERSION,
+                "data":[{"id":"version", "name":"Client/server versions", "category":"version",
+                    "status":"fail", "reason":"Different commits.",
+                    "fix":"Install matching versions and run canter serve --replace."}]}))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let root = fixture();
+    canter::remotes::add(
+        &root.path().join("state"),
+        "example".into(),
+        url,
+        b"test-token".as_slice(),
+    )
+    .unwrap();
+    let remote = canter::remotes::find(&root.path().join("state"), "example").unwrap();
+    let (connected, _) = remote.connect().await.unwrap();
+    assert!(connected.warning.is_none(), "{:?}", connected.warning);
+    assert!(connected.client.list_sessions().await.unwrap().is_empty());
+    let output = cli(root.path(), &["doctor", "--server", "example"]).await;
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("0 problems"), "{stdout}");
+    assert!(stdout.lines().any(|line| line.contains(canter::VERSION) && line.contains("0.1.0 · different-commit")), "{stdout}");
+    assert!(!stdout.contains("Fix:"), "{stdout}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    task.abort();
+    let _ = task.await;
 }

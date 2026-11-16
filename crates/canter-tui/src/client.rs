@@ -460,9 +460,18 @@ impl Client {
             );
         let mut report: canter_protocol::DoctorResponse =
             decode(self.http.get(endpoint).send().await?).await?;
-        if self.is_remote() {
+        if let Some((name, _)) = &self.remote {
             for check in &mut report.data {
-                if check
+                if check.id == "version"
+                    && report.server_protocol_version == canter_protocol::PROTOCOL_VERSION
+                {
+                    check.status = canter_protocol::DoctorStatus::Ok;
+                    check.reason = Some(format!(
+                        "This client runs canter {client_version}; server '{name}' runs canter {}.",
+                        report.server_version
+                    ));
+                    check.fix = None;
+                } else if check
                     .fix
                     .as_ref()
                     .is_some_and(|fix| fix.contains("canter serve --replace"))

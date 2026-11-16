@@ -86,15 +86,19 @@ impl Remote {
         let client = client.with_server_version(info.server_version.clone());
         if info.protocol_version != canter_protocol::PROTOCOL_VERSION {
             return Err(canter_tui::ConnectError {
-                message: client.upgrade_hint(""),
+                message: format!(
+                    "This client runs canter {}; server '{}' runs canter {} with a different protocol. Upgrade both to the same version.",
+                    crate::VERSION,
+                    self.name,
+                    info.server_version
+                ),
                 retryable: false,
             });
         }
-        let warning = (info.server_version != crate::VERSION).then(|| client.upgrade_hint(""));
         Ok((
             canter_tui::Connected {
                 client,
-                warning,
+                warning: None,
                 server: info.instance.clone(),
             },
             info,
