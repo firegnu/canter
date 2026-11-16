@@ -47,6 +47,45 @@ input 为空，没有 userMessage，clientName 为 background。每批可以有�
 
 ## HTTP 对照
 
+### TCP 与认证（P2-296）
+
+本机 Unix socket 照旧不需要令牌。服务端可在 `config.json` 加
+`"remote": {"listen": ["127.0.0.1:8787", "[::1]:8787"]}`，在回环 TCP 上提供同一套
+HTTP + SSE 接口。地址必须是 IP 和端口，不接受主机名或非回环地址；不配置或列表为空时不开 TCP。
+监听配置在服务端启动时生效，修改后用 `canter serve --replace`。canter 不提供 TLS；
+远程部署由自建 VPS 上的 Caddy 负责 HTTPS，再经 SSH 反向隧道或 frp 转回这些本机端口。
+
+每个 TCP 请求（包括 SSE、未知路径和不支持的方法）都必须带
+`Authorization: Bearer <token>`。认证在路由、请求体解析和业务处理之前完成；缺失、错误、已撤销
+或无法核对的令牌均返回 HTTP 401，`WWW-Authenticate: Bearer`，正文为
+`{"code":"unauthorized","message":"unauthorized"}`，不创建会话或发出会话事件。
+令牌不能通过 URL 参数传递。不加 CORS 头，也不拒绝带 `Origin` 的已认证请求。
+
+令牌只能在服务端机器上管理，没有发放令牌的协议接口：
+
+```text
+canter remote token add <客户端名>
+canter remote token list
+canter remote token remove <客户端名>
+```
+
+`add` 只在标准输出打印一次随机 256 位令牌（无填充的 base64url）；同名时拒绝覆盖。
+轮换时先用新名字发一个，客户端换好后撤销旧名字。`list` 只显示名字和创建时间。
+`<CANTER_HOME>/remote-tokens.json` 是权限 0600 的数组，每条为 `{name, sha256, created}`；
+`sha256` 是令牌文本的 SHA-256 小写十六进制摘要，`created` 为 RFC 3339 时间，不存明文。
+令牌文件最多 1 MiB，超限更新报错并保留原文件。本机命令持有 `remote-tokens.lock`，通过同目录临时文件原子替换；客户端名限 1～128 字节，
+不能含控制字符或首尾空白。认证用常量时间比较摘要，日志只记录客户端名。
+
+服务端每次核对 Bearer 令牌时重读文件，不依赖修改时间缓存；TCP 开启时另每 250 毫秒检查一次，
+撤销后新请求立即拒绝，已开的 SSE 主动结束，即使没有后续请求也能发现撤销。其他客户端令牌继续有效。
+文件不存在表示没有令牌；格式损坏、读失败、不是当前用户所有的普通文件、符号链接或权限不是 0600 时，
+所有 TCP 认证失败，并结束已有 SSE。本机 Unix socket 始终不受这些远程配置或令牌错误影响。
+
+任意监听地址无效或端口绑定失败会关闭整组 TCP 监听，原因写入服务端日志。
+`canter doctor` 的 `remote.listen` 检查显示实际监听地址或关闭原因，`remote.tokens` 显示令牌条数
+或无法读取的原因；不显示令牌和摘要。TCP 连接开启 keepalive（空闲 30 秒、间隔 10 秒、3 次探测）。
+替换进程沿用原来的服务端锁交接顺序：旧进程关闭 TCP 监听后释放锁，新进程再绑定同一端口。
+
 ### Accounts (P2-203)
 
 `info.features` includes `accounts`. Account commands use the local Unix socket;

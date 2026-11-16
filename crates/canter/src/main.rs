@@ -70,6 +70,10 @@ async fn run(arguments: Vec<std::ffi::OsString>, parsed: Result<Command, String>
                 .map(|output| print!("{output}")),
             Err(error) => Err(error.to_string()),
         },
+        Ok(Command::Remote(command)) => match canter_server::state_directory() {
+            Ok(home) => canter::remote::run(command, &home).map(|output| print!("{output}")),
+            Err(error) => Err(error.to_string()),
+        },
         Ok(Command::Usage) => match Context::current() {
             Ok(context) => canter::usage(context)
                 .await

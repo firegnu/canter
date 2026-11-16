@@ -4830,6 +4830,7 @@
     "ErrorCode": {
       "type": "string",
       "enum": [
+        "unauthorized",
         "invalid_request",
         "session_not_found",
         "turn_mismatch",

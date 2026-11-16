@@ -17,6 +17,8 @@ mod model_test_server;
 mod reload;
 #[cfg(test)]
 mod reload_tests;
+mod remote;
+pub mod remote_tokens;
 #[cfg(test)]
 mod responses_tests;
 mod service_env;
@@ -132,7 +134,9 @@ async fn serve_with_lsp(
             return Err(error);
         }
     };
+    let (remote, tcp_listeners) = remote::Remote::bind(lease.home.clone(), &config.remote).await;
     let app = Arc::new(http::App {
+        remote: Some(remote.clone()),
         instance: lease.registration.instance.clone(),
         session_environment,
         reload: Some(reload.clone()),
@@ -182,9 +186,34 @@ async fn serve_with_lsp(
     let home = lease.home.clone();
     let registration = lease.registration.clone();
     let stopped = app.stopped.clone();
+    let router = http::router(app);
+    let mut tcp_servers = tokio::task::JoinSet::new();
+    let token_watcher = tokio::spawn(remote.clone().watch(stopped.clone()));
+    for listener in tcp_listeners {
+        use axum::serve::ListenerExt;
+        let listener = listener.tap_io(|stream| {
+            let keepalive = socket2::TcpKeepalive::new()
+                .with_time(Duration::from_secs(30))
+                .with_interval(Duration::from_secs(10))
+                .with_retries(3);
+            if socket2::SockRef::from(&*stream)
+                .set_tcp_keepalive(&keepalive)
+                .is_err()
+            {
+                eprintln!("TCP connection: cannot enable keepalive");
+            }
+        });
+        let router = remote.router(router.clone());
+        let stopped = stopped.clone();
+        tcp_servers.spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(stopped.cancelled_owned())
+                .await
+        });
+    }
     let close_failed = Arc::new(AtomicBool::new(false));
     let failed = close_failed.clone();
-    let server = axum::serve(listener, http::router(app)).with_graceful_shutdown(async move {
+    let server = axum::serve(listener, router).with_graceful_shutdown(async move {
         let upgrade = async move {
             loop {
                 let home = home.clone();
@@ -238,6 +267,16 @@ async fn serve_with_lsp(
     }
     reload.shutdown().await;
     let _ = watcher.await;
+    let _ = token_watcher.await;
+    // Close every TCP listener before releasing the daemon lock to a successor.
+    if tokio::time::timeout(Duration::from_secs(5), async {
+        while tcp_servers.join_next().await.is_some() {}
+    })
+    .await
+    .is_err()
+    {
+        tcp_servers.shutdown().await;
+    }
     drop(lease);
     if close_failed.load(Ordering::Relaxed) {
         Err(ServerError(

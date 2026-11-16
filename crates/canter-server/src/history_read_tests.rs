@@ -3,6 +3,7 @@ use std::{fs, io::Write, time::Instant};
 
 fn app(home: PathBuf) -> Arc<App> {
     Arc::new(App {
+        remote: None,
         instance: crate::new_id(),
         session_environment: crate::session_environment::SessionEnvironment::for_test(
             &(home).join("test-session-home"),

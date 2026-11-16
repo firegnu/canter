@@ -1,6 +1,6 @@
 # canter-server
 
-本机 Unix socket 上的 HTTP + SSE 服务端；可执行入口为 `canter serve`。
+本机 Unix socket 上的 HTTP + SSE 服务端；可选回环 TCP 监听，逐请求核对令牌；可执行入口为 `canter serve`。
 只参考 Codex rust-v0.163.0 的 app-server-daemon README，以及 opencode v2.1.3 的
 `packages/cli/src/commands/handlers/default.ts`、`packages/client/src/effect/service.ts`，
 没有复制源码。HTTP 对照和错误格式见 `canter-protocol/README.md`。
@@ -15,6 +15,8 @@
 <CANTER_HOME>/
   config.json            模型配置；只从此文件读取 key
   config.lock            MCP 配置命令的写锁
+  remote-tokens.json     远程客户端名字、SHA-256 摘要和创建时间（0600，不存明文令牌）
+  remote-tokens.lock     本机令牌发放、撤销命令的写锁
   mcp-auth/              MCP OAuth 凭证（0600）及每个服务的续期/登录/退出锁
   models/chatgpt/         按账号分开的 GPT 模型目录缓存（文件 0600，不含令牌）
   server.lock            整个服务期持有的文件锁；不删除锁文件

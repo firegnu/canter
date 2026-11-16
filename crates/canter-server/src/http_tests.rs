@@ -251,6 +251,7 @@ async fn failed_close_can_be_resumed_through_http() {
         reached: Notify::new(),
     });
     let app = Arc::new(App {
+        remote: None,
         instance: crate::new_id(),
         session_environment: crate::session_environment::SessionEnvironment::for_test(
             &(home).join("test-session-home"),
@@ -426,6 +427,7 @@ async fn context_report_is_read_only_and_describes_the_next_request() {
     let model = Arc::new(Replay(Mutex::new(Vec::new())));
     let store = Arc::new(Store::new(root.path().join("state/sessions")).unwrap());
     let app = Arc::new(App {
+        remote: None,
         instance: crate::new_id(),
         session_environment: crate::session_environment::SessionEnvironment::for_test(
             &(root.path().join("state")).join("test-session-home"),
@@ -993,6 +995,7 @@ impl BtwTest {
         std::fs::write(root.path().join("file.txt"), "test content").unwrap();
         let model = Arc::new(BtwModel(Default::default()));
         let app = Arc::new(App {
+            remote: None,
             instance: crate::new_id(),
             session_environment: crate::session_environment::SessionEnvironment::for_test(
                 &root.path().join("home"),
@@ -1471,6 +1474,7 @@ async fn sandbox_route_reports_the_session_switch_and_current_scope() {
             std::fs::create_dir_all(root_path.join(name)).unwrap();
         }
         let app = Arc::new(App {
+            remote: None,
             instance: crate::new_id(),
             session_environment: crate::session_environment::SessionEnvironment::for_test(
                 &(root_path.join("state")).join("test-session-home"),

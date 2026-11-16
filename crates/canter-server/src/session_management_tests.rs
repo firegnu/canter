@@ -87,6 +87,7 @@ impl Harness {
             .unwrap();
         let home = root.path().join("state");
         let app = Arc::new(App {
+            remote: None,
             instance: crate::new_id(),
             session_environment: crate::session_environment::SessionEnvironment::for_test(
                 &(home.clone()).join("test-session-home"),
