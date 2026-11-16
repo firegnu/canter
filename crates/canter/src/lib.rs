@@ -349,7 +349,8 @@ impl Context {
             return remotes::find(&self.state_dir, name)?
                 .connect()
                 .await
-                .map(|(connected, _)| connected);
+                .map(|(connected, _)| connected)
+                .map_err(|error| error.to_string());
         }
         connected(
             canter_server::ensure_server(&self.state_dir, &self.executable)
@@ -419,7 +420,7 @@ pub struct ServerConnector {
 }
 
 impl Connector for ServerConnector {
-    async fn connect(&self) -> Result<Connected, String> {
+    async fn connect(&self) -> Result<Connected, canter_tui::ConnectError> {
         if let Some(remote) = &self.remote {
             let (mut connected, _) = remote.connect().await?;
             connected.client = connected
@@ -431,7 +432,7 @@ impl Connector for ServerConnector {
         let connection = canter_server::discover(&self.state_dir)
             .await
             .map_err(|error| error.to_string())?
-            .ok_or("no server found")?;
+            .ok_or_else(|| "no server found".to_owned())?;
         let mut connected = connected(connection)?;
         connected.client = connected
             .client
@@ -485,7 +486,7 @@ pub async fn prepare(args: ChatArgs, context: Context) -> Result<Launch<ServerCo
         })
         .transpose()?;
     let (mut connected, home) = if let Some(remote) = &remote {
-        let (connected, info) = remote.connect().await?;
+        let (connected, info) = remote.connect().await.map_err(|error| error.to_string())?;
         (connected, info.home)
     } else {
         (context.connect().await?, context.env.get("HOME").cloned())

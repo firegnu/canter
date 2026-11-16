@@ -118,15 +118,46 @@ pub struct Connected {
 /// Finds the server again after the connection dropped.
 pub trait Connector: Send + Sync + 'static {
     /// Looks up where the server is now and connects to it.
-    fn connect(&self) -> impl Future<Output = Result<Connected, String>> + Send;
+    fn connect(&self) -> impl Future<Output = Result<Connected, ConnectError>> + Send;
+}
+
+/// Preserve terminal connection failures for non-interactive callers.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct ConnectError {
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl From<String> for ConnectError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            retryable: true,
+        }
+    }
+}
+
+impl From<ClientError> for ConnectError {
+    fn from(error: ClientError) -> Self {
+        let unauthorized = match &error {
+            ClientError::Server { status, .. } => *status == reqwest::StatusCode::UNAUTHORIZED,
+            ClientError::Http(error) => error.status() == Some(reqwest::StatusCode::UNAUTHORIZED),
+            _ => false,
+        };
+        Self {
+            message: error.to_string(),
+            retryable: !unauthorized,
+        }
+    }
 }
 
 /// A server on a fixed socket, such as the fake server.
 pub struct SocketConnector(pub PathBuf);
 
 impl Connector for SocketConnector {
-    async fn connect(&self) -> Result<Connected, String> {
-        let client = Client::new(&self.0).map_err(|error| error.to_string())?;
+    async fn connect(&self) -> Result<Connected, ConnectError> {
+        let client = Client::new(&self.0)?;
         Ok(Connected {
             client,
             warning: None,
@@ -2794,7 +2825,10 @@ async fn pump<C: Connector>(
                     break stream;
                 }
                 Err(reason) => {
-                    if sender.send(Message::Reconnecting(reason)).is_err() {
+                    if sender
+                        .send(Message::Reconnecting(reason.to_string()))
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -2840,17 +2874,13 @@ pub async fn reconnect<C: Connector>(
     session: &str,
     env: &BTreeMap<String, String>,
     cursor: u64,
-) -> Result<(Connected, EventStream), String> {
+) -> Result<(Connected, EventStream), ConnectError> {
     let connected = connector.connect().await?;
     let client = &connected.client;
     // Resuming on the same server would open a session someone closed.
     let same_server = connected.server.is_some() && connected.server.as_deref() == previous;
     if !same_server {
-        let snapshot = client
-            .read_session(session)
-            .await
-            .map_err(|error| error.to_string())?
-            .session;
+        let snapshot = client.read_session(session).await?.session;
         // Old data has no reason. Keep its restart behavior, and also recover
         // non-closed sessions left behind by a crashed server.
         if snapshot.status != SessionStatus::Closed
@@ -2859,16 +2889,10 @@ pub async fn reconnect<C: Connector>(
                 None | Some(SessionCloseReason::ServerShutdown)
             )
         {
-            client
-                .resume(session, env)
-                .await
-                .map_err(|error| error.to_string())?;
+            client.resume(session, env).await?;
         }
     }
-    let stream = client
-        .subscribe(session, cursor)
-        .await
-        .map_err(|error| error.to_string())?;
+    let stream = client.subscribe(session, cursor).await?;
     Ok((connected, stream))
 }
 

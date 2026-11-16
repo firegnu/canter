@@ -72,16 +72,23 @@ pub fn find(home: &Path, name: &str) -> Result<Remote, String> {
 impl Remote {
     pub async fn connect(
         &self,
-    ) -> Result<(canter_tui::Connected, canter_protocol::InfoResponse), String> {
-        let client = canter_tui::client::Client::remote(&self.name, &self.url, &self.token)
-            .map_err(|error| error.to_string())?;
+    ) -> Result<(canter_tui::Connected, canter_protocol::InfoResponse), canter_tui::ConnectError>
+    {
+        let client = canter_tui::client::Client::remote(&self.name, &self.url, &self.token)?;
         let info = tokio::time::timeout(std::time::Duration::from_secs(10), client.info())
             .await
             .map_err(|_| format!("Server '{}' did not respond", self.name))?
-            .map_err(|error| format!("Cannot connect to server '{}': {error}", self.name))?;
+            .map_err(|error| {
+                let mut error = canter_tui::ConnectError::from(error);
+                error.message = format!("Cannot connect to server '{}': {error}", self.name);
+                error
+            })?;
         let client = client.with_server_version(info.server_version.clone());
         if info.protocol_version != canter_protocol::PROTOCOL_VERSION {
-            return Err(client.upgrade_hint(""));
+            return Err(canter_tui::ConnectError {
+                message: client.upgrade_hint(""),
+                retryable: false,
+            });
         }
         let warning = (info.server_version != crate::VERSION).then(|| client.upgrade_hint(""));
         Ok((

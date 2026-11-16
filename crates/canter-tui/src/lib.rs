@@ -82,8 +82,8 @@ pub use app::{ANSWER_GUARD_MS, Action, App};
 pub use export::Export;
 pub use links::LinkSystem;
 pub use run::{
-    CLIENT_NAME, Connected, Connector, FrameSync, Input, InputSender, Launch, Open, RunError,
-    SocketConnector, input, reconnect, run, run_on,
+    CLIENT_NAME, ConnectError, Connected, Connector, FrameSync, Input, InputSender, Launch, Open,
+    RunError, SocketConnector, input, reconnect, run, run_on,
 };
 
 use ratatui::Terminal;

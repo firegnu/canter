@@ -111,10 +111,8 @@ impl<C: Connector> Managed<C> {
 }
 
 impl<C: Connector> Connector for Arc<Managed<C>> {
-    async fn connect(&self) -> Result<Connected, String> {
+    async fn connect(&self) -> Result<Connected, crate::ConnectError> {
         let connected = self.connector.connect().await?;
-        self.attach(connected)
-            .await
-            .map_err(|error| error.to_string())
+        self.attach(connected).await.map_err(Into::into)
     }
 }

@@ -311,6 +311,7 @@ async fn run_inner(
     let mut denied = false;
     let mut budget_limited = false;
     let mut interrupted = false;
+    let mut reconnect_errors = std::collections::HashSet::new();
     loop {
         let event = tokio::select! {
             biased;
@@ -333,7 +334,7 @@ async fn run_inner(
                 let reconnect = async {
                     loop {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        if let Ok(connected) = canter_tui::reconnect(
+                        match canter_tui::reconnect(
                             &connector,
                             server.as_deref(),
                             id,
@@ -342,13 +343,20 @@ async fn run_inner(
                         )
                         .await
                         {
-                            break connected;
+                            Ok(connected) => break Ok(connected),
+                            Err(error) if !error.retryable => break Err(error.to_string()),
+                            Err(error) => {
+                                let reason = error.to_string();
+                                if reconnect_errors.insert(reason.clone()) {
+                                    eprintln!("Reconnect failed: {reason}");
+                                }
+                            }
                         }
                     }
                 };
                 let (connected, stream) = tokio::select! {
                     _ = &mut signal, if !interrupted => return output.finish(130, "interrupted", Some("Connection lost; could not confirm that the remote turn stopped."), None),
-                    connected = reconnect => connected,
+                    connected = reconnect => connected?,
                 };
                 client = connected.client;
                 server = connected.server;

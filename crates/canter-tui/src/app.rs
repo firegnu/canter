@@ -985,7 +985,12 @@ impl App {
         }
         let input = self.status_line_input(now_ms);
         if let Some(status_line) = &mut self.status_line {
-            status_line.update(input, &self.snapshot.settings.cwd);
+            let cwd = if self.remote {
+                "/"
+            } else {
+                &self.snapshot.settings.cwd
+            };
+            status_line.update(input, cwd);
         }
     }
 
@@ -2038,13 +2043,9 @@ impl App {
     /// a command that takes none, such as pasted lines, is refused, not
     /// dropped.
     fn run_command(&mut self, command: &Command, args: &str) -> Option<Action> {
-        if self.remote && matches!(command.name, "memory" | "diff" | "review" | "files") {
+        if self.remote && matches!(command.name, "diff" | "review" | "files") {
             self.input.clear();
-            self.information(if command.name == "memory" {
-                "Edit memory on the server machine"
-            } else {
-                "Not available on remote servers yet"
-            });
+            self.information("Not available on remote servers yet");
             return None;
         }
         // Like sending, so that what the command shows is in view.
@@ -2715,6 +2716,10 @@ impl App {
                     if action.is_some() {
                         self.report = None;
                         self.memory = None;
+                        if self.remote {
+                            self.information("Edit memory on the server machine");
+                            return Some(None);
+                        }
                     }
                     return Some(action);
                 }
@@ -4201,11 +4206,8 @@ impl App {
             self.search_from_newest();
             return;
         }
-        if self.remote {
-            let command = commands::parse(text).is_some_and(|(name, _)| {
-                commands::find(name).is_some() || self.skills.iter().any(|skill| skill.name == name)
-            });
-            if !command && crate::images::looks_like_file_drop(text) {
+        if let Some((cwd, _)) = &self.client_directory {
+            if crate::images::pasted_paths(text, cwd).is_some() {
                 self.information("Not available on remote servers yet");
             } else {
                 self.input.paste(text);

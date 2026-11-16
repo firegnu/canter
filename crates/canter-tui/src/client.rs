@@ -1129,6 +1129,11 @@ fn server_error(status: StatusCode, body: &[u8]) -> ClientError {
             code: error.code,
             message: error.message,
         },
+        Err(_) if status == StatusCode::UNAUTHORIZED => ClientError::Server {
+            status,
+            code: ErrorCode::Unauthorized,
+            message: "unauthorized".into(),
+        },
         Err(_) => ClientError::Protocol(format!("HTTP {status} without an error body")),
     }
 }

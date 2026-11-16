@@ -46,7 +46,7 @@ In another client terminal:
 canter remote add work http://127.0.0.1:8791
 ```
 
-Paste the token into standard input, press Enter, then Ctrl+D. Alternatively, redirect a private token file into this command. The token is not an argument. HTTP is allowed here because the destination is a literal loopback address and SSH encrypts the network hop. Other remote HTTP addresses are refused; HTTPS uses normal certificate verification. Redirects and environment HTTP proxies are not followed.
+At the `Paste the token, then press Enter` prompt, paste the token and press Enter. Terminal input is hidden and reads one line; Ctrl+D is not needed. Alternatively, redirect a private token file or pipe into this command as before. The token is not an argument. HTTP is allowed here because the destination is a literal loopback address and SSH encrypts the network hop. Other remote HTTP addresses are refused; HTTPS uses normal certificate verification. Redirects and environment HTTP proxies are not followed.
 
 ```sh
 canter remote list
@@ -106,10 +106,11 @@ Again, the token comes from stdin. No client-to-relay SSH tunnel is needed with 
 
 - Client environment variables are omitted for new, resumed and forked sessions. The server supplies its own session environment; commands, hooks and tools run there.
 - File links copy the server path. Web links open as usual (an SSH terminal still follows its existing copy-only behavior).
-- `/memory` says `Edit memory on the server machine`. `/export` writes on the client: relative paths use the client working directory and `~` uses the client HOME.
-- Images, file drops, `/diff`, `/review`, `/files`, and `@` file completion say `Not available on remote servers yet`. Git branch and change counts are hidden until server workspace queries are implemented.
+- `/memory` lists memories and supports deletion on the server. Selecting an entry to edit says `Edit memory on the server machine`. `/export` writes on the client: relative paths use the client working directory and `~` uses the client HOME.
+- Images, `/diff`, `/review`, `/files`, and `@` file completion say `Not available on remote servers yet`. Pasted paths are blocked only when the local image detector recognizes them as client-side images, resolving relative paths from the client working directory. Other text, including server paths and error messages, stays in the input box. Git branch and change counts are hidden until server workspace queries are implemented.
+- A configured `statusLine` script runs on the client with `/` as its working directory, outside the client project. Its JSON input still describes the server's `cwd`, with `gitBranch` set to null. Use absolute paths for scripts and resources.
 - `serve`, `upgrade`, `rollback`, `service`, `mcp`, `skills install`, token administration, and every `auth` subcommand reject `--server` with `Run this on the server machine`. Remote `--session-file` is also rejected.
 - A protocol mismatch names the server and asks you to upgrade it on that machine. Remote clients never replace or start a server locally. A failed remote `doctor` connection does not fall back to local offline diagnostics.
-- After approximately 45 seconds without stream data (three 15-second heartbeats), the connection times out. The terminal and remote `exec` reconnect using the last event sequence. `/v1/info.instance` distinguishes reconnecting to the same process from a restarted server. A client does not automatically resend a submitted message.
+- After approximately 45 seconds without stream data (three 15-second heartbeats), the connection times out. The terminal and remote `exec` reconnect using the last event sequence. `/v1/info.instance` distinguishes reconnecting to the same process from a restarted server. A client does not automatically resend a submitted message. Remote `exec` prints each distinct reconnect failure to stderr; unauthorized (HTTP 401) or incompatible-protocol failures end the command with an error instead of retrying indefinitely.
 
 These instructions are generic and do not depend on a cloud vendor. The development checks use temporary loopback servers and a fake model; an actual relay, certificate, and network trial must be checked in the deployment environment.

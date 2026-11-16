@@ -32,17 +32,56 @@ fn enter(ui: &mut Ui<TestBackend>, command: &str) -> Option<canter_tui::Action> 
 }
 
 #[test]
-fn remote_workspace_commands_and_memory_explain_the_limit_without_actions() {
-    for command in ["/diff", "/review", "/files", "/memory"] {
+fn remote_workspace_commands_explain_the_limit_without_actions() {
+    for command in ["/diff", "/review", "/files"] {
         let mut ui = screen();
         assert_eq!(enter(&mut ui, command), None, "{command}");
-        let expected = if command == "/memory" {
-            "Edit memory on the server machine"
-        } else {
-            "Not available on remote servers yet"
-        };
-        assert!(text(&mut ui).contains(expected), "{command}");
+        assert!(
+            text(&mut ui).contains("Not available on remote servers yet"),
+            "{command}"
+        );
     }
+}
+
+#[test]
+fn remote_memory_lists_and_deletes_but_does_not_open_an_editor() {
+    use canter_protocol::{MemoryDeleteParams, MemoryEntry, MemoryListResponse, MemoryScope};
+    use canter_tui::Action;
+    let mut ui = screen();
+    assert_eq!(enter(&mut ui, "/memory"), Some(Action::Memory));
+    let list = || MemoryListResponse {
+        data: vec![MemoryEntry {
+            scope: MemoryScope::Project,
+            file: "convention.md".into(),
+            name: "Project convention".into(),
+            description: "Keep the existing style.".into(),
+            path: "/server/project/memory/convention.md".into(),
+        }],
+    };
+    ui.app_mut().show_memories(Ok(list()));
+    assert!(text(&mut ui).contains("Keep the existing style."));
+    assert_eq!(
+        ui.app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 0),
+        None
+    );
+    assert!(text(&mut ui).contains("Edit memory on the server machine"));
+    ui.app_mut().show_memories(Ok(list()));
+    text(&mut ui);
+    assert_eq!(
+        ui.app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE), 0),
+        None
+    );
+    assert!(text(&mut ui).contains("Delete memory"));
+    assert_eq!(
+        ui.app_mut()
+            .handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), 0),
+        Some(Action::DeleteMemory(MemoryDeleteParams {
+            scope: MemoryScope::Project,
+            file: "convention.md".into()
+        }))
+    );
 }
 
 #[test]
@@ -93,14 +132,23 @@ fn remote_exports_resolve_relative_paths_and_tilde_on_the_client() {
 }
 
 #[test]
-fn remote_file_drop_is_a_notice_and_ordinary_text_still_sends() {
-    for value in [
-        "'/client/a picture.png'",
-        "/client/source.rs",
-        "./source.rs",
-    ] {
-        let mut ui = screen();
-        ui.app_mut().handle_paste(value);
+fn remote_image_drop_is_a_notice_and_path_text_still_sends() {
+    let client = tempfile::tempdir().unwrap();
+    let image = client.path().join("a picture.png");
+    std::fs::write(&image, b"\x89PNG\r\n\x1a\n").unwrap();
+    for value in [format!("'{}'", image.display()), "a picture.png".into()] {
+        let mut ui = Ui::new(
+            TestBackend::new(100, 28),
+            App::new_remote(
+                SessionSnapshot::empty("test"),
+                None,
+                0,
+                client.path().to_str().unwrap().into(),
+                None,
+            ),
+        )
+        .unwrap();
+        ui.app_mut().handle_paste(&value);
         assert!(text(&mut ui).contains("Not available on remote servers yet"));
         assert_eq!(
             ui.app_mut()
@@ -108,11 +156,20 @@ fn remote_file_drop_is_a_notice_and_ordinary_text_still_sends() {
             None
         );
     }
-    let mut ui = screen();
-    assert_eq!(
-        enter(&mut ui, "Hello remote server"),
-        Some(canter_tui::Action::Send("Hello remote server".into()))
-    );
+    for value in [
+        "/srv/x.rs",
+        "./x",
+        "~/x",
+        "/srv/p/src/lib.rs:10:5: error[E0308]: mismatched types",
+        "Hello remote server",
+    ] {
+        let mut ui = screen();
+        assert_eq!(
+            enter(&mut ui, value),
+            Some(canter_tui::Action::Send(value.into()))
+        );
+        assert!(!text(&mut ui).contains("Not available on remote servers yet"));
+    }
 }
 
 #[test]
@@ -277,4 +334,52 @@ fn remote_pasting_commands_with_paths_and_multiline_source_preserves_text() {
         enter(&mut ui, code),
         Some(canter_tui::Action::Send(code.into()))
     );
+}
+
+#[tokio::test]
+async fn remote_statusline_runs_outside_client_repositories_with_server_context() {
+    let client = tempfile::tempdir().unwrap();
+    std::fs::create_dir(client.path().join(".git")).unwrap();
+    std::fs::write(
+        client.path().join(".git/HEAD"),
+        "ref: refs/heads/client-only\n",
+    )
+    .unwrap();
+    let mut snapshot = SessionSnapshot::empty("test");
+    let server_cwd = client
+        .path()
+        .join("absent-server-project")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    snapshot.settings.cwd = server_cwd.clone();
+    let home = client.path().to_str().unwrap().to_owned();
+    let app = App::new_remote(snapshot, None, 0, home.clone(), Some(home.clone()))
+        .with_status_line(
+            Some("printf '%s\\n' \"$PWD\" > \"$HOME/pwd\"; /bin/cat > \"$HOME/input.json\"; printf 'remote status ok\\n'".into()),
+            [("HOME".into(), home.clone()), ("CANTER_HOME".into(), home)].into(),
+        );
+    let mut ui = Ui::new(TestBackend::new(100, 28), app).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let shown = text(&mut ui);
+            assert!(!shown.contains("statusline error"), "{shown}");
+            if shown.contains("remote status ok") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("remote status script should finish");
+    assert_eq!(
+        std::fs::read_to_string(client.path().join("pwd"))
+            .unwrap()
+            .trim(),
+        "/"
+    );
+    let input: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(client.path().join("input.json")).unwrap()).unwrap();
+    assert_eq!(input["cwd"], server_cwd);
+    assert!(input["gitBranch"].is_null());
 }

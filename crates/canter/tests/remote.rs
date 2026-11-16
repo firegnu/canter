@@ -578,6 +578,80 @@ async fn client_remotes_store_stdin_token_privately_and_list_without_secrets() {
 }
 
 #[tokio::test]
+async fn remote_add_prompts_on_a_terminal_reads_one_line_without_echo_and_restores_it() {
+    use nix::sys::termios::{LocalFlags, tcgetattr};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+    for token in ["test-only-terminal-token", "invalid token", "interrupt"] {
+        let root = fixture();
+        let terminal = nix::pty::openpty(None, None).unwrap();
+        let original = tcgetattr(&terminal.slave).unwrap();
+        assert!(original.local_flags.contains(LocalFlags::ECHO));
+        let mut child = Command::new(env!("CARGO_BIN_EXE_canter"))
+            .args(["remote", "add", "example", "https://example.com"])
+            .env_clear()
+            .env("HOME", root.path().join("home"))
+            .env("CANTER_HOME", root.path().join("state"))
+            .stdin(terminal.slave.try_clone().unwrap())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut stderr = BufReader::new(child.stderr.take().unwrap());
+        let mut prompt = String::new();
+        tokio::time::timeout(Duration::from_secs(3), stderr.read_line(&mut prompt))
+            .await
+            .expect("terminal token input must prompt before waiting")
+            .unwrap();
+        assert_eq!(prompt.trim(), "Paste the token, then press Enter");
+        assert!(
+            !tcgetattr(&terminal.slave)
+                .unwrap()
+                .local_flags
+                .intersects(LocalFlags::ECHO | LocalFlags::ECHONL)
+        );
+        if token == "interrupt" {
+            nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(child.id().unwrap() as i32),
+                nix::sys::signal::Signal::SIGINT,
+            )
+            .unwrap();
+        } else {
+            nix::unistd::write(&terminal.master, format!("{token}\n").as_bytes()).unwrap();
+        }
+        let output = tokio::time::timeout(Duration::from_secs(3), child.wait_with_output())
+            .await
+            .expect("Enter must complete token input without EOF")
+            .unwrap();
+        let mut errors = String::new();
+        stderr.read_to_string(&mut errors).await.unwrap();
+        assert_eq!(output.status.success(), token == "test-only-terminal-token");
+        if token != "interrupt" {
+            assert!(!errors.contains(token));
+        }
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(token));
+        assert_eq!(tcgetattr(&terminal.slave).unwrap(), original);
+        nix::fcntl::fcntl(
+            &terminal.master,
+            nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+        )
+        .unwrap();
+        let mut echoed = [0; 256];
+        assert!(
+            matches!(
+                nix::unistd::read(&terminal.master, &mut echoed),
+                Err(nix::errno::Errno::EAGAIN)
+            ),
+            "terminal must not echo the token"
+        );
+        if output.status.success() {
+            let stored = canter::remotes::read(&root.path().join("state")).unwrap();
+            assert_eq!(stored[0].token, token);
+        }
+    }
+}
+
+#[tokio::test]
 async fn token_update_refuses_an_oversized_save_without_replacing_the_readable_store() {
     let root = fixture();
     let records = (0..7_000).map(|index| json!({
@@ -1041,9 +1115,37 @@ async fn remote_tui_launch_uses_server_identity_home_and_optional_directory_filt
 
 #[tokio::test]
 async fn remote_exec_reconnects_after_proxy_drops_sse_and_replays_from_cursor() {
+    exec_after_stream_drop(None).await;
+}
+
+#[tokio::test]
+async fn remote_exec_reports_repeated_reconnect_failures_once_then_recovers() {
+    exec_after_stream_drop(Some(ReconnectFailure::Temporary)).await;
+}
+
+#[tokio::test]
+async fn remote_exec_exits_when_reconnect_is_unauthorized() {
+    exec_after_stream_drop(Some(ReconnectFailure::Unauthorized)).await;
+    exec_after_stream_drop(Some(ReconnectFailure::UnauthorizedWithoutBody)).await;
+}
+
+#[tokio::test]
+async fn remote_exec_exits_when_reconnect_protocol_is_incompatible() {
+    exec_after_stream_drop(Some(ReconnectFailure::Protocol)).await;
+}
+
+#[derive(Clone, Copy)]
+enum ReconnectFailure {
+    Temporary,
+    Unauthorized,
+    UnauthorizedWithoutBody,
+    Protocol,
+}
+
+async fn exec_after_stream_drop(failure: Option<ReconnectFailure>) {
     use std::sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let model_url = format!("http://{}/v1", listener.local_addr().unwrap());
@@ -1059,6 +1161,9 @@ async fn remote_exec_reconnects_after_proxy_drops_sse_and_replays_from_cursor() 
     let backend = server.url("");
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
     let dropped = Arc::new(AtomicBool::new(false));
+    let retries = Arc::new(AtomicUsize::new(0));
+    let inputs = Arc::new(AtomicUsize::new(0));
+    let sent_inputs = inputs.clone();
     let cursors = Arc::new(Mutex::new(Vec::new()));
     let observed = cursors.clone();
     let router = axum::Router::new().fallback(move |request: axum::extract::Request| {
@@ -1066,7 +1171,27 @@ async fn remote_exec_reconnects_after_proxy_drops_sse_and_replays_from_cursor() 
         let http = http.clone();
         let dropped = dropped.clone();
         let observed = observed.clone();
+        let retries = retries.clone();
+        let inputs = inputs.clone();
         async move {
+            if request.uri().path().ends_with("/input") {
+                inputs.fetch_add(1, Ordering::SeqCst);
+            }
+            if request.uri().path() == "/v1/info" && dropped.load(Ordering::SeqCst) {
+                let attempt = retries.fetch_add(1, Ordering::SeqCst);
+                let reply = match failure {
+                    Some(ReconnectFailure::Temporary) if attempt < 2 => Some((503, json!({"code":"internal", "message":"temporary relay failure"}))),
+                    Some(ReconnectFailure::Unauthorized) => Some((401, json!({"code":"unauthorized", "message":"unauthorized"}))),
+                    Some(ReconnectFailure::UnauthorizedWithoutBody) => Some((401, Value::Null)),
+                    Some(ReconnectFailure::Protocol) => Some((200, json!({"serverVersion":"test-incompatible", "protocolVersion":999, "instance":"changed", "sessions":[]}))),
+                    _ => None,
+                };
+                if let Some((status, body)) = reply {
+                    return axum::http::Response::builder().status(status)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(if body.is_null() { String::new() } else { body.to_string() })).unwrap();
+                }
+            }
             let is_events = request.uri().path() == "/v1/events";
             if is_events {
                 observed
@@ -1124,15 +1249,56 @@ async fn remote_exec_reconnects_after_proxy_drops_sse_and_replays_from_cursor() 
     )
     .await
     .unwrap();
-    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        sent_inputs.load(Ordering::SeqCst),
+        1,
+        "never resend the user input"
+    );
+    let fatal = matches!(
+        failure,
+        Some(
+            ReconnectFailure::Unauthorized
+                | ReconnectFailure::UnauthorizedWithoutBody
+                | ReconnectFailure::Protocol
+        )
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(if fatal { 1 } else { 0 }),
+        "{output:?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    match failure {
+        Some(ReconnectFailure::Temporary) => assert_eq!(
+            stderr.matches("temporary relay failure").count(),
+            1,
+            "{stderr}"
+        ),
+        Some(ReconnectFailure::Unauthorized | ReconnectFailure::UnauthorizedWithoutBody) => {
+            assert!(stderr.contains("unauthorized"), "{stderr}")
+        }
+        Some(ReconnectFailure::Protocol) => assert!(
+            stderr.contains(
+                "Server 'example' runs canter test-incompatible; upgrade it on that machine"
+            ),
+            "{stderr}"
+        ),
+        None => {}
+    }
     let values: Vec<Value> = String::from_utf8(output.stdout)
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(values.last().unwrap()["outcome"], "completed");
+    assert_eq!(
+        values.last().unwrap()["outcome"],
+        if fatal { "error" } else { "completed" }
+    );
     let queries = cursors.lock().unwrap().clone();
-    assert!(queries.len() >= 2, "must resubscribe: {queries:?}");
+    if !fatal {
+        assert!(queries.len() >= 2, "must resubscribe: {queries:?}");
+        assert!(queries[1].contains("after="));
+    }
     let events: Vec<u64> = values
         .iter()
         .filter_map(|event| event["seq"].as_u64())
@@ -1141,7 +1307,6 @@ async fn remote_exec_reconnects_after_proxy_drops_sse_and_replays_from_cursor() 
         events.windows(2).all(|pair| pair[0] < pair[1]),
         "replayed events must not be duplicated"
     );
-    assert!(queries[1].contains("after="));
     proxy.abort();
     let _ = proxy.await;
     server.stop().await;
