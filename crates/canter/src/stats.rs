@@ -39,13 +39,11 @@ pub fn parse(words: &[String]) -> Result<Args, String> {
 
 pub async fn run(args: Args, context: crate::Context) -> Result<(), String> {
     use std::io::Write;
-    let connection = canter_server::ensure_server(&context.state_dir, &context.executable)
-        .await
-        .map_err(|error| error.to_string())?;
-    if let Some(warning) = &connection.version_warning {
+    let connection = context.connect().await?;
+    if let Some(warning) = &connection.warning {
         eprintln!("{warning}");
     }
-    let client = crate::connected(connection)?.client;
+    let client = connection.client;
     if args.selector.is_none() && !args.last {
         let list = client
             .stats_list(args.all)

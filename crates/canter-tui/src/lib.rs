@@ -83,7 +83,7 @@ pub use export::Export;
 pub use links::LinkSystem;
 pub use run::{
     CLIENT_NAME, Connected, Connector, FrameSync, Input, InputSender, Launch, Open, RunError,
-    SocketConnector, input, run, run_on,
+    SocketConnector, input, reconnect, run, run_on,
 };
 
 use ratatui::Terminal;

@@ -35,7 +35,7 @@ pub enum Pick {
 
 pub struct Picker {
     sessions: Vec<SessionSummary>,
-    cwd: String,
+    cwd: Option<String>,
     home: Option<String>,
     /// Every directory, not just `cwd`.
     all: bool,
@@ -60,9 +60,9 @@ impl Picker {
         sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
         Self {
             sessions,
-            cwd,
+            all: cwd.is_empty(),
+            cwd: (!cwd.is_empty()).then_some(cwd),
             home,
-            all: false,
             selected: 0,
             confirm: None,
             error: None,
@@ -151,7 +151,7 @@ impl Picker {
             KeyCode::Up => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down => self.selected = (self.selected + 1).min(shown.saturating_sub(1)),
             KeyCode::Tab => {
-                self.all = !self.all;
+                self.all = self.cwd.is_none() || !self.all;
                 self.selected = 0;
             }
             KeyCode::Enter => {
@@ -196,7 +196,7 @@ impl Picker {
     pub(crate) fn search_params(&self) -> Option<SessionSearchParams> {
         self.search.as_ref().map(|search| SessionSearchParams {
             query: search.query.text().to_owned(),
-            cwd: (!search.all).then(|| self.cwd.clone()),
+            cwd: (!search.all).then(|| self.cwd.clone()).flatten(),
         })
     }
 
@@ -228,7 +228,7 @@ impl Picker {
     fn shown(&self) -> Vec<&SessionSummary> {
         self.sessions
             .iter()
-            .filter(|session| self.all || session.cwd == self.cwd)
+            .filter(|session| self.all || self.cwd.as_ref().is_none_or(|cwd| session.cwd == *cwd))
             .collect()
     }
 
@@ -610,5 +610,29 @@ mod tests {
             "{rows:#?}"
         );
         assert_eq!(directory(&rows[1]), format!("{:<24}session b", "~/canter"));
+    }
+}
+
+#[cfg(test)]
+mod remote_tests {
+    use super::*;
+    #[test]
+    fn no_remote_directory_shows_and_searches_every_directory() {
+        let sessions = ["/server/a", "/server/b"]
+            .map(|cwd| SessionSummary {
+                id: cwd.into(),
+                name: None,
+                cwd: cwd.into(),
+                updated_at: 0,
+                last_event_seq: 0,
+                agent_status: None,
+                parent: None,
+                status: SessionStatus::Idle,
+            })
+            .to_vec();
+        let mut picker = Picker::new(sessions, String::new(), None);
+        assert_eq!(picker.first().as_deref(), Some("/server/a"));
+        picker.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        assert_eq!(picker.search_params().unwrap().cwd, None);
     }
 }

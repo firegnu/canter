@@ -25,6 +25,33 @@ use serde::de::DeserializeOwned;
 /// The host is ignored on a unix socket; it only makes the URL valid.
 const ORIGIN: &str = "http://canter/";
 
+/// Only HTTPS or literal loopback HTTP may carry a remote credential.
+/// Credentials and query strings belong in neither the URL nor diagnostics.
+pub fn remote_url(value: &str) -> Result<Url, ClientError> {
+    let invalid = || {
+        ClientError::Protocol("Use an HTTPS server URL, or HTTP with a loopback IP address; tokens must not travel over unencrypted remote HTTP".into())
+    };
+    let url = Url::parse(value).map_err(|_| invalid())?;
+    let loopback = url
+        .host_str()
+        .and_then(|host| {
+            host.trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .ok()
+        })
+        .is_some_and(|ip| ip.is_loopback());
+    if (url.scheme() != "https" && !(url.scheme() == "http" && loopback))
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid());
+    }
+    Ok(url)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
     #[error("request failed: {0}")]
@@ -51,11 +78,78 @@ impl ClientError {
 #[derive(Debug, Clone)]
 pub struct Client {
     http: reqwest::Client,
+    origin: Url,
+    remote: Option<(String, String)>,
+    pub remote_cwd: Option<String>,
     sandbox_disabled: bool,
     pub(crate) managed_id: Option<String>,
 }
 
 impl Client {
+    /// A TCP client uses one fixed origin, never follows redirects, and never
+    /// sends its sensitive Authorization header through a system proxy.
+    pub fn remote(name: &str, address: &str, token: &str) -> Result<Self, ClientError> {
+        let origin = remote_url(address)?;
+        let mut authorization = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| ClientError::Protocol("invalid remote token".into()))?;
+        authorization.set_sensitive(true);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::AUTHORIZATION, authorization);
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .default_headers(headers)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            // Server heartbeats arrive every 15s, even without session events.
+            .read_timeout(std::time::Duration::from_secs(45))
+            .build()?;
+        Ok(Self {
+            http,
+            origin,
+            remote: Some((name.into(), "unknown".into())),
+            remote_cwd: None,
+            sandbox_disabled: false,
+            managed_id: None,
+        })
+    }
+
+    pub fn is_remote(&self) -> bool {
+        self.remote.is_some()
+    }
+
+    pub fn with_server_version(mut self, version: String) -> Self {
+        if let Some((_, current)) = &mut self.remote {
+            *current = version;
+        }
+        self
+    }
+
+    pub fn upgrade_hint(&self, local: &str) -> String {
+        match &self.remote {
+            Some((name, version)) => {
+                format!("Server '{name}' runs canter {version}; upgrade it on that machine")
+            }
+            None => local.into(),
+        }
+    }
+
+    /// Each route segment is encoded independently, preserving a proxy prefix.
+    fn url(&self, route: &str, values: &[&str]) -> Url {
+        let mut url = self.origin.clone();
+        let mut values = values.iter();
+        url.path_segments_mut()
+            .expect("HTTP URL")
+            .pop_if_empty()
+            .extend(route.trim_start_matches('/').split('/').map(|part| {
+                if part.starts_with('{') {
+                    values.next().copied().unwrap_or(part)
+                } else {
+                    part
+                }
+            }));
+        url
+    }
+
     pub async fn memories(
         &self,
         session: &str,
@@ -68,13 +162,13 @@ impl Client {
             .iter()
             .any(|feature| feature == "memory")
         {
-            return Err(ClientError::Protocol(
-                "This server does not support /memory; run canter serve --replace and retry".into(),
-            ));
+            return Err(ClientError::Protocol(self.upgrade_hint(
+                "This server does not support /memory; run canter serve --replace and retry",
+            )));
         }
         decode(
             self.http
-                .get(url(routes::MEMORIES, &[session]))
+                .get(self.url(routes::MEMORIES, &[session]))
                 .send()
                 .await?,
         )
@@ -88,7 +182,7 @@ impl Client {
     ) -> Result<(), ClientError> {
         let response = self
             .http
-            .post(url(routes::MEMORY_DELETE, &[session]))
+            .post(self.url(routes::MEMORY_DELETE, &[session]))
             .json(params)
             .send()
             .await?;
@@ -104,7 +198,7 @@ impl Client {
         &self,
         cwd: &str,
     ) -> Result<canter_protocol::FolderTrustResponse, ClientError> {
-        let mut endpoint = url(routes::FOLDER_TRUST, &[]);
+        let mut endpoint = self.url(routes::FOLDER_TRUST, &[]);
         endpoint.query_pairs_mut().append_pair("cwd", cwd);
         decode(self.http.get(endpoint).send().await?).await
     }
@@ -115,7 +209,7 @@ impl Client {
     ) -> Result<canter_protocol::FolderTrustResponse, ClientError> {
         decode(
             self.http
-                .post(url(routes::FOLDER_TRUST, &[]))
+                .post(self.url(routes::FOLDER_TRUST, &[]))
                 .json(&canter_protocol::FolderTrustParams { cwd: cwd.into() })
                 .send()
                 .await?,
@@ -129,13 +223,13 @@ impl Client {
         command: &crate::GoalCommand,
     ) -> Result<canter_protocol::GoalResponse, ClientError> {
         use crate::GoalCommand;
-        let endpoint = url(routes::GOAL, &[session]);
+        let endpoint = self.url(routes::GOAL, &[session]);
         let request = match command {
             GoalCommand::Read => self.http.get(endpoint),
             GoalCommand::Set(params) => self.http.post(endpoint).json(params),
             GoalCommand::Clear => self.http.delete(endpoint),
-            GoalCommand::Pause => self.http.post(url(routes::GOAL_PAUSE, &[session])),
-            GoalCommand::Resume => self.http.post(url(routes::GOAL_RESUME, &[session])),
+            GoalCommand::Pause => self.http.post(self.url(routes::GOAL_PAUSE, &[session])),
+            GoalCommand::Resume => self.http.post(self.url(routes::GOAL_RESUME, &[session])),
         };
         decode(request.send().await?).await
     }
@@ -145,7 +239,7 @@ impl Client {
     ) -> Result<canter_protocol::BackgroundCommandListResponse, ClientError> {
         decode(
             self.http
-                .get(url(routes::BACKGROUND_COMMANDS, &[session]))
+                .get(self.url(routes::BACKGROUND_COMMANDS, &[session]))
                 .send()
                 .await?,
         )
@@ -158,7 +252,7 @@ impl Client {
     ) -> Result<canter_protocol::AgentListResponse, ClientError> {
         decode(
             self.http
-                .get(url(routes::SESSION_AGENTS, &[session]))
+                .get(self.url(routes::SESSION_AGENTS, &[session]))
                 .send()
                 .await?,
         )
@@ -172,7 +266,7 @@ impl Client {
     ) -> Result<canter_protocol::AgentSummary, ClientError> {
         decode(
             self.http
-                .post(url(routes::SESSION_AGENT_STOP, &[session, agent]))
+                .post(self.url(routes::SESSION_AGENT_STOP, &[session, agent]))
                 .send()
                 .await?,
         )
@@ -185,7 +279,7 @@ impl Client {
     ) -> Result<canter_protocol::BackgroundCommandOutput, ClientError> {
         decode(
             self.http
-                .get(url(routes::BACKGROUND_OUTPUT, &[session, &id.to_string()]))
+                .get(self.url(routes::BACKGROUND_OUTPUT, &[session, &id.to_string()]))
                 .send()
                 .await?,
         )
@@ -197,8 +291,8 @@ impl Client {
         id: Option<u64>,
     ) -> Result<canter_protocol::BackgroundCommandListResponse, ClientError> {
         let endpoint = match id {
-            Some(id) => url(routes::BACKGROUND_STOP, &[session, &id.to_string()]),
-            None => url(routes::BACKGROUND_STOP_ALL, &[session]),
+            Some(id) => self.url(routes::BACKGROUND_STOP, &[session, &id.to_string()]),
+            None => self.url(routes::BACKGROUND_STOP_ALL, &[session]),
         };
         decode(self.http.post(endpoint).send().await?).await
     }
@@ -208,7 +302,7 @@ impl Client {
     ) -> Result<canter_protocol::LanguageServerListResponse, ClientError> {
         decode(
             self.http
-                .get(url(routes::LANGUAGE_SERVERS, &[session]))
+                .get(self.url(routes::LANGUAGE_SERVERS, &[session]))
                 .send()
                 .await?,
         )
@@ -228,7 +322,7 @@ impl Client {
         };
         decode(
             self.http
-                .post(url(route, &[session, server]))
+                .post(self.url(route, &[session, server]))
                 .send()
                 .await?,
         )
@@ -241,7 +335,7 @@ impl Client {
     ) -> Result<canter_protocol::ShellBackgroundResponse, ClientError> {
         decode(
             self.http
-                .post(url(routes::SHELL_BACKGROUND, &[session]))
+                .post(self.url(routes::SHELL_BACKGROUND, &[session]))
                 .json(&canter_protocol::ShellBackgroundParams { item_id })
                 .send()
                 .await?,
@@ -249,7 +343,7 @@ impl Client {
         .await
     }
     pub async fn info(&self) -> Result<canter_protocol::InfoResponse, ClientError> {
-        decode(self.http.get(url(routes::INFO, &[])).send().await?).await
+        decode(self.http.get(self.url(routes::INFO, &[])).send().await?).await
     }
 
     pub async fn doctor(
@@ -264,11 +358,11 @@ impl Client {
             .iter()
             .any(|feature| feature == "doctor")
         {
-            return Err(ClientError::Protocol(
-                "This server is too old for /doctor; run canter serve --replace and retry".into(),
-            ));
+            return Err(ClientError::Protocol(self.upgrade_hint(
+                "This server is too old for /doctor; run canter serve --replace and retry",
+            )));
         }
-        let mut endpoint = url(routes::DOCTOR, &[]);
+        let mut endpoint = self.url(routes::DOCTOR, &[]);
         endpoint
             .query_pairs_mut()
             .append_pair("clientVersion", client_version)
@@ -276,7 +370,20 @@ impl Client {
                 "clientProtocolVersion",
                 &canter_protocol::PROTOCOL_VERSION.to_string(),
             );
-        decode(self.http.get(endpoint).send().await?).await
+        let mut report: canter_protocol::DoctorResponse =
+            decode(self.http.get(endpoint).send().await?).await?;
+        if self.is_remote() {
+            for check in &mut report.data {
+                if check
+                    .fix
+                    .as_ref()
+                    .is_some_and(|fix| fix.contains("canter serve --replace"))
+                {
+                    check.fix = Some(self.upgrade_hint(""));
+                }
+            }
+        }
+        Ok(report)
     }
 
     pub async fn trash_session(&self, session: &str) -> Result<(), ClientError> {
@@ -288,11 +395,11 @@ impl Client {
             .iter()
             .any(|feature| feature == "sessionTrash")
         {
-            return Err(ClientError::Protocol("This server does not support deleting sessions; run canter serve --replace and retry".into()));
+            return Err(ClientError::Protocol(self.upgrade_hint("This server does not support deleting sessions; run canter serve --replace and retry")));
         }
         let response = self
             .http
-            .post(url(routes::SESSION_TRASH, &[session]))
+            .post(self.url(routes::SESSION_TRASH, &[session]))
             .send()
             .await?;
         let status = response.status();
@@ -335,7 +442,7 @@ impl Client {
     ) -> Result<BtwStream, ClientError> {
         let response = self
             .http
-            .post(url(route, &[session]))
+            .post(self.url(route, &[session]))
             .json(params)
             .header(ACCEPT, "text/event-stream")
             .send()
@@ -351,7 +458,7 @@ impl Client {
     }
 
     pub async fn mcp(&self) -> Result<canter_protocol::McpListResponse, ClientError> {
-        decode(self.http.get(url(routes::MCP, &[])).send().await?).await
+        decode(self.http.get(self.url(routes::MCP, &[])).send().await?).await
     }
 
     pub async fn command_rules(
@@ -359,7 +466,7 @@ impl Client {
     ) -> Result<canter_protocol::CommandRuleListResponse, ClientError> {
         decode(
             self.http
-                .get(url(routes::COMMAND_RULES, &[]))
+                .get(self.url(routes::COMMAND_RULES, &[]))
                 .send()
                 .await?,
         )
@@ -372,7 +479,7 @@ impl Client {
     ) -> Result<canter_protocol::CommandRuleDeleteResponse, ClientError> {
         decode(
             self.http
-                .post(url(routes::COMMAND_RULE_DELETE, &[]))
+                .post(self.url(routes::COMMAND_RULE_DELETE, &[]))
                 .json(rule)
                 .send()
                 .await?,
@@ -386,7 +493,7 @@ impl Client {
     ) -> Result<canter_protocol::CommandRuleDeleteResponse, ClientError> {
         decode(
             self.http
-                .post(url(routes::FILE_RULE_DELETE, &[]))
+                .post(self.url(routes::FILE_RULE_DELETE, &[]))
                 .json(rule)
                 .send()
                 .await?,
@@ -400,7 +507,7 @@ impl Client {
     ) -> Result<canter_protocol::ContextResponse, ClientError> {
         decode(
             self.http
-                .get(url(routes::CONTEXT, &[session]))
+                .get(self.url(routes::CONTEXT, &[session]))
                 .send()
                 .await?,
         )
@@ -413,7 +520,7 @@ impl Client {
     ) -> Result<canter_protocol::SessionSandboxResponse, ClientError> {
         decode(
             self.http
-                .get(url(routes::SANDBOX, &[session]))
+                .get(self.url(routes::SANDBOX, &[session]))
                 .send()
                 .await?,
         )
@@ -433,11 +540,11 @@ impl Client {
             .iter()
             .any(|feature| feature == "sessionSandboxSwitch")
         {
-            return Err(ClientError::Protocol("This server does not support /sandbox on|off; run canter serve --replace and retry".into()));
+            return Err(ClientError::Protocol(self.upgrade_hint("This server does not support /sandbox on|off; run canter serve --replace and retry")));
         }
         decode(
             self.http
-                .post(url(routes::SANDBOX, &[session]))
+                .post(self.url(routes::SANDBOX, &[session]))
                 .json(&canter_protocol::SessionSandboxParams {
                     enabled,
                     confirmed: !enabled,
@@ -453,8 +560,8 @@ impl Client {
         session: Option<&str>,
     ) -> Result<canter_protocol::UsageResponse, ClientError> {
         let endpoint = match session {
-            Some(id) => url(routes::SESSION_USAGE, &[id]),
-            None => url(routes::USAGE, &[]),
+            Some(id) => self.url(routes::SESSION_USAGE, &[id]),
+            None => self.url(routes::USAGE, &[]),
         };
         decode(self.http.get(endpoint).send().await?).await
     }
@@ -470,9 +577,9 @@ impl Client {
         {
             Ok(())
         } else {
-            Err(ClientError::Protocol(
-                "this server does not support stats; run canter serve --replace".into(),
-            ))
+            Err(ClientError::Protocol(self.upgrade_hint(
+                "this server does not support stats; run canter serve --replace",
+            )))
         }
     }
 
@@ -481,7 +588,7 @@ impl Client {
         all: bool,
     ) -> Result<canter_protocol::StatsListResponse, ClientError> {
         self.require_stats().await?;
-        let mut endpoint = url(routes::STATS, &[]);
+        let mut endpoint = self.url(routes::STATS, &[]);
         endpoint
             .query_pairs_mut()
             .append_pair("all", if all { "true" } else { "false" });
@@ -495,7 +602,7 @@ impl Client {
         self.require_stats().await?;
         decode(
             self.http
-                .get(url(routes::SESSION_STATS, &[session]))
+                .get(self.url(routes::SESSION_STATS, &[session]))
                 .send()
                 .await?,
         )
@@ -507,7 +614,11 @@ impl Client {
         &self,
         session: &str,
     ) -> Result<canter_protocol::AgentRoleListResponse, ClientError> {
-        let response = self.http.get(url(routes::ROLES, &[session])).send().await?;
+        let response = self
+            .http
+            .get(self.url(routes::ROLES, &[session]))
+            .send()
+            .await?;
         decode(response).await
     }
 
@@ -518,7 +629,7 @@ impl Client {
     ) -> Result<Vec<canter_protocol::Skill>, ClientError> {
         let response = self
             .http
-            .get(url(routes::SKILLS, &[session]))
+            .get(self.url(routes::SKILLS, &[session]))
             .send()
             .await?;
         Ok(decode::<canter_protocol::SkillListResponse>(response)
@@ -528,7 +639,7 @@ impl Client {
 
     /// GET /v1/models: the server's configured and account model catalogs.
     pub async fn list_models(&self) -> Result<canter_protocol::ModelListResponse, ClientError> {
-        let response = self.http.get(url(routes::MODELS, &[])).send().await?;
+        let response = self.http.get(self.url(routes::MODELS, &[])).send().await?;
         decode::<canter_protocol::ModelListResponse>(response).await
     }
 
@@ -539,6 +650,9 @@ impl Client {
             .build()?;
         Ok(Self {
             http,
+            origin: Url::parse(ORIGIN).expect("static origin"),
+            remote: None,
+            remote_cwd: None,
             sandbox_disabled: false,
             managed_id: None,
         })
@@ -561,7 +675,7 @@ impl Client {
                 .any(|feature| feature == "sessionSandbox")
         {
             return Err(ClientError::Protocol(
-                "This server does not support --yolo without a sandbox; run canter serve --replace and retry".into(),
+                self.upgrade_hint("This server does not support --yolo without a sandbox; run canter serve --replace and retry"),
             ));
         }
         Ok(())
@@ -586,7 +700,7 @@ impl Client {
     pub(crate) async fn managed_connect(&self, id: &str) -> Result<reqwest::Response, ClientError> {
         let response = self
             .http
-            .get(url(routes::MANAGED_CLIENT, &[id]))
+            .get(self.url(routes::MANAGED_CLIENT, &[id]))
             .send()
             .await?;
         let status = response.status();
@@ -599,7 +713,7 @@ impl Client {
 
     pub(crate) async fn managed_close(&self, id: &str) -> Result<(), ClientError> {
         self.http
-            .delete(url(routes::MANAGED_CLIENT, &[id]))
+            .delete(self.url(routes::MANAGED_CLIENT, &[id]))
             .send()
             .await?
             .error_for_status()?;
@@ -608,7 +722,11 @@ impl Client {
 
     /// GET /v1/sessions: every session, most recently updated first.
     pub async fn list_sessions(&self) -> Result<Vec<SessionSummary>, ClientError> {
-        let response = self.http.get(url(routes::SESSIONS, &[])).send().await?;
+        let response = self
+            .http
+            .get(self.url(routes::SESSIONS, &[]))
+            .send()
+            .await?;
         Ok(decode::<SessionListResponse>(response).await?.data)
     }
 
@@ -625,11 +743,11 @@ impl Client {
             .iter()
             .any(|feature| feature == "sessionSearch")
         {
-            return Err(ClientError::Protocol(
-                "This server does not support session search; run canter upgrade and retry".into(),
-            ));
+            return Err(ClientError::Protocol(self.upgrade_hint(
+                "This server does not support session search; run canter upgrade and retry",
+            )));
         }
-        let mut target = url(routes::SESSION_SEARCH, &[]);
+        let mut target = self.url(routes::SESSION_SEARCH, &[]);
         target.query_pairs_mut().append_pair("query", &params.query);
         if let Some(cwd) = &params.cwd {
             target.query_pairs_mut().append_pair("cwd", cwd);
@@ -645,10 +763,13 @@ impl Client {
     ) -> Result<SessionCreateResponse, ClientError> {
         let mut params = params.clone();
         params.sandbox_disabled |= self.sandbox_disabled;
+        if self.is_remote() {
+            params.env = None;
+        }
         self.require_session_sandbox(params.sandbox_disabled)
             .await?;
         let response = self
-            .opening_request(self.http.post(url(routes::SESSIONS, &[])))
+            .opening_request(self.http.post(self.url(routes::SESSIONS, &[])))
             .json(&params)
             .send()
             .await?;
@@ -659,7 +780,7 @@ impl Client {
     pub async fn read_session(&self, session: &str) -> Result<SessionReadResponse, ClientError> {
         let response = self
             .http
-            .get(url(routes::SESSION, &[session]))
+            .get(self.url(routes::SESSION, &[session]))
             .send()
             .await?;
         decode(response).await
@@ -683,13 +804,13 @@ impl Client {
     ) -> Result<SessionResumeResponse, ClientError> {
         let params = SessionResumeParams {
             sandbox_disabled: self.sandbox_disabled,
-            env: Some(env.clone()),
+            env: (!self.is_remote()).then(|| env.clone()),
             restricted_mode,
         };
         self.require_session_sandbox(params.sandbox_disabled)
             .await?;
         let response = self
-            .opening_request(self.http.post(url(routes::RESUME, &[session])))
+            .opening_request(self.http.post(self.url(routes::RESUME, &[session])))
             .json(&params)
             .send()
             .await?;
@@ -704,10 +825,13 @@ impl Client {
     ) -> Result<canter_protocol::SessionCreateResponse, ClientError> {
         let mut params = params.clone();
         params.sandbox_disabled |= self.sandbox_disabled;
+        if self.is_remote() {
+            params.env = None;
+        }
         self.require_session_sandbox(params.sandbox_disabled)
             .await?;
         let response = self
-            .opening_request(self.http.post(url(routes::SESSION_FORK, &[session])))
+            .opening_request(self.http.post(self.url(routes::SESSION_FORK, &[session])))
             .json(&params)
             .send()
             .await?;
@@ -722,7 +846,7 @@ impl Client {
     ) -> Result<SessionUpdateResponse, ClientError> {
         let response = self
             .http
-            .patch(url(routes::SESSION, &[session]))
+            .patch(self.url(routes::SESSION, &[session]))
             .json(params)
             .send()
             .await?;
@@ -737,7 +861,7 @@ impl Client {
     ) -> Result<SessionInputResponse, ClientError> {
         let response = self
             .http
-            .post(url(routes::INPUT, &[session]))
+            .post(self.url(routes::INPUT, &[session]))
             .json(params)
             .send()
             .await?;
@@ -751,7 +875,7 @@ impl Client {
     ) -> Result<SessionShellCommandResponse, ClientError> {
         let response = self
             .http
-            .post(url(routes::SHELL_COMMAND, &[session]))
+            .post(self.url(routes::SHELL_COMMAND, &[session]))
             .json(params)
             .send()
             .await?;
@@ -772,7 +896,7 @@ impl Client {
         };
         let response = self
             .http
-            .post(url(routes::INTERRUPT, &[session]))
+            .post(self.url(routes::INTERRUPT, &[session]))
             .json(&params)
             .send()
             .await?;
@@ -785,7 +909,7 @@ impl Client {
     pub async fn compact(&self, session: &str) -> Result<SessionCompactResponse, ClientError> {
         let response = self
             .http
-            .post(url(routes::COMPACT, &[session]))
+            .post(self.url(routes::COMPACT, &[session]))
             .json(&SessionCompactParams::default())
             .send()
             .await?;
@@ -798,7 +922,7 @@ impl Client {
     ) -> Result<canter_protocol::RewindListResponse, ClientError> {
         decode(
             self.http
-                .get(url(routes::REWIND, &[session]))
+                .get(self.url(routes::REWIND, &[session]))
                 .send()
                 .await?,
         )
@@ -812,7 +936,7 @@ impl Client {
     ) -> Result<canter_protocol::RewindPreviewResponse, ClientError> {
         decode(
             self.http
-                .post(url(routes::REWIND_PREVIEW, &[session]))
+                .post(self.url(routes::REWIND_PREVIEW, &[session]))
                 .json(params)
                 .send()
                 .await?,
@@ -827,7 +951,7 @@ impl Client {
     ) -> Result<canter_protocol::SessionRewindResponse, ClientError> {
         decode(
             self.http
-                .post(url(routes::REWIND, &[session]))
+                .post(self.url(routes::REWIND, &[session]))
                 .json(params)
                 .send()
                 .await?,
@@ -845,7 +969,7 @@ impl Client {
     ) -> Result<RequestResolveResponse, ClientError> {
         let response = self
             .http
-            .post(url(routes::REQUEST, &[session, request]))
+            .post(self.url(routes::REQUEST, &[session, request]))
             .json(params)
             .send()
             .await?;
@@ -854,7 +978,7 @@ impl Client {
 
     /// GET /v1/events: the session's events with a sequence greater than `after`.
     pub async fn subscribe(&self, session: &str, after: u64) -> Result<EventStream, ClientError> {
-        let mut url = url(routes::EVENTS, &[]);
+        let mut url = self.url(routes::EVENTS, &[]);
         url.query_pairs_mut()
             .append_pair("session", session)
             .append_pair("after", &after.to_string());
@@ -986,24 +1110,6 @@ impl SseParser {
             }
         }
     }
-}
-
-/// Fills a route's `{…}` segments with `values` in order; each value is
-/// percent-encoded as a path segment.
-fn url(route: &str, values: &[&str]) -> Url {
-    let mut url = Url::parse(ORIGIN).expect("static origin parses");
-    let mut values = values.iter();
-    url.path_segments_mut()
-        .expect("http URLs have a path")
-        .clear()
-        .extend(route.trim_start_matches('/').split('/').map(|part| {
-            if part.starts_with('{') {
-                values.next().copied().unwrap_or(part)
-            } else {
-                part
-            }
-        }));
-    url
 }
 
 async fn decode<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, ClientError> {

@@ -15,6 +15,15 @@ pub fn parse(words: &[String]) -> Result<Args, String> {
         match word.as_str() {
             "--" => prompt.extend(words.by_ref().cloned()),
             "--json" => args.json = true,
+            "--cwd" => {
+                args.chat.cwd = Some(
+                    words
+                        .next()
+                        .filter(|path| !path.starts_with('-'))
+                        .ok_or("--cwd needs a path")?
+                        .clone(),
+                )
+            }
             "--yolo" => args.chat.yolo = true,
             "--resume" => {
                 args.chat.resume = Some(Some(
@@ -129,6 +138,7 @@ async fn run_inner(
     context: crate::Context,
     output: &mut Output,
 ) -> Result<u8, String> {
+    let cwd = context.session_cwd(&args)?;
     let mut prompt = args.first.filter(|text| text != "-").unwrap_or_default();
     if prompt.is_empty() || !std::io::stdin().is_terminal() {
         eprintln!("Reading additional input from stdin...");
@@ -159,15 +169,22 @@ async fn run_inner(
         }
     };
     tokio::pin!(signal);
-    let connection = canter_server::ensure_server(&context.state_dir, &context.executable)
-        .await
-        .map_err(|error| error.to_string())?;
-    if let Some(warning) = &connection.version_warning {
+    let connection = context.connect().await?;
+    if let Some(warning) = &connection.warning {
         eprintln!("{warning}");
     }
-    let client = crate::connected(connection)?
-        .client
-        .with_sandbox_disabled(args.yolo);
+    let mut server = connection.server;
+    let mut client = connection.client.with_sandbox_disabled(args.yolo);
+    let connector = crate::ServerConnector {
+        state_dir: context.state_dir.clone(),
+        sandbox_disabled: args.yolo,
+        remote: context
+            .server
+            .as_deref()
+            .map(|name| crate::remotes::find(&context.state_dir, name))
+            .transpose()?,
+        remote_cwd: args.cwd.clone(),
+    };
     let features = client
         .info()
         .await
@@ -178,21 +195,15 @@ async fn run_inner(
         .iter()
         .any(|feature| feature == "nonInteractiveInput")
     {
-        return Err(
-            "This server does not support exec; run canter serve --replace and retry".into(),
-        );
+        return Err(client.upgrade_hint(
+            "This server does not support exec; run canter serve --replace and retry",
+        ));
     }
     if !features.iter().any(|feature| feature == "folderTrust") {
-        return Err(
-            "This server does not support folder trust; run canter serve --replace and retry"
-                .into(),
-        );
+        return Err(client.upgrade_hint(
+            "This server does not support folder trust; run canter serve --replace and retry",
+        ));
     }
-    let cwd = context
-        .cwd
-        .to_str()
-        .ok_or("the current directory's path is not UTF-8")?
-        .to_owned();
     let resume = if args.continue_latest {
         Some(
             client
@@ -200,7 +211,7 @@ async fn run_inner(
                 .await
                 .map_err(|error| error.to_string())?
                 .into_iter()
-                .find(|session| session.cwd == cwd)
+                .find(|session| cwd.is_empty() || session.cwd == cwd)
                 .ok_or("no session found in the current directory")?
                 .id,
         )
@@ -242,7 +253,7 @@ async fn run_inner(
                 tags: args.tags,
                 additional_directories: args.additional_directories,
                 cwd,
-                env: Some(context.env),
+                env: Some(context.env.clone()),
                 model: args.model.unwrap_or_default(),
                 reasoning_effort: None,
                 approval_policy: PermissionMode::AlwaysAsk,
@@ -313,9 +324,40 @@ async fn run_inner(
                 }
                 continue;
             }
-            event = events.next() => event.ok_or("server event stream ended before the turn completed")?,
+            event = events.next() => event,
         };
-        let event = event.map_err(|error| error.to_string())?;
+        let event = match event {
+            Some(Ok(event)) => event,
+            _ if client.is_remote() => {
+                eprintln!("Connection lost; reconnecting...");
+                let reconnect = async {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        if let Ok(connected) = canter_tui::reconnect(
+                            &connector,
+                            server.as_deref(),
+                            id,
+                            &context.env,
+                            events.last_seq(),
+                        )
+                        .await
+                        {
+                            break connected;
+                        }
+                    }
+                };
+                let (connected, stream) = tokio::select! {
+                    _ = &mut signal, if !interrupted => return output.finish(130, "interrupted", Some("Connection lost; could not confirm that the remote turn stopped."), None),
+                    connected = reconnect => connected,
+                };
+                client = connected.client;
+                server = connected.server;
+                events = stream;
+                continue;
+            }
+            Some(Err(error)) => return Err(error.to_string()),
+            None => return Err("server event stream ended before the turn completed".into()),
+        };
         progress(&event.payload);
         if let EventPayload::SessionGoalUpdated { goal: Some(goal) } = &event.payload
             && goal.status == GoalStatus::BudgetLimited

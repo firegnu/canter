@@ -107,6 +107,21 @@ fn read_clipboard(_path: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
+/// Recognizes pasted paths without inspecting the client's filesystem.
+pub(crate) fn looks_like_file_drop(text: &str) -> bool {
+    let text = text.trim().trim_start_matches(['\'', '"']);
+    if text.contains(['\r', '\n']) || text.starts_with("//") {
+        return false;
+    }
+    text.starts_with("file://")
+        || text.starts_with("~/")
+        || text.starts_with("./")
+        || text.starts_with("../")
+        || text
+            .strip_prefix('/')
+            .is_some_and(|path| path.contains('/') || path.contains('.'))
+}
+
 /// Shell words as pasted by Finder/terminals for one or several dropped
 /// files, in order; `None` unless there are words and every one is an image.
 /// No expansion or execution.

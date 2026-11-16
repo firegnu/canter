@@ -18,11 +18,18 @@ struct Server {
 
 impl Server {
     async fn start(remote: Option<Value>) -> Self {
+        Self::configured(remote, None).await
+    }
+
+    async fn configured(remote: Option<Value>, model_url: Option<String>) -> Self {
         let root = fixture();
         let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = reserved.local_addr().unwrap();
         let mut config = json!({"__test_session_environment":true, "base_url":format!("http://{address}"),
             "model":"fake", "context_window":1048576, "api_key":"test-only", "sandbox":false});
+        if let Some(url) = model_url {
+            config["base_url"] = json!(url);
+        }
         if let Some(remote) = remote {
             config["remote"] = if remote == json!(true) {
                 json!({"listen":[address.to_string()]})
@@ -519,6 +526,58 @@ fn check<'a>(report: &'a Value, id: &str) -> &'a Value {
 }
 
 #[tokio::test]
+async fn client_remotes_store_stdin_token_privately_and_list_without_secrets() {
+    use tokio::io::AsyncWriteExt;
+    let root = fixture();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_canter"))
+        .args(["remote", "add", "example", "https://example.com"])
+        .env_clear()
+        .env("HOME", root.path().join("home"))
+        .env("CANTER_HOME", root.path().join("state"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"test-only-remote-secret\n")
+        .await
+        .unwrap();
+    let output = child.wait_with_output().await.unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let path = root.path().join("state/remotes.json");
+    let records: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(records[0]["name"], "example");
+    assert_eq!(records[0]["token"], "test-only-remote-secret");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let listed = cli(root.path(), &["remote", "list"]).await;
+    assert!(listed.status.success());
+    let shown = String::from_utf8(listed.stdout).unwrap();
+    assert!(shown.contains("example") && shown.contains("https://example.com"));
+    assert!(!shown.contains("test-only-remote-secret"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("test-only-remote-secret"));
+    assert!(
+        cli(root.path(), &["remote", "remove", "example"])
+            .await
+            .status
+            .success()
+    );
+    assert_eq!(fs::read_to_string(path).unwrap().trim(), "[]");
+    assert!(!root.path().join("state/server.sock").exists());
+}
+
+#[tokio::test]
 async fn token_update_refuses_an_oversized_save_without_replacing_the_readable_store() {
     let root = fixture();
     let records = (0..7_000).map(|index| json!({
@@ -770,5 +829,554 @@ async fn replacement_reuses_tcp_port_with_existing_sse_and_stalled_http_body() {
     assert!(!server.log().contains("TCP disabled:"));
     drop(stalled);
     drop(stalled_unix);
+    server.stop().await;
+}
+
+#[test]
+fn server_selection_accepts_clients_and_refuses_machine_management() {
+    for args in [
+        vec!["--server", "example", "--cwd", "/work"],
+        vec!["exec", "--server", "example", "--cwd", "/work", "hello"],
+        vec!["usage", "--server", "example"],
+        vec!["stats", "--server", "example"],
+        vec!["doctor", "--server", "example"],
+        vec!["--server", "example", "--resume"],
+    ] {
+        assert!(
+            canter::parse(args.iter().map(Into::into)).is_ok(),
+            "{args:?}"
+        );
+    }
+    for command in [
+        vec!["serve"],
+        vec!["serve", "--replace"],
+        vec!["upgrade"],
+        vec!["rollback"],
+        vec!["service", "install"],
+        vec!["mcp", "list"],
+        vec!["skills", "install"],
+        vec!["remote", "token", "list"],
+        vec!["auth", "login", "chatgpt"],
+        vec!["auth", "status"],
+        vec!["auth", "use", "chatgpt", "1"],
+        vec!["auth", "background", "chatgpt", "off"],
+        vec!["auth", "logout", "chatgpt"],
+    ] {
+        let mut args = command.clone();
+        args.extend(["--server", "example"]);
+        assert_eq!(
+            canter::parse(args.iter().map(Into::into)).unwrap_err(),
+            "Run this on the server machine",
+            "{command:?}"
+        );
+    }
+    assert!(
+        canter::parse(
+            ["--server", "example", "--session-file", "/tmp/session.json"].map(Into::into)
+        )
+        .unwrap_err()
+        .contains("--session-file")
+    );
+}
+
+#[tokio::test]
+async fn server_rejects_relative_session_directory() {
+    let server = Server::start(None).await;
+    let response = server.local.post("http://localhost/v1/sessions")
+        .json(&json!({"cwd":".", "model":"fake", "approvalPolicy":"alwaysAsk", "clientName":"test", "env":{}, "restrictedMode":true}))
+        .send().await.unwrap();
+    assert_eq!(response.status(), 400);
+    assert!(
+        response.json::<Value>().await.unwrap()["message"]
+            .as_str()
+            .unwrap()
+            .contains("absolute")
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn named_clients_connect_to_tcp_without_starting_a_local_server() {
+    let server = Server::start(Some(json!(true))).await;
+    let root = fixture();
+    canter::remotes::add(
+        &root.path().join("state"),
+        "example".into(),
+        server.url(""),
+        server.token("client").await.as_bytes(),
+    )
+    .unwrap();
+    for args in [vec!["usage"], vec!["stats", "--json"], vec!["doctor"]] {
+        let mut args = args;
+        args.extend(["--server", "example"]);
+        let output = cli(root.path(), &args).await;
+        let errors = String::from_utf8_lossy(&output.stderr);
+        assert!(!errors.contains("server did not start"), "{errors}");
+        if args[0] != "doctor" {
+            assert!(output.status.success(), "{errors}");
+        } else {
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("TCP listener"),
+                "{output:?}"
+            );
+        }
+        assert!(!root.path().join("state/server.log").exists());
+        assert!(!root.path().join("state/server.sock").exists());
+    }
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn remote_exec_creates_a_text_session_and_continues_without_a_cwd_filter() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = axum::Router::new().route("/v1/chat/completions", axum::routing::post(|| async {
+        let reply = json!({"choices":[{"index":0,"delta":{"content":"Hello from the test server."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}});
+        ([("content-type", "text/event-stream")], format!("data: {reply}\n\ndata: [DONE]\n\n"))
+    }));
+    let model = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let server = Server::configured(Some(json!(true)), Some(format!("http://{address}/v1"))).await;
+    let root = fixture();
+    canter::remotes::add(
+        &root.path().join("state"),
+        "example".into(),
+        server.url(""),
+        server.token("client").await.as_bytes(),
+    )
+    .unwrap();
+    let missing = cli(root.path(), &["exec", "--server", "example", "hello"]).await;
+    assert!(!missing.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("--cwd"),
+        "{missing:?}"
+    );
+    let cwd = server.root.path().to_str().unwrap();
+    let first = cli(
+        root.path(),
+        &["exec", "--server", "example", "--cwd", cwd, "hello"],
+    )
+    .await;
+    assert!(first.status.success(), "{first:?}");
+    assert!(String::from_utf8_lossy(&first.stdout).contains("Hello from the test server."));
+    let second = cli(
+        root.path(),
+        &["exec", "--server", "example", "--last", "again"],
+    )
+    .await;
+    assert!(second.status.success(), "{second:?}");
+    let sessions: Value = server
+        .local
+        .get("http://localhost/v1/sessions")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(sessions["data"].as_array().unwrap().len(), 1);
+    assert_eq!(sessions["data"][0]["cwd"], cwd);
+    assert!(!root.path().join("state/server.log").exists());
+    server.stop().await;
+    model.abort();
+    let _ = model.await;
+}
+
+#[tokio::test]
+async fn remote_tui_launch_uses_server_identity_home_and_optional_directory_filter() {
+    let server = Server::start(Some(json!(true))).await;
+    let root = fixture();
+    canter::remotes::add(
+        &root.path().join("state"),
+        "example".into(),
+        server.url(""),
+        server.token("client").await.as_bytes(),
+    )
+    .unwrap();
+    let info: Value = server
+        .local
+        .get("http://localhost/v1/info")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let context = || canter::Context {
+        server: Some("example".into()),
+        state_dir: root.path().join("state"),
+        executable: "/not-used".into(),
+        cwd: root.path().to_owned(),
+        env: [("HOME".into(), "/client/home".into())].into(),
+        client_name: "test".into(),
+    };
+    for cwd in [None, Some("/server/project".into())] {
+        let launch = canter::prepare(
+            canter::ChatArgs {
+                resume: Some(None),
+                cwd: cwd.clone(),
+                ..Default::default()
+            },
+            context(),
+        )
+        .await
+        .unwrap();
+        assert!(launch.connected.client.is_remote());
+        assert_eq!(
+            launch.connected.server.as_deref(),
+            info["instance"].as_str()
+        );
+        assert_eq!(launch.home.as_deref(), info["home"].as_str());
+        assert_eq!(launch.connected.client.remote_cwd, cwd);
+    }
+    let error = canter::prepare(canter::ChatArgs::default(), context())
+        .await
+        .err()
+        .unwrap();
+    assert!(error.contains("--cwd"));
+    assert!(!root.path().join("state/server.log").exists());
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn remote_exec_reconnects_after_proxy_drops_sse_and_replays_from_cursor() {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let model_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let model = tokio::spawn(async move {
+        axum::serve(listener, axum::Router::new().route("/v1/chat/completions", axum::routing::post(|| async {
+        let reply = json!({"choices":[{"index":0,"delta":{"content":"Reconnected reply."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}});
+        ([("content-type", "text/event-stream")], format!("data: {reply}\n\ndata: [DONE]\n\n"))
+    }))).await.unwrap();
+    });
+    let server = Server::configured(Some(json!(true)), Some(model_url)).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_url = format!("http://{}", listener.local_addr().unwrap());
+    let backend = server.url("");
+    let http = reqwest::Client::builder().no_proxy().build().unwrap();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let cursors = Arc::new(Mutex::new(Vec::new()));
+    let observed = cursors.clone();
+    let router = axum::Router::new().fallback(move |request: axum::extract::Request| {
+        let backend = backend.clone();
+        let http = http.clone();
+        let dropped = dropped.clone();
+        let observed = observed.clone();
+        async move {
+            let is_events = request.uri().path() == "/v1/events";
+            if is_events {
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(request.uri().query().unwrap_or_default().to_owned());
+            }
+            let cut = is_events && !dropped.swap(true, Ordering::SeqCst);
+            let (parts, body) = request.into_parts();
+            let body = axum::body::to_bytes(body, 2 * 1024 * 1024).await.unwrap();
+            let response = http
+                .request(parts.method, format!("{backend}{}", parts.uri))
+                .headers(parts.headers)
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            let content_type = response.headers().get("content-type").cloned().unwrap();
+            let stream = response
+                .bytes_stream()
+                .take(if cut { 1 } else { usize::MAX });
+            axum::http::Response::builder()
+                .status(status)
+                .header("content-type", content_type)
+                .body(axum::body::Body::from_stream(stream))
+                .unwrap()
+        }
+    });
+    let proxy = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let root = fixture();
+    canter::remotes::add(
+        &root.path().join("state"),
+        "example".into(),
+        proxy_url,
+        server.token("client").await.as_bytes(),
+    )
+    .unwrap();
+    let output = tokio::time::timeout(
+        Duration::from_secs(20),
+        cli(
+            root.path(),
+            &[
+                "exec",
+                "--server",
+                "example",
+                "--cwd",
+                server.root.path().to_str().unwrap(),
+                "--json",
+                "hello",
+            ],
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let values: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(values.last().unwrap()["outcome"], "completed");
+    let queries = cursors.lock().unwrap().clone();
+    assert!(queries.len() >= 2, "must resubscribe: {queries:?}");
+    let events: Vec<u64> = values
+        .iter()
+        .filter_map(|event| event["seq"].as_u64())
+        .collect();
+    assert!(
+        events.windows(2).all(|pair| pair[0] < pair[1]),
+        "replayed events must not be duplicated"
+    );
+    assert!(queries[1].contains("after="));
+    proxy.abort();
+    let _ = proxy.await;
+    server.stop().await;
+    model.abort();
+    let _ = model.await;
+}
+
+#[tokio::test]
+async fn remote_protocol_mismatch_stops_before_commands_and_names_the_server() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let called = Arc::new(AtomicUsize::new(0));
+    let observed = called.clone();
+    let router = axum::Router::new().route("/v1/info", axum::routing::get(|| async {
+        axum::Json(json!({"serverVersion":"test-old", "protocolVersion":999, "instance":"test-instance", "sessions":[]}))
+    })).fallback(move || { observed.fetch_add(1, Ordering::SeqCst); async { axum::http::StatusCode::NOT_FOUND } });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let root = fixture();
+    canter::remotes::add(
+        &root.path().join("state"),
+        "example".into(),
+        url,
+        b"test-token".as_slice(),
+    )
+    .unwrap();
+    for args in [
+        vec!["usage"],
+        vec!["stats"],
+        vec!["doctor"],
+        vec!["exec", "--cwd", "/server/project", "hello"],
+    ] {
+        let mut args = args;
+        args.extend(["--server", "example"]);
+        let output = cli(root.path(), &args).await;
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("Server 'example' runs canter test-old; upgrade it on that machine"),
+            "{error}"
+        );
+        assert!(!error.contains("serve --replace"));
+    }
+    assert_eq!(called.load(Ordering::SeqCst), 0);
+    assert!(!root.path().join("state/server.log").exists());
+    task.abort();
+    let _ = task.await;
+}
+
+#[test]
+fn remote_store_refuses_unsafe_urls_duplicate_names_and_nonprivate_files() {
+    let root = fixture();
+    let state = root.path().join("state");
+    assert!(
+        canter::remotes::add(
+            &state,
+            "example".into(),
+            "http://203.0.113.10".into(),
+            b"test-secret".as_slice()
+        )
+        .is_err()
+    );
+    assert!(!state.join("remotes.json").exists());
+    canter::remotes::add(
+        &state,
+        "example".into(),
+        "https://example.com".into(),
+        b"test-secret".as_slice(),
+    )
+    .unwrap();
+    let before = fs::read(state.join("remotes.json")).unwrap();
+    assert!(
+        canter::remotes::add(
+            &state,
+            "example".into(),
+            "https://example.com".into(),
+            b"replacement-secret".as_slice()
+        )
+        .is_err()
+    );
+    assert_eq!(fs::read(state.join("remotes.json")).unwrap(), before);
+    fs::set_permissions(
+        state.join("remotes.json"),
+        fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    assert!(canter::remotes::find(&state, "example").is_err());
+    assert!(canter::remotes::remove(&state, "example").is_err());
+    assert_eq!(fs::read(state.join("remotes.json")).unwrap(), before);
+    fs::remove_file(state.join("remotes.json")).unwrap();
+    fs::write(root.path().join("other.json"), &before).unwrap();
+    std::os::unix::fs::symlink(root.path().join("other.json"), state.join("remotes.json")).unwrap();
+    assert!(canter::remotes::find(&state, "example").is_err());
+    assert_eq!(fs::read(root.path().join("other.json")).unwrap(), before);
+}
+
+#[tokio::test]
+async fn remote_reconnect_uses_info_instance_and_preserves_explicitly_closed_sessions() {
+    let mut server = Server::start(Some(json!(true))).await;
+    let root = fixture();
+    canter::remotes::add(
+        &root.path().join("state"),
+        "example".into(),
+        server.url(""),
+        server.token("client").await.as_bytes(),
+    )
+    .unwrap();
+    let id = server.create().await;
+    let context = canter::Context {
+        server: Some("example".into()),
+        state_dir: root.path().join("state"),
+        executable: "/not-used".into(),
+        cwd: root.path().to_owned(),
+        env: [("HOME".into(), "/client/home".into())].into(),
+        client_name: "test".into(),
+    };
+    let launch = canter::prepare(
+        canter::ChatArgs {
+            resume: Some(Some(id.clone())),
+            ..Default::default()
+        },
+        context,
+    )
+    .await
+    .unwrap();
+    let old_instance = launch.connected.server.clone();
+    let response = server
+        .local
+        .delete(format!("http://localhost/v1/sessions/{id}"))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let (same, stream) = canter_tui::reconnect(
+        &launch.connector,
+        old_instance.as_deref(),
+        &id,
+        &launch.env,
+        0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(same.server, old_instance);
+    assert_eq!(
+        same.client.read_session(&id).await.unwrap().session.status,
+        canter_protocol::SessionStatus::Closed
+    );
+    drop(stream);
+    let active = server.create().await;
+    let cursor = same
+        .client
+        .read_session(&active)
+        .await
+        .unwrap()
+        .session
+        .last_event_seq;
+    let replacement = Server::spawn(server.root.path(), true);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(15), server.child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+    server.child = replacement;
+    server.ready().await;
+    let (new, stream) = canter_tui::reconnect(
+        &launch.connector,
+        old_instance.as_deref(),
+        &active,
+        &launch.env,
+        cursor,
+    )
+    .await
+    .unwrap();
+    assert_ne!(new.server, old_instance);
+    assert_eq!(
+        new.client
+            .read_session(&active)
+            .await
+            .unwrap()
+            .session
+            .status,
+        canter_protocol::SessionStatus::Idle
+    );
+    drop(stream);
+    let (new, stream) = canter_tui::reconnect(
+        &launch.connector,
+        old_instance.as_deref(),
+        &id,
+        &launch.env,
+        0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        new.client.read_session(&id).await.unwrap().session.status,
+        canter_protocol::SessionStatus::Closed
+    );
+    drop(stream);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn remote_doctor_version_fix_points_to_the_server_machine() {
+    let server = Server::start(Some(json!(true))).await;
+    let remote = canter::remotes::Remote {
+        name: "example".into(),
+        url: server.url(""),
+        token: server.token("client").await,
+    };
+    let (connected, _) = remote.connect().await.unwrap();
+    let report = connected.client.doctor("test-old-client").await.unwrap();
+    let version = report
+        .data
+        .iter()
+        .find(|check| check.id == "version")
+        .unwrap();
+    assert!(
+        version
+            .fix
+            .as_deref()
+            .unwrap()
+            .contains("upgrade it on that machine")
+    );
+    assert!(
+        !serde_json::to_string(&report)
+            .unwrap()
+            .contains("serve --replace")
+    );
     server.stop().await;
 }

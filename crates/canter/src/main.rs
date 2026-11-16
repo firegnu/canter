@@ -35,7 +35,18 @@ fn main() -> ExitCode {
 }
 
 async fn run(arguments: Vec<std::ffi::OsString>, parsed: Result<Command, String>) -> ExitCode {
+    let (parsed, server) = match parsed {
+        Ok(Command::WithServer { name, command }) => (Ok(*command), Some(name)),
+        other => (other, None),
+    };
+    let context = || {
+        Context::current().map(|mut context| {
+            context.server = server.clone();
+            context
+        })
+    };
     let result = match parsed {
+        Ok(Command::WithServer { .. }) => unreachable!(),
         Ok(Command::Serve {
             replace: true,
             foreground: false,
@@ -43,7 +54,10 @@ async fn run(arguments: Vec<std::ffi::OsString>, parsed: Result<Command, String>
         Ok(Command::Serve { replace, .. }) => canter_server::serve(replace, canter::VERSION)
             .await
             .map_err(|error| error.to_string()),
-        Ok(Command::Chat(args)) => chat(args).await,
+        Ok(Command::Chat(args)) => match context() {
+            Ok(context) => chat(args, context).await,
+            Err(error) => Err(error),
+        },
         Ok(Command::Service(command)) => {
             canter::service::run(command).map(|output| print!("{output}"))
         }
@@ -52,7 +66,7 @@ async fn run(arguments: Vec<std::ffi::OsString>, parsed: Result<Command, String>
             .map(|output| print!("{output}"))
             .map_err(|error| error.to_string()),
         Ok(Command::Exec(args)) => {
-            let result = match Context::current() {
+            let result = match context() {
                 Ok(context) => canter::exec::run(args, context).await,
                 Err(error) => canter::exec::startup_error(args.json, &error),
             };
@@ -74,13 +88,13 @@ async fn run(arguments: Vec<std::ffi::OsString>, parsed: Result<Command, String>
             Ok(home) => canter::remote::run(command, &home).map(|output| print!("{output}")),
             Err(error) => Err(error.to_string()),
         },
-        Ok(Command::Usage) => match Context::current() {
+        Ok(Command::Usage) => match context() {
             Ok(context) => canter::usage(context)
                 .await
                 .map(|report| print!("{report}")),
             Err(error) => Err(error),
         },
-        Ok(Command::Doctor) => match Context::current() {
+        Ok(Command::Doctor) => match context() {
             Ok(context) => {
                 return match canter::doctor::run(context).await {
                     Ok(code) => ExitCode::from(code),
@@ -92,11 +106,11 @@ async fn run(arguments: Vec<std::ffi::OsString>, parsed: Result<Command, String>
             }
             Err(error) => Err(error),
         },
-        Ok(Command::Stats(args)) => match Context::current() {
+        Ok(Command::Stats(args)) => match context() {
             Ok(context) => canter::stats::run(args, context).await,
             Err(error) => Err(error),
         },
-        Ok(Command::Auth(command)) => match Context::current() {
+        Ok(Command::Auth(command)) => match context() {
             Ok(context) => canter::auth::run(command, context).await,
             Err(error) => Err(error),
         },
@@ -149,14 +163,19 @@ async fn replace() -> Result<(), String> {
     Ok(())
 }
 
-async fn chat(args: ChatArgs) -> Result<(), String> {
-    let launch = canter::prepare(args, Context::current()?).await?;
+async fn chat(args: ChatArgs, context: Context) -> Result<(), String> {
+    let server = context
+        .server
+        .as_ref()
+        .map(|name| format!(" --server '{}'", name.replace('\'', "'\\''")))
+        .unwrap_or_default();
+    let launch = canter::prepare(args, context).await?;
     let session = canter_tui::run(launch)
         .await
         .map_err(|error| error.to_string())?;
     if let Some(id) = session {
         // The controlling terminal may have disappeared (SIGHUP/EIO).
-        let _ = writeln!(std::io::stdout(), "To resume: canter --resume {id}");
+        let _ = writeln!(std::io::stdout(), "To resume: canter{server} --resume {id}");
     }
     Ok(())
 }

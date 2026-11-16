@@ -902,6 +902,7 @@ impl World {
     /// write out, to see which terminal's environment a command ran with.
     fn context(&self, client_name: &str, cwd: &Path) -> Context {
         Context {
+            server: None,
             state_dir: self.path("state"),
             executable: PathBuf::from(env!("CARGO_BIN_EXE_canter")),
             cwd: cwd.to_owned(),

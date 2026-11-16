@@ -64,7 +64,7 @@ impl<C: Connector> Managed<C> {
             .iter()
             .any(|feature| feature == "managedClients")
         {
-            return Err(ClientError::Protocol("This server does not support --close-on-exit; run canter serve --replace and retry".into()));
+            return Err(ClientError::Protocol(connected.client.upgrade_hint("This server does not support --close-on-exit; run canter serve --replace and retry")));
         }
         let mut response = connected.client.managed_connect(&self.id).await?;
         let disconnected = self.disconnected.clone();
