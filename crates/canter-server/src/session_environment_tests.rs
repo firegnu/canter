@@ -44,6 +44,20 @@ async fn interactive_rc_path_is_included_without_startup_output() {
     assert!(!values.keys().any(|key| key.contains("startup banner")));
 }
 
+// An interactive zsh that can reach a controlling terminal is stopped by job control when
+// the server runs in a terminal's foreground. Only discriminates when the test itself has
+// a controlling terminal (for example under `script`); without one it guards nothing.
+#[tokio::test]
+async fn probe_runs_without_a_controlling_terminal() {
+    let root = tempfile::tempdir().unwrap();
+    let user = user(
+        root.path(),
+        "if (exec 3</dev/tty) 2>/dev/null; then exit 1; fi\nexec /bin/sh -c \"$2\"",
+    );
+    let environment = SessionEnvironment::discover(user, Environment::new(), PROBE_TIMEOUTS).await;
+    assert_eq!(environment.source, Source::InteractiveLogin);
+}
+
 #[tokio::test]
 async fn exited_shell_with_background_stdout_returns_environment_before_timeout() {
     let root = tempfile::tempdir().unwrap();

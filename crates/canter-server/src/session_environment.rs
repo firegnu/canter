@@ -174,7 +174,8 @@ async fn probe(
     environment: &Environment,
     deadline: Instant,
 ) -> Result<Environment, &'static str> {
-    let mut child = Command::new(shell)
+    let mut command = Command::new(shell);
+    command
         .args([
             mode,
             "printf '\\0CANTER_SESSION_ENV\\0'; exec /usr/bin/env -0",
@@ -185,8 +186,19 @@ async fn probe(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .process_group(0)
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    // A new session, not just a process group: when the server runs in a terminal's
+    // foreground, an interactive shell in a background group of that terminal is stopped
+    // by job control. setsid leaves it without a controlling terminal; the session id is
+    // still the child's pid, so ProbeGroup's killpg is unchanged.
+    unsafe {
+        command.pre_exec(|| {
+            nix::unistd::setsid()
+                .map(|_| ())
+                .map_err(std::io::Error::from)
+        });
+    }
+    let mut child = command
         .spawn()
         .map_err(|_| "login shell could not be started")?;
     let group = ProbeGroup(nix::unistd::Pid::from_raw(child.id().unwrap() as i32));
