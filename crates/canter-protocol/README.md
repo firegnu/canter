@@ -248,10 +248,18 @@ removed 是完全相同规则的删除条数，重复的一起删，不存在返
 公开事件只含名字与用户文字，旧客户端按 Unknown 跳过 skill；全文与所属轮保存在私有模型历史，
 压缩只补回仍有效的同名最近一次点用快照，回退、撤回同步移除，不在压缩时重新读文件。
 `UserInput` 支持 `{ "type": "text", "text": "这是什么" }` 和
-`{ "type": "localImage", "path": "/tmp/screenshot.png", "name": "screenshot.png" }`。
-图片沿用 Codex v2 的 localImage/path，`name` 是 canter 可选的显示文件名；不提供 detail 或网址输入。
-服务端读取整条输入、校验图片格式和 8 MiB 上限后才接收；无效图片返回 invalid_request，
-不追加消息或事件。事件里的图片 path 是会话目录内的持久副本文件名，name 保留原文件名。
+`{ "type": "image", "url": "data:image/png;base64,iVBORw0KGgo=", "name": "screenshot.png" }`。
+图片沿用 Codex v2 的 image/url，`name` 是 canter 可选的显示文件名；不提供 detail，
+只接收 base64 data URL，不抓取 HTTP 图片。声明的 MIME 必须和 JPEG/PNG/GIF/WebP 内容匹配。
+保留 `{ "type": "localImage", "path": "/tmp/screenshot.png", "name": "screenshot.png" }`，
+其中 path 明确指服务端机器上的路径，供本机外部集成使用；终端本机和远程一律交 image 内容。
+服务端读取整条输入、校验图片格式、单张 8 MiB 和原图合计 64 MiB 上限后才接收，不限张数；
+单张或合计超限分别返回说明原因的 invalid_request，不追加输入消息或事件。
+仅 POST `/v1/sessions` 和 POST `/v1/sessions/{id}/input` 的请求体上限为
+`ceil(64 MiB / 3) * 4 + 2 MiB`（91,575,640 字节），其他接口仍为原来的 2 MiB。
+终端发送前检查相同上限，并检查 `/v1/info.features` 的 `imageData`；旧服务端缺此能力时
+提示 `canter serve --replace`（远程提示在服务端机器升级），不回退提交路径。
+事件仍用 localImage，path 是会话目录内的持久副本文件名，name 保留显示文件名。
 此文件名以当前会话目录为基准解析，不能当作客户端工作目录里的本机路径重新提交。
 存盘副本不可读时以 `[image unavailable: 名字]` 替代并发送 warning；请求不会因此失败。
 纯文字输入的 JSON 不变；旧客户端用 Unknown 跳过新的图片种类。

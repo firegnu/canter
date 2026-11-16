@@ -102,7 +102,7 @@ fn prompt_rows(input: &[UserInput], source: Option<&str>, width: u16) -> Vec<Row
         .filter_map(|part| match part {
             UserInput::Skill { name } => Some(format!("Used skill `{name}`")),
             UserInput::Text { text } => Some(text.clone()),
-            UserInput::LocalImage { name, .. } => {
+            UserInput::LocalImage { name, .. } | UserInput::Image { name, .. } => {
                 image_number += 1;
                 Some(format!(
                     "[Image #{image_number} {}]",

@@ -1389,7 +1389,7 @@ impl Session {
         let loaded = if params
             .input
             .iter()
-            .any(|part| matches!(part, UserInput::LocalImage { .. }))
+            .any(|part| matches!(part, UserInput::LocalImage { .. } | UserInput::Image { .. }))
         {
             let cwd = self
                 .shared

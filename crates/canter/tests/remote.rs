@@ -26,7 +26,8 @@ impl Server {
         let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = reserved.local_addr().unwrap();
         let mut config = json!({"__test_session_environment":true, "base_url":format!("http://{address}"),
-            "model":"fake", "context_window":1048576, "api_key":"test-only", "sandbox":false});
+            "model":"fake", "context_window":1048576, "api_key":"test-only", "sandbox":false,
+            "image_models":["fake"], "prompt_suggestions":false});
         if let Some(url) = model_url {
             config["base_url"] = json!(url);
         }
@@ -1102,6 +1103,171 @@ async fn remote_exec_creates_a_text_session_and_continues_without_a_cwd_filter()
     server.stop().await;
     model.abort();
     let _ = model.await;
+}
+
+#[tokio::test]
+async fn image_data_local_and_remote_clipboard_drops_reach_model_and_export_as_before() {
+    use canter_protocol::{SessionInputParams, UserInput};
+    use canter_tui::{Action, App, Export, client::Client};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::sync::{Arc, Mutex};
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let received = requests.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = axum::Router::new().route("/v1/chat/completions", axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+        received.lock().unwrap().push(body);
+        async {
+            let reply = json!({"choices":[{"index":0,"delta":{"content":"The image arrived."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}});
+            ([("content-type", "text/event-stream")], format!("data: {reply}\n\ndata: [DONE]\n\n"))
+        }
+    }));
+    let model = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let server = Server::configured(Some(json!(true)), Some(format!("http://{address}/v1"))).await;
+    let client_root = tempfile::tempdir().unwrap();
+    let picture = client_root.path().join("client-shot.png");
+    fs::write(&picture, b"\x89PNG\r\n\x1a\n").unwrap();
+    let token = server.token("images").await;
+    for remote in [false, true] {
+        let client = if remote {
+            Client::remote("test", &server.url(""), &token).unwrap()
+        } else {
+            Client::new(&server.root.path().join("state/server.sock")).unwrap()
+        };
+        let created = client
+            .create_session(
+                &serde_json::from_value(json!({
+                    "cwd":server.root.path(),"env":{},"model":"fake","approvalPolicy":"allowAll",
+                    "clientName":"test","restrictedMode":true,
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let id = created.session.id.clone();
+        let mut snapshot = created.session;
+        for kind in ["clipboard", "one", "many"] {
+            let mut app = if remote {
+                App::new_remote(
+                    snapshot,
+                    None,
+                    0,
+                    client_root.path().to_str().unwrap().into(),
+                    None,
+                )
+            } else {
+                App::new(snapshot, None, 0)
+            }
+            .with_clipboard_reader(|path| {
+                fs::write(path, b"\x89PNG\r\n\x1a\n").unwrap();
+                Ok(true)
+            });
+            app.set_models(&[serde_json::from_value(json!({"id":"fake","model":"fake","displayName":"fake","isDefault":true,"inputModalities":["text","image"]})).unwrap()]);
+            let count = match kind {
+                "clipboard" => {
+                    app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL), 0);
+                    1
+                }
+                "one" => {
+                    app.handle_paste(picture.to_str().unwrap());
+                    1
+                }
+                _ => {
+                    app.handle_paste(&[picture.to_str().unwrap(); 12].join(" "));
+                    12
+                }
+            };
+            let Some(Action::SendImages { input, .. }) =
+                app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 0)
+            else {
+                panic!("image draft must send locally and remotely");
+            };
+            let params: SessionInputParams =
+                serde_json::from_value(json!({"input":input,"clientName":"test"})).unwrap();
+            client.send_input(&id, &params).await.unwrap();
+            snapshot = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let session = client.read_session(&id).await.unwrap().session;
+                    if session.status == canter_protocol::SessionStatus::Idle {
+                        break session;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let turn = snapshot.turns.last().unwrap();
+            assert_eq!(
+                turn.input
+                    .iter()
+                    .filter(|part| matches!(part, UserInput::LocalImage { .. }))
+                    .count(),
+                count
+            );
+            for part in &turn.input {
+                if let UserInput::LocalImage { path, .. } = part {
+                    assert!(!path.contains('/'));
+                    assert_eq!(
+                        fs::read(
+                            server
+                                .root
+                                .path()
+                                .join("state/sessions")
+                                .join(&id)
+                                .join(path)
+                        )
+                        .unwrap(),
+                        b"\x89PNG\r\n\x1a\n"
+                    );
+                }
+            }
+            let requests = requests.lock().unwrap();
+            let request = requests.last().unwrap();
+            let content = request["messages"].as_array().unwrap().last().unwrap()["content"]
+                .as_array()
+                .unwrap();
+            assert_eq!(
+                content
+                    .iter()
+                    .filter(|part| part["type"] == "image_url")
+                    .count(),
+                count
+            );
+            for part in content.iter().filter(|part| part["type"] == "image_url") {
+                assert_eq!(
+                    part["image_url"]["url"],
+                    "data:image/png;base64,iVBORw0KGgo="
+                );
+            }
+        }
+        let export = client_root.path().join(format!("{remote}.md"));
+        let mut app = App::new_remote(
+            snapshot,
+            None,
+            0,
+            client_root.path().to_str().unwrap().into(),
+            None,
+        );
+        app.export(Export::File(Some(export.to_str().unwrap().into())), 0);
+        let markdown = fs::read_to_string(export).unwrap();
+        assert!(markdown.contains("[Image: screenshot.png]"));
+        assert!(markdown.contains("[Image: client-shot.png]"));
+        assert!(!markdown.contains("data:image"));
+        let events = fs::read_to_string(
+            server
+                .root
+                .path()
+                .join("state/sessions")
+                .join(&id)
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        assert!(!events.contains("data:image"));
+        assert!(events.contains("localImage"));
+    }
+    server.stop().await;
+    model.abort();
+    assert!(model.await.unwrap_err().is_cancelled());
 }
 
 #[tokio::test]

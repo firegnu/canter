@@ -541,6 +541,10 @@ fn user_text(content: &[UserInput]) -> String {
                     None => "[Image]".to_owned(),
                 })
             }
+            UserInput::Image { name, .. } => Some(match name {
+                Some(name) => format!("[Image: {}]", one_line(name, LINE_CHARS)),
+                None => "[Image]".into(),
+            }),
             UserInput::Unknown => None,
         })
         .filter(|part| !part.is_empty())

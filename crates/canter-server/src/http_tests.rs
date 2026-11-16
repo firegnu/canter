@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[path = "session_environment_http_tests.rs"]
 mod session_environment;
 
+#[path = "image_data_tests.rs"]
+mod image_data;
+
 #[tokio::test]
 async fn account_status_lists_empty_accounts_and_rejects_unsupported_provider() {
     let test = BtwTest::new().await;

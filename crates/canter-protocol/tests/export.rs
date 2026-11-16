@@ -176,6 +176,14 @@ fn exports_schema_and_typescript_and_matches_checked_in_artifacts() {
             .all(|field| field != "inputModalities")
     );
     let input_ts = fs::read_to_string(temp.path().join("typescript/UserInput.ts")).unwrap();
+    assert!(input_ts.contains("\"type\": \"image\", url: string, name?: string"));
+    let inline = definitions["UserInput"]["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|variant| variant["properties"]["type"]["const"] == "image")
+        .unwrap();
+    assert_eq!(inline["required"], serde_json::json!(["type", "url"]));
     assert!(input_ts.contains("\"type\": \"localImage\", path: string, name?: string"));
     let image = definitions["UserInput"]["oneOf"]
         .as_array()

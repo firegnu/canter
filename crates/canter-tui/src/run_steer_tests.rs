@@ -167,6 +167,11 @@ async fn tab_with_images_steers() {
         .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL), 0);
     test.ui.draw(0).unwrap();
     test.key(KeyCode::Tab);
+    let info = test.request().await;
+    assert_eq!(info.path, "/v1/info");
+    info.json(
+        json!({"serverVersion":"test","protocolVersion":1,"sessions":[],"features":["imageData"]}),
+    );
     let request = test.request().await;
     assert_eq!(request.body["mode"], "steer");
     assert!(
@@ -174,7 +179,8 @@ async fn tab_with_images_steers() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|part| part["type"] == "localImage"),
+            .any(|part| part["type"] == "image"
+                && part["url"] == "data:image/png;base64,iVBORw0KGgo="),
         "{}",
         request.body
     );

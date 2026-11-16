@@ -457,6 +457,7 @@ version = "0.1.0"
 dependencies = [
  "async-stream",
  "axum",
+ "base64 0.23.1",
  "canter-model",
  "canter-protocol",
  "canter-store",
@@ -608,6 +609,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "axum",
+ "base64 0.23.1",
  "canter-protocol",
  "chrono",
  "crossterm",

@@ -577,6 +577,14 @@ pub enum UserInput {
     Text {
         text: String,
     },
+    /// Input only: a base64 data URL; HTTP image fetching is not supported.
+    Image {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
+    },
+    /// On input, a path on the server machine. In events, a session copy filename.
     LocalImage {
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]

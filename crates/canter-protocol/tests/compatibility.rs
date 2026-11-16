@@ -345,7 +345,7 @@ fn unknown_enum_values_inside_known_messages_are_tolerated() {
         json!({"type":"unknown"}),
     );
     unknown::<UserInput>(
-        json!({"type":"image","url":"fixture://image"}),
+        json!({"type":"futureInput","url":"fixture://image"}),
         json!({"type":"unknown"}),
     );
     let event: Event = serde_json::from_value(json!({"seq":1,"sessionId":"s1","timestamp":1,"type":"session.status","status":"waiting_answer"})).unwrap();

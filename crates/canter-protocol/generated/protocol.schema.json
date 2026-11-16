@@ -2957,6 +2957,29 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "image"
+            },
+            "url": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "description": "Input only: a base64 data URL; HTTP image fetching is not supported."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "localImage"
             },
             "path": {
@@ -2972,7 +2995,8 @@
           "required": [
             "type",
             "path"
-          ]
+          ],
+          "description": "On input, a path on the server machine. In events, a session copy filename."
         },
         {
           "type": "object",
