@@ -811,7 +811,7 @@ documented in `docs/DESIGN.md` under P2-30.
 
 - `GET /diff?untrackedContent=true` 增加 `untrackedDiff: {text, truncated}` 和 `untrackedFiles: [{path, lines, binary}]`。`path` 是相对仓库根的文件名，Git 对特殊字符的引号和转义会还原。逐文件记录按同一响应中 `untracked.text` 的完整路径行排列。服务端列表的上限是 256 KiB（`LIMIT`），`untracked.truncated` 为 true 表示 `untrackedFiles` 也不全。32 KiB（`LIST_LIMIT`）是终端和 `/review` 展示列表时各自采用的上限。
 - 新文件按从 `/dev/null` 整份新增的格式显示，省略 `index` 行。单行的块头写 `@@ -0,0 +1 @@`，多行写 `@@ -0,0 +1,N @@`。空文件只有文件头，末行缺换行会带 Git 标记，非 UTF-8 内容用替换字符显示。符号链接的内容是链接目标路径。前 8000 字节内含 NUL 的文件只显示文件头和二进制提示，记录为 `binary: true, lines: 0`。
-- `untrackedDiff.text` 单独限 256 KiB，截断时 `untrackedDiff.truncated` 为 true。每次请求合计最多读取 8 MiB 新文件内容来数行。文件读不了或剩余预算不足以数完时，逐文件的 `lines` 为 null。遇到计数超预算的文件时，diff 在已有内容及该文件的 `diff --git`、`new file mode` 两行后截断，仍受 256 KiB 上限约束。逐文件记录继续返回。读取内容和计数都计入整个 diff 请求原有的 15 秒，超时返回 `collecting changes timed out`。
+- `untrackedDiff.truncated` 只在新文件 diff 文本超出 256 KiB 或计数超出每次请求的 8 MiB 读取预算时为 true。遇到读不了的项（如 Git 列出的嵌套仓库 `nested/`），diff 跳过该项，继续输出后面的文件。该项仍列在 `untrackedFiles` 中，`lines` 为 null，`binary` 为 false。遇到剩余预算不足以数完的文件时，其 `lines` 为 null，diff 在已有内容及该文件的 `diff --git`、`new file mode` 两行后截断，仍受 256 KiB 上限约束。逐文件记录继续返回。读取内容和计数都计入整个 diff 请求原有的 15 秒，超时返回 `collecting changes timed out`。
 - `GET /summary?untrackedLines=true` 增加 `untrackedLines`。完整计数时返回整数，无新文件时为 0。计数超出 8 MiB 预算、列表截断、文件读取或 Git 失败、计数超过 2 秒时返回 null。该参数可与 `changedLines=false` 合用。
 
 `/entries` 的响应为 `text/event-stream`，每批最多 256 项：

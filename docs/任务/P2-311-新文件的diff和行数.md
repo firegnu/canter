@@ -82,3 +82,4 @@
 - 验证。先确认旧实现的两项 HTTP 验收测试因缺少新字段而失败。回归覆盖旧 JSON、worktree 子目录、普通与可执行文件、空文件、二进制、符号链接、转义路径、非 UTF-8 内容、末行缺换行、精确预算边界和截断的路径列表。三个指定包的 nextest 分别通过 canter-server 468 项（跳过 5 项）、canter-protocol 62 项、canter-tui 755 项。`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。使用临时仓库、私有 socket 和隔离的会话环境，真实模型调用 0 次。
 - 踩过的坑。实测 Git 对单行省略行数，已按主控决定固定在测试中。核对生成物时发现默认 Schema 把逐文件的 `lines` 也当成可省略，已明确生成必填且允许 null 的字段。
 - 范围。TUI 只在测试夹具补了两个 `None`，终端展示和 `/review` 输入沿用原实现。按任务范围只在本分支提交，全仓测试、交叉审查、合并和推送留给主控。没有待主控决定的问题。
+- 交叉审查后按用户决定修正并补入协议 README，新增嵌套仓库回归测试验证 diff 跳过不可读项并继续输出后续文件，只有超预算才标记截断，不可读项保留 `lines: null, binary: false`，summary 总数为 null。

@@ -213,6 +213,40 @@ async fn workspace_untracked_content_and_counts_are_opt_in() {
 }
 
 #[tokio::test]
+async fn workspace_untracked_diff_skips_unreadable_entries() {
+    let test = BtwTest::new().await;
+    let repo = test.root.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    fs::write(repo.join("a.txt"), "first\n").unwrap();
+    git(&repo, &["init", "-q", "-b", "main", "nested"]);
+    fs::write(repo.join("z.txt"), "last\n").unwrap();
+
+    let created = session(&test, &repo).await;
+    let base = format!("{}/workspace", test.url(&created.session.id));
+    let diff = get(&test, format!("{base}/diff?untrackedContent=true")).await;
+    assert_eq!(
+        diff["untrackedFiles"],
+        json!([
+            {"path":"a.txt","lines":1,"binary":false},
+            {"path":"nested/","lines":null,"binary":false},
+            {"path":"z.txt","lines":1,"binary":false}
+        ])
+    );
+    let text = diff["untrackedDiff"]["text"].as_str().unwrap();
+    assert!(text.contains("+first\n"));
+    assert!(!text.contains("nested/"));
+    assert!(text.contains("+last\n"));
+    assert_eq!(diff["untrackedDiff"]["truncated"], false);
+    let summary = get(&test, format!("{base}/summary?untrackedLines=true")).await;
+    assert_eq!(
+        summary.get("untrackedLines"),
+        Some(&serde_json::Value::Null)
+    );
+    test.finish().await;
+}
+
+#[tokio::test]
 async fn workspace_untracked_diff_and_counts_have_independent_budgets() {
     let test = BtwTest::new().await;
     let repo = test.root.path().join("repo");

@@ -85,13 +85,10 @@ pub(super) async fn collect(
                     binary: content.as_ref().is_some_and(|c| c.binary),
                     lines,
                 });
-                if !result.diff.truncated {
-                    match content {
-                        Some(content) => {
-                            render(&mut result.diff, &String::from_utf8_lossy(name), content)
-                        }
-                        None => result.diff.truncated = true,
-                    }
+                if !result.diff.truncated
+                    && let Some(content) = content
+                {
+                    render(&mut result.diff, &String::from_utf8_lossy(name), content);
                 }
             } else if result.total.is_none() {
                 break;
