@@ -83,3 +83,11 @@
 - 踩过的坑。实测 Git 对单行省略行数，已按主控决定固定在测试中。核对生成物时发现默认 Schema 把逐文件的 `lines` 也当成可省略，已明确生成必填且允许 null 的字段。
 - 范围。TUI 只在测试夹具补了两个 `None`，终端展示和 `/review` 输入沿用原实现。按任务范围只在本分支提交，全仓测试、交叉审查、合并和推送留给主控。没有待主控决定的问题。
 - 交叉审查后按用户决定修正并补入协议 README，新增嵌套仓库回归测试验证 diff 跳过不可读项并继续输出后续文件，只有超预算才标记截断，不可读项保留 `lines: null, binary: false`，summary 总数为 null。
+
+## 主控审查
+
+- canter/dev-p2-311-1（Codex，gpt-6.2-astra / xhigh）。开发中途停下问两处格式（单行块头、计数超预算时 diff 怎么截），主控定：照 git 写 `+1`；截在该文件两行头之后。
+- diff 只动了范围内的文件；`git::local`、`changed_lines` 行为不变，新逻辑在 `workspace/untracked.rs`，逐级 `openat(NOFOLLOW)` 读文件，不跟随符号链接。重跑 canter-server、canter-protocol、canter-tui 1285 过、5 跳过，和开发报告一致。
+- 交叉审查 canter/review-p2-311-1（Claude Code，opus[1m] / xhigh）：可以合并，必须改 0，建议改 1（读不了的项让 diff 整体截断，嵌套仓库 `nested/` 必中）。用户 11-20 选「合并前改掉」，开发改为跳过读不了的项（64f28ae），复核通过。
+- 合并前全套：`cargo nextest run --all-targets` 2237 过、50 跳过；`cargo test --doc --workspace` 无失败。
+- 结果：返工 1 次（交叉审查的建议改，用户决定合并前改）
