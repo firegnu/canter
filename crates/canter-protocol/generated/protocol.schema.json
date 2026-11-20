@@ -30,6 +30,15 @@
           ],
           "minItems": 2,
           "maxItems": 2
+        },
+        "untrackedLines": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Absent unless requested. An incomplete count is explicitly null."
         }
       }
     },
@@ -47,6 +56,15 @@
         },
         "untracked": {
           "$ref": "#/$defs/WorkspaceOutput"
+        },
+        "untrackedDiff": {
+          "$ref": "#/$defs/WorkspaceOutput"
+        },
+        "untrackedFiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkspaceUntrackedFile"
+          }
         }
       },
       "required": [
@@ -69,6 +87,30 @@
       "required": [
         "text",
         "truncated"
+      ]
+    },
+    "WorkspaceUntrackedFile": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "lines": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "binary": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "lines",
+        "binary"
       ]
     },
     "WorkspaceStatus": {

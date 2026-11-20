@@ -9,6 +9,20 @@ pub struct WorkspaceSummary {
     pub branch: Option<String>,
     #[ts(type = "[number, number] | null")]
     pub changed_lines: Option<(u64, u64)>,
+    /// Absent unless requested. An incomplete count is explicitly null.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "requested_lines"
+    )]
+    #[ts(optional, type = "number | null")]
+    pub untracked_lines: Option<Option<u64>>,
+}
+
+fn requested_lines<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Option<u64>>, D::Error> {
+    Option::deserialize(d).map(Some)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -18,11 +32,29 @@ pub struct WorkspaceOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceDiff {
     pub root: String,
     pub staged: WorkspaceOutput,
     pub unstaged: WorkspaceOutput,
     pub untracked: WorkspaceOutput,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "WorkspaceOutput")]
+    #[ts(optional)]
+    pub untracked_diff: Option<WorkspaceOutput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Vec<WorkspaceUntrackedFile>")]
+    #[ts(optional)]
+    pub untracked_files: Option<Vec<WorkspaceUntrackedFile>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct WorkspaceUntrackedFile {
+    pub path: String,
+    #[schemars(schema_with = "Option::<u64>::json_schema")]
+    #[ts(type = "number | null")]
+    pub lines: Option<u64>,
+    pub binary: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

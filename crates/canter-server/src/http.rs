@@ -521,6 +521,7 @@ async fn info(State(app): State<Arc<App>>) -> Result<Json<InfoResponse>, ApiErro
         home: Some(app.session_environment.home.clone()),
         features: Some(vec![
             "workspaceQueries".into(),
+            "untrackedDiff".into(),
             "imageData".into(),
             "optionalSessionEnv".into(),
             "sessionSandbox".into(),
