@@ -254,26 +254,47 @@ pub(crate) struct Local {
 /// holding `cwd`, without running programs the repository configures. An
 /// error is `<program>: <why>`, as [`run`] gives it.
 pub(crate) async fn local(cwd: &str, env: &BTreeMap<String, String>) -> Result<Local, String> {
+    Ok(local_with_list(cwd, env).await?.0)
+}
+
+pub(super) async fn root(cwd: &str, env: &BTreeMap<String, String>) -> Result<String, String> {
     let root = run(command(cwd, env).args(["rev-parse", "--show-toplevel"])).await?;
-    let root = root
+    Ok(root
         .text
         .strip_suffix('\n')
         .unwrap_or(&root.text)
-        .to_owned();
+        .to_owned())
+}
+
+pub(super) async fn untracked_list(
+    root: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<RawOutput, String> {
+    run_raw(command(root, env).args(["ls-files", "--others", "--exclude-standard"])).await
+}
+
+/// Retain the original list bytes for callers that also open the listed paths.
+pub(super) async fn local_with_list(
+    cwd: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<(Local, Vec<u8>), String> {
+    let root = root(cwd, env).await?;
     let filters = filter_overrides(&root, env)
         .await
         .map_err(|e| e.to_string())?;
     let staged = run(&mut diff(&root, env, &filters, true, false)).await?;
     let unstaged = run(&mut diff(&root, env, &filters, false, false)).await?;
-    let untracked =
-        run(command(&root, env).args(["ls-files", "--others", "--exclude-standard"])).await?;
-    Ok(Local {
-        root,
-        filters,
-        staged,
-        unstaged,
-        untracked,
-    })
+    let list = untracked_list(&root, env).await?;
+    Ok((
+        Local {
+            root,
+            filters,
+            staged,
+            unstaged,
+            untracked: list.output(),
+        },
+        list.bytes,
+    ))
 }
 
 /// `git diff` in `root` with `filters` ([`filter_overrides`]): no external
@@ -380,7 +401,21 @@ pub(crate) fn prefix(text: &str, limit: usize) -> &str {
     &text[..end]
 }
 
-async fn read_bounded(mut reader: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<Output> {
+pub(super) struct RawOutput {
+    pub bytes: Vec<u8>,
+    pub truncated: bool,
+}
+
+impl RawOutput {
+    fn output(&self) -> Output {
+        Output {
+            text: String::from_utf8_lossy(&self.bytes).into_owned(),
+            truncated: self.truncated,
+        }
+    }
+}
+
+async fn read_bounded(mut reader: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<RawOutput> {
     use tokio::io::AsyncReadExt;
     let mut bytes = Vec::new();
     let mut truncated = false;
@@ -394,15 +429,16 @@ async fn read_bounded(mut reader: impl tokio::io::AsyncRead + Unpin) -> std::io:
         bytes.extend_from_slice(&buffer[..keep]);
         truncated |= keep < count;
     }
-    Ok(Output {
-        text: String::from_utf8_lossy(&bytes).into_owned(),
-        truncated,
-    })
+    Ok(RawOutput { bytes, truncated })
 }
 
 /// Runs `command` (git or gh) to the end, keeping at most [`LIMIT`] bytes
 /// of what it prints. It failing is `<program>: <its error output>`.
 pub(crate) async fn run(command: &mut tokio::process::Command) -> Result<Output, String> {
+    Ok(run_raw(command).await?.output())
+}
+
+async fn run_raw(command: &mut tokio::process::Command) -> Result<RawOutput, String> {
     use std::process::Stdio;
     let program = command
         .as_std()
@@ -426,7 +462,10 @@ pub(crate) async fn run(command: &mut tokio::process::Command) -> Result<Output,
     .await
     .map_err(|e| format!("{program}: {e}"))?;
     if !result.2.success() {
-        return Err(format!("{program}: {}", result.1.text.trim()));
+        return Err(format!(
+            "{program}: {}",
+            String::from_utf8_lossy(&result.1.bytes).trim()
+        ));
     }
     Ok(result.0)
 }

@@ -3,6 +3,7 @@ mod git;
 mod review;
 #[cfg(test)]
 mod review_tests;
+mod untracked;
 
 // Rendering tests exercise the moved collectors through a disposable HTTP
 // fixture. Process isolation and session lookup are tested against the real server.
@@ -24,16 +25,11 @@ pub mod test_support {
             } else {
                 None
             },
+            untracked_lines: None,
         }
     }
     pub async fn diff(cwd: &str, env: &BTreeMap<String, String>) -> Result<WorkspaceDiff, String> {
-        let local = git::local(cwd, env).await?;
-        Ok(WorkspaceDiff {
-            root: local.root,
-            staged: local.staged,
-            unstaged: local.unstaged,
-            untracked: local.untracked,
-        })
+        super::collect_diff(cwd, env, false).await
     }
     pub async fn status(cwd: &str, env: &BTreeMap<String, String>) -> WorkspaceStatus {
         match git::status(cwd, env.get("HOME").map(String::as_str), env).await {
@@ -65,6 +61,7 @@ pub mod test_support {
 #[serde(rename_all = "camelCase")]
 pub(super) struct SummaryParams {
     changed_lines: Option<bool>,
+    untracked_lines: Option<bool>,
 }
 
 pub(super) async fn summary(
@@ -77,14 +74,26 @@ pub(super) async fn summary(
     let cwd = settings.cwd;
     let branch_cwd = cwd.clone();
     let branch = tokio::task::spawn_blocking(move || git::branch(&branch_cwd));
-    let changed_lines = if params.changed_lines.unwrap_or(true) {
-        git::changed_lines(&cwd, &env).await
-    } else {
-        None
-    };
+    let (changed_lines, untracked_lines) = tokio::join!(
+        async {
+            if params.changed_lines.unwrap_or(true) {
+                git::changed_lines(&cwd, &env).await
+            } else {
+                None
+            }
+        },
+        async {
+            if params.untracked_lines == Some(true) {
+                Some(untracked::lines(&cwd, &env).await)
+            } else {
+                None
+            }
+        }
+    );
     Ok(Json(WorkspaceSummary {
         branch: branch.await.map_err(|_| ApiError::internal())?,
         changed_lines,
+        untracked_lines,
     }))
 }
 
@@ -102,21 +111,49 @@ fn display_path(path: &std::path::Path, cwd: &str, home: Option<&str>) -> String
     text.into_owned()
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DiffParams {
+    untracked_content: Option<bool>,
+}
+
 pub(super) async fn diff(
     State(app): State<Arc<App>>,
     ApiPath(id): ApiPath<String>,
+    params: Result<Query<DiffParams>, QueryRejection>,
 ) -> Result<Json<WorkspaceDiff>, ApiError> {
+    let Query(params) = params.map_err(|_| ApiError::invalid())?;
     let (settings, env) = app.session(&id).await?.workspace_context().await;
-    let local = tokio::time::timeout(Duration::from_secs(15), git::local(&settings.cwd, &env))
-        .await
-        .unwrap_or_else(|_| Err("collecting changes timed out".into()))
-        .map_err(|error| ApiError::new(ErrorCode::InvalidRequest, &error))?;
-    Ok(Json(WorkspaceDiff {
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        collect_diff(&settings.cwd, &env, params.untracked_content == Some(true)),
+    )
+    .await
+    .unwrap_or_else(|_| Err("collecting changes timed out".into()))
+    .map(Json)
+    .map_err(|error| ApiError::new(ErrorCode::InvalidRequest, &error))
+}
+
+async fn collect_diff(
+    cwd: &str,
+    env: &BTreeMap<String, String>,
+    content: bool,
+) -> Result<WorkspaceDiff, String> {
+    let (local, untracked_diff, untracked_files) = if content {
+        let (local, list) = git::local_with_list(cwd, env).await?;
+        let details = untracked::collect(local.root.clone(), list, true).await?;
+        (local, Some(details.diff), Some(details.files))
+    } else {
+        (git::local(cwd, env).await?, None, None)
+    };
+    Ok(WorkspaceDiff {
         root: local.root,
         staged: local.staged,
         unstaged: local.unstaged,
         untracked: local.untracked,
-    }))
+        untracked_diff,
+        untracked_files,
+    })
 }
 
 pub(super) async fn status(

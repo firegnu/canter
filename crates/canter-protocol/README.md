@@ -799,13 +799,20 @@ documented in `docs/DESIGN.md` under P2-30.
 
 | 方法与路径（前缀 `/v1/sessions/{id}/workspace`） | 返回 |
 | --- | --- |
-| `GET /summary` | `WorkspaceSummary`：`branch`（分支或 detached HEAD 的 7 位提交名）、`changedLines`（`[added, removed]` 或 null）。可选 `changedLines=false` 只查分支，此时响应的改动数为 null，调用方保留已有计数。 |
+| `GET /summary` | `WorkspaceSummary`：`branch`（分支或 detached HEAD 的 7 位提交名）、`changedLines`（`[added, removed]` 或 null）。`changedLines=false` 跳过已跟踪文件的计数，此时该字段为 null，调用方保留已有计数。可选 `untrackedLines=true` 另取新文件总行数。 |
 | `GET /diff` | `WorkspaceDiff`：仓库 `root`、`staged`、`unstaged`、`untracked`；后三项各为 `{text, truncated}`。不可用时按原来的 git 错误返回 `invalidRequest`。 |
 | `GET /status` | `WorkspaceStatus`：`{type:"repository", branch, entries:[[XY, path], ...]}`，或 `{type:"unavailable", reason}`。路径按会话 cwd、会话 HOME 显示。 |
 | `GET /review?target=...&clientName=...` | 原样组装的 `SessionInputParams`。`target` 缺省/空字符串为未提交改动，否则为 PR 编号或 GitHub PR HTTPS URL；`clientName` 必填。只准备输入，不开始审查；客户端仍通过原有 `/input` 提交，仍要求 `review` 能力。 |
 | `GET /entries` | 一次遍历的 SSE 流，每个 `data` 为 `WorkspaceEntriesBatch`（见下）。 |
 
 分支、改动数、diff、review 和 status 只查询 cwd 所在的仓库，支持 git worktree。git 仍清空继承环境，仅从会话环境取 PATH，保留原来的配置、hooks、fsmonitor、filter、external diff/textconv 等加固；改动数/status 的 2 秒以及 diff/review 的 15 秒超时不变。PR 准备的 `gh` 在服务端运行，使用会话环境及该环境中的登录，原有 `GIT_*`、`GH_DEBUG` 清理不变；没有安装或没有登录时返回原错误，不尝试客户端登录。review 文本、数据分隔、统计和截断预算不变。
+
+`/v1/info.features` 中的 `untrackedDiff` 表示同时支持以下两个查询参数。省略参数或传 `false` 时，响应省略对应的新字段。
+
+- `GET /diff?untrackedContent=true` 增加 `untrackedDiff: {text, truncated}` 和 `untrackedFiles: [{path, lines, binary}]`。`path` 是相对仓库根的文件名，Git 对特殊字符的引号和转义会还原。逐文件记录按同一响应中 `untracked.text` 的完整路径行排列。服务端列表的上限是 256 KiB（`LIMIT`），`untracked.truncated` 为 true 表示 `untrackedFiles` 也不全。32 KiB（`LIST_LIMIT`）是终端和 `/review` 展示列表时各自采用的上限。
+- 新文件按从 `/dev/null` 整份新增的格式显示，省略 `index` 行。单行的块头写 `@@ -0,0 +1 @@`，多行写 `@@ -0,0 +1,N @@`。空文件只有文件头，末行缺换行会带 Git 标记，非 UTF-8 内容用替换字符显示。符号链接的内容是链接目标路径。前 8000 字节内含 NUL 的文件只显示文件头和二进制提示，记录为 `binary: true, lines: 0`。
+- `untrackedDiff.text` 单独限 256 KiB，截断时 `untrackedDiff.truncated` 为 true。每次请求合计最多读取 8 MiB 新文件内容来数行。文件读不了或剩余预算不足以数完时，逐文件的 `lines` 为 null。遇到计数超预算的文件时，diff 在已有内容及该文件的 `diff --git`、`new file mode` 两行后截断，仍受 256 KiB 上限约束。逐文件记录继续返回。读取内容和计数都计入整个 diff 请求原有的 15 秒，超时返回 `collecting changes timed out`。
+- `GET /summary?untrackedLines=true` 增加 `untrackedLines`。完整计数时返回整数，无新文件时为 0。计数超出 8 MiB 预算、列表截断、文件读取或 Git 失败、计数超过 2 秒时返回 null。该参数可与 `changedLines=false` 合用。
 
 `/entries` 的响应为 `text/event-stream`，每批最多 256 项：
 

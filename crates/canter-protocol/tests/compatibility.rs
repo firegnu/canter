@@ -2,6 +2,19 @@ use canter_protocol::{Event, EventPayload, Item, SessionSnapshot, SessionStatus,
 use serde_json::json;
 
 #[test]
+fn workspace_untracked_lines_preserves_absent_null_and_count() {
+    for value in [
+        json!({"branch":null, "changedLines":null}),
+        json!({"branch":null, "changedLines":null, "untrackedLines":null}),
+        json!({"branch":null, "changedLines":null, "untrackedLines":0}),
+    ] {
+        let summary: canter_protocol::WorkspaceSummary =
+            serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(summary).unwrap(), value);
+    }
+}
+
+#[test]
 fn hook_context_round_trips_and_legacy_clients_skip_it() {
     #[derive(serde::Deserialize)]
     #[serde(tag = "type", rename_all = "camelCase")]

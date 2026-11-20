@@ -112,6 +112,7 @@ impl Server {
         let summary = WorkspaceSummary {
             branch: queries::branch(&app.snapshot().settings.cwd),
             changed_lines: None,
+            untracked_lines: None,
         };
         app.set_workspace_summary(summary);
         app.with_workspace(self.client.clone())
@@ -122,6 +123,7 @@ pub fn branch(mut app: App) -> App {
     app.set_workspace_summary(WorkspaceSummary {
         branch: queries::branch(&app.snapshot().settings.cwd),
         changed_lines: None,
+        untracked_lines: None,
     });
     app
 }
